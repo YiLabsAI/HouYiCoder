@@ -99,7 +99,7 @@ pub(crate) const PAGE_READ_MAX_BYTES: u64 = 2 * PAGE_MAX_BYTES;
 
 /// One reverse-read step of a page: the log is walked back in this much at a
 /// time, so a page never holds more than the turns it needs.
-const PAGE_STEP_BYTES: u64 = 256 * 1024;
+pub(crate) const PAGE_STEP_BYTES: u64 = 256 * 1024;
 
 /// The widest line one range read can name. The backend caps a single range
 /// read at a mebibyte, so a wider line cannot be read whole by growing the
@@ -132,6 +132,10 @@ pub(crate) struct TurnPage {
     /// Lines in this page that did not parse. The page still holds the rest,
     /// so this is reported rather than treated as a failed read.
     pub skipped: usize,
+    /// The byte the page ends at: the offset a later append starts from. The
+    /// page is read backwards from here, so this is what says whether the bytes
+    /// after the page are still the ones it stopped at.
+    pub end_offset: u64,
 }
 
 impl TurnPage {
@@ -474,6 +478,7 @@ impl SessionHistory {
             oldest_anchor,
             oldest_partial,
             skipped,
+            end_offset: from_byte,
         }
     }
 

@@ -7,6 +7,7 @@
 //! newest turns, and its totals would report the page as the session.
 
 use super::super::view::project_rows;
+use super::{DELTA_MAX_BYTES, PageRead, SessionHistory};
 use super::{DurableWatermark, SessionLogTrajectory, TrajectoryHead, TrajectoryState};
 use houyicoder_context::{SessionEvent, SessionLogEntry};
 use houyicoder_tui::view::trajectory_pane::{SessionTiming, SubagentUsage};
@@ -182,5 +183,24 @@ impl SessionLogTrajectory {
             skipped_records: 0,
             rows: Vec::new(),
         })
+    }
+}
+
+/// Which read a window that follows the tail needs when the history moved.
+///
+/// The common case is that the session appended: the window can take what the
+/// log added after the byte it ends at, instead of reading a whole page again
+/// for it. A burst bigger than the delta budget, or a window with no end to
+/// start from, is read as the tail.
+pub(super) fn append_or_tail(history: &SessionHistory, state: &TrajectoryState) -> PageRead {
+    let Some(back) = state.pages.back() else {
+        return PageRead::Tail;
+    };
+    let end = back.end_offset;
+    let size = history.log_size();
+    if end > 0 && size > end && size - end <= DELTA_MAX_BYTES {
+        PageRead::Append(end)
+    } else {
+        PageRead::Tail
     }
 }

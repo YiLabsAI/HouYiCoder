@@ -105,6 +105,9 @@ impl SessionHistory {
             oldest_anchor: None,
             oldest_partial: false,
             skipped,
+            // A head page is not where the log ends, so it never anchors an
+            // append: only the window that follows the tail does.
+            end_offset: 0,
         }
     }
 

@@ -1,7 +1,9 @@
 //! Tests for the loaded window: tail paging, the projection cache, and the
 //! session-level totals that the window must not narrow.
 
-use super::super::reader::{RESIDENT_PAGES, SessionLogTrajectory, TRAJECTORY_PAGE_TURNS};
+use super::super::reader::{
+    DELTA_MAX_BYTES, RESIDENT_PAGES, SessionLogTrajectory, TRAJECTORY_PAGE_TURNS,
+};
 use super::super::view::project;
 use crate::session_history::SessionHistory;
 use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
@@ -1378,5 +1380,86 @@ fn test_home_before_first_page() {
         !view.rows.is_empty(),
         "and the tail is what it has to show: {:?}",
         turn_numbers(&view)
+    );
+}
+
+/// An append is read as a delta: the window takes what the log added after the
+/// byte it ends at, rather than reading a page again for one event.
+#[test]
+fn test_append_reads_delta() {
+    let (store, reader, sid, history, _root) = disk_reader_at(300);
+    let before = turn_rows(&pump(&reader));
+    let (_, reads_before, bytes_before) = history.read_stats();
+
+    let rt = tokio::runtime::Runtime::new().expect("test runtime");
+    rt.block_on(store.append(SessionLogEntry {
+        id: EventId::new(),
+        session: sid,
+        ts: 900_000,
+        prev_hash: None,
+        event: SessionEvent::UserInput {
+            text: "appended".into(),
+        },
+    }))
+    .expect("append");
+    let after = turn_rows(&pump(&reader));
+    let (_, reads_after, bytes_after) = history.read_stats();
+
+    assert_eq!(
+        reads_after - reads_before,
+        1,
+        "one read answers the append, not a page walk"
+    );
+    // The delta asks for a step of the walk it replaces, so the append costs
+    // the window's own end rather than a page read backwards from EOF.
+    assert!(
+        bytes_after - bytes_before <= DELTA_MAX_BYTES,
+        "and it asks for the delta budget rather than a page: {} bytes",
+        bytes_after - bytes_before
+    );
+    assert_eq!(
+        after.len(),
+        before.len() + 1,
+        "the window gains the new turn"
+    );
+    assert_eq!(
+        &after[..before.len()],
+        &before[..],
+        "and the resident rows keep the numbers and titles they had"
+    );
+}
+
+/// A burst bigger than the delta budget is read as the tail: a resumed session
+/// or a wide tool result is not an append the window can extend itself with.
+#[test]
+fn test_burst_reads_tail() {
+    let (store, reader, sid, history, _root) = disk_reader_at(20);
+    drop(pump(&reader));
+    let (_, _, bytes_before) = history.read_stats();
+
+    let rt = tokio::runtime::Runtime::new().expect("test runtime");
+    rt.block_on(store.append(SessionLogEntry {
+        id: EventId::new(),
+        session: sid,
+        ts: 900_000,
+        prev_hash: None,
+        event: SessionEvent::UserInput {
+            text: "y".repeat((DELTA_MAX_BYTES + 4096) as usize),
+        },
+    }))
+    .expect("append a burst");
+    let view = pump(&reader);
+    let (_, _, bytes_after) = history.read_stats();
+
+    assert!(
+        bytes_after - bytes_before > DELTA_MAX_BYTES,
+        "the read is a page, not the delta budget: {} bytes",
+        bytes_after - bytes_before
+    );
+    assert!(
+        turn_rows(&view)
+            .iter()
+            .any(|(_, title)| title.starts_with("yyy")),
+        "and the burst is in the window"
     );
 }

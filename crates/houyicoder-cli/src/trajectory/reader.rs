@@ -36,6 +36,13 @@ pub(crate) const TRAJECTORY_PAGE_TURNS: usize = 100;
 /// one can still find the turn it named.
 pub(crate) const RESIDENT_PAGES: usize = 2;
 
+/// How much of an append one delta read takes. An append is a handful of
+/// events; a wider jump is a burst -- a resumed session, a wide tool result, or
+/// a log another writer rewrote -- and reading the tail page again is the
+/// honest way to land on it. The budget stays under one step of the tail walk,
+/// so taking a delta never asks the disk for more than the page it extends.
+pub(crate) const DELTA_MAX_BYTES: u64 = 64 * 1024;
+
 /// How many reads may end without a page before the pane reports failure
 /// rather than retrying. One is a transient; a run of them is a broken read,
 /// and retrying it every frame would spawn a worker per frame.
@@ -62,6 +69,10 @@ struct DurableWatermark {
 enum PageRead {
     /// The newest turns, read backwards from EOF.
     Tail,
+    /// What the log appended after the byte the window ends at, read forward
+    /// from it. A delta is only ever taken for a window that follows the tail:
+    /// a window the user walked away from counts an append as newer instead.
+    Append(u64),
     /// The complete turns older than a durable anchor.
     Older(TurnAnchor),
     /// The oldest turns, read forward from the start of the log.
@@ -220,6 +231,16 @@ impl SessionLogTrajectory {
         std::thread::spawn(move || {
             let page = match read {
                 PageRead::Tail => history.tail_turns(page_turns, PAGE_MAX_BYTES),
+                PageRead::Append(from) => {
+                    let window = history.window(from, DELTA_MAX_BYTES);
+                    TurnPage {
+                        events: window.events,
+                        oldest_anchor: None,
+                        oldest_partial: false,
+                        skipped: window.skipped,
+                        end_offset: window.next_offset,
+                    }
+                }
                 // The offset alone cannot say whether it still names the turn
                 // it did when the anchor was taken, so the read checks it
                 // rather than paging the wrong history. An anchor that no
@@ -366,6 +387,25 @@ impl SessionLogTrajectory {
                         state.older_hidden = 0;
                         state.follow_tail = false;
                     }
+                    // A delta describes what the log appended after the byte
+                    // the window ends at. A read that starts anywhere else is
+                    // not that, so it is dropped rather than spliced into the
+                    // wrong place.
+                    PageRead::Append(from) => {
+                        if state
+                            .pages
+                            .back()
+                            .is_none_or(|page| page.end_offset != from)
+                        {
+                            Self::drop_view(state);
+                            return;
+                        }
+                        if let Some(back) = state.pages.back_mut() {
+                            back.end_offset = outcome.end_offset;
+                            back.skipped += outcome.skipped;
+                            back.events.extend(outcome.events);
+                        }
+                    }
                     PageRead::Tail => {
                         // A window the user walked away from is theirs, so a
                         // tail page read before that does not move it. An empty
@@ -492,12 +532,8 @@ impl TrajectoryLog for SessionLogTrajectory {
         let needs_read = state.pages.is_empty()
             || (state.window_watermark != Some(watermark) && state.follow_tail);
         if state.pending.is_none() && needs_read {
-            self.dispatch(
-                &mut state,
-                PageRead::Tail,
-                watermark,
-                head.summary.total_turns,
-            );
+            let read = window_view::append_or_tail(&self.history, &state);
+            self.dispatch(&mut state, read, watermark, head.summary.total_turns);
         }
         state.max_turns = max_turns;
         // Ready once the resident pages were read for this history, even when
