@@ -309,8 +309,8 @@ impl MemoryRuntime {
 
     /// Create and install the primary recorder the main-agent save tool
     /// records into. The returned Arc is threaded into MemoryAddTool so a
-    /// main-agent save is captured at call time, then drained at the run
-    /// boundary by drain_primary_changes. Replaces the post-hoc durable-log
+    /// main-agent save is captured at call time, then drained when the turn
+    /// settles by drain_primary_changes. Replaces the post-hoc durable-log
     /// scan for primary saves.
     pub(crate) fn install_primary_recorder(&mut self) -> Arc<MutationLog> {
         let recorder = Arc::new(MutationLog::new());
@@ -334,8 +334,8 @@ impl MemoryRuntime {
             handler.handle(MemoryChangedEvent {
                 id: houyicoder_context::MemoryChangeId::new(),
                 origin: MemoryChangeOrigin::PrimaryAgent,
-                // The drain runs at the boundary of the run that saved, so
-                // these changes belong to the turn that just completed.
+                // The drain runs while the leg's turn is still current, a pause
+                // included, so the notice is attributed to that turn.
                 causality: MemoryChangeCausality::ThisTurn,
                 changes,
             });

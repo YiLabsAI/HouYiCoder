@@ -167,13 +167,7 @@ impl Runner {
         self.reset_user_turn();
         let started = Instant::now();
         let result = self.drive_loop(session, 0, Usage::default(), &token).await;
-        // Drain the primary recorder on every terminal outcome, not only the
-        // final-output path: an interrupted, max-turns, or errored run that
-        // saved mid-flight must still emit its notice so the change is not
-        // carried into the next run and mis-attributed.
-        self.memory.drain_primary_changes();
-        self.record_run_completion(session, Some(started), &result)
-            .await;
+        self.settle_turn(session, Some(started), &result).await;
         self.emit_run_result(&result);
         // Best-effort fact persistence: failures are logged, not fatal.
         if let Ok(_) = result
@@ -209,8 +203,7 @@ impl Runner {
         self.reset_user_turn();
         let started = Instant::now();
         let result = self.drive_loop(session, 0, Usage::default(), &token).await;
-        self.record_run_completion(session, Some(started), &result)
-            .await;
+        self.settle_turn(session, Some(started), &result).await;
         result
     }
 
@@ -233,7 +226,7 @@ impl Runner {
                 // leg of its own, so the record reports what the legs before
                 // the pause accounted.
                 let failed: Result<RunResult, RunError> = Err(e);
-                self.record_run_completion(session, None, &failed).await;
+                self.settle_turn(session, None, &failed).await;
                 return failed;
             }
         };
@@ -245,7 +238,7 @@ impl Runner {
             // calls would fold into the next turn's summary row. This call
             // drives no leg of its own, so the record reports the work the
             // legs before the pause already accounted.
-            self.record_run_completion(session, None, &result).await;
+            self.settle_turn(session, None, &result).await;
             self.emit_run_result(&result);
             self.finalize_input_buffer(&result);
             return result;
@@ -263,8 +256,7 @@ impl Runner {
                 // work this leg did, so a failed resume is not mistaken for a
                 // turn still running.
                 let failed: Result<RunResult, RunError> = Err(e);
-                self.record_run_completion(session, Some(started), &failed)
-                    .await;
+                self.settle_turn(session, Some(started), &failed).await;
                 return failed;
             }
         };
@@ -275,10 +267,11 @@ impl Runner {
                 turns: self.user_turn(),
                 usage: Usage::default(),
             });
-            // The turn is still open, so this accounts the leg and records
-            // nothing.
-            self.record_run_completion(session, Some(started), &result)
-                .await;
+            // The turn is still open, so no completion is recorded. The drain
+            // runs all the same, so a change a leg landed cannot wait for the
+            // leg that finishes the turn. No shipped tool leaves one here, since
+            // the only writer of the recorder auto-approves and never pauses.
+            self.settle_turn(session, Some(started), &result).await;
             return result;
         }
         // Resume the same user turn from its current per-turn count, so the
@@ -287,11 +280,24 @@ impl Runner {
         let result = self
             .drive_loop(session, self.user_turn(), Usage::default(), &token)
             .await;
-        self.memory.drain_primary_changes();
-        self.record_run_completion(session, Some(started), &result)
-            .await;
+        self.settle_turn(session, Some(started), &result).await;
         self.emit_run_result(&result);
         result
+    }
+
+    /// Close a turn by draining the primary recorder and recording the
+    /// completion. Every drive leg that returns ends here, and so does every
+    /// pause, so a returning leg never leaves a change for a later turn to
+    /// surface. A pause records no completion, because the turn it leaves
+    /// open is not over.
+    pub(super) async fn settle_turn(
+        &self,
+        session: SessionId,
+        leg: Option<Instant>,
+        result: &Result<RunResult, RunError>,
+    ) {
+        self.memory.drain_primary_changes();
+        self.record_run_completion(session, leg, result).await;
     }
 
     /// Record the end of a turn: how long the turn's drive legs ran, when any
@@ -305,7 +311,7 @@ impl Runner {
     /// work the legs before the pause did. Failure to write is logged, not
     /// fatal: the record feeds the frontend's turn summary, and the run already
     /// has its outcome to report.
-    pub(super) async fn record_run_completion(
+    async fn record_run_completion(
         &self,
         session: SessionId,
         leg: Option<Instant>,
@@ -346,11 +352,11 @@ impl Runner {
         );
     }
 
-    /// Fire background memory at the run boundary: the extractor and dream
-    /// workers run only on a final-output outcome. The primary recorder is
-    /// drained in the run settlement (run) on every terminal outcome, not
-    /// here. Reward capture is withheld when the operator sets
-    /// HOUYICODER_REWARD_OFF, which suppresses the dream reward signal only.
+    /// Fire background memory once a turn reaches its final output: the
+    /// extractor and dream workers run on that outcome alone. The primary
+    /// recorder is drained when the turn settles, on every outcome, not here.
+    /// Reward capture is withheld when the operator sets HOUYICODER_REWARD_OFF,
+    /// which suppresses the dream reward signal only.
     pub(crate) async fn fire_background_memory(&self, session: SessionId) {
         let reward_off = std::env::var("HOUYICODER_REWARD_OFF").is_ok();
         let reward = if reward_off {

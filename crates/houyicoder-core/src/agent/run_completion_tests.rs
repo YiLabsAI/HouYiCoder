@@ -9,7 +9,7 @@
 
 use super::*;
 use crate::agent::abort_tool_tests::GuardedHangingTool;
-use crate::agent::runner_tests::{GuardedTool, runner_with, runner_with_cfg0};
+use crate::agent::runner_tests::{approvals_of, guarded_runner, runner_with};
 use crate::provider::test_support::FakeProvider;
 use houyicoder_async::PFut;
 use houyicoder_context::{
@@ -34,8 +34,8 @@ fn recorded_ms(events: &[houyicoder_context::SessionLogEntry]) -> Vec<Option<u64
 /// A log that refuses the result a released approval writes and keeps
 /// everything else in memory, so a resume leg that fails part-way can be told
 /// from one that finished on a store the test still replays.
-struct RefusesResults {
-    inner: InMemoryBackend,
+pub(crate) struct RefusesResults {
+    pub(crate) inner: InMemoryBackend,
 }
 
 impl ContextBackend for RefusesResults {
@@ -87,38 +87,6 @@ fn capped_runner() -> Runner {
     guarded_runner(Arc::new(SessionStore::new(
         Box::new(InMemoryBackend::new()),
     )))
-}
-
-/// The paused-run shape on a caller's store, so a test can choose what the log
-/// does when the released call is written.
-fn guarded_runner(store: Arc<SessionStore>) -> Runner {
-    let resp = CompletionResponse {
-        output: vec![OutputItem::ToolCall {
-            id: "c1".into(),
-            name: "guarded".into(),
-            input: serde_json::json!({}),
-        }],
-        usage: Usage::default(),
-        model: "test".into(),
-    };
-    let mut tools = ToolRegistry::new();
-    tools.register(Arc::new(GuardedTool::new()));
-    Runner::new(
-        store,
-        Arc::new(FakeProvider::new(vec![resp])),
-        tools,
-        RunnerConfig {
-            max_turns: 1,
-            ..runner_with_cfg0()
-        },
-    )
-}
-
-fn approvals_of(outcome: RunOutcome) -> Vec<ApprovalRequest> {
-    match outcome {
-        RunOutcome::Interruption(a) => a,
-        other => panic!("expected the guarded call to pause for approval, got {other:?}"),
-    }
 }
 
 #[tokio::test]

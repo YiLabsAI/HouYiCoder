@@ -39,10 +39,10 @@ impl Runner {
         let started = std::time::Instant::now();
         let result = self.drive_loop(session, 0, Usage::default(), &token).await;
         // The re-drive is a drive loop like any other: the turn it ends needs
-        // its record, or the frontend has no marker closing the regenerated
-        // turn and its summary row would fold into the next turn's.
-        self.record_run_completion(session, Some(started), &result)
-            .await;
+        // its record and its primary saves noticed, or the frontend has no
+        // marker closing the regenerated turn and its summary row would fold
+        // into the next turn's.
+        self.settle_turn(session, Some(started), &result).await;
         result
     }
 }

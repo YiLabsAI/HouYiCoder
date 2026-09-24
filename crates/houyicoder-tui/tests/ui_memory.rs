@@ -261,7 +261,8 @@ fn test_esc_closes_pane() {
     drop(fs::remove_dir_all(&home));
 }
 
-/// A scripted save_memory call in the main run drains at the run boundary
+/// A save_memory call the model answers with in the main run drains when the
+/// turn settles
 /// into a PrimaryAgent notice. The notice summary carries the producer label
 /// (saved by the agent) and the count; the expanded per-change row carries
 /// the scope the write was addressed to. Pins the producer-label summary and

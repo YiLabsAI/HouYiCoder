@@ -382,6 +382,39 @@ pub(crate) fn runner_with_cfg0() -> RunnerConfig {
     }
 }
 
+/// The paused-run shape on a caller's store, so a test can choose what the log
+/// does when the released call is written.
+pub(crate) fn guarded_runner(store: Arc<SessionStore>) -> Runner {
+    let resp = CompletionResponse {
+        output: vec![OutputItem::ToolCall {
+            id: "c1".into(),
+            name: "guarded".into(),
+            input: serde_json::json!({}),
+        }],
+        usage: Usage::default(),
+        model: "test".into(),
+    };
+    let mut tools = ToolRegistry::new();
+    tools.register(Arc::new(GuardedTool::new()));
+    Runner::new(
+        store,
+        Arc::new(FakeProvider::new(vec![resp])),
+        tools,
+        RunnerConfig {
+            max_turns: 1,
+            ..runner_with_cfg0()
+        },
+    )
+}
+
+/// The approvals a paused run raised, so a resume can answer them.
+pub(crate) fn approvals_of(outcome: RunOutcome) -> Vec<ApprovalRequest> {
+    match outcome {
+        RunOutcome::Interruption(a) => a,
+        other => panic!("expected the guarded call to pause for approval, got {other:?}"),
+    }
+}
+
 #[tokio::test]
 async fn test_stream_persists_deltas() {
     // Response handlers receive each streamed delta. The session log carries

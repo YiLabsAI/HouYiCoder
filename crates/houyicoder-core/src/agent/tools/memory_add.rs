@@ -48,8 +48,8 @@ pub struct MemoryAddTool {
     /// Optional write recorder the caller threads in to learn how many saves
     /// landed. Incremented on a successful add. The forked-extraction seam
     /// resets it before a pass and reads it after to fire one AutoMemory
-    /// notice; the main-agent seam leaves it for the runtime to drain at the
-    /// run boundary into a PrimaryAgent notice.
+    /// notice; the main-agent seam leaves it for the runtime to drain when the
+    /// turn settles into a PrimaryAgent notice.
     recorder: Option<Arc<MutationLog>>,
     /// Which writer this tool saves on behalf of. Injected by the host at
     /// construction (the LLM never provides origin) so a dream cannot
@@ -101,7 +101,7 @@ impl MemoryAddTool {
     /// Thread a write recorder so a successful save bumps it. The forked
     /// extraction seam resets before a pass and reads after to fire one
     /// AutoMemory notice; the main-agent seam leaves the recorder for the
-    /// runtime to drain at the run boundary into a PrimaryAgent notice.
+    /// runtime to drain when the turn settles into a PrimaryAgent notice.
     pub(crate) fn with_recorder(mut self, recorder: Arc<MutationLog>) -> Self {
         self.recorder = Some(recorder);
         self

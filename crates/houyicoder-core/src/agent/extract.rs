@@ -22,7 +22,7 @@ use super::{RunError, RunOutcome, RunResult, Runner, ToolRegistry};
 /// memory are shared (Arc clone) so prompt caching and the in-process write
 /// lock carry over. The save_memory tool is registered with the given
 /// recorder so the caller can drain the exact operations the fork landed
-/// this pass (the main runner's tool has no recorder; it does not notify).
+/// this pass, separately from the recorder the main runner's tool carries.
 pub(crate) fn build_forked_extract_runner(
     store: Arc<dyn SessionLog>,
     provider: Arc<dyn ModelProvider>,

@@ -536,8 +536,8 @@ async fn test_extract_skips_main_saved() {
         "cursor still advances on skip"
     );
     // The extractor no longer reconstructs primary saves from the durable
-    // log: the main runner records them at call time and drains at the run
-    // boundary. So this pass emits no notice from the extractor side.
+    // log: the main runner records them at call time and drains when the
+    // turn settles. So this pass emits no notice from the extractor side.
     assert!(
         recording.summaries().is_empty(),
         "the extractor does not emit primary notices; the runtime drain does"
