@@ -659,8 +659,10 @@ fn test_anchor_holds_wide_turn() {
 /// A clear further back than a few chunks is still found: the head read walks
 /// to the event that began the history however far behind it sits, one chunk at
 /// a time, and counts every chunk as a read.
-#[test]
-fn test_head_page_far_clear() {
+/// A cleared history whose clear sits well beyond one scan chunk from the end,
+/// with one turn before the clear so the head read has to walk back to find the
+/// epoch. Written directly: this measures the read, not the writer.
+fn far_clear_history() -> (SessionHistory, EventId) {
     use houyicoder_memory::LocalFileBackend;
     use houyicoder_session::SessionStore;
 
@@ -673,11 +675,7 @@ fn test_head_page_far_clear() {
     let session = SessionId::new();
     let log = root.join(session.to_string()).join("log.jsonl");
     std::fs::create_dir_all(log.parent().expect("log parent")).expect("mkdir session");
-    // A cleared history whose clear sits well beyond one scan chunk from the
-    // end, written directly: this measures the read, not the writer.
     let mut body = String::with_capacity(20 * 1024 * 1024);
-    // A turn before the clear, so the history's first event is not the event
-    // that began the epoch and the head read has to walk back to it.
     let before = SessionLogEntry {
         session,
         ..ev(
@@ -712,11 +710,17 @@ fn test_head_page_far_clear() {
     std::fs::write(&log, body).expect("write log");
     assert!(
         std::fs::metadata(&log).expect("stat").len() > 8 * 1024 * 1024,
-        "the clear has to sit beyond the old scan cap for this to prove anything"
+        "the clear has to sit beyond one scan chunk for this to prove anything"
     );
 
     let store = SessionStore::new(Box::new(LocalFileBackend::new(root)));
     let history = SessionHistory::new(std::sync::Arc::new(store), session);
+    (history, clear_id)
+}
+
+#[test]
+fn test_head_page_far_clear() {
+    let (history, clear_id) = far_clear_history();
     let (_, _, before) = history.read_stats();
     let page = history.head_turns(Some(clear_id), 3, PAGE_MAX_BYTES, &live());
     let prompts: Vec<String> = page
@@ -775,5 +779,28 @@ fn test_head_page_cancelled() {
     assert!(
         page.events.is_empty(),
         "a cancelled head read returns no page rather than reading on"
+    );
+}
+
+/// A superseded head read stops at its next chunk rather than walking the whole
+/// log for a page nobody will take. The epoch sits behind many chunks, so a
+/// walk that ignored the flag would read to the beginning of the file and come
+/// back with the head instead of nothing.
+#[test]
+fn test_head_page_cancel_walk() {
+    let (history, clear_id) = far_clear_history();
+    let (_, _, before) = history.read_stats();
+    let cancelled = std::sync::atomic::AtomicBool::new(true);
+    let page = history.head_turns(Some(clear_id), 3, PAGE_MAX_BYTES, &cancelled);
+    assert!(
+        page.events.is_empty(),
+        "a cancelled walk returns no page rather than the head it walked to"
+    );
+    let (_, _, after) = history.read_stats();
+    let size = history.log_size();
+    assert!(
+        after - before < size / 2,
+        "the walk stopped at its next chunk instead of scanning the log: {} of {size}",
+        after - before
     );
 }
