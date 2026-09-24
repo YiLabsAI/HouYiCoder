@@ -5,7 +5,7 @@ use houyicoder_api::agent_event::{
     AgentEventHandlers, MemoryChange, MemoryChangeOrigin, MemoryChangedEvent, MemoryOperation,
 };
 use houyicoder_api::memory::MemoryProvider;
-use houyicoder_context::{MemoryEntry, MemoryError, SessionId};
+use houyicoder_context::{MemoryEntry, MemoryError, MemoryScope, SessionId};
 use std::collections::HashSet;
 use std::sync::Mutex as StdMutex;
 
@@ -137,7 +137,7 @@ async fn test_fire_background_drains_primary() {
         sink.lock().expect("captured").push(event);
     }));
     runner.memory.set_event_handlers(&handlers);
-    recorder.record("alpha", MemoryOperation::Created);
+    recorder.record("alpha", MemoryOperation::Created, MemoryScope::Auto);
     runner.fire_background_memory(SessionId::new()).await;
     let events = captured.lock().expect("captured").clone();
     assert_eq!(
@@ -166,8 +166,8 @@ fn test_primary_recorder_drains_changes() {
         sink.lock().expect("captured").push(event);
     }));
     runtime.set_event_handlers(&handlers);
-    recorder.record("alpha", MemoryOperation::Created);
-    recorder.record("beta", MemoryOperation::Updated);
+    recorder.record("alpha", MemoryOperation::Created, MemoryScope::Auto);
+    recorder.record("beta", MemoryOperation::Updated, MemoryScope::Auto);
     runtime.drain_primary_changes();
     let events = captured.lock().expect("captured").clone();
     assert_eq!(events.len(), 1, "one event carries both changes");
@@ -177,14 +177,16 @@ fn test_primary_recorder_drains_changes() {
         events[0].changes[0],
         MemoryChange {
             key: "alpha".into(),
-            operation: MemoryOperation::Created
+            operation: MemoryOperation::Created,
+            scope: MemoryScope::Auto
         }
     );
     assert_eq!(
         events[0].changes[1],
         MemoryChange {
             key: "beta".into(),
-            operation: MemoryOperation::Updated
+            operation: MemoryOperation::Updated,
+            scope: MemoryScope::Auto
         }
     );
     // A second drain with no new records emits nothing.

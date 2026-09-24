@@ -109,7 +109,7 @@ pub enum FrontendEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::frontend::memory::MemoryOperation;
+    use crate::frontend::memory::{MemoryChangeScope, MemoryOperation};
 
     #[test]
     fn test_memory_event_round_trips() {
@@ -120,6 +120,7 @@ mod tests {
             changes: vec![MemoryChange {
                 key: "build-gate".into(),
                 operation: MemoryOperation::Created,
+                scope: MemoryChangeScope::Auto,
             }],
         };
         let json = serde_json::to_string(&event).expect("serialize memory event");
@@ -132,6 +133,10 @@ mod tests {
             "causality serializes kebab-case: {json}"
         );
         assert!(
+            json.contains("\"scope\":\"auto\""),
+            "scope serializes lowercase: {json}"
+        );
+        assert!(
             !json.contains("\"stored\""),
             "no Stored variant leaks to the wire: {json}"
         );
@@ -142,6 +147,7 @@ mod tests {
                 if id.0 == "change-1"
                     && changes[0].key == "build-gate"
                     && changes[0].operation == MemoryOperation::Created
+                    && changes[0].scope == MemoryChangeScope::Auto
         ));
         // Updated round-trips byte-exact too.
         let updated = serde_json::to_string(&MemoryOperation::Updated).expect("serialize Updated");
@@ -170,6 +176,52 @@ mod tests {
                 if id.0 == "change-3"
                     && causality == MemoryChangeCausality::PreviousTurn
                     && changes[0].key == "older"
+        ));
+    }
+
+    #[test]
+    fn test_missing_scope_keeps_change() {
+        // A producer that predates the scope field sends none. The change
+        // must still deliver its key and operation, with the scope unknown
+        // rather than a guessed root.
+        let payload = serde_json::json!({
+            "MemoryChanged": {
+                "id": "change-4",
+                "origin": "auto-memory",
+                "causality": "this-turn",
+                "changes": [{"key": "older", "operation": "created"}],
+            }
+        });
+        let decoded: FrontendEvent =
+            serde_json::from_value(payload).expect("a missing scope must not drop the change");
+        assert!(matches!(
+            decoded,
+            FrontendEvent::MemoryChanged { changes, .. }
+                if changes[0].key == "older"
+                    && changes[0].scope == MemoryChangeScope::Unknown
+        ));
+    }
+
+    #[test]
+    fn test_unrecognized_scope_keeps_change() {
+        // A scope tag a future producer emits that this build does not name
+        // must not drop the whole event: the catch-all keeps the change, and
+        // the scope reads as unknown so the row names no root.
+        let payload = serde_json::json!({
+            "MemoryChanged": {
+                "id": "change-5",
+                "origin": "auto-memory",
+                "causality": "this-turn",
+                "changes": [{"key": "newer", "operation": "created", "scope": "global"}],
+            }
+        });
+        let decoded: FrontendEvent =
+            serde_json::from_value(payload).expect("an unrecognized scope must not drop the event");
+        assert!(matches!(
+            decoded,
+            FrontendEvent::MemoryChanged { changes, .. }
+                if changes[0].key == "newer"
+                    && changes[0].scope == MemoryChangeScope::Unknown
         ));
     }
 

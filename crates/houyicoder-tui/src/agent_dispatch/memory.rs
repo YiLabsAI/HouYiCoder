@@ -104,6 +104,12 @@ impl App {
                 operation_verb(change.operation),
                 change.key
             ));
+            // The scope the change was addressed to, when the frame said so.
+            // An unknown scope stays off the row rather than naming a root
+            // the producer never claimed.
+            if let Some(scope) = change.scope.label() {
+                notice.push_str(&format!(" · {scope}"));
+            }
         }
         // When the /memory pane is open, the pane refresh below is the live
         // view of the same changes; a transcript notice would duplicate it.

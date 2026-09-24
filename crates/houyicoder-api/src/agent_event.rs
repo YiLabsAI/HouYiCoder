@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use houyicoder_context::MemoryChangeId;
+use houyicoder_context::{MemoryChangeId, MemoryScope};
 
 /// Receives events from one typed event domain.
 pub trait EventHandler<E>: Send + Sync {
@@ -121,6 +121,9 @@ pub struct MemoryChange {
     pub key: String,
     /// The operation applied to the key.
     pub operation: MemoryOperation,
+    /// The scope the operation was addressed to, which the provider resolves
+    /// to a storage root.
+    pub scope: MemoryScope,
 }
 
 /// Which turn a memory change belongs to, so a notice names it rather than

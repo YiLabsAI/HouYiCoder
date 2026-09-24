@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use houyicoder_api::memory::MemoryProvider;
 use houyicoder_async::PFut;
-use houyicoder_context::MemoryError;
+use houyicoder_context::{MemoryError, MemoryScope};
 use serde_json::{Value, json};
 
 use super::{Tool, ToolCtx, ToolError};
@@ -100,7 +100,9 @@ impl Tool for PromoteMemoryTool {
             match provider.promote_memory(key) {
                 Ok(()) => {
                     if let Some(recorder) = &recorder {
-                        recorder.record(key, MemoryOperation::Promoted);
+                        // A promote moves the topic out of the auto root into
+                        // the project root, so the notice names project.
+                        recorder.record(key, MemoryOperation::Promoted, MemoryScope::Project);
                     }
                     Ok(json!({"promoted": key}))
                 }
@@ -183,7 +185,9 @@ impl Tool for DemoteMemoryTool {
             match provider.demote_memory(key) {
                 Ok(()) => {
                     if let Some(recorder) = &recorder {
-                        recorder.record(key, MemoryOperation::Demoted);
+                        // A demote moves the topic back into the auto root, so
+                        // the notice names auto.
+                        recorder.record(key, MemoryOperation::Demoted, MemoryScope::Auto);
                     }
                     Ok(json!({"demoted": key}))
                 }
@@ -295,8 +299,18 @@ mod tests {
         assert_eq!(changes.len(), 2);
         assert_eq!(changes[0].key, "k1");
         assert_eq!(changes[0].operation, MemoryOperation::Promoted);
+        assert_eq!(
+            changes[0].scope,
+            MemoryScope::Project,
+            "a promote lands the topic in the project root"
+        );
         assert_eq!(changes[1].key, "k2");
         assert_eq!(changes[1].operation, MemoryOperation::Demoted);
+        assert_eq!(
+            changes[1].scope,
+            MemoryScope::Auto,
+            "a demote lands the topic back in the auto root"
+        );
     }
 
     /// A missing key is surfaced as a NotFound error the model can act on

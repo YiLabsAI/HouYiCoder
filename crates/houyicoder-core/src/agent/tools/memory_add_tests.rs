@@ -140,6 +140,49 @@ async fn test_save_memory_counts_writes() {
     assert!(recorder.take().is_empty());
 }
 
+/// The recorded change carries the scope the save was addressed to, so the
+/// notice can name it. The scope the provider saw and the scope the recorder
+/// logged are asserted to be the same fact.
+#[tokio::test]
+async fn test_save_records_scope() {
+    let p = provider();
+    let recorder = Arc::new(MutationLog::new());
+    let tool = MemoryAddTool::new(Arc::clone(&p) as Arc<dyn MemoryProvider>)
+        .with_recorder(recorder.clone());
+    run(
+        &tool,
+        json!({ "key": "k-auto", "description": "d", "source": "user", "content": "c" }),
+    )
+    .await
+    .expect("default save lands in auto");
+    run(
+        &tool,
+        json!({
+            "key": "k-proj",
+            "description": "d",
+            "source": "project",
+            "content": "c",
+            "scope": "project"
+        }),
+    )
+    .await
+    .expect("project-scope save");
+    let changes = recorder.take();
+    assert_eq!(changes.len(), 2, "both saves notify");
+    assert_eq!(changes[0].scope, MemoryScope::Auto);
+    assert_eq!(
+        changes[1].scope,
+        MemoryScope::Project,
+        "the recorded scope follows the write"
+    );
+    let seen = p.scopes.lock().expect("scopes").clone();
+    assert_eq!(
+        changes.iter().map(|c| c.scope).collect::<Vec<_>>(),
+        seen,
+        "the recorded scope is the scope the provider was addressed with"
+    );
+}
+
 #[tokio::test]
 async fn test_repeat_save_emits_once() {
     let root = std::env::temp_dir().join(format!("memory-add-unchanged-{}", std::process::id()));

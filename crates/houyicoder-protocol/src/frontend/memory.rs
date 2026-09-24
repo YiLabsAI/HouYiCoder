@@ -56,6 +56,54 @@ pub enum MemoryOperation {
     Unknown,
 }
 
+/// The scope a memory change was addressed to, so the notice's detail rows
+/// name the scope and not only which key moved. The provider resolves the
+/// scope to a storage root, which for a provider with a single root is the
+/// same root whatever scope was named.
+///
+/// Forward-compatible: a future producer may write to a scope this enum does
+/// not yet name, and a frame from a producer that predates the field carries
+/// none at all. Both land on Unknown rather than failing the change, and the
+/// renderer leaves an unknown scope out instead of naming one it was not told.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MemoryChangeScope {
+    /// The user-global root: cross-project memories.
+    User,
+    /// The project root: checked-in, per-project.
+    Project,
+    /// The auto root: extractor and dream output.
+    Auto,
+    /// A scope this build does not know. Only produced by deserialization of
+    /// an unrecognized tag or an absent field; the producer never emits it.
+    #[serde(other)]
+    Unknown,
+}
+
+/// An absent scope reads as unknown: the change still delivers its key and
+/// operation, and the notice omits the scope rather than claiming one.
+impl Default for MemoryChangeScope {
+    fn default() -> Self {
+        Self::Unknown
+    }
+}
+
+impl MemoryChangeScope {
+    /// The lowercase label a reader shows for this scope, or None when the
+    /// scope is unknown and no root may be named. Each named label is the
+    /// serde tag the wire carries, pinned as such by
+    /// test_scope_serializes_lowercase, so a rename of a tag cannot silently
+    /// diverge from what is rendered.
+    pub fn label(self) -> Option<&'static str> {
+        match self {
+            Self::User => Some("user"),
+            Self::Project => Some("project"),
+            Self::Auto => Some("auto"),
+            Self::Unknown => None,
+        }
+    }
+}
+
 /// One successful memory operation projected onto the wire.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -64,6 +112,10 @@ pub struct MemoryChange {
     pub key: String,
     /// The operation applied to the key.
     pub operation: MemoryOperation,
+    /// The scope the change was addressed to. Absent on a frame from a
+    /// producer that predates the field.
+    #[serde(default)]
+    pub scope: MemoryChangeScope,
 }
 
 /// Which turn a memory change belongs to, so a notice that lands after the
@@ -184,6 +236,52 @@ mod tests {
         assert!(json.contains("\"mtimeSecs\":99"), "{json}");
         let back: MemoryDetail = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(back, entry);
+    }
+
+    #[test]
+    fn test_scope_serializes_lowercase() {
+        for (value, expect, label) in [
+            (MemoryChangeScope::User, "\"user\"", Some("user")),
+            (MemoryChangeScope::Project, "\"project\"", Some("project")),
+            (MemoryChangeScope::Auto, "\"auto\"", Some("auto")),
+            (MemoryChangeScope::Unknown, "\"unknown\"", None),
+        ] {
+            let json = serde_json::to_string(&value).expect("serialize");
+            assert_eq!(json, expect);
+            // The rendered label is the wire tag, so a rename of the tag
+            // cannot leave the notice naming a root the frame never carried.
+            assert_eq!(value.label(), label, "label follows the wire tag");
+            let back: MemoryChangeScope = serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(back, value);
+        }
+    }
+
+    #[test]
+    fn test_unrecognized_scope_reads_unknown() {
+        // A scope tag this build does not name lands on Unknown rather than
+        // failing the decode. The catch-all is what keeps a future scope
+        // from dropping the whole change, and it is separate from the
+        // absent-field default that test_missing_scope_keeps_change covers.
+        let scope: MemoryChangeScope =
+            serde_json::from_str("\"global\"").expect("decode unrecognized tag");
+        assert_eq!(scope, MemoryChangeScope::Unknown);
+        assert_eq!(scope.label(), None, "an unknown scope names no root");
+    }
+
+    #[test]
+    fn test_change_round_trips_scope() {
+        let change = MemoryChange {
+            key: "build-gate".into(),
+            operation: MemoryOperation::Promoted,
+            scope: MemoryChangeScope::Project,
+        };
+        let json = serde_json::to_string(&change).expect("serialize");
+        assert_eq!(
+            json,
+            "{\"key\":\"build-gate\",\"operation\":\"promoted\",\"scope\":\"project\"}"
+        );
+        let back: MemoryChange = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back, change);
     }
 
     #[test]

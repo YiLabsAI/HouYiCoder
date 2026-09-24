@@ -1,7 +1,7 @@
 use super::*;
 
 use houyicoder_protocol::frontend::memory::{
-    MemoryChange, MemoryChangeCausality, MemoryChangeId, MemoryOperation,
+    MemoryChange, MemoryChangeCausality, MemoryChangeId, MemoryChangeScope, MemoryOperation,
 };
 
 use crate::composition;
@@ -28,6 +28,7 @@ fn app_with_notice(
             .map(|(key, operation)| MemoryChange {
                 key: (*key).to_string(),
                 operation: *operation,
+                scope: MemoryChangeScope::Auto,
             })
             .collect(),
     }));
@@ -405,10 +406,12 @@ fn test_notice_shows_memory_changes() {
         MemoryChange {
             key: "alpha".into(),
             operation: MemoryOperation::Promoted,
+            scope: MemoryChangeScope::Project,
         },
         MemoryChange {
             key: "beta".into(),
             operation: MemoryOperation::Deleted,
+            scope: MemoryChangeScope::Auto,
         },
     ];
     app.handle_agent_message(SessionMessage::Event(ServerEvent::MemoryChanged {
@@ -446,6 +449,7 @@ fn test_notice_shows_memory_changes() {
     let single = vec![MemoryChange {
         key: "gamma".into(),
         operation: MemoryOperation::Created,
+        scope: MemoryChangeScope::Auto,
     }];
     app.handle_agent_message(SessionMessage::Event(ServerEvent::MemoryChanged {
         id: MemoryChangeId("change-2".into()),
@@ -481,6 +485,63 @@ fn test_unknown_causality_reads_earlier() {
     );
 }
 
+/// The expanded detail names the scope each change was addressed to, so the
+/// notice says where a memory went and not only which key moved.
+#[test]
+fn test_notice_detail_names_scope() {
+    let mut app = composition::app();
+    app.screen = Screen::Working;
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::MemoryChanged {
+        id: MemoryChangeId("change-scope".into()),
+        causality: MemoryChangeCausality::ThisTurn,
+        changes: vec![
+            MemoryChange {
+                key: "alpha".into(),
+                operation: MemoryOperation::Promoted,
+                scope: MemoryChangeScope::Project,
+            },
+            MemoryChange {
+                key: "beta".into(),
+                operation: MemoryOperation::Promoted,
+                scope: MemoryChangeScope::User,
+            },
+        ],
+    }));
+    app.expanded_fold_groups.insert("mg#0".into());
+    let out = render_text(&app, 100, 24);
+    assert!(
+        out.contains("⎿  promoted alpha · project") && out.contains("⎿  promoted beta · user"),
+        "each detail row names the scope the change was addressed to: {out}"
+    );
+}
+
+/// A frame that never named a scope leaves the token off the row instead of
+/// printing one the producer did not claim.
+#[test]
+fn test_notice_skips_unknown_scope() {
+    let mut app = composition::app();
+    app.screen = Screen::Working;
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::MemoryChanged {
+        id: MemoryChangeId("change-noscope".into()),
+        causality: MemoryChangeCausality::ThisTurn,
+        changes: vec![MemoryChange {
+            key: "alpha".into(),
+            operation: MemoryOperation::Created,
+            scope: MemoryChangeScope::Unknown,
+        }],
+    }));
+    app.expanded_fold_groups.insert("mg#0".into());
+    let out = render_text(&app, 100, 24);
+    assert!(
+        out.contains("⎿  created alpha"),
+        "the row still names the key and the operation: {out}"
+    );
+    assert!(
+        !out.contains("alpha ·") && !out.contains(" · unknown"),
+        "an unnamed root is left off the row: {out}"
+    );
+}
+
 #[test]
 fn test_notice_summarizes_many_changes() {
     let mut app = composition::app();
@@ -489,6 +550,7 @@ fn test_notice_summarizes_many_changes() {
         .map(|index| MemoryChange {
             key: format!("project-memory-with-a-deliberately-long-key-{index}"),
             operation: MemoryOperation::Created,
+            scope: MemoryChangeScope::Auto,
         })
         .collect();
     app.handle_agent_message(SessionMessage::Event(ServerEvent::MemoryChanged {
@@ -524,6 +586,7 @@ fn test_notice_single_change_wraps() {
     let changes = vec![MemoryChange {
         key: "a-single-memory-with-a-long-key-for-a-narrow-notice".into(),
         operation: MemoryOperation::Created,
+        scope: MemoryChangeScope::Auto,
     }];
     app.handle_agent_message(SessionMessage::Event(ServerEvent::MemoryChanged {
         id: MemoryChangeId("change-wrap".into()),
@@ -564,6 +627,7 @@ fn test_notice_click_toggles_fold() {
         changes: vec![MemoryChange {
             key: "alpha".into(),
             operation: MemoryOperation::Created,
+            scope: MemoryChangeScope::Auto,
         }],
     }));
     // Render to publish last_row_fold_keys, what a click resolves against.
@@ -759,6 +823,7 @@ fn test_notice_ctrl_o_latest() {
         changes: vec![MemoryChange {
             key: "alpha".into(),
             operation: MemoryOperation::Created,
+            scope: MemoryChangeScope::Auto,
         }],
     }));
     assert!(app.selection.anchor.is_none(), "no cursor");

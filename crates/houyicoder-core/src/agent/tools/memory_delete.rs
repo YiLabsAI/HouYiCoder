@@ -26,7 +26,7 @@ use std::sync::Arc;
 
 use houyicoder_api::memory::MemoryProvider;
 use houyicoder_async::PFut;
-use houyicoder_context::MemoryError;
+use houyicoder_context::{MemoryError, MemoryScope};
 use serde_json::{Value, json};
 
 use super::{Tool, ToolCtx, ToolError};
@@ -98,7 +98,10 @@ impl Tool for DeleteMemoryTool {
             match provider.delete_memory(key) {
                 Ok(()) => {
                     if let Some(recorder) = &recorder {
-                        recorder.record(key, MemoryOperation::Deleted);
+                        // This tool deletes through the unscoped form, whose
+                        // contract is the auto root (the dream's consolidation
+                        // target), so the notice names auto.
+                        recorder.record(key, MemoryOperation::Deleted, MemoryScope::Auto);
                     }
                     Ok(json!({"deleted": key}))
                 }
@@ -184,7 +187,13 @@ mod tests {
             .with_recorder(recorder.clone());
         run(&tool, json!({"key": "a"})).await.expect("delete a");
         run(&tool, json!({"key": "b"})).await.expect("delete b");
-        assert_eq!(recorder.take().len(), 2);
+        let changes = recorder.take();
+        assert_eq!(changes.len(), 2);
+        assert_eq!(
+            changes[0].scope,
+            MemoryScope::Auto,
+            "the unscoped delete form removes from the auto root"
+        );
     }
 
     /// A NotFound does not bump the recorder (no memory was touched).

@@ -7,12 +7,14 @@ use houyicoder_api::agent_event::{
     self, AgentEventHandlers, EventHandler, MemoryChangedEvent, ResponseStreamEvent,
     ToolExecutionEvent, UserNoticeEvent,
 };
+use houyicoder_context::MemoryScope;
 use houyicoder_core::agent::Runner;
 use houyicoder_protocol::acpx::{AcpxMethod, AcpxNotification};
 use houyicoder_protocol::envelope::{EventEnvelope, EventSeq};
 use houyicoder_protocol::frontend::FrontendEvent;
 use houyicoder_protocol::frontend::memory::{
-    MemoryChange, MemoryChangeCausality, MemoryChangeId, MemoryChangeOrigin, MemoryOperation,
+    MemoryChange, MemoryChangeCausality, MemoryChangeId, MemoryChangeOrigin, MemoryChangeScope,
+    MemoryOperation,
 };
 use tokio::sync::Notify;
 
@@ -110,6 +112,7 @@ impl EventHandler<MemoryChangedEvent> for EventSequencer {
                 .map(|change| MemoryChange {
                     key: change.key,
                     operation: to_protocol_memory_operation(change.operation),
+                    scope: to_protocol_memory_scope(change.scope),
                 })
                 .collect(),
         });
@@ -148,6 +151,14 @@ fn to_protocol_memory_operation(operation: agent_event::MemoryOperation) -> Memo
         agent_event::MemoryOperation::Deleted => MemoryOperation::Deleted,
         agent_event::MemoryOperation::Promoted => MemoryOperation::Promoted,
         agent_event::MemoryOperation::Demoted => MemoryOperation::Demoted,
+    }
+}
+
+fn to_protocol_memory_scope(scope: MemoryScope) -> MemoryChangeScope {
+    match scope {
+        MemoryScope::User => MemoryChangeScope::User,
+        MemoryScope::Project => MemoryChangeScope::Project,
+        MemoryScope::Auto => MemoryChangeScope::Auto,
     }
 }
 
@@ -400,10 +411,23 @@ mod tests {
                 id,
                 origin: agent_event::MemoryChangeOrigin::AutoDream,
                 causality: agent_event::MemoryChangeCausality::PreviousTurn,
-                changes: vec![agent_event::MemoryChange {
-                    key: "build-gate".into(),
-                    operation: agent_event::MemoryOperation::Promoted,
-                }],
+                changes: vec![
+                    agent_event::MemoryChange {
+                        key: "build-gate".into(),
+                        operation: agent_event::MemoryOperation::Promoted,
+                        scope: MemoryScope::Project,
+                    },
+                    agent_event::MemoryChange {
+                        key: "tone".into(),
+                        operation: agent_event::MemoryOperation::Updated,
+                        scope: MemoryScope::User,
+                    },
+                    agent_event::MemoryChange {
+                        key: "ledger".into(),
+                        operation: agent_event::MemoryOperation::Created,
+                        scope: MemoryScope::Auto,
+                    },
+                ],
             },
         );
         let pending = sequencer.sequence_pending_for_test();
@@ -413,6 +437,9 @@ mod tests {
                 if projected.0 == id.to_string()
                     && *causality == MemoryChangeCausality::PreviousTurn
                     && changes[0].operation == MemoryOperation::Promoted
+                    && changes[0].scope == MemoryChangeScope::Project
+                    && changes[1].scope == MemoryChangeScope::User
+                    && changes[2].scope == MemoryChangeScope::Auto
         ));
     }
 

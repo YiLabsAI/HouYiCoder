@@ -247,7 +247,7 @@ impl Tool for MemoryAddTool {
                             MemoryWriteOutcome::Updated => MemoryOperation::Updated,
                             MemoryWriteOutcome::Unchanged => MemoryOperation::Updated,
                         };
-                        recorder.record(&key, op);
+                        recorder.record(&key, op, scope);
                     }
                     let label = match outcome {
                         MemoryWriteOutcome::Created => "created",

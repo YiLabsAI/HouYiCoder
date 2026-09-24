@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex as StdMutex};
 use houyicoder_api::agent_event::{
     AgentEventHandlers, MemoryChange, MemoryChangeOrigin, MemoryChangedEvent, MemoryOperation,
 };
-use houyicoder_context::MemoryEntry;
+use houyicoder_context::{MemoryEntry, MemoryScope};
 use houyicoder_memory::InMemoryBackend;
 use houyicoder_protocol::llm::{
     CompletionRequest, CompletionResponse, LlmEvent, ModelCapabilities, OutputItem, ProviderError,
@@ -654,10 +654,12 @@ fn test_dream_reports_memory_operations() {
         MemoryChange {
             key: "stored-key".into(),
             operation: MemoryOperation::Created,
+            scope: MemoryScope::Auto,
         },
         MemoryChange {
             key: "deleted-key".into(),
             operation: MemoryOperation::Deleted,
+            scope: MemoryScope::Auto,
         },
     ]);
     let events = recording.events();
@@ -669,10 +671,12 @@ fn test_dream_reports_memory_operations() {
             MemoryChange {
                 key: "stored-key".into(),
                 operation: MemoryOperation::Created,
+                scope: MemoryScope::Auto,
             },
             MemoryChange {
                 key: "deleted-key".into(),
                 operation: MemoryOperation::Deleted,
+                scope: MemoryScope::Auto,
             },
         ]
     );

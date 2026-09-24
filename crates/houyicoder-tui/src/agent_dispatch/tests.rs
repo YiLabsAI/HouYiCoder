@@ -89,7 +89,7 @@ fn todo_frame(items: &[(&str, &str)]) -> TranscriptFrame {
 #[test]
 fn test_memory_change_refreshes_pane() {
     use houyicoder_protocol::frontend::memory::{
-        MemoryChange, MemoryChangeCausality, MemoryChangeId, MemoryOperation,
+        MemoryChange, MemoryChangeCausality, MemoryChangeId, MemoryChangeScope, MemoryOperation,
     };
     let (mut app, events) = connected_app_events();
     app.pane = Pane::Memory;
@@ -99,6 +99,7 @@ fn test_memory_change_refreshes_pane() {
         changes: vec![MemoryChange {
             key: "alpha".into(),
             operation: MemoryOperation::Created,
+            scope: MemoryChangeScope::Auto,
         }],
     }));
     let req = wait_for_request(&events, |p| matches!(p, FrontendRequest::MemoryList));
@@ -113,7 +114,7 @@ fn test_memory_change_refreshes_pane() {
 fn test_open_pane_skips_notice() {
     use crate::records::TranscriptLine;
     use houyicoder_protocol::frontend::memory::{
-        MemoryChange, MemoryChangeCausality, MemoryChangeId, MemoryOperation,
+        MemoryChange, MemoryChangeCausality, MemoryChangeId, MemoryChangeScope, MemoryOperation,
     };
     let (mut app, _events) = connected_app_events();
     app.pane = Pane::Memory;
@@ -123,6 +124,7 @@ fn test_open_pane_skips_notice() {
         changes: vec![MemoryChange {
             key: "k".into(),
             operation: MemoryOperation::Created,
+            scope: MemoryChangeScope::Auto,
         }],
     }));
     let open_lines = app
@@ -139,6 +141,7 @@ fn test_open_pane_skips_notice() {
         changes: vec![MemoryChange {
             key: "k2".into(),
             operation: MemoryOperation::Created,
+            scope: MemoryChangeScope::Auto,
         }],
     }));
     let closed_lines = app

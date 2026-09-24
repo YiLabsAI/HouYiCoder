@@ -680,7 +680,8 @@ async fn test_drive_forwards_config_queries() {
 async fn test_drive_translates_events() {
     use houyicoder_protocol::frontend::QueuedInput;
     use houyicoder_protocol::frontend::memory::{
-        MemoryChange, MemoryChangeCausality, MemoryChangeId, MemoryChangeOrigin, MemoryOperation,
+        MemoryChange, MemoryChangeCausality, MemoryChangeId, MemoryChangeOrigin, MemoryChangeScope,
+        MemoryOperation,
     };
 
     let mut engine = FakeEngine::new();
@@ -694,6 +695,7 @@ async fn test_drive_translates_events() {
         changes: vec![MemoryChange {
             key: "topic".into(),
             operation: MemoryOperation::Created,
+            scope: MemoryChangeScope::Auto,
         }],
     });
     engine.event(FrontendEvent::SystemLine {
