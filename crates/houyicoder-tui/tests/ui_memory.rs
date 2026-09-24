@@ -10,7 +10,10 @@ use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::common::{Key, RENDER_TIMEOUT, fresh_temp_dir, pty_session_isolated, run_slash_command};
+use crate::common::{
+    Key, RENDER_TIMEOUT, fresh_temp_dir, pty_session_isolated, pty_session_scripted_home,
+    pty_session_slow_scripted_home, run_slash_command,
+};
 
 /// A fresh temp HOME the test owns. The memory roots + the settings file land
 /// under the project-local state dir inside HOME, so assertions read there
@@ -253,6 +256,97 @@ fn test_esc_closes_pane() {
     assert!(
         !screen.contains("a to toggle ● auto-memory"),
         "memory controls should be gone:\n{screen}"
+    );
+    drop(s);
+    drop(fs::remove_dir_all(&home));
+}
+
+/// A scripted save_memory call in the main run drains at the run boundary
+/// into a PrimaryAgent notice. The notice summary carries the causal label
+/// (from this turn) and the count; the expanded per-change row carries the
+/// scope the write was addressed to. Pins the H3b causal label and the H3c
+/// scope row through the real binary, not a TestBackend.
+#[test]
+#[ignore]
+fn test_notice_label_and_scope() {
+    let home = fresh_home("notice-scope");
+    // The main agent's save_memory tool is unpinned, so the input carries a
+    // scope field the model picks per call. A project scope lands the write
+    // in the project root and the notice names it.
+    let script = r#"[
+      [{"type":"ToolCall","id":"c1","name":"save_memory","input":{"key":"deploy-gate","description":"deploy gate state","source":"feedback","content":"The deploy gate is red.","scope":"project"}}],
+      [{"type":"Text","text":"saved"}]
+    ]"#;
+    let mut s = pty_session_scripted_home(script, home.clone());
+    s.send_str("note the deploy gate");
+    s.send_key(&Key::Enter);
+    assert!(
+        s.wait_for("from this turn", RENDER_TIMEOUT),
+        "the notice summary should carry the causal label:\n{}",
+        s.output()
+    );
+    assert!(
+        s.wait_for("1 change", RENDER_TIMEOUT),
+        "the summary should name the change count:\n{}",
+        s.output()
+    );
+    // The fold layer collapses the notice to its summary; Ctrl+O reveals the
+    // per-change row, which carries the key and the scope.
+    s.send_key(&Key::Ctrl('o'));
+    assert!(
+        s.wait_for("created deploy-gate", RENDER_TIMEOUT),
+        "the expanded row should name the key:\n{}",
+        s.output()
+    );
+    assert!(
+        s.wait_for("· project", RENDER_TIMEOUT),
+        "the expanded row should name the scope the write was addressed to:\n{}",
+        s.output()
+    );
+    drop(s);
+    drop(fs::remove_dir_all(&home));
+}
+
+/// A background extractor notice lands in the transcript after the run that
+/// triggered it, with the causal label and the auto scope the extractor's
+/// pinned save carries. Covers the real order the design names (a background
+/// notice arriving after the user's turn) end-to-end through the real binary,
+/// not a synthetic TestBackend injection. The pane-open skip path is covered
+/// by the unit tests; this test pins the live notice itself.
+#[test]
+#[ignore]
+fn test_extractor_notice_lands() {
+    let home = fresh_home("notice-bg");
+    // The main run is a plain reply so it ends in one model call; the
+    // extractor's fork then consumes the scripted save_memory (with an
+    // evidence quote drawn from the prompt) and a trailing text so the pass
+    // ends. The slow stub keeps the extractor in flight so the notice lands
+    // measurably after the run.
+    let script = r#"[
+      [{"type":"Text","text":"ok"}],
+      [{"type":"ToolCall","id":"ex1","name":"save_memory","input":{"key":"gate-fact","description":"gate state","source":"feedback","content":"The gate is open.","evidence":[{"quote":"note the gate"}]}}],
+      [{"type":"Text","text":"done"}]
+    ]"#;
+    let mut s = pty_session_slow_scripted_home(600, script, home.clone());
+    s.send_str("note the gate state");
+    s.send_key(&Key::Enter);
+    assert!(
+        s.wait_for("ok", RENDER_TIMEOUT),
+        "the main run should finish before the extractor fires:\n{}",
+        s.output()
+    );
+    // The extractor's notice lands after the run with the causal label and
+    // the auto scope the pinned save carries.
+    assert!(
+        s.wait_for("from this turn", RENDER_TIMEOUT),
+        "the background notice should carry the causal label:\n{}",
+        s.output()
+    );
+    s.send_key(&Key::Ctrl('o'));
+    assert!(
+        s.wait_for("created gate-fact · auto", RENDER_TIMEOUT),
+        "the expanded row should name the key and the auto scope:\n{}",
+        s.output()
     );
     drop(s);
     drop(fs::remove_dir_all(&home));

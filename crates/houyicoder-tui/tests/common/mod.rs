@@ -753,6 +753,35 @@ pub fn pty_session_isolated(home: PathBuf) -> PtySession {
     ))
 }
 
+/// Like pty_session_isolated, but the stub emits a scripted response sequence
+/// so a memory-notice PTY test can drive a real save_memory tool call through
+/// the binary and assert the notice renders end-to-end.
+pub fn pty_session_scripted_home(script_json: &str, home: PathBuf) -> PtySession {
+    let repo = make_temp_repo("home");
+    pty_session_inner(PtySession::launch_with_args(
+        Some(script_json.to_string()),
+        None,
+        Some(home),
+        Some(repo),
+        &[],
+    ))
+}
+
+/// Like pty_session_scripted_home, but the stub applies an inter-chunk delay
+/// to text deltas so a background worker (the memory extractor's fork) stays
+/// in flight long enough for the test to act before its notice lands. The
+/// delay does not apply to tool-call events, which yield immediately.
+pub fn pty_session_slow_scripted_home(ms: u64, script_json: &str, home: PathBuf) -> PtySession {
+    let repo = make_temp_repo("home");
+    pty_session_inner(PtySession::launch_with_args(
+        Some(script_json.to_string()),
+        Some(ms),
+        Some(home),
+        Some(repo),
+        &[],
+    ))
+}
+
 /// Like pty_session, but the stub emits a scripted response sequence
 /// (HOUYICODER_TEST_STUB_RESPONSE_SCRIPT) so the run drives real tool calls. Used by the
 /// tool-call + permission-flow tests.
