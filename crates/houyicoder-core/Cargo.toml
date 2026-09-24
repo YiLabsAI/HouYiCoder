@@ -41,6 +41,7 @@ pollster = "1"
 reflink-copy = { version = "0.1.30", default-features = false }
 tracing = "0.1.44"
 dunce = "1"
+unicode-normalization = "0.1"
 
 [dev-dependencies]
 houyicoder-session = { path = "../houyicoder-session" }

@@ -25,7 +25,7 @@ Procedure:
 1. A recalled memories manifest is appended below when the store is non-empty. Read it first so you do not save a duplicate of an existing entry. If a fact refines an existing entry, reuse its key to refresh it. If no manifest is appended, the store is empty.
 2. The conversation above is the complete evidence window for this pass. Every message in it is eligible; no earlier history is present, so there is nothing to re-read or re-verify. Do not ask for older context — earlier turns were already extracted or are derivable from the code.
 3. Decide what is worth saving. A memory must capture context NOT derivable from the current project state: code patterns, architecture, file paths, git history, and fix recipes are derivable — do NOT save them. Save only: user role or preferences you learned; corrective or validating feedback on how to work (with the why); project goals, decisions, or coordination not in git (with the why); pointers to external systems.
-4. Save each candidate via the save_memory tool with a kebab-case key, a specific one-line description naming the entities, the correct source type, and the body (with Why and How-to-apply lines for feedback and project types).
+4. Save each candidate via the save_memory tool with a kebab-case key, a specific one-line description naming the entities, the correct source type, the body (with Why and How-to-apply lines for feedback and project types), and an evidence array of one to three quotes copied verbatim from the conversation above. Pick short snippets that ground this memory in what was actually said — two or three precise quotes beat one long one. The host validates each quote against the window and rejects a save whose quotes do not appear there before it writes; the manifest below is not evidence, so a save keyed on a fact only the manifest states has no quote to cite and is rejected.
 5. You may issue multiple save_memory calls in parallel within one turn. Do not interleave reads with writes — the appended manifest (when present) is the read step; go straight to writing.
 6. If nothing in the recent conversation is non-obvious and non-derivable, save nothing. An empty extraction is the correct outcome for a turn with no durable signal — do not force a save.
 
@@ -44,7 +44,7 @@ Environment assertions (a tool fails in a sandbox, a command is unavailable, a p
 pub fn build_extraction_prompt(memories: &[MemorySummary]) -> String {
     let mut prompt = extraction_prompt();
     prompt.push_str(
-        "\n\n## Eligible conversation window\n\nThe messages above are the complete evidence window. Cite only what they contain. The manifest below names memories that already exist and is not itself evidence.",
+        "\n\n## Eligible conversation window\n\nThe messages above are the complete evidence window. Cite only what they contain, and copy the evidence quotes for each save_memory call verbatim from these messages. The manifest below names memories that already exist and is not itself evidence.",
     );
     if memories.is_empty() {
         return prompt;
@@ -110,6 +110,14 @@ mod tests {
         assert!(
             p.contains("self-falsify"),
             "prompt teaches environment assertions to carry a falsification step"
+        );
+        assert!(
+            p.contains("evidence"),
+            "prompt must tell the agent to supply window-grounded evidence quotes"
+        );
+        assert!(
+            p.contains("rejected"),
+            "prompt must warn that a save without a window quote is rejected"
         );
     }
 

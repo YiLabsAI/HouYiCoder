@@ -28,12 +28,16 @@ use std::sync::Arc;
 
 use houyicoder_api::memory::MemoryProvider;
 use houyicoder_async::PFut;
-use houyicoder_context::{MemoryEntry, MemoryError, MemoryOrigin, MemoryScope, MemorySource};
+use houyicoder_context::{
+    MemoryEntry, MemoryError, MemoryOrigin, MemoryScope, MemorySource, SessionEvent,
+    SessionLogEntry,
+};
 use serde_json::{Value, json};
 
 use super::{Tool, ToolCtx, ToolError};
 use crate::agent::memory::MutationLog;
 use houyicoder_api::agent_event::MemoryOperation;
+use tracing::debug;
 
 /// A structured memory-write tool. The forked extraction agent calls it to
 /// persist a new memory entry; the provider owns the atomic write. Holds the
@@ -54,6 +58,11 @@ pub struct MemoryAddTool {
     /// where the model is offered no scope field and every write lands in the
     /// auto root; None where the model picks the root per call.
     scope: Option<MemoryScope>,
+    /// The evidence window the extraction seam validates quotes against. Empty
+    /// on the unpinned main-agent tool (no grounding check); the host-owned
+    /// window events on the extraction seam, so every save must quote text the
+    /// forked agent actually saw rather than a manifest-only fact.
+    evidence: Arc<[SessionLogEntry]>,
 }
 
 impl MemoryAddTool {
@@ -65,22 +74,26 @@ impl MemoryAddTool {
             recorder: None,
             origin: MemoryOrigin::Unknown,
             scope: None,
+            evidence: Arc::from(Vec::new()),
         }
     }
 
     /// The forked-extraction seam in one step: recorder, extractor origin,
-    /// and the auto-root pin. A scope choice offered to the extraction model
-    /// gets taken, and the write then lands outside the isolated auto root —
-    /// the pinned tool exposes no scope field at all.
+    /// the auto-root pin, and the evidence window every save must quote. A
+    /// scope choice offered to the extraction model gets taken, and the write
+    /// then lands outside the isolated auto root — the pinned tool exposes no
+    /// scope field at all.
     pub(crate) fn new_extraction(
         provider: Arc<dyn MemoryProvider>,
         recorder: Arc<MutationLog>,
+        evidence: Arc<[SessionLogEntry]>,
     ) -> Self {
         Self {
             provider,
             recorder: Some(recorder),
             origin: MemoryOrigin::Extractor,
             scope: Some(MemoryScope::Auto),
+            evidence,
         }
     }
 
@@ -140,7 +153,38 @@ impl Tool for MemoryAddTool {
             "required": ["key", "description", "source", "content"],
             "additionalProperties": false
         });
-        if self.scope.is_none() {
+        if self.scope.is_some() {
+            // The extraction seam grounds every save in window evidence: one
+            // to three quotes the forked agent copies from the conversation it
+            // saw, validated host-side as a substring of a window event's body
+            // so a manifest-only fact (no window quote) is rejected.
+            let props = schema["properties"]
+                .as_object_mut()
+                .expect("properties object built above");
+            props.insert(
+                "evidence".to_string(),
+                json!({
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 3,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "quote": {
+                                "type": "string",
+                                "description": "A non-empty snippet copied verbatim from the conversation window. Normalized (whitespace folded, Unicode NFC) host-side; must be a substring of some window message body. Two or three short quotes beat one long one."
+                            }
+                        },
+                        "required": ["quote"],
+                        "additionalProperties": false
+                    },
+                    "description": "One to three verbatim quotes from the conversation window that ground this memory. A save without a real window quote is rejected; the manifest above is not evidence."
+                }),
+            );
+            if let Some(req) = schema["required"].as_array_mut() {
+                req.push(json!("evidence"));
+            }
+        } else {
             // Only an unpinned tool offers the choice; the enum lists every
             // root the parser accepts, so schema and parser cannot disagree.
             let props = schema["properties"]
@@ -165,6 +209,13 @@ impl Tool for MemoryAddTool {
             let description = parse_string(&input, "description")?;
             let source = parse_source(&input)?;
             let content = parse_string(&input, "content")?;
+            // The extraction seam grounds every save in window evidence before
+            // the write: a save whose quotes are not substrings of a window
+            // event body is rejected with a correctable error, so no write
+            // lands and the recorder stays flat. Unpinned tools skip this.
+            if self.scope.is_some() {
+                validate_extraction_evidence(&self.evidence, &input)?;
+            }
             // A host-pinned tool ignores any scope in the input: the pin is
             // the answer, whatever the caller sent.
             let scope = self.scope.unwrap_or_else(|| parse_scope(&input));
@@ -264,6 +315,91 @@ fn parse_scope(input: &Value) -> MemoryScope {
     MemoryScope::from_label(label).unwrap_or(MemoryScope::Auto)
 }
 
+/// Build a correctable evidence-rejection error and trace it host-side so a
+/// recurring extraction failure is observable in the tracing stream.
+fn reject_evidence(msg: String) -> ToolError {
+    debug!(target: "memory_add", "extraction evidence rejected: {msg}");
+    ToolError::Failed(msg)
+}
+
+/// Validate the extraction seam's evidence: one to three quotes, each a
+/// normalized substring of some window event's body. A save keyed on a
+/// manifest-only fact has no quote the window contains, so it is rejected
+/// with a correctable error before any write or recorder bump.
+fn validate_extraction_evidence(
+    window: &[SessionLogEntry],
+    input: &Value,
+) -> Result<(), ToolError> {
+    let evidence = input
+        .get("evidence")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| {
+            reject_evidence(
+                "save_memory: 'evidence' must be an array of 1..3 quotes copied from the conversation window"
+                    .to_string(),
+            )
+        })?;
+    if evidence.is_empty() {
+        return Err(reject_evidence(
+            "save_memory: 'evidence' must contain at least one quote from the conversation window"
+                .to_string(),
+        ));
+    }
+    if evidence.len() > 3 {
+        return Err(reject_evidence(
+            "save_memory: 'evidence' may contain at most three quotes".to_string(),
+        ));
+    }
+    for (i, item) in evidence.iter().enumerate() {
+        let quote = item.get("quote").and_then(|v| v.as_str()).ok_or_else(|| {
+            reject_evidence(format!(
+                "save_memory: evidence[{i}] must have a non-empty 'quote' copied from the conversation window"
+            ))
+        })?;
+        let needle = normalize_quote(quote);
+        if needle.is_empty() {
+            return Err(reject_evidence(format!(
+                "save_memory: evidence[{i}] quote is empty after normalization"
+            )));
+        }
+        if !window
+            .iter()
+            .any(|e| normalized_body(&e.event).contains(&needle))
+        {
+            return Err(reject_evidence(format!(
+                "save_memory: evidence[{i}] quote was not found in the conversation window; copy the snippet verbatim from the messages above (the manifest is not evidence)"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Normalize a quote the same way window bodies are normalized: NFC, then
+/// collapse runs of whitespace to single spaces and trim. A quote copied
+/// from the conversation matches its source body under this normalization
+/// even if line breaks or extra spaces drifted.
+fn normalize_quote(quote: &str) -> String {
+    use unicode_normalization::UnicodeNormalization;
+    let nfc: String = quote.nfc().collect();
+    nfc.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// The normalized text body of a window event the model could quote from.
+/// User/assistant/mid-turn inputs contribute their text; tool calls and
+/// results contribute their JSON payload (the model sees both in the
+/// projection). Other events carry no quotable body.
+fn normalized_body(event: &SessionEvent) -> String {
+    let raw = match event {
+        SessionEvent::UserInput { text }
+        | SessionEvent::MidTurnInput { text, .. }
+        | SessionEvent::AssistantMessage { text, .. } => text.as_str(),
+        SessionEvent::ToolCall { input, .. } => &input.to_string(),
+        SessionEvent::ToolResult { output, .. } => &output.to_string(),
+        _ => "",
+    };
+    normalize_quote(raw)
+}
+
 /// Map a memory store error onto the tool error the model sees. An
 /// atomicity failure is surfaced verbatim so the model knows the store was
 /// left half-written (rare; the provider best-effort-rolls-back).
@@ -289,402 +425,5 @@ fn map_memory_error(e: MemoryError) -> ToolError {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use houyicoder_api::memory::{MemoryProvider, MemoryWriteOutcome};
-    use houyicoder_context::MemoryEntry;
-    use std::collections::HashSet;
-    use std::sync::Mutex;
-
-    /// An in-memory capturing provider so the tool test stays deterministic
-    /// and asserts the structured call reached add with the right entry.
-    /// Records the scope the caller passed so a scope-field test can assert
-    /// the project scope threaded through to the provider.
-    struct RecordingMemory {
-        writes: Mutex<Vec<MemoryEntry>>,
-        scopes: Mutex<Vec<MemoryScope>>,
-    }
-
-    impl MemoryProvider for RecordingMemory {
-        fn recall(
-            &self,
-            _query: &str,
-            _budget: usize,
-            _surfaced: &HashSet<String>,
-        ) -> Vec<MemoryEntry> {
-            Vec::new()
-        }
-        fn add(&self, entry: MemoryEntry) -> Result<(), MemoryError> {
-            self.writes.lock().expect("writes").push(entry);
-            self.scopes.lock().expect("scopes").push(MemoryScope::Auto);
-            Ok(())
-        }
-        fn add_in_scope(&self, entry: MemoryEntry, scope: MemoryScope) -> Result<(), MemoryError> {
-            self.writes.lock().expect("writes").push(entry);
-            self.scopes.lock().expect("scopes").push(scope);
-            Ok(())
-        }
-    }
-
-    fn provider() -> Arc<RecordingMemory> {
-        Arc::new(RecordingMemory {
-            writes: Mutex::new(Vec::new()),
-            scopes: Mutex::new(Vec::new()),
-        })
-    }
-
-    struct UnchangedMemory;
-
-    impl MemoryProvider for UnchangedMemory {
-        fn recall(
-            &self,
-            _query: &str,
-            _budget: usize,
-            _surfaced: &HashSet<String>,
-        ) -> Vec<MemoryEntry> {
-            Vec::new()
-        }
-
-        fn add(&self, _entry: MemoryEntry) -> Result<(), MemoryError> {
-            Ok(())
-        }
-
-        fn add_if_changed(&self, _entry: MemoryEntry) -> Result<MemoryWriteOutcome, MemoryError> {
-            Ok(MemoryWriteOutcome::Unchanged)
-        }
-    }
-
-    async fn run(tool: &MemoryAddTool, input: Value) -> Result<Value, ToolError> {
-        tool.execute(ToolCtx::new("test"), input).await
-    }
-
-    #[tokio::test]
-    async fn test_save_lands_structured_entry() {
-        let p = provider();
-        let tool = MemoryAddTool::new(Arc::clone(&p) as Arc<dyn MemoryProvider>);
-        let input = json!({
-            "key": "user-prefers-terse",
-            "description": "User prefers terse responses without preamble",
-            "source": "feedback",
-            "content": "Keep responses terse.\n**Why:** the user said the long intros waste their time.\n**How to apply:** drop preamble, lead with the answer."
-        });
-        let out = run(&tool, input).await.expect("save succeeds");
-        assert_eq!(out, json!({"saved": "user-prefers-terse"}));
-        let writes = p.writes.lock().expect("writes").clone();
-        assert_eq!(writes.len(), 1, "exactly one entry landed");
-        let e = &writes[0];
-        assert_eq!(e.key, "user-prefers-terse");
-        assert_eq!(e.source, MemorySource::Feedback);
-        assert_eq!(
-            e.description,
-            "User prefers terse responses without preamble"
-        );
-        assert!(e.content.contains("**Why:**"));
-        assert!(e.mtime_secs > 0, "mtime stamped with now");
-    }
-
-    /// A threaded recorder bumps once per successful save so the extractor can
-    /// fire one memory-saved notice per pass. A failed save (unknown source)
-    /// does not bump it.
-    #[tokio::test]
-    async fn test_save_memory_counts_writes() {
-        let p = provider();
-        let recorder = Arc::new(MutationLog::new());
-        let tool = MemoryAddTool::new(Arc::clone(&p) as Arc<dyn MemoryProvider>)
-            .with_recorder(recorder.clone());
-        let input = json!({
-            "key": "k1",
-            "description": "d",
-            "source": "user",
-            "content": "c"
-        });
-        run(&tool, input.clone()).await.expect("first save");
-        run(
-            &tool,
-            json!({ "key": "k2", "description": "d", "source": "user", "content": "c" }),
-        )
-        .await
-        .expect("second save");
-        let changes = recorder.take();
-        assert_eq!(changes.len(), 2);
-        assert_eq!(changes[0].key, "k1");
-        assert_eq!(changes[1].key, "k2");
-        let err_input =
-            json!({ "key": "k3", "description": "d", "source": "bogus", "content": "c" });
-        let _err = run(&tool, err_input).await;
-        assert!(recorder.take().is_empty());
-    }
-
-    #[tokio::test]
-    async fn test_repeat_save_emits_once() {
-        let root =
-            std::env::temp_dir().join(format!("memory-add-unchanged-{}", std::process::id()));
-        std::fs::create_dir_all(&root).expect("create memory root");
-        let provider = Arc::new(houyicoder_memory::MarkdownMemoryProvider::new(root.clone()));
-        let recorder = Arc::new(MutationLog::new());
-        let tool = MemoryAddTool::new(provider).with_recorder(recorder.clone());
-        let input =
-            json!({ "key": "stable", "description": "d", "source": "user", "content": "c" });
-        run(&tool, input.clone()).await.expect("first save");
-        assert_eq!(recorder.take().len(), 1, "the first save is observable");
-        let second = run(&tool, input).await.expect("repeated save");
-        assert_eq!(second, json!({"saved": "stable", "unchanged": true}));
-        assert!(recorder.take().is_empty(), "the repeated save is silent");
-        std::fs::remove_dir_all(root).ok();
-    }
-
-    #[tokio::test]
-    async fn test_unchanged_save_is_silent() {
-        let recorder = Arc::new(MutationLog::new());
-        let tool = MemoryAddTool::new(Arc::new(UnchangedMemory)).with_recorder(recorder.clone());
-        let input = json!({ "key": "k", "description": "d", "source": "user", "content": "c" });
-        let output = run(&tool, input).await.expect("unchanged save succeeds");
-        assert_eq!(output, json!({"saved": "k", "unchanged": true}));
-        assert!(recorder.take().is_empty(), "unchanged writes do not notify");
-    }
-
-    /// Without a threaded recorder the tool still saves (the main runner's tool
-    /// does not notify, so it never wires one).
-    #[tokio::test]
-    async fn test_save_memory_works_untracked() {
-        let p = provider();
-        let tool = MemoryAddTool::new(Arc::clone(&p) as Arc<dyn MemoryProvider>);
-        let input = json!({ "key": "k", "description": "d", "source": "user", "content": "c" });
-        let out = run(&tool, input).await.expect("save succeeds");
-        assert_eq!(out, json!({"saved": "k"}));
-    }
-
-    #[tokio::test]
-    async fn test_save_rejects_unknown_source() {
-        let p = provider();
-        let tool = MemoryAddTool::new(Arc::clone(&p) as Arc<dyn MemoryProvider>);
-        let input = json!({
-            "key": "k",
-            "description": "d",
-            "source": "personal",
-            "content": "c"
-        });
-        let err = run(&tool, input)
-            .await
-            .expect_err("unknown source rejected");
-        let msg = err.to_string();
-        assert!(
-            msg.contains("user, feedback, project, or reference"),
-            "error names the accepted set: {msg}"
-        );
-        assert!(
-            p.writes.lock().expect("writes").is_empty(),
-            "no write landed on a rejected source"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_save_rejects_missing_field() {
-        let p = provider();
-        let tool = MemoryAddTool::new(Arc::clone(&p) as Arc<dyn MemoryProvider>);
-        let input = json!({
-            "key": "k",
-            "source": "user",
-            "content": "c"
-        });
-        let err = run(&tool, input)
-            .await
-            .expect_err("missing description rejected");
-        assert!(
-            err.to_string().contains("'description'"),
-            "error names the missing field: {}",
-            err
-        );
-    }
-
-    /// Auto-approve is required by the forked-extract write seam because a
-    /// true gate would queue approvals with no responder.
-    #[test]
-    fn test_save_memory_auto_approves() {
-        let p = provider();
-        let tool = MemoryAddTool::new(Arc::clone(&p) as Arc<dyn MemoryProvider>);
-        assert!(!tool.requires_approval(), "auto-approve must hold");
-        assert!(!tool.is_destructive(), "an add is not destructive");
-        assert!(!tool.is_read_only(), "a save mutates the store");
-    }
-
-    /// The structured capability surface: the tool exposes no path field, so
-    /// there is no path argument for the model to probe. The schema pins
-    /// exactly five fields (the four structured fields plus the optional
-    /// scope) with no additional properties.
-    #[test]
-    fn test_save_schema_pins_fields() {
-        let p = provider();
-        let tool = MemoryAddTool::new(Arc::clone(&p) as Arc<dyn MemoryProvider>);
-        let schema = tool.input_schema();
-        let props = schema
-            .get("properties")
-            .and_then(|v| v.as_object())
-            .expect("properties object");
-        assert!(
-            !props.contains_key("path"),
-            "no path field — the provider owns paths"
-        );
-        let mut keys: Vec<&String> = props.keys().collect();
-        keys.sort();
-        assert_eq!(
-            keys,
-            vec![
-                &"content".to_string(),
-                &"description".to_string(),
-                &"key".to_string(),
-                &"scope".to_string(),
-                &"source".to_string(),
-            ],
-            "exactly the five structured fields"
-        );
-        // The enum lists every root the parser accepts, so a label the
-        // schema hides cannot be a label the parser would have taken.
-        let scope_enum = props["scope"]["enum"].as_array().expect("scope enum");
-        assert_eq!(
-            scope_enum,
-            &vec![json!("user"), json!("auto"), json!("project")],
-            "schema enum and parser agree on the roots"
-        );
-    }
-
-    /// The pinned construction hides the scope field: four properties, none
-    /// named scope, so the extraction model is never offered a root choice.
-    #[test]
-    fn test_extraction_schema_hides_scope() {
-        let p = provider();
-        let tool = MemoryAddTool::new_extraction(
-            Arc::clone(&p) as Arc<dyn MemoryProvider>,
-            Arc::new(MutationLog::new()),
-        );
-        let schema = tool.input_schema();
-        let props = schema
-            .get("properties")
-            .and_then(|v| v.as_object())
-            .expect("properties object");
-        assert!(
-            !props.contains_key("scope"),
-            "a pinned tool exposes no scope field"
-        );
-        let mut keys: Vec<&String> = props.keys().collect();
-        keys.sort();
-        assert_eq!(
-            keys,
-            vec![
-                &"content".to_string(),
-                &"description".to_string(),
-                &"key".to_string(),
-                &"source".to_string(),
-            ],
-            "the four structured fields remain"
-        );
-    }
-
-    /// The pin answers whatever the input claims: a scope label in the call
-    /// is ignored and the write still lands in the auto root, stamped with
-    /// the extractor origin and recorded for the pass notice.
-    #[tokio::test]
-    async fn test_extraction_pin_ignores_input() {
-        let p = provider();
-        let recorder = Arc::new(MutationLog::new());
-        let tool = MemoryAddTool::new_extraction(
-            Arc::clone(&p) as Arc<dyn MemoryProvider>,
-            Arc::clone(&recorder),
-        );
-        let out = run(
-            &tool,
-            json!({
-                "key": "k",
-                "description": "d",
-                "source": "feedback",
-                "content": "c",
-                "scope": "project"
-            }),
-        )
-        .await
-        .expect("pinned save succeeds");
-        assert_eq!(out, json!({"saved": "k"}));
-        let scopes = p.scopes.lock().expect("scopes").clone();
-        assert_eq!(
-            scopes,
-            vec![MemoryScope::Auto],
-            "the pin overrides the input label"
-        );
-        let writes = p.writes.lock().expect("writes").clone();
-        assert_eq!(
-            writes[0].origin,
-            MemoryOrigin::Extractor,
-            "the seam stamps the writer"
-        );
-        assert_eq!(recorder.take().len(), 1, "the save notifies once");
-    }
-
-    /// The scope field defaults to auto when omitted, and a project value
-    /// threads through to the provider's add_in_scope so the dream refreshes
-    /// a project-scope entry in place rather than shadowing it with a
-    /// competing auto copy.
-    #[tokio::test]
-    async fn test_save_scope_threads_through() {
-        let p = provider();
-        let tool = MemoryAddTool::new(Arc::clone(&p) as Arc<dyn MemoryProvider>);
-        // Default: no scope field -> Auto.
-        run(
-            &tool,
-            json!({
-                "key": "k-auto",
-                "description": "d",
-                "source": "user",
-                "content": "c"
-            }),
-        )
-        .await
-        .expect("default save");
-        // Explicit project scope -> add_in_scope(Project).
-        run(
-            &tool,
-            json!({
-                "key": "k-proj",
-                "description": "d",
-                "source": "project",
-                "content": "c",
-                "scope": "project"
-            }),
-        )
-        .await
-        .expect("project-scope save");
-        let scopes = p.scopes.lock().expect("scopes").clone();
-        assert_eq!(
-            scopes,
-            vec![MemoryScope::Auto, MemoryScope::Project],
-            "scope field threads through to the provider"
-        );
-        let writes = p.writes.lock().expect("writes").clone();
-        assert_eq!(writes.len(), 2, "both saves landed");
-        assert_eq!(writes[0].key, "k-auto");
-        assert_eq!(writes[1].key, "k-proj");
-    }
-
-    /// An unknown scope value falls back to auto rather than rejecting the
-    /// call: scope is an advisory field and the model's intent was to save.
-    /// A bad value still saves, so a typo does not starve memory.
-    #[tokio::test]
-    async fn test_save_bad_scope_fallback() {
-        let p = provider();
-        let tool = MemoryAddTool::new(Arc::clone(&p) as Arc<dyn MemoryProvider>);
-        let out = run(
-            &tool,
-            json!({
-                "key": "k",
-                "description": "d",
-                "source": "user",
-                "content": "c",
-                "scope": "bogus"
-            }),
-        )
-        .await
-        .expect("bad scope falls back to auto");
-        assert_eq!(out, json!({"saved": "k"}));
-        let scopes = p.scopes.lock().expect("scopes").clone();
-        assert_eq!(scopes, vec![MemoryScope::Auto], "bad scope -> auto");
-    }
-}
+#[path = "memory_add_tests.rs"]
+mod tests;

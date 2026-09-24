@@ -6,7 +6,7 @@
 use houyicoder_api::memory::MemoryProvider;
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_api::session::SessionLog;
-use houyicoder_context::SessionId;
+use houyicoder_context::{SessionId, SessionLogEntry};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -30,10 +30,11 @@ pub(crate) fn build_forked_extract_runner(
     cwd: &Path,
     config: RunnerConfig,
     recorder: Arc<MutationLog>,
+    evidence: Arc<[SessionLogEntry]>,
 ) -> Runner {
     let tools = ToolRegistry::new();
     Runner::new(store, provider, tools, config)
-        .install_extraction_memory(memory, recorder)
+        .install_extraction_memory(memory, recorder, evidence)
         .with_cwd(cwd.to_path_buf())
 }
 
@@ -54,7 +55,12 @@ pub(crate) async fn run_forked_extract(
     // formatMemoryManifest pre-inject). Built before moving memory into
     // the runner.
     let prompt = build_extraction_prompt(&memory.list_memories());
-    let runner = build_forked_extract_runner(store, provider, memory, cwd, config, recorder);
+    // The evidence window the save_memory tool validates quotes against:
+    // the exact events the forked agent sees, owned so the Arc<dyn Tool>
+    // outlives the borrowed ExactExtractionWindow.
+    let evidence = Arc::from(window.events().to_vec());
+    let runner =
+        build_forked_extract_runner(store, provider, memory, cwd, config, recorder, evidence);
     let session = SessionId::new();
     let result = runner.run_forked(session, window.events(), prompt).await;
     // A fork that hits the turn cap did not finish extracting — treat as a
@@ -173,7 +179,8 @@ mod tests {
                             "key": "user-prefers-terse",
                             "description": "User prefers terse responses",
                             "source": "feedback",
-                            "content": "Keep responses terse.\n**Why:** the user said long intros waste their time.\n**How to apply:** drop preamble, lead with the answer."
+                            "content": "Keep responses terse.\n**Why:** the user said long intros waste their time.\n**How to apply:** drop preamble, lead with the answer.",
+                            "evidence": [{"quote": "the long intros waste my time"}]
                         }),
                     },
                 ],
@@ -379,6 +386,7 @@ mod tests {
             Path::new("."),
             config(),
             Arc::new(MutationLog::new()),
+            Arc::from(Vec::new()),
         );
         let tool = runner
             .tools()

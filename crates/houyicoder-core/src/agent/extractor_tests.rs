@@ -58,26 +58,43 @@ struct FakeProvider {
 impl ModelProvider for FakeProvider {
     fn complete(
         &self,
-        _req: CompletionRequest,
+        req: CompletionRequest,
     ) -> PFut<'_, Result<CompletionResponse, ProviderError>> {
+        let quote = first_user_quote(&req);
         let mut c = self.calls.lock().expect("c");
         *c += 1;
         let n = *c;
         drop(c);
-        Box::pin(async move { Ok(scripted(n)) })
+        Box::pin(async move { Ok(scripted(n, &quote)) })
     }
-    fn stream(&self, _req: CompletionRequest) -> PStream<'_, Result<LlmEvent, ProviderError>> {
+    fn stream(&self, req: CompletionRequest) -> PStream<'_, Result<LlmEvent, ProviderError>> {
+        let quote = first_user_quote(&req);
         let mut c = self.calls.lock().expect("c");
         *c += 1;
         let n = *c;
         drop(c);
-        stream_from_response(scripted(n))
+        stream_from_response(scripted(n, &quote))
     }
     fn capabilities(&self) -> ModelCapabilities {
         ModelCapabilities::default()
     }
 }
-fn scripted(n: usize) -> CompletionResponse {
+
+/// Copy the first user message the forked agent saw as the evidence quote,
+/// mimicking a model that grounds its save in the window. The fork appends
+/// the extraction prompt after the window events, so the first user item is
+/// the window's opening user turn whatever the test fed.
+fn first_user_quote(req: &CompletionRequest) -> String {
+    req.input
+        .iter()
+        .find_map(|i| match i {
+            InputItem::User { content } => Some(content.clone()),
+            _ => None,
+        })
+        .unwrap_or_default()
+}
+
+fn scripted(n: usize, quote: &str) -> CompletionResponse {
     if n % 2 == 1 {
         CompletionResponse {
             output: vec![
@@ -89,7 +106,8 @@ fn scripted(n: usize) -> CompletionResponse {
                     name: "save_memory".into(),
                     input: serde_json::json!({
                         "key": "k", "description": "d",
-                        "source": "feedback", "content": "c"
+                        "source": "feedback", "content": "c",
+                        "evidence": [{"quote": quote}]
                     }),
                 },
             ],
@@ -138,26 +156,28 @@ struct MainFinalProvider {
 impl ModelProvider for MainFinalProvider {
     fn complete(
         &self,
-        _req: CompletionRequest,
+        req: CompletionRequest,
     ) -> PFut<'_, Result<CompletionResponse, ProviderError>> {
+        let quote = first_user_quote(&req);
         let mut c = self.calls.lock().expect("c");
         *c += 1;
         let n = *c;
         drop(c);
-        Box::pin(async move { Ok(scripted_main(n)) })
+        Box::pin(async move { Ok(scripted_main(n, &quote)) })
     }
-    fn stream(&self, _req: CompletionRequest) -> PStream<'_, Result<LlmEvent, ProviderError>> {
+    fn stream(&self, req: CompletionRequest) -> PStream<'_, Result<LlmEvent, ProviderError>> {
+        let quote = first_user_quote(&req);
         let mut c = self.calls.lock().expect("c");
         *c += 1;
         let n = *c;
         drop(c);
-        stream_from_response(scripted_main(n))
+        stream_from_response(scripted_main(n, &quote))
     }
     fn capabilities(&self) -> ModelCapabilities {
         ModelCapabilities::default()
     }
 }
-fn scripted_main(n: usize) -> CompletionResponse {
+fn scripted_main(n: usize, quote: &str) -> CompletionResponse {
     // n=1: main run final text. n=2: forked save_memory. n>=3: forked final.
     if n == 2 {
         CompletionResponse {
@@ -170,7 +190,8 @@ fn scripted_main(n: usize) -> CompletionResponse {
                     name: "save_memory".into(),
                     input: serde_json::json!({
                         "key": "k", "description": "d",
-                        "source": "feedback", "content": "c"
+                        "source": "feedback", "content": "c",
+                        "evidence": [{"quote": quote}]
                     }),
                 },
             ],
