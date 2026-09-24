@@ -1,11 +1,12 @@
 //! Tests for the turn fold: grouping, per-turn totals, records, and the
 //! timing and boundary facts it derives from the durable log.
 
+use super::super::turns::FoldMode;
 use super::super::view::*;
 use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
 use houyicoder_tui::view::trajectory_pane::{
     CompactedBoundary, ModelSwitchBoundary, RecordOutcome, TrajectoryRecordKind, TrajectoryRow,
-    TurnBoundary,
+    TrajectoryTurn, TurnBoundary,
 };
 
 fn ev(ts: u64, kind: SessionEvent) -> SessionLogEntry {
@@ -1380,5 +1381,82 @@ fn test_turn_title_derivation() {
         view.rows.is_empty()
             || matches!(&view.rows[0], TrajectoryRow::Turn(t) if !t.title.trim().is_empty()),
         "a row is never blank"
+    );
+}
+
+/// The list's fold and a drill's fold agree about every turn: what a row shows
+/// must not depend on which of the two built it. The two differ only in whether
+/// a record keeps its thinking, input, and output.
+#[test]
+fn test_fold_modes_agree() {
+    let events = vec![
+        ev(
+            100,
+            SessionEvent::UserInput {
+                text: "fix the bug".into(),
+            },
+        ),
+        ev(
+            110,
+            SessionEvent::ToolCall {
+                call_id: "c1".into(),
+                tool: "bash".into(),
+                input: serde_json::json!({"command": "ls"}),
+            },
+        ),
+        ev(
+            120,
+            SessionEvent::ToolResult {
+                call_id: "c1".into(),
+                output: serde_json::json!({"text": "a b c"}),
+                duration_ms: 7,
+            },
+        ),
+        ev(
+            130,
+            SessionEvent::TurnUsage {
+                turn: 1,
+                call_in_turn: 1,
+                input_tokens: 10,
+                output_tokens: 4,
+                cache_read_input_tokens: 2,
+                cache_write_input_tokens: 0,
+                reasoning_tokens: 1,
+                model: "m".into(),
+                recovery: false,
+                effort: None,
+            },
+        ),
+        ev(
+            140,
+            SessionEvent::UserInput {
+                text: "and again".into(),
+            },
+        ),
+        ev(
+            150,
+            SessionEvent::TurnAborted {
+                reason: "user".into(),
+            },
+        ),
+    ];
+
+    let (summary, _) = fold_rows(&events, 1, FoldMode::Summary);
+    let (records, _) = fold_rows(&events, 1, FoldMode::Records);
+    let turns = |rows: &[TrajectoryRow]| -> Vec<TrajectoryTurn> {
+        rows.iter()
+            .filter_map(|row| match row {
+                TrajectoryRow::Turn(turn) => Some(turn.clone()),
+                TrajectoryRow::Bg(_) => None,
+            })
+            .collect()
+    };
+    let summaries = turns(&summary);
+    let detailed = turns(&records);
+
+    assert_eq!(summaries.len(), 2, "two turns");
+    assert_eq!(
+        summaries, detailed,
+        "the two folds describe the same turns, field for field"
     );
 }

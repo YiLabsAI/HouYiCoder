@@ -512,7 +512,13 @@ fn positioned_bar(start_ms: u64, dur_ms: u64, total_ms: u64, width: usize) -> St
 /// scale so positioned bars read as a real timeline.
 fn ruler_line(total_ms: u64, width: usize) -> Line<'static> {
     let left = "0s".to_string();
-    let right = format_span_ms(total_ms);
+    // The right label is truncated to what the axis can carry: a span wider
+    // than the axis would push the ruler past the bar's columns, and a ruler
+    // that is not the axis it labels is worse than a short one.
+    let right = truncate_width(
+        &format_span_ms(total_ms),
+        width.saturating_sub(UnicodeWidthStr::width(left.as_str()) + 1),
+    );
     // The axis spans exactly the bar's columns, so a bar's position on the
     // ruler is its position in the turn.
     let mut s = " ".repeat(TIMELINE_PREFIX_W);

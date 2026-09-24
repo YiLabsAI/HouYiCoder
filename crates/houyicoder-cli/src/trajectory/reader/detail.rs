@@ -281,7 +281,12 @@ pub(super) fn detail(
         .ok()
         .and_then(|pages| pages.window_watermark)
         .and_then(|watermark| watermark.epoch);
-    if state.epoch != resident_epoch {
+    // A window being read again has no watermark yet: that is a read in flight,
+    // not a history that changed. Only a watermark naming another history makes
+    // the detail stale, so a retry does not report the drill as gone.
+    if let Some(resident) = resident_epoch
+        && state.epoch != Some(resident)
+    {
         state.pending = None;
         state.view = Some(Arc::new(stale_detail()));
         return Arc::new(stale_detail());

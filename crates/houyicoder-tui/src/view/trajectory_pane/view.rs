@@ -39,7 +39,7 @@ pub struct TrajectoryRecord {
     pub retries: usize,
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Debug)]
 pub struct TrajectoryTurn {
     pub n: usize,
     /// The durable identity of the turn: the event that opened it. A turn
@@ -81,7 +81,7 @@ pub struct TrajectoryTurn {
     pub success: bool,
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Debug)]
 pub struct TrajectoryBg {
     pub kind: String,
     pub summary: String,

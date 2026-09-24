@@ -347,10 +347,12 @@ fn record_row(
         ),
         sp(bar, bc),
         sp(" ", Color::DarkGray),
+        // Truncated to its column rather than padded: a span wider than the
+        // column would push the row past the width it is drawn in.
         sp(
             format!(
                 "{:>width$} ",
-                format_span_ms(ev.duration_ms),
+                truncate_width(&format_span_ms(ev.duration_ms), TIMELINE_DUR_W - 1),
                 width = TIMELINE_DUR_W - 1
             ),
             Color::Gray,

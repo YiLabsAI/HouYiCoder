@@ -29,12 +29,18 @@ impl SessionLogTrajectory {
     /// The read decides what the page means: an older page is prepended, the
     /// head replaces the window, a delta extends the page it was read behind,
     /// and a tail page replaces the window unless the user walked away from it.
-    fn apply_page(
+    ///
+    /// True when the page was applied. A page the window could not take -- a
+    /// delta behind another page, an anchor that no longer holds, a tail the
+    /// user walked away from -- leaves the window as it was, and the caller
+    /// must not stamp the watermark it was read for: that would claim the
+    /// window holds a history it never took.
+    pub(super) fn apply_page(
         state: &mut TrajectoryState,
         read: PageRead,
         outcome: TurnPage,
         dispatched: DurableWatermark,
-    ) {
+    ) -> bool {
         match read {
             // An older page is anchored to a durable turn, so a later
             // append does not invalidate it: it still abuts the page it
@@ -53,7 +59,7 @@ impl SessionLogTrajectory {
                     state.older_hidden = 0;
                     state.window_watermark = None;
                     Self::drop_view(state);
-                    return;
+                    return false;
                 }
                 let reached_start = arrived.oldest_anchor.is_none();
                 let arrived_turns = arrived.turn_count();
@@ -83,7 +89,7 @@ impl SessionLogTrajectory {
                         state.follow_tail = true;
                     }
                     Self::drop_view(state);
-                    return;
+                    return false;
                 }
                 state.pages.clear();
                 state.pages.push_back(outcome);
@@ -101,7 +107,7 @@ impl SessionLogTrajectory {
                     .is_none_or(|page| page.end_offset != from)
                 {
                     Self::drop_view(state);
-                    return;
+                    return false;
                 }
                 // The delta is applied whole or not at all: a delta
                 // that stopped short of the byte it was dispatched for
@@ -109,7 +115,7 @@ impl SessionLogTrajectory {
                 // does not describe, so it is refused and read again.
                 if outcome.end_offset < to {
                     Self::refuse(state, dispatched);
-                    return;
+                    return false;
                 }
                 if let Some(back) = state.pages.back_mut() {
                     back.end_offset = outcome.end_offset;
@@ -124,13 +130,14 @@ impl SessionLogTrajectory {
                 // follows it, which is the only way it leaves loading.
                 if !state.follow_tail && !state.pages.is_empty() {
                     Self::drop_view(state);
-                    return;
+                    return false;
                 }
                 state.follow_tail = true;
                 state.pages.clear();
                 state.pages.push_back(outcome);
             }
         }
+        true
     }
 
     /// Refuse a read that cannot be applied, the way a dead worker is refused:
@@ -174,9 +181,10 @@ impl SessionLogTrajectory {
                 // the run is counting.
                 state.failed = false;
                 state.read_failures = 0;
-                Self::apply_page(state, read, outcome, dispatched);
-                state.window_watermark = Some(dispatched);
-                state.window_total = total_turns;
+                if Self::apply_page(state, read, outcome, dispatched) {
+                    state.window_watermark = Some(dispatched);
+                    state.window_total = total_turns;
+                }
                 Self::drop_view(state);
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => {}
