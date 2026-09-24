@@ -514,6 +514,15 @@ pub enum SessionEvent {
         ttft_ms: Option<u64>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         decode_ms: Option<u64>,
+        /// Time the stream spent inside its reasoning blocks, summed over the
+        /// blocks it closed. None when it closed none (the provider sent no
+        /// reasoning, or the call ended inside one): an unfinished block is not
+        /// a measurement, and zero would claim the model thought for no time.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reasoning_ms: Option<u64>,
+        /// Time the stream spent inside its reply blocks, summed the same way.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        response_ms: Option<u64>,
     },
     /// Recorded when the user clears the conversation context. prior_turn is
     /// the model-call turn count at the moment of the clear, so a replay can

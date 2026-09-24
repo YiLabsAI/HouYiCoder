@@ -49,6 +49,8 @@ fn timing_events(events: &[SessionLogEntry]) -> Vec<ModelStepTiming> {
         .iter()
         .filter_map(|e| match e.event {
             SessionEvent::ModelStepTiming {
+                reasoning_ms: _,
+                response_ms: _,
                 turn,
                 step,
                 total_ms,

@@ -243,6 +243,8 @@ fn test_session_totals_cover_hidden() {
                     total_ms: 100,
                     ttft_ms: Some(20),
                     decode_ms: Some(80),
+                    reasoning_ms: None,
+                    response_ms: None,
                 },
             ),
         ]

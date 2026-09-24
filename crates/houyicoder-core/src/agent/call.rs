@@ -37,46 +37,22 @@ fn stream_idle_timeout() -> std::time::Duration {
     std::time::Duration::from_millis(50)
 }
 
-/// Pre-flight compress threshold: the context window minus the room the model
-/// needs to respond (capped so a huge max_output does not erase the buffer)
-/// minus an estimation margin for tiktoken drift on non-tiktoken-native
-/// models. Saturates to 0 for windows smaller than the reserve (tiny-window
-/// stubs trip compress immediately, which is correct — there is no room to
-/// serve anything).
-///
-/// An absolute buffer beats a 95% ratio: on a 200k window the ratio left
-/// only 10k headroom, too thin for a model that needs 8-16k to respond. The
-/// absolute reserves real output room and scales correctly to 1M-class
-/// windows (the buffer derives from the resolved window; a 1M-capable model
-/// whose limit is mis-resolved to 200k still anchors a 200k buffer — that is
-/// a window-resolution gap, not a miscompute in this formula).
-fn pre_flight_threshold(window: u32, max_output_tokens: u32) -> u32 {
-    const MAX_OUTPUT_RESERVE_CAP: u32 = 20_000;
-    const ESTIMATION_MARGIN: u32 = 13_000;
-    let reserve = max_output_tokens.min(MAX_OUTPUT_RESERVE_CAP) + ESTIMATION_MARGIN;
-    window.saturating_sub(reserve)
-}
-
-#[cfg(test)]
-#[path = "pre_flight_threshold_tests.rs"]
-mod pre_flight_threshold_tests;
-
-/// One streaming model call: re-project the event log into input, build the
-/// request, drive the provider stream, and fold it into a CompletionResponse
-/// while appending each text delta to the session log and notifying the live
-/// sink. Retry wraps only stream establishment (a retryable error before the
-/// first real event retries the whole call); once an event lands the turn is
-/// committed — a mid-stream error is terminal; there is no partial-recovery
-/// path here yet.
-///
-/// Pre-flight (fail-closed): if the assembled context exceeds the absolute reserve
-/// (window minus the model response room and an estimation margin), compress
-/// before sending to the provider. Overflow handler: when
-/// the stream returns ContextOverflow, compress and retry (bounded 2). If
-/// compress makes no progress (all Verbatim), fail-closed. Still overflow
-/// after retries → fail-closed bounded (no infinite retry avalanche).
-#[expect(clippy::too_many_lines, reason = "long by design, kept whole")]
 impl Runner {
+    /// One streaming model call: re-project the event log into input, build the
+    /// request, drive the provider stream, and fold it into a CompletionResponse
+    /// while appending each text delta to the session log and notifying the live
+    /// sink. Retry wraps only stream establishment (a retryable error before the
+    /// first real event retries the whole call); once an event lands the turn is
+    /// committed — a mid-stream error is terminal; there is no partial-recovery
+    /// path here yet.
+    ///
+    /// Pre-flight (fail-closed): if the assembled context exceeds the absolute reserve
+    /// (window minus the model response room and an estimation margin), compress
+    /// before sending to the provider. Overflow handler: when
+    /// the stream returns ContextOverflow, compress and retry (bounded 2). If
+    /// compress makes no progress (all Verbatim), fail-closed. Still overflow
+    /// after retries → fail-closed bounded (no infinite retry avalanche).
+    #[expect(clippy::too_many_lines, reason = "long by design, kept whole")]
     #[expect(clippy::cognitive_complexity, reason = "inherent dispatch complexity")]
     pub(crate) async fn model_call_stream(
         &self,
@@ -176,7 +152,8 @@ impl Runner {
                 // The reserve uses the frozen output cap — the same value
                 // the request body sends — so the room the gate reserves
                 // matches the room the request asks for.
-                let threshold = pre_flight_threshold(window, inference.max_output_tokens);
+                let threshold =
+                    super::compaction::pre_flight_threshold(window, inference.max_output_tokens);
                 // Floor the estimate to the last observed input tokens so a
                 // tiktoken undercount on a non-native model cannot false-trip
                 // the gate. The max is the conservative floor.
@@ -438,9 +415,11 @@ impl Runner {
 
             let mut state = StreamFold::default();
             let mut first_token_elapsed: Option<u64> = None;
+            let mut blocks = super::append::timing::BlockSpans::default();
             // Process events as they arrive so response handlers and the log
             // observe each delta without waiting for stream completion.
             if let Some(ev) = first {
+                blocks.note(&ev);
                 if matches!(
                     ev,
                     LlmEvent::TextDelta { .. }
@@ -478,6 +457,7 @@ impl Runner {
                         return Err(RunError::ProviderFatal(ProviderError::Network));
                     }
                 };
+                blocks.note(&ev);
                 if first_token_elapsed.is_none()
                     && matches!(
                         ev,
@@ -491,6 +471,7 @@ impl Runner {
                 self.fold_event(ev, &mut state, session, response_handler.as_deref())
                     .await?;
             }
+            let (reasoning_ms, response_ms) = (blocks.reasoning_ms(), blocks.response_ms());
             // Provider-omits-usage fallback: some OpenAI-compat streams
             // ignore stream_options.include_usage; substitute the estimated
             // input tokens so the status gauge + tally read the real footprint.
@@ -585,6 +566,8 @@ impl Runner {
                         total_dur_ms,
                         first_token_elapsed,
                         decode_dur_ms,
+                        reasoning_ms,
+                        response_ms,
                     )
                     .await
                 {
@@ -659,7 +642,14 @@ impl Runner {
             let total_dur_ms = api_start.elapsed().as_millis() as u64;
             let decode_dur_ms = first_token_elapsed.map(|ttft| total_dur_ms.saturating_sub(ttft));
             if let Err(e) = self
-                .append_model_step_timing(session, total_dur_ms, first_token_elapsed, decode_dur_ms)
+                .append_model_step_timing(
+                    session,
+                    total_dur_ms,
+                    first_token_elapsed,
+                    decode_dur_ms,
+                    reasoning_ms,
+                    response_ms,
+                )
                 .await
             {
                 tracing::debug!("timing append failed: {e}");

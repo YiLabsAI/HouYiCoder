@@ -41,6 +41,8 @@ fn timing(ts: u64, total_ms: u64, ttft_ms: u64, decode_ms: u64) -> SessionLogEnt
             total_ms,
             ttft_ms: Some(ttft_ms),
             decode_ms: Some(decode_ms),
+            reasoning_ms: None,
+            response_ms: None,
         },
     )
 }

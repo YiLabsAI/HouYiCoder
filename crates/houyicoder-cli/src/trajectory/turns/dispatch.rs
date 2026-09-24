@@ -122,8 +122,17 @@ pub(in crate::trajectory) fn apply_turn_content(
             total_ms,
             ttft_ms,
             decode_ms,
+            reasoning_ms,
+            response_ms,
             ..
-        } => builder.attach_timing(*total_ms, *ttft_ms, *decode_ms, ev.ts),
+        } => builder.attach_timing(
+            *total_ms,
+            *ttft_ms,
+            *decode_ms,
+            *reasoning_ms,
+            *response_ms,
+            ev.ts,
+        ),
         SessionEvent::TurnUsage { .. } => builder.apply_usage(&ev.event, ev.ts),
         SessionEvent::AssistantMessage { text, thinking } => {
             builder.attach_assistant(text, thinking, ev.ts);

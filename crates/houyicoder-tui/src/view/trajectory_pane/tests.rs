@@ -764,6 +764,8 @@ fn test_detail_shows_model_facts() {
         total_ms: 620,
         ttft_ms: Some(210),
         decode_ms: Some(410),
+        reasoning_ms: None,
+        response_ms: None,
     });
     record.usage = Some(EventUsage {
         input: Some(1200),
@@ -918,6 +920,8 @@ fn test_turn_detail_latency_split() {
         total_ms: 620,
         ttft_ms: Some(210),
         decode_ms: Some(410),
+        reasoning_ms: None,
+        response_ms: None,
     });
     record.usage = Some(EventUsage {
         input: Some(10),

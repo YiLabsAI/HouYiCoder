@@ -80,6 +80,8 @@ fn test_timeline_fits_narrow() {
         total_ms: 620,
         ttft_ms: Some(210),
         decode_ms: Some(410),
+        reasoning_ms: None,
+        response_ms: None,
     });
     model.usage = Some(EventUsage {
         input: None,

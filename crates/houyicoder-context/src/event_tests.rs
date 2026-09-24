@@ -447,11 +447,14 @@ fn test_timing_and_clear_events() {
         total_ms: 1250,
         ttft_ms: Some(350),
         decode_ms: Some(900),
+        reasoning_ms: Some(400),
+        response_ms: Some(500),
     };
     let e1 = event(s, EventId::new(), timing);
     let json1 = serde_json::to_string(&e1).expect("serialize");
     assert!(json1.contains("\"type\":\"ModelStepTiming\""));
     assert!(json1.contains("\"ttft_ms\":350"));
+    assert!(json1.contains("\"reasoning_ms\":400"));
     let back1: SessionLogEntry = serde_json::from_str(&json1).expect("deserialize");
     assert_eq!(back1, e1);
 
@@ -462,4 +465,43 @@ fn test_timing_and_clear_events() {
     assert!(json2.contains("\"prior_turn\":2"));
     let back2: SessionLogEntry = serde_json::from_str(&json2).expect("deserialize");
     assert_eq!(back2, e2);
+}
+
+/// An entry whose spans were never recorded carries neither key, and reads back
+/// with both unknown: an absent figure is not a zero, and a reader that
+/// defaulted them to zero would report a model that thought for no time.
+#[test]
+fn test_timing_spans_absent_unknown() {
+    let s = SessionId::new();
+    let event = event(
+        s,
+        EventId::new(),
+        SessionEvent::ModelStepTiming {
+            turn: 1,
+            step: 0,
+            total_ms: 1250,
+            ttft_ms: Some(350),
+            decode_ms: Some(900),
+            reasoning_ms: None,
+            response_ms: None,
+        },
+    );
+    let json = serde_json::to_string(&event).expect("serialize");
+    assert!(
+        !json.contains("reasoning_ms") && !json.contains("response_ms"),
+        "an unknown span is written as no key at all: {json}"
+    );
+
+    let back: SessionLogEntry = serde_json::from_str(&json).expect("deserialize");
+    match back.event {
+        SessionEvent::ModelStepTiming {
+            reasoning_ms,
+            response_ms,
+            ..
+        } => {
+            assert_eq!(reasoning_ms, None, "no reasoning span was recorded");
+            assert_eq!(response_ms, None, "and no reply span either");
+        }
+        other => panic!("a timing event: {other:?}"),
+    }
 }

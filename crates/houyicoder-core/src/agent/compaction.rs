@@ -5,6 +5,8 @@
 //! retries use reason-scoped suppression; manual requests bypass it.
 
 mod recording;
+
+pub(crate) use recording::pre_flight_threshold;
 mod summarization;
 
 pub use recording::RecordedCompaction;

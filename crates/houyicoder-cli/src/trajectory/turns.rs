@@ -282,6 +282,8 @@ impl TurnBuilder {
         total_ms: u64,
         ttft_ms: Option<u64>,
         decode_ms: Option<u64>,
+        reasoning_ms: Option<u64>,
+        response_ms: Option<u64>,
         ts: u64,
     ) {
         self.touch(ts);
@@ -291,6 +293,8 @@ impl TurnBuilder {
             total_ms,
             ttft_ms,
             decode_ms,
+            reasoning_ms,
+            response_ms,
         });
         // A model call's own span is the honest bar width for that row.
         if self.records[index].duration_ms == 0 {

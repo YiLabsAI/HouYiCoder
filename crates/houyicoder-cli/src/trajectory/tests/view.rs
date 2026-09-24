@@ -873,6 +873,8 @@ fn test_timing_percentiles_and_speed() {
                 total_ms: 1000,
                 ttft_ms: Some(200),
                 decode_ms: Some(800),
+                reasoning_ms: None,
+                response_ms: None,
             },
         ),
         ev(
@@ -883,6 +885,8 @@ fn test_timing_percentiles_and_speed() {
                 total_ms: 1500,
                 ttft_ms: Some(600),
                 decode_ms: Some(900),
+                reasoning_ms: None,
+                response_ms: None,
             },
         ),
     ];

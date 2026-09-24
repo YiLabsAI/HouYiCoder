@@ -99,6 +99,12 @@ pub struct EventTiming {
     pub total_ms: u64,
     pub ttft_ms: Option<u64>,
     pub decode_ms: Option<u64>,
+    /// Time the call spent inside its reasoning blocks, when the stream closed
+    /// any. None is unknown: the provider sent no reasoning, or the call ended
+    /// inside one, and neither is a measurement of zero.
+    pub reasoning_ms: Option<u64>,
+    /// Time the call spent inside its reply blocks, summed the same way.
+    pub response_ms: Option<u64>,
 }
 
 /// How a record ended. Three states, not a boolean: a tool call whose result

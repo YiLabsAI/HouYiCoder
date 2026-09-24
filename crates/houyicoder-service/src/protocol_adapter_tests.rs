@@ -76,6 +76,8 @@ fn test_every_kind_maps() {
                 total_ms: 100,
                 ttft_ms: None,
                 decode_ms: None,
+                reasoning_ms: None,
+                response_ms: None,
             },
             false,
             false,
@@ -395,6 +397,8 @@ fn test_timing_cleared_name() {
         total_ms: 100,
         ttft_ms: None,
         decode_ms: None,
+        reasoning_ms: None,
+        response_ms: None,
     };
     assert_eq!(event_name(&t), "timing");
     let c = SessionEvent::ContextCleared { prior_turn: 1 };

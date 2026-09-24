@@ -3,7 +3,7 @@
 //! wall clock before the store sets prev_hash on append.
 
 mod hook;
-mod timing;
+pub(super) mod timing;
 pub(crate) use hook::{emit_user_notice, record_hook_signals};
 
 use std::time::{SystemTime, UNIX_EPOCH};
