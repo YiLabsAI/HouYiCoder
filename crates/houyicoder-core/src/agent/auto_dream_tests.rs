@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex as StdMutex};
 use houyicoder_api::agent_event::{
     AgentEventHandlers, MemoryChange, MemoryChangeOrigin, MemoryChangedEvent, MemoryOperation,
 };
-use houyicoder_context::{MemoryEntry, MemoryScope};
+use houyicoder_context::{MemoryEntry, MemoryScope, MemorySource};
 use houyicoder_memory::InMemoryBackend;
 use houyicoder_protocol::llm::{
     CompletionRequest, CompletionResponse, LlmEvent, ModelCapabilities, OutputItem, ProviderError,
@@ -173,6 +173,37 @@ fn test_prompt_has_phases_root() {
     assert!(
         prompt.contains("demote_memory"),
         "prompt mentions the demote_memory tool"
+    );
+}
+
+/// The listing names each entry's storage scope, which is what lets the dream
+/// answer a read that is refused for a key stored in two scopes.
+#[test]
+fn test_listing_names_scope() {
+    let listing = vec![
+        MemorySummary::new(
+            "rule-x",
+            "a rule in the project root",
+            MemorySource::Project,
+            MemoryScope::Project,
+            100,
+        ),
+        MemorySummary::new(
+            "rule-y",
+            "a rule in the auto root",
+            MemorySource::Feedback,
+            MemoryScope::Auto,
+            200,
+        ),
+    ];
+    let rendered = format_listing(&listing);
+    assert!(
+        rendered.contains("scope=project"),
+        "the project copy is labelled: {rendered}"
+    );
+    assert!(
+        rendered.contains("scope=auto"),
+        "the auto copy is labelled: {rendered}"
     );
 }
 

@@ -216,9 +216,9 @@ fn now_secs() -> u64 {
         .unwrap_or(0)
 }
 
-/// Format the memory listing as a bulleted block for the prompt. Each entry
-/// is one line (key, source, description, mtime) so the agent can scan the
-/// whole store in one read and decide what to inspect further.
+/// Format the memory listing as a bulleted block for the prompt, one line per
+/// entry (key, source, scope, mtime, description). The scope is named because
+/// a read without one is refused for a key stored in two scopes.
 pub(crate) fn format_listing(listing: &[MemorySummary]) -> String {
     if listing.is_empty() {
         return "(no memories yet — orient from the index below if present)".to_string();
@@ -226,9 +226,10 @@ pub(crate) fn format_listing(listing: &[MemorySummary]) -> String {
     let mut out = String::new();
     for m in listing.iter().take(200) {
         out.push_str(&format!(
-            "- {} [{}] mtime={}: {}\n",
+            "- {} [{}] scope={} mtime={}: {}\n",
             m.key,
             m.source.as_label(),
+            m.scope.as_label(),
             m.mtime_secs,
             m.description,
         ));

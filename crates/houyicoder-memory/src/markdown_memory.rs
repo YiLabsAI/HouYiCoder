@@ -25,8 +25,8 @@ mod roots;
 use io::{
     Frontmatter, INDEX_BYTE_CAP, INDEX_FILE, ScannedTopic, StatRecord, cap_index_content,
     count_new_since_impl, first_line, first_rule_sentence, list_memories_impl,
-    merge_rule_into_carrier, parse_topic_file, sanitize_key, serialize_topic_file,
-    strip_rule_from_carrier, write_bytes_atomic,
+    merge_rule_into_carrier, parse_topic_file, sanitize_key, scopes_for_key_impl,
+    serialize_topic_file, show_memory_in_scope_impl, strip_rule_from_carrier, write_bytes_atomic,
 };
 
 /// Cap on candidate files scanned per recall; keeps the scan bounded.
@@ -392,6 +392,18 @@ impl MemoryProvider for MarkdownMemoryProvider {
         let key = sanitize_key(key).ok()?;
         let topic = self.scan_candidates().into_iter().find(|t| t.key == key)?;
         self.read_topic(&topic.path).ok()
+    }
+
+    /// Fetch one memory body from the named scope's root only. Delegates to
+    /// the io module so the per-root read stays beside the enumeration.
+    fn show_memory_in_scope(&self, key: &str, scope: MemoryScope) -> Option<MemoryEntry> {
+        show_memory_in_scope_impl(self, key, scope)
+    }
+
+    /// The scopes holding this key, in root order. Delegates to the io module;
+    /// the merged scan cannot report a second copy of a key.
+    fn scopes_for_key(&self, key: &str) -> Vec<MemoryScope> {
+        scopes_for_key_impl(self, key)
     }
 
     /// The auto-scope write root (the last root). The consolidation dream

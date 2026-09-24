@@ -11,7 +11,7 @@ use super::hook::registry::HookRegistry;
 use super::memory::{MemoryRuntime, MutationLog};
 use super::multi_agent::bus_types::BusMessage;
 use super::skill_reload::SkillReloadGuard;
-use super::tools::MemoryAddTool;
+use super::tools::{MemoryAddTool, SearchMemoryTool, ShowMemoryTool};
 use super::{RunError, Runner, VerifyGate};
 use houyicoder_api::agent_event::AgentEventHandlers;
 
@@ -78,17 +78,22 @@ impl Runner {
 
     /// Install a fully constructed memory runtime. Registers the
     /// save_memory tool sharing the runtime's provider so main-agent saves
-    /// and forked-extract saves land under the same lock. Consumes and
-    /// returns self for chaining at the composition root.
+    /// and forked-extract saves land under the same lock, plus the two
+    /// read-only tools the agent needs to find a memory again and read one
+    /// body back before acting on it. Consumes and returns self for chaining
+    /// at the composition root.
     pub fn install_memory(mut self, mut runtime: MemoryRuntime) -> Self {
         runtime.set_event_handlers(&self.events);
         if let Some(provider) = runtime.provider().cloned() {
             let recorder = runtime.install_primary_recorder();
             self.tools.register(Arc::new(
-                MemoryAddTool::new(provider)
+                MemoryAddTool::new(provider.clone())
                     .with_origin(houyicoder_context::MemoryOrigin::MainAgent)
                     .with_recorder(recorder),
             ));
+            self.tools
+                .register(Arc::new(SearchMemoryTool::new(provider.clone())));
+            self.tools.register(Arc::new(ShowMemoryTool::new(provider)));
         }
         self.memory = runtime;
         self

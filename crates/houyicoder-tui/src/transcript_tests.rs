@@ -233,6 +233,51 @@ fn test_save_memory_label() {
 }
 
 #[test]
+fn test_search_memory_label() {
+    // search_memory collapses to a match count: the chip shows the query and
+    // the result body is "found N". The matches JSON is a machine-readable
+    // list, not a readable body, so it stays out of the transcript — the same
+    // contract the other memory tools hold.
+    let frames = vec![
+        tool_call(
+            "c1",
+            "search_memory",
+            serde_json::json!({ "query": "how the deploy gate works" }),
+        ),
+        tool_result(
+            "c1",
+            serde_json::json!({"matches": [
+                {"key": "deploy-gate", "description": "red until review"},
+                {"key": "tea-order", "description": "how the team orders tea"}
+            ]}),
+        ),
+    ];
+    let lines = transcript_from_frames(&frames, 0..frames.len(), false);
+    assert_eq!(lines.len(), 2, "one chip + one result, got {lines:?}");
+    assert!(
+        matches!(
+            &lines[0],
+            TranscriptLine::Tool { name, invocation, .. }
+                if name == "search_memory" && invocation == "how the deploy gate works"
+        ),
+        "chip must show the query only, got {:?}",
+        lines[0]
+    );
+    assert!(
+        matches!(
+            &lines[1],
+            TranscriptLine::Tool { name, body, .. }
+                if name == "result" && body == "found 2"
+        ),
+        "result must be the match count, got {:?}",
+        lines[1]
+    );
+    let joined = format!("{lines:?}");
+    assert!(!joined.contains("tea-order"), "match keys must not leak");
+    assert!(!joined.contains("\"matches\""), "raw JSON must not leak");
+}
+
+#[test]
 fn test_reused_id_keeps_body() {
     // Eager tool callers (qwen-class) sometimes reuse one call_id across
     // two distinct tool calls. Each result row must carry its OWN output —

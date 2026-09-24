@@ -12,7 +12,7 @@ use std::ops::Range;
 use houyicoder_protocol::acpx::{AcpxMethod, AcpxNotification};
 use houyicoder_protocol::frontend::session_update::{SessionUpdate, ToolCall};
 
-use crate::brief::{result_summary, tool_call_brief};
+use crate::brief::{MEMORY_LABEL_TOOLS, result_summary, tool_call_brief};
 use crate::records::{ContextView, ToolOutcome, TranscriptLine};
 use crate::transcript::frame_payload::chunk_text;
 
@@ -516,10 +516,7 @@ fn tool_result_line(
         } else {
             raw
         }
-    } else if matches!(
-        tool_name,
-        "save_memory" | "delete_memory" | "promote_memory" | "demote_memory" | "show_memory"
-    ) {
+    } else if MEMORY_LABEL_TOOLS.contains(&tool_name) {
         result_summary(tool_name, output).unwrap_or(raw)
     } else if tool_name == "write" {
         write_result_body(output, call_input)

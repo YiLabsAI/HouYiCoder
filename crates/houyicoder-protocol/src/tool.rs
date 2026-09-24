@@ -36,6 +36,7 @@ pub fn tool_invocation(tool: &str, input: &Value) -> String {
         "save_memory" | "delete_memory" | "promote_memory" | "demote_memory" | "show_memory" => {
             "key"
         }
+        "search_memory" => "query",
         _ => return canonical_json(input),
     };
     match input.get(field).and_then(|v| v.as_str()) {
@@ -94,8 +95,8 @@ mod tests {
 
     #[test]
     fn test_memory_tools_key_field() {
-        // save/delete/promote/demote/show all take a single "key" field; the
-        // chip shows the key, not a raw {"key": ...} JSON glimpse.
+        // The keyed memory tools take a "key" field, show_memory plus an
+        // optional scope; the chip shows the key, not a raw JSON glimpse.
         for tool in [
             "save_memory",
             "delete_memory",
@@ -114,6 +115,17 @@ mod tests {
                 "{tool} must not dump JSON"
             );
         }
+    }
+
+    #[test]
+    fn test_search_pulls_query() {
+        // search_memory takes a free-text query rather than a key; the chip
+        // and the search index must show the query, not a JSON glimpse of it.
+        let input = serde_json::json!({ "query": "how the deploy gate works" });
+        assert_eq!(
+            tool_invocation("search_memory", &input),
+            "how the deploy gate works"
+        );
     }
 
     #[test]

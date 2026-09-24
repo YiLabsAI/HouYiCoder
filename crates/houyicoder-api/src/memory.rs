@@ -156,8 +156,29 @@ pub trait MemoryProvider: Send + Sync {
     }
     /// Fetch the full body of one memory by key. Default None for providers
     /// without a read path (stubs); markdown overrides to read the topic file.
+    /// A key present in more than one scope resolves to the newest copy, so a
+    /// caller that must have a particular one names it through
+    /// show_memory_in_scope instead.
     fn show_memory(&self, _key: &str) -> Option<MemoryEntry> {
         None
+    }
+    /// Fetch the full body of one memory by key from a named scope. Default
+    /// delegates to show_memory, so a single-root provider treats every scope
+    /// as the one root. Multi-scope backends override this to read the chosen
+    /// root, so a caller that knows which copy it wants is not handed a
+    /// different one by newest-mtime.
+    fn show_memory_in_scope(&self, key: &str, _scope: MemoryScope) -> Option<MemoryEntry> {
+        self.show_memory(key)
+    }
+    /// The storage scopes holding this key, in the provider's root order.
+    /// The read path needs it to tell one copy from an ambiguous key: a key
+    /// living in two roots has two different bodies, and a reader that wants a
+    /// particular one must say which. Undeduped by design — the listing merges
+    /// same-key copies by newest mtime, so only this call can report that a
+    /// key has more than one. Default empty for providers without a
+    /// multi-scope backend (single-root providers, stubs).
+    fn scopes_for_key(&self, _key: &str) -> Vec<MemoryScope> {
+        Vec::new()
     }
     /// The auto-scope write root as a string path. The consolidation dream uses
     /// this to locate the memory directory it consolidates and to place the

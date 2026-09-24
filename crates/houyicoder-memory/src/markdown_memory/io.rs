@@ -9,6 +9,8 @@ use houyicoder_context::{
 };
 use std::path::Path;
 
+use super::MarkdownMemoryProvider;
+
 /// Fields parsed from a topic file frontmatter.
 #[derive(Debug, Clone)]
 pub(super) struct Frontmatter {
@@ -310,7 +312,7 @@ pub(super) fn strip_rule_from_carrier(path: &Path, rule: &str) -> Result<(), Str
 /// source + scope + mtime). The provider impl delegates here so the
 /// enumeration logic lives in one place; the child module can reach the
 /// parent's private scan_candidates + read_frontmatter.
-pub(super) fn list_memories_impl(provider: &super::MarkdownMemoryProvider) -> Vec<MemorySummary> {
+pub(super) fn list_memories_impl(provider: &MarkdownMemoryProvider) -> Vec<MemorySummary> {
     provider
         .scan_candidates()
         .iter()
@@ -343,10 +345,49 @@ pub(super) fn list_memories_impl(provider: &super::MarkdownMemoryProvider) -> Ve
 /// epoch). The dream gate calls this to decide whether new material landed
 /// since the last dream. Reuses scan_candidates so the count matches the
 /// listing (deduped across roots, index file excluded).
-pub(super) fn count_new_since_impl(provider: &super::MarkdownMemoryProvider, since: u64) -> usize {
+pub(super) fn count_new_since_impl(provider: &MarkdownMemoryProvider, since: u64) -> usize {
     provider
         .scan_candidates()
         .iter()
         .filter(|t| t.mtime > since)
         .count()
+}
+
+/// Fetch one memory body from the named scope's root only, with no fallback to
+/// another root — a fallback would hand back a different body than the one
+/// asked for. The provider impl delegates here so the per-root read stays
+/// beside the per-root enumeration.
+pub(super) fn show_memory_in_scope_impl(
+    provider: &MarkdownMemoryProvider,
+    key: &str,
+    scope: MemoryScope,
+) -> Option<MemoryEntry> {
+    let key = sanitize_key(key).ok()?;
+    let topic = MarkdownMemoryProvider::scan_root(provider.root_for_scope(scope))
+        .into_iter()
+        .find(|t| t.key == key)?;
+    provider.read_topic(&topic.path).ok()
+}
+
+/// The scopes holding a key, in root order. Reads every root instead of the
+/// merged scan, which keeps only the newest copy per key and so cannot report
+/// a second one.
+pub(super) fn scopes_for_key_impl(
+    provider: &MarkdownMemoryProvider,
+    key: &str,
+) -> Vec<MemoryScope> {
+    let Ok(key) = sanitize_key(key) else {
+        return Vec::new();
+    };
+    provider
+        .roots
+        .iter()
+        .enumerate()
+        .filter(|(_, root)| {
+            MarkdownMemoryProvider::scan_root(root)
+                .iter()
+                .any(|t| t.key == key)
+        })
+        .map(|(index, _)| MemoryScope::for_root_index(index))
+        .collect()
 }

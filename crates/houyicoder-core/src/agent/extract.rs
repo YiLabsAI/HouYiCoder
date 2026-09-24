@@ -341,7 +341,10 @@ mod tests {
         std::fs::remove_dir_all(&cwd).ok();
     }
 
-    /// install_memory registers the structured save_memory tool.
+    /// install_memory registers the memory tool set on the runner: the write
+    /// tool plus the two read-only tools an agent needs to find a memory again
+    /// and read one body back. A read tool registered only on the dream fork
+    /// leaves the main agent unable to inspect what recall surfaced.
     #[test]
     fn test_install_memory_registers_tool() {
         let store: Arc<dyn SessionLog> =
@@ -359,10 +362,12 @@ mod tests {
             RunnerConfig::default(),
         )
         .install_memory(runtime);
-        assert!(
-            runner.tools().get("save_memory").is_some(),
-            "install_memory must register the save_memory tool"
-        );
+        for tool in ["save_memory", "search_memory", "show_memory"] {
+            assert!(
+                runner.tools().get(tool).is_some(),
+                "install_memory must register {tool}"
+            );
+        }
         assert!(
             memory.written_entries().is_empty(),
             "no write until the agent emits a save_memory call"
