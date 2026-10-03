@@ -185,7 +185,7 @@ impl Runner {
         let folded_count = folded_event_count(&manifest);
         let recall_rate = self.take_recall_rate(folded_count);
         let conflict_rate = self.merge_backbone_summary(&events, &mut manifest);
-        self.preserve_compacted_memory(&events, &manifest);
+        self.memory.before_compact(session).await;
 
         let summary = manifest.summary.clone().unwrap_or_default();
         let manifest_id = manifest.id;
@@ -274,10 +274,6 @@ impl Runner {
         let (merged, conflict) = merge_summary(&summary, &backbone);
         manifest.summary = Some(merged);
         Some(conflict.rate)
-    }
-
-    fn preserve_compacted_memory(&self, events: &[SessionLogEntry], manifest: &CheckpointManifest) {
-        self.memory.preserve_folded(events, manifest);
     }
 
     /// Fire PreCompact hooks and return the merged custom instructions (the

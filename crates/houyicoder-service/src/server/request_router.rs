@@ -327,9 +327,7 @@ impl Server {
                 )
                 .await;
         }
-        if let Err(e) = self.runner.before_clear(self.session).await {
-            tracing::warn!("before-clear extraction failed: {e}");
-        }
+        self.runner.before_clear(self.session).await;
         self.runner.reset_usage();
         self.runner.reset_measurement();
         self.runner.reset_trajectory(self.session).await;

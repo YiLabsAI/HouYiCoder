@@ -298,13 +298,13 @@ impl Runner {
         Ok(outcome.made_progress)
     }
 
-    /// Before-clear preservation: scan the whole session for unsolved-problem
-    /// and key-decision signals, write them to the auto scope so key facts
-    /// survive /clear. Best-effort: a write failure logs and continues;
-    /// memory never blocks the clear path. No-op when no memory provider
-    /// is available.
-    pub async fn before_clear(&self, session: SessionId) -> Result<(), RunError> {
-        self.memory.preserve_before_clear(session).await
+    /// System lifecycle seam for clear: hand the session to the memory
+    /// runtime's before-clear boundary, which drops the cached index and
+    /// submits the durable log to the background extraction pipeline.
+    /// Infallible by contract — preservation never blocks the clear path;
+    /// a failed extraction job retries off the durable log later.
+    pub async fn before_clear(&self, session: SessionId) {
+        self.memory.before_clear(session).await;
     }
 
     /// Override the default heuristic summarizer with an LLM-backed one. The

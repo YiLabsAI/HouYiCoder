@@ -2,7 +2,6 @@
 
 mod gates;
 mod mutation_log;
-mod preservation;
 mod recall;
 pub(crate) mod selector;
 
@@ -15,13 +14,11 @@ use houyicoder_api::agent_event::{
 use houyicoder_api::memory::{MemoryProvider, MemoryReranker};
 use houyicoder_api::session::SessionLog;
 use houyicoder_context::{
-    CheckpointManifest, EventId, MemoryEntry, MemoryError, MemoryScope, MemorySummary, SessionId,
-    SessionLogEntry,
+    EventId, MemoryEntry, MemoryError, MemoryScope, MemorySummary, SessionId,
 };
 
 pub use gates::{MemoryGateState, MemoryGates};
 pub(crate) use mutation_log::MutationLog;
-pub(crate) use preservation::{preserve_folded_context, preserve_session};
 use selector::RecallTasks;
 
 use crate::agent::auto_dream::DreamRunner;
@@ -167,51 +164,42 @@ impl MemoryRuntime {
         .await
     }
 
-    /// Preserve memory candidates from events the manifest marks Summarized
-    /// before compaction folds them out. Best-effort: a write failure logs
-    /// and continues; memory never blocks the compaction path.
-    pub(crate) fn preserve_folded(
-        &self,
-        events: &[SessionLogEntry],
-        manifest: &CheckpointManifest,
-    ) {
-        let Some(memory) = &self.provider else {
-            return;
-        };
-        let existing: std::collections::HashSet<String> =
-            memory.list_memories().into_iter().map(|s| s.key).collect();
-        for entry in preserve_folded_context(events, manifest) {
-            if !existing.contains(&entry.key)
-                && let Err(error) = memory.add(entry)
-            {
-                tracing::warn!("before-compact preservation write failed: {error}");
-            }
-        }
+    /// System lifecycle boundary: compaction is about to fold events out of
+    /// the model's view. Hands the session to the background extraction
+    /// pipeline so facts worth keeping are saved before the fold. This is
+    /// system behavior, not a user hook: no registry dispatch, and the
+    /// auto-memory gate is the only switch. Fire-and-forget; a failed job
+    /// retries off the durable log and never blocks the compaction path.
+    pub(crate) async fn before_compact(&self, session: SessionId) {
+        self.submit_preservation(session).await;
     }
 
-    /// Preserve memory candidates from the whole session before /clear.
-    /// Best-effort: a write failure logs and continues; memory never blocks
-    /// the clear path.
-    pub(crate) async fn preserve_before_clear(
-        &self,
-        session: SessionId,
-    ) -> Result<(), crate::agent::RunError> {
+    /// System lifecycle boundary: clear is about to drop the session from
+    /// the working view. Invalidates the cached index so the next prompt
+    /// rebuilds from the post-clear store, then hands the session to the
+    /// same extraction pipeline as compaction. Fire-and-forget; the clear
+    /// proceeds regardless of preservation outcome.
+    pub(crate) async fn before_clear(&self, session: SessionId) {
         self.invalidate_index_snapshot();
-        let Some(memory) = &self.provider else {
-            return Ok(());
-        };
-        let events = self.store.replay(session).await?;
-        let existing: std::collections::HashSet<String> =
-            memory.list_memories().into_iter().map(|s| s.key).collect();
-        for entry in preserve_session(&events) {
-            if existing.contains(&entry.key) {
-                continue;
-            }
-            if let Err(e) = memory.add(entry) {
-                tracing::warn!("before-clear preservation write failed: {e}");
+        self.submit_preservation(session).await;
+    }
+
+    /// Replay the durable session log and submit it to the extractor. Shared
+    /// by the end-of-turn background fire and both context-shrink boundaries,
+    /// so every extraction path honors the same gate and cursor. The log is
+    /// the input snapshot: it is append-only and survives the boundaries, so
+    /// a job that errors leaves the cursor unmoved and the next submission
+    /// reconsiders the same range. A runtime without an extractor degrades
+    /// to a no-op.
+    async fn submit_preservation(&self, session: SessionId) {
+        if self.gates.auto_memory_enabled()
+            && let Some(extractor) = self.background.extractor.as_ref()
+        {
+            match self.store.replay(session).await {
+                Ok(messages) => extractor.extract_memories(messages),
+                Err(error) => tracing::warn!("memory extract replay failed: {error}"),
             }
         }
-        Ok(())
     }
 
     /// Format the memory index for the system prompt prefix. The first result
@@ -306,14 +294,7 @@ impl MemoryRuntime {
     where
         F: FnOnce() -> RewardSnapshot,
     {
-        if self.gates.auto_memory_enabled()
-            && let Some(extractor) = self.background.extractor.as_ref()
-        {
-            match self.store.replay(session).await {
-                Ok(messages) => extractor.extract_memories(messages),
-                Err(error) => tracing::warn!("memory extract replay failed: {error}"),
-            }
-        }
+        self.submit_preservation(session).await;
         if self.gates.auto_dream_enabled()
             && let Some(dream) = self.background.dream.as_ref()
         {

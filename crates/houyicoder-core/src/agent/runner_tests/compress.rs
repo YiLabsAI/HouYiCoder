@@ -1,11 +1,26 @@
 use super::*;
+use crate::agent::extractor::{ExtractionLogs, MemoryExtractor};
+use crate::agent::memory::{MemoryGates, MemoryRuntime};
 use crate::provider::test_support::FakeProvider;
+use houyicoder_api::memory::MemoryProvider;
+use houyicoder_api::provider::stream_from_response;
+use houyicoder_api::session::SessionLog;
+use houyicoder_async::{PFut, PStream};
 use houyicoder_context::SessionEvent;
+use houyicoder_context::{
+    EventId, MemoryEntry, MemoryError, MemoryOrigin, MemorySummary, SessionLogEntry,
+};
 use houyicoder_memory::InMemoryBackend;
+use houyicoder_protocol::llm::CompletionRequest;
 use houyicoder_protocol::llm::{CompletionResponse, ModelCapabilities, OutputItem, ProviderError};
 use houyicoder_protocol::llm::{LlmEvent, Usage};
 use houyicoder_resilience::Retry;
 use houyicoder_session::SessionStore;
+use std::env::temp_dir;
+use std::fs;
+use std::process;
+use std::sync::Mutex;
+use std::time::Duration;
 
 // runner_with is shared from the parent tests module; reuse rather than duplicate.
 use super::runner_with;
@@ -364,173 +379,278 @@ async fn test_stall_flushes_partial() {
     );
 }
 
-/// Runner.compress runs before-compact preservation when a memory
-/// provider is wired: the about-to-fold span is scanned for signals + hits
-/// are written (best-effort). With a stub provider (add = no-op) this covers
-/// the wiring path; the preservation logic itself is tested in
-/// memory/preservation.rs (the pure fn).
-#[tokio::test]
-async fn test_compress_runs_preservation() {
-    let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("ok"));
-    let memory: Arc<dyn houyicoder_api::memory::MemoryProvider> =
-        Arc::new(houyicoder_memory::StubMemoryProvider::new());
-    let mut runner = runner_with(provider, ToolRegistry::new());
-    runner.memory.install_provider(memory);
-    let session = houyicoder_context::SessionId::new();
-    // Seed 6 assistant turns so default tail_turns=4 folds the oldest 2.
-    // Their text contains an unsolved signal so preserve_folded_context
-    // finds hits; the stub add accepts them (no-op).
-    for i in 0..6 {
-        runner
-            .store()
-            .append(houyicoder_context::SessionLogEntry {
-                id: houyicoder_context::EventId::new(),
-                session,
-                ts: 0,
-                prev_hash: None,
-                event: SessionEvent::AssistantMessage {
-                    text: format!("turn {i} hit an error"),
-                    thinking: None,
-                },
-            })
-            .await
-            .unwrap();
-    }
-    let progress = runner.compress(session).await;
-    assert!(progress.is_ok(), "compress must not error");
-    assert!(
-        progress.unwrap(),
-        "must make progress (fold the oldest turns)"
-    );
+// ===== Context-shrink boundaries hand off to the extraction pipeline =====
+
+/// A recording memory for the boundary tests: captures every write the
+/// forked extraction lands and lists nothing pre-seeded, so the fork's
+/// manifest injection starts empty.
+#[derive(Default)]
+struct RecordingMemory {
+    written: Mutex<Vec<MemoryEntry>>,
 }
 
-/// A recording memory for the before_clear test: records every add + lists
-/// the pre-seeded keys so dedup is exercised.
-struct RecordingClearMemory {
-    written: std::sync::Mutex<Vec<houyicoder_context::MemoryEntry>>,
-    existing_keys: std::sync::Mutex<Vec<String>>,
+impl RecordingMemory {
+    fn written_entries(&self) -> Vec<MemoryEntry> {
+        self.written.lock().expect("written").clone()
+    }
 }
-impl houyicoder_api::memory::MemoryProvider for RecordingClearMemory {
-    fn add(
-        &self,
-        e: houyicoder_context::MemoryEntry,
-    ) -> Result<(), houyicoder_context::MemoryError> {
-        self.written.lock().expect("written").push(e);
+
+impl MemoryProvider for RecordingMemory {
+    fn add(&self, entry: MemoryEntry) -> Result<(), MemoryError> {
+        self.written.lock().expect("written").push(entry);
         Ok(())
     }
-    fn list_memories(&self) -> Vec<houyicoder_context::MemorySummary> {
-        self.existing_keys
-            .lock()
-            .expect("existing")
-            .iter()
-            .map(|k| {
-                houyicoder_context::MemorySummary::new(
-                    k.clone(),
-                    "pre-seeded",
-                    houyicoder_context::MemorySource::Feedback,
-                    houyicoder_context::MemoryScope::Auto,
-                    0,
-                )
-            })
-            .collect()
+    fn list_memories(&self) -> Vec<MemorySummary> {
+        Vec::new()
     }
 }
 
-/// Runner.before_clear scans the whole session for markers + writes them to
-/// the auto scope, so key facts survive the /clear drop (the do-not-lose
-/// invariant). Both an unsolved + a decision marker are written.
-#[tokio::test]
-async fn test_before_clear_writes_markers() {
-    let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("ok"));
-    let memory: Arc<RecordingClearMemory> = Arc::new(RecordingClearMemory {
-        written: std::sync::Mutex::new(Vec::new()),
-        existing_keys: std::sync::Mutex::new(Vec::new()),
+/// The canned model for the forked extraction run: the first call saves one
+/// fact quoted from the window, the second call ends the run. Counts calls
+/// so a gated test can assert the fork never launched.
+struct CannedSaver {
+    calls: Mutex<usize>,
+}
+
+impl CannedSaver {
+    fn call_count(&self) -> usize {
+        *self.calls.lock().expect("calls")
+    }
+
+    fn next(&self) -> usize {
+        let mut calls = self.calls.lock().expect("calls");
+        *calls += 1;
+        *calls
+    }
+
+    fn response(n: usize) -> CompletionResponse {
+        if n == 1 {
+            CompletionResponse {
+                output: vec![
+                    OutputItem::Text {
+                        text: "Saving the token-expiry fact.".into(),
+                    },
+                    OutputItem::ToolCall {
+                        id: "save1".into(),
+                        name: "save_memory".into(),
+                        input: serde_json::json!({
+                            "key": "deploy-token-expiry",
+                            "description": "Deploy tokens expire nightly",
+                            "source": "project",
+                            "content": "Vault deploy tokens expire nightly.\n**Why:** an overnight run outlives the token.\n**How to apply:** rotate before long runs.",
+                            "evidence": [{"quote": "the deploy tokens expire nightly"}]
+                        }),
+                    },
+                ],
+                usage: Usage::default(),
+                model: "test".to_string(),
+            }
+        } else {
+            CompletionResponse {
+                output: vec![OutputItem::Text {
+                    text: "done".into(),
+                }],
+                usage: Usage::default(),
+                model: "test".to_string(),
+            }
+        }
+    }
+}
+
+impl ModelProvider for CannedSaver {
+    fn complete(
+        &self,
+        _req: CompletionRequest,
+    ) -> PFut<'_, Result<CompletionResponse, ProviderError>> {
+        let resp = Self::response(self.next());
+        Box::pin(async move { Ok(resp) })
+    }
+    fn stream(&self, _req: CompletionRequest) -> PStream<'_, Result<LlmEvent, ProviderError>> {
+        stream_from_response(Self::response(self.next()))
+    }
+    fn capabilities(&self) -> ModelCapabilities {
+        ModelCapabilities::default()
+    }
+}
+
+/// Assemble a runner whose memory runtime carries a live extractor: the
+/// forked run talks to the canned saver and writes into the recording
+/// memory. Returns the handles a boundary test asserts on.
+fn preservation_rig(
+    gates: MemoryGates,
+) -> (
+    Runner,
+    Arc<MemoryExtractor>,
+    Arc<RecordingMemory>,
+    Arc<CannedSaver>,
+) {
+    let saver = Arc::new(CannedSaver {
+        calls: Mutex::new(0),
     });
-    let mut runner = runner_with(provider, ToolRegistry::new());
-    runner
-        .memory
-        .install_provider(Arc::clone(&memory) as Arc<dyn houyicoder_api::memory::MemoryProvider>);
-    let session = houyicoder_context::SessionId::new();
-    for text in ["hit an error here", "we decided to use rust", "plain turn"] {
-        runner
-            .store()
-            .append(houyicoder_context::SessionLogEntry {
-                id: houyicoder_context::EventId::new(),
+    let memory = Arc::new(RecordingMemory::default());
+    let runner = runner_with(Arc::new(FakeProvider::text("ok")), ToolRegistry::new());
+    let store = runner.store();
+    let fork: Arc<dyn SessionLog> = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let cwd = temp_dir().join(format!("boundary-preserve-{}", process::id()));
+    fs::create_dir_all(&cwd).expect("mkdir cwd");
+    let extractor = Arc::new(MemoryExtractor::new(
+        ExtractionLogs {
+            session: Arc::clone(&store),
+            fork,
+        },
+        Arc::clone(&saver) as Arc<dyn ModelProvider>,
+        Arc::clone(&memory) as Arc<dyn MemoryProvider>,
+        cwd,
+        RunnerConfig::default(),
+    ));
+    let runtime = MemoryRuntime::from_parts(
+        store,
+        Some(Arc::clone(&memory) as Arc<dyn MemoryProvider>),
+        gates,
+        Some(Arc::clone(&extractor)),
+        None,
+    );
+    (runner.install_memory(runtime), extractor, memory, saver)
+}
+
+/// Seed one user query plus six assistant turns. The fold policy keeps the
+/// last four assistant turns, so compaction has the oldest two to fold; the
+/// second assistant turn carries the sentence the canned save quotes as
+/// evidence.
+async fn seed_boundary_session(runner: &Runner, session: SessionId) {
+    let store = runner.store();
+    let texts = [
+        "watch the overnight deploys",
+        "turn 1 hit an error here",
+        "noted — the deploy tokens expire nightly, so long runs need a refresh",
+        "turn 3 steady state",
+        "turn 4 steady state",
+        "turn 5 steady state",
+        "turn 6 steady state",
+    ];
+    for (index, text) in texts.iter().enumerate() {
+        let event = if index == 0 {
+            SessionEvent::UserInput {
+                text: (*text).to_string(),
+            }
+        } else {
+            SessionEvent::AssistantMessage {
+                text: (*text).to_string(),
+                thinking: None,
+            }
+        };
+        store
+            .append(SessionLogEntry {
+                id: EventId::new(),
                 session,
                 ts: 0,
                 prev_hash: None,
-                event: SessionEvent::AssistantMessage {
-                    text: text.into(),
-                    thinking: None,
-                },
+                event,
             })
             .await
-            .unwrap();
+            .expect("seed append");
     }
-    runner.before_clear(session).await.expect("before_clear ok");
-    let written = memory.written.lock().expect("written").clone();
+}
+
+/// The compact boundary hands the shrinking context to the extraction
+/// pipeline: the forked run saves the quoted fact through the pinned tool
+/// under the extractor origin.
+#[tokio::test]
+async fn test_compress_runs_extraction() {
+    let (runner, extractor, memory, _saver) = preservation_rig(MemoryGates::new(true, false));
+    let session = SessionId::new();
+    seed_boundary_session(&runner, session).await;
+    let progress = runner.compress(session).await;
+    assert!(progress.is_ok(), "compress must not error");
+    assert!(progress.unwrap(), "folds the oldest assistant turns");
+    extractor.drain_pending(Duration::from_secs(5)).await;
+    let written = memory.written_entries();
+    assert_eq!(written.len(), 1, "the forked run saved exactly one fact");
+    assert_eq!(written[0].key, "deploy-token-expiry");
+    assert_eq!(written[0].origin, MemoryOrigin::Extractor);
+}
+
+/// With the auto-memory gate off the compact boundary launches no fork and
+/// writes nothing, while the compaction itself still proceeds.
+#[tokio::test]
+async fn test_compress_respects_gate() {
+    let (runner, extractor, memory, saver) = preservation_rig(MemoryGates::new(false, false));
+    let session = SessionId::new();
+    seed_boundary_session(&runner, session).await;
+    let progress = runner.compress(session).await;
+    assert!(progress.is_ok(), "compaction itself is not gated");
+    extractor.drain_pending(Duration::from_secs(5)).await;
+    assert_eq!(saver.call_count(), 0, "no fork launches");
     assert!(
-        written
-            .iter()
-            .any(|e| e.key.starts_with("compact-unsolved")),
-        "unsolved marker written"
-    );
-    assert!(
-        written
-            .iter()
-            .any(|e| e.key.starts_with("compact-decision")),
-        "decision marker written"
-    );
-    assert!(
-        written.iter().all(|e| e.content != "plain turn"),
-        "non-marker text not written"
+        memory.written_entries().is_empty(),
+        "gate off writes nothing"
     );
 }
 
-/// before_clear dedups against existing auto-scope keys: a marker already
-/// saved (by a prior compact or a prior clear) is not re-written.
+/// The clear boundary hands the about-to-drop session to the same
+/// extraction pipeline: one quoted fact lands through the pinned tool
+/// under the extractor origin.
 #[tokio::test]
-async fn test_before_clear_dedups_existing() {
-    let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("ok"));
-    let memory: Arc<RecordingClearMemory> = Arc::new(RecordingClearMemory {
-        written: std::sync::Mutex::new(Vec::new()),
-        existing_keys: std::sync::Mutex::new(vec!["compact-unsolved-error".into()]),
-    });
-    let mut runner = runner_with(provider, ToolRegistry::new());
-    runner
-        .memory
-        .install_provider(Arc::clone(&memory) as Arc<dyn houyicoder_api::memory::MemoryProvider>);
-    let session = houyicoder_context::SessionId::new();
-    runner
-        .store()
-        .append(houyicoder_context::SessionLogEntry {
-            id: houyicoder_context::EventId::new(),
-            session,
-            ts: 0,
-            prev_hash: None,
-            event: SessionEvent::AssistantMessage {
-                text: "hit an error here".into(),
-                thinking: None,
-            },
-        })
-        .await
-        .unwrap();
-    runner.before_clear(session).await.expect("before_clear ok");
-    let written = memory.written.lock().expect("written").clone();
+async fn test_clear_runs_extraction() {
+    let (runner, extractor, memory, _saver) = preservation_rig(MemoryGates::new(true, false));
+    let session = SessionId::new();
+    seed_boundary_session(&runner, session).await;
+    runner.before_clear(session).await;
+    extractor.drain_pending(Duration::from_secs(5)).await;
+    let written = memory.written_entries();
+    assert_eq!(written.len(), 1, "the forked run saved exactly one fact");
+    assert_eq!(written[0].key, "deploy-token-expiry");
+    assert_eq!(written[0].origin, MemoryOrigin::Extractor);
+}
+
+/// With the auto-memory gate off the clear boundary launches no fork and
+/// writes nothing.
+#[tokio::test]
+async fn test_clear_respects_gate() {
+    let (runner, extractor, memory, saver) = preservation_rig(MemoryGates::new(false, false));
+    let session = SessionId::new();
+    seed_boundary_session(&runner, session).await;
+    runner.before_clear(session).await;
+    extractor.drain_pending(Duration::from_secs(5)).await;
+    assert_eq!(saver.call_count(), 0, "no fork launches");
     assert!(
-        written.iter().all(|e| e.key != "compact-unsolved-error"),
-        "the pre-existing unsolved marker key is not re-written"
+        memory.written_entries().is_empty(),
+        "gate off writes nothing"
     );
 }
 
-/// before_clear is a no-op (no panic, no write) when no memory provider is
-/// wired — the clear still proceeds on a memory-less runner.
+/// A runtime without an extractor still clears cleanly: the boundary
+/// degrades to a no-op instead of failing.
 #[tokio::test]
-async fn test_before_noop_without_memory() {
+async fn test_clear_without_extractor() {
+    let memory = Arc::new(RecordingMemory::default());
+    let runner = runner_with(Arc::new(FakeProvider::text("ok")), ToolRegistry::new());
+    let store = runner.store();
+    let runtime = MemoryRuntime::from_parts(
+        store,
+        Some(Arc::clone(&memory) as Arc<dyn MemoryProvider>),
+        MemoryGates::new(true, false),
+        None,
+        None,
+    );
+    let runner = runner.install_memory(runtime);
+    let session = SessionId::new();
+    seed_boundary_session(&runner, session).await;
+    runner.before_clear(session).await;
+    assert!(
+        memory.written_entries().is_empty(),
+        "no extractor means no preservation writes"
+    );
+}
+
+/// before_clear is a no-op (no panic, no write) when no memory runtime is
+/// installed — the clear still proceeds on a memory-less runner.
+#[tokio::test]
+async fn test_clear_noop_without_memory() {
     let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("ok"));
     let runner = runner_with(provider, ToolRegistry::new());
-    let session = houyicoder_context::SessionId::new();
-    runner.before_clear(session).await.expect("no-op ok");
+    let session = SessionId::new();
+    runner.before_clear(session).await;
 }
 
 // ===== Max turns: graceful Ok result (not Err crash) =====
