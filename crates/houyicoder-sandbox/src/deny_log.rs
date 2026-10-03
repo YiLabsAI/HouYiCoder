@@ -1,8 +1,11 @@
 //! Sandbox deny-log discovery. When a sandboxed command is blocked from
-//! a mach service the macOS sandbox logs the denial to the unified log.
-//! This module reads that log, extracts the denied service names, and
-//! strips the Apple deny-list so only authorizable services surface.
-//! On non-macOS hosts the reader returns empty.
+//! a mach service the denial lands in the macOS unified log in one of
+//! two record shapes: the kernel sandbox report (Sandbox: ... deny
+//! records), or launchd's own denied lookup record, which is what a
+//! blocked bootstrap lookup produces on recent macOS releases. This
+//! module reads that log, extracts the denied service names from both
+//! shapes, and strips the Apple deny-list so only authorizable services
+//! surface. On non-macOS hosts the reader returns empty.
 
 /// A mach service name is alphanumeric plus dot, dash, underscore — the
 /// same charset the seatbelt profile renderer accepts when emitting an
@@ -18,14 +21,18 @@ fn truncate_service_name(name: &str) -> String {
 }
 
 /// Parse denied mach-lookup service names from macOS sandbox log text.
-/// A candidate must follow the adjacent kernel denial shape within a
-/// Sandbox record; unrelated messages and file paths that merely contain
-/// mach-lookup are ignored. Service names are truncated to the renderer's
-/// accepted charset and deduplicated.
+/// A candidate must follow one of the two denial record shapes: the
+/// kernel denial adjacent to a Sandbox record, or a launchd denied
+/// lookup caused by a sandbox restriction. Unrelated messages and file
+/// paths that merely contain mach-lookup are ignored. Service names are
+/// truncated to the renderer's accepted charset and deduplicated. Shape
+/// identification is a substring check over untrusted log text; the
+/// authorization flow consuming these candidates gates on explicit user
+/// confirmation.
 pub fn parse_denied_services(log_text: &str) -> Vec<String> {
     let mut services = Vec::new();
     for line in log_text.lines() {
-        if let Some(name) = extract_mach_service(line)
+        if let Some(name) = extract_mach_service(line).or_else(|| extract_launchd_denial(line))
             && !services.contains(&name)
         {
             services.push(name);
@@ -51,6 +58,31 @@ fn extract_mach_service(line: &str) -> Option<String> {
     (!name.is_empty()).then_some(name)
 }
 
+/// Parse one launchd denied-lookup record. launchd enforces the seatbelt
+/// mach-lookup rule for bootstrap lookups and logs the denial itself: the
+/// service follows the name = marker and the cause reads Sandbox
+/// restriction. Three guards bound the record: the line must carry the
+/// launchd pid-1 sender token; a line carrying the kernel Sandbox marker
+/// belongs to the kernel shape, so launchd text embedded there (a file
+/// path in a file denial) is data, not a record; and the cause must be
+/// the sandbox, since a denial for any other cause offers nothing a
+/// profile grant could fix.
+fn extract_launchd_denial(line: &str) -> Option<String> {
+    if line.contains("Sandbox:") {
+        return None;
+    }
+    let sender = line.find("launchd[1]:")?;
+    let record = &line[sender + "launchd[1]:".len()..];
+    let marker = "denied lookup: name = ";
+    let at = record.find(marker)?;
+    let rest = &record[at + marker.len()..];
+    if !rest.contains("Sandbox restriction") {
+        return None;
+    }
+    let name = truncate_service_name(rest);
+    (!name.is_empty()).then_some(name)
+}
+
 /// Strip the Apple deny-list from a set of discovered services. Only
 /// non-deny-listed services survive — these are candidates the caller
 /// may surface to the user for authorization.
@@ -67,8 +99,7 @@ pub fn authorizable_services(discovered: Vec<String>) -> Vec<String> {
 ///
 /// Window-scoped: surfaces every mach-lookup denial in the window,
 /// including from unrelated sandboxed processes — a short window bounds
-/// that noise. The log attributes denials to sandboxd, not the denied
-/// process, so pid correlation is unreliable.
+/// that noise. Candidates surface by service name only.
 ///
 /// Blocks on a synchronous subprocess whose runtime scales with the
 /// host's unified log store and is not bounded by the window; call
@@ -77,6 +108,14 @@ pub fn discover_authorizable(window_secs: u64) -> Vec<String> {
     let text = read_deny_log(window_secs);
     authorizable_services(parse_denied_services(&text))
 }
+
+/// Unified-log query predicate covering both denial record shapes. The
+/// launchd branch is scoped to sandbox-caused denials. The log records
+/// each query's own command line, so a query also matches its own
+/// invocation text; those lines fail the parser's sender and record-shape
+/// checks.
+#[cfg(target_os = "macos")]
+const DENY_LOG_PREDICATE: &str = "(eventMessage CONTAINS \"mach-lookup\" AND eventMessage CONTAINS \"deny(\") OR (eventMessage CONTAINS \"denied lookup\" AND eventMessage CONTAINS \"Sandbox restriction\")";
 
 #[cfg(target_os = "macos")]
 fn read_deny_log(window_secs: u64) -> String {
@@ -87,7 +126,7 @@ fn read_deny_log(window_secs: u64) -> String {
             "--last",
             &format!("{window_secs}s"),
             "--predicate",
-            "eventMessage CONTAINS \"mach-lookup\" AND eventMessage CONTAINS \"deny(\"",
+            DENY_LOG_PREDICATE,
             "--style",
             "syslog",
         ],
@@ -187,6 +226,72 @@ mod tests {
         assert!(
             authorizable_services(parsed).is_empty(),
             "a deny-listed service extracted from a blob must not be offered"
+        );
+    }
+
+    /// A launchd denied-lookup record captured verbatim from the host
+    /// unified log: a blocked bootstrap lookup is enforced and logged by
+    /// launchd itself, in its own record shape rather than the kernel
+    /// Sandbox report.
+    #[test]
+    fn test_parse_launchd_denial() {
+        let log = "2026-10-04 02:32:30.968952+0800  localhost launchd[1]: [gui/501 [100015]:] denied lookup: name = com.houyi.test.entitlement, flags = 0x1, requestor = machlookup[82725], error = 159: Sandbox restriction";
+        let services = parse_denied_services(log);
+        assert_eq!(services, vec!["com.houyi.test.entitlement".to_string()]);
+    }
+
+    /// A launchd lookup denial for a non-sandbox cause must not surface:
+    /// no profile grant can fix it. A launchd line that is not a denial
+    /// record at all must not surface either.
+    #[test]
+    fn test_parse_skips_non_sandbox() {
+        let log = "localhost launchd[1]: [system:] denied lookup: name = com.example.svc, requestor = tool[42], error = 5: Input/output error\nlocalhost launchd[1]: [system:] notice: com.example.svc state changed";
+        assert!(parse_denied_services(log).is_empty());
+    }
+
+    /// The launchd record shape must come from launchd itself, which is
+    /// pid 1; another process logging the same text is not a denial.
+    #[test]
+    fn test_parse_requires_launchd() {
+        let log = "evil[999]: denied lookup: name = com.evil.svc, flags = 0x1, error = 159: Sandbox restriction";
+        assert!(parse_denied_services(log).is_empty());
+    }
+
+    /// A file denial whose attacker-controlled path embeds launchd
+    /// record text must not surface a service: a line carrying the
+    /// kernel Sandbox marker is a kernel record, and launchd text
+    /// inside it is data, not a record.
+    #[test]
+    fn test_parse_rejects_embedded_launchd() {
+        let log = "kernel: Sandbox: touch(123) deny(1) file-write-create /etc/launchd[1]: denied lookup: name = com.citrolabs.injected, error = 159: Sandbox restriction";
+        assert!(parse_denied_services(log).is_empty());
+    }
+
+    /// The sandbox cause must follow the name marker: restriction text
+    /// elsewhere on the line belongs to other message content and must
+    /// not authenticate a denial recorded for another cause.
+    #[test]
+    fn test_parse_launchd_cause_order() {
+        let log = "localhost launchd[1]: [system:] Sandbox restriction advisory; denied lookup: name = com.example.svc, error = 5: Input/output error";
+        assert!(parse_denied_services(log).is_empty());
+    }
+
+    /// A launchd denial whose name field is empty yields nothing, the
+    /// same as the kernel shape's empty-name case.
+    #[test]
+    fn test_parse_launchd_no_name() {
+        let log = "localhost launchd[1]: [system:] denied lookup: name = , requestor = tool[7], error = 159: Sandbox restriction";
+        assert!(parse_denied_services(log).is_empty());
+    }
+
+    /// Both record shapes in one log yield both services.
+    #[test]
+    fn test_parse_mixed_formats() {
+        let log = "Sandbox: one(1) deny(1) mach-lookup com.legacy.svc(1)\nlocalhost launchd[1]: [system:] denied lookup: name = com.new.svc, error = 159: Sandbox restriction";
+        let services = parse_denied_services(log);
+        assert_eq!(
+            services,
+            vec!["com.legacy.svc".to_string(), "com.new.svc".to_string()]
         );
     }
 
