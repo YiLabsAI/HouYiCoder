@@ -1,15 +1,21 @@
 //! Constructs the memory runtime and its persistent provider.
 
+use std::path::{Path, PathBuf};
+
 use super::*;
 use houyicoder_core::agent::{MemoryGates, MemoryRuntime};
 
-/// Build a three-scope provider and repair its derived index.
+/// Build a three-scope provider and repair its derived index. The home
+/// override exists so tests inject an isolated root instead of reading the
+/// real user home; production passes None and the environment home applies.
 pub(super) fn memory_provider_for(
-    ws: &std::path::Path,
+    ws: &Path,
+    home_override: Option<&Path>,
 ) -> houyicoder_memory::MarkdownMemoryProvider {
-    let home = std::env::var("HOME")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| ws.to_path_buf());
+    let home: PathBuf = home_override
+        .map(Path::to_path_buf)
+        .or_else(|| std::env::var("HOME").ok().map(PathBuf::from))
+        .unwrap_or_else(|| ws.to_path_buf());
     let slug = worktree::git_canonical_slug(ws);
     let user_root = home.join(".houyicoder").join("memory");
     let project_root = ws.join(".houyicoder").join("memory");
@@ -135,7 +141,7 @@ pub(super) fn heal_memory_index(provider: &houyicoder_memory::MarkdownMemoryProv
 
 #[cfg(test)]
 mod tests {
-    use super::{build_memory_runtime, heal_memory_index};
+    use super::{build_memory_runtime, heal_memory_index, memory_provider_for};
     use houyicoder_api::memory::MemoryProvider;
     use houyicoder_api::provider::ModelProvider;
     use houyicoder_api::session::SessionLog;
@@ -143,14 +149,16 @@ mod tests {
     use houyicoder_memory::{InMemoryBackend, MarkdownMemoryProvider};
     use houyicoder_provider::FakeProvider;
     use houyicoder_session::SessionStore;
+    use std::fs;
+    use std::path::PathBuf;
     use std::sync::Arc;
 
-    fn temp_root() -> std::path::PathBuf {
+    fn temp_root() -> PathBuf {
         use std::sync::atomic::{AtomicU64, Ordering};
         static SEQ: AtomicU64 = AtomicU64::new(0);
         let seq = SEQ.fetch_add(1, Ordering::Relaxed);
         let dir = std::env::temp_dir().join(format!("memory_heal_{seq}_{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("create temp root");
+        fs::create_dir_all(&dir).expect("create temp root");
         dir
     }
 
@@ -298,5 +306,38 @@ mod tests {
         // Restore so cleanup can remove the dir.
         std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).ok();
         drop(std::fs::remove_dir_all(&root));
+    }
+
+    /// An injected home override routes every provider root under the
+    /// override, so a test never touches the real user memory directory:
+    /// a save lands under the override, not under the environment home.
+    #[test]
+    fn test_roots_honor_home_override() {
+        use super::super::worktree;
+        use houyicoder_api::memory::MemoryProvider;
+        use houyicoder_context::{MemoryEntry, MemorySource};
+        let isolated = temp_root();
+        let ws = temp_root();
+        let provider = memory_provider_for(&ws, Some(&isolated));
+        provider
+            .add(MemoryEntry::new(
+                "isolated-key",
+                "written under the override",
+                MemorySource::Project,
+            ))
+            .expect("save lands");
+        let override_user = isolated.join(".houyicoder").join("memory");
+        let override_auto_projects = isolated.join(".houyicoder").join("projects");
+        assert!(
+            override_user.join("isolated-key.md").exists()
+                || override_auto_projects
+                    .join(worktree::git_canonical_slug(&ws))
+                    .join("memory")
+                    .join("isolated-key.md")
+                    .exists(),
+            "the write must land inside the override root"
+        );
+        drop(fs::remove_dir_all(&isolated));
+        drop(fs::remove_dir_all(&ws));
     }
 }

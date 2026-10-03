@@ -15,6 +15,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{List, ListItem, ListState, Paragraph, Wrap},
 };
+use unicode_width::UnicodeWidthStr;
 
 use crate::memory_state::{MemoryDetailState, MemoryPaneState, toggle_label};
 use crate::state::enums::MemoryScopeTab;
@@ -245,11 +246,15 @@ fn memory_items(filtered: &[&MemoryEntry], cursor: usize, width: u16) -> Vec<Lis
             } else {
                 Style::new().fg(Color::White)
             };
-            let scope = format!("[{}] ", memory.scope);
-            let meta = format!("  {} · {}", memory.source, age_label(memory.mtime_secs));
+            let scope = format!("scope: {} ", memory.scope);
+            let meta = format!(
+                "  source: {} · age: {}",
+                memory.source,
+                age_label(memory.mtime_secs)
+            );
             let key_width = (width as usize)
-                .saturating_sub(unicode_width::UnicodeWidthStr::width(scope.as_str()))
-                .saturating_sub(unicode_width::UnicodeWidthStr::width(meta.as_str()));
+                .saturating_sub(UnicodeWidthStr::width(scope.as_str()))
+                .saturating_sub(UnicodeWidthStr::width(meta.as_str()));
             let key = truncate_width(&memory.topic, key_width);
             let summary_width = (width as usize).saturating_sub(2);
             let summary = truncate_width(&memory.summary, summary_width);

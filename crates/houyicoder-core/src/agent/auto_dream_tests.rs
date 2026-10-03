@@ -755,3 +755,113 @@ fn test_merge_session_none_noop() {
     super::merge_cross_session_reward(&None, None, &mut reward);
     assert_eq!(reward.as_ref().unwrap().retry_after_error, 2);
 }
+
+/// The dream's save tool pins the auto root: the offered schema carries no
+/// scope field, and a scope smuggled into the input is ignored in favor of
+/// the pin, so a dream write can never open the user root. A refresh of a
+/// key already in the project root routes into that root in place.
+#[tokio::test]
+async fn test_dream_pins_save_scope() {
+    use crate::agent::memory::MutationLog;
+    use crate::agent::runner_config::RunnerConfig;
+    use crate::agent::tools::MemoryAddTool;
+    use crate::provider::test_support::FakeProvider;
+    use houyicoder_api::memory::MemoryProvider;
+    use houyicoder_api::tool::{Tool, ToolCtx};
+    use houyicoder_context::MemoryOrigin;
+    use houyicoder_memory::MarkdownMemoryProvider;
+
+    let root = temp_dir("pin-scope");
+    let user_root = root.join("user");
+    let project_root = root.join("project");
+    let auto_root = root.join("auto");
+    std::fs::create_dir_all(&user_root).unwrap();
+    std::fs::create_dir_all(&project_root).unwrap();
+    std::fs::create_dir_all(&auto_root).unwrap();
+    let memory: Arc<dyn MemoryProvider> = Arc::new(MarkdownMemoryProvider::new_multi(vec![
+        user_root,
+        project_root,
+        auto_root.clone(),
+    ]));
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let recorder = Arc::new(MutationLog::new());
+    let runner = super::build_forked_dream_runner(
+        store,
+        Arc::new(FakeProvider::new(vec![])),
+        memory.clone(),
+        &root,
+        RunnerConfig::default(),
+        recorder,
+    );
+    let defs = runner.tools().tool_defs();
+    let save_def = defs
+        .iter()
+        .find(|d| d.name == "save_memory")
+        .expect("dream registers save_memory");
+    let props = save_def.input_schema["properties"].as_object().unwrap();
+    assert!(
+        !props.contains_key("scope"),
+        "the pinned dream tool offers no scope choice: {save_def:?}"
+    );
+    assert!(
+        !props.contains_key("evidence"),
+        "the dream owns no conversation window, so no evidence is demanded: {save_def:?}"
+    );
+
+    let tool = MemoryAddTool::new(memory.clone())
+        .with_origin(MemoryOrigin::Dream)
+        .with_pinned_scope(MemoryScope::Auto);
+    let input = serde_json::json!({
+        "key": "dream-consolidated",
+        "description": "consolidated by the dream",
+        "source": "feedback",
+        "content": "rule body",
+        "scope": "user",
+    });
+    let outcome = tool.execute(ToolCtx::new("dream-pin-test"), input).await;
+    assert!(outcome.is_ok(), "{outcome:?}");
+    let listing = memory.list_memories();
+    let entry = listing
+        .iter()
+        .find(|s| s.key == "dream-consolidated")
+        .expect("dream write landed");
+    assert_eq!(
+        entry.scope,
+        MemoryScope::Auto,
+        "a smuggled scope never overrides the pin"
+    );
+
+    // A refresh of a key already living in the project root routes into
+    // that root in place: writing it into the pinned auto root would shadow
+    // the explicit entry by newest-mtime and lose the refresh.
+    memory
+        .add_in_scope(
+            MemoryEntry::new(
+                "promoted-rule",
+                "explicit project entry body",
+                MemorySource::Feedback,
+            ),
+            MemoryScope::Project,
+        )
+        .expect("seed the project copy");
+    let refresh = serde_json::json!({
+        "key": "promoted-rule",
+        "description": "consolidated refresh",
+        "source": "feedback",
+        "content": "refreshed rule body",
+    });
+    let refresh_outcome = tool
+        .execute(ToolCtx::new("dream-refresh-test"), refresh)
+        .await;
+    assert!(refresh_outcome.is_ok(), "{refresh_outcome:?}");
+    let refreshed = memory.show_memory("promoted-rule").expect("entry readable");
+    assert_eq!(
+        refreshed.content, "refreshed rule body",
+        "the refresh lands in the project root, not a competing auto copy"
+    );
+    assert!(
+        !auto_root.join("promoted-rule.md").exists(),
+        "no shadow copy in the auto root"
+    );
+    drop(std::fs::remove_dir_all(&root));
+}

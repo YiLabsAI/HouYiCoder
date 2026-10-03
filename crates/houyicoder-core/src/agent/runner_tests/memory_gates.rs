@@ -207,3 +207,49 @@ async fn test_toggle_off_skips_recall() {
         "auto_memory off must skip recall entirely"
     );
 }
+
+/// The frozen index obeys the same auto-memory gate as recall: a disabled
+/// gate injects no index even with entries on disk, and re-enabling rebuilds
+/// from the store instead of replaying a disabled-era snapshot.
+#[test]
+fn test_memory_index_respects_gate() {
+    use crate::agent::MemoryRuntime;
+    use crate::provider::test_support::FakeProvider;
+    use houyicoder_api::memory::MemoryProvider;
+    use houyicoder_memory::MarkdownMemoryProvider;
+    use std::fs;
+    let root = std::env::temp_dir().join(format!("mem-gate-{}-{}", std::process::id(), line!()));
+    drop(fs::remove_dir_all(&root));
+    fs::create_dir_all(&root).expect("mkdir");
+    let memory: Arc<dyn MemoryProvider> = Arc::new(MarkdownMemoryProvider::new(root.clone()));
+    memory
+        .add(MemoryEntry::new(
+            "gated-key",
+            "carries a description",
+            MemorySource::Project,
+        ))
+        .unwrap();
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let mut runtime = MemoryRuntime::new(store.clone());
+    runtime.install_provider(memory.clone());
+    let runner = Runner::new(
+        store,
+        Arc::new(FakeProvider::new(vec![])),
+        ToolRegistry::new(),
+        RunnerConfig::default(),
+    )
+    .install_memory(runtime);
+    runner.set_auto_memory(false);
+    assert_eq!(
+        runner.format_memory_index(),
+        None,
+        "a disabled gate injects no index even with entries on disk"
+    );
+    runner.set_auto_memory(true);
+    let reopened = runner.format_memory_index().expect("gate on rebuilds");
+    assert!(
+        reopened.contains("gated-key"),
+        "re-enabling rebuilds rather than replaying a disabled-era cache: {reopened}"
+    );
+    drop(std::fs::remove_dir_all(&root));
+}

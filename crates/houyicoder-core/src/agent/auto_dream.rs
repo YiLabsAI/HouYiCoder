@@ -16,9 +16,10 @@
 //! final topic set on exit — no hand-maintained index that can drift.
 //!
 //! Scope promote/demote: the forked agent calls promote_memory / demote_memory
-//! to move a topic between the auto and project scopes; save_memory accepts a
-//! scope parameter so a refresh of a project-scope entry lands in the project
-//! root rather than shadowing it with a competing auto copy.
+//! to move a topic between the auto and project scopes. save_memory is pinned
+//! to the auto root for the dream, with one host-side exception: refreshing a
+//! key that already lives in the project root writes that root in place, so
+//! the explicit entry is updated rather than shadowed.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -32,7 +33,9 @@ use houyicoder_api::agent_event::{
 use houyicoder_api::memory::MemoryProvider;
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_api::session::SessionLog;
-use houyicoder_context::{MemoryChangeId, MemoryRecallStats, MemorySummary, SessionId};
+use houyicoder_context::{
+    MemoryChangeId, MemoryOrigin, MemoryRecallStats, MemoryScope, MemorySummary, SessionId,
+};
 use tokio::task::JoinHandle;
 
 use super::runner_config::RunnerConfig;
@@ -371,9 +374,9 @@ pub(crate) fn build_consolidation_prompt(
         from the always-on carrier (freeing prefix budget) and moves the \
         topic back into the auto scope so it is recall-on-demand only.\n\
         - When refreshing a topic that is already in the project scope (one \
-        you promoted earlier), pass scope=project to save_memory so the \
-        refresh lands in the project dir rather than shadowing the explicit \
-        entry with a competing auto copy.\n\n\
+        you promoted earlier), just call save_memory with the updated \
+        content: the host routes that refresh into the project root in \
+        place, so the explicit entry is updated rather than shadowed.\n\n\
         ---\n\n\
         Return a brief summary of what you consolidated, updated, pruned, \
         promoted, or demoted. If nothing changed (memories are already tight), \
@@ -396,14 +399,18 @@ pub(crate) fn build_forked_dream_runner(
     recorder: Arc<MutationLog>,
 ) -> Runner {
     // The add + delete + promote + demote tools share one recorder so a
-    // touch (add, delete, promote, or demote) counts toward the notice
-    // (the consolidation dream both writes new entries, prunes stale ones,
-    // and flows rules between scopes).
+    // touch (add, delete, promote, or demote) counts toward the notice.
+    // The add tool pins the auto root: a scope choice offered to the dream
+    // model could open a root the seam is not authorized to write, and
+    // moving a topic between roots is the promote/demote tools' job — the
+    // one cross-root write the pin allows is the host-side refresh routing
+    // that updates a project-root key in place.
     let mut tools = ToolRegistry::new();
     tools.register(Arc::new(
         MemoryAddTool::new(memory.clone())
             .with_recorder(recorder.clone())
-            .with_origin(houyicoder_context::MemoryOrigin::Dream),
+            .with_origin(MemoryOrigin::Dream)
+            .with_pinned_scope(MemoryScope::Auto),
     ));
     tools.register(Arc::new(ShowMemoryTool::new(memory.clone())));
     tools.register(Arc::new(

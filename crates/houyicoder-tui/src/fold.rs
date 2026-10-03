@@ -38,6 +38,11 @@ pub(crate) struct ToolStats {
     /// would read "wrote" for a delete, so it gets its own count and the
     /// "deleted N memory" verb. Destructive op, surfaced for visibility.
     pub mem_delete: u32,
+    /// Memory store reads via the show_memory and search_memory tools. The
+    /// two share one bucket so a mixed group sums; the summary reads
+    /// "read N memory", telling the user the agent consulted its own state
+    /// instead of landing in the anonymous other bucket.
+    pub mem_read: u32,
 }
 
 impl ToolStats {
@@ -60,6 +65,7 @@ impl ToolStats {
             + self.other
             + self.mem_write
             + self.mem_delete
+            + self.mem_read
     }
 }
 
@@ -107,7 +113,15 @@ pub(crate) fn classify_bash(command: &str) -> BashKind {
 fn is_foldable(tool_name: &str) -> bool {
     matches!(
         tool_name,
-        "bash" | "grep" | "glob" | "read" | "WebFetch" | "save_memory" | "delete_memory"
+        "bash"
+            | "grep"
+            | "glob"
+            | "read"
+            | "WebFetch"
+            | "save_memory"
+            | "delete_memory"
+            | "show_memory"
+            | "search_memory"
     )
 }
 
@@ -149,6 +163,7 @@ pub(crate) fn accumulate(stats: &mut ToolStats, tool: &str, input: &Value) {
         "write" => stats.write += 1,
         "save_memory" => stats.mem_write += 1,
         "delete_memory" => stats.mem_delete += 1,
+        "show_memory" | "search_memory" => stats.mem_read += 1,
         "todo_write" => stats.todo += 1,
         _ => stats.other += 1,
     }
@@ -182,6 +197,7 @@ pub(crate) fn accumulate_brief(stats: &mut ToolStats, tool: &str, invocation: &s
         "WebFetch" => stats.search += 1,
         "save_memory" => stats.mem_write += 1,
         "delete_memory" => stats.mem_delete += 1,
+        "show_memory" | "search_memory" => stats.mem_read += 1,
         "todo_write" => stats.todo += 1,
         _ => stats.other += 1,
     }

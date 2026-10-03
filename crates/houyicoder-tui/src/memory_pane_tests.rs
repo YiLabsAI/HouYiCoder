@@ -31,8 +31,12 @@ fn test_memory_cursor_moves() {
     app.move_memory_cursor(1);
     let second = render(&app);
     assert!(
-        second.contains("❯ [user] comment-style"),
+        second.contains("❯ scope: user"),
         "cursor on comment-style:\n{second}"
+    );
+    assert!(
+        second.contains("comment-style"),
+        "row key follows the cursor marker:\n{second}"
     );
     // Up back to row 0.
     app.move_memory_cursor(-1);
@@ -99,7 +103,7 @@ fn test_list_result_resets_cursor() {
     });
     assert_eq!(app.memory.cursor(), 0, "cursor reset on refresh");
     assert!(app.memory.entries().iter().any(|m| m.topic == "fresh-gate"));
-    assert!(render(&app).contains("project · now"));
+    assert!(render(&app).contains("source: project · age: now"));
     assert_eq!(app.transcript.len(), transcript_len);
     assert_eq!(app.pane, crate::state::Pane::Memory);
 }
@@ -404,12 +408,13 @@ fn test_memory_pane_renders_tag() {
     app.run_command(SlashCommand::Memory);
     let out = render_text(&app, 100, 28);
     assert!(
-        out.contains("[project] build-gate"),
-        "scope and key missing:\n{out}"
+        out.contains("scope: project"),
+        "the physical scope carries its field name:\n{out}"
     );
+    assert!(out.contains("build-gate"), "key missing:\n{out}");
     assert!(
-        out.contains("project · unknown"),
-        "source and age missing:\n{out}"
+        out.contains("source: project · age:"),
+        "the semantic source and age carry their field names:\n{out}"
     );
 }
 

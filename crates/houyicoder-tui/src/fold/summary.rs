@@ -48,6 +48,7 @@ fn summary_count_parts(stats: &ToolStats, active: bool) -> Vec<SummaryPart> {
         other_v,
         mem_write_v,
         mem_delete_v,
+        mem_read_v,
     ) = if active {
         (
             "searching for",
@@ -60,6 +61,7 @@ fn summary_count_parts(stats: &ToolStats, active: bool) -> Vec<SummaryPart> {
             "running",
             "writing",
             "deleting",
+            "reading",
         )
     } else {
         (
@@ -73,6 +75,7 @@ fn summary_count_parts(stats: &ToolStats, active: bool) -> Vec<SummaryPart> {
             "ran",
             "wrote",
             "deleted",
+            "read",
         )
     };
     let read_count = stats.read_count();
@@ -84,6 +87,7 @@ fn summary_count_parts(stats: &ToolStats, active: bool) -> Vec<SummaryPart> {
             stats.mem_delete,
             "memory",
         ),
+        (stats.mem_read > 0, mem_read_v, stats.mem_read, "memory"),
         (stats.search > 0, search_v, stats.search, "pattern"),
         (read_count > 0, read_v, read_count, "file"),
         (stats.list > 0, list_v, stats.list, "directory"),

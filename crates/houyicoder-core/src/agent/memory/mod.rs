@@ -216,8 +216,13 @@ impl MemoryRuntime {
 
     /// Format the memory index for the system prompt prefix. The first result
     /// is held until clear or compact so background memory writes cannot change
-    /// the provider prefix between ordinary turns.
+    /// the provider prefix between ordinary turns. A disabled auto-memory gate
+    /// injects nothing and leaves the snapshot untouched, so re-enabling
+    /// rebuilds from the store instead of replaying the disabled era.
     pub(crate) fn format_index(&self) -> Option<String> {
+        if !self.gates.auto_memory_enabled() {
+            return None;
+        }
         let Ok(mut snapshot) = self.index_snapshot.lock() else {
             tracing::warn!("memory index snapshot lock poisoned");
             return self.build_index();

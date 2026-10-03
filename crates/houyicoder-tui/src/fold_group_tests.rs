@@ -3,7 +3,8 @@
 //! mid-run breaks a group so an edit renders expanded.
 
 use crate::fold::{
-    DisplaySlot, ToolStats, accumulate_brief, compute_fold_groups, display_slots, render_summary,
+    DisplaySlot, ToolStats, accumulate_brief, compute_fold_groups, display_slots, is_foldable,
+    render_summary,
 };
 use crate::records::{ToolOutcome, TranscriptLine};
 use crate::toggle_hint::ToggleHint;
@@ -331,4 +332,38 @@ fn test_memory_active_tense() {
         summary.plain,
         "\u{23fa} Writing 1 memory, deleting 1 memory"
     );
+}
+
+/// show_memory and search_memory fold into the memory-read bucket: a read
+/// of the agent's own state is a meta-operation like the write, and landing
+/// it in the generic other bucket would render "ran N tools" — hiding that
+/// memory was consulted at all.
+#[test]
+fn test_show_memory_read_bucket() {
+    let mut s = ToolStats::default();
+    accumulate_brief(&mut s, "show_memory", "key: deploy-gate");
+    assert_eq!(s.mem_read, 1);
+    assert_eq!(s.other, 0);
+    let summary = render_summary(&s, &[], false, Some(ToggleHint::Expand));
+    assert_eq!(summary.plain, "\u{23fa} Read 1 memory");
+}
+
+/// Both memory-read tools share one bucket so a mixed group sums rather
+/// than splitting into two near-identical parts.
+#[test]
+fn test_search_memory_read_bucket() {
+    let mut s = ToolStats::default();
+    accumulate_brief(&mut s, "search_memory", "query: deploy gates");
+    accumulate_brief(&mut s, "show_memory", "key: deploy-gate");
+    assert_eq!(s.mem_read, 2);
+    let summary = render_summary(&s, &[], false, Some(ToggleHint::Expand));
+    assert_eq!(summary.plain, "\u{23fa} Read 2 memories");
+}
+
+/// The read tools are collapsible: without fold membership a show_memory
+/// call renders as its own message instead of joining the turn summary.
+#[test]
+fn test_memory_reads_foldable() {
+    assert!(is_foldable("show_memory"));
+    assert!(is_foldable("search_memory"));
 }

@@ -101,8 +101,8 @@ impl Runner {
     }
 
     /// Install memory writes and mutation tracking for an extraction run.
-    /// The tool is the pinned construction: extractor origin, auto root, and
-    /// the evidence window every save must quote.
+    /// The tool is the pinned construction: extractor origin, an auto-root
+    /// pin for new keys, and the evidence window every save must quote.
     pub(crate) fn install_extraction_memory(
         mut self,
         provider: Arc<dyn houyicoder_api::memory::MemoryProvider>,

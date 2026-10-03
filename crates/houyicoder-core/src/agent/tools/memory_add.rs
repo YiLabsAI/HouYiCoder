@@ -15,8 +15,10 @@
 //! would queue approvals no one answers) — so the gate is off here and
 //! safety comes from the structured capability plus the what-not-to-save
 //! guidance in the extraction prompt. Each seam registers its own
-//! construction: origin is host-stamped per seam, and the extraction one
-//! pins the storage root so its writes cannot leave the auto store.
+//! construction: origin is host-stamped per seam, and the extraction and
+//! dream ones pin the storage root so their writes cannot open a root the
+//! host did not name — a pinned save lands in the pinned root, except the
+//! host-side refresh routing for keys already in the project root.
 //!
 //! The provider is shared with the runner that owns it, so a forked
 //! extraction run in the same process lands writes under the same write lock
@@ -55,10 +57,14 @@ pub struct MemoryAddTool {
     /// construction (the LLM never provides origin) so a dream cannot
     /// self-promote. Unknown for a bare tool (tests).
     origin: MemoryOrigin,
-    /// Storage root pinned by the host. Some on the forked-extraction seam,
-    /// where the model is offered no scope field and every write lands in the
-    /// auto root; None where the model picks the root per call.
+    /// Storage root pinned by the host. Some on the forked-extraction and
+    /// dream seams, where the model is offered no scope field and every write
+    /// lands in the auto root; None where the model picks the root per call.
     scope: Option<MemoryScope>,
+    /// Whether saves must quote window evidence. Set by the extraction seam,
+    /// which owns a real window; a pinned tool without a window (the dream)
+    /// checks nothing rather than fabricate a ground.
+    requires_evidence: bool,
     /// The evidence window the extraction seam validates quotes against. Empty
     /// on the unpinned main-agent tool (no grounding check); the host-owned
     /// window events on the extraction seam, so every save must quote text the
@@ -75,6 +81,7 @@ impl MemoryAddTool {
             recorder: None,
             origin: MemoryOrigin::Unknown,
             scope: None,
+            requires_evidence: false,
             evidence: Arc::from(Vec::new()),
         }
     }
@@ -94,8 +101,19 @@ impl MemoryAddTool {
             recorder: Some(recorder),
             origin: MemoryOrigin::Extractor,
             scope: Some(MemoryScope::Auto),
+            requires_evidence: true,
             evidence,
         }
+    }
+
+    /// Pin the storage root without an evidence window. The consolidation
+    /// dream writes outside any conversation window, so quoting one is
+    /// impossible; the pin keeps every new-key write in the pinned root
+    /// while the model is offered no scope choice, and the refresh routing
+    /// updates a project-root key in place.
+    pub fn with_pinned_scope(mut self, scope: MemoryScope) -> Self {
+        self.scope = Some(scope);
+        self
     }
 
     /// Thread a write recorder so a successful save bumps it. The forked
@@ -156,7 +174,7 @@ impl Tool for MemoryAddTool {
             "required": ["key", "description", "source", "content"],
             "additionalProperties": false
         });
-        if self.scope.is_some() {
+        if self.requires_evidence {
             // The extraction seam grounds every save in window evidence: one
             // to three quotes the forked agent copies from the conversation it
             // saw, validated host-side as a substring of a window event's body
@@ -187,7 +205,7 @@ impl Tool for MemoryAddTool {
             if let Some(req) = schema["required"].as_array_mut() {
                 req.push(json!("evidence"));
             }
-        } else {
+        } else if self.scope.is_none() {
             // Only an unpinned tool offers the choice; the enum lists every
             // root the parser accepts, so schema and parser cannot disagree.
             let props = schema["properties"]
@@ -216,12 +234,19 @@ impl Tool for MemoryAddTool {
             // the write: a save whose quotes are not substrings of a window
             // event body is rejected with a correctable error, so no write
             // lands and the recorder stays flat. Unpinned tools skip this.
-            if self.scope.is_some() {
+            if self.requires_evidence {
                 validate_extraction_evidence(&self.evidence, &input)?;
             }
             // A host-pinned tool ignores any scope in the input: the pin is
-            // the answer, whatever the caller sent.
-            let scope = self.scope.unwrap_or_else(|| parse_scope(&input));
+            // the answer, whatever the caller sent. The pin resolves per
+            // key: a save lands in the pinned root, except that a key
+            // already living in the project root refreshes that root in
+            // place — a competing copy in the pinned root would shadow the
+            // project entry by newest-mtime and lose the refresh.
+            let scope = match self.scope {
+                Some(pinned) => refresh_root(provider.as_ref(), &key, pinned),
+                None => parse_scope(&input),
+            };
             // Stamp the entry with the current time so a backend that does
             // not restat on recall still sees a fresh mtime; backends that
             // restat (the markdown store) overwrite this with the file stat,
@@ -322,6 +347,21 @@ fn parse_scope(input: &Value) -> MemoryScope {
         return MemoryScope::Auto;
     };
     MemoryScope::from_label(label).unwrap_or(MemoryScope::Auto)
+}
+
+/// Resolve the write root for a pinned save. The pin names the default
+/// root; the one exception is a key already living in the project root,
+/// where the save refreshes that root in place. Writing the refresh into
+/// the pinned root would create a competing copy that shadows the explicit
+/// entry by newest-mtime and the refresh would be lost on the next
+/// reconcile. Other roots stay closed to the pinned seam.
+fn refresh_root(provider: &dyn MemoryProvider, key: &str, pinned: MemoryScope) -> MemoryScope {
+    let refreshes_project = provider.scopes_for_key(key).contains(&MemoryScope::Project);
+    if refreshes_project && pinned != MemoryScope::Project {
+        MemoryScope::Project
+    } else {
+        pinned
+    }
 }
 
 /// Build a correctable evidence-rejection error and trace it host-side so a

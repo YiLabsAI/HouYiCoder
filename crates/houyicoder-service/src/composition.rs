@@ -571,7 +571,7 @@ pub(crate) fn assemble(
     let (runner, toggle_warnings) = match workspace {
         Some(ws) => {
             let memory_provider: Arc<dyn MemoryProvider> =
-                Arc::new(memory::memory_provider_for(&ws));
+                Arc::new(memory::memory_provider_for(&ws, None));
             let session_log_root = runner.store().session_log_root();
             let (runtime, warnings) = memory::build_memory_runtime(
                 runner.store(),
