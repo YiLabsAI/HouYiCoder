@@ -1,4 +1,5 @@
 use super::*;
+use houyicoder_protocol::acpx::AcpxMethod;
 use houyicoder_protocol::frontend::run::ContentBlock;
 use houyicoder_protocol::frontend::session_update::{
     ContentChunk, ToolCall, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
@@ -545,6 +546,53 @@ fn thought_row(lines: &[TranscriptLine]) -> Option<RowFacts> {
         }),
         _ => None,
     })
+}
+
+/// A window whose first frame is the message that closed the turn before it
+/// names that turn's row by the turn's own newest answer-side frame, the
+/// same name the whole log gives it: the fold's read-back pass advances the
+/// end over the frames it absorbs, so a close at the window's first frame
+/// does not name the row by that frame.
+#[test]
+fn test_close_keeps_row_name() {
+    let frames = vec![
+        user_msg("one"),
+        thought("step"),
+        agent_msg("answer"),
+        user_msg("two"),
+    ];
+    let whole = transcript_from_frames(&frames, 0..frames.len(), true);
+    let tail = transcript_from_frames(&frames, 3..frames.len(), true);
+    let whole_row = thought_row(&whole).expect("the whole log derives the row");
+    let tail_row = thought_row(&tail).expect("the window derives the same row");
+    assert_eq!(
+        whole_row.turn_id, "f2",
+        "the answer frame, not the closing message, names the row"
+    );
+    assert_eq!(
+        tail_row.turn_id, whole_row.turn_id,
+        "a window starting at the closing message agrees with the whole log"
+    );
+}
+
+/// A log read whose frames carry durable names gives each summary row the
+/// name sitting at the frame that closed the turn, so the same turn keeps
+/// its row identity across reads that start at different points — what a
+/// frame-position name cannot promise for a windowed read.
+#[test]
+fn test_fold_names_rows() {
+    let frames = vec![
+        user_msg("start"),
+        thought("step"),
+        run_completed(Some(7_000)),
+    ];
+    let names: Vec<String> = (0..frames.len()).map(|i| format!("e{i}")).collect();
+    let lines = transcript_from_named_frames(&frames, &names, 0..frames.len(), true);
+    let row = thought_row(&lines).expect("the closed turn derives its row");
+    assert_eq!(
+        row.turn_id, "e2",
+        "the row takes the name at the frame that closed the turn"
+    );
 }
 
 #[test]

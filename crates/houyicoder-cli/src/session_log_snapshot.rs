@@ -1,8 +1,11 @@
 //! The session-log implementation of the TUI's TranscriptSnapshot port: the
 //! search view reads the durable session log through the shared history
-//! reader, maps each event to the frames the live stream carries, and
-//! flattens them through the same transcript_from_frames the live render
-//! uses, so scrolling through history shows the turns the live view showed.
+//! reader, maps each event to the frames the live stream carries, and folds
+//! them through the same projection the live render uses, so scrolling
+//! through history shows the turns the live view showed. Each frame carries
+//! the durable identity of the event that produced it, so a turn's summary
+//! row keeps the same name in every windowed read and never collides with
+//! the frame-index names the live transcript carries.
 //!
 //! The mappings are the service layer's map_session_update and
 //! map_acpx_notification, the same two the live push uses. A local copy would
@@ -27,7 +30,7 @@ use houyicoder_tui::records::TranscriptLine;
 use houyicoder_tui::transcript::snapshot::{
     IndexProgress, SnapshotLoad, TranscriptSnapshot, WindowLoad,
 };
-use houyicoder_tui::transcript::{TranscriptFrame, bounds_turn_in, transcript_from_frames};
+use houyicoder_tui::transcript::{TranscriptFrame, bounds_turn_in, transcript_from_named_frames};
 
 use crate::session_history::{EventWindow, LocatedEvent, SessionHistory};
 
@@ -69,36 +72,51 @@ impl SessionLogSnapshot {
         ]
     }
 
-    /// The frames a run of durable events projects to. The snapshot has no run
-    /// state to consult, so a turn its log carries no record for is left open:
-    /// the snapshot never claims a turn ended that the log does not record as
-    /// ended.
-    fn frames_of_events<'a>(
+    /// The frames a run of durable events renders to, paired with the row
+    /// name each frame carries: the identity of the event that produced it.
+    /// Both frames of one event share its identity, so a turn's summary row
+    /// is named by the event the log recorded the close in — the same name
+    /// in every read, whatever window it started from. The identity type
+    /// belongs to the log's crate, so the formatting lives here rather than
+    /// in the projection.
+    fn named_frames<'a>(
         events: impl IntoIterator<Item = &'a SessionLogEntry>,
-    ) -> Vec<TranscriptFrame> {
+    ) -> (Vec<TranscriptFrame>, Vec<String>) {
         let mut frames = Vec::new();
+        let mut names = Vec::new();
         for event in events {
-            frames.extend(Self::frames_of(&event.event).into_iter().flatten());
+            for frame in Self::frames_of(&event.event).into_iter().flatten() {
+                names.push(format!("e{}", event.id));
+                frames.push(frame);
+            }
         }
-        frames
+        (frames, names)
     }
 
-    /// Project a run of durable events to transcript lines.
+    /// Render a run of durable events to transcript lines. The snapshot has
+    /// no run state to consult, so a turn its log carries no record for is
+    /// left open: the snapshot never claims a turn ended that the log does
+    /// not record as ended.
     fn project_events<'a>(
         events: impl IntoIterator<Item = &'a SessionLogEntry>,
     ) -> Vec<TranscriptLine> {
-        let frames = Self::frames_of_events(events);
-        transcript_from_frames(&frames, 0..frames.len(), true)
+        let (frames, names) = Self::named_frames(events);
+        transcript_from_named_frames(&frames, &names, 0..frames.len(), true)
     }
 
     /// Whether a step of events holds where a turn begins or ends, in the
     /// sense the projection reads: a message that opened a turn, or the record
-    /// that closed one.
+    /// that closed one. The probe reads frames alone, so it does not format
+    /// the row names it would not use.
     fn holds_boundary(events: &[LocatedEvent]) -> bool {
-        bounds_turn_in(&Self::frames_of_events(events.iter().map(|e| &e.entry)))
+        let frames: Vec<TranscriptFrame> = events
+            .iter()
+            .flat_map(|e| Self::frames_of(&e.entry.event).into_iter().flatten())
+            .collect();
+        bounds_turn_in(&frames)
     }
 
-    /// Project one window: the window's own events, folded against the events
+    /// Render one window: the window's own events, folded against the events
     /// the lookback recovered. A window starting inside a turn reaches the fold
     /// with the turn's opening frame behind its first event, which is what
     /// keeps the summary row the fold derives at the frame that closed the
@@ -110,12 +128,13 @@ impl SessionLogSnapshot {
         } else {
             Vec::new()
         };
-        let mut frames = Self::frames_of_events(ahead.iter().map(|e| &e.entry));
+        let (mut frames, mut names) = Self::named_frames(ahead.iter().map(|e| &e.entry));
         let start = frames.len();
-        frames.extend(Self::frames_of_events(
-            window.events.iter().map(|e| &e.entry),
-        ));
-        let lines = transcript_from_frames(&frames, start..frames.len(), true);
+        let (window_frames, window_names) =
+            Self::named_frames(window.events.iter().map(|e| &e.entry));
+        frames.extend(window_frames);
+        names.extend(window_names);
+        let lines = transcript_from_named_frames(&frames, &names, start..frames.len(), true);
         (lines, window.skipped)
     }
 }

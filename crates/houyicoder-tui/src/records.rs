@@ -147,14 +147,16 @@ pub enum TranscriptLine {
         /// kind of tool, "ran 3 tools (2 bash, 1 grep)" for mixed kinds);
         /// None when the turn ran no tools.
         tool_summary: Option<String>,
-        /// Identity of THIS turn's row: the position of the frame that ended
-        /// the turn, counted in the frames the reader folded. A rebuild folds
-        /// the whole log, so the name holds still while its window slides and
-        /// across a session reload; a read that folds only the lines it loaded
-        /// names rows within those lines. The expand/collapse state
-        /// (expanded_thinking) is keyed by this, NOT by the reasoning text:
-        /// two turns can produce identical text, and keying by reasoning would
-        /// collide them so expanding one expanded both.
+        /// Identity of THIS turn's row. A rebuild of the live frame log names
+        /// the row by the absolute position of the frame that ended the turn;
+        /// a read of the durable log names it by the identity of the event the
+        /// log recorded the end in. Either way the name holds still while the
+        /// window slides and across a session reload, and the two readers'
+        /// names cannot collide because their formats differ. The
+        /// expand/collapse state (expanded_thinking) is keyed by this, NOT by
+        /// the reasoning text: two turns can produce identical text, and
+        /// keying by reasoning would collide them so expanding one expanded
+        /// both.
         turn_id: String,
     },
     /// /context breakdown rendered INLINE as conversation content (multi-row

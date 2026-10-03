@@ -8,6 +8,7 @@ use super::*;
 use crate::session_history::LOOKBACK_STEP_BYTES;
 use houyicoder_context::{EventId, SessionEvent};
 use houyicoder_tui::records::TranscriptLine;
+use houyicoder_tui::transcript::transcript_from_frames;
 
 fn ev(event: SessionEvent) -> SessionLogEntry {
     SessionLogEntry {
@@ -67,12 +68,13 @@ fn test_turn_aborted_visible_snapshot() {
     );
 }
 
-/// The durable record reaches the snapshot and closes its turn there, at
-/// the same log position the live projection names. Without the acpx
-/// mapping the snapshot carries no record at all, so the turn it closes
-/// stays open and no summary row is derived.
+/// The durable record reaches the snapshot and closes its turn there, named
+/// by its own durable identity. Without the acpx mapping the snapshot
+/// carries no record at all, so the turn it closes stays open and no summary
+/// row is derived.
 #[test]
 fn test_snapshot_record_row() {
+    let closing = EventId::new();
     let events = &[
         ev(SessionEvent::UserInput { text: "one".into() }),
         ev(SessionEvent::Reasoning {
@@ -82,7 +84,11 @@ fn test_snapshot_record_row() {
             text: "first answer".into(),
             thinking: None,
         }),
-        ev(SessionEvent::RunCompleted { ms: Some(4_000) }),
+        ev_session(
+            SessionId::new(),
+            closing,
+            SessionEvent::RunCompleted { ms: Some(4_000) },
+        ),
         ev(SessionEvent::UserInput { text: "two".into() }),
         ev(SessionEvent::AssistantMessage {
             text: "second answer".into(),
@@ -98,8 +104,8 @@ fn test_snapshot_record_row() {
         .collect();
     assert_eq!(
         rows,
-        vec![(Some(4_000), "f3".to_string())],
-        "the record closes the first turn and names it by its log position"
+        vec![(Some(4_000), format!("e{closing}"))],
+        "the record closes the first turn and names the row by its durable identity"
     );
 }
 
@@ -367,6 +373,201 @@ fn test_window_long_turn_row() {
         reasoning.starts_with("0 "),
         "the row reaches the turn's opening, past the mid-turn message: {} bytes",
         reasoning.len()
+    );
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// The same turn read twice, once by the whole-log load and once by a window
+/// opening at the turn's own closing record, yields a row with the same name.
+/// The name comes from the durable identity of the event the log recorded the
+/// turn's end in, not from where the read happened to start: a window-local
+/// position shifts with the read, so a name derived from it detaches the
+/// expansion state from its row whenever the window slides, and collides with
+/// the live frame-index names the resident transcript already carries.
+#[test]
+fn test_turn_names_durable() {
+    let session = SessionId::new();
+    let chunk = "step text ".repeat(400);
+    // The first turn is short and the second spans several lookback steps, so
+    // the lookback behind a window opening at the second turn's record pulls
+    // the whole first turn into the fold-ahead prefix. The prefix is context
+    // for the fold, never rows of its own: a window read must derive only the
+    // window's own turn.
+    let first_close = EventId::new();
+    let mut events: Vec<SessionLogEntry> = vec![
+        ev_session(
+            session,
+            EventId::new(),
+            SessionEvent::UserInput {
+                text: "first".into(),
+            },
+        ),
+        ev_session(
+            session,
+            EventId::new(),
+            SessionEvent::Reasoning {
+                text: "weighing".into(),
+            },
+        ),
+        ev_session(
+            session,
+            first_close,
+            SessionEvent::RunCompleted { ms: Some(5_000) },
+        ),
+        ev_session(
+            session,
+            EventId::new(),
+            SessionEvent::UserInput {
+                text: "second".into(),
+            },
+        ),
+    ];
+    for i in 0..20 {
+        events.push(ev_session(
+            session,
+            EventId::new(),
+            SessionEvent::Reasoning {
+                text: format!("{i} {chunk}"),
+            },
+        ));
+    }
+    let closing = EventId::new();
+    events.push(ev_session(
+        session,
+        closing,
+        SessionEvent::RunCompleted { ms: Some(6_000) },
+    ));
+    let (snap, _s, root) = bridge_with_log(&events);
+    let mut steps = 0;
+    while !snap.index_chunk().done && steps < 1000 {
+        steps += 1;
+    }
+    let ids = |lines: &[TranscriptLine]| -> Vec<String> {
+        lines
+            .iter()
+            .filter_map(|l| match l {
+                TranscriptLine::ThoughtFor { turn_id, .. } => Some(turn_id.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+    let whole = ids(&snap.load(1 << 20).lines);
+    assert_eq!(
+        whole,
+        vec![format!("e{first_close}"), format!("e{closing}")],
+        "the whole log names each row by the event that closed its turn: {whole:?}"
+    );
+    let newest = snap.event_count().expect("the index is built") - 1;
+    let anchor = snap.byte_at(newest).expect("the record is indexed");
+    assert!(
+        anchor > LOOKBACK_STEP_BYTES,
+        "the second turn spans more than one lookback step: {anchor} bytes of log"
+    );
+    let at_record = ids(&snap.window(anchor, 1 << 20).lines);
+    assert_eq!(
+        at_record,
+        vec![format!("e{closing}")],
+        "the window read derives only its own turn, named by the closing event: {at_record:?}"
+    );
+    assert_eq!(
+        whole.last(),
+        at_record.last(),
+        "the whole log and the window name the same turn the same: {whole:?} vs {at_record:?}"
+    );
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// A turn the log carries no completion record for is closed by the message
+/// that opens the turn after it, and a window can start exactly at that
+/// message. The fold then names the row from frames it read back rather than
+/// frames the window holds, and the name must still be the one the whole log
+/// gives: the event holding the turn's newest fact, not the message that
+/// closed it. Two turns cover the read-back shapes — one holding reasoning
+/// alone, and one holding an answer followed by reasoning.
+#[test]
+fn test_names_durable_without_record() {
+    let session = SessionId::new();
+    let r1 = EventId::new();
+    let r2 = EventId::new();
+    let events = vec![
+        ev_session(
+            session,
+            EventId::new(),
+            SessionEvent::UserInput {
+                text: "first".into(),
+            },
+        ),
+        ev_session(
+            session,
+            r1,
+            SessionEvent::Reasoning {
+                text: "weighing".into(),
+            },
+        ),
+        ev_session(
+            session,
+            EventId::new(),
+            SessionEvent::UserInput {
+                text: "second".into(),
+            },
+        ),
+        ev_session(
+            session,
+            EventId::new(),
+            SessionEvent::AssistantMessage {
+                text: "answer".into(),
+                thinking: None,
+            },
+        ),
+        ev_session(
+            session,
+            r2,
+            SessionEvent::Reasoning {
+                text: "more".into(),
+            },
+        ),
+        ev_session(
+            session,
+            EventId::new(),
+            SessionEvent::UserInput {
+                text: "third".into(),
+            },
+        ),
+    ];
+    let (snap, _s, root) = bridge_with_log(&events);
+    let mut steps = 0;
+    while !snap.index_chunk().done && steps < 1000 {
+        steps += 1;
+    }
+    let ids = |lines: &[TranscriptLine]| -> Vec<String> {
+        lines
+            .iter()
+            .filter_map(|l| match l {
+                TranscriptLine::ThoughtFor { turn_id, .. } => Some(turn_id.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+    let whole = ids(&snap.load(1 << 20).lines);
+    assert_eq!(
+        whole,
+        vec![format!("e{r1}"), format!("e{r2}")],
+        "each record-less turn is named by the event holding its newest fact: {whole:?}"
+    );
+    let at_second = ids(&snap
+        .window(snap.byte_at(2).expect("indexed"), 1 << 20)
+        .lines);
+    assert_eq!(
+        at_second, whole,
+        "a window starting at the first closing message reads like the whole log: {at_second:?}"
+    );
+    let at_third = ids(&snap
+        .window(snap.byte_at(5).expect("indexed"), 1 << 20)
+        .lines);
+    assert_eq!(
+        at_third,
+        vec![format!("e{r2}")],
+        "a window starting at the second closing message keeps the name: {at_third:?}"
     );
     std::fs::remove_dir_all(&root).ok();
 }
