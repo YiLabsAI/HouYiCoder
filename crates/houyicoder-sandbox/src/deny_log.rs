@@ -101,9 +101,8 @@ pub fn authorizable_services(discovered: Vec<String>) -> Vec<String> {
 /// including from unrelated sandboxed processes — a short window bounds
 /// that noise. Candidates surface by service name only.
 ///
-/// Blocks on a synchronous subprocess whose runtime scales with the
-/// host's unified log store and is not bounded by the window; call
-/// from spawn_blocking, never on a tokio worker.
+/// Blocks on a synchronous subprocess; call from spawn_blocking, never
+/// on a tokio worker. The window is floored at one second.
 pub fn discover_authorizable(window_secs: u64) -> Vec<String> {
     let text = read_deny_log(window_secs);
     authorizable_services(parse_denied_services(&text))
@@ -117,20 +116,27 @@ pub fn discover_authorizable(window_secs: u64) -> Vec<String> {
 #[cfg(target_os = "macos")]
 const DENY_LOG_PREDICATE: &str = "(eventMessage CONTAINS \"mach-lookup\" AND eventMessage CONTAINS \"deny(\") OR (eventMessage CONTAINS \"denied lookup\" AND eventMessage CONTAINS \"Sandbox restriction\")";
 
+/// Build the unified-log query arguments for a window. The floor keeps a
+/// zero window from degenerating into an archive-wide scan: the log tool
+/// treats zero as the whole archive rather than an empty result, and
+/// archive-wide queries grow with host log volume.
+#[cfg(target_os = "macos")]
+fn query_args(window_secs: u64) -> Vec<String> {
+    let window = format!("{}s", window_secs.max(1));
+    vec![
+        "show".to_string(),
+        "--last".to_string(),
+        window,
+        "--predicate".to_string(),
+        DENY_LOG_PREDICATE.to_string(),
+        "--style".to_string(),
+        "syslog".to_string(),
+    ]
+}
+
 #[cfg(target_os = "macos")]
 fn read_deny_log(window_secs: u64) -> String {
-    run_query(
-        "log",
-        &[
-            "show",
-            "--last",
-            &format!("{window_secs}s"),
-            "--predicate",
-            DENY_LOG_PREDICATE,
-            "--style",
-            "syslog",
-        ],
-    )
+    run_query("log", &query_args(window_secs))
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -139,7 +145,7 @@ fn read_deny_log(_window_secs: u64) -> String {
 }
 
 #[cfg(target_os = "macos")]
-fn run_query(cmd: &str, args: &[&str]) -> String {
+fn run_query(cmd: &str, args: &[String]) -> String {
     #[expect(clippy::disallowed_methods, reason = "infra query, not model-driven")]
     match std::process::Command::new(cmd).args(args).output() {
         Ok(o) => String::from_utf8_lossy(&o.stdout).into_owned(),
@@ -337,16 +343,27 @@ mod tests {
         assert!(result.is_empty());
     }
 
-    // Queries the host unified log through a real subprocess: the runtime
-    // scales with the size of the log store, not with this test, so it
-    // belongs to the ignored live suite rather than the unit gate. The
-    // parse and filter logic is covered by the pure tests above.
+    /// The floor keeps a zero window from degenerating into an
+    /// archive-wide scan: the log tool treats zero as the whole archive,
+    /// not an empty result.
+    #[cfg(target_os = "macos")]
     #[test]
-    #[ignore = "host unified log query, runtime unbounded"]
+    fn test_query_args_floors_window() {
+        let args = query_args(0);
+        assert_eq!(args[2], "1s");
+        assert_eq!(query_args(5)[2], "5s");
+    }
+
+    // Queries the host unified log through a real subprocess: host-state
+    // probes belong to the ignored live suite whatever their runtime.
+    // The parse, filter, and query-building logic is covered by the pure
+    // tests above.
+    #[test]
+    #[ignore = "spawns a host unified log query"]
     fn test_discover_does_not_panic() {
-        // A 0-second window exercises the full pipeline (log show, parse,
-        // filter) without asserting on the result — the log may contain
-        // entries from other sandboxed processes on the host.
+        // A zero window exercises the floor plus the full pipeline (log
+        // show, parse, filter) without asserting on the result — the log
+        // may contain entries from other sandboxed processes on the host.
         discover_authorizable(0);
     }
 }
