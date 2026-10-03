@@ -13,6 +13,10 @@ path = "tests/core_all.rs"
 name = "reward_baseline"
 path = "tests/reward_baseline.rs"
 
+[[test]]
+name = "recall_benchmark"
+path = "tests/recall_benchmark.rs"
+
 [lib]
 path = "src/lib.rs"
 
@@ -47,4 +51,5 @@ unicode-normalization = "0.1"
 houyicoder-session = { path = "../houyicoder-session" }
 houyicoder-sandbox = { path = "../houyicoder-sandbox" }
 houyicoder-memory = { path = "../houyicoder-memory" }
+houyicoder-provider = { path = "../houyicoder-provider" }
 tokio = { version = "1", features = ["rt", "macros", "rt-multi-thread", "process", "io-util"] }

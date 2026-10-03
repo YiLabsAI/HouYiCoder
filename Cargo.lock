@@ -1462,6 +1462,7 @@ dependencies = [
  "houyicoder-context",
  "houyicoder-memory",
  "houyicoder-protocol",
+ "houyicoder-provider",
  "houyicoder-resilience",
  "houyicoder-sandbox",
  "houyicoder-session",

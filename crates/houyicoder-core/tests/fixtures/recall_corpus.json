@@ -1,0 +1,1326 @@
+{
+ "entries": [
+  {
+   "key": "deploy-gate-approvals",
+   "description": "Deploy gate needs two approvals before merge to the release branch",
+   "body": "Deploy gate needs two approvals before merge to the release branch. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "commit-message-gate",
+   "description": "Commit message gate enforces subject length and body wrap widths",
+   "body": "Commit message gate enforces subject length and body wrap widths. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "worktree-merge-flow",
+   "description": "Worktree changes rebase onto trunk then merge with fast-forward only",
+   "body": "Worktree changes rebase onto trunk then merge with fast-forward only. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "bug-log-template",
+   "description": "Every fixed defect logs seven sections plus a deep reflection",
+   "body": "Every fixed defect logs seven sections plus a deep reflection. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "nextest-process-model",
+   "description": "Nextest gives every test its own process so global state never leaks",
+   "body": "Nextest gives every test its own process so global state never leaks. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "coverage-diff-floor",
+   "description": "Diff coverage floor rejects commits whose new lines fall under eighty five",
+   "body": "Diff coverage floor rejects commits whose new lines fall under eighty five. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "prompt-cache-prefix",
+   "description": "Prompt cache prefix survives turns because the system text stays byte identical",
+   "body": "Prompt cache prefix survives turns because the system text stays byte identical. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "session-log-hash-chain",
+   "description": "Session log entries chain by previous hash so tampering shows up",
+   "body": "Session log entries chain by previous hash so tampering shows up. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "sandbox-profile-paths",
+   "description": "Sandbox profiles restrict file paths to the workspace and temp roots",
+   "body": "Sandbox profiles restrict file paths to the workspace and temp roots. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "memory-scope-roots",
+   "description": "Memory scopes map to user project and auto roots on disk",
+   "body": "Memory scopes map to user project and auto roots on disk. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "hook-guard-wrapper",
+   "description": "Gitignored hook files route through a guard wrapper for portability",
+   "body": "Gitignored hook files route through a guard wrapper for portability. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "permission-mode-gate",
+   "description": "Permission modes decide whether tool calls prompt ask or allow",
+   "body": "Permission modes decide whether tool calls prompt ask or allow. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "compaction-checkpoint-manifest",
+   "description": "Compaction folds old events into a summary with a checkpoint manifest",
+   "body": "Compaction folds old events into a summary with a checkpoint manifest. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "runner-config-defaults",
+   "description": "Runner config carries instructions and defaults for every agent turn",
+   "body": "Runner config carries instructions and defaults for every agent turn. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "event-sequencer-frames",
+   "description": "The event sequencer numbers frames so the client reassembles order",
+   "body": "The event sequencer numbers frames so the client reassembles order. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "tool-registry-guards",
+   "description": "Tool registry wraps every call in a guarded executor",
+   "body": "Tool registry wraps every call in a guarded executor. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "status-line-spinner",
+   "description": "Status line shows a cyan spinner while active and red when stalled",
+   "body": "Status line shows a cyan spinner while active and red when stalled. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "exit-key-contract",
+   "description": "Control d twice exits cleanly and control c interrupts the turn",
+   "body": "Control d twice exits cleanly and control c interrupts the turn. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "fold-cache-incremental",
+   "description": "Fold groups recompute in constant time from an incremental cache",
+   "body": "Fold groups recompute in constant time from an incremental cache. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "transcript-scroll-owner",
+   "description": "Transcript scroll position belongs to the visible surface owner",
+   "body": "Transcript scroll position belongs to the visible surface owner. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "subagent-worktree-isolation",
+   "description": "Parallel subagents get their own worktree so changes never collide",
+   "body": "Parallel subagents get their own worktree so changes never collide. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "dep-graph-gate",
+   "description": "Dependency graph gate blocks new edges that break layering",
+   "body": "Dependency graph gate blocks new edges that break layering. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "deploy-approval-quorum",
+   "description": "部署审批需要两名维护者复核后才能合入发布分支",
+   "body": "部署审批需要两名维护者复核后才能合入发布分支. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "canary-release-ramp",
+   "description": "灰度发布先放百分之五流量观察错误率再逐步放大",
+   "body": "灰度发布先放百分之五流量观察错误率再逐步放大. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "rollback-playbook",
+   "description": "回滚预案要求每次变更都附带一键回退步骤",
+   "body": "回滚预案要求每次变更都附带一键回退步骤. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "alert-threshold-tuning",
+   "description": "监控告警阈值按服务分别配置避免噪声淹没",
+   "body": "监控告警阈值按服务分别配置避免噪声淹没. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "log-retention-tiers",
+   "description": "日志留存分热数据七天冷数据一年",
+   "body": "日志留存分热数据七天冷数据一年. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "schema-migration-drill",
+   "description": "数据库迁移脚本必须先经过影子库验证",
+   "body": "数据库迁移脚本必须先经过影子库验证. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "secret-rotation-cycle",
+   "description": "密钥轮换周期为九十天到期前自动提醒",
+   "body": "密钥轮换周期为九十天到期前自动提醒. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "capacity-buffer-plan",
+   "description": "容量规划按峰值流量的三倍预留缓冲",
+   "body": "容量规划按峰值流量的三倍预留缓冲. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "chaos-drill-cadence",
+   "description": "故障演练每月一次覆盖主备切换场景",
+   "body": "故障演练每月一次覆盖主备切换场景. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "oncall-handover",
+   "description": "值班交接必须列出未完结事项和风险提示",
+   "body": "值班交接必须列出未完结事项和风险提示. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "release-branch-freeze",
+   "description": "发布分支在冻结期内只接受安全修复",
+   "body": "发布分支在冻结期内只接受安全修复. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "change-ticket-links",
+   "description": "变更单必须关联监控面板链接",
+   "body": "变更单必须关联监控面板链接. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "alert-escalation-path",
+   "description": "告警升级路径按值班表逐级通知",
+   "body": "告警升级路径按值班表逐级通知. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "migration-window",
+   "description": "迁移窗口选在流量低谷时段",
+   "body": "迁移窗口选在流量低谷时段. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "secret-storage-ban",
+   "description": "密钥保管禁止写入代码仓库",
+   "body": "密钥保管禁止写入代码仓库. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "capacity-review-quarter",
+   "description": "容量评估每季度重算一次",
+   "body": "容量评估每季度重算一次. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "drill-scenario-set",
+   "description": "演练脚本覆盖断电与断网两类",
+   "body": "演练脚本覆盖断电与断网两类. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "approval-trail-keep",
+   "description": "审批记录留存备查",
+   "body": "审批记录留存备查. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "rollback-two-person",
+   "description": "回退操作需要双人确认",
+   "body": "回退操作需要双人确认. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "log-sampling-tiers",
+   "description": "日志采样率按服务分级",
+   "body": "日志采样率按服务分级. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "probe-interval",
+   "description": "监控探针每五秒抓取一次",
+   "body": "监控探针每五秒抓取一次. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "oncall-roster-early",
+   "description": "值班表提前一周排好",
+   "body": "值班表提前一周排好. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "pane-footer-hints",
+   "description": "Pane footers list bound keys in one shared grammar",
+   "body": "Pane footers list bound keys in one shared grammar. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "wide-glyph-cursor",
+   "description": "Cursor column math counts double-width glyphs as two cells",
+   "body": "Cursor column math counts double-width glyphs as two cells. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "altscreen-redraw",
+   "description": "Alternate screen entry forces one full repaint then diffs",
+   "body": "Alternate screen entry forces one full repaint then diffs. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "wheel-capture",
+   "description": "Mouse wheel capture routes scrolls to the focused pane",
+   "body": "Mouse wheel capture routes scrolls to the focused pane. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "palette-registration",
+   "description": "Every slash command registers in the palette with its arg form",
+   "body": "Every slash command registers in the palette with its arg form. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "toast-lifecycle",
+   "description": "Toasts expire on a timer unless a second keystroke confirms",
+   "body": "Toasts expire on a timer unless a second keystroke confirms. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "unicode-width",
+   "description": "Render width follows the terminal unicode width table",
+   "body": "Render width follows the terminal unicode width table. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "cell-diffing",
+   "description": "Repaints write only cells whose content or style changed",
+   "body": "Repaints write only cells whose content or style changed. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "cursor-visibility",
+   "description": "Native cursor hides while popups stack over the input line",
+   "body": "Native cursor hides while popups stack over the input line. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "popup-stacking",
+   "description": "Stacked popups dismiss in reverse order on escape",
+   "body": "Stacked popups dismiss in reverse order on escape. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "focus-ring",
+   "description": "Focus ring draws only when keyboard mode is active",
+   "body": "Focus ring draws only when keyboard mode is active. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "tab-switch-policy",
+   "description": "Tab navigation follows one repository-wide direction policy",
+   "body": "Tab navigation follows one repository-wide direction policy. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "inline-render",
+   "description": "Inline rendering keeps shell scrollback usable after exit",
+   "body": "Inline rendering keeps shell scrollback usable after exit. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "scrollback-trim",
+   "description": "Viewable scrollback caps at the last frames while raw logs persist",
+   "body": "Viewable scrollback caps at the last frames while raw logs persist. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "pty-harness",
+   "description": "PTY journeys drive the real binary through a portable pty",
+   "body": "PTY journeys drive the real binary through a portable pty. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "mutation-kills",
+   "description": "Each phase proves its tests by killing named mutations",
+   "body": "Each phase proves its tests by killing named mutations. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "flake-quarantine",
+   "description": "Flaky tests get quarantined with a tracked issue not deleted",
+   "body": "Flaky tests get quarantined with a tracked issue not deleted. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "assert-granularity",
+   "description": "Assertions name the exact mismatch instead of a bare boolean",
+   "body": "Assertions name the exact mismatch instead of a bare boolean. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "red-first",
+   "description": "Every fix starts from a failing test that pins the defect",
+   "body": "Every fix starts from a failing test that pins the defect. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "timeout-budgets",
+   "description": "Unit tests stay under fifty milliseconds integration under five hundred",
+   "body": "Unit tests stay under fifty milliseconds integration under five hundred. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "tempdir-safety",
+   "description": "Fresh temp dirs retry on collision so parallel runs never share",
+   "body": "Fresh temp dirs retry on collision so parallel runs never share. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "coverage-deltas",
+   "description": "Coverage gates measure the diff not the whole tree",
+   "body": "Coverage gates measure the diff not the whole tree. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "ignored-policy",
+   "description": "Ignored suites never run in the default check gate",
+   "body": "Ignored suites never run in the default check gate. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "stub-fidelity",
+   "description": "Stubs saturate the same channels production traffic uses",
+   "body": "Stubs saturate the same channels production traffic uses. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "latch-over-sleep",
+   "description": "Effect latches replace fixed sleeps in async tests",
+   "body": "Effect latches replace fixed sleeps in async tests. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "boundary-cases",
+   "description": "Test the cap edge and reset not only the working path",
+   "body": "Test the cap edge and reset not only the working path. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "doc-sync-gate",
+   "description": "Delivery docs update in the same turn as the commit",
+   "body": "Delivery docs update in the same turn as the commit. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "ff-only-merge",
+   "description": "Trunk merges fast-forward from a rebased worktree branch",
+   "body": "Trunk merges fast-forward from a rebased worktree branch. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "branch-naming",
+   "description": "Branch names carry the workstream and a short suffix",
+   "body": "Branch names carry the workstream and a short suffix. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "rebase-conflicts",
+   "description": "Rebase conflicts resolve once then reuse via rerere",
+   "body": "Rebase conflicts resolve once then reuse via rerere. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "hook-activation",
+   "description": "Worktree hooks activate through a shared guard script",
+   "body": "Worktree hooks activate through a shared guard script. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "signed-commits",
+   "description": "History rewrites verify signature roots before filtering",
+   "body": "History rewrites verify signature roots before filtering. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "index-hygiene",
+   "description": "Commits ship the staged index never the loose worktree",
+   "body": "Commits ship the staged index never the loose worktree. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "cherry-pick-order",
+   "description": "Cherry-picks apply oldest first to keep dependencies sound",
+   "body": "Cherry-picks apply oldest first to keep dependencies sound. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "seatbelt-profile",
+   "description": "Seatbelt profiles deny writes outside approved roots",
+   "body": "Seatbelt profiles deny writes outside approved roots. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "path-escape",
+   "description": "Path joins canonicalize before containment checks",
+   "body": "Path joins canonicalize before containment checks. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "symlink-tricks",
+   "description": "Symlinked targets resolve then re-check against the root",
+   "body": "Symlinked targets resolve then re-check against the root. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "allowlist-review",
+   "description": "Safe-property allowlists need review before widening",
+   "body": "Safe-property allowlists need review before widening. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "deny-defaults",
+   "description": "Unknown commands default to deny until classified",
+   "body": "Unknown commands default to deny until classified. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "approval-fatigue",
+   "description": "Repeated approvals collapse into one reviewed standing grant",
+   "body": "Repeated approvals collapse into one reviewed standing grant. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "secret-redaction",
+   "description": "Command output redacts values matching secret shapes",
+   "body": "Command output redacts values matching secret shapes. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "command-validation",
+   "description": "Bash strings pass one centralized validator pipeline",
+   "body": "Bash strings pass one centralized validator pipeline. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "network-egress",
+   "description": "Sandboxed builds block egress except declared hosts",
+   "body": "Sandboxed builds block egress except declared hosts. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "escalation-refusal",
+   "description": "A peer message never grants permission escalation",
+   "body": "A peer message never grants permission escalation. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "trust-states",
+   "description": "Workspace trust gates which configs may load",
+   "body": "Workspace trust gates which configs may load. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "audit-trails",
+   "description": "Every denial appends to the durable audit trail",
+   "body": "Every denial appends to the durable audit trail. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "streaming-deltas",
+   "description": "Delta streams coalesce before hitting the render loop",
+   "body": "Delta streams coalesce before hitting the render loop. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "retry-budget",
+   "description": "Provider retries carry a budget and a circuit break",
+   "body": "Provider retries carry a budget and a circuit break. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "usage-from-provider",
+   "description": "Usage totals come from the provider never local guesses",
+   "body": "Usage totals come from the provider never local guesses. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "model-tiers",
+   "description": "Personalities name model tiers instead of strength labels",
+   "body": "Personalities name model tiers instead of strength labels. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "cache-pricing",
+   "description": "Cache economics track total volume not currency tables",
+   "body": "Cache economics track total volume not currency tables. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "usage-sidecar",
+   "description": "Persisted model choice writes a sidecar with a lock",
+   "body": "Persisted model choice writes a sidecar with a lock. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "key-rotation",
+   "description": "Provider keys rotate through the settings layer",
+   "body": "Provider keys rotate through the settings layer. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "timeout-ceilings",
+   "description": "Streaming timeouts cap total wall time not idle gaps",
+   "body": "Streaming timeouts cap total wall time not idle gaps. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "capability-probes",
+   "description": "Capability flags decide which fields go out",
+   "body": "Capability flags decide which fields go out. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "fallback-chains",
+   "description": "Provider fallbacks keep the same call contract",
+   "body": "Provider fallbacks keep the same call contract. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "summary-anchors",
+   "description": "Anchored compaction points from summaries to archives",
+   "body": "Anchored compaction points from summaries to archives. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "replay-budgets",
+   "description": "Replay budgets bound cold-start assembly time",
+   "body": "Replay budgets bound cold-start assembly time. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "manifest-apply",
+   "description": "Checkpoint manifests project events into the live window",
+   "body": "Checkpoint manifests project events into the live window. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "checkpoint-plans",
+   "description": "Planners dispose events as summarized or verbatim",
+   "body": "Planners dispose events as summarized or verbatim. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "byte-windows",
+   "description": "Context assembly measures bytes not message counts",
+   "body": "Context assembly measures bytes not message counts. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "fold-membership",
+   "description": "Fold groups own their member rows through rebuilds",
+   "body": "Fold groups own their member rows through rebuilds. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "verbatim-spans",
+   "description": "Verbatim spans survive compaction untouched",
+   "body": "Verbatim spans survive compaction untouched. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "tail-attachment",
+   "description": "Tail attachments merge into the newest human message",
+   "body": "Tail attachments merge into the newest human message. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "prompt-assembly",
+   "description": "System prompt assembly keeps a byte-stable prefix",
+   "body": "System prompt assembly keeps a byte-stable prefix. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "dream-promotion",
+   "description": "Dream passes promote repeated hits into durable topics",
+   "body": "Dream passes promote repeated hits into durable topics. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "extraction-cursor",
+   "description": "Extractor cursors mark the last consumed message",
+   "body": "Extractor cursors mark the last consumed message. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "stats-ledger",
+   "description": "Recall stats ledgers persist per topic hit counts",
+   "body": "Recall stats ledgers persist per topic hit counts. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "index-rebuild",
+   "description": "Index files rebuild fully from topic entries",
+   "body": "Index files rebuild fully from topic entries. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "dedup-first-wins",
+   "description": "Same-key topics across roots keep the newest copy",
+   "body": "Same-key topics across roots keep the newest copy. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "scope-filters",
+   "description": "Memory panes filter by physical storage scope",
+   "body": "Memory panes filter by physical storage scope. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "recall-hit-counts",
+   "description": "Recalled keys feed promotion counters",
+   "body": "Recalled keys feed promotion counters. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "byte-cap-inject",
+   "description": "Injected bodies pack under one contiguous budget",
+   "body": "Injected bodies pack under one contiguous budget. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "durable-logs",
+   "description": "Session logs append durably before any render",
+   "body": "Session logs append durably before any render. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "cold-replay",
+   "description": "Cold starts replay logs but render the visible window",
+   "body": "Cold starts replay logs but render the visible window. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "uuid-naming",
+   "description": "Session files name by uuid for collision safety",
+   "body": "Session files name by uuid for collision safety. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "resume-pickers",
+   "description": "Resume pickers list sessions newest first",
+   "body": "Resume pickers list sessions newest first. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "log-rotation",
+   "description": "Long sessions rotate logs without losing the chain",
+   "body": "Long sessions rotate logs without losing the chain. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "entry-hashing",
+   "description": "Each log entry hashes its predecessor",
+   "body": "Each log entry hashes its predecessor. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "view-projection",
+   "description": "Current views project events through the manifest",
+   "body": "Current views project events through the manifest. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "spawn-budgets",
+   "description": "Concurrent subagent counts obey a hard budget",
+   "body": "Concurrent subagent counts obey a hard budget. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "handoff-messages",
+   "description": "Handoffs copy context into a fresh agent transcript",
+   "body": "Handoffs copy context into a fresh agent transcript. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "crosstalk-isolation",
+   "description": "View switches never leak one child into another",
+   "body": "View switches never leak one child into another. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "turn-end-joins",
+   "description": "Turn joins drain pending tasks before exit",
+   "body": "Turn joins drain pending tasks before exit. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "drain-contracts",
+   "description": "Drains run where no same-session task can interleave",
+   "body": "Drains run where no same-session task can interleave. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "delegation-anchors",
+   "description": "Placeholder results carry the child identity for anchors",
+   "body": "Placeholder results carry the child identity for anchors. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "kill-channels",
+   "description": "Async children expose a stop channel to the parent",
+   "body": "Async children expose a stop channel to the parent. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "bash-pipelines",
+   "description": "Compound commands split at pipes for classification",
+   "body": "Compound commands split at pipes for classification. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "read-offsets",
+   "description": "Partial reads take offset and count together",
+   "body": "Partial reads take offset and count together. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "write-atomicity",
+   "description": "File writes land through a temp then rename",
+   "body": "File writes land through a temp then rename. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "edit-uniqueness",
+   "description": "Edits require one exact match or they fail",
+   "body": "Edits require one exact match or they fail. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "grep-engines",
+   "description": "Search picks a regex engine by pattern shape",
+   "body": "Search picks a regex engine by pattern shape. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "search-ranking",
+   "description": "Tool search ranks by name then description match",
+   "body": "Tool search ranks by name then description match. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "task-stops",
+   "description": "Task stops accept names or ids interchangeably",
+   "body": "Task stops accept names or ids interchangeably. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "server-discovery",
+   "description": "MCP servers discover per scope with hot reload",
+   "body": "MCP servers discover per scope with hot reload. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "skill-hot-pickup",
+   "description": "New skills register without restarting the session",
+   "body": "New skills register without restarting the session. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "hook-levels",
+   "description": "Hooks load at user project and local levels",
+   "body": "Hooks load at user project and local levels. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "manifest-parsing",
+   "description": "Skill frontmatter parses name and description only",
+   "body": "Skill frontmatter parses name and description only. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "tool-schemas",
+   "description": "MCP tool schemas validate before registration",
+   "body": "MCP tool schemas validate before registration. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "transport-tiers",
+   "description": "Buses tier in-process unix then network",
+   "body": "Buses tier in-process unix then network. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "registration-order",
+   "description": "Tools register before the first call assembles",
+   "body": "Tools register before the first call assembles. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "settings-layers",
+   "description": "Settings merge user then project then local",
+   "body": "Settings merge user then project then local. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "env-unification",
+   "description": "Environment reads funnel through one resolver",
+   "body": "Environment reads funnel through one resolver. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "exit-codes",
+   "description": "Exit codes distinguish interrupt from failure",
+   "body": "Exit codes distinguish interrupt from failure. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "version-stamps",
+   "description": "Builds stamp version and commit into binaries",
+   "body": "Builds stamp version and commit into binaries. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "default-resolution",
+   "description": "Model defaults resolve from settings never bare env",
+   "body": "Model defaults resolve from settings never bare env. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "review-cadence",
+   "description": "Deep reviews re-run on the frozen diff after fixes",
+   "body": "Deep reviews re-run on the frozen diff after fixes. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "report-files",
+   "description": "Review reports write to files for retrieval",
+   "body": "Review reports write to files for retrieval. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "commit-gates",
+   "description": "Commit gates require a marker written immediately before",
+   "body": "Commit gates require a marker written immediately before. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "message-wrapping",
+   "description": "Commit bodies wrap at seventy-two columns",
+   "body": "Commit bodies wrap at seventy-two columns. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "subject-style",
+   "description": "Subjects stay imperative english under the length cap",
+   "body": "Subjects stay imperative english under the length cap. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "why-only-bodies",
+   "description": "Commit bodies explain why never restate the diff",
+   "body": "Commit bodies explain why never restate the diff. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "ratchet-baselines",
+   "description": "Length ratchets absorb file growth before bumping",
+   "body": "Length ratchets absorb file growth before bumping. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "absorb-over-split",
+   "description": "Threshold hits trigger responsibility analysis not extraction",
+   "body": "Threshold hits trigger responsibility analysis not extraction. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "module-privacy",
+   "description": "Aggregated test binaries keep modules private per file",
+   "body": "Aggregated test binaries keep modules private per file. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "crate-layers",
+   "description": "Layer contracts keep presentation above core above storage",
+   "body": "Layer contracts keep presentation above core above storage. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "port-traits",
+   "description": "Cross-crate contracts live as traits in the api crate",
+   "body": "Cross-crate contracts live as traits in the api crate. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "dev-only-deps",
+   "description": "Some crate edges exist for tests alone and stay marked",
+   "body": "Some crate edges exist for tests alone and stay marked. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "composition-roots",
+   "description": "Wiring assembles concrete types in one place",
+   "body": "Wiring assembles concrete types in one place. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "silent-skips",
+   "description": "Composition lookups fail loudly never skip silently",
+   "body": "Composition lookups fail loudly never skip silently. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "two-side-contracts",
+   "description": "Serialization changes update producers and readers together",
+   "body": "Serialization changes update producers and readers together. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "roundtrip-tests",
+   "description": "Persisted shapes test byte-level round trips",
+   "body": "Persisted shapes test byte-level round trips. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "unknown-none",
+   "description": "Missing quantities surface as none never zero",
+   "body": "Missing quantities surface as none never zero. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "claim-scoping",
+   "description": "Absolute claims scope to the mechanism that enforces them",
+   "body": "Absolute claims scope to the mechanism that enforces them. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "surpass-claim-checks",
+   "description": "Surpass claims check the token proposition is not constant",
+   "body": "Surpass claims check the token proposition is not constant. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "doc-truth",
+   "description": "Acceptance docs track status as the source of truth",
+   "body": "Acceptance docs track status as the source of truth. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "stale-doc-passes",
+   "description": "Progress passes update outdated docs in the same round",
+   "body": "Progress passes update outdated docs in the same round. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "bug-log-audits",
+   "description": "Bug logs audit by subsystem when one defect implies more",
+   "body": "Bug logs audit by subsystem when one defect implies more. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "five-questions",
+   "description": "Each defect answers five why before the patch",
+   "body": "Each defect answers five why before the patch. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "symmetry-checks",
+   "description": "Isolation fixes inspect the opposite side too",
+   "body": "Isolation fixes inspect the opposite side too. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "property-gates",
+   "description": "Guards assert the property not the current location",
+   "body": "Guards assert the property not the current location. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "layer-counts",
+   "description": "Green claims count every layer and its test axis",
+   "body": "Green claims count every layer and its test axis. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "positional-reads",
+   "description": "Consumers dispatch by type never by position",
+   "body": "Consumers dispatch by type never by position. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "zero-hit-greps",
+   "description": "Empty search results still trace the lookup path",
+   "body": "Empty search results still trace the lookup path. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "cache-eviction-ceiling",
+   "description": "Cache eviction follows least-recently-used order once the store passes its byte ceiling",
+   "body": "Cache eviction follows least-recently-used order once the store passes its byte ceiling. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "sandbox-escape-shield",
+   "description": "Sandboxed commands run behind a profile that blocks paths outside the workspace",
+   "body": "Sandboxed commands run behind a profile that blocks paths outside the workspace. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "terminal-flicker-fix",
+   "description": "Alternate-screen redraws clear only the damaged rows so the pane never flashes",
+   "body": "Alternate-screen redraws clear only the damaged rows so the pane never flashes. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "scroll-position-keep",
+   "description": "Scroll offset belongs to the surface that owns it and survives view switches",
+   "body": "Scroll offset belongs to the surface that owns it and survives view switches. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "resume-cold-start",
+   "description": "Resume replays the durable log but renders only the visible window so cold start stays fast",
+   "body": "Resume replays the durable log but renders only the visible window so cold start stays fast. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "coverage-ratio-gate",
+   "description": "A ratio gate fails the build when changed lines drop below the threshold",
+   "body": "A ratio gate fails the build when changed lines drop below the threshold. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "build-cache-warm",
+   "description": "Incremental compilation reuses the previous artifact cache to shorten rebuilds",
+   "body": "Incremental compilation reuses the previous artifact cache to shorten rebuilds. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "permission-prompt-fatigue",
+   "description": "Repeated permission prompts collapse into one durable standing ask after the third time",
+   "body": "Repeated permission prompts collapse into one durable standing ask after the third time. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "secret-leak-scan",
+   "description": "Pushed commits pass a credential scanner that flags anything resembling an access token",
+   "body": "Pushed commits pass a credential scanner that flags anything resembling an access token. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "error-level-filter",
+   "description": "Level filtering keeps warnings and above while debug chatter stays out of release builds",
+   "body": "Level filtering keeps warnings and above while debug chatter stays out of release builds. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "retry-backoff-jitter",
+   "description": "Retries back off exponentially with jitter so a storm of clients never synchronizes",
+   "body": "Retries back off exponentially with jitter so a storm of clients never synchronizes. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "timeout-fallback-path",
+   "description": "A missed deadline falls back to the deterministic answer with a typed reason attached",
+   "body": "A missed deadline falls back to the deterministic answer with a typed reason attached. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "nightly-transcript-prune",
+   "description": "Nightly job prunes stale session transcripts older than thirty days",
+   "body": "Nightly job prunes stale session transcripts older than thirty days. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "frozen-system-text",
+   "description": "System text bytes stay identical across turns keeping the provider prefix cache hot",
+   "body": "System text bytes stay identical across turns keeping the provider prefix cache hot. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "usage-total-append",
+   "description": "Turn usage totals append after every model call so cost reports never estimate",
+   "body": "Turn usage totals append after every model call so cost reports never estimate. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "memory-tail-attachment",
+   "description": "Memory attachments ride inside the human message so prompt caching keeps its prefix",
+   "body": "Memory attachments ride inside the human message so prompt caching keeps its prefix. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "topic-file-lock",
+   "description": "Concurrent writers take one file lock so topic saves never interleave",
+   "body": "Concurrent writers take one file lock so topic saves never interleave. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "dream-scope-inherit",
+   "description": "Forked dreams inherit the parent scope and write back under the same lock",
+   "body": "Forked dreams inherit the parent scope and write back under the same lock. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "gate-violation-counts",
+   "description": "Gate violations are counted per topic and surfaced in the index rebuild",
+   "body": "Gate violations are counted per topic and surfaced in the index rebuild. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "extract-after-join",
+   "description": "Extraction runs behind the turn join so saves never race the next prompt",
+   "body": "Extraction runs behind the turn join so saves never race the next prompt. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "recall-byte-cap",
+   "description": "The byte cap stops recall injection once the session grows past its ceiling",
+   "body": "The byte cap stops recall injection once the session grows past its ceiling. Recorded for the recall benchmark corpus."
+  },
+  {
+   "key": "scope-dedup-canonical",
+   "description": "Dedup by key keeps one canonical copy when the same topic lands in two scopes",
+   "body": "Dedup by key keeps one canonical copy when the same topic lands in two scopes. Recorded for the recall benchmark corpus."
+  }
+ ],
+ "pairs": [
+  {
+   "category": "en_lexical",
+   "query": "deploy gate approvals",
+   "expected": "deploy-gate-approvals"
+  },
+  {
+   "category": "en_lexical",
+   "query": "commit message length limits",
+   "expected": "commit-message-gate"
+  },
+  {
+   "category": "en_lexical",
+   "query": "worktree rebase merge",
+   "expected": "worktree-merge-flow"
+  },
+  {
+   "category": "en_lexical",
+   "query": "bug log sections",
+   "expected": "bug-log-template"
+  },
+  {
+   "category": "en_lexical",
+   "query": "nextest process isolation",
+   "expected": "nextest-process-model"
+  },
+  {
+   "category": "en_lexical",
+   "query": "coverage floor new lines",
+   "expected": "coverage-diff-floor"
+  },
+  {
+   "category": "en_lexical",
+   "query": "prompt cache prefix bytes",
+   "expected": "prompt-cache-prefix"
+  },
+  {
+   "category": "en_lexical",
+   "query": "session log hash chain",
+   "expected": "session-log-hash-chain"
+  },
+  {
+   "category": "en_lexical",
+   "query": "sandbox profile paths",
+   "expected": "sandbox-profile-paths"
+  },
+  {
+   "category": "en_lexical",
+   "query": "memory scope roots",
+   "expected": "memory-scope-roots"
+  },
+  {
+   "category": "en_lexical",
+   "query": "hook guard wrapper",
+   "expected": "hook-guard-wrapper"
+  },
+  {
+   "category": "en_lexical",
+   "query": "permission mode prompt",
+   "expected": "permission-mode-gate"
+  },
+  {
+   "category": "en_lexical",
+   "query": "compaction summary checkpoint",
+   "expected": "compaction-checkpoint-manifest"
+  },
+  {
+   "category": "en_lexical",
+   "query": "runner config instructions",
+   "expected": "runner-config-defaults"
+  },
+  {
+   "category": "en_lexical",
+   "query": "event sequencer frames order",
+   "expected": "event-sequencer-frames"
+  },
+  {
+   "category": "en_lexical",
+   "query": "tool registry guarded",
+   "expected": "tool-registry-guards"
+  },
+  {
+   "category": "en_lexical",
+   "query": "spinner cyan stalled",
+   "expected": "status-line-spinner"
+  },
+  {
+   "category": "en_lexical",
+   "query": "control exit interrupt",
+   "expected": "exit-key-contract"
+  },
+  {
+   "category": "en_lexical",
+   "query": "fold incremental cache",
+   "expected": "fold-cache-incremental"
+  },
+  {
+   "category": "en_lexical",
+   "query": "transcript scroll owner",
+   "expected": "transcript-scroll-owner"
+  },
+  {
+   "category": "en_lexical",
+   "query": "subagent worktree isolation",
+   "expected": "subagent-worktree-isolation"
+  },
+  {
+   "category": "en_lexical",
+   "query": "dependency layering gate",
+   "expected": "dep-graph-gate"
+  },
+  {
+   "category": "cjk_lexical",
+   "query": "部署审批要几个人",
+   "expected": "deploy-approval-quorum"
+  },
+  {
+   "category": "cjk_lexical",
+   "query": "灰度发布流量比例是多少",
+   "expected": "canary-release-ramp"
+  },
+  {
+   "category": "cjk_lexical",
+   "query": "回滚预案怎么定",
+   "expected": "rollback-playbook"
+  },
+  {
+   "category": "cjk_lexical",
+   "query": "监控告警阈值怎么配",
+   "expected": "alert-threshold-tuning"
+  },
+  {
+   "category": "cjk_lexical",
+   "query": "日志留存多久",
+   "expected": "log-retention-tiers"
+  },
+  {
+   "category": "cjk_lexical",
+   "query": "数据库迁移要不要验证",
+   "expected": "schema-migration-drill"
+  },
+  {
+   "category": "cjk_lexical",
+   "query": "密钥轮换周期是多久",
+   "expected": "secret-rotation-cycle"
+  },
+  {
+   "category": "cjk_lexical",
+   "query": "容量规划留多少缓冲",
+   "expected": "capacity-buffer-plan"
+  },
+  {
+   "category": "cjk_lexical",
+   "query": "故障演练多久一次",
+   "expected": "chaos-drill-cadence"
+  },
+  {
+   "category": "cjk_lexical",
+   "query": "值班交接要写什么",
+   "expected": "oncall-handover"
+  },
+  {
+   "category": "cjk_cross",
+   "query": "缓存淘汰用的什么策略",
+   "expected": "cache-eviction-ceiling"
+  },
+  {
+   "category": "cjk_cross",
+   "query": "沙箱怎么防止越权访问",
+   "expected": "sandbox-escape-shield"
+  },
+  {
+   "category": "cjk_cross",
+   "query": "终端画面闪烁怎么解决",
+   "expected": "terminal-flicker-fix"
+  },
+  {
+   "category": "cjk_cross",
+   "query": "滚动位置退出再进入会丢吗",
+   "expected": "scroll-position-keep"
+  },
+  {
+   "category": "cjk_cross",
+   "query": "会话恢复冷启动很慢",
+   "expected": "resume-cold-start"
+  },
+  {
+   "category": "cjk_cross",
+   "query": "单元测试的达标线掉了",
+   "expected": "coverage-ratio-gate"
+  },
+  {
+   "category": "cjk_cross",
+   "query": "编译速度太慢如何加速",
+   "expected": "build-cache-warm"
+  },
+  {
+   "category": "cjk_cross",
+   "query": "权限弹窗太多很烦",
+   "expected": "permission-prompt-fatigue"
+  },
+  {
+   "category": "cjk_cross",
+   "query": "凭据外泄如何扫描",
+   "expected": "secret-leak-scan"
+  },
+  {
+   "category": "cjk_cross",
+   "query": "异常信息按级别筛出来怎么做",
+   "expected": "error-level-filter"
+  },
+  {
+   "category": "cjk_cross",
+   "query": "重试退避的间隔怎么算",
+   "expected": "retry-backoff-jitter"
+  },
+  {
+   "category": "cjk_cross",
+   "query": "超时之后如何回落",
+   "expected": "timeout-fallback-path"
+  },
+  {
+   "category": "semantic",
+   "query": "scheduled sweep dropping expired conversation records",
+   "expected": "nightly-transcript-prune"
+  },
+  {
+   "category": "semantic",
+   "query": "cached head invalidated upon earlier revisions",
+   "expected": "frozen-system-text"
+  },
+  {
+   "category": "semantic",
+   "query": "spent tokens summed following exchange close",
+   "expected": "usage-total-append"
+  },
+  {
+   "category": "semantic",
+   "query": "remembered notes placement within outgoing request payload",
+   "expected": "memory-tail-attachment"
+  },
+  {
+   "category": "semantic",
+   "query": "mutual exclusion around simultaneous record saving",
+   "expected": "topic-file-lock"
+  },
+  {
+   "category": "semantic",
+   "query": "consolidation retains provenance labeling",
+   "expected": "dream-scope-inherit"
+  },
+  {
+   "category": "semantic",
+   "query": "tally rule breaks shown during catalog regeneration",
+   "expected": "gate-violation-counts"
+  },
+  {
+   "category": "semantic",
+   "query": "distillation sequenced upon conversation completion",
+   "expected": "extract-after-join"
+  },
+  {
+   "category": "semantic",
+   "query": "payload halted beyond dialogue size limit",
+   "expected": "recall-byte-cap"
+  },
+  {
+   "category": "semantic",
+   "query": "single authoritative record despite duplicate arrival",
+   "expected": "scope-dedup-canonical"
+  },
+  {
+   "category": "negative",
+   "query": "sourdough starter hydration percentage",
+   "expected": null
+  },
+  {
+   "category": "negative",
+   "query": "migratory bird tally methods",
+   "expected": null
+  },
+  {
+   "category": "negative",
+   "query": "knitting gauge swatch sizing",
+   "expected": null
+  },
+  {
+   "category": "negative",
+   "query": "coffee roasting curve notes",
+   "expected": null
+  },
+  {
+   "category": "negative",
+   "query": "sailboat rigging knot guide",
+   "expected": null
+  },
+  {
+   "category": "negative",
+   "query": "今晚吃什么菜好呢",
+   "expected": null
+  },
+  {
+   "category": "negative",
+   "query": "周末去哪里爬山",
+   "expected": null
+  },
+  {
+   "category": "negative",
+   "query": "毛衣织错了怎么拆",
+   "expected": null
+  },
+  {
+   "category": "negative",
+   "query": "咖啡豆烘焙到什么程度",
+   "expected": null
+  },
+  {
+   "category": "negative",
+   "query": "鱼缸水温多少合适",
+   "expected": null
+  }
+ ]
+}

@@ -1,9 +1,9 @@
 //! Consolidated contract and end-to-end suites for this crate. Each module is
 //! the original test file included verbatim through a path attribute;
 //! aggregating into one binary cuts the number of test binaries nextest has to
-//! launch without dropping a test. reward_baseline keeps its own target so the
-//! verify filter can exclude it by name and a benchmark run can select it
-//! alone.
+//! launch without dropping a test. The reward baseline and the recall
+//! benchmark keep their own targets so the verify filter can exclude them by
+//! name and a benchmark run can select either alone.
 //! An included module is private to this binary, so an unused item inside one
 //! warns where the same item at a test-file root did not.
 
@@ -17,6 +17,8 @@ mod loop_with_sandbox;
 mod memory_loop;
 #[path = "observability_loop.rs"]
 mod observability_loop;
+#[path = "recall_quality.rs"]
+mod recall_quality;
 #[path = "runner_assembly.rs"]
 mod runner_assembly;
 #[path = "tools_with_sandbox.rs"]
