@@ -70,8 +70,9 @@ pub fn authorizable_services(discovered: Vec<String>) -> Vec<String> {
 /// that noise. The log attributes denials to sandboxd, not the denied
 /// process, so pid correlation is unreliable.
 ///
-/// Blocks on a synchronous subprocess (~0.7s); call from
-/// spawn_blocking, never on a tokio worker.
+/// Blocks on a synchronous subprocess whose runtime scales with the
+/// host's unified log store and is not bounded by the window; call
+/// from spawn_blocking, never on a tokio worker.
 pub fn discover_authorizable(window_secs: u64) -> Vec<String> {
     let text = read_deny_log(window_secs);
     authorizable_services(parse_denied_services(&text))
@@ -231,7 +232,12 @@ mod tests {
         assert!(result.is_empty());
     }
 
+    // Queries the host unified log through a real subprocess: the runtime
+    // scales with the size of the log store, not with this test, so it
+    // belongs to the ignored live suite rather than the unit gate. The
+    // parse and filter logic is covered by the pure tests above.
     #[test]
+    #[ignore = "host unified log query, runtime unbounded"]
     fn test_discover_does_not_panic() {
         // A 0-second window exercises the full pipeline (log show, parse,
         // filter) without asserting on the result — the log may contain
