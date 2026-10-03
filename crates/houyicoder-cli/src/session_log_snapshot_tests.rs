@@ -477,6 +477,79 @@ fn test_turn_names_durable() {
     std::fs::remove_dir_all(&root).ok();
 }
 
+/// A turn whose reasoning alone runs deeper than eight lookback steps, the
+/// reach the budget once allowed: the lookback behind a window opening at the
+/// closing record must still find the opener, so the window derives the row
+/// the whole-log read derives.
+/// Without it the fold sees no frame that opened the turn and the record
+/// closes nothing — a long turn renders without its summary row in any window
+/// that starts at its end, while the whole-log read shows it.
+#[test]
+fn test_lookback_finds_opener() {
+    let session = SessionId::new();
+    // Thirty kilobytes per event, twenty events: the turn spans over six
+    // hundred kilobytes of log, deeper than eight sixty-four kilobyte steps.
+    let chunk = "step text ".repeat(3_000);
+    let mut events: Vec<SessionLogEntry> = vec![ev_session(
+        session,
+        EventId::new(),
+        SessionEvent::UserInput {
+            text: "start".into(),
+        },
+    )];
+    for i in 0..20 {
+        events.push(ev_session(
+            session,
+            EventId::new(),
+            SessionEvent::Reasoning {
+                text: format!("{i} {chunk}"),
+            },
+        ));
+    }
+    let closing = EventId::new();
+    events.push(ev_session(
+        session,
+        closing,
+        SessionEvent::RunCompleted { ms: Some(5_000) },
+    ));
+    let (snap, _s, root) = bridge_with_log(&events);
+    let mut steps = 0;
+    while !snap.index_chunk().done && steps < 1000 {
+        steps += 1;
+    }
+    let newest = snap.event_count().expect("the index is built") - 1;
+    let anchor = snap
+        .byte_at(newest)
+        .unwrap_or_else(|| panic!("the record is indexed, count {newest}"));
+    assert!(
+        anchor > LOOKBACK_STEP_BYTES * 8,
+        "the opener sits deeper than eight lookback steps: {anchor} bytes of log"
+    );
+    let whole = row_facts(&snap.load(1 << 21).lines).expect("the whole log derives the row");
+    let at_record = snap.window(anchor, 1 << 21);
+    assert_eq!(
+        row_facts(&at_record.lines),
+        Some(whole.clone()),
+        "the lookback reaches the opener and the window derives the same row: {:?}",
+        at_record.lines
+    );
+    let name = format!("e{closing}");
+    let window_names: Vec<String> = at_record
+        .lines
+        .iter()
+        .filter_map(|l| match l {
+            TranscriptLine::ThoughtFor { turn_id, .. } => Some(turn_id.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        window_names,
+        vec![name],
+        "the window names the row by the closing event: {window_names:?}"
+    );
+    std::fs::remove_dir_all(&root).ok();
+}
+
 /// A turn the log carries no completion record for is closed by the message
 /// that opens the turn after it, and a window can start exactly at that
 /// message. The fold then names the row from frames it read back rather than

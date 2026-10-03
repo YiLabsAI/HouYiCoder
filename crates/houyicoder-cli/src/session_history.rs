@@ -23,8 +23,15 @@ const INDEX_CHUNK_BYTES: u64 = 4 * 1024 * 1024;
 pub(crate) const LOOKBACK_STEP_BYTES: u64 = 64 * 1024;
 
 /// The most a window read spends finding the turn it starts inside. A turn
-/// whose opening event sits further back than this renders without it.
-const LOOKBACK_MAX_BYTES: u64 = 512 * 1024;
+/// whose opening event sits further back than this renders without it. The
+/// ceiling is the same magnitude as the byte budget the live transcript
+/// keeps its resident frames under, though the two count different things:
+/// the live budget estimates in-memory frames, this one bounds serialized
+/// log bytes. The reverse walk stops at a turn boundary, so a read spends
+/// the turn's own size; the ceiling is only reached when no boundary sits
+/// within reach — a turn wider than the budget, or a stretch the boundary
+/// probe cannot parse.
+const LOOKBACK_MAX_BYTES: u64 = 8 * 1024 * 1024;
 
 /// The lazy event-byte-offset index. Built by reverse-reading from the
 /// tail (EOF) toward BOF, prepending each batch so offsets stay in
