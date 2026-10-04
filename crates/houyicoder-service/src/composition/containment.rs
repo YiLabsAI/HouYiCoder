@@ -112,10 +112,13 @@ pub(crate) fn attach_git_common_dir(session: &dyn SandboxSession, workspace: &Pa
     }
 }
 
-// macOS-only: every test here widens a live fence, which only Seatbelt
-// supports. Landlock is irreversible once applied and a Job Object carries no
-// path fence, so both correctly report add_working_dir as Unsupported.
-#[cfg(all(test, target_os = "macos"))]
+// Every backend admits runtime grants now: macOS re-renders the seatbelt
+// profile at the next spawn, Linux hands the grant set to the fence helper
+// in argv, and Windows widens the resolver (its job object carries no path
+// primitive, so the grant never claims kernel backing). The restore and
+// allow-back flows tested here therefore run on every platform, and path
+// comparisons go through dunce on both sides.
+#[cfg(test)]
 mod tests {
     use super::*;
     use houyicoder_permission::{FileRuleStore, Scope};
@@ -156,8 +159,8 @@ mod tests {
         store
             .add_read_directory(&read_target, Scope::Project)
             .expect("add_read_directory");
-        let canonical = fs::canonicalize(&target).expect("canonicalize target");
-        let canonical_read = fs::canonicalize(&read_target).expect("canonicalize read target");
+        let canonical = dunce::canonicalize(&target).expect("canonicalize target");
+        let canonical_read = dunce::canonicalize(&read_target).expect("canonicalize read target");
 
         let repo = root.join("repo");
         fs::create_dir_all(&repo).expect("mkdir repo");
@@ -203,7 +206,7 @@ mod tests {
         store
             .add_directory(&target, Scope::Project)
             .expect("add_directory");
-        let canonical = fs::canonicalize(&target).expect("canonicalize target");
+        let canonical = dunce::canonicalize(&target).expect("canonicalize target");
         // Never created, so its re-attach fails.
         store
             .add_directory(&root.join("stale-deleted"), Scope::Project)
@@ -267,7 +270,7 @@ mod tests {
             fs::remove_dir_all(&root).ok();
             return;
         };
-        let wt_canon = fs::canonicalize(&wt).expect("canonicalize worktree");
+        let wt_canon = dunce::canonicalize(&wt).expect("canonicalize worktree");
         let session: Arc<dyn SandboxSession> =
             Arc::new(PlatformSession::new_in_cwd(&wt_canon).expect("sandbox"));
         assert!(
@@ -277,7 +280,7 @@ mod tests {
 
         attach_git_common_dir(session.as_ref(), &wt_canon);
 
-        let main_git = fs::canonicalize(repo.join(".git")).expect("canonicalize main .git");
+        let main_git = dunce::canonicalize(repo.join(".git")).expect("canonicalize main .git");
         let dirs = session.working_dirs();
         assert!(
             dirs.iter().any(|d| Path::new(d.as_str()) == main_git),
@@ -297,7 +300,7 @@ mod tests {
             fs::remove_dir_all(&root).ok();
             return;
         };
-        let repo_canon = fs::canonicalize(&repo).expect("canonicalize repo");
+        let repo_canon = dunce::canonicalize(&repo).expect("canonicalize repo");
         let session: Arc<dyn SandboxSession> =
             Arc::new(PlatformSession::new_in_cwd(&repo_canon).expect("sandbox"));
 
@@ -329,11 +332,11 @@ mod tests {
         let adapter = ContainmentAdapter(session);
         assert_eq!(
             adapter.boundary_root().map(|p| p.to_path_buf()),
-            Some(fs::canonicalize(&root).expect("canonicalize root")),
+            Some(dunce::canonicalize(&root).expect("canonicalize root")),
             "the root the session enforces must be the root the gate sees"
         );
         let dirs = adapter.boundary_dirs();
-        let widened = fs::canonicalize(&extra).expect("canonicalize extra");
+        let widened = dunce::canonicalize(&extra).expect("canonicalize extra");
         assert!(
             dirs.iter().any(|d| d == &widened),
             "a runtime-added dir must be in the bounds the gate sees: {dirs:?}"

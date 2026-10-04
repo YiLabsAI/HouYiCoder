@@ -85,20 +85,30 @@ impl ExecResult {
     }
 }
 
-/// Per-command resource fence config. Defaults are industrial-grade: 30s CPU
-/// (kernel SIGXCPU, not app-polled), 2GB address space, 256 processes (fork-
-/// bomb backstop), 120s wall-clock. The fence kills the whole process tree
-/// on any breach, not just the direct child (prevents orphan processes where
-/// grandchildren survive and burn CPU for minutes).
+/// Per-command resource fence config. Which fields are honored differs by
+/// backend: the Windows job object enforces cpu_secs and as_bytes on the
+/// spawned tree; macOS and Linux enforce wall_timeout_ms only, killing the
+/// whole process tree on expiry (never just the direct child, so no orphan
+/// grandchild survives and burns CPU). Neither unix backend applies per-spawn
+/// rlimits: macOS has no safe in-child primitive, and the Linux rlimits are
+/// per real user ID or per virtual address space rather than per tree, so
+/// arming them breaks ordinary shells and compilers instead of budgeting the
+/// fenced tree. The Windows caps are fixed at session construction from the
+/// default config, so a per-call override of cpu_secs or as_bytes does not
+/// retune them; wall_timeout_ms is honored per call on every backend. nproc
+/// is reserved for a future per-tree process budget.
 #[derive(Debug, Clone, Copy)]
 pub struct ExecConfig {
-    /// CPU seconds before SIGXCPU (soft) then SIGKILL (hard). Kernel-enforced.
+    /// CPU seconds budget. Enforced by the Windows job object; macOS and
+    /// Linux rely on wall_timeout_ms.
     pub cpu_secs: u64,
-    /// Max address space bytes (RLIMIT_AS).
+    /// Memory cap in bytes. Enforced by the Windows job object as a commit
+    /// charge cap; not applied on macOS or Linux.
     pub as_bytes: u64,
-    /// Max processes the user may spawn (RLIMIT_NPROC) -- fork-bomb backstop.
+    /// Per-tree process budget. Not enforced on any backend yet; kept as the
+    /// configuration point for a process-count fence.
     pub nproc: u64,
-    /// Wall-clock seconds before the tree is killpg'd.
+    /// Wall-clock milliseconds before the tree is group-killed.
     pub wall_timeout_ms: u64,
 }
 

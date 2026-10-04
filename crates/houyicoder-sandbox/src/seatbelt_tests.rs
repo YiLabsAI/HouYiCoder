@@ -267,8 +267,10 @@ async fn test_long_command_trips_timeout() {
     );
 }
 
-// Live: CPU spin is caught by wall-timeout (macOS has no safe in-child
-// setrlimit — pre_exec is unsafe-blocked by workspace deny; Linux cgroup gives the per-cmd CPU budget). Honest name: wall catches it, not SIGXCPU on macOS.
+// Live: a CPU spin is caught by the wall timeout, not by a kernel CPU signal.
+// macOS has no safe in-child setrlimit (pre_exec is unsafe-blocked by the
+// workspace deny) and Linux defers per-spawn rlimits too, so the wall plus
+// the group kill is the resource fence on both unix backends.
 #[tokio::test]
 #[ignore]
 async fn test_wall_timeout_kills_spin() {

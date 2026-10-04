@@ -25,12 +25,11 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 mod helpers;
-mod runtime_dirs;
 mod seatbelt_stream;
+use crate::runtime_dirs::RuntimeDirs;
 #[cfg(test)]
 use helpers::COUNTER;
 use helpers::{ExecCountGuard, kill_process_group, mkdtemp, tree_cpu_secs};
-use runtime_dirs::RuntimeDirs;
 use seatbelt_stream::stream_drain;
 
 /// A macOS Seatbelt sandbox session. The workspace is a temp dir, the user's
@@ -440,11 +439,11 @@ impl MacSeatbeltSession {
         // fix. tokio's process_group is a safe wrapper (no pre_exec, which
         // std marks unsafe and the workspace denies).
         cmd.process_group(0);
-        // cpu_secs/as_bytes/nproc are applied via Linux cgroup v2,
-        // cpu.max/memory.max/pids.max, a safe config — no pre_exec). macOS
-        // has no safe in-child setrlimit (pre_exec is unsafe-blocked), so
-        // the macOS fence is wall-timeout + killpg; cgroup does the per-cmd
-        // CPU/memory budget on Linux where it is the stronger primitive.
+        // The cpu, address space and process count budgets are not applied
+        // on macOS: there is no safe in-child setrlimit (pre_exec is
+        // unsafe-blocked), so the resource fence here is the wall timeout
+        // plus the group kill above. Linux defers them for a different
+        // reason: the rlimit primitives are per user, not per tree.
         let _ = (config.cpu_secs, config.as_bytes, config.nproc);
         let child = cmd
             .spawn()

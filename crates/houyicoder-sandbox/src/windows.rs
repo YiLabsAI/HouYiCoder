@@ -26,8 +26,10 @@
 //! the session stays a no-op fence — exec runs unfenced and the
 //! application-level path resolver remains the only boundary.
 
+use crate::runtime_dirs::RuntimeDirs;
 use houyicoder_api::sandbox::{
     Containment, Coverage, FenceStatus, NetworkPolicy, SandboxSession, SideEffect,
+    normalize_tool_path,
 };
 use houyicoder_async::PFut;
 use houyicoder_context::{ExecConfig, ExecResult, SandboxError};
@@ -48,6 +50,10 @@ pub struct WindowsJobSession {
     /// across threads. None when construction degraded to a no-op fence.
     job_handle: Option<usize>,
     fence: FenceStatus,
+    /// Runtime directory grants. The job object carries no path primitive,
+    /// so these widen the resolver only: the kernel fence stays limited to
+    /// resources and the coverage answer remains honest about that.
+    dirs: RuntimeDirs,
 }
 
 impl WindowsJobSession {
@@ -66,6 +72,7 @@ impl WindowsJobSession {
             owned: false,
             job_handle,
             fence,
+            dirs: RuntimeDirs::default(),
         })
     }
 
@@ -88,6 +95,7 @@ impl WindowsJobSession {
             owned: true,
             job_handle,
             fence,
+            dirs: RuntimeDirs::default(),
         })
     }
 
@@ -103,6 +111,28 @@ impl WindowsJobSession {
     #[must_use]
     pub fn with_network(self, _network: NetworkPolicy) -> Self {
         self
+    }
+
+    fn resolve_path(&self, path: &str, include_read_only: bool) -> Result<PathBuf, SandboxError> {
+        let supplied = Path::new(path);
+        let base = if supplied.is_absolute() {
+            supplied.to_path_buf()
+        } else {
+            self.workspace.join(path)
+        };
+        let canonical = normalize_tool_path(&base).unwrap_or(base);
+        if canonical.starts_with(&self.workspace) {
+            return Ok(canonical);
+        }
+        if self.dirs.allows_write(&canonical) {
+            return Ok(canonical);
+        }
+        if include_read_only && self.dirs.allows_read(&canonical) {
+            return Ok(canonical);
+        }
+        Err(SandboxError::PathTraversal(format!(
+            "path escapes workspace + authorized dirs: {path}"
+        )))
     }
 }
 
@@ -156,9 +186,11 @@ fn apply_fence() -> (Option<usize>, FenceStatus) {
         let job = ffi::create_job_object().map_err(|e| format!("create job object: {e}"))?;
         let cfg = ExecConfig::default();
         // Per-process user-time cap in 100-nanosecond units. A CPU-second is
-        // 10_000_000 such units. The kernel raises a soft limit (the process
-        // is allowed to run past it briefly) then a hard kill — the same
-        // shape as the SIGXCPU-then-SIGKILL fence the macOS backend documents.
+        // 10_000_000 such units. Reaching the cap terminates the process
+        // outright; there is no soft signal phase. The caps are fixed here at
+        // session construction, so a per-call ExecConfig override of cpu_secs
+        // or as_bytes does not retune the job — only the wall timeout is
+        // per-call on this backend.
         let cpu_100ns = (cfg.cpu_secs as i64).saturating_mul(10_000_000);
         let mem = cfg.as_bytes as usize;
         let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = Default::default();
@@ -337,13 +369,12 @@ impl WindowsJobSession {
 }
 
 // ----------------------------------------------------------------------------
-// SandboxSession impl. Two cfg-gated impls: the real one (windows plus
-// enforce) assigns each spawned child to the job so the kernel fence covers
-// the whole tree; the stub emits an audit line on every call so the unfenced
-// gap is visible.
+// SandboxSession impl. One impl for both fence outcomes: the job handle is
+// an Option, so a degraded session runs the same spawn path with an audit
+// line and no assignment, and the resolver and grant behavior are identical
+// whether or not the kernel fence engaged.
 // ----------------------------------------------------------------------------
 
-#[cfg(all(target_os = "windows", feature = "enforce"))]
 impl SandboxSession for WindowsJobSession {
     fn fence_status(&self) -> FenceStatus {
         self.fence.clone()
@@ -377,17 +408,7 @@ impl SandboxSession for WindowsJobSession {
             let child = cmd
                 .spawn()
                 .map_err(|e| SandboxError::SandboxUnavailable(format!("spawn: {e}")))?;
-            // Assign the child to the job so the kernel fence (CPU/memory
-            // caps plus KILL_ON_JOB_CLOSE tree teardown) covers the child and
-            // every descendant it spawns. Best-effort: a failed assignment
-            // leaves the child running under the per-cmd wall-timeout plus
-            // kill_on_drop only, with an audit line so the gap is visible.
-            if let Some(raw) = job_raw
-                && let Some(pid) = child.id()
-                && let Err(e) = assign_child_to_job(raw, pid)
-            {
-                tracing::warn!("sandbox audit: assign child to job failed: {e}");
-            }
+            assign_if_fenced(job_raw, &child);
             let outcome = tokio::time::timeout(wall, child.wait_with_output()).await;
             match outcome {
                 Ok(Ok(output)) => Ok(ExecResult {
@@ -407,7 +428,64 @@ impl SandboxSession for WindowsJobSession {
     fn workspace_root(&self) -> std::sync::Arc<std::path::Path> {
         std::sync::Arc::from(self.workspace.clone())
     }
+
+    fn resolve(&self, path: &str) -> Result<PathBuf, SandboxError> {
+        self.resolve_path(path, true)
+    }
+
+    fn resolve_write(&self, path: &str) -> Result<PathBuf, SandboxError> {
+        self.resolve_path(path, false)
+    }
+
+    fn add_working_dir(&self, path: &str) -> Result<(), SandboxError> {
+        self.dirs.add_write(path)
+    }
+
+    fn add_reading_dir(&self, path: &str) -> Result<(), SandboxError> {
+        self.dirs.add_read(path)
+    }
+
+    fn remove_working_dir(&self, path: &str) {
+        self.dirs.remove(path);
+    }
+
+    fn working_dirs(&self) -> Vec<String> {
+        self.dirs.all_strings()
+    }
+
+    fn reading_dirs(&self) -> Vec<String> {
+        self.dirs
+            .read_only()
+            .into_iter()
+            .map(|path| path.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    fn writing_dirs(&self) -> Vec<String> {
+        self.dirs
+            .read_write()
+            .into_iter()
+            .map(|path| path.to_string_lossy().into_owned())
+            .collect()
+    }
 }
+
+/// Hand the spawned child to the job so the kernel fence (CPU/memory caps
+/// plus KILL_ON_JOB_CLOSE tree teardown) covers the child and every
+/// descendant. Best-effort: a failed assignment leaves the child running
+/// under the wall-timeout plus kill_on_drop only, with an audit line so the
+/// gap is visible.
+#[cfg(all(target_os = "windows", feature = "enforce"))]
+fn assign_if_fenced(job_raw: Option<usize>, child: &tokio::process::Child) {
+    let Some(raw) = job_raw else { return };
+    let Some(pid) = child.id() else { return };
+    if let Err(e) = assign_child_to_job(raw, pid) {
+        tracing::warn!("sandbox audit: assign child to job failed: {e}");
+    }
+}
+
+#[cfg(not(all(target_os = "windows", feature = "enforce")))]
+fn assign_if_fenced(_job_raw: Option<usize>, _child: &tokio::process::Child) {}
 
 #[cfg(all(target_os = "windows", feature = "enforce"))]
 fn assign_child_to_job(job_raw: usize, pid: u32) -> Result<(), String> {
@@ -428,100 +506,88 @@ fn assign_child_to_job(job_raw: usize, pid: u32) -> Result<(), String> {
     result
 }
 
-#[cfg(not(all(target_os = "windows", feature = "enforce")))]
-impl SandboxSession for WindowsJobSession {
-    // Report what construction recorded rather than the trait default. They
-    // agree today, but reading the field keeps this symmetric with the linux
-    // stub, so a change to what construction records stays reported.
-    fn fence_status(&self) -> FenceStatus {
-        self.fence.clone()
-    }
-
-    // No kernel fence available (non-Windows or enforce feature off). The
-    // command runs unfenced with an audit line so the gap is visible, not
-    // silent. The application-level path resolver is the only boundary.
-    #[expect(clippy::disallowed_methods, reason = "infra spawn, not model-driven")]
-    fn exec_with_config(
-        &self,
-        command: &str,
-        config: ExecConfig,
-    ) -> PFut<'_, Result<ExecResult, SandboxError>> {
-        let cwd = self.workspace.clone();
-        let command = command.to_string();
-        let wall = std::time::Duration::from_millis(config.wall_timeout_ms);
-        Box::pin(async move {
-            tracing::warn!(
-                "sandbox audit: windows job object NOT enforced; running unfenced (wall={}s)",
-                config.wall_timeout_ms
-            );
-            let _ = (config.cpu_secs, config.as_bytes, config.nproc);
-            let mut cmd = tokio::process::Command::new("cmd");
-            cmd.arg("/C")
-                .arg(&command)
-                .current_dir(&cwd)
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped())
-                .kill_on_drop(true);
-            let child = cmd
-                .spawn()
-                .map_err(|e| SandboxError::SandboxUnavailable(format!("spawn: {e}")))?;
-            let outcome = tokio::time::timeout(wall, child.wait_with_output()).await;
-            match outcome {
-                Ok(Ok(output)) => Ok(ExecResult {
-                    stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-                    stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-                    exit_code: output.status.code(),
-                }),
-                Ok(Err(e)) => Err(SandboxError::Io(format!("wait: {e}"))),
-                Err(_elapsed) => Err(SandboxError::Timeout(format!(
-                    "wall-clock {}s exceeded",
-                    config.wall_timeout_ms
-                ))),
-            }
-        })
-    }
-
-    fn workspace_root(&self) -> std::sync::Arc<std::path::Path> {
-        std::sync::Arc::from(self.workspace.clone())
-    }
-}
-
-#[cfg(test)]
-#[cfg(not(all(target_os = "windows", feature = "enforce")))]
-mod tests {
-    // On the stub path (non-Windows, or enforce off) the constructor is a
-    // pure no-op fence, safe to exercise. On windows plus enforce the
-    // constructor creates a real Job Object, so these tests are cfg-gated
-    // off there (see the jobobject_smoke example for that path).
-
-    use super::*;
-
-    #[test]
-    fn test_session_constructs_workspace() {
-        let session = WindowsJobSession::new().expect("stub session");
-        assert!(session.workspace.exists());
-        assert!(session.workspace.is_dir());
-    }
-
-    #[test]
-    fn test_absolute_path_rejected() {
-        let session = WindowsJobSession::new().expect("stub session");
-        let resolved = session.resolve("C:/secret");
-        assert!(matches!(resolved, Err(SandboxError::PathTraversal(_))));
-    }
-}
-
 impl Containment for WindowsJobSession {
-    // Interim: the Job Object fences resource limits, but the writable-roots
-    // set is not yet computed here, so coverage reports Unfenced. This is a
-    // coverage-gap, not a "Windows has no fence" statement -- until the roots
-    // are surfaced, the auto-allow does not fire on Windows and every exec
-    // asks.
+    // The job object fences CPU, memory and tree lifetime; it carries no
+    // path primitive, so the kernel cannot back a writable-roots claim.
+    // Coverage stays Unfenced honestly: the resolver admits the runtime
+    // grants, but with no kernel path fence every exec asks.
     fn coverage(&self) -> Coverage {
         Coverage::Unfenced
     }
 
     fn would_block(&self, _effect: SideEffect) -> Option<String> {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // Construction creates a Job Object but never restricts this process --
+    // only children assigned to it -- so these tests run under both fence
+    // outcomes (see the jobobject_smoke example for the kernel-side check).
+
+    use super::*;
+
+    fn unique_dir(tag: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "houyicoder-windows-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ))
+    }
+
+    #[test]
+    fn test_session_constructs_workspace() {
+        let session = WindowsJobSession::new().expect("session");
+        assert!(session.workspace.exists());
+        assert!(session.workspace.is_dir());
+    }
+
+    #[test]
+    fn test_absolute_path_rejected() {
+        let session = WindowsJobSession::new().expect("session");
+        let resolved = session.resolve("C:/secret");
+        assert!(matches!(resolved, Err(SandboxError::PathTraversal(_))));
+    }
+
+    #[test]
+    fn test_granted_dir_admitted() {
+        let session = WindowsJobSession::new().expect("session");
+        let granted = unique_dir("grant");
+        std::fs::create_dir_all(&granted).expect("create granted dir");
+        let target = granted.join("notes.txt");
+        std::fs::write(&target, "x").expect("write target");
+        let granted_str = granted.to_str().expect("granted str");
+        let target_str = target.to_str().expect("target str");
+
+        session.add_working_dir(granted_str).expect("grant");
+        let resolved = session.resolve_write(target_str).expect("admitted");
+        let canonical_granted = dunce::canonicalize(&granted).expect("canonical granted");
+        assert!(resolved.starts_with(canonical_granted));
+
+        session.remove_working_dir(granted_str);
+        let revoked = session.resolve_write(target_str);
+        assert!(matches!(revoked, Err(SandboxError::PathTraversal(_))));
+
+        let _cleanup = std::fs::remove_dir_all(&granted);
+    }
+
+    #[test]
+    fn test_coverage_unfenced() {
+        // The job object carries no path primitive, so no grant set can back
+        // a writable-roots claim; the answer stays Unfenced even with grants,
+        // and the gate keeps asking for consent.
+        let session = WindowsJobSession::new().expect("session");
+        assert!(matches!(session.coverage(), Coverage::Unfenced));
+        let granted = unique_dir("coverage");
+        std::fs::create_dir_all(&granted).expect("create granted dir");
+        let granted_str = granted.to_str().expect("granted str");
+        session.add_working_dir(granted_str).expect("grant");
+        assert!(matches!(session.coverage(), Coverage::Unfenced));
+        session.remove_working_dir(granted_str);
+        let _cleanup = std::fs::remove_dir_all(&granted);
     }
 }

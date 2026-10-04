@@ -1,66 +1,76 @@
-//! Linux sandbox session. Two mutually exclusive cfg paths:
+//! Linux sandbox session: a per-spawn Landlock fence via a helper binary.
 //!
-//! - linux plus the enforce feature: a real Landlock fence applied at
-//!   construction time via the landlock crate (pure-Rust, safe wrappers
-//!   over the Landlock LSM syscalls). The fence is an irreversible
-//!   per-process kernel restriction: it tightens the calling process and
-//!   every process it later spawns, so exec_with_config runs the command
-//!   unfenced at the spawn level and the child inherits the fence.
-//! - otherwise (non-Linux, or the enforce feature off): an audited no-op.
-//!   Each operation emits a one-line audit to stderr so a future monitor or
-//!   log scanner can see the fence was not enforced.
-//!
-//! Why apply at construction rather than per-exec: the macOS backend fences
-//! the child by spawning sandbox-exec (a separate binary that applies the
-//! Seatbelt profile in a forked child, leaving the parent unrestricted). The
-//! workspace lint denies unsafe_code, so the fork plus pre_exec plus apply
-//! pattern is unavailable here — pre_exec is unsafe. Landlock has no
-//! equivalent of sandbox-exec as a std-routable helper binary, and the
-//! crate's safe API only applies to the calling process. Construction-time
-//! application is therefore the safe-code tradeoff: the process that
-//! constructs the session becomes the sandbox boundary, and all child
-//! commands inherit the fence.
-//!
-//! Graceful degradation: the landlock crate reports a NotEnforced ruleset
-//! status when the kernel has no Landlock support (NotImplemented or
-//! NotEnabled LandlockStatus) or the requested features exceed the running
-//! kernel ABI. In that case the session stays a no-op fence — exec runs
-//! unfenced and the application-level path resolver remains the only
-//! boundary. An audit line is emitted so the gap is visible, never silent.
+//! Each exec spawns the fence helper beside the daemon, passes the live
+//! grant set in argv, and the helper applies a Landlock ruleset to itself
+//! before exec-ing the command shell: the fence covers the spawned tree
+//! only, never the daemon. Construction probes the helper for FenceStatus;
+//! unfenced, exec runs directly with an audit line and the path resolver
+//! remains the boundary.
 
+use crate::runtime_dirs::RuntimeDirs;
 use houyicoder_api::sandbox::{
     Containment, Coverage, FenceStatus, NetworkPolicy, SandboxSession, SideEffect,
+    normalize_tool_path,
 };
 use houyicoder_async::PFut;
 use houyicoder_context::{ExecConfig, ExecResult, SandboxError};
 use houyicoder_resilience::resource_breaker::ResourceBreaker;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// File name of the fence helper, located beside the daemon executable.
+const HELPER_BIN: &str = "houyicoder-sandbox-helper";
 
 /// A Linux sandbox session. The workspace is the user's project dir (Guarded
-/// mode) or a temp dir. Drop leaves the workspace untouched when not owned.
-/// Under linux plus the enforce feature, construction applies the Landlock
-/// fence to the calling process; otherwise the session is an audited no-op.
+/// mode) or a temp dir this session owns; Drop removes only an owned one.
+/// The fence lives in the spawned helper, so the daemon itself is never
+/// restricted and directory grants given mid-session reach the next command.
 pub struct LinuxLandlockSession {
     workspace: PathBuf,
     owned: bool,
     fence: FenceStatus,
+    /// Scratch dir this session always owns: exported as TMPDIR so heredoc
+    /// and mktemp writes land inside the fence, which grants nothing under
+    /// the shared system temp root. Removed on Drop.
+    tmpdir: PathBuf,
+    /// Runtime directory grants, re-read at every spawn so a consent given
+    /// mid-session widens the next command's fence.
+    dirs: RuntimeDirs,
+}
+
+/// Mint the per-session scratch dir under the system temp root. The name
+/// mixes pid, a per-process counter and nanos so two sessions can never
+/// share one dir; create_dir then fails rather than reusing a stray dir.
+fn session_tmpdir() -> Result<PathBuf, SandboxError> {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let dir =
+        std::env::temp_dir().join(format!("houyicoder-tmp-{}-{n}-{nanos}", std::process::id()));
+    std::fs::create_dir(&dir)?;
+    dunce::canonicalize(&dir).map_err(|e| SandboxError::Io(format!("tmpdir canonicalize: {e}")))
 }
 
 impl LinuxLandlockSession {
     /// Create a session rooted at the user's project dir. The dir is
     /// canonicalized through dunce so symlinks do not trip the path
     /// resolver. The user's directory is never removed on Drop. Construction
-    /// applies the Landlock fence (real under linux plus enforce, no-op
-    /// otherwise) so the workspace path is in the allow-set.
+    /// probes the helper once; the status answers fence_status and decides
+    /// whether exec routes through the helper or runs with an audit line.
     pub fn new_in_cwd(cwd: &Path) -> Result<Self, SandboxError> {
         let workspace = dunce::canonicalize(cwd)
             .map_err(|e| SandboxError::Io(format!("cwd canonicalize: {e}")))?;
-        let fence = apply_fence(&workspace);
+        let fence = probe_fence(&workspace);
         Ok(Self {
             workspace,
             owned: false,
             fence,
+            tmpdir: session_tmpdir()?,
+            dirs: RuntimeDirs::default(),
         })
     }
 
@@ -76,11 +86,13 @@ impl LinuxLandlockSession {
                 .unwrap_or(0)
         ));
         std::fs::create_dir_all(&workspace)?;
-        let fence = apply_fence(&workspace);
+        let fence = probe_fence(&workspace);
         Ok(Self {
             workspace,
             owned: true,
             fence,
+            tmpdir: session_tmpdir()?,
+            dirs: RuntimeDirs::default(),
         })
     }
 
@@ -92,12 +104,151 @@ impl LinuxLandlockSession {
         self
     }
 
-    /// No-op: the fence is applied at construction and is irreversible, so a
-    /// posture set afterwards cannot change it. Present for PlatformSession
-    /// parity.
+    /// No-op: the path fence carries no network ruleset yet, so a posture set
+    /// here cannot be honored. Present for PlatformSession parity; the gap is
+    /// visible through would_block answering None for network effects.
     #[must_use]
     pub fn with_network(self, _network: NetworkPolicy) -> Self {
         self
+    }
+
+    /// Locate the fence helper: an explicit environment override wins, then
+    /// the directory of the running executable, then one level up (build and
+    /// test layouts place the daemon in a deps directory below the helper).
+    fn helper_path() -> Option<PathBuf> {
+        if let Some(path) = std::env::var_os("HOUYICODER_SANDBOX_HELPER") {
+            return Some(PathBuf::from(path));
+        }
+        let deps = std::env::current_exe().ok()?.parent()?.to_path_buf();
+        let sibling = deps.join(HELPER_BIN);
+        if sibling.is_file() {
+            return Some(sibling);
+        }
+        let upper = deps.parent()?.join(HELPER_BIN);
+        if upper.is_file() {
+            return Some(upper);
+        }
+        None
+    }
+
+    fn resolve_path(&self, path: &str, include_read_only: bool) -> Result<PathBuf, SandboxError> {
+        let supplied = Path::new(path);
+        let base = if supplied.is_absolute() {
+            supplied.to_path_buf()
+        } else {
+            self.workspace.join(path)
+        };
+        let canonical = normalize_tool_path(&base).unwrap_or(base);
+        if canonical.starts_with(&self.workspace) || canonical.starts_with(&self.tmpdir) {
+            return Ok(canonical);
+        }
+        if self.dirs.allows_write(&canonical) {
+            return Ok(canonical);
+        }
+        if include_read_only && self.dirs.allows_read(&canonical) {
+            return Ok(canonical);
+        }
+        Err(SandboxError::PathTraversal(format!(
+            "path escapes workspace + authorized dirs: {path}"
+        )))
+    }
+
+    /// Run one command. Fenced, the helper is spawned with the live grant
+    /// set in argv; unfenced, the shell is spawned directly after an audit
+    /// line. Both paths share the cwd, the pipes, the scratch TMPDIR, the
+    /// process group, kill_on_drop and the wall timeout. The cpu, address
+    /// space and process count budgets are not passed to the helper: their
+    /// per-spawn rlimit semantics are per user, not per tree, so the wall
+    /// timeout plus the group kill below are the resource fence here.
+    #[expect(clippy::disallowed_methods, reason = "infra spawn, not model-driven")]
+    async fn exec_inner(
+        &self,
+        command: String,
+        config: ExecConfig,
+    ) -> Result<ExecResult, SandboxError> {
+        let wall = std::time::Duration::from_millis(config.wall_timeout_ms);
+        let helper = if matches!(self.fence, FenceStatus::Enforced) {
+            Self::helper_path()
+        } else {
+            None
+        };
+        let mut cmd = match helper {
+            Some(helper) => {
+                let mut cmd = tokio::process::Command::new(helper);
+                cmd.arg("--write").arg(&self.workspace);
+                cmd.arg("--write").arg(&self.tmpdir);
+                for dir in self.dirs.read_write() {
+                    cmd.arg("--write").arg(dir);
+                }
+                for dir in self.dirs.read_only() {
+                    cmd.arg("--read").arg(dir);
+                }
+                cmd.arg("--").arg(&command);
+                cmd
+            }
+            None => {
+                tracing::warn!(
+                    "sandbox audit: landlock fence NOT enforced; running unfenced (wall={}ms)",
+                    config.wall_timeout_ms
+                );
+                let mut cmd = tokio::process::Command::new("/bin/sh");
+                cmd.arg("-c").arg(&command);
+                cmd
+            }
+        };
+        // Export the session scratch dir as TMPDIR so heredoc temp files and
+        // tools that honor TMPDIR land inside the fence; the shared system
+        // temp root is never granted. TMPPREFIX routes zsh heredoc temps
+        // there too. Set explicitly rather than inherited, since the parent
+        // TMPDIR points outside the fence.
+        let tmpdir_str = self.tmpdir.to_string_lossy().into_owned();
+        cmd.env("TMPDIR", &tmpdir_str)
+            .env("TMPPREFIX", format!("{tmpdir_str}/zsh"))
+            .current_dir(&self.workspace)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true);
+        cmd.process_group(0);
+        let child = cmd
+            .spawn()
+            .map_err(|e| SandboxError::SandboxUnavailable(format!("spawn: {e}")))?;
+        // After process_group(0) the child's group id equals its pid. The
+        // guard reaps the whole tree on every exit path: kill_on_drop only
+        // reaches the direct child, so without it a wall timeout or a
+        // dropped future would leave grandchildren running.
+        let pgid = child.id().unwrap_or(0) as i32;
+        let _tree_guard = TreeKillGuard { pgid };
+        let outcome = tokio::time::timeout(wall, child.wait_with_output()).await;
+        match outcome {
+            Ok(Ok(output)) => Ok(ExecResult {
+                stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+                exit_code: output.status.code(),
+            }),
+            Ok(Err(e)) => Err(SandboxError::Io(format!("wait: {e}"))),
+            Err(_elapsed) => Err(SandboxError::Timeout(format!(
+                "wall-clock {}ms exceeded",
+                config.wall_timeout_ms
+            ))),
+        }
+    }
+}
+
+/// Group kill on drop: SIGKILL every process in the child's group, so a
+/// timeout or a cancelled future does not leave fenced grandchildren burning
+/// CPU and holding locks after the daemon has already returned.
+struct TreeKillGuard {
+    pgid: i32,
+}
+
+impl Drop for TreeKillGuard {
+    fn drop(&mut self) {
+        if self.pgid > 0 {
+            let _ = nix::sys::signal::kill(
+                nix::unistd::Pid::from_raw(-self.pgid),
+                nix::sys::signal::Signal::SIGKILL,
+            );
+        }
     }
 }
 
@@ -112,244 +263,284 @@ impl Drop for LinuxLandlockSession {
         if self.owned {
             let _result = std::fs::remove_dir_all(&self.workspace);
         }
+        // The scratch dir is always created by this session, so it is always
+        // removed here. Best-effort; never panic.
+        let _result = std::fs::remove_dir_all(&self.tmpdir);
     }
 }
 
-// Apply the Landlock fence to the calling process. Under linux plus the
-// enforce feature this builds a real ruleset and calls restrict_self;
-// otherwise it is a no-op (the stub session logs the unfenced gap from each
-// method).
-#[cfg(all(target_os = "linux", feature = "enforce"))]
-fn apply_fence(workspace: &Path) -> FenceStatus {
-    use landlock::{
-        ABI, Access, AccessFs, Ruleset, RulesetAttr, RulesetCreatedAttr, RulesetStatus,
-        path_beneath_rules,
+/// Ask the helper whether it can enforce on this kernel. The answer maps one
+/// to one onto FenceStatus; a missing helper, a refused spawn or a non-zero
+/// exit all land in Failed so the composition root surfaces the gap instead
+/// of silently degrading.
+#[cfg(feature = "enforce")]
+fn probe_fence(workspace: &Path) -> FenceStatus {
+    let Some(helper) = LinuxLandlockSession::helper_path() else {
+        tracing::warn!("sandbox audit: fence helper not found beside the daemon; running unfenced");
+        return FenceStatus::Failed("fence helper not found".into());
     };
-
-    // Test-suite escape hatch, debug builds only so a release binary can never
-    // be unfenced through the environment. This fence restricts the CALLING
-    // process irreversibly and cargo test shares one process per binary, so one
-    // test constructing a session would make every sibling test's temp-dir write
-    // fail with EACCES. The session still constructs; only enforcement is off.
-    #[cfg(debug_assertions)]
-    if std::env::var("HOUYICODER_SANDBOX_NO_ENFORCE").is_ok_and(|v| v == "1") {
-        tracing::warn!(
-            "sandbox audit: landlock enforcement skipped via HOUYICODER_SANDBOX_NO_ENFORCE (test builds only); running unfenced"
-        );
-        return FenceStatus::Unavailable;
-    }
-
-    // Target a recent ABI. The landlock crate degrades gracefully on older
-    // kernels via the default BestEffort compatibility level, and
-    // restrict_self reports NotEnforced when the kernel has no Landlock at
-    // all — that path falls through to the NotEnforced status, never an Err.
-    let abi = ABI::V6;
-
-    // System read-only tree: the shell, the dynamic linker, shared libs,
-    // /etc config, /proc for ps and /proc/self, /sys for read-only sysfs.
-    // from_read includes Execute so binaries under these trees can run.
-    const READ_PATHS: &[&str] = &[
-        "/usr", "/lib", "/lib64", "/bin", "/sbin", "/etc", "/proc", "/sys",
-    ];
-    // Read-write: the workspace (the agent edits here). The character
-    // devices the runtime needs to open are added separately; path_beneath
-    // narrows a file to file-level access automatically.
-    let workspace_str = workspace.to_string_lossy();
-    let rw_paths: [&str; 1] = [workspace_str.as_ref()];
-    const DEV_PATHS: &[&str] = &["/dev/null", "/dev/zero", "/dev/random", "/dev/urandom"];
-
-    let result = (|| {
-        let ruleset = Ruleset::default().handle_access(AccessFs::from_all(abi))?;
-        let created = ruleset.create()?;
-        let created = created
-            .add_rules(path_beneath_rules(READ_PATHS, AccessFs::from_read(abi)))?
-            .add_rules(path_beneath_rules(rw_paths, AccessFs::from_all(abi)))?
-            .add_rules(path_beneath_rules(DEV_PATHS, AccessFs::from_all(abi)))?;
-        let status = created.restrict_self()?;
-        Ok::<_, landlock::RulesetError>(status)
-    })();
-    match result {
-        Ok(status)
-            if matches!(
-                status.ruleset,
-                RulesetStatus::FullyEnforced | RulesetStatus::PartiallyEnforced
-            ) =>
-        {
-            // Fence applied. Children spawned by exec inherit it.
-            FenceStatus::Enforced
+    #[expect(clippy::disallowed_methods, reason = "infra spawn, not model-driven")]
+    let probe = std::process::Command::new(&helper)
+        .arg("--probe")
+        .arg("--write")
+        .arg(workspace)
+        .output();
+    match probe {
+        Ok(output) if output.status.success() => {
+            let word = String::from_utf8_lossy(&output.stdout);
+            match word.trim() {
+                "enforced" => FenceStatus::Enforced,
+                "enforced-partial" => {
+                    tracing::warn!(
+                        "sandbox audit: landlock enforced with a degraded kernel ABI; some filesystem rights are not restricted"
+                    );
+                    FenceStatus::Enforced
+                }
+                "not-enforced" => {
+                    tracing::warn!(
+                        "sandbox audit: landlock supported but ruleset not enforced; running unfenced"
+                    );
+                    FenceStatus::NotEnforced
+                }
+                "unavailable" => {
+                    tracing::warn!(
+                        "sandbox audit: landlock unavailable on this kernel; running unfenced"
+                    );
+                    FenceStatus::Unavailable
+                }
+                other => {
+                    let reason = other.strip_prefix("failed:").unwrap_or(other).to_string();
+                    tracing::warn!(
+                        "sandbox audit: landlock apply failed: {reason}; running unfenced"
+                    );
+                    FenceStatus::Failed(reason)
+                }
+            }
         }
-        Ok(_) => {
-            tracing::warn!(
-                "sandbox audit: landlock supported but ruleset not enforced; running unfenced"
-            );
-            FenceStatus::NotEnforced
+        Ok(output) => {
+            let reason = format!("probe exited with {}", output.status);
+            tracing::warn!("sandbox audit: fence helper probe failed: {reason}; running unfenced");
+            FenceStatus::Failed(reason)
         }
         Err(e) => {
-            tracing::warn!("sandbox audit: landlock apply failed: {e}; running unfenced");
-            FenceStatus::Failed(e.to_string())
+            tracing::warn!("sandbox audit: fence helper probe spawn failed: {e}; running unfenced");
+            FenceStatus::Failed(format!("probe spawn: {e}"))
         }
     }
 }
 
-#[cfg(not(all(target_os = "linux", feature = "enforce")))]
-fn apply_fence(_workspace: &Path) -> FenceStatus {
-    // No-op: the stub session methods emit their own unfenced audit lines.
+#[cfg(not(feature = "enforce"))]
+fn probe_fence(_workspace: &Path) -> FenceStatus {
     FenceStatus::Unavailable
 }
 
-// ----------------------------------------------------------------------------
-// SandboxSession impl. Two cfg-gated impls: the real one (linux plus
-// enforce) runs commands unfenced at the spawn level (the fence was applied
-// at construction and the child inherits it); the stub emits an audit line
-// on every call so the unfenced gap is visible.
-// ----------------------------------------------------------------------------
-
-#[cfg(all(target_os = "linux", feature = "enforce"))]
 impl SandboxSession for LinuxLandlockSession {
     fn fence_status(&self) -> FenceStatus {
         self.fence.clone()
     }
 
-    // The child inherits the Landlock domain applied at construction, so the
-    // spawn itself needs no sandbox-exec equivalent. kill_on_drop plus a wall
-    // timeout are the resource fence; a full breaker tree-kill guard is the
-    // macOS backend's concern and tracked separately for Linux.
-    #[expect(clippy::disallowed_methods, reason = "infra spawn, not model-driven")]
+    fn as_containment(&self) -> Option<&dyn Containment> {
+        Some(self)
+    }
+
     fn exec_with_config(
         &self,
         command: &str,
         config: ExecConfig,
     ) -> PFut<'_, Result<ExecResult, SandboxError>> {
-        let cwd = self.workspace.clone();
         let command = command.to_string();
-        let wall = std::time::Duration::from_millis(config.wall_timeout_ms);
-        Box::pin(async move {
-            let _ = (config.cpu_secs, config.as_bytes, config.nproc);
-            let mut cmd = tokio::process::Command::new("/bin/sh");
-            cmd.arg("-c")
-                .arg(&command)
-                .current_dir(&cwd)
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped())
-                .kill_on_drop(true);
-            cmd.process_group(0);
-            let child = cmd
-                .spawn()
-                .map_err(|e| SandboxError::SandboxUnavailable(format!("spawn: {e}")))?;
-            let outcome = tokio::time::timeout(wall, child.wait_with_output()).await;
-            match outcome {
-                Ok(Ok(output)) => Ok(ExecResult {
-                    stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-                    stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-                    exit_code: output.status.code(),
-                }),
-                Ok(Err(e)) => Err(SandboxError::Io(format!("wait: {e}"))),
-                Err(_elapsed) => Err(SandboxError::Timeout(format!(
-                    "wall-clock {}s exceeded",
-                    config.wall_timeout_ms
-                ))),
-            }
-        })
+        Box::pin(async move { self.exec_inner(command, config).await })
     }
 
-    fn workspace_root(&self) -> std::sync::Arc<std::path::Path> {
-        std::sync::Arc::from(self.workspace.clone())
+    fn workspace_root(&self) -> Arc<Path> {
+        Arc::from(self.workspace.clone())
+    }
+
+    fn resolve(&self, path: &str) -> Result<PathBuf, SandboxError> {
+        self.resolve_path(path, true)
+    }
+
+    fn resolve_write(&self, path: &str) -> Result<PathBuf, SandboxError> {
+        self.resolve_path(path, false)
+    }
+
+    fn add_working_dir(&self, path: &str) -> Result<(), SandboxError> {
+        self.dirs.add_write(path)
+    }
+
+    fn add_reading_dir(&self, path: &str) -> Result<(), SandboxError> {
+        self.dirs.add_read(path)
+    }
+
+    fn remove_working_dir(&self, path: &str) {
+        self.dirs.remove(path);
+    }
+
+    fn working_dirs(&self) -> Vec<String> {
+        self.dirs.all_strings()
+    }
+
+    fn reading_dirs(&self) -> Vec<String> {
+        self.dirs
+            .read_only()
+            .into_iter()
+            .map(|path| path.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    fn writing_dirs(&self) -> Vec<String> {
+        self.dirs
+            .read_write()
+            .into_iter()
+            .map(|path| path.to_string_lossy().into_owned())
+            .collect()
     }
 }
 
-#[cfg(not(all(target_os = "linux", feature = "enforce")))]
-impl SandboxSession for LinuxLandlockSession {
-    fn fence_status(&self) -> FenceStatus {
-        self.fence.clone()
-    }
-
-    // No kernel fence available (non-Linux or enforce feature off). The
-    // command runs unfenced with an audit line so the gap is visible, not
-    // silent. The application-level path resolver is the only boundary.
-    #[expect(clippy::disallowed_methods, reason = "infra spawn, not model-driven")]
-    fn exec_with_config(
-        &self,
-        command: &str,
-        config: ExecConfig,
-    ) -> PFut<'_, Result<ExecResult, SandboxError>> {
-        let cwd = self.workspace.clone();
-        let command = command.to_string();
-        let wall = std::time::Duration::from_millis(config.wall_timeout_ms);
-        Box::pin(async move {
-            tracing::warn!(
-                "sandbox audit: linux landlock NOT enforced; running unfenced (wall={}s)",
-                config.wall_timeout_ms
-            );
-            let _ = (config.cpu_secs, config.as_bytes, config.nproc);
-            let mut cmd = tokio::process::Command::new("/bin/sh");
-            cmd.arg("-c")
-                .arg(&command)
-                .current_dir(&cwd)
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped())
-                .kill_on_drop(true);
-            cmd.process_group(0);
-            let child = cmd
-                .spawn()
-                .map_err(|e| SandboxError::SandboxUnavailable(format!("spawn: {e}")))?;
-            let outcome = tokio::time::timeout(wall, child.wait_with_output()).await;
-            match outcome {
-                Ok(Ok(output)) => Ok(ExecResult {
-                    stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-                    stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-                    exit_code: output.status.code(),
-                }),
-                Ok(Err(e)) => Err(SandboxError::Io(format!("wait: {e}"))),
-                Err(_elapsed) => Err(SandboxError::Timeout(format!(
-                    "wall-clock {}s exceeded",
-                    config.wall_timeout_ms
-                ))),
-            }
-        })
-    }
-
-    fn workspace_root(&self) -> std::sync::Arc<std::path::Path> {
-        std::sync::Arc::from(self.workspace.clone())
-    }
-}
-
-#[cfg(test)]
-#[cfg(not(all(target_os = "linux", feature = "enforce")))]
-mod tests {
-    // On the stub path (non-Linux, or enforce off) the constructor is a
-    // pure no-op fence, safe to exercise. On linux plus enforce the
-    // constructor applies a real Landlock domain to the test process, so
-    // these tests are cfg-gated off there (see the landlock_smoke example
-    // for that path).
-
-    use super::*;
-
-    #[test]
-    fn test_session_constructs_workspace() {
-        let session = LinuxLandlockSession::new().expect("stub session");
-        assert!(session.workspace.exists());
-        assert!(session.workspace.is_dir());
-    }
-
-    #[test]
-    fn test_absolute_path_rejected() {
-        let session = LinuxLandlockSession::new().expect("stub session");
-        let resolved = session.resolve("/etc/passwd");
-        assert!(matches!(resolved, Err(SandboxError::PathTraversal(_))));
+/// Map fence state and grant lists onto the coverage answer. Split out of
+/// the trait impl so the mapping is testable without a live fence: the roots
+/// a Fenced answer certifies must equal the grant set the next helper spawn
+/// receives in argv. The session scratch dir is granted too but is not a
+/// user-authorized root, so it is not listed.
+fn coverage_for(fence: &FenceStatus, workspace: &Path, dirs: &RuntimeDirs) -> Coverage {
+    if matches!(fence, FenceStatus::Enforced) {
+        let mut roots = vec![workspace.to_path_buf()];
+        roots.extend(dirs.read_write());
+        Coverage::Fenced {
+            writable_roots: roots,
+        }
+    } else {
+        Coverage::Unfenced
     }
 }
 
 impl Containment for LinuxLandlockSession {
-    // Interim: Landlock fences writes, but the writable-roots set is not yet
-    // computed here, so coverage reports Unfenced. This is a coverage-gap, not
-    // a "Linux has no fence" statement -- the fence exists, its roots are just
-    // not surfaced to the gate yet. Until they are, the auto-allow does not
-    // fire on Linux and every exec asks.
+    /// Fenced, the writable roots are the workspace plus every runtime write
+    /// grant; the next helper spawn receives these plus the session scratch
+    /// dir, so the certified set is never wider than the kernel grant set.
+    /// Unfenced, the gate keeps asking for consent because the resolver is
+    /// the only boundary. The answer certifies path containment only: this
+    /// backend imposes no network ruleset, so egress from a fenced command is
+    /// not contained.
     fn coverage(&self) -> Coverage {
-        Coverage::Unfenced
+        coverage_for(&self.fence, &self.workspace, &self.dirs)
     }
 
     fn would_block(&self, _effect: SideEffect) -> Option<String> {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // Construction probes the fence helper but never fences this process, so
+    // these tests run on any Linux host regardless of kernel support: the
+    // probe answer depends on the kernel, the resolver, grant and coverage
+    // behavior do not.
+
+    use super::*;
+
+    fn unique_dir(tag: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "houyicoder-linux-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ))
+    }
+
+    #[test]
+    fn test_session_constructs_workspace() {
+        let session = LinuxLandlockSession::new().expect("session");
+        assert!(session.workspace.exists());
+        assert!(session.workspace.is_dir());
+        assert!(session.tmpdir.is_dir());
+    }
+
+    #[test]
+    fn test_absolute_path_rejected() {
+        let session = LinuxLandlockSession::new().expect("session");
+        let resolved = session.resolve("/etc/passwd");
+        assert!(matches!(resolved, Err(SandboxError::PathTraversal(_))));
+    }
+
+    #[test]
+    fn test_granted_dir_admitted() {
+        let session = LinuxLandlockSession::new().expect("session");
+        let granted = unique_dir("grant");
+        std::fs::create_dir_all(&granted).expect("create granted dir");
+        let target = granted.join("notes.txt");
+        std::fs::write(&target, "x").expect("write target");
+        let granted_str = granted.to_str().expect("granted str");
+        let target_str = target.to_str().expect("target str");
+
+        session.add_working_dir(granted_str).expect("grant");
+        let resolved = session.resolve_write(target_str).expect("admitted");
+        let canonical_granted = dunce::canonicalize(&granted).expect("canonical granted");
+        assert!(resolved.starts_with(canonical_granted));
+
+        session.remove_working_dir(granted_str);
+        let revoked = session.resolve_write(target_str);
+        assert!(matches!(revoked, Err(SandboxError::PathTraversal(_))));
+
+        let _cleanup = std::fs::remove_dir_all(&granted);
+    }
+
+    #[test]
+    fn test_scratch_dir_admitted() {
+        let session = LinuxLandlockSession::new().expect("session");
+        let target = session.tmpdir.join("scratch.txt");
+        let target_str = target.to_str().expect("target str");
+        let resolved = session.resolve_write(target_str).expect("scratch admitted");
+        assert!(resolved.starts_with(&session.tmpdir));
+    }
+
+    #[test]
+    fn test_coverage_lists_grants() {
+        let mut session = LinuxLandlockSession::new().expect("session");
+        session.fence = FenceStatus::Enforced;
+        let granted = unique_dir("coverage");
+        std::fs::create_dir_all(&granted).expect("create granted dir");
+        let granted_str = granted.to_str().expect("granted str");
+        session.add_working_dir(granted_str).expect("grant");
+
+        match session.coverage() {
+            Coverage::Fenced { writable_roots } => {
+                assert!(
+                    writable_roots.iter().any(|r| r == &session.workspace),
+                    "the workspace must be a fenced root: {writable_roots:?}"
+                );
+                let canonical = dunce::canonicalize(&granted).expect("canonical granted");
+                assert!(
+                    writable_roots.contains(&canonical),
+                    "every write grant must be a fenced root: {writable_roots:?}"
+                );
+                assert!(
+                    !writable_roots.contains(&session.tmpdir),
+                    "the scratch dir is not a user-authorized root: {writable_roots:?}"
+                );
+            }
+            other => panic!("an enforced fence must report fenced coverage: {other:?}"),
+        }
+
+        session.remove_working_dir(granted_str);
+        match session.coverage() {
+            Coverage::Fenced { writable_roots } => {
+                assert_eq!(writable_roots, vec![session.workspace.clone()]);
+            }
+            other => panic!("revoking a grant must not unfence: {other:?}"),
+        }
+        let _cleanup = std::fs::remove_dir_all(&granted);
+    }
+
+    #[test]
+    fn test_coverage_unfenced() {
+        let mut session = LinuxLandlockSession::new().expect("session");
+        session.fence = FenceStatus::Failed("probe".into());
+        assert!(matches!(session.coverage(), Coverage::Unfenced));
+        session.fence = FenceStatus::NotEnforced;
+        assert!(matches!(session.coverage(), Coverage::Unfenced));
     }
 }

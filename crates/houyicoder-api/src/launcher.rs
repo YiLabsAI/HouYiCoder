@@ -71,16 +71,21 @@ impl StdioConfig {
 
 /// Per-command kernel resource fence. Mirrors the fence vocabulary the sandbox
 /// already enforces (CPU seconds, address space, process count, wall-clock
-/// timeout); a launcher applies it via setrlimit + a process-group tree-kill on
-/// breach. A fence is optional on a spawn: a trusted inner command (a git
+/// timeout); a launcher applies it via a process-group tree-kill on breach,
+/// and the cpu and memory budgets only where the platform has a per-tree
+/// primitive. A fence is optional on a spawn: a trusted inner command (a git
 /// worktree op) may spawn with no fence, while a tool exec always carries one.
 #[derive(Debug, Clone, Copy)]
 pub struct FenceConfig {
-    /// CPU seconds before the kernel sends SIGXCPU then SIGKILL.
+    /// CPU seconds budget. Enforced where a per-tree kernel primitive exists
+    /// (the Windows job object); not applied through rlimits, whose unix
+    /// semantics are per process or per user rather than per tree.
     pub cpu_secs: u64,
-    /// Max address space bytes (RLIMIT_AS).
+    /// Memory budget in bytes. Enforced by the Windows job object as a
+    /// commit-charge cap; not applied on the unix backends.
     pub as_bytes: u64,
-    /// Max processes the user may spawn (RLIMIT_NPROC) — a fork-bomb backstop.
+    /// Per-tree process budget. Not enforced on any backend yet; kept as the
+    /// configuration point for a process-count fence.
     pub nproc: u64,
     /// Wall-clock milliseconds before the whole process group is killpg'd.
     pub wall_timeout_ms: u64,
@@ -347,10 +352,10 @@ impl LauncherChild {
 /// exit is awaited separately. Object-safe so the composition root holds a
 /// single launcher and a kernel-fenced or wrapper launcher swaps behind it.
 ///
-/// The chokepoint applies the policy: fence (process group + setrlimit +
-/// tree-kill), wrapper (pipe the command through a wrapper program), audit (log
-/// the spawn). A concrete launcher without a kernel fence returns Unsupported
-/// for a policy that requests one.
+/// The chokepoint applies the policy: fence (process group + wall timeout +
+/// tree-kill), wrapper (pipe the command through a wrapper program), audit
+/// (log the spawn). A concrete launcher without a kernel fence returns
+/// Unsupported for a policy that requests one.
 pub trait ProcessLauncher: Send + Sync {
     /// Spawn a process under the given policy. Returns the child handle on
     /// success; the caller awaits exit through the handle.

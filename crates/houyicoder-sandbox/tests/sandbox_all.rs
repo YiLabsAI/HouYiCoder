@@ -4,6 +4,8 @@
 //! dropping a test. An included module is private to this binary, so an unused
 //! item inside one warns where the same item at a test-file root did not.
 
+#[path = "consistency.rs"]
+mod consistency;
 #[path = "seatbelt.rs"]
 mod seatbelt;
 #[path = "seatbelt_kernel.rs"]

@@ -13,11 +13,11 @@ path = "tests/sandbox_all.rs"
 path = "src/lib.rs"
 
 [features]
-# Default-on marker. When enabled AND the host is Linux, the
-# LinuxLandlockSession applies a real Landlock fence at construction via the
-# landlock crate (pure-Rust, safe wrappers over the Landlock syscalls).
-# Turning it off, or building for a non-Linux target, leaves the audited
-# no-op stub in place so the crate still compiles and runs unfenced. The
+# Default-on marker. When enabled AND the host is Linux, the fence helper
+# binary applies a real Landlock ruleset to itself before exec-ing each
+# command (the landlock crate is a pure-Rust, safe wrapper over the Landlock
+# syscalls). Turning it off, or building for a non-Linux target, leaves the
+# audited unfenced path in place so the crate still compiles and runs. The
 # marker is a plain feature (not dep-gated) because Cargo has no
 # target-conditional feature table: the dep lives under a linux target
 # section and the CODE is gated on both the feature and the target.
@@ -37,7 +37,8 @@ tokio = { version = "1", features = ["process", "time", "rt", "macros", "io-util
 tracing = "0.1.44"
 
 # nix is a unix-only crate (no Windows support). Target-gate it so this
-# crate compiles on Windows; only the macOS + Linux backends reference it.
+# crate compiles on Windows; only the macOS + Linux backends reference it,
+# for the process-group kill that reaps a fenced tree on timeout.
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.31", features = ["signal", "process"] }
 
@@ -68,9 +69,10 @@ windows = { version = "0.62", features = [
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "macros", "rt-multi-thread", "process", "time"] }
 
-# Smoke binary that applies the fence and asserts denied paths return
-# EACCES/EPERM. required-features keeps it out of the default mac build
-# path's run; the source is cfg-gated to linux so mac compiles a no-op main.
+# Smoke binary that drives commands through the fenced exec path and asserts
+# the kernel denies paths outside the grant set. required-features keeps it
+# out of the default mac build path's run; the source is cfg-gated to linux
+# so mac compiles a no-op main.
 [[example]]
 name = "landlock_smoke"
 required-features = ["enforce"]

@@ -1,4 +1,8 @@
-//! Runtime directory capability state for a Seatbelt session.
+//! Runtime directory grants shared by the platform sessions: the dirs the
+//! user authorized beyond the workspace root, canonicalized through dunce so
+//! Windows and Unix compare in one form. Each backend re-derives its fence
+//! from this state at the next spawn (macOS profile render, Linux helper
+//! argv) or admits paths against it (Windows resolver).
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -6,13 +10,13 @@ use std::sync::{Arc, Mutex};
 use houyicoder_context::SandboxError;
 
 #[derive(Clone, Default)]
-pub(super) struct RuntimeDirs {
+pub(crate) struct RuntimeDirs {
     read_only: Arc<Mutex<Vec<PathBuf>>>,
     read_write: Arc<Mutex<Vec<PathBuf>>>,
 }
 
 impl RuntimeDirs {
-    pub(super) fn add_read(&self, path: &str) -> Result<(), SandboxError> {
+    pub(crate) fn add_read(&self, path: &str) -> Result<(), SandboxError> {
         let canonical = canonical_dir(path)?;
         if self
             .read_write
@@ -26,42 +30,45 @@ impl RuntimeDirs {
         Ok(())
     }
 
-    pub(super) fn add_write(&self, path: &str) -> Result<(), SandboxError> {
+    pub(crate) fn add_write(&self, path: &str) -> Result<(), SandboxError> {
         let canonical = canonical_dir(path)?;
         remove_path(&self.read_only, &canonical);
         push_unique(&self.read_write, canonical);
         Ok(())
     }
 
-    pub(super) fn remove(&self, path: &str) {
+    pub(crate) fn remove(&self, path: &str) {
         remove_supplied(&self.read_only, path);
         remove_supplied(&self.read_write, path);
     }
 
-    pub(super) fn remove_write(&self, path: &Path) {
+    /// Drop one write grant by canonical path, leaving read grants alone.
+    /// The worktree fence restore revokes the git-dir grant it added.
+    #[cfg(target_os = "macos")]
+    pub(crate) fn remove_write(&self, path: &Path) {
         remove_path(&self.read_write, path);
     }
 
-    pub(super) fn allows_read(&self, path: &Path) -> bool {
+    pub(crate) fn allows_read(&self, path: &Path) -> bool {
         contains_path(&self.read_only, path) || self.allows_write(path)
     }
 
-    pub(super) fn allows_write(&self, path: &Path) -> bool {
+    pub(crate) fn allows_write(&self, path: &Path) -> bool {
         contains_path(&self.read_write, path)
     }
 
-    pub(super) fn read_only(&self) -> Vec<PathBuf> {
+    pub(crate) fn read_only(&self) -> Vec<PathBuf> {
         self.read_only.lock().expect("read-only dirs lock").clone()
     }
 
-    pub(super) fn read_write(&self) -> Vec<PathBuf> {
+    pub(crate) fn read_write(&self) -> Vec<PathBuf> {
         self.read_write
             .lock()
             .expect("read-write dirs lock")
             .clone()
     }
 
-    pub(super) fn all_strings(&self) -> Vec<String> {
+    pub(crate) fn all_strings(&self) -> Vec<String> {
         self.read_only()
             .into_iter()
             .chain(self.read_write())

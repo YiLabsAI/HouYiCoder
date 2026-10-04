@@ -7,10 +7,10 @@
 //! Policy handling is best-effort for the first cut:
 //! - audit: emits a structured spawn log line to stderr.
 //! - fence: the wall timeout is enforced on both spawn paths; the kernel
-//!   resource limits (setrlimit + cgroup) and the sandbox-exec integration are
-//!   deferred to the sandbox layer. A spawn with a fence but no sandbox wired
-//!   logs a warning naming what is and is not applied, and runs so the caller
-//!   is not blocked.
+//!   resource limits and the sandbox-exec integration are deferred to the
+//!   sandbox layer. A spawn with a fence but no sandbox wired logs a warning
+//!   naming what is and is not applied, and runs so the caller is not
+//!   blocked.
 //!
 //! Routing: when stdout or stderr is Piped, the capture path runs (spawn,
 //! drain both pipes, wait, return a pre-resolved child). When neither is

@@ -107,7 +107,12 @@ pub enum AllowReason {
 /// private and the only constructor is the checked one below, so holding a
 /// value of this type is itself the proof. That is what makes the rule a
 /// compile-time property rather than a convention: an allow decision cannot
-/// claim fence coverage without a value only the checked constructor hands out.
+/// claim fence coverage without a value only the checked constructor hands
+/// out. The proof certifies path containment only: on a backend whose fence
+/// carries no network ruleset, such as the Linux path fence, a covered call
+/// can still reach the network, so any relaxation built on this proof is
+/// path-only there and weaker than the same relaxation behind a fence that
+/// denies egress.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FenceProof {
     fenced_root_count: usize,

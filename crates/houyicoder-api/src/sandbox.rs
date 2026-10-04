@@ -10,9 +10,9 @@
 //! whose shell and argv layout the backend selects (POSIX sh on Unix today).
 //! A backend MUST NOT hard-wire a shell that is absent on the target platform
 //! (no sh on bare Windows) — a future cross-platform backend picks its own
-//! interpreter. The fence (process group + setrlimit + killpg + wall timeout)
-//! is enforced per-call by the backend; a Tool overrides the per-call
-//! ExecConfig.
+//! interpreter. The fence (process group + wall timeout + whole-tree group
+//! kill, plus resource caps where the platform has a per-tree primitive) is
+//! enforced per-call by the backend; a Tool overrides the per-call ExecConfig.
 
 use houyicoder_async::PFut;
 use houyicoder_context::{DirEntry, ExecConfig, ExecResult, SandboxError};
@@ -333,10 +333,14 @@ pub trait SandboxSession: Send + Sync {
     }
 
     /// Run a command with an explicit per-call resource fence. The fence:
-    /// process_group + kill_on_drop + setrlimit (CPU/AS/NPROC) + wall-clock
-    /// timeout + killpg whole-tree on breach. A Tool overrides per-call (e.g.
-    /// a long bench run widens cpu_secs + wall). Backends without a kernel
-    /// fence return Unsupported.
+    /// process_group + kill_on_drop + wall-clock timeout + whole-tree group
+    /// kill on breach. The cpu and memory budgets are enforced only where a
+    /// per-tree kernel primitive exists (the Windows job object, whose caps
+    /// are session-fixed, so a per-call cpu or memory widening does not reach
+    /// them); the unix backends lean on the wall timeout, since their
+    /// per-spawn rlimit primitives are per user, not per tree. A Tool
+    /// overrides per-call; wall_timeout_ms is the override every backend
+    /// honors. Backends without a kernel fence return Unsupported.
     fn exec_with_config(
         &self,
         command: &str,

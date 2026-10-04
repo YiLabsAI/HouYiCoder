@@ -71,7 +71,7 @@ fn main() {
     // default i32 literal type (2 GiB > i32::MAX), and this example only
     // compiles on windows, so the overflow surfaces only there.
     let two_gib: usize = 2 * 1024 * 1024 * 1024;
-    if limits.process_memory != two_gib as usize {
+    if limits.process_memory != two_gib {
         eprintln!(
             "FAIL: process memory cap is {}, expected {two_gib}",
             limits.process_memory
@@ -83,7 +83,7 @@ fn main() {
             limits.process_memory
         );
     }
-    if limits.job_memory != two_gib as usize {
+    if limits.job_memory != two_gib {
         eprintln!(
             "FAIL: job memory cap is {}, expected {two_gib}",
             limits.job_memory

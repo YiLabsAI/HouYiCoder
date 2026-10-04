@@ -204,9 +204,12 @@ impl DefaultModeGate {
     /// Set whether fenced exec commands skip the Ask. Default off. Fence
     /// coverage only answers that the action stays in-bounds; it is not
     /// evidence the action is recoverable, so it cannot carry a silent
-    /// auto-allow on its own. The relaxation stays off until a real
-    /// recoverability proof (snapshot coverage of the call's targets) is
-    /// available; tests that exercise the mechanism set it explicitly.
+    /// auto-allow on its own. Coverage is also path-only on backends whose
+    /// fence carries no network ruleset (the Linux path fence), so enabling
+    /// this there would auto-allow execs whose egress is not contained. The
+    /// relaxation stays off until a real recoverability proof (snapshot
+    /// coverage of the call's targets) is available; tests that exercise the
+    /// mechanism set it explicitly.
     pub fn with_auto_allow_fenced_exec(self, on: bool) -> Self {
         self.auto_allow_fenced_exec.store(on, Ordering::Relaxed);
         self

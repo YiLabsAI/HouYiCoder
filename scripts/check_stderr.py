@@ -85,6 +85,11 @@ _CONSOLE_OK: dict[str, int] = {
     "crates/houyicoder-cli/src/main.rs": 16,
     "crates/houyicoder-loader/src/main.rs": 2,
     "crates/houyicoder-service/src/uds.rs": 2,
+    # The fence helper is a separate binary the daemon spawns with both
+    # pipes attached: its stdout carries the probe status word and its
+    # stderr audit lines land in the captured command output, never on
+    # the user's terminal.
+    "crates/houyicoder-sandbox/src/bin/houyicoder-sandbox-helper.rs": 12,
     # The frame-timing bench prints its summary for --nocapture; it runs on
     # a TestBackend from make benchmark, never on the live terminal.
     "crates/houyicoder-tui/src/frame_timing.rs": 2,
