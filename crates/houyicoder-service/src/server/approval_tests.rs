@@ -8,7 +8,8 @@ use futures::{SinkExt, StreamExt};
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_api::sandbox::SandboxSession;
 use houyicoder_api::skill::{SkillRegistry, SkillScriptRef};
-use houyicoder_context::SessionId;
+use houyicoder_async::PFut;
+use houyicoder_context::{ExecConfig, ExecResult, SandboxError, SessionId};
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::{ApprovalRequest, Runner, ToolRegistry};
 use houyicoder_memory::InMemoryBackend;
@@ -22,10 +23,19 @@ use houyicoder_protocol::frontend::FrontendRequest;
 use houyicoder_protocol::frontend::run::{self, ApprovalDecision};
 use houyicoder_protocol::frontend::trust::TrustAccept;
 use houyicoder_provider::FakeProvider;
+// Only the macOS-gated consent tests build a real platform session; the
+// cross-platform rule test below uses a stub fence instead, so on other
+// platforms this import would be unused.
+#[cfg(target_os = "macos")]
 use houyicoder_sandbox::PlatformSession;
 use houyicoder_session::SessionStore;
 use serde_json::json;
-use std::{env, fs, path::Path, process, sync::Arc};
+use std::{
+    env, fs,
+    path::Path,
+    process,
+    sync::{Arc, Mutex},
+};
 
 /// build_approval_request carries the structured Ask reason the gate
 /// produced onto the request form, and drops it to None when the
@@ -443,6 +453,48 @@ fn test_safety_skips_rule() {
     fs::remove_dir_all(&root).ok();
 }
 
+/// A fence whose runtime directory grants always succeed and are remembered,
+/// so the platform-independent consent rule logic can be exercised on every
+/// platform. A real platform session supports runtime grants only on macOS;
+/// the Linux and Windows fences are fixed at construction and report
+/// Unsupported, which would make this rule test fail elsewhere even though
+/// the rule logic it targets is not platform-specific. Remembering the grants
+/// lets a later call see an earlier one's directory as already in bounds, so
+/// the location-check skip the test documents holds on every platform.
+struct GrantFence {
+    root: Arc<Path>,
+    granted: Mutex<Vec<String>>,
+}
+
+impl SandboxSession for GrantFence {
+    fn workspace_root(&self) -> Arc<Path> {
+        self.root.clone()
+    }
+    fn exec_with_config(
+        &self,
+        _command: &str,
+        _config: ExecConfig,
+    ) -> PFut<'_, Result<ExecResult, SandboxError>> {
+        Box::pin(async {
+            Ok(ExecResult {
+                stdout: String::new(),
+                stderr: String::new(),
+                exit_code: Some(0),
+            })
+        })
+    }
+    fn add_reading_dir(&self, path: &str) -> Result<(), SandboxError> {
+        self.granted
+            .lock()
+            .expect("grant lock")
+            .push(path.to_string());
+        Ok(())
+    }
+    fn working_dirs(&self) -> Vec<String> {
+        self.granted.lock().expect("grant lock").clone()
+    }
+}
+
 /// A None reason, meaning the re-decide could not reproduce why the gate
 /// asked, must never reach the rule path: its non-bash terminal is a
 /// contentless tool-level allow that would shadow every later ask. The
@@ -465,8 +517,10 @@ fn test_none_reason_no_rule() {
     let gate = Arc::new(DefaultModeGate::new().with_store(store.clone()));
     let repo = root.join("repo");
     fs::create_dir_all(&repo).expect("mkdir repo");
-    let session: Arc<dyn SandboxSession> =
-        Arc::new(PlatformSession::new_in_cwd(&repo).expect("sandbox"));
+    let session: Arc<dyn SandboxSession> = Arc::new(GrantFence {
+        root: Arc::from(repo),
+        granted: Mutex::new(Vec::new()),
+    });
     let sess_store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("test"));
     let runner = Runner::new(
@@ -506,6 +560,18 @@ fn test_none_reason_no_rule() {
         !blanket_grep_allow,
         "a None-reason grep must not install a contentless blanket allow rule: {:?}",
         store.load()
+    );
+
+    // The fence remembers the first grant, so the second call's nested path is
+    // already in bounds and the location check skips it: only the outside
+    // grant is recorded. The recording fence is what makes this documented
+    // skip hold on every platform, not only where a real session remembers
+    // grants.
+    let recorded = session.working_dirs();
+    assert_eq!(
+        recorded.len(),
+        1,
+        "only the outside grant is recorded; the nested call must be skipped: {recorded:?}"
     );
 
     fs::remove_dir_all(&root).ok();

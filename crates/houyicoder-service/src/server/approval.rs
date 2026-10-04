@@ -1,16 +1,22 @@
 //! Mid-run permission requests, verdict auditing, and scoped consent
 //! capabilities applied before execution resumes.
 
-use houyicoder_api::sandbox::{BoundaryAccess, BoundaryGrant, Containment, boundary_grants_for};
+use houyicoder_api::sandbox::{
+    BoundaryAccess, BoundaryGrant, Containment, SandboxSession, boundary_grants_for,
+};
+use houyicoder_api::skill::SkillScriptRef;
 use houyicoder_context::{EventId, PermissionVerdict, SandboxError, SessionEvent, SessionLogEntry};
 use houyicoder_core::agent::{
     ApprovalDecision as EngineApprovalDecision, ApprovalRequest as EngineApprovalRequest,
 };
-use houyicoder_permission::{AskSource, Decision, ToolRequest};
+use houyicoder_permission::{AskReason, AskSource, Decision, Scope, ToolRequest};
+use houyicoder_protocol::acp_wire::AcpNotification;
 use houyicoder_protocol::envelope::{
     ClientFrame, ClientResponsePayload, ServerFrame, ServerRequestEnvelope, ServerRequestPayload,
 };
 use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
+use houyicoder_protocol::extension::ENTITLEMENT_TOOL;
+use houyicoder_protocol::frontend::run::{ApprovalDecision, DelegationSource};
 
 use crate::composition::ContainmentAdapter;
 use crate::protocol_adapter::{build_approval_request, parse_approval_decision};
@@ -31,9 +37,9 @@ impl Server {
         &mut self,
         io: &mut FrameCarrier,
         approval: &EngineApprovalRequest,
-        delegation: Option<houyicoder_protocol::frontend::run::DelegationSource>,
+        delegation: Option<DelegationSource>,
     ) -> Result<EngineApprovalDecision, ProtocolError> {
-        let is_entitlement = approval.tool_name == houyicoder_protocol::extension::ENTITLEMENT_TOOL;
+        let is_entitlement = approval.tool_name == ENTITLEMENT_TOOL;
         let mut reason = if is_entitlement {
             // The entitlement ask is not a gate decision — reconstructing a
             // ladder reason for a host-generated tool would mislead the card.
@@ -77,9 +83,7 @@ impl Server {
                     ));
                 }
             };
-            if let Ok(notif) =
-                serde_json::from_str::<houyicoder_protocol::acp_wire::AcpNotification>(&frame)
-            {
+            if let Ok(notif) = serde_json::from_str::<AcpNotification>(&frame) {
                 let is_cancel = notif.method == "session/cancel";
                 self.handle_session_notification(&notif);
                 if is_cancel {
@@ -182,7 +186,7 @@ impl Server {
         &self,
         tool_name: &str,
         input: &serde_json::Value,
-    ) -> Option<houyicoder_permission::AskReason> {
+    ) -> Option<AskReason> {
         // is_destructive is unused by the ladder; is_read_only is hardcoded
         // false so a surfaced ask reproduces as the write-guarded case it
         // was (a read-only call passes the protected-path stage, so no
@@ -215,7 +219,7 @@ impl Server {
     /// script leaves the original detail untouched.
     fn augment_skill_script_reason(
         &self,
-        reason: &mut houyicoder_permission::AskReason,
+        reason: &mut AskReason,
         tool_name: &str,
         input: &serde_json::Value,
     ) {
@@ -242,8 +246,8 @@ impl Server {
     fn install_approved_consent(
         &self,
         approval: &EngineApprovalRequest,
-        decision: &houyicoder_protocol::frontend::run::ApprovalDecision,
-        reason: Option<&houyicoder_permission::AskReason>,
+        decision: &ApprovalDecision,
+        reason: Option<&AskReason>,
         grants: &[BoundaryGrant],
     ) -> Result<(), ProtocolError> {
         self.route_consent_with_grants(
@@ -269,7 +273,7 @@ impl Server {
         tool_name: &str,
         input: &serde_json::Value,
         scope: &str,
-        reason: Option<&houyicoder_permission::AskReason>,
+        reason: Option<&AskReason>,
     ) -> Result<(), SandboxError> {
         let grants = self.approval_directory_grants(tool_name, input);
         self.route_consent_with_grants(tool_name, input, scope, reason, &grants)
@@ -281,7 +285,7 @@ impl Server {
         tool_name: &str,
         input: &serde_json::Value,
         scope: &str,
-        reason: Option<&houyicoder_permission::AskReason>,
+        reason: Option<&AskReason>,
         grants: &[BoundaryGrant],
     ) -> Result<(), SandboxError> {
         self.install_directory_grants(grants, scope)?;
@@ -370,12 +374,12 @@ impl Server {
         if scope == "always" {
             for grant in grants {
                 match grant.access {
-                    BoundaryAccess::ReadOnly => self
-                        .gate
-                        .add_read_directory(&grant.directory, houyicoder_permission::Scope::Local),
-                    BoundaryAccess::ReadWrite => self
-                        .gate
-                        .add_directory(&grant.directory, houyicoder_permission::Scope::Local),
+                    BoundaryAccess::ReadOnly => {
+                        self.gate.add_read_directory(&grant.directory, Scope::Local)
+                    }
+                    BoundaryAccess::ReadWrite => {
+                        self.gate.add_directory(&grant.directory, Scope::Local)
+                    }
                 }
             }
         }
@@ -383,20 +387,14 @@ impl Server {
     }
 }
 
-fn rollback_directory_grants(
-    session: &dyn houyicoder_api::sandbox::SandboxSession,
-    grants: &[&BoundaryGrant],
-) {
+fn rollback_directory_grants(session: &dyn SandboxSession, grants: &[&BoundaryGrant]) {
     for grant in grants {
         session.remove_working_dir(&grant.directory.to_string_lossy());
     }
 }
 
 /// Add the effective directory capability to the approval reason.
-pub(crate) fn disclose_directory_grants(
-    reason: &mut Option<houyicoder_permission::AskReason>,
-    grants: &[BoundaryGrant],
-) {
+pub(crate) fn disclose_directory_grants(reason: &mut Option<AskReason>, grants: &[BoundaryGrant]) {
     if grants.is_empty()
         || reason
             .as_ref()
@@ -404,7 +402,7 @@ pub(crate) fn disclose_directory_grants(
     {
         return;
     }
-    let current = reason.get_or_insert_with(|| houyicoder_permission::AskReason {
+    let current = reason.get_or_insert_with(|| AskReason {
         source: AskSource::Detection,
         validator: "directory-capability",
         detail: "external path requires a sandbox directory capability".into(),
@@ -430,7 +428,7 @@ pub(crate) fn disclose_directory_grants(
 /// skill-directory scripts: the skill name + relative script path. No first
 /// line is shown — it is attacker-controlled text the card would frame as an
 /// authoritative summary. Multiple scripts name the first and count the rest.
-fn format_skill_script_detail(scripts: &[houyicoder_api::skill::SkillScriptRef]) -> String {
+fn format_skill_script_detail(scripts: &[SkillScriptRef]) -> String {
     match scripts.len() {
         0 => String::new(),
         1 => {
@@ -453,6 +451,9 @@ fn format_skill_script_detail(scripts: &[houyicoder_api::skill::SkillScriptRef])
 #[path = "approval_tests.rs"]
 mod tests;
 
-#[cfg(test)]
+// Every test in this module exercises the macOS sandbox consent chain,
+// so the whole module compiles only on macOS. Gating the module keeps
+// its imports from turning unused on other platforms.
+#[cfg(all(test, target_os = "macos"))]
 #[path = "consent_chain_tests.rs"]
 mod consent_chain_tests;
