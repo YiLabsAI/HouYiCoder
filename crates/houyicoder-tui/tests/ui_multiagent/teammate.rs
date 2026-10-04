@@ -379,3 +379,201 @@ fn test_parent_park_survives_child() {
         s.screen().contents()
     );
 }
+
+/// A child-to-child hop carries no expansion state between the two views:
+/// the leaving child parks its open blocks under its own id, and the
+/// entering child starts from what it parked itself, nothing else. Both
+/// children answer with one reasoning turn and one reply, so the two logs
+/// hold the same frame shape and their turn rows take the same name — a
+/// leak between them would be structural, not a coincidence of content. The
+/// re-entry at the end proves the parked expansion comes back without a
+/// fresh ctrl+o. Slow, ignored by default.
+#[test]
+#[ignore]
+fn test_hop_expansion_isolation() {
+    // One delegation per parent call, in order: the stub answers callers
+    // from one shared queue, so two tool calls in a single response would
+    // race for the child replies and swap the children's transcripts.
+    let script = r##"[
+        [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"first","description":"first"}}],
+        [{"type":"Reasoning","text":"ATHINK weighing the first option"},{"type":"Text","text":"first-child-result"}],
+        [{"type":"ToolCall","id":"toolu_2","name":"agent","input":{"subagent_type":"plan","prompt":"second","description":"second"}}],
+        [{"type":"Reasoning","text":"BTHINK weighing the second option"},{"type":"Text","text":"second-child-result"}],
+        [{"type":"Text","text":"parent done"}]
+    ]"##;
+    let mut s = pty_session_scripted(script);
+    assert!(s.wait_for("let's build", RENDER_TIMEOUT));
+    s.send_str("delegate two");
+    s.send_str("\r");
+    assert!(
+        s.wait_for_compact("parentdone", RENDER_TIMEOUT * 3),
+        "both delegations complete and the parent resumes:\n{}",
+        s.output()
+    );
+    // A completed footer row drops five seconds after completion, and the
+    // agents pane lists the returned delegations only once the rows are
+    // gone: while one stands, Enter on the pane follows the footer
+    // selection instead, which is empty here.
+    std::thread::sleep(Duration::from_secs(6));
+    // Drain the parent-phase stream first: the child's result text also
+    // rendered while the parent was live, so a fill latch scanned against
+    // the undrained stream matches that residue and the expand key goes
+    // out before the view's own rows exist.
+    s.clear_output();
+    // Drill into the newest delegation (the plan child) and expand its
+    // reasoning block.
+    s.send_str("\r");
+    assert!(
+        s.wait_for_compact("Viewing@plan", RENDER_TIMEOUT),
+        "Enter opens the newest teammate view:\n{}",
+        s.output()
+    );
+    // The view opens empty and fills when the fetch from the child's log
+    // lands; after the drain above only the fill can emit this text, so it
+    // is the latch that the rows exist for the expand key to act on.
+    assert!(
+        s.wait_for_compact("second-child-result", RENDER_TIMEOUT * 2),
+        "the child's rows fill the view:\n{}",
+        s.output()
+    );
+    s.clear_output();
+    s.send_key(&Key::Ctrl('o'));
+    assert!(
+        s.wait_for_compact("BTHINK", RENDER_TIMEOUT),
+        "ctrl+o expands the viewed child's reasoning:\n{}",
+        s.output()
+    );
+    // Open the agents pane over the standing view and Enter the first
+    // delegation: a hop that must park the plan child's expansion and open
+    // the explore child with its own state.
+    s.send_str("/agents");
+    s.send_key(&Key::Enter);
+    assert!(
+        s.wait_for_compact("first-child-result", RENDER_TIMEOUT),
+        "the pane lists the returned delegations:\n{}",
+        s.output()
+    );
+    s.clear_output();
+    s.send_key(&Key::Enter);
+    // Esc closes the pane back to the transcript; the hop already
+    // happened under it.
+    s.send_key(&Key::Esc);
+    // The banner's leading cells do not change across the hop, so the
+    // stream carries only the redrawn child name; the standing screen
+    // holds the full banner.
+    assert!(
+        s.wait_for_screen("Viewing @explore", RENDER_TIMEOUT),
+        "the pane Enter hops to the first child's view:\n{}",
+        s.screen().contents()
+    );
+    assert!(
+        s.wait_for_compact("first-child-result", RENDER_TIMEOUT * 2),
+        "the hopped-to view fills from the child's log:\n{}",
+        s.output()
+    );
+    std::thread::sleep(Duration::from_millis(400));
+    assert!(
+        !s.output_compact().contains("ATHINK"),
+        "the entered child must not inherit the leaving child's expansion:\n{}",
+        s.output()
+    );
+    // Back to the parent, then re-enter the plan child: its parked
+    // expansion returns without a fresh ctrl+o.
+    s.clear_output();
+    s.send_key(&Key::ShiftDown);
+    assert!(
+        s.wait_for_compact("parentdone", RENDER_TIMEOUT),
+        "Shift+Down repaints the parent transcript:\n{}",
+        s.output()
+    );
+    s.clear_output();
+    s.send_str("\r");
+    assert!(
+        s.wait_for_compact("Viewing@plan", RENDER_TIMEOUT),
+        "Enter reopens the newest teammate view:\n{}",
+        s.output()
+    );
+    assert!(
+        s.wait_for_compact("BTHINK", RENDER_TIMEOUT),
+        "the parked reasoning block is restored on re-entry:\n{}",
+        s.output()
+    );
+    s.clear_output();
+    s.send_key(&Key::ShiftDown);
+    assert!(
+        s.wait_for_compact("parentdone", RENDER_TIMEOUT),
+        "the final exit repaints the parent transcript:\n{}",
+        s.output()
+    );
+}
+
+/// A search opened while a child view stands is refused with a toast that
+/// names the exit gesture: the search reads the parent session's durable
+/// log, so opening it under the child view would count matches against
+/// rows the user cannot see and jump the hidden parent's viewport. After
+/// the exit the same command opens the search view normally. Slow,
+/// ignored by default.
+#[test]
+#[ignore]
+fn test_child_search_refusal() {
+    let script = r#"[
+        [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth"}}],
+        [{"type":"Text","text":"auth is in src/auth"}],
+        [{"type":"Text","text":"the needle is in the haystack"}]
+    ]"#;
+    let mut s = pty_session_scripted(script);
+    assert!(s.wait_for("let's build", RENDER_TIMEOUT));
+    s.send_str("find the needle");
+    s.send_str("\r");
+    assert!(
+        s.wait_for_compact("haystack", RENDER_TIMEOUT * 2),
+        "the run finishes before the view opens:\n{}",
+        s.output()
+    );
+    s.send_str("\r");
+    assert!(
+        s.wait_for_plain("Viewing", RENDER_TIMEOUT),
+        "Enter opens the teammate view:\n{}",
+        s.output()
+    );
+    s.clear_output();
+    s.send_str("/search needle");
+    s.send_key(&Key::Enter);
+    assert!(
+        s.wait_for_compact("exittheteammateview", RENDER_TIMEOUT),
+        "the refusal toast names the exit gesture:\n{}",
+        s.output()
+    );
+    std::thread::sleep(Duration::from_millis(400));
+    let screen = s.screen().contents();
+    assert!(
+        !screen.contains("SEARCH"),
+        "the search view must not open under the child view:\n{screen}"
+    );
+    assert!(
+        screen.contains("Viewing"),
+        "the child view stands through the refusal:\n{screen}"
+    );
+    // The same command opens the search once the view is exited.
+    s.clear_output();
+    s.send_key(&Key::ShiftDown);
+    assert!(
+        s.wait_for_compact("haystack", RENDER_TIMEOUT),
+        "Shift+Down repaints the parent:\n{}",
+        s.output()
+    );
+    s.clear_output();
+    s.send_str("/search needle");
+    s.send_key(&Key::Enter);
+    assert!(
+        s.wait_for("SEARCH", RENDER_TIMEOUT),
+        "the search view opens from the parent view:\n{}",
+        s.output()
+    );
+    s.send_key(&Key::Char('q'));
+    assert!(
+        s.wait_for("let's build", RENDER_TIMEOUT),
+        "q exits the search view:\n{}",
+        s.output()
+    );
+}

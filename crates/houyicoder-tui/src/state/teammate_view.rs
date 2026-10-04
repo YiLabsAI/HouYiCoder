@@ -3,6 +3,7 @@
 //! Shift+Up/Down. Esc only interrupts the viewed child's current turn.
 
 use super::App;
+use super::parked_view_states::ChildViewState;
 use crate::records::{TeammateView, TranscriptLine};
 use crate::run_control::ClientCommand;
 use houyicoder_protocol::frontend::SessionId;
@@ -30,15 +31,21 @@ impl App {
     }
 
     /// Enter the teammate view for an explicit child session id. Used by the
-    /// footer pill (Enter on a selected fleet row) where the target comes
+    /// footer strip (Enter on a selected fleet row) where the target comes
     /// from the agent id, not the transcript cursor. Mirrors the cursor
     /// path: copy any already-loaded fold rows for an immediate render, and
-    /// fire the on-demand fetch when the child transcript is not local.
+    /// fire the on-demand fetch when the child transcript is not local. A
+    /// hop from one child to another passes through the canonical exit
+    /// first, so the leaving child parks its own state and the parent's
+    /// held sets never mix with a child's.
     pub(crate) fn enter_teammate_view_for_sid(
         &mut self,
         child_sid: &str,
         needs_fetch: bool,
     ) -> bool {
+        if self.teammate_view.is_some() {
+            self.exit_teammate_view();
+        }
         let mut view = TeammateView {
             child_sid: child_sid.to_string(),
             ..Default::default()
@@ -75,9 +82,17 @@ impl App {
         {
             view.subagent_type = e.subagent_type.clone();
         }
+        // Swap the open-row sets to the child's view: the parent's sets
+        // go into the held slot, and what this child parked on its last
+        // exit (open rows and viewport) is reinstalled. The parent scroll
+        // keeps its own position regardless; a child with nothing parked
+        // starts with empty sets at the tail.
+        let parent_keys = self.take_expanded_keys();
+        if let Some(parked) = self.parked_view_states.enter_child(child_sid, parent_keys) {
+            view.scroll = parked.scroll;
+            self.set_expanded_keys(parked.keys);
+        }
         self.teammate_view = Some(view);
-        // The parent scroll keeps its position across the visit: only the
-        // child's own scroll, carried on the view, starts at the tail.
         // The render cache keys on transcript_version, which is the
         // invalidation signal for whatever active_transcript returns. Entering
         // the view swaps that source, so bump here or the cache holds the
@@ -97,17 +112,31 @@ impl App {
         true
     }
 
-    /// Exit the teammate view and return to the parent transcript. Clears
-    /// the view id; no memory-management release is needed on the sync path
-    /// because the child transcript is fetched on demand from the durable
-    /// log, not retained for streaming.
+    /// Exit the teammate view and return to the parent transcript. No
+    /// memory-management release is needed on the sync path because the
+    /// child transcript is fetched on demand from the durable log, not
+    /// retained for streaming.
     pub(crate) fn exit_teammate_view(&mut self) {
-        self.teammate_view = None;
-        // The parent scroll stands where the reader left it: entering did not
-        // reset it and leaving does not force it to the tail, so the parent
-        // viewport resumes at its own position. No trim runs here either — the
-        // cap bounds the parent transcript, and the reader never scrolled the
-        // parent away from its tail to earn one.
+        let Some(view) = self.teammate_view.take() else {
+            return;
+        };
+        // Swap the open-row sets back: the child's rows and viewport park
+        // under its id for the next visit, and the parent's held sets are
+        // reinstalled. The parent scroll stands where the reader left it:
+        // entering did not reset it and leaving does not force it to the
+        // tail. No trim runs here either — the cap bounds the parent
+        // transcript, and the reader never scrolled the parent away from
+        // its tail to earn one.
+        let view_state = ChildViewState {
+            keys: self.take_expanded_keys(),
+            scroll: view.scroll,
+        };
+        if let Some(parent_keys) = self
+            .parked_view_states
+            .exit_child(&view.child_sid, view_state)
+        {
+            self.set_expanded_keys(parent_keys);
+        }
         // Exiting swaps active_transcript back to the parent, so the render
         // cache must drop the child rows and rebuild from the parent.
         self.bump_transcript_version();

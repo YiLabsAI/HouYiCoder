@@ -4,8 +4,11 @@
 //! list/detail projection to drift from the index (the structural fix for the
 //! preview/detail desync bugs).
 
+use std::time::Duration;
+
 use super::App;
 use super::index_read::{IndexChunkPoll, PendingIndexChunk};
+use crate::notifications::{NotifKind, Notification};
 
 impl App {
     /// Enter Scroll mode, remembering the current viewport so Esc/End returns
@@ -21,7 +24,24 @@ impl App {
     /// their deletion) so this view owns no list/detail -- the verbose
     /// transcript IS the result, which is what closes the preview/detail drift
     /// bugs structurally.
+    ///
+    /// Refused while a child view is open: the search reads the parent
+    /// session's durable log, so its matches would count against the parent
+    /// while the child's transcript renders, and a match jump would move the
+    /// hidden parent's viewport. The refusal says why instead of staying
+    /// silent; searching a child's own log is a separate capability.
     pub fn enter_search_view(&mut self, query: &str) {
+        if self.teammate_view.is_some() {
+            self.notifications.add(Notification::immediate(
+                "search-blocked-teammate",
+                NotifKind::Text {
+                    text: "shift+↑↓ to exit the teammate view, then search".to_string(),
+                    color: None,
+                },
+                Duration::from_millis(2000),
+            ));
+            return;
+        }
         self.enter_scroll();
         self.verbose = true;
         // Load the snapshot from the durable log via the seam when wired;

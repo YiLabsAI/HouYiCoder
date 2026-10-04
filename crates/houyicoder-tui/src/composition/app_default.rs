@@ -21,7 +21,9 @@ use crate::scroll::WindowScroll;
 use crate::selection::SystemClipboard;
 use crate::skills_state::SkillsPaneState;
 use crate::state::transcript::Transcript;
-use crate::state::{ModelPickerState, ParkedKeys, QueueViewState, StatusTab, TrajectoryPaneState};
+use crate::state::{
+    ModelPickerState, ParkedViewStates, QueueViewState, StatusTab, TrajectoryPaneState,
+};
 
 #[expect(clippy::too_many_lines, reason = "long by design, kept whole")]
 pub fn app() -> App {
@@ -134,7 +136,7 @@ pub fn app() -> App {
         expanded_fold_groups: HashSet::new(),
         expanded_thinking: HashSet::new(),
         expanded_subagents: HashSet::new(),
-        parked_keys: ParkedKeys::default(),
+        parked_view_states: ParkedViewStates::default(),
         teammate_view: None,
         fleet: Default::default(),
         verbose: false,

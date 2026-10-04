@@ -252,15 +252,21 @@ impl App {
         // typed in A would clear B). /resume Commands stay (switch intent is
         // still valid); Messages stay (user content). Dropping old-session
         // Commands prevents a stale /clear firing in B.
+        // A child view open at switch time exits through the canonical path
+        // first, so the flat sets hold the parent's own keys again and the
+        // park below stores them under the right session.
+        if self.teammate_view.is_some() {
+            self.exit_teammate_view();
+        }
         let mut pending = std::mem::take(&mut self.pending);
         // The open expansion sets belong to the session that owns them: park
         // them under the session being left and install the entry for the
         // session being entered, so a switch away and back keeps what the
-        // user had open. The parked map is taken here too -- build_app
+        // user had open. The parked state is taken here too -- build_app
         // rebuilds the whole App.
         let leaving = self.session_id.clone();
         let open_keys = self.take_expanded_keys();
-        let mut parked_keys = std::mem::take(&mut self.parked_keys);
+        let mut parked = std::mem::take(&mut self.parked_view_states);
         // Drop session-scoped Commands (/clear /rewind /undo) the user typed
         // in the OLD session: they operate on the current session, so
         // carrying them to the NEW session + auto-draining would apply the
@@ -297,11 +303,15 @@ impl App {
         self.screen = crate::state::Screen::Working;
         self.bump_transcript_version();
         self.pending = pending;
-        parked_keys.park(leaving, open_keys);
-        if let Some(keys) = parked_keys.take_parked(&self.session_id) {
+        parked.park_session(leaving, open_keys);
+        if let Some(keys) = parked.take_session(&self.session_id) {
             self.set_expanded_keys(keys);
         }
-        self.parked_keys = parked_keys;
+        // The new session's fleet is unrelated to the old one's children,
+        // and a child id can repeat across sessions: no parked child
+        // view state crosses the switch.
+        parked.clear_children();
+        self.parked_view_states = parked;
         // A swap is a clean transition (the prior run ended FinalOutput, the
         // /resume Command drained at idle, then the swap ran). Carried items
         // auto-drain in the new session (a queued message from A sends in B

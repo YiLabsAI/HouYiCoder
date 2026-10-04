@@ -13,10 +13,10 @@ pub(crate) mod app_methods;
 pub(crate) mod counts;
 mod cursors;
 pub(crate) mod enums;
-mod expanded_keys;
 pub(crate) mod history_read;
 pub(crate) mod index_read;
 mod model_picker;
+mod parked_view_states;
 mod scroll;
 mod search_view;
 mod teammate_view;
@@ -56,10 +56,10 @@ use houyicoder_protocol::frontend::context::ContextBreakdown;
 use houyicoder_protocol::frontend::hooks::HookEntry;
 
 pub(crate) use crate::state::cursors::EventCursor;
-pub(crate) use crate::state::expanded_keys::ParkedKeys;
 pub use crate::state::model_picker::{
     DEFAULT_LABEL, ModelDraft, ModelPickerState, ModelSettingFocus, PendingCommit,
 };
+pub(crate) use crate::state::parked_view_states::ParkedViewStates;
 pub use crate::state::trajectory::{
     TrajectoryDrill, TrajectoryPaneState, TrajectorySelection, TrajectoryTurnKey,
 };
@@ -415,9 +415,12 @@ pub struct App {
     /// Empty = collapsed.
     pub expanded_thinking: HashSet<String>,
     pub expanded_subagents: HashSet<String>,
-    /// Expansion sets parked by the session that owns them, so a switch away
-    /// and back restores what the user had open.
-    pub(crate) parked_keys: ParkedKeys,
+    /// State parked for views that are not on screen: the sessions switched
+    /// away from, the children stepped out of, and the parent's own sets
+    /// while a child view covers it. The four flat sets above always hold
+    /// the visible view's keys, so every render and toggle path reads
+    /// them without knowing which view is on screen.
+    pub(crate) parked_view_states: ParkedViewStates,
     /// Drilled-in teammate transcript; when Some, active_transcript swaps to
     /// the child's turns with a banner. Enter opens, Shift+Up/Down closes;
     /// Esc interrupts the viewed child's turn.

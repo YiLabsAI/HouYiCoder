@@ -98,6 +98,8 @@ mod spec_transition_tests;
 #[cfg(test)]
 mod teammate_scroll_tests;
 #[cfg(test)]
+mod teammate_view_tests;
+#[cfg(test)]
 mod test_harness;
 #[cfg(test)]
 mod todolist_verify_tests;

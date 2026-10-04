@@ -671,3 +671,81 @@ fn test_swap_restores_open_keys() {
         "the returned session draws the group the user had open"
     );
 }
+
+/// A session switch taken while a child view is open must park only the
+/// parent's own sets under the leaving session. The rows open in the child
+/// view belong to the child; restoring them into the parent on the way
+/// back would expand rows the parent reader never opened.
+#[test]
+fn test_switch_parking_hygiene() {
+    let mut app = build_app(test_bundle());
+    let first_sid = app.session_id.clone();
+    app.transcript.push(TranscriptLine::Subagent {
+        child_sid: "c1".into(),
+        subagent_type: "explore".into(),
+        summary: "first".into(),
+        prompt: String::new(),
+        folded_transcript: Vec::new(),
+        color: None,
+    });
+    app.expanded_results.insert("parent-key".into());
+    assert!(app.enter_teammate_view_for_sid("c1", false));
+    // A row opened while the child view is on screen.
+    app.expanded_results.insert("child-key".into());
+
+    app.switch_session(test_bundle());
+    assert!(
+        app.teammate_view.is_none(),
+        "the switch leaves the child view behind"
+    );
+
+    let mut back = test_bundle();
+    back.session = first_sid;
+    app.switch_session(back);
+    assert!(
+        app.expanded_results.contains("parent-key"),
+        "the parent's own open rows come back: {:?}",
+        app.expanded_results
+    );
+    assert!(
+        !app.expanded_results.contains("child-key"),
+        "the child's open rows do not ride into the parent: {:?}",
+        app.expanded_results
+    );
+}
+
+/// A child view state parked in the session being left does not cross the
+/// switch: the new session's fleet is unrelated, and a child id can repeat
+/// across sessions, so a surviving entry would restore into a different
+/// child's view.
+#[test]
+fn test_switch_drops_child_park() {
+    let mut app = build_app(test_bundle());
+    app.transcript.push(TranscriptLine::Subagent {
+        child_sid: "c1".into(),
+        subagent_type: "explore".into(),
+        summary: "first".into(),
+        prompt: String::new(),
+        folded_transcript: Vec::new(),
+        color: None,
+    });
+    assert!(app.enter_teammate_view_for_sid("c1", false));
+    app.expanded_results.insert("child-key".into());
+    app.exit_teammate_view();
+
+    app.switch_session(test_bundle());
+    app.transcript.push(TranscriptLine::Subagent {
+        child_sid: "c1".into(),
+        subagent_type: "explore".into(),
+        summary: "unrelated".into(),
+        prompt: String::new(),
+        folded_transcript: Vec::new(),
+        color: None,
+    });
+    assert!(app.enter_teammate_view_for_sid("c1", false));
+    assert!(
+        app.expanded_results.is_empty(),
+        "the new session's child starts with no parked view state: {:?}",
+        app.expanded_results
+    );
+}
