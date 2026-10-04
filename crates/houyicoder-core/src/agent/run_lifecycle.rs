@@ -120,6 +120,11 @@ impl Runner {
     pub async fn run(&self, session: SessionId, user_input: String) -> Result<RunResult, RunError> {
         self.prune_snapshots();
         self.reset_run_state();
+        // A new user turn starts with a fresh max_turns budget and no carried
+        // work: the cap bounds one turn's tool loop, and every exit of this
+        // turn settles against state that began here, so a turn abandoned on
+        // an approval cannot leak its measured time into the next record.
+        self.reset_user_turn();
         self.reapply_skill_entitlements();
         let token = CancellationToken::new();
         *self.cancel.lock().expect("cancel mutex") = Some(token.clone());
@@ -139,7 +144,8 @@ impl Runner {
                 body,
                 untrusted,
             } => {
-                self.store
+                let appended = self
+                    .store
                     .append(new_event(
                         session,
                         SessionEvent::SkillBody {
@@ -149,22 +155,40 @@ impl Runner {
                             untrusted,
                         },
                     ))
-                    .await?;
+                    .await;
+                if let Err(e) = appended {
+                    let failed: Result<RunResult, RunError> = Err(e.into());
+                    self.settle_turn(session, None, &failed).await;
+                    return failed;
+                }
             }
             crate::agent::skill_slash::SkillSlashOutcome::Refused(notice) => {
                 self.emit_system_line(notice);
-                return Ok(RunResult {
+                let result = Ok(RunResult {
                     outcome: RunOutcome::FinalOutput(String::new()),
                     turns: 0,
                     usage: Usage::default(),
                 });
+                // The refusal ends the turn even though no leg ran. Without
+                // the completion record the frontend folds this turn into
+                // the next one; no leg means no measured duration.
+                self.settle_turn(session, None, &result).await;
+                return result;
             }
         }
-        self.memory.recall(session).await?;
-        self.inject_skill_listing_and_body(session).await?;
-        // A new user turn gets a fresh max_turns budget: the cap bounds one
-        // turn's tool loop, not the session's accumulated turns.
-        self.reset_user_turn();
+        // Both preparation steps run after the user input is persisted, so
+        // their failures end an opened turn all the same: settle before
+        // returning, or the turn folds into the next one.
+        if let Err(e) = self.memory.recall(session).await {
+            let failed: Result<RunResult, RunError> = Err(e);
+            self.settle_turn(session, None, &failed).await;
+            return failed;
+        }
+        if let Err(e) = self.inject_skill_listing_and_body(session).await {
+            let failed: Result<RunResult, RunError> = Err(e);
+            self.settle_turn(session, None, &failed).await;
+            return failed;
+        }
         let started = Instant::now();
         let result = self.drive_loop(session, 0, Usage::default(), &token).await;
         self.settle_turn(session, Some(started), &result).await;

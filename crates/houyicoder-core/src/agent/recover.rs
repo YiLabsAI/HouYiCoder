@@ -25,14 +25,23 @@ impl Runner {
     pub async fn recover_turn(&self, session: SessionId) -> Result<RunResult, RunError> {
         let token = CancellationToken::new();
         *self.cancel.lock().expect("cancel mutex") = Some(token.clone());
-        self.store
+        let marked = self
+            .store
             .append(new_event(
                 session,
                 SessionEvent::TurnAborted {
                     reason: "process restart".into(),
                 },
             ))
-            .await?;
+            .await;
+        if let Err(e) = marked {
+            // The boundary marker is part of the re-driven turn: if it cannot
+            // be written the turn ends here, and settling keeps the frontend
+            // fold boundary even though the log is refusing writes.
+            let failed: Result<RunResult, RunError> = Err(e.into());
+            self.settle_turn(session, None, &failed).await;
+            return failed;
+        }
         // A recovery attempt is a fresh turn: reset the max_turns budget so a
         // session retried after a crash is not permanently capped.
         self.reset_user_turn();
