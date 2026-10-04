@@ -312,6 +312,16 @@ fn decode_envelope(bytes: &[u8], scope: Scope) -> PermissionsFile {
         for r in &mut env.rules {
             r.scope = scope;
         }
+        // Entries an older writer persisted may carry the Windows verbatim
+        // prefix; reduce them to the plain drive-letter form so removal
+        // matches them and a fence comparison holds. A no-op elsewhere.
+        for d in env
+            .directories
+            .iter_mut()
+            .chain(env.read_directories.iter_mut())
+        {
+            *d = dunce::simplified(d).to_path_buf();
+        }
         return env;
     }
     // Legacy bare-array shape (pre-envelope): migrate in place.
@@ -415,7 +425,7 @@ impl RuleStore for FileRuleStore {
     fn add_directory(&self, dir: &Path, scope: Scope) -> Result<(), StoreError> {
         let _guard = self.lock.lock().expect("rule store lock");
         let mut env = self.read_envelope(scope);
-        let canonical = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+        let canonical = dunce::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
         if env.directories.iter().all(|d| d != &canonical) {
             env.read_directories.retain(|path| path != &canonical);
             env.directories.push(canonical);
@@ -435,7 +445,7 @@ impl RuleStore for FileRuleStore {
     fn add_read_directory(&self, dir: &Path, scope: Scope) -> Result<(), StoreError> {
         let _guard = self.lock.lock().expect("rule store lock");
         let mut env = self.read_envelope(scope);
-        let canonical = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+        let canonical = dunce::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
         if env.directories.iter().any(|path| path == &canonical) {
             return Ok(());
         }
@@ -449,7 +459,7 @@ impl RuleStore for FileRuleStore {
     fn remove_directory(&self, dir: &Path, scope: Scope) -> Result<(), StoreError> {
         let _guard = self.lock.lock().expect("rule store lock");
         let mut env = self.read_envelope(scope);
-        let canonical = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+        let canonical = dunce::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
         let before = env.directories.len() + env.read_directories.len();
         env.directories.retain(|path| path != &canonical);
         env.read_directories.retain(|path| path != &canonical);

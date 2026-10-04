@@ -306,7 +306,7 @@ fn test_directory_persists_and_hydrates() {
     // A fresh store pointing at the same files hydrates the directory.
     let store2 = std::sync::Arc::new(tmp_store(&dir, "dirp")) as std::sync::Arc<dyn RuleStore>;
     let dirs = store2.load_directories();
-    let canonical = std::fs::canonicalize(&target).expect("canonicalize target");
+    let canonical = dunce::canonicalize(&target).expect("canonicalize target");
     assert!(
         dirs.iter().any(|d| d == &canonical),
         "directory must hydrate from disk into a fresh store: {dirs:?}"
@@ -322,6 +322,30 @@ fn test_directory_persists_and_hydrates() {
         "removed directory must not re-hydrate"
     );
     std::fs::remove_dir_all(&target).ok();
+}
+
+/// A directory an older writer persisted in the Windows verbatim form
+/// hydrates back in the plain drive-letter form, so removal matches it and a
+/// fence comparison holds. The verbatim prefix exists only on Windows, so
+/// that is where the discrimination lives.
+#[cfg(windows)]
+#[test]
+fn test_verbatim_dir_simplifies() {
+    let dir = tempdir();
+    let root = dir.join("legacy");
+    std::fs::create_dir_all(&root).expect("legacy root");
+    std::fs::write(
+        root.join("project.json"),
+        r#"{"version":2,"rules":[],"directories":["\\\\?\\C:\\houyi-legacy-dir"],"read_directories":[]}"#,
+    )
+    .expect("write legacy envelope");
+    let store = tmp_store(&dir, "legacy");
+    let dirs = store.load_directories();
+    assert_eq!(
+        dirs,
+        vec![PathBuf::from("C:\\houyi-legacy-dir")],
+        "verbatim entry simplifies on load: {dirs:?}"
+    );
 }
 
 #[test]
