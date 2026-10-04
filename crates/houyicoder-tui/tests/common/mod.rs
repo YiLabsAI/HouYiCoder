@@ -1,11 +1,6 @@
 //! Shared pseudo-terminal harness for real-binary interaction tests.
 //! It isolates process state, sends key events, and captures terminal output.
 
-#![expect(
-    dead_code,
-    reason = "integration test binaries each use a different helper subset"
-)]
-
 use std::env;
 use std::fs;
 use std::io::{self, Read, Write};

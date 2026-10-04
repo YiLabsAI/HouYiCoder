@@ -132,19 +132,18 @@ fn draw_agent_status_bar(f: &mut Frame, area: Rect, app: &App) {
         // Right-aligned context gauge (persistent — a right-side
         // footprint read). The figure is the assembled context, the same
         // measurement the context pane renders, so the two surfaces cannot
-        // disagree. Before a turn has assembled one the gauge holds a dash
-        // rather than a zero that would read as an empty window. Colored by
+        // disagree. Before a turn has assembled one the gauge stays hidden
+        // rather than showing a zero that would read as an empty window. Colored by
         // load; above 90% (the red zone) the label appends a /compact hint so
         // the user knows the action to free space.
-        if snap.context_window > 0 {
-            let (label, style) = match snap.context_used_tokens {
-                Some(used) => {
-                    let pct = 100.0 * used as f64 / snap.context_window as f64;
-                    (context_gauge_label(pct), context_gauge_color(pct))
-                }
-                None => (" context — ".to_string(), Style::new().fg(Color::DarkGray)),
-            };
-            right = Some(Line::from(Span::styled(label, style)));
+        if snap.context_window > 0
+            && let Some(used) = snap.context_used_tokens
+        {
+            let pct = 100.0 * used as f64 / snap.context_window as f64;
+            right = Some(Line::from(Span::styled(
+                context_gauge_label(pct),
+                context_gauge_color(pct),
+            )));
         }
     }
     match right {
@@ -645,34 +644,47 @@ mod tests {
     #[test]
     fn test_bar_gauge_needs_measurement() {
         // Before a turn has assembled a context there is no occupancy to
-        // report. The gauge holds a dash rather than a percentage, which would
-        // claim the window is a known amount full.
+        // report. The gauge stays hidden rather than claiming the window is
+        // a known amount full.
         use houyicoder_protocol::frontend::status::StatusSnapshot;
         use ratatui::{Terminal, backend::TestBackend};
         let mut app = crate::composition::app();
         app.model_picker.snapshot.applied.id = "test-model".into();
-        app.status_cache = Some(StatusSnapshot {
-            model: "test-model".into(),
-            context_used_tokens: None,
-            context_window: 200_000,
-            ..Default::default()
-        });
-        let backend = TestBackend::new(80, 3);
-        let mut term = Terminal::new(backend).unwrap();
-        term.draw(|f| draw_agent_status_bar(f, f.area(), &app))
-            .unwrap();
-        let text: String = term
-            .backend()
-            .buffer()
-            .content()
-            .iter()
-            .map(|c| c.symbol())
-            .collect();
-        assert!(text.contains("test-model"), "model id shown: {text}");
-        assert!(
-            text.contains("context —"),
-            "an unmeasured context says so: {text}"
-        );
-        assert!(!text.contains('%'), "and claims no percentage: {text}");
+        for width in [48, 80] {
+            let backend = TestBackend::new(width, 3);
+            let mut term = Terminal::new(backend).unwrap();
+            for (used, expected) in [
+                (None, None),
+                (Some(0), Some("0% context used")),
+                (Some(16000), Some("8% context used")),
+                (Some(180000), Some("90% used · /compact")),
+                (None, None),
+            ] {
+                app.status_cache = Some(StatusSnapshot {
+                    model: "test-model".into(),
+                    context_used_tokens: used,
+                    context_window: 200_000,
+                    ..Default::default()
+                });
+                term.draw(|f| draw_agent_status_bar(f, f.area(), &app))
+                    .unwrap();
+                let text: String = term
+                    .backend()
+                    .buffer()
+                    .content()
+                    .iter()
+                    .map(|c| c.symbol())
+                    .collect();
+                assert!(text.contains("test-model"), "model id shown: {text}");
+                match expected {
+                    Some(label) => assert!(text.contains(label), "{label}: {text}"),
+                    None => {
+                        assert!(!text.contains("context"), "unmeasured: {text}");
+                        assert!(!text.contains('%'), "unmeasured: {text}");
+                        assert!(!text.contains("/compact"), "unmeasured: {text}");
+                    }
+                }
+            }
+        }
     }
 }

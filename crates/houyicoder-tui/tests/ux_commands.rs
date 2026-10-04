@@ -126,27 +126,40 @@ fn test_status_renders_three_subtabs() {
     );
 }
 
-/// The status bar context gauge renders on the working screen — the
-/// always-visible observability surface (model · context% · mode). The
-/// gauge label reads "X% context used" below 90%. Pins the gauge reaches
-/// the real terminal byte stream, not just the unit-tested label fn.
+/// The context gauge stays hidden until a request assembles a measurement.
+/// After a stub reply the working status bar shows the measured percentage.
+/// Both assertions read the current terminal screen rather than old output.
+/// The launch and provider remain isolated from user settings and credentials.
 #[test]
 #[ignore]
 fn test_status_bar_renders_gauge() {
-    let mut s = PtySession::launch();
+    let mut s = PtySession::launch_with_stub_script(common::ONE_REPLY_SCRIPT);
     assert!(
         s.wait_for("sign in to houyicoder", RENDER_TIMEOUT),
         "should reach login"
     );
     s.send_key(&Key::Char('3'));
     assert!(
-        s.wait_for("let's build, or / for commands", RENDER_TIMEOUT),
-        "working screen"
+        s.wait_for_screen("auto mode on", RENDER_TIMEOUT),
+        "working status bar: {}",
+        s.screen().contents()
     );
     assert!(
-        s.output_plain().contains("context"),
-        "status bar context gauge missing (context_window may be 0 in local mode):\n{}",
-        s.output()
+        !s.screen().contents().contains("context"),
+        "unmeasured context stays hidden: {}",
+        s.screen().contents()
+    );
+    s.send_str("hello");
+    s.send_key(&Key::Enter);
+    assert!(
+        s.wait_for_screen("logged", RENDER_TIMEOUT),
+        "stub reply: {}",
+        s.screen().contents()
+    );
+    assert!(
+        s.wait_for_screen("% context used", RENDER_TIMEOUT),
+        "measured context gauge: {}",
+        s.screen().contents()
     );
 }
 
