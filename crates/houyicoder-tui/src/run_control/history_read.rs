@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use crate::records::TranscriptLine;
-use crate::state::transcript::{HistoryReadOutcome, HistoryReadResult};
+use crate::state::history_read::{HistoryReadOutcome, HistoryReadResult};
 use crate::transcript::snapshot::TranscriptSnapshot;
 
 /// Byte budget of one older-row read from the session log, and of each window

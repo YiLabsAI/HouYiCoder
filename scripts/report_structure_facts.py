@@ -189,10 +189,12 @@ def file_line_bands() -> dict:
     }
 
 
-def struct_field_counts() -> list[tuple[str, int]]:
-    """Count fields per struct. Line-based brace-matching that skips
-    braces inside line comments (a doc comment with a brace would otherwise
-    inflate depth and overshoot past the struct's real closing brace)."""
+def iter_struct_field_counts() -> list[tuple[str, int]]:
+    """Count fields per struct, every struct regardless of size. Line-based
+    brace-matching that skips braces inside line comments (a doc comment
+    with a brace would otherwise inflate depth and overshoot past the
+    struct's real closing brace). The owner registry reads this so a small
+    registered owner is still pinned; the report reads the filtered list."""
     results = []
     struct_re = re.compile(r"^\s*(?:pub\s+)?struct\s+([A-Z]\w+)\s*\{")
     field_re = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?\w+\s*:")
@@ -218,11 +220,20 @@ def struct_field_counts() -> list[tuple[str, int]]:
                     if field_re.match(stripped) and not stripped.startswith("//"):
                         fields += 1
                 j += 1
-            if fields > FIELD_WARN_THRESHOLD:
+            if fields > 0:
                 rel = str(f.relative_to(REPO))
                 results.append((f"{rel}:{name}", fields))
     results.sort(key=lambda x: -x[1])
     return results
+
+
+def struct_field_counts() -> list[tuple[str, int]]:
+    """The warn-floor view of the per-struct counts: only structs over
+    FIELD_WARN_THRESHOLD, which is what the report prints and what the
+    global trend total sums."""
+    return [
+        (key, n) for key, n in iter_struct_field_counts() if n > FIELD_WARN_THRESHOLD
+    ]
 
 
 def clone_ratchet() -> dict:

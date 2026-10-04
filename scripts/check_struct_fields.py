@@ -7,7 +7,7 @@ deleted without re-registering) also blocks -- renaming cannot evade the
 gate. The global raw field total is report-only during the migration:
 splitting fields into wrappers grows it legitimately, so the total is
 printed as a trend, never blocking, and never silently treated as green.
-Baselines live in owner_registry.py and move only with a reviewed reason
+Baselines live in rules/monitored_structs.py and move only with a reviewed reason
 in the same commit that changes reality.
 """
 import sys
@@ -15,7 +15,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from rules.monitored_structs import ACTIVE_OWNERS  # noqa: E402
-from report_structure_facts import struct_field_counts  # noqa: E402
+from report_structure_facts import (  # noqa: E402
+    iter_struct_field_counts,
+    struct_field_counts,
+)
 
 # The real raw total at migration start, measured right after the parser
 # fix. Report-only trend reference, never blocking.
@@ -40,7 +43,7 @@ def evaluate_registry(counts, registry=ACTIVE_OWNERS):
             errors.append(
                 f"registered owner {key} disappeared from the struct "
                 "counts -- register the new fully-qualified name in "
-                "owner_registry.py in the same commit"
+                "rules/monitored_structs.py in the same commit"
             )
         elif actual != cfg["fields"]:
             kind = "grew" if actual > cfg["fields"] else "dropped"
@@ -53,9 +56,13 @@ def evaluate_registry(counts, registry=ACTIVE_OWNERS):
 
 
 def main() -> int:
-    counts = dict(struct_field_counts())
-    errors = evaluate_registry(counts)
-    total = sum(counts.values())
+    # The registry reads every struct, not just the ones over the warn
+    # floor: a small registered owner is still a pinned owner, and the
+    # floor is a report filter, not an escape from the pin. The global
+    # trend total keeps the filtered view it was baselined against.
+    all_counts = dict(iter_struct_field_counts())
+    errors = evaluate_registry(all_counts)
+    total = sum(dict(struct_field_counts()).values())
     delta = total - GLOBAL_TOTAL_AT_MIGRATION_START
     trend = f"+{delta}" if delta >= 0 else str(delta)
     if errors:

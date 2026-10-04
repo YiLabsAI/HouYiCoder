@@ -5,16 +5,17 @@
 //! the affected range, keeping rebuild cost independent of session length.
 
 use std::ops::Range;
+use std::sync::mpsc;
 
 use super::history_read::{OVERLAP_FRONT_ROWS, ReadJob};
 use super::{MAX_REBUILD_FRAMES, PREPEND_BATCH};
 use crate::records::TranscriptLine;
 use crate::state::App;
+use crate::state::history_read::{HistoryReadOutcome, HistoryReadPoll, PendingHistoryRead};
 use crate::state::transcript::DiskFront;
 use crate::state::transcript::blocks::{
     Block, BlockAnchor, BlockId, TranscriptChange, TranscriptChangeSet,
 };
-use crate::state::transcript::{HistoryReadOutcome, HistoryReadPoll, PendingHistoryRead};
 use crate::transcript::TranscriptFrame;
 use crate::transcript::transcript_from_frames_at;
 
@@ -406,7 +407,7 @@ impl App {
             // running at all, matching the no-source short-circuit.
             return;
         };
-        if self.transcript.history_read_pending() {
+        if self.history_reads.is_pending() {
             return;
         }
         if self.transcript.disk_row_count() >= LOG_ROW_BUDGET {
@@ -438,12 +439,13 @@ impl App {
         // and drop it. The sync path this replaced read the front after the
         // rebuild too.
         let dispatch_front = self.transcript.frame_window_start();
-        let (tx, rx) = std::sync::mpsc::channel();
+        let dispatch_disk_front = self.transcript.disk_front();
+        let (tx, rx) = mpsc::channel();
         runtime.spawn_blocking(move || {
             job.run_and_send(tx);
         });
-        self.transcript
-            .set_history_read(PendingHistoryRead::new(dispatch_front, rx));
+        self.history_reads
+            .dispatch(dispatch_front, dispatch_disk_front, rx);
     }
 
     /// Advance the reads that run off the draw path: the older-rows read and
@@ -461,16 +463,16 @@ impl App {
     /// Called from the loop body every pass, not inside the dirty gate, so an
     /// idle loop still picks the result up.
     pub(crate) fn pump_history_read(&mut self) -> bool {
-        let Some(pending) = self.transcript.take_history_read() else {
+        let Some(pending) = self.history_reads.take() else {
             return false;
         };
         match pending.poll() {
             HistoryReadPoll::Pending => {
-                self.transcript.set_history_read(pending);
+                self.history_reads.put_back(pending);
                 false
             }
             HistoryReadPoll::Ready(outcome) => {
-                self.apply_history_read_result(outcome, pending.dispatch_front);
+                self.apply_history_read_result(outcome, &pending);
                 true
             }
             HistoryReadPoll::Disconnected => {
@@ -483,17 +485,47 @@ impl App {
         }
     }
 
-    /// Apply a background read's result. Stale results are dropped rather than
-    /// applied: if the reader returned to the tail the rows are not wanted, and
-    /// if the resident front moved since dispatch the frames the rows were cut
-    /// against are gone and prepending them would leave a gap. This covers
-    /// tail-return and resident-front rejection; full view-generation rejection
-    /// (pane, parent/child, session switch) is a later concern.
-    fn apply_history_read_result(&mut self, outcome: HistoryReadOutcome, dispatch_front: usize) {
+    /// Apply a background read's result, or drop it when it no longer belongs
+    /// to the view. Four checks, each covering one way the world moves while a
+    /// read runs: the reader returned to the tail (rows not wanted); the
+    /// history was invalidated (the epoch moved on, so the rows belong to an
+    /// archived history even when the rebuilt view's numbers match again); the
+    /// resident front moved (the frames the rows were cut against are gone and
+    /// prepending would leave a gap); the disk-rows state moved (a chained read
+    /// is trusted against the loaded stack's seam without its own overlap
+    /// match, so releasing the stack removes the basis of that trust). Full
+    /// view-generation rejection (pane, parent/child) is a later concern.
+    fn apply_history_read_result(
+        &mut self,
+        outcome: HistoryReadOutcome,
+        read: &PendingHistoryRead,
+    ) {
         if self.transcript_scroll.is_following_tail() {
+            tracing::debug!("history read dropped: the reader returned to the tail");
             return;
         }
-        if self.transcript.frame_window_start() != dispatch_front {
+        if read.epoch != self.history_reads.epoch() {
+            tracing::debug!(
+                read_epoch = read.epoch,
+                current = self.history_reads.epoch(),
+                "history read dropped: the history was invalidated"
+            );
+            return;
+        }
+        if self.transcript.frame_window_start() != read.dispatch_front {
+            tracing::debug!(
+                dispatch_front = read.dispatch_front,
+                current = self.transcript.frame_window_start(),
+                "history read dropped: the resident front moved"
+            );
+            return;
+        }
+        if self.transcript.disk_front() != read.dispatch_disk_front {
+            tracing::debug!(
+                dispatch_disk_front = ?read.dispatch_disk_front,
+                current = ?self.transcript.disk_front(),
+                "history read dropped: the disk-rows state moved"
+            );
             return;
         }
         match outcome {
@@ -503,7 +535,7 @@ impl App {
             HistoryReadOutcome::Rows(result) => {
                 let count = result.rows.len();
                 self.transcript
-                    .prepend_disk_rows(result.rows, result.anchor, dispatch_front);
+                    .prepend_disk_rows(result.rows, result.anchor, read.dispatch_front);
                 // Hold the viewport still: the rows landed above it.
                 let cur = self.transcript_scroll.raw_top();
                 self.transcript_scroll.set_raw_top(cur + count);

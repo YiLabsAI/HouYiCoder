@@ -4,9 +4,11 @@
 
 use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
+use std::sync::mpsc;
 
 use crate::records::TranscriptLine;
 use crate::state::App;
+use crate::state::history_read::{HistoryReadOutcome, HistoryReadResult};
 use crate::test_harness::MockSnapshot;
 use crate::transcript::TranscriptFrame;
 use houyicoder_protocol::frontend::run::ContentBlock;
@@ -190,8 +192,57 @@ fn test_child_blocks_parent_reads() {
         app.load_older_frames();
     }
     assert!(
-        !app.transcript.history_read_pending(),
+        !app.history_reads.is_pending(),
         "no parent history read was dispatched while the child is on view"
+    );
+}
+
+/// A parent read dispatched before the visit lands while the child is on
+/// view. It belongs to the parent: the rows go into the parent transcript,
+/// the parent viewport holds still, and the child render is untouched. New
+/// dispatches stay blocked while the child is on view; an already-running
+/// read completing is not a new dispatch and must not be lost either.
+#[test]
+fn test_parent_read_spares_child() {
+    let mut app = app_with_parent(5);
+    app.transcript_scroll.jump_to(0);
+    let (tx, rx) = mpsc::channel::<HistoryReadOutcome>();
+    let front = app.transcript.frame_window_start();
+    let disk_front = app.transcript.disk_front();
+    app.history_reads.dispatch(front, disk_front, rx);
+
+    assert!(app.enter_teammate_view());
+    let child_before = crate::test_harness::render_text(&app, 80, 24);
+    let parent_top = app.transcript_scroll.raw_top();
+
+    tx.send(HistoryReadOutcome::Rows(HistoryReadResult {
+        rows: vec![TranscriptLine::User("older parent row".into())],
+        anchor: 100,
+    }))
+    .ok();
+    assert!(app.pump_history_read(), "the parent read landed");
+
+    assert_eq!(
+        app.transcript.disk_row_count(),
+        1,
+        "the rows went into the parent transcript"
+    );
+    assert_eq!(
+        app.transcript_scroll.raw_top(),
+        parent_top + 1,
+        "the parent viewport held still over the landed rows"
+    );
+    assert_eq!(
+        crate::test_harness::render_text(&app, 80, 24),
+        child_before,
+        "the child render is untouched by the parent read"
+    );
+
+    app.exit_teammate_view();
+    let parent_after = crate::test_harness::render_text(&app, 80, 24);
+    assert!(
+        parent_after.contains("older parent row"),
+        "the parent shows the loaded row after the visit"
     );
 }
 

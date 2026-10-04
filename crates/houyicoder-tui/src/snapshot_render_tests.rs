@@ -4,11 +4,14 @@
 //! render_invariant_tests so both stay under the size gate.
 
 use crate::records::TranscriptLine;
+use crate::state::index_read::PendingIndexChunk;
 use crate::test_harness::render_text;
-use crate::transcript::snapshot::{TranscriptSnapshot, WindowLoad};
+use crate::transcript::snapshot::{IndexProgress, TranscriptSnapshot, WindowLoad};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use std::sync::Arc;
-use std::time::Duration;
+use std::sync::mpsc;
+use std::thread;
+use std::time::{Duration, Instant};
 
 fn working() -> crate::state::App {
     crate::test_harness::working_app()
@@ -847,12 +850,12 @@ fn test_index_runs_on_worker() {
     );
     assert!(app.indexing.get(), "G starts the build");
 
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    while std::time::Instant::now() < deadline {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
         if app.pump_background_reads() && app.index_done.get() {
             break;
         }
-        std::thread::sleep(Duration::from_millis(5));
+        thread::sleep(Duration::from_millis(5));
     }
     assert!(
         app.index_done.get(),
@@ -883,10 +886,9 @@ fn test_index_worker_death_stops() {
         KeyEvent::new(KeyCode::Char('G'), KeyModifiers::NONE),
     );
     // A slot whose sender is already gone stands in for a dead worker.
-    let (tx, rx) = std::sync::mpsc::channel();
+    let (tx, rx) = mpsc::channel();
     drop(tx);
-    *app.pending_index_chunk.borrow_mut() =
-        Some(crate::state::index_read::PendingIndexChunk::new(rx));
+    *app.pending_index_chunk.borrow_mut() = Some(PendingIndexChunk::new(rx));
 
     assert!(app.pump_index_chunk(), "the dead worker is noticed");
     assert!(
@@ -897,4 +899,63 @@ fn test_index_worker_death_stops() {
         app.pending_index_chunk.borrow().is_none(),
         "the slot is cleared so a later G can dispatch again"
     );
+}
+
+/// An interrupt stops the build but the chunk already on its worker still
+/// lands. The partial index is kept by contract, so the landing applies its
+/// progress without resuming the interrupted build; a later G restarts and
+/// completes from there.
+#[test]
+fn test_index_landing_after_interrupt() {
+    let mut app = working();
+    app.snapshot = Some(Arc::new(MockSnapshot {
+        lines: Vec::new(),
+        log_bytes: 20 * 1024 * 1024,
+        truncated: false,
+        skipped: 0,
+        window_lines: vec![TranscriptLine::User("tail".into())],
+        window_start: 0,
+        windows: Vec::new(),
+        index_steps: 1,
+        index_calls: std::sync::atomic::AtomicU32::new(0),
+    }));
+    app.enter_search_view("tail");
+    crate::app::handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('G'), KeyModifiers::NONE),
+    );
+    assert!(app.indexing.get(), "G starts the build");
+    // A held sender stands in for the chunk's worker.
+    let (tx, rx) = mpsc::channel();
+    *app.pending_index_chunk.borrow_mut() = Some(PendingIndexChunk::new(rx));
+
+    assert!(app.interrupt_index(), "the interrupt consumed the Esc");
+    tx.send(IndexProgress {
+        indexed_bytes: 512,
+        total_bytes: 2048,
+        done: false,
+    })
+    .ok();
+
+    assert!(app.pump_index_chunk(), "the landed chunk is noticed");
+    assert_eq!(app.indexed_bytes.get(), 512, "its progress applied");
+    assert!(
+        !app.indexing.get(),
+        "the interrupted build did not resume on the landing"
+    );
+
+    // Restart on a real runtime: the build runs to completion.
+    app.runtime = Some(Arc::new(
+        tokio::runtime::Runtime::new().expect("test runtime"),
+    ));
+    app.start_full_index();
+    assert!(app.indexing.get(), "G restarts the build");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        if app.pump_background_reads() && app.index_done.get() {
+            break;
+        }
+        thread::sleep(Duration::from_millis(5));
+    }
+    assert!(app.index_done.get(), "the restarted build completed");
 }

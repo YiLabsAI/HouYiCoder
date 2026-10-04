@@ -5,11 +5,13 @@
 
 use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use crate::composition;
 use crate::records::{ContextSuggestion, SuggestionSeverity, TranscriptLine};
-use crate::state::transcript::{DiskFront, HistoryReadOutcome, PendingHistoryRead};
+use crate::state::history_read::HistoryReadOutcome;
+use crate::state::transcript::DiskFront;
 use crate::state::{App, Screen};
 use crate::test_harness::MockSnapshot;
 use crate::todo_view::TodoStatus;
@@ -73,7 +75,7 @@ fn fresh_app() -> App {
 /// applied before assertions run. Returns false at once when no read was
 /// dispatched (the resident-frame path or a no-op short-circuit).
 fn pump_history_read_blocking(app: &mut App, timeout: Duration) -> bool {
-    if !app.transcript.history_read_pending() {
+    if !app.history_reads.is_pending() {
         return false;
     }
     let start = Instant::now();
@@ -1786,10 +1788,7 @@ fn test_dispatch_front_after_drain() {
         front_after > front_before,
         "the in-dispatch rebuild drained the resident front"
     );
-    let pending = app
-        .transcript
-        .take_history_read()
-        .expect("a read was dispatched");
+    let pending = app.history_reads.take().expect("a read was dispatched");
     assert_eq!(
         pending.dispatch_front, front_after,
         "dispatch_front is the front after the rebuild, not before it"
@@ -1829,7 +1828,7 @@ fn test_stale_history_read_dropped() {
         "stale Exhausted did not latch Stopped at the old front"
     );
     assert!(
-        !app.transcript.history_read_pending(),
+        !app.history_reads.is_pending(),
         "the slot released after the stale result was dropped"
     );
 }
@@ -1841,17 +1840,16 @@ fn test_stale_history_read_dropped() {
 #[test]
 fn test_dead_worker_clears_slot() {
     let mut app = fresh_app();
-    let (tx, rx) = std::sync::mpsc::channel::<HistoryReadOutcome>();
+    let (tx, rx) = mpsc::channel::<HistoryReadOutcome>();
     drop(tx);
-    app.transcript.set_history_read(PendingHistoryRead::new(
-        app.transcript.frame_window_start(),
-        rx,
-    ));
-    assert!(app.transcript.history_read_pending());
+    let front = app.transcript.frame_window_start();
+    let disk_front = app.transcript.disk_front();
+    app.history_reads.dispatch(front, disk_front, rx);
+    assert!(app.history_reads.is_pending());
     let landed = app.pump_history_read();
     assert!(!landed, "a disconnected worker sets no dirty flag");
     assert!(
-        !app.transcript.history_read_pending(),
+        !app.history_reads.is_pending(),
         "the slot released so a later dispatch can run"
     );
     assert_eq!(

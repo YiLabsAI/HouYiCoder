@@ -5,6 +5,8 @@ use crate::pending_prompt::PendingPrompt;
 use crate::pending_queue::PendingItem;
 use crate::records::ToolOutcome;
 use crate::state::TranscriptLine;
+use crate::state::history_read::HistoryReadOutcome;
+use crate::state::transcript::DiskFront;
 use houyicoder_protocol::envelope::RequestId;
 
 fn test_bundle() -> RunnerBundle {
@@ -109,6 +111,30 @@ fn test_switch_session_resets_view() {
     assert!(!app.agent_busy(), "agent_busy cleared");
     assert!(app.transcript_scroll.is_following_tail(), "scroll reset");
     assert_eq!(app.pane, crate::state::Pane::Transcript, "pane reset");
+}
+
+/// A pending history read was dispatched against the old session's log. The
+/// switch rebuilds the whole App, so the record goes with the old session:
+/// the slot is empty in the new one and the old worker's send fails into the
+/// dropped receiver. A late result from the archived session has no route
+/// into the new view.
+#[test]
+fn test_switch_drops_pending_read() {
+    let mut app = build_app(test_bundle());
+    let (tx, rx) = mpsc::channel::<HistoryReadOutcome>();
+    app.history_reads.dispatch(0, DiskFront::Unloaded, rx);
+    assert!(app.history_reads.is_pending());
+
+    app.switch_session(test_bundle());
+
+    assert!(
+        !app.history_reads.is_pending(),
+        "the rebuilt App starts with no read against the old log"
+    );
+    assert!(
+        tx.send(HistoryReadOutcome::Exhausted).is_err(),
+        "the old worker's route to the view is gone"
+    );
 }
 
 #[test]

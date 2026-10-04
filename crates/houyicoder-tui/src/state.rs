@@ -141,6 +141,11 @@ pub struct App {
     /// skip-set). Backed by a JSONL file at the config home.
     pub history: HistoryNav,
     pub transcript: transcript::Transcript,
+    /// The background history reads of the working transcript and the history
+    /// generation each was dispatched against. Beside the transcript, not
+    /// inside it: the transcript owns the resident facts, while this owner
+    /// governs a read task's lifecycle across those facts being reset.
+    pub history_reads: history_read::HistoryReads,
     /// Cursor into the frame log for the verdict audit cache. Stays on App:
     /// verdicts are an audit capability, not transcript content.
     pub verdict_cursor: usize,

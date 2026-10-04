@@ -43,7 +43,27 @@ ACTIVE_OWNERS = {
         # selection moved into SkillsPaneState in the same spirit. The index
         # build's pending-chunk slot joins the index fields it belongs to; the
         # window's fields are a SearchWindowState owner waiting to be drawn.
-        "fields": 144,
+        # HistoryReads took the pending-read slot out of Transcript and App
+        # gained the owner field beside it, net one more.
+        "fields": 145,
         "mut_app": 44,
+    },
+    "crates/houyicoder-tui/src/state/transcript.rs:Transcript": {
+        # The transcript facts: frame log, resident budget counters, derived
+        # lines and fold cache, disk rows and their front, turn boundary,
+        # revision. The pending-read slot moved out to HistoryReads: the
+        # transcript owns facts, not task lifecycles. External mutators are
+        # the rebuild path and the command layer, both through pub(crate)
+        # methods; the frame log mutates only through with_frames_mut so the
+        # byte counter cannot miss an edit.
+        "fields": 12,
+    },
+    "crates/houyicoder-tui/src/state/history_read.rs:HistoryReads": {
+        # The running history read and its generation counter. External
+        # mutators: dispatch/take/put_back from the rebuild path, invalidate
+        # from the command layer on a history reset. The epoch is the guard
+        # that outlives the slot: a record held across an invalidation is
+        # still refused by its stamp.
+        "fields": 2,
     },
 }

@@ -48,12 +48,6 @@ pub struct Transcript {
     /// that front past them, and the frames between the two fronts are gone,
     /// so the rows no longer reach the view and are dropped.
     disk_rows_front: usize,
-    /// A running history read, when the draw path dispatched a disk read to
-    /// a background task instead of running it on the draw thread. At most
-    /// one: a second dispatch is skipped while this is set. Lives here rather
-    /// than on App so the App field count stays bounded and the state sits
-    /// beside the disk rows it governs.
-    history_read: Option<PendingHistoryRead>,
     current_turn: CurrentTurnBoundary,
     revision: Cell<u64>,
 }
@@ -75,10 +69,6 @@ pub(crate) enum DiskFront {
     Stopped,
 }
 
-pub(crate) use super::history_read::{
-    HistoryReadOutcome, HistoryReadPoll, HistoryReadResult, PendingHistoryRead,
-};
-
 /// Default ceiling on the resident frames' estimated bytes.
 const RESIDENT_BYTE_BUDGET: usize = 8 * 1024 * 1024;
 
@@ -95,7 +85,6 @@ impl Default for Transcript {
             disk_rows: Vec::new(),
             disk_front: DiskFront::default(),
             disk_rows_front: 0,
-            history_read: None,
             current_turn: CurrentTurnBoundary::default(),
             revision: Cell::new(0),
         }
@@ -297,24 +286,6 @@ impl Transcript {
     /// The resident front the disk rows sit above.
     pub(crate) fn disk_rows_front(&self) -> usize {
         self.disk_rows_front
-    }
-
-    /// Whether a background history read is running.
-    pub(crate) fn history_read_pending(&self) -> bool {
-        self.history_read.is_some()
-    }
-
-    /// Take the pending read out for polling, returning None when none is in
-    /// flight. The caller polls and, on Ready or Disconnected, leaves the slot
-    /// empty by not putting it back; on Pending it must put it back to keep
-    /// the read alive.
-    pub(crate) fn take_history_read(&mut self) -> Option<PendingHistoryRead> {
-        self.history_read.take()
-    }
-
-    /// Put a pending read back after a Pending poll.
-    pub(crate) fn set_history_read(&mut self, read: PendingHistoryRead) {
-        self.history_read = Some(read);
     }
 
     /// Put older rows read from the session log in front of the rows the frame

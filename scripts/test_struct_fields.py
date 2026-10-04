@@ -84,6 +84,17 @@ def test_registry_owner_deleted_blocks():
     assert len(errors) == 1 and "disappeared" in errors[0]
 
 
+def test_registered_owners_bypass_warn_floor():
+    # The warn floor filters the report, not the registry: every registered
+    # owner must appear in the counts the gate reads, however small it is.
+    # Without this a two-field owner registers and then reads as vanished.
+    from report_structure_facts import iter_struct_field_counts
+
+    counts = dict(iter_struct_field_counts())
+    for key in ACTIVE_OWNERS:
+        assert key in counts, key
+
+
 def test_registry_covers_real_owners():
     # Every registered owner must point at a real source file (the key is
     # "path:TypeName"), so the registry cannot drift into monitoring

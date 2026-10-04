@@ -20,6 +20,7 @@ use crate::run_state::RunState;
 use crate::scroll::WindowScroll;
 use crate::selection::SystemClipboard;
 use crate::skills_state::SkillsPaneState;
+use crate::state::history_read::HistoryReads;
 use crate::state::transcript::Transcript;
 use crate::state::{
     ModelPickerState, ParkedViewStates, QueueViewState, StatusTab, TrajectoryPaneState,
@@ -36,6 +37,7 @@ pub fn app() -> App {
         input: InputField::new(),
         history: HistoryNav::default(),
         transcript: Transcript::default(),
+        history_reads: HistoryReads::default(),
         verdict_cursor: 0,
         unseen_since: None,
         transcript_scroll: TranscriptScroll::default(),
