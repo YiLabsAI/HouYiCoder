@@ -1519,6 +1519,7 @@ dependencies = [
 name = "houyicoder-permission"
 version = "0.1.0"
 dependencies = [
+ "dunce",
  "glob",
  "houyicoder-api",
  "houyicoder-async",

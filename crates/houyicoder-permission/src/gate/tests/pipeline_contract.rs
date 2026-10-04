@@ -211,7 +211,7 @@ fn test_outside_edit_asks_path() {
     let settings = outside.join("settings.json");
     std::fs::write(&settings, b"{}").unwrap();
     let gate = DefaultModeGate::new_without_builtins()
-        .with_containment(Arc::new(BoundsFence(std::fs::canonicalize(&root).unwrap())));
+        .with_containment(Arc::new(BoundsFence(dunce::canonicalize(&root).unwrap())));
     let input = serde_json::json!({"path": settings.to_string_lossy()});
     let request = ToolRequest {
         tool_name: "edit",
@@ -243,8 +243,8 @@ fn test_outside_asks_inside_defers() {
     std::fs::create_dir_all(&root).expect("mkdir root");
     let outside = std::env::temp_dir().join(format!("gate-bounds-out-{}", std::process::id()));
     std::fs::create_dir_all(&outside).expect("mkdir outside");
-    let croot = std::fs::canonicalize(&root).unwrap();
-    let coutside = std::fs::canonicalize(&outside).unwrap();
+    let croot = dunce::canonicalize(&root).unwrap();
+    let coutside = dunce::canonicalize(&outside).unwrap();
 
     struct BoundsFence {
         root: PathBuf,
@@ -369,7 +369,7 @@ fn test_outside_new_file_asks() {
     let outside = base.join("outside");
     std::fs::create_dir_all(&root).expect("mkdir root");
     std::fs::create_dir_all(&outside).expect("mkdir outside");
-    let croot = std::fs::canonicalize(&root).unwrap();
+    let croot = dunce::canonicalize(&root).unwrap();
 
     struct BoundsFence {
         root: PathBuf,

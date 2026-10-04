@@ -52,7 +52,7 @@ impl Workspace {
             std::env::temp_dir().join(format!("houyi-protected-{}-{}", std::process::id(), tag));
         std::fs::create_dir_all(root.join(".git/hooks")).expect("git hooks dir");
         std::fs::create_dir_all(root.join("src")).expect("src dir");
-        let root = std::fs::canonicalize(&root).expect("canonical workspace");
+        let root = dunce::canonicalize(&root).expect("canonical workspace");
         #[cfg(unix)]
         std::os::unix::fs::symlink(root.join(".git"), root.join("gitlink")).expect("symlink");
         Self(root)
