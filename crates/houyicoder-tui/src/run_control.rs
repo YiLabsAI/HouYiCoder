@@ -17,11 +17,19 @@ use crate::session::{ConnectionStatus, EnqueueError, PollOutcome};
 use crate::state::App;
 use crate::state::enums::LiveBlock;
 use crate::transcript::frame_payload::chunk_text;
-use crate::transcript::{FrontendRow, SequencedFrame, TranscriptFrame};
+use crate::transcript::{FrontendRow, SequencedFrame, TranscriptFrame, is_user_frame};
 
 const MAX_REBUILD_FRAMES: usize = 500;
 const PREPEND_BATCH: usize = 100;
 const MAX_AGENT_MESSAGES_PER_POLL: usize = 4096;
+
+/// How many messages a poll may take past the batch cap when the cap lands
+/// on a user message. The projection writes the delivery mark beside the
+/// message it belongs to; a rebuild that saw the message without the mark
+/// would read it as opening a turn of its own and close the running turn
+/// early. The mark is the next frame in the channel, so a few extra polls
+/// rejoin the pair; an idle channel ends the lookahead at once.
+const DELIVERY_MARK_LOOKAHEAD: usize = 4;
 
 #[path = "run_control/history_read.rs"]
 mod history_read;
@@ -413,7 +421,10 @@ impl App {
     pub fn poll_agent(&mut self) -> bool {
         let mut applied = false;
         let mut batch: Vec<TranscriptFrame> = Vec::new();
-        for _ in 0..MAX_AGENT_MESSAGES_PER_POLL {
+        let mut remaining = MAX_AGENT_MESSAGES_PER_POLL;
+        let mut lookahead_used = false;
+        while remaining > 0 {
+            remaining -= 1;
             // Poll one owned message off the session so the session borrow
             // ends before the mutable dispatch below. The batch cap returns
             // control to terminal input even when producers remain saturated.
@@ -444,6 +455,13 @@ impl App {
                     }
                     break;
                 }
+            }
+            // The cap can land between a user message and the delivery mark
+            // the projection writes beside it. Grant one small lookahead so
+            // the pair folds in one rebuild instead of splitting across two.
+            if remaining == 0 && !lookahead_used && batch.last().is_some_and(is_user_frame) {
+                lookahead_used = true;
+                remaining = DELIVERY_MARK_LOOKAHEAD;
             }
         }
         self.apply_frames(batch);

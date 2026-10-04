@@ -6,9 +6,10 @@
 //! MessageSend, and permission asks arrive as SessionMessage::Request
 //! reverse requests.
 use super::*;
-use crate::agent_message::{ServerRequest, ServerResponse};
+use crate::agent_message::{ServerEvent, ServerRequest, ServerResponse, SessionMessage};
 use crate::composition;
 use crate::pending_prompt::PendingPrompt;
+use crate::session::SessionConnection;
 use crate::state::{Pane, TranscriptLine};
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_api::tool::{Tool, ToolCtx};
@@ -16,6 +17,7 @@ use houyicoder_core::SessionId;
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::{Runner, ToolRegistry};
 use houyicoder_memory::InMemoryBackend;
+use houyicoder_protocol::acpx::{AcpxMethod, AcpxNotification};
 use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::extension::ENTITLEMENT_TOOL;
 use houyicoder_protocol::frontend::run::{ContentBlock, RunError, RunOutcome, RunResult};
@@ -29,6 +31,7 @@ use std::sync::Arc;
 use std::sync::mpsc;
 use std::thread::sleep;
 use std::time::Duration;
+use std::time::Instant;
 fn user_msg(text: &str) -> TranscriptFrame {
     TranscriptFrame::Session(SessionUpdate::UserMessageChunk(ContentChunk::new(
         ContentBlock::Text { text: text.into() },
@@ -1093,6 +1096,69 @@ fn test_startup_handshake_empty_timeout() {
     let mut app = app_with_provider(p, ToolRegistry::new());
     app.startup_handshake(Duration::from_millis(50));
     assert!(app.pending_trust().is_none(), "no card on empty handshake");
+}
+
+fn thought_msg(text: &str) -> TranscriptFrame {
+    TranscriptFrame::Session(SessionUpdate::AgentThoughtChunk(ContentChunk::new(
+        ContentBlock::Text { text: text.into() },
+    )))
+}
+
+fn acpx_frame(method: AcpxMethod, params: serde_json::Value) -> TranscriptFrame {
+    TranscriptFrame::Acpx(AcpxNotification::new(method, params))
+}
+
+/// A poll batch that ends at the cap between a queued message and the
+/// delivery mark the projection writes beside it, while the run is still
+/// active. A rebuild that saw the message without the mark would read it as
+/// opening a turn of its own and close the running turn early, rendering a
+/// premature summary for a turn that is still running. The poll extends past
+/// the cap while the batch ends on a user message, so one batch applies the
+/// settled order and the running turn stays open until its record arrives.
+/// The run must be active for the test to judge anything: an idle projection
+/// closes the log's trailing turn at the window end by design, which derives
+/// a row from the open turn whether or not the mark made the batch. The
+/// session carries no driver: the test's own sender is the only frame source,
+/// so the batch ends exactly where the test queued it.
+#[test]
+fn test_batch_keeps_mark() {
+    let (tx, rx) = mpsc::channel::<SessionMessage>();
+    let mut app = composition::app();
+    app.transcript.reset();
+    app.runtime = Some(composition::shared_runtime());
+    app.session = Some(SessionConnection::from_receiver(rx));
+    app.run_state.start(RequestId(0), Instant::now());
+    let send = |frame: TranscriptFrame| {
+        tx.send(SessionMessage::Event(ServerEvent::Frame(frame)))
+            .expect("the connection receiver is alive")
+    };
+    send(user_msg("start"));
+    for i in 0..MAX_AGENT_MESSAGES_PER_POLL - 2 {
+        send(thought_msg(&format!("step {i}")));
+    }
+    send(user_msg("interject"));
+    send(acpx_frame(
+        AcpxMethod::ContextMidTurnInput,
+        serde_json::json!({}),
+    ));
+    let rows = |app: &App| {
+        app.transcript
+            .iter()
+            .filter(|l| matches!(l, TranscriptLine::ThoughtFor { .. }))
+            .count()
+    };
+    app.poll_agent();
+    assert_eq!(
+        rows(&app),
+        0,
+        "the marked message joins the running turn, so no row derives yet"
+    );
+    send(acpx_frame(
+        AcpxMethod::ContextRunCompleted,
+        serde_json::json!({ "ms": 5_000 }),
+    ));
+    app.poll_agent();
+    assert_eq!(rows(&app), 1, "the record closes the turn exactly once");
 }
 
 #[cfg(test)]

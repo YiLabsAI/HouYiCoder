@@ -48,7 +48,7 @@ fn is_run_completed(frame: &TranscriptFrame) -> bool {
 /// Whether the frame is a user message. Both a fresh prompt and a message
 /// queued during a turn arrive as one, so the frame alone cannot say which it
 /// is.
-fn is_user_frame(frame: &TranscriptFrame) -> bool {
+pub(crate) fn is_user_frame(frame: &TranscriptFrame) -> bool {
     matches!(
         frame,
         TranscriptFrame::Session(SessionUpdate::UserMessageChunk(_))

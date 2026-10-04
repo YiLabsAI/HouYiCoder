@@ -29,6 +29,7 @@ use tool_updates::{PendingUpdate, ToolRegistry, collect_tool_updates};
 use turn_fold::{RowNames, TurnFold};
 
 pub use turn_fold::bounds_turn_in;
+pub(crate) use turn_fold::is_user_frame;
 
 /// One frame of the turn stream, preserved in arrival order so the
 /// transcript rebuild keeps the time-ordered interleave of session/update

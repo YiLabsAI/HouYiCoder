@@ -131,6 +131,25 @@ impl SessionConnection {
         }
     }
 
+    /// Test-only connection whose inbound side is the given receiver. No
+    /// protocol driver runs: the test's own sender is the only message
+    /// source, so a poll sees exactly what the test queued, in order. The
+    /// spawned task only consumes commands, keeping the outbound side open.
+    #[cfg(test)]
+    pub(crate) fn from_receiver(agent_rx: mpsc::Receiver<SessionMessage>) -> Self {
+        let (cmd_tx, mut cmd_rx) = tokio::sync::mpsc::unbounded_channel::<ClientCommand>();
+        let driver = crate::composition::shared_runtime()
+            .spawn(async move { while cmd_rx.recv().await.is_some() {} });
+        Self {
+            cmd_tx,
+            agent_rx,
+            next_req_id: Cell::new(0),
+            exhaustion_reported: Cell::new(false),
+            status: ConnectionStatus::Ready,
+            driver,
+        }
+    }
+
     /// Issue a connection-local monotonic request identifier, starting at
     /// zero and advancing by one per call. When the sequence exhausts the
     /// u64 range the counter stops advancing and allocation is refused, so a
