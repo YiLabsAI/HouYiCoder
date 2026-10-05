@@ -14,6 +14,7 @@ use houyicoder_protocol::frontend::run::{ApprovalDecision, ApprovalRequest, Stop
 use houyicoder_protocol::llm::Usage;
 use houyicoder_protocol::llm::{CompletionResponse, OutputItem, ProviderError};
 use houyicoder_provider::FakeProvider;
+use houyicoder_service::composition::walk_to_workspace_root;
 
 /// Pump the event loop until the predicate holds, or the budget runs out.
 /// Returns whether it held. The run is driven by a worker thread, so a test

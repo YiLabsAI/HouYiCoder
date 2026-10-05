@@ -25,7 +25,6 @@ use houyicoder_protocol::frontend::session_update::{ContentChunk, SessionUpdate}
 use houyicoder_protocol::llm::Usage;
 use houyicoder_protocol::llm::{CompletionResponse, OutputItem};
 use houyicoder_provider::FakeProvider;
-use houyicoder_service::composition::walk_to_workspace_root;
 use houyicoder_session::SessionStore;
 use std::sync::Arc;
 use std::sync::mpsc;
