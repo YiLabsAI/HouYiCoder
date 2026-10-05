@@ -30,16 +30,17 @@ fn mark_method(frames: &[FrontendEvent]) -> Option<AcpxMethod> {
 
 #[test]
 fn test_mid_turn_input_marked() {
-    let frames = Server::project_turn_event(&entry(SessionEvent::MidTurnInput {
+    let projection = Server::project_turn_event(&entry(SessionEvent::MidTurnInput {
         text: "steer here".into(),
         pending_input_id: None,
     }));
+    let frames = &projection.payloads;
     assert!(
         matches!(frames.first(), Some(FrontendEvent::SessionUpdate { .. })),
         "the message itself comes first: {frames:?}"
     );
     assert_eq!(
-        mark_method(&frames),
+        mark_method(frames),
         Some(AcpxMethod::ContextMidTurnInput),
         "the delivery mark rides immediately after the message: {frames:?}"
     );
@@ -47,7 +48,7 @@ fn test_mid_turn_input_marked() {
 
 #[test]
 fn test_child_notice_marked() {
-    let frames = Server::project_turn_event(&entry(SessionEvent::NotificationInjected {
+    let projection = Server::project_turn_event(&entry(SessionEvent::NotificationInjected {
         child_session_id: "child-1".into(),
         turn: 1,
         order: 0,
@@ -55,9 +56,10 @@ fn test_child_notice_marked() {
         summary: "found it".into(),
     }));
     assert_eq!(
-        mark_method(&frames),
+        mark_method(&projection.payloads),
         Some(AcpxMethod::ContextChildCompleted),
-        "a child completion is marked as delivered too: {frames:?}"
+        "a child completion is marked as delivered too: {:?}",
+        projection.payloads
     );
 }
 
@@ -66,15 +68,16 @@ fn test_interrupt_notice_marked() {
     // The notice a regenerate leaves behind belongs to the turn it interrupts.
     // Read as a message that opens a turn, it ends the running turn and starts
     // another, so one turn's work renders as two summary rows.
-    let frames = Server::project_turn_event(&entry(SessionEvent::TurnAborted {
+    let projection = Server::project_turn_event(&entry(SessionEvent::TurnAborted {
         reason: "interrupted by user".into(),
     }));
+    let frames = &projection.payloads;
     assert!(
         matches!(frames.first(), Some(FrontendEvent::SessionUpdate { .. })),
         "the visible notice still comes first: {frames:?}"
     );
     assert_eq!(
-        mark_method(&frames),
+        mark_method(frames),
         Some(AcpxMethod::ContextTurnInterrupted),
         "the interrupt notice carries its mark: {frames:?}"
     );
@@ -82,7 +85,19 @@ fn test_interrupt_notice_marked() {
 
 #[test]
 fn test_prompt_unmarked() {
-    let frames = Server::project_turn_event(&entry(SessionEvent::UserInput { text: "go".into() }));
+    let projection =
+        Server::project_turn_event(&entry(SessionEvent::UserInput { text: "go".into() }));
+    let frames = &projection.payloads;
     assert_eq!(frames.len(), 1, "a prompt carries no mark: {frames:?}");
     assert!(matches!(frames[0], FrontendEvent::SessionUpdate { .. }));
+}
+
+#[test]
+fn test_projection_carries_identity() {
+    // The identity the consumer stamps rows from is the log entry's own id
+    // in transport form, so a reconnect that reshuffles sequence numbers
+    // still lands on the same durable rows.
+    let entry = entry(SessionEvent::UserInput { text: "go".into() });
+    let projection = Server::project_turn_event(&entry);
+    assert_eq!(projection.event_id.0, entry.id.to_string());
 }

@@ -10,7 +10,7 @@ use houyicoder_api::agent_event::{
 use houyicoder_context::MemoryScope;
 use houyicoder_core::agent::Runner;
 use houyicoder_protocol::acpx::{AcpxMethod, AcpxNotification};
-use houyicoder_protocol::envelope::{EventEnvelope, EventSeq};
+use houyicoder_protocol::envelope::{DurableEventId, EventEnvelope, EventSeq};
 use houyicoder_protocol::frontend::FrontendEvent;
 use houyicoder_protocol::frontend::memory::{
     MemoryChange, MemoryChangeCausality, MemoryChangeId, MemoryChangeOrigin, MemoryChangeScope,
@@ -25,6 +25,15 @@ struct PendingEvent {
     order: u64,
     payload: FrontendEvent,
     reliable: bool,
+}
+
+/// The payloads one durable log entry projects to, plus the entry identity
+/// stamped on every envelope built from them. Push order stays on the seq
+/// axis; the identity is what survives a reconnect, so the two travel
+/// together from the load callback but answer different questions.
+pub(crate) struct DurableProjection {
+    pub(crate) event_id: DurableEventId,
+    pub(crate) payloads: Vec<FrontendEvent>,
 }
 
 #[derive(Default)]
@@ -242,7 +251,7 @@ impl EventSequencer {
 
     pub(crate) fn sequence_available<F>(&self, load_durable_events: F) -> Vec<EventEnvelope>
     where
-        F: FnOnce(usize) -> Vec<Vec<FrontendEvent>>,
+        F: FnOnce(usize) -> Vec<DurableProjection>,
     {
         let mut state = self.inner.state.lock().expect("event sequencer lock");
         let durable_events = load_durable_events(state.trajectory_cursor);
@@ -257,7 +266,7 @@ impl EventSequencer {
         load_durable_events: F,
     ) -> Vec<EventEnvelope>
     where
-        F: FnOnce(usize) -> Vec<Vec<FrontendEvent>>,
+        F: FnOnce(usize) -> Vec<DurableProjection>,
     {
         let mut state = self.inner.state.lock().expect("event sequencer lock");
         let durable_events = load_durable_events(state.trajectory_cursor);
@@ -267,12 +276,16 @@ impl EventSequencer {
 
     fn sequence_trajectory(
         state: &mut SequencerState,
-        entries: Vec<Vec<FrontendEvent>>,
+        entries: Vec<DurableProjection>,
     ) -> Vec<EventEnvelope> {
         let mut sequenced = Vec::new();
-        for events in entries {
-            for payload in events {
-                let frame = EventEnvelope::new(EventSeq(state.next_seq), payload);
+        for projection in entries {
+            for payload in projection.payloads {
+                let frame = EventEnvelope::durable(
+                    EventSeq(state.next_seq),
+                    payload,
+                    projection.event_id.clone(),
+                );
                 state.next_seq = state.next_seq.saturating_add(1);
                 state.reliable.push(frame.clone());
                 sequenced.push(frame);
@@ -366,6 +379,13 @@ mod tests {
         }
     }
 
+    fn durable(id: &str, payloads: Vec<FrontendEvent>) -> DurableProjection {
+        DurableProjection {
+            event_id: DurableEventId(id.to_string()),
+            payloads,
+        }
+    }
+
     fn status(agent_id: &str, turn: u32) -> FrontendEvent {
         FrontendEvent::AgentStatus {
             agent_id: agent_id.to_string(),
@@ -383,11 +403,49 @@ mod tests {
         let sequencer = EventSequencer::new();
         sequencer.enqueue_ephemeral(line("delta"));
 
-        let frames = sequencer.sequence_available(|_| vec![vec![line("user"), line("commit")]]);
+        let frames = sequencer
+            .sequence_available(|_| vec![durable("e1", vec![line("user"), line("commit")])]);
 
         assert_eq!(frames[0].seq, EventSeq(0));
         assert_eq!(frames[1].seq, EventSeq(1));
         assert_eq!(frames[2].seq, EventSeq(2));
+    }
+
+    #[test]
+    fn test_identity_rides_envelope() {
+        // Every payload one entry projects to carries that entry's
+        // identity, while a runtime push with no log entry carries none,
+        // so a consumer can tell durable rows from local ones.
+        let sequencer = EventSequencer::new();
+        let frames = sequencer
+            .sequence_available(|_| vec![durable("e1", vec![line("user"), line("commit")])]);
+        assert_eq!(
+            frames[0].event_id.as_ref().map(|id| &id.0),
+            Some(&"e1".to_string())
+        );
+        assert_eq!(frames[1].event_id, frames[0].event_id);
+
+        sequencer.enqueue_reliable(line("notice"));
+        let pending = sequencer.sequence_pending_for_test();
+        assert_eq!(pending[0].event_id, None);
+    }
+
+    #[test]
+    fn test_replay_preserves_identity() {
+        // A reconnect replays retained envelopes; the durable identity must
+        // survive retention so the resumed consumer lands on the same rows.
+        let sequencer = EventSequencer::new();
+        sequencer.sequence_available(|_| vec![durable("e1", vec![line("user")])]);
+        sequencer.enqueue_reliable(line("notice"));
+        drop(sequencer.sequence_pending_for_test());
+
+        let replay = sequencer.reliable_after(None);
+        assert_eq!(replay.len(), 2);
+        assert_eq!(
+            replay[0].event_id.as_ref().map(|id| &id.0),
+            Some(&"e1".to_string())
+        );
+        assert_eq!(replay[1].event_id, None);
     }
 
     #[test]
@@ -548,7 +606,7 @@ mod tests {
             sequencer_for_load.sequence_available(|_| {
                 snapshot_tx.send(()).expect("snapshot entered");
                 release_rx.recv().expect("snapshot released");
-                vec![vec![line("user"), line("commit")]]
+                vec![durable("e1", vec![line("user"), line("commit")])]
             })
         });
         snapshot_rx.recv().expect("snapshot started");

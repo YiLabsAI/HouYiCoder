@@ -4,36 +4,40 @@
 use crate::protocol_adapter::{map_acpx_notification, map_session_update};
 use houyicoder_context::{SessionEvent, SessionLogEntry};
 use houyicoder_protocol::envelope::{
-    EventEnvelope, RequestId, ResponseEnvelope, ResponsePayload, ServerFrame,
+    DurableEventId, EventEnvelope, RequestId, ResponseEnvelope, ResponsePayload, ServerFrame,
 };
 use houyicoder_protocol::error::ProtocolError;
 use houyicoder_protocol::framing::encode;
 use houyicoder_protocol::frontend::{FrontendEvent, PendingInputId, QueuedInput};
 
+use super::event_sequencer::DurableProjection;
 use super::{FrameCarrier, Server};
 
 impl Server {
-    fn project_turn_event(event: &SessionLogEntry) -> Vec<FrontendEvent> {
-        let mut projected = Vec::with_capacity(3);
+    fn project_turn_event(event: &SessionLogEntry) -> DurableProjection {
+        let mut payloads = Vec::with_capacity(3);
         if let Some(update) = map_session_update(&event.event) {
-            projected.push(FrontendEvent::SessionUpdate { update });
+            payloads.push(FrontendEvent::SessionUpdate { update });
         }
         if let Some(notification) = map_acpx_notification(&event.event) {
-            projected.push(FrontendEvent::Acpx { notification });
+            payloads.push(FrontendEvent::Acpx { notification });
         }
         if let SessionEvent::MidTurnInput {
             text,
             pending_input_id: Some(id),
         } = &event.event
         {
-            projected.push(FrontendEvent::QueuedInputCommitted {
+            payloads.push(FrontendEvent::QueuedInputCommitted {
                 inputs: vec![QueuedInput {
                     id: PendingInputId(*id),
                     text: text.clone(),
                 }],
             });
         }
-        projected
+        DurableProjection {
+            event_id: DurableEventId(event.id.to_string()),
+            payloads,
+        }
     }
 
     /// Sequence and send every event currently available for this session.

@@ -7,6 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::frontend::FrontendEvent;
 use crate::frontend::model::ModelApplyResult;
 
 /// A caller-minted request id. Unique within a session; the response echoes it
@@ -16,9 +17,20 @@ pub struct RequestId(pub u64);
 
 /// A globally monotonic event sequence number. The service assigns these;
 /// a client reconnecting reports the last seq it processed so the service
-/// replays the tail without re-sending the whole stream.
+/// replays the tail without re-sending the whole stream. Sequence numbers
+/// answer push order and resume position only; they restart on every service
+/// process, so content identity never derives from them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct EventSeq(pub u64);
+
+/// The transport form of a host durable event identity: the ULID string of
+/// the session log entry the payload was projected from. The protocol crate
+/// stays serde-only with no internal dependencies, so the identity crosses
+/// the process boundary as a string newtype rather than the context crate's
+/// typed id. Stable across reconnects and process restarts, unlike EventSeq.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct DurableEventId(pub String);
 
 /// A request envelope: the caller's req_id plus the request payload. The
 /// frame on the wire is this envelope, not the bare payload, so the response
@@ -52,18 +64,44 @@ impl ResumeFrom {
     }
 }
 
-/// An event envelope: the service-assigned monotonic seq plus the event
-/// payload. The client tracks the highest seq it has processed for resume.
+/// An event envelope: the service-assigned monotonic seq, the event payload,
+/// and — when the payload has a durable origin — the log entry identity.
+/// The client tracks the highest seq it has processed for resume.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct EventEnvelope {
     pub seq: EventSeq,
-    pub payload: crate::frontend::FrontendEvent,
+    pub payload: FrontendEvent,
+    /// The durable identity of the log entry this payload was projected
+    /// from. Present exactly when the payload has a durable origin; runtime
+    /// pushes with no log entry (stream previews, agent status, system
+    /// notices) leave it absent and the consumer falls back to a local row
+    /// identity. The fallback is locally visible, so no capability bit
+    /// negotiates it. An optional increment: absent from the serialized
+    /// form when None, and a peer that predates the field ignores it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event_id: Option<DurableEventId>,
 }
 
 impl EventEnvelope {
-    pub fn new(seq: EventSeq, payload: crate::frontend::FrontendEvent) -> Self {
-        Self { seq, payload }
+    pub fn new(seq: EventSeq, payload: FrontendEvent) -> Self {
+        Self {
+            seq,
+            payload,
+            event_id: None,
+        }
+    }
+
+    /// An envelope for one payload projected from a durable log entry. The
+    /// seq carries push order and resume position; the event_id carries the
+    /// entry identity that survives reconnects and process restarts. Every
+    /// payload projected from the same entry carries the same identity.
+    pub fn durable(seq: EventSeq, payload: FrontendEvent, event_id: DurableEventId) -> Self {
+        Self {
+            seq,
+            payload,
+            event_id: Some(event_id),
+        }
     }
 }
 
@@ -369,6 +407,75 @@ mod tests {
     fn test_event_seq_orders_monotonically() {
         assert!(EventSeq(1) < EventSeq(2));
         assert!(EventSeq(2) > EventSeq(1));
+    }
+
+    fn sample_id() -> DurableEventId {
+        DurableEventId("01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string())
+    }
+
+    #[test]
+    fn test_envelope_carries_identity() {
+        // The identity survives a round-trip and is visible in the
+        // serialized form, so a consumer can stamp row identity from it.
+        let envelope = EventEnvelope::durable(
+            EventSeq(3),
+            FrontendEvent::SystemLine {
+                text: "delivered".into(),
+            },
+            sample_id(),
+        );
+        let json = serde_json::to_string(&envelope).expect("serialize");
+        assert!(
+            json.contains("\"event_id\""),
+            "a durable envelope serializes its identity: {json}"
+        );
+        let back: EventEnvelope = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back.event_id, Some(sample_id()));
+        assert_eq!(back.seq, EventSeq(3));
+    }
+
+    #[test]
+    fn test_envelope_omits_identity() {
+        // A runtime push with no log entry serializes without the key, and
+        // the identity-free form — what a host that predates the field
+        // sends — decodes to None rather than failing.
+        let envelope = EventEnvelope::new(
+            EventSeq(1),
+            FrontendEvent::SystemLine {
+                text: "runtime".into(),
+            },
+        );
+        let json = serde_json::to_string(&envelope).expect("serialize");
+        assert!(
+            !json.contains("event_id"),
+            "an absent identity leaves no key: {json}"
+        );
+        let back: EventEnvelope = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back.event_id, None);
+    }
+
+    #[test]
+    fn test_legacy_consumer_ignores_identity() {
+        // New host, old frontend: the envelope carries no deny-unknown
+        // configuration, so a consumer whose shape predates the field
+        // decodes the new form and every field it knows still lands.
+        #[derive(Deserialize)]
+        struct LegacyEnvelope {
+            seq: EventSeq,
+            payload: FrontendEvent,
+        }
+        let envelope = EventEnvelope::durable(
+            EventSeq(7),
+            FrontendEvent::SystemLine {
+                text: "line".into(),
+            },
+            sample_id(),
+        );
+        let json = serde_json::to_string(&envelope).expect("serialize");
+        let legacy: LegacyEnvelope =
+            serde_json::from_str(&json).expect("a peer that predates the field ignores it");
+        assert_eq!(legacy.seq, EventSeq(7));
+        assert!(matches!(legacy.payload, FrontendEvent::SystemLine { .. }));
     }
 
     #[test]
