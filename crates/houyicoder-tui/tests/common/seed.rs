@@ -149,3 +149,226 @@ pub fn seed_session_with_checkpoint(
     let backend = houyicoder_memory::LocalFileBackend::new(root.to_path_buf());
     futures::executor::block_on(backend.write_checkpoint(manifest)).expect("write checkpoint");
 }
+
+/// One planted marker in a large fixture log: a unique whitespace-free token
+/// and the byte depth of the event line that carries it. Depth lets a
+/// measurement classify the marker as resident-zone (newer than the byte
+/// budget from the tail) or disk-zone (only reachable through a history
+/// read).
+// Allowed dead because only the measurement binary calls the large-fixture
+// seeder; the aggregated UI binary includes this module without using it.
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct FixtureMarker {
+    pub text: String,
+    pub byte_depth: u64,
+}
+
+/// What a large fixture log holds, returned so a measurement can classify
+/// samples without re-deriving the corpus.
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct LargeFixture {
+    pub sid: String,
+    pub log_bytes: u64,
+    pub event_count: usize,
+    /// Markers in oldest-first order; the settle marker is not included.
+    pub markers: Vec<FixtureMarker>,
+    /// The unique token on the log's last event: the resume-replay settle
+    /// latch (visible only after the whole trajectory reached the view).
+    pub settle_marker: String,
+}
+
+/// The byte step between planted markers: a quarter of the history read's
+/// window budget, so one loaded window reveals several markers and a
+/// measurement can see each window land rather than only every fourth one.
+#[allow(dead_code)]
+const MARKER_STEP_BYTES: u64 = 64 * 1024;
+
+/// Deterministic filler text: pseudo-words derived from the indices, so the
+/// corpus is reproducible across runs without a random source. Each word is
+/// six bytes ("w1234 ").
+#[allow(dead_code)]
+fn filler(turn: usize, phase: usize, words: usize) -> String {
+    let mut text = String::with_capacity(words * 6 + 16);
+    for i in 0..words {
+        let v = (turn.wrapping_mul(31) + phase * 17 + i * 29) % 9973;
+        text.push_str(&format!("w{v:04} "));
+    }
+    text
+}
+
+/// The buffered log writer for the large fixture, owning the file and the
+/// running counters (byte depth, next timestamp, event count). The shapes
+/// the generator writes — one event, the markers due at the current depth,
+/// one turn — are its methods, so the counters stay with the file they
+/// describe.
+#[allow(dead_code)]
+struct FixtureWriter {
+    out: std::io::BufWriter<std::fs::File>,
+    sid: houyicoder_core::SessionId,
+    depth: u64,
+    ts_next: u64,
+    event_count: usize,
+}
+
+#[allow(dead_code)]
+impl FixtureWriter {
+    fn new(path: &std::path::Path, sid: houyicoder_core::SessionId) -> std::io::Result<Self> {
+        let file = std::fs::File::create(path)?;
+        Ok(Self {
+            out: std::io::BufWriter::with_capacity(1 << 20, file),
+            sid,
+            depth: 0,
+            ts_next: 1_000,
+            event_count: 0,
+        })
+    }
+
+    /// Serialize one event as a JSONL line and track its byte depth.
+    fn event(&mut self, event: houyicoder_core::SessionEvent) {
+        use houyicoder_core::{EventId, SessionLogEntry};
+        use std::io::Write;
+        let entry = SessionLogEntry {
+            id: EventId::new(),
+            session: self.sid,
+            ts: self.ts_next,
+            prev_hash: None,
+            event,
+        };
+        let mut line = serde_json::to_string(&entry).expect("serialize event");
+        line.push('\n');
+        self.depth += line.len() as u64;
+        self.ts_next += 1;
+        self.event_count += 1;
+        self.out.write_all(line.as_bytes()).expect("write log line");
+    }
+
+    /// Land a marker event whenever the depth crossed the next step: a
+    /// standalone UserInput so the token renders on its own short line (no
+    /// wrap-split, no merge into an adjacent message) and doubles as a turn
+    /// boundary the lookback walk can stop on.
+    fn due_markers(&mut self, markers: &mut Vec<FixtureMarker>, next_marker_at: &mut u64) {
+        use houyicoder_core::SessionEvent;
+        while self.depth >= *next_marker_at {
+            let text = format!("MK{:04}QZX", markers.len());
+            self.event(SessionEvent::UserInput { text: text.clone() });
+            markers.push(FixtureMarker {
+                text,
+                byte_depth: self.depth,
+            });
+            *next_marker_at += MARKER_STEP_BYTES;
+        }
+    }
+
+    /// One production-shaped turn: a start, a prompt, reasoning, a tool call
+    /// and its result, and the answer.
+    fn turn(&mut self, turn: usize) {
+        use houyicoder_core::SessionEvent;
+        self.event(SessionEvent::TurnStarted {
+            turn: turn as u32,
+            call_in_turn: 0,
+        });
+        self.event(SessionEvent::UserInput {
+            text: format!("fixture prompt {turn}: inspect the recorded run"),
+        });
+        self.event(SessionEvent::Reasoning {
+            text: filler(turn, 1, 300),
+        });
+        self.event(SessionEvent::ToolCall {
+            call_id: format!("call-{turn}"),
+            tool: "bash".into(),
+            input: serde_json::json!({ "command": format!("grep -n 'fixture {turn}' run.log") }),
+        });
+        self.event(SessionEvent::ToolResult {
+            call_id: format!("call-{turn}"),
+            output: serde_json::json!({ "stdout": filler(turn, 2, 500) }),
+            duration_ms: (turn % 40) as u64 + 5,
+        });
+        self.event(SessionEvent::AssistantMessage {
+            text: filler(turn, 3, 200),
+            thinking: None,
+        });
+    }
+
+    /// Flush the buffer and hand back (depth, event count).
+    fn finish(mut self) -> (u64, usize) {
+        use std::io::Write;
+        self.out.flush().expect("flush log");
+        (self.depth, self.event_count)
+    }
+}
+
+/// Seed a large session log (target_bytes magnitude) for measurement tests:
+/// turns of TurnStarted + UserInput + Reasoning + ToolCall + ToolResult +
+/// AssistantMessage with production-shaped payloads (the average event lands
+/// near the 3.6 KB the history reader's window budget assumes), a unique
+/// marker event every MARKER_STEP_BYTES of depth, and a settle marker on the
+/// last event. The log is written directly as JSONL in one buffered pass —
+/// the append-per-event path fsyncs each line, which a 64 MiB fixture
+/// should not pay. The read path is lenient (prev_hash None matches the
+/// existing seed precedent), and the descriptor mirrors seed_session_with_cwd
+/// so --resume accepts the session. The event shape matches the CLI crate's
+/// measurement fixture generator, so the index-build measurement and the
+/// page-up measurement compare over the same turn layout; a change here
+/// must be mirrored there.
+#[allow(dead_code)]
+pub fn seed_large_session_on_disk(
+    root: &std::path::Path,
+    sid_str: &str,
+    model: &str,
+    target_bytes: u64,
+) -> LargeFixture {
+    use houyicoder_core::{SessionEvent, SessionId};
+
+    let sid = SessionId::from_display_string(sid_str).expect("sid parses");
+    let dir = root.join(sid_str);
+    std::fs::create_dir_all(&dir).expect("mkdir session dir");
+
+    let mut markers = Vec::new();
+    let mut next_marker_at: u64 = MARKER_STEP_BYTES;
+    let mut writer = FixtureWriter::new(&dir.join("log.jsonl"), sid).expect("create log");
+    for turn in 0..usize::MAX {
+        if writer.depth >= target_bytes {
+            break;
+        }
+        writer.due_markers(&mut markers, &mut next_marker_at);
+        writer.turn(turn);
+    }
+    let settle_marker = "SETTLEQZX".to_string();
+    writer.event(SessionEvent::UserInput {
+        text: settle_marker.clone(),
+    });
+    let (log_bytes, event_count) = writer.finish();
+    // A write handle because syncing a file needs write access on Windows;
+    // a read-only open fails there.
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(dir.join("log.jsonl"))
+        .and_then(|f| f.sync_all())
+        .expect("fsync log");
+
+    let cwd = houyicoder_service::composition::workspace_cwd(None);
+    let meta = serde_json::json!({
+        "name": null,
+        "name_source": "auto",
+        "cwd": cwd,
+        "model": model,
+        "provenance": {"kind": "fresh"},
+        "version": "test",
+        "created_at": 1000,
+    });
+    std::fs::write(
+        dir.join("session.json"),
+        serde_json::to_string(&meta).expect("serialize meta"),
+    )
+    .expect("write descriptor");
+
+    LargeFixture {
+        sid: sid_str.to_string(),
+        log_bytes,
+        event_count,
+        markers,
+        settle_marker,
+    }
+}

@@ -893,3 +893,329 @@ fn test_home_refuses_stale() {
         after - before
     );
 }
+
+/// Deterministic pseudo-words for measurement fixtures: derived from the
+/// indices so the corpus is reproducible without a random source. Each word
+/// is six bytes ("w1234 ").
+fn measurement_filler(turn: usize, phase: usize, words: usize) -> String {
+    let mut text = String::with_capacity(words * 6 + 16);
+    for i in 0..words {
+        let v = (turn.wrapping_mul(31) + phase * 17 + i * 29) % 9973;
+        text.push_str(&format!("w{v:04} "));
+    }
+    text
+}
+
+/// Running state of the measurement fixture generator: how many bytes have
+/// been written, the timestamp for the next event, and how many events have
+/// been emitted.
+struct MeasurementFixtureState {
+    depth_bytes: u64,
+    next_ts: u64,
+    event_count: usize,
+}
+
+/// Serialize one fixture event as a JSONL line, advancing the generator
+/// state.
+fn write_measurement_event(
+    out: &mut std::io::BufWriter<std::fs::File>,
+    state: &mut MeasurementFixtureState,
+    sid: SessionId,
+    event: SessionEvent,
+) {
+    use std::io::Write;
+    let entry = SessionLogEntry {
+        id: EventId::new(),
+        session: sid,
+        ts: state.next_ts,
+        prev_hash: None,
+        event,
+    };
+    let mut line = serde_json::to_string(&entry).expect("serialize event");
+    line.push('\n');
+    state.depth_bytes += line.len() as u64;
+    state.next_ts += 1;
+    state.event_count += 1;
+    out.write_all(line.as_bytes()).expect("write log line");
+}
+
+/// One production-shaped turn: a start, a prompt, reasoning, a tool call and
+/// its result, and the answer.
+fn write_measurement_turn(
+    out: &mut std::io::BufWriter<std::fs::File>,
+    state: &mut MeasurementFixtureState,
+    sid: SessionId,
+    turn: usize,
+) {
+    write_measurement_event(
+        out,
+        state,
+        sid,
+        SessionEvent::TurnStarted {
+            turn: turn as u32,
+            call_in_turn: 0,
+        },
+    );
+    write_measurement_event(
+        out,
+        state,
+        sid,
+        SessionEvent::UserInput {
+            text: format!("fixture prompt {turn}: inspect the recorded run"),
+        },
+    );
+    write_measurement_event(
+        out,
+        state,
+        sid,
+        SessionEvent::Reasoning {
+            text: measurement_filler(turn, 1, 300),
+        },
+    );
+    write_measurement_event(
+        out,
+        state,
+        sid,
+        SessionEvent::ToolCall {
+            call_id: format!("call-{turn}"),
+            tool: "bash".into(),
+            input: serde_json::json!({ "command": format!("grep -n 'fixture {turn}' run.log") }),
+        },
+    );
+    write_measurement_event(
+        out,
+        state,
+        sid,
+        SessionEvent::ToolResult {
+            call_id: format!("call-{turn}"),
+            output: serde_json::json!({ "stdout": measurement_filler(turn, 2, 500) }),
+            duration_ms: (turn % 40) as u64 + 5,
+        },
+    );
+    write_measurement_event(
+        out,
+        state,
+        sid,
+        SessionEvent::AssistantMessage {
+            text: measurement_filler(turn, 3, 200),
+            thinking: None,
+        },
+    );
+}
+
+/// Write a large fixture log directly as JSONL in one buffered pass and
+/// return (log_bytes, event_count). The append path fsyncs each line, which
+/// a multi-megabyte fixture should not pay; the read side is lenient about
+/// the hash chain (prev_hash None), matching the seeding precedent elsewhere.
+/// The event shape matches the TUI crate's large-fixture seeder, so the
+/// index-build measurement and the page-up measurement compare over the same
+/// turn layout; a change here must be mirrored there.
+fn seed_measurement_log(root: &std::path::Path, sid: SessionId, target_bytes: u64) -> (u64, usize) {
+    use std::io::Write;
+
+    let dir = root.join(sid.to_string());
+    std::fs::create_dir_all(&dir).expect("mkdir session dir");
+    let file = std::fs::File::create(dir.join("log.jsonl")).expect("create log");
+    let mut out = std::io::BufWriter::with_capacity(1 << 20, file);
+
+    let mut state = MeasurementFixtureState {
+        depth_bytes: 0,
+        next_ts: 1_000,
+        event_count: 0,
+    };
+    for turn in 0..usize::MAX {
+        if state.depth_bytes >= target_bytes {
+            break;
+        }
+        write_measurement_turn(&mut out, &mut state, sid, turn);
+    }
+    out.flush().expect("flush log");
+    (state.depth_bytes, state.event_count)
+}
+
+/// The current process's resident set in kilobytes, read through the process
+/// table tool. Measurement scaffolding, not an engine command.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "measurement sampling of the test process, not an engine command"
+)]
+fn self_rss_kb() -> Option<u64> {
+    let out = std::process::Command::new("ps")
+        .args(["-o", "rss=", "-p", &std::process::id().to_string()])
+        .output()
+        .ok()?;
+    String::from_utf8_lossy(&out.stdout)
+        .trim()
+        .parse::<u64>()
+        .ok()
+}
+
+/// One index build over one fixture size: the timed chunks, the resident-set
+/// delta across the build, and the finished index for verification.
+struct IndexBuildRun {
+    history: SessionHistory,
+    sid: SessionId,
+    log_bytes: u64,
+    event_count: usize,
+    chunk_ms: Vec<f64>,
+    build_ms: f64,
+    rss_before_kb: Option<u64>,
+    rss_after_kb: Option<u64>,
+}
+
+impl IndexBuildRun {
+    /// Seed a fixture of the target size under root and build the whole
+    /// index, timing every chunk.
+    fn measure(root: &std::path::Path, sid: SessionId, target: u64) -> Self {
+        let (log_bytes, event_count) = seed_measurement_log(root, sid, target);
+        let store = SessionStore::new(Box::new(LocalFileBackend::new(root.to_path_buf())));
+        let history = SessionHistory::new(std::sync::Arc::new(store), sid);
+
+        let rss_before_kb = self_rss_kb();
+        let build_start = std::time::Instant::now();
+        let mut chunk_ms: Vec<f64> = Vec::new();
+        let progress = loop {
+            let step = std::time::Instant::now();
+            let p = history.index_chunk();
+            chunk_ms.push(step.elapsed().as_secs_f64() * 1000.0);
+            if p.done {
+                break p;
+            }
+        };
+        let build_ms = build_start.elapsed().as_secs_f64() * 1000.0;
+        let rss_after_kb = self_rss_kb();
+
+        assert_eq!(progress.total_bytes, log_bytes, "index covered the log");
+        assert_eq!(progress.indexed_bytes, log_bytes, "index reached the head");
+        Self {
+            history,
+            sid,
+            log_bytes,
+            event_count,
+            chunk_ms,
+            build_ms,
+            rss_before_kb,
+            rss_after_kb,
+        }
+    }
+
+    /// Correctness rides along with the timing: the index must count every
+    /// event, stay monotonic in byte offset, and land each spot-checked
+    /// offset on a parseable event line.
+    fn verify(&self, root: &std::path::Path) {
+        use std::io::{BufRead, Seek, SeekFrom};
+
+        let counted = self.history.event_count().expect("index done");
+        assert_eq!(counted, self.event_count, "every event indexed");
+
+        let mut prev = 0u64;
+        for i in 0..counted {
+            let off = self.history.byte_at(i).expect("offset covered");
+            assert!(off >= prev, "offsets monotonic at {i}");
+            prev = off;
+        }
+        let file = std::fs::File::open(root.join(self.sid.to_string()).join("log.jsonl"))
+            .expect("reopen log");
+        for i in [0usize, counted / 2, counted - 1] {
+            let off = self.history.byte_at(i).expect("offset covered");
+            let mut reader = std::io::BufReader::new(&file);
+            reader.seek(SeekFrom::Start(off)).expect("seek");
+            let mut line = String::new();
+            reader.read_line(&mut line).expect("read line");
+            assert!(
+                parse_event(&line).is_some(),
+                "offset for event {i} lands on a parseable line"
+            );
+        }
+    }
+
+    fn offsets_bytes(&self) -> usize {
+        self.event_count * std::mem::size_of::<u64>()
+    }
+
+    fn chunk_stats(&self) -> (f64, f64) {
+        let mut sorted = self.chunk_ms.clone();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        (sorted[sorted.len() / 2], sorted[sorted.len() - 1])
+    }
+
+    fn csv_row(&self) -> String {
+        let (p50, max) = self.chunk_stats();
+        let rss_text = |r: Option<u64>| r.map(|v| v.to_string()).unwrap_or_else(|| "na".into());
+        format!(
+            "{},{},{},{:.1},{p50:.1},{max:.1},{},{},{}\n",
+            self.log_bytes,
+            self.event_count,
+            self.chunk_ms.len(),
+            self.build_ms,
+            rss_text(self.rss_before_kb),
+            rss_text(self.rss_after_kb),
+            self.offsets_bytes(),
+        )
+    }
+
+    fn report_line(&self) -> String {
+        let (p50, max) = self.chunk_stats();
+        let rss_text = |r: Option<u64>| r.map(|v| v.to_string()).unwrap_or_else(|| "na".into());
+        format!(
+            "index build {} bytes: {} chunks, {:.1} ms total, p50 {p50:.1} ms, max {max:.1} ms, \
+             rss {} -> {} KiB, offsets {} bytes",
+            self.log_bytes,
+            self.chunk_ms.len(),
+            self.build_ms,
+            rss_text(self.rss_before_kb),
+            rss_text(self.rss_after_kb),
+            self.offsets_bytes(),
+        )
+    }
+}
+
+/// Baseline for the history index build: chunk times for 16 MiB and 64 MiB
+/// logs, the resident-set delta across the build, and the analytical memory
+/// of the finished offset table.
+#[test]
+#[ignore = "measurement workload; run via the history benchmark target"]
+fn test_index_build_baseline() {
+    let run_id = std::env::var("HOUYI_BENCH_RUN_ID")
+        .unwrap_or_else(|_| format!("adhoc-{}", std::process::id()));
+    let sha = std::env::var("HOUYI_GIT_SHA").unwrap_or_else(|_| "unknown".into());
+    let run_dir = std::path::Path::new("target/measurements/history-index").join(&run_id);
+    std::fs::create_dir_all(&run_dir).expect("measurements dir");
+
+    let sizes = [16u64 * 1024 * 1024, 64 * 1024 * 1024];
+    let mut rows = String::from(
+        "log_bytes,event_count,chunks,build_ms,chunk_ms_p50,chunk_ms_max,rss_before_kb,rss_after_kb,offsets_bytes\n",
+    );
+
+    for target in sizes {
+        let root = std::env::temp_dir().join(format!(
+            "houyi_index_measure_{target}_{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).expect("fixture root");
+        let run = IndexBuildRun::measure(&root, SessionId::new(), target);
+        run.verify(&root);
+        rows.push_str(&run.csv_row());
+        println!("{}", run.report_line());
+        drop(std::fs::remove_dir_all(&root));
+    }
+
+    let profile = if cfg!(debug_assertions) {
+        "debug"
+    } else {
+        "release"
+    };
+    std::fs::write(
+        run_dir.join("meta.txt"),
+        format!(
+            "sha {sha}\nrun_id {run_id}\nprofile {profile}\nos {} {}\nindex_chunk_bytes \
+             {INDEX_CHUNK_BYTES}\nsizes 16MiB 64MiB\n",
+            std::env::consts::OS,
+            std::env::consts::ARCH
+        ),
+    )
+    .expect("write meta");
+    std::fs::write(run_dir.join("index_build.csv"), &rows).expect("write rows");
+    println!("history index baseline ({})", run_dir.display());
+    print!("{rows}");
+}

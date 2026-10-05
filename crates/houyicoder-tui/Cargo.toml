@@ -25,6 +25,10 @@ path = "tests/ui_all.rs"
 name = "live_agent"
 path = "tests/live_agent.rs"
 
+[[test]]
+name = "measure_history"
+path = "tests/measure_history.rs"
+
 [lib]
 path = "src/lib.rs"
 

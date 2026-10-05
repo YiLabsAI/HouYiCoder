@@ -2,7 +2,7 @@
 set -euo pipefail
 
 if [ "$#" -ne 1 ]; then
-    echo "expected one benchmark: reward | tui" >&2
+    echo "expected one benchmark: reward | tui | history" >&2
     exit 2
 fi
 BENCHMARK="$1"
@@ -36,12 +36,28 @@ case "$BENCHMARK" in
             "$CARGO" test -p houyicoder-tui --lib frame_timing_benchmark \
             --release -- --ignored --nocapture
         ;;
+    history)
+        # The PTY measurement drives the real binary, so build it first; the
+        # test binary follows the same profile (houyi_binary_path switches on
+        # debug_assertions). Serial threads keep the timing uncontended. One
+        # run id across both halves so their sample dirs join up.
+        HISTORY_SHA="$(git rev-parse --short HEAD)"
+        HISTORY_RUN_ID="$(date +%Y-%m-%d-%H%M%S)-$HISTORY_SHA"
+        run "$CARGO" build --release --bin houyi
+        run env HOUYI_GIT_SHA="$HISTORY_SHA" HOUYI_BENCH_RUN_ID="$HISTORY_RUN_ID" \
+            "$CARGO" test -p houyicoder-tui --test measure_history \
+            --release -- --ignored --nocapture --test-threads 1
+        run env HOUYI_GIT_SHA="$HISTORY_SHA" HOUYI_BENCH_RUN_ID="$HISTORY_RUN_ID" \
+            "$CARGO" test -p houyicoder-cli --release --bin houyi \
+            session_history::tests::test_index_build_baseline \
+            -- --ignored --nocapture
+        ;;
     "")
-        echo "benchmark name required: reward | tui" >&2
+        echo "benchmark name required: reward | tui | history" >&2
         exit 2
         ;;
     *)
-        echo "unknown benchmark: '$BENCHMARK' (expected: reward | tui)" >&2
+        echo "unknown benchmark: '$BENCHMARK' (expected: reward | tui | history)" >&2
         exit 2
         ;;
 esac

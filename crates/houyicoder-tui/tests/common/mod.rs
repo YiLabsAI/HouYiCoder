@@ -277,6 +277,15 @@ impl PtySession {
         &self.sessions_dir
     }
 
+    /// The child's OS process id, for measurement tests that sample the
+    /// running binary's resource use from outside.
+    // Allowed dead because only the measurement binary samples resources;
+    // the aggregated UI binary includes this module without calling it.
+    #[allow(dead_code)]
+    pub fn child_pid(&self) -> Option<u32> {
+        self._child.process_id()
+    }
+
     /// Write raw bytes to the PTY master (the binary reads them as crossterm
     /// key events on stdin).
     pub fn send_bytes(&mut self, bytes: &[u8]) {
@@ -482,15 +491,23 @@ impl Key {
     }
 }
 
-/// Resolve target/debug/houyi relative to this crate's manifest dir
-/// (the workspace root is two levels above the TUI crate dir).
+/// Resolve target/<profile>/houyi relative to this crate's manifest dir
+/// (the workspace root is two levels above the TUI crate dir). The profile
+/// follows the test binary: a release test run measures the release binary,
+/// which the caller must have built (cargo build --release --bin houyi) —
+/// the measurement benchmark target builds it first.
 fn houyi_binary_path() -> PathBuf {
+    let profile = if cfg!(debug_assertions) {
+        "debug"
+    } else {
+        "release"
+    };
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     manifest
         .parent()
         .and_then(|p| p.parent())
-        .map(|root| root.join("target").join("debug").join("houyi"))
-        .unwrap_or_else(|| PathBuf::from("target/debug/houyi"))
+        .map(|root| root.join("target").join(profile).join("houyi"))
+        .unwrap_or_else(|| PathBuf::from(format!("target/{profile}/houyi")))
 }
 
 /// The workspace root (two levels above this crate). Used as the binary's cwd
