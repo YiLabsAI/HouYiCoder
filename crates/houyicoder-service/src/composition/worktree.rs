@@ -51,10 +51,12 @@ pub fn wire_worktree_controller(
 }
 
 /// The canonical .git common dir for a workspace: git rev-parse
-/// --git-common-dir, canonicalized. For a linked worktree this resolves
-/// the .git gitfile indirection to the main repo's shared .git dir (where
-/// config, objects, refs live); for a main repo it is the repo's own .git.
-/// None when git is unavailable or the path cannot be canonicalized.
+/// --git-common-dir, canonicalized to the plain Windows form (no verbatim
+/// prefix) so it is comparable with dunce-form workspace roots. For a linked
+/// worktree this resolves the .git gitfile indirection to the main repo's
+/// shared .git dir (where config, objects, refs live); for a main repo it is
+/// the repo's own .git. None when git is unavailable or the path cannot be
+/// canonicalized.
 ///
 /// This is the path the worktree controller allow-backs into the narrow
 /// fence so a linked worktree can read the main repo's .git/config and the
@@ -79,8 +81,11 @@ pub fn git_common_dir(ws: &Path) -> Option<PathBuf> {
     if s.is_empty() {
         return None;
     }
-    std::fs::canonicalize(ws.join(&s))
-        .or_else(|_| std::fs::canonicalize(std::path::Path::new(&s)))
+    // dunce on both branches: callers compare this path against workspace
+    // roots that carry no Windows verbatim prefix, and a std canonicalize
+    // form would never prefix-match them.
+    dunce::canonicalize(ws.join(&s))
+        .or_else(|_| dunce::canonicalize(std::path::Path::new(&s)))
         .ok()
 }
 

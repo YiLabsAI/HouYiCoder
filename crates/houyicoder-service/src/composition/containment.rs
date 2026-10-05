@@ -98,10 +98,18 @@ pub(crate) fn restore_directory_grants(session: &dyn SandboxSession, store: &dyn
 /// that matter survive either way -- hooks and config stay write-denied by
 /// the mandatory deny segment, which lands after every allow-back.
 pub(crate) fn attach_git_common_dir(session: &dyn SandboxSession, workspace: &Path) {
-    let Some(common) = super::worktree::git_common_dir(workspace) else {
+    // Normalize before anything consumes the path, not just before the
+    // comparison: the git probe and the containment check must see the same
+    // plain form. Production workspaces arrive from the resolver in dunce
+    // form, but a std-canonicalized caller would on Windows carry the
+    // verbatim prefix, which never prefix-matches the plain-form common dir;
+    // git for Windows is also widely reported to reject it, which would fail
+    // the probe and leave the allow-back a silent no-op.
+    let ws = dunce::canonicalize(workspace).unwrap_or_else(|_| workspace.to_path_buf());
+    let Some(common) = super::worktree::git_common_dir(&ws) else {
         return;
     };
-    if common.starts_with(workspace) {
+    if common.starts_with(&ws) {
         return;
     }
     if let Err(e) = session.add_working_dir(&common.to_string_lossy()) {
@@ -310,6 +318,62 @@ mod tests {
             session.working_dirs().is_empty(),
             "a main repo's git dir is already inside the workspace: {:?}",
             session.working_dirs()
+        );
+        fs::remove_dir_all(&root).ok();
+    }
+
+    /// Production hands attach a std-canonicalized workspace, which on
+    /// Windows carries the verbatim prefix, while the common dir resolves to
+    /// the plain form. Without normalizing the workspace side, the main
+    /// repo's own git dir fails the containment check and gets attached as a
+    /// runtime grant, showing a fence extension that widened nothing.
+    #[cfg(windows)]
+    #[test]
+    fn test_attach_normalizes_verbatim() {
+        let root = temp_root("houyi-verbatim");
+        let Some((repo, _wt)) = git_repo_with_worktree(&root) else {
+            fs::remove_dir_all(&root).ok();
+            return;
+        };
+        let ws = std::fs::canonicalize(&repo).expect("canonicalize repo");
+        let session: Arc<dyn SandboxSession> =
+            Arc::new(PlatformSession::new_in_cwd(&ws).expect("sandbox"));
+
+        attach_git_common_dir(session.as_ref(), &ws);
+
+        assert!(
+            session.working_dirs().is_empty(),
+            "a verbatim workspace must still contain its own git dir: {:?}",
+            session.working_dirs()
+        );
+        fs::remove_dir_all(&root).ok();
+    }
+
+    /// The positive counterpart: a linked worktree passed in verbatim form
+    /// must still get the main repo git dir attached. The probe runs after
+    /// normalization, so this reddens if the verbatim path ever reaches git
+    /// for Windows (which is widely reported to reject it, making the
+    /// allow-back a silent no-op) instead of only checking the negative
+    /// containment case.
+    #[cfg(windows)]
+    #[test]
+    fn test_attach_verbatim_worktree() {
+        let root = temp_root("houyi-verbatim-wt");
+        let Some((repo, wt)) = git_repo_with_worktree(&root) else {
+            fs::remove_dir_all(&root).ok();
+            return;
+        };
+        let ws = std::fs::canonicalize(&wt).expect("canonicalize worktree");
+        let session: Arc<dyn SandboxSession> =
+            Arc::new(PlatformSession::new_in_cwd(&ws).expect("sandbox"));
+
+        attach_git_common_dir(session.as_ref(), &ws);
+
+        let main_git = dunce::canonicalize(repo.join(".git")).expect("canonicalize main .git");
+        let dirs = session.working_dirs();
+        assert!(
+            dirs.iter().any(|d| Path::new(d.as_str()) == main_git),
+            "a verbatim linked worktree must still attach the main git dir: {dirs:?}"
         );
         fs::remove_dir_all(&root).ok();
     }

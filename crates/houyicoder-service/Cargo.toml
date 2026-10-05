@@ -38,6 +38,7 @@ houyicoder-provider = { path = "../houyicoder-provider" }
 houyicoder-sandbox = { path = "../houyicoder-sandbox" }
 houyicoder-resilience = { path = "../houyicoder-resilience" }
 houyicoder-skill = { path = "../houyicoder-skill" }
+dunce = "1"
 futures = "0.3"
 tokio = { version = "1", features = ["macros", "rt", "sync", "net", "io-util"] }
 serde = { version = "1", features = ["derive"] }
@@ -92,4 +93,3 @@ required-features = ["acp-cross-decode"]
 tokio = { version = "1", features = ["rt", "macros", "time"] }
 serde = { version = "1", features = ["derive"] }
 houyicoder-client = { path = "../houyicoder-client" }
-dunce = "1"
