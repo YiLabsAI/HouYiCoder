@@ -47,6 +47,8 @@ tracing = "0.1.44"
 unicode-linebreak = "0.1.5"
 
 [dev-dependencies]
+# Plain-form canonicalization for workspace-walk test assertions.
+dunce = "1"
 houyicoder-core = { path = "../houyicoder-core" }
 houyicoder-api = { path = "../houyicoder-api" }
 houyicoder-permission = { path = "../houyicoder-permission" }

@@ -330,7 +330,7 @@ fn test_walk_finds_workspace_root() {
     )
     .unwrap();
     let found = walk_to_workspace_root(&crate_dir);
-    assert_eq!(found, Some(root.canonicalize().unwrap()));
+    assert_eq!(found, Some(dunce::canonicalize(&root).unwrap()));
     fs::remove_dir_all(&root).ok();
 }
 
