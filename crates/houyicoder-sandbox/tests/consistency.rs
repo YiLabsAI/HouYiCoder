@@ -1,15 +1,16 @@
 //! Cross-platform consistency suite for the sandbox backends. One set of
 //! behavioral assertions runs against whichever PlatformSession the host
 //! provides, so a grant, a revocation and an escape attempt mean the same
-//! thing on every platform: the resolver group runs everywhere, and the
-//! kernel group runs whenever the host's path fence is actually live
+//! thing on every platform: the resolver and exec groups run everywhere, and
+//! the kernel group runs whenever the host's path fence is actually live
 //! (macOS always; Linux when the helper and kernel agree, never under the
-//! test-suite enforcement hatch -- the landlock smoke example covers that
-//! path; Windows never, its job object carries no path primitive).
+//! test-suite enforcement hatch -- the landlock smoke example exercises that
+//! path on demand; Windows never, its job object carries no path primitive).
 
 #![cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 
 use houyicoder_api::sandbox::{FenceStatus, SandboxSession};
+use houyicoder_context::{ExecConfig, SandboxError};
 use houyicoder_sandbox::PlatformSession;
 use std::path::{Path, PathBuf};
 
@@ -37,6 +38,30 @@ fn write_cmd(path: &str) -> String {
         format!("echo x> {path}")
     } else {
         format!("touch {path}")
+    }
+}
+
+/// One command writing to both streams, in the host shell's syntax: cmd
+/// separates with an ampersand and redirects through 1>&2, a unix shell with
+/// a semicolon and >&2.
+fn streams_cmd() -> String {
+    if cfg!(windows) {
+        "echo out & echo err 1>&2".to_string()
+    } else {
+        "echo out; echo err >&2".to_string()
+    }
+}
+
+/// A command that outlives the wall timeout under test. It never runs to
+/// completion: the timeout group-kills it, so the test costs the timeout
+/// budget, not the command's natural duration.
+fn outlive_cmd(wall_ms: u64) -> String {
+    if cfg!(windows) {
+        let secs = wall_ms / 1000 + 5;
+        format!("ping -n {secs} 127.0.0.1 > nul")
+    } else {
+        let secs = wall_ms / 1000 + 5;
+        format!("sleep {secs}")
     }
 }
 
@@ -169,6 +194,43 @@ fn test_duplicate_grant_single_entry() {
         .count();
     assert_eq!(count, 1, "a repeated grant must stay one entry");
     std::fs::remove_dir_all(&outside).ok();
+}
+
+// ---------------------------------------------------------------------------
+// Exec group: the spawn path every backend runs whether or not the kernel
+// fence engaged. Ungated on purpose: stream plumbing, exit-code passthrough
+// and the wall timeout are backend-shared behavior that even a resolver-only
+// boundary owes the caller.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_exec_round_trip() {
+    let s = session();
+    let r = s.exec(&streams_cmd()).await.expect("exec streams");
+    assert!(r.is_success(), "stderr: {}", r.stderr);
+    assert_eq!(r.stdout.trim(), "out", "stdout must pass through");
+    assert_eq!(r.stderr.trim(), "err", "stderr must pass through");
+
+    let failed = s.exec("exit 3").await.expect("exec exit code");
+    assert_eq!(
+        failed.exit_code,
+        Some(3),
+        "a non-zero exit is a result, not an error"
+    );
+}
+
+#[tokio::test]
+async fn test_exec_wall_timeout() {
+    let s = session();
+    let config = ExecConfig {
+        wall_timeout_ms: 100,
+        ..ExecConfig::default()
+    };
+    let err = s
+        .exec_with_config(&outlive_cmd(config.wall_timeout_ms), config)
+        .await
+        .expect_err("the wall timeout must fire");
+    assert!(matches!(err, SandboxError::Timeout(_)), "got {err:?}");
 }
 
 // ---------------------------------------------------------------------------

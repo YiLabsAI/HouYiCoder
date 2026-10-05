@@ -4,8 +4,11 @@
 A line whose only change is a module path renamed elsewhere in the same diff
 is not new code and is left out of the measured set; see is_path_rewrite.
 
-Unit-only: runs `cargo llvm-cov --lib` so integration tests (tests/) do not
-count toward coverage (they validate end-to-end paths, not unit isolation).
+Unit-dominated: normally consumes the merged lcov check_coverage.sh left
+behind (lib suite plus the sandbox integration exception recorded there);
+the standalone fallback runs `cargo llvm-cov --lib`, so integration tests
+count only through that recorded exception, never as a substitute for the
+unit tests a module owes.
 The gate fails when the coverage of NEW or MODIFIED lines (the diff vs
 COV_BASE, default HEAD for pre-commit; set origin/main for CI) drops below
 COV_DIFF_THRESHOLD (85 starter, raise to 90 once green).
@@ -512,7 +515,8 @@ def main() -> int:
             return 0
         if Path(LCOV).is_file():
             print("note: cached lcov is stale vs source; re-running cargo llvm-cov.", file=sys.stderr)
-        # Unit-only (--lib): integration tests do not count toward coverage.
+        # Fallback report is lib-only; the cached path above inherits the
+        # merged lcov check_coverage.sh produced, sandbox exception included.
         fresh = instrumented_report(COV_DIR, rebuild=False)
         if fresh is None:
             return 2

@@ -15,6 +15,7 @@ use houyicoder_api::sandbox::{
 use houyicoder_async::PFut;
 use houyicoder_context::{ExecConfig, ExecResult, SandboxError};
 use houyicoder_resilience::resource_breaker::ResourceBreaker;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -153,6 +154,31 @@ impl LinuxLandlockSession {
         )))
     }
 
+    /// The fence helper argv for one command: the workspace and the session
+    /// scratch dir as write grants, every runtime write grant, every read-only
+    /// grant, then the command after the separator. Split out of exec_inner so
+    /// the argv shape is testable without a spawn: this list IS the kernel
+    /// grant set, and a path the resolver admits but this list omits would be
+    /// fenced away at spawn time.
+    fn helper_argv(&self, command: &str) -> Vec<OsString> {
+        let mut argv: Vec<OsString> = Vec::new();
+        argv.push("--write".into());
+        argv.push(self.workspace.as_os_str().to_os_string());
+        argv.push("--write".into());
+        argv.push(self.tmpdir.as_os_str().to_os_string());
+        for dir in self.dirs.read_write() {
+            argv.push("--write".into());
+            argv.push(dir.into_os_string());
+        }
+        for dir in self.dirs.read_only() {
+            argv.push("--read".into());
+            argv.push(dir.into_os_string());
+        }
+        argv.push("--".into());
+        argv.push(command.into());
+        argv
+    }
+
     /// Run one command. Fenced, the helper is spawned with the live grant
     /// set in argv; unfenced, the shell is spawned directly after an audit
     /// line. Both paths share the cwd, the pipes, the scratch TMPDIR, the
@@ -175,15 +201,7 @@ impl LinuxLandlockSession {
         let mut cmd = match helper {
             Some(helper) => {
                 let mut cmd = tokio::process::Command::new(helper);
-                cmd.arg("--write").arg(&self.workspace);
-                cmd.arg("--write").arg(&self.tmpdir);
-                for dir in self.dirs.read_write() {
-                    cmd.arg("--write").arg(dir);
-                }
-                for dir in self.dirs.read_only() {
-                    cmd.arg("--read").arg(dir);
-                }
-                cmd.arg("--").arg(&command);
+                cmd.args(self.helper_argv(&command));
                 cmd
             }
             None => {
@@ -220,17 +238,25 @@ impl LinuxLandlockSession {
         let _tree_guard = TreeKillGuard { pgid };
         let outcome = tokio::time::timeout(wall, child.wait_with_output()).await;
         match outcome {
-            Ok(Ok(output)) => Ok(ExecResult {
-                stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-                exit_code: output.status.code(),
-            }),
+            Ok(Ok(output)) => Ok(exec_result_from_output(output)),
             Ok(Err(e)) => Err(SandboxError::Io(format!("wait: {e}"))),
             Err(_elapsed) => Err(SandboxError::Timeout(format!(
                 "wall-clock {}ms exceeded",
                 config.wall_timeout_ms
             ))),
         }
+    }
+}
+
+/// Map a finished child's raw output onto the exec answer. Split out of
+/// exec_inner so the stream and exit-code mapping is testable without a
+/// spawn: a signal death reports a None code, and the lossy conversion is
+/// what every caller sees.
+fn exec_result_from_output(output: std::process::Output) -> ExecResult {
+    ExecResult {
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        exit_code: output.status.code(),
     }
 }
 
@@ -269,6 +295,39 @@ impl Drop for LinuxLandlockSession {
     }
 }
 
+/// Map the helper probe's answer word onto the fence status. Split out of
+/// probe_fence so every branch of the helper protocol is testable without a
+/// Linux host or a spawned helper: the word set is the contract between the
+/// daemon and the helper binary, and an unrecognized word must land in
+/// Failed with the reason, never be mistaken for a working fence.
+#[cfg(feature = "enforce")]
+fn fence_from_probe(word: &str) -> FenceStatus {
+    match word.trim() {
+        "enforced" => FenceStatus::Enforced,
+        "enforced-partial" => {
+            tracing::warn!(
+                "sandbox audit: landlock enforced with a degraded kernel ABI; some filesystem rights are not restricted"
+            );
+            FenceStatus::Enforced
+        }
+        "not-enforced" => {
+            tracing::warn!(
+                "sandbox audit: landlock supported but ruleset not enforced; running unfenced"
+            );
+            FenceStatus::NotEnforced
+        }
+        "unavailable" => {
+            tracing::warn!("sandbox audit: landlock unavailable on this kernel; running unfenced");
+            FenceStatus::Unavailable
+        }
+        other => {
+            let reason = other.strip_prefix("failed:").unwrap_or(other).to_string();
+            tracing::warn!("sandbox audit: landlock apply failed: {reason}; running unfenced");
+            FenceStatus::Failed(reason)
+        }
+    }
+}
+
 /// Ask the helper whether it can enforce on this kernel. The answer maps one
 /// to one onto FenceStatus; a missing helper, a refused spawn or a non-zero
 /// exit all land in Failed so the composition root surfaces the gap instead
@@ -287,35 +346,7 @@ fn probe_fence(workspace: &Path) -> FenceStatus {
         .output();
     match probe {
         Ok(output) if output.status.success() => {
-            let word = String::from_utf8_lossy(&output.stdout);
-            match word.trim() {
-                "enforced" => FenceStatus::Enforced,
-                "enforced-partial" => {
-                    tracing::warn!(
-                        "sandbox audit: landlock enforced with a degraded kernel ABI; some filesystem rights are not restricted"
-                    );
-                    FenceStatus::Enforced
-                }
-                "not-enforced" => {
-                    tracing::warn!(
-                        "sandbox audit: landlock supported but ruleset not enforced; running unfenced"
-                    );
-                    FenceStatus::NotEnforced
-                }
-                "unavailable" => {
-                    tracing::warn!(
-                        "sandbox audit: landlock unavailable on this kernel; running unfenced"
-                    );
-                    FenceStatus::Unavailable
-                }
-                other => {
-                    let reason = other.strip_prefix("failed:").unwrap_or(other).to_string();
-                    tracing::warn!(
-                        "sandbox audit: landlock apply failed: {reason}; running unfenced"
-                    );
-                    FenceStatus::Failed(reason)
-                }
-            }
+            fence_from_probe(&String::from_utf8_lossy(&output.stdout))
         }
         Ok(output) => {
             let reason = format!("probe exited with {}", output.status);
@@ -439,6 +470,9 @@ mod tests {
     // behavior do not.
 
     use super::*;
+    use std::fs;
+    use std::os::unix::process::ExitStatusExt;
+    use std::process::{ExitStatus, Output};
 
     fn unique_dir(tag: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
@@ -470,9 +504,9 @@ mod tests {
     fn test_granted_dir_admitted() {
         let session = LinuxLandlockSession::new().expect("session");
         let granted = unique_dir("grant");
-        std::fs::create_dir_all(&granted).expect("create granted dir");
+        fs::create_dir_all(&granted).expect("create granted dir");
         let target = granted.join("notes.txt");
-        std::fs::write(&target, "x").expect("write target");
+        fs::write(&target, "x").expect("write target");
         let granted_str = granted.to_str().expect("granted str");
         let target_str = target.to_str().expect("target str");
 
@@ -485,7 +519,7 @@ mod tests {
         let revoked = session.resolve_write(target_str);
         assert!(matches!(revoked, Err(SandboxError::PathTraversal(_))));
 
-        let _cleanup = std::fs::remove_dir_all(&granted);
+        let _cleanup = fs::remove_dir_all(&granted);
     }
 
     #[test]
@@ -502,7 +536,7 @@ mod tests {
         let mut session = LinuxLandlockSession::new().expect("session");
         session.fence = FenceStatus::Enforced;
         let granted = unique_dir("coverage");
-        std::fs::create_dir_all(&granted).expect("create granted dir");
+        fs::create_dir_all(&granted).expect("create granted dir");
         let granted_str = granted.to_str().expect("granted str");
         session.add_working_dir(granted_str).expect("grant");
 
@@ -532,7 +566,7 @@ mod tests {
             }
             other => panic!("revoking a grant must not unfence: {other:?}"),
         }
-        let _cleanup = std::fs::remove_dir_all(&granted);
+        let _cleanup = fs::remove_dir_all(&granted);
     }
 
     #[test]
@@ -542,5 +576,91 @@ mod tests {
         assert!(matches!(session.coverage(), Coverage::Unfenced));
         session.fence = FenceStatus::NotEnforced;
         assert!(matches!(session.coverage(), Coverage::Unfenced));
+    }
+
+    /// The argv is the kernel grant set: the workspace and scratch dir come
+    /// first as write grants, runtime grants follow in flag pairs by kind,
+    /// and the command sits alone after the separator.
+    #[test]
+    fn test_helper_argv_grants() {
+        let session = LinuxLandlockSession::new().expect("session");
+        let write_dir = unique_dir("argv-write");
+        fs::create_dir_all(&write_dir).expect("create write dir");
+        let read_dir = unique_dir("argv-read");
+        fs::create_dir_all(&read_dir).expect("create read dir");
+        session
+            .add_working_dir(write_dir.to_str().expect("write str"))
+            .expect("grant write");
+        session
+            .add_reading_dir(read_dir.to_str().expect("read str"))
+            .expect("grant read");
+
+        let argv = session.helper_argv("touch x");
+        let canonical_write = dunce::canonicalize(&write_dir).expect("canonical write");
+        let canonical_read = dunce::canonicalize(&read_dir).expect("canonical read");
+        let expected: Vec<OsString> = vec![
+            "--write".into(),
+            session.workspace.as_os_str().to_os_string(),
+            "--write".into(),
+            session.tmpdir.as_os_str().to_os_string(),
+            "--write".into(),
+            canonical_write.into_os_string(),
+            "--read".into(),
+            canonical_read.into_os_string(),
+            "--".into(),
+            "touch x".into(),
+        ];
+        assert_eq!(argv, expected, "argv must carry the full grant set");
+
+        let _cleanup = fs::remove_dir_all(&write_dir);
+        let _cleanup = fs::remove_dir_all(&read_dir);
+    }
+
+    /// Every word of the helper protocol, including the ones a healthy host
+    /// never sees: an unrecognized word must land in Failed carrying the
+    /// reason, never be mistaken for a working fence.
+    #[cfg(feature = "enforce")]
+    #[test]
+    fn test_probe_word_mapping() {
+        assert!(matches!(
+            fence_from_probe("enforced\n"),
+            FenceStatus::Enforced
+        ));
+        assert!(matches!(
+            fence_from_probe("enforced-partial"),
+            FenceStatus::Enforced
+        ));
+        assert!(matches!(
+            fence_from_probe("not-enforced"),
+            FenceStatus::NotEnforced
+        ));
+        assert!(matches!(
+            fence_from_probe("unavailable"),
+            FenceStatus::Unavailable
+        ));
+        match fence_from_probe("failed:abi too old") {
+            FenceStatus::Failed(reason) => assert_eq!(reason, "abi too old"),
+            other => panic!("a failed probe must carry its reason: {other:?}"),
+        }
+        match fence_from_probe("garbage") {
+            FenceStatus::Failed(reason) => assert_eq!(reason, "garbage"),
+            other => panic!("an unknown word must land in Failed: {other:?}"),
+        }
+    }
+
+    /// The stream and exit-code mapping every caller sees. The raw wait
+    /// status carries the exit code in its upper bits; a signal death would
+    /// report None instead, which the Option in the answer preserves.
+    #[test]
+    fn test_output_maps_result() {
+        let output = Output {
+            status: ExitStatus::from_raw(3 << 8),
+            stdout: b"out".to_vec(),
+            stderr: b"err".to_vec(),
+        };
+        let result = exec_result_from_output(output);
+        assert_eq!(result.stdout, "out");
+        assert_eq!(result.stderr, "err");
+        assert_eq!(result.exit_code, Some(3));
     }
 }

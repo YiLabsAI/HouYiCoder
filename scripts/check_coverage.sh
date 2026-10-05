@@ -8,14 +8,28 @@
 #   rustup component add llvm-tools-preview
 #   cargo install cargo-llvm-cov
 #
-# Unit-only (--lib): integration tests do not count toward this number. They
-# validate end-to-end journeys, and journey completeness is reviewed as story
-# coverage, not as a line percentage. Counting them here would let an
-# end-to-end path stand in for unit tests a module still owes. Bin targets fall
-# outside --lib for the same reason they fall outside the unit suite: they are
-# wiring, exercised by the integration and PTY suites instead. Measured on this
-# workspace the difference is small either way (integration tests move the
-# total by well under a point), so including them would buy noise, not signal.
+# Unit-only (--lib), with one recorded exception below: integration tests do
+# not count toward this number. They validate end-to-end journeys, and journey
+# completeness is reviewed as story coverage, not as a line percentage.
+# Counting them here would let an end-to-end path stand in for unit tests a
+# module still owes. Bin targets fall outside --lib for the same reason they
+# fall outside the unit suite: they are wiring, exercised by the integration
+# and PTY suites instead. Measured on this workspace the difference is small
+# either way (integration tests move the total by well under a point), so
+# including them would buy noise, not signal.
+#
+# The exception is the sandbox consistency suite, merged as a second
+# instrumented run. The Linux backend's exec and probe paths are spawn
+# machinery the unit discipline forbids reaching from a lib test (no
+# subprocess in the unit suite), so on a Linux runner those production lines
+# are only exercisable by the integration binary; the pure logic around the
+# spawns is unit-tested through extracted mappings. That run also builds the
+# fence helper bin, and the report includes every built instrumented binary,
+# so the exclusion covers src/bin/ as well -- the same doctrine that keeps
+# bins outside --lib. This matters on Linux: the suite runs under the
+# enforcement hatch there, the helper's Landlock path never executes, and
+# counting the helper would add its bare lines to the denominator. With both
+# exclusions the number stays production-lib-only and unit-dominated.
 #
 # One global threshold, not one per crate. A per-crate floor has to be pinned on
 # the platform that pinned it, and this workspace has crates whose entire module
@@ -66,8 +80,18 @@ find "$COV_DIR" -name '*.profraw' -delete 2>/dev/null || true
 # --locked: this runs as its own CI job in parallel with the lint/test jobs,
 # so it cannot rely on an earlier `cargo check --locked` in the same job to
 # catch a stale Cargo.lock -- pin the dependency set here too.
-cargo llvm-cov --locked --no-cfg-coverage --lib --workspace \
-  --lcov --output-path "$LCOV"
+# Two instrumented runs, one merged report: --no-report keeps each run's
+# samples for the final report to merge (the documented multi-run pattern),
+# and the report excludes each crate's tests/ directory plus src/bin/ so
+# neither the integration binary's own sources nor the incidentally built
+# helper bin enter the lcov. The regex is anchored to the crate root on
+# purpose: directory-form unit-test modules under src/ stay in the report
+# exactly as the lib-only run always had them.
+cargo llvm-cov --locked --no-cfg-coverage --no-report --lib --workspace
+cargo llvm-cov --locked --no-cfg-coverage --no-report \
+  -p houyicoder-sandbox --test sandbox_all
+cargo llvm-cov report --lcov --output-path "$LCOV" \
+  --ignore-filename-regex 'crates/[^/]+/(tests|src/bin)/'
 
 # Stale-mapping guard: the line table is baked into the instrumented binary, so
 # a binary older than the last edit attributes every number to the wrong code.
