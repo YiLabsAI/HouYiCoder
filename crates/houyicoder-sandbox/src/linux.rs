@@ -161,11 +161,12 @@ impl LinuxLandlockSession {
     /// grant set, and a path the resolver admits but this list omits would be
     /// fenced away at spawn time.
     fn helper_argv(&self, command: &str) -> Vec<OsString> {
-        let mut argv: Vec<OsString> = Vec::new();
-        argv.push("--write".into());
-        argv.push(self.workspace.as_os_str().to_os_string());
-        argv.push("--write".into());
-        argv.push(self.tmpdir.as_os_str().to_os_string());
+        let mut argv: Vec<OsString> = vec![
+            "--write".into(),
+            self.workspace.as_os_str().to_os_string(),
+            "--write".into(),
+            self.tmpdir.as_os_str().to_os_string(),
+        ];
         for dir in self.dirs.read_write() {
             argv.push("--write".into());
             argv.push(dir.into_os_string());
