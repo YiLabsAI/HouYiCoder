@@ -17,7 +17,7 @@ use houyicoder_protocol::frontend::{PendingInputId, QueuedInput, SessionId as Fr
 use crate::agent_message::{
     ClientCommand, ConnectionEvent, ServerEvent, ServerRequest, ServerResponse, SessionMessage,
 };
-use crate::transcript::TranscriptFrame;
+use crate::transcript::{SequencedFrame, TranscriptFrame};
 
 /// How many unknown-method notices one connection writes to the diagnostic
 /// log. The notification is dropped either way; the bound keeps a peer that
@@ -424,11 +424,17 @@ async fn drive_connection(
             },
             frame = client.next_frame() => match frame {
                 Ok(ServerFrame::Event(ev)) => match ev.payload {
+                    // The envelope's stream position and durable identity
+                    // ride every frame that lands in the transcript log, so
+                    // a row stays identifiable when numbering restarts.
                     FrontendEvent::SessionUpdate { update } => {
-                        let _send = agent_tx
-                            .send(SessionMessage::Event(ServerEvent::Frame(
-                                TranscriptFrame::Session(update),
-                            )));
+                        let _send = agent_tx.send(SessionMessage::Event(ServerEvent::Frame(
+                            SequencedFrame {
+                                seq: Some(ev.seq),
+                                event_id: ev.event_id,
+                                frame: TranscriptFrame::Session(update),
+                            },
+                        )));
                     }
                     FrontendEvent::Acpx { notification } => {
                         // Token-level deltas ride the acpx/llm/* stream as
@@ -499,7 +505,11 @@ async fn drive_connection(
                             }
                             _ => {
                                 let _send = agent_tx.send(SessionMessage::Event(
-                                    ServerEvent::Frame(TranscriptFrame::Acpx(notification)),
+                                    ServerEvent::Frame(SequencedFrame {
+                                        seq: Some(ev.seq),
+                                        event_id: ev.event_id,
+                                        frame: TranscriptFrame::Acpx(notification),
+                                    }),
                                 ));
                             }
                         }

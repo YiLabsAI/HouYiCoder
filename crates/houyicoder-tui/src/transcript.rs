@@ -10,6 +10,7 @@
 use std::ops::Range;
 
 use houyicoder_protocol::acpx::AcpxNotification;
+use houyicoder_protocol::envelope::{DurableEventId, EventSeq};
 use houyicoder_protocol::frontend::session_update::{SessionUpdate, ToolCall};
 
 use crate::brief::{MEMORY_LABEL_TOOLS, result_summary, tool_call_brief};
@@ -115,32 +116,40 @@ impl From<houyicoder_protocol::envelope::ChildTranscriptFrame> for TranscriptFra
     }
 }
 
-/// A frame paired with the event seq that produced it, when the frame came
-/// from the server stream. Frontend-raised rows and test-built frames carry
-/// no seq: they never anchor a block alone (they attach to the surrounding
-/// turn), and the block layer assigns them a local anchor instead.
+/// A transcript frame plus the stream metadata its envelope carried. A frame
+/// from the server stream holds the envelope's event seq — the resume
+/// position within one connection, never a row identity, because sequence
+/// numbering restarts with every service process — and, when the payload was
+/// projected from a durable log entry, that entry's durable event identity,
+/// which is stable across reconnects. Frontend-raised rows and test-built
+/// frames carry neither.
 #[derive(Debug, Clone)]
 pub struct SequencedFrame {
-    pub seq: Option<houyicoder_protocol::envelope::EventSeq>,
+    pub seq: Option<EventSeq>,
+    pub event_id: Option<DurableEventId>,
     pub frame: TranscriptFrame,
 }
 
 impl From<TranscriptFrame> for SequencedFrame {
     fn from(frame: TranscriptFrame) -> Self {
-        Self { seq: None, frame }
+        Self {
+            seq: None,
+            event_id: None,
+            frame,
+        }
     }
 }
 
 impl SequencedFrame {
-    /// The frame without its seq, for callers that read the projection shape.
+    /// The frame without its stream metadata, for callers that read the projection shape.
     pub fn frame(&self) -> &TranscriptFrame {
         &self.frame
     }
 }
 
 /// Lets the projection read a frame log stored as either bare TranscriptFrame
-/// (test fixtures, the legacy storage) or SequencedFrame (the Transcript store
-/// that carries event seq). Both slice shapes feed the same projector without a
+/// (test fixtures) or SequencedFrame (the Transcript store that carries the
+/// stream metadata). Both slice shapes feed the same projector without a
 /// per-call conversion, so a test that builds a Vec of TranscriptFrame and a
 /// rebuild that holds the live SequencedFrame log call the same entry.
 impl AsRef<TranscriptFrame> for SequencedFrame {

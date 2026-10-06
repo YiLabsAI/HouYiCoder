@@ -5,13 +5,15 @@ use std::sync::{Arc, Mutex};
 use houyicoder_async::PFut;
 use houyicoder_client::{Client, Transport};
 use houyicoder_protocol::envelope::{
-    ClientFrame, EventEnvelope, EventSeq, RequestId, ResponseEnvelope, ResponsePayload,
-    ServerFrame, ServerRequestEnvelope, ServerRequestPayload,
+    ClientFrame, DurableEventId, EventEnvelope, EventSeq, RequestId, ResponseEnvelope,
+    ResponsePayload, ServerFrame, ServerRequestEnvelope, ServerRequestPayload,
 };
 use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
 use houyicoder_protocol::framing;
 use houyicoder_protocol::frontend::FrontendRequest;
 use houyicoder_protocol::frontend::event::FrontendEvent;
+use houyicoder_protocol::frontend::run::ContentBlock;
+use houyicoder_protocol::frontend::session_update::{ContentChunk, SessionUpdate};
 use houyicoder_protocol::handshake::Hello;
 
 use super::*;
@@ -270,6 +272,64 @@ async fn test_drive_translates_agent_status() {
     }
 }
 
+/// Frames projected from durable log entries reach the event loop with the
+/// identity their envelopes carried, so the frame log can name each row
+/// after the entry that produced it. Both frame branches keep it: the
+/// session update and the acpx notification that becomes a transcript
+/// frame.
+#[tokio::test]
+async fn test_drive_keeps_identity() {
+    use crate::transcript::SequencedFrame;
+    use houyicoder_protocol::acpx::{AcpxMethod, AcpxNotification};
+
+    let mut engine = FakeEngine::new();
+    engine.durable_event(
+        "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+        FrontendEvent::SessionUpdate {
+            update: SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text {
+                text: "hi".into(),
+            })),
+        },
+    );
+    engine.durable_event(
+        "01ARZ3NDEKTSV4RRFFQ69G5FBW",
+        FrontendEvent::Acpx {
+            notification: AcpxNotification::new(
+                AcpxMethod::ContextSummary,
+                serde_json::json!({"text": "earlier turn, condensed"}),
+            ),
+        },
+    );
+    engine.close();
+    let run = engine.drive(Vec::new()).await;
+    let frames: Vec<&SequencedFrame> = run
+        .msgs
+        .iter()
+        .filter_map(|m| match m {
+            SessionMessage::Event(ServerEvent::Frame(sequenced)) => Some(sequenced),
+            _ => None,
+        })
+        .collect();
+    let ids: Vec<Option<&str>> = frames
+        .iter()
+        .map(|sf| sf.event_id.as_ref().map(|id| id.0.as_str()))
+        .collect();
+    let seqs: Vec<Option<EventSeq>> = frames.iter().map(|sf| sf.seq).collect();
+    assert_eq!(
+        ids,
+        [
+            Some("01ARZ3NDEKTSV4RRFFQ69G5FAV"),
+            Some("01ARZ3NDEKTSV4RRFFQ69G5FBW")
+        ],
+        "each frame keeps the durable identity its envelope carried: {run:?}"
+    );
+    assert_eq!(
+        seqs,
+        [Some(EventSeq(1)), Some(EventSeq(2))],
+        "each frame keeps the stream position it arrived on: {run:?}"
+    );
+}
+
 /// An acpx method this build cannot name does not end the session: the read
 /// lands on the unrecognized method, the driver drops it, and the events
 /// behind it still arrive.
@@ -350,6 +410,16 @@ impl FakeEngine {
                 EventSeq(self.seq),
                 e,
             )))));
+    }
+
+    /// Queue an event projected from a durable log entry: the envelope
+    /// carries the entry identity beside the issued seq.
+    fn durable_event(&mut self, id: &str, e: FrontendEvent) {
+        self.seq += 1;
+        let envelope =
+            EventEnvelope::durable(EventSeq(self.seq), e, DurableEventId(id.to_string()));
+        self.load
+            .push_back(Ok(line_of(&ServerFrame::Event(envelope))));
     }
 
     /// Queue a frame naming an acpx method this build does not model, as a

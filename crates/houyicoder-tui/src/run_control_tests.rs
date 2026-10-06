@@ -18,7 +18,7 @@ use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::{Runner, ToolRegistry};
 use houyicoder_memory::InMemoryBackend;
 use houyicoder_protocol::acpx::{AcpxMethod, AcpxNotification};
-use houyicoder_protocol::envelope::RequestId;
+use houyicoder_protocol::envelope::{DurableEventId, EventSeq, RequestId};
 use houyicoder_protocol::extension::ENTITLEMENT_TOOL;
 use houyicoder_protocol::frontend::run::{ContentBlock, RunError, RunOutcome, RunResult};
 use houyicoder_protocol::frontend::session_update::{ContentChunk, SessionUpdate};
@@ -380,10 +380,12 @@ fn test_handle_final_output_refreshes() {
     let mut app = composition::app();
     // The driver ships each durable frame; App owns the history. Push the
     // frames before Done so the rebuild on Done reads them.
-    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(user_msg("hi"))));
-    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(agent_msg(
-        "hello back",
-    ))));
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(
+        user_msg("hi").into(),
+    )));
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(
+        agent_msg("hello back").into(),
+    )));
     let msg = SessionMessage::Response {
         request: RequestId(1),
         response: ServerResponse::Done {
@@ -1128,7 +1130,7 @@ fn test_batch_keeps_mark() {
     app.session = Some(SessionConnection::from_receiver(rx));
     app.run_state.start(RequestId(0), Instant::now());
     let send = |frame: TranscriptFrame| {
-        tx.send(SessionMessage::Event(ServerEvent::Frame(frame)))
+        tx.send(SessionMessage::Event(ServerEvent::Frame(frame.into())))
             .expect("the connection receiver is alive")
     };
     send(user_msg("start"));
@@ -1158,6 +1160,43 @@ fn test_batch_keeps_mark() {
     ));
     app.poll_agent();
     assert_eq!(rows(&app), 1, "the record closes the turn exactly once");
+}
+
+/// Frames that arrive in one poll batch each keep the identity they carried
+/// into the resident log: batching groups the rebuild, but it must not blur
+/// the per-frame stream metadata.
+#[test]
+fn test_batch_keeps_identity() {
+    let (tx, rx) = mpsc::channel::<SessionMessage>();
+    let mut app = composition::app();
+    app.transcript.reset();
+    app.runtime = Some(composition::shared_runtime());
+    app.session = Some(SessionConnection::from_receiver(rx));
+    let send = |seq: u64, id: &str, text: &str| {
+        tx.send(SessionMessage::Event(ServerEvent::Frame(SequencedFrame {
+            seq: Some(EventSeq(seq)),
+            event_id: Some(DurableEventId(id.to_string())),
+            frame: user_msg(text),
+        })))
+        .expect("the connection receiver is alive")
+    };
+    send(1, "01ARZ3NDEKTSV4RRFFQ69G5FAV", "first");
+    send(2, "01ARZ3NDEKTSV4RRFFQ69G5FBW", "second");
+    app.poll_agent();
+    let ids: Vec<Option<&str>> = app
+        .transcript
+        .frames()
+        .iter()
+        .map(|sf| sf.event_id.as_ref().map(|id| id.0.as_str()))
+        .collect();
+    assert_eq!(
+        ids,
+        vec![
+            Some("01ARZ3NDEKTSV4RRFFQ69G5FAV"),
+            Some("01ARZ3NDEKTSV4RRFFQ69G5FBW")
+        ],
+        "each frame keeps its own identity through the batch"
+    );
 }
 
 #[cfg(test)]

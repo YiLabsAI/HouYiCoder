@@ -420,7 +420,7 @@ impl App {
     /// other messages first flush preceding frames to preserve order.
     pub fn poll_agent(&mut self) -> bool {
         let mut applied = false;
-        let mut batch: Vec<TranscriptFrame> = Vec::new();
+        let mut batch: Vec<SequencedFrame> = Vec::new();
         let mut remaining = MAX_AGENT_MESSAGES_PER_POLL;
         let mut lookahead_used = false;
         while remaining > 0 {
@@ -459,7 +459,8 @@ impl App {
             // The cap can land between a user message and the delivery mark
             // the projection writes beside it. Grant one small lookahead so
             // the pair folds in one rebuild instead of splitting across two.
-            if remaining == 0 && !lookahead_used && batch.last().is_some_and(is_user_frame) {
+            let batch_ends_on_user = batch.last().is_some_and(|sf| is_user_frame(sf.frame()));
+            if remaining == 0 && !lookahead_used && batch_ends_on_user {
                 lookahead_used = true;
                 remaining = DELIVERY_MARK_LOOKAHEAD;
             }

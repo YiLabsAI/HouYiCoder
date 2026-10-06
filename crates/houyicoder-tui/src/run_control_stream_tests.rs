@@ -170,9 +170,9 @@ fn test_durable_clears_preview() {
         p.live_assistant_text = "same paragraph".into();
     }
 
-    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(agent_msg(
-        "same paragraph",
-    ))));
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(
+        agent_msg("same paragraph").into(),
+    )));
 
     let p = app.run_progress().expect("active run");
     assert!(p.live_assistant_text.is_empty());
@@ -192,24 +192,24 @@ fn test_durable_clears_preview() {
 fn test_midturn_keeps_order() {
     let mut app = composition::app();
     app.start_run_for_test(0);
-    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(user_msg(
-        "original",
-    ))));
-    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(agent_msg(
-        "earlier work",
-    ))));
-    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(user_msg(
-        "interjection",
-    ))));
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(
+        user_msg("original").into(),
+    )));
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(
+        agent_msg("earlier work").into(),
+    )));
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(
+        user_msg("interjection").into(),
+    )));
     {
         let p = app.run_progress_mut().expect("active run");
         p.live_active = true;
         p.live_assistant_text = "response".into();
     }
 
-    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(agent_msg(
-        "response",
-    ))));
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(
+        agent_msg("response").into(),
+    )));
 
     let user = app
         .transcript
@@ -238,10 +238,12 @@ fn test_midturn_keeps_order() {
 #[test]
 fn test_interrupted_content_shows_marker() {
     let mut app = composition::app();
-    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(user_msg("hi"))));
-    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(agent_msg(
-        "partial reply",
-    ))));
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(
+        user_msg("hi").into(),
+    )));
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(
+        agent_msg("partial reply").into(),
+    )));
     let msg = SessionMessage::Response {
         request: RequestId(11),
         response: ServerResponse::Done {
@@ -271,7 +273,9 @@ fn test_interrupted_content_shows_marker() {
 #[test]
 fn test_interrupt_restores_input() {
     let mut app = composition::app();
-    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(user_msg("draft"))));
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(
+        user_msg("draft").into(),
+    )));
     app.last_run_input = Some("draft".into());
     app.pending
         .push(crate::pending_queue::PendingItem::ParkedMessage(
@@ -326,17 +330,17 @@ fn test_interrupt_restores_input() {
 #[test]
 fn test_commit_blocks_restore() {
     let mut app = composition::app();
-    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(user_msg(
-        "origin",
-    ))));
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(
+        user_msg("origin").into(),
+    )));
     app.last_run_input = Some("origin".into());
     let committed = houyicoder_protocol::frontend::QueuedInput::new("follow-up");
     app.pending.push(crate::pending_queue::PendingItem::Message(
         committed.clone(),
     ));
-    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(user_msg(
-        "follow-up",
-    ))));
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(
+        user_msg("follow-up").into(),
+    )));
     app.handle_agent_message(SessionMessage::Event(ServerEvent::QueuedInputCommitted {
         inputs: vec![committed],
     }));
@@ -369,9 +373,9 @@ fn test_commit_blocks_restore() {
 #[test]
 fn test_live_blocks_restore() {
     let mut app = composition::app();
-    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(user_msg(
-        "origin",
-    ))));
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(
+        user_msg("origin").into(),
+    )));
     app.last_run_input = Some("origin".into());
     app.start_run_for_test(14);
     app.handle_agent_message(SessionMessage::Event(ServerEvent::Delta {
@@ -409,7 +413,9 @@ fn test_recall_survives_interrupt() {
     app.screen = crate::state::Screen::Working;
     app.start_run_for_test(0);
     app.last_run_input = Some("first".into());
-    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(user_msg("first"))));
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(
+        user_msg("first").into(),
+    )));
     // Queue a message while the run is in flight (spawn_run's busy path:
     // pending push; the busy branch takes no send).
     app.spawn_run("zzsecond".into());
@@ -510,9 +516,9 @@ fn test_resubmit_avoids_duplicate_interrupt() {
 
     // Turn 1: submit, then interrupt before output -> restore for editing.
     app.spawn_run("analysis".into());
-    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(user_msg(
-        "analysis",
-    ))));
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(
+        user_msg("analysis").into(),
+    )));
     let turn1 = app.active_run_req_id().expect("turn 1 running");
     app.handle_agent_message(interrupted_done(turn1));
     assert_eq!(app.input.value(), "analysis", "turn 1 restored");
@@ -521,9 +527,9 @@ fn test_resubmit_avoids_duplicate_interrupt() {
     // Resubmit the restored input, then interrupt again.
     drop(app.input.take());
     app.spawn_run("analysis".into());
-    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(user_msg(
-        "analysis",
-    ))));
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(
+        user_msg("analysis").into(),
+    )));
     let turn2 = app.active_run_req_id().expect("turn 2 running");
     app.handle_agent_message(interrupted_done(turn2));
 
@@ -723,10 +729,12 @@ fn test_submit_clears_lone_interrupt() {
     app.screen = crate::state::Screen::Working;
     // A run with real output, interrupted: a lone notice, no restore pair.
     app.spawn_run("first".into());
-    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(user_msg("first"))));
-    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(agent_msg(
-        "partial reply",
-    ))));
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(
+        user_msg("first").into(),
+    )));
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(
+        agent_msg("partial reply").into(),
+    )));
     let req = app.active_run_req_id().expect("run active");
     app.handle_agent_message(SessionMessage::Response {
         request: req,

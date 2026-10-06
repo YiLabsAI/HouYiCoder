@@ -377,8 +377,8 @@ fn test_subagent_folded_survives_rebuild() {
             .raw_output(serde_json::json!({"agentId": "c1", "content": "found auth"})),
     )));
     let mut app = crate::composition::app();
-    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(call)));
-    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(result)));
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(call.into())));
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(result.into())));
     assert!(
         app.transcript
             .iter()

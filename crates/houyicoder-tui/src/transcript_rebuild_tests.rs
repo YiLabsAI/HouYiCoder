@@ -90,7 +90,7 @@ fn pump_history_read_blocking(app: &mut App, timeout: Duration) -> bool {
 
 fn pump(app: &mut App, frame: TranscriptFrame) {
     use crate::agent_message::{ServerEvent, SessionMessage};
-    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(frame)));
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(frame.into())));
 }
 
 /// A ToolCall frame renders immediately without waiting for another boundary.

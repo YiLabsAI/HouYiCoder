@@ -155,13 +155,6 @@ impl Transcript {
         self.frame_window_start + self.frames.len()
     }
 
-    /// The frame at an absolute index, or None when it was drained or never
-    /// existed. The resident vec holds [frame_window_start, abs_frame_count).
-    pub(crate) fn resident_frame(&self, abs_idx: usize) -> Option<&SequencedFrame> {
-        self.frames
-            .get(abs_idx.checked_sub(self.frame_window_start)?)
-    }
-
     /// The resident frames' estimated byte total.
     pub(crate) fn resident_bytes(&self) -> u64 {
         self.resident_bytes.get()
@@ -419,6 +412,7 @@ mod tests {
     use super::*;
     use crate::records::ToolOutcome;
     use crate::scroll::VIEWABLE_SCROLLBACK_CAP;
+    use crate::transcript::frame_payload::chunk_text;
     use houyicoder_protocol::frontend::run::ContentBlock;
     use houyicoder_protocol::frontend::session_update::{ContentChunk, SessionUpdate};
 
@@ -525,8 +519,8 @@ mod tests {
     }
 
     /// The resident byte total follows the frames through a push and a drain,
-    /// and the absolute coordinates survive: the drained frames keep their
-    /// absolute index while the resident ones stay addressable by it.
+    /// and the absolute coordinates survive: the window start advances past
+    /// the drained frames without renumbering the ones it kept.
     #[test]
     fn test_resident_bytes_track_drain() {
         let mut t = Transcript::default();
@@ -548,8 +542,11 @@ mod tests {
         assert_eq!(t.frame_window_start(), 2);
         assert_eq!(t.abs_frame_count(), 5, "draining does not renumber");
         assert_eq!(t.resident_bytes(), total - freed);
-        assert!(t.resident_frame(0).is_none(), "a drained frame is gone");
-        assert!(t.resident_frame(2).is_some(), "a resident frame stays");
+        assert_eq!(t.frame_count(), 3, "the drained frames are gone");
+        assert!(
+            matches!(&t.frames()[0].frame, TranscriptFrame::Session(SessionUpdate::UserMessageChunk(c)) if chunk_text(c) == "m2"),
+            "the kept window opens at the first surviving frame"
+        );
     }
 
     /// The drain stops at the kept front: a budget far below the total cannot

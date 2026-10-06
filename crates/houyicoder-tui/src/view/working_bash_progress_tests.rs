@@ -134,11 +134,9 @@ fn test_tool_records_while_running() {
         "tick before the call is tracked is dropped"
     );
     // Running: the tick lands (elapsed + optional lines).
-    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(tool_call_frame(
-        "call_1",
-        "bash",
-        ToolCallStatus::InProgress,
-    ))));
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(
+        tool_call_frame("call_1", "bash", ToolCallStatus::InProgress).into(),
+    )));
     app.handle_agent_message(SessionMessage::Event(ServerEvent::ToolProgress {
         call_id: "call_1".into(),
         elapsed_secs: 5,
@@ -155,9 +153,9 @@ fn test_tool_records_while_running() {
         })
     );
     // Result lands: finish_tool clears the entry.
-    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(tool_done_frame(
-        "call_1",
-    ))));
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(
+        tool_done_frame("call_1").into(),
+    )));
     assert!(
         !app.run_progress()
             .expect("active run")

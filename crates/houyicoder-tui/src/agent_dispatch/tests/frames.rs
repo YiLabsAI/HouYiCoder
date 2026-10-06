@@ -1,5 +1,7 @@
 use super::*;
 
+use crate::transcript::SequencedFrame;
+use houyicoder_protocol::envelope::{DurableEventId, EventSeq};
 use houyicoder_protocol::frontend::memory::{
     MemoryChange, MemoryChangeCausality, MemoryChangeId, MemoryChangeOrigin, MemoryChangeScope,
     MemoryOperation,
@@ -112,18 +114,16 @@ fn test_transcript_shows_redundant_calls() {
 fn test_tool_frames_track_set() {
     let mut app = composition::app();
     app.start_run_for_test(0);
-    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(tool_call_frame(
-        "call_1",
-        "bash",
-        ToolCallStatus::InProgress,
-    ))));
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(
+        tool_call_frame("call_1", "bash", ToolCallStatus::InProgress).into(),
+    )));
     assert!(
         app.run_progress()
             .is_some_and(|p| p.running_tools.contains("call_1"))
     );
-    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(tool_done_frame(
-        "call_1",
-    ))));
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(
+        tool_done_frame("call_1").into(),
+    )));
     assert!(
         app.run_progress()
             .expect("active run")
@@ -132,15 +132,38 @@ fn test_tool_frames_track_set() {
     );
 }
 
+/// A frame applied from the event stream keeps in the resident log the
+/// identity it arrived with, so a reader can name the row after the log
+/// entry that produced it.
+#[test]
+fn test_apply_keeps_identity() {
+    let mut app = composition::app();
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(SequencedFrame {
+        seq: Some(EventSeq(7)),
+        event_id: Some(DurableEventId("01ARZ3NDEKTSV4RRFFQ69G5FAV".into())),
+        frame: tool_call_frame("call_1", "glob", ToolCallStatus::InProgress),
+    })));
+    let stored = app.transcript.frames();
+    assert_eq!(stored.len(), 1, "the frame landed in the log");
+    assert_eq!(
+        stored[0].event_id.as_ref().map(|id| id.0.as_str()),
+        Some("01ARZ3NDEKTSV4RRFFQ69G5FAV"),
+        "the durable identity reaches the resident log"
+    );
+    assert_eq!(
+        stored[0].seq,
+        Some(EventSeq(7)),
+        "the stream position reaches the resident log"
+    );
+}
+
 #[test]
 fn test_done_clears_running_tools() {
     let mut app = composition::app();
     app.start_run_for_test(1);
-    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(tool_call_frame(
-        "call_1",
-        "bash",
-        ToolCallStatus::InProgress,
-    ))));
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(
+        tool_call_frame("call_1", "bash", ToolCallStatus::InProgress).into(),
+    )));
     app.handle_agent_message(done_msg());
     assert!(
         app.run_progress()
@@ -174,10 +197,9 @@ fn test_completed_list_timestamped() {
     // does not. The distinction drives the footer grace window.
     let mut app = composition::app();
     app.start_run_for_test(1);
-    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(todo_frame(&[
-        ("old work", "completed"),
-        ("current", "in_progress"),
-    ]))));
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(
+        todo_frame(&[("old work", "completed"), ("current", "in_progress")]).into(),
+    )));
     app.handle_agent_message(done_msg());
     assert!(
         app.todos.completion_at.contains_key("old work"),
@@ -191,10 +213,9 @@ fn test_completed_list_timestamped() {
     // Completing the whole list timestamps every item for one shared
     // clearing.
     app.start_run_for_test(1);
-    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(todo_frame(&[
-        ("old work", "completed"),
-        ("current", "completed"),
-    ]))));
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(
+        todo_frame(&[("old work", "completed"), ("current", "completed")]).into(),
+    )));
     app.handle_agent_message(done_msg());
     assert!(app.todos.completion_at.contains_key("current"));
     assert!(app.todos.completion_at.contains_key("old work"));
@@ -210,10 +231,9 @@ fn test_replayed_done_clears() {
         let mut app = composition::app();
         app.screen = Screen::Working;
         app.todos.set_replaying_history(true);
-        app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(todo_frame(&[
-            ("old work", "completed"),
-            ("current", "completed"),
-        ]))));
+        app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(
+            todo_frame(&[("old work", "completed"), ("current", "completed")]).into(),
+        )));
         app.start_run_for_test(1);
         app.handle_agent_message(done_msg());
         assert!(app.todos.items.is_empty());
@@ -236,18 +256,15 @@ fn test_replayed_later_frame_clears() {
     let mut app = composition::app();
     app.screen = Screen::Working;
     app.todos.set_replaying_history(true);
-    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(todo_frame(&[
-        ("one", "in_progress"),
-        ("two", "pending"),
-    ]))));
-    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(todo_frame(&[
-        ("one", "completed"),
-        ("two", "pending"),
-    ]))));
-    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(todo_frame(&[
-        ("one", "completed"),
-        ("two", "completed"),
-    ]))));
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(
+        todo_frame(&[("one", "in_progress"), ("two", "pending")]).into(),
+    )));
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(
+        todo_frame(&[("one", "completed"), ("two", "pending")]).into(),
+    )));
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(
+        todo_frame(&[("one", "completed"), ("two", "completed")]).into(),
+    )));
     app.start_run_for_test(1);
     app.handle_agent_message(done_msg());
     assert!(app.todos.items.is_empty());
@@ -266,10 +283,9 @@ fn test_replayed_open_renders() {
     let mut app = composition::app();
     app.screen = Screen::Working;
     app.todos.set_replaying_history(true);
-    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(todo_frame(&[
-        ("old work", "completed"),
-        ("open task", "pending"),
-    ]))));
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(
+        todo_frame(&[("old work", "completed"), ("open task", "pending")]).into(),
+    )));
     app.start_run_for_test(1);
     app.handle_agent_message(done_msg());
     let out = render_text(&app, 100, 24);

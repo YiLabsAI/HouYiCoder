@@ -61,27 +61,27 @@ fn app_scrolled_back() -> App {
 fn test_agent_count_rises() {
     let mut app = app_scrolled_back();
     assert_eq!(app.new_turn_count().count, 0, "no new agent content yet");
-    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(agent_msg(
-        "first response",
-    ))));
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(
+        agent_msg("first response").into(),
+    )));
     assert_eq!(
         app.new_turn_count().count,
         1,
         "one agent turn since snapshot"
     );
     // A tool call within the same turn does NOT start a new count.
-    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(tool_call_frame(
-        "c1",
-    ))));
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(
+        tool_call_frame("c1").into(),
+    )));
     assert_eq!(
         app.new_turn_count().count,
         1,
         "tool call within a turn does not split the count"
     );
     // More agent text after the tool is still the same turn — still 1.
-    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(agent_msg(
-        "continuing",
-    ))));
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(
+        agent_msg("continuing").into(),
+    )));
     assert_eq!(
         app.new_turn_count().count,
         1,
@@ -110,9 +110,9 @@ fn test_evicted_keeps_count() {
     let _out = render_text(&app, 80, 24);
     app.scroll_transcript_line_up(3);
     let _out = render_text(&app, 80, 24);
-    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(agent_msg(
-        "response",
-    ))));
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(
+        agent_msg("response").into(),
+    )));
     assert_eq!(app.new_turn_count().count, 1);
     // One row past the cap while scrolled back: trim skips a scrolled-back
     // reader, so the line accumulates past the cap rather than draining. The
@@ -165,9 +165,9 @@ fn test_evicted_keeps_count() {
 #[test]
 fn test_rescroll_keeps_count() {
     let mut app = app_scrolled_back();
-    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(agent_msg(
-        "response",
-    ))));
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(
+        agent_msg("response").into(),
+    )));
     let snapshot = app.unseen_since.expect("snapshot taken");
     // A second scroll-away: was already not following, so the null guard
     // keeps the original baseline.
@@ -314,7 +314,7 @@ fn user_msg(text: &str) -> TranscriptFrame {
 
 /// Deliver one frame through the production path.
 fn pump(app: &mut App, frame: TranscriptFrame) {
-    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(frame)));
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(frame.into())));
 }
 
 /// An anchor frame the byte budget evicted leaves the label counting the turns

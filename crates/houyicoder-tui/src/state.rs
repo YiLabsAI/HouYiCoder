@@ -150,9 +150,9 @@ pub struct App {
     /// verdicts are an audit capability, not transcript content.
     pub verdict_cursor: usize,
     /// Cursor anchored on the frame the user last saw before scrolling away
-    /// from the tail, for the new-message count. Absolute (Local) or durable
-    /// (Server) so front-of-window eviction and resume cannot silently shift
-    /// the baseline the way a raw frame index would.
+    /// from the tail, for the new-message count. A Local absolute index or a
+    /// Server within-connection stream position, so front-of-window eviction
+    /// cannot shift the baseline the way a raw resident index would.
     pub(crate) unseen_since: Option<EventCursor>,
     pub transcript_scroll: TranscriptScroll,
     /// Cached display rows: the full pre-visible computation (display_slots +

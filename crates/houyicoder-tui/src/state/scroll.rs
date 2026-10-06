@@ -261,6 +261,7 @@ mod tests {
     fn agent_frame(seq: u64, text: &str) -> SequencedFrame {
         SequencedFrame {
             seq: Some(EventSeq(seq)),
+            event_id: None,
             frame: TranscriptFrame::Session(SessionUpdate::AgentMessageChunk(ContentChunk::new(
                 ContentBlock::Text { text: text.into() },
             ))),

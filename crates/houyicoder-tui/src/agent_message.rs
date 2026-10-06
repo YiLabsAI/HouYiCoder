@@ -14,7 +14,7 @@ use houyicoder_protocol::frontend::{PendingInputId, QueuedInput, SessionId as Fr
 use houyicoder_protocol::llm::EffortLevel;
 use std::time::{Duration, Instant};
 
-use crate::transcript::TranscriptFrame;
+use crate::transcript::{SequencedFrame, TranscriptFrame};
 
 /// One row in the agent status footer: a spawned child's latest snapshot.
 pub struct FleetEntry {
@@ -254,9 +254,10 @@ pub(crate) struct AgentStatusSnapshot {
 /// Server-originated events: the event direction of the session protocol.
 #[derive(Debug)]
 pub enum ServerEvent {
-    /// One durable wire frame the driver observed. The event loop pushes it
-    /// into its own frame log; the transcript projection reads from there.
-    Frame(TranscriptFrame),
+    /// One durable frame the driver unpacked from the event stream, with the
+    /// stream position and durable identity its envelope carried. The event
+    /// loop pushes it into its own frame log for the transcript projection.
+    Frame(SequencedFrame),
     /// One incremental chunk of assistant text, emitted as the provider streams.
     Delta { text: String },
     /// One incremental chunk of model reasoning (the breathing thinking row).

@@ -29,7 +29,7 @@ use crate::state::enums::LiveBlock;
 use crate::state::{App, BashProgress};
 use crate::terminal_title::sync as sync_terminal_title;
 use crate::transcript::frame_payload::chunk_text;
-use crate::transcript::{TranscriptFrame, transcript_from_frames};
+use crate::transcript::{SequencedFrame, TranscriptFrame, transcript_from_frames};
 
 impl App {
     /// Apply an inbound agent message to application state. Dispatch follows
@@ -625,15 +625,16 @@ impl App {
 
     /// Append a durable frame batch and rebuild the transcript once. Batching
     /// keeps reconnect cost linear while still making mid-run frames visible.
-    pub(crate) fn apply_frames(&mut self, frames: impl IntoIterator<Item = TranscriptFrame>) {
+    pub(crate) fn apply_frames(&mut self, frames: impl IntoIterator<Item = SequencedFrame>) {
         let mut any = false;
         let mut assistant_committed = false;
-        for frame in frames {
-            if let Some(msg) = frame_log_msg(&frame) {
+        for sequenced in frames {
+            let frame = sequenced.frame();
+            if let Some(msg) = frame_log_msg(frame) {
                 tracing::debug!(msg);
             }
             assistant_committed |= matches!(
-                &frame,
+                frame,
                 TranscriptFrame::Session(SessionUpdate::AgentMessageChunk(_))
             );
             // A server user message replaces the tentative echo the frontend
@@ -642,11 +643,11 @@ impl App {
             // server user message is arriving, so push_frame stays a pure
             // append and the streaming token / tool-update hot path pays
             // nothing for echo bookkeeping.
-            if let TranscriptFrame::Session(SessionUpdate::UserMessageChunk(chunk)) = &frame {
+            if let TranscriptFrame::Session(SessionUpdate::UserMessageChunk(chunk)) = frame {
                 self.transcript.drop_trailing_echo(chunk_text(chunk));
             }
-            self.track_running_tool(&frame);
-            self.transcript.push_frame(frame);
+            self.track_running_tool(frame);
+            self.transcript.push_frame(sequenced);
             any = true;
         }
         if any {

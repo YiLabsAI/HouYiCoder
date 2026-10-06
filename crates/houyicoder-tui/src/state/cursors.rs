@@ -1,16 +1,17 @@
 //! Typed cursor over the transcript frame log. A cursor names a position in
 //! absolute frame space so front-of-window eviction cannot shift it: a Local
 //! absolute index never moves when the resident vec drains from the front,
-//! and a Server event seq is durable across resume. The dual-anchor mirrors
-//! the block identity anchor so a cursor and the block it lands on share one
-//! notion of a stable frame position.
+//! and a Server cursor holds the stream position its frame arrived on,
+//! unique and monotonic while the issuing connection lives. Neither form is
+//! a durable identity: stream numbering restarts with the service process,
+//! and block anchors are Local-only.
 
 use houyicoder_protocol::envelope::EventSeq;
 
 /// A position in the frame log used by scroll and todo cursors. Local holds
 /// an absolute frame index, monotonic across front drains; Server holds the
-/// durable event seq a server frame carries. Resolution returns the count of
-/// frames already consumed up to the anchor.
+/// within-connection stream position a server frame carries. Resolution
+/// returns the count of frames already consumed up to the anchor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum EventCursor {
     Server(EventSeq),
@@ -21,9 +22,9 @@ pub(crate) enum EventCursor {
 mod tests {
     use super::*;
 
-    /// The two anchors never collide: a server seq and a local index name
-    /// different identity spaces, so a cursor resolved by one cannot match a
-    /// block anchored on the other.
+    /// The two forms never collide: a stream position and a local index name
+    /// different coordinate spaces, so the same number through each stays two
+    /// distinct cursors.
     #[test]
     fn test_cursor_anchor_distinct() {
         let server = EventCursor::Server(EventSeq(7));

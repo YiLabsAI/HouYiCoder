@@ -27,11 +27,11 @@ const LOG_ROW_BUDGET: usize = crate::scroll::VIEWABLE_SCROLLBACK_CAP;
 
 impl App {
     /// Rebuild the transcript from the frame log. Each turn is one block whose
-    /// identity (the event seq of the frame that opened it, or a log position
-    /// for a frontend-raised run) survives rebuild, so a turn whose frames did
-    /// not change carries its derived lines and expand state forward without
-    /// re-deriving them or re-pairing them by content. Only the turns whose
-    /// frame range changed re-derive; a rewind truncates the stale tail.
+    /// identity (the log position of the frame that opened it) survives
+    /// rebuild, so a turn whose frames did not change carries its derived
+    /// lines and expand state forward without re-deriving them or re-pairing
+    /// them by content. Only the turns whose frame range changed re-derive; a
+    /// rewind truncates the stale tail.
     pub(crate) fn rebuild_transcript(&mut self) {
         let turn_start = self.current_turn_start();
         let newest_open = self.run_state.is_active();
@@ -152,15 +152,13 @@ impl App {
             // The frozen prefix is a single reusable slot whose identity
             // stays fixed across cap advances (the window slides under it),
             // so it anchors on Local(0) rather than the moving frame_start;
-            // the active turn anchors on its opening frame's seq or log
-            // position, stable while the turn runs and replaced in place
-            // when a new turn takes the active slot.
+            // the active turn anchors on its opening frame's log position,
+            // stable while the turn runs and replaced in place when a new
+            // turn takes the active slot. The stream seq never anchors a
+            // block: numbering restarts with the service process, so an
+            // identity built from it would drift.
             let id = if is_active {
-                let anchor_seq = self
-                    .transcript
-                    .resident_frame(range.start)
-                    .and_then(|sf| sf.seq);
-                self.transcript.blocks().assign_id(anchor_seq, range.start)
+                self.transcript.blocks().assign_id(range.start)
             } else {
                 BlockId(BlockAnchor::Local(0))
             };

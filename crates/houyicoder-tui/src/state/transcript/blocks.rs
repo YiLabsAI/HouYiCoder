@@ -5,18 +5,14 @@
 
 use std::ops::Range;
 
-use houyicoder_protocol::envelope::EventSeq;
-
 use crate::records::TranscriptLine;
 
-/// The stable identity of a block. A server frame anchors with the durable
-/// event seq the server assigned; a frontend-raised row has none, so it
-/// anchors with a locally assigned counter that never collides with a server
-/// seq. The two never share an identity, and each survives rebuild because
-/// the anchor source is itself stable across the rebuild.
+/// The stable identity of a block: the log position its opening frame holds,
+/// assigned locally and stable while that frame stays in the visible window.
+/// The stream seq is deliberately not an anchor source — numbering restarts
+/// with the service process, so an identity built from it would drift.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum BlockAnchor {
-    Server(EventSeq),
     Local(u64),
 }
 
@@ -58,9 +54,9 @@ impl TranscriptChangeSet {
 }
 
 /// The ordered, reusable turn-level blocks the transcript keeps between
-/// rebuilds. A frontend-raised frame carries no server seq, so its block
-/// anchors on the frame's log position; the position is stable while the
-/// block stays in the visible window, which is the only place it is reused.
+/// rebuilds. A block anchors on its opening frame's log position; the
+/// position is stable while the block stays in the visible window, which is
+/// the only place it is reused.
 #[derive(Debug, Default)]
 pub(crate) struct TranscriptBlocks {
     blocks: Vec<Block>,
@@ -97,14 +93,11 @@ impl TranscriptBlocks {
         }
     }
 
-    /// The stable id for a block opening at a log position. A server frame
-    /// anchors on its event seq; a frontend-raised row anchors on its log
-    /// position, which stays put while the frame stays in the visible window.
-    pub(crate) fn assign_id(&self, anchor_seq: Option<EventSeq>, anchor_pos: usize) -> BlockId {
-        match anchor_seq {
-            Some(seq) => BlockId(BlockAnchor::Server(seq)),
-            None => BlockId(BlockAnchor::Local(anchor_pos as u64)),
-        }
+    /// The stable id for a block opening at a log position: the position
+    /// stays put while the opening frame stays in the visible window, which
+    /// is exactly the span a block is reused across.
+    pub(crate) fn assign_id(&self, anchor_pos: usize) -> BlockId {
+        BlockId(BlockAnchor::Local(anchor_pos as u64))
     }
 
     /// Apply a change set to the block list. ReplaceBlock migrates fetched
@@ -215,7 +208,6 @@ mod tests {
             .iter()
             .map(|b| match b.id.0 {
                 BlockAnchor::Local(n) => n,
-                BlockAnchor::Server(_) => unreachable!(),
             })
             .collect();
         assert_eq!(ids, vec![2, 3]);
@@ -308,22 +300,16 @@ mod tests {
             .iter()
             .map(|b| match b.id.0 {
                 BlockAnchor::Local(n) => n,
-                BlockAnchor::Server(_) => unreachable!(),
             })
             .collect();
         assert_eq!(ids, vec![1]);
     }
 
-    /// assign_id maps a server frame to a Server anchor and a frontend-raised
-    /// frame to a Local anchor on its log position, so the two never share an
-    /// identity even before a server seq is threaded through.
+    /// assign_id anchors a block on its opening frame's log position, so the
+    /// identity is stable exactly while the frame stays in the window.
     #[test]
     fn test_assign_id_anchors() {
         let bs = TranscriptBlocks::default();
-        let server = bs.assign_id(Some(EventSeq(42)), 5);
-        let local = bs.assign_id(None, 5);
-        assert_ne!(server, local);
-        assert!(matches!(server.0, BlockAnchor::Server(_)));
-        assert!(matches!(local.0, BlockAnchor::Local(5)));
+        assert_eq!(bs.assign_id(5), BlockId(BlockAnchor::Local(5)));
     }
 }
