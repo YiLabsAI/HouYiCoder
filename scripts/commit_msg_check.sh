@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Commit-msg hook. Two layers:
-#   1. Structural (here): conventional prefix + 72-char subject.
+#   1. Structural (here): conventional prefix, mandatory scope, 72-char subject.
 #   2. Content (commit_msg_lint.py): codename rules shared with the
 #      .rs comment gate via rules/comments.py.
 # An optional gitignored wordlist (.commit-lint-words) adds local
@@ -13,14 +13,22 @@ msg_file="$1"
 repo=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
 first_line=$(head -1 "$msg_file")
 
-# Must match: type(scope?): subject
-pattern='^(feat|fix|docs|refactor|test|chore|style|perf|ci|build)(\(.+\))?: .+'
+# Must match: type(scope): subject. The scope is mandatory on every commit:
+# a subject that names no module tells a reader scanning the log nothing
+# about where the change landed. A change no single module owns takes a
+# concern scope (naming, hooks, deps) rather than dropping the scope;
+# several modules take a comma list (cli,tui).
+pattern='^(feat|fix|docs|refactor|test|chore|style|perf|ci|build)\([a-z0-9][a-z0-9,_-]*\): .+'
 
 if ! echo "$first_line" | grep -qE "$pattern"; then
     cat >&2 <<'EOF'
 ERROR: commit message must follow conventional commits:
-  feat: / fix: / docs: / refactor: / test: / chore: / style: / perf: / ci: / build:
-  optional scope: feat(tui): ...
+  type(scope): subject -- the scope is mandatory, not optional
+  types: feat / fix / docs / refactor / test / chore / style / perf / ci / build
+  scope: the module or subsystem the change lands in, e.g. feat(tui): ...
+         a change no single module owns takes a concern scope,
+         e.g. refactor(naming): ...
+         several modules take a comma list, e.g. fix(cli,tui): ...
   imperative mood: "add" not "added"
   first line <= 72 chars, ASCII only (English)
 EOF

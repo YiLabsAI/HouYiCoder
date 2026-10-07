@@ -566,20 +566,28 @@ updated, rust-toolchain.toml MSRV current.
 ## Commit standards (mandatory)
 
 - Atomic commits: one logical change per commit.
-- Conventional commits: first line MUST match type(scope?): subject
+- Conventional commits: first line MUST match type(scope): subject
   - Types: feat / fix / docs / refactor / test / chore / style / perf / ci / build
-  - Optional scope: feat(tui): ...
+  - Scope is MANDATORY on every commit: feat(tui): ... A subject with no
+    scope tells a reader scanning the log nothing about where the change
+    landed. A change no single module owns takes a concern scope
+    (refactor(naming), ci(hooks), build(deps)); a change spanning a few
+    modules takes a comma list (fix(cli,tui)). Dropping the scope is never
+    the answer to "which module is this".
   - Subject <= 72 chars, imperative mood (add not added)
   - Body (optional): wrap at 72, explain why not what
 - Commit messages are written for external readers, in English: imperative
-  subject under 72 chars with a conventional prefix; an optional body of one
-  or two sentences explaining why (the diff already says what); factual and
-  neutral in tone; no internal process references.
+  subject under 72 chars with a conventional prefix and a scope; an optional
+  body of one or two sentences explaining why (the diff already says what);
+  factual and neutral in tone; no internal process references.
 - Linear history: git pull --rebase; squash local WIP before push.
-- Enforced by scripts/commit_msg_check.sh (structural: prefix + length) plus
-  an optional local style lint the script reads if a gitignored wordlist is
-  present. Install via make setup-hooks. The pre-push hook re-scans the
-  about-to-be-published range -- published history is immutable, so pre-push
-  is the final gate.
+- Enforced by scripts/commit_msg_check.sh (structural: prefix + scope +
+  length) plus an optional local style lint the script reads if a gitignored
+  wordlist is present. Install via make setup-hooks. The pre-push hook
+  re-scans the about-to-be-published range -- published history is
+  immutable, so pre-push is the final gate.
+- A rule that lives only in a reviewer's memory is not enforced: when this
+  guide and a standing ruling disagree, the ruling wins and this file is
+  corrected in the same commit.
 - If you add/rename a major abstraction, update the architecture docs and
   this guide.

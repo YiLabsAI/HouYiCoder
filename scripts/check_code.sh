@@ -94,7 +94,28 @@ run_rust_check "fmt-check"  "fmt-check"   "$CARGO" fmt --all -- --check
 run_rust_check "clippy"     "clippy"      "$CARGO" clippy --workspace --all-targets --no-deps -- -D warnings
 run_check "comments"    python3 scripts/check_rs_comments.py $RS_FILES
 run_check "no-cjk"      python3 scripts/check_no_cjk.py
-run_check "script-tests"  bash -c 'python3 scripts/test_hook_rust.py && python3 scripts/test_commit_msg_lint.py && python3 scripts/test_cov_lcov.py && python3 scripts/test_flat_prefix.py && python3 scripts/test_diff_cov.py && python3 scripts/test_stderr_gate.py && python3 scripts/test_comment_block_length.py && python3 scripts/test_app_coupling.py && python3 scripts/test_file_size.py && python3 scripts/test_struct_fields.py && python3 scripts/test_app_mut_borrows.py && python3 scripts/test_module_dead_code.py && python3 scripts/test_run_tests_timeout.py && python3 scripts/test_harness_routing.py'
+# The script suites run one file per step, so a red file names itself instead
+# of hiding inside a single chained command.
+SCRIPT_TESTS=(
+  test_hook_rust.py
+  test_commit_msg_lint.py
+  test_commit_msg_check.py
+  test_cov_lcov.py
+  test_flat_prefix.py
+  test_diff_cov.py
+  test_stderr_gate.py
+  test_comment_block_length.py
+  test_app_coupling.py
+  test_file_size.py
+  test_struct_fields.py
+  test_app_mut_borrows.py
+  test_module_dead_code.py
+  test_run_tests_timeout.py
+  test_harness_routing.py
+)
+for script_test in "${SCRIPT_TESTS[@]}"; do
+  run_check "script-tests:$script_test" python3 "scripts/$script_test"
+done
 run_check "rust-naming" python3 scripts/check_rust_naming.py $RS_FILES
 run_check "struct-fields" python3 scripts/check_struct_fields.py
 run_check "app-mut-borrows" python3 scripts/check_app_mut_borrows.py
