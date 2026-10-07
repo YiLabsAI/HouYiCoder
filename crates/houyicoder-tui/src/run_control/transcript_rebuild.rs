@@ -10,6 +10,7 @@ use std::sync::mpsc;
 use super::history_read::{OVERLAP_FRONT_ROWS, ReadJob};
 use super::{MAX_REBUILD_FRAMES, PREPEND_BATCH};
 use crate::records::TranscriptLine;
+use crate::row_id::RowId;
 use crate::state::App;
 use crate::state::history_read::{HistoryReadOutcome, HistoryReadPoll, PendingHistoryRead};
 use crate::state::transcript::DiskFront;
@@ -142,7 +143,9 @@ impl App {
         }
         if cur_idx > 0 {
             if let Some(survivor) = blocks.get(cur_idx) {
-                changes.push(TranscriptChange::EvictBefore { id: survivor.id });
+                changes.push(TranscriptChange::EvictBefore {
+                    id: survivor.id.clone(),
+                });
             } else {
                 clear_all = true;
             }
@@ -152,13 +155,22 @@ impl App {
             // The frozen prefix is a single reusable slot whose identity
             // stays fixed across cap advances (the window slides under it),
             // so it anchors on Local(0) rather than the moving frame_start;
-            // the active turn anchors on its opening frame's log position,
-            // stable while the turn runs and replaced in place when a new
-            // turn takes the active slot. The stream seq never anchors a
-            // block: numbering restarts with the service process, so an
-            // identity built from it would drift.
+            // the active turn anchors on the identity its opening frame
+            // carries — the durable entry when the frame came from the log,
+            // the frame's log position when the frontend raised it. The
+            // stream seq never anchors a block: numbering restarts with the
+            // service process, so an identity built from it would drift.
             let id = if is_active {
-                self.transcript.blocks().assign_id(range.start)
+                let base = self.transcript.frame_window_start();
+                let opening = self
+                    .transcript
+                    .frames()
+                    .get(range.start.saturating_sub(base));
+                let anchor = match opening {
+                    Some(sf) => RowId::of(sf.as_ref(), sf.event_id.as_ref(), range.start as u64),
+                    None => RowId::local(range.start as u64),
+                };
+                self.transcript.blocks().assign_id(anchor)
             } else {
                 BlockId(BlockAnchor::Local(0))
             };
@@ -190,10 +202,14 @@ impl App {
                 // took the active slot): replace it in place by its old
                 // identity so the slot order is preserved without a rewind.
                 Some(old) if !matched => {
-                    changes.push(TranscriptChange::ReplaceBlock { id: old.id, block });
+                    changes.push(TranscriptChange::ReplaceBlock {
+                        id: old.id.clone(),
+                        block,
+                    });
                     cur_idx += 1;
                 }
                 Some(_) => {
+                    let id = block.id.clone();
                     changes.push(TranscriptChange::ReplaceBlock { id, block });
                     cur_idx += 1;
                 }
@@ -207,7 +223,9 @@ impl App {
         if cur_idx < blocks.len()
             && let Some(last_kept) = cur_idx.checked_sub(1).and_then(|i| blocks.get(i))
         {
-            changes.push(TranscriptChange::RewindTo { id: last_kept.id });
+            changes.push(TranscriptChange::RewindTo {
+                id: last_kept.id.clone(),
+            });
         }
         (changes, clear_all, prefix_reused)
     }

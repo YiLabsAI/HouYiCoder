@@ -257,7 +257,7 @@ fn test_ctrl_o_fallthrough() {
     assert!(app.expanded_thinking.is_empty());
     crate::keys::handle_ctrl_o(&mut app);
     assert!(
-        app.expanded_thinking.contains("t1"),
+        app.expanded_thinking.contains(&"t1".into()),
         "falls through to ThoughtFor when no Subagent is present"
     );
 }

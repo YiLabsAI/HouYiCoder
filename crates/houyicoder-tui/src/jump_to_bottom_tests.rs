@@ -168,7 +168,7 @@ fn test_rescroll_keeps_count() {
     app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(
         agent_msg("response").into(),
     )));
-    let snapshot = app.unseen_since.expect("snapshot taken");
+    let snapshot = app.unseen_since.clone().expect("snapshot taken");
     // A second scroll-away: was already not following, so the null guard
     // keeps the original baseline.
     app.scroll_transcript_line_up(3);

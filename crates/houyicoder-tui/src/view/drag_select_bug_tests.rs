@@ -295,12 +295,12 @@ fn test_click_thoughtfor_expands_one() {
         app.expanded_thinking
     );
     assert!(
-        app.expanded_thinking.contains("t1"),
+        app.expanded_thinking.contains(&"t1".into()),
         "the clicked row's turn_id should be expanded: {:?}",
         app.expanded_thinking
     );
     assert!(
-        !app.expanded_thinking.contains("t2"),
+        !app.expanded_thinking.contains(&"t2".into()),
         "the other row's turn_id must NOT expand: {:?}",
         app.expanded_thinking
     );
@@ -355,12 +355,12 @@ fn test_click_thoughtfor_none_reasoning() {
     );
     crate::app::handle_mouse(&mut app, mouse(MouseEventKind::Up(MouseButton::Left), x, y));
     assert!(
-        app.expanded_thinking.contains("t2"),
+        app.expanded_thinking.contains(&"t2".into()),
         "clicking the reasoning=Some ThoughtFor (after a None one) must expand it: {:?}",
         app.expanded_thinking
     );
     assert!(
-        !app.expanded_thinking.contains("t1"),
+        !app.expanded_thinking.contains(&"t1".into()),
         "the None-reasoning row has nothing to expand: {:?}",
         app.expanded_thinking
     );
@@ -410,7 +410,7 @@ fn test_click_thought_no_duration() {
     );
     crate::app::handle_mouse(&mut app, mouse(MouseEventKind::Up(MouseButton::Left), x, y));
     assert!(
-        app.expanded_thinking.contains("t1"),
+        app.expanded_thinking.contains(&"t1".into()),
         "a summary with no duration still expands its reasoning: {:?}",
         app.expanded_thinking
     );
@@ -431,7 +431,7 @@ fn test_click_thought_no_duration() {
     );
     crate::app::handle_mouse(&mut app, mouse(MouseEventKind::Up(MouseButton::Left), x, y));
     assert!(
-        !app.expanded_thinking.contains("t2"),
+        !app.expanded_thinking.contains(&"t2".into()),
         "a summary with nothing to show publishes no handle: {:?}",
         app.expanded_thinking
     );
@@ -497,12 +497,12 @@ fn test_click_thoughtfor_scrolled_off() {
     );
     crate::app::handle_mouse(&mut app, mouse(MouseEventKind::Up(MouseButton::Left), x, y));
     assert!(
-        app.expanded_thinking.contains("t2"),
+        app.expanded_thinking.contains(&"t2".into()),
         "clicking the visible t2 must expand t2: {:?}",
         app.expanded_thinking
     );
     assert!(
-        !app.expanded_thinking.contains("t1"),
+        !app.expanded_thinking.contains(&"t1".into()),
         "the off-screen t1 must NOT expand from a click on t2: {:?}",
         app.expanded_thinking
     );

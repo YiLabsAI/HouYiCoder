@@ -3,6 +3,10 @@
 //! Builds selectable rows for user, agent, tool, diff, delegation, and
 //! checklist content, then applies scrolling, search, and expansion state.
 
+use std::collections::{HashMap, HashSet};
+use std::fmt::Display;
+use std::hash::Hash;
+
 use ratatui::{
     Frame,
     layout::Rect,
@@ -14,6 +18,7 @@ use ratatui::{
 use super::row_buffer::{Row, RowBuffer, RowParts};
 use super::tail_rows::build_tail_rows;
 use crate::records::ToolOutcome;
+use crate::row_id::RowId;
 use crate::state::{App, ViewportMode};
 use crate::toggle_hint::ToggleHint;
 use crate::view::context_view;
@@ -115,7 +120,7 @@ pub(super) fn draw_transcript(f: &mut Frame, area: Rect, app: &App) {
         let cache = app.cached_expanded_group.borrow();
         visible_window(&cache, &live.expanded_group, total_slots, top, cap)
     };
-    let visible_turn_ids: Vec<Option<String>> = {
+    let visible_turn_ids: Vec<Option<RowId>> = {
         let cache = app.cached_turn_ids.borrow();
         visible_window(&cache, &live.turn_ids, total_slots, top, cap)
     };
@@ -622,19 +627,22 @@ pub(crate) fn refresh_wide_cells(f: &mut Frame, area: Rect) {
     }
 }
 
-/// Order-independent content hash of a string set: XOR each element's stable
-/// byte hash so the result does not depend on HashSet iteration order. Replaces
-/// the .len() proxy for the slots-version cache key -- .len() collided on
-/// same-length different-content sets (expand A, collapse A, expand B -> same
-/// length, stale cache). XOR-of-hashes is content-aware; the residual collision
-/// (two distinct strings hashing equal) is negligible for small sets + bounded
-/// by the next transcript_version bump.
-fn set_content_hash(set: &std::collections::HashSet<String>) -> u64 {
-    fn str_hash(s: &str) -> u64 {
-        s.bytes()
-            .fold(0u64, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u64))
-    }
-    set.iter().map(|s| str_hash(s)).fold(0u64, |acc, h| acc ^ h)
+/// A key's stable byte hash, shared by the content hashes below.
+fn str_hash(s: &str) -> u64 {
+    s.bytes()
+        .fold(0u64, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u64))
+}
+
+/// Order-independent content hash of a key set: XOR each element's stable byte
+/// hash so the result does not depend on iteration order. This replaces the
+/// .len() proxy, which collided on same-length different-content sets;
+/// XOR-of-hashes is content-aware and the residual collision negligible for
+/// small sets plus the next transcript_version bump. Keys hash by display
+/// form, which is unique per identity.
+fn set_content_hash<T: Eq + Hash + Display>(set: &HashSet<T>) -> u64 {
+    set.iter()
+        .map(|k| str_hash(&k.to_string()))
+        .fold(0, |acc, h| acc ^ h)
 }
 
 /// Order-independent content hash of the live bash-progress map: XOR each
@@ -643,11 +651,7 @@ fn set_content_hash(set: &std::collections::HashSet<String>) -> u64 {
 /// the cached slot text). elapsed_secs is second-granularity, so this changes
 /// ~once/sec during a bash run -- the cache rebuilds on a tick, not every
 /// frame (the old || agent_busy bypass).
-fn bash_progress_hash(map: &std::collections::HashMap<String, crate::state::BashProgress>) -> u64 {
-    fn str_hash(s: &str) -> u64 {
-        s.bytes()
-            .fold(0u64, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u64))
-    }
+fn bash_progress_hash(map: &HashMap<String, crate::state::BashProgress>) -> u64 {
     map.iter()
         .map(|(k, p)| {
             let lines = p.lines.map_or(0, |n| n.wrapping_add(1));

@@ -7,6 +7,7 @@ use ratatui::text::Line;
 
 use super::row_buffer::{Row, RowBuffer};
 use crate::records::ToolOutcome;
+use crate::row_id::RowId;
 use crate::state::App;
 
 #[derive(Default)]
@@ -15,7 +16,7 @@ pub(super) struct TailRows {
     pub callids: Vec<Option<String>>,
     pub fold_keys: Vec<Option<String>>,
     pub expanded_group: Vec<Option<String>>,
-    pub turn_ids: Vec<Option<String>>,
+    pub turn_ids: Vec<Option<RowId>>,
     pub pre_rendered: Vec<Option<Line<'static>>>,
     pub all_rows: Vec<(u8, String)>,
 }

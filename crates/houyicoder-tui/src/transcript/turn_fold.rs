@@ -13,10 +13,12 @@ use std::ops::Range;
 use houyicoder_protocol::acpx::AcpxMethod;
 use houyicoder_protocol::frontend::session_update::SessionUpdate;
 
+use super::SequencedFrame;
 use super::TranscriptFrame;
 use super::frame_payload::chunk_text;
 use super::tool_renders_chip;
 use crate::records::TranscriptLine;
+use crate::row_id::RowId;
 
 /// The duration a run-completion record carries. A record without a readable
 /// one closes the turn with no duration rather than a claimed zero.
@@ -135,21 +137,28 @@ fn open_turn_before<F: AsRef<TranscriptFrame>>(log: &[F], start: usize) -> Optio
     }
 }
 
-/// Where folded summary rows take their durable name. The name is only
-/// useful while it identifies the same turn in every read that carries it,
-/// and what can promise that differs by the log being read.
+/// Where folded summary rows take their identity. The identity is only
+/// useful while it names the same turn in every read that carries it, and
+/// what can promise that differs by the log being read.
 pub(super) enum RowNames<'a> {
-    /// The live frame log, whose rows are named by absolute frame position:
-    /// the caller tracks the absolute index of log[0] and adds the fold's
-    /// end position to it, so a row keeps its name while the log's front
-    /// drains.
-    FrameIndex { abs_base: usize },
-    /// A durable log read, one formatted name per frame in log order: a row
-    /// takes the name at the frame that closed its turn, which no read can
-    /// shift because it belongs to the event, not to the window. The reader
-    /// formats the names, since the log's identity type is the reader's; the
-    /// fold only requires that names run parallel to the frames.
-    EventName(&'a [String]),
+    /// The live frame log. A row whose closing frame came from a durable
+    /// entry takes that entry's identity off the frame itself; a row no entry
+    /// named takes the absolute position where its turn ended, so the name
+    /// holds still while the log's front drains.
+    Live {
+        log: &'a [SequencedFrame],
+        abs_base: usize,
+    },
+    /// A log of bare frames, where no frame carries an entry identity: every
+    /// row takes the absolute position where its turn ended, which holds still
+    /// while the log's front drains.
+    Position { abs_base: usize },
+    /// A durable log read, one row identity per frame in log order: a row
+    /// takes the identity at the frame that closed its turn, which no read
+    /// can shift because it belongs to the entry, not to the window. The
+    /// reader derives the identities through the same function the live path
+    /// uses; the fold only requires that they run parallel to the frames.
+    EventName(&'a [RowId]),
 }
 
 /// The facts one turn accumulates for its summary row, gathered as the
@@ -303,20 +312,33 @@ impl<'a, F: AsRef<TranscriptFrame>> TurnFold<'a, F> {
             ms,
             reasoning,
             tool_summary: self.tool_summary(),
-            turn_id: self.row_name(),
+            turn_id: self.row_id(),
         })
     }
 
-    /// The durable name of the closing turn's row: an absolute frame position
-    /// in a live log, the reader's own event name in a durable read.
-    fn row_name(&self) -> String {
+    /// The identity of the closing turn's row: the entry that produced the
+    /// frame ending the turn when there is one, a position-based local name
+    /// otherwise.
+    fn row_id(&self) -> RowId {
         match &self.names {
-            RowNames::FrameIndex { abs_base } => format!("f{}", abs_base + self.ended_at),
+            RowNames::Live { log, abs_base } => {
+                let abs = *abs_base + self.ended_at;
+                match log.get(self.ended_at) {
+                    Some(sf) => RowId::of(sf.as_ref(), sf.event_id.as_ref(), abs as u64),
+                    // A turn only closes after the fold consumed the frame
+                    // that ends it, so ended_at always names a frame here.
+                    // Were that ever to stop holding, a position-named row
+                    // keeps the render going instead of failing on a frame
+                    // that is not there.
+                    None => RowId::local(abs as u64),
+                }
+            }
+            RowNames::Position { abs_base } => RowId::local((*abs_base + self.ended_at) as u64),
             RowNames::EventName(names) => {
-                // ended_at is a log position and the names run parallel to
-                // the log. A degenerate empty window at the log's end would
-                // hold a position one past the last frame; the newest name is
-                // the row's nearest durable anchor there.
+                // ended_at is a log position and the identities run parallel
+                // to the log. A degenerate empty window at the log's end
+                // would hold a position one past the last frame; the newest
+                // identity is the row's nearest durable anchor there.
                 let at = self.ended_at.min(names.len().saturating_sub(1));
                 names
                     .get(at)

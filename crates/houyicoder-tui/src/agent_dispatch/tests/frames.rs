@@ -10,9 +10,13 @@ use houyicoder_protocol::frontend::memory::{
 use crate::composition;
 use crate::keys::handle_ctrl_o;
 use crate::records::TranscriptLine;
+use crate::row_id::RowId;
 use crate::state::{App, Pane, Screen};
 use crate::test_harness::render_text;
 use crate::view::line_wrap::wrap_line;
+use houyicoder_protocol::acpx::{AcpxMethod, AcpxNotification};
+use houyicoder_protocol::frontend::run::ContentBlock;
+use houyicoder_protocol::frontend::session_update::ContentChunk;
 
 /// A working-screen app holding one memory-change notice: the shape every
 /// notice test starts from, so the broadcast setup lives here once.
@@ -703,11 +707,11 @@ fn test_thought_keep_affordance() {
         .last_row_turn_ids
         .borrow()
         .iter()
-        .position(|t| t.as_deref() == Some("t1"))
+        .position(|t| t.as_ref() == Some(&RowId::from("t1")))
         .expect("the thought row publishes its turn id");
     app.toggle_thinking_expand_at_row(ri);
     assert!(
-        app.expanded_thinking.contains("t1"),
+        app.expanded_thinking.contains(&"t1".into()),
         "the thought still toggles open on the thought-click path"
     );
 }
@@ -864,5 +868,139 @@ fn test_notice_ctrl_o_latest() {
     assert!(
         !app.expanded_fold_groups.contains("mg#0"),
         "the same key closes it again"
+    );
+}
+
+/// A frame carrying a durable entry identity, so the fold derives row names
+/// from the entry rather than the frame's position.
+fn stamped_frame(id: &str, frame: TranscriptFrame) -> SequencedFrame {
+    SequencedFrame {
+        seq: Some(EventSeq(1)),
+        event_id: Some(DurableEventId(id.to_string())),
+        frame,
+    }
+}
+
+fn stamped_user(id: &str, text: &str) -> SequencedFrame {
+    stamped_frame(
+        id,
+        TranscriptFrame::Session(SessionUpdate::UserMessageChunk(ContentChunk::new(
+            ContentBlock::Text { text: text.into() },
+        ))),
+    )
+}
+
+fn stamped_thought(id: &str, text: &str) -> SequencedFrame {
+    stamped_frame(
+        id,
+        TranscriptFrame::Session(SessionUpdate::AgentThoughtChunk(ContentChunk::new(
+            ContentBlock::Text { text: text.into() },
+        ))),
+    )
+}
+
+fn stamped_record(id: &str, ms: u64) -> SequencedFrame {
+    stamped_frame(
+        id,
+        TranscriptFrame::Acpx(AcpxNotification::new(
+            AcpxMethod::ContextRunCompleted,
+            serde_json::json!({ "ms": ms }),
+        )),
+    )
+}
+
+/// An expanded reasoning row stays open across a re-read that shifts frame
+/// positions: the expand key names the log entry that closed the turn, and
+/// the rebuilt row carries the same identity wherever its frames land. A
+/// position key would drift with the shifted log and collapse the row on
+/// return.
+#[test]
+fn test_expand_survives_reread() {
+    let mut app = composition::app();
+    app.screen = Screen::Working;
+    app.runtime = Some(crate::composition::shared_runtime());
+    app.transcript.push_frame(stamped_user("e1", "go"));
+    app.transcript
+        .push_frame(stamped_thought("e2", "REREADMARK weighed the options"));
+    app.transcript.push_frame(stamped_record("e3", 3_000));
+    app.rebuild_transcript();
+    let key = app
+        .transcript
+        .iter()
+        .find_map(|l| match l {
+            TranscriptLine::ThoughtFor { turn_id, .. } => Some(turn_id.clone()),
+            _ => None,
+        })
+        .expect("the record closes the turn and derives its row");
+    assert!(
+        matches!(key, RowId::Durable { slot: 1, .. }),
+        "the closing record names the row at the notification slot: {key:?}"
+    );
+    app.expanded_thinking.insert(key);
+    let before = render_text(&app, 100, 30);
+    assert!(
+        before.contains("REREADMARK"),
+        "the row starts open:\n{before}"
+    );
+
+    // The same log read back with an older history ahead of it: every frame
+    // position shifts, the row identity does not.
+    app.transcript.reset();
+    app.transcript
+        .push_frame(stamped_user("e0", "older history"));
+    app.transcript.push_frame(stamped_user("e1", "go"));
+    app.transcript
+        .push_frame(stamped_thought("e2", "REREADMARK weighed the options"));
+    app.transcript.push_frame(stamped_record("e3", 3_000));
+    app.rebuild_transcript();
+    let after = render_text(&app, 100, 30);
+    assert!(
+        after.contains("REREADMARK"),
+        "the row is still open after the re-read shifted positions:\n{after}"
+    );
+}
+
+/// A block whose opening frame carries a durable identity anchors on that
+/// entry, so appending to the turn leaves the block id alone: the anchor comes
+/// from the frame that opened the turn, not from the frames the turn has since
+/// grown.
+#[test]
+fn test_block_anchor_durable() {
+    use crate::state::transcript::blocks::BlockAnchor;
+    let mut app = composition::app();
+    app.screen = Screen::Working;
+    app.runtime = Some(crate::composition::shared_runtime());
+    app.transcript.push_frame(stamped_user("e1", "go"));
+    app.transcript.push_frame(stamped_thought("e2", "weighed"));
+    app.rebuild_transcript();
+    let active = app
+        .transcript
+        .blocks()
+        .blocks()
+        .last()
+        .expect("the rebuild derives the active turn block")
+        .id
+        .clone();
+    assert!(
+        matches!(
+            active.0,
+            BlockAnchor::Durable(RowId::Durable { slot: 0, .. })
+        ),
+        "the active block carries its opening entry into the anchor: {active:?}"
+    );
+    app.transcript
+        .push_frame(stamped_thought("e3", "pondered again"));
+    app.rebuild_transcript();
+    let again = app
+        .transcript
+        .blocks()
+        .blocks()
+        .last()
+        .expect("the active block survives the rebuild")
+        .id
+        .clone();
+    assert_eq!(
+        again, active,
+        "the same log anchors the same active block id"
     );
 }

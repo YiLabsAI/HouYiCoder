@@ -84,18 +84,18 @@ impl TodoState {
         run_active: bool,
     ) {
         let abs_count = abs_base + frames.len();
-        let (start, reset) = match self.cursor {
+        let (start, reset) = match &self.cursor {
             None => (0, false),
             Some(EventCursor::Local(n)) => {
-                let n = n as usize;
+                let n = *n as usize;
                 if n > abs_count {
                     (0, true)
                 } else {
                     (n.saturating_sub(abs_base), false)
                 }
             }
-            // The generic slice carries no event seq; re-derive from the front.
-            Some(EventCursor::Server(_)) => (0, true),
+            // The generic slice carries no row identity; re-derive.
+            Some(EventCursor::Durable(_)) => (0, true),
         };
         if reset {
             self.items.clear();
@@ -218,8 +218,8 @@ impl TodoState {
 
     #[cfg(test)]
     pub(crate) fn cursor(&self) -> usize {
-        match self.cursor {
-            Some(EventCursor::Local(n)) => n as usize,
+        match &self.cursor {
+            Some(EventCursor::Local(n)) => *n as usize,
             _ => 0,
         }
     }
@@ -294,7 +294,6 @@ mod tests {
     use super::*;
     use std::slice::from_ref;
 
-    use houyicoder_protocol::envelope::EventSeq;
     use houyicoder_protocol::frontend::run::ContentBlock;
     use houyicoder_protocol::frontend::session_update::{
         ContentChunk, SessionUpdate, ToolCall, ToolCallId,
@@ -485,28 +484,28 @@ mod tests {
         assert!(state.completion_at.is_empty());
     }
 
-    /// A server-anchored cursor cannot be resolved against the generic frame
+    /// A durable-anchored cursor cannot be resolved against the generic frame
     /// slice, so the accumulator re-derives from the front; the usize test
-    /// accessor reads a server cursor back as zero.
+    /// accessor reads a durable cursor back as zero.
     #[test]
-    fn test_server_cursor_re_derives() {
+    fn test_durable_cursor_re_derives() {
         let frame = TranscriptFrame::Session(todo_write_frame(serde_json::json!({
             "todos": [{"content": "done", "status": "completed"}]
         })));
         let mut state = TodoState {
-            cursor: Some(EventCursor::Server(EventSeq(7))),
+            cursor: Some(EventCursor::Durable("e7".into())),
             ..Default::default()
         };
         assert_eq!(
             state.cursor(),
             0,
-            "the usize accessor reads a server cursor as zero"
+            "the usize accessor reads a durable cursor as zero"
         );
         state.update(from_ref(&frame), 0, true);
         assert_eq!(
             state.items.len(),
             1,
-            "server cursor re-derives from the front"
+            "a durable cursor re-derives from the front"
         );
     }
 

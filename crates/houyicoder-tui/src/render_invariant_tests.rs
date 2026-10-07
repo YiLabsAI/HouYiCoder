@@ -594,7 +594,7 @@ fn test_thought_expand_wraps_narrow() {
         },
     ]
     .into();
-    app.expanded_thinking.insert("t1".to_string());
+    app.expanded_thinking.insert("t1".into());
     let out = render_text(&app, 30, 24);
     let count = app.transcript_display_rows();
     let rendered = app.transcript_scroll.total.get();

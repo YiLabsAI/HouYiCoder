@@ -3,9 +3,9 @@
 //! reader, maps each event to the frames the live stream carries, and folds
 //! them through the same projection the live render uses, so scrolling
 //! through history shows the turns the live view showed. Each frame carries
-//! the durable identity of the event that produced it, so a turn's summary
-//! row keeps the same name in every windowed read and never collides with
-//! the frame-index names the live transcript carries.
+//! the durable identity of the event that produced it, and the row names are
+//! derived through the same function the live path uses, so one event names
+//! one row in every read, whatever window it started from.
 //!
 //! The mappings are the service layer's map_session_update and
 //! map_acpx_notification, the same two the live push uses. A local copy would
@@ -25,8 +25,10 @@ use houyicoder_api::session::SessionLog;
 #[cfg(test)]
 use houyicoder_context::SessionId;
 use houyicoder_context::{SessionEvent, SessionLogEntry};
+use houyicoder_protocol::envelope::DurableEventId;
 use houyicoder_service::protocol_adapter::{map_acpx_notification, map_session_update};
 use houyicoder_tui::records::TranscriptLine;
+use houyicoder_tui::row_id::RowId;
 use houyicoder_tui::transcript::snapshot::{
     IndexProgress, SnapshotLoad, TranscriptSnapshot, WindowLoad,
 };
@@ -72,21 +74,26 @@ impl SessionLogSnapshot {
         ]
     }
 
-    /// The frames a run of durable events renders to, paired with the row
-    /// name each frame carries: the identity of the event that produced it.
-    /// Both frames of one event share its identity, so a turn's summary row
-    /// is named by the event the log recorded the close in — the same name
-    /// in every read, whatever window it started from. The identity type
-    /// belongs to the log's crate, so the formatting lives here rather than
-    /// in the projection.
+    /// The frames a run of durable events renders to, along with the row
+    /// identity each frame carries. The identity names both the event that
+    /// produced the frame and the frame's slot in the event's canonical frame
+    /// order, so the two frames of one event stay distinguishable and a turn's
+    /// summary row is named by the event the log recorded the close in — the
+    /// same name in every read, whatever window it started from. The
+    /// derivation is the one the live read path calls, so the two readers
+    /// cannot drift apart.
     fn named_frames<'a>(
         events: impl IntoIterator<Item = &'a SessionLogEntry>,
-    ) -> (Vec<TranscriptFrame>, Vec<String>) {
+    ) -> (Vec<TranscriptFrame>, Vec<RowId>) {
         let mut frames = Vec::new();
         let mut names = Vec::new();
         for event in events {
+            let id = DurableEventId(event.id.to_string());
             for frame in Self::frames_of(&event.event).into_iter().flatten() {
-                names.push(format!("e{}", event.id));
+                // Both mappers yield log categories, so every frame here comes
+                // from the entry and the position argument is never read: no
+                // frontend-raised frame reaches this loop.
+                names.push(RowId::of(&frame, Some(&id), 0));
                 frames.push(frame);
             }
         }

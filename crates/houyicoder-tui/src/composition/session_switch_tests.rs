@@ -4,6 +4,7 @@ use crate::fold::DisplaySlot;
 use crate::pending_prompt::PendingPrompt;
 use crate::pending_queue::PendingItem;
 use crate::records::ToolOutcome;
+use crate::row_id::RowId;
 use crate::state::TranscriptLine;
 use crate::state::history_read::HistoryReadOutcome;
 use crate::state::transcript::DiskFront;
@@ -633,8 +634,10 @@ fn group_body_visible(app: &App) -> bool {
 /// coming back keeps what the user had open. Keys never cross: a key open in
 /// one session stays closed in another, including a key string both sessions
 /// use (call-1#0), and a key the other session added (second-only) must not
-/// appear after the return. The thinking set is the exception: its key is a
-/// turn counter the rebuilt session mints afresh, so it is not parked.
+/// appear after the return. Thinking keys split by identity: a key held on a
+/// log entry survives the round trip, which a rebuilt session reads back as
+/// the same entry; a key held on a frame position drops, because the rebuilt
+/// session holds no row at that position.
 #[test]
 fn test_swap_restores_open_keys() {
     let first = test_bundle();
@@ -644,6 +647,7 @@ fn test_swap_restores_open_keys() {
     app.expanded_results.insert("call-1".into());
     app.expanded_fold_groups.insert("call-1#0".into());
     app.expanded_thinking.insert("1".into());
+    app.expanded_thinking.insert(RowId::local(9));
     app.expanded_subagents.insert("child-1".into());
     assert!(
         group_body_visible(&app),
@@ -700,9 +704,15 @@ fn test_swap_restores_open_keys() {
         app.expanded_fold_groups
     );
     assert!(
-        app.expanded_thinking.is_empty(),
-        "a thinking key does not come back: its counter restarts with the \
-         session, so the restored key would open a new turn instead: {:?}",
+        app.expanded_thinking.contains(&"1".into()),
+        "a thinking key held on a log entry comes back: the rebuilt session \
+         reads the same entry: {:?}",
+        app.expanded_thinking
+    );
+    assert!(
+        !app.expanded_thinking.contains(&RowId::local(9)),
+        "a thinking key held on a frame position does not come back: the \
+         rebuilt session holds no row at it: {:?}",
         app.expanded_thinking
     );
     assert!(app.expanded_subagents.contains("child-1"));

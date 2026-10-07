@@ -528,7 +528,7 @@ struct RowFacts {
     ms: Option<u64>,
     reasoning: Option<String>,
     tool_summary: Option<String>,
-    turn_id: String,
+    turn_id: RowId,
 }
 
 fn thought_row(lines: &[TranscriptLine]) -> Option<RowFacts> {
@@ -566,7 +566,8 @@ fn test_close_keeps_row_name() {
     let whole_row = thought_row(&whole).expect("the whole log derives the row");
     let tail_row = thought_row(&tail).expect("the window derives the same row");
     assert_eq!(
-        whole_row.turn_id, "f2",
+        whole_row.turn_id,
+        RowId::local(2),
         "the answer frame, not the closing message, names the row"
     );
     assert_eq!(
@@ -586,11 +587,14 @@ fn test_fold_names_rows() {
         thought("step"),
         run_completed(Some(7_000)),
     ];
-    let names: Vec<String> = (0..frames.len()).map(|i| format!("e{i}")).collect();
+    let names: Vec<RowId> = (0..frames.len())
+        .map(|i| RowId::from(format!("e{i}")))
+        .collect();
     let lines = transcript_from_named_frames(&frames, &names, 0..frames.len(), true);
     let row = thought_row(&lines).expect("the closed turn derives its row");
     assert_eq!(
-        row.turn_id, "e2",
+        row.turn_id,
+        RowId::from("e2"),
         "the row takes the name at the frame that closed the turn"
     );
 }
@@ -611,7 +615,11 @@ fn test_turn_row_folds_reasoning() {
     let row = thought_row(&lines).expect("a row for the turn");
     assert_eq!(row.reasoning.as_deref(), Some("pondering deeply"));
     assert_eq!(row.ms, None, "a log with no record claims no duration");
-    assert_eq!(row.turn_id, "f4", "named by the frame that ended the turn");
+    assert_eq!(
+        row.turn_id,
+        RowId::local(4),
+        "named by the frame that ended the turn"
+    );
     assert!(matches!(
         lines.last(),
         Some(TranscriptLine::ThoughtFor { .. })
@@ -694,7 +702,8 @@ fn test_row_uses_recorded_ms() {
     let row = thought_row(&lines).expect("a row for the turn");
     assert_eq!(row.ms, Some(7_000));
     assert_eq!(
-        row.turn_id, "f3",
+        row.turn_id,
+        RowId::local(3),
         "the record is the frame that ended the turn"
     );
     assert!(matches!(lines[3], TranscriptLine::ThoughtFor { .. }));
@@ -742,7 +751,7 @@ fn test_record_unknown_duration_closes() {
     let row = thought_row(&lines).expect("a row");
     assert_eq!(row.ms, None, "an unmeasured loop claims no duration");
     assert_eq!(row.reasoning.as_deref(), Some("weighing"));
-    assert_eq!(row.turn_id, "f3");
+    assert_eq!(row.turn_id, RowId::local(3));
 }
 
 #[test]
@@ -765,7 +774,7 @@ fn test_turn_name_uses_log() {
     frames.push(thought("thinking"));
     let lines = transcript_from_frames(&frames, 100..frames.len(), false);
     let row = thought_row(&lines).expect("a row for the turn");
-    assert_eq!(row.turn_id, "f101");
+    assert_eq!(row.turn_id, RowId::local(101));
 }
 
 #[test]
@@ -789,7 +798,7 @@ fn test_record_spans_mid_turn() {
     assert_eq!(row.ms, Some(3_000));
     assert_eq!(row.reasoning.as_deref(), Some("first half second half"));
     assert_eq!(row.tool_summary.as_deref(), Some("ran 1 bash"));
-    assert_eq!(row.turn_id, "f6");
+    assert_eq!(row.turn_id, RowId::local(6));
 }
 
 #[test]
@@ -819,7 +828,7 @@ fn test_frontend_row_between_mark() {
     assert_eq!(rows, 1, "one row for the one turn: {lines:?}");
     let row = thought_row(&lines).expect("a row");
     assert_eq!(row.reasoning.as_deref(), Some("first half second half"));
-    assert_eq!(row.turn_id, "f6");
+    assert_eq!(row.turn_id, RowId::local(6));
 }
 
 #[test]
@@ -892,7 +901,7 @@ fn test_window_starts_inside_turn() {
         Some(2_000),
         "the record inside the window closed it"
     );
-    assert_eq!(row.turn_id, "f5");
+    assert_eq!(row.turn_id, RowId::local(5));
 }
 
 #[test]
@@ -929,7 +938,7 @@ fn test_window_record_only() {
     assert_eq!(row.reasoning.as_deref(), Some("half "));
     assert_eq!(row.tool_summary.as_deref(), Some("ran 1 bash"));
     assert_eq!(row.ms, Some(5_000));
-    assert_eq!(row.turn_id, "f3");
+    assert_eq!(row.turn_id, RowId::local(3));
 }
 
 #[test]
@@ -951,7 +960,7 @@ fn test_upgraded_log_rows() {
         run_completed(Some(1_000)),
     ];
     let lines = transcript_from_frames(&frames, 0..frames.len(), false);
-    let facts: Vec<(Option<u64>, String, String)> = lines
+    let facts: Vec<(Option<u64>, String, RowId)> = lines
         .iter()
         .filter_map(|l| match l {
             TranscriptLine::ThoughtFor {
@@ -966,10 +975,10 @@ fn test_upgraded_log_rows() {
     assert_eq!(
         facts,
         vec![
-            (None, "a".to_string(), "f1".to_string()),
-            (None, "b".to_string(), "f3".to_string()),
-            (Some(9_000), "c".to_string(), "f6".to_string()),
-            (Some(1_000), "d".to_string(), "f9".to_string()),
+            (None, "a".to_string(), RowId::local(1)),
+            (None, "b".to_string(), RowId::local(3)),
+            (Some(9_000), "c".to_string(), RowId::local(6)),
+            (Some(1_000), "d".to_string(), RowId::local(9)),
         ],
         "one row per turn, each with its own reasoning: {lines:?}"
     );

@@ -3,6 +3,7 @@
 //! transcript_scroll field; the debug_scroll helper is private to this impl
 //! block and only these methods call it.
 
+use crate::row_id::RowId;
 use crate::scroll::{NewTurnCount, ScrollTransition, TranscriptScroll};
 use crate::state::{App, EventCursor};
 use crate::transcript::TranscriptFrame;
@@ -126,7 +127,7 @@ impl App {
     /// length, so the cap that drops the oldest pushed rows does not silently
     /// zero the count.
     pub fn new_turn_count(&self) -> NewTurnCount {
-        let Some(cursor) = self.unseen_since else {
+        let Some(cursor) = self.unseen_since.as_ref() else {
             return NewTurnCount::default();
         };
         let (from, is_lower_bound) = match self.frame_index_for_cursor(cursor) {
@@ -160,36 +161,43 @@ impl App {
     }
 
     /// The cursor at the current tail: the boundary one past the last frame.
-    /// Anchors Server on the tail frame's event seq when the frame carries
+    /// Anchors Durable on the tail frame's row identity when the frame carries
     /// one, else Local on the absolute frame count, which a front drain does
     /// not shift. Both resolve to the frame count, so the label reads zero new
     /// turns at the moment of capture.
     fn event_cursor_at_tail(&self) -> EventCursor {
+        let abs = self.transcript.abs_frame_count() as u64;
         match self.transcript.frames().last() {
-            Some(sf) => match sf.seq {
-                Some(seq) => EventCursor::Server(seq),
-                None => EventCursor::Local(self.transcript.abs_frame_count() as u64),
+            // An unstamped tail keeps the boundary one past the last frame,
+            // which is what the resolver shifts onto the resident range. The
+            // local argument is not read here: a stamped tail takes the
+            // durable form, and an unstamped one falls through to the frame
+            // count, so no counter value of ours could reach the cursor.
+            Some(sf) => match RowId::of(sf.as_ref(), sf.event_id.as_ref(), 0) {
+                id @ RowId::Durable { .. } => EventCursor::Durable(id),
+                _ => EventCursor::Local(abs),
             },
             None => EventCursor::Local(0),
         }
     }
 
     /// Resolve a cursor to the index of the first resident frame past its
-    /// anchor: the count of frames already consumed. Server finds the anchored
-    /// seq and steps past it; Local is an absolute frame index, shifted onto
-    /// the resident range. None when the anchor's frame is no longer resident,
-    /// so the caller counts the whole window instead of reading it as empty.
-    fn frame_index_for_cursor(&self, cursor: EventCursor) -> Option<usize> {
+    /// anchor: the count of frames already consumed. Durable finds the frame
+    /// its identity names and steps past it; Local is an absolute frame index,
+    /// shifted onto the resident range. None when the anchor's frame is no
+    /// longer resident, so the caller counts the whole window instead of
+    /// reading it as empty.
+    fn frame_index_for_cursor(&self, cursor: &EventCursor) -> Option<usize> {
         let base = self.transcript.frame_window_start();
         match cursor {
-            EventCursor::Server(seq) => self
+            EventCursor::Durable(id) => self
                 .transcript
                 .frames()
                 .iter()
-                .position(|sf| sf.seq == Some(seq))
+                .position(|sf| id.names(sf.as_ref(), sf.event_id.as_ref()))
                 .map(|i| i + 1),
             EventCursor::Local(n) => {
-                let abs = n as usize;
+                let abs = *n as usize;
                 (abs >= base).then(|| (abs - base).min(self.transcript.frame_count()))
             }
         }
@@ -254,34 +262,36 @@ mod tests {
     use super::*;
     use crate::composition;
     use crate::transcript::SequencedFrame;
-    use houyicoder_protocol::envelope::EventSeq;
+    use houyicoder_protocol::envelope::{DurableEventId, EventSeq};
     use houyicoder_protocol::frontend::run::ContentBlock;
     use houyicoder_protocol::frontend::session_update::ContentChunk;
 
-    fn agent_frame(seq: u64, text: &str) -> SequencedFrame {
+    fn stamped_frame(id: &str, text: &str) -> SequencedFrame {
         SequencedFrame {
-            seq: Some(EventSeq(seq)),
-            event_id: None,
+            seq: Some(EventSeq(1)),
+            event_id: Some(DurableEventId(id.to_string())),
             frame: TranscriptFrame::Session(SessionUpdate::AgentMessageChunk(ContentChunk::new(
                 ContentBlock::Text { text: text.into() },
             ))),
         }
     }
 
-    /// A tail frame carrying a server seq anchors the cursor on that seq, so
-    /// the baseline survives a front drain that a raw frame index would not.
+    /// A tail frame carrying a durable identity anchors the cursor on that
+    /// entry, so the baseline survives a front drain that a raw frame index
+    /// would not, and a re-read the index would misname.
     #[test]
-    fn test_tail_cursor_server_anchored() {
+    fn test_tail_cursor_durable_anchored() {
         let mut app = composition::app();
-        app.transcript.push_frame(agent_frame(5, "first"));
-        assert!(matches!(
-            app.event_cursor_at_tail(),
-            EventCursor::Server(EventSeq(5))
-        ));
+        app.transcript.push_frame(stamped_frame("e1", "first"));
+        let expected = RowId::Durable {
+            event: DurableEventId("e1".to_string()),
+            slot: 0,
+        };
+        assert_eq!(app.event_cursor_at_tail(), EventCursor::Durable(expected));
     }
 
-    /// A tail frame with no server seq anchors Local on the absolute frame
-    /// count, which a front drain does not shift.
+    /// A tail frame with no durable identity anchors Local on the absolute
+    /// frame count, which a front drain does not shift.
     #[test]
     fn test_tail_cursor_local_count() {
         let mut app = composition::app();
@@ -303,24 +313,62 @@ mod tests {
         assert!(matches!(app.event_cursor_at_tail(), EventCursor::Local(0)));
     }
 
-    /// A server cursor resolves to the frames past the anchored seq. An anchor
-    /// whose frame is no longer resident counts the whole window and reports
-    /// the count as a floor, since the frames it stood on are gone.
+    /// A durable anchor resolves by identity, not index: the front of the log
+    /// draining shifts every resident frame, and the anchored entry is still
+    /// found where it now sits. An anchor the drain took resolves to nothing,
+    /// and the count reports itself as a floor.
     #[test]
-    fn test_cursor_resolves_server_anchor() {
+    fn test_cursor_across_front_drain() {
         let mut app = composition::app();
-        app.transcript.push_frame(agent_frame(5, "first"));
-        app.transcript.push_frame(agent_frame(6, "second"));
-
-        app.unseen_since = Some(EventCursor::Server(EventSeq(5)));
+        app.transcript.push_frame(stamped_frame("e1", "first"));
+        app.transcript.push_frame(stamped_frame("e2", "second"));
+        app.transcript.push_frame(stamped_frame("e3", "third"));
+        app.unseen_since = Some(EventCursor::Durable("e2".into()));
         assert_eq!(
             app.new_turn_count().count,
             1,
-            "server anchor on seq 5 leaves the seq 6 turn to count"
+            "the third entry is the one unseen turn"
+        );
+
+        let total = app.transcript.resident_bytes();
+        let freed = app.transcript.frames()[0].estimated_bytes() as u64;
+        assert_eq!(
+            app.transcript.drain_front_to_budget(total - freed, Some(2)),
+            1,
+            "the drain takes the first entry alone"
+        );
+        assert_eq!(
+            app.new_turn_count().count,
+            1,
+            "the anchor resolves by identity after the drain shifted it"
         );
         assert!(!app.new_turn_count().is_lower_bound);
 
-        app.unseen_since = Some(EventCursor::Server(EventSeq(999)));
+        app.unseen_since = Some(EventCursor::Durable("e1".into()));
+        assert!(
+            app.new_turn_count().is_lower_bound,
+            "an anchor the drain took leaves the count a floor"
+        );
+    }
+
+    /// A durable cursor resolves to the frames past the anchored entry. An
+    /// anchor whose frame is no longer resident counts the whole window and
+    /// reports the count as a floor, since the frames it stood on are gone.
+    #[test]
+    fn test_cursor_resolves_durable_anchor() {
+        let mut app = composition::app();
+        app.transcript.push_frame(stamped_frame("e1", "first"));
+        app.transcript.push_frame(stamped_frame("e2", "second"));
+
+        app.unseen_since = Some(EventCursor::Durable("e1".into()));
+        assert_eq!(
+            app.new_turn_count().count,
+            1,
+            "an anchor on the first entry leaves the second turn to count"
+        );
+        assert!(!app.new_turn_count().is_lower_bound);
+
+        app.unseen_since = Some(EventCursor::Durable("absent".into()));
         assert_eq!(
             app.new_turn_count().count,
             1,

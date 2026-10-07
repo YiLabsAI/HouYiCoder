@@ -15,6 +15,7 @@ use houyicoder_protocol::frontend::session_update::{SessionUpdate, ToolCall};
 
 use crate::brief::{MEMORY_LABEL_TOOLS, result_summary, tool_call_brief};
 use crate::records::{ContextView, ToolOutcome, TranscriptLine};
+use crate::row_id::RowId;
 use crate::transcript::frame_payload::chunk_text;
 
 pub(crate) mod frame_payload;
@@ -147,11 +148,12 @@ impl SequencedFrame {
     }
 }
 
-/// Lets the projection read a frame log stored as either bare TranscriptFrame
-/// (test fixtures) or SequencedFrame (the Transcript store that carries the
-/// stream metadata). Both slice shapes feed the same projector without a
-/// per-call conversion, so a test that builds a Vec of TranscriptFrame and a
-/// rebuild that holds the live SequencedFrame log call the same entry.
+/// Lets the frame walk read a log stored as either bare TranscriptFrame (test
+/// fixtures) or SequencedFrame (the Transcript store that carries the stream
+/// metadata). The walk and the turn fold take a slice of anything convertible
+/// this way, so both shapes reach them by reference and neither pays a
+/// conversion: a test holding a Vec of bare frames and a rebuild holding the
+/// live log run the same walk.
 impl AsRef<TranscriptFrame> for SequencedFrame {
     fn as_ref(&self) -> &TranscriptFrame {
         &self.frame
@@ -193,47 +195,65 @@ fn tool_renders_chip(title: &str) -> bool {
 /// newest_open says whether the newest turn may still be running: a turn still
 /// going yields no row, since a half-accumulated summary would otherwise render
 /// as a finished one.
-pub fn transcript_from_frames<F: AsRef<TranscriptFrame>>(
-    log: &[F],
+///
+/// log holds bare frames, so no frame carries an entry identity and the rows
+/// this entry builds are named by position. A log whose frames carry entry
+/// identities goes through transcript_from_frames_at, which keeps them;
+/// accepting one here would drop every identity on the way in.
+pub fn transcript_from_frames(
+    log: &[TranscriptFrame],
     window: Range<usize>,
     newest_open: bool,
 ) -> Vec<TranscriptLine> {
-    transcript_from_frames_at(log, 0, window, newest_open)
-}
-
-/// Project a window of frames to lines when the log's first frame sits at an
-/// absolute frame index other than zero. The window is an absolute frame range
-/// and abs_base is the absolute index of log[0], so a window onto a drained log
-/// still names its turns by absolute position: a turn's row identity stays put
-/// when the resident window's front advances, and expand state stays attached
-/// to it.
-pub fn transcript_from_frames_at<F: AsRef<TranscriptFrame>>(
-    log: &[F],
-    abs_base: usize,
-    window: Range<usize>,
-    newest_open: bool,
-) -> Vec<TranscriptLine> {
-    let start = window.start.saturating_sub(abs_base);
-    let end = window.end.saturating_sub(abs_base).min(log.len());
     render_window(
         log,
-        RowNames::FrameIndex { abs_base },
-        start..end,
+        RowNames::Position { abs_base: 0 },
+        resident_window(0, log.len(), window),
         newest_open,
     )
 }
 
-/// Render a durable log read whose frames carry durable names, one per frame
-/// in log order. A turn's summary row takes the name at the frame that closed
-/// the turn, so the same turn keeps its row identity across reads that start
-/// at different points: a position-based name cannot promise that for a
-/// windowed read, whose positions shift with the window and collide with the
-/// live frame-index names the resident transcript already carries. The reader
-/// owns the name format, since the log's identity type is the reader's; the
-/// window is relative to log and names must run parallel to it.
+/// Derive the rows of a window when the log's first frame sits at an absolute
+/// frame index other than zero. The window is an absolute frame range and
+/// abs_base is the absolute index of log[0]. A turn's summary row takes the
+/// identity of the frame that closed the turn: the durable entry's own identity
+/// when the frame carries one, else the absolute position, which stays put when
+/// the resident window's front drains, so expand state stays attached to its row.
+pub fn transcript_from_frames_at(
+    log: &[SequencedFrame],
+    abs_base: usize,
+    window: Range<usize>,
+    newest_open: bool,
+) -> Vec<TranscriptLine> {
+    render_window(
+        log,
+        RowNames::Live { log, abs_base },
+        resident_window(abs_base, log.len(), window),
+        newest_open,
+    )
+}
+
+/// The part of a log an absolute frame range reaches, when the log's first
+/// frame sits at abs_base and its front may already have drained. The walk
+/// takes a range into the slice it holds, so an absolute range has to be
+/// shifted onto the resident frames and clamped to what is still there.
+fn resident_window(abs_base: usize, log_len: usize, window: Range<usize>) -> Range<usize> {
+    let start = window.start.saturating_sub(abs_base);
+    let end = window.end.saturating_sub(abs_base).min(log_len);
+    start..end
+}
+
+/// Render a durable log read whose frames carry row identities, one per frame
+/// in log order. A turn's summary row takes the identity at the frame that
+/// closed the turn, so the same turn keeps its row identity across reads that
+/// start at different points: a position-based name cannot promise that for a
+/// windowed read, whose positions shift with the window. The reader derives the
+/// identities through the same function the live path uses, so one entry names
+/// one row in both; the window is relative to log and the identities must run
+/// parallel to it.
 pub fn transcript_from_named_frames<F: AsRef<TranscriptFrame>>(
     log: &[F],
-    names: &[String],
+    names: &[RowId],
     window: Range<usize>,
     newest_open: bool,
 ) -> Vec<TranscriptLine> {

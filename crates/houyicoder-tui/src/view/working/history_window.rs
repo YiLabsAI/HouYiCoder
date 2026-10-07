@@ -15,6 +15,7 @@ use ratatui::{
 };
 
 use crate::records::ToolOutcome;
+use crate::row_id::RowId;
 use crate::state::App;
 use crate::view::markers::{diff_row, styled_row};
 use crate::view::working::transcript::{
@@ -57,7 +58,7 @@ pub(super) fn draw_history_window(f: &mut Frame, area: Rect, app: &App) {
         fold_keys.into_iter().skip(top).take(cap).collect();
     let visible_expanded_group: Vec<Option<String>> =
         expanded_group.into_iter().skip(top).take(cap).collect();
-    let visible_turn_ids: Vec<Option<String>> = turn_ids.into_iter().skip(top).take(cap).collect();
+    let visible_turn_ids: Vec<Option<RowId>> = turn_ids.into_iter().skip(top).take(cap).collect();
     let visible_pre: Vec<Option<Line<'static>>> =
         pre_rendered.into_iter().skip(top).take(cap).collect();
 

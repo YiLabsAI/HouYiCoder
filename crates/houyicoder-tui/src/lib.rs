@@ -36,6 +36,7 @@ pub mod render_cache;
 pub mod result_body;
 pub mod resume_picker;
 pub mod review_queue;
+pub mod row_id;
 pub mod run_control;
 pub mod run_state;
 pub mod scroll;

@@ -41,6 +41,7 @@ use crate::records::{TeammateView, ToolOutcome};
 use crate::render_cache::RenderCache;
 use crate::resume_picker::{SessionCatalog, SessionPickerState};
 use crate::review_queue::ReviewQueue;
+use crate::row_id::RowId;
 use crate::run_state::{RunProgress, RunState};
 use crate::scroll::{SearchState, TranscriptScroll, WindowScroll};
 use crate::selection::{ClipboardWriter, Selection};
@@ -163,7 +164,7 @@ pub struct App {
     pub cached_callids: RefCell<Vec<Option<String>>>,
     pub cached_fold_keys: RefCell<Vec<Option<String>>>,
     pub cached_expanded_group: RefCell<Vec<Option<String>>>,
-    pub cached_turn_ids: RefCell<Vec<Option<String>>>,
+    pub cached_turn_ids: RefCell<Vec<Option<RowId>>>,
     pub cached_pre_rendered: RefCell<Vec<Option<Line<'static>>>>,
     pub search: SearchState,
     /// Frozen snapshot the search view renders + counts against. Empty
@@ -418,7 +419,7 @@ pub struct App {
     pub expanded_fold_groups: HashSet<String>,
     /// Per-ThoughtFor-line expansion state, keyed by that line's turn_id.
     /// Empty = collapsed.
-    pub expanded_thinking: HashSet<String>,
+    pub expanded_thinking: HashSet<RowId>,
     pub expanded_subagents: HashSet<String>,
     /// State parked for views that are not on screen: the sessions switched
     /// away from, the children stepped out of, and the parent's own sets
@@ -455,7 +456,7 @@ pub struct App {
     /// misaligned when ThoughtFor rows scrolled out of the viewport — the
     /// visible count skipped off-screen rows while the full-transcript count
     /// did not, so clicking a visible row toggled an off-screen turn).
-    pub last_row_turn_ids: RefCell<Vec<Option<String>>>,
+    pub last_row_turn_ids: RefCell<Vec<Option<RowId>>>,
     /// Side table for large pastes that were replaced by placeholder tokens
     /// in the input box; expanded back to full text on submit.
     pub pasted: PasteStore,

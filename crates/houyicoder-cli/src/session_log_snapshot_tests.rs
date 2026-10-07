@@ -7,8 +7,12 @@
 use super::*;
 use crate::session_history::LOOKBACK_STEP_BYTES;
 use houyicoder_context::{EventId, SessionEvent};
+use houyicoder_protocol::envelope::{DurableEventId, EventSeq};
 use houyicoder_tui::records::TranscriptLine;
-use houyicoder_tui::transcript::transcript_from_frames;
+use houyicoder_tui::row_id::RowId;
+use houyicoder_tui::transcript::{
+    SequencedFrame, transcript_from_frames, transcript_from_frames_at,
+};
 
 fn ev(event: SessionEvent) -> SessionLogEntry {
     SessionLogEntry {
@@ -98,14 +102,116 @@ fn test_snapshot_record_row() {
     let rows: Vec<(Option<u64>, String)> = SessionLogSnapshot::project_events(events)
         .iter()
         .filter_map(|l| match l {
-            TranscriptLine::ThoughtFor { ms, turn_id, .. } => Some((*ms, turn_id.clone())),
+            TranscriptLine::ThoughtFor { ms, turn_id, .. } => Some((*ms, turn_id.to_string())),
             _ => None,
         })
         .collect();
     assert_eq!(
         rows,
-        vec![(Some(4_000), format!("e{closing}"))],
+        vec![(Some(4_000), format!("e{closing}.1"))],
         "the record closes the first turn and names the row by its durable identity"
+    );
+}
+
+/// The frames of one event take their slots in the canonical frame order:
+/// the session frame first, the notification frame second. An event whose
+/// only frame comes from map_acpx_notification still names that frame at the
+/// notification slot — the frame's category decides the slot, not how many
+/// frames the event produced.
+#[test]
+fn test_named_frames_slot_sequence() {
+    let input = EventId::new();
+    let mid = EventId::new();
+    let closing = EventId::new();
+    let events = [
+        ev_session(
+            SessionId::new(),
+            input,
+            SessionEvent::UserInput { text: "go".into() },
+        ),
+        ev_session(
+            SessionId::new(),
+            mid,
+            SessionEvent::MidTurnInput {
+                text: "queued".into(),
+                pending_input_id: None,
+            },
+        ),
+        ev_session(
+            SessionId::new(),
+            closing,
+            SessionEvent::RunCompleted { ms: Some(1_000) },
+        ),
+    ];
+    let (_frames, names) = SessionLogSnapshot::named_frames(events.iter());
+    let entry = |id: EventId, slot: u8| RowId::Durable {
+        event: DurableEventId(id.to_string()),
+        slot,
+    };
+    assert_eq!(
+        names,
+        vec![
+            entry(input, 0),
+            entry(mid, 0),
+            entry(mid, 1),
+            entry(closing, 1)
+        ]
+    );
+}
+
+/// The two read paths name one durable content alike: the summary row
+/// the snapshot derives from log events and the row the live fold derives
+/// from stamped frames of the same events carry the same identity, at the
+/// notification slot for a record-closed turn.
+#[test]
+fn test_snapshot_live_names_agree() {
+    let closing = EventId::new();
+    let events = [
+        ev(SessionEvent::UserInput { text: "one".into() }),
+        ev(SessionEvent::Reasoning {
+            text: "weighing".into(),
+        }),
+        ev_session(
+            SessionId::new(),
+            closing,
+            SessionEvent::RunCompleted { ms: Some(4_000) },
+        ),
+    ];
+    let row_name = |lines: &[TranscriptLine]| -> Option<RowId> {
+        lines.iter().find_map(|l| match l {
+            TranscriptLine::ThoughtFor { turn_id, .. } => Some(turn_id.clone()),
+            _ => None,
+        })
+    };
+    let snapshot_row = row_name(&SessionLogSnapshot::project_events(events.iter()))
+        .expect("the record closes the turn in the snapshot");
+    let mut log: Vec<SequencedFrame> = Vec::new();
+    for entry in &events {
+        let id = DurableEventId(entry.id.to_string());
+        for frame in SessionLogSnapshot::frames_of(&entry.event)
+            .into_iter()
+            .flatten()
+        {
+            log.push(SequencedFrame {
+                seq: Some(EventSeq(1)),
+                event_id: Some(id.clone()),
+                frame,
+            });
+        }
+    }
+    let live_row = row_name(&transcript_from_frames_at(&log, 0, 0..log.len(), true))
+        .expect("the live fold closes the same turn");
+    let expected = RowId::Durable {
+        event: DurableEventId(closing.to_string()),
+        slot: 1,
+    };
+    assert_eq!(
+        snapshot_row, expected,
+        "the snapshot names the row by the closing entry"
+    );
+    assert_eq!(
+        live_row, expected,
+        "the live path gives the same row the same name"
     );
 }
 
@@ -446,7 +552,7 @@ fn test_turn_names_durable() {
         lines
             .iter()
             .filter_map(|l| match l {
-                TranscriptLine::ThoughtFor { turn_id, .. } => Some(turn_id.clone()),
+                TranscriptLine::ThoughtFor { turn_id, .. } => Some(turn_id.to_string()),
                 _ => None,
             })
             .collect()
@@ -454,7 +560,7 @@ fn test_turn_names_durable() {
     let whole = ids(&snap.load(1 << 20).lines);
     assert_eq!(
         whole,
-        vec![format!("e{first_close}"), format!("e{closing}")],
+        vec![format!("e{first_close}.1"), format!("e{closing}.1")],
         "the whole log names each row by the event that closed its turn: {whole:?}"
     );
     let newest = snap.event_count().expect("the index is built") - 1;
@@ -466,7 +572,7 @@ fn test_turn_names_durable() {
     let at_record = ids(&snap.window(anchor, 1 << 20).lines);
     assert_eq!(
         at_record,
-        vec![format!("e{closing}")],
+        vec![format!("e{closing}.1")],
         "the window read derives only its own turn, named by the closing event: {at_record:?}"
     );
     assert_eq!(
@@ -533,12 +639,12 @@ fn test_lookback_finds_opener() {
         "the lookback reaches the opener and the window derives the same row: {:?}",
         at_record.lines
     );
-    let name = format!("e{closing}");
+    let name = format!("e{closing}.1");
     let window_names: Vec<String> = at_record
         .lines
         .iter()
         .filter_map(|l| match l {
-            TranscriptLine::ThoughtFor { turn_id, .. } => Some(turn_id.clone()),
+            TranscriptLine::ThoughtFor { turn_id, .. } => Some(turn_id.to_string()),
             _ => None,
         })
         .collect();
@@ -616,7 +722,7 @@ fn test_names_durable_without_record() {
         lines
             .iter()
             .filter_map(|l| match l {
-                TranscriptLine::ThoughtFor { turn_id, .. } => Some(turn_id.clone()),
+                TranscriptLine::ThoughtFor { turn_id, .. } => Some(turn_id.to_string()),
                 _ => None,
             })
             .collect()
@@ -624,7 +730,7 @@ fn test_names_durable_without_record() {
     let whole = ids(&snap.load(1 << 20).lines);
     assert_eq!(
         whole,
-        vec![format!("e{r1}"), format!("e{r2}")],
+        vec![format!("e{r1}.0"), format!("e{r2}.0")],
         "each record-less turn is named by the event holding its newest fact: {whole:?}"
     );
     let at_second = ids(&snap
@@ -639,7 +745,7 @@ fn test_names_durable_without_record() {
         .lines);
     assert_eq!(
         at_third,
-        vec![format!("e{r2}")],
+        vec![format!("e{r2}.0")],
         "a window starting at the second closing message keeps the name: {at_third:?}"
     );
     std::fs::remove_dir_all(&root).ok();

@@ -1,6 +1,7 @@
 //! Streaming behavior for transient output and durable completion frames.
 use super::*;
 use crate::agent_message::ServerResponse;
+use crate::row_id::RowId;
 
 /// Streamed reasoning remains transient until completion records it in the
 /// transcript.
@@ -92,7 +93,11 @@ fn test_run_row_from_record() {
     });
     let (reasoning, turn_id) = row.expect("the finished turn must surface its summary row");
     assert_eq!(reasoning.as_deref(), Some("pondering the task"));
-    assert_eq!(turn_id, "f3", "named by the frame that ended the turn");
+    assert!(
+        matches!(turn_id, RowId::Durable { slot: 1, .. }),
+        "the record that closed the turn names the row by its durable \
+         identity, at the notification slot: {turn_id:?}"
+    );
 }
 
 /// Regression guard for output-tail truncation. A streamed reply must land in

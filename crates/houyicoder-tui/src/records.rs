@@ -7,6 +7,7 @@ use houyicoder_protocol::frontend::context::ContextBreakdown;
 
 use houyicoder_protocol::extension::ENTITLEMENT_TOOL;
 
+use crate::row_id::RowId;
 use crate::scroll::TranscriptScroll;
 use crate::toggle_hint::ToggleHint;
 use crate::view::relative_time::turn_span_label;
@@ -147,17 +148,14 @@ pub enum TranscriptLine {
         /// kind of tool, "ran 3 tools (2 bash, 1 grep)" for mixed kinds);
         /// None when the turn ran no tools.
         tool_summary: Option<String>,
-        /// Identity of THIS turn's row. A rebuild of the live frame log names
-        /// the row by the absolute position of the frame that ended the turn;
-        /// a read of the durable log names it by the identity of the event the
-        /// log recorded the end in. Either way the name holds still while the
-        /// window slides and across a session reload, and the two readers'
-        /// names cannot collide because their formats differ. The
-        /// expand/collapse state (expanded_thinking) is keyed by this, NOT by
-        /// the reasoning text: two turns can produce identical text, and
-        /// keying by reasoning would collide them so expanding one expanded
-        /// both.
-        turn_id: String,
+        /// Identity of THIS turn's row: the log entry that ended the turn when
+        /// the frames carry one, else the absolute frame position that ended
+        /// it. The same entry names the same row in every read, live or from
+        /// disk, and across a session reload. The expand/collapse state
+        /// (expanded_thinking) is keyed by this, NOT by the reasoning text: two
+        /// turns can produce identical text, and keying by reasoning would
+        /// collide them so expanding one expanded both.
+        turn_id: RowId,
     },
     /// /context breakdown rendered INLINE as conversation content (multi-row
     /// block). Carries the full view payload so the renderer lays it out

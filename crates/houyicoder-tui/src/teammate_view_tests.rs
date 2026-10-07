@@ -180,13 +180,13 @@ fn test_sibling_view_swap() {
         "the hop exits through the parent's own sets"
     );
     assert!(
-        !app.expanded_thinking.contains("a1"),
+        !app.expanded_thinking.contains(&"a1".into()),
         "the first child's key does not ride out to the parent"
     );
 
     assert!(app.enter_teammate_view_for_sid("c1", false));
     assert!(
-        app.expanded_thinking.contains("a1"),
+        app.expanded_thinking.contains(&"a1".into()),
         "re-entering the first child restores what it had open"
     );
 }
@@ -225,7 +225,7 @@ fn test_ctrl_o_expands_child() {
     );
     crate::keys::handle_ctrl_o(&mut app);
     assert!(
-        app.expanded_thinking.contains("f3"),
+        app.expanded_thinking.contains(&"f3".into()),
         "the toggle targets the child row, set: {:?}",
         app.expanded_thinking
     );

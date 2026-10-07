@@ -6,17 +6,22 @@
 use std::ops::Range;
 
 use crate::records::TranscriptLine;
+use crate::row_id::{LocalEntryId, RowId};
 
-/// The stable identity of a block: the log position its opening frame holds,
-/// assigned locally and stable while that frame stays in the visible window.
-/// The stream seq is deliberately not an anchor source — numbering restarts
-/// with the service process, so an identity built from it would drift.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// The stable identity of a block, taken from its opening frame. A frame
+/// from a durable log entry anchors the block on that entry's row identity,
+/// which survives a re-read of the log; a frame the frontend raised anchors
+/// on its absolute log position, stable while the frame stays in the visible
+/// window. The stream seq is deliberately not an anchor source — numbering
+/// restarts with the service process, so an identity built from it would
+/// drift.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum BlockAnchor {
+    Durable(RowId),
     Local(u64),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct BlockId(pub BlockAnchor);
 
 /// One turn-level slice of the frame log, with the lines the projection
@@ -93,11 +98,17 @@ impl TranscriptBlocks {
         }
     }
 
-    /// The stable id for a block opening at a log position: the position
-    /// stays put while the opening frame stays in the visible window, which
-    /// is exactly the span a block is reused across.
-    pub(crate) fn assign_id(&self, anchor_pos: usize) -> BlockId {
-        BlockId(BlockAnchor::Local(anchor_pos as u64))
+    /// The stable id for a block whose opening frame carries the given row
+    /// identity. A durable identity anchors the block on its log entry, so
+    /// the block keeps its id across a re-read; a local identity anchors on
+    /// the frame's absolute log position, which stays put while the frame
+    /// stays in the visible window — exactly the span a block is reused
+    /// across.
+    pub(crate) fn assign_id(&self, opening: RowId) -> BlockId {
+        BlockId(match opening {
+            id @ RowId::Durable { .. } => BlockAnchor::Durable(id),
+            RowId::Local(LocalEntryId(n)) => BlockAnchor::Local(n),
+        })
     }
 
     /// Apply a change set to the block list. ReplaceBlock migrates fetched
@@ -208,6 +219,7 @@ mod tests {
             .iter()
             .map(|b| match b.id.0 {
                 BlockAnchor::Local(n) => n,
+                BlockAnchor::Durable(_) => panic!("test blocks anchor locally"),
             })
             .collect();
         assert_eq!(ids, vec![2, 3]);
@@ -300,16 +312,27 @@ mod tests {
             .iter()
             .map(|b| match b.id.0 {
                 BlockAnchor::Local(n) => n,
+                BlockAnchor::Durable(_) => panic!("test blocks anchor locally"),
             })
             .collect();
         assert_eq!(ids, vec![1]);
     }
 
-    /// assign_id anchors a block on its opening frame's log position, so the
-    /// identity is stable exactly while the frame stays in the window.
+    /// assign_id anchors a block on the identity its opening frame carries:
+    /// a durable entry keeps the block id stable across a re-read of the log,
+    /// a frontend frame falls back to the frame's log position, stable while
+    /// the frame stays in the window.
     #[test]
     fn test_assign_id_anchors() {
         let bs = TranscriptBlocks::default();
-        assert_eq!(bs.assign_id(5), BlockId(BlockAnchor::Local(5)));
+        assert_eq!(
+            bs.assign_id(RowId::local(5)),
+            BlockId(BlockAnchor::Local(5))
+        );
+        let durable: RowId = "e1".into();
+        assert_eq!(
+            bs.assign_id(durable.clone()),
+            BlockId(BlockAnchor::Durable(durable))
+        );
     }
 }

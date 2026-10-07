@@ -8,6 +8,7 @@
 use ratatui::text::Line;
 
 use crate::records::ToolOutcome;
+use crate::row_id::RowId;
 
 /// A row's text plus the metadata a later click or key resolves by row index.
 pub(super) struct Row {
@@ -17,7 +18,7 @@ pub(super) struct Row {
     callid: Option<String>,
     fold_key: Option<String>,
     group: Option<String>,
-    turn_id: Option<String>,
+    turn_id: Option<RowId>,
     pre: Option<Line<'static>>,
 }
 
@@ -67,7 +68,7 @@ impl Row {
 
     /// The reasoning turn id, set on a thought header so a click resolves
     /// straight to the turn rather than counting rows.
-    pub(super) fn turn_id(mut self, turn_id: Option<String>) -> Self {
+    pub(super) fn turn_id(mut self, turn_id: Option<RowId>) -> Self {
         self.turn_id = turn_id;
         self
     }
@@ -86,7 +87,7 @@ pub(super) type RowParts = (
     Vec<Option<String>>,
     Vec<Option<String>>,
     Vec<Option<String>>,
-    Vec<Option<String>>,
+    Vec<Option<RowId>>,
     Vec<Option<Line<'static>>>,
 );
 
@@ -97,7 +98,7 @@ pub(super) struct RowBuffer {
     callids: Vec<Option<String>>,
     fold_keys: Vec<Option<String>>,
     groups: Vec<Option<String>>,
-    turn_ids: Vec<Option<String>>,
+    turn_ids: Vec<Option<RowId>>,
     pre_rendered: Vec<Option<Line<'static>>>,
     in_subagent: bool,
 }

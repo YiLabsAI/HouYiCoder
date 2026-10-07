@@ -1659,7 +1659,7 @@ fn test_ctrl_o_expands_latest() {
     assert!(app.selection.anchor.is_none(), "no cursor");
     handle_ctrl_o(&mut app);
     assert!(
-        app.expanded_thinking.contains("t1"),
+        app.expanded_thinking.contains(&"t1".into()),
         "the later block expands: {:?}",
         app.expanded_thinking
     );
@@ -1707,7 +1707,7 @@ fn test_ctrl_o_follows_cursor() {
     app.selection.start(0, top + ri);
     handle_ctrl_o(&mut app);
     assert!(
-        app.expanded_thinking.contains("t1"),
+        app.expanded_thinking.contains(&"t1".into()),
         "the row under the cursor expands"
     );
     assert!(

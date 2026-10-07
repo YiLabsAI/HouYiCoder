@@ -10,6 +10,7 @@ use std::collections::HashSet;
 use houyicoder_protocol::frontend::SessionId;
 
 use super::App;
+use crate::row_id::RowId;
 use crate::scroll::TranscriptScroll;
 
 /// The four expansion sets one view owns.
@@ -17,7 +18,7 @@ use crate::scroll::TranscriptScroll;
 pub(crate) struct ExpandedKeys {
     pub(crate) results: HashSet<String>,
     pub(crate) fold_groups: HashSet<String>,
-    pub(crate) thinking: HashSet<String>,
+    pub(crate) thinking: HashSet<RowId>,
     pub(crate) subagents: HashSet<String>,
 }
 
@@ -64,12 +65,12 @@ impl ParkedViewStates {
     /// session replaces its entry, so the entry count follows the sessions
     /// visited, not the number of switches.
     pub(crate) fn park_session(&mut self, session: SessionId, mut keys: ExpandedKeys) {
-        // The thinking set is dropped rather than parked. Its key is a turn
-        // counter that restarts when a session is rebuilt, so a restored key
-        // would open a block of the new visit rather than the one the user
-        // had open, and the rows it names are not replayed, so no key can
-        // reach them anyway.
-        keys.thinking.clear();
+        // Only the local thinking keys are dropped. A durable key names the
+        // log entry that closed its turn, which a rebuilt session reads back
+        // from the log, so it opens the same block the reader left open; a
+        // local key is a frame position of the visit that raised it, and a
+        // rebuilt session holds no row at that position to open.
+        keys.thinking.retain(RowId::is_durable);
         if keys.is_empty() {
             return;
         }
@@ -224,26 +225,30 @@ mod tests {
     }
 
     #[test]
-    fn test_park_drops_thinking_key() {
+    fn test_park_filters_thinking_keys() {
         let mut parked = ParkedViewStates::default();
         let mut thinking_only = ExpandedKeys::default();
-        thinking_only.thinking.insert("1".into());
+        thinking_only.thinking.insert(RowId::local(1));
         parked.park_session(sid("a"), thinking_only);
         assert!(
             parked.take_session(&sid("a")).is_none(),
-            "a thinking key alone leaves nothing to restore"
+            "a local thinking key alone leaves nothing to restore"
         );
 
         let mut mixed = ExpandedKeys::default();
-        mixed.thinking.insert("1".into());
+        mixed.thinking.insert(RowId::local(1));
+        mixed.thinking.insert("entry".into());
         mixed.results.insert("call-1".into());
         parked.park_session(sid("b"), mixed);
         let taken = parked.take_session(&sid("b")).expect("parked");
         assert!(taken.results.contains("call-1"));
         assert!(
-            taken.thinking.is_empty(),
-            "the thinking key stays behind: {:?}",
-            taken.thinking
+            taken.thinking.contains(&"entry".into()),
+            "the durable key names a log entry the rebuilt session reads back"
+        );
+        assert!(
+            !taken.thinking.contains(&RowId::local(1)),
+            "the local key stays behind: a rebuilt session has no row there"
         );
     }
 
