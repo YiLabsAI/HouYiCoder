@@ -957,3 +957,94 @@ fn test_index_landing_after_interrupt() {
     }
     assert!(app.index_done.get(), "the restarted build completed");
 }
+
+/// A build already running is left to the loop. The key that starts one carries
+/// no gate of its own, so pressing it again reaches the dispatch, and a second
+/// chunk would overwrite the slot: the receiver of the running chunk is
+/// dropped, which orphans a worker that reads the log and sends into a channel
+/// nobody holds. The sender held here is the observation -- it keeps its
+/// receiver only if no second chunk was dispatched.
+#[test]
+fn test_index_restart_waits() {
+    let mut app = working();
+    app.snapshot = Some(Arc::new(MockSnapshot {
+        lines: Vec::new(),
+        log_bytes: 20 * 1024 * 1024,
+        truncated: false,
+        skipped: 0,
+        window_lines: vec![TranscriptLine::User("tail".into())],
+        window_start: 0,
+        windows: Vec::new(),
+        index_steps: 1,
+        index_calls: std::sync::atomic::AtomicU32::new(0),
+    }));
+    app.runtime = Some(Arc::new(
+        tokio::runtime::Runtime::new().expect("test runtime"),
+    ));
+    app.enter_search_view("tail");
+    app.indexing.set(true);
+    let (tx, rx) = mpsc::channel();
+    *app.pending_index_chunk.borrow_mut() = Some(PendingIndexChunk::new(rx));
+
+    crate::app::handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('G'), KeyModifiers::NONE),
+    );
+
+    assert!(
+        tx.send(IndexProgress {
+            indexed_bytes: 7,
+            total_bytes: 9,
+            done: false,
+        })
+        .is_ok(),
+        "the running chunk still has its receiver"
+    );
+    assert!(app.pump_index_chunk(), "and its progress still lands");
+    assert_eq!(
+        app.indexed_bytes.get(),
+        7,
+        "from the chunk that was already running, not a second one"
+    );
+}
+
+/// The loop's own step waits for the running chunk rather than dispatching
+/// beside it. Same observation as the key above, from the other caller: a step
+/// that dispatched while a chunk was running would overwrite the slot and drop
+/// that chunk's receiver.
+#[test]
+fn test_index_pump_waits() {
+    let mut app = working();
+    app.snapshot = Some(Arc::new(MockSnapshot {
+        lines: Vec::new(),
+        log_bytes: 20 * 1024 * 1024,
+        truncated: false,
+        skipped: 0,
+        window_lines: vec![TranscriptLine::User("tail".into())],
+        window_start: 0,
+        windows: Vec::new(),
+        index_steps: 1,
+        index_calls: std::sync::atomic::AtomicU32::new(0),
+    }));
+    app.runtime = Some(Arc::new(
+        tokio::runtime::Runtime::new().expect("test runtime"),
+    ));
+    app.enter_search_view("tail");
+    app.indexing.set(true);
+    let (tx, rx) = mpsc::channel();
+    *app.pending_index_chunk.borrow_mut() = Some(PendingIndexChunk::new(rx));
+
+    assert!(
+        !app.pump_index_chunk(),
+        "nothing landed yet, so nothing moved"
+    );
+    assert!(
+        tx.send(IndexProgress {
+            indexed_bytes: 3,
+            total_bytes: 9,
+            done: false,
+        })
+        .is_ok(),
+        "the running chunk still has its receiver"
+    );
+}

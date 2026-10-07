@@ -9,6 +9,15 @@
 
 use crate::transcript::snapshot::IndexProgress;
 
+/// Index chunks reading the log at once.
+///
+/// The slot holding a pending chunk holds one, so a second dispatch drops the
+/// receiver of the running chunk and orphans that worker: it finishes the chunk
+/// it is reading and sends into a channel nobody holds, and the read it paid
+/// for is discarded with it. The budget is stated here and asserted at the dispatch
+/// point rather than left to the shape of the slot.
+pub(crate) const INDEX_WORKER_BUDGET: usize = 1;
+
 /// One index chunk while its task runs. The receiver is the channel the
 /// background task sends progress over; the task owns the sender and drops it
 /// on exit.

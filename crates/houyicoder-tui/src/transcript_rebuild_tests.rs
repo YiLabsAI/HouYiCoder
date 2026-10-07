@@ -75,7 +75,7 @@ fn fresh_app() -> App {
 /// applied before assertions run. Returns false at once when no read was
 /// dispatched (the resident-frame path or a no-op short-circuit).
 fn pump_history_read_blocking(app: &mut App, timeout: Duration) -> bool {
-    if !app.history_reads.is_pending() {
+    if app.history_reads.running() == 0 {
         return false;
     }
     let start = Instant::now();
@@ -1827,8 +1827,9 @@ fn test_stale_history_read_dropped() {
         DiskFront::Stopped,
         "stale Exhausted did not latch Stopped at the old front"
     );
-    assert!(
-        !app.history_reads.is_pending(),
+    assert_eq!(
+        app.history_reads.running(),
+        0,
         "the slot released after the stale result was dropped"
     );
 }
@@ -1844,12 +1845,13 @@ fn test_dead_worker_clears_slot() {
     drop(tx);
     let front = app.transcript.frame_window_start();
     let disk_front = app.transcript.disk_front();
-    app.history_reads.dispatch(front, disk_front, rx);
-    assert!(app.history_reads.is_pending());
+    drop(app.history_reads.dispatch(front, disk_front, rx));
+    assert_eq!(app.history_reads.running(), 1);
     let landed = app.pump_history_read();
     assert!(!landed, "a disconnected worker sets no dirty flag");
-    assert!(
-        !app.history_reads.is_pending(),
+    assert_eq!(
+        app.history_reads.running(),
+        0,
         "the slot released so a later dispatch can run"
     );
     assert_eq!(

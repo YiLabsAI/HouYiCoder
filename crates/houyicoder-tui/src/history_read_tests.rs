@@ -48,7 +48,7 @@ fn inject_read(app: &mut App) -> mpsc::Sender<HistoryReadOutcome> {
     let (tx, rx) = mpsc::channel::<HistoryReadOutcome>();
     let front = app.transcript.frame_window_start();
     let disk_front = app.transcript.disk_front();
-    app.history_reads.dispatch(front, disk_front, rx);
+    drop(app.history_reads.dispatch(front, disk_front, rx));
     tx
 }
 

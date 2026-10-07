@@ -7,7 +7,7 @@
 use std::time::Duration;
 
 use super::App;
-use super::index_read::{IndexChunkPoll, PendingIndexChunk};
+use super::index_read::{INDEX_WORKER_BUDGET, IndexChunkPoll, PendingIndexChunk};
 use crate::notifications::{NotifKind, Notification};
 
 impl App {
@@ -307,20 +307,42 @@ impl App {
         }
     }
 
+    /// How many index chunks are running. The slot holds one, so a caller asks
+    /// this rather than the slot: the limit it is keeping then lives beside the
+    /// constant that names it.
+    fn running_index_workers(&self) -> usize {
+        usize::from(self.pending_index_chunk.borrow().is_some())
+    }
+
     /// G in byte-window mode: start the full event-byte-offset index build
     /// (one chunk at a time; Esc interrupts). The first chunk is dispatched
     /// here, and the loop advances the build from there.
+    ///
+    /// A build already running is left to the loop. The key carries no gate of
+    /// its own, so pressing it twice would dispatch twice, and the second
+    /// dispatch drops the first chunk's receiver: its worker reads the log and
+    /// sends into a channel nobody holds.
     pub fn start_full_index(&mut self) {
-        if self.window_mode {
-            self.indexing.set(true);
-            self.index_done.set(false);
-            self.dispatch_index_chunk();
+        if !self.window_mode {
+            return;
         }
+        self.indexing.set(true);
+        self.index_done.set(false);
+        if self.running_index_workers() >= INDEX_WORKER_BUDGET {
+            return;
+        }
+        self.dispatch_index_chunk();
     }
 
     /// Esc while indexing interrupts the build (the partial index is kept --
     /// a later G resumes from where it left off). Returns true if it
     /// consumed the Esc so the caller does not also exit the view.
+    ///
+    /// The chunk already on its worker is not cancelled and cannot be: it is a
+    /// blocking read of the log. It lands, its progress applies, and no next
+    /// chunk is dispatched, so one chunk is the worst case an interrupt leaves
+    /// running. That bound is the index build's whole stop contract, because a
+    /// worker here reads one chunk and returns rather than walking the log.
     pub fn interrupt_index(&mut self) -> bool {
         if self.indexing.get() {
             self.indexing.set(false);
@@ -336,41 +358,46 @@ impl App {
     /// A wired runtime reads the chunk on a worker and applies it when it
     /// lands; the bare path, which has no runtime, reads it inline. Returns
     /// true when progress moved, so the caller redraws the chrome.
+    ///
+    /// This is the build's stop point. A build nobody wants dispatches no next
+    /// chunk, and the loop advances the build from here, so an interrupt takes
+    /// effect at the next chunk boundary rather than partway through a read.
     pub fn pump_index_chunk(&mut self) -> bool {
         let mut moved = self.apply_index_progress();
         if !self.indexing.get() {
             return moved;
         }
-        if self.pending_index_chunk.borrow().is_some() {
-            // A chunk is already in flight; the next step waits for it.
+        if self.running_index_workers() >= INDEX_WORKER_BUDGET {
+            // A chunk is already running; the next step waits for it.
             return moved;
         }
-        match self.runtime.clone() {
-            Some(runtime) => {
-                let Some(snap) = self.snapshot.clone() else {
-                    return moved;
-                };
-                let (tx, rx) = std::sync::mpsc::channel();
-                runtime.spawn_blocking(move || {
-                    tx.send(snap.index_chunk()).ok();
-                });
-                *self.pending_index_chunk.borrow_mut() = Some(PendingIndexChunk::new(rx));
-            }
-            None => {
-                // No runtime: the unwired path reads the chunk where it stands,
-                // which is what the bare and test compositions exercise.
-                if let Some(snap) = self.snapshot.clone() {
-                    let p = snap.index_chunk();
-                    self.apply_index_chunk(p);
-                    moved = true;
-                }
-            }
+        if self.runtime.is_some() {
+            self.dispatch_index_chunk();
+            return moved;
+        }
+        // No runtime: the read happens where it stands instead, which is what
+        // the bare and test compositions exercise.
+        if let Some(snap) = self.snapshot.clone() {
+            let p = snap.index_chunk();
+            self.apply_index_chunk(p);
+            moved = true;
         }
         moved
     }
 
     /// Dispatch one index chunk on a worker, when a runtime is wired.
+    ///
+    /// The one place a chunk task is started, so the budget is asserted here:
+    /// every caller guards before asking, and a caller that forgets is told in
+    /// debug rather than leaving two workers reading one log with only the
+    /// second one's receiver in the slot.
     fn dispatch_index_chunk(&mut self) {
+        debug_assert!(
+            self.running_index_workers() < INDEX_WORKER_BUDGET,
+            "an index chunk was dispatched while {} were running, past the budget of {}",
+            self.running_index_workers(),
+            INDEX_WORKER_BUDGET
+        );
         let Some(runtime) = self.runtime.clone() else {
             return;
         };

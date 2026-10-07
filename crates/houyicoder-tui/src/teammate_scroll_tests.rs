@@ -191,8 +191,9 @@ fn test_child_blocks_parent_reads() {
     for _ in 0..3 {
         app.load_older_frames();
     }
-    assert!(
-        !app.history_reads.is_pending(),
+    assert_eq!(
+        app.history_reads.running(),
+        0,
         "no parent history read was dispatched while the child is on view"
     );
 }
@@ -209,7 +210,7 @@ fn test_parent_read_spares_child() {
     let (tx, rx) = mpsc::channel::<HistoryReadOutcome>();
     let front = app.transcript.frame_window_start();
     let disk_front = app.transcript.disk_front();
-    app.history_reads.dispatch(front, disk_front, rx);
+    drop(app.history_reads.dispatch(front, disk_front, rx));
 
     assert!(app.enter_teammate_view());
     let child_before = crate::test_harness::render_text(&app, 80, 24);

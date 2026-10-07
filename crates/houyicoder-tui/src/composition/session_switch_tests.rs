@@ -10,6 +10,7 @@ use crate::state::history_read::HistoryReadOutcome;
 use crate::state::transcript::DiskFront;
 use crate::transcript::{SequencedFrame, TranscriptFrame};
 use houyicoder_protocol::envelope::RequestId;
+use std::sync::atomic::Ordering;
 
 fn test_bundle() -> RunnerBundle {
     let bundle = houyicoder_service::composition::build_runner(
@@ -130,21 +131,27 @@ fn test_switch_session_resets_view() {
 
 /// A pending history read was dispatched against the old session's log. The
 /// switch rebuilds the whole App, so the record goes with the old session:
-/// the slot is empty in the new one and the old worker's send fails into the
-/// dropped receiver. A late result from the archived session has no route
-/// into the new view.
+/// the slot is empty in the new one, the old worker's send fails into the
+/// dropped receiver, and the drop told it to stop, so it quits at its next
+/// window rather than walking an archived log to its byte cap. A late result
+/// from the archived session has no route into the new view.
 #[test]
 fn test_switch_drops_pending_read() {
     let mut app = build_app(test_bundle());
     let (tx, rx) = mpsc::channel::<HistoryReadOutcome>();
-    app.history_reads.dispatch(0, DiskFront::Unloaded, rx);
-    assert!(app.history_reads.is_pending());
+    let stop = app.history_reads.dispatch(0, DiskFront::Unloaded, rx);
+    assert_eq!(app.history_reads.running(), 1);
 
     app.switch_session(test_bundle());
 
-    assert!(
-        !app.history_reads.is_pending(),
+    assert_eq!(
+        app.history_reads.running(),
+        0,
         "the rebuilt App starts with no read against the old log"
+    );
+    assert!(
+        stop.load(Ordering::Relaxed),
+        "the abandoned worker was told to stop, not merely unheard"
     );
     assert!(
         tx.send(HistoryReadOutcome::Exhausted).is_err(),

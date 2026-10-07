@@ -12,7 +12,9 @@ use super::{MAX_REBUILD_FRAMES, PREPEND_BATCH};
 use crate::records::TranscriptLine;
 use crate::row_id::RowId;
 use crate::state::App;
-use crate::state::history_read::{HistoryReadOutcome, HistoryReadPoll, PendingHistoryRead};
+use crate::state::history_read::{
+    HISTORY_READ_WORKER_BUDGET, HistoryReadOutcome, HistoryReadPoll, PendingHistoryRead,
+};
 use crate::state::transcript::DiskFront;
 use crate::state::transcript::blocks::{
     Block, BlockAnchor, BlockId, TranscriptChange, TranscriptChangeSet,
@@ -411,8 +413,9 @@ impl App {
     /// never blocks on this: the task ships the result over a channel the
     /// pending slot holds, and a later pump applies it. Without a runtime or
     /// a snapshot source there is nothing to dispatch and the scroll stops at
-    /// the resident front, as it did before; with a read already running a
-    /// second dispatch is skipped so at most one runs at a time.
+    /// the resident front; while the running reads are at the budget a second
+    /// dispatch is skipped and a later scroll asks again, so the log is walked
+    /// by one task at a time.
     fn dispatch_history_read(&mut self) {
         let Some(source) = self.snapshot.clone() else {
             return;
@@ -423,7 +426,7 @@ impl App {
             // running at all, matching the no-source short-circuit.
             return;
         };
-        if self.history_reads.is_pending() {
+        if self.history_reads.running() >= HISTORY_READ_WORKER_BUDGET {
             return;
         }
         if self.transcript.disk_row_count() >= LOG_ROW_BUDGET {
@@ -457,11 +460,16 @@ impl App {
         let dispatch_front = self.transcript.frame_window_start();
         let dispatch_disk_front = self.transcript.disk_front();
         let (tx, rx) = mpsc::channel();
-        runtime.spawn_blocking(move || {
-            job.run_and_send(tx);
-        });
-        self.history_reads
+        // The owner makes the stop flag and hands it back, so the flag the task
+        // watches is the one an invalidation raises. Recording the dispatch
+        // before the task starts also means the slot is occupied from the moment
+        // the worker exists, rather than only after it may have finished.
+        let stop = self
+            .history_reads
             .dispatch(dispatch_front, dispatch_disk_front, rx);
+        runtime.spawn_blocking(move || {
+            job.run_and_send(tx, &stop);
+        });
     }
 
     /// Advance the reads that run off the draw path: the older-rows read and
