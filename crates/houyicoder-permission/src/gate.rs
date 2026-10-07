@@ -352,7 +352,7 @@ impl ModeGate for DefaultModeGate {
             );
         }
         // Dedup-push: the in-memory list is the single source of truth for
-        // the live process (UI projects from it, remove_rule indexes into it,
+        // the live process (the UI reads it, remove_rule indexes into it,
         // Session scope lives only here). Duplicates here are visible (UI
         // shows copies) and break remove_rule semantics (delete one row ->
         // remove all matches on disk but leave the rest in memory).

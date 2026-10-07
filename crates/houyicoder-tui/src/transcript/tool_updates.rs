@@ -1,5 +1,5 @@
-//! First pass of frame projection: resolve each tool call's outcome and
-//! output from its matching update so the projection can color the call chip
+//! First pass of frame fold: resolve each tool call's outcome and
+//! output from its matching update so the fold can color the call chip
 //! and carry the precomputed body without re-reading the update.
 
 use crate::records::ToolOutcome;

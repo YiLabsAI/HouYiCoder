@@ -125,14 +125,14 @@ impl Server {
             snapshot.descriptor = Some(pa::map_session_descriptor(&descriptor));
         }
         snapshot.version = env!("CARGO_PKG_VERSION").to_string();
-        snapshot.auth_token_source = super::status_projection::auth_token_source();
+        snapshot.auth_token_source = super::status_view::auth_token_source();
         snapshot.base_url = houyicoder_config::resolve_base_url();
-        snapshot.setting_sources = super::status_projection::setting_sources_label();
+        snapshot.setting_sources = super::status_view::setting_sources_label();
         let (toggles, _settings_warnings) = houyicoder_config::load_toggles();
         snapshot.auto_memory = toggles.auto_memory;
         snapshot.auto_dream = toggles.auto_dream;
         snapshot.by_model =
-            super::status_projection::project_by_model(self.runner.by_model_usage());
+            super::status_view::build_model_usage_view(self.runner.by_model_usage());
         snapshot
     }
 }

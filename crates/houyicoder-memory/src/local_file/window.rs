@@ -396,7 +396,7 @@ mod tests {
     /// A session's event log replays round-trip across a restart: events
     /// appended on one LocalFileBackend instance re-materialize in replay
     /// order on a fresh instance at the same root. The durable log is the
-    /// source of truth the turn-group projection re-reads each turn, so a
+    /// source of truth the turn-group assembly re-reads each turn, so a
     /// resume that cannot replay is a brick. This pins the replay path the
     /// manifest builder + apply_manifest run against after a restart.
     #[test]

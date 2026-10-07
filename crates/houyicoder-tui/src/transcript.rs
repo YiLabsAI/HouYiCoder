@@ -1,7 +1,7 @@
-//! Frame-to-transcript projection: rebuild the readable transcript lines from
+//! Frame-to-row fold: rebuild the readable transcript lines from
 //! the ordered session/update + acpx frame stream the driver accumulates, and
 //! fold each turn's reasoning + tool calls into the one summary row the
-//! transcript shows for that turn. The projection derives that row from the
+//! transcript shows for that turn. The fold derives that row from the
 //! turn's own frames rather than from what a host happened to watch live, so
 //! a turn replayed from the log renders the row the live turn rendered. A row
 //! the frontend raises itself rides the same log, so it keeps its place for
@@ -39,7 +39,7 @@ pub(crate) use turn_fold::is_user_frame;
 /// lands between the tool calls that bracketed it, not at the tail). The
 /// driver accumulates the server's frames as it pushes them, and the
 /// frontend appends its own rows to the same log; the transcript is a
-/// faithful projection of that ordered stream, never a stub.
+/// faithful fold of that ordered stream, never a stub.
 #[derive(Debug, Clone)]
 pub enum TranscriptFrame {
     /// An ACP session/update chunk (user / agent / thought message, tool call,
@@ -58,7 +58,7 @@ pub enum TranscriptFrame {
 }
 
 /// A row the frontend raises on its own account. It renders through the same
-/// projection as the server's frames, so it lands where it was raised and
+/// fold as the server's frames, so it lands where it was raised and
 /// stays there while the window slides, rather than drifting to the head of
 /// whatever rows a rebuild happens to keep.
 #[derive(Debug, Clone)]
@@ -105,7 +105,7 @@ impl FrontendRow {
     }
 }
 
-/// Convert a fetched child frame to the live-frame shape the projection
+/// Convert a fetched child frame to the live-frame shape the fold
 /// reads, so child rows render through the same pipeline as the parent flow.
 impl From<houyicoder_protocol::envelope::ChildTranscriptFrame> for TranscriptFrame {
     fn from(frame: houyicoder_protocol::envelope::ChildTranscriptFrame) -> Self {
@@ -121,7 +121,7 @@ impl From<houyicoder_protocol::envelope::ChildTranscriptFrame> for TranscriptFra
 /// from the server stream holds the envelope's event seq — the resume
 /// position within one connection, never a row identity, because sequence
 /// numbering restarts with every service process — and, when the payload was
-/// projected from a durable log entry, that entry's durable event identity,
+/// mapped from a durable log entry, that entry's durable event identity,
 /// which is stable across reconnects. Frontend-raised rows and test-built
 /// frames carry neither.
 #[derive(Debug, Clone)]
@@ -142,7 +142,7 @@ impl From<TranscriptFrame> for SequencedFrame {
 }
 
 impl SequencedFrame {
-    /// The frame without its stream metadata, for callers that read the projection shape.
+    /// The frame without its stream metadata, for callers that read the fold shape.
     pub fn frame(&self) -> &TranscriptFrame {
         &self.frame
     }
@@ -205,7 +205,7 @@ pub fn transcript_from_frames(
     window: Range<usize>,
     newest_open: bool,
 ) -> Vec<TranscriptLine> {
-    render_window(
+    walk_window(
         log,
         RowNames::Position { abs_base: 0 },
         resident_window(0, log.len(), window),
@@ -225,7 +225,7 @@ pub fn transcript_from_frames_at(
     window: Range<usize>,
     newest_open: bool,
 ) -> Vec<TranscriptLine> {
-    render_window(
+    walk_window(
         log,
         RowNames::Live { log, abs_base },
         resident_window(abs_base, log.len(), window),
@@ -263,7 +263,7 @@ pub fn transcript_from_named_frames<F: AsRef<TranscriptFrame>>(
         "row names must run parallel to the frame log"
     );
     let end = window.end.min(log.len());
-    render_window(
+    walk_window(
         log,
         RowNames::EventName(names),
         window.start..end,
@@ -271,9 +271,10 @@ pub fn transcript_from_named_frames<F: AsRef<TranscriptFrame>>(
     )
 }
 
-/// The shared walk behind both entries: window is relative to log, and names
-/// says where the folded rows take their identity.
-fn render_window<'a, F: AsRef<TranscriptFrame>>(
+/// The shared walk behind every entry that derives rows from a frame log:
+/// window is relative to log, and names says where the folded rows take
+/// their identity.
+fn walk_window<'a, F: AsRef<TranscriptFrame>>(
     log: &'a [F],
     names: RowNames<'a>,
     window: Range<usize>,
@@ -281,7 +282,7 @@ fn render_window<'a, F: AsRef<TranscriptFrame>>(
 ) -> Vec<TranscriptLine> {
     let frames = &log[window.clone()];
     let (updates, tools) = collect_tool_updates(frames);
-    let mut p = Projector {
+    let mut p = LineBuilder {
         base: window.start,
         at_end: window.end == log.len(),
         newest_open,
@@ -354,12 +355,12 @@ fn tool_result_line(
     }
 }
 
-/// The state the projection accumulates while walking a window of frames: the
+/// The state the walk accumulates while building a window's lines: the
 /// tool-call updates paired in the first pass, the lines emitted so far, the
 /// late-arriving results awaiting reposition, and the turn fold. Held in a
 /// struct so the walk is a sequence of method calls on shared state rather
 /// than one long function body.
-struct Projector<'a, F: AsRef<TranscriptFrame>> {
+struct LineBuilder<'a, F: AsRef<TranscriptFrame>> {
     base: usize,
     at_end: bool,
     newest_open: bool,
@@ -370,7 +371,7 @@ struct Projector<'a, F: AsRef<TranscriptFrame>> {
     fold: TurnFold<'a, F>,
 }
 
-impl<'a, F: AsRef<TranscriptFrame>> Projector<'a, F> {
+impl<'a, F: AsRef<TranscriptFrame>> LineBuilder<'a, F> {
     /// Walk the window's frames in order, folding each into the open turn and
     /// emitting its lines. The fold runs first so a turn's summary row lands
     /// ahead of the frame that ended it.

@@ -135,7 +135,7 @@ fn test_permission_view_with_verdicts() {
 
 #[test]
 fn test_verdict_skipped_on_surface() {
-    // A permission verdict is durable (audit trail) but NOT projected
+    // A permission verdict is durable (audit trail) but NOT rendered
     // onto the interaction surface — transcript_from_frames skips the
     // acpx/context/permissions_decision notification. The user sees
     // verdicts only via /permissions view (which filters the trajectory).

@@ -2,7 +2,7 @@
 //! memory-recall attachment into the assembled message stream (merged into
 //! user turn, not the system prompt, so the system prompt stays byte-frozen
 //! for prompt-cache across turns), write persists facts from /save signals,
-//! and compaction folds old memory-recall events out of the projection so
+//! and compaction folds old memory-recall events out of the assembled context so
 //! the surfaced de-dup set naturally empties and entries re-surface.
 //!
 //! Uses a custom MemoryProvider that records calls and honors the surfaced
@@ -328,7 +328,7 @@ async fn test_save_signal_writes_memory() {
 
 /// Compress does not call recall — recall fires only at the run-entry turn
 /// boundary (per user query), never on the compaction path. The surfaced
-/// reset is now a projection-level effect (old memory-recall events fold
+/// reset is now an assembly-level effect (old memory-recall events fold
 /// out), not a provider-side clear, so compress must not touch recall.
 #[tokio::test]
 async fn test_compress_does_not_recall() {
@@ -358,7 +358,7 @@ async fn test_compress_does_not_recall() {
 }
 
 /// After compaction folds the oldest turn (its memory-recall attachment with
-/// it) out of the projection, the surfaced scan empties and the next run
+/// it) out of the assembled context, the surfaced scan empties and the next run
 /// re-surfaces the entry. This is the full closed loop: recall → inject →
 /// compress (folds memory-recall) → recall again. Needs enough assistant
 /// turns that the default compress policy actually folds the oldest turn.
@@ -387,7 +387,7 @@ async fn test_post_compress_recall_surfaces() {
 
     // Build enough assistant turns that compress (default tail_turns=4)
     // folds the oldest turn — and its memory-recall attachment — out of the
-    // projection. Turns 2..5 surface nothing new (the cycled-fact key is
+    // assembly. Turns 2..5 add nothing new (the cycled-fact key is
     // already in the view), so only turn 1 carries a memory-recall event.
     for _ in 1..5 {
         let _r = runner.run(session, "continue".into()).await;

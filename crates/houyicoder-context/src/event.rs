@@ -79,12 +79,12 @@ pub enum SessionEvent {
     /// A logical turn boundary. Appended at the model-call entry (the same
     /// seam as the in-memory start_turn) so every turn — including cancelled
     /// / errored ones that never reach a TurnUsage — carries a durable
-    /// boundary marker. The projection groups turns on this, NOT on
-    /// UserInput (a single prompt spans N turns of tool iterations; grouping
-    /// on UserInput flattens them and hides the retry/iteration work). turn
-    /// is the logical turn number; call_in_turn is 0 at the boundary (the
-    /// per-round-trip index lives on TurnUsage). Old logs have no such event
-    /// — the projection falls back to UserInput grouping for them.
+    /// boundary marker. Readers group turns on this, NOT on UserInput (a
+    /// single prompt spans N turns of tool iterations; grouping on UserInput
+    /// flattens them and hides the retry/iteration work). turn is the logical
+    /// turn number; call_in_turn is 0 at the boundary (the per-round-trip
+    /// index lives on TurnUsage). Old logs have no such event — a reader then
+    /// falls back to UserInput grouping.
     #[serde(rename = "TurnStarted")]
     TurnStarted {
         #[serde(default)]
@@ -94,8 +94,8 @@ pub enum SessionEvent {
     },
     /// A user-role message the runner injects for control purposes (e.g. the
     /// "resume directly" nudge after a token-cap truncation), not authored by
-    /// the human. Served to the model like UserInput, but hosts skip it when
-    /// projecting to the readable transcript so the user never sees the nudge.
+    /// the human. Reaches the model like UserInput, but hosts skip it when
+    /// folding to the readable transcript so the user never sees the nudge.
     #[serde(rename = "MetaUser")]
     MetaUser {
         text: String,
@@ -103,7 +103,7 @@ pub enum SessionEvent {
     /// A user message the human queued while a run was in flight, drained +
     /// appended at the next turn boundary.
     /// The durable text is the user's bare input (the transcript shows it
-    /// verbatim, like UserInput). The model-input projection wraps it with a
+    /// verbatim, like UserInput). The model input assembly wraps it with a
     /// framing note so the model reads it as a mid-work interjection
     /// ("continue your current task and address it"), not a fresh
     /// instruction that drops the in-flight task.
@@ -120,7 +120,7 @@ pub enum SessionEvent {
     /// the human. The keys field carries the surfaced memory file stems so the
     /// next turn recall can dedup-scan the transcript. The checkpoint
     /// planner disposes this as Summarized so compaction folds it out of the
-    /// live projection, which makes surfaced scanning naturally reset with
+    /// assembled context, which makes surfaced scanning naturally reset with
     /// no explicit clear.
     #[serde(rename = "MemoryRecall")]
     MemoryRecall {
@@ -140,7 +140,7 @@ pub enum SessionEvent {
     /// memory-recall). Carries only descriptions — the full body loads on
     /// demand when the model calls the Skill tool, so the listing stays
     /// terse (progressive disclosure). The checkpoint planner disposes this
-    /// as Summarized so compaction folds it out of the live projection;
+    /// as Summarized so compaction folds it out of the assembled context;
     /// the turn-entry step scans the assembled context for a surviving listing
     /// and skips when one exists, so the listing re-surfaces after a
     /// compaction with no provider-side clear — the same natural-reset
@@ -167,7 +167,7 @@ pub enum SessionEvent {
     /// is excluded from the folded span and revived post-compact, so an
     /// invoked skill's guidance survives a compaction boundary. The
     /// untrusted flag marks bodies from non-managed/user sources so the
-    /// projection can frame them; agent_id is None on the host and set when
+    /// assembly can frame them; agent_id is None on the host and set when
     /// a forked child invoked the skill. The append ts is the invoke time.
     #[serde(rename = "SkillBody")]
     SkillBody {
@@ -182,8 +182,8 @@ pub enum SessionEvent {
         text: String,
         /// Reasoning text that preceded this assistant message, if any. The
         /// raw Reasoning events stay in the log for replay fidelity; this
-        /// field gives a projection a single-source view of the thinking
-        /// attached to the message so a host can render a collapsed block
+        /// field gives a reader a single-source view of the thinking attached
+        /// to the message so a host can render a collapsed block
         /// without scanning for sibling Reasoning events. None when the
         /// model emitted no reasoning.
         #[serde(default)]
@@ -192,8 +192,9 @@ pub enum SessionEvent {
     /// One incremental chunk of an assistant message streamed token-by-token.
     /// The durable audit trail of a streamed turn: N deltas land during the
     /// stream, then one authoritative AssistantMessage (the full text) lands at
-    /// turn end. Projection skips deltas (they are subsumed by the AssistantMessage)
-    /// so the model-input history never double-counts; the deltas exist for live
+    /// turn end. The assembly skips deltas (they are subsumed by the
+    /// AssistantMessage) so the model-input history never double-counts; the
+    /// deltas exist for live
     /// display and mid-stream resumability, not for replay into the model.
     AssistantTextDelta {
         text: String,
@@ -329,7 +330,7 @@ pub enum SessionEvent {
     /// call_id links to the ToolCall the verdict answers. scope describes the
     /// breadth of the approval (once / prefix:* / session) so the audit trail
     /// records not just the yes/no but how far the consent reaches. This event
-    /// is audit-only: projections skip it (the approval popup + its resolution
+    /// is audit-only: readers skip it (the approval popup + its resolution
     /// are already visible in the transcript; this is the durable record).
     PermissionDecision {
         call_id: String,
@@ -341,7 +342,7 @@ pub enum SessionEvent {
     /// about to be re-driven from the durable log. Lands as the first event of
     /// the recovery turn so a replay sees the boundary between the partial turn
     /// and the regenerated one — the partial deltas are never silently
-    /// concatenated with the regenerated content. Projections render it as a
+    /// concatenated with the regenerated content. Readers render it as a
     /// visible notice so the user knows the prior turn was regenerated.
     TurnAborted {
         /// A human-readable reason: process crash, forced abort, etc.

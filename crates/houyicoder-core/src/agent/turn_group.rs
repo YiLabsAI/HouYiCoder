@@ -335,8 +335,9 @@ mod tests {
     #[test]
     fn test_skips_assistant_text_deltas() {
         // Streaming deltas are subsumed by the authoritative AssistantMessage
-        // that follows them. Projection must skip every delta so the model-input
-        // history carries one assistant message, not N fragments plus a dupe.
+        // that follows them. The assembly must skip every delta so the
+        // model-input history carries one assistant message, not N fragments
+        // plus a dupe.
         let events = vec![
             evt(SessionEvent::UserInput { text: "hi".into() }),
             evt(SessionEvent::AssistantTextDelta { text: "hel".into() }),

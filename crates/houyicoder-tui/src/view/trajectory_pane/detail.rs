@@ -462,7 +462,7 @@ pub(super) fn draw_event_detail(
     };
 
     // L2 detail renders every field the record CARRIES, by presence — not a
-    // kind-name table. A kind-name table would mask a projection that emits
+    // kind-name table. A kind-name table would mask a fold that emits
     // fewer fields than the pane expects, so a real session drilled to L2
     // showed an empty body while the demonstration rows rendered fine.
     // Field-presence drives rendering for every kind, present and future, and

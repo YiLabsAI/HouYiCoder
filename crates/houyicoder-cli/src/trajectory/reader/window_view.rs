@@ -75,7 +75,7 @@ impl SessionLogTrajectory {
     /// The view for a state, built once and then served from the cache.
     ///
     /// A draw must not rebuild the window: while a read is in flight the state
-    /// is unchanged frame to frame, and re-projecting the page each time would
+    /// is unchanged frame to frame, and re-folding the page each time would
     /// put a page fold on the draw path.
     pub(super) fn serve(
         &self,

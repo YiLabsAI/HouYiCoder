@@ -436,7 +436,7 @@ fn normalize_quote(quote: &str) -> String {
 /// The normalized text body of a window event the model could quote from.
 /// User/assistant/mid-turn inputs contribute their text; tool calls and
 /// results contribute their JSON payload (the model sees both in the
-/// projection). Other events carry no quotable body.
+/// assembly). Other events carry no quotable body.
 fn normalized_body(event: &SessionEvent) -> String {
     let raw = match event {
         SessionEvent::UserInput { text }

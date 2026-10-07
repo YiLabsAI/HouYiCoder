@@ -274,7 +274,7 @@ fn test_plain_failure_counts() {
 }
 
 /// A result whose call the fold never saw is judged on the output alone, the
-/// same rule the trajectory projection applies to a windowed read.
+/// same rule the trajectory view applies to a windowed read.
 #[test]
 fn test_orphan_result_plain_rule() {
     let events = vec![

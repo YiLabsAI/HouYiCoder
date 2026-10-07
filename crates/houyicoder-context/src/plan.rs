@@ -66,7 +66,7 @@ pub struct CheckpointManifest {
 #[derive(Debug, Clone)]
 pub struct ContextSnapshot {
     pub session: SessionId,
-    /// Events in the context window (full replay; the manifest projects them).
+    /// Events in the context window (full replay; the manifest selects them).
     pub events: Vec<SessionLogEntry>,
     /// The most recent checkpoint, if any compaction has run.
     pub last_checkpoint: Option<CheckpointId>,

@@ -205,7 +205,7 @@ fn test_glob_read_edit_chips() {
         diff_result("c3", ToolOutcome::Success),
     ];
     // transcript_from_frames is not in scope here; exercise the fold layer the
-    // render path consumes. After the projection rebuilds, the call+result
+    // render path consumes. After the fold rebuilds, the call+result
     // adjacency is what the fold sees; model it as the post-reorder shape.
     let reordered = vec![
         TranscriptLine::User("go".into()),

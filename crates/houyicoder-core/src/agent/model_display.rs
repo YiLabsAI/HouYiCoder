@@ -1,4 +1,4 @@
-//! The capability projection both the /model pane and the request path
+//! The capability view both the /model pane and the request path
 //! consume: for any model id, the window, the output cap, the effort dialect
 //! and the Fast tier. The host answers these so the guest never probes an id
 //! for substrings — what a model supports is the host's answer.

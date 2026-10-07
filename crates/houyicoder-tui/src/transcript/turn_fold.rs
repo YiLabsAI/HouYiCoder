@@ -79,7 +79,8 @@ pub fn bounds_turn_in<F: AsRef<TranscriptFrame>>(frames: &[F]) -> bool {
 /// interjection, a background child's completion, and the notice that a turn
 /// was interrupted all reach the host as user messages, exactly like a fresh
 /// prompt, so the message chunk alone cannot say which of the four it is. The
-/// projection writes this mark beside the message it belongs to.
+/// host sends the mark right after the message it belongs to; the fold reads
+/// it to place that message inside the turn that was already running.
 fn marks_delivery(frame: &TranscriptFrame) -> bool {
     matches!(
         frame,
@@ -162,7 +163,7 @@ pub(super) enum RowNames<'a> {
 }
 
 /// The facts one turn accumulates for its summary row, gathered as the
-/// projection walks that turn's frames. The row is emitted where the turn
+/// fold walks that turn's frames. The row is emitted where the turn
 /// ends, so the summary lands under the answer it describes.
 pub(super) struct TurnFold<'a, F: AsRef<TranscriptFrame>> {
     /// The whole log, for what a window cannot carry on its own: which turn the
@@ -172,7 +173,7 @@ pub(super) struct TurnFold<'a, F: AsRef<TranscriptFrame>> {
     /// Log position of the frame that opened the open turn. None when the
     /// window opens between turns — a record behind it ended the one before —
     /// or ahead of any turn at all: frames before the first user message (a
-    /// session notice) belong to no turn this projection can summarize.
+    /// session notice) belong to no turn this fold can summarize.
     opened_at: Option<usize>,
     /// Log position of the newest frame folded into the turn. The row is
     /// named by where the turn ended, which this is once the turn closes.

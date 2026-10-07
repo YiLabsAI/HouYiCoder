@@ -206,7 +206,7 @@ fn input_positions(frames: &[ServerFrame], input: &QueuedInput) -> (usize, usize
     let user = frames
         .iter()
         .position(|frame| is_user_message(frame, &input.text))
-        .expect("user projection");
+        .expect("user event mapped");
     let commit = frames
         .iter()
         .position(|frame| {
@@ -500,7 +500,7 @@ async fn test_input_commit() {
     for _ in 0..64 {
         let frame = tokio::time::timeout(Duration::from_millis(100), client.next_frame())
             .await
-            .expect("mid-run projection must not wait for completion")
+            .expect("mid-run mapping must not wait for completion")
             .expect("server frame");
         assert!(
             !matches!(frame, ServerFrame::Response(_)),
@@ -540,7 +540,7 @@ async fn test_input_commit() {
     drop(handle.await);
 }
 
-/// A committed input is projected and cleared before the next model delta.
+/// A committed input is mapped and cleared before the next model delta.
 #[tokio::test]
 async fn test_input_order() {
     let blocked = Arc::new(Notify::new());

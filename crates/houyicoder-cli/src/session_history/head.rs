@@ -22,7 +22,7 @@ impl SessionHistory {
     /// page holds one turn more than it keeps, then cut at the opening of the
     /// oldest turn kept. The page never starts mid-turn, so it carries no
     /// partial flag; a log whose first event is not a user input still opens a
-    /// turn there, which the projection numbers as the session's first.
+    /// turn there, which the fold numbers as the session's first.
     ///
     /// A cleared session counts only what came after the clear, so the page
     /// starts at the event that began the epoch rather than at the log's first

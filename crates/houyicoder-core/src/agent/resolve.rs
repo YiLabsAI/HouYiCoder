@@ -109,7 +109,7 @@ impl Runner {
         // Hook fire point: PreToolUse. Run the gate per tool before any execute;
         // Deny / Feedback / Ask remove the call + return a blocked
         // result the model sees losslessly, Allow / Observe / Trigger / Inject
-        // keep it. Inject's input rewrite lands with the input-projection cut.
+        // keep it. Inject's input rewrite lands with the input-assembly cut.
         // The gate reads every call the model emitted, a call awaiting approval
         // included: a rule that refuses a call outranks a decision on it, so
         // nobody is asked to approve what the rule already refused.

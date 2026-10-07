@@ -55,9 +55,10 @@ impl houyicoder_api::tool::Tool for BlockingTool {
 /// user input, so build_request_body ships role:"tool" right after the
 /// assistant turn that issued the call. This is the real trigger path
 /// (a fresh connection's next_frame returns None, dropping the in-flight
-/// run future), not a hand-stitched orphan log. Assert on the projection (END: model input legal): every
-/// assistant turn with tool_calls must be immediately followed by ToolResult
-/// items whose call_id set equals the tool_call id set.
+/// run future), not a hand-stitched orphan log. Assert on the model input
+/// the log assembles to, not on the call that assembles it: every assistant
+/// turn with tool_calls must be immediately followed by ToolResult items
+/// whose call_id set equals the tool_call id set.
 #[tokio::test]
 #[expect(clippy::too_many_lines, reason = "long by design, kept whole")]
 async fn test_disconnect_orphan_repaired() {
@@ -235,7 +236,7 @@ async fn test_disconnect_orphan_repaired() {
     drop(client2);
     drop(serve2.await);
 
-    // Distinguishing assertion (END, not MEANS): project the replayed log
+    // Distinguishing assertion, end not means: assemble the replayed log
     // into model input and require every assistant turn with tool_calls be
     // immediately followed by ToolResult items whose call_id set equals the
     // tool_call id set. No-fix red (orphan ships as assistant(tool_calls)

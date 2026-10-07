@@ -1,6 +1,6 @@
 //! Recalls memory once per user query.
 //!
-//! Surfaced keys come from the projected context, so compaction naturally
+//! Surfaced keys come from the assembled context, so compaction naturally
 //! permits relevant memories to appear again. A confident lexical selection
 //! injects synchronously; a weak signal runs the semantic stage alongside
 //! the main model call and appends its recall on completion, so the first
@@ -191,7 +191,7 @@ async fn inject_selected(
     Ok((injected, bytes))
 }
 
-/// Collect surfaced keys and bytes from the projected context.
+/// Collect surfaced keys and bytes from the assembled context.
 fn surfaced_memory_scan(
     events: &[SessionLogEntry],
     manifest: Option<&CheckpointManifest>,

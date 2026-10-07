@@ -29,7 +29,7 @@ pub struct SubagentUsage {
 }
 
 impl SubagentUsage {
-    /// Fold one durable event into the projection. Events other than a child
+    /// Fold one durable event into the totals. Events other than a child
     /// return leave it unchanged.
     pub fn record(&mut self, event: &SessionEvent) {
         let SessionEvent::SubagentReturn {
@@ -63,7 +63,7 @@ impl SubagentUsage {
         self.reasoning_tokens = self.reasoning_tokens.saturating_add(*reasoning_tokens);
     }
 
-    /// Convert the projection to the provider usage shape used by status.
+    /// Convert the totals to the provider usage shape used by status.
     pub fn to_usage(self) -> Usage {
         let clamp = |v: u64| v.min(u32::MAX as u64) as u32;
         let input_tokens = clamp(self.input_tokens);
@@ -289,7 +289,7 @@ pub trait SessionLog: Send + Sync {
     ) -> PFut<'_, Result<Vec<CheckpointId>, ContextError>>;
 
     /// Borrow the underlying backend for CAS operations (block_put /
-    /// block_get) from the projection layer without owning the store.
+    /// block_get) through the log without owning the store.
     fn backend(&self) -> &dyn ContextBackend;
 
     /// The durable sessions root this log's backend persists under, for

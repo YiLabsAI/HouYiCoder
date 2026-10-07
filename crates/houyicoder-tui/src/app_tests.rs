@@ -823,14 +823,14 @@ fn test_first_loss_cause_wins() {
 }
 
 /// An app with no session reports Disconnected through the unified
-/// projection, distinct from every live state.
+/// fold, distinct from every live state.
 #[test]
 fn test_connection_status_disconnected() {
     let app = working_app();
     assert_eq!(
         app.connection_status(),
         ConnectionStatus::Disconnected,
-        "the absent session projects as Disconnected"
+        "the absent session reads as Disconnected"
     );
 }
 

@@ -163,7 +163,7 @@ fn first_prompt_slug(events: &[SessionLogEntry]) -> String {
     }
 }
 
-/// Project the durable event stream into the export document. Pure (no I/O,
+/// Build the export document from the durable event stream. Pure (no I/O,
 /// no session-log access) so it tests without a SessionLog: feed synthetic
 /// events, assert the aggregated fields. export() wraps this, serializes,
 /// and builds the filename.
@@ -380,7 +380,7 @@ impl ExportLog for SessionLogTrajectory {
         // Redact secrets on the share boundary — the export file is sent
         // outside the session (a bug report, ExPeL data, a handoff), so any
         // secret in the tool I/O / reasoning / credential fields is stripped
-        // before it lands on disk. The durable log the export projects from
+        // before it lands on disk. The durable log the export reads from
         // stays full-fidelity; only this shared artifact is filtered (the
         // redaction module in the tui crate).
         let json = houyicoder_tui::redaction::redact(&raw);
@@ -598,7 +598,7 @@ mod tests {
         // A tool result whose output carries an OpenAI key. The export
         // serializes the full trajectory then redacts on the share boundary,
         // so the shared JSON file must NOT carry the secret — even though
-        // the durable log the export projects from stays full-fidelity.
+        // the durable log the export reads from stays full-fidelity.
         let secret = "sk-abcd1234efgh5678ijkl9012mnop3456qrst";
         let events = vec![ev(
             100,

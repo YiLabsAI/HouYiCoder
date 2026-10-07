@@ -1,5 +1,5 @@
-//! The outbound frame path of one server connection: sequenced event
-//! projection, responses, and protocol errors sent to the client.
+//! The outbound frame path of one server connection: durable events mapped
+//! to sequenced frames, responses, and protocol errors sent to the client.
 
 use crate::protocol_adapter::{map_acpx_notification, map_session_update};
 use houyicoder_context::{SessionEvent, SessionLogEntry};
@@ -10,11 +10,11 @@ use houyicoder_protocol::error::ProtocolError;
 use houyicoder_protocol::framing::encode;
 use houyicoder_protocol::frontend::{FrontendEvent, PendingInputId, QueuedInput};
 
-use super::event_sequencer::DurableProjection;
+use super::event_sequencer::EntryPayloads;
 use super::{FrameCarrier, Server};
 
 impl Server {
-    fn project_turn_event(event: &SessionLogEntry) -> DurableProjection {
+    fn map_turn_event(event: &SessionLogEntry) -> EntryPayloads {
         let mut payloads = Vec::with_capacity(3);
         if let Some(update) = map_session_update(&event.event) {
             payloads.push(FrontendEvent::SessionUpdate { update });
@@ -34,7 +34,7 @@ impl Server {
                 }],
             });
         }
-        DurableProjection {
+        EntryPayloads {
             event_id: DurableEventId(event.id.to_string()),
             payloads,
         }
@@ -43,7 +43,7 @@ impl Server {
     /// Sequence and send every event currently available for this session.
     /// The sequencer holds its producer lock while reading the durable cursor
     /// and draining runtime events, so a delta emitted after an append remains
-    /// behind that append's projections.
+    /// behind that append's mappings.
     pub(super) async fn flush_events(
         &mut self,
         io: &mut FrameCarrier,
@@ -56,7 +56,7 @@ impl Server {
                 .store()
                 .trajectory_since(session, cursor)
                 .iter()
-                .map(Self::project_turn_event)
+                .map(Self::map_turn_event)
                 .collect()
         });
         for frame in frames {
@@ -79,7 +79,7 @@ impl Server {
                 .store()
                 .trajectory_since(session, cursor)
                 .iter()
-                .map(Self::project_turn_event)
+                .map(Self::map_turn_event)
                 .collect()
         });
         for frame in replay {
@@ -97,7 +97,7 @@ impl Server {
             .await
     }
 
-    /// Project a fetched child session's turn events through the same adapters
+    /// Map a fetched child session's turn events through the same adapters
     /// used by the parent transcript.
     pub(super) async fn child_transcript_frames(
         &self,

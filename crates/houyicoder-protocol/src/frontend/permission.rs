@@ -3,7 +3,7 @@
 //! importing the permission crate. The engine types live in the permission
 //! crate (a mode enum, a rule struct with an effect and an optional content
 //! pattern); the wire form mirrors the shape but owns no behavior, so the
-//! service boundary projects the engine state to this wire type and the TUI
+//! service boundary maps the engine state to this wire type and the TUI
 //! renders it directly. The effect is narrowed to the two durable verdicts the
 //! rule surface manages: allow and reject. An interactive ask is a transient
 //! verdict, not a stored rule, so it has no wire variant here.
@@ -33,7 +33,7 @@ pub enum PermissionMode {
 /// Three verdicts mirror the engine Effect: allow, reject (deny), and ask
 /// (always prompt). Ask rules are session-scoped (kept in memory, not
 /// persisted to disk) but they ARE stored rules the gate consults, so the
-/// wire carries the variant — /rules shows them and the projection round-trips
+/// wire carries the variant — /rules shows them and the mapping round-trips
 /// them losslessly. snake_case on the wire.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -94,7 +94,7 @@ impl Default for RuleDestination {
 
 /// A durable permission rule, wire form. Pairs a tool name (action) with an
 /// optional content pattern, an effect, and the destination (persistence
-/// scope) the rule lands in. The service boundary projects the engine rule to
+/// scope) the rule lands in. The service boundary maps the engine rule to
 /// this wire form on /rules; the TUI renders the list without importing the
 /// permission crate. content is None for a tool-level rule that matches
 /// regardless of input. destination defaults to project so a legacy add that

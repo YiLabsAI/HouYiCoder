@@ -1,10 +1,10 @@
 //! Tests for the Ask permission-rule wire round-trip + the "ask" label
 //! (snake_case serialization). Extracted from server.rs to keep the file
-//! under the size gate. These test crate::projection functions, not Server.
+//! under the size gate. These test crate::protocol_adapter functions, not Server.
 
 use houyicoder_permission::{Effect, Rule, RuleContent};
 
-/// An Ask rule round-trips through the projection losslessly: engine
+/// An Ask rule round-trips through the mapping losslessly: engine
 /// Effect::Ask -> wire Ask -> engine Effect::Ask (was wrongly dropped to
 /// Reject before the three-state wire fix).
 #[test]

@@ -107,7 +107,7 @@ impl Summarizer for HeuristicSummarizer {
 }
 
 /// AssistantTextDelta is a streaming audit chunk subsumed by the authoritative
-/// AssistantMessage at turn end. Projection skips it; the manifest skips it
+/// AssistantMessage at turn end. The assembly skips it; the manifest skips it
 /// too (no disposition, not in the folded span).
 fn is_delta(kind: &SessionEvent) -> bool {
     matches!(kind, SessionEvent::AssistantTextDelta { .. })
@@ -139,7 +139,7 @@ fn is_delta(kind: &SessionEvent) -> bool {
 /// (PostToolUse) does the externalization before Compress runs.
 ///
 /// AssistantTextDelta events are streaming audit chunks subsumed by the
-/// authoritative AssistantMessage at turn end; projection skips them, so the
+/// authoritative AssistantMessage at turn end; the assembly skips them, so the
 /// manifest skips them too — they get no disposition and are not in the folded
 /// span (otherwise the LLM summarizer would see duplicated text).
 ///
@@ -382,10 +382,10 @@ fn estimate_tokens(events: &[SessionLogEntry], tokenizer: &super::context::Token
 
 /// Estimate one event's model-visible payload without assembly side effects.
 ///
-/// Counts what the model sees after projection: user/assistant text, tool
+/// Counts what the model sees after assembly: user/assistant text, tool
 /// names and inputs, tool results, skill bodies, injected notifications.
 /// Reasoning, summaries, and lifecycle markers are excluded because
-/// projection skips them. Shared by the compaction pre/post measurement
+/// the assembly skips them. Shared by the compaction pre/post measurement
 /// and by apply_token_ceiling, so the verbatim-tail boundary is placed
 /// against the same model-visible token budget the estimator reports.
 fn estimate_event_tokens(event: &SessionLogEntry, tokenizer: &super::context::Tokenizer) -> usize {

@@ -542,7 +542,7 @@ async fn test_extraction_rejects_too_many() {
 }
 
 /// Evidence may quote a tool call's input or its result's output — the
-/// model sees both JSON bodies in the projection, so a save can ground in
+/// model sees both JSON bodies in the assembly, so a save can ground in
 /// either rather than only user-typed text.
 #[tokio::test]
 async fn test_extraction_quotes_tool_bodies() {

@@ -166,7 +166,7 @@ impl Tokenizer {
         }
     }
 
-    /// Token count of a projected input item: its text plus any tool call names
+    /// Token count of an assembled input item: its text plus any tool call names
     /// and inputs, or the tool result output.
     pub fn count_input(&self, item: &InputItem) -> u32 {
         match item {
@@ -455,7 +455,7 @@ impl Default for ContextBuilder {
     }
 }
 
-/// One-line previews of the projected messages, for /context drill-down.
+/// One-line previews of the assembled messages, for /context drill-down.
 fn message_previews(messages: &[InputItem]) -> Vec<String> {
     messages
         .iter()

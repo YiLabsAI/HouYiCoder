@@ -96,7 +96,7 @@ impl App {
 
     /// Append a row the frontend raises to the frame log, then rebuild so the
     /// row renders where its frame now sits. Every such append ends here: a
-    /// frame the projection has not seen is a row the transcript is missing.
+    /// frame the fold has not seen is a row the transcript is missing.
     pub(crate) fn raise_frontend_row(&mut self, row: FrontendRow) {
         self.transcript.push_frame(TranscriptFrame::Frontend(row));
         self.rebuild_transcript();

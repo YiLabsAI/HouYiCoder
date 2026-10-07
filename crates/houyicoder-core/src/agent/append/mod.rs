@@ -105,7 +105,7 @@ impl Runner {
 
     /// Append a queued interjection: a user message the human queued while a
     /// run was in flight, drained + appended at the next turn boundary. The
-    /// model-input projection wraps it with a framing note so the model reads
+    /// model input assembly wraps it with a framing note so the model reads
     /// it as a mid-work interjection (continue the task + address), not a
     /// fresh instruction that drops the in-flight task. The durable text is
     /// the bare user input (the transcript shows it verbatim).
@@ -130,8 +130,8 @@ impl Runner {
     /// Append a child-completion notification: a background subagent finished
     /// and the parent model must learn of the result at this turn boundary.
     /// Distinct from append_mid_turn_input (a user interjection) so the
-    /// durable log + the projection distinguish a child result from a user
-    /// message. The projection frames it as a background result, not a
+    /// durable log + the assembly distinguish a child result from a user
+    /// message. The assembly frames it as a background result, not a
     /// continue-the-task note. turn + order are best-effort (the event-log
     /// order is authoritative, as with SubagentReturn).
     pub(crate) async fn append_notification(
@@ -157,7 +157,7 @@ impl Runner {
 
     /// Observe a batch of to-be-executed calls for redundancy, then append a
     /// dedup reminder for each newly-flagged duplicate as a persisted MetaUser
-    /// event so the next turn's projection serves it to the model as a
+    /// event so the next turn's assembly hands it to the model as a
     /// system-reminder. This is the instant-feedback half of the reward loop
     /// (the delayed half is the dream distilling lessons from the same
     /// signal). Best-effort: a failed append logs and never fails the run
@@ -263,11 +263,11 @@ impl Runner {
 
     /// Append one turn's model response: Reasoning events, then a single
     /// AssistantMessage (concatenated text — anchors the tool calls), then the
-    /// ToolCall events. Projection groups AssistantMessage + its ToolCalls.
+    /// ToolCall events. The assembly groups AssistantMessage + its ToolCalls.
     ///
     /// The accumulated reasoning text is attached to the AssistantMessage as
-    /// the thinking field so a projection has a single-source view of the
-    /// reasoning that preceded the message. The raw Reasoning events also
+    /// the thinking field so the assembled input has a single-source view of
+    /// the reasoning that preceded the message. The raw Reasoning events also
     /// land in the log for replay fidelity.
     ///
     /// fidelity limitation: all Text items are concatenated into one
@@ -538,8 +538,9 @@ impl Runner {
     /// Append a logical turn boundary. The durable companion to the in-memory
     /// start_turn: every model-call entry appends one, so a turn that never
     /// reaches a TurnUsage (cancelled / errored mid-stream) still carries a
-    /// boundary marker. The trajectory projection groups turns on this, not
-    /// on UserInput (a single prompt spans N tool-iteration turns).
+    /// boundary marker. The trajectory view groups turns on this, not on
+    /// UserInput (a single prompt spans N tool-iteration turns); assembling
+    /// model input skips the marker.
     pub(crate) async fn append_turn_started(&self, session: SessionId) -> Result<(), RunError> {
         let (turn, call_in_turn) = match self.observability.lock() {
             Ok(ol) => ol.turn_coords(),

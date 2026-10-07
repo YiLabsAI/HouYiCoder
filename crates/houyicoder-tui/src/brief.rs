@@ -27,7 +27,7 @@ pub(crate) fn value_brief(v: &Value) -> String {
 /// Extract a clean, human-readable call-line argument for a tool call, so
 /// the transcript shows the runnable form (e.g. Bash with the command
 /// verbatim) rather than raw JSON args. Known tools delegate the field
-/// selection to the shared, untruncated tool_invocation projection (so the
+/// selection to the shared, untruncated tool_invocation extraction (so the
 /// chip, the verbose view, and the search index all read the same source
 /// text), then truncate to the chip budget: at most 160 chars on one line so
 /// a long shell one-liner stays one-glance. Unknown tools keep the original
@@ -200,7 +200,7 @@ pub(crate) fn edit_diff_summary(added: u32, removed: u32) -> String {
 }
 
 /// The memory tools whose transcript result is one human label rather than
-/// the raw JSON body. Shared by the result-summary projection and the
+/// the raw JSON body. Shared by the result-summary render and the
 /// transcript body builder so a new memory tool joins both at once.
 pub(crate) const MEMORY_LABEL_TOOLS: &[&str] = &[
     "save_memory",

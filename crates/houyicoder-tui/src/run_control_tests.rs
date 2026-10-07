@@ -1110,13 +1110,13 @@ fn acpx_frame(method: AcpxMethod, params: serde_json::Value) -> TranscriptFrame 
 }
 
 /// A poll batch that ends at the cap between a queued message and the
-/// delivery mark the projection writes beside it, while the run is still
+/// delivery mark the host sends beside it, while the run is still
 /// active. A rebuild that saw the message without the mark would read it as
 /// opening a turn of its own and close the running turn early, rendering a
 /// premature summary for a turn that is still running. The poll extends past
 /// the cap while the batch ends on a user message, so one batch applies the
 /// settled order and the running turn stays open until its record arrives.
-/// The run must be active for the test to judge anything: an idle projection
+/// The run must be active for the test to judge anything: an idle fold
 /// closes the log's trailing turn at the window end by design, which derives
 /// a row from the open turn whether or not the mark made the batch. The
 /// session carries no driver: the test's own sender is the only frame source,

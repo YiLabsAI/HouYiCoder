@@ -6,7 +6,7 @@
 //! an ansi-strip that adds markers — falls back to the raw).
 //!
 //! Trust gate: tool output is an untrusted data stream. A reduced output
-//! carries a data_tag so downstream projection never lets a control keyword
+//! carries a data_tag so downstream assembly never lets a control keyword
 //! embedded in tool output (a fake system-reminder, a forbidden instruction)
 //! become an instruction — the model treats it as data, not as a directive.
 

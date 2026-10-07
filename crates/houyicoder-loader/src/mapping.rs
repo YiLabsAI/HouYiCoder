@@ -60,7 +60,8 @@ pub(crate) fn map_record(
 /// A user record. The content is either a plain string (a human prompt) or a
 /// block array (tool_result blocks returning tool output, or text). isMeta
 /// marks injected control messages (e.g. the resume-directly nudge) -> map to
-/// MetaUser so the projection hides them.
+/// MetaUser, its own event rather than a user prompt: model input reads it as
+/// a directive, and it does not ride the frontend user-message stream.
 fn map_user(rec: &Value, sid: SessionId, ts_ms: u64, out: &mut Vec<SessionLogEntry>) {
     let is_meta = rec.get("isMeta").and_then(Value::as_bool).unwrap_or(false);
     let Some(content) = rec.get("message").and_then(|m| m.get("content")) else {

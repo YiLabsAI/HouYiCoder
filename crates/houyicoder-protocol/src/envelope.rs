@@ -24,7 +24,7 @@ pub struct RequestId(pub u64);
 pub struct EventSeq(pub u64);
 
 /// The transport form of a host durable event identity: the ULID string of
-/// the session log entry the payload was projected from. The protocol crate
+/// the session log entry the payload was mapped from. The protocol crate
 /// stays serde-only with no internal dependencies, so the identity crosses
 /// the process boundary as a string newtype rather than the context crate's
 /// typed id. Stable across reconnects and process restarts, unlike EventSeq.
@@ -72,7 +72,7 @@ impl ResumeFrom {
 pub struct EventEnvelope {
     pub seq: EventSeq,
     pub payload: FrontendEvent,
-    /// The durable identity of the log entry this payload was projected
+    /// The durable identity of the log entry this payload was mapped
     /// from. Present exactly when the payload has a durable origin; runtime
     /// pushes with no log entry (stream previews, agent status, system
     /// notices) leave it absent and the consumer falls back to a local row
@@ -92,10 +92,10 @@ impl EventEnvelope {
         }
     }
 
-    /// An envelope for one payload projected from a durable log entry. The
+    /// An envelope for one payload mapped from a durable log entry. The
     /// seq carries push order and resume position; the event_id carries the
     /// entry identity that survives reconnects and process restarts. Every
-    /// payload projected from the same entry carries the same identity.
+    /// payload mapped from the same entry carries the same identity.
     pub fn durable(seq: EventSeq, payload: FrontendEvent, event_id: DurableEventId) -> Self {
         Self {
             seq,
@@ -107,7 +107,7 @@ impl EventEnvelope {
 
 /// One frame of a child agent's transcript, fetched on demand when the
 /// parent expands a Subagent fold-group. Mirrors the live session/update +
-/// acpx frame stream so the parent projects the child transcript through the
+/// acpx frame stream so the parent maps the child transcript through the
 /// same pipeline as its own (the child is not a simplified list). Batched in
 /// a ChildTranscript response for the sync case where the child is terminal
 /// at expand time; a streaming variant for live async children is a later
@@ -151,7 +151,7 @@ pub enum ResponsePayload {
     /// A status snapshot the frontend requested (/status). Carries the wire
     /// form so the TUI renders without importing the engine crate.
     Status(crate::frontend::status::StatusSnapshot),
-    /// The session's turn-event trajectory (/trajectory), projected to the
+    /// The session's turn-event trajectory (/trajectory), mapped to the
     /// wire session/update form so the TUI renders the trajectory without
     /// importing the engine or context crate. Kinds with no base-protocol
     /// counterpart (compaction boundary, summary) ride the acpx/context
@@ -159,7 +159,7 @@ pub enum ResponsePayload {
     /// field carries the flagged same-input re-issues (self-evolution
     /// reward signal) for a "redundant calls" section in the pane.
     Trajectory(crate::frontend::trajectory::TrajectoryResponse),
-    /// A context-window breakdown (/context), projected to the wire form so
+    /// A context-window breakdown (/context), mapped to the wire form so
     /// the TUI renders the token-budget visualization without importing the
     /// engine or context crate.
     Context(crate::frontend::context::ContextBreakdown),
@@ -167,10 +167,10 @@ pub enum ResponsePayload {
     /// count, the persisted manifest id, and pre/post token estimates. The
     /// TUI renders a one-line outcome so the user knows the window shrank.
     Compact(crate::frontend::compact::CompactReply),
-    /// The current permission mode (/mode), projected to the wire form so the
+    /// The current permission mode (/mode), mapped to the wire form so the
     /// TUI renders the mode label without importing the permission crate.
     PermissionMode(crate::frontend::permission::PermissionMode),
-    /// The durable permission rule set (/rules), projected to the wire form so
+    /// The durable permission rule set (/rules), mapped to the wire form so
     /// the TUI renders the rule list without importing the permission crate.
     PermissionRules(Vec<crate::frontend::permission::PermissionRule>),
     /// The directories the user added to the sandbox workspace at runtime
@@ -226,8 +226,8 @@ pub enum ResponsePayload {
     /// line without guessing where to look.
     Debug(crate::frontend::debug::DebugState),
     /// The on-demand child transcript (expanding a Subagent fold-group): the
-    /// child session's turn events projected to the same session/update +
-    /// acpx frame stream the parent accumulates, so the TUI projects the
+    /// child session's turn events mapped to the same session/update +
+    /// acpx frame stream the parent accumulates, so the TUI renders the
     /// child transcript through the same pipeline as its own. A sync child
     /// is terminal at expand time, so this is a one-shot full snapshot. The
     /// child_sid echoes the request so the stateless driver can route the
@@ -353,7 +353,7 @@ pub enum ServerFrame {
 /// client sends to answer a prior ServerRequestEnvelope. Tagged so the server
 /// decodes one type and routes by axis. Introduces the client-side tag the
 /// reverse-request flow needs; the codec switches to it when the service
-/// wires the reverse-request projection.
+/// wires the reverse-request mapping.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "role", content = "data", rename_all = "snake_case")]
 #[non_exhaustive]

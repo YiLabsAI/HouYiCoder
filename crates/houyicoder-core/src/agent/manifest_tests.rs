@@ -402,7 +402,7 @@ fn test_estimate_counts_each_kind() {
             &tokenizer
         ),
         0,
-        "durable Summary is replaced by the manifest projection"
+        "durable Summary is replaced by the manifest selection"
     );
     assert_eq!(
         estimate_event_tokens(

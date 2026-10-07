@@ -702,7 +702,7 @@ fn provider_or_stub(
 
 /// Runner and event-stream state retained across client connections. The
 /// sequencer preserves reliable history, sequence allocation, and the durable
-/// projection cursor while each attachment supplies a new carrier.
+/// log cursor while each attachment supplies a new carrier.
 struct LiveRunnerHandle {
     runner: Arc<Runner>,
     event_sequencer: crate::server::EventSequencer,

@@ -15,8 +15,8 @@
 //! that the dispatch thread absorbs the block.
 //!
 //! The hook context types are runtime types without Serialize derives, so
-//! a HookContextJson projection carries the payload over the pipe (the
-//! project keeps wire projections separate from core runtime types). The
+//! a HookContextJson mapping carries the payload over the pipe (the
+//! project keeps wire mappings separate from core runtime types). The
 //! verdict the command returns is a small tagged JSON.
 
 use std::io::{Read, Write};
@@ -336,7 +336,7 @@ fn exit_code_to_verdict(
     }
 }
 
-/// The wire projection of a HookContext over the command hook stdin pipe.
+/// The wire mapping of a HookContext over the command hook stdin pipe.
 /// Core runtime types stay free of Serialize derives; this struct is the
 /// external shape a hook command reads.
 #[derive(Debug, Clone, Serialize)]

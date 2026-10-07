@@ -516,7 +516,7 @@ pub fn map_session_update(kind: &SessionEvent) -> Option<SessionUpdate> {
 /// say which it is. An event carrying neither returns None. Params carry the
 /// event's serde shape so a client reconstructs the typed payload.
 ///
-/// Shared with the live push and with any reader that projects a durable log
+/// Shared with the live push and with any reader that maps a durable log
 /// off-line, so both see the same frames for the same event.
 pub fn map_acpx_notification(kind: &SessionEvent) -> Option<AcpxNotification> {
     use AcpxMethod::*;

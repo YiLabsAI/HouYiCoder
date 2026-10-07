@@ -146,7 +146,7 @@ impl SessionStore {
     }
 
     /// Borrow the underlying backend for CAS operations (block_put / block_get)
-    /// from the projection layer without owning the store.
+    /// through the log without owning the store.
     pub fn backend(&self) -> &dyn ContextBackend {
         &*self.backend
     }
@@ -218,7 +218,7 @@ impl SessionStore {
     /// Read the in-memory trajectory mirror for a session (sync): the finalized
     /// events in append order, each with prev_hash set. Empty when no events
     /// have been appended this process for the session. The /trajectory command
-    /// projects this directly — SessionLogEntry already carries the id, ts, prev_hash,
+    /// reads this directly — SessionLogEntry already carries the id, ts, prev_hash,
     /// and kind a trajectory row needs, so no separate record type is introduced.
     pub fn trajectory_snapshot(&self, session: SessionId) -> Vec<SessionLogEntry> {
         self.mirrors.snapshot(session)

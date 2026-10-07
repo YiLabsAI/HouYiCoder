@@ -90,7 +90,7 @@ fn add_rule(app: &mut App, spec: PermissionRuleSpec) {
 }
 
 /// Ship a parsed rule to the server with the chosen destination (persistence
-/// scope). The wire rule carries the destination; the server projects it to
+/// scope). The protocol rule carries the destination; the server maps it to
 /// the engine Rule.scope at the boundary so the store writes the right file.
 fn add_rule_with_destination(
     app: &mut App,

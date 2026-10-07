@@ -81,7 +81,7 @@ impl ModelProvider for FakeProvider {
 }
 
 /// A tool that requires approval and, when approved, returns a fixed result.
-/// Used so the runner surfaces an interruption the service projects as a
+/// Used so the runner surfaces an interruption the service maps as a
 /// reverse permission request.
 struct ApprovableTool;
 
@@ -109,7 +109,7 @@ impl Tool for ApprovableTool {
 
 /// The reverse-permission end-to-end: a MessageSend drives a run whose first
 /// provider response is a tool call to a tool that requires approval. The
-/// runner suspends (Interruption); the service projects that as a server-to-
+/// runner suspends (Interruption); the service maps that as a server-to-
 /// client reverse Permission request; the client answers approve; the service
 /// resumes; the second provider response is final text; the run ends FinalOutput
 /// with stop_reason EndTurn. This proves the half-live turn state machine.

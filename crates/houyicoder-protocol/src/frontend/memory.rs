@@ -104,7 +104,7 @@ impl MemoryChangeScope {
     }
 }
 
-/// One successful memory operation projected onto the wire.
+/// One successful memory operation mapped onto the wire.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MemoryChange {

@@ -65,7 +65,7 @@ fn test_rank_dedups_already_surfaced() {
     let second = p.rank_candidates("fox", &surfaced);
     assert!(second.is_empty(), "a surfaced entry must be skipped");
     // After a compaction-style reset (empty surfaced set), the entry is
-    // eligible again — the natural reset the projection scan produces.
+    // eligible again — the natural reset the assembly scan produces.
     surfaced.clear();
     let third = p.rank_candidates("fox", &surfaced);
     assert_eq!(third.len(), 1);

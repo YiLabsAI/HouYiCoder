@@ -12,9 +12,9 @@
 //! Unknown instead of failing the read. The adapter (service layer) maps the
 //! wire string to the enum on the way in and back on the way out.
 //!
-//! LlmEvent (token-level provider stream) projects onto acpx/llm/* as an
+//! LlmEvent (token-level provider stream) maps onto acpx/llm/* as an
 //! independent notification stream — it does NOT ride the base session/update
-//! channel, which carries the turn-level SessionLogEntry projection. The two are
+//! channel, which carries the turn-level SessionLogEntry mapping. The two are
 //! orthogonal: LlmEvent is live token flow; SessionLogEntry is the durable turn
 //! record.
 
@@ -67,7 +67,7 @@ pub enum AcpxMethod {
 
     // acpx/max_turns — the MaxTurnsReached side channel (the run hit the
     // turn cap; the stop_reason carries max_turn_requests, the turn count
-    // rides here). Lands when the reverse-request projection promotes it.
+    // rides here). Lands when the reverse-request mapping promotes it.
     #[serde(rename = "acpx/max_turns")]
     MaxTurns,
 
@@ -225,12 +225,12 @@ pub enum TakeControlOutcome {
     },
 }
 
-/// Project a token-level LlmEvent onto its acpx/llm/* notification. The
+/// Map a token-level LlmEvent to its acpx/llm/* notification. The
 /// method is keyed off the variant; the params carry the event's own fields
 /// (serialized as the event's serde shape) so a client reconstructs the same
 /// typed event. A future variant with no method mapping returns None so the
 /// adapter drops it rather than inventing a key.
-pub fn project_llm_event(event: &LlmEvent) -> Option<AcpxNotification> {
+pub fn map_llm_event(event: &LlmEvent) -> Option<AcpxNotification> {
     let method = match event {
         LlmEvent::StepStart { .. } => AcpxMethod::LlmStepStart,
         LlmEvent::StepFinish { .. } => AcpxMethod::LlmStepFinish,
@@ -471,14 +471,14 @@ mod tests {
             id: "t1".into(),
             text: "hi".into(),
         };
-        let n = project_llm_event(&ev).expect("text delta projects");
+        let n = map_llm_event(&ev).expect("text delta maps");
         assert_eq!(n.method, AcpxMethod::LlmTextDelta);
         assert_eq!(n.params["id"], "t1");
         assert_eq!(n.params["text"], "hi");
     }
 
     #[test]
-    fn test_project_llm_event_variant() {
+    fn test_llm_event_maps_variant() {
         // Every LlmEvent variant must map to a method (no silent drop).
         let cases: Vec<LlmEvent> = vec![
             LlmEvent::StepStart { index: 0 },
@@ -537,7 +537,7 @@ mod tests {
             },
         ];
         for ev in &cases {
-            assert!(project_llm_event(ev).is_some(), "variant must project");
+            assert!(map_llm_event(ev).is_some(), "variant must map");
         }
     }
 }

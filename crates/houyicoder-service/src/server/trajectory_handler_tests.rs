@@ -89,14 +89,13 @@ async fn test_trajectory_handler_builds_response() {
     assert!(resp.contains("trajectory"), "response: {resp}");
 }
 
-/// A ChildTranscript request replays the child session log and projects each
-/// turn event to the same session/update + acpx frame stream the parent
+/// A ChildTranscript request replays the child session log and maps each turn
+/// event to the same session/update + acpx frame stream the parent
 /// accumulates. Seeds a child log with a user input + assistant message,
-/// drives the request, and asserts the response carries the projected
-/// frames. Covers the outbound projection loop the no-log wired TUI test
-/// skips.
+/// drives the request, and asserts the response carries the mapped frames.
+/// Covers the outbound frame mapping the no-log wired TUI test skips.
 #[tokio::test]
-async fn test_child_transcript_projects_log() {
+async fn test_child_transcript_reads_log() {
     use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
     let runner = stub_runner();
     let child = SessionId::new();
@@ -164,11 +163,11 @@ async fn test_child_transcript_projects_log() {
     );
     assert!(
         resp.contains("find auth"),
-        "child user input projected into the response: {resp}"
+        "child user input mapped into the response: {resp}"
     );
     assert!(
         resp.contains("auth is in src/auth"),
-        "child assistant text projected into the response: {resp}"
+        "child assistant text mapped into the response: {resp}"
     );
 }
 
@@ -220,7 +219,7 @@ async fn test_child_transcript_during_run() {
     );
     // Call the mid-run handler directly (the serve loop routes mid-run
     // requests here); no run is in flight, but the handler is the unit under
-    // test — it must replay the child log, project, and respond.
+    // test — it must replay the child log, map it to frames, and respond.
     server
         .handle_request_during_run(
             &mut io,
@@ -239,7 +238,7 @@ async fn test_child_transcript_during_run() {
     );
     assert!(
         resp.contains("find auth"),
-        "mid-run child transcript projects the child log: {resp}"
+        "mid-run child transcript maps the child log: {resp}"
     );
 }
 
@@ -247,7 +246,7 @@ async fn test_child_transcript_during_run() {
 /// pane opens from a keystroke the user can press while a turn streams, so a
 /// query that only lands between runs leaves it on the empty-state guide for
 /// the whole turn and makes a catalog row unpickable exactly when the user
-/// wants to switch. Read-only projection: it does not race the parent run.
+/// wants to switch. Read-only mapping: it does not race the parent run.
 #[tokio::test]
 async fn test_model_query_during_run() {
     let runner = stub_runner();
@@ -311,7 +310,7 @@ async fn test_permission_cycle_during_run() {
 /// and responds — the fix for the prior drop that left the TUI stuck on the
 /// placeholder until the run ended. A delayed provider keeps the run
 /// in-flight so the mid-run arm fires; the child log is seeded so the
-/// response carries the projected transcript.
+/// response carries the mapped transcript.
 #[tokio::test]
 async fn test_child_fetch_during_run() {
     use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};

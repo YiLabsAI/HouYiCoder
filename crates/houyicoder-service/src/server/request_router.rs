@@ -333,7 +333,7 @@ impl Server {
         self.runner.reset_trajectory(self.session).await;
         self.runner.clear_input_queue();
         self.runner.clear_notifications();
-        self.event_sequencer.reset_projection();
+        self.event_sequencer.reset_sequencer();
         self.send_response(io, req_id, ResponsePayload::Ack).await
     }
 }

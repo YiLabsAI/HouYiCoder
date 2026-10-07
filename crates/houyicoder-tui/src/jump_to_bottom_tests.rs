@@ -117,7 +117,7 @@ fn test_evicted_keeps_count() {
     // One row past the cap while scrolled back: trim skips a scrolled-back
     // reader, so the line accumulates past the cap rather than draining. The
     // echo rows live in the frame log (frontend Echo frames), and the log is
-    // bounded by bytes rather than by this row cap, so rebuild re-projects the
+    // bounded by bytes rather than by this row cap, so rebuild re-folds the
     // aged-out echo frame too: one extra row versus the old direct-push model.
     app.push_transcript_line(TranscriptLine::User("one past the cap".into()));
     assert_eq!(

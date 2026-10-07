@@ -21,7 +21,7 @@ impl Server {
     /// at a boundary: the permission-mode cycle (Shift+Tab) updates the
     /// Mutex-protected gate the drive loop reads at decide() time, so the
     /// switch lands before the next tool call; the child transcript fetch and
-    /// the model query are read-only projections (no side effects) so they do
+    /// the model query are read-only mappings (no side effects) so they do
     /// not race the parent run; the model set routes through the same apply
     /// path the between-runs dispatch uses, so a pick submitted while a turn
     /// is in flight takes effect on the next request rather than being

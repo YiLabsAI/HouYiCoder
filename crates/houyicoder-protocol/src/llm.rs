@@ -169,7 +169,7 @@ pub struct AssistantToolCall {
 /// translates its SessionLogEntry log into these (user/assistant text + tool
 /// results). Tagged for wire transport. An Assistant item may carry the tool
 /// calls it emitted alongside its text — the tool_use/tool_result pair
-/// invariant must survive every projection (a ToolResult without its matching
+/// invariant must survive every mapping (a ToolResult without its matching
 /// AssistantToolCall in the window is a bug).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "role")]

@@ -2,7 +2,7 @@
 //! Holds the parent's components (registry, store, provider, tools, config,
 //! worktree controller, cwd) and on a foreground spawn drives the child runner to
 //! a terminal state, records the SubagentReturn boundary, and returns the
-//! result the tool projects into its tool_result.
+//! result the tool maps into its tool_result.
 
 use std::path::PathBuf;
 use std::sync::Arc;

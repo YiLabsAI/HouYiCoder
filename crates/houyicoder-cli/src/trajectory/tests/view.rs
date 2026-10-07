@@ -8,8 +8,8 @@ use super::super::view::*;
 use crate::session_history::TurnPage;
 use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
 use houyicoder_tui::view::trajectory_pane::{
-    CompactedBoundary, ModelSwitchBoundary, RecordOutcome, TrajectoryRecordKind, TrajectoryRow,
-    TrajectoryTurn, TurnBoundary,
+    CompactedBoundary, ModelSwitchBoundary, RecordOutcome, TrajectoryRecord, TrajectoryRecordKind,
+    TrajectoryRow, TrajectoryTurn, TurnBoundary,
 };
 use std::collections::VecDeque;
 
@@ -120,7 +120,7 @@ fn test_turn_groups_by_input() {
             },
         ),
     ];
-    let view = project(&events, "test", 0);
+    let view = build_view(&events, "test", 0);
     assert_eq!(
         view.total_turns, 1,
         "one prompt is one turn however many model calls it takes"
@@ -263,7 +263,7 @@ fn test_multi_iteration_produces_turns() {
             },
         ),
     ];
-    let view = project(&events, "test", 0);
+    let view = build_view(&events, "test", 0);
     assert_eq!(
         view.total_turns, 1,
         "one prompt stays one turn however many model calls it drives"
@@ -351,7 +351,7 @@ fn test_recovery_retry_same_turn() {
             },
         ),
     ];
-    let view = project(&events, "test", 0);
+    let view = build_view(&events, "test", 0);
     assert_eq!(
         view.total_turns, 1,
         "retry stays on the same turn, not a new turn"
@@ -400,7 +400,7 @@ fn test_tokens_none_no_usage() {
         ),
         // No TurnUsage — the turn was cancelled before Finish.
     ];
-    let view = project(&events, "test", 0);
+    let view = build_view(&events, "test", 0);
     assert_eq!(view.total_turns, 1);
     let t = match &view.rows[0] {
         TrajectoryRow::Turn(t) => t,
@@ -415,8 +415,8 @@ fn test_tokens_none_no_usage() {
 }
 
 #[test]
-fn test_project_empty_view() {
-    let view = project(&[], "test", 0);
+fn test_empty_log_builds_view() {
+    let view = build_view(&[], "test", 0);
     assert_eq!(view.total_turns, 0);
     assert!(view.rows.is_empty());
     assert_eq!(
@@ -426,14 +426,12 @@ fn test_project_empty_view() {
 }
 
 #[test]
-fn test_project_reasoning_carries_thinking() {
-    // A Reasoning event projects to a "reasoning" event row carrying the
-    // full thinking text (so the pane's L2 detail can show it without
-    // re-scanning for sibling events); an AssistantMessage with a thinking
-    // field carries it too. Pins the thinking projection — the cost of
-    // surfacing reasoning is a trajectory dimension the record layer
-    // spent a turn establishing.
-    let events = vec![
+fn test_model_carries_thinking() {
+    // The pane's L2 detail reads thinking off the model record, so the text has
+    // to land there from whichever event carries it. A turn holds one model
+    // record: a streamed reasoning chunk and the assistant's own thinking field
+    // both write into it instead of becoming two rows.
+    let streamed = vec![
         ev(
             100,
             SessionEvent::UserInput {
@@ -457,29 +455,65 @@ fn test_project_reasoning_carries_thinking() {
             120,
             SessionEvent::AssistantMessage {
                 text: "answer".into(),
-                thinking: Some("let me think...".into()),
+                thinking: None,
             },
         ),
     ];
-    let view = project(&events, "test", 0);
+    let record = only_model_record(&streamed);
+    assert_eq!(
+        record.thinking.as_deref(),
+        Some("let me think..."),
+        "a streamed chunk fills the thinking of a record whose reply has none"
+    );
+    assert_eq!(
+        record.output.as_deref(),
+        Some("answer"),
+        "the reply lands on the same record"
+    );
+
+    let carried = vec![
+        ev(
+            200,
+            SessionEvent::UserInput {
+                text: "explain".into(),
+            },
+        ),
+        ev(
+            205,
+            SessionEvent::TurnStarted {
+                turn: 1,
+                call_in_turn: 0,
+            },
+        ),
+        ev(
+            210,
+            SessionEvent::AssistantMessage {
+                text: "answer".into(),
+                thinking: Some("reasoned first".into()),
+            },
+        ),
+    ];
+    assert_eq!(
+        only_model_record(&carried).thinking.as_deref(),
+        Some("reasoned first"),
+        "a reply supplies its own thinking field"
+    );
+}
+
+/// The turn's single model record. A second one means the fold opened a call it
+/// should have reused.
+fn only_model_record(events: &[SessionLogEntry]) -> TrajectoryRecord {
+    let view = build_view(events, "test", 0);
     let turn = match &view.rows[0] {
         TrajectoryRow::Turn(t) => t,
         _ => unreachable!(),
     };
-    let reasoning = records_of(&events, turn.n)
+    let models: Vec<TrajectoryRecord> = records_of(events, turn.n)
         .into_iter()
-        .find(|e| e.kind == TrajectoryRecordKind::Model)
-        .expect("reasoning event projects to a row");
-    assert_eq!(reasoning.thinking.as_deref(), Some("let me think..."));
-    let llm = records_of(&events, turn.n)
-        .into_iter()
-        .find(|e| e.kind == TrajectoryRecordKind::Model)
-        .expect("assistant message projects to an llm row");
-    assert_eq!(
-        llm.thinking.as_deref(),
-        Some("let me think..."),
-        "the AssistantMessage carries its own thinking field"
-    );
+        .filter(|e| e.kind == TrajectoryRecordKind::Model)
+        .collect();
+    assert_eq!(models.len(), 1, "one model record per turn");
+    models.into_iter().next().expect("the record just counted")
 }
 
 #[test]
@@ -503,7 +537,7 @@ fn test_cancelled_turn_omits_tokens() {
         // No TurnUsage — the turn was cancelled before the provider returned
         // usage. Tokens must be None, not 0.
     ];
-    let view = project(&events, "test", 0);
+    let view = build_view(&events, "test", 0);
     assert_eq!(view.total_turns, 1);
     let turn = view
         .rows
@@ -519,7 +553,7 @@ fn test_cancelled_turn_omits_tokens() {
     assert!(turn.efforts.is_empty(), "cancelled turn effort None");
 }
 
-/// A failed bash tool result projects to a trajectory event whose L2 output
+/// A failed bash tool result yields a trajectory event whose L2 output
 /// is the human-readable extract_body form (exit code + stderr), NOT the raw
 /// JSON dump. Before the fix the trajectory pane showed
 /// {"error":"...","exit_code":1,"stdout":"","stderr":"..."} on drill-down
@@ -558,7 +592,7 @@ fn test_tool_result_extracts_body() {
             },
         ),
     ];
-    let view = project(&events, "test", 0);
+    let view = build_view(&events, "test", 0);
     let turn = match &view.rows[0] {
         TrajectoryRow::Turn(t) => t,
         _ => unreachable!(),
@@ -621,7 +655,7 @@ fn test_failed_bash_counted() {
             },
         ),
     ];
-    let view = project(&events, "test", 0);
+    let view = build_view(&events, "test", 0);
     let turn = match &view.rows[0] {
         TrajectoryRow::Turn(t) => t,
         _ => unreachable!(),
@@ -673,7 +707,7 @@ fn test_grep_nomatch_ok() {
             },
         ),
     ];
-    let view = project(&events, "test", 0);
+    let view = build_view(&events, "test", 0);
     let turn = match &view.rows[0] {
         TrajectoryRow::Turn(t) => t,
         _ => unreachable!(),
@@ -721,7 +755,7 @@ fn test_error_key_counted() {
             },
         ),
     ];
-    let view = project(&events, "test", 0);
+    let view = build_view(&events, "test", 0);
     assert_eq!(view.failures, 1);
 }
 
@@ -729,7 +763,7 @@ fn test_error_key_counted() {
 /// must NOT enter the turn's user_input. The trajectory title reads
 /// user_input; a system reminder showing there would mislead the user into
 /// thinking they typed it. MetaUser is skipped in build_record (no
-/// trajectory event row) and never sets user_input in the projection loop.
+/// trajectory event row) and never sets user_input in the fold.
 #[test]
 fn test_meta_user_excluded() {
     let events = vec![
@@ -760,7 +794,7 @@ fn test_meta_user_excluded() {
             },
         ),
     ];
-    let view = project(&events, "test", 0);
+    let view = build_view(&events, "test", 0);
     assert_eq!(
         view.total_turns, 1,
         "the second model call stays inside the one turn"
@@ -819,7 +853,7 @@ fn test_memory_recall_excluded() {
             },
         ),
     ];
-    let view = project(&events, "test", 0);
+    let view = build_view(&events, "test", 0);
     let turn = match &view.rows[0] {
         TrajectoryRow::Turn(t) => t,
         _ => unreachable!(),
@@ -894,7 +928,7 @@ fn test_timing_percentiles_and_speed() {
             },
         ),
     ];
-    let view = project(&events, "qwen", 0);
+    let view = build_view(&events, "qwen", 0);
     assert_eq!(view.timing.ttft_avg_ms, Some(400));
     assert_eq!(view.timing.ttft_p95_ms, Some(600));
     assert_eq!(view.timing.ttft_p99_ms, Some(600));
@@ -954,7 +988,7 @@ fn test_turn_ids_survive_rebuild() {
             },
         ),
     ];
-    let view = project(&events, "test", 0);
+    let view = build_view(&events, "test", 0);
     assert_eq!(view.total_turns, 2);
     let n: Vec<usize> = view
         .rows
@@ -1003,7 +1037,7 @@ fn test_context_cleared_records_boundary() {
             },
         ),
     ];
-    let view = project(&events, "test", 0);
+    let view = build_view(&events, "test", 0);
     assert_eq!(
         view.total_turns, 2,
         "a clear does not create or drop a turn"
@@ -1080,7 +1114,7 @@ fn test_model_switch_boundary() {
             },
         ),
     ];
-    let view = project(&events, "qwen", 0);
+    let view = build_view(&events, "qwen", 0);
     assert_eq!(view.total_turns, 2);
     let second = match &view.rows[1] {
         TrajectoryRow::Turn(t) => t,
@@ -1127,7 +1161,7 @@ fn test_compaction_boundary_attached() {
             },
         ),
     ];
-    let view = project(&events, "test", 0);
+    let view = build_view(&events, "test", 0);
     assert_eq!(view.total_turns, 2);
     let second = match &view.rows[1] {
         TrajectoryRow::Turn(t) => t,
@@ -1196,7 +1230,7 @@ fn test_two_boundaries_kept() {
         ),
         usage(210, "deepseek"),
     ];
-    let view = project(&events, "test", 0);
+    let view = build_view(&events, "test", 0);
     let second = match &view.rows[1] {
         TrajectoryRow::Turn(t) => t,
         _ => unreachable!(),
@@ -1259,7 +1293,7 @@ fn test_switch_inside_turn() {
             },
         ),
     ];
-    let view = project(&events, "test", 0);
+    let view = build_view(&events, "test", 0);
     let first = match &view.rows[0] {
         TrajectoryRow::Turn(t) => t,
         _ => unreachable!(),
@@ -1297,7 +1331,7 @@ fn test_turn_key_opening_event() {
     );
     let first_id = first.id.to_string();
     let second_id = second.id.to_string();
-    let view = project(&[first, second], "m", 0);
+    let view = build_view(&[first, second], "m", 0);
 
     let keys: Vec<&str> = view
         .rows
@@ -1326,7 +1360,7 @@ fn test_turn_key_without_input() {
         },
     );
     let opening_id = opening.id.to_string();
-    let view = project(&[opening], "m", 0);
+    let view = build_view(&[opening], "m", 0);
     match view.rows.first() {
         Some(TrajectoryRow::Turn(turn)) => assert_eq!(
             turn.key.as_str(),
@@ -1349,7 +1383,7 @@ fn test_turn_title_derivation() {
             text: "fix the bug".into(),
         },
     );
-    let view = project(&[with_input], "m", 0);
+    let view = build_view(&[with_input], "m", 0);
     match &view.rows[0] {
         TrajectoryRow::Turn(turn) => assert_eq!(turn.title, "fix the bug"),
         _ => panic!("a turn row"),
@@ -1371,7 +1405,7 @@ fn test_turn_title_derivation() {
             input: serde_json::json!({"command": "ls -la"}),
         },
     );
-    let view = project(&[mid_run.clone(), call.clone()], "m", 0);
+    let view = build_view(&[mid_run.clone(), call.clone()], "m", 0);
     match &view.rows[0] {
         TrajectoryRow::Turn(turn) => {
             // The rule the list used to apply: the prompt, or the first
@@ -1388,7 +1422,7 @@ fn test_turn_title_derivation() {
 
     // Nothing to derive from: the placeholder, never a blank row.
     let only_boundary = ev(100, SessionEvent::ContextCleared { prior_turn: 1 });
-    let view = project(&[only_boundary], "m", 0);
+    let view = build_view(&[only_boundary], "m", 0);
     assert!(
         view.rows.is_empty()
             || matches!(&view.rows[0], TrajectoryRow::Turn(t) if !t.title.trim().is_empty()),

@@ -52,14 +52,14 @@ impl CompactReply {
         }
     }
 
-    /// Attach a recall rate to the reply (the projection maps the engine
+    /// Attach a recall rate to the reply (the adapter maps the engine
     /// outcome's recall_rate through).
     pub fn with_recall_rate(mut self, rate: Option<f64>) -> Self {
         self.recall_rate = rate;
         self
     }
 
-    /// Attach a conflict rate to the reply (the projection maps the engine
+    /// Attach a conflict rate to the reply (the adapter maps the engine
     /// outcome's conflict_rate through).
     pub fn with_conflict_rate(mut self, rate: Option<f64>) -> Self {
         self.conflict_rate = rate;

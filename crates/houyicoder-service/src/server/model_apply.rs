@@ -173,9 +173,9 @@ impl Server {
         }
     }
 
-    /// Project the model section plus the live session into the /model pane
-    /// snapshot. The settings read is file I/O, so it runs on the blocking
-    /// pool so it does not block a Tokio worker. A panic in the projection
+    /// Build the /model pane snapshot from the model section plus the live
+    /// session. The settings read is file I/O, so it runs on the blocking
+    /// pool so it does not block a Tokio worker. A panic in the mapping
     /// fails the reply as an internal error rather than crashing the serve
     /// loop or rendering an empty pane that would read as no models.
     pub(super) async fn model_catalog_snapshot(&self) -> Result<ModelCatalog, ProtocolError> {
@@ -189,7 +189,7 @@ impl Server {
         catalog.map_err(|e| {
             ProtocolError::new(
                 ErrorCategory::Internal,
-                format!("model catalog projection failed: {e}"),
+                format!("model catalog build failed: {e}"),
                 false,
             )
         })

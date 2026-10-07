@@ -1,7 +1,7 @@
 //! Reconnection contracts for interrupted sessions.
 //!
 //! These tests verify that a new connection restores pending permission work,
-//! queued input projection, event order, and lifecycle ownership without
+//! queued input mapping, event order, and lifecycle ownership without
 //! reviving terminal sessions or accepting unrelated responses. Disconnects
 //! at each recovery boundary must remain resumable and preserve prior choices.
 
@@ -134,10 +134,10 @@ async fn await_inject_dispatch(client: &mut Client) {
     }
 }
 
-/// A queued input on a resumed run is projected before the next model delta.
+/// A queued input on a resumed run is replayed before the next model delta.
 #[tokio::test]
 #[expect(clippy::too_many_lines, reason = "reconnect lifecycle proof")]
-async fn test_reconnect_projects_queued_input() {
+async fn test_reconnect_replays_queued_input() {
     let session = SessionId::new();
     let append_notify = Arc::new(Notify::new());
     let store = Arc::new(
@@ -303,7 +303,7 @@ async fn test_reconnect_projects_queued_input() {
     let user = frames
         .iter()
         .position(|frame| reconnect_user_message(frame, "reconnected note"))
-        .expect("queued input projected into transcript");
+        .expect("queued input mapped into transcript");
     let committed = frames
         .iter()
         .position(|frame| reconnect_commit(frame, &input))

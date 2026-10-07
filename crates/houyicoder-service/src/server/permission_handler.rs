@@ -8,7 +8,7 @@ use super::{Server, frame_carrier::FrameCarrier};
 use crate::protocol_adapter as pa;
 
 impl Server {
-    /// Project the gate's durable rule set for /rules replies and the
+    /// Map the gate's durable rule set for /rules replies and the
     /// add/remove acks that ship the updated set. Builtin rules ship with the
     /// binary and session rules are transient in-memory consent, so only
     /// writable-scope rules are listed here.
@@ -21,7 +21,7 @@ impl Server {
             .collect()
     }
 
-    /// Project the sandbox session's runtime working dirs for the Workspace
+    /// List the sandbox session's runtime working dirs for the Workspace
     /// tab and the add/remove acks. Empty when no session is attached.
     pub(super) fn working_directories(&self) -> Vec<String> {
         self.sandbox_session

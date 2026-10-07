@@ -94,7 +94,7 @@ pub(super) fn superseded_by_later(events: &[SessionLogEntry], i: usize) -> bool 
     })
 }
 
-/// How a block_ref ToolResult is served in the projected view.
+/// How a block_ref ToolResult reaches the assembled model input.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RetentionDecision {
     /// Retrieve the full content from the CAS — for a recent, active result
@@ -292,7 +292,7 @@ fn apply_tier(
     }
 }
 
-/// A typed marker for a block the projection could not materialize (backend
+/// A typed marker for a block the assembly could not materialize (backend
 /// failure, corrupt bytes). Carries the block_ref so a later re-invoke can
 /// still resolve it, and a reason so the model knows the content is
 /// unreachable, not absent. The turn does not fail — the model is told to

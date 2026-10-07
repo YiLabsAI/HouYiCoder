@@ -339,7 +339,7 @@ impl App {
     /// Load older history when scrollback reaches the current boundary,
     /// preserving the visible viewport position. The boundary is the oldest
     /// frame the resident window holds: below it the frames were drained, and
-    /// only the session log still carries the rows they projected. The window
+    /// only the session log still carries the rows they folded. The window
     /// now starts further back, so the block list is re-derived for the
     /// enlarged range.
     pub(crate) fn load_older_frames(&mut self) {
@@ -379,7 +379,7 @@ impl App {
         // Count the older batch's lines to hold the viewport steady across the
         // rebuild that follows. The batch's frames all precede the frames
         // already loaded, and a row the frontend raised among them rides the
-        // batch's own projection.
+        // batch's own fold.
         let prepended = transcript_from_frames_at(
             self.transcript.frames(),
             self.transcript.frame_window_start(),
@@ -563,7 +563,7 @@ impl App {
 
     /// The rendered text of the rows the visible transcript starts at. The
     /// rows read from the log are matched against them to find where the two
-    /// projections overlap.
+    /// folds overlap.
     fn front_row_texts(&self) -> Vec<String> {
         self.transcript
             .lines()

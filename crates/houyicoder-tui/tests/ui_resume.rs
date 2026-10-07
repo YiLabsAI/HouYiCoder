@@ -171,7 +171,7 @@ fn test_resume_lock_released_exit() {
 }
 
 /// /status shows provenance=resumed after a --resume <file> launch (the
-/// descriptor carries ResumedFromExport, projected to the wire + rendered).
+/// descriptor carries ResumedFromExport, mapped to the wire + rendered).
 #[test]
 #[ignore]
 fn test_status_shows_resumed_provenance() {

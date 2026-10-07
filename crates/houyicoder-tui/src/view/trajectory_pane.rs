@@ -164,11 +164,11 @@ pub struct CompactedBoundary {
 /// The trajectory-data seam the render path calls. Matches the disk-search
 /// pattern: the TUI owns the contract + the plain-data view; the
 /// composition root injects an impl that holds the session id + reads the
-/// durable session log and projects events into the view. None in stub and
+/// durable session log and folds events into the view. None in stub and
 /// unwired modes falls back to the mock so the pane still renders a demo.
 pub trait TrajectoryLog: Send + Sync {
-    /// Project the session's durable event log into the view. Called on every
-    /// draw, so an implementation reuses its last projection while the log has
+    /// Build the view from the session's durable event log. Called on every
+    /// draw, so an implementation reuses its last view while the log has
     /// not changed.
     fn trajectory(&self) -> std::sync::Arc<TrajectoryView>;
 

@@ -8,7 +8,7 @@
 //! Last-write-wins: the tool posts the full list each call, so the most
 //! recent todo-write frame determines the current checklist. The accumulator
 //! advances an append-only frame cursor; unrelated user boundaries retain the
-//! last checklist instead of clearing it. A cold projection, idle replay or
+//! last checklist instead of clearing it. A cold replay, idle replay or
 //! rewind, is restored history rather than a live event: it records no
 //! completion timestamps, and an all-completed list clears on the spot
 //! instead of installing.
@@ -57,7 +57,7 @@ pub struct TodoView {
     pub active_form: Option<String>,
 }
 
-/// Projected checklist state and its completion visibility lifecycle.
+/// Derived checklist state and its completion visibility lifecycle.
 #[derive(Default)]
 pub struct TodoState {
     pub(crate) items: Vec<TodoView>,
@@ -125,8 +125,7 @@ impl TodoState {
         // they record no completion timestamps and an all-completed list
         // clears on the spot. The phase persists across every replayed frame,
         // so a list that finishes on a later frame still reads as cold.
-        let cold_projection = self.replaying_history;
-        if cold_projection
+        if self.replaying_history
             && !items.is_empty()
             && items
                 .iter()
@@ -141,7 +140,7 @@ impl TodoState {
             self.expanded = false;
             return;
         }
-        if !cold_projection {
+        if !self.replaying_history {
             let old_completed: HashSet<String> = self
                 .items
                 .iter()
@@ -164,7 +163,7 @@ impl TodoState {
         // completed.
         self.completion_at
             .retain(|content, _| completed.contains(content));
-        if !cold_projection
+        if !self.replaying_history
             && !items.is_empty()
             && items
                 .iter()
@@ -182,7 +181,7 @@ impl TodoState {
 
     /// Hide the whole checklist after every item has remained completed for
     /// the completion visibility window. An untimestamped completed list also
-    /// clears as a defensive fallback; cold projections normally clear in
+    /// clears as a defensive fallback; cold replays normally clear in
     /// update before installing any items.
     pub(crate) fn prune(&mut self, now: Instant) -> bool {
         if self.items.is_empty()

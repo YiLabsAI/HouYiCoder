@@ -256,7 +256,7 @@ pub(crate) struct AgentStatusSnapshot {
 pub enum ServerEvent {
     /// One durable frame the driver unpacked from the event stream, with the
     /// stream position and durable identity its envelope carried. The event
-    /// loop pushes it into its own frame log for the transcript projection.
+    /// loop pushes it into its own frame log for the transcript fold.
     Frame(SequencedFrame),
     /// One incremental chunk of assistant text, emitted as the provider streams.
     Delta { text: String },
@@ -400,7 +400,7 @@ pub enum ServerResponse {
     /// The on-demand child transcript for an expanded Subagent fold-group.
     /// Frames arrive already converted to TranscriptFrame, so the fill site
     /// runs transcript_from_frames to populate the child rows through the
-    /// same projection as the parent flow. child_sid keys the Subagent line
+    /// same fold as the parent flow. child_sid keys the Subagent line
     /// to update in place.
     ChildTranscript {
         child_sid: String,
@@ -508,8 +508,8 @@ pub enum ClientCommand {
     },
     /// Fetch a child agent's transcript on demand, fired on first expand of a
     /// Subagent fold-group with no child rows yet. A re-expand reuses the
-    /// cached rows. The server replays the child session log, projects each
-    /// turn event through the same session/update + acpx projection the live
+    /// cached rows. The server replays the child session log, maps each
+    /// turn event through the same session/update + acpx adapters the live
     /// push path uses, and returns a one-shot snapshot as a ChildTranscript
     /// response.
     ChildTranscriptQuery {

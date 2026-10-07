@@ -273,7 +273,7 @@ impl crate::agent::Runner {
 
     /// Read the in-memory trajectory buffer for a session (sync): the
     /// finalized events in append order, each with prev_hash set. The
-    /// /trajectory command projects this. Empty for a session with no
+    /// /trajectory command renders this. Empty for a session with no
     /// events appended this process.
     pub fn trajectory_snapshot(
         &self,
@@ -308,7 +308,7 @@ impl crate::agent::Runner {
     }
 
     /// The names + descriptions of every tool registered on this runner, in
-    /// registry order. The /tools command projects this for capability
+    /// registry order. The /tools command renders this for capability
     /// discoverability — the host (and user) can see what the agent can do
     /// without reading source. Returns (name, description) pairs so the host
     /// never imports the provider's ToolDef type — the layering stays

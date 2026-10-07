@@ -248,7 +248,7 @@ fn test_memory_behavior_section_present() {
 /// parentheses, description hook), the entry body, and a staleness caveat
 /// for entries older than a day. Scan format so the model reads the
 /// same shape it expects. The wrapper marks the content
-/// as injected context, and the projection merges this text into the user
+/// as injected context, and the assembly merges this text into the user
 /// turn — the system prompt itself stays free of recalled memory.
 #[test]
 fn test_memory_manifest_format_aligned() {
@@ -362,12 +362,12 @@ fn test_context_partitions_recall_tokens() {
         !v.system.contains("# Recalled memories"),
         "system prompt stays byte-frozen, no recalled memory in it"
     );
-    // No double-count: the projection merges the memory text into the user
+    // No double-count: the assembly merges the memory text into the user
     // message, so msg_tokens already includes it. Messages (non-memory
     // input) + Memory (attachment) must equal the full input, and the total
     // must equal system + full input — not system + input + memory.
     let tok = Tokenizer::new();
-    // The projection merges the memory text into the user message with a
+    // The assembly merges the memory text into the user message with a
     // newline joiner; count the merged content as one string (BPE is not
     // additive across pieces).
     let merged = format!("what is the build rule\n{mem_text}");
@@ -392,9 +392,9 @@ fn test_context_partitions_recall_tokens() {
 }
 
 #[test]
-fn test_skill_section_recomputed_projection() {
-    // A SkillListing event in the log: the projection merges its text into
-    // the user message, and the Skills section attributes the attachment
+fn test_skill_section_recomputed() {
+    // A SkillListing event in the log: the context assembly merges its text
+    // into the user message, and the Skills section attributes the attachment
     // tokens so /context shows the discovery cost without double-counting.
     let mut scratch = std::env::temp_dir();
     scratch.push(format!("ctx-test-skillsec-{}", std::process::id()));
@@ -432,7 +432,7 @@ fn test_skill_section_recomputed_projection() {
         skill.tokens > 0,
         "Skills section must count the listing tokens"
     );
-    // No double-count: the projection merges the listing text into the user
+    // No double-count: the assembly merges the listing text into the user
     // message, so Messages (non-listing input) + Skills (attachment) must
     // equal the full merged input.
     let tok = Tokenizer::new();
@@ -667,7 +667,7 @@ fn test_recall_not_system_section() {
         !sys.items.iter().any(|i| i.contains("DEPLOY_COMMAND")),
         "system items must not list recall content"
     );
-    // The recall text is in the user message (merged by the projection) —
+    // The recall text is in the user message (merged by the assembly) —
     // the model sees it, just not in the static prefix.
     let msgs = v
         .measurement

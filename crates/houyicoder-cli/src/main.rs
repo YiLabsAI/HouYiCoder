@@ -596,7 +596,7 @@ pub(crate) fn assemble_bundle(
     bus: Option<Arc<houyicoder_core::agent::multi_agent::bus_types::AgentBus>>,
 ) -> houyicoder_tui::composition::RunnerBundle {
     // Grab the SessionLog BEFORE the runner moves into the server task — the
-    // trajectory view projects it for the /trajectory pane, and the session
+    // trajectory view reads it for the /trajectory pane, and the session
     // picker reads other sessions' log heads to derive their titles.
     let session_log = runner.store();
     // The descriptor reader for the session picker (lists sessions + reads each
@@ -669,8 +669,8 @@ pub(crate) fn assemble_bundle(
 
 /// Pair an in-memory protocol server and client around a runner. The session
 /// event sequencer receives runtime events before the runner is shared, then
-/// becomes the sole ordering authority for durable projections, model deltas,
-/// and fleet status. The server is the only carrier writer.
+/// becomes the sole ordering authority for durable event frames, model
+/// deltas, and fleet status. The server is the only carrier writer.
 #[expect(clippy::too_many_arguments, reason = "param grouping deliberate")]
 fn start_local_server(
     mut runner: Runner,

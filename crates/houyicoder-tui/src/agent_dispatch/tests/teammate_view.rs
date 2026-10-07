@@ -71,9 +71,9 @@ fn test_exit_teammate_clears_view() {
 }
 
 /// A fetched child frame fills the teammate view's transcript through the
-/// same projection the inline fold receives, so the drilled-in view is
-/// isomorphic with the expanded fold, not a parallel simplification. Pins
-/// the T36e isomorphism contract: child view renders via the main pipeline.
+/// same fold the inline fold-group fetch fills, so the drilled-in view is
+/// isomorphic with the expanded fold-group, not a parallel simplification:
+/// the child view renders through the main pipeline.
 #[test]
 fn test_teammate_view_fill_isomorphic() {
     use crate::records::TranscriptLine;
@@ -119,7 +119,7 @@ fn test_teammate_view_fill_isomorphic() {
     assert_eq!(view.transcript.len(), 2, "view filled by the fetch");
     assert!(matches!(view.transcript[0], TranscriptLine::User(_)));
     assert!(matches!(view.transcript[1], TranscriptLine::Agent(_)));
-    // Isomorphism: the fold-group and the view carry the same projected rows.
+    // Isomorphism: the fold-group and the view carry the same folded rows.
     let folded = match &app.transcript[0] {
         TranscriptLine::Subagent {
             folded_transcript, ..

@@ -2,7 +2,7 @@
 //! text a call carries, and whether a result reports a failure.
 //!
 //! Untruncated tool-call invocation text, shared by the verbose transcript
-//! render and the search index. A single projection for both is what makes
+//! render and the search index. A single mapping for both is what makes
 //! index-equals-render a structural guarantee rather than a convention: the
 //! same tool_invocation(tool, input) string is what the verbose view paints
 //! and what the search scans, so a match is always on text the user can see.
@@ -48,7 +48,7 @@ pub fn tool_invocation(tool: &str, input: &Value) -> String {
 /// Canonical (key-sorted) JSON for an unknown tool input. With preserve_order
 /// off, a Value::Object is a BTreeMap and to_string emits sorted keys —
 /// deterministic regardless of insertion order, so the wire-frame and
-/// persisted-event projections of the same call agree byte for byte (the
+/// persisted-event mappings of the same call agree byte for byte (the
 /// provenance guarantee the search jump relies on). Non-objects pass through
 /// verbatim.
 fn canonical_json(input: &Value) -> String {
@@ -168,12 +168,12 @@ mod tests {
         assert!(!inv.contains('…'));
     }
 
-    // I4: known tools project to their scalar field is projected to that field
-    // (not dumped as JSON), and unknown tools fall back to JSON. Adding a
-    // tool whose args deserve a field projection without updating the known
-    // list makes it show as JSON here — a visible drift signal.
+    // A known tool renders its one meaningful argument as a scalar field
+    // rather than as a JSON dump, and an unknown tool falls back to JSON.
+    // Adding a tool whose args deserve a scalar field without updating the
+    // known list makes it show as JSON here, which is the drift signal.
     #[test]
-    fn test_known_tools_project_scalar() {
+    fn test_known_tools_render_scalar() {
         let cases: &[(&str, serde_json::Value, &str)] = &[
             ("bash", serde_json::json!({ "command": "ls" }), "ls"),
             ("read", serde_json::json!({ "path": "a.rs" }), "a.rs"),
@@ -199,7 +199,7 @@ mod tests {
             let inv = tool_invocation(tool, input);
             assert_eq!(
                 inv, *want,
-                "{tool}: known tool must project to its scalar field, not JSON"
+                "{tool}: known tool must use its scalar field, not JSON"
             );
             assert!(!inv.contains('{'), "{tool}: must not fall through to JSON");
         }

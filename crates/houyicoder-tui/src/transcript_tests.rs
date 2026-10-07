@@ -46,7 +46,7 @@ fn test_frames_map_to_transcript() {
         tool_result("c1", serde_json::json!({"stdout": "file.txt"})),
     ];
     let lines = transcript_from_frames(&frames, 0..frames.len(), false);
-    // Four frame lines plus the turn's summary row, which the projection
+    // Four frame lines plus the turn's summary row, which the fold
     // derives from the same frames and places where the turn ended.
     assert_eq!(lines.len(), 5);
     assert!(matches!(lines[0], TranscriptLine::User(ref s) if s == "hi"));
@@ -485,7 +485,7 @@ fn run_completed(ms: Option<u64>) -> TranscriptFrame {
     ))
 }
 
-/// A message the user sent while the turn was running, as the projection
+/// A message the user sent while the turn was running, as the fold
 /// writes it: the message chunk followed by the mark that says the turn kept
 /// going past it.
 fn mid_turn_msg(text: &str) -> [TranscriptFrame; 2] {
@@ -510,9 +510,9 @@ fn child_completed_msg(text: &str) -> [TranscriptFrame; 2] {
     ]
 }
 
-/// The notice a regenerate leaves behind after a cancel or a restart, written
-/// the way the projection writes it: the notice chunk followed by the mark
-/// that says it belongs to the turn it interrupts.
+/// The notice a regenerate leaves behind after a cancel or a restart, in the
+/// shape the host sends it: the notice chunk followed by the mark that says
+/// it belongs to the turn it interrupts.
 fn interrupted_notice(text: &str) -> [TranscriptFrame; 2] {
     [
         user_msg(text),
@@ -767,7 +767,7 @@ fn test_open_turn_no_row() {
 #[test]
 fn test_turn_name_uses_log() {
     // The name is the turn's position in the log, not its position in the
-    // slice given to the projection, so a window that slides keeps naming
+    // slice given to the fold, so a window that slides keeps naming
     // the same turn and the expand state stays with its row.
     let mut frames: Vec<TranscriptFrame> = (0..100).map(|_| agent_msg("")).collect();
     frames.push(user_msg("go"));

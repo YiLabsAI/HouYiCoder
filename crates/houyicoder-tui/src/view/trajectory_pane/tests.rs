@@ -233,15 +233,14 @@ fn test_level2_renders_event_detail() {
         .unwrap();
 }
 
-/// L2 detail must render the content of EVERY real projection kind — not
-/// just the mock kinds. Drives draw_event_detail with a view whose events use
-/// the real kind strings (tool_call / tool_result / reasoning / llm) and
-/// asserts the input / output / thinking text appears. This is the
-/// regression guard for the kind-name-divergence trap: a kind-name match
-/// table masked an empty L2 body for real sessions while the mock rendered
-/// fine.
+/// L2 detail renders every field a record can carry, not just the ones a mock
+/// happens to fill. Drives draw_event_detail over model and tool records
+/// holding thinking, input, and output, and asserts each reaches the body. A
+/// name-match table once masked an empty L2 body for real records while the
+/// mock rendered fine, so these records carry the typed kinds the reader
+/// emits rather than a name the draw path has to match on.
 #[test]
-fn test_level2_renders_projection_kinds() {
+fn test_level2_renders_record_detail() {
     fn ev(
         kind: TrajectoryRecordKind,
         thinking: Option<&str>,
@@ -297,21 +296,24 @@ fn test_level2_renders_projection_kinds() {
     };
     assert!(
         body_text(0).contains("let me think"),
-        "reasoning shows its thinking at L2"
+        "a model record shows its thinking at L2"
     );
     assert!(
         body_text(1).contains("echo hi"),
-        "tool_call shows its input at L2"
+        "a tool record shows its input at L2"
     );
     assert!(
         body_text(2).contains("hi"),
-        "tool_result shows its output at L2"
+        "a tool record shows its output at L2"
     );
-    let llm = body_text(3);
-    assert!(llm.contains("decided"), "llm shows thinking at L2");
+    let last = body_text(3);
     assert!(
-        llm.contains("the full reply"),
-        "llm shows the full reply at L2, not just the preview"
+        last.contains("decided"),
+        "the last record shows its thinking"
+    );
+    assert!(
+        last.contains("the full reply"),
+        "and its full output, not just the preview"
     );
 }
 
@@ -351,7 +353,7 @@ fn test_trajectory_bar_invariants_mock() {
 /// Secrets in tool I/O must NOT render on the trajectory pane (a human-facing
 /// surface — screen-share / recording / scrollback). The L2 event detail
 /// redacts input/output/thinking before drawing; the durable log the pane
-/// projects from stays full-fidelity. This pins the redact-on-read boundary.
+/// reads stays full-fidelity. This pins the redact-on-read boundary.
 #[test]
 fn test_event_detail_redacts_secrets() {
     let secret = "sk-abcd1234efgh5678ijkl9012mnop3456qrst";

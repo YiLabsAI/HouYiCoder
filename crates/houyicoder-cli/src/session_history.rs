@@ -1,7 +1,7 @@
 //! The typed reader of a session's durable log: byte-anchored windows, a lazy
 //! offset index, and a bounded turn lookback.
 //!
-//! A consumer projects the events it receives into its own view types. This
+//! A consumer folds the events it receives into its own view types. This
 //! layer never renders, and it never holds the whole log: every read is
 //! anchored to a byte offset and bounded by a budget.
 

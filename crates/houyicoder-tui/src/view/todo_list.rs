@@ -2,7 +2,7 @@
 //! transcript while a run is in flight or idle. The items render as plain,
 //! selectable transcript rows so a drag can lift them into the clipboard like
 //! any other content. The data is a wire-side view model the accumulator
-//! parses from each todo-write tool call; this module only reads and projects
+//! parses from each todo-write tool call; this module only reads and renders
 //! it.
 //!
 //! Collapsed (default): at most three visible items plus a one-line hidden

@@ -24,7 +24,7 @@ use houyicoder_protocol::llm::OutputItem;
 #[derive(Debug)]
 pub enum NextStep {
     /// Call the model again (tools were called and executed; feed results back
-    /// by re-projecting the event log next iteration).
+    /// by re-assembling the event log next iteration).
     RunAgain,
     /// The turn produced a final answer. The loop returns.
     FinalOutput(String),

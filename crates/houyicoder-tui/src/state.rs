@@ -196,8 +196,8 @@ pub struct App {
     /// the tail window). Scrolling newer loads a window starting here.
     pub window_end: u64,
     /// The log byte size frozen at search-view enter. Window reads stay in
-    /// [0, frozen) so events appended after enter are invisible (I6 snapshot
-    /// consistency -- the window does not chase the growing tail).
+    /// [0, frozen) so events appended after enter are invisible (snapshot
+    /// consistency: the window does not chase the growing tail).
     pub frozen_file_size: u64,
     /// Within-window row scroll state. Separate from TranscriptScroll (the
     /// whole-vec path) so the 5 total consumers stay on their own path.
@@ -223,9 +223,9 @@ pub struct App {
     /// Optional full-history disk-search seam. None in stub / unwired modes
     /// (the /search --all flag then reports no disk results). When wired, the
     /// composition root injects an impl that reads the durable session log +
-    /// projects SessionLogEntries to searchable text — the TUI never touches the log.
+    /// maps SessionLogEntries to searchable text — the TUI never touches the log.
     /// Optional trajectory-data seam. The composition root injects an impl
-    /// that reads the durable session log and projects events into a
+    /// that reads the durable session log and folds events into a
     /// TrajectoryView; None in stub and unwired modes falls back to the mock
     /// trajectory so the pane still renders a demo.
     pub trajectory_log: Option<Arc<dyn TrajectoryLog>>,

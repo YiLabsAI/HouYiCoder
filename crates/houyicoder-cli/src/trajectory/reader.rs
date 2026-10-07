@@ -1,7 +1,7 @@
 //! The trajectory pane's page reader.
 //!
 //! The turn list comes from a bounded page of the durable log, read by a
-//! worker thread and projected into the view the pane draws. The reader itself
+//! worker thread and folded into the view the pane draws. The reader itself
 //! never touches the disk on a draw: it serves the window it holds and reports
 //! a read in flight as loading. This module owns the read state and when a read
 //! is needed; the view the pane draws is built in the window view submodule.
@@ -24,7 +24,7 @@ mod detail;
 mod drain;
 pub(super) mod window_view;
 
-use super::view::project;
+use super::view::build_view;
 
 /// How many turns the pane loads by default, and how many it adds each time
 /// the user asks for older history.
@@ -120,7 +120,7 @@ pub(super) struct ResidentPage {
     pub(super) accumulator: PageAccumulator,
 }
 
-/// The pane's read state: the resident pages, the view projected from them, and
+/// The pane's read state: the resident pages, the view folded from them, and
 /// the read in flight, if any.
 ///
 /// The pane draws every frame, so nothing here reads the log. A page arrives
@@ -197,7 +197,7 @@ struct TrajectoryState {
 /// Session log trajectory reader.
 ///
 /// The turn list comes from a bounded page of the durable log, read by a worker
-/// thread and projected into the view the pane draws. The reader itself never
+/// thread and folded into the view the pane draws. The reader itself never
 /// touches the disk: a draw serves the page it holds and reports a read in
 /// flight as loading.
 pub struct SessionLogTrajectory {
@@ -409,7 +409,7 @@ impl TrajectoryLog for SessionLogTrajectory {
         // rebuilt (once) rather than returned as the current window.
         // The window is settled when no read is in flight and the cached view
         // was built for this durable history. A live revision is not part of
-        // the key: it moves on every streamed token, and re-projecting the
+        // the key: it moves on every streamed token, and rebuilding the
         // window for one would cost a page fold per frame.
         if state.pending.is_none()
             && let Some(view) = state.view.as_ref()
@@ -420,10 +420,10 @@ impl TrajectoryLog for SessionLogTrajectory {
         }
         // A backend with no byte-addressable log, such as an in-memory store,
         // has no pages to read. Its mirror holds the whole history already, so
-        // it is projected directly rather than paged.
+        // its view is built directly rather than paged.
         if !self.history.byte_windows() {
             let events = self.session_log.trajectory_snapshot(self.session_id);
-            let mut view = Arc::new(project(&events, &self.model, max_turns));
+            let mut view = Arc::new(build_view(&events, &self.model, max_turns));
             let view_mut = Arc::make_mut(&mut view);
             view_mut.state = TrajectoryViewState::Ready;
             view_mut.history_generation = state.history_generation;
@@ -562,7 +562,7 @@ impl TrajectoryLog for SessionLogTrajectory {
     }
 
     fn return_to_tail(&self) {
-        // The mirror path projects the newest turns, so resetting the width is
+        // The mirror path folds the newest turns, so resetting the width is
         // enough to put the tail back.
         if !self.history.byte_windows() {
             self.loaded_turns

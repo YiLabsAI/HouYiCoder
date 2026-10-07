@@ -488,7 +488,7 @@ mod tests {
 
     /// An untrusted body is wrapped so the model reads the framing note +
     /// the skill name tag, then the content. The wrapper matches what the
-    /// slash-path projection emitted, so the two paths converge on one
+    /// slash-path assembly emitted, so the two paths converge on one
     /// framing shape.
     #[test]
     fn test_frame_untrusted_wraps() {

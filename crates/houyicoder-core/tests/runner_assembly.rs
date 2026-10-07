@@ -6,7 +6,7 @@
 //! a thin static string. A non-empty instructions is appended to the
 //! assembled prompt so the byte-stable prefix survives for prompt-cache.
 //!
-//! The loop re-projects the event log through build_for_turn() each turn:
+//! The loop re-assembles the event log through build_for_turn() each turn:
 //! on turn 2, the input sent to the provider must contain the turn 1
 //! events (user, assistant, tool result), not a stale in-memory buffer.
 
@@ -148,7 +148,7 @@ async fn test_nonempty_overrides_assembled() {
 }
 
 /// A provider that returns scripted responses in sequence while recording the
-/// input items from each request. Used to verify the loop re-projects the
+/// input items from each request. Used to verify the loop re-assembles the
 /// event log through build() each turn (assembled.messages carries prior turns).
 struct InputRecordingProvider {
     responses: Mutex<std::vec::IntoIter<CompletionResponse>>,
@@ -187,7 +187,7 @@ impl ModelProvider for InputRecordingProvider {
 async fn test_loop_uses_assembled_messages() {
     // On turn 2, the input sent to the provider must contain the turn 1
     // events (user message + assistant with tool call + tool result). This
-    // proves the loop re-projects the event log through build() each turn
+    // proves the loop re-assembles the event log through build() each turn
     // rather than holding a stale in-memory buffer.
     let seen = Arc::new(Mutex::new(Vec::new()));
     let responses = vec![
@@ -246,7 +246,7 @@ async fn test_loop_uses_assembled_messages() {
     assert!(matches!(&captured[0][0], InputItem::User { content } if content == "do the task"));
 
     // Turn 2: user + assistant (with tool call) + tool result — proving
-    // the event log was re-projected through build().
+    // the event log was re-assembled through build().
     assert!(
         captured[1].len() >= 3,
         "turn 2 must carry turn 1 events, got {} items",
@@ -267,7 +267,7 @@ async fn test_loop_uses_assembled_messages() {
     assert!(matches!(&captured[1][2], InputItem::ToolResult { call_id, .. } if call_id == "c1"));
 }
 
-/// The loop assembles the manifest-projected view (summary + verbatim
+/// The loop assembles the manifest-applied view (summary + verbatim
 /// tail + Referenced output rehydrated from the CAS), not the raw event log.
 /// This catches assembly bugs before the Compress stage writes checkpoints at runtime.
 #[tokio::test]
@@ -375,7 +375,7 @@ async fn seed_manifest_events(
     events
 }
 
-/// Assert the assembled input carries the manifest-projected view: (a) the
+/// Assert the assembled input carries the manifest-applied view: (a) the
 /// summary is present, not the raw Summarized user text; (b) the verbatim
 /// tail is present; (c) the Summarized large tool result is dropped with its
 /// group (not kept via a Referenced override — that is the Isolate stage's

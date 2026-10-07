@@ -1,7 +1,7 @@
 //! Full-screen search view entry/exit, split from state.rs so the parent
 //! stays under the file-size gate. The view is Scroll mode with verbose render
 //! and a query; the verbose transcript IS the result set, so there is no
-//! list/detail projection to drift from the index (the structural fix for the
+//! list/detail view to drift from the index (the structural fix for the
 //! preview/detail desync bugs).
 
 use std::time::Duration;

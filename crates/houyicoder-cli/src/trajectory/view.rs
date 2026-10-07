@@ -210,7 +210,7 @@ fn build_summary(
         duration_ms: acc.duration_ms,
         timing: session_timing,
         hidden_turns,
-        // A whole-log projection ends at the newest turn, so nothing newer is
+        // A whole-log fold ends at the newest turn, so nothing newer is
         // held back.
         newer_hidden: 0,
         history_generation: 0,
@@ -280,10 +280,14 @@ fn process_event_timing(ev: &SessionEvent, acc: &mut AccTotals) {
 /// answered by a pass over the whole log: the header reports what the session
 /// spent, not what the visible page spent, and the status pane reads the same
 /// whole-session figure.
-pub(crate) fn project(events: &[SessionLogEntry], model: &str, max_turns: usize) -> TrajectoryView {
+pub(crate) fn build_view(
+    events: &[SessionLogEntry],
+    model: &str,
+    max_turns: usize,
+) -> TrajectoryView {
     let (window, first_turn) = tail_window(events, max_turns);
     let hidden_turns = first_turn.saturating_sub(1);
-    let rows = project_rows(window, first_turn);
+    let rows = build_rows(window, first_turn);
     // Session-level totals: read once from the whole log, never from the page.
     let mut acc = AccTotals::default();
     accumulate_session(events, &mut acc);
@@ -295,7 +299,7 @@ pub(crate) fn project(events: &[SessionLogEntry], model: &str, max_turns: usize)
 /// A windowed read starts mid-session, so the number its oldest turn carries
 /// comes from the caller rather than from the slice: numbering from the slice
 /// would restart every page at the session's first turn.
-pub(crate) fn project_rows(events: &[SessionLogEntry], first_turn: usize) -> Vec<TrajectoryRow> {
+pub(crate) fn build_rows(events: &[SessionLogEntry], first_turn: usize) -> Vec<TrajectoryRow> {
     fold_rows(events, first_turn, FoldMode::Summary).0
 }
 

@@ -1,13 +1,13 @@
 //! The transcript-snapshot port: a loader the durable session log
 //! implements, as the trajectory view does for timeline data. The TUI owns
 //! the contract (this trait); the CLI implementation owns the session-log
-//! access and the projection. The TUI never touches the log file or the
+//! access and the fold. The TUI never touches the log file or the
 //! event types.
 //!
 //! Distinct from the deleted SearchLog: that was a searcher (ran the
 //! query on the disk side, which caused index!=render drift). This is a
 //! loader -- it returns rendered lines, and the search runs on the
-//! rendered projection in the TUI, so a query never misses synthesized
+//! rendered rows in the TUI, so a query never misses synthesized
 //! text. The windowed successor is the same position's next generation
 //! (load -> window), not a parallel path.
 
@@ -63,8 +63,8 @@ pub struct IndexProgress {
 
 /// A loader (not a searcher) backed by the durable session log. The TUI
 /// decides the threshold and degrade from log_size; the implementation only
-/// produces bytes/events and projects them. Search stays in the TUI on the
-/// rendered projection, so synthesized text is never missed.
+/// produces bytes/events and folds them. Search stays in the TUI on the
+/// rendered rows, so synthesized text is never missed.
 ///
 /// The trait evolves load (read-whole, for logs under the threshold) into
 /// window (byte-anchored screen reads, for logs over the threshold) -- same

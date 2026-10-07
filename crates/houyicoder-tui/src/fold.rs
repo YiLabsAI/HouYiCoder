@@ -606,7 +606,7 @@ impl crate::state::App {
 
     /// The fold groups for the transcript currently on view. The main view
     /// reads the incrementally maintained cache; the teammate view and the
-    /// search view project a transcript the cache was not built over, so they
+    /// search view fold a transcript the cache was not built over, so they
     /// compute groups on demand.
     pub(crate) fn active_fold_groups(&self) -> Cow<'_, [FoldGroup]> {
         if self.teammate_view.is_some() || self.search.active {

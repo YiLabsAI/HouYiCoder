@@ -21,13 +21,13 @@ use houyicoder_api::cost_model::ProviderCost;
 /// the gate is conservative, and an over-estimate of new under-counts
 /// savings (leans toward not compacting, which is safe).
 #[derive(Debug, Clone, Copy)]
-pub struct CompactProjection {
+pub struct CompactionEstimate {
     /// The current input-token count (pre-compact).
     pub old_tokens: u64,
     /// The projected input-token count after compaction.
     pub new_tokens: u64,
     /// The remaining turns in the run (for the savings horizon). A simple
-    /// estimate (max_turns - current_turn) for now; an EWMA projection lands
+    /// estimate (max_turns - current_turn) for now; an EWMA estimate lands
     /// when the proactive-lookahead wires.
     pub remaining_turns: u64,
     /// The summarizer's input-token cost (the LLM call to produce the summary
@@ -71,17 +71,17 @@ pub enum EconomyReason {
     NoShrink,
 }
 
-/// Build a compaction projection from the current input-token count +
+/// Build a compaction estimate from the current input-token count +
 /// remaining turns. The post-compact size is a fold-ratio heuristic (the
 /// verbatim tail is roughly a third of the assembled context); the
 /// summarizer cost is the folded span re-billed at input + a tenth at
 /// output. Rough but conservative — an over-estimate under-counts
 /// savings, leaning toward skipping (safe; the ceiling gate still fires
 /// if the view keeps growing).
-pub fn economy_projection(current_input_tokens: u32, remaining_turns: u64) -> CompactProjection {
+pub fn estimate_compaction(current_input_tokens: u32, remaining_turns: u64) -> CompactionEstimate {
     let projected_new = current_input_tokens / 3;
     let folded = current_input_tokens.saturating_sub(projected_new);
-    CompactProjection {
+    CompactionEstimate {
         old_tokens: current_input_tokens as u64,
         new_tokens: projected_new as u64,
         remaining_turns,
@@ -91,7 +91,7 @@ pub fn economy_projection(current_input_tokens: u32, remaining_turns: u64) -> Co
 }
 
 /// Decide whether a compaction is economically worthwhile given the
-/// projection + the provider's cost rates. The decision uses:
+/// estimate + the provider's cost rates. The decision uses:
 /// - projected_savings = cache_read_rate × (old − new) × remaining_turns
 ///   (the cached prefix is re-read at the discount each remaining turn
 ///   instead of re-billed at base).
@@ -106,10 +106,10 @@ pub fn economy_projection(current_input_tokens: u32, remaining_turns: u64) -> Co
 /// short horizon) leans toward Skip, which is safe (the ceiling trigger still
 /// fires if the view keeps growing). A zero remaining_turns or zero shrink
 /// always skips.
-pub fn economy_decision(projection: CompactProjection, cost: &ProviderCost) -> EconomyDecision {
-    let old = projection.old_tokens as f64;
-    let new = projection.new_tokens as f64;
-    let remaining = projection.remaining_turns as f64;
+pub fn economy_decision(estimate: CompactionEstimate, cost: &ProviderCost) -> EconomyDecision {
+    let old = estimate.old_tokens as f64;
+    let new = estimate.new_tokens as f64;
+    let remaining = estimate.remaining_turns as f64;
 
     let shrink = (old - new).max(0.0);
     if shrink <= 0.0 {
@@ -128,7 +128,7 @@ pub fn economy_decision(projection: CompactProjection, cost: &ProviderCost) -> E
             reason: EconomyReason::NoHorizon,
             projected_savings: 0.0,
             rewrite_cost: cost.cache_write_5m * new,
-            summarizer_cost: summarizer_cost(projection, cost),
+            summarizer_cost: summarizer_cost(estimate, cost),
             clear_at_least: f64::INFINITY,
         };
     }
@@ -139,7 +139,7 @@ pub fn economy_decision(projection: CompactProjection, cost: &ProviderCost) -> E
     let projected_savings = cache_read_saving * shrink * remaining;
     // The rewrite: re-writing the compacted prefix at the write premium.
     let rewrite_cost = cost.cache_write_5m * new;
-    let summarizer_cost = summarizer_cost(projection, cost);
+    let summarizer_cost = summarizer_cost(estimate, cost);
     let total_cost = rewrite_cost + summarizer_cost;
 
     // The clear_at_least floor: the minimum shrink that breaks even on the
@@ -169,9 +169,9 @@ pub fn economy_decision(projection: CompactProjection, cost: &ProviderCost) -> E
 
 /// The summarizer's cost: the LLM call to produce the summary re-bills the
 /// folded span at the input rate + the summary text at the output rate.
-fn summarizer_cost(projection: CompactProjection, cost: &ProviderCost) -> f64 {
-    (projection.summarizer_input_tokens as f64) * cost.input
-        + (projection.summarizer_output_tokens as f64) * cost.output
+fn summarizer_cost(estimate: CompactionEstimate, cost: &ProviderCost) -> f64 {
+    (estimate.summarizer_input_tokens as f64) * cost.input
+        + (estimate.summarizer_output_tokens as f64) * cost.output
 }
 
 #[cfg(test)]
@@ -184,10 +184,10 @@ mod tests {
     }
 
     #[test]
-    fn test_economy_projection_fold_ratio() {
-        // The projection folds the assembled context by a third; the
+    fn test_estimate_fold_ratio() {
+        // The estimate folds the assembled context by a third; the
         // summarizer re-bills the folded span at input + a tenth at output.
-        let p = economy_projection(150_000, 10);
+        let p = estimate_compaction(150_000, 10);
         assert_eq!(p.old_tokens, 150_000);
         assert_eq!(p.new_tokens, 50_000);
         assert_eq!(p.summarizer_input_tokens, 100_000);
@@ -199,7 +199,7 @@ mod tests {
     fn test_no_shrink_skips() {
         // old == new: nothing to save, skip.
         let dec = economy_decision(
-            CompactProjection {
+            CompactionEstimate {
                 old_tokens: 100_000,
                 new_tokens: 100_000,
                 remaining_turns: 10,
@@ -216,7 +216,7 @@ mod tests {
     fn test_no_horizon_skips() {
         // remaining_turns 0: a compact is always a loss (nothing left to save).
         let dec = economy_decision(
-            CompactProjection {
+            CompactionEstimate {
                 old_tokens: 100_000,
                 new_tokens: 30_000,
                 remaining_turns: 0,
@@ -234,7 +234,7 @@ mod tests {
         // A large shrink over many turns: the cached-read savings exceed the
         // rewrite + summarizer cost. Compact.
         let dec = economy_decision(
-            CompactProjection {
+            CompactionEstimate {
                 old_tokens: 150_000,
                 new_tokens: 30_000,
                 remaining_turns: 10,
@@ -265,7 +265,7 @@ mod tests {
         // savings). This is the BelowBreakeven case: compaction would
         // recover the rewrite but not the summary's own cost.
         let dec = economy_decision(
-            CompactProjection {
+            CompactionEstimate {
                 old_tokens: 40_000,
                 new_tokens: 30_000,
                 remaining_turns: 5,
@@ -287,7 +287,7 @@ mod tests {
         // clear_at_least = rewrite_cost / (cache_read_saving × remaining).
         // Verify the derivation matches the formula (no magic constant).
         let dec = economy_decision(
-            CompactProjection {
+            CompactionEstimate {
                 old_tokens: 150_000,
                 new_tokens: 30_000,
                 remaining_turns: 10,
@@ -311,7 +311,7 @@ mod tests {
         // the breakeven math might pass (with a huge horizon), the floor
         // blocks a compaction that clears too little to recover the rewrite.
         let dec = economy_decision(
-            CompactProjection {
+            CompactionEstimate {
                 old_tokens: 30_100,
                 new_tokens: 30_000,
                 remaining_turns: 100,

@@ -1,8 +1,7 @@
-//! Projects server-owned configuration and usage into status responses: the
-//! env/config display fields and the per-model usage the server attaches to
-//! the StatusSnapshot after map_status_snapshot builds the runner-owned
-//! fields. Pure readers of env and the observability log, with no Server
-//! state.
+//! Builds the server-owned part of a status response: the env/config display
+//! fields and the per-model usage view the server attaches to the
+//! StatusSnapshot after map_status_snapshot builds the runner-owned fields.
+//! Pure readers of env and the observability log, with no Server state.
 
 use houyicoder_protocol::frontend::status::ModelUsageView;
 
@@ -43,7 +42,7 @@ pub(super) fn setting_sources_label() -> String {
 /// Trim the engine per-model usage to the view the Usage tab renders:
 /// token counts only, no USD, no capability fields. The order is whatever
 /// Runner::by_model_usage returns (already sorted heaviest-first).
-pub(super) fn project_by_model(
+pub(super) fn build_model_usage_view(
     entries: Vec<(String, houyicoder_core::observability::ModelUsage)>,
 ) -> Vec<ModelUsageView> {
     entries
@@ -65,7 +64,7 @@ mod tests {
     use houyicoder_core::observability::ModelUsage;
 
     #[test]
-    fn test_project_model_trims_fields() {
+    fn test_model_view_trims_fields() {
         // USD, web search, context window, and max output tokens are dropped:
         // the Usage tab renders token counts only, and capability fields
         // belong to the /model pane, not the usage breakdown.
@@ -83,7 +82,7 @@ mod tests {
                 max_output_tokens: 8192,
             },
         )];
-        let view = project_by_model(entries);
+        let view = build_model_usage_view(entries);
         assert_eq!(view.len(), 1);
         assert_eq!(view[0].model, "glm-5.2");
         assert_eq!(view[0].input_tokens, 1000);
@@ -94,14 +93,14 @@ mod tests {
     }
 
     #[test]
-    fn test_project_model_preserves_order() {
-        // The caller (Runner::by_model_usage) sorts heaviest-first; the
-        // projection must not reorder, only trim.
+    fn test_model_view_preserves_order() {
+        // The caller (Runner::by_model_usage) sorts heaviest-first; the view
+        // must not reorder, only trim.
         let entries = vec![
             ("qwen3.7-max".to_string(), ModelUsage::default()),
             ("glm-5.2".to_string(), ModelUsage::default()),
         ];
-        let view = project_by_model(entries);
+        let view = build_model_usage_view(entries);
         assert_eq!(
             view.iter().map(|m| m.model.as_str()).collect::<Vec<_>>(),
             ["qwen3.7-max", "glm-5.2"],

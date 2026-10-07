@@ -261,7 +261,7 @@ impl RecallTasks {
 
     /// Candidate keys reserved by still-running selections for one session.
     /// A finished selection needs no reservation because its append is in
-    /// the projection, so the surfaced scan takes over from there.
+    /// the assembly, so the surfaced scan takes over from there.
     pub(crate) fn pending_keys(&self, session: SessionId) -> HashSet<String> {
         self.running
             .lock()

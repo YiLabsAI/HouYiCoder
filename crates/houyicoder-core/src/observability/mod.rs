@@ -1,9 +1,9 @@
-//! Observability: cross-cutting collection and projection layer.
+//! Observability: cross-cutting collection layer and its read-only views.
 //!
 //! The log is an append-only container that gathers records from every
 //! subsystem (context lifecycle, tool pipeline, hook dispatch, provider
 //! responses). It does not mutate any subsystem state — it only appends and
-//! aggregates. The ContextView trait projects the log contents as read-only
+//! aggregates. The MetricsView trait exposes the log contents as read-only
 //! snapshots for a host to render inspection commands.
 //!
 //! Token semantics follow the protocol layer Usage struct: inclusive totals
@@ -331,8 +331,8 @@ impl CostAccumulator {
 // ===== observability log =====
 
 /// Append-only collection of records from every subsystem. The log does not
-/// mutate any track state; it only appends and aggregates. The ContextView
-/// trait projects its contents as read-only snapshots.
+/// mutate any track state; it only appends and aggregates. The MetricsView
+/// trait exposes its contents as read-only snapshots.
 pub struct ObservabilityLog {
     writes: Vec<SessionLogEntry>,
     tool_calls: Vec<ToolCallRecord>,
@@ -591,7 +591,7 @@ impl ObservabilityLog {
         (self.turn_count, self.call_in_turn)
     }
 
-    /// Cache the most recent compaction recording for insight projection.
+    /// Cache the most recent compaction recording for insight reporting.
     pub fn set_report(&mut self, report: RecordedCompaction) {
         self.last_report = Some(report);
     }
@@ -641,17 +641,14 @@ impl ObservabilityLog {
     }
 }
 
-/// Read-only projection of the log's aggregates for inspection commands.
-/// Renamed from ContextView to MetricsView (2026-08-02): the log no longer
-/// duplicates the assembled context — context_pct is passed to record_usage
-/// as a u32 (provider input_tokens primary, local tiktoken fallback), so
-/// the breakdown() method + last_breakdown field are gone. trajectory()
-/// still reads the writes buffer until /trajectory projects from the store
-/// directly. The rename also disambiguates from the TUI's own ContextView
-/// struct (the /context view model).
+/// Read-only view of the log's aggregates for inspection commands. The log
+/// does not duplicate the assembled context: context_pct reaches
+/// record_usage as a u32 (provider input_tokens primary, local tiktoken
+/// fallback), so no breakdown accessor lives here. trajectory() still reads
+/// the writes buffer until /trajectory reads the store directly.
 pub trait MetricsView {
     /// The trajectory event stream (append order). Drops when the store
-    /// becomes the single source for /trajectory projection.
+    /// becomes the single source /trajectory reads.
     fn trajectory(&self) -> &[SessionLogEntry];
     /// The most recent compaction recording, for trajectory compact drill-down.
     fn report(&self) -> Option<&RecordedCompaction>;
@@ -705,7 +702,7 @@ impl std::fmt::Display for ExportError {
 
 impl std::error::Error for ExportError {}
 
-/// Project the substrate (trajectory, tool stats, cost, errors) into an
+/// Serialize the substrate (trajectory, tool stats, cost, errors) into an
 /// industry-standard format for analysis or post-training. Multiple sinks
 /// serve different consumers; the canonical internal format is JSON.
 pub trait ExportSink {

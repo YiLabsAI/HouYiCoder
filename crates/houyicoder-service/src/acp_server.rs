@@ -302,7 +302,7 @@ impl AcpServer {
                             ) {
                                 PermissionVerdict::Denied
                             } else {
-                                // Look up the decision the projection computes.
+                                // Look up the decision the mapping computes.
                                 PermissionVerdict::Approved
                             };
                             let _verdict = verdict; // reserved for the audit below
@@ -375,9 +375,9 @@ impl AcpServer {
                         continue;
                     }
                     _ => {
-                        let projected = map_run_result(&run);
+                        let run_view = map_run_result(&run);
                         let resp = PromptResponse {
-                            stop_reason: projected.stop_reason,
+                            stop_reason: run_view.stop_reason,
                             meta: None,
                         };
                         return self
@@ -392,7 +392,7 @@ impl AcpServer {
                     }
                 },
                 Err(e) => {
-                    let _projected_err = map_run_error(&e);
+                    let _run_error = map_run_error(&e);
                     return self
                         .send_response(
                             io,
@@ -434,7 +434,7 @@ impl AcpServer {
     /// Forward one engine turn event as a session/update notification. Kinds
     /// the base protocol has no standard counterpart for (compaction boundary,
     /// summary, meta user, permission decision) ride the acpx/context/* side
-    /// channel — that projection lands with the acpx serve integration; a
+    /// channel — that mapping lands with the acpx serve integration; a
     /// pure-ACP client ignores it anyway, so the base stream here is complete
     /// for the first cut.
     async fn push_turn_event(

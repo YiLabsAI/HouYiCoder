@@ -50,9 +50,9 @@ mod status_handler;
 /// The /debug request handler.
 mod debug_dispatch;
 
-/// Status-snapshot descriptor attachers: env/config display fields + per-model
-/// usage projection.
-mod status_projection;
+/// Status-snapshot descriptor attachers: env/config display fields + the
+/// per-model usage view.
+mod status_view;
 
 /// Mid-run + between-run session-notification + permission-mode-cycle
 /// helpers.
@@ -268,8 +268,8 @@ impl Server {
         ResponsePayload::PermissionAskBeforeGit(self.gate.git_checkpoint_enabled())
     }
 
-    /// Project the live session plus the settings model section into the
-    /// /model pane snapshot. A missing or malformed section yields defaults
+    /// Build the /model pane snapshot from the live session plus the
+    /// settings model section. A missing or malformed section yields defaults
     /// (no catalog), so the pane renders the empty-state guidance rather than
     /// failing. The session side comes from the runner, never from settings:
     /// a session started on another model reports that model until the user

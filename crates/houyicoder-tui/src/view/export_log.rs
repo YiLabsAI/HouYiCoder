@@ -1,6 +1,6 @@
 //! The export seam: the TUI owns the contract (ExportLog trait +
 //! ExportPayload), the composition root injects an impl backed by the runner's
-//! SessionLog that projects the durable event stream into a self-contained
+//! SessionLog that builds the durable event stream into a self-contained
 //! JSON document. Matches the trajectory-data + disk-search seams: the TUI
 //! never touches the log file or the event types — it gets a serialized
 //! payload + a suggested filename and writes it to disk.
@@ -22,11 +22,11 @@ pub struct ExportPayload {
     /// Suggested filename (no directory): timestamp + first-prompt slug + .json.
     pub filename: String,
     /// Pretty-printed JSON document. Serialized by the implementation so the
-    /// TUI stays free of the export data shape (it owns the projection).
+    /// TUI stays free of the export data shape (it owns the document build).
     pub json: String,
 }
 
-/// Project the durable session log into an export document. None when the
+/// Build the durable session log into an export document. None when the
 /// command reports not connected or unavailable in this session instead of
 /// writing an empty file.
 pub trait ExportLog: Send + Sync {

@@ -14,15 +14,15 @@
 //! half-written.
 //!
 //! De-dup is caller-driven, not provider-internal: the caller passes the set
-//! of memory keys already in the assembled context (scanned from the projected
-//! transcript) so the rank skips entries the model already sees this turn.
-//! Compaction folds old memory-recall events out of the projection (they
-//! take the Summarized disposition), so the scanned surfaced set naturally
-//! empties at the compaction boundary — the reset happens by projection,
-//! with no provider-side mutable state to clear. Recall re-scans the
-//! post-compact transcript for already-injected attachments rather than
-//! tracking them in provider state — the reset is a natural consequence
-//! of projection, not a separate cleanup step.
+//! of memory keys already in the assembled context (scanned from the
+//! assembled transcript) so the rank skips entries the model already sees
+//! this turn. Compaction folds old memory-recall events out of the assembled
+//! context (they take the Summarized disposition), so the scanned surfaced
+//! set naturally empties at the compaction boundary — the reset falls out of
+//! the assembly, with no provider-side mutable state to clear. Recall
+//! re-scans the post-compact transcript for already-injected attachments
+//! rather than tracking them in provider state — the reset is a natural
+//! consequence of the assembly, not a separate cleanup step.
 //!
 //! MemoryStore is a thin backend seam: markdown is the default impl, a future
 //! SqliteStore can impl the same seam with zero change to the recall engine
@@ -65,7 +65,7 @@ pub trait MemoryProvider: Send + Sync {
     /// relevant first, skipping any key in surfaced. Zero-score rows stay in
     /// the list, sorted last, so a query with no lexical overlap still
     /// offers its candidates to the semantic stage. The caller builds
-    /// surfaced by scanning the projected transcript for already-injected
+    /// surfaced by scanning the assembled transcript for already-injected
     /// memory-recall events, so the provider holds no surfaced state across
     /// calls. Default empty for providers without a rank path.
     fn rank_candidates(&self, query: &str, surfaced: &HashSet<String>) -> Vec<MemoryRankHit> {

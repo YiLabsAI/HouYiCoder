@@ -1,7 +1,7 @@
 //! agent::runner — the spine: the single-agent tool-use loop.
 //!
 //! The loop holds no in-memory message buffer; the durable session log is the
-//! buffer, re-projected into model input each turn. Stateless provider (full
+//! buffer, re-assembled into model input each turn. Stateless provider (full
 //! history each call) keeps replay server-safe, so Retry only vetoes transient
 //! provider errors. Tool dispatch is sequential with a partition-by-safety
 //! batch for concurrency-safe calls; handoff is terminal. The store is held
@@ -138,7 +138,7 @@ pub struct Runner {
     /// the in-session pick + built-in default.
     catalog_resolver: Option<Arc<dyn ModelCatalogResolver>>,
     /// Composes the assembled context per turn: the assembled system prompt +
-    /// the projected message history. The loop calls build_for_turn() each
+    /// the assembled message history. The loop calls build_for_turn() each
     /// turn so the assembled context and the /context breakdown share one
     /// source.
     context_builder: ContextBuilder,
@@ -745,7 +745,7 @@ impl Runner {
         }
         // A child-completion notification is a distinct boundary from a user
         // interjection: it records which child finished (NotificationInjected,
-        // not MidTurnInput) so the durable log + the projection distinguish
+        // not MidTurnInput) so the durable log + the assembled input distinguish
         // "a background subagent reported a result" from "the user sent a
         // message" -- the model sees a child-completion framing, not a
         // continue-the-task note.

@@ -418,7 +418,7 @@ pub(crate) fn approvals_of(outcome: RunOutcome) -> Vec<ApprovalRequest> {
 #[tokio::test]
 async fn test_stream_persists_deltas() {
     // Response handlers receive each streamed delta. The session log carries
-    // only the authoritative assistant message, and projection produces one
+    // only the authoritative assistant message, and the assembly produces one
     // assistant input item without duplicating transport-only deltas.
     let p = Arc::new(FakeProvider::text("hello world"));
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
@@ -481,7 +481,7 @@ async fn test_stream_persists_deltas() {
         .iter()
         .filter(|i| matches!(i, houyicoder_protocol::llm::InputItem::Assistant { .. }))
         .count();
-    assert_eq!(assistant, 1, "projection folds deltas into one Assistant");
+    assert_eq!(assistant, 1, "the assembly folds deltas into one Assistant");
 }
 
 #[tokio::test]

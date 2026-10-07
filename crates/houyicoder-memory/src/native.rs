@@ -62,7 +62,7 @@ impl MemoryProvider for KeywordRecallProvider {
         let entries = self.entries.lock().expect("entries mutex poisoned");
         // Score each entry by the number of distinct query keywords it
         // contains; skip entries already in surfaced (the caller-built
-        // de-dup set, scanned from the projected view). Track insertion
+        // de-dup set, scanned from the assembled view). Track insertion
         // index for a recency tie-break (higher = newer). Zero-score rows
         // stay in the list as the semantic stage's candidate input.
         let mut scored: Vec<(u32, usize, MemoryRankHit)> = entries

@@ -1,4 +1,4 @@
-//! Pins for the session-log snapshot: the durable log projected through the
+//! Pins for the session-log snapshot: the durable log folded through the
 //! same mapping the live push uses, the byte-window reads on a real backend,
 //! and the offset index. The acceptance guarantees (render parity, multibyte
 //! safety, bounded window and index, a row surviving a window that starts
@@ -24,7 +24,7 @@ fn ev(event: SessionEvent) -> SessionLogEntry {
     }
 }
 
-/// A bash call + result pair projects to a Tool chip row followed by a
+/// A bash call and its result yield a Tool chip row followed by a
 /// result row whose body is the raw stdout. The parity guarantee + the
 /// footprint source (body stored once).
 #[test]
@@ -40,7 +40,7 @@ fn test_bash_renders_stdout_body() {
             serde_json::json!({"stdout": "hi\nthere", "exitCode": 0}),
         )),
     ];
-    let lines = SessionLogSnapshot::project_events(events);
+    let lines = SessionLogSnapshot::render_events(events);
     assert!(lines.len() >= 2, "call + result rows: {lines:?}");
     let body = match &lines[1] {
         TranscriptLine::Tool { body, .. } => body.clone(),
@@ -57,7 +57,7 @@ fn test_turn_aborted_visible_snapshot() {
     let events = &[ev(SessionEvent::TurnAborted {
         reason: "user escape".into(),
     })];
-    let lines = SessionLogSnapshot::project_events(events);
+    let lines = SessionLogSnapshot::render_events(events);
     let text = match &lines[..] {
         [TranscriptLine::User(s)] => s.clone(),
         other => panic!("expected one user notice row, got {other:?}"),
@@ -99,7 +99,7 @@ fn test_snapshot_record_row() {
             thinking: None,
         }),
     ];
-    let rows: Vec<(Option<u64>, String)> = SessionLogSnapshot::project_events(events)
+    let rows: Vec<(Option<u64>, String)> = SessionLogSnapshot::render_events(events)
         .iter()
         .filter_map(|l| match l {
             TranscriptLine::ThoughtFor { ms, turn_id, .. } => Some((*ms, turn_id.to_string())),
@@ -183,7 +183,7 @@ fn test_snapshot_live_names_agree() {
             _ => None,
         })
     };
-    let snapshot_row = row_name(&SessionLogSnapshot::project_events(events.iter()))
+    let snapshot_row = row_name(&SessionLogSnapshot::render_events(events.iter()))
         .expect("the record closes the turn in the snapshot");
     let mut log: Vec<SequencedFrame> = Vec::new();
     for entry in &events {
@@ -243,7 +243,7 @@ fn test_live_snapshot_parity() {
         );
     }
     let live_rows: Vec<TranscriptLine> = transcript_from_frames(&live, 0..live.len(), false);
-    let snapshot_rows = SessionLogSnapshot::project_events(events);
+    let snapshot_rows = SessionLogSnapshot::render_events(events);
     assert_eq!(
         live_rows.iter().map(|l| l.render()).collect::<Vec<_>>(),
         snapshot_rows.iter().map(|l| l.render()).collect::<Vec<_>>(),
@@ -281,7 +281,7 @@ fn test_open_turn_differs() {
         .iter()
         .map(|l| l.render())
         .collect();
-    let snapshot_rows: Vec<String> = SessionLogSnapshot::project_events(events)
+    let snapshot_rows: Vec<String> = SessionLogSnapshot::render_events(events)
         .iter()
         .map(|l| l.render())
         .collect();
@@ -350,8 +350,8 @@ fn test_window_mid_turn_row() {
     std::fs::remove_dir_all(&root).ok();
 }
 
-/// What the summary row of a projection says: the reasoning it gathered and
-/// the duration its record closed the turn with. None when the projection
+/// What the summary row of a fold says: the reasoning it gathered and
+/// the duration its record closed the turn with. None when the fold
 /// writes no row.
 fn row_facts(lines: &[TranscriptLine]) -> Option<(Option<String>, Option<u64>)> {
     lines.iter().find_map(|l| match l {

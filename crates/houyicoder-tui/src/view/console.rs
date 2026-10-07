@@ -4,7 +4,7 @@
 //! evidence trail (hunk + spec clause + test + adversarial summary), a replay
 //! button (stub), and sign-off / reject affordances. Right column = audit
 //! trail: signed-off/rejected findings with who/when/replayable and
-//! a stub hash-chain projection. All data is placeholder.
+//! a stub hash-chain view. All data is placeholder.
 
 use ratatui::{
     Frame,
@@ -157,7 +157,7 @@ fn draw_audit_trail(f: &mut Frame, area: Rect, app: &App) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .title(" decision log (hash-chain projection) ");
+        .title(" decision log (hash-chain view) ");
     let items: Vec<ListItem> = app
         .review
         .audit_trail

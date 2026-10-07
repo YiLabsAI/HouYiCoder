@@ -72,8 +72,8 @@ impl TokenBudget {
 
     /// Commit the projected cost after the spawn actually starts.
     /// Called once per child; the child's actual spend may differ
-    /// from the projection, but the gate uses the projection (the
-    /// worst case) for the deny decision.
+    /// from the forecast, but the gate uses the forecast (the worst
+    /// case) for the deny decision.
     pub fn commit(&self, projected_child_cost: u64) {
         self.spent
             .fetch_add(projected_child_cost, Ordering::Relaxed);
@@ -156,7 +156,7 @@ mod tests {
     }
 
     /// Check does not mutate: calling check twice with the same
-    /// projection returns the same verdict (commit is separate).
+    /// forecast returns the same verdict (commit is separate).
     #[test]
     fn test_check_does_not_mutate() {
         let b = TokenBudget::new(100_000);
@@ -166,7 +166,7 @@ mod tests {
         assert_eq!(b.spent(), 0);
     }
 
-    /// Saturating add: a huge projection does not overflow.
+    /// Saturating add: a huge forecast does not overflow.
     #[test]
     fn test_saturating_no_overflow() {
         let b = TokenBudget::new(100_000);

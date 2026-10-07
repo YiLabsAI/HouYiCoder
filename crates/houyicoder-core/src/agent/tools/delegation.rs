@@ -397,7 +397,7 @@ mod tests {
     #[test]
     fn test_execute_builds_tool_result() {
         // A spawn handle that returns a canned terminal outcome: the tool
-        // projects it into a tool_result carrying the summary, the child
+        // maps it into a tool_result carrying the summary, the child
         // session id, and the usage block.
         use houyicoder_api::spawn::{SpawnArgs, SpawnFailure, SpawnHandle, SpawnOutcome};
         use houyicoder_protocol::llm::Usage;

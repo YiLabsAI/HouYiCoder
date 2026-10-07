@@ -3,7 +3,7 @@ use houyicoder_context::PermissionVerdict;
 
 /// Every durable turn-event kind maps to a session update, an ACPX
 /// notification, or neither. Streaming deltas are transient runtime events;
-/// their durable projection is the authoritative AssistantMessage at turn end.
+/// their durable mapping is the authoritative AssistantMessage at turn end.
 #[test]
 fn test_every_kind_maps() {
     let cases: Vec<(SessionEvent, bool, bool)> = vec![

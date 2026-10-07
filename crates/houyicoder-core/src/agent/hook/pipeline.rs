@@ -3,7 +3,7 @@
 //! Verdict handling (full, per the hook design):
 //! - Allow / Observe / Trigger / Inject keep the tool in the exec queue.
 //!   Inject rewrites the tool input (the design's updatedInput); the
-//!   rewrite lands with the input-projection cut -- for now the input is
+//!   rewrite lands with the input-assembly cut -- for now the input is
 //!   kept unchanged and the inject content is recorded as an observation.
 //! - Deny / Feedback / Ask remove the tool + return a blocked
 //!   result so the model sees the reason losslessly. Deny is terminal (no

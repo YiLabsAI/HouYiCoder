@@ -11,7 +11,7 @@ use houyicoder_protocol::llm::{
 use houyicoder_protocol::llm::{LlmEvent, Usage};
 
 use super::compaction::{CompactionSuppression, SuppressionCause};
-use super::economy::{economy_decision, economy_projection};
+use super::economy::{economy_decision, estimate_compaction};
 use super::model_window::{
     conservative_input_tokens, fill_omitted_usage, normalize_model_for_api,
     record_learned_context_window,
@@ -38,7 +38,7 @@ fn stream_idle_timeout() -> std::time::Duration {
 }
 
 impl Runner {
-    /// One streaming model call: re-project the event log into input, build the
+    /// One streaming model call: re-assemble the event log into input, build the
     /// request, drive the provider stream, and fold it into a CompletionResponse
     /// while appending each text delta to the session log and notifying the live
     /// sink. Retry wraps only stream establishment (a retryable error before the
@@ -69,9 +69,9 @@ impl Runner {
         // turn. Start the turn here so length/overflow retries inside 'outer
         // stay on the same turn number (the turn boundary is this entry).
         // Append a durable TurnStarted boundary alongside the in-memory
-        // start_turn so the projection groups turns on a marker that exists
-        // even for
-        // cancelled / errored turns (which never reach a TurnUsage).
+        // start_turn, so a turn that never reaches a TurnUsage (cancelled or
+        // errored mid-stream) still carries a boundary marker. Model input
+        // skips the marker; the trajectory view groups turns on it.
         obs_wire::start_turn(&self.observability);
         self.heal_turn_start_suppression();
         self.append_turn_started(session).await?;
@@ -175,9 +175,8 @@ impl Runner {
                     && !economy_fired_this_turn
                     && self.compaction_suppression() == CompactionSuppression::None
                 {
-                    let projection =
-                        economy_projection(conservative_input_tokens, remaining as u64);
-                    let decision = economy_decision(projection, &cost);
+                    let estimate = estimate_compaction(conservative_input_tokens, remaining as u64);
+                    let decision = economy_decision(estimate, &cost);
                     if decision.compact {
                         // Mark fired before the await so a re-entry after
                         // continue cannot re-fire (the compact itself is
@@ -228,9 +227,10 @@ impl Runner {
                     }
                     overflow_retries += 1;
                     // Compact folded older memory-recall events out of the
-                    // assembled context (Summarized disposition drops them from the
-                    // projection). Re-inject so the model is not memory-blind
-                    // for the rest of this run: the surfaced scan now sees the
+                    // assembled context, where the Summarized disposition
+                    // drops them from the model's input. Re-inject so the
+                    // model is not memory-blind for the rest of this run:
+                    // the surfaced scan now sees the
                     // folded set as empty, so recall re-surfaces entries the
                     // model still needs for the remaining tool turns.
                     self.memory.recall(session).await?;

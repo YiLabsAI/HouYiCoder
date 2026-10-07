@@ -115,7 +115,7 @@ mod tests {
     /// A scripted provider: call 1 emits a save_memory tool call (the forked
     /// agent extracting a fact), call 2 emits a final text response so the
     /// loop ends within the max_turns budget. Records the instructions plus
-    /// projected input so the test can assert both reached the model.
+    /// assembled input so the test can assert both reached the model.
     struct ForkedAgentProvider {
         calls: Mutex<usize>,
         seen: Arc<Mutex<Vec<String>>>,
@@ -147,7 +147,7 @@ mod tests {
         }
     }
 
-    /// Capture instructions plus projected input as one string so the test
+    /// Capture instructions plus assembled input as one string so the test
     /// asserts both the system prompt (tool docs) and the prefix conversation
     /// reached the forked agent.
     fn capture(req: &CompletionRequest) -> String {
@@ -275,7 +275,7 @@ mod tests {
         );
 
         // The prefix conversation + the extraction tool doc both reached the
-        // forked agent: the user's terse ask is in the projected input, the
+        // forked agent: the user's terse ask is in the assembled input, the
         // save_memory tool doc is in the system instructions.
         let first = seen.lock().expect("seen")[0].clone();
         assert!(

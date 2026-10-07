@@ -116,8 +116,8 @@ impl ReviewFinding {
 }
 
 /// One audit-trail entry: a signed-off or rejected finding, with who/when and
-/// a replayable reference. A projection of the hash-chain event log. The hash
-/// field is a stub hash-chain projection.
+/// a replayable reference, mapped from the hash-chain event log. The hash
+/// field is a stub digest.
 #[derive(Debug, Clone)]
 pub struct AuditEntry {
     pub finding_id: String,
@@ -128,7 +128,7 @@ pub struct AuditEntry {
     pub hash: String,
 }
 
-/// Build a stub audit-trail entry with a fake hash-chain projection.
+/// Build a stub audit-trail entry with a fake hash-chain digest.
 pub fn audit_entry(finding_id: &str, verdict: &str, who: &str, when: &str) -> AuditEntry {
     let replay_ref = format!("replay:{}#{}", finding_id, when);
     let hash = format!("h{:04x}", finding_id.len().wrapping_mul(31) ^ when.len());

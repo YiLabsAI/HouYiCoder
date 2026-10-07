@@ -288,7 +288,7 @@ pub fn allow_system_etc(tag: &str) -> String {
 /// works and the user's aliases and conditional includes stay faithful, at the
 /// cost of a credential section being readable into the transcript. Value-level
 /// redaction on the transcript boundary is the real fix and supersedes this.
-/// The alternative of projecting a minimal config through the environment was
+/// The alternative of passing a minimal config through the environment was
 /// rejected: it loses aliases, conditional includes and url rewrites, and the
 /// secret would still be reachable by another read path.
 pub fn allow_home_gitconfig(home: &str, tag: &str) -> String {

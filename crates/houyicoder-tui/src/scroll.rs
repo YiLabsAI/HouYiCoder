@@ -17,7 +17,7 @@ use crate::records::TranscriptLine;
 /// perf cliff: the per-frame display-row count walks every line, and search
 /// scans every line on each run, so a long session makes every frame O(total
 /// history). The raw transcript stays on the session log for full-history
-/// recall; this is the bounded viewable projection, mirroring a native
+/// recall; this is the bounded viewable window, mirroring a native
 /// terminal's bounded scrollback. Fold state is keyed by string (not line
 /// index) so eviction does not corrupt it.
 pub(crate) const VIEWABLE_SCROLLBACK_CAP: usize = 4000;

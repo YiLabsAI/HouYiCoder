@@ -43,7 +43,7 @@ impl Tool for QueuingTool {
     }
 }
 
-// A provider that records the projected input of each call + returns a
+// A provider that records the assembled input of each call + returns a
 // scripted response sequence. Call 1 emits the queueing tool call so the
 // run continues (RunAgain); call 2 returns final text so the loop ends.
 struct CaptureProvider {
@@ -133,7 +133,7 @@ fn scripted_capture(n: usize, tool_name: &str) -> CompletionResponse {
 
 /// A user message enqueued during turn 1 (the tool's execute) is drained at
 /// the turn-2 boundary + appended as a user message, so the model's second
-/// call sees the interjection in its projected input. This is the
+/// call sees the interjection in its assembled input. This is the
 /// turn-boundary injection — finer than the run-boundary queue.
 #[tokio::test]
 async fn test_turn_injects_between_turns() {
@@ -243,7 +243,7 @@ impl Tool for RemoveAfterEnqueueTool {
 /// next run(), the entry reconcile appends an interrupted ToolResult before
 /// this turn's user input so build_request_body ships role:"tool" right after
 /// the assistant turn that issued the call — else the provider 400s. Assert on
-/// the projection (END: model input legal), not on event existence (MEANS):
+/// the assembly (END: model input legal), not on event existence (MEANS):
 /// every Assistant with tool_calls must be immediately followed by ToolResult
 /// items whose call_id set equals the tool_call id set. Order-sensitive —
 /// no-fix red, wrapper-site red, run-entry green.

@@ -79,7 +79,7 @@ pub struct RewardSnapshot {
     pub cost: CostWaste,
 }
 
-/// Project a read-only reward snapshot. Locks OL + redundancy briefly to
+/// Capture a read-only reward snapshot. Locks OL + redundancy briefly to
 /// clone out, drops both before returning. Never holds across an await —
 /// the dream spawn is the caller's job after this returns.
 pub fn capture_reward_snapshot(

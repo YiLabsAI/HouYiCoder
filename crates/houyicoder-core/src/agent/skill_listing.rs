@@ -164,7 +164,7 @@ impl Runner {
             return Ok(());
         };
         let view = self.store.current_view(session).await?;
-        // Scan the projected (manifest-applied) view, not the raw log: a
+        // Scan the assembled (manifest-applied) view, not the raw log: a
         // Summarized listing folded by compaction drops out of the view,
         // so the scan naturally empties and the listing re-surfaces.
         let filtered = match view.manifest.as_ref() {
@@ -501,7 +501,7 @@ mod tests {
     }
 
     /// When no listing survives in the view, inject appends a SkillListing
-    /// event the projection merges into the user message.
+    /// event the assembly merges into the user message.
     #[tokio::test]
     async fn test_inject_appends_when_absent() {
         let (runner, session) = runner_with_skills();

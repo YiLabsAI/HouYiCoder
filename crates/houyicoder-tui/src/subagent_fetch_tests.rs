@@ -1,6 +1,6 @@
 //! End-to-end wiring tests for on-demand child transcript fetches.
 //! Expansion requests the child log and replaces the matching folded rows
-//! with the projected transcript.
+//! with the folded transcript.
 use super::*;
 use crate::records::TranscriptLine;
 use crate::test_harness::{connected_app_events, wait_for_request};
@@ -9,7 +9,7 @@ use houyicoder_protocol::frontend::FrontendRequest;
 /// A first expand of an unloaded Subagent line fires the fetch over the wire.
 /// For a sid the store has no log for, the server returns an empty frame list
 /// and the reply lands as the unavailable line in the fold-group. This proves
-/// the full round-trip without a live child run; the projection itself is
+/// the full round-trip without a live child run; the fold itself is
 /// pinned by the pure fill test.
 #[test]
 fn test_expand_fires_child_fetch() {

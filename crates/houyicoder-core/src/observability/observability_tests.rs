@@ -258,7 +258,7 @@ fn test_context_pct_unknown() {
 }
 
 #[test]
-fn test_context_view_projects() {
+fn test_metrics_view_exposes_log() {
     let mut log = ObservabilityLog::new(200_000);
     log.append_write(event("first"));
     log.record_tool_call("bash", 50, false, None);

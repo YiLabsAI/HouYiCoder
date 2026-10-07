@@ -42,7 +42,7 @@ pub(crate) enum SkillSlashOutcome {
     /// SkillBody the model reads as a directive (and that survives a
     /// compaction boundary, unlike a MetaUser which compaction folds). The
     /// untrusted flag marks bodies from non-managed/user sources so the
-    /// projection can frame them as data, not trusted instruction.
+    /// assembly can frame them as data, not trusted instruction.
     Prepared {
         name: String,
         body: String,

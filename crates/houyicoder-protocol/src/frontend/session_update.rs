@@ -4,7 +4,7 @@
 //! sessionUpdate, camelCase fields, snake_case enum variants) so the
 //! cross-decode fixture in service/tests/ gates fidelity against that
 //! crate. The protocol layer owns these wire types; the engine SessionLogEntry
-//! projects to them at the service boundary, so the frontend renders the full
+//! maps to them at the service boundary, so the frontend renders the full
 //! turn stream without importing engine types.
 //!
 //! Only the standard variants the current server emits are typed here

@@ -27,11 +27,11 @@ struct PendingEvent {
     reliable: bool,
 }
 
-/// The payloads one durable log entry projects to, plus the entry identity
+/// The payloads one durable log entry maps to, plus the entry identity
 /// stamped on every envelope built from them. Push order stays on the seq
 /// axis; the identity is what survives a reconnect, so the two travel
 /// together from the load callback but answer different questions.
-pub(crate) struct DurableProjection {
+pub(crate) struct EntryPayloads {
     pub(crate) event_id: DurableEventId,
     pub(crate) payloads: Vec<FrontendEvent>,
 }
@@ -238,7 +238,7 @@ impl EventSequencer {
         self.inner.notify.notified()
     }
 
-    pub(crate) fn reset_projection(&self) {
+    pub(crate) fn reset_sequencer(&self) {
         let mut state = self.inner.state.lock().expect("event sequencer lock");
         state.trajectory_cursor = 0;
         state.next_pending_order = 0;
@@ -251,7 +251,7 @@ impl EventSequencer {
 
     pub(crate) fn sequence_available<F>(&self, load_durable_events: F) -> Vec<EventEnvelope>
     where
-        F: FnOnce(usize) -> Vec<DurableProjection>,
+        F: FnOnce(usize) -> Vec<EntryPayloads>,
     {
         let mut state = self.inner.state.lock().expect("event sequencer lock");
         let durable_events = load_durable_events(state.trajectory_cursor);
@@ -266,7 +266,7 @@ impl EventSequencer {
         load_durable_events: F,
     ) -> Vec<EventEnvelope>
     where
-        F: FnOnce(usize) -> Vec<DurableProjection>,
+        F: FnOnce(usize) -> Vec<EntryPayloads>,
     {
         let mut state = self.inner.state.lock().expect("event sequencer lock");
         let durable_events = load_durable_events(state.trajectory_cursor);
@@ -276,15 +276,15 @@ impl EventSequencer {
 
     fn sequence_trajectory(
         state: &mut SequencerState,
-        entries: Vec<DurableProjection>,
+        entries: Vec<EntryPayloads>,
     ) -> Vec<EventEnvelope> {
         let mut sequenced = Vec::new();
-        for projection in entries {
-            for payload in projection.payloads {
+        for entry in entries {
+            for payload in entry.payloads {
                 let frame = EventEnvelope::durable(
                     EventSeq(state.next_seq),
                     payload,
-                    projection.event_id.clone(),
+                    entry.event_id.clone(),
                 );
                 state.next_seq = state.next_seq.saturating_add(1);
                 state.reliable.push(frame.clone());
@@ -379,8 +379,8 @@ mod tests {
         }
     }
 
-    fn durable(id: &str, payloads: Vec<FrontendEvent>) -> DurableProjection {
-        DurableProjection {
+    fn durable(id: &str, payloads: Vec<FrontendEvent>) -> EntryPayloads {
+        EntryPayloads {
             event_id: DurableEventId(id.to_string()),
             payloads,
         }
@@ -413,7 +413,7 @@ mod tests {
 
     #[test]
     fn test_identity_rides_envelope() {
-        // Every payload one entry projects to carries that entry's
+        // Every payload one entry maps to carries that entry's
         // identity, while a runtime push with no log entry carries none,
         // so a consumer can tell durable rows from local ones.
         let sequencer = EventSequencer::new();
@@ -460,7 +460,7 @@ mod tests {
     }
 
     #[test]
-    fn test_memory_event_projects_fields() {
+    fn test_memory_event_carries_fields() {
         let sequencer = EventSequencer::new();
         let id = context::MemoryChangeId::new();
         EventHandler::<MemoryChangedEvent>::handle(
@@ -491,8 +491,8 @@ mod tests {
         let pending = sequencer.sequence_pending_for_test();
         assert!(matches!(
             &pending[0].payload,
-            FrontendEvent::MemoryChanged { id: projected, origin: MemoryChangeOrigin::AutoDream, causality, changes }
-                if projected.0 == id.to_string()
+            FrontendEvent::MemoryChanged { id: changed_id, origin: MemoryChangeOrigin::AutoDream, causality, changes }
+                if changed_id.0 == id.to_string()
                     && *causality == MemoryChangeCausality::PreviousTurn
                     && changes[0].operation == MemoryOperation::Promoted
                     && changes[0].scope == MemoryChangeScope::Project
@@ -502,7 +502,7 @@ mod tests {
     }
 
     #[test]
-    fn test_tool_event_projects_progress() {
+    fn test_tool_event_carries_progress() {
         let sequencer = EventSequencer::new();
         EventHandler::<ToolExecutionEvent>::handle(
             &sequencer,
@@ -521,7 +521,7 @@ mod tests {
     }
 
     #[test]
-    fn test_notice_event_projects_line() {
+    fn test_notice_event_carries_line() {
         let sequencer = EventSequencer::new();
         EventHandler::<UserNoticeEvent>::handle(
             &sequencer,

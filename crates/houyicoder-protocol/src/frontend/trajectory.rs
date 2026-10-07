@@ -11,7 +11,7 @@
 //! hash chain a client can verify the server is not dropping events). Kinds
 //! the base session/update has no standard variant for (permission decision,
 //! compaction boundary, summary, meta user) ride here too, so the audit log
-//! is complete the stream + the acpx notifications are projections of the
+//! is complete the stream + the acpx notifications are mappings of the
 //! same events for different surfaces.
 
 use serde::{Deserialize, Serialize};
@@ -35,7 +35,7 @@ pub struct TrajectoryResponse {
 }
 
 /// One entry in the audit-log trajectory, wire form. The durable per-event
-/// record the server projects from the engine turn-event log. The TUI
+/// record the server maps from the engine turn-event log. The TUI
 /// renders /trajectory from this without importing the engine crate.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

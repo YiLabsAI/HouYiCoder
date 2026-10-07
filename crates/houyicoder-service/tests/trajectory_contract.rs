@@ -71,7 +71,7 @@ async fn recv(rx: &mut mpsc::Receiver<String>) -> String {
 
 /// After a run, the Trajectory request returns the serialized turn-event
 /// stream (the user message chunk + the agent message chunk the run produced),
-/// proving the server projects the engine trajectory to the protocol response
+/// proving the server maps the engine trajectory to the protocol response
 /// form.
 #[tokio::test]
 async fn test_returns_session_updates() {

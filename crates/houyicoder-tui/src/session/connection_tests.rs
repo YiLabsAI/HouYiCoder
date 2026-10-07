@@ -272,7 +272,7 @@ async fn test_drive_translates_agent_status() {
     }
 }
 
-/// Frames projected from durable log entries reach the event loop with the
+/// Frames mapped from durable log entries reach the event loop with the
 /// identity their envelopes carried, so the frame log can name each row
 /// after the entry that produced it. Both frame branches keep it: the
 /// session update and the acpx notification that becomes a transcript
@@ -412,7 +412,7 @@ impl FakeEngine {
             )))));
     }
 
-    /// Queue an event projected from a durable log entry: the envelope
+    /// Queue an event mapped from a durable log entry: the envelope
     /// carries the entry identity beside the issued seq.
     fn durable_event(&mut self, id: &str, e: FrontendEvent) {
         self.seq += 1;

@@ -24,7 +24,7 @@ const PREPEND_BATCH: usize = 100;
 const MAX_AGENT_MESSAGES_PER_POLL: usize = 4096;
 
 /// How many messages a poll may take past the batch cap when the cap lands
-/// on a user message. The projection writes the delivery mark beside the
+/// on a user message. The host sends the delivery mark right after the
 /// message it belongs to; a rebuild that saw the message without the mark
 /// would read it as opening a turn of its own and close the running turn
 /// early. The mark is the next frame in the channel, so a few extra polls
@@ -457,8 +457,8 @@ impl App {
                 }
             }
             // The cap can land between a user message and the delivery mark
-            // the projection writes beside it. Grant one small lookahead so
-            // the pair folds in one rebuild instead of splitting across two.
+            // the host sends beside it. Grant one small lookahead so both
+            // frames fold in one rebuild instead of splitting across two.
             let batch_ends_on_user = batch.last().is_some_and(|sf| is_user_frame(sf.frame()));
             if remaining == 0 && !lookahead_used && batch_ends_on_user {
                 lookahead_used = true;

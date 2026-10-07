@@ -148,9 +148,9 @@ fn test_uncapped_finds_old_match() {
     assert!(!app.search_truncated, "a small log must not degrade");
 }
 
-/// I5 guard: search runs on the rendered projection, so a synthesized
-/// chip name (Update, built from an edit event -- never in the raw log
-/// bytes) is findable. A byte-level prefilter would miss it (the I5 bug).
+/// Search runs on the rendered rows, so a synthesized chip name (Update,
+/// built from an edit event — never in the raw log bytes) is findable. A
+/// byte-level prefilter would miss it.
 #[test]
 fn test_search_finds_synthesized_name() {
     let mut app = working();
@@ -180,20 +180,15 @@ fn test_search_finds_synthesized_name() {
     app.enter_search_view("Update");
     assert!(
         !app.search.matches.is_empty(),
-        "search must find the synthesized Update chip name (I5: search on rendered projection)"
+        "search must find the synthesized Update chip name: search reads the rendered rows"
     );
 }
 
-/// Over the 16 MB threshold, the snapshot degrades: load returns empty +
-/// truncated, and the status bar surfaces an honest "log N MB too large"
-/// hint -- not a silent "no match". The windowed load is the deferred
-/// successor; for now the degrade is honest.
-/// Over the threshold, the search view opens in byte-window mode (the real
-/// path -- not a degrade). The window holds the tail (newest events),
-/// search runs on the window's rendered projection, the chrome shows a byte
-/// percentage (not "too large"), and frozen_file_size pins the boundary so
-/// later appends stay invisible (I6). Asserts visible output + the mode flag,
-/// not internal scroll state.
+/// Over the 16 MB threshold, the search view opens in byte-window mode. The
+/// window holds the tail (newest events), search runs on the window's rendered
+/// rows, the chrome shows a byte percentage (not "too large"), and
+/// frozen_file_size pins the boundary so later appends stay invisible. Asserts
+/// visible output + the mode flag, not internal scroll state.
 #[test]
 fn test_large_log_opens_mode() {
     let mut app = working();
@@ -218,7 +213,10 @@ fn test_large_log_opens_mode() {
         !app.search_truncated,
         "window mode is the real path, not a degrade"
     );
-    assert_eq!(app.frozen_file_size, total, "frozen at enter (I6 boundary)");
+    assert_eq!(
+        app.frozen_file_size, total,
+        "frozen at enter, so later appends stay outside the window"
+    );
     assert_eq!(app.window_anchor, 19 * 1024 * 1024);
     assert_eq!(app.window_end, total, "tail window reaches EOF");
     assert!(

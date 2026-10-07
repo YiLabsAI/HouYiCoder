@@ -1,7 +1,7 @@
 //! The session-log implementation of the TUI's TranscriptSnapshot port: the
 //! search view reads the durable session log through the shared history
 //! reader, maps each event to the frames the live stream carries, and folds
-//! them through the same projection the live render uses, so scrolling
+//! them with the same turn fold the live render uses, so scrolling
 //! through history shows the turns the live view showed. Each frame carries
 //! the durable identity of the event that produced it, and the row names are
 //! derived through the same function the live path uses, so one event names
@@ -15,8 +15,8 @@
 //! by another process, so a turn that no record closes stays open here.
 //!
 //! The byte windows, the lazy offset index, and the turn lookback belong to
-//! SessionHistory; this type only projects what that reader returns. G
-//! triggers a full index build with progress.
+//! SessionHistory; this type only renders what that reader returns. The G
+//! key in the search view triggers a full index build with progress.
 
 use std::sync::Arc;
 
@@ -41,7 +41,7 @@ use crate::session_history::{EventWindow, LocatedEvent, SessionHistory};
 const WINDOW_MAX_BYTES: u64 = 256 * 1024;
 
 /// The session-log implementation of the TranscriptSnapshot port: holds the
-/// shared history reader and projects its windows to rendered lines.
+/// shared history reader and renders its windows to lines.
 pub struct SessionLogSnapshot {
     history: Arc<SessionHistory>,
 }
@@ -62,11 +62,11 @@ impl SessionLogSnapshot {
         Self { history }
     }
 
-    /// Map a durable event to the frames the projection reads, through the
-    /// same two mappers the live push uses: the session/update stream and the
-    /// acpx notifications it has no variant for. Both are needed — a run
-    /// completion record arrives as a notification, and it is what tells the
-    /// projection where a turn ended.
+    /// Map a durable event to the frames the fold reads, through the same two
+    /// functions the live push uses: the session/update stream and the acpx
+    /// notifications it has no variant for. Both are needed — a run completion
+    /// record arrives as a notification, and it is what tells the fold where a
+    /// turn ended.
     fn frames_of(event: &SessionEvent) -> [Option<TranscriptFrame>; 2] {
         [
             map_session_update(event).map(TranscriptFrame::Session),
@@ -90,9 +90,9 @@ impl SessionLogSnapshot {
         for event in events {
             let id = DurableEventId(event.id.to_string());
             for frame in Self::frames_of(&event.event).into_iter().flatten() {
-                // Both mappers yield log categories, so every frame here comes
-                // from the entry and the position argument is never read: no
-                // frontend-raised frame reaches this loop.
+                // Both functions yield log categories, so every frame here
+                // comes from the entry and the position argument is never
+                // read: no frontend-raised frame reaches this loop.
                 names.push(RowId::of(&frame, Some(&id), 0));
                 frames.push(frame);
             }
@@ -104,7 +104,7 @@ impl SessionLogSnapshot {
     /// no run state to consult, so a turn its log carries no record for is
     /// left open: the snapshot never claims a turn ended that the log does
     /// not record as ended.
-    fn project_events<'a>(
+    fn render_events<'a>(
         events: impl IntoIterator<Item = &'a SessionLogEntry>,
     ) -> Vec<TranscriptLine> {
         let (frames, names) = Self::named_frames(events);
@@ -112,7 +112,7 @@ impl SessionLogSnapshot {
     }
 
     /// Whether a step of events holds where a turn begins or ends, in the
-    /// sense the projection reads: a message that opened a turn, or the record
+    /// sense the fold reads: a message that opened a turn, or the record
     /// that closed one. The probe reads frames alone, so it does not format
     /// the row names it would not use.
     fn holds_boundary(events: &[LocatedEvent]) -> bool {
@@ -128,7 +128,7 @@ impl SessionLogSnapshot {
     /// with the turn's opening frame behind its first event, which is what
     /// keeps the summary row the fold derives at the frame that closed the
     /// turn. Only the window's events become rows.
-    fn project_window(&self, window: &EventWindow) -> (Vec<TranscriptLine>, usize) {
+    fn render_window(&self, window: &EventWindow) -> (Vec<TranscriptLine>, usize) {
         let ahead = if window.lines_start_offset > 0 {
             self.history
                 .lookback_until(window.lines_start_offset, Self::holds_boundary)
@@ -161,7 +161,7 @@ impl TranscriptSnapshot for SessionLogSnapshot {
             };
         }
         let read = self.history.read_whole_lenient();
-        let lines = Self::project_events(&read.events);
+        let lines = Self::render_events(&read.events);
         SnapshotLoad {
             lines,
             skipped: read.skipped,
@@ -171,7 +171,7 @@ impl TranscriptSnapshot for SessionLogSnapshot {
 
     fn window(&self, anchor: u64, max_bytes: u64) -> WindowLoad {
         let window = self.history.window(anchor, max_bytes);
-        let (lines, skipped) = self.project_window(&window);
+        let (lines, skipped) = self.render_window(&window);
         WindowLoad {
             lines,
             start_offset: window.lines_start_offset,
@@ -183,7 +183,7 @@ impl TranscriptSnapshot for SessionLogSnapshot {
 
     fn tail_window(&self, max_bytes: u64) -> WindowLoad {
         let window = self.history.tail_window(max_bytes);
-        let (lines, skipped) = self.project_window(&window);
+        let (lines, skipped) = self.render_window(&window);
         WindowLoad {
             lines,
             start_offset: window.lines_start_offset,
@@ -195,7 +195,7 @@ impl TranscriptSnapshot for SessionLogSnapshot {
 
     fn window_before(&self, from_byte: u64, max_bytes: u64) -> WindowLoad {
         let window = self.history.window_before(from_byte, max_bytes);
-        let (lines, skipped) = self.project_window(&window);
+        let (lines, skipped) = self.render_window(&window);
         WindowLoad {
             lines,
             start_offset: window.lines_start_offset,

@@ -598,10 +598,11 @@ fn test_resume_export_live_session() {
 
 /// User journey: /status in a real binary renders the session identity
 /// block (Version / Session name / Session ID / cwd / Model / provenance)
-/// from the descriptor the server attaches to the wire snapshot. The unit
-/// tier asserts the render function with a synthetic snapshot; this drives
-/// the full wire path end-to-end (server reads the descriptor -> projects to
-/// the wire summary -> TUI renders) so a wiring break between the server
+/// from the descriptor the server attaches to the status snapshot. The unit
+/// tier asserts the render function with a snapshot built by hand; this
+/// drives the whole path end to end (server reads the descriptor, fills the
+/// snapshot, TUI renders it), so a break in that chain shows up here rather
+/// than only in the unit tier.
 /// Before the first turn, no durable append has fired and no descriptor is on
 /// disk. Version is the running build (top-level on the snapshot, set by the
 /// server) so it renders; cwd and provenance come from the descriptor and drop

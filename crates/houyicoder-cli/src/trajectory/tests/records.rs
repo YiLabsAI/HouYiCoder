@@ -37,7 +37,7 @@ fn test_tool_without_result_pending() {
             },
         ),
     ];
-    let view = project(&events, "test", 0);
+    let view = build_view(&events, "test", 0);
     let turn = match &view.rows[0] {
         TrajectoryRow::Turn(t) => t,
         _ => unreachable!(),
@@ -98,7 +98,7 @@ fn test_agent_merges_spawn_return() {
             },
         ),
     ];
-    let view = project(&events, "test", 0);
+    let view = build_view(&events, "test", 0);
     let turn = match &view.rows[0] {
         TrajectoryRow::Turn(t) => t,
         _ => unreachable!(),
@@ -160,7 +160,7 @@ fn test_mid_turn_input_context() {
             },
         ),
     ];
-    let view = project(&events, "test", 0);
+    let view = build_view(&events, "test", 0);
     assert_eq!(view.total_turns, 1, "an interjection is not a new turn");
     let turn = match &view.rows[0] {
         TrajectoryRow::Turn(t) => t,
@@ -212,7 +212,7 @@ fn test_memory_recall_is_record() {
             },
         ),
     ];
-    let view = project(&events, "test", 0);
+    let view = build_view(&events, "test", 0);
     let turn = match &view.rows[0] {
         TrajectoryRow::Turn(t) => t,
         _ => unreachable!(),
@@ -295,7 +295,7 @@ fn test_delegation_hides_tool_call() {
             },
         ),
     ];
-    let view = project(&events, "test", 0);
+    let view = build_view(&events, "test", 0);
     let turn = match &view.rows[0] {
         TrajectoryRow::Turn(t) => t,
         _ => unreachable!(),
@@ -357,7 +357,7 @@ fn test_direct_tool_call_shows() {
             },
         ),
     ];
-    let view = project(&events, "test", 0);
+    let view = build_view(&events, "test", 0);
     let turn = match &view.rows[0] {
         TrajectoryRow::Turn(t) => t,
         _ => unreachable!(),
@@ -413,7 +413,7 @@ fn test_hook_verdict_neutral() {
             },
         ),
     ];
-    let view = project(&events, "test", 0);
+    let view = build_view(&events, "test", 0);
     let turn = match &view.rows[0] {
         TrajectoryRow::Turn(t) => t,
         _ => unreachable!(),
@@ -489,7 +489,7 @@ fn test_delegation_legacy_hides_tool() {
             },
         ),
     ];
-    let view = project(&events, "test", 0);
+    let view = build_view(&events, "test", 0);
     let turn = match &view.rows[0] {
         TrajectoryRow::Turn(t) => t,
         _ => unreachable!(),
@@ -539,7 +539,7 @@ fn test_agent_return_shown() {
             },
         ),
     ];
-    let view = project(&events, "test", 0);
+    let view = build_view(&events, "test", 0);
     let turn = match &view.rows[0] {
         TrajectoryRow::Turn(t) => t,
         _ => unreachable!(),
@@ -590,7 +590,7 @@ fn test_agent_unknown_status() {
             },
         ),
     ];
-    let view = project(&events, "test", 0);
+    let view = build_view(&events, "test", 0);
     let turn = match &view.rows[0] {
         TrajectoryRow::Turn(t) => t,
         _ => unreachable!(),
@@ -641,7 +641,7 @@ fn test_model_calls_are_numbered() {
             },
         ),
     ];
-    let view = project(&events, "test", 0);
+    let view = build_view(&events, "test", 0);
     let turn = match &view.rows[0] {
         TrajectoryRow::Turn(t) => t,
         _ => unreachable!(),
@@ -675,7 +675,7 @@ fn test_reply_completes_model_call() {
             },
         ),
     ];
-    let view = project(&events, "test", 0);
+    let view = build_view(&events, "test", 0);
     let turn = match &view.rows[0] {
         TrajectoryRow::Turn(t) => t,
         _ => unreachable!(),
@@ -698,7 +698,7 @@ fn test_turn_opened_by_content() {
             thinking: None,
         },
     )];
-    let view = project(&events, "test", 0);
+    let view = build_view(&events, "test", 0);
     assert_eq!(view.total_turns, 1);
     let turn = match &view.rows[0] {
         TrajectoryRow::Turn(t) => t,
@@ -721,7 +721,7 @@ fn test_content_turn_has_key() {
         },
     );
     let opening_id = opening.id.to_string();
-    let view = project(&[opening], "test", 0);
+    let view = build_view(&[opening], "test", 0);
     match &view.rows[0] {
         TrajectoryRow::Turn(turn) => assert_eq!(
             turn.key.as_str(),
@@ -753,7 +753,7 @@ fn test_tool_turn_is_numbered() {
         },
     );
     let input_id = input.id.to_string();
-    let view = project(&[opening, input], "test", 0);
+    let view = build_view(&[opening, input], "test", 0);
     let turns: Vec<(usize, &str)> = view
         .rows
         .iter()

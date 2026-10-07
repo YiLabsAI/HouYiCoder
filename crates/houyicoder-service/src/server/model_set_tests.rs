@@ -1,4 +1,4 @@
-//! Tests for the ModelSet dispatch handler and the ModelInfo projection:
+//! Tests for the ModelSet dispatch handler and the ModelInfo mapping:
 //! the id swap, the Default sentinel, effort pass-through to the reply, the
 //! persistence outcome, and the catalog rows the pane renders.
 
@@ -314,13 +314,13 @@ async fn test_set_clamps_effort_persist() {
     drop(fs::remove_file(&path));
 }
 
-/// A ModelInfo request projects the settings catalog into the pane snapshot
+/// A ModelInfo request renders the settings catalog into the pane snapshot
 /// in written order, while the live session supplies the selection and the
 /// applied model. A session model the catalog does not list gets a row of its
 /// own, appended so the written order is untouched and the pane has something
 /// to put the check and the cursor on.
 #[tokio::test]
-async fn test_info_projects_catalog_rows() {
+async fn test_info_lists_catalog_rows() {
     let mut fx = Fixture::start(
         r#"{"model":{"id":"qwen3.7-max","catalog":[{"id":"qwen3.7-max","display_name":"Max","description":"most capable"},{"id":"glm-5.2","display_name":"Fable"}]}}"#,
     )

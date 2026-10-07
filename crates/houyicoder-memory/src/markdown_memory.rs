@@ -244,7 +244,7 @@ impl MarkdownMemoryProvider {
     }
 
     /// Rebuild the derived MEMORY index for every root from that root's own
-    /// topic files. The index is a projection: it can always be regenerated
+    /// topic files. The index is derived: it can always be regenerated
     /// from the single-source topic records. Inherent helper called by the
     /// trait rebuild_index override (avoids same-name dispatch ambiguity).
     fn rebuild_index_impl(&self) -> Result<(), MemoryError> {
@@ -291,7 +291,7 @@ impl MarkdownMemoryProvider {
         Ok(fm)
     }
 
-    /// Read the full topic record (frontmatter plus body) and project it
+    /// Read the full topic record (frontmatter plus body) and map it
     /// into a MemoryEntry.
     fn read_topic(&self, path: &Path) -> Result<MemoryEntry, MemoryError> {
         let text = fs::read_to_string(path).map_err(|e| match e.kind() {
@@ -349,8 +349,8 @@ impl MarkdownMemoryProvider {
 }
 
 impl MemoryProvider for MarkdownMemoryProvider {
-    /// Regenerate the derived index from all topic files (full rebuild,
-    /// self-healing projection).
+    /// Regenerate the derived index from all topic files (a full,
+    /// self-healing rebuild).
     fn rebuild_index(&self) -> Result<(), MemoryError> {
         self.rebuild_index_impl()
     }

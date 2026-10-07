@@ -548,7 +548,7 @@ pub enum FrontendRequest {
     /// Fetch a child agent's transcript on demand (expanding a Subagent
     /// fold-group in the parent flow). The child session id is the agentId
     /// the sync spawn path returned; the reply is a one-shot snapshot of the
-    /// child's turn events projected to the same session/update + acpx frame
+    /// child's turn events mapped to the same session/update + acpx frame
     /// stream the parent accumulates. A sync child is terminal by the time
     /// the fold-group renders, so this is a full snapshot, not a live stream.
     ChildTranscript {
@@ -643,7 +643,7 @@ pub enum FrontendRequest {
     Compact,
     Metrics,
     // permission mode and rule set (the TUI renders /mode and /rules without
-    // importing the permission crate; the service projects the engine gate
+    // importing the permission crate; the service maps the engine gate
     // state to the wire form at the boundary).
     PermissionMode,
     PermissionRules,

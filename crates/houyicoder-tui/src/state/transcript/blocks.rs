@@ -24,7 +24,7 @@ pub(crate) enum BlockAnchor {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct BlockId(pub BlockAnchor);
 
-/// One turn-level slice of the frame log, with the lines the projection
+/// One turn-level slice of the frame log, with the lines the fold
 /// derived for it and a revision that ticks when its frames change. Rebuild
 /// reuses a block whose id and revision match, carrying its lines and expand
 /// state forward without re-deriving them.

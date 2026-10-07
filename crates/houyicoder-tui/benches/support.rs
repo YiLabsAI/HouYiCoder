@@ -1,7 +1,7 @@
 //! Corpus generators for the transcript baseline bench. Each generator
 //! returns a deterministic frame log of roughly the requested length, so a
 //! bench run is reproducible across machines and commits. The three classes
-//! cover the projection paths that dominate rebuild and fold cost: short
+//! cover the fold paths that dominate rebuild and fold cost: short
 //! text turns, reasoning-heavy turns, and tool-call-plus-result pairs.
 
 use houyicoder_protocol::frontend::ContentBlock;
@@ -50,7 +50,7 @@ fn tool_result(id: &str, output: Value) -> TranscriptFrame {
 }
 
 /// Alternating short user and agent text lines. Exercises the plain text
-/// projection without tool folding or reasoning summary rows.
+/// fold without tool folding or reasoning summary rows.
 pub fn short_text(n: usize) -> Vec<TranscriptFrame> {
     (0..n)
         .map(|i| {
@@ -64,7 +64,7 @@ pub fn short_text(n: usize) -> Vec<TranscriptFrame> {
 }
 
 /// Reasoning chunks followed by a short agent reply per turn. Each turn is a
-/// thought then a message, so the projection builds summary rows and measures
+/// thought then a message, so the fold builds summary rows and measures
 /// the reasoning path rather than only plain text.
 pub fn reasoning_heavy(n: usize) -> Vec<TranscriptFrame> {
     (0..n)
@@ -86,7 +86,7 @@ pub fn reasoning_heavy(n: usize) -> Vec<TranscriptFrame> {
 
 /// Tool-call plus result pairs. Every other frame starts a tool call and the
 /// next completes it, so the fold scanner finds one group per pair and the
-/// rebuild projects both the call and its result line.
+/// rebuild folds both the call and its result line.
 pub fn tool_heavy(n: usize) -> Vec<TranscriptFrame> {
     (0..n)
         .map(|i| {

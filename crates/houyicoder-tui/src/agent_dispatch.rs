@@ -571,7 +571,7 @@ impl App {
     }
 
     /// Fill a Subagent fold-group with the fetched child transcript,
-    /// projected through the same pipeline as the parent flow; the teammate
+    /// rendered through the same pipeline as the parent flow; the teammate
     /// view swaps too when it shows the same child.
     fn apply_child_transcript(&mut self, child_sid: String, frames: Vec<TranscriptFrame>) {
         // Empty frames mean the child log is missing or produced no durable

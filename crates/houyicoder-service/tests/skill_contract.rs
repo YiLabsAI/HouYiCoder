@@ -101,7 +101,7 @@ async fn test_run_slash_real_body() {
         "base-dir header prepended: {content}"
     );
     // A project-local skill (discovered under the cwd, not a managed or
-    // user source) is untrusted, so the projection frames its body as
+    // user source) is untrusted, so the mapping frames its body as
     // data — the fail-closed trust determination the slash path carries.
     assert!(untrusted, "project-local skill body is untrusted");
     drop(std::fs::remove_dir_all(&tmp));

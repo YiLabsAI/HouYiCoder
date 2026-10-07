@@ -19,7 +19,7 @@ use houyicoder_session::SessionStore;
 use std::sync::Mutex as StdMutex;
 
 /// MemoryProvider stub with an empty memory_root so execute_dream
-/// returns early — enough to cover the reward projection + the
+/// returns early — enough to cover the reward assembly + the
 /// execute_dream(Some) call without spawning a forked agent.
 struct EmptyMemory;
 impl MemoryProvider for EmptyMemory {
@@ -510,7 +510,7 @@ fn test_primary_recorder_drains_changes() {
 async fn test_redundancy_reminder_appends_user() {
     // Two same-tool same-input calls in one batch flag a SameBatch
     // duplicate; observe_redundancy appends a MetaUser reminder so the
-    // next turn's projection serves it to the model as a system-reminder.
+    // next turn's assembly hands it to the model as a system-reminder.
     let runner = runner_with_empty_dream();
     let session = SessionId::new();
     let input = serde_json::json!({"x": 1});

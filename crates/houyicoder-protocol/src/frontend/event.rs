@@ -51,7 +51,7 @@ pub enum FrontendEvent {
         finding_id: String,
     },
     /// One ACP session/update notification, the typed form of a turn event
-    /// the base protocol has a standard variant for. The service projects the
+    /// the base protocol has a standard variant for. The service maps the
     /// engine turn event to this wire type at the boundary; the frontend
     /// renders the turn stream without importing engine types.
     SessionUpdate {

@@ -1,10 +1,10 @@
-//! Tests for the loaded window: tail paging, the projection cache, and the
+//! Tests for the loaded window: tail paging, the view cache, and the
 //! session-level totals that the window must not narrow.
 
 use super::super::reader::{
     DELTA_MAX_BYTES, RESIDENT_PAGES, SessionLogTrajectory, TRAJECTORY_PAGE_TURNS,
 };
-use super::super::view::project;
+use super::super::view::build_view;
 use super::test_support::gated_range_backend;
 use crate::session_history::SessionHistory;
 use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
@@ -39,7 +39,7 @@ fn test_tail_window_limits() {
             },
         ));
     }
-    let view = project(&events, "test", 2);
+    let view = build_view(&events, "test", 2);
     assert_eq!(view.rows.len(), 2, "only the newest window is folded");
     assert_eq!(view.hidden_turns, 3, "and the rest is reported as hidden");
     assert_eq!(
@@ -59,12 +59,12 @@ fn test_tail_window_limits() {
         "the oldest visible turn keeps the number it has in the session"
     );
     // A window wider than the log hides nothing.
-    let all = project(&events, "test", 50);
+    let all = build_view(&events, "test", 50);
     assert_eq!(all.rows.len(), 5);
     assert_eq!(all.total_turns, 5);
     assert_eq!(all.hidden_turns, 0);
     // Zero means no limit, which is how the fold's own tests read a log.
-    let unlimited = project(&events, "test", 0);
+    let unlimited = build_view(&events, "test", 0);
     assert_eq!(unlimited.rows.len(), 5);
     assert_eq!(unlimited.total_turns, 5);
     assert_eq!(unlimited.hidden_turns, 0);
@@ -119,7 +119,7 @@ pub(super) fn pump(reader: &SessionLogTrajectory) -> Arc<TrajectoryView> {
     panic!("the page never landed");
 }
 
-/// The reader reuses its projection while the log has not changed, and rebuilds
+/// The reader reuses its view while the log has not changed, and rebuilds
 /// it when it has: the pane draws every frame, so an unchanged log must not be
 /// re-read and re-folded per draw.
 #[test]
@@ -265,7 +265,7 @@ fn test_session_totals_cover_hidden() {
         events.extend(usage(ts + 1, tin, tout, fail));
     }
 
-    let view = project(&events, "test", 1);
+    let view = build_view(&events, "test", 1);
     assert_eq!(view.rows.len(), 1, "only one turn is shown");
     assert_eq!(view.hidden_turns, 2);
     assert_eq!(
@@ -346,7 +346,7 @@ fn test_subagent_usage_summed() {
         child("child-1", 180_000, 4_000, 170_000),
         child("child-2", 32_000, 1_000, 30_000),
     ];
-    let view = project(&events, "test", 0);
+    let view = build_view(&events, "test", 0);
     let delegated = view
         .subagent_usage
         .expect("two returns produce a delegated row");
@@ -402,7 +402,7 @@ fn test_subagent_usage_parent_unknown() {
             },
         ),
     ];
-    let view = project(&events, "test", 0);
+    let view = build_view(&events, "test", 0);
     assert!(view.subagent_usage.is_some(), "the child is still reported");
     assert_eq!(
         view.tokens_in, None,
@@ -457,7 +457,7 @@ fn test_subagent_usage_unmeasured_unknown() {
             },
         ),
     ];
-    let view = project(&events, "test", 0);
+    let view = build_view(&events, "test", 0);
     assert!(
         view.subagent_usage.is_some(),
         "the delegation is reported even without usage"
@@ -477,7 +477,7 @@ fn test_subagent_usage_absent() {
             text: "just talk".into(),
         },
     )];
-    let view = project(&events, "test", 0);
+    let view = build_view(&events, "test", 0);
     assert!(view.subagent_usage.is_none(), "no children, no row");
 }
 
@@ -507,7 +507,7 @@ fn test_subagent_usage_unknown() {
             },
         ),
     ];
-    let view = project(&events, "test", 0);
+    let view = build_view(&events, "test", 0);
     let delegated = view.subagent_usage.expect("the call is still reported");
     assert_eq!(delegated.calls, 1);
     assert_eq!(delegated.input, 0);
@@ -625,7 +625,7 @@ fn test_disk_turn_numbers_continue() {
 }
 
 /// A settled window costs nothing to draw: the pane draws every frame, so a
-/// frame that re-read the log or re-projected the page would put both on the
+/// frame that re-read the log or re-folded the page would put both on the
 /// draw path.
 #[test]
 fn test_draw_reads_nothing() {

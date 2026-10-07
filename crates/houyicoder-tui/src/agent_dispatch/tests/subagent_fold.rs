@@ -1,10 +1,10 @@
 use super::*;
 
 /// A ChildTranscriptResult reply populates the matching Subagent line's
-/// folded_transcript through the same projection as the parent flow
+/// folded_transcript through the same fold as the parent flow
 /// (isomorphism: the child renders as TranscriptLines, not an opaque blob).
-/// Pins the fill arm + the transcript_from_frames projection so a refactor
-/// that drops the in-place swap or the projection fails here.
+/// Both halves are load-bearing: a refactor that drops the in-place swap
+/// or the transcript_from_frames fold fails here.
 #[test]
 fn test_child_transcript_fills_folded() {
     use crate::records::TranscriptLine;
@@ -42,11 +42,7 @@ fn test_child_transcript_fills_folded() {
         TranscriptLine::Subagent {
             folded_transcript, ..
         } => {
-            assert_eq!(
-                folded_transcript.len(),
-                2,
-                "child frames projected to 2 lines"
-            );
+            assert_eq!(folded_transcript.len(), 2, "child frames render to 2 lines");
             assert!(matches!(folded_transcript[0], TranscriptLine::User(_)));
             assert!(matches!(folded_transcript[1], TranscriptLine::Agent(_)));
         }
@@ -325,7 +321,7 @@ fn test_subagent_cursor_targeting() {
 }
 
 /// A fetched wire child frame converts to the live-frame shape the
-/// transcript projection consumes, so child rows render through the same
+/// transcript fold consumes, so child rows render through the same
 /// pipeline as the parent flow. Pins the From impl at the driver boundary.
 #[test]
 fn test_child_frame_converts() {
@@ -357,7 +353,7 @@ fn test_child_frame_converts() {
 }
 
 /// A parent transcript rebuild must not wipe the fetched child rows from a
-/// Subagent line. The line is frame-derived, so a rebuild re-projects it
+/// Subagent line. The line is frame-derived, so a rebuild re-folds it
 /// empty; the merge carries the old folded_transcript over when the
 /// child_sid matches. Pins the retain semantics the rebuild otherwise
 /// violates.
@@ -383,7 +379,7 @@ fn test_subagent_folded_survives_rebuild() {
         app.transcript
             .iter()
             .any(|l| matches!(l, TranscriptLine::Subagent { .. })),
-        "subagent line projected from the agent-tool result"
+        "subagent line rendered from the agent-tool result"
     );
     // Fill folded_transcript (the on-expand fetch landing).
     app.handle_agent_message(SessionMessage::Response {
@@ -397,7 +393,7 @@ fn test_subagent_folded_survives_rebuild() {
             ))],
         },
     });
-    // A parent rebuild re-projects frames; the fetched child rows survive.
+    // A parent rebuild re-folds frames; the fetched child rows survive.
     app.rebuild_transcript();
     match app
         .transcript

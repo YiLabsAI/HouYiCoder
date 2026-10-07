@@ -216,7 +216,7 @@ async fn test_tool_list_returns_tools() {
 
 /// Skills returns the runner's skill snapshot as a Skills payload; the stub
 /// runner has no registry installed, so the snapshot is empty but the branch
-/// still projects it to the protocol form.
+/// still maps it to the protocol form.
 #[tokio::test]
 async fn test_skills_returns_payload() {
     let payloads = dispatch_responses(plain_server(), vec![FrontendRequest::Skills]).await;
@@ -275,7 +275,7 @@ async fn test_skill_body_reply() {
 }
 
 /// Status builds a full snapshot and attaches the running build version,
-/// proving the server-side status projection ran to completion (env display
+/// proving the server-side status view ran to completion (env display
 /// fields, the auto-memory/auto-dream toggles, and the per-model usage).
 #[tokio::test]
 async fn test_status_builds_snapshot() {
@@ -294,7 +294,7 @@ async fn test_status_builds_snapshot() {
 /// Adding a durable rule then removing it: the add reply carries the new rule
 /// set and the remove reply carries it gone, so the /permissions list stays
 /// in sync without a poll. The index is against the writable rule set, the
-/// same projection the reply ships.
+/// same mapping the reply ships.
 #[tokio::test]
 async fn test_rule_add_then_remove() {
     let rule = PermissionRule {

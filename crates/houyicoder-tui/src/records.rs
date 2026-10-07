@@ -104,11 +104,11 @@ pub enum TranscriptLine {
         status: String,
         /// The untruncated call-line argument (command / path / pattern, or
         /// canonical full JSON for an unknown tool). Precomputed at build time
-        /// from the same tool_invocation projection the verbose view and search
-        /// read, so index-equals-render is structural: a search hit is always
-        /// on text the verbose view shows. The chip uses the truncated status;
-        /// the verbose view and search use this verbatim. Empty for the
-        /// result row (a result has no invocation).
+        /// from the same tool_invocation extraction the verbose view and
+        /// search read, so index-equals-render is structural: a search hit is
+        /// always on text the verbose view shows. The chip uses the truncated
+        /// status; the verbose view and search use this verbatim. Empty for
+        /// the result row (a result has no invocation).
         invocation: String,
         outcome: ToolOutcome,
         call_id: String,
@@ -132,7 +132,7 @@ pub enum TranscriptLine {
     /// The per-turn "thought for" line, carrying the turn's reasoning text
     /// so Ctrl+O can expand it inline below the answer (the
     /// "Thought for 2s (ctrl+o to expand)" shape). reasoning is None when the
-    /// turn emitted no reasoning (no hint, no expand). The frame projection
+    /// turn emitted no reasoning (no hint, no expand). The frame fold
     /// derives this row from the turn's own frames, so the live turn and the
     /// same turn replayed from the log render the same row.
     ThoughtFor {
@@ -176,7 +176,7 @@ pub enum TranscriptLine {
         /// lives in the transcript body). Empty when the call input lacks
         /// a prompt.
         prompt: String,
-        /// The child's transcript projected through the same pipeline.
+        /// The child's transcript folded through the same pipeline.
         /// Empty: the on-expand fetch from the child session log is not
         /// yet wired.
         folded_transcript: Vec<TranscriptLine>,
@@ -239,9 +239,9 @@ pub(crate) fn subagent_line(
 }
 
 /// A teammate transcript the user drilled into from a Subagent fold-group.
-/// While open, the working surface swaps to render the child's projected
+/// While open, the working view swaps to render the child's folded
 /// turns instead of the parent's, with a banner naming the agent. The child
-/// transcript is the same projection the inline fold-group fetch fills, so the
+/// transcript is the same fold the inline fold-group fetch fills, so the
 /// drilled-in view is isomorphic with the expanded fold, not a simplified
 /// list. Opened by Enter on a Subagent line, closed by Shift+Up/Down; Esc
 /// interrupts the viewed child's turn.
@@ -257,7 +257,7 @@ pub struct TeammateView {
     /// The agent's badge color, applied to the banner name. None renders
     /// the default foreground.
     pub color: Option<String>,
-    /// The child's projected transcript. Empty until the fetch returns.
+    /// The child's folded transcript. Empty until the fetch returns.
     pub transcript: Vec<TranscriptLine>,
     /// The child viewport's scroll state, owned here so the parent's scroll
     /// keeps its position across the visit. Entering starts it at the tail;

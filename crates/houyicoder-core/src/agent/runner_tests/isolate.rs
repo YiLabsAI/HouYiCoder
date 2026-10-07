@@ -8,7 +8,7 @@ async fn test_externalizes_large_tool_result() {
     // Isolate stage (PostToolUse): a tool result larger than the threshold
     // is externalized to the CAS at append time. The appended ToolResult
     // event carries a block_ref marker + preview, not the raw content; the
-    // raw is in the CAS; the turn-group projection materializes it on
+    // raw is in the CAS; the turn-group assembly materializes it on
     // demand. This is the wiring that makes the 3-tier retention policy
     // fire on real tool outputs, not just simulated markers in tests.
     use houyicoder_context::{BlockHash, SessionEvent};
@@ -17,7 +17,7 @@ async fn test_externalizes_large_tool_result() {
     let runner = runner_with(p, ToolRegistry::new());
     let session = SessionId::new();
     // Append the matching ToolCall before each result so the pair invariant
-    // (projection debug_assert) holds.
+    // (assembly debug_assert) holds.
     for cid in ["c1", "c2"] {
         runner
             .store()
@@ -92,13 +92,13 @@ async fn test_externalizes_large_tool_result() {
         );
         assert!(output.get("ok").is_some(), "small output content intact");
     }
-    // The turn-group projection materializes the large result (age 0 =>
+    // The turn-group assembly materializes the large result (age 0 =>
     // Materialize tier) so the model sees the real content.
     let items = super::turn_group::assemble_model_input(&events, Some(runner.store().backend()));
     let tr_item = items
         .iter()
         .find(|i| matches!(i, InputItem::ToolResult { call_id, .. } if call_id == "c1"))
-        .expect("c1 result projected");
+        .expect("the isolated call's result assembled");
     if let InputItem::ToolResult { output, .. } = tr_item {
         assert_eq!(output, &big, "materialized output matches the original");
     }

@@ -127,7 +127,7 @@ async fn memory_dispatch(
 
 /// A show request replies with the MemoryShow payload for the key, so the
 /// pane renders the entry on demand. The stub provider holds no entries, so
-/// the detail is None, but the branch still projects the lookup to the
+/// the detail is None, but the branch still maps the lookup to the
 /// protocol form rather than dropping the request.
 #[tokio::test]
 async fn test_show_replies_memory_entry() {
