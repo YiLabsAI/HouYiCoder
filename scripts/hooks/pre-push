@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# houyicoder installed pre-push
+# (make setup-hooks copies this into the hooks directory)
+#
+# Two guards run on a push and neither may be lost:
+#
+#   1. A machine-local guard, when one was already installed at setup time.
+#      setup-hooks moves it beside this file as pre-push.local without
+#      following it, so a symlink keeps pointing at its own source and stays
+#      updatable from there.
+#   2. The repository gate, scripts/pre_push_hook.sh: the coverage gate plus a
+#      per-commit style re-scan of the about-to-publish range.
+#
+# Git feeds the ref list on stdin and stdin can only be read once, so it is
+# captured here and replayed to each guard. A guard that received an empty list
+# would check nothing and still exit zero, so an empty capture is fed from
+# /dev/null instead: an open stdin holding nothing, which is the shape git
+# itself sends for a push that carries no refs.
+#
+# An executable guard runs through its own interpreter, so one written in
+# something other than shell keeps working once this chain stands in front of
+# it. A guard that is not executable runs through shell, which is more than git
+# does — git skips it — on the grounds that a guard somebody left behind is
+# more likely dormant than deliberately disabled.
+set -euo pipefail
+
+hooks_dir=$(cd "$(dirname "$0")" && pwd)
+repo=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+marker='houyicoder installed pre-push'
+local_guard=$hooks_dir/pre-push.local
+refs=$(cat)
+
+# Read the marker off one line rather than out of the whole file. A guard that
+# detects this chain by looking for its marker carries the same string in its
+# body, and a whole-file match would refuse every push on that machine.
+carries_marker() {
+    local file=$1 line
+    [ -f "$file" ] || return 1
+    line=$(sed -n '2p' "$file" 2>/dev/null) || return 1
+    [ "$line" = "# $marker" ]
+}
+
+# A copy of this chain beside itself would run the repository gate twice and
+# then hand the push back to the copy it was called from, which never ends.
+if carries_marker "$local_guard"; then
+    echo "pre-push: $local_guard is another copy of this chain." >&2
+    echo "  Refusing to push rather than run the gate twice or recurse." >&2
+    echo "  Restore the guard that slot held, or remove the copy." >&2
+    exit 1
+fi
+
+run_guard() {
+    guard=$1
+    shift
+    if [ -L "$guard" ] && [ ! -e "$guard" ]; then
+        echo "pre-push: $guard is a symlink with no target, so it cannot run." >&2
+        echo "  Refusing to push — a guard that cannot run is not a guard" >&2
+        echo "  that passed." >&2
+        exit 1
+    fi
+    [ -e "$guard" ] || return 0
+    run=(bash "$guard")
+    if [ -x "$guard" ]; then
+        run=("$guard")
+    fi
+    if [ -n "$refs" ]; then
+        printf '%s\n' "$refs" | "${run[@]}" "$@"
+    else
+        "${run[@]}" "$@" </dev/null
+    fi
+}
+
+run_guard "$local_guard" "$@"
+run_guard "$repo/scripts/pre_push_hook.sh" "$@"

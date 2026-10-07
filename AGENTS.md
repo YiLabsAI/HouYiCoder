@@ -586,6 +586,19 @@ updated, rust-toolchain.toml MSRV current.
   wordlist is present. Install via make setup-hooks. The pre-push hook
   re-scans the about-to-be-published range -- published history is
   immutable, so pre-push is the final gate.
+- setup-hooks runs scripts/hooks/install.sh, which lays down the pre-push
+  chain: a guard already occupying the hook slot moves beside it as
+  pre-push.local, where a symlink keeps pointing at its own source, and runs
+  first. An occupant that ends by delegating to the repository gate is
+  replaced rather than kept, because the chain runs that gate itself and
+  keeping both would run it twice per push. Git hands a pre-push hook its ref
+  list on stdin once, so the chain captures and replays it: a guard that read
+  an empty list would check nothing and still pass. The installer classifies
+  every occupant before touching it and verifies what it wrote, because a hook
+  slot that looks installed and is not runs no gate at all and reports
+  success. The hooks directory belongs to the repository rather than to one
+  worktree, so installing from a worktree changes every checkout of it. Both
+  scripts carry their own tests in the script-tests gate step.
 - A rule that lives only in a reviewer's memory is not enforced: when this
   guide and a standing ruling disagree, the ruling wins and this file is
   corrected in the same commit.

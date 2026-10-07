@@ -112,6 +112,7 @@ SCRIPT_TESTS=(
   test_module_dead_code.py
   test_run_tests_timeout.py
   test_harness_routing.py
+  test_pre_push_chain.py
 )
 for script_test in "${SCRIPT_TESTS[@]}"; do
   run_check "script-tests:$script_test" python3 "scripts/$script_test"

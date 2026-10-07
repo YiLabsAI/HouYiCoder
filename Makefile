@@ -59,15 +59,7 @@ setup-nextest:
 	@./scripts/ensure_nextest.sh
 
 setup-hooks:
-	@hooks_dir=$$(git rev-parse --git-common-dir)/hooks; \
-	printf '#!/usr/bin/env bash\nset -euo pipefail\nrepo=$$(git rev-parse --show-toplevel 2>/dev/null || pwd)\n[ -f "$$repo/scripts/pre_commit_hook.sh" ] || exit 0\nexec bash "$$repo/scripts/pre_commit_hook.sh"\n' > "$$hooks_dir/pre-commit"; \
-	chmod +x "$$hooks_dir/pre-commit"; \
-	printf '#!/usr/bin/env bash\nset -euo pipefail\nrepo=$$(git rev-parse --show-toplevel 2>/dev/null || pwd)\n[ -f "$$repo/scripts/pre_push_hook.sh" ] || exit 0\nexec bash "$$repo/scripts/pre_push_hook.sh"\n' > "$$hooks_dir/pre-push"; \
-	chmod +x "$$hooks_dir/pre-push"; \
-	chmod +x scripts/pre_push_hook.sh scripts/pre_commit_hook.sh
-	@echo "pre-commit hook installed (file-type-narrowed make check; no-op if absent)."
-	@echo "pre-push hook installed (coverage gate, skips make check; no-op if absent)."
-	@echo "Remove: rm $$(git rev-parse --git-common-dir)/hooks/pre-commit $$(git rev-parse --git-common-dir)/hooks/pre-push"
+	@bash scripts/hooks/install.sh
 
 format:
 	$(CARGO) fmt --all
