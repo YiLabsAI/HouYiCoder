@@ -268,11 +268,23 @@ review findings.
 
 ### Bulk edit protocol
 When editing many files via a script (sed or python regex across the tree):
-back up first (git stash or cp -r) so it is reversible; dry-run on one file
-and review the diff before applying broadly; verify after (grep, cargo
-check, make check). Prefer targeted edits over blanket regex. Blanket
-regex without a dry-run is a known cause of avoidable breakage (mangled
-indent, leftover residue, hit string literals).
+make the edit reversible first, dry-run on one file and review the diff
+before applying broadly, and verify after (grep, cargo check, make check).
+Prefer targeted edits over blanket regex. Blanket regex without a dry-run is
+a known cause of avoidable breakage (mangled indent, leftover residue, hit
+string literals).
+
+The reversible form is a temporary commit, not a stash. Inside a worktree the
+stash stack is shared with every other checkout of the repository and with
+any session running beside this one, so a bare git stash pop can restore
+somebody else's work onto this tree. Commit the state first, run the edit,
+and git reset --hard back to that commit when the result is wrong.
+
+Prose does not compile, so none of the verifiers above can see a damaged
+comment. A regex that rewrites comments can leave a sentence that reads as
+nothing, a word the style rules forbid, or a claim that no longer matches the
+code underneath it, and cargo check stays green through all three. Read every
+line the edit adds, not only the lines it was aimed at.
 
 ### Code size & complexity (refactor triggers)
 - **Function**: clippy::too_many_lines fires >100 lines → refactor/split.
