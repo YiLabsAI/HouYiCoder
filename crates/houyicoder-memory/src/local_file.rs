@@ -1,17 +1,17 @@
 //! LocalFileBackend: persistent ContextBackend for v0. One directory per
 //! session under a root: <root>/<session>/log.jsonl (append-only, 0o600) +
-//! <root>/<session>/checkpoints/<cp>.json. File mode 0o600, dir 0o700 (Unix).
-//! Reads and writes resolve a session's directory from the id in either
-//! spelling: the uuid name, or the ULID name a store written before that
-//! format used.
+//! <root>/<session>/checkpoints/<cp>.json + <root>/<session>/log.index (a
+//! derived offset index). File mode 0o600, dir 0o700 (Unix). Reads and writes
+//! resolve a session's directory from the id in either spelling: the uuid
+//! name, or the ULID name a store written before that format used.
 //!
 //! Main-chain dedup by event id via an in-memory seen set, mirroring
 //! InMemoryBackend. The set is cold on first append to a session: one
 //! streaming read of the existing log builds it, then each append is an
 //! O(1) set lookup. Without the cache every append re-read the whole log
 //! (O(n) per append, O(n^2) over a session -- a 500MB log pays 500MB per
-//! write). Checkpoints are per-file so list_checkpoints scans filenames,
-//! not contents.
+//! write). That same cold pass builds the offset index. Checkpoints are
+//! per-file so list_checkpoints scans filenames, not contents.
 //!
 //! v0 uses sync std::fs inside Box::pin(async) (consistent with InMemoryBackend).
 //! This blocks the async runtime on IO; a production impl switches to tokio::fs
@@ -31,23 +31,27 @@ use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use houyicoder_async::PFut;
 use houyicoder_context::{
     BlockHash, CheckpointId, CheckpointManifest, ContextBackend, ContextError, EventId,
-    LenientRead, LogRangeRead, ReverseRead, SessionId, SessionLogEntry,
-    session_class::{LOG_FILE, session_dir},
+    LenientRead, LogRangeRead, ReverseRead, SAMPLE_INTERVAL_BYTES, SessionId, SessionLogEntry,
+    session_class::{INDEX_FILE, LOG_FILE, session_dir},
 };
 
 use crate::sha256_hex;
 
+mod log_index;
+use log_index::SessionWriteState;
+
+#[cfg(test)]
+mod log_index_tests;
 #[cfg(test)]
 mod window;
 
 pub struct LocalFileBackend {
     root: PathBuf,
-    /// Per-session seen-id cache so append dedup is an O(1) set lookup,
-    /// not an O(n) full-log rescan. Cold on first append to a session:
-    /// load_seen_set builds it from the existing log once, like
-    /// InMemoryBackend.seen.
-    seen: Mutex<HashMap<SessionId, HashSet<EventId>>>,
-    /// Number of times load_seen_set read the log for dedup. A warm cache
+    /// Per-session write state so append dedup is an O(1) set lookup, not an
+    /// O(n) full-log rescan. Cold on the first append to a session, built from
+    /// the existing log once and held for the life of the backend.
+    write_state: Mutex<HashMap<SessionId, SessionWriteState>>,
+    /// Number of times load_write_state read the log for dedup. A warm cache
     /// keeps this at one per session; a regression to per-append rescans
     /// would push it to one per append. Test-only observability hook.
     read_count: AtomicUsize,
@@ -59,7 +63,7 @@ impl LocalFileBackend {
     pub fn new(root: PathBuf) -> Self {
         Self {
             root,
-            seen: Mutex::new(HashMap::new()),
+            write_state: Mutex::new(HashMap::new()),
             read_count: AtomicUsize::new(0),
         }
     }
@@ -71,37 +75,25 @@ impl LocalFileBackend {
         self.read_count.load(Ordering::Relaxed)
     }
 
-    /// Build the seen-id set for a session by streaming its log line by
-    /// line (avoids reading a 500MB log into one heap allocation). Called
-    /// once on the first append to a cold session; cached in self.seen.
+    /// Build a session's write state by streaming its log line by line
+    /// (avoids reading a 500MB log into one heap allocation). Called once
+    /// on the first append to a cold session; cached in self.write_state.
     /// Increments read_count so a per-append rescan regression is visible.
-    fn load_seen_set(&self, session: SessionId) -> HashSet<EventId> {
+    fn load_write_state(&self, session: SessionId) -> SessionWriteState {
         self.read_count.fetch_add(1, Ordering::Relaxed);
-        let log = self.log_path(session);
-        let Ok(f) = fs::File::open(&log) else {
-            return HashSet::new();
-        };
-        let reader = BufReader::new(f);
-        let mut set = HashSet::new();
-        for line in reader.lines() {
-            let Ok(line) = line else {
-                break;
-            };
-            if line.is_empty() {
-                continue;
-            }
-            // Parse only to read the id; a corrupt line is skipped (a
-            // later read_log surfaces it as Corrupt). Tolerating here keeps
-            // a single bad line from blocking the whole session's dedup.
-            if let Ok(event) = serde_json::from_str::<SessionLogEntry>(&line) {
-                set.insert(event.id);
-            }
-        }
-        set
+        SessionWriteState::cold_scan(
+            &self.log_path(session),
+            self.index_path(session),
+            SAMPLE_INTERVAL_BYTES,
+        )
     }
 
     pub(crate) fn log_path(&self, session: SessionId) -> PathBuf {
         session_dir(&self.root, session).join(LOG_FILE)
+    }
+
+    fn index_path(&self, session: SessionId) -> PathBuf {
+        session_dir(&self.root, session).join(INDEX_FILE)
     }
 
     fn checkpoint_dir(&self, session: SessionId) -> PathBuf {
@@ -143,20 +135,19 @@ impl LocalFileBackend {
         let session = event.session;
         Self::ensure_dir(&session_dir(&self.root, session))?;
         let log = self.log_path(session);
-        // Dedup: O(1) set lookup, not an O(n) full-log rescan. The set is
-        // cold on the first append to a session -- load_seen_set builds it
-        // once from the existing log (the resume-replay case: a fresh
-        // backend over a prior session pays one read, then each replayed
-        // event is a set hit). Held through the write so a failed write
-        // does not pollute the set (the id is inserted only after the
-        // line lands). v0 serializes appends, so holding the lock through
-        // the blocking write is acceptable.
-        let mut seen = self.seen.lock().expect("seen mutex poisoned");
-        let set = seen
+        let id = event.id;
+        // Dedup, and the offset index that has to advance with the log. The lock
+        // is held through the blocking write so a failure cannot leave the state
+        // claiming a record that did not land, and so no second append
+        // interleaves between extending the log and accounting for it.
+        let mut states = self.write_state.lock().expect("write state poisoned");
+        let state = states
             .entry(session)
-            .or_insert_with(|| self.load_seen_set(session));
-        if set.contains(&event.id) {
-            return Ok(event.id); // main-chain dedup: no-op.
+            .or_insert_with(|| self.load_write_state(session));
+        if state.already_written(id) {
+            // A no-op extends neither the log nor the index: an entry for a
+            // record that never landed puts every later offset out of step.
+            return Ok(id);
         }
         let mut json = serde_json::to_string(&event)
             .map_err(|_| ContextError::Corrupt("event failed to serialize".into()))?;
@@ -166,13 +157,23 @@ impl LocalFileBackend {
         #[cfg(unix)]
         opts.mode(0o600);
         let mut f = opts.open(&log).map_err(|_| ContextError::Io)?;
-        f.write_all(json.as_bytes()).map_err(|_| ContextError::Io)?;
-        // fsync so a crash after the append does not lose the event (the OS
-        // page cache is not durable). The block_put + checkpoint writes fsync
-        // too so the manifest never references a block that is not on disk.
-        f.sync_all().map_err(|_| ContextError::Io)?;
-        set.insert(event.id);
-        Ok(event.id)
+        let mut landed = f.write_all(json.as_bytes());
+        // fsync so a crash after the append does not lose the event: the page
+        // cache is not durable. The block and checkpoint writes fsync too, so a
+        // manifest never references a block that is not on disk.
+        if landed.is_ok() {
+            landed = f.sync_all();
+        }
+        if landed.is_err() {
+            // A write that reports failure may still have left bytes behind, so
+            // the length the index accounts for is no longer the log's. Keep
+            // what it published -- those offsets were real -- and stop there
+            // rather than compute every later one from a length that is wrong.
+            state.log_write_failed();
+            return Err(ContextError::Io);
+        }
+        state.record_durable(id, json.len() as u64);
+        Ok(id)
     }
 
     fn read_log(&self, session: SessionId) -> Result<Vec<SessionLogEntry>, ContextError> {
@@ -328,8 +329,8 @@ impl LocalFileBackend {
     /// the JSONL for the block_ref field — a coarse text scan, not a typed
     /// parse, since the reclaim pass walks every session + a typed parse of every event
     /// is needless work for a maintenance pass.
-    fn referenced_block_hashes(&self) -> std::collections::HashSet<String> {
-        let mut refs = std::collections::HashSet::new();
+    fn referenced_block_hashes(&self) -> HashSet<String> {
+        let mut refs = HashSet::new();
         let Ok(sessions) = fs::read_dir(&self.root) else {
             return refs;
         };

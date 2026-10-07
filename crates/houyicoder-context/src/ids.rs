@@ -99,6 +99,19 @@ impl EventId {
     pub fn from_display_string(s: &str) -> Option<Self> {
         s.parse::<Ulid>().ok().map(Self)
     }
+
+    /// The id as sixteen bytes, most significant first, so byte order and id
+    /// order agree. A fixed-width binary form lets an index hold an id without
+    /// paying the 26 characters its text spelling needs.
+    pub fn to_bytes(self) -> [u8; 16] {
+        self.0.to_bytes()
+    }
+
+    /// The id those sixteen bytes encode. Total: every byte string is some id,
+    /// so a reader of a fixed-width field has no parse failure to handle.
+    pub fn from_bytes(bytes: [u8; 16]) -> Self {
+        Self(Ulid::from_bytes(bytes))
+    }
 }
 
 /// The unique identity of one memory-change notification.

@@ -17,6 +17,11 @@ use crate::{SessionDescriptor, SessionEvent, SessionId, SessionLogEntry, Session
 pub const LOG_FILE: &str = "log.jsonl";
 /// The descriptor a session's directory holds.
 pub const DESCRIPTOR_FILE: &str = "session.json";
+/// The offset index a session's directory may hold beside its log. Derived from
+/// the log and rebuildable from it, so a directory without one is complete
+/// rather than broken, and a directory holding a bad one loses speed and
+/// nothing else.
+pub const INDEX_FILE: &str = "log.index";
 /// How much of a log's head is read to find the delegation a child wrote
 /// there. A delegation record holds two ids, a type name, and its own
 /// second, so this bound is generous for what it looks for and small enough
