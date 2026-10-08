@@ -78,7 +78,10 @@ ACTIVE_OWNERS = {
         # PermissionPaneState owner: a tab switch or input-mode entry replaces
         # the whole value and resets the cursor and buffer, which the flat
         # fields could only carry as a comment.
-        "fields": 117,
+        # The hooks pane drill level and selection cursor became one
+        # HooksPaneState owner, so enter and return step the level and clamp
+        # the cursor as one value.
+        "fields": 116,
         "mut_app": 44,
     },
     "crates/houyicoder-tui/src/last_row_keys.rs:LastRowKeys": {
@@ -105,6 +108,13 @@ ACTIVE_OWNERS = {
         # input-mode entry resets the cursor and buffer, so the four move as
         # one value rather than four fields a caller must reset in step.
         "fields": 4,
+    },
+    "crates/houyicoder-tui/src/hooks_state.rs:HooksPaneState": {
+        # The hooks pane browse state: the drill level (0 = event list, 1 =
+        # the selected event detail) and the selection cursor in the
+        # level-0 list. One owner because enter and return step the level and
+        # clamp the cursor together, never one without the other.
+        "fields": 2,
     },
     "crates/houyicoder-tui/src/state/transcript/view.rs:TranscriptViewState": {
         # The transcript view's own state, one value per view: the whole-vec

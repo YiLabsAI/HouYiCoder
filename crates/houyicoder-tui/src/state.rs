@@ -30,6 +30,7 @@ use crate::composition::WorktreeEntry;
 use crate::composition::app as test_app;
 use crate::console_state::ConsoleState;
 use crate::history::HistoryNav;
+use crate::hooks_state::HooksPaneState;
 use crate::input::InputField;
 use crate::last_row_keys::LastRowKeys;
 use crate::list_pane_state::ListPaneState;
@@ -446,12 +447,11 @@ pub struct App {
     pub skill_picker_open: bool,
     /// Selected index in the @ skill-picker.
     pub skill_picker_sel: Cell<usize>,
-    /// The /hooks pane drill-down level: 0 = event list, 1 = selected event
-    /// detail (registered hooks + description). A
-    /// select-event → view-hook browse pattern.
-    pub hooks_level: Cell<u8>,
-    /// The selected event index in the /hooks Level-0 list.
-    pub hooks_sel: Cell<usize>,
+    /// The hooks pane state: the drill-down level (0 = event list, 1 = the
+    /// selected event detail) and the selected event index. Pub(crate) so the
+    /// key handler and render path step a field directly; the level and the
+    /// selection move together on enter and return.
+    pub(crate) hooks_pane: HooksPaneState,
     /// The oldest frame the scrollback has loaded, in absolute frame
     /// coordinates, or usize::MAX before any load. It is the view's requested
     /// boundary; the transcript's resident front is the memory boundary, and a

@@ -327,27 +327,27 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
             app.delete_queued_at_cursor();
         }
         KeyCode::Esc if app.pane == Pane::Hooks => {
-            if app.hooks_level.get() > 0 {
-                app.hooks_level.set(0);
+            if app.hooks_pane.level.get() > 0 {
+                app.hooks_pane.level.set(0);
             } else {
                 app.pane = Pane::Transcript;
             }
         }
-        KeyCode::Up if app.pane == Pane::Hooks && app.hooks_level.get() == 0 => {
-            let cur = app.hooks_sel.get();
-            app.hooks_sel.set(cur.saturating_sub(1));
+        KeyCode::Up if app.pane == Pane::Hooks && app.hooks_pane.level.get() == 0 => {
+            let cur = app.hooks_pane.sel.get();
+            app.hooks_pane.sel.set(cur.saturating_sub(1));
         }
-        KeyCode::Down if app.pane == Pane::Hooks && app.hooks_level.get() == 0 => {
+        KeyCode::Down if app.pane == Pane::Hooks && app.hooks_pane.level.get() == 0 => {
             let len = app
                 .hook_entries
                 .iter()
                 .filter(|h| h.source == "framework")
                 .count();
-            let next = app.hooks_sel.get() + 1;
-            app.hooks_sel.set(next.min(len.saturating_sub(1)));
+            let next = app.hooks_pane.sel.get() + 1;
+            app.hooks_pane.sel.set(next.min(len.saturating_sub(1)));
         }
-        KeyCode::Enter if app.pane == Pane::Hooks && app.hooks_level.get() == 0 => {
-            app.hooks_level.set(1);
+        KeyCode::Enter if app.pane == Pane::Hooks && app.hooks_pane.level.get() == 0 => {
+            app.hooks_pane.level.set(1);
         }
         // '/' opens the slash palette only when no typed permission sub-mode
         // (add rule / add directory) is active; an AddDir path typically

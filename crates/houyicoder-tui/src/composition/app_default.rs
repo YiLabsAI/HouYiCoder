@@ -9,6 +9,7 @@ use std::sync::Arc;
 use houyicoder_protocol::frontend::SessionId;
 
 use crate::history::HistoryNav;
+use crate::hooks_state::HooksPaneState;
 use crate::input::InputField;
 use crate::last_row_keys::LastRowKeys;
 use crate::list_pane_state::ListPaneState;
@@ -151,8 +152,7 @@ pub fn app() -> App {
         skill_picker_open: false,
         skills_pane: SkillsPaneState::default(),
         skill_picker_sel: Cell::new(0),
-        hooks_level: Cell::new(0),
-        hooks_sel: Cell::new(0),
+        hooks_pane: HooksPaneState::default(),
         loaded_from_frame: Cell::new(usize::MAX),
         model_picker: ModelPickerState::default(),
         status_tab: StatusTab::default(),

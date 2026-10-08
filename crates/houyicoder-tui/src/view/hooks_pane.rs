@@ -24,7 +24,7 @@ pub(crate) fn draw_content(f: &mut Frame, inner: Rect, app: &App) {
             Constraint::Length(1),
         ])
         .split(inner);
-    let level = app.hooks_level.get();
+    let level = app.hooks_pane.level.get();
     let title = if level == 0 { "Hooks" } else { "Hook detail" };
     f.render_widget(
         Paragraph::new(Line::from(vec![Span::styled(
@@ -94,7 +94,7 @@ fn draw_event_list(f: &mut Frame, area: Rect, app: &App) {
         .collect();
     let mut order: Vec<usize> = (0..events.len()).collect();
     order.sort_by_key(|&i| counts[i] == 0);
-    let sel = app.hooks_sel.get().min(events.len().saturating_sub(1));
+    let sel = app.hooks_pane.sel.get().min(events.len().saturating_sub(1));
     let items: Vec<ListItem> = order
         .iter()
         .map(|&i| {
@@ -135,7 +135,7 @@ fn draw_event_list(f: &mut Frame, area: Rect, app: &App) {
 fn draw_event_detail(f: &mut Frame, area: Rect, app: &App) {
     let mut events = framework_events(app);
     events.sort_by_key(|e| configured_count(&app.hook_entries, &e.name) == 0);
-    let sel = app.hooks_sel.get().min(events.len().saturating_sub(1));
+    let sel = app.hooks_pane.sel.get().min(events.len().saturating_sub(1));
     if events.is_empty() {
         return;
     }

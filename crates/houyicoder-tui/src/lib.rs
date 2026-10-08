@@ -18,6 +18,7 @@ pub mod evidence;
 pub mod fold;
 pub mod git_op;
 pub mod history;
+mod hooks_state;
 pub mod input;
 pub mod keys;
 mod last_row_keys;
