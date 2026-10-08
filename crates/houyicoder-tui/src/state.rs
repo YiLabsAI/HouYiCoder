@@ -50,6 +50,7 @@ use crate::review_queue::ReviewQueue;
 use crate::run_state::{RunProgress, RunState};
 use crate::selection::{ClipboardWriter, Selection};
 use crate::session::SessionConnection;
+use crate::skill_picker_state::SkillPickerState;
 use crate::skills_state::SkillsPaneState;
 use crate::todo_view::TodoState;
 use crate::transcript::snapshot::TranscriptSnapshot;
@@ -439,10 +440,9 @@ pub struct App {
     /// Session-scoped disabled skills (toggled via t in the detail view).
     /// Persisted disable is a follow-up (settings wire).
     pub skill_disabled: HashSet<String>,
-    /// Whether the @ skill-picker overlay is open (typing @ in the input).
-    pub skill_picker_open: bool,
-    /// Selected index in the @ skill-picker.
-    pub skill_picker_sel: Cell<usize>,
+    /// The @ skill-picker overlay state: the open flag and its list cursor.
+    /// Opening resets the cursor to zero, so the two move as one value.
+    pub(crate) skill_picker: SkillPickerState,
     /// The hooks pane state: the drill-down level (0 = event list, 1 = the
     /// selected event detail) and the selected event index. Pub(crate) so the
     /// key handler and render path step a field directly; the level and the

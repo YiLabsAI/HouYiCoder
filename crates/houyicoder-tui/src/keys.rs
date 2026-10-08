@@ -80,7 +80,7 @@ pub fn handle_working(app: &mut App, k: KeyEvent) {
         palette::handle_palette(app, k);
         return;
     }
-    if app.skill_picker_open && skill_picker::handle(app, k) {
+    if app.skill_picker.open && skill_picker::handle(app, k) {
         return; // consumed by picker (Up/Down/Enter/Esc/Backspace)
     }
     // Esc while viewing a teammate only interrupts the viewed child's
@@ -128,8 +128,8 @@ pub fn handle_working(app: &mut App, k: KeyEvent) {
     // picker for free-form @skill:name input. Selecting from the picker
     // overwrites the input with the full @skill:name.
     if k.code == KeyCode::Char('@') && app.input.is_empty() && !pane_replaces_input(app.pane) {
-        app.skill_picker_open = true;
-        app.skill_picker_sel.set(0);
+        app.skill_picker.open = true;
+        app.skill_picker.sel.set(0);
         // If skills haven't been queried yet (the user hasn't opened
         // /skills), fetch them now so the picker isn't empty.
         if app.skill_entries.is_empty()

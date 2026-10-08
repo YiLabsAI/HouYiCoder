@@ -47,6 +47,7 @@ pub mod run_state;
 pub mod scroll;
 pub mod selection;
 pub mod session;
+mod skill_picker_state;
 mod skills_state;
 pub mod state;
 pub mod terminal_title;

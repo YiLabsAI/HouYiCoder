@@ -88,7 +88,10 @@ ACTIVE_OWNERS = {
         # pane width) became one LayoutFeedback owner: both are written by the
         # draw pass and read by the count and layout paths, so they travel as
         # the render's measured bounds rather than two loose cells.
-        "fields": 114,
+        # The @ skill-picker overlay's open flag and list cursor became one
+        # SkillPickerState owner, so opening the picker resets the cursor to
+        # zero as one value rather than two flat fields a caller sets in step.
+        "fields": 113,
         "mut_app": 44,
     },
     "crates/houyicoder-tui/src/last_row_keys.rs:LastRowKeys": {
@@ -121,6 +124,13 @@ ACTIVE_OWNERS = {
         # the selected event detail) and the selection cursor in the
         # level-0 list. One owner because enter and return step the level and
         # clamp the cursor together, never one without the other.
+        "fields": 2,
+    },
+    "crates/houyicoder-tui/src/skill_picker_state.rs:SkillPickerState": {
+        # The @ skill-picker overlay state: the open flag and the list cursor.
+        # One owner because opening the picker resets the cursor to zero and
+        # selecting or closing clears it, so the two move as one value rather
+        # than two flat fields a caller must reset in step.
         "fields": 2,
     },
     "crates/houyicoder-tui/src/paste.rs:PendingPaste": {

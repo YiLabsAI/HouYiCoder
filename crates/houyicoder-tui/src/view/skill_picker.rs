@@ -75,7 +75,8 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         .collect();
     let mut state = ListState::default();
     state.select(Some(
-        app.skill_picker_sel
+        app.skill_picker
+            .sel
             .get()
             .min(filtered.len().saturating_sub(1)),
     ));
@@ -209,7 +210,7 @@ mod tests {
             user_invocable: true,
             usage: None,
         }];
-        app.skill_picker_open = true;
+        app.skill_picker.open = true;
         let out = crate::test_harness::render_text(&app, 80, 24);
         assert!(out.contains("alpha"), "skill name in picker: {out}");
         assert!(out.contains("Enter to insert"), "nav hint in picker: {out}");
@@ -220,7 +221,7 @@ mod tests {
     fn test_picker_empty_state() {
         let mut app = crate::composition::app();
         app.screen = crate::state::Screen::Working;
-        app.skill_picker_open = true;
+        app.skill_picker.open = true;
         let out = crate::test_harness::render_text(&app, 80, 24);
         assert!(
             out.contains("no skills match"),
@@ -253,7 +254,7 @@ mod tests {
                 usage: None,
             },
         ];
-        app.skill_picker_open = true;
+        app.skill_picker.open = true;
         app.input.push('@');
         app.input.push('b');
         let out = crate::test_harness::render_text(&app, 80, 24);

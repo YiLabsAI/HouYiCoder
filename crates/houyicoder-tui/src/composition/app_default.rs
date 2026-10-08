@@ -23,6 +23,7 @@ use crate::render_cache::RenderCache;
 use crate::resume_picker::SessionPickerState;
 use crate::run_state::RunState;
 use crate::selection::SystemClipboard;
+use crate::skill_picker_state::SkillPickerState;
 use crate::skills_state::SkillsPaneState;
 use crate::state::history_read::HistoryReads;
 use crate::state::transcript::Transcript;
@@ -148,9 +149,8 @@ pub fn app() -> App {
         skill_entries: Vec::new(),
 
         skill_disabled: HashSet::new(),
-        skill_picker_open: false,
         skills_pane: SkillsPaneState::default(),
-        skill_picker_sel: Cell::new(0),
+        skill_picker: SkillPickerState::default(),
         hooks_pane: HooksPaneState::default(),
         loaded_from_frame: Cell::new(usize::MAX),
         model_picker: ModelPickerState::default(),

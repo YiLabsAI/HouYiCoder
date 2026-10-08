@@ -116,7 +116,7 @@ fn draw_working(f: &mut Frame, app: &App) {
     if let Some(i) = layout.slots.overlay {
         if app.palette.open {
             palette::draw(f, app, outer[i]);
-        } else if app.skill_picker_open {
+        } else if app.skill_picker.open {
             skill_picker::draw(f, app, outer[i]);
         } else {
             input_bar::draw_inline_search(f, outer[i], app);
@@ -238,7 +238,7 @@ fn build_working_layout(
         None
     };
     let mut overlay: Option<usize> = None;
-    if app.palette.open || app.skill_picker_open {
+    if app.palette.open || app.skill_picker.open {
         constraints.push(Constraint::Length(10));
         overlay = Some(constraints.len() - 1);
     }

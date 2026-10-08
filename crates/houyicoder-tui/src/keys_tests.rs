@@ -482,10 +482,10 @@ fn test_skill_picker_opens() {
         user_invocable: true,
         usage: None,
     }];
-    assert!(!app.skill_picker_open);
+    assert!(!app.skill_picker.open);
     handle_working(&mut app, key(KeyCode::Char('@')));
-    assert!(app.skill_picker_open, "@ opens the picker");
-    assert_eq!(app.skill_picker_sel.get(), 0, "cursor resets to 0");
+    assert!(app.skill_picker.open, "@ opens the picker");
+    assert_eq!(app.skill_picker.sel.get(), 0, "cursor resets to 0");
     assert!(
         app.input.value().contains('@'),
         "@ pushed into input so free-form typing survives"
@@ -499,7 +499,7 @@ fn test_skill_picker_blocked() {
     app.input.push('x');
     handle_working(&mut app, key(KeyCode::Char('@')));
     assert!(
-        !app.skill_picker_open,
+        !app.skill_picker.open,
         "@ must not open when input non-empty"
     );
     assert!(
@@ -535,9 +535,9 @@ fn test_skill_picker_nav() {
     ];
     handle_working(&mut app, key(KeyCode::Char('@')));
     handle_working(&mut app, key(KeyCode::Down));
-    assert_eq!(app.skill_picker_sel.get(), 1, "Down moves picker cursor");
+    assert_eq!(app.skill_picker.sel.get(), 1, "Down moves picker cursor");
     handle_working(&mut app, key(KeyCode::Up));
-    assert_eq!(app.skill_picker_sel.get(), 0, "Up moves back");
+    assert_eq!(app.skill_picker.sel.get(), 0, "Up moves back");
 }
 
 /// Esc closes the picker without inserting anything.
@@ -555,9 +555,9 @@ fn test_skill_picker_esc() {
         usage: None,
     }];
     handle_working(&mut app, key(KeyCode::Char('@')));
-    assert!(app.skill_picker_open);
+    assert!(app.skill_picker.open);
     handle_working(&mut app, key(KeyCode::Esc));
-    assert!(!app.skill_picker_open, "Esc closes the picker");
+    assert!(!app.skill_picker.open, "Esc closes the picker");
     assert!(app.input.is_empty(), "no text inserted on Esc");
 }
 
@@ -578,7 +578,7 @@ fn test_skill_picker_enter_submit() {
     }];
     handle_working(&mut app, key(KeyCode::Char('@')));
     handle_working(&mut app, key(KeyCode::Enter));
-    assert!(!app.skill_picker_open, "Enter closes the picker");
+    assert!(!app.skill_picker.open, "Enter closes the picker");
     assert!(
         app.input.value().contains("@skill:alpha"),
         "@skill:alpha inserted into the input box"
@@ -596,7 +596,7 @@ fn test_skill_picker_enter_empty() {
     let mut app = working_app();
     handle_working(&mut app, key(KeyCode::Char('@')));
     handle_working(&mut app, key(KeyCode::Enter));
-    assert!(!app.skill_picker_open, "Enter closes on empty list");
+    assert!(!app.skill_picker.open, "Enter closes on empty list");
     assert!(
         app.input.value().contains('@'),
         "lone @ stays in input when no skill selected"
@@ -619,9 +619,9 @@ fn test_skill_picker_char() {
         usage: None,
     }];
     handle_working(&mut app, key(KeyCode::Char('@')));
-    assert!(app.skill_picker_open);
+    assert!(app.skill_picker.open);
     handle_working(&mut app, key(KeyCode::Char('x')));
-    assert!(app.skill_picker_open, "picker stays open for filter typing");
+    assert!(app.skill_picker.open, "picker stays open for filter typing");
     assert!(
         app.input.value().contains('x'),
         "char lands in input as filter"
@@ -644,7 +644,7 @@ fn test_skill_picker_backspace_close() {
     }];
     handle_working(&mut app, key(KeyCode::Char('@')));
     handle_working(&mut app, key(KeyCode::Backspace));
-    assert!(!app.skill_picker_open, "backspace on lone @ closes picker");
+    assert!(!app.skill_picker.open, "backspace on lone @ closes picker");
     assert!(app.input.is_empty(), "input cleared");
 }
 
@@ -665,7 +665,7 @@ fn test_skill_picker_colon_closes() {
     handle_working(&mut app, key(KeyCode::Char('@')));
     handle_working(&mut app, key(KeyCode::Char('s')));
     handle_working(&mut app, key(KeyCode::Char(':')));
-    assert!(!app.skill_picker_open, "colon closes picker for free-form");
+    assert!(!app.skill_picker.open, "colon closes picker for free-form");
 }
 
 /// Filter narrows the list; Down+Enter selects from the filtered list
@@ -698,7 +698,7 @@ fn test_skill_picker_filter_select() {
     handle_working(&mut app, key(KeyCode::Char('b')));
     // Filter narrows to just "beta". Enter should select beta.
     handle_working(&mut app, key(KeyCode::Enter));
-    assert!(!app.skill_picker_open, "Enter closes picker");
+    assert!(!app.skill_picker.open, "Enter closes picker");
     assert!(
         app.input.value().contains("@skill:beta"),
         "filtered selection inserts beta: {}",

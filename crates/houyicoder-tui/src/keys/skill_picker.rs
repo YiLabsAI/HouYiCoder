@@ -20,26 +20,26 @@ use crate::view::skill_picker::filtered_skills;
 pub(super) fn handle(app: &mut App, k: KeyEvent) -> bool {
     match k.code {
         KeyCode::Up => {
-            let cur = app.skill_picker_sel.get();
-            app.skill_picker_sel.set(cur.saturating_sub(1));
+            let cur = app.skill_picker.sel.get();
+            app.skill_picker.sel.set(cur.saturating_sub(1));
             true
         }
         KeyCode::Down => {
             let len = filtered_skills(app).len();
             if len > 0 {
-                let next = app.skill_picker_sel.get() + 1;
-                app.skill_picker_sel.set(next.min(len.saturating_sub(1)));
+                let next = app.skill_picker.sel.get() + 1;
+                app.skill_picker.sel.set(next.min(len.saturating_sub(1)));
             }
             true
         }
         KeyCode::Enter => {
             let ordered = filtered_skills(app);
-            if let Some(entry) = ordered.get(app.skill_picker_sel.get()) {
+            if let Some(entry) = ordered.get(app.skill_picker.sel.get()) {
                 let text = format!("@skill:{}", entry.name);
-                app.skill_picker_open = false;
+                app.skill_picker.open = false;
                 app.input.set(text);
             } else {
-                app.skill_picker_open = false;
+                app.skill_picker.open = false;
             }
             true
         }
@@ -47,13 +47,13 @@ pub(super) fn handle(app: &mut App, k: KeyEvent) -> bool {
             if app.input.value() == "@" {
                 app.input.clear();
             }
-            app.skill_picker_open = false;
+            app.skill_picker.open = false;
             true
         }
         KeyCode::Backspace => {
             if app.input.value() == "@" {
                 app.input.clear();
-                app.skill_picker_open = false;
+                app.skill_picker.open = false;
                 true
             } else {
                 false
@@ -64,13 +64,13 @@ pub(super) fn handle(app: &mut App, k: KeyEvent) -> bool {
         // free-form, not a filter query. Skill names are ^[a-z0-9-]+$
         // (no colons), so a colon is an unambiguous namespace signal.
         KeyCode::Char(':') => {
-            app.skill_picker_open = false;
+            app.skill_picker.open = false;
             false
         }
         // Tab closes the picker and falls through to cycle_pane, matching
         // the pre-picker behavior where Tab always cycles panes.
         KeyCode::Tab => {
-            app.skill_picker_open = false;
+            app.skill_picker.open = false;
             false
         }
         _ => false,
