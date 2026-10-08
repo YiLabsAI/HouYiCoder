@@ -172,20 +172,6 @@ pub struct App {
     pub cached_turn_ids: RefCell<Vec<Option<RowId>>>,
     pub cached_pre_rendered: RefCell<Vec<Option<Line<'static>>>>,
     pub search: SearchState,
-    /// The byte offset where the loaded window starts. For the byte-%
-    /// position indicator (divided by frozen_file_size).
-    pub window_anchor: u64,
-    /// The byte offset past the loaded window's last line (== file size for
-    /// the tail window). Scrolling newer loads a window starting here.
-    pub window_end: u64,
-    /// The log byte size frozen at search-view enter. Window reads stay in
-    /// [0, frozen) so events appended after enter are invisible (snapshot
-    /// consistency: the window does not chase the growing tail).
-    pub frozen_file_size: u64,
-    /// Corrupt lines skipped in the current window (separate from the
-    /// enter-time skip count the corpus holds, so window-mode chrome shows
-    /// the per-window count).
-    pub window_skipped: usize,
     /// True while the G full-scan builds the event-byte-offset index (one
     /// chunk at a time keeps the UI responsive; Esc interrupts). The loop
     /// advances the build while this is set, off the draw path.

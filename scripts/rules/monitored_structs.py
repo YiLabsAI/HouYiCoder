@@ -53,16 +53,20 @@ ACTIVE_OWNERS = {
         # re-reads. The search corpus (frozen lines plus load metadata)
         # joined the view state next, taking four flat fields: enter and
         # exit are transactions rather than assignments a caller repeats.
-        "fields": 139,
+        # The byte-window (history window) joined beside it, taking the
+        # anchor, end, frozen-size, and per-window skip fields: a window
+        # navigation step is now one replace call, not three assignments.
+        "fields": 135,
         "mut_app": 44,
     },
     "crates/houyicoder-tui/src/state/transcript/view.rs:TranscriptViewState": {
         # The transcript view's own state, one value per view: the whole-vec
-        # scroll, the search window's scroll, the window flag, and the search
-        # corpus today; the search query state and the four expansion sets
-        # arrive with their readers. The dispatch (which scroll is live) is a
-        # method here, so callers cannot re-derive it from the flag.
-        "fields": 4,
+        # scroll, the search window's scroll, the window flag, the search
+        # corpus, and the byte-window (history window) today; the search
+        # query state and the four expansion sets arrive with their readers.
+        # The dispatch (which scroll is live) is a method here, so callers
+        # cannot re-derive it from the flag.
+        "fields": 5,
     },
     "crates/houyicoder-tui/src/state/transcript.rs:Transcript": {
         # The transcript facts: frame log, resident budget counters, derived

@@ -220,11 +220,12 @@ fn test_large_log_opens_mode() {
         "window mode is the real path, not a degrade"
     );
     assert_eq!(
-        app.frozen_file_size, total,
+        app.frozen_file_size(),
+        total,
         "frozen at enter, so later appends stay outside the window"
     );
-    assert_eq!(app.window_anchor, 19 * 1024 * 1024);
-    assert_eq!(app.window_end, total, "tail window reaches EOF");
+    assert_eq!(app.window_anchor(), 19 * 1024 * 1024);
+    assert_eq!(app.window_end(), total, "tail window reaches EOF");
     assert!(
         app.search.matches.len() == 1,
         "search found the tail needle in the window"
@@ -463,16 +464,16 @@ fn test_exit_clears_window_state() {
     }));
     app.enter_search_view("tail");
     assert!(app.window_browsing(), "window mode entered");
-    assert_eq!(app.frozen_file_size, 20 * 1024 * 1024);
+    assert_eq!(app.frozen_file_size(), 20 * 1024 * 1024);
     app.exit_search_view();
     assert!(!app.window_browsing(), "exit clears window mode");
     assert!(
         app.transcript_view.search_corpus.lines().is_empty(),
         "exit frees the window vec"
     );
-    assert_eq!(app.frozen_file_size, 0, "frozen boundary cleared");
-    assert_eq!(app.window_anchor, 0);
-    assert_eq!(app.window_end, 0);
+    assert_eq!(app.frozen_file_size(), 0, "frozen boundary cleared");
+    assert_eq!(app.window_anchor(), 0);
+    assert_eq!(app.window_end(), 0);
 }
 
 /// In byte-window mode, g/G/PgUp/PgDn scroll the window_scroll (not
@@ -642,14 +643,14 @@ fn test_walks_older_across_windows() {
         index_calls: std::sync::atomic::AtomicU32::new(0),
     }));
     app.enter_search_view("needle");
-    assert_eq!(app.window_anchor, 200, "opens at the tail window");
+    assert_eq!(app.window_anchor(), 200, "opens at the tail window");
     // n: tail window's match is the only one -> load the prior window. The
     // middle window has no match -> scan continues to the oldest window.
     crate::app::handle_key(
         &mut app,
         KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE),
     );
-    assert_eq!(app.window_anchor, 0, "n loaded the oldest window");
+    assert_eq!(app.window_anchor(), 0, "n loaded the oldest window");
     let out = render_text(&app, 80, 24);
     assert!(
         out.contains("old needle"),
@@ -707,12 +708,12 @@ fn test_walks_newer_across_windows() {
         &mut app,
         KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE),
     );
-    assert_eq!(app.window_anchor, 0, "n reached the oldest window");
+    assert_eq!(app.window_anchor(), 0, "n reached the oldest window");
     crate::app::handle_key(
         &mut app,
         KeyEvent::new(KeyCode::Char('N'), KeyModifiers::NONE),
     );
-    assert_eq!(app.window_anchor, 200, "N walked back to the tail window");
+    assert_eq!(app.window_anchor(), 200, "N walked back to the tail window");
     let out = render_text(&app, 80, 24);
     assert!(
         out.contains("new needle"),

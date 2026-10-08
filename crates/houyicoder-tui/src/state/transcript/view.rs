@@ -43,6 +43,10 @@ pub(crate) struct TranscriptViewState {
     /// it mutates the query state, a disjoint field borrow a method call
     /// cannot express.
     pub(crate) search_corpus: SearchCorpus,
+    /// The byte-window the search view browses when the log is over the
+    /// threshold: the loaded window's byte range, the frozen file size that
+    /// bounds further reads, and the per-window corrupt-line skip count.
+    history_window: HistoryWindow,
 }
 
 impl TranscriptViewState {
@@ -109,6 +113,55 @@ impl TranscriptViewState {
     /// offset would be garbage.
     pub(crate) fn reset_window_scroll(&mut self) {
         self.window_scroll = TranscriptScroll::default();
+    }
+
+    /// Byte offset where the loaded window starts.
+    pub(crate) fn window_anchor(&self) -> u64 {
+        self.history_window.anchor
+    }
+
+    /// Byte offset past the loaded window's last line.
+    pub(crate) fn window_end(&self) -> u64 {
+        self.history_window.end
+    }
+
+    /// The log byte size frozen at enter; window reads stay in its bounds.
+    pub(crate) fn frozen_file_size(&self) -> u64 {
+        self.history_window.frozen_file_size
+    }
+
+    /// Corrupt lines skipped in the current window.
+    pub(crate) fn window_skipped(&self) -> usize {
+        self.history_window.skipped
+    }
+
+    /// Enter byte-window mode: freeze the file size and load the first window.
+    pub(crate) fn enter_history_window(
+        &mut self,
+        frozen: u64,
+        anchor: u64,
+        end: u64,
+        skipped: usize,
+    ) {
+        self.history_window.frozen_file_size = frozen;
+        self.history_window.anchor = anchor;
+        self.history_window.end = end;
+        self.history_window.skipped = skipped;
+    }
+
+    /// Replace the window for a navigation step; the frozen size stays.
+    pub(crate) fn replace_history_window(&mut self, anchor: u64, end: u64, skipped: usize) {
+        self.history_window.anchor = anchor;
+        self.history_window.end = end;
+        self.history_window.skipped = skipped;
+    }
+
+    /// Exit: clear the window and the frozen boundary.
+    pub(crate) fn exit_history_window(&mut self) {
+        self.history_window.anchor = 0;
+        self.history_window.end = 0;
+        self.history_window.frozen_file_size = 0;
+        self.history_window.skipped = 0;
     }
 }
 
@@ -214,6 +267,28 @@ impl SearchCorpus {
     }
 }
 
+/// The byte-window the search view browses when the log is over the
+/// threshold: the loaded window's byte range, the frozen file size that
+/// bounds further reads, and the per-window corrupt-line skip count. One
+/// owner so enter, exit, and window navigation are transactions rather than
+/// four assignments a caller repeats in lockstep.
+#[derive(Debug, Default)]
+struct HistoryWindow {
+    /// Byte offset where the loaded window starts. For the byte-% position.
+    anchor: u64,
+    /// Byte offset past the loaded window's last line (== file size for the
+    /// tail window). Scrolling newer loads a window starting here.
+    end: u64,
+    /// The log byte size frozen at enter. Window reads stay in [0, frozen)
+    /// so events appended after enter are invisible (the window does not
+    /// chase the growing tail).
+    frozen_file_size: u64,
+    /// Corrupt lines skipped in the current window (separate from the
+    /// enter-time count the corpus holds, so window-mode chrome shows the
+    /// per-window count).
+    skipped: usize,
+}
+
 /// App's delegation to the transcript view-state owner. The owner field is
 /// pub(crate), but these keep the call site short and give the reader's
 /// position a stable name that does not change when fields move into the
@@ -253,5 +328,48 @@ impl App {
     /// Reset the within-window scroll for a fresh window load.
     pub(crate) fn reset_window_scroll(&mut self) {
         self.transcript_view.reset_window_scroll();
+    }
+
+    /// Byte offset where the loaded window starts.
+    pub(crate) fn window_anchor(&self) -> u64 {
+        self.transcript_view.window_anchor()
+    }
+
+    /// Byte offset past the loaded window's last line.
+    pub(crate) fn window_end(&self) -> u64 {
+        self.transcript_view.window_end()
+    }
+
+    /// The log byte size frozen at enter; window reads stay in its bounds.
+    pub(crate) fn frozen_file_size(&self) -> u64 {
+        self.transcript_view.frozen_file_size()
+    }
+
+    /// Corrupt lines skipped in the current window.
+    pub(crate) fn window_skipped(&self) -> usize {
+        self.transcript_view.window_skipped()
+    }
+
+    /// Enter byte-window mode: freeze the file size and load the first window.
+    pub(crate) fn enter_history_window(
+        &mut self,
+        frozen: u64,
+        anchor: u64,
+        end: u64,
+        skipped: usize,
+    ) {
+        self.transcript_view
+            .enter_history_window(frozen, anchor, end, skipped);
+    }
+
+    /// Replace the window for a navigation step; the frozen size stays.
+    pub(crate) fn replace_history_window(&mut self, anchor: u64, end: u64, skipped: usize) {
+        self.transcript_view
+            .replace_history_window(anchor, end, skipped);
+    }
+
+    /// Exit: clear the window and the frozen boundary.
+    pub(crate) fn exit_history_window(&mut self) {
+        self.transcript_view.exit_history_window();
     }
 }

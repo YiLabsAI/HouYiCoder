@@ -76,10 +76,7 @@ impl App {
                     .search_corpus
                     .enter_over_window(w.lines, log_bytes, w.skipped);
                 self.set_window_browsing(true);
-                self.frozen_file_size = log_bytes;
-                self.window_anchor = w.start_offset;
-                self.window_end = w.next_offset;
-                self.window_skipped = w.skipped;
+                self.enter_history_window(log_bytes, w.start_offset, w.next_offset, w.skipped);
                 self.reset_window_scroll();
             }
             Some(Loaded::Under { load }) => {
@@ -118,10 +115,7 @@ impl App {
         self.search.focus = 0;
         self.transcript_view.search_corpus.exit();
         self.set_window_browsing(false);
-        self.window_anchor = 0;
-        self.window_end = 0;
-        self.frozen_file_size = 0;
-        self.window_skipped = 0;
+        self.exit_history_window();
         self.reset_window_scroll();
         self.indexing.set(false);
         self.indexed_bytes.set(0);
@@ -247,7 +241,7 @@ impl App {
         // Scan up to BOUND windows older; focus the NEWEST match in the first
         // window that has one (the closest older match).
         const BOUND: usize = 64;
-        let mut anchor = self.window_anchor;
+        let mut anchor = self.window_anchor();
         for _ in 0..BOUND {
             if anchor == 0 {
                 return; // BOF: no older window.
@@ -258,9 +252,7 @@ impl App {
             }
             let new_anchor = w.start_offset;
             self.transcript_view.search_corpus.replace_lines(w.lines);
-            self.window_anchor = new_anchor;
-            self.window_end = w.next_offset;
-            self.window_skipped = w.skipped;
+            self.replace_history_window(new_anchor, w.next_offset, w.skipped);
             self.reset_window_scroll();
             self.run_search();
             if !self.search.matches.is_empty() {
@@ -293,9 +285,9 @@ impl App {
             return;
         };
         const BOUND: usize = 64;
-        let mut cursor = self.window_end;
+        let mut cursor = self.window_end();
         for _ in 0..BOUND {
-            if cursor >= self.frozen_file_size {
+            if cursor >= self.frozen_file_size() {
                 return; // EOF: no newer window.
             }
             let w = snap.window(cursor, crate::scroll::WINDOW_MAX_BYTES);
@@ -304,9 +296,7 @@ impl App {
             }
             let new_end = w.next_offset;
             self.transcript_view.search_corpus.replace_lines(w.lines);
-            self.window_anchor = w.start_offset;
-            self.window_end = new_end;
-            self.window_skipped = w.skipped;
+            self.replace_history_window(w.start_offset, new_end, w.skipped);
             self.reset_window_scroll();
             self.run_search();
             if !self.search.matches.is_empty() {

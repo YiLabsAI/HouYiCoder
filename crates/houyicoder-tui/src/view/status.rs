@@ -346,12 +346,12 @@ pub fn draw_scroll_status(f: &mut Frame, area: Rect, app: &App) {
                 // file size. No line/total -- the window rows are one screen,
                 // not the whole log.
                 let pct = app
-                    .window_anchor
+                    .window_anchor()
                     .checked_mul(100)
-                    .and_then(|p| p.checked_div(app.frozen_file_size))
+                    .and_then(|p| p.checked_div(app.frozen_file_size()))
                     .unwrap_or(0);
-                let skipped = if app.window_skipped > 0 {
-                    format!("  · {} lines skipped", app.window_skipped)
+                let skipped = if app.window_skipped() > 0 {
+                    format!("  · {} lines skipped", app.window_skipped())
                 } else {
                     String::new()
                 };
