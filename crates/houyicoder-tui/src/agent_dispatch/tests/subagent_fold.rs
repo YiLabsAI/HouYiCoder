@@ -262,7 +262,8 @@ fn test_subagent_toggle_stale_key() {
     });
     // Forge a stale stash: row 0 carries a child id the transcript no longer
     // holds (a post-rebuild drift the resolver must tolerate).
-    app.last_row_fold_keys
+    app.last_row_keys
+        .fold_keys
         .borrow_mut()
         .push(Some("ghost".into()));
     assert!(

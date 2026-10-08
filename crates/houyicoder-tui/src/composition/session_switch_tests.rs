@@ -393,7 +393,8 @@ fn test_clears_session_local_state() {
     app.selection.anchor = Some((0, 5));
     app.selection.is_dragging = true;
     app.last_all_rows.borrow_mut().push((0, "stale row".into()));
-    app.last_row_callids
+    app.last_row_keys
+        .callids
         .borrow_mut()
         .push(Some("stale-call".into()));
     // Sanity: the residue is there before the swap.
@@ -415,8 +416,8 @@ fn test_clears_session_local_state() {
         "last_all_rows cleared"
     );
     assert!(
-        app.last_row_callids.borrow().is_empty(),
-        "last_row_callids cleared"
+        app.last_row_keys.callids.borrow().is_empty(),
+        "last_row_keys.callids cleared"
     );
 }
 

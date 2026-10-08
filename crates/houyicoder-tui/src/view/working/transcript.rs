@@ -152,10 +152,10 @@ pub(super) fn draw_transcript(f: &mut Frame, area: Rect, app: &App) {
     app.last_transcript_width.set(inner.width);
     *app.last_transcript_rows.borrow_mut() =
         visible.iter().map(|(t, s, _)| (*t, s.clone())).collect();
-    *app.last_row_callids.borrow_mut() = visible_callids;
-    *app.last_row_fold_keys.borrow_mut() = visible_fold_keys;
-    *app.last_row_expanded_group.borrow_mut() = visible_expanded_group;
-    *app.last_row_turn_ids.borrow_mut() = visible_turn_ids;
+    *app.last_row_keys.callids.borrow_mut() = visible_callids;
+    *app.last_row_keys.fold_keys.borrow_mut() = visible_fold_keys;
+    *app.last_row_keys.expanded_group.borrow_mut() = visible_expanded_group;
+    *app.last_row_keys.turn_ids.borrow_mut() = visible_turn_ids;
     f.render_widget(Block::default().borders(Borders::NONE), area);
 
     let q = if app.transcript_view.search.active {
@@ -181,7 +181,7 @@ pub(super) fn draw_transcript(f: &mut Frame, area: Rect, app: &App) {
     };
     let user_bg = Style::new().bg(Color::Indexed(238));
     let dim = Style::new().fg(Color::DarkGray);
-    let exp_grp = app.last_row_expanded_group.borrow();
+    let exp_grp = app.last_row_keys.expanded_group.borrow();
     let exp_groups = &app.transcript_view.expanded.fold_groups;
     let subagents = &app.transcript_view.expanded.subagents;
     let spin_elapsed = app.run_started().map(|t| t.elapsed()).unwrap_or_default();

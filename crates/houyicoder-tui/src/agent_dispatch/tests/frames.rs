@@ -676,10 +676,11 @@ fn test_notice_click_toggles_fold() {
             scope: MemoryChangeScope::Auto,
         }],
     }));
-    // Render to publish last_row_fold_keys, what a click resolves against.
+    // Render to publish last_row_keys.fold_keys, what a click resolves against.
     let _rendered = render_text(&app, 100, 24);
     let ri = app
-        .last_row_fold_keys
+        .last_row_keys
+        .fold_keys
         .borrow()
         .iter()
         .position(|k| k.as_deref() == Some("mg#0"))
@@ -719,7 +720,8 @@ fn test_thought_keep_affordance() {
     );
     let _rendered = render_text(&app, 100, 24);
     let ri = app
-        .last_row_turn_ids
+        .last_row_keys
+        .turn_ids
         .borrow()
         .iter()
         .position(|t| t.as_ref() == Some(&RowId::from("t1")))

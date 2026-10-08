@@ -31,6 +31,7 @@ use crate::composition::app as test_app;
 use crate::console_state::ConsoleState;
 use crate::history::HistoryNav;
 use crate::input::InputField;
+use crate::last_row_keys::LastRowKeys;
 use crate::list_pane_state::ListPaneState;
 use crate::memory_state::MemoryPaneState;
 use crate::notifications::NotificationState;
@@ -364,10 +365,11 @@ pub struct App {
     /// Per-line render cache (content hash + width + expand key; indices are
     /// unstable — transcript rebuilds each batch). Count + render share it.
     pub render_cache: RefCell<RenderCache>,
-    /// Parallel to last_transcript_rows: the result call_id a visible row
-    /// belongs to (Some on a summary row) so Ctrl+O maps the anchor's row to
-    /// the result to toggle, without changing the (u8, String) copy tuple.
-    pub last_row_callids: RefCell<Vec<Option<String>>>,
+    /// The per-row keys of the last emitted visible row set: the call id,
+    /// fold-group key, expanded-group mark, and turn id each visible row
+    /// carries, parallel to the rows. Pub(crate) so the click and Ctrl+O
+    /// handlers and the draw pass reach a vector directly.
+    pub(crate) last_row_keys: LastRowKeys,
     /// State parked for views that are not on screen: the sessions switched
     /// away from, the children stepped out of, and the parent's own sets
     /// while a child view covers it. The visible view's four open-row sets
@@ -383,27 +385,6 @@ pub struct App {
     /// Verbose render: force results, reasoning, and fold groups expanded
     /// with untruncated chips. Set in the search view, cleared on exit.
     pub verbose: bool,
-    /// Parallel to last_row_callids: the fold-group key a visible row belongs
-    /// to (Some on a collapsed summary / expanded collapse-hint row) so Ctrl+O
-    /// and click can toggle the fold group under the selection anchor.
-    pub last_row_fold_keys: RefCell<Vec<Option<String>>>,
-    /// Parallel to last_row_fold_keys but marks ONLY rows inside an EXPANDED
-    /// fold group (the expanded summary header + every body row the group
-    /// emits). Consumed by the click-release handler (click anywhere in an
-    /// expanded block collapses it) and the render path (gray bg on the
-    /// expanded block). Kept separate from last_row_fold_keys so Ctrl+O's
-    /// result-first contract stays intact: Ctrl+O reads fold_keys (None on
-    /// body rows) and expands the result under the cursor, never collapses the
-    /// group from a body row.
-    pub last_row_expanded_group: RefCell<Vec<Option<String>>>,
-    /// Parallel to last_row_fold_keys: the ThoughtFor turn_id a visible row
-    /// carries (Some on a "Thought for Ns" header row, None elsewhere) so the
-    /// click handler maps a click's row straight to the turn_id to toggle,
-    /// without counting Nth-visible-then-Nth-in-full-transcript (which
-    /// misaligned when ThoughtFor rows scrolled out of the viewport — the
-    /// visible count skipped off-screen rows while the full-transcript count
-    /// did not, so clicking a visible row toggled an off-screen turn).
-    pub last_row_turn_ids: RefCell<Vec<Option<RowId>>>,
     /// Side table for large pastes that were replaced by placeholder tokens
     /// in the input box; expanded back to full text on submit.
     pub pasted: PasteStore,

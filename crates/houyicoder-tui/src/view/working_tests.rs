@@ -171,7 +171,8 @@ fn test_fold_collapse_expand_toggle() {
 
     // --- Ctrl+O on summary row expands ---
     let fold_ri = app
-        .last_row_fold_keys
+        .last_row_keys
+        .fold_keys
         .borrow()
         .iter()
         .position(|k| k.is_some())
@@ -222,7 +223,8 @@ fn test_fold_collapse_expand_toggle() {
     app.transcript_view.expanded.fold_groups.clear();
     render_text(&app, 80, 24);
     let fold_ri = app
-        .last_row_fold_keys
+        .last_row_keys
+        .fold_keys
         .borrow()
         .iter()
         .position(|k| k.is_some())
@@ -255,7 +257,8 @@ fn test_fold_collapse_expand_toggle() {
     // --- Click on collapse hint toggles back to collapsed ---
     render_text(&app, 80, 24);
     let fold_ri = app
-        .last_row_fold_keys
+        .last_row_keys
+        .fold_keys
         .borrow()
         .iter()
         .position(|k| k.is_some())
@@ -477,13 +480,14 @@ fn test_fold_expand_one_only() {
     // Find the first fold-summary row (group A, key=c1) and click it.
     let rect = app.transcript_rect.get();
     let fold_ri = app
-        .last_row_fold_keys
+        .last_row_keys
+        .fold_keys
         .borrow()
         .iter()
         .position(|k| k.is_some())
         .expect("a fold row should exist");
     assert_eq!(
-        app.last_row_fold_keys.borrow()[fold_ri].as_deref(),
+        app.last_row_keys.fold_keys.borrow()[fold_ri].as_deref(),
         Some("c1#0"),
         "first fold row should be group A (key c1#0)"
     );
@@ -916,9 +920,13 @@ fn test_child_rows_hide_handles() {
         "only the delegation head advertises a toggle: {out}"
     );
     assert!(
-        app.last_row_turn_ids.borrow().iter().all(|t| t.is_none()),
+        app.last_row_keys
+            .turn_ids
+            .borrow()
+            .iter()
+            .all(|t| t.is_none()),
         "no child row publishes a reasoning handle: {:?}",
-        app.last_row_turn_ids.borrow()
+        app.last_row_keys.turn_ids.borrow()
     );
 }
 

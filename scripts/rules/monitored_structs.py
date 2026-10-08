@@ -63,9 +63,21 @@ ACTIVE_OWNERS = {
         # the corpus so the run path holds the corpus slice while it
         # mutates the query, a disjoint field borrow a method cannot.
         # The unseen-since cursor joined beside it: the scroll-away
-        # snapshot the new-message count reads against the tail.
-        "fields": 129,
+        # snapshot the new-message count reads against the tail. The four
+        # per-row key vectors of the last emitted visible row set (call id,
+        # fold-group key, expanded-group mark, turn id) became one LastRowKeys
+        # owner beside render_cache, so the draw pass writes and the click and
+        # Ctrl+O handlers read one set that cannot drift out of length sync.
+        "fields": 126,
         "mut_app": 44,
+    },
+    "crates/houyicoder-tui/src/last_row_keys.rs:LastRowKeys": {
+        # The four per-row key vectors of the last emitted visible row set:
+        # the call id, fold-group key, expanded-group mark, and turn id each
+        # visible row carries, parallel arrays the click handler and the draw
+        # pass read by visible-row index. One owner so the four are written and
+        # read as one set, never drifted out of sync.
+        "fields": 4,
     },
     "crates/houyicoder-tui/src/state/transcript/view.rs:TranscriptViewState": {
         # The transcript view's own state, one value per view: the whole-vec

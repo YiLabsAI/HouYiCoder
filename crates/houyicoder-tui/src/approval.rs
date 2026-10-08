@@ -60,7 +60,7 @@ impl App {
     pub(crate) fn toggle_focused_result_expand(&mut self) {
         let target = self
             .anchor_visible_row()
-            .and_then(|ri| self.last_row_callids.borrow().get(ri).cloned().flatten())
+            .and_then(|ri| self.last_row_keys.callid_at(ri))
             .or_else(|| {
                 self.transcript.lines().iter().rev().find_map(|l| match l {
                     crate::records::TranscriptLine::Tool { name, call_id, .. }
@@ -86,7 +86,7 @@ impl App {
     pub(crate) fn toggle_focused_fold_expand(&mut self) -> bool {
         let key = self
             .anchor_visible_row()
-            .and_then(|ri| self.last_row_fold_keys.borrow().get(ri).cloned().flatten());
+            .and_then(|ri| self.last_row_keys.fold_key_at(ri));
         let Some(key) = key else {
             return false;
         };
@@ -188,7 +188,7 @@ impl App {
     /// no cursor walk, no fallback. Returns true when the row was a
     /// delegation head.
     pub(crate) fn toggle_subagent_expand_at_row(&mut self, ri: usize) -> bool {
-        let Some(child_sid) = self.last_row_fold_keys.borrow().get(ri).cloned().flatten() else {
+        let Some(child_sid) = self.last_row_keys.fold_key_at(ri) else {
             return false;
         };
         // The row stash carries only the fold key, not the loaded flag, so
@@ -370,13 +370,13 @@ impl App {
     pub(crate) fn toggle_thinking_expand_at_row(&mut self, ri: usize) -> bool {
         use crate::records::TranscriptLine;
         // Resolve the click row straight to the ThoughtFor turn_id published
-        // by the draw pass (parallel to last_row_fold_keys). The old path
+        // by the draw pass (parallel to last_row_keys.fold_keys). The old path
         // counted "Nth visible expandable ThoughtFor" then matched it to
         // "Nth in the FULL transcript" — when ThoughtFor rows scrolled out
         // of the viewport the two counts diverged (the visible count skipped
         // off-screen rows, the full count did not), so clicking a visible
         // row toggled an off-screen turn ("point at bottom, expand at top").
-        let turn_id = self.last_row_turn_ids.borrow().get(ri).cloned().flatten();
+        let turn_id = self.last_row_keys.turn_id_at(ri);
         let Some(turn_id) = turn_id else {
             return false;
         };
@@ -409,7 +409,7 @@ impl App {
     /// the click handler, which knows the row from the mouse y coordinate).
     /// No-op when the row is not a fold row.
     pub(crate) fn toggle_fold_at_row(&mut self, ri: usize) {
-        let key = self.last_row_fold_keys.borrow().get(ri).cloned().flatten();
+        let key = self.last_row_keys.fold_key_at(ri);
         if let Some(key) = key
             && !self.transcript_view.expanded.fold_groups.remove(&key)
         {
@@ -430,10 +430,8 @@ impl App {
             return false;
         };
         let key = self
-            .last_row_expanded_group
-            .borrow()
-            .get(ri)
-            .and_then(|f| f.clone())
+            .last_row_keys
+            .expanded_group_at(ri)
             .filter(|k| self.transcript_view.expanded.fold_groups.contains(k));
         let Some(key) = key else {
             return false;

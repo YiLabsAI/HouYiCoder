@@ -69,10 +69,10 @@ pub(super) fn draw_history_window(f: &mut Frame, area: Rect, app: &App) {
     app.last_transcript_width.set(inner.width);
     *app.last_transcript_rows.borrow_mut() =
         visible.iter().map(|(t, s, _)| (*t, s.clone())).collect();
-    *app.last_row_callids.borrow_mut() = visible_callids;
-    *app.last_row_fold_keys.borrow_mut() = visible_fold_keys;
-    *app.last_row_expanded_group.borrow_mut() = visible_expanded_group;
-    *app.last_row_turn_ids.borrow_mut() = visible_turn_ids;
+    *app.last_row_keys.callids.borrow_mut() = visible_callids;
+    *app.last_row_keys.fold_keys.borrow_mut() = visible_fold_keys;
+    *app.last_row_keys.expanded_group.borrow_mut() = visible_expanded_group;
+    *app.last_row_keys.turn_ids.borrow_mut() = visible_turn_ids;
     f.render_widget(Block::default().borders(Borders::NONE), area);
 
     let q = if app.transcript_view.search.active {

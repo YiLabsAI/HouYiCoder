@@ -442,7 +442,7 @@ fn test_click_thought_no_duration() {
 /// transcript" — with t1 off-screen the visible count was 1 (only t2) but the
 /// full-transcript count matched t1 (the first), so a click on the visible
 /// bottom row expanded the off-screen top row ("point at bottom, expand at
-/// top"). The fix publishes last_row_turn_ids so the click resolves straight
+/// top"). The fix publishes last_row_keys.turn_ids so the click resolves straight
 /// to the visible row's turn_id.
 #[test]
 fn test_click_thoughtfor_scrolled_off() {
@@ -612,7 +612,8 @@ fn app_with_fold_group() -> crate::state::App {
 /// selection now, so the summary text is drag-selectable).
 fn expand_first_group(app: &mut crate::state::App) -> String {
     let fold_ri = app
-        .last_row_fold_keys
+        .last_row_keys
+        .fold_keys
         .borrow()
         .iter()
         .position(|k| k.is_some())
@@ -628,7 +629,7 @@ fn expand_first_group(app: &mut crate::state::App) -> String {
     "c1#0".to_string()
 }
 
-/// Map a visible fold-row index (into last_row_fold_keys) back to its
+/// Map a visible fold-row index (into last_row_keys.fold_keys) back to its
 /// last_all_rows index so screen_y can place it on screen.
 fn fold_ri_to_all_rows_index(app: &crate::state::App, fold_ri: usize) -> usize {
     let top = app.whole_scroll().top_offset();
@@ -756,7 +757,8 @@ fn test_drag_fold_summary_copies() {
     });
     let _out = render_text(&app, 80, 24);
     let fold_ri = app
-        .last_row_fold_keys
+        .last_row_keys
+        .fold_keys
         .borrow()
         .iter()
         .position(|k| k.is_some())
@@ -797,7 +799,8 @@ fn test_expanded_block_paints_gray() {
     let mut app = app_with_fold_group();
     // Collapsed: the summary row is dim, NOT gray.
     let summary_ri = app
-        .last_row_fold_keys
+        .last_row_keys
+        .fold_keys
         .borrow()
         .iter()
         .position(|k| k.is_some())

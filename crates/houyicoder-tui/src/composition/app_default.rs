@@ -10,6 +10,7 @@ use houyicoder_protocol::frontend::SessionId;
 
 use crate::history::HistoryNav;
 use crate::input::InputField;
+use crate::last_row_keys::LastRowKeys;
 use crate::list_pane_state::ListPaneState;
 use crate::memory_state::MemoryPaneState;
 use crate::notifications::NotificationState;
@@ -120,14 +121,11 @@ pub fn app() -> App {
         last_approval_rows: RefCell::new(Vec::new()),
         approval_selection: Selection::default(),
         render_cache: RefCell::new(RenderCache::default()),
-        last_row_callids: RefCell::new(Vec::new()),
+        last_row_keys: LastRowKeys::default(),
         parked_view_states: ParkedViewStates::default(),
         teammate_view: None,
         fleet: Default::default(),
         verbose: false,
-        last_row_fold_keys: RefCell::new(Vec::new()),
-        last_row_expanded_group: RefCell::new(Vec::new()),
-        last_row_turn_ids: RefCell::new(Vec::new()),
         pasted: PasteStore::default(),
         paste_buffer: None,
         paste_last: None,

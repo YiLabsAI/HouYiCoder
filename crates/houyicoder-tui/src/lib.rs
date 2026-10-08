@@ -20,6 +20,7 @@ pub mod git_op;
 pub mod history;
 pub mod input;
 pub mod keys;
+mod last_row_keys;
 mod list_pane_state;
 pub mod markdown;
 mod memory_state;

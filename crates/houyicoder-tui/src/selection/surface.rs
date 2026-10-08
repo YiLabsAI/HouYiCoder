@@ -337,14 +337,16 @@ impl Surface for TranscriptSurface<'_> {
                     .unwrap_or(selection::TAG_PLAIN);
                 let fold_key = self
                     .app
-                    .last_row_fold_keys
+                    .last_row_keys
+                    .fold_keys
                     .borrow()
                     .get(ri)
                     .cloned()
                     .flatten();
                 let turn_id = self
                     .app
-                    .last_row_turn_ids
+                    .last_row_keys
+                    .turn_ids
                     .borrow()
                     .get(ri)
                     .cloned()
