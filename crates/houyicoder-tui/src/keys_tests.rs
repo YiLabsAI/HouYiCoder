@@ -1659,18 +1659,18 @@ fn test_ctrl_o_expands_latest() {
     assert!(app.selection.anchor.is_none(), "no cursor");
     handle_ctrl_o(&mut app);
     assert!(
-        app.expanded_thinking.contains(&"t1".into()),
+        app.transcript_view.expanded.thinking.contains(&"t1".into()),
         "the later block expands: {:?}",
-        app.expanded_thinking
+        app.transcript_view.expanded.thinking
     );
     assert!(
-        app.expanded_subagents.is_empty(),
+        app.transcript_view.expanded.subagents.is_empty(),
         "the earlier delegation is untouched: {:?}",
-        app.expanded_subagents
+        app.transcript_view.expanded.subagents
     );
     handle_ctrl_o(&mut app);
     assert!(
-        app.expanded_thinking.is_empty(),
+        app.transcript_view.expanded.thinking.is_empty(),
         "the same key collapses what it expanded"
     );
 }
@@ -1706,11 +1706,11 @@ fn test_ctrl_o_follows_cursor() {
     app.selection.start(0, top + ri);
     handle_ctrl_o(&mut app);
     assert!(
-        app.expanded_thinking.contains(&"t1".into()),
+        app.transcript_view.expanded.thinking.contains(&"t1".into()),
         "the row under the cursor expands"
     );
     assert!(
-        app.expanded_subagents.is_empty(),
+        app.transcript_view.expanded.subagents.is_empty(),
         "the later delegation stays collapsed"
     );
 }

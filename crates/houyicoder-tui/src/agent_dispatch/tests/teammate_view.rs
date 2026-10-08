@@ -285,7 +285,7 @@ fn test_cursor_after_fold_group() {
     );
     // The flat walk would have resolved to c2 (last) — confirm it does not.
     assert!(
-        !app.expanded_subagents.contains("c2"),
+        !app.transcript_view.expanded.subagents.contains("c2"),
         "the non-targeted delegation is untouched"
     );
 }

@@ -375,22 +375,10 @@ pub struct App {
     /// belongs to (Some on a summary row) so Ctrl+O maps the anchor's row to
     /// the result to toggle, without changing the (u8, String) copy tuple.
     pub last_row_callids: RefCell<Vec<Option<String>>>,
-    /// Result call_ids the user has expanded (Ctrl+O) so the full multi-line
-    /// body shows. Keyed by call_id (not row index) so expansion survives the
-    /// wholesale transcript rebuild on each event batch.
-    pub expanded_results: HashSet<String>,
-    /// Fold-group keys the user has expanded (Ctrl+O or click on a summary).
-    /// Keyed by the group's first tool call_id so the choice survives rebuilds.
-    /// Active-turn groups are always expanded and never enter this set.
-    pub expanded_fold_groups: HashSet<String>,
-    /// Per-ThoughtFor-line expansion state, keyed by that line's turn_id.
-    /// Empty = collapsed.
-    pub expanded_thinking: HashSet<RowId>,
-    pub expanded_subagents: HashSet<String>,
     /// State parked for views that are not on screen: the sessions switched
     /// away from, the children stepped out of, and the parent's own sets
-    /// while a child view covers it. The four flat sets above always hold
-    /// the visible view's keys, so every render and toggle path reads
+    /// while a child view covers it. The visible view's four open-row sets
+    /// live on the transcript view state; every render and toggle path reads
     /// them without knowing which view is on screen.
     pub(crate) parked_view_states: ParkedViewStates,
     /// Drilled-in teammate transcript; when Some, active_transcript swaps to

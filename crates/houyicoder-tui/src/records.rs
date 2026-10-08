@@ -151,8 +151,8 @@ pub enum TranscriptLine {
         /// Identity of THIS turn's row: the log entry that ended the turn when
         /// the frames carry one, else the absolute frame position that ended
         /// it. The same entry names the same row in every read, live or from
-        /// disk, and across a session reload. The expand/collapse state
-        /// (expanded_thinking) is keyed by this, NOT by the reasoning text: two
+        /// disk, and across a session reload. The expand/collapse state for a
+        /// thinking block is keyed by this, NOT by the reasoning text: two
         /// turns can produce identical text, and keying by reasoning would
         /// collide them so expanding one expanded both.
         turn_id: RowId,

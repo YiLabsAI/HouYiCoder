@@ -57,7 +57,10 @@ fn test_transcript_diff_gutter_gap() {
     ]
     .into();
     // Expand so the full diff (not the collapsed head) is on screen.
-    app.expanded_results.insert("c1".to_string());
+    app.transcript_view
+        .expanded
+        .results
+        .insert("c1".to_string());
     let out = render_text(&app, 100, 32);
     println!("--- transcript diff render ---\n{out}\n--- end ---");
     assert!(
@@ -97,7 +100,10 @@ fn test_transcript_diff_bg_fill() {
         is_diff: true,
     }]
     .into();
-    app.expanded_results.insert("c1".to_string());
+    app.transcript_view
+        .expanded
+        .results
+        .insert("c1".to_string());
     let buf = render_buffer(&app, 100, 20);
     // Find the add row (the one whose text contains "let a = ONE;").
     let mut add_y = None;
@@ -147,7 +153,10 @@ fn test_transcript_diff_word_highlight() {
         is_diff: true,
     }]
     .into();
-    app.expanded_results.insert("c1".to_string());
+    app.transcript_view
+        .expanded
+        .results
+        .insert("c1".to_string());
     let buf = render_buffer(&app, 100, 20);
     let dump = crate::test_harness::dump_buffer(&buf);
     println!("--- word-diff render ---\n{dump}\n--- end ---");
@@ -209,7 +218,10 @@ fn test_transcript_diff_wraps() {
         is_diff: true,
     }]
     .into();
-    app.expanded_results.insert("c1".to_string());
+    app.transcript_view
+        .expanded
+        .results
+        .insert("c1".to_string());
     // A narrow pane forces the long added line to wrap to multiple rows.
     let buf = render_buffer(&app, 30, 14);
     let dump = crate::test_harness::dump_buffer(&buf);
@@ -429,7 +441,7 @@ fn test_edit_diff_not_folded() {
     let diff = houyicoder_core::agent::unified_diff(orig, new, 3);
     let body = format!("{}\n{}", crate::brief::edit_diff_summary(1, 1), diff);
     // Real flow: a call row (name "Update") + its diff result row. NOT
-    // expanded_results — the default view is what we assert on.
+    // the results set — the default view is what we assert on.
     app.transcript = vec![
         TranscriptLine::User("update foo".into()),
         TranscriptLine::Tool {
@@ -594,7 +606,7 @@ fn test_thought_expand_wraps_narrow() {
         },
     ]
     .into();
-    app.expanded_thinking.insert("t1".into());
+    app.transcript_view.expanded.thinking.insert("t1".into());
     let out = render_text(&app, 30, 24);
     let count = app.transcript_display_rows();
     let rendered = app.whole_scroll().total.get();
@@ -612,7 +624,7 @@ fn test_thought_expand_wraps_narrow() {
     );
 }
 
-/// KNOWN BUG (deferred fix, characterization test). expanded_results is keyed
+/// KNOWN BUG (deferred fix, characterization test). The results set is keyed
 /// by bare call_id, so two result rows sharing a call_id (eager tool callers
 /// reuse one call_id across distinct calls) collide: expanding ONE result
 /// (Ctrl+O) also expands the OTHER. This pins the CURRENT buggy behavior —
@@ -659,10 +671,19 @@ fn test_expanded_results_callid_collide() {
     ]
     .into();
     // Expand both fold groups so the result rows are visible (not hidden behind
-    // a collapsed summary), then expand result 1's BODY via expanded_results.
-    app.expanded_fold_groups.insert("c1#0".to_string());
-    app.expanded_fold_groups.insert("c1#1".to_string());
-    app.expanded_results.insert("c1".to_string());
+    // a collapsed summary), then expand result 1's BODY via the results set.
+    app.transcript_view
+        .expanded
+        .fold_groups
+        .insert("c1#0".to_string());
+    app.transcript_view
+        .expanded
+        .fold_groups
+        .insert("c1#1".to_string());
+    app.transcript_view
+        .expanded
+        .results
+        .insert("c1".to_string());
     let out = render_text(&app, 80, 24);
     // BUG: result 2 (same call_id) renders EXPANDED, so its tail shows.
     assert!(

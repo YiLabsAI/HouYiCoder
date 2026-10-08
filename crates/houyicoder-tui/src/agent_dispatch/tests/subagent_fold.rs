@@ -149,9 +149,12 @@ fn test_subagent_collapse_keeps_folded() {
     });
     // Expand, then collapse: the child rows survive the collapse.
     app.toggle_tail_expand();
-    assert!(app.expanded_subagents.contains("c1"));
+    assert!(app.transcript_view.expanded.subagents.contains("c1"));
     app.toggle_tail_expand();
-    assert!(!app.expanded_subagents.contains("c1"), "collapsed");
+    assert!(
+        !app.transcript_view.expanded.subagents.contains("c1"),
+        "collapsed"
+    );
     match &app.transcript[0] {
         TranscriptLine::Subagent {
             folded_transcript, ..
@@ -185,16 +188,19 @@ fn test_click_subagent_head_expands() {
     });
     let _out = crate::test_harness::render_text(&app, 80, 24);
     let rect = app.transcript_rect.get();
-    assert!(!app.expanded_subagents.contains("c1"), "starts collapsed");
+    assert!(
+        !app.transcript_view.expanded.subagents.contains("c1"),
+        "starts collapsed"
+    );
     {
         let mut surface = TranscriptSurface { app: &mut app };
         surface.handle_down(rect.x, rect.y);
         surface.handle_up();
     }
     assert!(
-        app.expanded_subagents.contains("c1"),
+        app.transcript_view.expanded.subagents.contains("c1"),
         "clicking the subagent head expands the delegation: {:?}",
-        app.expanded_subagents
+        app.transcript_view.expanded.subagents
     );
     // Toggle symmetry: a second click on the (still-head) row collapses.
     let _out = crate::test_harness::render_text(&app, 80, 24);
@@ -205,7 +211,7 @@ fn test_click_subagent_head_expands() {
         surface.handle_up();
     }
     assert!(
-        !app.expanded_subagents.contains("c1"),
+        !app.transcript_view.expanded.subagents.contains("c1"),
         "clicking an expanded head collapses it"
     );
 }
@@ -232,7 +238,7 @@ fn test_subagent_toggle_no_key() {
         "out-of-range row returns false, no misfire"
     );
     assert!(
-        app.expanded_subagents.is_empty(),
+        app.transcript_view.expanded.subagents.is_empty(),
         "nothing expanded on a no-fold-key row"
     );
 }
@@ -264,7 +270,7 @@ fn test_subagent_toggle_stale_key() {
         "stale row still toggles (treats the ghost as a delegation)"
     );
     assert!(
-        app.expanded_subagents.contains("ghost"),
+        app.transcript_view.expanded.subagents.contains("ghost"),
         "stale fold key expanded under the ghost id"
     );
 }
@@ -300,14 +306,14 @@ fn test_subagent_cursor_targeting() {
         "the cursor names a delegation"
     );
     assert!(
-        app.expanded_subagents.contains("c1"),
+        app.transcript_view.expanded.subagents.contains("c1"),
         "cursor on first line expands it"
     );
     assert!(
-        !app.expanded_subagents.contains("c2"),
+        !app.transcript_view.expanded.subagents.contains("c2"),
         "the second line is not expanded when the cursor targets the first"
     );
-    app.expanded_subagents.clear();
+    app.transcript_view.expanded.subagents.clear();
     app.selection.anchor = None;
     assert!(
         !app.toggle_subagent_expand(),
@@ -315,7 +321,7 @@ fn test_subagent_cursor_targeting() {
     );
     assert!(app.toggle_tail_expand(), "the tail-most rule picks one");
     assert!(
-        app.expanded_subagents.contains("c2"),
+        app.transcript_view.expanded.subagents.contains("c2"),
         "and it is the later line"
     );
 }

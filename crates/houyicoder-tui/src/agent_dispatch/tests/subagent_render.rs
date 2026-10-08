@@ -26,7 +26,7 @@ fn test_subagent_renders_collapsed() {
     );
 }
 
-/// When the child_sid is in expanded_subagents, the Subagent line renders the
+/// When the child_sid is in the subagents set, the Subagent line renders the
 /// collapse hint + a placeholder for the unloaded child transcript. The
 /// fetch that fills folded_transcript lands next; this pins the expanded
 /// branch so a refactor that drops it fails here.
@@ -43,7 +43,10 @@ fn test_subagent_renders_expanded() {
         folded_transcript: Vec::new(),
         color: None,
     });
-    app.expanded_subagents.insert("child-1".into());
+    app.transcript_view
+        .expanded
+        .subagents
+        .insert("child-1".into());
     let out = crate::test_harness::render_text(&app, 80, 24);
     assert!(
         out.contains("ctrl+o to collapse"),
@@ -72,7 +75,10 @@ fn test_subagent_expanded_renders_child() {
         folded_transcript: vec![TranscriptLine::Agent("child reply: auth is here".into())],
         color: None,
     });
-    app.expanded_subagents.insert("child-1".into());
+    app.transcript_view
+        .expanded
+        .subagents
+        .insert("child-1".into());
     let out = crate::test_harness::render_text(&app, 80, 24);
     assert!(
         out.contains("child reply: auth is here"),
@@ -81,7 +87,7 @@ fn test_subagent_expanded_renders_child() {
 }
 
 /// Ctrl+O toggles the last Subagent delegation's expand state. The first
-/// call expands (expanded_subagents gains the child_sid); the second
+/// call expands (the subagents set gains the child_sid); the second
 /// collapses (removed). Pins the toggle wiring so a refactor that drops it
 /// fails here.
 #[test]
@@ -97,14 +103,20 @@ fn test_subagent_toggle_expand() {
         folded_transcript: Vec::new(),
         color: None,
     });
-    assert!(app.expanded_subagents.is_empty(), "starts collapsed");
+    assert!(
+        app.transcript_view.expanded.subagents.is_empty(),
+        "starts collapsed"
+    );
     assert!(app.toggle_tail_expand(), "toggle returns true");
     assert!(
-        app.expanded_subagents.contains("child-1"),
+        app.transcript_view.expanded.subagents.contains("child-1"),
         "first toggle expands"
     );
     assert!(app.toggle_tail_expand(), "toggle returns true again");
-    assert!(app.expanded_subagents.is_empty(), "second toggle collapses");
+    assert!(
+        app.transcript_view.expanded.subagents.is_empty(),
+        "second toggle collapses"
+    );
 }
 
 /// Feeding a ChildTranscriptResult fills the matching Subagent line's
@@ -123,7 +135,10 @@ fn test_child_transcript_fills() {
         folded_transcript: Vec::new(),
         color: None,
     });
-    app.expanded_subagents.insert("child-1".into());
+    app.transcript_view
+        .expanded
+        .subagents
+        .insert("child-1".into());
     app.handle_agent_message(SessionMessage::Response {
         request: RequestId(16),
         response: ServerResponse::ChildTranscript {
@@ -217,7 +232,10 @@ fn test_child_fetch_repaints() {
         folded_transcript: Vec::new(),
         color: None,
     });
-    app.expanded_subagents.insert("child-1".into());
+    app.transcript_view
+        .expanded
+        .subagents
+        .insert("child-1".into());
     let out = crate::test_harness::render_text(&app, 80, 24);
     assert!(
         out.contains("not yet loaded"),
@@ -254,10 +272,10 @@ fn test_ctrl_o_fallthrough() {
         tool_summary: None,
         turn_id: "t1".into(),
     });
-    assert!(app.expanded_thinking.is_empty());
+    assert!(app.transcript_view.expanded.thinking.is_empty());
     crate::keys::handle_ctrl_o(&mut app);
     assert!(
-        app.expanded_thinking.contains(&"t1".into()),
+        app.transcript_view.expanded.thinking.contains(&"t1".into()),
         "falls through to ThoughtFor when no Subagent is present"
     );
 }
@@ -305,12 +323,15 @@ fn test_subagent_expand_stable_index() {
     assert!(matches!(app.transcript[1], TranscriptLine::Subagent { .. }));
     assert!(matches!(app.transcript[2], TranscriptLine::Agent(_)));
     // Expand the Subagent — the transcript Vec does not change.
-    app.expanded_subagents.insert("child-1".into());
+    app.transcript_view
+        .expanded
+        .subagents
+        .insert("child-1".into());
     assert!(matches!(app.transcript[0], TranscriptLine::User(_)));
     assert!(matches!(app.transcript[1], TranscriptLine::Subagent { .. }));
     assert!(matches!(app.transcript[2], TranscriptLine::Agent(_)));
     // Collapse — still stable.
-    app.expanded_subagents.remove("child-1");
+    app.transcript_view.expanded.subagents.remove("child-1");
     assert!(matches!(app.transcript[0], TranscriptLine::User(_)));
     assert!(matches!(app.transcript[1], TranscriptLine::Subagent { .. }));
     assert!(matches!(app.transcript[2], TranscriptLine::Agent(_)));
@@ -335,7 +356,7 @@ fn test_subagent_row_count() {
     // Collapsed: 1 head row.
     assert_eq!(app.line_display_rows(&sub), 1);
     // Expanded with loaded children: 1 head + child rows.
-    app.expanded_subagents.insert("c1".into());
+    app.transcript_view.expanded.subagents.insert("c1".into());
     let child_rows = app.line_display_rows(&TranscriptLine::Agent("child reply".into()));
     assert_eq!(app.line_display_rows(&sub), 1 + child_rows);
     // Expanded with empty folded_transcript: 1 head + 1 placeholder.
@@ -347,6 +368,6 @@ fn test_subagent_row_count() {
         folded_transcript: Vec::new(),
         color: None,
     };
-    app.expanded_subagents.insert("c2".into());
+    app.transcript_view.expanded.subagents.insert("c2".into());
     assert_eq!(app.line_display_rows(&empty_sub), 2);
 }

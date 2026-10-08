@@ -630,7 +630,7 @@ impl crate::state::App {
         let slots = display_slots(
             transcript,
             groups.as_ref(),
-            &self.expanded_fold_groups,
+            &self.transcript_view.expanded.fold_groups,
             self.verbose,
         );
         let width = self.last_transcript_width.get();
@@ -640,9 +640,9 @@ impl crate::state::App {
             let (needs_spacer, rows) = match slot {
                 DisplaySlot::Line(i, group) => {
                     let full = self.verbose
-                        || group
-                            .as_ref()
-                            .is_some_and(|key| self.expanded_fold_groups.contains(key));
+                        || group.as_ref().is_some_and(|key| {
+                            self.transcript_view.expanded.fold_groups.contains(key)
+                        });
                     (true, self.line_display_rows_mode(&transcript[*i], full))
                 }
                 DisplaySlot::Summary(g) => (true, 1 + g.hint.is_some() as usize),

@@ -34,7 +34,7 @@ impl App {
             } => {
                 let mut n = 1; // header row + expanded reasoning (width-wrapped)
                 if let Some(r) = reasoning
-                    && (self.expanded_thinking.contains(turn_id) || self.verbose)
+                    && (self.transcript_view.expanded.thinking.contains(turn_id) || self.verbose)
                 {
                     n += self.render_cache.borrow_mut().thought_row_count(r, w);
                 }
@@ -54,7 +54,7 @@ impl App {
                 body,
                 call_id,
                 Some(*outcome),
-                self.expanded_results.contains(call_id) || self.verbose,
+                self.transcript_view.expanded.results.contains(call_id) || self.verbose,
                 *is_diff,
                 w,
             ),
@@ -68,7 +68,7 @@ impl App {
                 ..
             } => {
                 let mut n = 1; // head row
-                if self.expanded_subagents.contains(child_sid) || self.verbose {
+                if self.transcript_view.expanded.subagents.contains(child_sid) || self.verbose {
                     if folded_transcript.is_empty() {
                         n += 1; // placeholder row
                     } else {

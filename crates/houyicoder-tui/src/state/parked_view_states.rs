@@ -1,9 +1,9 @@
-//! The open-row sets and the views they park for. The App holds the
-//! visible view's four sets flat; a transition parks what the leaving
-//! view had open and installs what the entering view owns. Keys are
-//! not globally unique, so every parked entry stays scoped to the view
-//! that owns it: sessions park by session id, children by child id, and the
-//! parent's sets wait in a single held slot while a child view is open.
+//! The open-row sets and the views they park for. The visible view's four
+//! sets live as one value on the transcript view state; a transition parks
+//! what the leaving view had open and installs what the entering view owns.
+//! Keys are not globally unique, so every parked entry stays scoped to the
+//! view that owns it: sessions park by session id, children by child id, and
+//! the parent's sets wait in a single held slot while a child view is open.
 
 use std::collections::HashSet;
 
@@ -14,7 +14,7 @@ use crate::row_id::RowId;
 use crate::scroll::TranscriptScroll;
 
 /// The four expansion sets one view owns.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub(crate) struct ExpandedKeys {
     pub(crate) results: HashSet<String>,
     pub(crate) fold_groups: HashSet<String>,
@@ -139,22 +139,15 @@ impl ParkedViewStates {
 }
 
 impl App {
-    /// Take the visible view's expansion sets, leaving the four empty.
+    /// Take the visible view's expansion sets as one value, leaving it empty.
     pub(crate) fn take_expanded_keys(&mut self) -> ExpandedKeys {
-        ExpandedKeys {
-            results: std::mem::take(&mut self.expanded_results),
-            fold_groups: std::mem::take(&mut self.expanded_fold_groups),
-            thinking: std::mem::take(&mut self.expanded_thinking),
-            subagents: std::mem::take(&mut self.expanded_subagents),
-        }
+        std::mem::take(&mut self.transcript_view.expanded)
     }
 
-    /// Install a view's expansion sets as the visible ones.
+    /// Install a view's expansion sets as the visible ones, replacing the
+    /// current value whole.
     pub(crate) fn set_expanded_keys(&mut self, keys: ExpandedKeys) {
-        self.expanded_results = keys.results;
-        self.expanded_fold_groups = keys.fold_groups;
-        self.expanded_thinking = keys.thinking;
-        self.expanded_subagents = keys.subagents;
+        self.transcript_view.expanded = keys;
     }
 }
 

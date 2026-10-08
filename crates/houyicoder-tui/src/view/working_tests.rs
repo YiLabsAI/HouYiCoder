@@ -186,7 +186,7 @@ fn test_fold_collapse_expand_toggle() {
         KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL),
     );
     assert!(
-        app.expanded_fold_groups.contains("c1#0"),
+        app.transcript_view.expanded.fold_groups.contains("c1#0"),
         "group should be expanded after Ctrl+O"
     );
 
@@ -219,7 +219,7 @@ fn test_fold_collapse_expand_toggle() {
     );
 
     // --- Click on summary row toggles to expanded (same as Ctrl+O) ---
-    app.expanded_fold_groups.clear();
+    app.transcript_view.expanded.fold_groups.clear();
     render_text(&app, 80, 24);
     let fold_ri = app
         .last_row_fold_keys
@@ -248,7 +248,7 @@ fn test_fold_collapse_expand_toggle() {
         },
     );
     assert!(
-        app.expanded_fold_groups.contains("c1#0"),
+        app.transcript_view.expanded.fold_groups.contains("c1#0"),
         "click on summary should expand"
     );
 
@@ -281,7 +281,7 @@ fn test_fold_collapse_expand_toggle() {
         },
     );
     assert!(
-        !app.expanded_fold_groups.contains("c1#0"),
+        !app.transcript_view.expanded.fold_groups.contains("c1#0"),
         "click on collapse hint should collapse"
     );
 }
@@ -506,11 +506,14 @@ fn test_fold_expand_one_only() {
         },
     );
     // Only c1 expanded, not c3.
-    assert!(app.expanded_fold_groups.contains("c1#0"), "c1 expanded");
     assert!(
-        !app.expanded_fold_groups.contains("c3"),
+        app.transcript_view.expanded.fold_groups.contains("c1#0"),
+        "c1 expanded"
+    );
+    assert!(
+        !app.transcript_view.expanded.fold_groups.contains("c3"),
         "c3 must NOT expand when c1 is clicked: {:?}",
-        app.expanded_fold_groups
+        app.transcript_view.expanded.fold_groups
     );
     // Render: group A's calls visible (the ⏺ Bash(ls -la) chip expands),
     // group B's calls hidden — collapsed shows only the summary + ⎿ $find .
@@ -904,7 +907,7 @@ fn test_child_rows_hide_handles() {
         ],
         color: None,
     });
-    app.expanded_subagents.insert("c1".into());
+    app.transcript_view.expanded.subagents.insert("c1".into());
     let out = render_text(&app, 80, 24);
     assert!(out.contains("child answer"), "child rows render: {out}");
     assert_eq!(
@@ -953,7 +956,7 @@ fn test_expanded_subagent_shaded() {
             .bg
     };
     assert_ne!(head_bg(&buf), Some(shade), "collapsed head is not shaded");
-    app.expanded_subagents.insert("c1".into());
+    app.transcript_view.expanded.subagents.insert("c1".into());
     let buf = render_buffer(&app, 80, 24);
     assert_eq!(
         head_bg(&buf),

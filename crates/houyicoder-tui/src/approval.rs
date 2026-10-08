@@ -74,8 +74,8 @@ impl App {
         if let Some(id) = target {
             // remove returns true if it was present; insert only when it was
             // not, giving a clean toggle in one pass.
-            if !self.expanded_results.remove(&id) {
-                self.expanded_results.insert(id);
+            if !self.transcript_view.expanded.results.remove(&id) {
+                self.transcript_view.expanded.results.insert(id);
             }
         }
     }
@@ -90,8 +90,8 @@ impl App {
         let Some(key) = key else {
             return false;
         };
-        if !self.expanded_fold_groups.remove(&key) {
-            self.expanded_fold_groups.insert(key);
+        if !self.transcript_view.expanded.fold_groups.remove(&key) {
+            self.transcript_view.expanded.fold_groups.insert(key);
         }
         true
     }
@@ -176,8 +176,8 @@ impl App {
         let Some(key) = latest else {
             return false;
         };
-        if !self.expanded_fold_groups.remove(&key) {
-            self.expanded_fold_groups.insert(key);
+        if !self.transcript_view.expanded.fold_groups.remove(&key) {
+            self.transcript_view.expanded.fold_groups.insert(key);
         }
         true
     }
@@ -217,11 +217,12 @@ impl App {
     /// transcript fetch. The fetch lands asynchronously and fills
     /// folded_transcript in place; a re-expand reuses the cached rows.
     fn apply_subagent_toggle(&mut self, child_sid: String, needs_fetch: bool) {
-        let expanding = !self.expanded_subagents.contains(&child_sid);
+        let subagents = &mut self.transcript_view.expanded.subagents;
+        let expanding = !subagents.contains(&child_sid);
         if expanding {
-            self.expanded_subagents.insert(child_sid.clone());
+            subagents.insert(child_sid.clone());
         } else {
-            self.expanded_subagents.remove(&child_sid);
+            subagents.remove(&child_sid);
         }
         self.pin_transcript_top();
         if expanding
@@ -257,7 +258,7 @@ impl App {
         let slots = display_slots(
             transcript,
             self.transcript.fold_groups(),
-            &self.expanded_fold_groups,
+            &self.transcript_view.expanded.fold_groups,
             self.verbose,
         );
         let width = self.last_transcript_width.get();
@@ -354,8 +355,8 @@ impl App {
         let Some(turn_id) = target else {
             return false;
         };
-        if !self.expanded_thinking.remove(&turn_id) {
-            self.expanded_thinking.insert(turn_id);
+        if !self.transcript_view.expanded.thinking.remove(&turn_id) {
+            self.transcript_view.expanded.thinking.insert(turn_id);
         }
         self.pin_transcript_top();
         true
@@ -396,8 +397,9 @@ impl App {
         if !has_reasoning {
             return false;
         }
-        if !self.expanded_thinking.remove(&turn_id) {
-            self.expanded_thinking.insert(turn_id.clone());
+        let thinking = &mut self.transcript_view.expanded.thinking;
+        if !thinking.remove(&turn_id) {
+            thinking.insert(turn_id.clone());
         }
         self.pin_transcript_top();
         true
@@ -409,9 +411,9 @@ impl App {
     pub(crate) fn toggle_fold_at_row(&mut self, ri: usize) {
         let key = self.last_row_fold_keys.borrow().get(ri).cloned().flatten();
         if let Some(key) = key
-            && !self.expanded_fold_groups.remove(&key)
+            && !self.transcript_view.expanded.fold_groups.remove(&key)
         {
-            self.expanded_fold_groups.insert(key);
+            self.transcript_view.expanded.fold_groups.insert(key);
         }
     }
 
@@ -432,11 +434,11 @@ impl App {
             .borrow()
             .get(ri)
             .and_then(|f| f.clone())
-            .filter(|k| self.expanded_fold_groups.contains(k));
+            .filter(|k| self.transcript_view.expanded.fold_groups.contains(k));
         let Some(key) = key else {
             return false;
         };
-        self.expanded_fold_groups.remove(&key);
+        self.transcript_view.expanded.fold_groups.remove(&key);
         self.selection.clear();
         true
     }

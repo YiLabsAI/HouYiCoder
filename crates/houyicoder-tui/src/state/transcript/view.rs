@@ -17,6 +17,7 @@
 use crate::records::TranscriptLine;
 use crate::scroll::TranscriptScroll;
 use crate::state::App;
+use crate::state::parked_view_states::ExpandedKeys;
 
 /// The transcript view state the view on screen holds: where the reader is,
 /// what they have expanded, and whether a search view is open over it.
@@ -47,6 +48,11 @@ pub(crate) struct TranscriptViewState {
     /// threshold: the loaded window's byte range, the frozen file size that
     /// bounds further reads, and the per-window corrupt-line skip count.
     history_window: HistoryWindow,
+    /// The four open-row sets the visible view owns. Pub(crate) so the
+    /// toggle and render paths reach a set directly; the whole value
+    /// swaps on a view park or restore, which is the contract the flat
+    /// fields could only carry as a comment.
+    pub(crate) expanded: ExpandedKeys,
 }
 
 impl TranscriptViewState {

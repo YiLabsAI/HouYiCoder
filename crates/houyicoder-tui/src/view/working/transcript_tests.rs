@@ -68,7 +68,10 @@ fn test_expand_shows_command() {
         bash_result(),
     ]
     .into();
-    app.expanded_fold_groups.insert("c1#0".into());
+    app.transcript_view
+        .expanded
+        .fold_groups
+        .insert("c1#0".into());
     let out = render_text(&app, 32, 16);
     assert!(
         out.contains("const task = 7"),

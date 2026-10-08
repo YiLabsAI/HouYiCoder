@@ -59,12 +59,12 @@ fn app_with_two_children(parent_rows: usize) -> App {
 fn test_child_expansion_isolation() {
     let mut app = app_with_two_children(5);
     assert!(app.enter_teammate_view_for_sid("c1", false));
-    app.expanded_thinking.insert("1".into());
+    app.transcript_view.expanded.thinking.insert("1".into());
     app.exit_teammate_view();
 
     assert!(app.enter_teammate_view_for_sid("c2", false));
     assert!(
-        app.expanded_thinking.is_empty(),
+        app.transcript_view.expanded.thinking.is_empty(),
         "a sibling child starts with its own empty sets, not the last child's keys"
     );
 }
@@ -75,17 +75,17 @@ fn test_child_expansion_isolation() {
 #[test]
 fn test_parent_expansion_survives() {
     let mut app = app_with_two_children(5);
-    app.expanded_results.insert("call-p".into());
+    app.transcript_view.expanded.results.insert("call-p".into());
 
     assert!(app.enter_teammate_view_for_sid("c1", false));
     assert!(
-        !app.expanded_results.contains("call-p"),
+        !app.transcript_view.expanded.results.contains("call-p"),
         "the child view does not carry the parent's open rows"
     );
 
     app.exit_teammate_view();
     assert!(
-        app.expanded_results.contains("call-p"),
+        app.transcript_view.expanded.results.contains("call-p"),
         "the parent's expansion is restored on exit"
     );
 }
@@ -159,10 +159,13 @@ fn test_child_blocks_search() {
 #[test]
 fn test_sibling_view_swap() {
     let mut app = app_with_two_children(5);
-    app.expanded_results.insert("parent-key".into());
+    app.transcript_view
+        .expanded
+        .results
+        .insert("parent-key".into());
 
     assert!(app.enter_teammate_view_for_sid("c1", false));
-    app.expanded_thinking.insert("a1".into());
+    app.transcript_view.expanded.thinking.insert("a1".into());
     assert!(app.enter_teammate_view_for_sid("c2", false));
     assert_eq!(
         app.teammate_view.as_ref().expect("child on view").child_sid,
@@ -170,23 +173,23 @@ fn test_sibling_view_swap() {
         "the hop lands on the second child"
     );
     assert!(
-        app.expanded_thinking.is_empty(),
+        app.transcript_view.expanded.thinking.is_empty(),
         "the second child does not inherit the first child's keys"
     );
 
     app.exit_teammate_view();
     assert!(
-        app.expanded_results.contains("parent-key"),
+        app.transcript_view.expanded.results.contains("parent-key"),
         "the hop exits through the parent's own sets"
     );
     assert!(
-        !app.expanded_thinking.contains(&"a1".into()),
+        !app.transcript_view.expanded.thinking.contains(&"a1".into()),
         "the first child's key does not ride out to the parent"
     );
 
     assert!(app.enter_teammate_view_for_sid("c1", false));
     assert!(
-        app.expanded_thinking.contains(&"a1".into()),
+        app.transcript_view.expanded.thinking.contains(&"a1".into()),
         "re-entering the first child restores what it had open"
     );
 }
@@ -225,9 +228,9 @@ fn test_ctrl_o_expands_child() {
     );
     crate::keys::handle_ctrl_o(&mut app);
     assert!(
-        app.expanded_thinking.contains(&"f3".into()),
+        app.transcript_view.expanded.thinking.contains(&"f3".into()),
         "the toggle targets the child row, set: {:?}",
-        app.expanded_thinking
+        app.transcript_view.expanded.thinking
     );
     let after = crate::test_harness::render_text(&app, 100, 30);
     assert!(after.contains("CHILDTHINK"), "the row expands:\n{after}");

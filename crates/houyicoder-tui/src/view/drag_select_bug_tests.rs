@@ -242,7 +242,7 @@ fn test_copy_tracks_shifted_content() {
 /// "ctrl+o to expand" but a click also toggles (both inputs expand/collapse);
 /// the bug was that one click expanded all of them. Set up two ThoughtFor
 /// rows with distinct reasoning, click the first, and assert only the
-/// first's reasoning key lands in expanded_thinking.
+/// first's reasoning key lands in the thinking set.
 #[test]
 fn test_click_thoughtfor_expands_one() {
     use crate::records::TranscriptLine;
@@ -287,20 +287,20 @@ fn test_click_thoughtfor_expands_one() {
     );
     crate::app::handle_mouse(&mut app, mouse(MouseEventKind::Up(MouseButton::Left), x, y));
     assert_eq!(
-        app.expanded_thinking.len(),
+        app.transcript_view.expanded.thinking.len(),
         1,
         "clicking one ThoughtFor must expand only one, got: {:?}",
-        app.expanded_thinking
+        app.transcript_view.expanded.thinking
     );
     assert!(
-        app.expanded_thinking.contains(&"t1".into()),
+        app.transcript_view.expanded.thinking.contains(&"t1".into()),
         "the clicked row's turn_id should be expanded: {:?}",
-        app.expanded_thinking
+        app.transcript_view.expanded.thinking
     );
     assert!(
-        !app.expanded_thinking.contains(&"t2".into()),
+        !app.transcript_view.expanded.thinking.contains(&"t2".into()),
         "the other row's turn_id must NOT expand: {:?}",
-        app.expanded_thinking
+        app.transcript_view.expanded.thinking
     );
 }
 
@@ -353,14 +353,14 @@ fn test_click_thoughtfor_none_reasoning() {
     );
     crate::app::handle_mouse(&mut app, mouse(MouseEventKind::Up(MouseButton::Left), x, y));
     assert!(
-        app.expanded_thinking.contains(&"t2".into()),
+        app.transcript_view.expanded.thinking.contains(&"t2".into()),
         "clicking the reasoning=Some ThoughtFor (after a None one) must expand it: {:?}",
-        app.expanded_thinking
+        app.transcript_view.expanded.thinking
     );
     assert!(
-        !app.expanded_thinking.contains(&"t1".into()),
+        !app.transcript_view.expanded.thinking.contains(&"t1".into()),
         "the None-reasoning row has nothing to expand: {:?}",
-        app.expanded_thinking
+        app.transcript_view.expanded.thinking
     );
 }
 
@@ -408,9 +408,9 @@ fn test_click_thought_no_duration() {
     );
     crate::app::handle_mouse(&mut app, mouse(MouseEventKind::Up(MouseButton::Left), x, y));
     assert!(
-        app.expanded_thinking.contains(&"t1".into()),
+        app.transcript_view.expanded.thinking.contains(&"t1".into()),
         "a summary with no duration still expands its reasoning: {:?}",
-        app.expanded_thinking
+        app.transcript_view.expanded.thinking
     );
     // The next summary carries no reasoning at all, so it offers no toggle:
     // the same gesture must leave the expand state alone.
@@ -429,9 +429,9 @@ fn test_click_thought_no_duration() {
     );
     crate::app::handle_mouse(&mut app, mouse(MouseEventKind::Up(MouseButton::Left), x, y));
     assert!(
-        !app.expanded_thinking.contains(&"t2".into()),
+        !app.transcript_view.expanded.thinking.contains(&"t2".into()),
         "a summary with nothing to show publishes no handle: {:?}",
-        app.expanded_thinking
+        app.transcript_view.expanded.thinking
     );
 }
 
@@ -495,20 +495,20 @@ fn test_click_thoughtfor_scrolled_off() {
     );
     crate::app::handle_mouse(&mut app, mouse(MouseEventKind::Up(MouseButton::Left), x, y));
     assert!(
-        app.expanded_thinking.contains(&"t2".into()),
+        app.transcript_view.expanded.thinking.contains(&"t2".into()),
         "clicking the visible t2 must expand t2: {:?}",
-        app.expanded_thinking
+        app.transcript_view.expanded.thinking
     );
     assert!(
-        !app.expanded_thinking.contains(&"t1".into()),
+        !app.transcript_view.expanded.thinking.contains(&"t1".into()),
         "the off-screen t1 must NOT expand from a click on t2: {:?}",
-        app.expanded_thinking
+        app.transcript_view.expanded.thinking
     );
 }
 
 /// Regression: two ThoughtFor rows with the SAME reasoning text (two turns
 /// happened to produce identical reasoning) must still expand independently.
-/// The bug: expanded_thinking is keyed by reasoning text, so clicking one
+/// The bug: the thinking set is keyed by reasoning text, so clicking one
 /// expanded BOTH (the shared key made both rows' render check true). Keying
 /// by reasoning text collides; each ThoughtFor needs its own identity.
 #[test]
@@ -645,7 +645,7 @@ fn test_click_body_collapses_group() {
     let mut app = app_with_fold_group();
     let key = expand_first_group(&mut app);
     assert!(
-        app.expanded_fold_groups.contains(&key),
+        app.transcript_view.expanded.fold_groups.contains(&key),
         "group should be expanded after summary click"
     );
     // A body row (the bash call line) — NOT the summary header.
@@ -662,7 +662,7 @@ fn test_click_body_collapses_group() {
         mouse(MouseEventKind::Up(MouseButton::Left), rect.x, y),
     );
     assert!(
-        !app.expanded_fold_groups.contains(&key),
+        !app.transcript_view.expanded.fold_groups.contains(&key),
         "clean click on an expanded body row must collapse the group"
     );
 }
@@ -703,7 +703,7 @@ fn test_drag_expanded_block_copies() {
         "drag in expanded block must copy (drag wins over collapse): {copied:?}"
     );
     assert!(
-        app.expanded_fold_groups.contains(&key),
+        app.transcript_view.expanded.fold_groups.contains(&key),
         "drag must NOT collapse the expanded group"
     );
 }
@@ -739,7 +739,7 @@ fn test_drag_return_keeps_group() {
         mouse(MouseEventKind::Up(MouseButton::Left), x0, y),
     );
     assert!(
-        app.expanded_fold_groups.contains(&key),
+        app.transcript_view.expanded.fold_groups.contains(&key),
         "a drag that returned to its start must not collapse the group"
     );
 }
@@ -783,7 +783,7 @@ fn test_drag_fold_summary_copies() {
         "drag on the fold summary must copy its text, not toggle: {copied:?}"
     );
     assert!(
-        !app.expanded_fold_groups.contains("c1#0"),
+        !app.transcript_view.expanded.fold_groups.contains("c1#0"),
         "a drag must not expand the group"
     );
 }

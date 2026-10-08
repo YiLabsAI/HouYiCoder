@@ -337,9 +337,9 @@ fn test_frame_timing_benchmark() {
         // one, so the expanded set truly toggles instead of only growing.
         let call_id = format!("call-{}", 6 + ((i / 2) % 200));
         if i.is_multiple_of(2) {
-            app.expanded_results.insert(call_id);
+            app.transcript_view.expanded.results.insert(call_id);
         } else {
-            app.expanded_results.remove(&call_id);
+            app.transcript_view.expanded.results.remove(&call_id);
         }
         app.transcript.bump_revision();
         durations.push(render(&app, (80, 24)));

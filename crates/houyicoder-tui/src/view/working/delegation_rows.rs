@@ -43,7 +43,7 @@ pub(crate) fn push_delegation_rows(
         color,
     } = *d;
     let grp_key: Option<String> = grp.map(|g| g.to_string());
-    let expanded = app.expanded_subagents.contains(child_sid);
+    let expanded = app.transcript_view.expanded.subagents.contains(child_sid);
     // A delegation nested inside an expanded one is shown, not operated: it
     // carries no hint and no fold key, so the block the user opened stays the
     // only thing their next Ctrl+O or click acts on.
