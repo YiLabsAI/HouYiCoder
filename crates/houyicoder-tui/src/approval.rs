@@ -261,7 +261,7 @@ impl App {
             &self.transcript_view.expanded.fold_groups,
             self.verbose,
         );
-        let width = self.last_transcript_width.get();
+        let width = self.layout_feedback.transcript_width.get();
         self.selection.anchor.and_then(|(_, content_row)| {
             let mut row = 0usize;
             let mut first = true;

@@ -34,6 +34,7 @@ use crate::history::HistoryNav;
 use crate::hooks_state::HooksPaneState;
 use crate::input::InputField;
 use crate::last_row_keys::LastRowKeys;
+use crate::layout_feedback::LayoutFeedback;
 use crate::list_pane_state::ListPaneState;
 use crate::memory_state::MemoryPaneState;
 use crate::notifications::NotificationState;
@@ -290,13 +291,10 @@ pub struct App {
     pub cumulative_steps: u32,
     /// Session checklist content, expansion, and completion lifecycle.
     pub todos: TodoState,
-    /// Last terminal height seen by the draw pass, stashed for height-aware
-    /// checklist rendering. Interior-mutable for draw-borrow updates.
-    pub last_terminal_rows: Cell<u16>,
-    /// Last transcript PANE width (inner area.width, not the input last_cols).
-    /// Stashed so the count path soft-wraps to the same width render used
-    /// (count == render). 0 before first render = do-not-wrap.
-    pub last_transcript_width: Cell<u16>,
+    /// The renderer layout feedback: the last terminal height and transcript
+    /// pane width the draw pass measured, held in one owner so the count and
+    /// layout paths read the same dims the last render used.
+    pub(crate) layout_feedback: LayoutFeedback,
     /// Last token count displayed by the spinner. Lerps toward the actual
     /// count each frame for a smooth increment animation.
     pub displayed_tokens: Cell<u32>,

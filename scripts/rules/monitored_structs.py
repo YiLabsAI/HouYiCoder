@@ -84,7 +84,11 @@ ACTIVE_OWNERS = {
         # The pending paste chunks and the last-chunk timestamp became one
         # PendingPaste owner, so a flush check drains and restores both as
         # one value rather than two flat fields a caller must move in step.
-        "fields": 115,
+        # The renderer layout feedback (last terminal height and transcript
+        # pane width) became one LayoutFeedback owner: both are written by the
+        # draw pass and read by the count and layout paths, so they travel as
+        # the render's measured bounds rather than two loose cells.
+        "fields": 114,
         "mut_app": 44,
     },
     "crates/houyicoder-tui/src/last_row_keys.rs:LastRowKeys": {
@@ -125,6 +129,14 @@ ACTIVE_OWNERS = {
         # together on each 50ms gap flush check. One owner because a flush
         # that drained the buffer but left the timestamp (or vice versa) left
         # the next check with a timestamp and no buffer to flush.
+        "fields": 2,
+    },
+    "crates/houyicoder-tui/src/layout_feedback.rs:LayoutFeedback": {
+        # The renderer layout feedback: the last terminal height and the
+        # transcript pane width, both Cell mirrors the draw pass writes and
+        # the count and layout paths read. One owner because both hold the
+        # dims of the last render, so a count path that read one dim while
+        # the draw pass updated the other saw a render/count mismatch.
         "fields": 2,
     },
     "crates/houyicoder-tui/src/state/transcript/view.rs:TranscriptViewState": {

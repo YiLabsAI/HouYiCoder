@@ -66,7 +66,7 @@ fn draw_working(f: &mut Frame, app: &App) {
     app.queue_view.strip_rect.set(Rect::new(0, 0, 0, 0));
     app.pane_rect.set(Rect::new(0, 0, 0, 0));
     app.approval_rect.set(Rect::new(0, 0, 0, 0));
-    app.last_terminal_rows.set(f.area().height);
+    app.layout_feedback.terminal_rows.set(f.area().height);
     // Wrap columns for the input content: terminal width minus the top/bottom
     // border (2) and the "❯ " prompt (2). Stored on App so the key handlers
     // can move the cursor in wrapped space with the same column count.
@@ -283,7 +283,7 @@ fn draw_focus(f: &mut Frame, app: &App) {
     app.queue_view.strip_rect.set(Rect::new(0, 0, 0, 0));
     app.pane_rect.set(Rect::new(0, 0, 0, 0));
     app.approval_rect.set(Rect::new(0, 0, 0, 0));
-    app.last_terminal_rows.set(f.area().height);
+    app.layout_feedback.terminal_rows.set(f.area().height);
     let total_h = f.area().height;
     let queue_h = footer_budget::allocate(total_h, 0, queue_overlay::strip_want(app), 0).queue;
     let mut constraints: Vec<Constraint> = vec![Constraint::Min(1)];
@@ -314,7 +314,7 @@ fn draw_scroll(f: &mut Frame, app: &App) {
     app.queue_view.strip_rect.set(Rect::new(0, 0, 0, 0));
     app.pane_rect.set(Rect::new(0, 0, 0, 0));
     app.approval_rect.set(Rect::new(0, 0, 0, 0));
-    app.last_terminal_rows.set(f.area().height);
+    app.layout_feedback.terminal_rows.set(f.area().height);
     let total_h = f.area().height;
     let queue_h = footer_budget::allocate(total_h, 0, queue_overlay::strip_want(app), 0).queue;
     let mut constraints: Vec<Constraint> = vec![Constraint::Min(1)];

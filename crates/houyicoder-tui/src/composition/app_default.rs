@@ -13,6 +13,7 @@ use crate::history::HistoryNav;
 use crate::hooks_state::HooksPaneState;
 use crate::input::InputField;
 use crate::last_row_keys::LastRowKeys;
+use crate::layout_feedback::LayoutFeedback;
 use crate::list_pane_state::ListPaneState;
 use crate::memory_state::MemoryPaneState;
 use crate::notifications::NotificationState;
@@ -102,8 +103,7 @@ pub fn app() -> App {
         cumulative_tokens: 0,
         cumulative_steps: 0,
         todos: Default::default(),
-        last_terminal_rows: Cell::new(24),
-        last_transcript_width: Cell::new(0),
+        layout_feedback: LayoutFeedback::default(),
         displayed_tokens: Cell::new(0),
         last_run_input: None,
         pending: Vec::new(),

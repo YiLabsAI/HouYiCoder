@@ -23,6 +23,7 @@ mod hooks_state;
 pub mod input;
 pub mod keys;
 mod last_row_keys;
+mod layout_feedback;
 mod list_pane_state;
 pub mod markdown;
 mod memory_state;

@@ -66,7 +66,7 @@ pub(super) fn draw_history_window(f: &mut Frame, area: Rect, app: &App) {
     app.transcript_rect.set(inner);
     // The count path (history_row_of_line) soft-wraps to the same width the
     // render path just used -- count == render holds for the window too.
-    app.last_transcript_width.set(inner.width);
+    app.layout_feedback.transcript_width.set(inner.width);
     *app.last_transcript_rows.borrow_mut() =
         visible.iter().map(|(t, s, _)| (*t, s.clone())).collect();
     *app.last_row_keys.callids.borrow_mut() = visible_callids;

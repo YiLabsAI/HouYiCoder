@@ -149,7 +149,7 @@ pub(super) fn draw_transcript(f: &mut Frame, area: Rect, app: &App) {
     // Stash the transcript pane width so the count path (line_display_rows,
     // called from scroll handlers outside the draw borrow) soft-wraps to the
     // SAME width the render path just used — count == render rows.
-    app.last_transcript_width.set(inner.width);
+    app.layout_feedback.transcript_width.set(inner.width);
     *app.last_transcript_rows.borrow_mut() =
         visible.iter().map(|(t, s, _)| (*t, s.clone())).collect();
     *app.last_row_keys.callids.borrow_mut() = visible_callids;

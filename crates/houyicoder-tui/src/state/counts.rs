@@ -26,7 +26,7 @@ impl App {
         line: &TranscriptLine,
         full_tool_call: bool,
     ) -> usize {
-        let w = self.last_transcript_width.get();
+        let w = self.layout_feedback.transcript_width.get();
         match line {
             TranscriptLine::Agent(text) => self.agent_text_rows(text),
             TranscriptLine::ThoughtFor {
@@ -126,7 +126,7 @@ impl App {
             return 0;
         }
         let mut n = 0;
-        let w = self.last_transcript_width.get();
+        let w = self.layout_feedback.transcript_width.get();
         // No live thinking block during the turn (the live ∴ Thinking block
         // was removed; live reasoning does not echo
         // as a block). The thinking indicator is the spinner row.
@@ -165,7 +165,7 @@ impl App {
     fn agent_text_rows(&self, text: &str) -> usize {
         self.render_cache
             .borrow_mut()
-            .agent_row_count(text, self.last_transcript_width.get())
+            .agent_row_count(text, self.layout_feedback.transcript_width.get())
     }
 
     /// Walk the active transcript in FLAT order (no fold slots), summing

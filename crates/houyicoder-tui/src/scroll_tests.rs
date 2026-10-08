@@ -512,7 +512,7 @@ fn test_search_current_match_yellow() {
     let mut app = working();
     app.transcript = searchable_transcript().into();
     app.enter_search_view("needle");
-    // Warm the width (jump uses last_transcript_width set by a prior draw)
+    // Warm the width (jump uses layout_feedback.transcript_width set by a prior draw)
     // then walk to the older, multi-line tool-result match.
     drop(render(&app));
     crate::keys::handle_working(
