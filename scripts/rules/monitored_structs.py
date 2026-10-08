@@ -70,7 +70,7 @@ ACTIVE_OWNERS = {
         # Ctrl+O handlers read one set that cannot drift out of length sync.
         # The pre-rendered display-row cache (the rows, the version stamp that
         # guards them, the four per-row key vectors, and the pre-rendered
-        # lines) became one SlotsCache owner: the six are recomputed in
+        # lines) became one DisplayRowsCache owner: the six are recomputed in
         # lockstep on a version mismatch and sliced in lockstep every frame,
         # so one owner keeps a stale-length vector from desyncing a key.
         # The permission pane state (the selected tab, the cursor row, the
@@ -92,7 +92,7 @@ ACTIVE_OWNERS = {
         # read as one set, never drifted out of sync.
         "fields": 4,
     },
-    "crates/houyicoder-tui/src/slots_cache.rs:SlotsCache": {
+    "crates/houyicoder-tui/src/display_rows_cache.rs:DisplayRowsCache": {
         # The pre-rendered display-row set the draw pass caches by version:
         # the rows, the version stamp, the four per-row key vectors, and the
         # pre-rendered lines. One owner because the six are recomputed in

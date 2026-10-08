@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use houyicoder_protocol::frontend::SessionId;
 
+use crate::display_rows_cache::DisplayRowsCache;
 use crate::history::HistoryNav;
 use crate::hooks_state::HooksPaneState;
 use crate::input::InputField;
@@ -22,7 +23,6 @@ use crate::resume_picker::SessionPickerState;
 use crate::run_state::RunState;
 use crate::selection::SystemClipboard;
 use crate::skills_state::SkillsPaneState;
-use crate::slots_cache::SlotsCache;
 use crate::state::history_read::HistoryReads;
 use crate::state::transcript::Transcript;
 use crate::state::{
@@ -43,8 +43,8 @@ pub fn app() -> App {
         history_reads: HistoryReads::default(),
         verdict_cursor: 0,
         transcript_view: Default::default(),
-        slots_cache: {
-            let c = SlotsCache::default();
+        display_rows_cache: {
+            let c = DisplayRowsCache::default();
             c.version.set(u64::MAX);
             c
         },

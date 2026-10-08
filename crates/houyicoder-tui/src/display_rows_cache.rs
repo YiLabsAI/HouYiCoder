@@ -18,14 +18,14 @@ use ratatui::text::Line;
 /// Every field is a RefCell or Cell so the draw pass can borrow one vector
 /// while another is still out, matching the per-vector visible_window reads.
 #[derive(Debug, Default)]
-pub(crate) struct SlotsCache {
+pub(crate) struct DisplayRowsCache {
     /// The full pre-visible row computation (display_slots + row formatting),
     /// invalidated by the version counter. Recomputed only when the
     /// transcript or display inputs change, not every frame.
     pub(crate) rows: RefCell<Vec<(u8, String, Option<ToolOutcome>)>>,
     /// The version the cached rows and key vectors were built at. u64::MAX at
     /// start so the first frame always rebuilds; the draw pass compares it to
-    /// the slots version it would build and rebuilds on mismatch.
+    /// the version it would build and rebuilds on mismatch.
     pub(crate) version: Cell<u64>,
     /// The call id each cached row carries, parallel to rows. Sliced by the
     /// same visible_window the rows are, so a screen row maps to its call id.

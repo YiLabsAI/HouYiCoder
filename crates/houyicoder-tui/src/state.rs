@@ -29,6 +29,7 @@ use crate::composition::WorktreeEntry;
 #[cfg(test)]
 use crate::composition::app as test_app;
 use crate::console_state::ConsoleState;
+use crate::display_rows_cache::DisplayRowsCache;
 use crate::history::HistoryNav;
 use crate::hooks_state::HooksPaneState;
 use crate::input::InputField;
@@ -49,7 +50,6 @@ use crate::run_state::{RunProgress, RunState};
 use crate::selection::{ClipboardWriter, Selection};
 use crate::session::SessionConnection;
 use crate::skills_state::SkillsPaneState;
-use crate::slots_cache::SlotsCache;
 use crate::todo_view::TodoState;
 use crate::transcript::snapshot::TranscriptSnapshot;
 use crate::view::export_log::ExportLog;
@@ -161,7 +161,7 @@ pub struct App {
     /// vectors, the pre-rendered lines, and the version stamp that guards
     /// them together. Pub(crate) so the draw pass reads and writes a vector
     /// directly, matching the per-vector visible_window slices.
-    pub(crate) slots_cache: SlotsCache,
+    pub(crate) display_rows_cache: DisplayRowsCache,
     /// True while the G full-scan builds the event-byte-offset index (one
     /// chunk at a time keeps the UI responsive; Esc interrupts). The loop
     /// advances the build while this is set, off the draw path.

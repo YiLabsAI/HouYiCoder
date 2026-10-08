@@ -14,6 +14,7 @@ pub mod command;
 pub mod composition;
 pub mod console_state;
 
+mod display_rows_cache;
 pub mod evidence;
 pub mod fold;
 pub mod git_op;
@@ -46,7 +47,6 @@ pub mod scroll;
 pub mod selection;
 pub mod session;
 mod skills_state;
-mod slots_cache;
 pub mod state;
 pub mod terminal_title;
 pub mod todo_view;
