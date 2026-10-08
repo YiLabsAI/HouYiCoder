@@ -20,9 +20,14 @@ from report_structure_facts import (  # noqa: E402
     struct_field_counts,
 )
 
-# The real raw total at migration start, measured right after the parser
-# fix. Report-only trend reference, never blocking.
-GLOBAL_TOTAL_AT_MIGRATION_START = 582
+# The raw total from when the counter started seeing every declaration form
+# present in the tree. Before that it matched only bare and pub declarations
+# with no generic parameters, so the crate-internal owners a refactor
+# introduces were invisible to it and could not be registered. The anchor the
+# migration started from predates the fix and was measured with the
+# incomplete pattern, so reading a trend across the two would report a change
+# of measuring stick as a change of code. The trend restarts here.
+GLOBAL_TOTAL_ANCHOR = 751
 
 
 def evaluate_owner(actual, baseline):
@@ -63,21 +68,22 @@ def main() -> int:
     all_counts = dict(iter_struct_field_counts())
     errors = evaluate_registry(all_counts)
     total = sum(dict(struct_field_counts()).values())
-    delta = total - GLOBAL_TOTAL_AT_MIGRATION_START
+    delta = total - GLOBAL_TOTAL_ANCHOR
     trend = f"+{delta}" if delta >= 0 else str(delta)
     if errors:
         for e in errors:
             print(f"error: {e}", file=sys.stderr)
         print(
             f"\n[struct-fields] {len(errors)} owner gate(s) red. Global "
-            f"raw total {total} ({trend} vs migration start) is "
-            "report-only during the migration.",
+            f"raw total {total} ({trend} since the counter saw every "
+            "struct) is report-only during the migration.",
             file=sys.stderr,
         )
         return 1
     print(
         f"[struct-fields] {len(ACTIVE_OWNERS)} owner(s) green. Global raw "
-        f"total {total} ({trend} vs migration start) -- report-only."
+        f"total {total} ({trend} since the counter saw every struct) "
+        "-- report-only."
     )
     return 0
 

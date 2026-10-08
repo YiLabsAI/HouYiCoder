@@ -10,6 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from check_struct_fields import evaluate_owner, evaluate_registry  # noqa: E402
+from report_structure_facts import struct_decl_name  # noqa: E402
 from rules.monitored_structs import ACTIVE_OWNERS  # noqa: E402
 
 REGISTRY = {"crates/houyicoder-tui/src/state.rs:App": {"fields": 173}}
@@ -84,7 +85,37 @@ def test_registry_owner_deleted_blocks():
     assert len(errors) == 1 and "disappeared" in errors[0]
 
 
-def test_registered_owners_bypass_warn_floor():
+def test_qualifier_structs_recognized():
+    # An owner a refactor introduces is usually crate-internal. A counter
+    # that saw only bare and pub declarations left exactly those owners
+    # invisible, so registering one read back as a vanished owner.
+    assert struct_decl_name("pub(crate) struct Parked {") == "Parked"
+    assert struct_decl_name("pub(super) struct Held {") == "Held"
+    assert struct_decl_name("pub(in crate::state) struct Scoped {") == "Scoped"
+    assert struct_decl_name("    pub(crate) struct Nested {") == "Nested"
+
+
+def test_generic_structs_recognized():
+    assert struct_decl_name("pub struct Bus<T: Clone> {") == "Bus"
+    assert struct_decl_name("struct Window<'a> {") == "Window"
+    assert struct_decl_name("pub(crate) struct Both<'a, T: Send> {") == "Both"
+
+
+def test_undecorated_structs_recognized():
+    # Seeing more declarations is not a reason to lose the ones already
+    # counted, so the two original forms stay asserted beside the new ones.
+    assert struct_decl_name("struct Plain {") == "Plain"
+    assert struct_decl_name("pub struct Open {") == "Open"
+
+
+def test_non_declarations_rejected():
+    assert struct_decl_name("// struct Ghost {") is None
+    assert struct_decl_name("/// pub(crate) struct Documented {") is None
+    assert struct_decl_name("pub(crate) struct Tuple(u8);") is None
+    assert struct_decl_name('let s = "struct Fake {";') is None
+
+
+def test_registered_owners_counted():
     # The warn floor filters the report, not the registry: every registered
     # owner must appear in the counts the gate reads, however small it is.
     # Without this a two-field owner registers and then reads as vanished.

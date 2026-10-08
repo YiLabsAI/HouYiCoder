@@ -189,6 +189,21 @@ def file_line_bands() -> dict:
     }
 
 
+# A struct declaration: any visibility qualifier (none, pub, pub(crate),
+# pub(in path)) and generic parameters that carry no brace or semicolon,
+# body opening on the same line. The qualifier matters because an owner a
+# refactor introduces is usually crate-internal, and a counter seeing only
+# pub structs leaves exactly those owners unpinnable by the registry.
+_STRUCT_DECL = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?struct\s+([A-Z]\w+)\s*(?:<[^{;]*)?\{")
+
+
+def struct_decl_name(line: str) -> str | None:
+    """The name a struct declaration line introduces, or None. Its own function
+    so the accepted declaration forms are testable without a source tree."""
+    match = _STRUCT_DECL.match(line)
+    return match.group(1) if match else None
+
+
 def iter_struct_field_counts() -> list[tuple[str, int]]:
     """Count fields per struct, every struct regardless of size. Line-based
     brace-matching that skips braces inside line comments (a doc comment
@@ -196,7 +211,6 @@ def iter_struct_field_counts() -> list[tuple[str, int]]:
     struct's real closing brace). The owner registry reads this so a small
     registered owner is still pinned; the report reads the filtered list."""
     results = []
-    struct_re = re.compile(r"^\s*(?:pub\s+)?struct\s+([A-Z]\w+)\s*\{")
     field_re = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?\w+\s*:")
     for f in rs_source_files(REPO):
         try:
@@ -204,10 +218,9 @@ def iter_struct_field_counts() -> list[tuple[str, int]]:
         except OSError:
             continue
         for i, line in enumerate(lines):
-            m = struct_re.match(line)
-            if not m:
+            name = struct_decl_name(line)
+            if name is None:
                 continue
-            name = m.group(1)
             depth = 1  # the { on the struct line
             fields = 0
             j = i + 1

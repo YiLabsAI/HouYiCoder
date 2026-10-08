@@ -18,11 +18,11 @@ REPO = Path(__file__).resolve().parent.parent
 ACTIVE_OWNERS = {
     "crates/houyicoder-tui/src/state.rs:App": {
         # RunState owns the run lifecycle (four fields removed); the model
-        # picker consolidates six model fields into one. parked_keys carries
-        # the four expansion sets across a session switch. The turn counter
-        # went with the live turn summary it named. Transcript took the turn
-        # boundary and the render version (two fields; the lines field
-        # changed type in place). verdict_cursor stays as an audit
+        # picker consolidates six model fields into one. parked_view_states
+        # carries the four expansion sets across a session switch. The turn
+        # counter went with the live turn summary it named. Transcript took
+        # the turn boundary and the render version (two fields; the lines
+        # field changed type in place). verdict_cursor stays as an audit
         # capability; scrolled_from_frame waits for the view-state owner.
         # RunProgress took the eight streaming-progress fields (assistant
         # preview, reasoning preview, live block, the two timing clocks,
@@ -66,6 +66,16 @@ ACTIVE_OWNERS = {
         # is still refused by its stamp. The worker count is shared with every
         # permit handed out, so the budget reads what is executing rather than
         # what the record still names.
+        "fields": 3,
+    },
+    "crates/houyicoder-tui/src/state/parked_view_states.rs:ParkedViewStates": {
+        # Expansion sets parked for views that are not on screen: by session,
+        # by child within the current visit, and the parent's own sets held
+        # while a child view is open. Both lists are capped, and a repeat park
+        # of the same view replaces its earlier entry, so the entry count
+        # follows the views visited rather than the visit count. The
+        # transitions exchange whole sets, which is what keeps one view's keys
+        # out of another.
         "fields": 3,
     },
 }
