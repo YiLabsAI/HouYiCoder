@@ -38,7 +38,6 @@ pub fn app() -> App {
         transcript: Transcript::default(),
         history_reads: HistoryReads::default(),
         verdict_cursor: 0,
-        unseen_since: None,
         transcript_view: Default::default(),
         display_rows_cache: RefCell::new(Vec::new()),
         display_rows_version: Cell::new(u64::MAX),

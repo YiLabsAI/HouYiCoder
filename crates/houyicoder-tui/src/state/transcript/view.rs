@@ -17,6 +17,7 @@
 use crate::records::TranscriptLine;
 use crate::scroll::{TranscriptScroll, TranscriptSearch};
 use crate::state::App;
+use crate::state::cursors::EventCursor;
 use crate::state::parked_view_states::ExpandedKeys;
 
 /// The transcript view state the view on screen holds: where the reader is,
@@ -59,6 +60,12 @@ pub(crate) struct TranscriptViewState {
     /// corpus slice while it mutates this query state, a disjoint field
     /// borrow a method call on the owner cannot express.
     pub(crate) search: TranscriptSearch,
+    /// The event cursor the reader scrolled away from the tail at, so new
+    /// content appended since is "unseen". None while following the tail.
+    /// Pub(crate): the scroll commands write it and the trim path reads it
+    /// alongside the scroll object, and a forwarding method would borrow the
+    /// whole owner where the field is enough.
+    pub(crate) unseen_since: Option<EventCursor>,
 }
 
 impl TranscriptViewState {

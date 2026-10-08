@@ -125,7 +125,7 @@ fn test_child_tail_spares_parent() {
     // parent's unseen count, the state a child-side tail step must not touch.
     app.scroll_transcript_up();
     assert!(
-        app.unseen_since.is_some(),
+        app.transcript_view.unseen_since.is_some(),
         "the parent marked where the reader scrolled away"
     );
     app.transcript.push(subagent_line(40));
@@ -153,7 +153,7 @@ fn test_child_tail_spares_parent() {
         "the parent top is where the reader parked it"
     );
     assert!(
-        app.unseen_since.is_some(),
+        app.transcript_view.unseen_since.is_some(),
         "the parent's unseen marker survives the child's tail step"
     );
 }

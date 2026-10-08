@@ -150,11 +150,6 @@ pub struct App {
     /// Cursor into the frame log for the verdict audit cache. Stays on App:
     /// verdicts are an audit capability, not transcript content.
     pub verdict_cursor: usize,
-    /// Cursor anchored on the frame the user last saw before scrolling away
-    /// from the tail, for the new-message count. A Local absolute index or a
-    /// Server within-connection stream position, so front-of-window eviction
-    /// cannot shift the baseline the way a raw resident index would.
-    pub(crate) unseen_since: Option<EventCursor>,
     /// The transcript view's own state, as one value the view on screen
     /// holds: the two scroll objects and the window flag today, the search
     /// view and the expansion sets as their readers migrate in. The flat

@@ -114,9 +114,11 @@ impl App {
     /// reset the count). No-op when the scroll did not break follow (short
     /// transcript, max_top==0) or when a snapshot already exists.
     fn snapshot_scroll_away(&mut self, was_following: bool) {
-        if was_following && !self.whole_scroll().is_following_tail() && self.unseen_since.is_none()
+        if was_following
+            && !self.whole_scroll().is_following_tail()
+            && self.transcript_view.unseen_since.is_none()
         {
-            self.unseen_since = Some(self.event_cursor_at_tail());
+            self.transcript_view.unseen_since = Some(self.event_cursor_at_tail());
         }
     }
 
@@ -125,7 +127,7 @@ impl App {
     /// trim actually dropped lines, so a no-op return to the tail does not
     /// invalidate the render cache.
     fn resume_tail_trim(&mut self) {
-        self.unseen_since = None;
+        self.transcript_view.unseen_since = None;
         let dropped = self.trim_live_transcript();
         if dropped > 0 {
             self.bump_transcript_version();
@@ -142,7 +144,7 @@ impl App {
     /// length, so the cap that drops the oldest pushed rows does not silently
     /// zero the count.
     pub fn new_turn_count(&self) -> NewTurnCount {
-        let Some(cursor) = self.unseen_since.as_ref() else {
+        let Some(cursor) = self.transcript_view.unseen_since.as_ref() else {
             return NewTurnCount::default();
         };
         let (from, is_lower_bound) = match self.frame_index_for_cursor(cursor) {
@@ -340,7 +342,7 @@ mod tests {
         app.transcript.push_frame(stamped_frame("e1", "first"));
         app.transcript.push_frame(stamped_frame("e2", "second"));
         app.transcript.push_frame(stamped_frame("e3", "third"));
-        app.unseen_since = Some(EventCursor::Durable("e2".into()));
+        app.transcript_view.unseen_since = Some(EventCursor::Durable("e2".into()));
         assert_eq!(
             app.new_turn_count().count,
             1,
@@ -361,7 +363,7 @@ mod tests {
         );
         assert!(!app.new_turn_count().is_lower_bound);
 
-        app.unseen_since = Some(EventCursor::Durable("e1".into()));
+        app.transcript_view.unseen_since = Some(EventCursor::Durable("e1".into()));
         assert!(
             app.new_turn_count().is_lower_bound,
             "an anchor the drain took leaves the count a floor"
@@ -377,7 +379,7 @@ mod tests {
         app.transcript.push_frame(stamped_frame("e1", "first"));
         app.transcript.push_frame(stamped_frame("e2", "second"));
 
-        app.unseen_since = Some(EventCursor::Durable("e1".into()));
+        app.transcript_view.unseen_since = Some(EventCursor::Durable("e1".into()));
         assert_eq!(
             app.new_turn_count().count,
             1,
@@ -385,7 +387,7 @@ mod tests {
         );
         assert!(!app.new_turn_count().is_lower_bound);
 
-        app.unseen_since = Some(EventCursor::Durable("absent".into()));
+        app.transcript_view.unseen_since = Some(EventCursor::Durable("absent".into()));
         assert_eq!(
             app.new_turn_count().count,
             1,

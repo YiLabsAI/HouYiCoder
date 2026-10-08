@@ -168,12 +168,16 @@ fn test_rescroll_keeps_count() {
     app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(
         agent_msg("response").into(),
     )));
-    let snapshot = app.unseen_since.clone().expect("snapshot taken");
+    let snapshot = app
+        .transcript_view
+        .unseen_since
+        .clone()
+        .expect("snapshot taken");
     // A second scroll-away: was already not following, so the null guard
     // keeps the original baseline.
     app.scroll_transcript_line_up(3);
     assert_eq!(
-        app.unseen_since,
+        app.transcript_view.unseen_since,
         Some(snapshot),
         "second scroll-away must not reset the baseline"
     );
@@ -209,7 +213,7 @@ fn test_click_label_jumps() {
         "click returns to the tail"
     );
     assert!(
-        app.unseen_since.is_none(),
+        app.transcript_view.unseen_since.is_none(),
         "click clears the scroll-away snapshot"
     );
 }
@@ -329,7 +333,7 @@ fn test_floor_count_after_drain() {
         pump(&mut app, agent_msg(&format!("a{i} {text}")));
     }
     // The user scrolls back from the tail: the anchor is the frame count then.
-    app.unseen_since = Some(EventCursor::Local(1000));
+    app.transcript_view.unseen_since = Some(EventCursor::Local(1000));
     app.transcript.set_resident_byte_budget(1024);
     for i in 500..800 {
         pump(&mut app, user_msg(&format!("u{i} {text}")));
