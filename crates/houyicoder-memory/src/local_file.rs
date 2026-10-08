@@ -17,10 +17,10 @@
 //! This blocks the async runtime on IO; a production impl switches to tokio::fs
 //! or a spawned blocking task. Fine for prototype sessions.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fs;
 use std::fs::OpenOptions;
-use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
+use std::io::{BufRead, BufReader, ErrorKind, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -35,8 +35,7 @@ use houyicoder_context::{
     session_class::{INDEX_FILE, LOG_FILE, session_dir},
 };
 
-use crate::sha256_hex;
-
+mod blocks;
 mod log_index;
 use log_index::SessionWriteState;
 
@@ -104,18 +103,6 @@ impl LocalFileBackend {
         self.checkpoint_dir(session).join(format!("{cp}.json"))
     }
 
-    // CAS blocks live under <root>/.cas, shared across sessions (content
-    // addressing dedups across sessions). Sharded by the first 2 hex chars of
-    // the hash to keep any one directory from growing unbounded.
-    fn cas_dir(&self) -> PathBuf {
-        self.root.join(".cas")
-    }
-
-    fn block_path(&self, hash: &BlockHash) -> PathBuf {
-        let prefix = hash.0.get(..2).unwrap_or("");
-        self.cas_dir().join(prefix).join(format!("{}.bin", hash.0))
-    }
-
     fn ensure_dir(path: &Path) -> Result<(), ContextError> {
         #[cfg(unix)]
         {
@@ -180,7 +167,7 @@ impl LocalFileBackend {
         let log = self.log_path(session);
         let content = match fs::read_to_string(&log) {
             Ok(c) => c,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) if e.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
             Err(_) => return Err(ContextError::Io),
         };
         let mut events = Vec::new();
@@ -266,7 +253,7 @@ impl LocalFileBackend {
         let dir = self.checkpoint_dir(session);
         let entries = match fs::read_dir(&dir) {
             Ok(e) => e,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) if e.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
             Err(_) => return Err(ContextError::Io),
         };
         let mut ids: Vec<CheckpointId> = entries
@@ -280,118 +267,6 @@ impl LocalFileBackend {
             .collect();
         ids.sort();
         Ok(ids)
-    }
-
-    fn block_put_sync(&self, block: Vec<u8>) -> Result<BlockHash, ContextError> {
-        let hash = sha256_hex(&block);
-        let path = self.block_path(&hash);
-        // Dedup: same content already on disk; do not rewrite.
-        if path.exists() {
-            return Ok(hash);
-        }
-        if let Some(parent) = path.parent() {
-            Self::ensure_dir(parent)?;
-        }
-        // Atomic write to a temp sibling + fsync + rename so a crash never
-        // leaves a partial block (a reader gets the complete block or nothing).
-        let tmp = path.with_extension("bin.tmp");
-        let mut opts = OpenOptions::new();
-        opts.create(true).write(true).truncate(true);
-        #[cfg(unix)]
-        opts.mode(0o600);
-        let mut f = opts.open(&tmp).map_err(|_| ContextError::Io)?;
-        f.write_all(&block).map_err(|_| ContextError::Io)?;
-        f.sync_all().map_err(|_| ContextError::Io)?;
-        drop(f);
-        fs::rename(&tmp, &path).map_err(|_| ContextError::Io)?;
-        // Fsync the parent directory so the rename is durable across a
-        // crash; otherwise the block's data is fsynced but its directory
-        // entry is not, leaving a dangling block_ref on restart.
-        if let Some(dir) = path.parent()
-            && let Ok(dir_file) = fs::File::open(dir)
-        {
-            drop(dir_file.sync_all());
-        }
-        Ok(hash)
-    }
-
-    fn block_get_sync(&self, hash: &BlockHash) -> Result<Vec<u8>, ContextError> {
-        let path = self.block_path(hash);
-        match fs::read(&path) {
-            Ok(bytes) => Ok(bytes),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(ContextError::NotFound),
-            Err(_) => Err(ContextError::Io),
-        }
-    }
-
-    /// Collect the block_ref hashes referenced across every session log so the
-    /// a maintenance pass can tell a referenced block (keep) from an orphan (reclaim). Scans
-    /// the JSONL for the block_ref field — a coarse text scan, not a typed
-    /// parse, since the reclaim pass walks every session + a typed parse of every event
-    /// is needless work for a maintenance pass.
-    fn referenced_block_hashes(&self) -> HashSet<String> {
-        let mut refs = HashSet::new();
-        let Ok(sessions) = fs::read_dir(&self.root) else {
-            return refs;
-        };
-        let needle = "\"block_ref\":\"";
-        for entry in sessions.flatten() {
-            let log = entry.path().join(LOG_FILE);
-            let Ok(content) = fs::read_to_string(&log) else {
-                continue;
-            };
-            let mut at = 0;
-            while let Some(i) = content[at..].find(needle) {
-                let start = at + i + needle.len();
-                let rest = &content[start..];
-                let end = rest.find('"').unwrap_or(0);
-                if end > 0 {
-                    refs.insert(rest[..end].to_string());
-                }
-                at = start + end + 1;
-            }
-        }
-        refs
-    }
-
-    /// Reclaim orphan CAS blocks: blocks on disk whose hash no session log
-    /// references (the source event was compacted out + the manifest dropped
-    /// the block_ref). A maintenance pass, full-scan, not hot-path. Returns
-    /// the count of blocks removed. A block still referenced by any session
-    /// stays; a block referenced by none (an orphan) is deleted.
-    pub fn reclaim_orphan_blocks(&self) -> Result<usize, ContextError> {
-        let referenced = self.referenced_block_hashes();
-        let mut removed = 0;
-        let Ok(shards) = fs::read_dir(self.cas_dir()) else {
-            return Ok(0);
-        };
-        for shard in shards.flatten() {
-            let Ok(blocks) = fs::read_dir(shard.path()) else {
-                continue;
-            };
-            for block in blocks.flatten() {
-                let fname = block.file_name();
-                let name = match fname.to_str() {
-                    Some(n) => n,
-                    None => continue,
-                };
-                // <hash>.bin — strip the suffix for the referenced-set lookup.
-                let Some(hash) = name.strip_suffix(".bin") else {
-                    // A stale .bin.tmp left by a crash during block_put_sync
-                    // (the temp sibling never reached the rename). No
-                    // reference can exist for a temp file, so reap it
-                    // unconditionally instead of leaking CAS storage.
-                    if name.ends_with(".bin.tmp") && fs::remove_file(block.path()).is_ok() {
-                        removed += 1;
-                    }
-                    continue;
-                };
-                if !referenced.contains(hash) && fs::remove_file(block.path()).is_ok() {
-                    removed += 1;
-                }
-            }
-        }
-        Ok(removed)
     }
 }
 
@@ -521,12 +396,12 @@ impl ContextBackend for LocalFileBackend {
     fn log_size(&self, session: SessionId) -> u64 {
         // A missing log (new session, never appended) is size 0; the snapshot
         // caller treats 0 as "no disk log" and skips the load.
-        std::fs::metadata(self.log_path(session))
+        fs::metadata(self.log_path(session))
             .map(|m| m.len())
             .unwrap_or(0)
     }
 
-    fn session_log_root(&self) -> Option<&std::path::Path> {
+    fn session_log_root(&self) -> Option<&Path> {
         Some(&self.root)
     }
 
@@ -599,7 +474,6 @@ impl ContextBackend for LocalFileBackend {
             let mid_line = if n == 0 {
                 true
             } else {
-                use std::io::{Read as _, Seek as _};
                 let prev_byte = f.seek(SeekFrom::Start(byte_offset - 1)).ok().and_then(|_| {
                     let mut b = [0u8; 1];
                     f.read(&mut b).ok().filter(|&r| r == 1).map(|_| b[0])

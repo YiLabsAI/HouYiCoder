@@ -1,19 +1,25 @@
-//! Tests for local_file + the byte-window reads (split from local_file.rs
-//! so each file stays under the size gate).
+//! Tests for the durable session store: the byte-window reads forward and
+//! reverse with their error paths and their defaults on the in-memory
+//! backend, the append path with its dedup and its legacy directory spelling,
+//! the log size, the tolerant read that skips a corrupt line, the checkpoint
+//! manifests, and the replay that rebuilds a session from its event log.
 
 #[cfg(test)]
 mod tests {
     use crate::local_file::LocalFileBackend;
     use houyicoder_context::{
-        BlockHash, CheckpointId, CheckpointManifest, ContextBackend, ContextError, Disposition,
-        EventId, SessionEvent, SessionId, SessionLogEntry,
+        CheckpointId, CheckpointManifest, ContextBackend, ContextError, Disposition, EventId,
+        SessionEvent, SessionId, SessionLogEntry, TurnGroup,
     };
+    use std::env;
+    use std::fs;
+    use std::io::Write;
     use std::path::PathBuf;
 
     fn temp_root() -> PathBuf {
         let dir =
-            std::env::temp_dir().join(format!("houyicoder_local_window_test_{}", SessionId::new()));
-        std::fs::create_dir_all(&dir).expect("create temp root");
+            env::temp_dir().join(format!("houyicoder_local_window_test_{}", SessionId::new()));
+        fs::create_dir_all(&dir).expect("create temp root");
         dir
     }
 
@@ -62,7 +68,7 @@ mod tests {
             "partial first line dropped, rest complete: {:?}",
             r2.lines
         );
-        std::fs::remove_dir_all(&root).ok();
+        fs::remove_dir_all(&root).ok();
     }
 
     /// The reverse reader yields lines newest-first with their byte offsets +
@@ -100,7 +106,7 @@ mod tests {
             r.lines[0].0 > r.lines[4].0,
             "offsets descend as we go newer"
         );
-        std::fs::remove_dir_all(&root).ok();
+        fs::remove_dir_all(&root).ok();
     }
 
     /// A multi-byte UTF-8 sequence is not corrupted: the window is split on
@@ -129,7 +135,7 @@ mod tests {
             "multibyte char intact (no U+FFFD): {text}"
         );
         assert!(text.contains("边界测试"));
-        std::fs::remove_dir_all(&root).ok();
+        fs::remove_dir_all(&root).ok();
     }
 
     /// An in-memory backend has no on-disk log, so the windowed reads return
@@ -178,7 +184,7 @@ mod tests {
         let rev = b.read_lines_reverse(cold_session, 0, 1024);
         assert!(rev.lines.is_empty(), "cold reverse: no lines");
         assert_eq!(rev.next_from, None);
-        std::fs::remove_dir_all(&root).ok();
+        fs::remove_dir_all(&root).ok();
     }
 
     #[test]
@@ -206,7 +212,7 @@ mod tests {
             matches!(events[0].event, SessionEvent::UserInput { ref text } if text == "a"),
             "first event is the first appended"
         );
-        std::fs::remove_dir_all(&root).ok();
+        fs::remove_dir_all(&root).ok();
     }
 
     /// Appending to a session whose directory is named in the other spelling
@@ -220,8 +226,8 @@ mod tests {
         let b = LocalFileBackend::new(root.clone());
         let s = SessionId::new();
         let legacy = root.join(s.ulid_name());
-        std::fs::create_dir_all(&legacy).expect("create legacy dir");
-        std::fs::write(legacy.join("log.jsonl"), "").expect("seed log");
+        fs::create_dir_all(&legacy).expect("create legacy dir");
+        fs::write(legacy.join("log.jsonl"), "").expect("seed log");
 
         let id = EventId::new();
         pollster::block_on(b.append(evt(
@@ -233,7 +239,7 @@ mod tests {
         )))
         .unwrap();
 
-        let written = std::fs::read_to_string(legacy.join("log.jsonl")).expect("read legacy log");
+        let written = fs::read_to_string(legacy.join("log.jsonl")).expect("read legacy log");
         assert!(
             written.contains("into the legacy dir"),
             "the event lands in the directory the store already holds"
@@ -242,7 +248,7 @@ mod tests {
             !root.join(s.to_string()).exists(),
             "one session does not get a second directory"
         );
-        std::fs::remove_dir_all(&root).ok();
+        fs::remove_dir_all(&root).ok();
     }
 
     /// The tolerant read parses good lines + skips + counts bad ones, so one
@@ -262,11 +268,11 @@ mod tests {
         )))
         .unwrap();
         // Inject a corrupt line directly into the log (bad JSON).
-        let mut f = std::fs::OpenOptions::new()
+        let mut f = fs::OpenOptions::new()
             .append(true)
             .open(b.log_path(s))
             .expect("open log");
-        std::io::Write::write_all(&mut f, b"not valid json\n").expect("write corrupt");
+        f.write_all(b"not valid json\n").expect("write corrupt");
         let read = b.read_log_lenient(s);
         assert_eq!(read.events.len(), 1, "the good event parses through");
         assert_eq!(read.skipped, 1, "the corrupt line is skipped + counted");
@@ -275,7 +281,7 @@ mod tests {
             b.read_log(s).is_err(),
             "strict replay errors on the corrupt line; tolerant does not"
         );
-        std::fs::remove_dir_all(&root).ok();
+        fs::remove_dir_all(&root).ok();
     }
 
     /// A duplicate event id is a no-op append (main-chain dedup), so the log
@@ -304,7 +310,7 @@ mod tests {
             1,
             "seen set built once, not per append"
         );
-        std::fs::remove_dir_all(&root).ok();
+        fs::remove_dir_all(&root).ok();
     }
 
     /// A checkpoint round-trips through the on-disk JSON + lists back. Drives
@@ -321,7 +327,7 @@ mod tests {
             session: s,
             last_event: last,
             summary: Some("head summarized".into()),
-            plan: vec![houyicoder_context::TurnGroup {
+            plan: vec![TurnGroup {
                 turn_id: last,
                 disposition: Disposition::Verbatim,
                 event_ids: vec![last],
@@ -340,65 +346,57 @@ mod tests {
             matches!(miss, Err(ContextError::NotFound)),
             "missing -> NotFound"
         );
-        std::fs::remove_dir_all(&root).ok();
+        fs::remove_dir_all(&root).ok();
     }
 
-    /// The CAS block store round-trips, dedups same content, and reports
-    /// NotFound for a missing hash. Drives the async block_put/block_get
-    /// wrappers + the sync helpers.
+    /// A checkpoint write goes to a temp sibling, fsyncs, then renames, so a
+    /// reader sees the previous manifest or the complete new one and never a
+    /// partial file. Once the call returns the temp sibling is gone and the
+    /// manifest reads back on a fresh backend.
     #[test]
-    fn test_block_store_round_trips() {
+    fn test_checkpoint_atomic_write() {
         let root = temp_root();
         let b = LocalFileBackend::new(root.clone());
-        let blob = b"hello local cas".to_vec();
-        let h1 = pollster::block_on(b.block_put(blob.clone())).unwrap();
-        // Same content -> same hash, no rewrite (dedup path).
-        let h2 = pollster::block_on(b.block_put(blob.clone())).unwrap();
-        assert_eq!(h1, h2, "same content -> same hash");
-        let back = pollster::block_on(b.block_get(&h1)).unwrap();
-        assert_eq!(back, blob, "round-trip recovers the bytes");
-        // Different content -> different hash.
-        let h3 = pollster::block_on(b.block_put(b"other".to_vec())).unwrap();
-        assert_ne!(h3, h1, "different content -> different hash");
-        // Missing hash -> NotFound.
-        let miss = pollster::block_on(b.block_get(&BlockHash("0".repeat(64))));
-        assert!(matches!(miss, Err(ContextError::NotFound)));
-        std::fs::remove_dir_all(&root).ok();
-    }
-
-    /// CAS blocks survive a backend restart: a block_put on one
-    /// LocalFileBackend instance is retrievable from a fresh instance pointed
-    /// at the same root. The CAS lives under <root>/.cas/, separate from the
-    /// per-session log, so dropping the in-memory backend does not lose the
-    /// content-addressed bytes. This is the durability premise for the
-    /// 3-tier retention policy — a block_ref marker written in one run must
-    /// resolve in a resumed run.
-    #[test]
-    fn test_cas_survives_restart() {
-        let root = temp_root();
-        let blob = b"restart-durable cas blob".to_vec();
-        let hash = {
-            let b = LocalFileBackend::new(root.clone());
-            pollster::block_on(b.block_put(blob.clone())).unwrap()
+        let session = SessionId::new();
+        let manifest = CheckpointManifest {
+            id: CheckpointId::new(),
+            session,
+            last_event: EventId::new(),
+            summary: Some("folded".into()),
+            plan: vec![TurnGroup {
+                turn_id: EventId::new(),
+                disposition: Disposition::Summarized,
+                event_ids: vec![EventId::new()],
+            }],
+            ts: 0,
         };
-        // A fresh backend over the same root sees the persisted CAS bytes.
+        let mid = manifest.id;
+        pollster::block_on(b.write_checkpoint(manifest.clone())).unwrap();
+        let cp_path = root
+            .join(format!("{session}"))
+            .join("checkpoints")
+            .join(format!("{mid}.json"));
+        assert!(cp_path.exists(), "checkpoint file present");
+        assert!(
+            !cp_path.with_extension("tmp").exists(),
+            "no temp sibling lingers after write_checkpoint"
+        );
         let b2 = LocalFileBackend::new(root.clone());
-        let back = pollster::block_on(b2.block_get(&hash)).unwrap();
-        assert_eq!(back, blob, "CAS block survives a backend restart");
-        // Dedup also persists: re-putting the same content on the fresh
-        // backend yields the same hash (the path.exists() short-circuit
-        // reads the already-present file).
-        let again = pollster::block_on(b2.block_put(blob.clone())).unwrap();
-        assert_eq!(again, hash, "dedup stable across restart");
-        std::fs::remove_dir_all(&root).ok();
+        let back = pollster::block_on(b2.read_checkpoint(mid)).unwrap();
+        assert_eq!(
+            back.summary,
+            Some("folded".into()),
+            "checkpoint round-trips"
+        );
+        fs::remove_dir_all(&root).ok();
     }
 
     /// A session's event log replays round-trip across a restart: events
     /// appended on one LocalFileBackend instance re-materialize in replay
     /// order on a fresh instance at the same root. The durable log is the
     /// source of truth the turn-group assembly re-reads each turn, so a
-    /// resume that cannot replay is a brick. This pins the replay path the
-    /// manifest builder + apply_manifest run against after a restart.
+    /// resume that cannot replay is a brick. The manifest builder and
+    /// apply_manifest both read this path after a restart.
     #[test]
     fn test_replay_session_round_trips() {
         let root = temp_root();
@@ -461,7 +459,7 @@ mod tests {
             },
             "replay preserves the event kind + payload"
         );
-        std::fs::remove_dir_all(&root).ok();
+        fs::remove_dir_all(&root).ok();
     }
 
     /// A window that lands mid-line with no newline in the read returns no
@@ -490,7 +488,7 @@ mod tests {
             r.next_offset > 50,
             "next_offset advances past the partial read"
         );
-        std::fs::remove_dir_all(&root).ok();
+        fs::remove_dir_all(&root).ok();
     }
 
     /// A reverse read of a single line with no trailing newline yields its
@@ -520,7 +518,7 @@ mod tests {
             "content intact: {}",
             r.lines[0].1
         );
-        std::fs::remove_dir_all(&root).ok();
+        fs::remove_dir_all(&root).ok();
     }
 
     /// A reverse read of an empty log file (file exists, size 0) returns
@@ -533,8 +531,8 @@ mod tests {
         let s = SessionId::new();
         // Touch the log file so it exists with size 0 (not a cold session).
         let log = b.log_path(s);
-        std::fs::create_dir_all(log.parent().unwrap()).expect("create session dir");
-        std::fs::File::create(&log).expect("create empty log");
+        fs::create_dir_all(log.parent().unwrap()).expect("create session dir");
+        fs::File::create(&log).expect("create empty log");
         let r = b.read_lines_reverse(s, 0, 1 << 20);
         assert!(r.lines.is_empty(), "empty file yields no lines");
         assert_eq!(r.next_from, None, "BOF (size 0)");
@@ -542,158 +540,6 @@ mod tests {
         let fwd = b.read_log_range(s, 0, 1 << 20);
         assert!(fwd.lines.is_empty());
         assert_eq!(fwd.bytes_total, 0);
-        std::fs::remove_dir_all(&root).ok();
-    }
-    /// Crash atomicity: block_put + write_checkpoint write to a temp sibling,
-    /// fsync, then rename — so a reader never observes a partial block or
-    /// manifest. After the calls return, no .tmp lingers + the data
-    /// round-trips. (A true crash mid-write leaves the .tmp behind, which a
-    /// later reclaim pass would reap; this test pins the happy path the
-    /// atomic-rename contract promises.)
-    #[test]
-    fn test_cas_crash_atomicity() {
-        use houyicoder_context::{CheckpointManifest, TurnGroup};
-        let root = temp_root();
-        let b = LocalFileBackend::new(root.clone());
-        let session = SessionId::new();
-        let blob = b"atomicity-checked blob".to_vec();
-        let hash = pollster::block_on(b.block_put(blob.clone())).unwrap();
-        // The block file is present + readable; no .tmp lingers.
-        let block_path = root
-            .join(".cas")
-            .join(&hash.0[..2])
-            .join(format!("{}.bin", hash.0));
-        assert!(block_path.exists(), "block file present");
-        assert!(
-            !block_path.with_extension("bin.tmp").exists(),
-            "no .tmp lingers after block_put"
-        );
-        assert_eq!(
-            pollster::block_on(b.block_get(&hash)).unwrap(),
-            blob,
-            "block round-trips"
-        );
-        // A checkpoint write is atomic too: no .tmp lingers + the manifest
-        // round-trips on a fresh backend.
-        let manifest = CheckpointManifest {
-            id: CheckpointId::new(),
-            session,
-            last_event: EventId::new(),
-            summary: Some("folded".into()),
-            plan: vec![TurnGroup {
-                turn_id: EventId::new(),
-                disposition: Disposition::Summarized,
-                event_ids: vec![EventId::new()],
-            }],
-            ts: 0,
-        };
-        let mid = manifest.id;
-        pollster::block_on(b.write_checkpoint(manifest.clone())).unwrap();
-        let cp_path = root
-            .join(format!("{session}"))
-            .join("checkpoints")
-            .join(format!("{mid}.json"));
-        assert!(cp_path.exists(), "checkpoint file present");
-        assert!(
-            !cp_path.with_extension("json.tmp").exists(),
-            "no .tmp lingers after write_checkpoint"
-        );
-        let b2 = LocalFileBackend::new(root.clone());
-        let back = pollster::block_on(b2.read_checkpoint(mid)).unwrap();
-        assert_eq!(
-            back.summary,
-            Some("folded".into()),
-            "checkpoint round-trips"
-        );
-        std::fs::remove_dir_all(&root).ok();
-    }
-
-    /// Orphan-block reclaim: a block referenced by a session log's block_ref
-    /// stays; a block no log references (an orphan from a compacted-out
-    /// event) is reclaimed. The reclaim pass scans the session logs for
-    /// block_ref hashes + deletes any CAS block not in that set.
-    #[test]
-    fn test_reclaim_blocks_removes_unreferenced() {
-        let root = temp_root();
-        let b = LocalFileBackend::new(root.clone());
-        let session = SessionId::new();
-        // A referenced block: write a log with a block_ref, then put the
-        // block the ref points at.
-        let referenced_blob = b"keep me".to_vec();
-        let referenced_hash = pollster::block_on(b.block_put(referenced_blob.clone())).unwrap();
-        pollster::block_on(b.append(evt(
-            session,
-            EventId::new(),
-            SessionEvent::ToolResult {
-                call_id: "c1".into(),
-                output: serde_json::json!({"block_ref": referenced_hash.0, "preview": "..."}),
-                duration_ms: 0,
-            },
-        )))
-        .unwrap();
-        // An orphan block: put directly, no log references it.
-        let orphan_blob = b"reclaim me".to_vec();
-        let orphan_hash = pollster::block_on(b.block_put(orphan_blob.clone())).unwrap();
-        let orphan_path = root
-            .join(".cas")
-            .join(&orphan_hash.0[..2])
-            .join(format!("{}.bin", orphan_hash.0));
-        assert!(orphan_path.exists(), "orphan present before reclaim");
-        let removed = b.reclaim_orphan_blocks().unwrap();
-        assert_eq!(removed, 1, "the orphan was reclaimed");
-        assert!(!orphan_path.exists(), "orphan gone after reclaim");
-        // The referenced block stays.
-        let kept_path = root
-            .join(".cas")
-            .join(&referenced_hash.0[..2])
-            .join(format!("{}.bin", referenced_hash.0));
-        assert!(kept_path.exists(), "referenced block stays");
-        assert_eq!(
-            pollster::block_on(b.block_get(&referenced_hash)).unwrap(),
-            referenced_blob,
-            "referenced block still retrievable"
-        );
-        std::fs::remove_dir_all(&root).ok();
-    }
-
-    /// A crash during block_put_sync leaves the temp sibling (.bin.tmp) on
-    /// disk. The reclaim pass must reap it — no reference can exist for a
-    /// temp file that never reached the rename, so it is removed
-    /// unconditionally rather than leaking CAS storage across crashes.
-    #[test]
-    fn test_reclaim_reaps_stale_tmp() {
-        let root = temp_root();
-        let b = LocalFileBackend::new(root.clone());
-        let session = SessionId::new();
-        // A real block the log references — reclaim must keep it.
-        let blob = b"keep me".to_vec();
-        let hash = pollster::block_on(b.block_put(blob.clone())).unwrap();
-        pollster::block_on(b.append(evt(
-            session,
-            EventId::new(),
-            SessionEvent::ToolResult {
-                call_id: "c1".into(),
-                output: serde_json::json!({"block_ref": hash.0, "preview": "..."}),
-                duration_ms: 0,
-            },
-        )))
-        .unwrap();
-        // Simulate a crash mid-write: drop a .bin.tmp temp sibling directly.
-        let tmp_path = root
-            .join(".cas")
-            .join(&hash.0[..2])
-            .join(format!("{}.bin.tmp", hash.0));
-        std::fs::write(&tmp_path, b"stale temp").unwrap();
-        assert!(tmp_path.exists(), "stale .bin.tmp present before reclaim");
-        let removed = b.reclaim_orphan_blocks().unwrap();
-        assert_eq!(removed, 1, "the stale .bin.tmp was reaped");
-        assert!(!tmp_path.exists(), "stale .bin.tmp gone after reclaim");
-        // The referenced real block is untouched.
-        assert_eq!(
-            pollster::block_on(b.block_get(&hash)).unwrap(),
-            blob,
-            "referenced block still retrievable"
-        );
-        std::fs::remove_dir_all(&root).ok();
+        fs::remove_dir_all(&root).ok();
     }
 }
