@@ -285,12 +285,11 @@ fn test_wheel_moves_content() {
         app.system_line(format!("history line {i:02}"));
     }
     let out_before = render_text(&app, 80, 24);
-    let total = app.transcript_display_rows();
     let cap = app.transcript_scroll.cap.get();
-    let top_before = app.transcript_scroll.top_offset(total);
+    let top_before = app.transcript_scroll.top_offset();
     // Wheel up one notch in the middle of the transcript area.
     crate::app::handle_mouse(&mut app, mouse(MouseEventKind::ScrollUp, 40, 12));
-    let top_after = app.transcript_scroll.top_offset(total);
+    let top_after = app.transcript_scroll.top_offset();
     assert!(
         !app.transcript_scroll.is_following_tail(),
         "wheel up breaks follow-tail"

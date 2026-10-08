@@ -81,8 +81,10 @@ pub struct TranscriptScroll {
     /// the key handler can page by a full screen. Defaults to a sane value so
     /// paging works before the first draw.
     pub cap: Cell<usize>,
-    /// Total display-row count, written by the view during draw so the key
-    /// handler can clamp and detect end-of-buffer.
+    /// Total display-row count. The view writes it during draw; a scroll
+    /// step before the first draw publishes the walked count here so the
+    /// step clamps against the number the renderer will publish. The step
+    /// and clamp methods read this cell and nothing else.
     pub total: Cell<usize>,
 }
 
@@ -132,7 +134,8 @@ impl TranscriptScroll {
     /// The top display-row index to render from. Follows the tail when
     /// follow_tail is true; otherwise the pinned offset clamped to the valid
     /// range so the viewport always fills: never starts past total - cap.
-    pub fn top_offset(&self, total_rows: usize) -> usize {
+    pub fn top_offset(&self) -> usize {
+        let total_rows = self.total.get();
         let cap = self.effective_cap();
         if self.follow_tail {
             total_rows.saturating_sub(cap)
@@ -142,8 +145,8 @@ impl TranscriptScroll {
     }
 
     /// Number of rows hidden above the current viewport (the N in N more).
-    pub fn more_above(&self, total_rows: usize) -> usize {
-        self.top_offset(total_rows)
+    pub fn more_above(&self) -> usize {
+        self.top_offset()
     }
 
     /// Page up by one viewport. Breaks follow-tail and pins the offset. A
@@ -151,13 +154,14 @@ impl TranscriptScroll {
     /// less — otherwise a wheel on a short session would pin offset 0 and
     /// surface a ghost jump-to-bottom label while the view is already at
     /// the bottom.
-    pub fn page_up(&mut self, total_rows: usize) {
+    pub fn page_up(&mut self) {
+        let total_rows = self.total.get();
         let cap = self.effective_cap();
         let max_top = total_rows.saturating_sub(cap);
         if max_top == 0 {
             return;
         }
-        let cur = self.top_offset(total_rows);
+        let cur = self.top_offset();
         self.offset = cur.saturating_sub(cap);
         self.follow_tail = false;
     }
@@ -166,9 +170,10 @@ impl TranscriptScroll {
     /// reached. The transition lets the caller trim the live transcript and
     /// clear the scroll-away snapshot on a return to the tail, rather than
     /// the flip happening silently here.
-    pub fn page_down(&mut self, total_rows: usize) -> ScrollTransition {
+    pub fn page_down(&mut self) -> ScrollTransition {
+        let total_rows = self.total.get();
         let cap = self.effective_cap();
-        let cur = self.top_offset(total_rows);
+        let cur = self.top_offset();
         let max_top = total_rows.saturating_sub(cap);
         if cur + cap >= max_top {
             if self.follow_tail {
@@ -189,12 +194,13 @@ impl TranscriptScroll {
     /// line step keeps continuity with the prior viewport, unlike a full
     /// page jump which swaps the whole screen. A no-op (keeping follow-tail)
     /// when the transcript fits one viewport or less, matching page_up.
-    pub fn line_up(&mut self, n: usize, total_rows: usize) {
+    pub fn line_up(&mut self, n: usize) {
+        let total_rows = self.total.get();
         let max_top = total_rows.saturating_sub(self.effective_cap());
         if max_top == 0 {
             return;
         }
-        let cur = self.top_offset(total_rows);
+        let cur = self.top_offset();
         self.offset = cur.saturating_sub(n);
         self.follow_tail = false;
     }
@@ -203,8 +209,9 @@ impl TranscriptScroll {
     /// reached. See line_up for why a line step is the wheel default. The
     /// transition carries whether the step crossed to the tail so the caller
     /// can trim and clear the scroll-away snapshot.
-    pub fn line_down(&mut self, n: usize, total_rows: usize) -> ScrollTransition {
-        let cur = self.top_offset(total_rows);
+    pub fn line_down(&mut self, n: usize) -> ScrollTransition {
+        let total_rows = self.total.get();
+        let cur = self.top_offset();
         let max_top = total_rows.saturating_sub(self.effective_cap());
         if cur + n >= max_top {
             if self.follow_tail {
@@ -445,10 +452,32 @@ mod tests {
         s.cap.set(5);
         s.total.set(20);
         assert!(s.follow_tail);
-        assert_eq!(s.top_offset(20), 15);
-        s.page_up(20);
+        assert_eq!(s.top_offset(), 15);
+        s.page_up();
         assert!(!s.follow_tail);
-        assert_eq!(s.top_offset(20), 10);
+        assert_eq!(s.top_offset(), 10);
+    }
+
+    /// The clamp reads the cell, and the cell only. Before this contract the
+    /// step methods took total as an argument while the cell held the same
+    /// fact, so two sources could disagree about one value; this test pins
+    /// that a published cell change is what moves the clamp, with no second
+    /// source to override it.
+    #[test]
+    fn test_clamp_reads_published_total() {
+        let mut s = TranscriptScroll::default();
+        s.cap.set(5);
+        s.total.set(20);
+        s.jump_to(18);
+        assert_eq!(s.top_offset(), 15, "clamps to the published total");
+        s.total.set(40);
+        assert_eq!(s.top_offset(), 18, "a later publish moves the clamp");
+        s.total.set(10);
+        assert_eq!(
+            s.top_offset(),
+            5,
+            "a smaller publish clamps back, never past total - cap"
+        );
     }
 
     #[test]
@@ -456,12 +485,12 @@ mod tests {
         let mut s = TranscriptScroll::default();
         s.cap.set(5);
         s.total.set(20);
-        s.page_up(20);
+        s.page_up();
         assert!(!s.follow_tail);
         // page down once -> offset 15, still not at max_top(15) edge
-        s.page_down(20);
+        s.page_down();
         // one more page down reaches the bottom -> follow tail
-        s.page_down(20);
+        s.page_down();
         assert!(s.follow_tail);
     }
 
@@ -469,20 +498,22 @@ mod tests {
     fn test_jump_to_pins_offset() {
         let mut s = TranscriptScroll::default();
         s.cap.set(5);
+        s.total.set(20);
         s.jump_to(3);
         assert!(!s.follow_tail);
-        assert_eq!(s.top_offset(20), 3);
+        assert_eq!(s.top_offset(), 3);
     }
 
     #[test]
     fn test_line_down_three() {
         let mut s = TranscriptScroll::default();
         s.cap.set(5);
+        s.total.set(20);
         // Pin near the middle first so a line step is visible vs a page jump.
         s.jump_to(5);
-        assert_eq!(s.top_offset(20), 5);
-        s.line_down(3, 20);
-        assert_eq!(s.top_offset(20), 8, "line step is 3, not a full page of 5");
+        assert_eq!(s.top_offset(), 5);
+        s.line_down(3);
+        assert_eq!(s.top_offset(), 8, "line step is 3, not a full page of 5");
         assert!(!s.follow_tail);
     }
 
@@ -490,9 +521,10 @@ mod tests {
     fn test_line_up_three() {
         let mut s = TranscriptScroll::default();
         s.cap.set(5);
+        s.total.set(20);
         s.jump_to(8);
-        s.line_up(3, 20);
-        assert_eq!(s.top_offset(20), 5);
+        s.line_up(3);
+        assert_eq!(s.top_offset(), 5);
         assert!(!s.follow_tail);
     }
 
@@ -500,9 +532,10 @@ mod tests {
     fn test_line_down_tail() {
         let mut s = TranscriptScroll::default();
         s.cap.set(5);
+        s.total.set(20);
         s.jump_to(14);
         // max_top = 20 - 5 = 15; stepping 3 from 14 reaches the tail.
-        s.line_down(3, 20);
+        s.line_down(3);
         assert!(s.follow_tail, "reaching the bottom returns to follow-tail");
     }
 
@@ -510,17 +543,19 @@ mod tests {
     fn test_line_up_clamp() {
         let mut s = TranscriptScroll::default();
         s.cap.set(5);
+        s.total.set(20);
         s.jump_to(1);
-        s.line_up(3, 20);
-        assert_eq!(s.top_offset(20), 0, "never underflows past the top");
+        s.line_up(3);
+        assert_eq!(s.top_offset(), 0, "never underflows past the top");
     }
 
     #[test]
     fn test_more_above_counts_hidden() {
         let mut s = TranscriptScroll::default();
         s.cap.set(5);
-        s.page_up(20);
-        assert_eq!(s.more_above(20), 10);
+        s.total.set(20);
+        s.page_up();
+        assert_eq!(s.more_above(), 10);
     }
 
     #[test]

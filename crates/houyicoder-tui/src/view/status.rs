@@ -294,8 +294,8 @@ fn focus_action_hint(app: &App) -> String {
 /// into the same row keeps the ScrollBox height stable (no layout shift),
 /// like a transcript search bar.
 pub fn draw_scroll_status(f: &mut Frame, area: Rect, app: &App) {
-    let total = app.transcript_display_rows();
-    let top = app.active_scroll().top_offset(total);
+    let top = app.active_scroll().top_offset();
+    let total = app.active_scroll().total.get();
     let line = top.saturating_add(1);
     let style = Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD);
     let line_widget = if app.search.input_mode {

@@ -354,9 +354,7 @@ impl App {
         if self.transcript_scroll.is_following_tail() {
             return;
         }
-        let top = self
-            .transcript_scroll
-            .top_offset(self.display_rows_cache.borrow().len());
+        let top = self.transcript_scroll.top_offset();
         // Load only when the user is near the current history boundary.
         if top > 5 {
             return;

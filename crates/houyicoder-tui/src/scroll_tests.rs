@@ -117,13 +117,9 @@ fn test_page_down_after_up() {
     drop(render(&app));
     app.scroll_transcript_up();
     assert!(!app.transcript_scroll.is_following_tail());
-    let top_after_up = app
-        .transcript_scroll
-        .top_offset(app.transcript_display_rows());
+    let top_after_up = app.transcript_scroll.top_offset();
     app.scroll_transcript_down();
-    let top_after_down = app
-        .transcript_scroll
-        .top_offset(app.transcript_display_rows());
+    let top_after_down = app.transcript_scroll.top_offset();
     assert!(
         top_after_down >= top_after_up,
         "PgDown must not scroll further up: {top_after_up} -> {top_after_down}"
@@ -148,8 +144,7 @@ fn test_thinking_expand_pins() {
         turn_id: "t1".into(),
     });
     drop(render(&app));
-    let total = app.transcript_scroll.total.get();
-    let top_before = app.transcript_scroll.top_offset(total);
+    let top_before = app.transcript_scroll.top_offset();
     assert!(
         top_before > 0,
         "the fixture must be taller than the viewport, else the pin is untestable"
@@ -161,7 +156,7 @@ fn test_thinking_expand_pins() {
         "expand stops following the tail so the rows below can grow"
     );
     assert_eq!(
-        app.transcript_scroll.top_offset(total),
+        app.transcript_scroll.top_offset(),
         top_before,
         "expand must keep the visible top, not fall back to offset 0"
     );
@@ -183,12 +178,11 @@ fn test_subagent_expand_pins() {
         color: None,
     });
     drop(render(&app));
-    let total = app.transcript_scroll.total.get();
-    let top_before = app.transcript_scroll.top_offset(total);
+    let top_before = app.transcript_scroll.top_offset();
     assert!(top_before > 0, "fixture taller than the viewport");
     assert!(app.toggle_tail_expand(), "the delegation is expandable");
     assert_eq!(
-        app.transcript_scroll.top_offset(total),
+        app.transcript_scroll.top_offset(),
         top_before,
         "expand must keep the visible top, not fall back to offset 0"
     );
@@ -295,10 +289,8 @@ fn test_grid_survives_page_up() {
     fill_transcript(&mut app, 20);
     app.viewport = crate::state::ViewportMode::Scroll;
     drop(render(&app));
-    let total = app.transcript_display_rows();
-    app.transcript_scroll.page_up(total);
-    let total = app.transcript_display_rows();
-    app.transcript_scroll.page_up(total);
+    app.transcript_scroll.page_up();
+    app.transcript_scroll.page_up();
     let out = render(&app);
     assert!(out.contains("Context Usage"), "header gone: {out}");
     assert!(out.contains("Estimated usage"), "legend gone: {out}");

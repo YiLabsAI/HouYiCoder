@@ -1702,8 +1702,7 @@ fn test_ctrl_o_follows_cursor() {
         .iter()
         .position(|(_, text)| text.contains("Thought for"))
         .expect("the reasoning row is on screen");
-    let total = app.transcript_scroll.total.get();
-    let top = app.transcript_scroll.top_offset(total);
+    let top = app.transcript_scroll.top_offset();
     app.selection.start(0, top + ri);
     handle_ctrl_o(&mut app);
     assert!(

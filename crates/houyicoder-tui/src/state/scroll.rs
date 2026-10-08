@@ -32,19 +32,34 @@ impl App {
         }
     }
 
+    /// Publish the row count into the on-view scroll before any scroll step,
+    /// so the step clamps against the same total the renderer publishes.
+    /// Before the first render the cell holds zero; the walk is the fallback
+    /// then, close to what a first draw would publish (it counts unwrapped
+    /// rows, so content that would wrap is undercounted until that draw).
+    /// After the first render the cell is the count==render single source
+    /// and the walk is skipped.
+    pub(crate) fn ensure_rows_published(&mut self) {
+        if self.active_scroll().total.get() == 0 {
+            let walked = self.fold_aware_rows(None);
+            self.active_scroll_mut().total.set(walked);
+        }
+    }
+
     /// Page the transcript on view up by one viewport (older rows). Only the
     /// parent's scroll breaks follow-tail into a new-message count; the
     /// child's scroll moves alone.
     pub fn scroll_transcript_up(&mut self) {
+        self.ensure_rows_published();
         let total = self.transcript_display_rows();
         let viewing_child = self.teammate_view.is_some();
-        let before = self.active_scroll().top_offset(total);
+        let before = self.active_scroll().top_offset();
         let was_following = self.active_scroll().is_following_tail();
-        self.active_scroll_mut().page_up(total);
+        self.active_scroll_mut().page_up();
         if !viewing_child {
             self.snapshot_scroll_away(was_following);
         }
-        let after = self.active_scroll().top_offset(total);
+        let after = self.active_scroll().top_offset();
         self.debug_scroll("up", total, before, after);
     }
 
@@ -55,14 +70,15 @@ impl App {
     /// child step to the tail must not cut parent history the reader never
     /// scrolled away from.
     pub fn scroll_transcript_down(&mut self) {
+        self.ensure_rows_published();
         let total = self.transcript_display_rows();
         let viewing_child = self.teammate_view.is_some();
-        let before = self.active_scroll().top_offset(total);
-        let transition = self.active_scroll_mut().page_down(total);
+        let before = self.active_scroll().top_offset();
+        let transition = self.active_scroll_mut().page_down();
         if !viewing_child && transition == ScrollTransition::ReachedTail {
             self.resume_tail_trim();
         }
-        let after = self.active_scroll().top_offset(total);
+        let after = self.active_scroll().top_offset();
         self.debug_scroll("down", total, before, after);
     }
 
@@ -86,8 +102,7 @@ impl App {
     /// falls back to the last pinned offset, which is 0 on a session that
     /// never scrolled, so the view jumps to the top of the transcript.
     pub fn pin_transcript_top(&mut self) {
-        let total = self.active_scroll().total.get();
-        let top = self.active_scroll().top_offset(total);
+        let top = self.active_scroll().top_offset();
         self.active_scroll_mut().jump_to(top);
     }
 
@@ -208,15 +223,16 @@ impl App {
     /// viewport, unlike a full page jump. Only the parent's scroll breaks
     /// follow-tail into a new-message count.
     pub fn scroll_transcript_line_up(&mut self, n: usize) {
+        self.ensure_rows_published();
         let total = self.transcript_display_rows();
         let viewing_child = self.teammate_view.is_some();
-        let before = self.active_scroll().top_offset(total);
+        let before = self.active_scroll().top_offset();
         let was_following = self.active_scroll().is_following_tail();
-        self.active_scroll_mut().line_up(n, total);
+        self.active_scroll_mut().line_up(n);
         if !viewing_child {
             self.snapshot_scroll_away(was_following);
         }
-        let after = self.active_scroll().top_offset(total);
+        let after = self.active_scroll().top_offset();
         self.debug_scroll("line-up", total, before, after);
     }
 
@@ -225,14 +241,15 @@ impl App {
     /// trims and clears the scroll-away snapshot, matching page_down; a
     /// child step to the tail moves the child scroll alone.
     pub fn scroll_transcript_line_down(&mut self, n: usize) {
+        self.ensure_rows_published();
         let total = self.transcript_display_rows();
         let viewing_child = self.teammate_view.is_some();
-        let before = self.active_scroll().top_offset(total);
-        let transition = self.active_scroll_mut().line_down(n, total);
+        let before = self.active_scroll().top_offset();
+        let transition = self.active_scroll_mut().line_down(n);
         if !viewing_child && transition == ScrollTransition::ReachedTail {
             self.resume_tail_trim();
         }
-        let after = self.active_scroll().top_offset(total);
+        let after = self.active_scroll().top_offset();
         self.debug_scroll("line-down", total, before, after);
     }
 

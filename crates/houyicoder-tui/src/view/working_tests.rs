@@ -178,8 +178,7 @@ fn test_fold_collapse_expand_toggle() {
         .expect("a fold row should exist");
     let rect = app.transcript_rect.get();
     let fold_y = rect.y + fold_ri as u16;
-    let total = app.transcript_scroll.total.get();
-    let scroll_top = app.transcript_scroll.top_offset(total);
+    let scroll_top = app.transcript_scroll.top_offset();
     let _ = fold_y;
     app.selection.start(0, scroll_top + fold_ri);
     keys::handle_working(
@@ -402,8 +401,7 @@ fn test_copy_preserves_scrolled_content() {
     // Selection at screen row 0..1 maps to scroll_top + 0..1 in the full
     // rows. Verify the extracted text comes from the scrolled position.
     let rect = app.transcript_rect.get();
-    let total = app.transcript_scroll.total.get();
-    let top = app.transcript_scroll.top_offset(total);
+    let top = app.transcript_scroll.top_offset();
     let mut sel = Selection::default();
     sel.start(0, top);
     sel.update(79, top + 1);
@@ -565,7 +563,7 @@ fn test_anchor_clamped_to_content() {
     let bottom = rect.y + rect.height - 1;
     let border_y = rect.y + rect.height;
     let total = app.transcript_scroll.total.get();
-    let scroll_top = app.transcript_scroll.top_offset(total);
+    let scroll_top = app.transcript_scroll.top_offset();
     let visible = total.saturating_sub(scroll_top).min(rect.height as usize);
     assert!(
         visible < rect.height as usize,

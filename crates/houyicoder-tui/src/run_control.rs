@@ -524,7 +524,7 @@ impl App {
             self.transcript_scroll.cap.get(),
             total,
             self.transcript_scroll.is_following_tail(),
-            self.transcript_scroll.top_offset(total),
+            self.transcript_scroll.top_offset(),
             self.approval().is_some(),
             self.agent_busy(),
         );

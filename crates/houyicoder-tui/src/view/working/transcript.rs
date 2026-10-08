@@ -100,7 +100,7 @@ pub(super) fn draw_transcript(f: &mut Frame, area: Rect, app: &App) {
     app.active_scroll().cap.set(cap);
     let total = total_slots + live.rows.len();
     app.active_scroll().total.set(total);
-    let top = app.active_scroll().top_offset(total);
+    let top = app.active_scroll().top_offset();
 
     // Slice the visible window [top, top+cap) over (slots ++ live) WITHOUT
     // cloning the full slots cache — only the viewport rows are cloned.

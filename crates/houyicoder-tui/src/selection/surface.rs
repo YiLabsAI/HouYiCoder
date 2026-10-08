@@ -133,7 +133,7 @@ pub(crate) fn last_visible_content_row(rect: Rect, total: usize, scroll_top: usi
 /// (columns map 1:1 to content; there is no horizontal scroll).
 pub(crate) fn transcript_mouse_to_content(app: &App, rect: Rect, x: u16, y: u16) -> (u16, usize) {
     let total = app.active_scroll().total.get();
-    let scroll_top = app.active_scroll().top_offset(total);
+    let scroll_top = app.active_scroll().top_offset();
     let col = x.clamp(rect.x, rect.x + rect.width.saturating_sub(1));
     let last_content = last_visible_content_row(rect, total, scroll_top);
     let row = y
