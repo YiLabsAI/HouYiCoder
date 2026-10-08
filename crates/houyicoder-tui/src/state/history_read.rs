@@ -7,8 +7,14 @@
 //! signal, so a late result has nowhere to land and the worker producing it
 //! quits at its next window instead of walking the rest of its byte budget for
 //! rows nothing will ever apply.
+//!
+//! The budget counts workers, not records. Dropping a record tells a worker to
+//! stop, but one already inside a read cannot observe that until it comes back
+//! up for its next window, so the slot it holds stays taken until it does. A
+//! count taken from the record would instead report the budget free while two
+//! walks of the same log run at once.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, mpsc};
 
 use crate::records::TranscriptLine;
@@ -21,8 +27,8 @@ use crate::state::transcript::DiskFront;
 /// rows on, and the apply side rejects a read stamped with the state before
 /// that move. So exceeding the budget spends IO for nothing, and a dispatch
 /// waits for the running read to clear. The budget is stated here and asserted
-/// at the dispatch point rather than left to the shape of the slot holding the
-/// read.
+/// at the dispatch point, against a count of the workers holding a slot rather
+/// than of the records the owner keeps.
 pub(crate) const HISTORY_READ_WORKER_BUDGET: usize = 1;
 
 /// The handle a worker watches to learn it is no longer wanted.
@@ -32,6 +38,56 @@ pub(crate) const HISTORY_READ_WORKER_BUDGET: usize = 1;
 /// the rest of its walk. It says nothing about kernel IO, which finishes or
 /// fails on its own schedule.
 pub(crate) type StopSignal = Arc<AtomicBool>;
+
+/// An execution slot, held for as long as the worker holding it runs.
+///
+/// Freed by the worker leaving rather than by the owner letting go of its
+/// record, because the budget counts what is running.
+///
+/// Releasing on drop also covers a task that never runs: a runtime shutting down
+/// drops the closure it was handed, which drops this with it, so a slot cannot
+/// leak and refuse every later read.
+pub(crate) struct WorkerPermit {
+    active: Arc<AtomicUsize>,
+}
+
+impl WorkerPermit {
+    /// Take a slot, counted from the moment the worker exists.
+    fn acquire(active: &Arc<AtomicUsize>) -> Self {
+        active.fetch_add(1, Ordering::AcqRel);
+        Self {
+            active: Arc::clone(active),
+        }
+    }
+}
+
+impl Drop for WorkerPermit {
+    fn drop(&mut self) {
+        self.active.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+/// What a dispatch hands the task it starts, and what that task holds for its
+/// whole run: the flag telling it whether the read is still wanted, and the slot
+/// the budget counts.
+///
+/// Both are issued together here, in the owner whose record drop raises the flag
+/// and whose counter the slot belongs to, and neither gives the worker a route
+/// to that record. Holding them in one value ties the slot's lifetime to the
+/// worker's rather than to the caller's: the lease moves into the task, so the
+/// slot comes back when the task does and not before.
+#[must_use = "dropping a lease frees its slot and discards its stop flag"]
+pub(crate) struct WorkerLease {
+    stop: StopSignal,
+    _permit: WorkerPermit,
+}
+
+impl WorkerLease {
+    /// The flag the worker checks between windows.
+    pub(crate) fn stop(&self) -> &StopSignal {
+        &self.stop
+    }
+}
 
 /// Rows a background read brought back from the session log, with the byte
 /// offset the next older read ends at.
@@ -49,8 +105,8 @@ pub(crate) enum HistoryReadOutcome {
     Exhausted,
 }
 
-/// A history read while its task runs, stamped with everything the apply side
-/// needs to decide whether the result still belongs to the view: the history
+/// A dispatched history read, stamped with everything the apply side needs to
+/// decide whether the result still belongs to the view: the history
 /// generation, the resident front, and the disk-rows state at dispatch. The
 /// receiver is the channel the task sends the outcome over; the task owns the
 /// sender and drops it on exit. The stop flag is shared with that task, and
@@ -90,7 +146,7 @@ impl Drop for PendingHistoryRead {
     /// Tell the worker its rows are unwanted on the way out.
     ///
     /// Every way a read stops being wanted ends in this drop: an invalidation
-    /// clears the slot, a session switch replaces the whole owner, and a quit
+    /// clears the record, a session switch replaces the whole owner, and a quit
     /// drops it with the rest of the app. Raising the flag here rather than at
     /// each of those keeps the abandon paths from having to agree. A record
     /// dropped after its result landed raises a flag nobody reads again.
@@ -100,8 +156,9 @@ impl Drop for PendingHistoryRead {
 }
 
 /// What poll sees: still waiting, a result ready to apply, or the background
-/// task gone. Disconnected is distinct from Pending so a dead worker cannot
-/// pin the slot forever and block every later read.
+/// task gone. Disconnected is distinct from Pending so a worker that died
+/// without sending is still cleared from the record instead of being waited on
+/// forever, which is also what latches the front against a re-dispatch storm.
 #[derive(Debug)]
 pub(crate) enum HistoryReadPoll {
     Pending,
@@ -110,9 +167,9 @@ pub(crate) enum HistoryReadPoll {
 }
 
 impl PendingHistoryRead {
-    /// Drain the channel without blocking. Pending keeps the slot; Ready
+    /// Drain the channel without blocking. Pending keeps the record; Ready
     /// returns the outcome for the caller to apply and clear it; Disconnected
-    /// means the worker is gone and the slot must be cleared.
+    /// means the worker is gone and the record must be cleared.
     pub fn poll(&self) -> HistoryReadPoll {
         use mpsc::TryRecvError;
         match self.rx.try_recv() {
@@ -123,17 +180,27 @@ impl PendingHistoryRead {
     }
 }
 
-/// The reads of one transcript history: at most one running read, and the
-/// generation counter that outlives it. Lives on App beside the scroll state
-/// the apply side consults, not inside Transcript: the transcript owns the
-/// facts, while this owner governs a task lifecycle across those facts being
-/// reset.
+/// The reads of one transcript history: the read on file, the workers holding a
+/// slot against the budget, and the generation counter that outlives both.
+/// Lives on App beside the scroll state the apply side consults, not inside
+/// Transcript: the transcript owns the facts, while this owner governs a task
+/// lifecycle across those facts being reset.
+///
+/// The worker count belongs here rather than to the task runner because it is
+/// the owner that decides a read is unwanted, and a read it has just stopped is
+/// still running. A session switch rebuilds this whole owner, so the count the
+/// new session dispatches against starts at zero and inherits nothing from the
+/// worker the old session abandoned.
 #[derive(Debug, Default)]
 pub struct HistoryReads {
     /// Bumped on every history invalidation. Strictly monotonic within one
     /// App; a session switch rebuilds the whole owner instead.
     epoch: u64,
     pending: Option<PendingHistoryRead>,
+    /// Slots the dispatched workers hold. Shared with every permit handed out,
+    /// so the budget reads what is executing rather than what the record above
+    /// still names.
+    active: Arc<AtomicUsize>,
 }
 
 impl HistoryReads {
@@ -143,35 +210,61 @@ impl HistoryReads {
         self.epoch
     }
 
-    /// How many reads are running. A dispatch is skipped while this is at the
-    /// budget and a later scroll asks again, so one task walks the log at a
-    /// time. Callers ask the count rather than the slot holding the read, so
-    /// the limit they are keeping lives beside the constant that names it.
+    /// How many reads are running: the workers holding a slot, not the records
+    /// this owner keeps. A stopped worker holds its slot until its read ends.
     pub(crate) fn running(&self) -> usize {
-        usize::from(self.pending.is_some())
+        self.active.load(Ordering::Acquire)
+    }
+
+    /// Whether a dispatched read is still on file, so a result may yet land and
+    /// a poll has something to look at.
+    ///
+    /// Not the same question as running(), and the two come apart in both
+    /// directions: a worker can have left with its result sitting in the
+    /// channel, and an invalidation can clear the record while its worker still
+    /// walks.
+    pub(crate) fn holds_pending(&self) -> bool {
+        self.pending.is_some()
+    }
+
+    /// Whether there is room to dispatch another read.
+    ///
+    /// Two things say no, and neither implies the other. A worker still holding
+    /// a slot is walking the log, so a second dispatch walks the same bytes
+    /// again for one answer. A record still on file is a result nobody has
+    /// looked at yet, and dispatching over it throws that result away -- its
+    /// worker may already have left and freed the budget, which is why the
+    /// count alone cannot answer this.
+    pub(crate) fn may_dispatch(&self) -> bool {
+        self.running() < HISTORY_READ_WORKER_BUDGET && !self.holds_pending()
     }
 
     /// Record a dispatched read, stamped with the current epoch and the
     /// transcript coordinates the apply side re-checks.
     ///
-    /// Returns the stop flag the caller hands the task it starts, so the flag
-    /// is created here, in the owner whose drop raises it, and the task never
-    /// has a route to a record it should not touch. Dispatching past the budget is a
-    /// programming error rather than a runtime condition: the guard sits at the
-    /// dispatch point, and reaching this method means a caller skipped it.
-    #[must_use = "the flag returned here is the only way to stop the read"]
+    /// Returns the lease the caller moves into the task it starts, so the flag
+    /// that task watches is created here, in the owner whose drop raises it, and
+    /// the slot the budget counts is taken at the same moment. Neither gives the
+    /// task a route to a record it should not touch. Dispatching with no room
+    /// for it is a programming error rather than a runtime condition: the guard
+    /// is may_dispatch and it sits at the dispatch point, so reaching this
+    /// method means a caller skipped it.
+    #[must_use = "the lease is what the task holds, and it frees the slot on drop"]
     pub(crate) fn dispatch(
         &mut self,
         dispatch_front: usize,
         dispatch_disk_front: DiskFront,
         rx: mpsc::Receiver<HistoryReadOutcome>,
-    ) -> StopSignal {
+    ) -> WorkerLease {
         debug_assert!(
-            self.running() < HISTORY_READ_WORKER_BUDGET,
-            "a history read was dispatched while {} were running, past the budget of {}",
+            self.may_dispatch(),
+            "a history read was dispatched with no room for it: {} running \
+             against a budget of {}, and a record on file = {}",
             self.running(),
-            HISTORY_READ_WORKER_BUDGET
+            HISTORY_READ_WORKER_BUDGET,
+            self.holds_pending()
         );
+        let permit = WorkerPermit::acquire(&self.active);
         let stop = Arc::new(AtomicBool::new(false));
         self.pending = Some(PendingHistoryRead {
             epoch: self.epoch,
@@ -180,23 +273,26 @@ impl HistoryReads {
             stop: Arc::clone(&stop),
             rx,
         });
-        stop
+        WorkerLease {
+            stop,
+            _permit: permit,
+        }
     }
 
-    /// Take the running read out for polling. On Ready or Disconnected the
-    /// caller leaves the slot empty by not putting it back; on Pending it must
-    /// put the record back to keep the read alive.
+    /// Take the read on file out for polling. On Ready or Disconnected the
+    /// caller leaves it cleared by not putting it back; on Pending it must put
+    /// the record back to keep the read alive.
     pub(crate) fn take(&mut self) -> Option<PendingHistoryRead> {
         self.pending.take()
     }
 
     /// Put a pending read back after a Pending poll. Single-caller contract:
     /// only the loop's pump holds a taken record, and it puts back before
-    /// anything else can dispatch, so the slot is empty on return.
+    /// anything else can dispatch, so nothing is on file on return.
     pub(crate) fn put_back(&mut self, read: PendingHistoryRead) {
         debug_assert!(
             self.pending.is_none(),
-            "put_back must not clobber an occupied slot"
+            "put_back must not clobber a read already on file"
         );
         self.pending = Some(read);
     }
@@ -210,6 +306,10 @@ impl HistoryReads {
     /// rows nothing will ever apply. The drop raises the read's stop flag too,
     /// so the worker quits at its next window instead.
     ///
+    /// It does not free the budget. The slot belongs to the worker and comes
+    /// back when the worker does, so a stop that has not yet been observed still
+    /// counts against the limit it exists to keep.
+    ///
     /// The generation counter covers what a flag cannot reach: a record this
     /// owner no longer holds is still refused by its stamp when it lands.
     pub(crate) fn invalidate(&mut self) {
@@ -221,23 +321,40 @@ impl HistoryReads {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::thread;
+    use std::time::Duration;
+
+    /// A wait on the other side of a thread. Bounded so a worker that never
+    /// arrives fails the test instead of hanging it.
+    fn rendezvous<T>(channel: &mpsc::Receiver<T>) -> T {
+        channel
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the other side of the rendezvous arrived")
+    }
 
     /// The invalidate drops the running read and moves the generation on, so
-    /// a held record from before is told apart by its stamp alone.
+    /// a held record from before is told apart by its stamp alone. The slot
+    /// outlives the record, because it belongs to the worker and nothing ran
+    /// here to give it back before the lease drops.
     #[test]
     fn test_invalidate_moves_epoch() {
         let mut reads = HistoryReads::default();
         let (tx, rx) = mpsc::channel::<HistoryReadOutcome>();
-        drop(reads.dispatch(0, DiskFront::Unloaded, rx));
+        let lease = reads.dispatch(0, DiskFront::Unloaded, rx);
         assert_eq!(reads.running(), 1);
         let epoch_before = reads.epoch();
 
         reads.invalidate();
 
-        assert_eq!(reads.running(), 0, "the running read was dropped");
+        assert!(
+            !reads.holds_pending(),
+            "the running read was dropped from file"
+        );
         assert_ne!(reads.epoch(), epoch_before, "the generation moved on");
         // The dropped receiver makes the worker send fail; nothing panics.
         assert!(tx.send(HistoryReadOutcome::Exhausted).is_err());
+        drop(lease);
+        assert_eq!(reads.running(), 0, "the worker leaving frees the slot");
     }
 
     /// A dispatch after an invalidation carries the new generation and both
@@ -248,7 +365,7 @@ mod tests {
         let mut reads = HistoryReads::default();
         reads.invalidate();
         let (_tx, rx) = mpsc::channel::<HistoryReadOutcome>();
-        drop(reads.dispatch(3, DiskFront::At(4096), rx));
+        let _lease = reads.dispatch(3, DiskFront::At(4096), rx);
         let pending = reads.take().expect("a read is pending");
         assert_eq!(pending.epoch, reads.epoch());
         assert_eq!(pending.dispatch_front, 3);
@@ -258,31 +375,119 @@ mod tests {
     /// An invalidation raises the flag the dispatched worker holds, which is the
     /// half of the stop contract the owner owns: it cannot cancel a read already
     /// in the kernel, so it tells the worker its rows are unwanted and the
-    /// worker quits at its next window. The next dispatch gets a fresh flag,
-    /// because a raised one would stop the read it was just handed to.
+    /// worker quits at its next window. The first lease is scoped so it hands
+    /// its slot back before the second dispatch, which is what production does:
+    /// the worker leaves, then a later scroll asks again. The next dispatch gets
+    /// a fresh flag, because a raised one would stop the read it was just handed
+    /// to.
     #[test]
     fn test_invalidate_raises_stop() {
         let mut reads = HistoryReads::default();
         let (_tx, rx) = mpsc::channel::<HistoryReadOutcome>();
-        let stop = reads.dispatch(0, DiskFront::Unloaded, rx);
-        assert!(!stop.load(Ordering::Relaxed), "a fresh read is wanted");
+        let stopped = {
+            let lease = reads.dispatch(0, DiskFront::Unloaded, rx);
+            let flag = Arc::clone(lease.stop());
+            assert!(!flag.load(Ordering::Relaxed), "a fresh read is wanted");
 
-        reads.invalidate();
+            reads.invalidate();
 
-        assert!(
-            stop.load(Ordering::Relaxed),
-            "the dropped read was told to stop, not merely unheard"
-        );
+            assert!(
+                flag.load(Ordering::Relaxed),
+                "the dropped read was told to stop, not merely unheard"
+            );
+            flag
+        };
+
         let (_tx, rx) = mpsc::channel::<HistoryReadOutcome>();
         let next = reads.dispatch(0, DiskFront::Unloaded, rx);
         assert!(
-            !next.load(Ordering::Relaxed),
+            !next.stop().load(Ordering::Relaxed),
             "a new read does not inherit the stop it was not given"
         );
         assert_ne!(
-            Arc::as_ptr(&stop),
-            Arc::as_ptr(&next),
+            Arc::as_ptr(&stopped),
+            Arc::as_ptr(next.stop()),
             "each dispatch hands out its own flag"
         );
+    }
+
+    /// A record on file blocks a dispatch even with no worker running, because
+    /// dispatch replaces the record wholesale and that record may hold a result
+    /// nobody has read yet. The worker that produced it can already have left,
+    /// since it sends before it exits, so the budget alone cannot say whether a
+    /// dispatch is safe.
+    #[test]
+    fn test_record_blocks_dispatch() {
+        let mut reads = HistoryReads::default();
+        let (tx, rx) = mpsc::channel::<HistoryReadOutcome>();
+        drop(reads.dispatch(0, DiskFront::Unloaded, rx));
+        assert_eq!(
+            reads.running(),
+            0,
+            "the budget is free as soon as the lease goes"
+        );
+        assert!(
+            !reads.may_dispatch(),
+            "its record is still on file, so a dispatch would throw it away"
+        );
+
+        tx.send(HistoryReadOutcome::Exhausted).ok();
+        assert!(
+            !reads.may_dispatch(),
+            "a result waiting in the channel blocks the dispatch that would drop it"
+        );
+
+        let taken = reads.take().expect("the record is on file");
+        assert!(matches!(taken.poll(), HistoryReadPoll::Ready(_)));
+        assert!(
+            reads.may_dispatch(),
+            "the record cleared, so the budget and the file agree again"
+        );
+    }
+
+    /// The budget counts what is executing, so dropping the record does not open
+    /// a second slot while the first worker is still inside its read. This is
+    /// the interleaving production reaches: a dispatch, then a history clear
+    /// invalidating it, then a scroll that asks for older history again. A
+    /// worker stopped but not yet returned cannot observe its flag, so a second
+    /// walk started in that gap reads the same log beside the first, and the
+    /// first walk's bytes are read twice for one answer.
+    #[test]
+    fn test_running_counts_workers() {
+        let mut reads = HistoryReads::default();
+        let (_tx, rx) = mpsc::channel::<HistoryReadOutcome>();
+        let lease = reads.dispatch(0, DiskFront::Unloaded, rx);
+
+        // Two rendezvous instead of sleeps: the worker announces it has arrived
+        // inside its read, and the test releases it again only after checking
+        // the count. That makes the ordering the claim depends on structural
+        // rather than timed.
+        let (arrived_tx, arrived_rx) = mpsc::sync_channel::<()>(0);
+        let (release_tx, release_rx) = mpsc::sync_channel::<()>(0);
+        let worker = thread::spawn(move || {
+            arrived_tx.send(()).expect("the test is listening");
+            rendezvous(&release_rx);
+            assert!(
+                lease.stop().load(Ordering::Relaxed),
+                "the dropped record told this worker to stop"
+            );
+            drop(lease);
+        });
+        rendezvous(&arrived_rx);
+
+        reads.invalidate();
+
+        assert_eq!(reads.running(), 1, "a stopped worker still holds its slot");
+        // The dispatch point asks this, not the count, so this is the assertion
+        // that stands in for the second dispatch the interleaving would do. The
+        // record is already gone, so only the budget term can refuse it.
+        assert!(
+            !reads.may_dispatch(),
+            "the dispatch point refuses a second walk of the same log"
+        );
+
+        release_tx.send(()).expect("the worker is listening");
+        worker.join().expect("the worker returns");
+        assert_eq!(reads.running(), 0, "the worker leaving frees the slot");
     }
 }

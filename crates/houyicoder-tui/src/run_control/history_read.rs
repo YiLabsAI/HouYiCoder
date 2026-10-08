@@ -30,7 +30,7 @@ pub(crate) const OVERLAP_FRONT_ROWS: usize = 32;
 const OVERLAP_RUN_ROWS: usize = 3;
 
 /// A read the draw path handed to a background task. The task runs it to
-/// completion and sends the outcome over the channel the pending slot holds.
+/// completion and sends the outcome over the channel the record on file holds.
 pub(crate) enum ReadJob {
     Tail {
         source: Arc<dyn TranscriptSnapshot>,
@@ -417,7 +417,7 @@ mod tests {
         let source = five_window_log(Arc::clone(&reads), Some(2));
         let snapshot: Arc<dyn TranscriptSnapshot> = source.clone();
         let (_tx, rx) = mpsc::channel::<HistoryReadOutcome>();
-        let stop =
+        let lease =
             reads
                 .lock()
                 .expect("the owner is not poisoned")
@@ -427,7 +427,7 @@ mod tests {
             source: snapshot,
             front: vec!["the row the view starts at".to_string()],
         };
-        let outcome = job.run(&stop);
+        let outcome = job.run(lease.stop());
 
         assert!(outcome.is_none(), "a stopped walk reports nothing");
         assert_eq!(
@@ -447,7 +447,7 @@ mod tests {
         let source = five_window_log(Arc::clone(&reads), None);
         let snapshot: Arc<dyn TranscriptSnapshot> = source.clone();
         let (_tx, rx) = mpsc::channel::<HistoryReadOutcome>();
-        let stop =
+        let lease =
             reads
                 .lock()
                 .expect("the owner is not poisoned")
@@ -457,7 +457,7 @@ mod tests {
             source: snapshot,
             front: vec!["the row the view starts at".to_string()],
         };
-        let outcome = job.run(&stop);
+        let outcome = job.run(lease.stop());
 
         assert!(
             matches!(outcome, Some(HistoryReadOutcome::Exhausted)),

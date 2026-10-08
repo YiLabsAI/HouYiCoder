@@ -1,7 +1,8 @@
-//! Lifecycle of the background history read: which events invalidate a
-//! running read, and what a landed result may still touch. The fixtures
-//! inject the read over a test channel and hold the sender, so the completion
-//! order is controlled — no sleeps and no real worker.
+//! Lifecycle of the background history read: which events invalidate a running
+//! read, what a landed result may still touch, and what clears the record when
+//! no result is ever going to come. The fixtures inject the read over a test
+//! channel and hold the sender, so the completion order is controlled — no
+//! sleeps and no real worker.
 
 use std::sync::mpsc;
 
@@ -76,11 +77,10 @@ fn test_reset_drops_pending_read() {
     );
 }
 
-/// The loop takes the record out of the slot to poll it; a clear landing in
-/// that window drops the slot but cannot reach the taken record. Putting it
-/// back and polling must still refuse the result: the epoch the record
-/// carries no longer matches the owner's, and no rebuilt-view number can
-/// fake that match.
+/// The loop takes the record out to poll it; a clear landing in that window
+/// moves the generation on but cannot reach the taken record. Putting it back
+/// and polling must still refuse the result: the epoch the record carries no
+/// longer matches the owner's, and no rebuilt-view number can fake that match.
 #[test]
 fn test_clear_stales_held_read() {
     let mut app = working_app(5);
@@ -150,8 +150,8 @@ fn test_tail_return_stales_chain() {
         "the tail return released the loaded stack"
     );
 
-    // The reader scrolls back up while the stale chain read still holds the
-    // slot, and the result lands.
+    // The reader scrolls back up while the stale chain read is still on file,
+    // and the result lands.
     app.transcript_scroll.jump_to(0);
     tx.send(landed_rows("chained older", 100)).ok();
     app.pump_history_read();
@@ -160,5 +160,50 @@ fn test_tail_return_stales_chain() {
         app.transcript.disk_row_count(),
         0,
         "a chain read whose loaded stack was released does not apply"
+    );
+}
+
+/// A worker that died or dropped its sender without sending must not leave its
+/// record on file: the pump would keep looking at a read that can never land,
+/// and nothing would latch the front. Dropping the lease is what such a worker
+/// looks like from the owner's side, so the two counts come apart the way they
+/// do in production — the budget already says the walk is over, and the record
+/// is what is left to clear. The pump sees Disconnected rather than Pending,
+/// clears it, and latches the front to Stopped so a dead worker cannot drive a
+/// re-dispatch storm.
+#[test]
+fn test_disconnect_clears_record() {
+    let mut app = working_app(0);
+    assert_ne!(
+        app.transcript.disk_front(),
+        DiskFront::Stopped,
+        "the front is open before a dead worker latches it"
+    );
+    let (tx, rx) = mpsc::channel::<HistoryReadOutcome>();
+    drop(tx);
+    let front = app.transcript.frame_window_start();
+    let disk_front = app.transcript.disk_front();
+    drop(app.history_reads.dispatch(front, disk_front, rx));
+    assert!(
+        app.history_reads.holds_pending(),
+        "the record the dead worker left is still on file"
+    );
+    assert_eq!(
+        app.history_reads.running(),
+        0,
+        "the lease going away freed the slot with it"
+    );
+
+    let landed = app.pump_history_read();
+
+    assert!(!landed, "a disconnected worker sets no dirty flag");
+    assert!(
+        !app.history_reads.holds_pending(),
+        "the record cleared, so the pump stops looking at a read that cannot land"
+    );
+    assert_eq!(
+        app.transcript.disk_front(),
+        DiskFront::Stopped,
+        "the front latched to stop a re-dispatch storm"
     );
 }

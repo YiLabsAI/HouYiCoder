@@ -12,9 +12,7 @@ use super::{MAX_REBUILD_FRAMES, PREPEND_BATCH};
 use crate::records::TranscriptLine;
 use crate::row_id::RowId;
 use crate::state::App;
-use crate::state::history_read::{
-    HISTORY_READ_WORKER_BUDGET, HistoryReadOutcome, HistoryReadPoll, PendingHistoryRead,
-};
+use crate::state::history_read::{HistoryReadOutcome, HistoryReadPoll, PendingHistoryRead};
 use crate::state::transcript::DiskFront;
 use crate::state::transcript::blocks::{
     Block, BlockAnchor, BlockId, TranscriptChange, TranscriptChangeSet,
@@ -411,11 +409,12 @@ impl App {
     /// Dispatch a background read of older rows from the session log, the
     /// rows of the drained frames that still live on disk. The draw path
     /// never blocks on this: the task ships the result over a channel the
-    /// pending slot holds, and a later pump applies it. Without a runtime or
+    /// record on file holds, and a later pump applies it. Without a runtime or
     /// a snapshot source there is nothing to dispatch and the scroll stops at
-    /// the resident front; while the running reads are at the budget a second
+    /// the resident front; when the owner has no room for another read a second
     /// dispatch is skipped and a later scroll asks again, so the log is walked
-    /// by one task at a time.
+    /// by one task at a time and a result nobody has looked at yet is never
+    /// dispatched over.
     fn dispatch_history_read(&mut self) {
         let Some(source) = self.snapshot.clone() else {
             return;
@@ -426,7 +425,7 @@ impl App {
             // running at all, matching the no-source short-circuit.
             return;
         };
-        if self.history_reads.running() >= HISTORY_READ_WORKER_BUDGET {
+        if !self.history_reads.may_dispatch() {
             return;
         }
         if self.transcript.disk_row_count() >= LOG_ROW_BUDGET {
@@ -460,15 +459,17 @@ impl App {
         let dispatch_front = self.transcript.frame_window_start();
         let dispatch_disk_front = self.transcript.disk_front();
         let (tx, rx) = mpsc::channel();
-        // The owner makes the stop flag and hands it back, so the flag the task
-        // watches is the one an invalidation raises. Recording the dispatch
-        // before the task starts also means the slot is occupied from the moment
-        // the worker exists, rather than only after it may have finished.
-        let stop = self
+        // The owner issues the stop flag and the execution slot together, so the
+        // flag the task watches is the one an invalidation raises and the budget
+        // counts the read from the moment the worker exists. The lease moves into
+        // the closure and drops when the closure returns, which is what holds the
+        // slot for the length of the walk: an invalidation before that point
+        // stops the worker but cannot take the slot back from it.
+        let lease = self
             .history_reads
             .dispatch(dispatch_front, dispatch_disk_front, rx);
         runtime.spawn_blocking(move || {
-            job.run_and_send(tx, &stop);
+            job.run_and_send(tx, lease.stop());
         });
     }
 
@@ -500,9 +501,11 @@ impl App {
                 true
             }
             HistoryReadPoll::Disconnected => {
-                // The worker died or dropped its sender without sending. Drop
-                // the slot and stop re-reading, so a dead task cannot pin the
-                // scroll forever or block later dispatches.
+                // The worker died or dropped its sender without sending. Leave
+                // the record cleared and stop re-reading: without the latch the
+                // scroll keeps asking for rows no worker will ever bring back.
+                // The budget needs no help here: a worker frees its slot on its
+                // own when it leaves.
                 self.transcript.set_disk_front(DiskFront::Stopped);
                 false
             }

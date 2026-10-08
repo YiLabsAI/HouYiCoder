@@ -191,9 +191,8 @@ fn test_child_blocks_parent_reads() {
     for _ in 0..3 {
         app.load_older_frames();
     }
-    assert_eq!(
-        app.history_reads.running(),
-        0,
+    assert!(
+        !app.history_reads.holds_pending(),
         "no parent history read was dispatched while the child is on view"
     );
 }

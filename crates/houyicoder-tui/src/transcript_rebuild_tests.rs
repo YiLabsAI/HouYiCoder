@@ -5,12 +5,11 @@
 
 use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
-use std::sync::mpsc;
+use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::composition;
 use crate::records::{ContextSuggestion, SuggestionSeverity, TranscriptLine};
-use crate::state::history_read::HistoryReadOutcome;
 use crate::state::transcript::DiskFront;
 use crate::state::{App, Screen};
 use crate::test_harness::MockSnapshot;
@@ -70,12 +69,15 @@ fn fresh_app() -> App {
     app
 }
 
-/// Pump the in-flight history read until it lands or times out. Mirrors what
-/// the app loop does each pass, but blocks the test thread so the result is
-/// applied before assertions run. Returns false at once when no read was
-/// dispatched (the resident-frame path or a no-op short-circuit).
+/// Pump the history read on file until it lands or times out. Mirrors what the
+/// app loop does each pass, but blocks the test thread so the result is applied
+/// before assertions run. Returns false at once when no read was dispatched
+/// (the resident-frame path or a no-op short-circuit).
+///
+/// The question is whether a record is on file, not whether a worker runs: a
+/// read can have finished and left its result waiting for the pump.
 fn pump_history_read_blocking(app: &mut App, timeout: Duration) -> bool {
-    if app.history_reads.running() == 0 {
+    if !app.history_reads.holds_pending() {
         return false;
     }
     let start = Instant::now();
@@ -83,9 +85,19 @@ fn pump_history_read_blocking(app: &mut App, timeout: Duration) -> bool {
         if app.pump_history_read() {
             return true;
         }
-        std::thread::sleep(Duration::from_millis(2));
+        thread::sleep(Duration::from_millis(2));
     }
     false
+}
+
+/// Wait for the dispatched workers to leave, bounded so one that never returns
+/// fails the test instead of hanging it. A worker sends its result before it
+/// exits, so the count right after a landing can still see it on its way out.
+fn wait_for_workers_to_leave(app: &App) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while app.history_reads.running() > 0 && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(2));
+    }
 }
 
 fn pump(app: &mut App, frame: TranscriptFrame) {
@@ -1827,37 +1839,12 @@ fn test_stale_history_read_dropped() {
         DiskFront::Stopped,
         "stale Exhausted did not latch Stopped at the old front"
     );
+    wait_for_workers_to_leave(&app);
     assert_eq!(
         app.history_reads.running(),
         0,
-        "the slot released after the stale result was dropped"
-    );
-}
-
-/// A background task that died or dropped its sender without sending must not
-/// pin the slot forever and block every later read. The pump sees Disconnected
-/// (not Pending), clears the slot, and latches the front to Stopped so a dead
-/// worker cannot drive a re-dispatch storm.
-#[test]
-fn test_dead_worker_clears_slot() {
-    let mut app = fresh_app();
-    let (tx, rx) = mpsc::channel::<HistoryReadOutcome>();
-    drop(tx);
-    let front = app.transcript.frame_window_start();
-    let disk_front = app.transcript.disk_front();
-    drop(app.history_reads.dispatch(front, disk_front, rx));
-    assert_eq!(app.history_reads.running(), 1);
-    let landed = app.pump_history_read();
-    assert!(!landed, "a disconnected worker sets no dirty flag");
-    assert_eq!(
-        app.history_reads.running(),
-        0,
-        "the slot released so a later dispatch can run"
-    );
-    assert_eq!(
-        app.transcript.disk_front(),
-        DiskFront::Stopped,
-        "the front latched to stop a re-dispatch storm"
+        "throwing the stale result away still let its worker leave, so the \
+         budget is free for the scroll that asks again"
     );
 }
 

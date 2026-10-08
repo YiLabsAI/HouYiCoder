@@ -59,11 +59,13 @@ ACTIVE_OWNERS = {
         "fields": 12,
     },
     "crates/houyicoder-tui/src/state/history_read.rs:HistoryReads": {
-        # The running history read and its generation counter. External
-        # mutators: dispatch/take/put_back from the rebuild path, invalidate
-        # from the command layer on a history reset. The epoch is the guard
-        # that outlives the slot: a record held across an invalidation is
-        # still refused by its stamp.
-        "fields": 2,
+        # The record on file, the workers holding a slot, and the generation
+        # counter. External mutators: dispatch/take/put_back from the rebuild
+        # path, invalidate from the command layer on a history reset. The epoch
+        # is the guard that outlives the record: one held across an invalidation
+        # is still refused by its stamp. The worker count is shared with every
+        # permit handed out, so the budget reads what is executing rather than
+        # what the record still names.
+        "fields": 3,
     },
 }

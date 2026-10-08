@@ -130,27 +130,33 @@ fn test_switch_session_resets_view() {
 }
 
 /// A pending history read was dispatched against the old session's log. The
-/// switch rebuilds the whole App, so the record goes with the old session:
-/// the slot is empty in the new one, the old worker's send fails into the
-/// dropped receiver, and the drop told it to stop, so it quits at its next
-/// window rather than walking an archived log to its byte cap. A late result
-/// from the archived session has no route into the new view.
+/// switch rebuilds the whole App, so the record goes with the old session and
+/// the new owner counts nothing: the abandoned worker's slot belonged to the
+/// counter it was dispatched against, not to the one the new session reads. The
+/// old worker's send fails into the dropped receiver, and the drop told it to
+/// stop, so it quits at its next window rather than walking an archived log to
+/// its byte cap. A late result from the archived session has no route into the
+/// new view.
 #[test]
 fn test_switch_drops_pending_read() {
     let mut app = build_app(test_bundle());
     let (tx, rx) = mpsc::channel::<HistoryReadOutcome>();
-    let stop = app.history_reads.dispatch(0, DiskFront::Unloaded, rx);
+    let lease = app.history_reads.dispatch(0, DiskFront::Unloaded, rx);
     assert_eq!(app.history_reads.running(), 1);
 
     app.switch_session(test_bundle());
 
+    assert!(
+        !app.history_reads.holds_pending(),
+        "the rebuilt App starts with no read against the old log"
+    );
     assert_eq!(
         app.history_reads.running(),
         0,
-        "the rebuilt App starts with no read against the old log"
+        "and it does not inherit the slot the abandoned worker still holds"
     );
     assert!(
-        stop.load(Ordering::Relaxed),
+        lease.stop().load(Ordering::Relaxed),
         "the abandoned worker was told to stop, not merely unheard"
     );
     assert!(
