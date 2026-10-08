@@ -158,8 +158,8 @@ pub(super) fn draw_transcript(f: &mut Frame, area: Rect, app: &App) {
     *app.last_row_turn_ids.borrow_mut() = visible_turn_ids;
     f.render_widget(Block::default().borders(Borders::NONE), area);
 
-    let q = if app.search.active {
-        app.search.query.trim().to_ascii_lowercase()
+    let q = if app.transcript_view.search.active {
+        app.transcript_view.search.query.trim().to_ascii_lowercase()
     } else {
         String::new()
     };
@@ -170,8 +170,8 @@ pub(super) fn draw_transcript(f: &mut Frame, area: Rect, app: &App) {
     // focused line (it no-ops current=true on rows with no query, so non-query
     // rows in the range stay plain). search.matches keys on transcript line,
     // so all in-line occurrences are the same match.
-    let focused_range = if app.search.active && !q.is_empty() {
-        app.search.focused_line().map(|i| {
+    let focused_range = if app.transcript_view.search.active && !q.is_empty() {
+        app.transcript_view.search.focused_line().map(|i| {
             let start = app.transcript_row_of_line(i);
             let rows = app.line_display_rows(&app.active_transcript()[i]);
             start..start + rows
@@ -287,7 +287,7 @@ pub(super) fn draw_transcript(f: &mut Frame, area: Rect, app: &App) {
     // label falls through to the transcript surface and starts a drag-select.
     let label_visible = app.viewport != ViewportMode::Scroll
         && !app.active_scroll().is_following_tail()
-        && !app.search.active;
+        && !app.transcript_view.search.active;
     if label_visible {
         let new = app.new_turn_count();
         let label = if new.count > 0 {

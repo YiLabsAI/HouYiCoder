@@ -15,7 +15,7 @@
 //! method instead of a comment.
 
 use crate::records::TranscriptLine;
-use crate::scroll::TranscriptScroll;
+use crate::scroll::{TranscriptScroll, TranscriptSearch};
 use crate::state::App;
 use crate::state::parked_view_states::ExpandedKeys;
 
@@ -53,6 +53,12 @@ pub(crate) struct TranscriptViewState {
     /// swaps on a view park or restore, which is the contract the flat
     /// fields could only carry as a comment.
     pub(crate) expanded: ExpandedKeys,
+    /// The search query state: whether the search view is open, the query, the
+    /// match indices and focus, and the in-view slash bar buffer. Pub(crate)
+    /// for the same reason as the corpus: the search's run path holds the
+    /// corpus slice while it mutates this query state, a disjoint field
+    /// borrow a method call on the owner cannot express.
+    pub(crate) search: TranscriptSearch,
 }
 
 impl TranscriptViewState {

@@ -247,7 +247,7 @@ impl TranscriptScroll {
 /// bound_scrollback reads it to recompute matches after evicting old lines so
 /// the indices stay valid mid-search.
 #[derive(Debug, Default, Clone)]
-pub struct SearchState {
+pub struct TranscriptSearch {
     /// True while the search view is active. Single source: read by the
     /// highlight gate, the chrome, and the active_transcript picker. The
     /// search view renders a frozen snapshot, not the live vec, so an open
@@ -273,7 +273,7 @@ pub struct SearchState {
     pub input: InputField,
 }
 
-impl SearchState {
+impl TranscriptSearch {
     /// Compute matches for the current query over the transcript. Case is
     /// ignored. Resets focus to the first match. Slash-command User echoes
     /// (lines starting with /) are skipped so /search X does not self-match
@@ -454,7 +454,7 @@ mod tests {
 
     #[test]
     fn test_search_finds_case_insensitive() {
-        let mut s = SearchState {
+        let mut s = TranscriptSearch {
             query: "BUG".to_string(),
             ..Default::default()
         };
@@ -466,7 +466,7 @@ mod tests {
 
     #[test]
     fn test_search_next_wraps() {
-        let mut s = SearchState {
+        let mut s = TranscriptSearch {
             query: "x".to_string(),
             ..Default::default()
         };
@@ -481,7 +481,7 @@ mod tests {
 
     #[test]
     fn test_empty_query_finds_nothing() {
-        let mut s = SearchState {
+        let mut s = TranscriptSearch {
             query: String::new(),
             ..Default::default()
         };

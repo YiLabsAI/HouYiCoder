@@ -30,7 +30,7 @@ impl App {
         let next = ViewportMode::for_stage(self.stage);
         if next != ViewportMode::Working {
             self.palette.close();
-            self.search.close();
+            self.transcript_view.search.close();
         }
         self.viewport = next;
     }

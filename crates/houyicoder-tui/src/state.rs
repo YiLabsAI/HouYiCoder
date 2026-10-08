@@ -44,7 +44,6 @@ use crate::resume_picker::{SessionCatalog, SessionPickerState};
 use crate::review_queue::ReviewQueue;
 use crate::row_id::RowId;
 use crate::run_state::{RunProgress, RunState};
-use crate::scroll::SearchState;
 use crate::selection::{ClipboardWriter, Selection};
 use crate::session::SessionConnection;
 use crate::skills_state::SkillsPaneState;
@@ -171,7 +170,6 @@ pub struct App {
     pub cached_expanded_group: RefCell<Vec<Option<String>>>,
     pub cached_turn_ids: RefCell<Vec<Option<RowId>>>,
     pub cached_pre_rendered: RefCell<Vec<Option<Line<'static>>>>,
-    pub search: SearchState,
     /// True while the G full-scan builds the event-byte-offset index (one
     /// chunk at a time keeps the UI responsive; Esc interrupts). The loop
     /// advances the build while this is set, off the draw path.

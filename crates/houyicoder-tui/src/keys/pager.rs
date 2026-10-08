@@ -13,11 +13,11 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crate::state::App;
 
 pub(super) fn handle_scroll(app: &mut App, k: KeyEvent) {
-    if app.search.input_mode {
+    if app.transcript_view.search.input_mode {
         handle_search_input(app, k);
         return;
     }
-    if app.search.active {
+    if app.transcript_view.search.active {
         handle_search_view(app, k);
         return;
     }
@@ -59,7 +59,7 @@ fn handle_search_view(app: &mut App, k: KeyEvent) {
             if app.window_browsing() {
                 app.window_search_older();
             } else {
-                app.search.prev();
+                app.transcript_view.search.prev();
                 app.jump_to_focused_match();
             }
         }
@@ -67,7 +67,7 @@ fn handle_search_view(app: &mut App, k: KeyEvent) {
             if app.window_browsing() {
                 app.window_search_newer();
             } else {
-                app.search.next();
+                app.transcript_view.search.next();
                 app.jump_to_focused_match();
             }
         }
@@ -120,13 +120,13 @@ fn handle_search_input(app: &mut App, k: KeyEvent) {
     match k.code {
         KeyCode::Enter => app.commit_search_input(),
         KeyCode::Esc => app.cancel_search_input(),
-        KeyCode::Backspace => app.search.input.backspace(),
-        KeyCode::Delete => app.search.input.delete(),
-        KeyCode::Left => app.search.input.move_left(),
-        KeyCode::Right => app.search.input.move_right(),
-        KeyCode::Home => app.search.input.move_home(),
-        KeyCode::End => app.search.input.move_end(),
-        KeyCode::Char(c) => app.search.input.push(c),
+        KeyCode::Backspace => app.transcript_view.search.input.backspace(),
+        KeyCode::Delete => app.transcript_view.search.input.delete(),
+        KeyCode::Left => app.transcript_view.search.input.move_left(),
+        KeyCode::Right => app.transcript_view.search.input.move_right(),
+        KeyCode::Home => app.transcript_view.search.input.move_home(),
+        KeyCode::End => app.transcript_view.search.input.move_end(),
+        KeyCode::Char(c) => app.transcript_view.search.input.push(c),
         _ => {}
     }
 }

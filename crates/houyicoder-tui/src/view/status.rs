@@ -298,9 +298,9 @@ pub fn draw_scroll_status(f: &mut Frame, area: Rect, app: &App) {
     let total = app.active_scroll().total.get();
     let line = top.saturating_add(1);
     let style = Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD);
-    let line_widget = if app.search.input_mode {
-        let buf = app.search.input.value();
-        let cur = app.search.input.cursor();
+    let line_widget = if app.transcript_view.search.input_mode {
+        let buf = app.transcript_view.search.input.value();
+        let cur = app.transcript_view.search.input.cursor();
         let (pre, post) = buf.split_at(cur);
         let cursor_char = post.chars().next().unwrap_or(' ');
         let mut spans: Vec<Span<'static>> = vec![
@@ -317,10 +317,14 @@ pub fn draw_scroll_status(f: &mut Frame, area: Rect, app: &App) {
             spans.push(Span::styled("  (empty = no match)", style));
         }
         Line::from(spans)
-    } else if app.search.active {
-        let n = app.search.matches.len();
-        let focus = if n == 0 { 0 } else { app.search.focus + 1 };
-        let query = app.search.query.trim();
+    } else if app.transcript_view.search.active {
+        let n = app.transcript_view.search.matches.len();
+        let focus = if n == 0 {
+            0
+        } else {
+            app.transcript_view.search.focus + 1
+        };
+        let query = app.transcript_view.search.query.trim();
         let text = if app.transcript_view.search_corpus.truncated() {
             // Honest degrade: the log is over the threshold, so the snapshot
             // is empty -- not a "no match". Tell the user why.

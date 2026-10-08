@@ -59,18 +59,20 @@ ACTIVE_OWNERS = {
         # The four expansion sets (results, fold groups, thinking,
         # subagents) moved into the view state owner beside them, so a
         # view park or restore swaps one value, not four fields a caller
-        # moves by hand.
-        "fields": 131,
+        # moves by hand. The search query state followed: it lives beside
+        # the corpus so the run path holds the corpus slice while it
+        # mutates the query, a disjoint field borrow a method cannot.
+        "fields": 130,
         "mut_app": 44,
     },
     "crates/houyicoder-tui/src/state/transcript/view.rs:TranscriptViewState": {
         # The transcript view's own state, one value per view: the whole-vec
         # scroll, the search window's scroll, the window flag, the search
-        # corpus, the byte-window (history window), and the four expansion
-        # sets bundled as one value. The search query state arrives with its
-        # readers. The dispatch (which scroll is live) is a method here, so
-        # callers cannot re-derive it from the flag.
-        "fields": 6,
+        # corpus, the byte-window (history window), the four expansion sets
+        # bundled as one value, and the search query state. The dispatch
+        # (which scroll is live) is a method here, so callers cannot
+        # re-derive it from the flag.
+        "fields": 7,
     },
     "crates/houyicoder-tui/src/state/transcript.rs:Transcript": {
         # The transcript facts: frame log, resident budget counters, derived

@@ -47,7 +47,6 @@ pub fn app() -> App {
         cached_expanded_group: RefCell::new(Vec::new()),
         cached_turn_ids: RefCell::new(Vec::new()),
         cached_pre_rendered: RefCell::new(Vec::new()),
-        search: SearchState::default(),
         indexing: Cell::new(false),
         indexed_bytes: Cell::new(0),
         index_total: Cell::new(0),

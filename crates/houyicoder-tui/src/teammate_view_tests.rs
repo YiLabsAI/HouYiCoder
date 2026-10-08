@@ -137,7 +137,7 @@ fn test_child_blocks_search() {
     app.enter_search_view("row");
 
     assert!(
-        !app.search.active,
+        !app.transcript_view.search.active,
         "search stays closed while a child is on view"
     );
     assert!(app.teammate_view.is_some(), "the child view stands");
@@ -289,5 +289,5 @@ fn test_search_ignores_fleet_click() {
         app.teammate_view.is_none(),
         "a click on the old strip does not open a child view during search"
     );
-    assert!(app.search.active, "the search view stands");
+    assert!(app.transcript_view.search.active, "the search view stands");
 }

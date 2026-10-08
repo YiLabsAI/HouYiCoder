@@ -355,7 +355,7 @@ fn test_slash_prefix_needs_boundary() {
     app.input.set("/searchalot".to_string());
     app.submit_input();
     assert!(
-        !app.search.active,
+        !app.transcript_view.search.active,
         "/searchalot must not open the search pane"
     );
     assert!(
@@ -393,13 +393,16 @@ fn test_search_opens_newest_match() {
     }
     app.transcript = transcript.into();
     app.enter_search_view("needle");
-    assert!(app.search.active, "in_search set on entry");
+    assert!(app.transcript_view.search.active, "in_search set on entry");
     assert!(app.verbose, "verbose set on entry");
     assert_eq!(app.viewport, ViewportMode::Scroll, "enters Scroll mode");
-    let matches = &app.search.matches;
+    let matches = &app.transcript_view.search.matches;
     assert_eq!(matches.len(), 1, "one needle match");
     assert_eq!(*matches.last().unwrap(), 0, "match is the first line");
-    assert_eq!(matches[app.search.focus], 0, "focus = newest (only) match");
+    assert_eq!(
+        matches[app.transcript_view.search.focus], 0,
+        "focus = newest (only) match"
+    );
     // The match line must be ON SCREEN on entry, not just pointed at. The
     // filler pushes it 60 rows above the tail, so a follow_tail entry leaves
     // it off-screen and this reddens.
@@ -409,14 +412,20 @@ fn test_search_opens_newest_match() {
         "focused match line must be ON SCREEN on entry, not just pointed at:\n{out}"
     );
     app.exit_search_view();
-    assert!(!app.search.active, "in_search cleared on exit");
+    assert!(
+        !app.transcript_view.search.active,
+        "in_search cleared on exit"
+    );
     assert!(!app.verbose, "verbose cleared on exit");
     assert_ne!(
         app.viewport,
         ViewportMode::Scroll,
         "viewport restored on exit"
     );
-    assert!(app.search.query.is_empty(), "query cleared on exit");
+    assert!(
+        app.transcript_view.search.query.is_empty(),
+        "query cleared on exit"
+    );
 }
 
 // The search view renders a SEARCH chrome (the query + match count) and Esc
@@ -433,7 +442,10 @@ fn test_search_chrome_exit_key() {
     assert!(out.contains("SEARCH"), "chrome shows SEARCH: {out}");
     assert!(out.contains("foo"), "query in chrome: {out}");
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-    assert!(!app.search.active, "Esc exits the search view");
+    assert!(
+        !app.transcript_view.search.active,
+        "Esc exits the search view"
+    );
     assert!(!app.verbose, "Esc clears verbose");
 }
 
@@ -591,7 +603,10 @@ fn test_search_all_informs_user() {
     let mut app = working();
     agent_row(&mut app, "needle in window");
     app.run_tui_local_command("search --all needle");
-    assert!(app.search.active, "--all still enters the search view");
+    assert!(
+        app.transcript_view.search.active,
+        "--all still enters the search view"
+    );
     assert!(app.verbose);
     assert!(
         app.transcript.iter().any(|l| matches!(
@@ -601,7 +616,7 @@ fn test_search_all_informs_user() {
         "must inform the user full-history is unavailable"
     );
     assert_eq!(
-        app.search.matches.len(),
+        app.transcript_view.search.matches.len(),
         1,
         "still searches the in-memory window"
     );

@@ -43,13 +43,13 @@ fn test_count_matches_under_snapshot() {
         TranscriptLine::User("snap four".into()),
         TranscriptLine::User("snap five".into()),
     ]);
-    app.search.active = true;
-    app.search.query = "snap".into();
+    app.transcript_view.search.active = true;
+    app.transcript_view.search.query = "snap".into();
     app.run_search();
     // Focus the LAST match so the focused-range line index reaches the
     // snapshot's tail; a count path still reading self.transcript (2 lines)
     // would index out of bounds here.
-    app.search.focus = app.search.matches.len().saturating_sub(1);
+    app.transcript_view.search.focus = app.transcript_view.search.matches.len().saturating_sub(1);
     app.verbose = true;
     // Pre-render: transcript_display_rows falls back to fold_aware_rows
     // (the Cell is 0 before any render), so this exercises the count path
@@ -91,10 +91,10 @@ fn test_bound_scrollback_skips_recompute() {
         TranscriptLine::User("snap match".into()),
         TranscriptLine::User("snap other".into()),
     ]);
-    app.search.active = true;
-    app.search.query = "match".into();
+    app.transcript_view.search.active = true;
+    app.transcript_view.search.query = "match".into();
     app.run_search();
-    let matches_before = app.search.matches.clone();
+    let matches_before = app.transcript_view.search.matches.clone();
     // Push past the 4000-row cap on the LIVE transcript to trigger eviction
     // while the search view is open. bound_scrollback must NOT recompute
     // search.matches against the drained live vec.
@@ -102,7 +102,7 @@ fn test_bound_scrollback_skips_recompute() {
         app.push_transcript_line(TranscriptLine::User(format!("live drain {i}")));
     }
     assert_eq!(
-        app.search.matches, matches_before,
+        app.transcript_view.search.matches, matches_before,
         "eviction must not recompute the snapshot's matches"
     );
     assert!(
@@ -136,7 +136,7 @@ fn test_uncapped_finds_old_match() {
     }));
     app.enter_search_view("needle");
     assert_eq!(
-        app.search.matches,
+        app.transcript_view.search.matches,
         vec![5000],
         "the snapshot must find the match beyond the 4000-row cap"
     );
@@ -182,7 +182,7 @@ fn test_search_finds_synthesized_name() {
     }));
     app.enter_search_view("Update");
     assert!(
-        !app.search.matches.is_empty(),
+        !app.transcript_view.search.matches.is_empty(),
         "search must find the synthesized Update chip name: search reads the rendered rows"
     );
 }
@@ -227,7 +227,7 @@ fn test_large_log_opens_mode() {
     assert_eq!(app.window_anchor(), 19 * 1024 * 1024);
     assert_eq!(app.window_end(), total, "tail window reaches EOF");
     assert!(
-        app.search.matches.len() == 1,
+        app.transcript_view.search.matches.len() == 1,
         "search found the tail needle in the window"
     );
     let out = render_text(&app, 100, 24);
@@ -784,7 +784,7 @@ fn test_esc_interrupts_full_index() {
     crate::app::handle_key(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     assert!(!app.indexing.get(), "Esc interrupted the index build");
     assert!(
-        app.search.active,
+        app.transcript_view.search.active,
         "Esc during indexing stays in the view (does not exit)"
     );
 }
