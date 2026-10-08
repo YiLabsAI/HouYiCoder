@@ -863,7 +863,7 @@ fn test_index_runs_on_worker() {
 }
 
 /// A worker that dies without sending stops the build rather than stalling it:
-/// the slot is cleared and indexing turns off, so a later G can start again.
+/// the record is cleared and indexing turns off, so a later G can start again.
 #[test]
 fn test_index_worker_death_stops() {
     let mut app = working();
@@ -883,7 +883,7 @@ fn test_index_worker_death_stops() {
         &mut app,
         KeyEvent::new(KeyCode::Char('G'), KeyModifiers::NONE),
     );
-    // A slot whose sender is already gone stands in for a dead worker.
+    // A record whose sender is already gone stands in for a dead worker.
     let (tx, rx) = mpsc::channel();
     drop(tx);
     *app.pending_index_chunk.borrow_mut() = Some(PendingIndexChunk::new(rx));
@@ -895,7 +895,7 @@ fn test_index_worker_death_stops() {
     );
     assert!(
         app.pending_index_chunk.borrow().is_none(),
-        "the slot is cleared so a later G can dispatch again"
+        "the record is cleared so a later G can dispatch again"
     );
 }
 
@@ -960,7 +960,7 @@ fn test_index_landing_after_interrupt() {
 
 /// A build already running is left to the loop. The key that starts one carries
 /// no gate of its own, so pressing it again reaches the dispatch, and a second
-/// chunk would overwrite the slot: the receiver of the running chunk is
+/// chunk would overwrite the record: the receiver of the running chunk is
 /// dropped, which orphans a worker that reads the log and sends into a channel
 /// nobody holds. The sender held here is the observation -- it keeps its
 /// receiver only if no second chunk was dispatched.
@@ -1010,8 +1010,8 @@ fn test_index_restart_waits() {
 
 /// The loop's own step waits for the running chunk rather than dispatching
 /// beside it. Same observation as the key above, from the other caller: a step
-/// that dispatched while a chunk was running would overwrite the slot and drop
-/// that chunk's receiver.
+/// that dispatched while a chunk was running would overwrite the record and
+/// drop that chunk's receiver.
 #[test]
 fn test_index_pump_waits() {
     let mut app = working();

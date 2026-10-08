@@ -7,7 +7,7 @@
 use std::time::Duration;
 
 use super::App;
-use super::index_read::{INDEX_WORKER_BUDGET, IndexChunkPoll, PendingIndexChunk};
+use super::index_read::{INDEX_CHUNK_BUDGET, IndexChunkPoll, PendingIndexChunk};
 use crate::notifications::{NotifKind, Notification};
 
 impl App {
@@ -307,10 +307,14 @@ impl App {
         }
     }
 
-    /// How many index chunks are running. The slot holds one, so a caller asks
-    /// this rather than the slot: the limit it is keeping then lives beside the
-    /// constant that names it.
-    fn running_index_workers(&self) -> usize {
+    /// How many index chunks are outstanding: dispatched and not yet applied.
+    ///
+    /// Within the build a record lasts exactly as long as its chunk -- the pump
+    /// clears it on a landed or dead one, an interrupt deliberately leaves it on
+    /// file -- so counting records bounds chunk reads. A history read cannot
+    /// reason this way: its invalidation clears the record under a worker still
+    /// inside the log, which is why that budget is held by the worker.
+    fn pending_index_chunks(&self) -> usize {
         usize::from(self.pending_index_chunk.borrow().is_some())
     }
 
@@ -328,7 +332,7 @@ impl App {
         }
         self.indexing.set(true);
         self.index_done.set(false);
-        if self.running_index_workers() >= INDEX_WORKER_BUDGET {
+        if self.pending_index_chunks() >= INDEX_CHUNK_BUDGET {
             return;
         }
         self.dispatch_index_chunk();
@@ -367,7 +371,7 @@ impl App {
         if !self.indexing.get() {
             return moved;
         }
-        if self.running_index_workers() >= INDEX_WORKER_BUDGET {
+        if self.pending_index_chunks() >= INDEX_CHUNK_BUDGET {
             // A chunk is already running; the next step waits for it.
             return moved;
         }
@@ -390,13 +394,13 @@ impl App {
     /// The one place a chunk task is started, so the budget is asserted here:
     /// every caller guards before asking, and a caller that forgets is told in
     /// debug rather than leaving two workers reading one log with only the
-    /// second one's receiver in the slot.
+    /// second one's receiver on file.
     fn dispatch_index_chunk(&mut self) {
         debug_assert!(
-            self.running_index_workers() < INDEX_WORKER_BUDGET,
-            "an index chunk was dispatched while {} were running, past the budget of {}",
-            self.running_index_workers(),
-            INDEX_WORKER_BUDGET
+            self.pending_index_chunks() < INDEX_CHUNK_BUDGET,
+            "an index chunk was dispatched while {} were outstanding, past the budget of {}",
+            self.pending_index_chunks(),
+            INDEX_CHUNK_BUDGET
         );
         let Some(runtime) = self.runtime.clone() else {
             return;
@@ -445,5 +449,28 @@ impl App {
             self.index_done.set(true);
             self.indexing.set(false);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::mpsc;
+
+    use super::*;
+    use crate::composition;
+
+    /// Both callers guard before dispatching, and two tests catch a raised
+    /// budget through those guards, so this assert is a backstop for a caller
+    /// that forgets one: told in debug rather than left to orphan the chunk
+    /// already running. No worker is needed to trip it, since the record on
+    /// file is what the count reads.
+    #[test]
+    #[should_panic(expected = "past the budget")]
+    fn test_dispatch_enforces_budget() {
+        let mut app = composition::app();
+        let (_tx, rx) = mpsc::channel();
+        *app.pending_index_chunk.borrow_mut() = Some(PendingIndexChunk::new(rx));
+
+        app.dispatch_index_chunk();
     }
 }

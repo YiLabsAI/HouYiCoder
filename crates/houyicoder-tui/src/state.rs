@@ -217,8 +217,8 @@ pub struct App {
     pub index_total: Cell<u64>,
     /// True when the full index is built (event_count/byte_at answer).
     pub index_done: Cell<bool>,
-    /// The index chunk running on a worker, if any. A chunk reads the log, so
-    /// the loop advances the build and the draw path never does.
+    /// The index chunk dispatched and not yet applied, if any. A chunk reads
+    /// the log, so the loop advances the build and the draw path never does.
     pub pending_index_chunk: std::cell::RefCell<Option<index_read::PendingIndexChunk>>,
     /// Optional full-history disk-search seam. None in stub / unwired modes
     /// (the /search --all flag then reports no disk results). When wired, the
