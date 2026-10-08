@@ -39,6 +39,7 @@ use crate::palette::PaletteState;
 use crate::paste::PasteStore;
 use crate::pending_prompt::PendingPrompt;
 use crate::pending_queue::PendingItem;
+use crate::permission_pane_state::PermissionPaneState;
 use crate::records::TeammateView;
 use crate::render_cache::RenderCache;
 use crate::resume_picker::{SessionCatalog, SessionPickerState};
@@ -413,16 +414,11 @@ pub struct App {
     pub sticky_choices: HashMap<String, PermissionOptionKind>,
     /// The session verdict log, from the acpx/context/permission_decision stream — the client-side audit trail of every approve/deny.
     pub verdict_log_cache: Vec<PermissionDecisionEntry>,
-    /// Selected tab in /permission (Allow/Ask/Deny filter rules; Recent shows the verdict log).
-    pub permission_tab: PermissionTab,
-    /// Cursor row in the current /permission tab; clamped at render.
-    pub permission_cursor: usize,
-    /// Active typed-input sub-mode in /permission (add/remove/search); None =
-    /// list navigation, re-purposing the main input box.
-    pub permission_input: PermissionInput,
-    /// Pane-local search buffer for the /permissions SearchBox. Decoupled from
-    /// the main input so search never eats a slash command's leading slash.
-    pub permission_search: String,
+    /// The permission pane state: the selected tab, the cursor row, the
+    /// typed-input sub-mode, and the pane-local search buffer. Pub(crate) so
+    /// the key handler and render path reach a field directly; the whole value
+    /// is what a tab switch or input-mode entry replaces.
+    pub(crate) permission_pane: PermissionPaneState,
     /// The original working directory the session started in, shown at the top
     /// of the Workspace tab in /permissions (empty in a stub App).
     pub working_dir: String,

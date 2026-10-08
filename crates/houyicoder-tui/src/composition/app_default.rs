@@ -15,6 +15,7 @@ use crate::list_pane_state::ListPaneState;
 use crate::memory_state::MemoryPaneState;
 use crate::notifications::NotificationState;
 use crate::paste::PasteStore;
+use crate::permission_pane_state::PermissionPaneState;
 use crate::render_cache::RenderCache;
 use crate::resume_picker::SessionPickerState;
 use crate::run_state::RunState;
@@ -137,10 +138,7 @@ pub fn app() -> App {
         context_cache: None,
         sticky_choices: HashMap::new(),
         verdict_log_cache: Vec::new(),
-        permission_tab: PermissionTab::Allow,
-        permission_cursor: 0,
-        permission_input: PermissionInput::None,
-        permission_search: String::new(),
+        permission_pane: PermissionPaneState::default(),
         working_dir: cwd_string(),
         status_cache: None,
         last_status_poll: None,

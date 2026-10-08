@@ -73,7 +73,12 @@ ACTIVE_OWNERS = {
         # lines) became one SlotsCache owner: the six are recomputed in
         # lockstep on a version mismatch and sliced in lockstep every frame,
         # so one owner keeps a stale-length vector from desyncing a key.
-        "fields": 120,
+        # The permission pane state (the selected tab, the cursor row, the
+        # typed-input sub-mode, and the pane-local search buffer) became one
+        # PermissionPaneState owner: a tab switch or input-mode entry replaces
+        # the whole value and resets the cursor and buffer, which the flat
+        # fields could only carry as a comment.
+        "fields": 117,
         "mut_app": 44,
     },
     "crates/houyicoder-tui/src/last_row_keys.rs:LastRowKeys": {
@@ -91,6 +96,15 @@ ACTIVE_OWNERS = {
         # lockstep when the version is stale and sliced in lockstep every
         # frame, so no vector drifts to a length the others do not share.
         "fields": 7,
+    },
+    "crates/houyicoder-tui/src/permission_pane_state.rs:PermissionPaneState": {
+        # The permission pane state: the selected tab (the rule filter or the
+        # recent verdict log), the cursor row inside it, the typed-input
+        # sub-mode (add / remove / search / none), and the pane-local search
+        # buffer. One owner because a tab switch resets the cursor and an
+        # input-mode entry resets the cursor and buffer, so the four move as
+        # one value rather than four fields a caller must reset in step.
+        "fields": 4,
     },
     "crates/houyicoder-tui/src/state/transcript/view.rs:TranscriptViewState": {
         # The transcript view's own state, one value per view: the whole-vec

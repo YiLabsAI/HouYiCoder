@@ -23,9 +23,7 @@ use crate::resume_picker::SessionCatalog;
 use crate::review_queue::ReviewQueue;
 use crate::selection::Selection;
 use crate::session::SessionConnection;
-use crate::state::{
-    App, Pane, PermissionInput, PermissionTab, Screen, SpecContext, Stage, StatusStub, ViewportMode,
-};
+use crate::state::{App, Pane, Screen, SpecContext, Stage, StatusStub, ViewportMode};
 use crate::transcript::snapshot::TranscriptSnapshot;
 use crate::view::export_log::ExportLog;
 use crate::view::trajectory_pane::TrajectoryLog;

@@ -66,7 +66,7 @@ pub fn draw(f: &mut Frame, area: Rect, app: &App) {
 /// draw_permission_pane; this fills the padded inner rect. Rule surface only
 /// — the mode pill and the ask-before-git toggle live on the status bar.
 pub(crate) fn draw_permission_content(f: &mut Frame, area: Rect, app: &App) {
-    let tab = app.permission_tab;
+    let tab = app.permission_pane.tab;
     let rules = crate::permission_input::filtered_rules(
         tab,
         &app.rules_cache,
@@ -83,7 +83,7 @@ pub(crate) fn draw_permission_content(f: &mut Frame, area: Rect, app: &App) {
         PermissionTab::Recent => denials.len(),
         PermissionTab::Allow | PermissionTab::Ask | PermissionTab::Deny => rules.len(),
     };
-    let cursor = app.permission_cursor.min(list_len.saturating_sub(1));
+    let cursor = app.permission_pane.cursor.min(list_len.saturating_sub(1));
     let prompt = crate::permission_input::permission_prompt(app);
 
     // tab header (1) + per-tab description (1) + SearchBox on rule tabs (3) +
@@ -91,7 +91,7 @@ pub(crate) fn draw_permission_content(f: &mut Frame, area: Rect, app: &App) {
     // is its affordance) + body + footer (1). Absent slots are Length(0) so
     // the body absorbs the space; the slots stay in a fixed order.
     let search_h = if tab.is_rule_tab() { 3 } else { 0 };
-    let prompt_h = match app.permission_input {
+    let prompt_h = match app.permission_pane.input {
         PermissionInput::Add
         | PermissionInput::AddDir
         | PermissionInput::AddDestination { .. }
@@ -165,12 +165,12 @@ fn permission_tab_description(tab: PermissionTab) -> &'static str {
 /// Render the resident SearchBox: a rounded border with the ⌕ glyph and either
 /// the live query (when the Search sub-mode is active) or a dim "Search…"
 /// placeholder. Cyan when active, dark gray otherwise. The query lives in the
-/// pane-local permission_search buffer (decoupled from the main input box so
+/// pane-local permission_pane.search buffer (decoupled from the main input box so
 /// search never eats the slash a slash command needs).
 fn render_search_box(f: &mut Frame, area: Rect, app: &App) {
-    let active = matches!(app.permission_input, PermissionInput::Search);
+    let active = matches!(app.permission_pane.input, PermissionInput::Search);
     let query = if active {
-        app.permission_search.clone()
+        app.permission_pane.search.clone()
     } else {
         String::new()
     };

@@ -118,7 +118,7 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
     // Permission pane browsing mode (not in Add/AddDir sub-mode): swallow
     // all input. When Add is active, permission_input.is_active() returns
     // true, and the chars must reach app.input (the user types the rule spec).
-    if app.pane == Pane::Permission && !app.permission_input.is_active() {
+    if app.pane == Pane::Permission && !app.permission_pane.input.is_active() {
         return;
     }
     // Approval pending: a/r decide, Enter confirms the focus, Esc dismisses.
@@ -357,7 +357,7 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
         KeyCode::Char('/')
             if app.input.is_empty()
                 && !editing
-                && !app.permission_input.is_active()
+                && !app.permission_pane.input.is_active()
                 && !pane_replaces_input(app.pane) =>
         {
             app.open_palette()

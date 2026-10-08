@@ -440,7 +440,7 @@ impl App {
         }
         // /permissions typed sub-mode (add / remove / search): Enter submits the
         // pane's typed text, not a chat turn or slash command.
-        if self.pane == Pane::Permission && self.permission_input.is_active() {
+        if self.pane == Pane::Permission && self.permission_pane.input.is_active() {
             let text = self.input.take();
             crate::permission_input::submit_permission_input(self, text);
             return;
