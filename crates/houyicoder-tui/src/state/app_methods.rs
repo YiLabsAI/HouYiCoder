@@ -162,7 +162,7 @@ impl App {
     /// regardless.
     pub(crate) fn trim_live_transcript(&mut self) -> usize {
         self.transcript
-            .trim_live(self.transcript_scroll.is_following_tail())
+            .trim_live(self.whole_scroll().is_following_tail())
     }
 
     // The page/line scroll methods (scroll_transcript_up / down /

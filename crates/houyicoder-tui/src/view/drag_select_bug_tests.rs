@@ -31,7 +31,7 @@ fn app_with_lines(n: usize) -> (crate::state::App, Arc<Mutex<Vec<String>>>) {
 /// Screen row of the all-rows index under the current scroll offset.
 fn screen_y(app: &crate::state::App, ri: usize) -> u16 {
     let rect = app.transcript_rect.get();
-    let top = app.transcript_scroll.top_offset();
+    let top = app.whole_scroll().top_offset();
     rect.y + (ri.saturating_sub(top)) as u16
 }
 
@@ -116,9 +116,9 @@ fn test_redrag_stays_char_mode() {
 fn test_edge_drag_scrolls_line() {
     let (mut app, _captured) = app_with_lines(40);
     let rect = app.transcript_rect.get();
-    app.transcript_scroll.jump_to(10);
+    app.whole_scroll_mut().jump_to(10);
     let _out = render_text(&app, 80, 24);
-    assert_eq!(app.transcript_scroll.top_offset(), 10);
+    assert_eq!(app.whole_scroll().top_offset(), 10);
     // Press mid-viewport, then drag onto the top edge row.
     crate::app::handle_mouse(
         &mut app,
@@ -133,7 +133,7 @@ fn test_edge_drag_scrolls_line() {
         &mut app,
         mouse(MouseEventKind::Drag(MouseButton::Left), rect.x + 2, rect.y),
     );
-    let after = app.transcript_scroll.top_offset();
+    let after = app.whole_scroll().top_offset();
     assert_eq!(after, 9, "edge drag must scroll one line, not a page");
     assert_eq!(
         app.selection.anchor.map(|(_, r)| r),
@@ -631,7 +631,7 @@ fn expand_first_group(app: &mut crate::state::App) -> String {
 /// Map a visible fold-row index (into last_row_fold_keys) back to its
 /// last_all_rows index so screen_y can place it on screen.
 fn fold_ri_to_all_rows_index(app: &crate::state::App, fold_ri: usize) -> usize {
-    let top = app.transcript_scroll.top_offset();
+    let top = app.whole_scroll().top_offset();
     top + fold_ri
 }
 

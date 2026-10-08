@@ -328,7 +328,7 @@ pub fn draw_scroll_status(f: &mut Frame, area: Rect, app: &App) {
             format!(
                 " SEARCH  {query}  log {mb}MB too large — full search needs disk viewport (not built)  q=exit "
             )
-        } else if app.window_mode {
+        } else if app.window_browsing() {
             // Indexing (the G full-scan): show progress instead of the
             // position, so the user sees the build advancing + knows Esc stops
             // it. Follows less's indexing indicator style.

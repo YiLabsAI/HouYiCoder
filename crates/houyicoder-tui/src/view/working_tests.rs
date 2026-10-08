@@ -141,7 +141,7 @@ fn test_fold_collapse_expand_toggle() {
     // --- Collapsed state ---
     let out = render_text(&app, 80, 24);
     let count = app.transcript_display_rows();
-    let rendered = app.transcript_scroll.total.get();
+    let rendered = app.whole_scroll().total.get();
     assert_eq!(
         count, rendered,
         "desync collapsed: count={count} rendered={rendered}"
@@ -178,7 +178,7 @@ fn test_fold_collapse_expand_toggle() {
         .expect("a fold row should exist");
     let rect = app.transcript_rect.get();
     let fold_y = rect.y + fold_ri as u16;
-    let scroll_top = app.transcript_scroll.top_offset();
+    let scroll_top = app.whole_scroll().top_offset();
     let _ = fold_y;
     app.selection.start(0, scroll_top + fold_ri);
     keys::handle_working(
@@ -192,7 +192,7 @@ fn test_fold_collapse_expand_toggle() {
 
     let out = render_text(&app, 80, 24);
     let count = app.transcript_display_rows();
-    let rendered = app.transcript_scroll.total.get();
+    let rendered = app.whole_scroll().total.get();
     assert_eq!(
         count, rendered,
         "desync expanded: count={count} rendered={rendered}"
@@ -314,7 +314,7 @@ fn test_busy_count_matches_render() {
     }
     let _out = render_text(&app, 80, 24);
     let count = app.transcript_display_rows();
-    let rendered = app.transcript_scroll.total.get();
+    let rendered = app.whole_scroll().total.get();
     assert_eq!(
         count, rendered,
         "desync busy: count={count} rendered={rendered}"
@@ -328,7 +328,7 @@ fn test_busy_count_matches_render() {
     }
     let _out = render_text(&app, 80, 24);
     let count = app.transcript_display_rows();
-    let rendered = app.transcript_scroll.total.get();
+    let rendered = app.whole_scroll().total.get();
     assert_eq!(
         count, rendered,
         "desync spinner-only: count={count} rendered={rendered}"
@@ -401,7 +401,7 @@ fn test_copy_preserves_scrolled_content() {
     // Selection at screen row 0..1 maps to scroll_top + 0..1 in the full
     // rows. Verify the extracted text comes from the scrolled position.
     let rect = app.transcript_rect.get();
-    let top = app.transcript_scroll.top_offset();
+    let top = app.whole_scroll().top_offset();
     let mut sel = Selection::default();
     sel.start(0, top);
     sel.update(79, top + 1);
@@ -562,8 +562,8 @@ fn test_anchor_clamped_to_content() {
     assert!(rect.height > 1, "transcript rect must have height");
     let bottom = rect.y + rect.height - 1;
     let border_y = rect.y + rect.height;
-    let total = app.transcript_scroll.total.get();
-    let scroll_top = app.transcript_scroll.top_offset();
+    let total = app.whole_scroll().total.get();
+    let scroll_top = app.whole_scroll().top_offset();
     let visible = total.saturating_sub(scroll_top).min(rect.height as usize);
     assert!(
         visible < rect.height as usize,
@@ -708,7 +708,7 @@ fn test_todo_count_matches_render() {
     let _out = render_text(&app, 80, 24);
     assert_eq!(
         app.transcript_display_rows(),
-        app.transcript_scroll.total.get(),
+        app.whole_scroll().total.get(),
         "desync collapsed checklist"
     );
 
@@ -717,7 +717,7 @@ fn test_todo_count_matches_render() {
     let _out = render_text(&app, 80, 24);
     assert_eq!(
         app.transcript_display_rows(),
-        app.transcript_scroll.total.get(),
+        app.whole_scroll().total.get(),
         "desync expanded checklist"
     );
 
@@ -730,7 +730,7 @@ fn test_todo_count_matches_render() {
     let _out = render_text(&app, 80, 24);
     assert_eq!(
         app.transcript_display_rows(),
-        app.transcript_scroll.total.get(),
+        app.whole_scroll().total.get(),
         "desync all-done checklist"
     );
 }

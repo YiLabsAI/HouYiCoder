@@ -44,7 +44,7 @@ impl App {
         // also leave when the resident front moved past the rows they were
         // read to sit above: the frames between the two fronts are drained, so
         // holding them would leave a hole in the scrollback.
-        if self.transcript_scroll.is_following_tail()
+        if self.whole_scroll().is_following_tail()
             || self.transcript.disk_rows_front() != self.transcript.frame_window_start()
         {
             self.transcript.clear_disk_rows();
@@ -106,9 +106,9 @@ impl App {
             && self.transcript.disk_rows_front() != self.transcript.frame_window_start()
         {
             let released = self.transcript.clear_disk_rows();
-            if !self.transcript_scroll.is_following_tail() {
-                let top = self.transcript_scroll.raw_top();
-                self.transcript_scroll
+            if !self.whole_scroll().is_following_tail() {
+                let top = self.whole_scroll().raw_top();
+                self.whole_scroll_mut()
                     .set_raw_top(top.saturating_sub(released));
             }
         }
@@ -351,10 +351,10 @@ impl App {
             return;
         }
         // Don't prepend when following the tail (user is at the bottom).
-        if self.transcript_scroll.is_following_tail() {
+        if self.whole_scroll().is_following_tail() {
             return;
         }
-        let top = self.transcript_scroll.top_offset();
+        let top = self.whole_scroll().top_offset();
         // Load only when the user is near the current history boundary.
         if top > 5 {
             return;
@@ -396,8 +396,8 @@ impl App {
         // which corrects the viewport. The one-frame drift is acceptable
         // (prepend only fires on scroll-up, the user is actively scrolling, not
         // reading a static view).
-        let cur = self.transcript_scroll.raw_top();
-        self.transcript_scroll.set_raw_top(cur + prepended);
+        let cur = self.whole_scroll().raw_top();
+        self.whole_scroll_mut().set_raw_top(cur + prepended);
         // The lowered boundary moves the window's front, so the next rebuild
         // re-derives the prefix rather than reusing it.
         self.rebuild_transcript();
@@ -525,7 +525,7 @@ impl App {
         outcome: HistoryReadOutcome,
         read: &PendingHistoryRead,
     ) {
-        if self.transcript_scroll.is_following_tail() {
+        if self.whole_scroll().is_following_tail() {
             tracing::debug!("history read dropped: the reader returned to the tail");
             return;
         }
@@ -562,8 +562,8 @@ impl App {
                 self.transcript
                     .prepend_disk_rows(result.rows, result.anchor, read.dispatch_front);
                 // Hold the viewport still: the rows landed above it.
-                let cur = self.transcript_scroll.raw_top();
-                self.transcript_scroll.set_raw_top(cur + count);
+                let cur = self.whole_scroll().raw_top();
+                self.whole_scroll_mut().set_raw_top(cur + count);
                 self.rebuild_transcript();
                 self.bump_transcript_version();
             }

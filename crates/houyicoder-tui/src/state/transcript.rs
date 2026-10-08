@@ -6,6 +6,7 @@
 //! blocks derive.
 
 pub(crate) mod blocks;
+pub(crate) mod view;
 
 use std::cell::Cell;
 use std::ops::Deref;

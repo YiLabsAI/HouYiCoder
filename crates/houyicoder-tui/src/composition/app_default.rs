@@ -17,7 +17,6 @@ use crate::paste::PasteStore;
 use crate::render_cache::RenderCache;
 use crate::resume_picker::SessionPickerState;
 use crate::run_state::RunState;
-use crate::scroll::WindowScroll;
 use crate::selection::SystemClipboard;
 use crate::skills_state::SkillsPaneState;
 use crate::state::history_read::HistoryReads;
@@ -40,7 +39,7 @@ pub fn app() -> App {
         history_reads: HistoryReads::default(),
         verdict_cursor: 0,
         unseen_since: None,
-        transcript_scroll: TranscriptScroll::default(),
+        transcript_view: Default::default(),
         display_rows_cache: RefCell::new(Vec::new()),
         display_rows_version: Cell::new(u64::MAX),
         cached_callids: RefCell::new(Vec::new()),
@@ -53,11 +52,9 @@ pub fn app() -> App {
         search_truncated: false,
         snapshot_log_bytes: 0,
         search_skipped: 0,
-        window_mode: false,
         window_anchor: 0,
         window_end: 0,
         frozen_file_size: 0,
-        window_scroll: WindowScroll::default(),
         window_skipped: 0,
         indexing: Cell::new(false),
         indexed_bytes: Cell::new(0),

@@ -55,7 +55,7 @@ fn app_with_parent(parent_rows: usize) -> App {
 fn test_parent_scroll_survives_visit() {
     let mut app = app_with_parent(60);
     let first = crate::test_harness::render_text(&app, 80, 24);
-    app.transcript_scroll.jump_to(20);
+    app.whole_scroll_mut().jump_to(20);
     let parked = crate::test_harness::render_text(&app, 80, 24);
     assert_ne!(first, parked, "scrolling moved the viewport");
 
@@ -64,7 +64,7 @@ fn test_parent_scroll_survives_visit() {
     let _child = crate::test_harness::render_text(&app, 80, 24);
     app.scroll_transcript_up();
     assert_eq!(
-        app.transcript_scroll.raw_top(),
+        app.whole_scroll().raw_top(),
         20,
         "child scroll did not move the parent"
     );
@@ -82,9 +82,9 @@ fn test_parent_scroll_survives_visit() {
 #[test]
 fn test_child_scroll_leaves_parent() {
     let mut app = app_with_parent(60);
-    app.transcript_scroll.jump_to(15);
-    let parent_top = app.transcript_scroll.raw_top();
-    let parent_follow = app.transcript_scroll.is_following_tail();
+    app.whole_scroll_mut().jump_to(15);
+    let parent_top = app.whole_scroll().raw_top();
+    let parent_follow = app.whole_scroll().is_following_tail();
 
     assert!(app.enter_teammate_view());
     // Step up three viewports and back one line: enough to break follow-tail
@@ -99,9 +99,9 @@ fn test_child_scroll_leaves_parent() {
         "the child did scroll away"
     );
 
-    assert_eq!(app.transcript_scroll.raw_top(), parent_top);
+    assert_eq!(app.whole_scroll().raw_top(), parent_top);
     assert_eq!(
-        app.transcript_scroll.is_following_tail(),
+        app.whole_scroll().is_following_tail(),
         parent_follow,
         "the parent follow state is untouched by child scrolling"
     );
@@ -130,7 +130,7 @@ fn test_child_tail_spares_parent() {
     );
     app.transcript.push(subagent_line(40));
     let len_before = app.transcript.lines().len();
-    let top_before = app.transcript_scroll.raw_top();
+    let top_before = app.whole_scroll().raw_top();
 
     assert!(app.enter_teammate_view());
     app.scroll_transcript_up();
@@ -148,7 +148,7 @@ fn test_child_tail_spares_parent() {
         "no parent trim ran"
     );
     assert_eq!(
-        app.transcript_scroll.raw_top(),
+        app.whole_scroll().raw_top(),
         top_before,
         "the parent top is where the reader parked it"
     );
@@ -174,7 +174,7 @@ fn test_child_blocks_parent_reads() {
     app.rebuild_transcript();
     app.rebuild_transcript();
     app.transcript.push(subagent_line(2));
-    app.transcript_scroll.jump_to(0);
+    app.whole_scroll_mut().jump_to(0);
     app.snapshot = Some(Arc::new(MockSnapshot {
         lines: Vec::new(),
         log_bytes: 4096,
@@ -205,7 +205,7 @@ fn test_child_blocks_parent_reads() {
 #[test]
 fn test_parent_read_spares_child() {
     let mut app = app_with_parent(5);
-    app.transcript_scroll.jump_to(0);
+    app.whole_scroll_mut().jump_to(0);
     let (tx, rx) = mpsc::channel::<HistoryReadOutcome>();
     let front = app.transcript.frame_window_start();
     let disk_front = app.transcript.disk_front();
@@ -213,7 +213,7 @@ fn test_parent_read_spares_child() {
 
     assert!(app.enter_teammate_view());
     let child_before = crate::test_harness::render_text(&app, 80, 24);
-    let parent_top = app.transcript_scroll.raw_top();
+    let parent_top = app.whole_scroll().raw_top();
 
     tx.send(HistoryReadOutcome::Rows(HistoryReadResult {
         rows: vec![TranscriptLine::User("older parent row".into())],
@@ -228,7 +228,7 @@ fn test_parent_read_spares_child() {
         "the rows went into the parent transcript"
     );
     assert_eq!(
-        app.transcript_scroll.raw_top(),
+        app.whole_scroll().raw_top(),
         parent_top + 1,
         "the parent viewport held still over the landed rows"
     );

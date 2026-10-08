@@ -334,7 +334,7 @@ fn draw_scroll(f: &mut Frame, app: &App) {
     // at a time has no whole-vec fold object) through its own path that does
     // not touch TranscriptScroll/display_slots/total. Under threshold, the
     // whole-log snapshot renders through the standard slot-based path.
-    if app.window_mode {
+    if app.window_browsing() {
         history_window::draw_history_window(f, outer[0], app);
     } else {
         transcript::draw_transcript(f, outer[0], app);

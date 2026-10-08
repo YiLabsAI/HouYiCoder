@@ -301,7 +301,7 @@ pub(crate) fn handle_mouse(app: &mut App, m: MouseEvent) {
             if in_rect(rect, m.column, m.row) {
                 // Byte-window browsing does not share transcript selection
                 // coordinates, so clicks do not start a drag.
-                if !app.window_mode {
+                if !app.window_browsing() {
                     TranscriptSurface { app: &mut *app }.handle_down(m.column, m.row);
                 }
             } else {
@@ -358,8 +358,8 @@ pub(crate) fn handle_mouse(app: &mut App, m: MouseEvent) {
         MouseEventKind::ScrollUp => {
             clear_stale_click(&mut app.selection);
             clear_stale_click(&mut app.pane_selection);
-            if app.window_mode {
-                app.window_scroll.line_up(3);
+            if app.window_browsing() {
+                app.window_scroll_mut().line_up(3);
             } else {
                 app.scroll_transcript_line_up(3);
             }
@@ -367,8 +367,8 @@ pub(crate) fn handle_mouse(app: &mut App, m: MouseEvent) {
         MouseEventKind::ScrollDown => {
             clear_stale_click(&mut app.selection);
             clear_stale_click(&mut app.pane_selection);
-            if app.window_mode {
-                app.window_scroll.line_down(3);
+            if app.window_browsing() {
+                app.window_scroll_mut().line_down(3);
             } else {
                 app.scroll_transcript_line_down(3);
             }

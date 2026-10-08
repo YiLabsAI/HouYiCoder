@@ -791,7 +791,7 @@ fn test_notice_count_matches_render() {
     );
     assert_eq!(
         collapsed,
-        app.transcript_scroll.total.get(),
+        app.whole_scroll().total.get(),
         "the count and the rows the draw published agree"
     );
     app.expanded_fold_groups.insert("mg#0".into());
@@ -803,7 +803,7 @@ fn test_notice_count_matches_render() {
     );
     assert_eq!(
         expanded,
-        app.transcript_scroll.total.get(),
+        app.whole_scroll().total.get(),
         "the count and the rows the draw published agree while open too"
     );
 }

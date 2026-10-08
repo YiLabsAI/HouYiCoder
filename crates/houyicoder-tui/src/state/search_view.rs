@@ -9,6 +9,7 @@ use std::time::Duration;
 use super::App;
 use super::index_read::{INDEX_CHUNK_BUDGET, IndexChunkPoll, PendingIndexChunk};
 use crate::notifications::{NotifKind, Notification};
+use crate::transcript::snapshot::{SnapshotLoad, WindowLoad};
 
 impl App {
     /// Enter Scroll mode, remembering the current viewport so Esc/End returns
@@ -52,30 +53,48 @@ impl App {
         // flat-rendered (no fold slots), so peak resident stays bounded
         // regardless of log size. NOT a degrade: the window IS the real
         // search surface; the chrome shows byte-% position, not "too large".
-        if let Some(snap) = self.snapshot.as_ref() {
-            self.snapshot_log_bytes = snap.log_size();
-            if self.snapshot_log_bytes > crate::scroll::SEARCH_LOG_THRESHOLD {
-                self.window_mode = true;
-                self.frozen_file_size = self.snapshot_log_bytes;
+        // Collect the load inside the snapshot borrow, then commit the whole
+        // enter transaction once the borrow ends -- the fields land together
+        // or not at all.
+        enum Loaded {
+            Over { log_bytes: u64, w: WindowLoad },
+            Under { load: SnapshotLoad },
+        }
+        let loaded = self.snapshot.as_ref().map(|snap| {
+            let log_bytes = snap.log_size();
+            if log_bytes > crate::scroll::SEARCH_LOG_THRESHOLD {
                 let w = snap.tail_window(crate::scroll::WINDOW_MAX_BYTES);
+                Loaded::Over { log_bytes, w }
+            } else {
+                let load = snap.load(crate::scroll::SEARCH_LOG_THRESHOLD);
+                Loaded::Under { load }
+            }
+        });
+        match loaded {
+            Some(Loaded::Over { log_bytes, w }) => {
+                self.snapshot_log_bytes = log_bytes;
+                self.set_window_browsing(true);
+                self.frozen_file_size = log_bytes;
                 self.search_transcript = w.lines;
                 self.window_anchor = w.start_offset;
                 self.window_end = w.next_offset;
                 self.search_skipped = w.skipped;
                 self.window_skipped = w.skipped;
                 self.search_truncated = false;
-                self.window_scroll = crate::scroll::WindowScroll::default();
-            } else {
-                let load = snap.load(crate::scroll::SEARCH_LOG_THRESHOLD);
+                self.reset_window_scroll();
+            }
+            Some(Loaded::Under { load }) => {
                 self.search_transcript = load.lines;
                 self.search_truncated = load.truncated;
                 self.search_skipped = load.skipped;
+                self.snapshot_log_bytes = 0;
             }
-        } else {
-            self.search_transcript = self.transcript.lines().to_vec();
-            self.search_truncated = false;
-            self.snapshot_log_bytes = 0;
-            self.search_skipped = 0;
+            None => {
+                self.search_transcript = self.transcript.lines().to_vec();
+                self.search_truncated = false;
+                self.snapshot_log_bytes = 0;
+                self.search_skipped = 0;
+            }
         }
         self.search.active = true;
         self.search.query = query.to_string();
@@ -103,12 +122,12 @@ impl App {
         self.search_truncated = false;
         self.snapshot_log_bytes = 0;
         self.search_skipped = 0;
-        self.window_mode = false;
+        self.set_window_browsing(false);
         self.window_anchor = 0;
         self.window_end = 0;
         self.frozen_file_size = 0;
         self.window_skipped = 0;
-        self.window_scroll = crate::scroll::WindowScroll::default();
+        self.reset_window_scroll();
         self.indexing.set(false);
         self.indexed_bytes.set(0);
         self.index_total.set(0);
@@ -198,12 +217,12 @@ impl App {
     /// is window_scroll -- separate from the whole-vec TranscriptScroll.
     pub fn jump_to_focused_match(&mut self) {
         if let Some(idx) = self.search.focused_line() {
-            if self.window_mode {
+            if self.window_browsing() {
                 let row = self.history_row_of_line(idx);
-                self.window_scroll.jump_to(row);
+                self.window_scroll_mut().jump_to(row);
             } else {
                 let row = self.transcript_row_of_line(idx);
-                self.transcript_scroll.jump_to(row);
+                self.whole_scroll_mut().jump_to(row);
             }
         }
     }
@@ -215,7 +234,7 @@ impl App {
     /// Bounded, not infinite: a bounded scan that finds nothing stays put
     /// (the chrome shows the partial total) -- honest, not a false "no more".
     pub fn window_search_older(&mut self) {
-        if !self.window_mode {
+        if !self.window_browsing() {
             self.search.prev();
             self.jump_to_focused_match();
             return;
@@ -247,7 +266,7 @@ impl App {
             self.window_anchor = new_anchor;
             self.window_end = w.next_offset;
             self.window_skipped = w.skipped;
-            self.window_scroll = crate::scroll::WindowScroll::default();
+            self.reset_window_scroll();
             self.run_search();
             if !self.search.matches.is_empty() {
                 // Newest match in this older window = last index.
@@ -264,7 +283,7 @@ impl App {
     /// window holds a newer match, the in-window next handles it. Otherwise
     /// load newer windows (forward) searching for the next newer match.
     pub fn window_search_newer(&mut self) {
-        if !self.window_mode {
+        if !self.window_browsing() {
             self.search.next();
             self.jump_to_focused_match();
             return;
@@ -293,7 +312,7 @@ impl App {
             self.window_anchor = w.start_offset;
             self.window_end = new_end;
             self.window_skipped = w.skipped;
-            self.window_scroll = crate::scroll::WindowScroll::default();
+            self.reset_window_scroll();
             self.run_search();
             if !self.search.matches.is_empty() {
                 // Newest match in a forward (older->newer) window = last index,
@@ -327,7 +346,7 @@ impl App {
     /// dispatch drops the first chunk's receiver: its worker reads the log and
     /// sends into a channel nobody holds.
     pub fn start_full_index(&mut self) {
-        if !self.window_mode {
+        if !self.window_browsing() {
             return;
         }
         self.indexing.set(true);

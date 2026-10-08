@@ -535,7 +535,7 @@ fn test_prepend_loads_history() {
     }
     app.rebuild_transcript();
     let before = app.transcript.len();
-    app.transcript_scroll.jump_to(0);
+    app.whole_scroll_mut().jump_to(0);
     app.load_older_frames();
     pump_history_read_blocking(&mut app, Duration::from_secs(5));
     assert!(app.transcript.len() > before);
@@ -573,7 +573,7 @@ fn test_prepend_survives_rebuild() {
     }
     app.rebuild_transcript();
     assert!(app.loaded_from_frame.get() > 0);
-    app.transcript_scroll.jump_to(0);
+    app.whole_scroll_mut().jump_to(0);
     app.load_older_frames();
     pump_history_read_blocking(&mut app, Duration::from_secs(5));
     assert!(
@@ -611,7 +611,7 @@ fn test_prepend_keeps_echo_place() {
         app.transcript.push_frame(user_msg(&format!("recent {i}")));
     }
     app.rebuild_transcript();
-    app.transcript_scroll.jump_to(0);
+    app.whole_scroll_mut().jump_to(0);
     app.load_older_frames();
     pump_history_read_blocking(&mut app, Duration::from_secs(5));
     let at = |app: &App, want: &str| {
@@ -929,7 +929,7 @@ fn test_trim_skips_scrollaway() {
     );
     // Scroll away from the tail, then keep pushing: trim must not drain a
     // scrolled-back reader, so the lines accumulate past the cap.
-    app.transcript_scroll.jump_to(0);
+    app.whole_scroll_mut().jump_to(0);
     let extra = 50;
     for _ in 0..extra {
         app.push_transcript_line(TranscriptLine::Agent("scrolled-back line".into()));
@@ -995,7 +995,7 @@ fn test_scrollback_survives_frame() {
     }
     app.rebuild_transcript();
     // Scroll away and load older frames until the history boundary hits zero.
-    app.transcript_scroll.jump_to(0);
+    app.whole_scroll_mut().jump_to(0);
     while app.loaded_from_frame.get() > 0 {
         app.load_older_frames();
         pump_history_read_blocking(&mut app, Duration::from_secs(5));
@@ -1280,7 +1280,7 @@ fn test_scrollback_stops_at_front() {
         base > 0 && base + 1 < cap,
         "the drain leaves a loadable range below the frame cap: front={base}"
     );
-    app.transcript_scroll.jump_to(0);
+    app.whole_scroll_mut().jump_to(0);
     app.loaded_from_frame.set(base + 1);
     app.load_older_frames();
     pump_history_read_blocking(&mut app, Duration::from_secs(5));
@@ -1345,7 +1345,7 @@ fn test_load_boundary_keeps_draining() {
         0,
         "the budget holds the frames before a load"
     );
-    app.transcript_scroll.jump_to(0);
+    app.whole_scroll_mut().jump_to(0);
     app.load_older_frames();
     pump_history_read_blocking(&mut app, Duration::from_secs(5));
     assert!(
@@ -1486,7 +1486,7 @@ fn test_scrollback_reads_log_rows() {
     lines.extend(app.transcript.iter().cloned());
     app.snapshot = Some(log_source(vec![log_window(lines, 100, 4096)]));
 
-    app.transcript_scroll.jump_to(0);
+    app.whole_scroll_mut().jump_to(0);
     app.load_older_frames();
     pump_history_read_blocking(&mut app, Duration::from_secs(5));
 
@@ -1508,7 +1508,7 @@ fn test_scrollback_reads_log_rows() {
     assert_rows_print_once(&app);
     assert_eq!(app.transcript.disk_front(), DiskFront::At(100));
     assert_eq!(
-        app.transcript_scroll.raw_top(),
+        app.whole_scroll().raw_top(),
         5,
         "the viewport held still under the rows that landed above it"
     );
@@ -1533,7 +1533,7 @@ fn test_scrollback_chains_older_window() {
         log_window(tail, 100, 4096),
     ]));
 
-    app.transcript_scroll.jump_to(0);
+    app.whole_scroll_mut().jump_to(0);
     app.load_older_frames();
     pump_history_read_blocking(&mut app, Duration::from_secs(5));
     app.load_older_frames();
@@ -1567,7 +1567,7 @@ fn test_scrollback_chains_older_window() {
 fn test_scrollback_without_log_source() {
     let mut app = drained_app();
     let shown = app.transcript.len();
-    app.transcript_scroll.jump_to(0);
+    app.whole_scroll_mut().jump_to(0);
     app.load_older_frames();
     pump_history_read_blocking(&mut app, Duration::from_secs(5));
     assert_eq!(app.transcript.len(), shown);
@@ -1588,7 +1588,7 @@ fn test_scrollback_stops_without_match() {
         4096,
     )]));
 
-    app.transcript_scroll.jump_to(0);
+    app.whole_scroll_mut().jump_to(0);
     app.load_older_frames();
     pump_history_read_blocking(&mut app, Duration::from_secs(5));
 
@@ -1607,7 +1607,7 @@ fn test_rows_leave_at_end() {
     lines.extend(app.transcript.iter().cloned());
     app.snapshot = Some(log_source(vec![log_window(lines, 100, 4096)]));
 
-    app.transcript_scroll.jump_to(0);
+    app.whole_scroll_mut().jump_to(0);
     app.load_older_frames();
     pump_history_read_blocking(&mut app, Duration::from_secs(5));
     assert_eq!(app.transcript.disk_row_count(), 1);
@@ -1625,7 +1625,7 @@ fn test_rows_leave_at_end() {
             .any(|l| matches!(l, TranscriptLine::User(t) if t == "older 0"))
     );
 
-    app.transcript_scroll.follow_tail();
+    app.whole_scroll_mut().follow_tail();
     app.rebuild_transcript();
     assert_eq!(
         app.transcript.disk_row_count(),
@@ -1663,7 +1663,7 @@ fn test_join_prefers_longest_run() {
     lines.extend(view.clone());
     app.snapshot = Some(log_source(vec![log_window(lines, 100, 4096)]));
 
-    app.transcript_scroll.jump_to(0);
+    app.whole_scroll_mut().jump_to(0);
     app.load_older_frames();
     pump_history_read_blocking(&mut app, Duration::from_secs(5));
 
@@ -1698,7 +1698,7 @@ fn test_walk_crosses_log_windows() {
         log_window(newer, 100, 4096),
     ]));
 
-    app.transcript_scroll.jump_to(0);
+    app.whole_scroll_mut().jump_to(0);
     app.load_older_frames();
     pump_history_read_blocking(&mut app, Duration::from_secs(5));
 
@@ -1725,7 +1725,7 @@ fn test_walk_stops_without_progress() {
         .collect();
     app.snapshot = Some(log_source(vec![log_window(lines, 4096, 4096)]));
 
-    app.transcript_scroll.jump_to(0);
+    app.whole_scroll_mut().jump_to(0);
     app.load_older_frames();
     pump_history_read_blocking(&mut app, Duration::from_secs(5));
 
@@ -1761,7 +1761,7 @@ fn test_walk_stops_without_window() {
         index_calls: AtomicU32::new(0),
     }));
 
-    app.transcript_scroll.jump_to(0);
+    app.whole_scroll_mut().jump_to(0);
     app.load_older_frames();
     pump_history_read_blocking(&mut app, Duration::from_secs(5));
 
@@ -1793,7 +1793,7 @@ fn test_dispatch_front_after_drain() {
         100,
         4096,
     )]));
-    app.transcript_scroll.jump_to(0);
+    app.whole_scroll_mut().jump_to(0);
     app.load_older_frames();
     let front_after = app.transcript.frame_window_start();
     assert!(
@@ -1820,7 +1820,7 @@ fn test_stale_history_read_dropped() {
         .map(|i| TranscriptLine::User(format!("unrelated {i}")))
         .collect();
     app.snapshot = Some(log_source(vec![log_window(lines, 100, 4096)]));
-    app.transcript_scroll.jump_to(0);
+    app.whole_scroll_mut().jump_to(0);
     app.load_older_frames();
     // Move the resident front past the dispatch front before the result lands.
     let text = "z".repeat(2000);
@@ -1863,13 +1863,13 @@ fn test_rows_leave_on_drain() {
     lines.extend(app.transcript.iter().cloned());
     app.snapshot = Some(log_source(vec![log_window(lines, 100, 4096)]));
 
-    app.transcript_scroll.jump_to(0);
+    app.whole_scroll_mut().jump_to(0);
     app.load_older_frames();
     pump_history_read_blocking(&mut app, Duration::from_secs(5));
     assert_eq!(app.transcript.disk_row_count(), 1);
     assert_eq!(app.transcript.disk_rows_front(), front);
     assert_eq!(
-        app.transcript_scroll.raw_top(),
+        app.whole_scroll().raw_top(),
         1,
         "the loaded row carried the viewport down with it"
     );
@@ -1892,7 +1892,7 @@ fn test_rows_leave_on_drain() {
     );
     assert_eq!(app.transcript.disk_front(), DiskFront::Unloaded);
     assert_eq!(
-        app.transcript_scroll.raw_top(),
+        app.whole_scroll().raw_top(),
         0,
         "the viewport holds its place as the row leaves in the drain's own pass"
     );
@@ -1922,7 +1922,7 @@ fn test_log_rows_capped() {
         .map(|i| TranscriptLine::User(format!("older {i}")))
         .collect();
     app.transcript.prepend_disk_rows(rows, 100, 0);
-    app.transcript_scroll.jump_to(0);
+    app.whole_scroll_mut().jump_to(0);
     app.snapshot = Some(log_source(vec![log_window(
         vec![TranscriptLine::User("even older".into())],
         50,
@@ -1955,7 +1955,7 @@ fn test_scrollback_without_rows() {
         4096,
     )]));
 
-    app.transcript_scroll.jump_to(0);
+    app.whole_scroll_mut().jump_to(0);
     app.load_older_frames();
     pump_history_read_blocking(&mut app, Duration::from_secs(5));
 

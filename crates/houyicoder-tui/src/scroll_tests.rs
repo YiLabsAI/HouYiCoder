@@ -39,7 +39,7 @@ fn test_scrollback_keeps_top_row() {
     for i in 0..40 {
         app.push_transcript_line(crate::state::TranscriptLine::System(format!("row-{i}")));
     }
-    app.transcript_scroll.jump_to(0);
+    app.whole_scroll_mut().jump_to(0);
     let out = render_text(&app, 80, 12);
     let first = out.lines().next().unwrap_or("");
     assert!(
@@ -88,12 +88,12 @@ fn test_page_up_breaks_follow() {
     }
     let out = render(&app);
     println!("--- transcript at tail ---\n{out}\n--- end ---");
-    assert!(app.transcript_scroll.is_following_tail());
+    assert!(app.whole_scroll().is_following_tail());
     // Render once so the view publishes cap/total into the Cell fields.
     drop(render(&app));
     app.scroll_transcript_up();
     assert!(
-        !app.transcript_scroll.is_following_tail(),
+        !app.whole_scroll().is_following_tail(),
         "PgUp should break follow-tail"
     );
     let out = render(&app);
@@ -103,7 +103,7 @@ fn test_page_up_breaks_follow() {
         "N-more indicator should appear when scrolled back"
     );
     app.scroll_transcript_follow_tail();
-    assert!(app.transcript_scroll.is_following_tail());
+    assert!(app.whole_scroll().is_following_tail());
 }
 
 /// PgUp then PgDown exercises the down path (which reads the published
@@ -116,10 +116,10 @@ fn test_page_down_after_up() {
     }
     drop(render(&app));
     app.scroll_transcript_up();
-    assert!(!app.transcript_scroll.is_following_tail());
-    let top_after_up = app.transcript_scroll.top_offset();
+    assert!(!app.whole_scroll().is_following_tail());
+    let top_after_up = app.whole_scroll().top_offset();
     app.scroll_transcript_down();
-    let top_after_down = app.transcript_scroll.top_offset();
+    let top_after_down = app.whole_scroll().top_offset();
     assert!(
         top_after_down >= top_after_up,
         "PgDown must not scroll further up: {top_after_up} -> {top_after_down}"
@@ -144,19 +144,19 @@ fn test_thinking_expand_pins() {
         turn_id: "t1".into(),
     });
     drop(render(&app));
-    let top_before = app.transcript_scroll.top_offset();
+    let top_before = app.whole_scroll().top_offset();
     assert!(
         top_before > 0,
         "the fixture must be taller than the viewport, else the pin is untestable"
     );
-    assert!(app.transcript_scroll.is_following_tail());
+    assert!(app.whole_scroll().is_following_tail());
     assert!(app.toggle_thinking_expand(), "the ThoughtFor is expandable");
     assert!(
-        !app.transcript_scroll.is_following_tail(),
+        !app.whole_scroll().is_following_tail(),
         "expand stops following the tail so the rows below can grow"
     );
     assert_eq!(
-        app.transcript_scroll.top_offset(),
+        app.whole_scroll().top_offset(),
         top_before,
         "expand must keep the visible top, not fall back to offset 0"
     );
@@ -178,11 +178,11 @@ fn test_subagent_expand_pins() {
         color: None,
     });
     drop(render(&app));
-    let top_before = app.transcript_scroll.top_offset();
+    let top_before = app.whole_scroll().top_offset();
     assert!(top_before > 0, "fixture taller than the viewport");
     assert!(app.toggle_tail_expand(), "the delegation is expandable");
     assert_eq!(
-        app.transcript_scroll.top_offset(),
+        app.whole_scroll().top_offset(),
         top_before,
         "expand must keep the visible top, not fall back to offset 0"
     );
@@ -256,13 +256,13 @@ fn test_agent_output_no_yank() {
     }
     drop(render(&app));
     app.scroll_transcript_up();
-    assert!(!app.transcript_scroll.is_following_tail());
+    assert!(!app.whole_scroll().is_following_tail());
     app.system_line("fresh line");
     // Agent output (a system line landing at turn end) must NOT yank a user
     // who scrolled back to read history. The scroll state is untouched by a
     // push; re-follow happens only at user action sites (submit, End, etc.).
     assert!(
-        !app.transcript_scroll.is_following_tail(),
+        !app.whole_scroll().is_following_tail(),
         "agent output yanked a scrolled-up user"
     );
 }
@@ -289,8 +289,8 @@ fn test_grid_survives_page_up() {
     fill_transcript(&mut app, 20);
     app.viewport = crate::state::ViewportMode::Scroll;
     drop(render(&app));
-    app.transcript_scroll.page_up();
-    app.transcript_scroll.page_up();
+    app.whole_scroll_mut().page_up();
+    app.whole_scroll_mut().page_up();
     let out = render(&app);
     assert!(out.contains("Context Usage"), "header gone: {out}");
     assert!(out.contains("Estimated usage"), "legend gone: {out}");
@@ -301,7 +301,7 @@ fn test_context_grid_visible_top() {
     let mut app = context_app();
     fill_transcript(&mut app, 20);
     app.viewport = crate::state::ViewportMode::Scroll;
-    app.transcript_scroll.jump_to(0);
+    app.whole_scroll_mut().jump_to(0);
     drop(render(&app));
     let out = render(&app);
     assert!(
@@ -321,7 +321,7 @@ fn test_context_grid_renders_overlap() {
     fill_transcript(&mut app, 20);
     app.viewport = crate::state::ViewportMode::Scroll;
     drop(render(&app));
-    app.transcript_scroll.jump_to(5);
+    app.whole_scroll_mut().jump_to(5);
     let out = render(&app);
     assert!(
         out.contains("Estimated usage") || out.contains("Suggestions"),

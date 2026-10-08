@@ -38,9 +38,10 @@ pub(super) fn handle_scroll(app: &mut App, k: KeyEvent) {
 /// match into view so the screen follows the walk. g/G jump to the top/bottom.
 /// q/Esc exit the view. slash opens the in-view re-search bar.
 /// PageUp/PageDown scroll a screenful. In byte-window mode the scroll state
-/// is window_scroll (separate from TranscriptScroll); n/N + jump branch
-/// internally on window_mode. Cross-window paging (scroll past the window
-/// edge) lands with the G full-scan + per-window n/N scan.
+/// is the window's own scroll (separate from the whole-vec scroll); n/N and
+/// jump branch internally on whether window browsing is on. Cross-window
+/// paging (scroll past the window edge) lands with the G full-scan plus
+/// per-window n/N scan.
 fn handle_search_view(app: &mut App, k: KeyEvent) {
     // Esc: if the G full-index is building, interrupt it (stay in the view);
     // otherwise exit the view.
@@ -55,7 +56,7 @@ fn handle_search_view(app: &mut App, k: KeyEvent) {
         KeyCode::Char('/') => app.enter_search_input(),
         KeyCode::Char('q') => app.exit_search_view(),
         KeyCode::Char('n') => {
-            if app.window_mode {
+            if app.window_browsing() {
                 app.window_search_older();
             } else {
                 app.search.prev();
@@ -63,7 +64,7 @@ fn handle_search_view(app: &mut App, k: KeyEvent) {
             }
         }
         KeyCode::Char('N') => {
-            if app.window_mode {
+            if app.window_browsing() {
                 app.window_search_newer();
             } else {
                 app.search.next();
@@ -71,33 +72,33 @@ fn handle_search_view(app: &mut App, k: KeyEvent) {
             }
         }
         KeyCode::Char('g') => {
-            if app.window_mode {
-                app.window_scroll.jump_to(0);
+            if app.window_browsing() {
+                app.window_scroll_mut().jump_to(0);
             } else {
                 app.active_scroll_mut().jump_to(0);
             }
         }
         KeyCode::Char('G') => {
-            if app.window_mode {
+            if app.window_browsing() {
                 // Build the full event-byte-offset index across frames so
                 // arbitrary seek + the total count become possible. Progress
                 // shows in the chrome; Esc interrupts.
                 app.start_full_index();
-                app.window_scroll.follow_tail();
+                app.window_scroll_mut().follow_tail();
             } else {
                 app.scroll_transcript_follow_tail();
             }
         }
         KeyCode::PageUp => {
-            if app.window_mode {
-                app.window_scroll.page_up();
+            if app.window_browsing() {
+                app.window_scroll_mut().page_up();
             } else {
                 app.scroll_transcript_up();
             }
         }
         KeyCode::PageDown => {
-            if app.window_mode {
-                app.window_scroll.page_down();
+            if app.window_browsing() {
+                app.window_scroll_mut().page_down();
             } else {
                 app.scroll_transcript_down();
             }

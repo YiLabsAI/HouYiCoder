@@ -130,8 +130,8 @@ fn test_child_scroll_restored() {
 #[test]
 fn test_child_blocks_search() {
     let mut app = app_with_two_children(60);
-    app.transcript_scroll.jump_to(10);
-    let top = app.transcript_scroll.raw_top();
+    app.whole_scroll_mut().jump_to(10);
+    let top = app.whole_scroll().raw_top();
 
     assert!(app.enter_teammate_view_for_sid("c1", false));
     app.enter_search_view("row");
@@ -142,7 +142,7 @@ fn test_child_blocks_search() {
     );
     assert!(app.teammate_view.is_some(), "the child view stands");
     assert_eq!(
-        app.transcript_scroll.raw_top(),
+        app.whole_scroll().raw_top(),
         top,
         "the hidden parent's viewport did not move"
     );

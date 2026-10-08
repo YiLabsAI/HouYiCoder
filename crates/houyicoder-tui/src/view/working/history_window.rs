@@ -3,8 +3,8 @@
 //! The window has no global fold groups because only one byte range is loaded.
 //! Per-line styling and spacing are shared with the main transcript renderer.
 //!
-//! WindowScroll owns its row count and position independently from the active
-//! conversation.
+//! The within-window scroll owns its row count and position independently
+//! from the active conversation.
 
 use ratatui::{
     Frame,
@@ -41,10 +41,10 @@ pub(super) fn draw_history_window(f: &mut Frame, area: Rect, app: &App) {
     }
     let (rows, row_callids, fold_keys, expanded_group, turn_ids, pre_rendered) = sink.into_parts();
     let cap = area.height as usize;
-    app.window_scroll.cap.set(cap);
+    app.window_scroll().cap.set(cap);
     let total = rows.len();
-    app.window_scroll.total.set(total);
-    let top = app.window_scroll.top_offset();
+    app.window_scroll().total.set(total);
+    let top = app.window_scroll().top_offset();
     // Stash the full + visible row sets so copy can extract selected text from
     // the window (selection past the visible edge, viewport scrolled between
     // draw and copy). These stashes are the rendered-row cache, not

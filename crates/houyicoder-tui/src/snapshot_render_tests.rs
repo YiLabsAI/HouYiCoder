@@ -62,7 +62,7 @@ fn test_count_matches_under_snapshot() {
     for w in [40, 80] {
         let out = render_text(&app, w, 50);
         let count = app.transcript_display_rows();
-        let rendered = app.transcript_scroll.total.get();
+        let rendered = app.whole_scroll().total.get();
         assert_eq!(
             count, rendered,
             "snapshot desync at w={w}: count={count} rendered={rendered}\n{out}"
@@ -208,7 +208,10 @@ fn test_large_log_opens_mode() {
         index_calls: std::sync::atomic::AtomicU32::new(0),
     }));
     app.enter_search_view("needle");
-    assert!(app.window_mode, "over-threshold opens byte-window mode");
+    assert!(
+        app.window_browsing(),
+        "over-threshold opens byte-window mode"
+    );
     assert!(
         !app.search_truncated,
         "window mode is the real path, not a degrade"
@@ -400,11 +403,11 @@ fn test_flat_count_matches_render() {
         index_calls: std::sync::atomic::AtomicU32::new(0),
     }));
     app.enter_search_view("answer");
-    assert!(app.window_mode, "test setup: window mode active");
+    assert!(app.window_browsing(), "test setup: window mode active");
     for w in [40u16, 80, 120] {
         let out = render_text(&app, w, 24);
         let count = app.history_display_rows();
-        let rendered = app.window_scroll.total.get();
+        let rendered = app.window_scroll().total.get();
         assert_eq!(
             count, rendered,
             "flat count==render at w={w}: count={count} rendered={rendered}\n{out}"
@@ -445,10 +448,10 @@ fn test_exit_clears_window_state() {
         index_calls: std::sync::atomic::AtomicU32::new(0),
     }));
     app.enter_search_view("tail");
-    assert!(app.window_mode, "window mode entered");
+    assert!(app.window_browsing(), "window mode entered");
     assert_eq!(app.frozen_file_size, 20 * 1024 * 1024);
     app.exit_search_view();
-    assert!(!app.window_mode, "exit clears window mode");
+    assert!(!app.window_browsing(), "exit clears window mode");
     assert!(
         app.search_transcript.is_empty(),
         "exit frees the window vec"
@@ -477,31 +480,37 @@ fn test_window_keys_scroll_window() {
         index_calls: std::sync::atomic::AtomicU32::new(0),
     }));
     app.enter_search_view("tail");
-    assert!(app.window_mode);
+    assert!(app.window_browsing());
     // Simulate a render that published a window taller than one viewport so
     // paging is meaningful (the draw path sets these Cells; tests reach in to
     // avoid driving a full render just to seed scroll metrics).
-    app.window_scroll.total.set(100);
-    app.window_scroll.cap.set(10);
+    app.window_scroll().total.set(100);
+    app.window_scroll().cap.set(10);
     // enter_search_view jumps to the focused match -> follow_tail false.
-    assert!(!app.window_scroll.follow_tail);
+    assert!(!app.window_scroll().is_following_tail());
     // G follows the tail (the bottom of the window).
     crate::app::handle_key(
         &mut app,
         KeyEvent::new(KeyCode::Char('G'), KeyModifiers::NONE),
     );
-    assert!(app.window_scroll.follow_tail, "G follows the window tail");
+    assert!(
+        app.window_scroll().is_following_tail(),
+        "G follows the window tail"
+    );
     // g jumps to the top.
     crate::app::handle_key(
         &mut app,
         KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE),
     );
-    assert!(!app.window_scroll.follow_tail, "g pins to the top");
-    assert_eq!(app.window_scroll.top_offset(), 0, "g at the top");
+    assert!(
+        !app.window_scroll().is_following_tail(),
+        "g pins to the top"
+    );
+    assert_eq!(app.window_scroll().top_offset(), 0, "g at the top");
     // PageUp from the top is a no-op (already at 0); PageDown moves down.
     crate::app::handle_key(&mut app, KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE));
     assert_eq!(
-        app.window_scroll.top_offset(),
+        app.window_scroll().top_offset(),
         0,
         "PageUp at top is a no-op"
     );
@@ -510,7 +519,7 @@ fn test_window_keys_scroll_window() {
         KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE),
     );
     assert!(
-        app.window_scroll.top_offset() > 0,
+        app.window_scroll().top_offset() > 0,
         "PageDown moves down in the window"
     );
 }
@@ -534,9 +543,9 @@ fn test_window_scrolls_no_drag() {
         index_calls: std::sync::atomic::AtomicU32::new(0),
     }));
     app.enter_search_view("tail");
-    app.window_scroll.total.set(100);
-    app.window_scroll.cap.set(10);
-    let live_total_before = app.transcript_scroll.total.get();
+    app.window_scroll().total.set(100);
+    app.window_scroll().cap.set(10);
+    let live_total_before = app.whole_scroll().total.get();
     let rect = ratatui::layout::Rect::new(0, 0, 80, 24);
     app.transcript_rect.set(rect);
     // Wheel up: window_scroll pins (follow_tail -> false), transcript_scroll
@@ -550,9 +559,12 @@ fn test_window_scrolls_no_drag() {
             modifiers: KeyModifiers::NONE,
         },
     );
-    assert!(!app.window_scroll.follow_tail, "wheel up pins the window");
+    assert!(
+        !app.window_scroll().is_following_tail(),
+        "wheel up pins the window"
+    );
     assert_eq!(
-        app.transcript_scroll.total.get(),
+        app.whole_scroll().total.get(),
         live_total_before,
         "wheel in window mode does not touch transcript_scroll"
     );

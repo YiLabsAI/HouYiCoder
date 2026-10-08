@@ -21,7 +21,7 @@ use crate::evidence::{
 use crate::palette::PaletteState;
 use crate::resume_picker::SessionCatalog;
 use crate::review_queue::ReviewQueue;
-use crate::scroll::{SearchState, TranscriptScroll};
+use crate::scroll::SearchState;
 use crate::selection::Selection;
 use crate::session::SessionConnection;
 use crate::state::{

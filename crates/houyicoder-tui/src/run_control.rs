@@ -516,15 +516,15 @@ impl App {
         if std::env::var("HICODER_DEBUG_RENDER").is_err() {
             return;
         }
-        let total = self.transcript_scroll.total.get();
+        let total = self.whole_scroll().total.get();
         tracing::warn!(
             "[done] frames={} transcript={} cap={} total={} follow={} top={} approval={} busy={}",
             frames.len(),
             self.transcript.len(),
-            self.transcript_scroll.cap.get(),
+            self.whole_scroll().cap.get(),
             total,
-            self.transcript_scroll.is_following_tail(),
-            self.transcript_scroll.top_offset(),
+            self.whole_scroll().is_following_tail(),
+            self.whole_scroll().top_offset(),
             self.approval().is_some(),
             self.agent_busy(),
         );

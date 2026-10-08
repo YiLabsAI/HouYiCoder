@@ -44,9 +44,23 @@ ACTIVE_OWNERS = {
         # build's pending-chunk slot joins the index fields it belongs to; the
         # window's fields are a SearchWindowState owner waiting to be drawn.
         # HistoryReads took the pending-read slot out of Transcript and App
-        # gained the owner field beside it, net one more.
-        "fields": 145,
+        # gained the owner field beside it, net one more. The transcript
+        # view state took the two scroll objects and the window flag
+        # (three flat fields gone, one owner field gained, net two fewer):
+        # the whole-vec scroll and the search window's scroll are two
+        # instances of the one scroll type, and which one is live is a
+        # method on the owner rather than a bare boolean every caller
+        # re-reads.
+        "fields": 143,
         "mut_app": 44,
+    },
+    "crates/houyicoder-tui/src/state/transcript/view.rs:TranscriptViewState": {
+        # The transcript view's own state, one value per view: the whole-vec
+        # scroll, the search window's scroll, and the window flag today;
+        # the search view's state and the four expansion sets arrive with
+        # their readers. The dispatch (which scroll is live) is a method
+        # here, so callers cannot re-derive it from the flag.
+        "fields": 3,
     },
     "crates/houyicoder-tui/src/state/transcript.rs:Transcript": {
         # The transcript facts: frame log, resident budget counters, derived

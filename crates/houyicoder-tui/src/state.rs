@@ -43,7 +43,7 @@ use crate::resume_picker::{SessionCatalog, SessionPickerState};
 use crate::review_queue::ReviewQueue;
 use crate::row_id::RowId;
 use crate::run_state::{RunProgress, RunState};
-use crate::scroll::{SearchState, TranscriptScroll, WindowScroll};
+use crate::scroll::SearchState;
 use crate::selection::{ClipboardWriter, Selection};
 use crate::session::SessionConnection;
 use crate::skills_state::SkillsPaneState;
@@ -155,7 +155,11 @@ pub struct App {
     /// Server within-connection stream position, so front-of-window eviction
     /// cannot shift the baseline the way a raw resident index would.
     pub(crate) unseen_since: Option<EventCursor>,
-    pub transcript_scroll: TranscriptScroll,
+    /// The transcript view's own state, as one value the view on screen
+    /// holds: the two scroll objects and the window flag today, the search
+    /// view and the expansion sets as their readers migrate in. The flat
+    /// fields below stay until each group's readers move over.
+    pub(crate) transcript_view: transcript::view::TranscriptViewState,
     /// Cached display rows: the full pre-visible computation (display_slots +
     /// row formatting). Invalidated by a version counter — only recomputed
     /// when the transcript or display inputs change, not every frame.
@@ -182,13 +186,6 @@ pub struct App {
     /// surfaces "N lines skipped" so the user sees data was dropped (not a
     /// silent gap). Zero on the strict-replay path (replay errors instead).
     pub search_skipped: usize,
-    /// True when the search view is in byte-window mode (log over the
-    /// threshold). Renders flat (no fold slots) through a separate path that
-    /// does not touch TranscriptScroll/display_slots/total: the slot layer
-    /// (fold grouping + collapse handles) has no meaning when one screen is
-    /// materialized at a time. Row-layer rendering is shared with the live
-    /// path.
-    pub window_mode: bool,
     /// The byte offset where the loaded window starts. For the byte-%
     /// position indicator (divided by frozen_file_size).
     pub window_anchor: u64,
@@ -199,9 +196,6 @@ pub struct App {
     /// [0, frozen) so events appended after enter are invisible (snapshot
     /// consistency: the window does not chase the growing tail).
     pub frozen_file_size: u64,
-    /// Within-window row scroll state. Separate from TranscriptScroll (the
-    /// whole-vec path) so the 5 total consumers stay on their own path.
-    pub window_scroll: WindowScroll,
     /// Corrupt lines skipped in the current window (separate from the
     /// whole-log search_skipped so window-mode chrome shows the per-window
     /// count).

@@ -1,7 +1,7 @@
 //! Transcript scroll methods on App, split from state.rs so that file stays
-//! under the file-size gate. All page/line scroll goes through the
-//! transcript_scroll field; the debug_scroll helper is private to this impl
-//! block and only these methods call it.
+//! under the file-size gate. All page/line scroll goes through the view
+//! state's scroll; the debug_scroll helper is private to this impl block and
+//! only these methods call it.
 
 use crate::row_id::RowId;
 use crate::scroll::{NewTurnCount, ScrollTransition, TranscriptScroll};
@@ -10,14 +10,16 @@ use crate::transcript::TranscriptFrame;
 use houyicoder_protocol::frontend::session_update::SessionUpdate;
 
 impl App {
-    /// The scroll state of the surface on view: the teammate's own while its
-    /// view is open, the parent's otherwise. Presentation paths (draw, keys,
-    /// mouse, status) read this; parent-only domain work (rebuild, trim,
-    /// history reads) reads transcript_scroll directly and never this.
+    /// The scroll state of the view on screen: the teammate's own while its
+    /// view is open, otherwise the active transcript view's -- the window's
+    /// scroll while the search view browses a byte window, the whole-vec
+    /// transcript's otherwise. Presentation paths (draw, keys, mouse,
+    /// status) read this; parent-only domain work (rebuild, trim, history
+    /// reads) reads the whole-vec scroll directly and never this.
     pub(crate) fn active_scroll(&self) -> &TranscriptScroll {
         match &self.teammate_view {
             Some(view) => &view.scroll,
-            None => &self.transcript_scroll,
+            None => self.transcript_view.scroll_on_view(),
         }
     }
 
@@ -28,7 +30,7 @@ impl App {
     pub(crate) fn active_scroll_mut(&mut self) -> &mut TranscriptScroll {
         match &mut self.teammate_view {
             Some(view) => &mut view.scroll,
-            None => &mut self.transcript_scroll,
+            None => self.transcript_view.scroll_on_view_mut(),
         }
     }
 
@@ -112,9 +114,7 @@ impl App {
     /// reset the count). No-op when the scroll did not break follow (short
     /// transcript, max_top==0) or when a snapshot already exists.
     fn snapshot_scroll_away(&mut self, was_following: bool) {
-        if was_following
-            && !self.transcript_scroll.is_following_tail()
-            && self.unseen_since.is_none()
+        if was_following && !self.whole_scroll().is_following_tail() && self.unseen_since.is_none()
         {
             self.unseen_since = Some(self.event_cursor_at_tail());
         }

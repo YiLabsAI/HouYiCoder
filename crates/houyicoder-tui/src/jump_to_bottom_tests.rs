@@ -205,7 +205,7 @@ fn test_click_label_jumps() {
         mouse(MouseEventKind::Down(MouseButton::Left), px, py),
     );
     assert!(
-        app.transcript_scroll.is_following_tail(),
+        app.whole_scroll().is_following_tail(),
         "click returns to the tail"
     );
     assert!(
@@ -231,7 +231,7 @@ fn test_label_side_falls_through() {
         mouse(MouseEventKind::Down(MouseButton::Left), 0, rect.y),
     );
     assert!(
-        !app.transcript_scroll.is_following_tail(),
+        !app.whole_scroll().is_following_tail(),
         "click beside the label must not jump to the tail"
     );
 }
@@ -247,7 +247,7 @@ fn test_short_transcript_no_label() {
     let _out = render_text(&app, 80, 24);
     app.scroll_transcript_line_up(3);
     assert!(
-        app.transcript_scroll.is_following_tail(),
+        app.whole_scroll().is_following_tail(),
         "short transcript scroll keeps follow-tail"
     );
     let _out = render_text(&app, 80, 24);
@@ -265,7 +265,7 @@ fn test_label_hidden_following() {
     }
     let _out = render_text(&app, 80, 24);
     assert!(
-        app.transcript_scroll.is_following_tail(),
+        app.whole_scroll().is_following_tail(),
         "default follows the tail"
     );
     let rect = app.jump_to_bottom_rect.get();
@@ -285,13 +285,13 @@ fn test_wheel_moves_content() {
         app.system_line(format!("history line {i:02}"));
     }
     let out_before = render_text(&app, 80, 24);
-    let cap = app.transcript_scroll.cap.get();
-    let top_before = app.transcript_scroll.top_offset();
+    let cap = app.whole_scroll().cap.get();
+    let top_before = app.whole_scroll().top_offset();
     // Wheel up one notch in the middle of the transcript area.
     crate::app::handle_mouse(&mut app, mouse(MouseEventKind::ScrollUp, 40, 12));
-    let top_after = app.transcript_scroll.top_offset();
+    let top_after = app.whole_scroll().top_offset();
     assert!(
-        !app.transcript_scroll.is_following_tail(),
+        !app.whole_scroll().is_following_tail(),
         "wheel up breaks follow-tail"
     );
     assert!(
@@ -346,7 +346,7 @@ fn test_floor_count_after_drain() {
         "the label counts the turns the window still shows: {new:?}"
     );
     assert!(new.is_lower_bound, "a gone anchor reports a floor");
-    app.transcript_scroll.jump_to(0);
+    app.whole_scroll_mut().jump_to(0);
     let out = render_text(&app, 80, 24);
     assert!(
         out.contains("+ new message"),

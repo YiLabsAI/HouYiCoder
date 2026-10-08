@@ -29,7 +29,7 @@ fn test_drag_copies_agent_line() {
         .iter()
         .position(|(_, s)| s.contains("hello world"))
         .expect("agent line in last_all_rows");
-    let top = app.transcript_scroll.top_offset();
+    let top = app.whole_scroll().top_offset();
     let agent_y = rect.y + (agent_ri.saturating_sub(top)) as u16;
     let line_end = rect.x + 13;
     for ev in [
@@ -86,7 +86,7 @@ fn test_drag_copies_second_line() {
         .iter()
         .position(|(_, s)| s == "  second line")
         .expect("second line is its own row");
-    let top = app.transcript_scroll.top_offset();
+    let top = app.whole_scroll().top_offset();
     let second_y = rect.y + (second_ri.saturating_sub(top)) as u16;
     let line_end = rect.x + 13;
     for ev in [

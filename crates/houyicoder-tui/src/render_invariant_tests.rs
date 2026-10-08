@@ -479,7 +479,7 @@ fn test_agent_markdown_count_matches() {
     .into();
     let _out = render_text(&app, 80, 24);
     let count = app.transcript_display_rows();
-    let rendered = app.transcript_scroll.total.get();
+    let rendered = app.whole_scroll().total.get();
     assert_eq!(
         count, rendered,
         "agent markdown desync: count={count} rendered={rendered}"
@@ -500,7 +500,7 @@ fn test_agent_markdown_wraps_narrow() {
     .into();
     let out = render_text(&app, 30, 24);
     let count = app.transcript_display_rows();
-    let rendered = app.transcript_scroll.total.get();
+    let rendered = app.whole_scroll().total.get();
     assert_eq!(
         count, rendered,
         "wrapped agent markdown desync at 30 cols: count={count} rendered={rendered}\n{out}"
@@ -522,7 +522,7 @@ fn test_user_message_wraps_narrow() {
     app.transcript = vec![TranscriptLine::User(long.into())].into();
     let out = render_text(&app, 30, 24);
     let count = app.transcript_display_rows();
-    let rendered = app.transcript_scroll.total.get();
+    let rendered = app.whole_scroll().total.get();
     assert_eq!(
         count, rendered,
         "wrapped user prompt desync: count={count} rendered={rendered}\n{out}"
@@ -568,7 +568,7 @@ fn test_user_multiline_count_matches() {
     app.transcript = vec![TranscriptLine::User(multi.into())].into();
     let out = render_text(&app, 30, 24);
     let count = app.transcript_display_rows();
-    let rendered = app.transcript_scroll.total.get();
+    let rendered = app.whole_scroll().total.get();
     assert_eq!(
         count, rendered,
         "multiline user prompt desync: count={count} rendered={rendered}\n{out}"
@@ -597,7 +597,7 @@ fn test_thought_expand_wraps_narrow() {
     app.expanded_thinking.insert("t1".into());
     let out = render_text(&app, 30, 24);
     let count = app.transcript_display_rows();
-    let rendered = app.transcript_scroll.total.get();
+    let rendered = app.whole_scroll().total.get();
     assert_eq!(
         count, rendered,
         "expanded thought wrap desync: count={count} rendered={rendered}\n{out}"
@@ -737,7 +737,7 @@ fn test_verbose_count_matches() {
     for w in [40, 80, 120] {
         let out = render_text(&app, w, 50);
         let count = app.transcript_display_rows();
-        let rendered = app.transcript_scroll.total.get();
+        let rendered = app.whole_scroll().total.get();
         assert_eq!(
             count, rendered,
             "verbose desync at w={w}: count={count} rendered={rendered}\n{out}"
