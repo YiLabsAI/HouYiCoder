@@ -9,7 +9,7 @@ use std::fmt;
 use std::sync::{Arc, mpsc};
 use std::time::Instant;
 
-pub(crate) mod app_methods;
+pub(crate) mod chain;
 pub(crate) mod counts;
 mod cursors;
 pub(crate) mod enums;
@@ -19,6 +19,7 @@ mod model_picker;
 mod parked_view_states;
 mod scroll;
 mod search_view;
+pub(crate) mod stage;
 mod teammate_view;
 mod trajectory;
 pub(crate) mod transcript;

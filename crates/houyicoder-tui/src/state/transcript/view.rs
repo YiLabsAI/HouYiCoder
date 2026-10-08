@@ -103,11 +103,11 @@ impl TranscriptViewState {
     }
 }
 
-/// App's forwarding surface to the transcript view-state owner. The owner
-/// field is pub(crate), but these keep the call site short and give the
-/// reader's position a stable name that does not change when fields move
-/// into the owner. They live with the owner rather than in an App method
-/// grab-bag so the delegation is one click away from what it reaches.
+/// App's delegation to the transcript view-state owner. The owner field is
+/// pub(crate), but these keep the call site short and give the reader's
+/// position a stable name that does not change when fields move into the
+/// owner. They live with the owner rather than in an App method grab-bag so
+/// the delegation is one click away from what it reaches.
 impl App {
     /// Whole-vec scroll; parent-only paths read this, not the dispatch.
     pub(crate) fn whole_scroll(&self) -> &TranscriptScroll {

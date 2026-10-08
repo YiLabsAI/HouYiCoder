@@ -3,6 +3,7 @@
 //! index selects the finding currently in view on the console.
 
 use crate::evidence::{AuditEntry, ReviewFinding, Verdict, audit_entry};
+use crate::state::App;
 
 /// The multi-agent review queue: the findings awaiting sign-off, the focused
 /// index, and the audit trail of signed-off / rejected findings. All data is
@@ -81,6 +82,42 @@ impl ReviewQueue {
         self.audit_trail
             .push(audit_entry(&fid, "rejected", who, when));
         Some(note)
+    }
+}
+
+/// App's delegation to the review-queue owner. Co-located with the owner
+/// rather than in an App method grab-bag.
+impl App {
+    /// True when every review finding has been signed off or rejected.
+    pub fn all_findings_resolved(&self) -> bool {
+        !self.review.findings.is_empty() && self.review.findings.iter().all(|f| f.resolved())
+    }
+
+    /// Number of review findings in the console queue.
+    pub fn console_len(&self) -> usize {
+        self.review.len()
+    }
+
+    /// Move the console review-queue focus up, wrapping around.
+    pub fn console_focus_up(&mut self) {
+        self.review.focus_up();
+    }
+
+    /// Move the console review-queue focus down, wrapping around.
+    pub fn console_focus_down(&mut self) {
+        self.review.focus_down();
+    }
+
+    /// Sign off on the focused finding: mark signed off and append an audit
+    /// trail entry. No-op if the queue is empty or already signed off.
+    pub fn signoff_focused(&mut self, who: &str, when: &str) {
+        self.review.signoff_focused(who, when);
+    }
+
+    /// Reject the focused finding: mark rejected and append an audit trail
+    /// entry. Returns the org-eval feedback note when a rejection happened.
+    pub fn reject_focused(&mut self, who: &str, when: &str) -> Option<String> {
+        self.review.reject_focused(who, when)
     }
 }
 

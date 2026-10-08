@@ -2,6 +2,7 @@
 //! selection index. Extracted from App so the palette surface is one cohesive
 //! unit; App delegates the palette methods here.
 
+use crate::state::App;
 use houyicoder_protocol::frontend::SlashCommand;
 
 /// Palette overlay state: whether it is open, the inline filter query, and the
@@ -109,6 +110,56 @@ impl PaletteState {
     pub fn close(&mut self) {
         self.open = false;
         self.query.clear();
+    }
+}
+
+/// App's delegation to the palette owner. The methods live here so the
+/// delegation sits beside the owner it reaches, not in an App method
+/// grab-bag.
+impl App {
+    /// The filtered slash-command list, reduced by the inline query.
+    pub fn palette_filtered(&self) -> Vec<SlashCommand> {
+        self.palette.filtered()
+    }
+
+    /// Number of palette entries after filtering.
+    pub fn palette_len(&self) -> usize {
+        self.palette.len()
+    }
+
+    /// The currently selected slash command, if the palette is open.
+    pub fn selected_command(&self) -> Option<SlashCommand> {
+        self.palette.selected()
+    }
+
+    /// Move the palette selection up, wrapping around.
+    pub fn palette_up(&mut self) {
+        self.palette.prev();
+    }
+
+    /// Move the palette selection down, wrapping around.
+    pub fn palette_down(&mut self) {
+        self.palette.next();
+    }
+
+    /// Push a char onto the inline filter and reset the selection.
+    pub fn palette_push(&mut self, c: char) {
+        self.palette.push(c);
+    }
+
+    /// Remove the trailing char of the inline filter query.
+    pub fn palette_pop(&mut self) {
+        self.palette.pop();
+    }
+
+    /// Open the palette with an empty filter at the first command.
+    pub fn open_palette(&mut self) {
+        self.palette.open();
+    }
+
+    /// Close the palette without running a command.
+    pub fn close_palette(&mut self) {
+        self.palette.close();
     }
 }
 
