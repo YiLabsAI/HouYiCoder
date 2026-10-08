@@ -172,21 +172,6 @@ pub struct App {
     pub cached_turn_ids: RefCell<Vec<Option<RowId>>>,
     pub cached_pre_rendered: RefCell<Vec<Option<Line<'static>>>>,
     pub search: SearchState,
-    /// Frozen snapshot the search view renders + counts against. Empty
-    /// outside the search view; active_transcript picks it when search.active
-    /// so count + render + highlight read one source.
-    pub search_transcript: Vec<TranscriptLine>,
-    /// True when the snapshot seam declined to load the whole log (log over
-    /// the threshold) and search_transcript is empty as an honest degrade.
-    /// The status bar shows a "log too large" hint instead of "no match".
-    pub search_truncated: bool,
-    /// The raw log byte size at search-view enter, for the degrade hint
-    /// ("log is N MB"). Zero when no snapshot seam is wired.
-    pub snapshot_log_bytes: u64,
-    /// Corrupt log lines the tolerant read skipped at enter. The status bar
-    /// surfaces "N lines skipped" so the user sees data was dropped (not a
-    /// silent gap). Zero on the strict-replay path (replay errors instead).
-    pub search_skipped: usize,
     /// The byte offset where the loaded window starts. For the byte-%
     /// position indicator (divided by frozen_file_size).
     pub window_anchor: u64,
@@ -198,8 +183,8 @@ pub struct App {
     /// consistency: the window does not chase the growing tail).
     pub frozen_file_size: u64,
     /// Corrupt lines skipped in the current window (separate from the
-    /// whole-log search_skipped so window-mode chrome shows the per-window
-    /// count).
+    /// enter-time skip count the corpus holds, so window-mode chrome shows
+    /// the per-window count).
     pub window_skipped: usize,
     /// True while the G full-scan builds the event-byte-offset index (one
     /// chunk at a time keeps the UI responsive; Esc interrupts). The loop

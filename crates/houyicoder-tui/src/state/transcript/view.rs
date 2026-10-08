@@ -1,6 +1,7 @@
-//! The transcript view's own state: the scroll, the expansion sets, and the
-//! search view, as one value the view on screen holds and a parked view
-//! keeps. Split from state.rs so the parent stays under the file-size gate.
+//! The transcript view's own state: the scroll, the search corpus, the
+//! expansion sets, and the search view, as one value the view on screen
+//! holds and a parked view keeps. Split from state.rs so the parent stays
+//! under the file-size gate.
 //!
 //! This owner exists to hold the multi-field rules that the flat App fields
 //! could only carry as comments: entering and leaving the search view is one
@@ -9,9 +10,11 @@
 //! which; the four expansion sets always hold the visible view's keys, so
 //! parking and restoring a view swaps whole values instead of moving four
 //! sets by hand. Fields arrive with their readers, group by group; the
-//! scroll objects and the window flag land first because the dispatch below
-//! is what makes the one-live-scroll rule a method instead of a comment.
+//! scroll objects and the window flag land first, then the search corpus,
+//! because the dispatch below is what makes the one-live-scroll rule a
+//! method instead of a comment.
 
+use crate::records::TranscriptLine;
 use crate::scroll::TranscriptScroll;
 use crate::state::App;
 
@@ -34,6 +37,12 @@ pub(crate) struct TranscriptViewState {
     /// True when the search view is in byte-window mode (log over the
     /// threshold). Renders flat through a separate path; see window_scroll.
     window_mode: bool,
+    /// The frozen lines the search view renders and counts against, plus the
+    /// load metadata that explains them. Pub(crate) rather than private like
+    /// the scroll objects: the search's run path holds the corpus slice while
+    /// it mutates the query state, a disjoint field borrow a method call
+    /// cannot express.
+    pub(crate) search_corpus: SearchCorpus,
 }
 
 impl TranscriptViewState {
@@ -100,6 +109,108 @@ impl TranscriptViewState {
     /// offset would be garbage.
     pub(crate) fn reset_window_scroll(&mut self) {
         self.window_scroll = TranscriptScroll::default();
+    }
+}
+
+/// The frozen lines the search view renders and counts against, plus the
+/// load metadata that explains them: whether the snapshot source declined the
+/// whole log, the raw log byte size at enter, and the corrupt-line skip
+/// count. One owner so enter and exit are transactions -- four assignments a
+/// caller would otherwise repeat in lockstep, where forgetting one leaves
+/// the chrome reading a stale value.
+#[derive(Debug, Default)]
+pub(crate) struct SearchCorpus {
+    /// Frozen snapshot lines. Empty outside the search view; active_transcript
+    /// picks it when search is active so count and render read one source.
+    lines: Vec<TranscriptLine>,
+    /// True when the snapshot source declined the whole log and the lines vec
+    /// is empty as an honest degrade. The chrome shows a too-large hint
+    /// instead of no-match.
+    truncated: bool,
+    /// The raw log byte size at enter, for the degrade hint. Zero when no
+    /// snapshot source is wired.
+    log_bytes: u64,
+    /// Corrupt log lines the tolerant read skipped at enter. The chrome
+    /// shows the count so dropped data is not a silent gap. Zero on the
+    /// strict-replay path, which errors instead of skipping.
+    skipped: usize,
+}
+
+impl SearchCorpus {
+    /// The frozen snapshot lines the search view renders, counts, and matches
+    /// against.
+    pub(crate) fn lines(&self) -> &[TranscriptLine] {
+        &self.lines
+    }
+
+    /// True when the snapshot source declined the whole log and the lines vec
+    /// is empty as an honest degrade.
+    pub(crate) fn truncated(&self) -> bool {
+        self.truncated
+    }
+
+    /// The raw log byte size frozen at enter, for the degrade hint.
+    pub(crate) fn log_bytes(&self) -> u64 {
+        self.log_bytes
+    }
+
+    /// Corrupt log lines the tolerant read skipped at enter.
+    pub(crate) fn skipped(&self) -> usize {
+        self.skipped
+    }
+
+    /// Enter over-threshold: a byte window loaded, so the corpus is the
+    /// window's lines, the frozen log size is the byte boundary, and skipped
+    /// counts the window's corrupt lines. Not truncated -- the window is the
+    /// real search view, not a degrade.
+    pub(crate) fn enter_over_window(
+        &mut self,
+        lines: Vec<TranscriptLine>,
+        log_bytes: u64,
+        skipped: usize,
+    ) {
+        self.lines = lines;
+        self.log_bytes = log_bytes;
+        self.skipped = skipped;
+        self.truncated = false;
+    }
+
+    /// Enter under-threshold: the whole log loaded, with its truncate and
+    /// skip flags. No byte boundary applies.
+    pub(crate) fn enter_under(
+        &mut self,
+        lines: Vec<TranscriptLine>,
+        truncated: bool,
+        skipped: usize,
+    ) {
+        self.lines = lines;
+        self.truncated = truncated;
+        self.skipped = skipped;
+        self.log_bytes = 0;
+    }
+
+    /// Enter with no snapshot source: the corpus is a clone of the live
+    /// transcript, no degrade, no boundary, no skips.
+    pub(crate) fn enter_fallback(&mut self, lines: Vec<TranscriptLine>) {
+        self.lines = lines;
+        self.truncated = false;
+        self.log_bytes = 0;
+        self.skipped = 0;
+    }
+
+    /// Replace the lines for a newer or older window load during navigation.
+    /// A window step changes which lines the view holds; the enter-time skip
+    /// count the chrome shows stays.
+    pub(crate) fn replace_lines(&mut self, lines: Vec<TranscriptLine>) {
+        self.lines = lines;
+    }
+
+    /// Exit: clear the lines and the load metadata together.
+    pub(crate) fn exit(&mut self) {
+        self.lines.clear();
+        self.truncated = false;
+        self.log_bytes = 0;
+        self.skipped = 0;
     }
 }
 

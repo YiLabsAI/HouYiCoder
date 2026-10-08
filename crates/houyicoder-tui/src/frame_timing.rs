@@ -271,7 +271,9 @@ fn test_frame_timing_benchmark() {
             let mut app = crate::composition::app();
             app.screen = crate::state::Screen::Working;
             app.transcript = lines.clone().into();
-            app.search_transcript = lines.clone();
+            app.transcript_view
+                .search_corpus
+                .replace_lines(lines.clone());
             app.transcript.bump_revision();
             render(&app, area);
             let mut durations = Vec::with_capacity(100);

@@ -72,28 +72,26 @@ impl App {
         });
         match loaded {
             Some(Loaded::Over { log_bytes, w }) => {
-                self.snapshot_log_bytes = log_bytes;
+                self.transcript_view
+                    .search_corpus
+                    .enter_over_window(w.lines, log_bytes, w.skipped);
                 self.set_window_browsing(true);
                 self.frozen_file_size = log_bytes;
-                self.search_transcript = w.lines;
                 self.window_anchor = w.start_offset;
                 self.window_end = w.next_offset;
-                self.search_skipped = w.skipped;
                 self.window_skipped = w.skipped;
-                self.search_truncated = false;
                 self.reset_window_scroll();
             }
             Some(Loaded::Under { load }) => {
-                self.search_transcript = load.lines;
-                self.search_truncated = load.truncated;
-                self.search_skipped = load.skipped;
-                self.snapshot_log_bytes = 0;
+                self.transcript_view.search_corpus.enter_under(
+                    load.lines,
+                    load.truncated,
+                    load.skipped,
+                );
             }
             None => {
-                self.search_transcript = self.transcript.lines().to_vec();
-                self.search_truncated = false;
-                self.snapshot_log_bytes = 0;
-                self.search_skipped = 0;
+                let live = self.transcript.lines().to_vec();
+                self.transcript_view.search_corpus.enter_fallback(live);
             }
         }
         self.search.active = true;
@@ -118,10 +116,7 @@ impl App {
         self.search.matches.clear();
         self.search.input.clear();
         self.search.focus = 0;
-        self.search_transcript.clear();
-        self.search_truncated = false;
-        self.snapshot_log_bytes = 0;
-        self.search_skipped = 0;
+        self.transcript_view.search_corpus.exit();
         self.set_window_browsing(false);
         self.window_anchor = 0;
         self.window_end = 0;
@@ -181,19 +176,19 @@ impl App {
         if let Some(tv) = &self.teammate_view {
             &tv.transcript
         } else if self.search.active {
-            &self.search_transcript
+            self.transcript_view.search_corpus.lines()
         } else {
             self.transcript.lines()
         }
     }
 
-    /// Run the search against active_transcript. The borrow needs the
-    /// disjoint-field form (the match slice borrows search_transcript while
-    /// search.run borrows search mutably); a method returning active_transcript
-    /// would over-borrow self, so the branching stays inline here.
+    /// Run the search against the active transcript. The borrow needs the
+    /// disjoint-field form (the match slice borrows the corpus while
+    /// search.run borrows the query state mutably); a method returning the
+    /// slice would over-borrow self, so the branching stays inline here.
     pub fn run_search(&mut self) {
         let t: &[crate::records::TranscriptLine] = if self.search.active {
-            &self.search_transcript
+            self.transcript_view.search_corpus.lines()
         } else {
             self.transcript.lines()
         };
@@ -262,7 +257,7 @@ impl App {
                 return; // no progress (corrupt/empty) -- stop.
             }
             let new_anchor = w.start_offset;
-            self.search_transcript = w.lines;
+            self.transcript_view.search_corpus.replace_lines(w.lines);
             self.window_anchor = new_anchor;
             self.window_end = w.next_offset;
             self.window_skipped = w.skipped;
@@ -308,7 +303,7 @@ impl App {
                 return; // no progress -- stop.
             }
             let new_end = w.next_offset;
-            self.search_transcript = w.lines;
+            self.transcript_view.search_corpus.replace_lines(w.lines);
             self.window_anchor = w.start_offset;
             self.window_end = new_end;
             self.window_skipped = w.skipped;

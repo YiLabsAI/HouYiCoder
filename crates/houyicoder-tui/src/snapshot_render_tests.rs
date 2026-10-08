@@ -36,13 +36,13 @@ fn test_count_matches_under_snapshot() {
         TranscriptLine::User("live beta".into()),
     ]
     .into();
-    app.search_transcript = vec![
+    app.transcript_view.search_corpus.replace_lines(vec![
         TranscriptLine::User("snap one".into()),
         TranscriptLine::User("snap two".into()),
         TranscriptLine::User("snap three".into()),
         TranscriptLine::User("snap four".into()),
         TranscriptLine::User("snap five".into()),
-    ];
+    ]);
     app.search.active = true;
     app.search.query = "snap".into();
     app.run_search();
@@ -87,10 +87,10 @@ fn test_count_matches_under_snapshot() {
 #[test]
 fn test_bound_scrollback_skips_recompute() {
     let mut app = working();
-    app.search_transcript = vec![
+    app.transcript_view.search_corpus.replace_lines(vec![
         TranscriptLine::User("snap match".into()),
         TranscriptLine::User("snap other".into()),
-    ];
+    ]);
     app.search.active = true;
     app.search.query = "match".into();
     app.run_search();
@@ -145,7 +145,10 @@ fn test_uncapped_finds_old_match() {
         out.contains("needle deep in history"),
         "the deep match must render:\n{out}"
     );
-    assert!(!app.search_truncated, "a small log must not degrade");
+    assert!(
+        !app.transcript_view.search_corpus.truncated(),
+        "a small log must not degrade"
+    );
 }
 
 /// Search runs on the rendered rows, so a synthesized chip name (Update,
@@ -213,7 +216,7 @@ fn test_large_log_opens_mode() {
         "over-threshold opens byte-window mode"
     );
     assert!(
-        !app.search_truncated,
+        !app.transcript_view.search_corpus.truncated(),
         "window mode is the real path, not a degrade"
     );
     assert_eq!(
@@ -256,7 +259,11 @@ fn test_skipped_lines_in_chrome() {
         index_calls: std::sync::atomic::AtomicU32::new(0),
     }));
     app.enter_search_view("needle");
-    assert_eq!(app.search_skipped, 2, "skip count carried from the load");
+    assert_eq!(
+        app.transcript_view.search_corpus.skipped(),
+        2,
+        "skip count carried from the load"
+    );
     let out = render_text(&app, 100, 24);
     assert!(
         out.contains("2 lines skipped"),
@@ -264,7 +271,7 @@ fn test_skipped_lines_in_chrome() {
     );
 }
 
-/// Exit clears the snapshot (frees the memory). Asserts search_transcript is
+/// Exit clears the snapshot (frees the memory). Asserts the corpus vec is
 /// empty after exit. Note: RSS is not a user-visible quantity; the vec being
 /// empty is the only assertable proxy for "freed memory" (do not change this
 /// to a screen assertion -- it would test nothing).
@@ -287,16 +294,23 @@ fn test_exit_clears_snapshot() {
     }));
     app.enter_search_view("snap");
     assert!(
-        !app.search_transcript.is_empty(),
+        !app.transcript_view.search_corpus.lines().is_empty(),
         "snapshot loaded on enter"
     );
     app.exit_search_view();
     assert!(
-        app.search_transcript.is_empty(),
+        app.transcript_view.search_corpus.lines().is_empty(),
         "exit frees the snapshot vec"
     );
-    assert!(!app.search_truncated, "truncated flag cleared");
-    assert_eq!(app.search_skipped, 0, "skipped count cleared");
+    assert!(
+        !app.transcript_view.search_corpus.truncated(),
+        "truncated flag cleared"
+    );
+    assert_eq!(
+        app.transcript_view.search_corpus.skipped(),
+        0,
+        "skipped count cleared"
+    );
 }
 
 /// A source with no on-disk log answers every window empty and holds no index:
@@ -453,7 +467,7 @@ fn test_exit_clears_window_state() {
     app.exit_search_view();
     assert!(!app.window_browsing(), "exit clears window mode");
     assert!(
-        app.search_transcript.is_empty(),
+        app.transcript_view.search_corpus.lines().is_empty(),
         "exit frees the window vec"
     );
     assert_eq!(app.frozen_file_size, 0, "frozen boundary cleared");

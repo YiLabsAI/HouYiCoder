@@ -50,17 +50,19 @@ ACTIVE_OWNERS = {
         # the whole-vec scroll and the search window's scroll are two
         # instances of the one scroll type, and which one is live is a
         # method on the owner rather than a bare boolean every caller
-        # re-reads.
-        "fields": 143,
+        # re-reads. The search corpus (frozen lines plus load metadata)
+        # joined the view state next, taking four flat fields: enter and
+        # exit are transactions rather than assignments a caller repeats.
+        "fields": 139,
         "mut_app": 44,
     },
     "crates/houyicoder-tui/src/state/transcript/view.rs:TranscriptViewState": {
         # The transcript view's own state, one value per view: the whole-vec
-        # scroll, the search window's scroll, and the window flag today;
-        # the search view's state and the four expansion sets arrive with
-        # their readers. The dispatch (which scroll is live) is a method
-        # here, so callers cannot re-derive it from the flag.
-        "fields": 3,
+        # scroll, the search window's scroll, the window flag, and the search
+        # corpus today; the search query state and the four expansion sets
+        # arrive with their readers. The dispatch (which scroll is live) is a
+        # method here, so callers cannot re-derive it from the flag.
+        "fields": 4,
     },
     "crates/houyicoder-tui/src/state/transcript.rs:Transcript": {
         # The transcript facts: frame log, resident budget counters, derived
