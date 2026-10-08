@@ -81,7 +81,10 @@ ACTIVE_OWNERS = {
         # The hooks pane drill level and selection cursor became one
         # HooksPaneState owner, so enter and return step the level and clamp
         # the cursor as one value.
-        "fields": 116,
+        # The pending paste chunks and the last-chunk timestamp became one
+        # PendingPaste owner, so a flush check drains and restores both as
+        # one value rather than two flat fields a caller must move in step.
+        "fields": 115,
         "mut_app": 44,
     },
     "crates/houyicoder-tui/src/last_row_keys.rs:LastRowKeys": {
@@ -114,6 +117,14 @@ ACTIVE_OWNERS = {
         # the selected event detail) and the selection cursor in the
         # level-0 list. One owner because enter and return step the level and
         # clamp the cursor together, never one without the other.
+        "fields": 2,
+    },
+    "crates/houyicoder-tui/src/paste.rs:PendingPaste": {
+        # The bracketed-paste accumulator: the chunk buffer built up across
+        # Paste events and the last-chunk timestamp, drained and restored
+        # together on each 50ms gap flush check. One owner because a flush
+        # that drained the buffer but left the timestamp (or vice versa) left
+        # the next check with a timestamp and no buffer to flush.
         "fields": 2,
     },
     "crates/houyicoder-tui/src/state/transcript/view.rs:TranscriptViewState": {

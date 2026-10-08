@@ -112,17 +112,8 @@ pub fn run_with_runner(
             dirty = true;
         }
         // Flush accumulated paste chunks after a 50ms gap (paste ended).
-        if let (Some(buf), Some(last)) = (app.paste_buffer.take(), app.paste_last.take()) {
-            if last.elapsed().as_millis() >= 50 {
-                let token = app.pasted.ingest(&buf);
-                // Paste into the active palette or input surface.
-                app.apply_paste_token(&token);
-                dirty = true;
-            } else {
-                // Still receiving chunks — put back for next iteration.
-                app.paste_buffer = Some(buf);
-                app.paste_last = Some(last);
-            }
+        if app.flush_pending_paste() {
+            dirty = true;
         }
     }
 
@@ -168,12 +159,12 @@ pub(crate) fn handle_event(app: &mut App, event: Event) -> io::Result<bool> {
         Event::Paste(data) => {
             // Accumulate chunks (large pastes arrive in multiple Paste
             // events). Flushed in the run loop when the gap exceeds 50ms.
-            if let Some(buf) = app.paste_buffer.as_mut() {
+            if let Some(buf) = app.pending_paste.buffer.as_mut() {
                 buf.push_str(&data);
             } else {
-                app.paste_buffer = Some(data);
+                app.pending_paste.buffer = Some(data);
             }
-            app.paste_last = Some(Instant::now());
+            app.pending_paste.last = Some(Instant::now());
             Ok(true)
         }
         Event::Resize(_, _) => {

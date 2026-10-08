@@ -16,7 +16,7 @@ use crate::last_row_keys::LastRowKeys;
 use crate::list_pane_state::ListPaneState;
 use crate::memory_state::MemoryPaneState;
 use crate::notifications::NotificationState;
-use crate::paste::PasteStore;
+use crate::paste::{PasteStore, PendingPaste};
 use crate::permission_pane_state::PermissionPaneState;
 use crate::render_cache::RenderCache;
 use crate::resume_picker::SessionPickerState;
@@ -128,8 +128,7 @@ pub fn app() -> App {
         fleet: Default::default(),
         verbose: false,
         pasted: PasteStore::default(),
-        paste_buffer: None,
-        paste_last: None,
+        pending_paste: PendingPaste::default(),
         last_cols: Cell::new(80),
         native_cursor_position: Cell::new(None),
         mode_cache: None,

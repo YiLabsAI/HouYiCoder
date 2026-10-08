@@ -4,6 +4,7 @@
 
 use crate::composition;
 use crate::state::Screen;
+use std::time::{Duration, Instant};
 
 fn working() -> crate::state::App {
     let mut app = composition::app();
@@ -64,4 +65,30 @@ fn test_two_pastes_submit_distinct() {
         second, b,
         "second send must be the second paste, not the first"
     );
+}
+
+#[test]
+fn test_flush_paste_drains() {
+    let mut app = working();
+    app.pending_paste.buffer = Some("chunk".to_string());
+    app.pending_paste.last = Some(Instant::now() - Duration::from_millis(60));
+    assert!(app.flush_pending_paste());
+    assert!(app.pending_paste.buffer.is_none());
+}
+
+#[test]
+fn test_flush_paste_restores() {
+    let mut app = working();
+    app.pending_paste.buffer = Some("chunk".to_string());
+    app.pending_paste.last = Some(Instant::now());
+    assert!(!app.flush_pending_paste());
+    assert_eq!(app.pending_paste.buffer.as_deref(), Some("chunk"));
+    assert!(app.pending_paste.last.is_some());
+}
+
+#[test]
+fn test_flush_paste_skips_empty() {
+    let mut app = working();
+    assert!(!app.flush_pending_paste());
+    assert!(app.pending_paste.buffer.is_none());
 }

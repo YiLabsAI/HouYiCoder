@@ -4,6 +4,8 @@
 //! readable for a huge paste and avoids pushing megabytes through the layout
 //! wrap math.
 
+use std::time::Instant;
+
 const PASTE_THRESHOLD: usize = 800;
 const PASTE_MAX_LINES: usize = 2;
 
@@ -76,6 +78,22 @@ impl PasteStore {
         out.push_str(rest);
         out
     }
+}
+
+/// The paste chunks accumulated across multiple bracketed-paste events
+/// before the 50ms gap flush decides whether to ingest them as one paste.
+/// One owner because the buffer text and its last-chunk timestamp are
+/// drained and restored together on each flush check: a flat field per
+/// value invited a flush that drained the buffer but left the timestamp,
+/// or vice versa, so the next check saw a timestamp with no buffer to
+/// flush.
+#[derive(Debug, Default)]
+pub(crate) struct PendingPaste {
+    /// The accumulated chunk text, built up across Paste events until the
+    /// gap flush ingests it into the paste side table.
+    pub(crate) buffer: Option<String>,
+    /// The timestamp of the last received chunk, for the gap-based flush.
+    pub(crate) last: Option<Instant>,
 }
 
 /// Extract the numeric id from a [Pasted text #N ...] token.

@@ -38,7 +38,7 @@ use crate::list_pane_state::ListPaneState;
 use crate::memory_state::MemoryPaneState;
 use crate::notifications::NotificationState;
 use crate::palette::PaletteState;
-use crate::paste::PasteStore;
+use crate::paste::{PasteStore, PendingPaste};
 use crate::pending_prompt::PendingPrompt;
 use crate::pending_queue::PendingItem;
 use crate::permission_pane_state::PermissionPaneState;
@@ -384,12 +384,10 @@ pub struct App {
     /// Side table for large pastes that were replaced by placeholder tokens
     /// in the input box; expanded back to full text on submit.
     pub pasted: PasteStore,
-    /// Accumulates bracketed-paste chunks that arrive in multiple Paste
-    /// events (large pastes are chunked by the terminal). Flushed (ingested)
-    /// after a 50ms gap with no new chunk.
-    pub paste_buffer: Option<String>,
-    /// Timestamp of the last paste chunk, for the gap-based flush.
-    pub paste_last: Option<Instant>,
+    /// The paste chunks accumulated before the 50ms gap flush, holding the
+    /// buffer text and the last-chunk timestamp together so a flush check
+    /// drains and restores both as one value.
+    pub(crate) pending_paste: PendingPaste,
     /// Last computed input wrap column count (set by the draw pass, read by
     /// key handlers for cursor up/down in wrapped space). Interior-mutable so
     /// the draw borrow of App can update it without going through &mut.

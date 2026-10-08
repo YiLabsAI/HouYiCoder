@@ -425,6 +425,30 @@ impl App {
         }
     }
 
+    /// Drain the pending paste accumulator when the last chunk arrived at
+    /// least 50ms ago, ingesting it into the paste side table and routing the
+    /// placeholder token to the active input surface. Returns true when a
+    /// paste was ingested. Returns false when nothing is pending or the gap
+    /// has not elapsed; in the latter case the accumulator is restored for
+    /// the next check.
+    pub(crate) fn flush_pending_paste(&mut self) -> bool {
+        let (Some(buf), Some(last)) = (
+            self.pending_paste.buffer.take(),
+            self.pending_paste.last.take(),
+        ) else {
+            return false;
+        };
+        if last.elapsed().as_millis() >= 50 {
+            let token = self.pasted.ingest(&buf);
+            self.apply_paste_token(&token);
+            true
+        } else {
+            self.pending_paste.buffer = Some(buf);
+            self.pending_paste.last = Some(last);
+            false
+        }
+    }
+
     /// Submit the working-surface input. In an artifact edit mode (Replace,
     /// Insert, NaturalLanguage), Enter submits the in-progress edit. Otherwise
     /// parse a leading slash to run a command; in the artifact pane Normal
