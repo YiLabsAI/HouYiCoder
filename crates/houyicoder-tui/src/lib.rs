@@ -44,6 +44,7 @@ pub mod scroll;
 pub mod selection;
 pub mod session;
 mod skills_state;
+mod slots_cache;
 pub mod state;
 pub mod terminal_title;
 pub mod todo_view;

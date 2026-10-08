@@ -39,15 +39,15 @@ use crate::palette::PaletteState;
 use crate::paste::PasteStore;
 use crate::pending_prompt::PendingPrompt;
 use crate::pending_queue::PendingItem;
-use crate::records::{TeammateView, ToolOutcome};
+use crate::records::TeammateView;
 use crate::render_cache::RenderCache;
 use crate::resume_picker::{SessionCatalog, SessionPickerState};
 use crate::review_queue::ReviewQueue;
-use crate::row_id::RowId;
 use crate::run_state::{RunProgress, RunState};
 use crate::selection::{ClipboardWriter, Selection};
 use crate::session::SessionConnection;
 use crate::skills_state::SkillsPaneState;
+use crate::slots_cache::SlotsCache;
 use crate::todo_view::TodoState;
 use crate::transcript::snapshot::TranscriptSnapshot;
 use crate::view::export_log::ExportLog;
@@ -73,7 +73,6 @@ use houyicoder_protocol::frontend::status::StatusSnapshot;
 use houyicoder_protocol::frontend::tools::ToolEntry;
 use houyicoder_protocol::frontend::{LoginMode, SessionId};
 use ratatui::layout::Rect;
-use ratatui::text::Line;
 
 /// Live progress for one long-running tool call (bash): elapsed seconds +
 /// the running stdout line count (None when the backend does not stream
@@ -156,16 +155,11 @@ pub struct App {
     /// view and the expansion sets as their readers migrate in. The flat
     /// fields below stay until each group's readers move over.
     pub(crate) transcript_view: transcript::view::TranscriptViewState,
-    /// Cached display rows: the full pre-visible computation (display_slots +
-    /// row formatting). Invalidated by a version counter — only recomputed
-    /// when the transcript or display inputs change, not every frame.
-    pub display_rows_cache: RefCell<Vec<(u8, String, Option<ToolOutcome>)>>,
-    pub display_rows_version: Cell<u64>,
-    pub cached_callids: RefCell<Vec<Option<String>>>,
-    pub cached_fold_keys: RefCell<Vec<Option<String>>>,
-    pub cached_expanded_group: RefCell<Vec<Option<String>>>,
-    pub cached_turn_ids: RefCell<Vec<Option<RowId>>>,
-    pub cached_pre_rendered: RefCell<Vec<Option<Line<'static>>>>,
+    /// The pre-rendered display-row cache: the rows, the four per-row key
+    /// vectors, the pre-rendered lines, and the version stamp that guards
+    /// them together. Pub(crate) so the draw pass reads and writes a vector
+    /// directly, matching the per-vector visible_window slices.
+    pub(crate) slots_cache: SlotsCache,
     /// True while the G full-scan builds the event-byte-offset index (one
     /// chunk at a time keeps the UI responsive; Esc interrupts). The loop
     /// advances the build while this is set, off the draw path.

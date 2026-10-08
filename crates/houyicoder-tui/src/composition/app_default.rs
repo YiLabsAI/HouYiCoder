@@ -20,6 +20,7 @@ use crate::resume_picker::SessionPickerState;
 use crate::run_state::RunState;
 use crate::selection::SystemClipboard;
 use crate::skills_state::SkillsPaneState;
+use crate::slots_cache::SlotsCache;
 use crate::state::history_read::HistoryReads;
 use crate::state::transcript::Transcript;
 use crate::state::{
@@ -40,13 +41,11 @@ pub fn app() -> App {
         history_reads: HistoryReads::default(),
         verdict_cursor: 0,
         transcript_view: Default::default(),
-        display_rows_cache: RefCell::new(Vec::new()),
-        display_rows_version: Cell::new(u64::MAX),
-        cached_callids: RefCell::new(Vec::new()),
-        cached_fold_keys: RefCell::new(Vec::new()),
-        cached_expanded_group: RefCell::new(Vec::new()),
-        cached_turn_ids: RefCell::new(Vec::new()),
-        cached_pre_rendered: RefCell::new(Vec::new()),
+        slots_cache: {
+            let c = SlotsCache::default();
+            c.version.set(u64::MAX);
+            c
+        },
         indexing: Cell::new(false),
         indexed_bytes: Cell::new(0),
         index_total: Cell::new(0),

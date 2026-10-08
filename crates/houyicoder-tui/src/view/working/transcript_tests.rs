@@ -222,7 +222,7 @@ fn test_cache_version_stable_idle() {
     app.transcript.bump_revision();
     let out1 = render_text(&app, 80, 24);
     assert!(
-        app.display_rows_version.get() != u64::MAX,
+        app.slots_cache.version.get() != u64::MAX,
         "version should be set after first render"
     );
     let out2 = render_text(&app, 80, 24);

@@ -68,7 +68,12 @@ ACTIVE_OWNERS = {
         # fold-group key, expanded-group mark, turn id) became one LastRowKeys
         # owner beside render_cache, so the draw pass writes and the click and
         # Ctrl+O handlers read one set that cannot drift out of length sync.
-        "fields": 126,
+        # The pre-rendered display-row cache (the rows, the version stamp that
+        # guards them, the four per-row key vectors, and the pre-rendered
+        # lines) became one SlotsCache owner: the six are recomputed in
+        # lockstep on a version mismatch and sliced in lockstep every frame,
+        # so one owner keeps a stale-length vector from desyncing a key.
+        "fields": 120,
         "mut_app": 44,
     },
     "crates/houyicoder-tui/src/last_row_keys.rs:LastRowKeys": {
@@ -78,6 +83,14 @@ ACTIVE_OWNERS = {
         # pass read by visible-row index. One owner so the four are written and
         # read as one set, never drifted out of sync.
         "fields": 4,
+    },
+    "crates/houyicoder-tui/src/slots_cache.rs:SlotsCache": {
+        # The pre-rendered display-row set the draw pass caches by version:
+        # the rows, the version stamp, the four per-row key vectors, and the
+        # pre-rendered lines. One owner because the six are recomputed in
+        # lockstep when the version is stale and sliced in lockstep every
+        # frame, so no vector drifts to a length the others do not share.
+        "fields": 7,
     },
     "crates/houyicoder-tui/src/state/transcript/view.rs:TranscriptViewState": {
         # The transcript view's own state, one value per view: the whole-vec
