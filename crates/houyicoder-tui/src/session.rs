@@ -2,6 +2,7 @@
 //! connection: it owns the command channel, message receiver, request-id
 //! counter, and driver task.
 
+pub(crate) mod capabilities;
 mod connection;
 
 pub use connection::{

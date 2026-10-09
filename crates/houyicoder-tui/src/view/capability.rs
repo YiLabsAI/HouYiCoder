@@ -69,17 +69,17 @@ pub(crate) fn draw_permission_content(f: &mut Frame, area: Rect, app: &App) {
     let tab = app.permission_pane.tab;
     let rules = crate::permission_input::filtered_rules(
         tab,
-        &app.rules_cache,
+        &app.capabilities.permission.rules_cache,
         crate::permission_input::search_query(app),
     );
-    let denials = filtered_denials(&app.verdict_log_cache);
+    let denials = filtered_denials(&app.capabilities.permission.verdict_log_cache);
     // Clamp the cursor against the list the focused tab actually renders —
     // Workspace shows dirs (not rules), Recent shows denials, the rule tabs
     // show rules. Clamping against max(rules, denials) let the Workspace
     // cursor run past the dirs list (highlight vanished) when the denial log
     // was longer than the dirs list.
     let list_len = match tab {
-        PermissionTab::Workspace => app.dirs_cache.len(),
+        PermissionTab::Workspace => app.capabilities.permission.dirs_cache.len(),
         PermissionTab::Recent => denials.len(),
         PermissionTab::Allow | PermissionTab::Ask | PermissionTab::Deny => rules.len(),
     };
@@ -303,13 +303,13 @@ fn permission_workspace_body(app: &App, cursor: usize) -> Paragraph<'static> {
             .style(Style::new().fg(Color::White)),
         Line::from("").style(Style::new().fg(Color::White)),
     ];
-    if app.dirs_cache.is_empty() {
+    if app.capabilities.permission.dirs_cache.is_empty() {
         lines.push(
             Line::from("(no additional directories — a to add one)")
                 .style(Style::new().fg(Color::DarkGray)),
         );
     } else {
-        for (i, dir) in app.dirs_cache.iter().enumerate() {
+        for (i, dir) in app.capabilities.permission.dirs_cache.iter().enumerate() {
             let row = format!("- {dir}");
             let style = if i == cursor {
                 Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)

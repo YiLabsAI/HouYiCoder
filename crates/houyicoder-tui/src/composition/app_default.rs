@@ -3,7 +3,7 @@
 use super::*;
 
 use std::cell::{Cell, RefCell};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use houyicoder_protocol::frontend::SessionId;
@@ -25,6 +25,7 @@ use crate::resume_picker::SessionPickerState;
 use crate::run_state::RunState;
 use crate::selection::SystemClipboard;
 use crate::selections::Selections;
+use crate::session::capabilities::SessionCapabilities;
 use crate::skill_picker_state::SkillPickerState;
 use crate::skills_state::SkillsPaneState;
 use crate::state::history_read::HistoryReads;
@@ -119,13 +120,8 @@ pub fn app() -> App {
         verbose: false,
         pasted: PasteStore::default(),
         pending_paste: PendingPaste::default(),
-        mode_cache: None,
-        rules_cache: Vec::new(),
-        dirs_cache: Vec::new(),
-        ask_before_git_enabled: true,
+        capabilities: SessionCapabilities::default(),
         context_cache: None,
-        sticky_choices: HashMap::new(),
-        verdict_log_cache: Vec::new(),
         permission_pane: PermissionPaneState::default(),
         working_dir: cwd_string(),
         status_cache: None,

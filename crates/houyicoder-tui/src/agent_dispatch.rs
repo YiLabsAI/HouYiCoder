@@ -434,17 +434,17 @@ impl App {
                 // next render. No transcript line — mode switching is a
                 // background state change, not a conversation event. The
                 // /mode command pushes its own feedback when invoked.
-                self.mode_cache = Some(mode);
+                self.capabilities.permission.mode_cache = Some(mode);
             }
             ServerResponse::PermissionRules { rules } => {
-                self.rules_cache = rules.clone();
+                self.capabilities.permission.rules_cache = rules.clone();
                 self.system_line(render_permission_rules_wire(&rules));
             }
             ServerResponse::PermissionDirs { dirs } => {
-                self.dirs_cache = dirs.clone();
+                self.capabilities.permission.dirs_cache = dirs.clone();
             }
             ServerResponse::PermissionAskBeforeGit { enabled } => {
-                self.ask_before_git_enabled = enabled;
+                self.capabilities.permission.ask_before_git_enabled = enabled;
                 self.system_line(format!(
                     "permission: ask before git operations: {} (git commit/rebase/reset/tag {} before running)",
                     if enabled { "on" } else { "off" },

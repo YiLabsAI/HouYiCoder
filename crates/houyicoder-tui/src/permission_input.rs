@@ -190,10 +190,18 @@ pub(crate) fn filtered_rule_index(app: &App) -> Option<usize> {
     ) {
         return None;
     }
-    let view = filtered_rules(app.permission_pane.tab, &app.rules_cache, search_query(app));
+    let view = filtered_rules(
+        app.permission_pane.tab,
+        &app.capabilities.permission.rules_cache,
+        search_query(app),
+    );
     let cursor = app.permission_pane.cursor.min(view.len().saturating_sub(1));
     let target = view.get(cursor).copied()? as *const PermissionRule;
-    app.rules_cache.iter().position(|r| std::ptr::eq(r, target))
+    app.capabilities
+        .permission
+        .rules_cache
+        .iter()
+        .position(|r| std::ptr::eq(r, target))
 }
 
 /// The display text for a rule's content tier (matches the render path).
@@ -438,11 +446,14 @@ fn handle_nav_keys(app: &mut App, code: ratatui::crossterm::event::KeyCode) -> b
             // Remove the cursor-selected directory. No preselected (confirm=
             // false) so a stray Enter cannot drop a dir. The cursor indexes
             // into dirs_cache; saturating-clamped at render + ship time.
-            let idx = app
-                .permission_pane
-                .cursor
-                .min(app.dirs_cache.len().saturating_sub(1));
-            if !app.dirs_cache.is_empty() {
+            let idx = app.permission_pane.cursor.min(
+                app.capabilities
+                    .permission
+                    .dirs_cache
+                    .len()
+                    .saturating_sub(1),
+            );
+            if !app.capabilities.permission.dirs_cache.is_empty() {
                 app.permission_pane.input = PermissionInput::RemoveDir {
                     idx,
                     confirm: false,
@@ -537,7 +548,7 @@ fn submit_add_dir(app: &mut App, path: String) {
 /// Bounds-checked against the live cache; a stale cursor (dirs changed since
 /// the sub-mode entered) is a no-op with a system line.
 fn remove_dir_at(app: &mut App, index: usize) {
-    let Some(path) = app.dirs_cache.get(index).cloned() else {
+    let Some(path) = app.capabilities.permission.dirs_cache.get(index).cloned() else {
         app.system_line("permission: directory no longer present");
         return;
     };
@@ -626,7 +637,7 @@ mod tests {
     #[test]
     fn test_remove_dir_ships() {
         let (mut app, events) = connected_app_events();
-        app.dirs_cache = vec!["/tmp/extra".into()];
+        app.capabilities.permission.dirs_cache = vec!["/tmp/extra".into()];
         remove_dir_at(&mut app, 0);
         let req = wait_for_request(&events, |p| {
             matches!(p, FrontendRequest::PermissionRemoveWorkingDir { .. })

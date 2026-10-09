@@ -132,13 +132,14 @@ fn test_option3_no_duplicate_result() {
     // verdict + system line, then resume with an approve decision -- the
     // exact side effects of handle_approval Enter with selected=2.
     let call_id = app.approval().unwrap().call_id.clone();
-    app.rules_cache
-        .push(houyicoder_protocol::frontend::permission::PermissionRule {
+    app.capabilities.permission.rules_cache.push(
+        houyicoder_protocol::frontend::permission::PermissionRule {
             action: "boom".to_string(),
             content: None,
             effect: houyicoder_protocol::frontend::permission::PermissionEffect::Allow,
             ..Default::default()
-        });
+        },
+    );
     app.system_line("added allow rule for boom");
     app.resolve_current_approval(houyicoder_protocol::frontend::run::ApprovalDecision {
         call_id,

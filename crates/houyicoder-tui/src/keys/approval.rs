@@ -114,7 +114,10 @@ pub(super) fn handle_approval(app: &mut App, k: KeyEvent) {
                     approval_scope(a),
                 )
             };
-            app.sticky_choices.insert(tool, kind);
+            app.capabilities
+                .permission
+                .sticky_choices
+                .insert(tool, kind);
             if app.session.is_some() {
                 // Ship the verdict over the wire as a reverse response; the
                 // server drives runner.resume, records the audit event, and,
@@ -144,7 +147,7 @@ pub(super) fn handle_approval(app: &mut App, k: KeyEvent) {
                 Some(a) => (a.call_id.clone(), a.tool.clone()),
                 None => return,
             };
-            app.sticky_choices.insert(
+            app.capabilities.permission.sticky_choices.insert(
                 tool,
                 houyicoder_protocol::acp_wire::PermissionOptionKind::RejectOnce,
             );

@@ -1220,11 +1220,14 @@ fn test_verdict_survives_drain() {
         "the rebuild drains the frames below the active turn"
     );
     assert_eq!(
-        app.verdict_log_cache.len(),
+        app.capabilities.permission.verdict_log_cache.len(),
         1,
         "the drained frame's verdict is in the audit cache"
     );
-    assert_eq!(app.verdict_log_cache[0].call_id, "c1");
+    assert_eq!(
+        app.capabilities.permission.verdict_log_cache[0].call_id,
+        "c1"
+    );
 }
 
 /// A log that holds no user frame still reaches the budget: with no turn

@@ -90,10 +90,10 @@ fn test_permission_rule_add_list() {
 /// Pump the driver until the rules cache length changes (the add/del replies
 /// ship a fresh rule set), or the wait times out.
 fn pump_rules(app: &mut App) {
-    let mark = app.rules_cache.len();
+    let mark = app.capabilities.permission.rules_cache.len();
     for _ in 0..200 {
         app.poll_agent();
-        if app.rules_cache.len() != mark {
+        if app.capabilities.permission.rules_cache.len() != mark {
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(10));
@@ -122,7 +122,7 @@ fn test_permission_bad_effect_rejected() {
     let mut app = app();
     run(&mut app, "/permissions add bash bogus");
     assert!(last_system(&app).contains("permission:"));
-    assert_eq!(app.rules_cache.len(), 0);
+    assert_eq!(app.capabilities.permission.rules_cache.len(), 0);
 }
 
 #[test]
@@ -131,7 +131,8 @@ fn test_status_bar_renders_mode() {
     // confirm the current mode label lands in the bottom status line.
     let mut app = crate::composition::build_app_for_test(None);
     app.screen = crate::state::Screen::Working;
-    app.mode_cache = Some(houyicoder_protocol::frontend::permission::PermissionMode::Auto);
+    app.capabilities.permission.mode_cache =
+        Some(houyicoder_protocol::frontend::permission::PermissionMode::Auto);
     let text = render_text(&app, 100, 28);
     assert!(
         text.contains("auto mode on"),
@@ -144,7 +145,8 @@ fn test_status_bar_renders_manual() {
     // Manual mode shows the pause-glyph pill in the status bar.
     let mut app = crate::composition::build_app_for_test(None);
     app.screen = crate::state::Screen::Working;
-    app.mode_cache = Some(houyicoder_protocol::frontend::permission::PermissionMode::Manual);
+    app.capabilities.permission.mode_cache =
+        Some(houyicoder_protocol::frontend::permission::PermissionMode::Manual);
     let text = render_text(&app, 100, 28);
     assert!(
         text.contains("manual mode on"),
@@ -261,11 +263,14 @@ fn test_git_toggle_disconnected() {
     // the cached toggle untouched: the server is the authority, and the
     // change never reached it.
     let mut app = app();
-    assert!(app.ask_before_git_enabled, "default on");
+    assert!(
+        app.capabilities.permission.ask_before_git_enabled,
+        "default on"
+    );
     app.input.set("/permissions git off".to_string());
     app.submit_input();
     assert!(
-        app.ask_before_git_enabled,
+        app.capabilities.permission.ask_before_git_enabled,
         "disconnected toggle must not flip the cached state"
     );
     assert!(
@@ -315,12 +320,12 @@ fn test_git_ops_updates_cache() {
         request: RequestId(4),
         response: ServerResponse::PermissionAskBeforeGit { enabled: false },
     });
-    assert!(!app.ask_before_git_enabled);
+    assert!(!app.capabilities.permission.ask_before_git_enabled);
     app.handle_agent_message(SessionMessage::Response {
         request: RequestId(5),
         response: ServerResponse::PermissionAskBeforeGit { enabled: true },
     });
-    assert!(app.ask_before_git_enabled);
+    assert!(app.capabilities.permission.ask_before_git_enabled);
 }
 
 #[test]
@@ -526,14 +531,18 @@ fn test_permission_add_submode_flow() {
     );
     assert!(app.input.is_empty(), "input cleared after submit");
     pump_rules(&mut app);
-    let added = app.rules_cache.iter().any(|r| {
+    let added = app.capabilities.permission.rules_cache.iter().any(|r| {
         r.action == "bash"
             && matches!(
                 r.effect,
                 houyicoder_protocol::frontend::permission::PermissionEffect::Allow
             )
     });
-    assert!(added, "rule landed in cache: {:?}", app.rules_cache);
+    assert!(
+        added,
+        "rule landed in cache: {:?}",
+        app.capabilities.permission.rules_cache
+    );
 }
 
 #[test]
@@ -573,7 +582,7 @@ fn test_permission_remove_submode_deletes() {
     app.pane = Pane::Permission;
     run(&mut app, "/permissions add bash allow");
     pump_rules(&mut app);
-    assert!(!app.rules_cache.is_empty());
+    assert!(!app.capabilities.permission.rules_cache.is_empty());
     // Cursor sits on the only rule; 'd' enters Remove (No preselected).
     crate::keys::handle_working(&mut app, key_press(crossterm::event::KeyCode::Char('d')));
     assert!(matches!(
@@ -594,9 +603,9 @@ fn test_permission_remove_submode_deletes() {
     );
     pump_rules(&mut app);
     assert!(
-        app.rules_cache.is_empty(),
+        app.capabilities.permission.rules_cache.is_empty(),
         "rule removed: {:?}",
-        app.rules_cache
+        app.capabilities.permission.rules_cache
     );
 }
 
@@ -642,7 +651,7 @@ fn test_permission_workspace_remove_flow() {
     let mut app = app();
     app.pane = Pane::Permission;
     app.permission_pane.tab = PermissionTab::Workspace;
-    app.dirs_cache = vec!["/tmp/extra".into()];
+    app.capabilities.permission.dirs_cache = vec!["/tmp/extra".into()];
     crate::keys::handle_working(&mut app, key_press(crossterm::event::KeyCode::Char('d')));
     assert!(
         matches!(
@@ -659,7 +668,7 @@ fn test_permission_workspace_remove_flow() {
         "RemoveDir Enter clears the sub-mode"
     );
     // Esc path: 'd' then Esc cancels without shipping.
-    app.dirs_cache = vec!["/tmp/extra".into()];
+    app.capabilities.permission.dirs_cache = vec!["/tmp/extra".into()];
     crate::keys::handle_working(&mut app, key_press(crossterm::event::KeyCode::Char('d')));
     crate::keys::handle_working(&mut app, key_press(crossterm::event::KeyCode::Esc));
     assert_eq!(
@@ -668,7 +677,7 @@ fn test_permission_workspace_remove_flow() {
         "Esc cancels RemoveDir"
     );
     assert!(
-        !app.dirs_cache.is_empty(),
+        !app.capabilities.permission.dirs_cache.is_empty(),
         "Esc does not remove the dir locally (server is the authority)"
     );
 }
@@ -732,11 +741,14 @@ fn test_git_toggle_connection_lost() {
     // A dead driver refuses the toggle: the cached state never moves and the
     // refusal names the lost connection (no fake success).
     let mut app = crate::test_harness::connection_lost_app();
-    assert!(app.ask_before_git_enabled, "default on");
+    assert!(
+        app.capabilities.permission.ask_before_git_enabled,
+        "default on"
+    );
     app.input.set("/permissions git off".to_string());
     app.submit_input();
     assert!(
-        app.ask_before_git_enabled,
+        app.capabilities.permission.ask_before_git_enabled,
         "a failed send must not flip the cached state"
     );
     assert!(

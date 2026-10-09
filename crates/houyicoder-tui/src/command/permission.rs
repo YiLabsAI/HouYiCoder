@@ -39,7 +39,7 @@ impl App {
 
     /// Show the durable rule set from the protocol cache.
     fn show_permission_rules(&mut self) {
-        let rules = &self.rules_cache;
+        let rules = &self.capabilities.permission.rules_cache;
         if rules.is_empty() {
             self.system_line("permission: no rules (mode defaults apply)");
             return;
@@ -58,11 +58,11 @@ impl App {
     /// Show the active mode, durable rules, and session verdict log.
     fn show_permission_view(&mut self) {
         let mode = self.current_mode();
-        let ask_before_git = self.ask_before_git_enabled;
+        let ask_before_git = self.capabilities.permission.ask_before_git_enabled;
         self.system_line(super::render::render_permission_view(
             mode,
-            &self.rules_cache,
-            &self.verdict_log_cache,
+            &self.capabilities.permission.rules_cache,
+            &self.capabilities.permission.verdict_log_cache,
             ask_before_git,
         ));
     }
@@ -91,7 +91,10 @@ impl App {
 
     /// Return the cached permission mode, defaulting to Auto.
     pub fn current_mode(&self) -> PermissionMode {
-        self.mode_cache.unwrap_or(PermissionMode::Auto)
+        self.capabilities
+            .permission
+            .mode_cache
+            .unwrap_or(PermissionMode::Auto)
     }
 
     /// Shift+Tab cycle of the permission mode: manual to auto and back. The
@@ -138,7 +141,7 @@ impl App {
             self.system_line(Self::enqueue_failure_line("permission", e));
             return;
         }
-        let on = self.ask_before_git_enabled;
+        let on = self.capabilities.permission.ask_before_git_enabled;
         self.system_line(format!(
             "permission: ask before git operations: {} (git commit/rebase/reset/tag {} before running; /permissions git on|off to toggle)",
             if on { "on" } else { "off" },

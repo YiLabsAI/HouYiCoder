@@ -42,7 +42,7 @@ fn test_permission_tab_filters_rules() {
     };
     let mut app = app();
     app.pane = Pane::Permission;
-    app.rules_cache = vec![
+    app.capabilities.permission.rules_cache = vec![
         rule("bash", PermissionEffect::Allow, Some("npm")),
         rule("bash", PermissionEffect::Reject, Some("rm")),
         rule("edit", PermissionEffect::Ask, None),
@@ -88,7 +88,7 @@ fn test_permission_cursor_recent_tab() {
     };
     let mut app = app();
     app.pane = Pane::Permission;
-    app.rules_cache = vec![
+    app.capabilities.permission.rules_cache = vec![
         PermissionRule {
             action: "bash".into(),
             content: Some(PermissionRuleContent::Exact {
@@ -148,7 +148,7 @@ fn test_permission_cursor_recent_tab() {
 
     // Recently-denied with a denial shows the row (✗ tool + scope); allows
     // never surface here.
-    app.verdict_log_cache = vec![PermissionDecisionEntry {
+    app.capabilities.permission.verdict_log_cache = vec![PermissionDecisionEntry {
         tool: "bash".into(),
         verdict: "deny".into(),
         scope: "rm -rf".into(),
@@ -176,7 +176,7 @@ fn test_permission_search_submode_filters() {
     };
     let mut app = app();
     app.pane = Pane::Permission;
-    app.rules_cache = vec![
+    app.capabilities.permission.rules_cache = vec![
         PermissionRule {
             action: "bash".into(),
             content: Some(PermissionRuleContent::Prefix {
@@ -255,10 +255,10 @@ fn test_permission_workspace_cursor_clamps() {
     app.pane = Pane::Permission;
     app.permission_pane.tab = PermissionTab::Workspace;
     app.working_dir = "/repo".into();
-    app.dirs_cache = vec!["/tmp/a".into(), "/tmp/b".into()];
+    app.capabilities.permission.dirs_cache = vec!["/tmp/a".into(), "/tmp/b".into()];
     // A denial log longer than the dirs list — the trap condition.
     use houyicoder_protocol::frontend::permission::PermissionDecisionEntry;
-    app.verdict_log_cache = (0..5)
+    app.capabilities.permission.verdict_log_cache = (0..5)
         .map(|i| PermissionDecisionEntry {
             tool: "bash".into(),
             verdict: "deny".into(),
@@ -306,7 +306,7 @@ fn test_permission_workspace_lists_dirs() {
     app.pane = Pane::Permission;
     app.permission_pane.tab = PermissionTab::Workspace;
     app.working_dir = "/repo".into();
-    app.dirs_cache = vec!["/tmp/extra".into()];
+    app.capabilities.permission.dirs_cache = vec!["/tmp/extra".into()];
     let text = render_text(&app, 80, 24);
     assert!(
         text.contains("original working directory"),
@@ -317,7 +317,7 @@ fn test_permission_workspace_lists_dirs() {
         "Workspace shows an added directory: {text}"
     );
     // Empty state.
-    app.dirs_cache.clear();
+    app.capabilities.permission.dirs_cache.clear();
     let text = render_text(&app, 80, 24);
     assert!(
         text.contains("no additional directories"),
@@ -341,7 +341,7 @@ fn test_workspace_nav_two_dirs() {
     app.pane = Pane::Permission;
     app.permission_pane.tab = PermissionTab::Workspace;
     app.working_dir = "/repo".into();
-    app.dirs_cache = vec!["/tmp/a".into(), "/tmp/b".into()];
+    app.capabilities.permission.dirs_cache = vec!["/tmp/a".into(), "/tmp/b".into()];
 
     let scan = |app: &App| -> (bool, bool) {
         let buf = crate::test_harness::render_buffer(app, 80, 24);

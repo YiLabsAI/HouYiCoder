@@ -324,7 +324,7 @@ impl App {
         // one starts at the frame cap instead of an earlier window.
         self.loaded_from_frame.set(usize::MAX);
         self.verdict_cursor = 0;
-        self.verdict_log_cache.clear();
+        self.capabilities.permission.verdict_log_cache.clear();
         self.todos.clear();
         // Reset the server's cumulative usage tally + audit trajectory so
         // /context reflects the new session only. Fire-and-forget: the host

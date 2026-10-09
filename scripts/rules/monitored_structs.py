@@ -104,8 +104,26 @@ ACTIVE_OWNERS = {
         # travels beside its siblings rather than as four loose App fields.
         # The agent sender went to the connection/harness assembly, not an App
         # field; nothing on App read it.
-        "fields": 98,
+        # The permission state (mode, rules, directories, git toggle, sticky
+        # verdicts, verdict log) became one PermissionCapability under the
+        # session's SessionCapabilities composition; six flat fields folded
+        # into the one App field named capabilities.
+        "fields": 93,
         "mut_app": 44,
+    },
+    "crates/houyicoder-tui/src/session/capabilities.rs:PermissionCapability": {
+        # The session's wire-reported permission state: mode, rules, allowed
+        # directories, the ask-before-git toggle, per-tool sticky verdicts,
+        # and the verdict audit trail. Six cache fields refreshed by the same
+        # wire replies and read by the same pane and status paths, so they
+        # move as one capability value.
+        "fields": 6,
+    },
+    "crates/houyicoder-tui/src/session/capabilities.rs:SessionCapabilities": {
+        # The static composition of a session's named capabilities. It holds
+        # the permission capability; the status and catalog caches join it as
+        # they are bundled in the following increments.
+        "fields": 1,
     },
     "crates/houyicoder-tui/src/last_row_keys.rs:LastRowKeys": {
         # The four per-row key vectors of the last emitted visible row set:

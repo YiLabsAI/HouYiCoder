@@ -50,7 +50,7 @@ fn test_reject_records_sticky() {
     crate::keys::handle_working(&mut app, key(KeyCode::Esc));
     use houyicoder_protocol::acp_wire::PermissionOptionKind;
     assert_eq!(
-        app.sticky_choices.get("bash"),
+        app.capabilities.permission.sticky_choices.get("bash"),
         Some(&PermissionOptionKind::RejectOnce),
         "Esc records a sticky reject",
     );
@@ -71,7 +71,7 @@ fn test_persist_records_sticky() {
     crate::keys::handle_working(&mut app, key(KeyCode::Enter));
     use houyicoder_protocol::acp_wire::PermissionOptionKind;
     assert_eq!(
-        app.sticky_choices.get("bash"),
+        app.capabilities.permission.sticky_choices.get("bash"),
         Some(&PermissionOptionKind::AllowAlways),
         "Enter on Yes-dont-ask records allow-always",
     );
@@ -88,7 +88,7 @@ fn test_auto_focuses_approve() {
     // for the tool, matching the user's minimal-friction intent.
     use houyicoder_protocol::frontend::permission::PermissionMode;
     let mut app = composition::app();
-    app.mode_cache = Some(PermissionMode::Auto);
+    app.capabilities.permission.mode_cache = Some(PermissionMode::Auto);
     assert_eq!(app.initial_cursor("bash"), 0);
 }
 
@@ -99,8 +99,10 @@ fn test_sticky_beats_auto() {
     use houyicoder_protocol::acp_wire::PermissionOptionKind;
     use houyicoder_protocol::frontend::permission::PermissionMode;
     let mut app = composition::app();
-    app.mode_cache = Some(PermissionMode::Auto);
-    app.sticky_choices
+    app.capabilities.permission.mode_cache = Some(PermissionMode::Auto);
+    app.capabilities
+        .permission
+        .sticky_choices
         .insert("bash".to_string(), PermissionOptionKind::RejectOnce);
     assert_eq!(
         app.initial_cursor("bash"),

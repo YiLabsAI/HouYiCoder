@@ -661,7 +661,7 @@ impl App {
         // this scan, so every drained frame's verdict is already cached.
         if self.verdict_cursor > self.transcript.abs_frame_count() {
             self.verdict_cursor = 0;
-            self.verdict_log_cache.clear();
+            self.capabilities.permission.verdict_log_cache.clear();
         }
         let base = self.transcript.frame_window_start();
         for sf in self
@@ -675,7 +675,7 @@ impl App {
                 && let Ok(entry) =
                     serde_json::from_value::<PermissionDecisionEntry>(n.params.clone())
             {
-                self.verdict_log_cache.push(entry);
+                self.capabilities.permission.verdict_log_cache.push(entry);
             }
         }
         self.verdict_cursor = self.transcript.abs_frame_count();

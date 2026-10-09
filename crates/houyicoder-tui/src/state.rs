@@ -4,7 +4,7 @@
 //! transitions in dedicated types rather than adding parallel fields here.
 
 use std::cell::{Cell, RefCell};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fmt;
 use std::sync::Arc;
 use std::time::Instant;
@@ -52,13 +52,13 @@ use crate::run_state::{RunProgress, RunState};
 use crate::selection::ClipboardWriter;
 use crate::selections::Selections;
 use crate::session::SessionConnection;
+use crate::session::capabilities::SessionCapabilities;
 use crate::skill_picker_state::SkillPickerState;
 use crate::skills_state::SkillsPaneState;
 use crate::todo_view::TodoState;
 use crate::transcript::snapshot::TranscriptSnapshot;
 use crate::view::export_log::ExportLog;
 use crate::view::trajectory_pane::TrajectoryLog;
-use houyicoder_protocol::acp_wire::PermissionOptionKind;
 use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::frontend::context::ContextBreakdown;
 use houyicoder_protocol::frontend::hooks::HookEntry;
@@ -70,9 +70,6 @@ pub use crate::state::model_picker::{
 pub(crate) use crate::state::parked_view_states::ParkedViewStates;
 pub use crate::state::trajectory::{
     TrajectoryDrill, TrajectoryPaneState, TrajectorySelection, TrajectoryTurnKey,
-};
-use houyicoder_protocol::frontend::permission::{
-    PermissionDecisionEntry, PermissionMode, PermissionRule,
 };
 use houyicoder_protocol::frontend::skills::SkillEntry;
 use houyicoder_protocol::frontend::status::StatusSnapshot;
@@ -341,25 +338,12 @@ pub struct App {
     /// buffer text and the last-chunk timestamp together so a flush check
     /// drains and restores both as one value.
     pub(crate) pending_paste: PendingPaste,
-    /// The permission mode cache, wire-typed. Seeded once on the first idle
-    /// poll (so the status-bar pill renders from session start), then updated
-    /// by the PermissionMode / PermissionCycleMode responses the server ships
-    /// on Shift+Tab cycle. The server is the single write authority for mode;
-    /// the TUI never imports the permission crate's gate.
-    pub mode_cache: Option<PermissionMode>,
-    /// Durable rule cache (wire-typed), refreshed by PermissionRulesResult.
-    pub rules_cache: Vec<PermissionRule>,
-    pub dirs_cache: Vec<String>,
-    /// Ask-before-git checkpoint toggle cache (default on); /permission git refreshes it.
-    pub ask_before_git_enabled: bool,
+    /// The session's named capability composition: the wire-reported caches
+    /// the panes and status paths read. One owner so those caches travel
+    /// together as one value rather than a scatter of flat fields.
+    pub(crate) capabilities: SessionCapabilities,
     /// /context cache: last breakdown, rendered immediately on /context (refreshed in background). None until the first ContextResult.
     pub context_cache: Option<ContextBreakdown>,
-    /// Per-tool last-used verdict (identity, not list position). The cursor
-    /// preselect reads this so rejecting bash lands on No next time.
-    /// Session-scoped; not persisted across processes.
-    pub sticky_choices: HashMap<String, PermissionOptionKind>,
-    /// The session verdict log, from the acpx/context/permission_decision stream — the client-side audit trail of every approve/deny.
-    pub verdict_log_cache: Vec<PermissionDecisionEntry>,
     /// The permission pane state: the selected tab, the cursor row, the
     /// typed-input sub-mode, and the pane-local search buffer. Pub(crate) so
     /// the key handler and render path reach a field directly; the whole value

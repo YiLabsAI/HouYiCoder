@@ -364,10 +364,11 @@ impl App {
     /// Select the initial approval choice. A remembered verdict wins;
     /// automatic mode and the default both select one-time approval.
     fn initial_cursor(&self, tool: &str) -> usize {
-        if let Some(kind) = self.sticky_choices.get(tool) {
+        let permission = &self.capabilities.permission;
+        if let Some(kind) = permission.sticky_choices.get(tool) {
             return Approval::index_for_kind(*kind);
         }
-        if matches!(self.mode_cache, Some(PermissionMode::Auto)) {
+        if matches!(permission.mode_cache, Some(PermissionMode::Auto)) {
             return 0;
         }
         0
@@ -490,7 +491,7 @@ impl App {
                             // Seed the mode cache once so the status pill renders at
                             // startup. A refused enqueue stays quiet: the
                             // ConnectionLost event announces the loss.
-                            if self.mode_cache.is_none() {
+                            if self.capabilities.permission.mode_cache.is_none() {
                                 match s.next_request_id() {
                                     Ok(req_id) => {
                                         let _ = s
