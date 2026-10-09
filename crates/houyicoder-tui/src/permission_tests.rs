@@ -51,7 +51,7 @@ fn test_reasoning_no_live_block() {
 }
 
 fn run(app: &mut App, cmd: &str) {
-    app.input.set(cmd.to_string());
+    app.input.editor.set(cmd.to_string());
     app.submit_input();
 }
 
@@ -268,7 +268,7 @@ fn test_git_toggle_disconnected() {
         app.session.capabilities.permission.ask_before_git_enabled,
         "default on"
     );
-    app.input.set("/permissions git off".to_string());
+    app.input.editor.set("/permissions git off".to_string());
     app.submit_input();
     assert!(
         app.session.capabilities.permission.ask_before_git_enabled,
@@ -286,7 +286,7 @@ fn test_git_show_disconnected() {
     // Disconnected, /permissions git reports not connected: the cached value
     // may be stale and a refresh cannot ship, so no state line is pushed.
     let mut app = app();
-    app.input.set("/permissions git".to_string());
+    app.input.editor.set("/permissions git".to_string());
     app.submit_input();
     assert!(
         last_system(&app).contains("permission: not connected"),
@@ -335,7 +335,7 @@ fn test_permission_pane_esc_exits() {
     // transcript.
     use crate::state::Pane;
     let mut app = app();
-    app.input.set("/permissions".to_string());
+    app.input.editor.set("/permissions".to_string());
     app.submit_input();
     assert_eq!(
         app.pane,
@@ -362,7 +362,7 @@ fn test_open_no_transcript_hint() {
     // not echo a "rule manager ..." system line into the transcript.
     use crate::state::Pane;
     let mut app = app();
-    app.input.set("/permissions".to_string());
+    app.input.editor.set("/permissions".to_string());
     app.submit_input();
     assert_eq!(app.pane, Pane::Permission);
     let systems: Vec<String> = app
@@ -509,7 +509,7 @@ fn test_permission_add_submode_flow() {
     for c in "bash npm:allow".chars() {
         crate::keys::handle_working(&mut app, key_press(crossterm::event::KeyCode::Char(c)));
     }
-    assert_eq!(app.input.value(), "bash npm:allow");
+    assert_eq!(app.input.editor.value(), "bash npm:allow");
     crate::keys::handle_working(&mut app, key_press(crossterm::event::KeyCode::Enter));
     // Enter on the spec advances to the destination pick (default project),
     // not a ship — the Add flow is two steps now.
@@ -531,7 +531,7 @@ fn test_permission_add_submode_flow() {
         PermissionInput::None,
         "destination Enter ships + clears sub-mode"
     );
-    assert!(app.input.is_empty(), "input cleared after submit");
+    assert!(app.input.editor.is_empty(), "input cleared after submit");
     pump_rules(&mut app);
     let added = app
         .session
@@ -636,7 +636,7 @@ fn test_permission_workspace_add_flow() {
     for c in "/tmp/extra".chars() {
         crate::keys::handle_working(&mut app, key_press(crossterm::event::KeyCode::Char(c)));
     }
-    assert_eq!(app.input.value(), "/tmp/extra");
+    assert_eq!(app.input.editor.value(), "/tmp/extra");
     crate::keys::handle_working(&mut app, key_press(crossterm::event::KeyCode::Enter));
     assert_eq!(
         app.permission_pane.input,
@@ -753,7 +753,7 @@ fn test_git_toggle_connection_lost() {
         app.session.capabilities.permission.ask_before_git_enabled,
         "default on"
     );
-    app.input.set("/permissions git off".to_string());
+    app.input.editor.set("/permissions git off".to_string());
     app.submit_input();
     assert!(
         app.session.capabilities.permission.ask_before_git_enabled,
@@ -770,7 +770,7 @@ fn test_git_toggle_connection_lost() {
 fn test_git_show_connection_lost() {
     // A dead driver refuses the refresh, so no cached state line is shown.
     let mut app = crate::test_harness::connection_lost_app();
-    app.input.set("/permissions git".to_string());
+    app.input.editor.set("/permissions git".to_string());
     app.submit_input();
     assert!(
         last_system(&app).contains("permission: connection lost"),

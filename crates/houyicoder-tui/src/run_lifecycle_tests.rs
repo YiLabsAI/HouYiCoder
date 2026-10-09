@@ -498,7 +498,7 @@ fn test_esc_aborts_busy_run() {
     // The run streamed a delta before the abort, so it produced real content:
     // the input must NOT be restored.
     assert!(
-        app.input.is_empty(),
+        app.input.editor.is_empty(),
         "input must stay empty when real content was produced"
     );
     assert!(
@@ -532,7 +532,7 @@ fn test_esc_abort_restores_input() {
     assert!(settled, "aborted run should settle via Interrupted");
     // The input box is restored to the original text, cursor at the end.
     assert_eq!(
-        app.input.value(),
+        app.input.editor.value(),
         original,
         "input must be restored after a no-content abort"
     );
@@ -634,7 +634,7 @@ fn test_slash_echo_visible() {
     app.screen = crate::state::Screen::Working;
     // Simulate the real /context path: submit_input pushes User echo
     // THEN run_command pushes ContextGrid.
-    app.input.set("/context".to_string());
+    app.input.editor.set("/context".to_string());
     app.submit_input();
     // Assert the transcript has both lines.
     assert!(

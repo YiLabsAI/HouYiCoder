@@ -496,7 +496,7 @@ impl App {
         match self.workflow.artifact.mode() {
             ArtifactMode::Replace => {
                 if text.trim().is_empty() {
-                    self.input.set(text);
+                    self.input.editor.set(text);
                     return;
                 }
                 self.workflow.artifact.set_pending_replace(text);
@@ -509,7 +509,7 @@ impl App {
             }
             ArtifactMode::Insert => {
                 if text.trim().is_empty() {
-                    self.input.set(text);
+                    self.input.editor.set(text);
                     return;
                 }
                 self.workflow.artifact.set_pending_insert(text);
@@ -522,7 +522,7 @@ impl App {
             }
             ArtifactMode::NaturalLanguage => {
                 if text.trim().is_empty() {
-                    self.input.set(text);
+                    self.input.editor.set(text);
                     return;
                 }
                 // push_annotation mutates .artifact and ends; propose borrows

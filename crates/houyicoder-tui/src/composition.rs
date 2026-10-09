@@ -165,7 +165,7 @@ pub fn build_app(bundle: RunnerBundle) -> App {
     for w in startup_warnings {
         app.system_line(w);
     }
-    app.history = crate::history::HistoryNav::with_path(history_path);
+    app.input.history = crate::history::HistoryNav::with_path(history_path);
     app
 }
 

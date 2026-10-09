@@ -631,14 +631,14 @@ impl App {
     /// Insert recalled text before the current draft. The cursor remains at
     /// the draft boundary so editing can continue without losing input.
     pub(crate) fn merge_recalled_text(&mut self, text: String) {
-        let draft = self.input.value().to_string();
+        let draft = self.input.editor.value().to_string();
         if draft.is_empty() {
-            self.input.set(text);
+            self.input.editor.set(text);
         } else {
             let merged = format!("{text}\n{draft}");
             let draft_start = text.len() + 1; // past the text + newline
-            self.input.set(merged);
-            self.input.move_to(draft_start);
+            self.input.editor.set(merged);
+            self.input.editor.move_to(draft_start);
         }
     }
 

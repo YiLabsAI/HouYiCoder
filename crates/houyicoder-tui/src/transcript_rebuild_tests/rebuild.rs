@@ -102,7 +102,7 @@ fn test_slash_echo_survives_rebuild() {
 fn test_submission_echo_one_row() {
     let mut app = fresh_app();
     app.screen = Screen::Working;
-    app.input.set("hi".to_string());
+    app.input.editor.set("hi".to_string());
     app.submit_input();
     app.rebuild_after_frame_edit();
     let echoes = app

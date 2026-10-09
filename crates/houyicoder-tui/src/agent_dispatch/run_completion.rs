@@ -53,13 +53,13 @@ impl super::App {
                                     && !should_preserve_interrupted_turn(
                                         self.session.transcript.frames(),
                                     )
-                                    && self.input.is_empty() =>
+                                    && self.input.editor.is_empty() =>
                             {
                                 // Remove the empty submission from transcript
                                 // and history before restoring it for editing.
                                 self.rewind_to_last_user_input();
-                                self.history.remove_last();
-                                self.input.set(text);
+                                self.input.history.remove_last();
+                                self.input.editor.set(text);
                                 true
                             }
                             _ => false,

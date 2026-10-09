@@ -159,12 +159,12 @@ pub(crate) fn handle_event(app: &mut App, event: Event) -> io::Result<bool> {
         Event::Paste(data) => {
             // Accumulate chunks (large pastes arrive in multiple Paste
             // events). Flushed in the run loop when the gap exceeds 50ms.
-            if let Some(buf) = app.pending_paste.buffer.as_mut() {
+            if let Some(buf) = app.input.pending_paste.buffer.as_mut() {
                 buf.push_str(&data);
             } else {
-                app.pending_paste.buffer = Some(data);
+                app.input.pending_paste.buffer = Some(data);
             }
-            app.pending_paste.last = Some(Instant::now());
+            app.input.pending_paste.last = Some(Instant::now());
             Ok(true)
         }
         Event::Resize(_, _) => {
@@ -471,7 +471,7 @@ pub(crate) fn handle_key(app: &mut App, k: KeyEvent) {
     // its non-terminal interrupt role.
     if app.pane == Pane::Transcript
         && app.viewport == ViewportMode::Working
-        && app.input.is_empty()
+        && app.input.editor.is_empty()
         && app.teammate_view.is_none()
     {
         let running = app

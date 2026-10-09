@@ -271,7 +271,7 @@ fn test_full_flow_viewport() {
 
     // 2. Press a -> auto-advance to Implementing -> auto-enter Focus (header +
     //    tabs + input fold, diff pane full-width).
-    app.input.clear();
+    app.input.editor.clear();
     keys::handle_working(&mut app, key(KeyCode::Char('a')));
     assert_eq!(app.workflow.stage, Stage::Implementing);
     assert_eq!(

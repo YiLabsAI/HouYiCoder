@@ -241,9 +241,9 @@ fn test_model_pane_swallows_chars() {
         KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
     );
     assert!(
-        app.input.value().is_empty(),
+        app.input.editor.value().is_empty(),
         "char swallowed by Model pane, not pushed to input: {}",
-        app.input.value()
+        app.input.editor.value()
     );
 }
 

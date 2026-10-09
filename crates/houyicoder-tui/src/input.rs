@@ -11,6 +11,8 @@
 //! mid-string editing and movement. The view layer reads wrapped_lines /
 //! line_count to size the input box and render wrapped content.
 
+use crate::history::HistoryNav;
+use crate::paste::{PasteStore, PendingPaste};
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
@@ -351,6 +353,23 @@ impl InputField {
         best.max(wl.start_offset)
             .min(wl.start_offset + wl.text.len())
     }
+}
+
+/// The input subsystem's aggregate: the chat editor, the prompt-history
+/// navigation, and the two paste halves (the side table of replaced
+/// placeholders and the bracket-paste accumulator). Together they hold the
+/// text being composed and the past context that edits it, so they move as one
+/// value under a single owner boundary rather than four flat App fields.
+#[derive(Default)]
+pub(crate) struct Input {
+    /// The cursor-aware, wrapping chat editor.
+    pub(crate) editor: InputField,
+    /// The up/down prompt-history navigation, backed by a JSONL file.
+    pub(crate) history: HistoryNav,
+    /// The side table for large pastes replaced by placeholder tokens.
+    pub(crate) pasted: PasteStore,
+    /// The bracket-paste accumulator drained on the gap flush.
+    pub(crate) pending_paste: PendingPaste,
 }
 
 #[cfg(test)]

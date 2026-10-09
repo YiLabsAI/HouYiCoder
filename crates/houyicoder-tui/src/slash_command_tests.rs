@@ -359,7 +359,7 @@ fn test_help_text_visible() {
     println!("--- /help ---\n{h}\n--- end ---");
     assert!(h.contains("show help"), "help missing");
     // /tips is TUI-local (not in SlashCommand); submit via input
-    app.input.set("/tips".to_string());
+    app.input.editor.set("/tips".to_string());
     app.submit_input();
     let t = render(&app);
     println!("--- /tips ---\n{t}\n--- end ---");

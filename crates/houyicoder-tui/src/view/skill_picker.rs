@@ -25,9 +25,10 @@ pub(crate) fn filtered_skills(
 ) -> Vec<&houyicoder_protocol::frontend::skills::SkillEntry> {
     let query = app
         .input
+        .editor
         .value()
         .strip_prefix('@')
-        .unwrap_or_else(|| app.input.value());
+        .unwrap_or_else(|| app.input.editor.value());
     let ordered = display_order(&app.session.capabilities.skills.entries);
     if query.is_empty() {
         ordered
@@ -256,8 +257,8 @@ mod tests {
             },
         ];
         app.skill_picker.open = true;
-        app.input.push('@');
-        app.input.push('b');
+        app.input.editor.push('@');
+        app.input.editor.push('b');
         let out = crate::test_harness::render_text(&app, 80, 24);
         assert!(out.contains("beta"), "filter matches beta: {out}");
         assert!(!out.contains("alpha"), "alpha filtered out: {out}");

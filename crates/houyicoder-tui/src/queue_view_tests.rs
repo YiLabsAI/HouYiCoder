@@ -44,7 +44,10 @@ fn test_idle_esc_keeps() {
     app.pending.push(PendingItem::Message("task a".into()));
     app.pending.push(PendingItem::Message("task b".into()));
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-    assert!(app.input.is_empty(), "Esc leaves the input box untouched");
+    assert!(
+        app.input.editor.is_empty(),
+        "Esc leaves the input box untouched"
+    );
     assert_eq!(app.pending.len(), 2, "Esc leaves the queue intact");
 }
 
@@ -61,7 +64,10 @@ fn test_busy_esc_keeps() {
     crate::keys::handle_working(&mut app, esc);
     crate::keys::handle_working(&mut app, esc);
     assert!(app.cancelling(), "Esc interrupts the run");
-    assert!(app.input.is_empty(), "Esc does not touch the input box");
+    assert!(
+        app.input.editor.is_empty(),
+        "Esc does not touch the input box"
+    );
     assert_eq!(app.pending.len(), 2, "the queue stays intact");
 }
 
@@ -75,7 +81,7 @@ fn test_recall_includes_parked() {
     app.pending
         .push(PendingItem::ParkedMessage("held b".into()));
     crate::keys::handle_working(&mut app, key('R'));
-    assert_eq!(app.input.value(), "held a\nheld b");
+    assert_eq!(app.input.editor.value(), "held a\nheld b");
     assert!(app.pending.is_empty(), "queue drained");
 }
 
@@ -88,7 +94,11 @@ fn test_recall_keeps_command() {
     app.pending.push(PendingItem::Message("do work".into()));
     app.pending.push(PendingItem::Command("/clear".into()));
     crate::keys::handle_working(&mut app, key('R'));
-    assert_eq!(app.input.value(), "do work", "only the message is recalled");
+    assert_eq!(
+        app.input.editor.value(),
+        "do work",
+        "only the message is recalled"
+    );
     assert_eq!(
         app.pending,
         vec![PendingItem::Command("/clear".into())],
@@ -107,14 +117,17 @@ fn test_recall_clear_loses() {
         .push(PendingItem::Message("important task".into()));
     crate::keys::handle_working(&mut app, key('R'));
     assert_eq!(
-        app.input.value(),
+        app.input.editor.value(),
         "important task",
         "message recalled to input"
     );
     assert!(app.pending.is_empty(), "queue drained on recall");
     // Clear the recalled input.
     crate::keys::handle_working(&mut app, ctrl('u'));
-    assert!(app.input.is_empty(), "Ctrl+U clears the recalled text");
+    assert!(
+        app.input.editor.is_empty(),
+        "Ctrl+U clears the recalled text"
+    );
     assert!(
         app.pending.is_empty(),
         "message is gone (remove-on-recall is by design)"
@@ -236,7 +249,7 @@ fn test_click_footer_recalls_item() {
     let click = mouse_at(qrect.x + 2, qrect.y);
     crate::app::handle_mouse(&mut app, click);
     assert_eq!(
-        app.input.value(),
+        app.input.editor.value(),
         "first task",
         "click on first preview recalls it"
     );
@@ -261,7 +274,7 @@ fn test_click_second_row_recalls() {
     let click = mouse_at(qrect.x + 2, qrect.y + 1);
     crate::app::handle_mouse(&mut app, click);
     assert_eq!(
-        app.input.value(),
+        app.input.editor.value(),
         "second task",
         "click on the second row recalls the second item"
     );
@@ -389,7 +402,7 @@ fn test_click_more_opens_queue() {
         "queue items are not drained by opening the pane"
     );
     assert!(
-        app.input.value().is_empty(),
+        app.input.editor.value().is_empty(),
         "input box is not filled by opening the pane"
     );
 }
@@ -413,7 +426,7 @@ fn test_pane_enter_recalls_one() {
     app.queue_view.cursor = 1;
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     assert_eq!(
-        app.input.value(),
+        app.input.editor.value(),
         "beta",
         "only the selected item is recalled"
     );
@@ -438,7 +451,11 @@ fn test_pane_r_recalls_all() {
         &mut app,
         KeyEvent::new(KeyCode::Char('R'), KeyModifiers::NONE),
     );
-    assert_eq!(app.input.value(), "a\nb\nc", "all items recalled in order");
+    assert_eq!(
+        app.input.editor.value(),
+        "a\nb\nc",
+        "all items recalled in order"
+    );
     assert!(app.pending.is_empty(), "queue drained");
     assert_eq!(app.pane, Pane::Transcript, "pane closes after recall-all");
 }
@@ -455,7 +472,10 @@ fn test_pane_d_deletes_one() {
         &mut app,
         KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
     );
-    assert!(app.input.value().is_empty(), "input not filled on delete");
+    assert!(
+        app.input.editor.value().is_empty(),
+        "input not filled on delete"
+    );
     assert_eq!(
         app.pending,
         vec![PendingItem::Message("beta".into())],

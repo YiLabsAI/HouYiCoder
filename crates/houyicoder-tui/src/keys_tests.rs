@@ -229,7 +229,7 @@ fn test_model_open_echoes_once() {
             .count()
     }
     let mut app = catalog_app(&[("qwen3.7-max", true, true), ("other", true, true)]);
-    app.input.set("/model".to_string());
+    app.input.editor.set("/model".to_string());
     app.submit_input();
     assert_eq!(app.pane, Pane::Model, "the command opens the pane");
     assert_eq!(echoes(&app), 1, "one /model echo on open");
@@ -305,7 +305,7 @@ fn test_picker_fast_inline() {
         SlashCommand::ALL.iter().all(|cmd| cmd.name() != "fast"),
         "the palette offers no tier command"
     );
-    app.input.set("/fast".to_string());
+    app.input.editor.set("/fast".to_string());
     app.submit_input();
     assert_eq!(
         app.model_picker.effective_speed(),
@@ -498,7 +498,7 @@ fn test_skill_picker_opens() {
     assert!(app.skill_picker.open, "@ opens the picker");
     assert_eq!(app.skill_picker.sel.get(), 0, "cursor resets to 0");
     assert!(
-        app.input.value().contains('@'),
+        app.input.editor.value().contains('@'),
         "@ pushed into input so free-form typing survives"
     );
 }
@@ -507,14 +507,14 @@ fn test_skill_picker_opens() {
 #[test]
 fn test_skill_picker_blocked() {
     let mut app = working_app();
-    app.input.push('x');
+    app.input.editor.push('x');
     handle_working(&mut app, key(KeyCode::Char('@')));
     assert!(
         !app.skill_picker.open,
         "@ must not open when input non-empty"
     );
     assert!(
-        app.input.value().contains('@'),
+        app.input.editor.value().contains('@'),
         "@ landed in the input box instead"
     );
 }
@@ -569,7 +569,7 @@ fn test_skill_picker_esc() {
     assert!(app.skill_picker.open);
     handle_working(&mut app, key(KeyCode::Esc));
     assert!(!app.skill_picker.open, "Esc closes the picker");
-    assert!(app.input.is_empty(), "no text inserted on Esc");
+    assert!(app.input.editor.is_empty(), "no text inserted on Esc");
 }
 
 /// Enter inserts the selected skill into the input box (does not auto-submit,
@@ -591,11 +591,11 @@ fn test_skill_picker_enter_submit() {
     handle_working(&mut app, key(KeyCode::Enter));
     assert!(!app.skill_picker.open, "Enter closes the picker");
     assert!(
-        app.input.value().contains("@skill:alpha"),
+        app.input.editor.value().contains("@skill:alpha"),
         "@skill:alpha inserted into the input box"
     );
     assert!(
-        !app.input.value().is_empty(),
+        !app.input.editor.value().is_empty(),
         "input holds the text for a second Enter to submit"
     );
 }
@@ -609,7 +609,7 @@ fn test_skill_picker_enter_empty() {
     handle_working(&mut app, key(KeyCode::Enter));
     assert!(!app.skill_picker.open, "Enter closes on empty list");
     assert!(
-        app.input.value().contains('@'),
+        app.input.editor.value().contains('@'),
         "lone @ stays in input when no skill selected"
     );
 }
@@ -634,7 +634,7 @@ fn test_skill_picker_char() {
     handle_working(&mut app, key(KeyCode::Char('x')));
     assert!(app.skill_picker.open, "picker stays open for filter typing");
     assert!(
-        app.input.value().contains('x'),
+        app.input.editor.value().contains('x'),
         "char lands in input as filter"
     );
 }
@@ -656,7 +656,7 @@ fn test_skill_picker_backspace_close() {
     handle_working(&mut app, key(KeyCode::Char('@')));
     handle_working(&mut app, key(KeyCode::Backspace));
     assert!(!app.skill_picker.open, "backspace on lone @ closes picker");
-    assert!(app.input.is_empty(), "input cleared");
+    assert!(app.input.editor.is_empty(), "input cleared");
 }
 
 /// A colon signals a namespace prefix — closes the picker for free-form.
@@ -711,14 +711,14 @@ fn test_skill_picker_filter_select() {
     handle_working(&mut app, key(KeyCode::Enter));
     assert!(!app.skill_picker.open, "Enter closes picker");
     assert!(
-        app.input.value().contains("@skill:beta"),
+        app.input.editor.value().contains("@skill:beta"),
         "filtered selection inserts beta: {}",
-        app.input.value()
+        app.input.editor.value()
     );
     assert!(
-        !app.input.value().contains("alpha"),
+        !app.input.editor.value().contains("alpha"),
         "alpha not selected: {}",
-        app.input.value()
+        app.input.editor.value()
     );
 }
 
@@ -734,7 +734,7 @@ fn test_pane_swallows_typing() {
         app.pane = pane;
         handle_working(&mut app, key(KeyCode::Char('x')));
         assert!(
-            app.input.is_empty(),
+            app.input.editor.is_empty(),
             "{pane:?}: a character must not enter the hidden input box"
         );
         handle_working(&mut app, key(KeyCode::Char('/')));
@@ -742,10 +742,10 @@ fn test_pane_swallows_typing() {
             !app.palette.open,
             "{pane:?}: slash does not open the palette over a pane"
         );
-        app.input.push('a');
+        app.input.editor.push('a');
         handle_working(&mut app, key(KeyCode::Backspace));
         assert_eq!(
-            app.input.value(),
+            app.input.editor.value(),
             "a",
             "{pane:?}: backspace does not edit the hidden box"
         );
@@ -767,7 +767,7 @@ fn test_paste_routes_palette_open() {
         "palette paste should append to the query"
     );
     assert_eq!(
-        app.input.value(),
+        app.input.editor.value(),
         "",
         "input must stay empty when palette open"
     );
@@ -775,7 +775,8 @@ fn test_paste_routes_palette_open() {
     // Palette closed: paste lands in the input box.
     let mut app = working_app();
     app.apply_paste_token("hello");
-    assert_eq!(app.input.value(), "hello", "input paste appends to the box");
+    let text = app.input.editor.value();
+    assert_eq!(text, "hello", "input paste appends to the box");
 }
 
 /// The /status pane Left / Right keys cycle the sub-tab (Status → Config →
@@ -982,7 +983,7 @@ fn test_diff_approve_key_sets() {
     let mut app = working_app();
     app.pane = Pane::Diff;
     app.workflow.stage = Stage::Implementing;
-    app.input.clear();
+    app.input.editor.clear();
     handle_working(&mut app, key(KeyCode::Down));
     handle_working(&mut app, key(KeyCode::Char('a')));
     assert_eq!(app.workflow.diff.hunks[1].approved, Verdict::Approved);
@@ -993,7 +994,7 @@ fn test_diff_reject_key_sets() {
     let mut app = working_app();
     app.pane = Pane::Diff;
     app.workflow.stage = Stage::Implementing;
-    app.input.clear();
+    app.input.editor.clear();
     handle_working(&mut app, key(KeyCode::Char('r')));
     assert_eq!(
         app.workflow.diff.current().unwrap().approved,
@@ -1010,11 +1011,11 @@ fn test_review_rework_key_routes() {
     let mut app = working_app();
     app.pane = Pane::Review;
     app.workflow.stage = Stage::Verify;
-    app.input.clear();
+    app.input.editor.clear();
     handle_working(&mut app, key(KeyCode::Char('i')));
     assert_eq!(app.pane, Pane::Review, "no finding -> rework is a no-op");
     assert!(
-        app.input.is_empty(),
+        app.input.editor.is_empty(),
         "i consumed by the rework arm, not pushed to the input box"
     );
 }
@@ -1036,7 +1037,8 @@ fn test_repeated_esc_keeps() {
             .any(|p| matches!(p, PendingItem::Message(t) if t == "task a")),
         "repeated Esc keeps the queued message"
     );
-    assert!(app.input.is_empty(), "Esc does not touch the input box");
+    let empty = app.input.editor.is_empty();
+    assert!(empty, "Esc does not touch the input box");
     assert!(app.cancelling(), "Esc leaves cancellation in flight");
 }
 
@@ -1049,11 +1051,11 @@ fn test_recall_merges_draft() {
     crate::test_harness::attach_connection(&mut app);
     app.start_run_for_test(0);
     app.pending.push(PendingItem::Message("task a".into()));
-    app.input.set("half draft".into());
+    app.input.editor.set("half draft".into());
     app.pane = Pane::Queue;
     handle_working(&mut app, key(KeyCode::Char('R')));
     assert_eq!(
-        app.input.value(),
+        app.input.editor.value(),
         "task a\nhalf draft",
         "explicit recall prepends the message without overwriting the draft"
     );
@@ -1081,7 +1083,7 @@ fn test_esc_cancelling_closes_pane() {
         "the queue is not popped while closing the pane"
     );
     assert!(
-        app.input.is_empty(),
+        app.input.editor.is_empty(),
         "input stays empty -- no recall on the pane-close Esc"
     );
 }
@@ -1315,10 +1317,11 @@ fn test_approval_nav_full_cycle() {
 #[test]
 fn test_esc_keeps_input() {
     let mut app = working_app();
-    app.input.set("draft".into());
+    app.input.editor.set("draft".into());
     handle_working(&mut app, key(KeyCode::Esc));
     assert!(!app.quit, "idle Esc must not quit");
-    assert_eq!(app.input.value(), "draft", "Ctrl+U owns input clearing");
+    let text = app.input.editor.value();
+    assert_eq!(text, "draft", "Ctrl+U owns input clearing");
 }
 
 /// While a run is in flight, Esc interrupts and leaves the draft untouched.
@@ -1331,10 +1334,11 @@ fn test_busy_esc_keeps_draft() {
     let mut app = working_app();
     crate::test_harness::attach_connection(&mut app);
     app.start_run_for_test(0);
-    app.input.set("draft".into());
+    app.input.editor.set("draft".into());
     handle_working(&mut app, key(KeyCode::Esc));
     assert!(app.cancelling(), "busy Esc interrupts the run");
-    assert_eq!(app.input.value(), "draft", "the draft is left untouched");
+    let text = app.input.editor.value();
+    assert_eq!(text, "draft", "the draft is left untouched");
 }
 
 /// While a run is in flight, Esc in the /worktrees pane closes the pane back
@@ -1348,7 +1352,7 @@ fn test_worktree_esc_closes_busy() {
     let mut app = working_app();
     app.pane = Pane::Worktree;
     app.start_run_for_test(0);
-    app.input.clear();
+    app.input.editor.clear();
     handle_working(&mut app, key(KeyCode::Esc));
     assert_eq!(app.pane, Pane::Transcript, "Esc closes the worktree pane");
     assert!(
@@ -1388,7 +1392,7 @@ fn worktree_app_with_rows() -> App {
             ..Default::default()
         },
     ];
-    app.input.clear();
+    app.input.editor.clear();
     app
 }
 
@@ -1568,7 +1572,7 @@ fn test_teammate_esc_no_leak() {
     use crate::records::TeammateView;
     let mut app = fleet_app(1);
     app.start_run_for_test(0);
-    app.input.set("a draft steering note".into());
+    app.input.editor.set("a draft steering note".into());
     app.teammate_view = Some(TeammateView {
         child_sid: "child-0".into(),
         ..Default::default()
@@ -1583,7 +1587,7 @@ fn test_teammate_esc_no_leak() {
         "Esc keeps the view open (exit is on Shift+Up/Down)"
     );
     assert!(
-        !app.input.is_empty(),
+        !app.input.editor.is_empty(),
         "Esc does not clear the draft (Ctrl+U owns that)"
     );
 }
@@ -1855,7 +1859,7 @@ fn test_char_closes_trajectory_pane() {
         "and leaves the viewport that drew the pane"
     );
     assert_eq!(
-        app.input.value(),
+        app.input.editor.value(),
         "h",
         "and the character lands in the visible input box"
     );
@@ -1882,7 +1886,7 @@ fn test_focus_routes_trajectory_char() {
          editor the character lands in would not be on screen"
     );
     assert_eq!(
-        app.input.value(),
+        app.input.editor.value(),
         "h",
         "and lands in the editor rather than being dropped"
     );
@@ -1931,61 +1935,5 @@ fn test_focus_trajectory_esc_levels() {
         app.viewport,
         ViewportMode::Focus,
         "the viewport is untouched"
-    );
-}
-
-/// Up/Down move the cursor across wrapped input lines using the column count
-/// the draw pass fed back, so the cursor walks the same wrap the render shows
-/// rather than jumping to the text start.
-#[test]
-fn test_up_down_walk_wrap() {
-    let mut app = working_app();
-    app.input.set("word ".repeat(40));
-    let bottom = app.input.cursor();
-    handle_input(&mut app, key(KeyCode::Up));
-    let up = app.input.cursor();
-    handle_input(&mut app, key(KeyCode::Down));
-    let down = app.input.cursor();
-    assert!(up < bottom, "Up walks toward the top of the wrap");
-    assert!(down > up, "Down walks back toward the bottom");
-}
-
-/// Home/End land on the current wrapped line's start and end when the text
-/// wraps, instead of the whole text's boundaries, so the cursor follows the
-/// same wrap the render draws.
-#[test]
-fn test_home_end_wrap_line() {
-    let mut app = working_app();
-    app.input.set("word ".repeat(40));
-    let end = app.input.cursor();
-    handle_input(&mut app, key(KeyCode::Home));
-    let home = app.input.cursor();
-    assert!(
-        home > 0,
-        "Home lands on the wrapped line start, not the text start"
-    );
-    assert!(home < end, "Home leaves the text end");
-    handle_input(&mut app, key(KeyCode::End));
-    assert_eq!(
-        app.input.cursor(),
-        end,
-        "End returns to the wrapped line end"
-    );
-}
-
-/// Ctrl+U deletes backward to the wrapped line's start, leaving the earlier
-/// wrapped lines in the box rather than clearing the whole buffer.
-#[test]
-fn test_ctrl_u_kills_line() {
-    let mut app = working_app();
-    app.input.set("word ".repeat(40));
-    let before = app.input.value().len();
-    handle_input(
-        &mut app,
-        KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
-    );
-    assert!(
-        app.input.value().len() < before,
-        "Ctrl+U deletes to the wrapped line start"
     );
 }

@@ -127,7 +127,8 @@ pub fn handle_working(app: &mut App, k: KeyEvent) {
     // (the picker stays open and narrows the list). A colon closes the
     // picker for free-form @skill:name input. Selecting from the picker
     // overwrites the input with the full @skill:name.
-    if k.code == KeyCode::Char('@') && app.input.is_empty() && !pane_replaces_input(app.pane) {
+    if k.code == KeyCode::Char('@') && app.input.editor.is_empty() && !pane_replaces_input(app.pane)
+    {
         app.skill_picker.open = true;
         app.skill_picker.sel.set(0);
         // If skills haven't been queried yet (the user hasn't opened

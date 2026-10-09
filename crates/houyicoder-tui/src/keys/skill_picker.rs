@@ -37,22 +37,22 @@ pub(super) fn handle(app: &mut App, k: KeyEvent) -> bool {
             if let Some(entry) = ordered.get(app.skill_picker.sel.get()) {
                 let text = format!("@skill:{}", entry.name);
                 app.skill_picker.open = false;
-                app.input.set(text);
+                app.input.editor.set(text);
             } else {
                 app.skill_picker.open = false;
             }
             true
         }
         KeyCode::Esc => {
-            if app.input.value() == "@" {
-                app.input.clear();
+            if app.input.editor.value() == "@" {
+                app.input.editor.clear();
             }
             app.skill_picker.open = false;
             true
         }
         KeyCode::Backspace => {
-            if app.input.value() == "@" {
-                app.input.clear();
+            if app.input.editor.value() == "@" {
+                app.input.editor.clear();
                 app.skill_picker.open = false;
                 true
             } else {

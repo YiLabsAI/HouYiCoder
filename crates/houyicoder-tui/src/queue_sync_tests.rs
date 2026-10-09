@@ -162,7 +162,7 @@ fn test_busy_clear_enqueues_feedback() {
     app.session
         .transcript
         .push(TranscriptLine::User("pre-clear".into()));
-    app.input.set("/clear".to_string());
+    app.input.editor.set("/clear".to_string());
     app.submit_input();
     assert_eq!(
         app.pending,

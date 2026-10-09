@@ -29,9 +29,8 @@ use crate::composition::WorktreeEntry;
 #[cfg(test)]
 use crate::composition::app as test_app;
 use crate::display_rows_cache::DisplayRowsCache;
-use crate::history::HistoryNav;
 use crate::hooks_state::HooksPaneState;
-use crate::input::InputField;
+use crate::input::{Input, InputField};
 use crate::last_row_keys::LastRowKeys;
 use crate::layout_feedback::LayoutFeedback;
 use crate::layout_snapshot::LayoutSnapshot;
@@ -39,7 +38,6 @@ use crate::list_pane_state::ListPaneState;
 use crate::memory_state::MemoryPaneState;
 use crate::notifications::NotificationState;
 use crate::palette::PaletteState;
-use crate::paste::{PasteStore, PendingPaste};
 use crate::pending_queue::PendingItem;
 use crate::permission_pane_state::PermissionPaneState;
 use crate::records::TeammateView;
@@ -131,10 +129,10 @@ pub struct App {
     pub viewport: ViewportMode,
     /// The viewport the user was in before entering Scroll, so Esc/End returns to it rather than re-deriving from stage (which would lose a manual Focus->Working fold).
     pub prev_viewport: ViewportMode,
-    pub input: InputField,
-    /// Up/Down prompt history navigation (cache + cursor + draft + abort
-    /// skip-set). Backed by a JSONL file at the config home.
-    pub history: HistoryNav,
+    /// The input subsystem: the chat editor, the prompt-history navigation,
+    /// and the two paste halves, held as one value so a session switch resets
+    /// them together.
+    pub(crate) input: Input,
     /// Cursor into the frame log for the verdict audit cache. Stays on App:
     /// verdicts are an audit capability, not transcript content.
     pub verdict_cursor: usize,
@@ -235,13 +233,6 @@ pub struct App {
     /// Verbose render: force results, reasoning, and fold groups expanded
     /// with untruncated chips. Set in the search view, cleared on exit.
     pub verbose: bool,
-    /// Side table for large pastes that were replaced by placeholder tokens
-    /// in the input box; expanded back to full text on submit.
-    pub pasted: PasteStore,
-    /// The paste chunks accumulated before the 50ms gap flush, holding the
-    /// buffer text and the last-chunk timestamp together so a flush check
-    /// drains and restores both as one value.
-    pub(crate) pending_paste: PendingPaste,
     /// The permission pane state: the selected tab, the cursor row, the
     /// typed-input sub-mode, and the pane-local search buffer. Pub(crate) so
     /// the key handler and render path reach a field directly; the whole value

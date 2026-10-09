@@ -243,7 +243,7 @@ mod tests {
         app.start_run_for_test(0);
         app.screen = crate::state::Screen::Working;
         // /resume <sid> mid-run -> enqueued as a Command, not executed.
-        app.input.set("/resume aaaa1111".to_string());
+        app.input.editor.set("/resume aaaa1111".to_string());
         app.submit_input();
         assert_eq!(
             app.pending,
@@ -265,7 +265,7 @@ mod tests {
         app.persistence.catalog = Some(Arc::new(TwoRowCatalog));
         app.start_run_for_test(0);
         app.screen = crate::state::Screen::Working;
-        app.input.set("/resume".to_string());
+        app.input.editor.set("/resume".to_string());
         app.submit_input();
         assert!(
             app.pending.is_empty(),

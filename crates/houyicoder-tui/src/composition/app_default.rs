@@ -8,16 +8,14 @@ use std::sync::Arc;
 use houyicoder_protocol::frontend::SessionId;
 
 use crate::display_rows_cache::DisplayRowsCache;
-use crate::history::HistoryNav;
 use crate::hooks_state::HooksPaneState;
-use crate::input::InputField;
+use crate::input::Input;
 use crate::last_row_keys::LastRowKeys;
 use crate::layout_feedback::LayoutFeedback;
 use crate::layout_snapshot::LayoutSnapshot;
 use crate::list_pane_state::ListPaneState;
 use crate::memory_state::MemoryPaneState;
 use crate::notifications::NotificationState;
-use crate::paste::{PasteStore, PendingPaste};
 use crate::permission_pane_state::PermissionPaneState;
 use crate::render_cache::RenderCache;
 use crate::resume_picker::SessionPickerState;
@@ -40,8 +38,7 @@ pub fn app() -> App {
         pane: Pane::Transcript,
         viewport: ViewportMode::Working,
         prev_viewport: ViewportMode::Working,
-        input: InputField::new(),
-        history: HistoryNav::default(),
+        input: Input::default(),
         verdict_cursor: 0,
         transcript_view: Default::default(),
         display_rows_cache: {
@@ -81,8 +78,6 @@ pub fn app() -> App {
         teammate_view: None,
         fleet: Default::default(),
         verbose: false,
-        pasted: PasteStore::default(),
-        pending_paste: PendingPaste::default(),
         permission_pane: PermissionPaneState::default(),
         skills_pane: SkillsPaneState::default(),
         skill_picker: SkillPickerState::default(),

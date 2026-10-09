@@ -196,7 +196,7 @@ fn test_focus_lost_hides_caret() {
     use crossterm::event::Event;
     use ratatui::style::Color;
     let mut app = working();
-    app.input.set("abc".to_string());
+    app.input.editor.set("abc".to_string());
     let has_white = |buf: &ratatui::buffer::Buffer| {
         (0..buf.area().height).any(|y| {
             (0..buf.area().width)
@@ -353,7 +353,7 @@ fn test_context_grid_pgup_working() {
 fn test_slash_prefix_needs_boundary() {
     use crate::state::TranscriptLine;
     let mut app = working();
-    app.input.set("/searchalot".to_string());
+    app.input.editor.set("/searchalot".to_string());
     app.submit_input();
     assert!(
         !app.transcript_view.search.active,
@@ -367,7 +367,7 @@ fn test_slash_prefix_needs_boundary() {
     );
 
     let mut app = working();
-    app.input.set("/rewindfoo".to_string());
+    app.input.editor.set("/rewindfoo".to_string());
     app.submit_input();
     assert!(
         !app.session

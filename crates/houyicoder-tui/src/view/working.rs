@@ -77,7 +77,7 @@ fn draw_working(f: &mut Frame, app: &App) {
     let input_h = if pane_hides_input {
         0
     } else {
-        app.input.input_height(f.area().height, content_cols)
+        app.input.editor.input_height(f.area().height, content_cols)
     };
     let total_h = f.area().height;
     // Layout top-to-bottom: transcript (fills the remainder), an optional

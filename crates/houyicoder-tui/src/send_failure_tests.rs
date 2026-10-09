@@ -214,7 +214,7 @@ fn test_recall_refused() {
         "the queued message stays while its server copy exists"
     );
     assert!(
-        app.input.value().is_empty(),
+        app.input.editor.value().is_empty(),
         "nothing is recalled into the editor when the mirror removal fails"
     );
     assert!(

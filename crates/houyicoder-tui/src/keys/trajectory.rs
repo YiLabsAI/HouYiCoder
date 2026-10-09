@@ -107,7 +107,7 @@ pub fn handle(app: &mut App, k: KeyEvent) -> bool {
             }
             true
         }
-        KeyCode::Enter if app.input.is_empty() => {
+        KeyCode::Enter if app.input.editor.is_empty() => {
             let level = app.trajectory.level();
             if level == 0 && app.trajectory.list_len() > 0 {
                 // Freeze the turn-list selection so the turn-detail and

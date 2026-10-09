@@ -40,14 +40,14 @@ pub(super) fn handle_input(app: &mut App, k: KeyEvent) {
 /// immediate delete; in an edit mode, Esc cancels to Normal. Returns the key
 /// to keep processing when not consumed here.
 fn pane_action_key(app: &mut App, k: KeyEvent) -> Option<KeyEvent> {
-    let empty = app.input.is_empty();
+    let empty = app.input.editor.is_empty();
     // Esc in an artifact edit mode cancels to Normal (clearing any in-progress
     // text). Esc in Normal mode falls through to handle_generic_input, which
     // exits the pane to Transcript.
     if app.pane == Pane::Artifact && !app.workflow.artifact.mode().is_normal() {
         if k.code == KeyCode::Esc {
             app.workflow.artifact.cancel_mode();
-            app.input.clear();
+            app.input.editor.clear();
             return None;
         }
         // In an edit mode, all other keys fall through to the generic input
@@ -171,13 +171,13 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
         // view). Only when the input is empty so mid-typing Esc is a no-op
         // (the user can still Backspace to clear, then Esc to exit). Esc in
         // an edit mode is caught earlier by pane_action_key (cancel to Normal).
-        KeyCode::Esc if app.pane == Pane::Artifact && app.input.is_empty() => {
+        KeyCode::Esc if app.pane == Pane::Artifact && app.input.editor.is_empty() => {
             app.pane = Pane::Transcript;
         }
         // In the /status pane, Tab cycles the sub-tab (Status, Config, Usage)
         // instead of the whole pane (the pane owns its tab bar).
         KeyCode::Tab if app.pane == Pane::Status => app.status_tab = app.status_tab.next(),
-        KeyCode::Tab if app.pane == Pane::Memory && app.input.is_empty() => {
+        KeyCode::Tab if app.pane == Pane::Memory && app.input.editor.is_empty() => {
             app.cycle_memory_scope()
         }
         // On the /status Status tab, the e key opens the inline session-name
@@ -188,7 +188,7 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
             if app.pane == Pane::Status
                 && app.status_tab == StatusTab::Status
                 && app.status_name_edit.is_none()
-                && app.input.is_empty() =>
+                && app.input.editor.is_empty() =>
         {
             app.enter_status_name_edit();
         }
@@ -200,10 +200,10 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
         // keys keep their normal meaning elsewhere. Left/Right match the
         // /permissions pane's tab switching; Shift+Tab stays the global
         // mode cycle instead of being shadowed by this pane.
-        KeyCode::Left if app.pane == Pane::Memory && app.input.is_empty() => {
+        KeyCode::Left if app.pane == Pane::Memory && app.input.editor.is_empty() => {
             app.cycle_memory_scope_prev()
         }
-        KeyCode::Right if app.pane == Pane::Memory && app.input.is_empty() => {
+        KeyCode::Right if app.pane == Pane::Memory && app.input.editor.is_empty() => {
             app.cycle_memory_scope()
         }
         KeyCode::Up if app.pane == Pane::Memory => app.move_memory_cursor(-1),
@@ -223,7 +223,7 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
         // the returned delegations), not the presence of a selection: keying
         // off the selection let an unselected live fleet fall through and
         // open a delegation that was not even on screen.
-        KeyCode::Enter if app.pane == Pane::Agents && app.input.is_empty() => {
+        KeyCode::Enter if app.pane == Pane::Agents && app.input.editor.is_empty() => {
             if app.fleet.entries.is_empty() {
                 if let Some(row) = app.agents.rows.get(app.agents.sel) {
                     let sid = row.child_sid.clone();
@@ -239,16 +239,16 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
         // default, auto, bypass, default.
         KeyCode::BackTab if app.pane == Pane::Model => app.cycle_model_setting(),
         KeyCode::BackTab => app.tab_cycle_mode(),
-        KeyCode::Char('a') if app.pane == Pane::Memory && app.input.is_empty() => {
+        KeyCode::Char('a') if app.pane == Pane::Memory && app.input.editor.is_empty() => {
             app.toggle_memory_setting(MemoryToggleWhich::Auto)
         }
-        KeyCode::Char('c') if app.pane == Pane::Memory && app.input.is_empty() => {
+        KeyCode::Char('c') if app.pane == Pane::Memory && app.input.editor.is_empty() => {
             app.toggle_memory_setting(MemoryToggleWhich::Dream)
         }
-        KeyCode::Char('d') if app.pane == Pane::Memory && app.input.is_empty() => {
+        KeyCode::Char('d') if app.pane == Pane::Memory && app.input.editor.is_empty() => {
             app.forget_memory_at_cursor()
         }
-        KeyCode::Enter if app.pane == Pane::Memory && app.input.is_empty() => {
+        KeyCode::Enter if app.pane == Pane::Memory && app.input.editor.is_empty() => {
             app.show_memory_at_cursor()
         }
         KeyCode::Esc if app.pane == Pane::Memory && app.memory.searching() => {
@@ -276,7 +276,7 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
         KeyCode::Up if app.pane == Pane::Model => app.move_model_focus(-1),
         KeyCode::Left if app.pane == Pane::Model => app.adjust_model_setting(false),
         KeyCode::Right if app.pane == Pane::Model => app.adjust_model_setting(true),
-        KeyCode::Enter if app.pane == Pane::Model && app.input.is_empty() => {
+        KeyCode::Enter if app.pane == Pane::Model && app.input.editor.is_empty() => {
             app.commit_model_pick();
         }
         KeyCode::Esc if app.pane == Pane::Model => {
@@ -362,7 +362,7 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
         // not snap to the palette. The other sub-modes own their keys
         // (handle_permission_key consumes them) so they never reach here.
         KeyCode::Char('/')
-            if app.input.is_empty()
+            if app.input.editor.is_empty()
                 && !editing
                 && !app.permission_pane.input.is_active()
                 && !pane_replaces_input(app.pane) =>
@@ -376,7 +376,7 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
         KeyCode::Enter if !pane_replaces_input(app.pane) => {
             // Empty-input Enter drills into a teammate view: the pill
             // selection takes priority, then the Subagent line at cursor.
-            if app.input.is_empty() && app.teammate_view.is_none() {
+            if app.input.editor.is_empty() && app.teammate_view.is_none() {
                 if let Some(sid) = fleet::selected_fleet_sid(app) {
                     app.enter_teammate_view_for_sid(&sid, true);
                     return;
@@ -402,43 +402,60 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
         KeyCode::End if k.modifiers.contains(KeyModifiers::CONTROL) => {
             app.scroll_transcript_follow_tail();
         }
-        KeyCode::End if !editing && app.input.is_empty() => app.scroll_transcript_follow_tail(),
+        KeyCode::End if !editing && app.input.editor.is_empty() => {
+            app.scroll_transcript_follow_tail()
+        }
         // Cursor movement within the (possibly wrapped) input. Home/End and
         // Ctrl+A/E operate on the visual wrapped line (readline semantics),
         // not the whole text; double-press Home walks up wrapped lines.
         // Up/Down use the wrap column count stashed by the draw pass.
-        KeyCode::Left => app.input.move_left(),
-        KeyCode::Right => app.input.move_right(),
+        KeyCode::Left => app.input.editor.move_left(),
+        KeyCode::Right => app.input.editor.move_right(),
         KeyCode::Up => {
-            if !app.input.move_up(app.layout_feedback.terminal_cols.get()) && !editing {
+            if !app
+                .input
+                .editor
+                .move_up(app.layout_feedback.terminal_cols.get())
+                && !editing
+            {
                 let project = crate::history::current_project();
                 let session_key = app.session.identity.session_id.to_string();
-                app.history.up(&mut app.input, &project, &session_key);
+                app.input
+                    .history
+                    .up(&mut app.input.editor, &project, &session_key);
             }
         }
         KeyCode::Down => {
-            if !app.input.move_down(app.layout_feedback.terminal_cols.get()) && !editing {
-                app.history.down(&mut app.input);
+            if !app
+                .input
+                .editor
+                .move_down(app.layout_feedback.terminal_cols.get())
+                && !editing
+            {
+                app.input.history.down(&mut app.input.editor);
             }
         }
         KeyCode::Home => app
             .input
+            .editor
             .move_line_home(app.layout_feedback.terminal_cols.get()),
         KeyCode::End => app
             .input
+            .editor
             .move_line_end(app.layout_feedback.terminal_cols.get()),
         KeyCode::Char('a') if k.modifiers.contains(KeyModifiers::CONTROL) => {
-            app.input.move_home();
+            app.input.editor.move_home();
         }
         KeyCode::Char('e') if k.modifiers.contains(KeyModifiers::CONTROL) => {
-            app.input.move_end();
+            app.input.editor.move_end();
         }
         KeyCode::Char('u') if k.modifiers.contains(KeyModifiers::CONTROL) => {
             app.input
+                .editor
                 .kill_to_line_start(app.layout_feedback.terminal_cols.get());
         }
-        KeyCode::Backspace if !pane_replaces_input(app.pane) => app.input.pop(),
-        KeyCode::Char(c) if !pane_replaces_input(app.pane) => app.input.push(c),
+        KeyCode::Backspace if !pane_replaces_input(app.pane) => app.input.editor.pop(),
+        KeyCode::Char(c) if !pane_replaces_input(app.pane) => app.input.editor.push(c),
         _ => {}
     }
 }
@@ -458,3 +475,7 @@ pub(super) fn cycle_pane(app: &mut App) {
         .unwrap_or(0);
     app.pane = Pane::PRIMARY[next];
 }
+
+#[cfg(test)]
+#[path = "input_tests.rs"]
+mod tests;

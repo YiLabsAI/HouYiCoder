@@ -23,7 +23,7 @@ fn render(app: &crate::state::App) -> String {
 #[test]
 fn test_auto_start_task_enters() {
     let mut app = working();
-    app.input.set("fix the login bug".to_string());
+    app.input.editor.set("fix the login bug".to_string());
     app.submit_input();
     assert_eq!(
         app.workflow.stage,
@@ -67,7 +67,7 @@ fn test_rewind_targeted_to_named() {
     app.run_command(SlashCommand::Spec);
     app.approve_in_pane(); // Approval advances to planning.
     app.approve_in_pane(); // Approval advances to implementation.
-    app.input.set("/rewind spec".to_string());
+    app.input.editor.set("/rewind spec".to_string());
     app.submit_input();
     assert_eq!(
         app.workflow.stage,

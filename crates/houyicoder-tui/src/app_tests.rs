@@ -284,7 +284,7 @@ fn test_q_empty_no_quit() {
     let mut app = working_app();
     crate::keys::handle_working(&mut app, key(KeyCode::Char('q')));
     assert!(!app.quit, "q with empty input must not quit (it types)");
-    assert_eq!(app.input.value(), "q");
+    assert_eq!(app.input.editor.value(), "q");
 }
 
 /// An unknown /-prefix (not a known command) is a message to the model,
@@ -294,7 +294,7 @@ fn test_q_empty_no_quit() {
 #[test]
 fn test_unknown_slash_is_message() {
     let mut app = working_app();
-    app.input.set("/nope".to_string());
+    app.input.editor.set("/nope".to_string());
     app.submit_input();
     let unknown = app
         .session
@@ -314,7 +314,7 @@ fn test_unknown_slash_is_message() {
 #[test]
 fn test_command_echoes_user_turn() {
     let mut app = working_app();
-    app.input.set("/debug".to_string());
+    app.input.editor.set("/debug".to_string());
     app.submit_input();
     let echoed = app
         .session
@@ -336,7 +336,7 @@ fn test_command_echoes_user_turn() {
 #[test]
 fn test_slash_path_is_text() {
     let mut app = working_app();
-    app.input.set("/home/you/sample-project".to_string());
+    app.input.editor.set("/home/you/sample-project".to_string());
     app.submit_input();
     let unknown = app
         .session
@@ -458,7 +458,7 @@ fn test_single_kill_without_selection() {
     app.fleet.selected = None;
     handle_key(&mut app, key(KeyCode::Char('k')));
     assert!(
-        !app.input.is_empty(),
+        !app.input.editor.is_empty(),
         "k with no selection types, not swallowed"
     );
     assert!(

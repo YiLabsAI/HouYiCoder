@@ -55,13 +55,13 @@ pub(super) fn draw_input(f: &mut Frame, area: Rect, app: &App) {
     } else {
         body_style
     };
-    let wrapped = app.input.wrapped_lines(content_cols);
+    let wrapped = app.input.editor.wrapped_lines(content_cols);
     // Show the cursor even while a run is in flight: queueing, recalling,
     // and editing queued input are all busy-period flows, so hiding the
     // cursor then leaves the user blind to edits (and to a click that did
     // move the model cursor but rendered nowhere).
-    let (crow, ccol) = app.input.cursor_position(content_cols);
-    let cursor_byte = app.input.cursor();
+    let (crow, ccol) = app.input.editor.cursor_position(content_cols);
+    let cursor_byte = app.input.editor.cursor();
     let lines: Vec<Line> = wrapped
         .iter()
         .enumerate()

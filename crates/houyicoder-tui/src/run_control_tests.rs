@@ -977,7 +977,7 @@ fn test_toggle_repeat_press_dropped() {
 fn test_git_ops_ships_connected() {
     let provider = Arc::new(FakeProvider::new(vec![]));
     let mut app = app_with_provider(provider, ToolRegistry::new());
-    app.input.set("/permissions git".to_string());
+    app.input.editor.set("/permissions git".to_string());
     app.submit_input();
     assert!(app.session.transcript.iter().any(|l| matches!(
         l,

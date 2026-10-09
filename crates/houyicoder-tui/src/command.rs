@@ -423,7 +423,7 @@ impl App {
         if self.palette.open {
             self.palette.query.push_str(token);
         } else {
-            self.input.insert_str(token);
+            self.input.editor.insert_str(token);
         }
     }
 
@@ -435,18 +435,18 @@ impl App {
     /// the next check.
     pub(crate) fn flush_pending_paste(&mut self) -> bool {
         let (Some(buf), Some(last)) = (
-            self.pending_paste.buffer.take(),
-            self.pending_paste.last.take(),
+            self.input.pending_paste.buffer.take(),
+            self.input.pending_paste.last.take(),
         ) else {
             return false;
         };
         if last.elapsed().as_millis() >= 50 {
-            let token = self.pasted.ingest(&buf);
+            let token = self.input.pasted.ingest(&buf);
             self.apply_paste_token(&token);
             true
         } else {
-            self.pending_paste.buffer = Some(buf);
-            self.pending_paste.last = Some(last);
+            self.input.pending_paste.buffer = Some(buf);
+            self.input.pending_paste.last = Some(last);
             false
         }
     }
@@ -460,14 +460,14 @@ impl App {
     pub(crate) fn submit_input(&mut self) {
         // Artifact edit mode: Enter submits the edit, not a slash command.
         if self.pane == Pane::Artifact && !self.workflow.artifact.mode().is_normal() {
-            let text = self.input.take();
+            let text = self.input.editor.take();
             self.artifact_submit_edit(text);
             return;
         }
         // /permissions typed sub-mode (add / remove / search): Enter submits the
         // pane's typed text, not a chat turn or slash command.
         if self.pane == Pane::Permission && self.permission_pane.input.is_active() {
-            let text = self.input.take();
+            let text = self.input.editor.take();
             crate::permission_input::submit_permission_input(self, text);
             return;
         }
@@ -475,7 +475,7 @@ impl App {
         // back to the tail so new content streams in under their attention,
         // clearing any new-messages indicator left from reading history.
         self.scroll_transcript_follow_tail();
-        let text = self.input.take();
+        let text = self.input.editor.take();
         if text.is_empty() {
             return;
         }
@@ -525,11 +525,11 @@ impl App {
         // will follow this submission: the frontend raises the row, and the typed
         // task opens the drafting surface it would open with a runner. No reply
         // follows, because there is nothing to reply with.
-        let text = crate::paste::PasteStore::expand(&text, &self.pasted);
+        let text = crate::paste::PasteStore::expand(&text, &self.input.pasted);
         if self.session.connection.is_some() {
             let project = crate::history::current_project();
             let session_id = self.session.identity.session_id.to_string();
-            self.history.submit(&text, &project, &session_id);
+            self.input.history.submit(&text, &project, &session_id);
             self.spawn_run(text);
             return;
         }

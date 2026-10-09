@@ -27,7 +27,7 @@ pub(super) fn handle_palette(app: &mut App, k: KeyEvent) {
                     app.palette.sel = 0;
                 } else {
                     app.close_palette();
-                    app.input.set(cmd.name().to_string());
+                    app.input.editor.set(cmd.name().to_string());
                     app.submit_input();
                 }
             } else if !app.palette.query.is_empty() {
@@ -40,7 +40,7 @@ pub(super) fn handle_palette(app: &mut App, k: KeyEvent) {
                 let q = app.palette.query.trim_start_matches('/');
                 let raw = format!("/{q}");
                 app.close_palette();
-                app.input.set(raw);
+                app.input.editor.set(raw);
                 app.submit_input();
             }
         }

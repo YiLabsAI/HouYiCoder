@@ -307,7 +307,11 @@ fn test_interrupt_restores_input() {
     };
     app.start_run_for_test(12);
     app.handle_agent_message(msg);
-    assert_eq!(app.input.value(), "draft", "input restored for editing");
+    assert_eq!(
+        app.input.editor.value(),
+        "draft",
+        "input restored for editing"
+    );
     assert!(
         app.session
             .transcript
@@ -330,7 +334,7 @@ fn test_interrupt_restores_input() {
         ),
     );
     assert_eq!(
-        app.input.value(),
+        app.input.editor.value(),
         "draft",
         "a repeated Esc keeps the restore"
     );
@@ -373,7 +377,7 @@ fn test_commit_blocks_restore() {
         },
     });
 
-    assert!(app.input.is_empty(), "stale origin is not restored");
+    assert!(app.input.editor.is_empty(), "stale origin is not restored");
     assert!(
         app.session
             .transcript
@@ -410,7 +414,10 @@ fn test_live_blocks_restore() {
         },
     });
 
-    assert!(app.input.is_empty(), "visible output prevents rollback");
+    assert!(
+        app.input.editor.is_empty(),
+        "visible output prevents rollback"
+    );
     assert!(
         app.session.last_run_input.is_none(),
         "rollback stash is cleared"
@@ -447,7 +454,7 @@ fn test_recall_survives_interrupt() {
     assert!(!app.pending.is_empty(), "queue intact after the interrupt");
     app.pop_queued_to_input();
     assert_eq!(
-        app.input.value(),
+        app.input.editor.value(),
         "zzsecond",
         "explicit recall moves the queue head into the input"
     );
@@ -467,7 +474,7 @@ fn test_recall_survives_interrupt() {
         },
     });
     assert_eq!(
-        app.input.value(),
+        app.input.editor.value(),
         "zzsecond",
         "popped text survives the interrupt's input restore"
     );
@@ -541,11 +548,11 @@ fn test_resubmit_avoids_duplicate_interrupt() {
     )));
     let turn1 = app.active_run_req_id().expect("turn 1 running");
     app.handle_agent_message(interrupted_done(turn1));
-    assert_eq!(app.input.value(), "analysis", "turn 1 restored");
+    assert_eq!(app.input.editor.value(), "analysis", "turn 1 restored");
     assert_eq!(interrupts(&app), 1, "one Interrupted after turn 1");
 
     // Resubmit the restored input, then interrupt again.
-    drop(app.input.take());
+    drop(app.input.editor.take());
     app.spawn_run("analysis".into());
     app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(
         user_msg("analysis").into(),
