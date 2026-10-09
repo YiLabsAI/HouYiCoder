@@ -46,7 +46,7 @@ impl App {
             if key.is_empty() {
                 self.system_line("memory: usage /memory forget <key>");
             } else {
-                let Some(s) = self.session.as_ref() else {
+                let Some(s) = self.session.connection.as_ref() else {
                     self.system_line("memory: not connected");
                     return true;
                 };
@@ -74,7 +74,7 @@ impl App {
             }
             return true;
         }
-        let Some(s) = self.session.as_ref() else {
+        let Some(s) = self.session.connection.as_ref() else {
             self.system_line("memory: not connected");
             return true;
         };
@@ -102,7 +102,7 @@ impl App {
     /// is already flipping is dropped so fast keypresses cannot race
     /// on→off→on against each other.
     pub(crate) fn toggle_memory_setting(&mut self, which: MemoryToggleWhich) {
-        let Some(s) = self.session.as_ref() else {
+        let Some(s) = self.session.connection.as_ref() else {
             self.system_line("memory: not connected");
             return;
         };
@@ -149,7 +149,7 @@ impl App {
         };
         let key = memory.topic.clone();
         let scope = memory.scope.clone();
-        let Some(s) = self.session.as_ref() else {
+        let Some(s) = self.session.connection.as_ref() else {
             self.system_line("memory: not connected".to_string());
             return;
         };
@@ -182,7 +182,7 @@ impl App {
             return;
         };
         let key = memory.topic.clone();
-        let Some(s) = self.session.as_ref() else {
+        let Some(s) = self.session.connection.as_ref() else {
             self.system_line("memory: not connected".to_string());
             return;
         };

@@ -48,8 +48,8 @@ impl App {
     /// leave state waiting on one. Request ids are issued by the connection
     /// before this call.
     pub fn enqueue(&self, cmd: ClientCommand) -> Result<(), EnqueueError> {
-        self.session
-            .as_ref()
+        let connection = self.session.connection.as_ref();
+        connection
             .ok_or(EnqueueError::NotConnected)
             .and_then(|s| s.enqueue(cmd))
     }
@@ -82,9 +82,8 @@ impl App {
     /// session, so callers read one four-state view instead of folding an
     /// Option over a three-state enum.
     pub fn connection_status(&self) -> ConnectionStatus {
-        self.session
-            .as_ref()
-            .map_or(ConnectionStatus::Disconnected, |s| s.status().clone())
+        let connection = self.session.connection.as_ref();
+        connection.map_or(ConnectionStatus::Disconnected, |s| s.status().clone())
     }
 
     /// Record a single request-id exhaustion notice for an auto path. The
@@ -93,11 +92,8 @@ impl App {
     /// lose it silently; the one-shot flag lets the first round announce and
     /// later rounds stay quiet.
     pub(crate) fn note_request_id_exhausted(&mut self) {
-        if self
-            .session
-            .as_ref()
-            .is_some_and(|s| s.take_exhaustion_notice())
-        {
+        let connection = self.session.connection.as_ref();
+        if connection.is_some_and(|s| s.take_exhaustion_notice()) {
             self.system_line("request ids exhausted");
         }
     }
@@ -158,14 +154,14 @@ impl App {
             self.promote_next_pending();
             return true;
         }
-        let Some(s) = self.session.as_ref() else {
+        let Some(s) = self.session.connection.as_ref() else {
             return false;
         };
         let Ok(req_id) = s.next_request_id() else {
             self.system_line("run: request ids exhausted");
             return false;
         };
-        let session_id = self.identity.session_id.clone();
+        let session_id = self.session.identity.session_id.clone();
         let content = vec![ContentBlock::Text {
             text: input.clone(),
         }];
@@ -224,7 +220,7 @@ impl App {
                 // Remove the stale server copy before starting a fresh run; a
                 // refused removal keeps the head queued so the local copy and
                 // the server mirror cannot diverge.
-                let session_id = self.identity.session_id.clone();
+                let session_id = self.session.identity.session_id.clone();
                 if let Err(e) = self.enqueue(ClientCommand::QueueRemove {
                     session_id,
                     id: head.id,
@@ -386,7 +382,7 @@ impl App {
     /// and stops once the trust card is raised or the status reply proves the
     /// workspace passed the gate.
     pub fn startup_handshake(&mut self, timeout: Duration) {
-        if let Some(session) = self.session.as_ref() {
+        if let Some(session) = self.session.connection.as_ref() {
             match session.next_request_id() {
                 Ok(req_id) => {
                     if session
@@ -402,11 +398,12 @@ impl App {
         let deadline = Instant::now() + timeout;
         loop {
             let remaining = deadline.saturating_duration_since(Instant::now());
-            let Some(message) = self
+            let next = self
                 .session
+                .connection
                 .as_mut()
-                .and_then(|session| session.poll_startup(remaining))
-            else {
+                .and_then(|s| s.poll_startup(remaining));
+            let Some(message) = next else {
                 break;
             };
             self.handle_agent_message(message);
@@ -429,7 +426,7 @@ impl App {
             // Poll one owned message off the session so the session borrow
             // ends before the mutable dispatch below. The batch cap returns
             // control to terminal input even when producers remain saturated.
-            let outcome = self.session.as_mut().map(|s| s.poll());
+            let outcome = self.session.connection.as_mut().map(|s| s.poll());
             match outcome {
                 Some(PollOutcome::Message(SessionMessage::Event(ServerEvent::Frame(frame)))) => {
                     batch.push(frame);
@@ -482,7 +479,7 @@ impl App {
             .unwrap_or(true);
         if !self.agent_busy() && !self.reverse_request_in_flight() && poll_due {
             self.capabilities.status.last_status_poll = Some(Instant::now());
-            if let Some(s) = self.session.as_ref() {
+            if let Some(s) = self.session.connection.as_ref() {
                 match s.next_request_id() {
                     Ok(req_id) => {
                         if s.enqueue(ClientCommand::StatusQuery { req_id }).is_ok() {
@@ -536,7 +533,7 @@ impl App {
         // refused abort would otherwise wait forever for a completion that
         // never comes.
         if let Err(e) = self.enqueue(ClientCommand::AbortRun {
-            session_id: self.identity.session_id.clone(),
+            session_id: self.session.identity.session_id.clone(),
         }) {
             self.system_line(Self::enqueue_failure_line("run", e));
             return;
@@ -596,7 +593,7 @@ impl App {
         for it in std::mem::take(&mut self.pending) {
             match it {
                 PendingItem::Message(input) => {
-                    let session_id = self.identity.session_id.clone();
+                    let session_id = self.session.identity.session_id.clone();
                     if self
                         .enqueue(ClientCommand::QueueRemove {
                             session_id,

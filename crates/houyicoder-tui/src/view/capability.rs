@@ -293,10 +293,10 @@ fn permission_denial_list(
 /// tab collects; the Add/Remove keys (a / d) drive the flows owned in
 /// permission_input.
 fn permission_workspace_body(app: &App, cursor: usize) -> Paragraph<'static> {
-    let cwd = if app.identity.working_dir.is_empty() {
+    let cwd = if app.session.identity.working_dir.is_empty() {
         "(unknown)"
     } else {
-        &app.identity.working_dir
+        &app.session.identity.working_dir
     };
     let mut lines: Vec<Line<'static>> = vec![
         Line::from(format!("- {cwd}  (original working directory)"))

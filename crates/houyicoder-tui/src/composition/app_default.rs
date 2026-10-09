@@ -25,6 +25,7 @@ use crate::run_metrics::RunMetrics;
 use crate::run_state::RunState;
 use crate::selection::SystemClipboard;
 use crate::selections::Selections;
+use crate::session::Session;
 use crate::session::capabilities::SessionCapabilities;
 use crate::session::identity::SessionIdentity;
 use crate::session::persistence::SessionPersistence;
@@ -73,12 +74,10 @@ pub fn app() -> App {
         agent_directory: None,
         login_mode: None,
         quit: false,
-        identity: SessionIdentity {
+        session: Session::bare(SessionIdentity {
             session_id: SessionId::new("test"),
             working_dir: cwd_string(),
-        },
-        runtime: None,
-        session: None,
+        }),
         notifications: NotificationState::default(),
         terminal_focused: true,
         run_state: RunState::Idle,

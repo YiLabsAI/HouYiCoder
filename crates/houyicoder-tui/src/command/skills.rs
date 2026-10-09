@@ -23,7 +23,7 @@ impl App {
             return;
         };
         let name = entry.name.clone();
-        let Some(session) = self.session.as_ref() else {
+        let Some(session) = self.session.connection.as_ref() else {
             self.skills_pane.open_unavailable(name);
             return;
         };

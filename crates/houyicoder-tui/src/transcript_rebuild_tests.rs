@@ -8,8 +8,10 @@ use std::sync::atomic::AtomicU32;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use crate::agent_message::SessionMessage;
 use crate::composition;
 use crate::records::{ContextSuggestion, SuggestionSeverity, TranscriptLine};
+use crate::session::SessionConnection;
 use crate::state::transcript::DiskFront;
 use crate::state::{App, Screen};
 use crate::test_harness::MockSnapshot;
@@ -60,12 +62,13 @@ fn todo_write_frame(id: &str, todos: &[(&str, &str)]) -> TranscriptFrame {
     ))
 }
 
-/// Return an App with empty transcript state and the shared runtime so the
+/// Return an App with empty transcript state and a test connection so the
 /// history read dispatches to a background task the test then pumps.
 fn fresh_app() -> App {
     let mut app = composition::app();
     app.transcript.reset();
-    app.runtime = Some(crate::composition::shared_runtime());
+    let (_tx, rx) = std::sync::mpsc::channel::<SessionMessage>();
+    app.session.connection = Some(SessionConnection::from_receiver(rx));
     app
 }
 
@@ -101,7 +104,7 @@ fn wait_for_workers_to_leave(app: &App) {
 }
 
 fn pump(app: &mut App, frame: TranscriptFrame) {
-    use crate::agent_message::{ServerEvent, SessionMessage};
+    use crate::agent_message::ServerEvent;
     app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(frame.into())));
 }
 

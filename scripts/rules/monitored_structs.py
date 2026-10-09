@@ -135,9 +135,25 @@ ACTIVE_OWNERS = {
         # one owner and the composition root builds the workflow as one value.
         # The session's wire routing id and starting working directory became
         # one SessionIdentity owner, so the two flat fields reset together on
-        # a session switch instead of a swap resetting them in step.
-        "fields": 62,
+        # a session switch instead of a swap resetting them in step. The
+        # identity and the optional live connection then folded into one
+        # Session owner beside that identity: the identity is always present
+        # and only the connection is optional, so the App shell holds one
+        # session value rather than an identity plus a separate Option the
+        # two could drift out of sync. The runtime field went away with that
+        # owner -- it was a second projection of the same wired fact the
+        # connection now signals, and background reads reach the process
+        # runtime directly instead of carrying a copy on the shell.
+        "fields": 60,
         "mut_app": 44,
+    },
+    "crates/houyicoder-tui/src/session.rs:Session": {
+        # The presented session: its stable identity and the optional live
+        # engine connection, held as one value so a swap replaces both and a
+        # lost connection never drops the identity or the already-observed
+        # state. Two fields that formerly sat detached on App now travel as
+        # one constructor boundary.
+        "fields": 2,
     },
     "crates/houyicoder-tui/src/workflow.rs:Workflow": {
         # The spec-plan-review-verify-artifact lifecycle: the stage machine,

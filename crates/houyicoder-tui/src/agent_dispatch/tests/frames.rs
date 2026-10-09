@@ -942,7 +942,6 @@ fn stamped_record(id: &str, ms: u64) -> SequencedFrame {
 fn test_expand_survives_reread() {
     let mut app = composition::app();
     app.screen = Screen::Working;
-    app.runtime = Some(crate::composition::shared_runtime());
     app.transcript.push_frame(stamped_user("e1", "go"));
     app.transcript
         .push_frame(stamped_thought("e2", "REREADMARK weighed the options"));
@@ -993,7 +992,6 @@ fn test_block_anchor_durable() {
     use crate::state::transcript::blocks::BlockAnchor;
     let mut app = composition::app();
     app.screen = Screen::Working;
-    app.runtime = Some(crate::composition::shared_runtime());
     app.transcript.push_frame(stamped_user("e1", "go"));
     app.transcript.push_frame(stamped_thought("e2", "weighed"));
     app.rebuild_transcript();

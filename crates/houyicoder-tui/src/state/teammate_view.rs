@@ -98,7 +98,7 @@ impl App {
         // the view swaps that source, so bump here or the cache holds the
         // parent rows and the child transcript never renders.
         self.bump_transcript_version();
-        if fire_fetch && let Some(s) = self.session.as_ref() {
+        if fire_fetch && let Some(s) = self.session.connection.as_ref() {
             match s.next_request_id() {
                 Ok(req_id) => {
                     self.enqueue_refresh(ClientCommand::ChildTranscriptQuery {

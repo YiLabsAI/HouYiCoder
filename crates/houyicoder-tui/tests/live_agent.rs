@@ -114,7 +114,7 @@ fn test_live_bash_tool_roundtrip() {
     // tool_call our provider parses, the runner raises Interruption for HITL,
     // approval + resume drives the sandbox, and the model reports the result.
     let mut app = live_app_with_tools(true);
-    assert!(app.session.is_some(), "carrier must be wired");
+    assert!(app.has_connection(), "carrier must be wired");
     app.spawn_run(
         "Use the bash tool to run the command: echo hello-from-tool. \
          Then reply with exactly the text it printed."
@@ -184,7 +184,7 @@ fn test_chat_replies_to_greeting() {
         return;
     }
     let mut app = live_app_with_tools(false);
-    assert!(app.session.is_some(), "carrier must be wired");
+    assert!(app.has_connection(), "carrier must be wired");
     app.spawn_run("say hello in one short sentence".into());
     assert!(drain(&mut app, 30_000), "agent did not reply within 30s");
     let has_reply = app

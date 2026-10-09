@@ -12,7 +12,7 @@ impl App {
     /// continues the same event loop (no quit, no restart). An in-process
     /// switch-session path.
     pub(crate) fn run_resume(&mut self, arg: Option<&str>) {
-        if self.session.is_none() {
+        if self.session.connection.is_none() {
             self.system_line("resume: not connected");
             return;
         }
@@ -22,7 +22,7 @@ impl App {
             self.system_line("resume: session history unavailable");
             return;
         };
-        let current_sid = self.identity.session_id.0.clone();
+        let current_sid = self.session.identity.session_id.0.clone();
         match arg {
             None => {
                 let rows = catalog.sessions(&current_sid);

@@ -455,7 +455,7 @@ fn draw_main(f: &mut Frame, area: Rect, app: &App) {
         draw_queue_pane(f, area, app);
         return;
     }
-    if app.session.is_some() {
+    if app.session.connection.is_some() {
         // Full-screen overlays that take over the main area in agent-chat
         // mode (otherwise the main area is the chat transcript). The artifact
         // pane is the slash-command surface that owns the whole main area when

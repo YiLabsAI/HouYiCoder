@@ -1139,8 +1139,7 @@ fn test_batch_keeps_mark() {
     let (tx, rx) = mpsc::channel::<SessionMessage>();
     let mut app = composition::app();
     app.transcript.reset();
-    app.runtime = Some(composition::shared_runtime());
-    app.session = Some(SessionConnection::from_receiver(rx));
+    app.session.connection = Some(SessionConnection::from_receiver(rx));
     app.run_state.start(RequestId(0), Instant::now());
     let send = |frame: TranscriptFrame| {
         tx.send(SessionMessage::Event(ServerEvent::Frame(frame.into())))
@@ -1183,8 +1182,7 @@ fn test_batch_keeps_identity() {
     let (tx, rx) = mpsc::channel::<SessionMessage>();
     let mut app = composition::app();
     app.transcript.reset();
-    app.runtime = Some(composition::shared_runtime());
-    app.session = Some(SessionConnection::from_receiver(rx));
+    app.session.connection = Some(SessionConnection::from_receiver(rx));
     let send = |seq: u64, id: &str, text: &str| {
         tx.send(SessionMessage::Event(ServerEvent::Frame(SequencedFrame {
             seq: Some(EventSeq(seq)),

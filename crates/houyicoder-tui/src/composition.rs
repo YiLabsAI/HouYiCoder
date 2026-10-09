@@ -132,7 +132,6 @@ pub fn build_app(bundle: RunnerBundle) -> App {
         startup_warnings,
         history_path,
     } = bundle;
-    let runtime = shared_runtime();
     // The live session: spawns the driver task on the shared runtime and
     // hands App the command channel + the message receiver + the request-id
     // counter. The driver takes ownership of the client; the App holds only
@@ -141,7 +140,8 @@ pub fn build_app(bundle: RunnerBundle) -> App {
     // to the server task that owns the runner, and the transcript rides the
     // accumulated frames — not a store replay.
     let driver_agent_tx = agent_tx.clone();
-    let live_session = SessionConnection::spawn(client, driver_agent_tx, agent_rx, &runtime);
+    let live_session =
+        SessionConnection::spawn(client, driver_agent_tx, agent_rx, &shared_runtime());
     if skip_login {
         app.screen = crate::state::Screen::Working;
         app.login_mode = Some(houyicoder_protocol::frontend::LoginMode::Local);
@@ -151,9 +151,8 @@ pub fn build_app(bundle: RunnerBundle) -> App {
     // snapshot lands, so the status bar names what the session runs.
     app.model_picker.snapshot.applied.id = model;
     app.status.sandbox = "mac-seatbelt".to_string();
-    app.identity.session_id = session_id;
-    app.runtime = Some(runtime);
-    app.session = Some(live_session);
+    app.session.identity.session_id = session_id;
+    app.session.connection = Some(live_session);
     app.persistence = SessionPersistence {
         trajectory_log,
         export_log,
@@ -261,7 +260,7 @@ impl App {
         // session being entered, so a switch away and back keeps what the
         // user had open. The parked state is taken here too -- build_app
         // rebuilds the whole App.
-        let leaving = self.identity.session_id.clone();
+        let leaving = self.session.identity.session_id.clone();
         let open_keys = self.take_expanded_keys();
         let mut parked = std::mem::take(&mut self.parked_view_states);
         // Drop session-scoped Commands (/clear /rewind /undo) the user typed
@@ -301,7 +300,7 @@ impl App {
         self.bump_transcript_version();
         self.pending = pending;
         parked.park_session(leaving, open_keys);
-        if let Some(keys) = parked.take_session(&self.identity.session_id) {
+        if let Some(keys) = parked.take_session(&self.session.identity.session_id) {
             self.set_expanded_keys(keys);
         }
         // The new session's fleet is unrelated to the old one's children,

@@ -50,9 +50,8 @@ use crate::run_metrics::RunMetrics;
 use crate::run_state::{RunProgress, RunState};
 use crate::selection::ClipboardWriter;
 use crate::selections::Selections;
-use crate::session::SessionConnection;
+use crate::session::Session;
 use crate::session::capabilities::SessionCapabilities;
-use crate::session::identity::SessionIdentity;
 use crate::session::persistence::SessionPersistence;
 use crate::skill_picker_state::SkillPickerState;
 use crate::skills_state::SkillsPaneState;
@@ -201,17 +200,10 @@ pub struct App {
     pub login_mode: Option<LoginMode>,
     pub quit: bool,
     // --- real agent-loop wiring ---
-    /// The presented session's identity: the wire routing id and the working
-    /// directory the session started in. Both reset together on a session
-    /// switch, so they live as one value rather than two loose fields a swap
-    /// must reset in step.
-    pub(crate) identity: SessionIdentity,
-    /// The tokio runtime that drives async run/resume. None while disconnected.
-    pub runtime: Option<Arc<tokio::runtime::Runtime>>,
-    /// The live connection with the engine: owns the command channel to the
-    /// driver, the message channel back to the event loop, the request-id
-    /// counter, and the driver task handle. None in the pure-stub path.
-    pub session: Option<SessionConnection>,
+    /// The presented session: its stable identity and the optional live
+    /// engine connection, held as one value so a swap replaces both and a
+    /// lost connection never drops the identity.
+    pub(crate) session: Session,
     /// Transient notification toast: one-line auto-expiring hint above the
     /// input box (copy feedback, exit-again prompt). Poll-driven expiry.
     pub notifications: NotificationState,
@@ -348,6 +340,14 @@ impl App {
         self.run_state.is_cancelling()
     }
 
+    /// Whether the session holds a live engine connection handle, so the
+    /// send paths can enqueue commands. The handle survives a driver that
+    /// dropped under ConnectionStatus::Lost, so this reports the handle's
+    /// presence, not the driver's health.
+    pub fn has_connection(&self) -> bool {
+        self.session.connection.is_some()
+    }
+
     /// The request id of the active run, or None when idle.
     pub fn active_run_req_id(&self) -> Option<RequestId> {
         self.run_state.request_id()
@@ -419,6 +419,15 @@ mod tests {
     fn test_app_debug_format() {
         let app = test_app();
         drop(format!("{app:?}"));
+    }
+
+    #[test]
+    fn test_has_connection_reports_presence() {
+        let mut app = test_app();
+        assert!(!app.has_connection());
+        let (_tx, rx) = std::sync::mpsc::channel::<crate::agent_message::SessionMessage>();
+        app.session.connection = Some(crate::session::SessionConnection::from_receiver(rx));
+        assert!(app.has_connection());
     }
 
     #[test]

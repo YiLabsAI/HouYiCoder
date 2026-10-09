@@ -384,11 +384,11 @@ impl App {
             // A chunk is already running; the next step waits for it.
             return moved;
         }
-        if self.runtime.is_some() {
+        if self.session.connection.is_some() {
             self.dispatch_index_chunk();
             return moved;
         }
-        // No runtime: the read happens where it stands instead, which is what
+        // No connection: the read happens where it stands instead, which is what
         // the bare and test compositions exercise.
         if let Some(snap) = self.persistence.snapshot.clone() {
             let p = snap.index_chunk();
@@ -411,14 +411,14 @@ impl App {
             self.pending_index_chunks(),
             INDEX_CHUNK_BUDGET
         );
-        let Some(runtime) = self.runtime.clone() else {
+        if self.session.connection.is_none() {
             return;
-        };
+        }
         let Some(snap) = self.persistence.snapshot.clone() else {
             return;
         };
         let (tx, rx) = std::sync::mpsc::channel();
-        runtime.spawn_blocking(move || {
+        crate::composition::shared_runtime().spawn_blocking(move || {
             tx.send(snap.index_chunk()).ok();
         });
         *self.index_build.pending_index_chunk.borrow_mut() = Some(PendingIndexChunk::new(rx));

@@ -230,7 +230,7 @@ fn submit_ask_question(app: &mut App) {
     };
     let call_id = aq.call_id.clone();
     let updated_input = aq.build_updated_input();
-    if app.session.is_some() {
+    if app.session.connection.is_some() {
         app.resolve_current_approval(ApprovalDecision {
             call_id,
             approved: true,
@@ -252,7 +252,7 @@ fn cancel_ask_question(app: &mut App) {
     if let serde_json::Value::Object(ref mut obj) = input {
         obj.insert("declined".into(), serde_json::json!(true));
     }
-    if app.session.is_some() {
+    if app.session.connection.is_some() {
         app.resolve_current_approval(ApprovalDecision {
             call_id,
             approved: true,

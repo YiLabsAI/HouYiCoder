@@ -80,7 +80,7 @@ pub fn draw_status_bar(f: &mut Frame, area: Rect, app: &App) {
     // Approval pending: the modal popup (view::approval) is the sole approval
     // surface; the status bar keeps showing the normal agent bar (mode pill +
     // model + tokens) underneath, so the two no longer duplicate the request.
-    if app.session.is_some() {
+    if app.session.connection.is_some() {
         draw_agent_status_bar(f, area, app);
         return;
     }

@@ -105,7 +105,7 @@ fn add_rule_with_destination(
     };
     let label = crate::command::render::permission_effect_label(spec.effect);
     let action = wire_rule.action.clone();
-    let Some(s) = app.session.as_ref() else {
+    let Some(s) = app.session.connection.as_ref() else {
         app.system_line("permission: not connected");
         return;
     };
@@ -129,7 +129,7 @@ fn add_rule_with_destination(
 /// Remove the rule at the given index into the full rules_cache (the server
 /// sees the unfiltered set, not the tab-filtered view).
 pub(crate) fn remove_rule_at(app: &mut App, index: usize) {
-    let Some(s) = app.session.as_ref() else {
+    let Some(s) = app.session.connection.as_ref() else {
         app.system_line("permission: not connected");
         return;
     };
@@ -529,7 +529,7 @@ pub(crate) fn submit_permission_input(app: &mut App, text: String) {
 /// (PermissionDirsResult) refreshes dirs_cache. A None req_id (no
 /// session) surfaces a system line instead of panicking.
 fn submit_add_dir(app: &mut App, path: String) {
-    let Some(s) = app.session.as_ref() else {
+    let Some(s) = app.session.connection.as_ref() else {
         app.system_line("permission: not connected");
         return;
     };
@@ -552,7 +552,7 @@ fn remove_dir_at(app: &mut App, index: usize) {
         app.system_line("permission: directory no longer present");
         return;
     };
-    let Some(s) = app.session.as_ref() else {
+    let Some(s) = app.session.connection.as_ref() else {
         app.system_line("permission: not connected");
         return;
     };

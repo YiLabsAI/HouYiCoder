@@ -228,7 +228,7 @@ impl App {
         self.pin_transcript_top();
         if expanding
             && needs_fetch
-            && let Some(s) = self.session.as_ref()
+            && let Some(s) = self.session.connection.as_ref()
         {
             match s.next_request_id() {
                 Ok(req_id) => {

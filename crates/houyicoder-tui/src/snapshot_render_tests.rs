@@ -17,6 +17,15 @@ fn working() -> crate::state::App {
     crate::test_harness::working_app()
 }
 
+/// A working App whose session holds a receiver-backed connection, so the
+/// index build dispatches on a worker rather than reading inline.
+fn connected_working() -> crate::state::App {
+    let mut app = working();
+    let (_tx, rx) = mpsc::channel::<crate::agent_message::SessionMessage>();
+    app.session.connection = Some(crate::session::SessionConnection::from_receiver(rx));
+    app
+}
+
 use crate::test_harness::MockSnapshot;
 
 /// count==render must hold when the search view renders a frozen snapshot
@@ -855,11 +864,11 @@ fn test_draw_reads_no_index() {
     );
 }
 
-/// With a runtime wired, a chunk runs on a worker: the loop advances the build
-/// and applies what the worker sent.
+/// With a live connection, a chunk runs on a worker: the loop advances the
+/// build and applies what the worker sent.
 #[test]
 fn test_index_runs_on_worker() {
-    let mut app = working();
+    let mut app = connected_working();
     app.persistence.snapshot = Some(Arc::new(MockSnapshot {
         lines: Vec::new(),
         log_bytes: 20 * 1024 * 1024,
@@ -872,9 +881,6 @@ fn test_index_runs_on_worker() {
         index_calls: std::sync::atomic::AtomicU32::new(0),
     }));
     app.enter_search_view("tail");
-    app.runtime = Some(Arc::new(
-        tokio::runtime::Runtime::new().expect("test runtime"),
-    ));
     crate::app::handle_key(
         &mut app,
         KeyEvent::new(KeyCode::Char('G'), KeyModifiers::NONE),
@@ -979,10 +985,9 @@ fn test_index_landing_after_interrupt() {
         "the interrupted build did not resume on the landing"
     );
 
-    // Restart on a real runtime: the build runs to completion.
-    app.runtime = Some(Arc::new(
-        tokio::runtime::Runtime::new().expect("test runtime"),
-    ));
+    // Restart with a connection: the build runs on a worker to completion.
+    let (_tx, rx) = mpsc::channel::<crate::agent_message::SessionMessage>();
+    app.session.connection = Some(crate::session::SessionConnection::from_receiver(rx));
     app.start_full_index();
     assert!(app.index_build.indexing.get(), "G restarts the build");
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -1006,7 +1011,7 @@ fn test_index_landing_after_interrupt() {
 /// receiver only if no second chunk was dispatched.
 #[test]
 fn test_index_restart_waits() {
-    let mut app = working();
+    let mut app = connected_working();
     app.persistence.snapshot = Some(Arc::new(MockSnapshot {
         lines: Vec::new(),
         log_bytes: 20 * 1024 * 1024,
@@ -1018,9 +1023,6 @@ fn test_index_restart_waits() {
         index_steps: 1,
         index_calls: std::sync::atomic::AtomicU32::new(0),
     }));
-    app.runtime = Some(Arc::new(
-        tokio::runtime::Runtime::new().expect("test runtime"),
-    ));
     app.enter_search_view("tail");
     app.index_build.indexing.set(true);
     let (tx, rx) = mpsc::channel();
@@ -1054,7 +1056,7 @@ fn test_index_restart_waits() {
 /// drop that chunk's receiver.
 #[test]
 fn test_index_pump_waits() {
-    let mut app = working();
+    let mut app = connected_working();
     app.persistence.snapshot = Some(Arc::new(MockSnapshot {
         lines: Vec::new(),
         log_bytes: 20 * 1024 * 1024,
@@ -1066,9 +1068,6 @@ fn test_index_pump_waits() {
         index_steps: 1,
         index_calls: std::sync::atomic::AtomicU32::new(0),
     }));
-    app.runtime = Some(Arc::new(
-        tokio::runtime::Runtime::new().expect("test runtime"),
-    ));
     app.enter_search_view("tail");
     app.index_build.indexing.set(true);
     let (tx, rx) = mpsc::channel();

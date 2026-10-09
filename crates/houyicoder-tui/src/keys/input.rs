@@ -407,7 +407,7 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
         KeyCode::Up => {
             if !app.input.move_up(app.layout_feedback.terminal_cols.get()) && !editing {
                 let project = crate::history::current_project();
-                let session_key = app.identity.session_id.to_string();
+                let session_key = app.session.identity.session_id.to_string();
                 app.history.up(&mut app.input, &project, &session_key);
             }
         }
@@ -443,7 +443,7 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
 /// (runner wired) Tab is a no-op: the working screen is a single chat stream,
 /// not a pane tab system.
 pub(super) fn cycle_pane(app: &mut App) {
-    if app.session.is_some() {
+    if app.session.connection.is_some() {
         return;
     }
     let next = Pane::PRIMARY

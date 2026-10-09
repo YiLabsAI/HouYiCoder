@@ -16,7 +16,7 @@ impl App {
     pub(crate) fn open_model_pane(&mut self) {
         self.pane = Pane::Model;
         self.model_picker.reseed();
-        if let Some(s) = self.session.as_ref() {
+        if let Some(s) = self.session.connection.as_ref() {
             match s.next_request_id() {
                 Ok(req_id) => {
                     self.enqueue_refresh(ClientCommand::ModelInfoQuery { req_id });
@@ -58,7 +58,7 @@ impl App {
         if self.model_picker.is_pending() {
             return;
         }
-        let Some(s) = self.session.as_ref() else {
+        let Some(s) = self.session.connection.as_ref() else {
             self.system_line("model: not connected");
             return;
         };

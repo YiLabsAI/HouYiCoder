@@ -118,7 +118,7 @@ pub(super) fn handle_approval(app: &mut App, k: KeyEvent) {
                 .permission
                 .sticky_choices
                 .insert(tool, kind);
-            if app.session.is_some() {
+            if app.session.connection.is_some() {
                 // Ship the verdict over the wire as a reverse response; the
                 // server drives runner.resume, records the audit event, and,
                 // when scope is "always", computes the bash command prefix
@@ -151,7 +151,7 @@ pub(super) fn handle_approval(app: &mut App, k: KeyEvent) {
                 tool,
                 houyicoder_protocol::acp_wire::PermissionOptionKind::RejectOnce,
             );
-            if app.session.is_some() {
+            if app.session.connection.is_some() {
                 app.resolve_current_approval(
                     houyicoder_protocol::frontend::run::ApprovalDecision {
                         call_id,

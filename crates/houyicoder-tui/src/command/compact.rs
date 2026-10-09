@@ -20,7 +20,7 @@ impl App {
             );
             return;
         }
-        let Some(s) = self.session.as_ref() else {
+        let Some(s) = self.session.connection.as_ref() else {
             self.system_line("compact: not connected");
             return;
         };

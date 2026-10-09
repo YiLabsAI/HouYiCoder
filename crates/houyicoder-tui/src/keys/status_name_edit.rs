@@ -111,7 +111,7 @@ mod tests {
     #[test]
     fn test_enter_commits_no_session() {
         let mut app = status_tab_app();
-        app.session = None;
+        app.session.connection = None;
         let mut f = InputField::new();
         f.insert_str("x");
         app.status_name_edit = Some(f);

@@ -417,12 +417,12 @@ impl App {
         let Some(source) = self.persistence.snapshot.clone() else {
             return;
         };
-        let Some(runtime) = self.runtime.clone() else {
-            // No runtime: the bare or unwired path has no way to run a
+        if self.session.connection.is_none() {
+            // No connection: the bare or unwired path has no way to run a
             // background task, so the read stays off the draw thread by not
             // running at all, matching the no-source short-circuit.
             return;
-        };
+        }
         if !self.history_reads.may_dispatch() {
             return;
         }
@@ -466,7 +466,7 @@ impl App {
         let lease = self
             .history_reads
             .dispatch(dispatch_front, dispatch_disk_front, rx);
-        runtime.spawn_blocking(move || {
+        crate::composition::shared_runtime().spawn_blocking(move || {
             job.run_and_send(tx, lease.stop());
         });
     }

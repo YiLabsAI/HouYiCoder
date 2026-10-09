@@ -41,7 +41,6 @@ fn subagent_line(sid: &str, rows: usize) -> TranscriptLine {
 fn app_with_two_children(parent_rows: usize) -> App {
     let mut app = crate::composition::app();
     app.screen = crate::state::Screen::Working;
-    app.runtime = Some(crate::composition::shared_runtime());
     for i in 0..parent_rows {
         app.transcript
             .push_frame(user_frame(&format!("parent row {i}")));
@@ -201,7 +200,6 @@ fn test_sibling_view_swap() {
 fn test_ctrl_o_expands_child() {
     let mut app = crate::composition::app();
     app.screen = crate::state::Screen::Working;
-    app.runtime = Some(crate::composition::shared_runtime());
     app.transcript.push_frame(user_frame("parent row"));
     app.rebuild_transcript();
     app.transcript.push(TranscriptLine::Subagent {

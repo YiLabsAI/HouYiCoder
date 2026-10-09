@@ -474,7 +474,7 @@ fn test_kill_all_no_running() {
 #[test]
 fn test_clear_ships_session_reset() {
     let (mut app, events) = connected_app_events();
-    let sid = app.identity.session_id.clone();
+    let sid = app.session.identity.session_id.clone();
     app.run_command(SlashCommand::Clear);
     let req = wait_for_request(&events, |p| {
         matches!(p, FrontendRequest::SessionReset { .. })
@@ -496,6 +496,7 @@ fn test_exhausted_commands_report() {
     use houyicoder_protocol::frontend::memory::MemoryToggleWhich;
     let (mut app, _events) = connected_app_events();
     app.session
+        .connection
         .as_ref()
         .expect("connected session")
         .set_next_req_id(u64::MAX);
@@ -544,6 +545,7 @@ fn test_exhausted_commands_report() {
 fn test_exhausted_clear_no_repeat() {
     let (mut app, _events) = connected_app_events();
     app.session
+        .connection
         .as_ref()
         .expect("connected session")
         .set_next_req_id(u64::MAX);
@@ -755,13 +757,14 @@ fn test_auto_refresh_silent() {
 fn test_connection_status_ready() {
     let (mut app, _events) = connected_app_events();
     assert_eq!(
-        app.session.as_ref().expect("session").status(),
+        app.session.connection.as_ref().expect("session").status(),
         &ConnectionStatus::Connecting,
         "before the handshake result the status is Connecting"
     );
     // Block for the driver's real ConnectionReady and apply it.
     let msg = app
         .session
+        .connection
         .as_mut()
         .expect("session")
         .poll_startup(std::time::Duration::from_secs(5))
@@ -843,7 +846,7 @@ fn test_connection_status_disconnected() {
 fn test_poll_closed_distinct() {
     let mut app = connection_lost_app();
     // The fixture consumed the death announcement; the channel is exhausted.
-    let outcome = app.session.as_mut().expect("session").poll();
+    let outcome = app.session.connection.as_mut().expect("session").poll();
     assert!(
         matches!(outcome, PollOutcome::Closed),
         "an exhausted channel reports Closed, not Idle: {outcome:?}"
@@ -853,6 +856,7 @@ fn test_poll_closed_distinct() {
     let (mut live, _events) = connected_app_events();
     let msg = live
         .session
+        .connection
         .as_mut()
         .expect("session")
         .poll_startup(std::time::Duration::from_secs(5))
@@ -861,7 +865,7 @@ fn test_poll_closed_distinct() {
         matches!(msg, SessionMessage::Connection(ConnectionEvent::Ready)),
         "the driver announces readiness, got {msg:?}"
     );
-    let outcome = live.session.as_mut().expect("session").poll();
+    let outcome = live.session.connection.as_mut().expect("session").poll();
     assert!(
         matches!(outcome, PollOutcome::Idle),
         "a live quiet channel reports Idle, not Closed: {outcome:?}"
@@ -880,8 +884,7 @@ fn test_closed_settles_loss() {
         let (agent_tx, agent_rx) = std::sync::mpsc::channel();
         let session = SessionConnection::spawn(client, agent_tx, agent_rx, &runtime);
         let mut a = working_app();
-        a.runtime = Some(runtime);
-        a.session = Some(session);
+        a.session.connection = Some(session);
         a
     };
     // Consume the death announcement WITHOUT applying it — the panic path
@@ -890,6 +893,7 @@ fn test_closed_settles_loss() {
     // message, so the arrival does not race the assertion.
     let death = app
         .session
+        .connection
         .as_mut()
         .expect("session")
         .poll_startup(std::time::Duration::from_secs(5))

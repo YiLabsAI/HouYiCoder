@@ -68,7 +68,7 @@ fn draw_tab_body(f: &mut Frame, tab: StatusTab, area: Rect, app: &App) {
             let snap = app.snapshot_or_stub();
             render_status(
                 &snap,
-                &app.identity.session_id,
+                &app.session.identity.session_id,
                 &app.status.sandbox,
                 &app.todos.items,
             )

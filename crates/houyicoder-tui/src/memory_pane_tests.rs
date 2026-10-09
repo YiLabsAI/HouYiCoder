@@ -640,7 +640,7 @@ fn test_dead_driver_toggle_rollback() {
     );
 
     let mut app = working();
-    app.session = Some(session);
+    app.session.connection = Some(session);
     app.run_command(SlashCommand::Memory);
     app.toggle_memory_setting(MemoryToggleWhich::Auto);
     assert_eq!(

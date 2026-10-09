@@ -342,8 +342,7 @@ pub(crate) fn connected_app_with_events() -> (App, Receiver<TransportEvent>) {
     let (agent_tx, agent_rx) = mpsc::channel::<SessionMessage>();
     let session = SessionConnection::spawn(client, agent_tx, agent_rx, &runtime);
     let mut app = working_app();
-    app.runtime = Some(runtime);
-    app.session = Some(session);
+    app.session.connection = Some(session);
     (app, events_rx)
 }
 
@@ -378,8 +377,7 @@ pub(crate) fn attach_connection(app: &mut App) {
     let client = Client::new(Box::new(RecordingTransport::new(events_tx)));
     let (agent_tx, agent_rx) = std::sync::mpsc::channel::<crate::agent_message::SessionMessage>();
     let session = SessionConnection::spawn(client, agent_tx, agent_rx, &runtime);
-    app.runtime = Some(runtime);
-    app.session = Some(session);
+    app.session.connection = Some(session);
 }
 
 /// An App whose driver exited on a failed handshake: the session object is
@@ -404,8 +402,7 @@ pub(crate) fn connection_lost_app() -> App {
         "expected ConnectionLost, got {death:?}"
     );
     let mut app = working_app();
-    app.runtime = Some(runtime);
-    app.session = Some(session);
+    app.session.connection = Some(session);
     // Apply the real loss so the error line lands and the session state
     // reflects it — tests assert on both.
     app.handle_agent_message(death);

@@ -111,7 +111,7 @@ impl App {
         // refreshes to show the new state.
         self.system_line(notice);
         if self.pane == Pane::Memory
-            && let Some(s) = self.session.as_ref()
+            && let Some(s) = self.session.connection.as_ref()
         {
             match s.next_request_id() {
                 Ok(req_id) => {

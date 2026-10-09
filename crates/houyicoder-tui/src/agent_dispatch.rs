@@ -44,7 +44,7 @@ impl App {
                     // so a failed Hello leaves the status at Connecting until
                     // the loss lands. The transition is constrained: a late
                     // confirmation cannot revive a lost connection.
-                    if let Some(s) = self.session.as_mut() {
+                    if let Some(s) = self.session.connection.as_mut() {
                         s.mark_ready();
                     }
                 }
@@ -84,7 +84,7 @@ impl App {
         cause: String,
         not_sent: Vec<RequestId>,
     ) -> bool {
-        let first = match self.session.as_mut() {
+        let first = match self.session.connection.as_mut() {
             Some(s) => s.mark_lost(cause.clone()),
             // No connection exists: nothing was lost twice, so run the sweep
             // for this observation. A synthetic loss on a session-less App
@@ -350,7 +350,7 @@ impl App {
             && view.last_fetched_turn.is_none_or(|t| turn > t)
         {
             view.last_fetched_turn = Some(turn);
-            if let Some(s) = self.session.as_ref() {
+            if let Some(s) = self.session.connection.as_ref() {
                 match s.next_request_id() {
                     Ok(req_id) => {
                         self.enqueue_refresh(ClientCommand::ChildTranscriptQuery {

@@ -38,7 +38,6 @@ fn subagent_line(rows: usize) -> TranscriptLine {
 fn app_with_parent(parent_rows: usize) -> App {
     let mut app = crate::composition::app();
     app.screen = crate::state::Screen::Working;
-    app.runtime = Some(crate::composition::shared_runtime());
     for i in 0..parent_rows {
         app.transcript
             .push_frame(user_frame(&format!("parent row {i}")));
@@ -115,7 +114,6 @@ fn test_child_scroll_leaves_parent() {
 fn test_child_tail_spares_parent() {
     let mut app = crate::composition::app();
     app.screen = crate::state::Screen::Working;
-    app.runtime = Some(crate::composition::shared_runtime());
     for i in 0..60 {
         app.transcript
             .push_frame(user_frame(&format!("parent row {i}")));
@@ -165,7 +163,6 @@ fn test_child_tail_spares_parent() {
 fn test_child_blocks_parent_reads() {
     let mut app = crate::composition::app();
     app.screen = crate::state::Screen::Working;
-    app.runtime = Some(crate::composition::shared_runtime());
     app.transcript.set_resident_byte_budget(4096);
     let text = "x".repeat(200);
     for _ in 0..40 {
