@@ -120,7 +120,7 @@ fn draw_agent_status_bar(f: &mut Frame, area: Rect, app: &App) {
         left.push(Span::styled(hint, dim));
     }
     let mut right: Option<Line<'static>> = None;
-    if let Some(snap) = &app.status_cache {
+    if let Some(snap) = &app.capabilities.status.status_cache {
         if snap.breaker_state.as_deref() == Some("Open") {
             left.push(Span::styled(" · ", dim));
             left.push(Span::styled("breaker Open", Style::new().fg(Color::Red)));
@@ -609,7 +609,7 @@ mod tests {
         use ratatui::{Terminal, backend::TestBackend};
         let mut app = crate::composition::app();
         app.model_picker.snapshot.applied.id = "test-model".into();
-        app.status_cache = Some(StatusSnapshot {
+        app.capabilities.status.status_cache = Some(StatusSnapshot {
             model: "test-model".into(),
             breaker_state: None,
             cumulative_usage: Usage {
@@ -667,7 +667,7 @@ mod tests {
                 (Some(180000), Some("90% used · /compact")),
                 (None, None),
             ] {
-                app.status_cache = Some(StatusSnapshot {
+                app.capabilities.status.status_cache = Some(StatusSnapshot {
                     model: "test-model".into(),
                     context_used_tokens: used,
                     context_window: 200_000,

@@ -108,7 +108,11 @@ ACTIVE_OWNERS = {
         # verdicts, verdict log) became one PermissionCapability under the
         # session's SessionCapabilities composition; six flat fields folded
         # into the one App field named capabilities.
-        "fields": 93,
+        # The status caches (context breakdown, status snapshot, the last
+        # poll stamp, and the pending-command flag) became one StatusCapability
+        # under the same composition; four flat fields folded into the one App
+        # field named capabilities.
+        "fields": 89,
         "mut_app": 44,
     },
     "crates/houyicoder-tui/src/session/capabilities.rs:PermissionCapability": {
@@ -119,11 +123,18 @@ ACTIVE_OWNERS = {
         # move as one capability value.
         "fields": 6,
     },
+    "crates/houyicoder-tui/src/session/capabilities.rs:StatusCapability": {
+        # The session's status caches and poll bookkeeping: the last context
+        # breakdown, the latest status snapshot, the last poll stamp, and the
+        # pending-command flag. Four flat fields folded into one capability
+        # value under the session's capability composition.
+        "fields": 4,
+    },
     "crates/houyicoder-tui/src/session/capabilities.rs:SessionCapabilities": {
-        # The static composition of a session's named capabilities. It holds
-        # the permission capability; the status and catalog caches join it as
-        # they are bundled in the following increments.
-        "fields": 1,
+        # The static composition of a session's named capabilities: the
+        # permission and status capabilities. The catalog caches join it in a
+        # following increment.
+        "fields": 2,
     },
     "crates/houyicoder-tui/src/last_row_keys.rs:LastRowKeys": {
         # The four per-row key vectors of the last emitted visible row set:

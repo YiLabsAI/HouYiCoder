@@ -410,7 +410,7 @@ impl App {
                 break;
             };
             self.handle_agent_message(message);
-            if self.pending_trust().is_some() || self.status_cache.is_some() {
+            if self.pending_trust().is_some() || self.capabilities.status.status_cache.is_some() {
                 break;
             }
         }
@@ -476,14 +476,12 @@ impl App {
         // Refresh status while idle. Active runs and reverse requests retain
         // exclusive ownership of response frames.
         const STATUS_POLL_INTERVAL_SECS: u64 = 1;
-        if !self.agent_busy()
-            && !self.reverse_request_in_flight()
-            && self
-                .last_status_poll
-                .map(|t| t.elapsed().as_secs() >= STATUS_POLL_INTERVAL_SECS)
-                .unwrap_or(true)
-        {
-            self.last_status_poll = Some(Instant::now());
+        let last_poll = self.capabilities.status.last_status_poll;
+        let poll_due = last_poll
+            .map(|t| t.elapsed().as_secs() >= STATUS_POLL_INTERVAL_SECS)
+            .unwrap_or(true);
+        if !self.agent_busy() && !self.reverse_request_in_flight() && poll_due {
+            self.capabilities.status.last_status_poll = Some(Instant::now());
             if let Some(s) = self.session.as_ref() {
                 match s.next_request_id() {
                     Ok(req_id) => {

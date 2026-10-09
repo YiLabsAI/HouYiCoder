@@ -414,11 +414,11 @@ impl App {
             ServerResponse::Status { snapshot } => {
                 // Cache the snapshot for the status bar + /status pane. NOTE:
                 // rename's reply rides this variant (a racing /status is swallowed).
-                self.pending_status_command = false;
+                self.capabilities.status.pending_status_command = false;
                 // Sync the terminal tab title (OSC 0/2) on change only (not
                 // unconditionally every status update).
                 sync_terminal_title(&snapshot, &mut self.last_title);
-                self.status_cache = Some(*snapshot);
+                self.capabilities.status.status_cache = Some(*snapshot);
             }
             ServerResponse::Trajectory { entries, redundant } => {
                 self.system_line(render_trajectory_wire(&entries, &redundant));
@@ -534,7 +534,7 @@ impl App {
     /// Drill-down (memory files, skills) is empty until the server ships
     /// those sections; the grid itself is honest data from the breakdown.
     fn apply_context_breakdown(&mut self, breakdown: ContextBreakdown) {
-        self.context_cache = Some(breakdown.clone());
+        self.capabilities.status.context_cache = Some(breakdown.clone());
         let suggestions = suggestions_for(&breakdown);
         let view = ContextView {
             breakdown,

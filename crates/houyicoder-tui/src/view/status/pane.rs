@@ -217,7 +217,7 @@ mod tests {
         let mut snap = app.snapshot_or_stub();
         snap.auto_memory = false;
         snap.auto_dream = true;
-        app.status_cache = Some(snap);
+        app.capabilities.status.status_cache = Some(snap);
         let s = render_config(&app);
         let memory_line = s
             .lines()

@@ -749,7 +749,7 @@ fn test_slash_queries_ship_connected() {
 
     app.run_command(SlashCommand::Status);
     assert!(
-        app.pending_status_command,
+        app.capabilities.status.pending_status_command,
         "Status sets the pending-command flag"
     );
     assert_eq!(

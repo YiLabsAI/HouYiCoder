@@ -60,7 +60,6 @@ use crate::transcript::snapshot::TranscriptSnapshot;
 use crate::view::export_log::ExportLog;
 use crate::view::trajectory_pane::TrajectoryLog;
 use houyicoder_protocol::envelope::RequestId;
-use houyicoder_protocol::frontend::context::ContextBreakdown;
 use houyicoder_protocol::frontend::hooks::HookEntry;
 
 pub(crate) use crate::state::cursors::EventCursor;
@@ -72,7 +71,6 @@ pub use crate::state::trajectory::{
     TrajectoryDrill, TrajectoryPaneState, TrajectorySelection, TrajectoryTurnKey,
 };
 use houyicoder_protocol::frontend::skills::SkillEntry;
-use houyicoder_protocol::frontend::status::StatusSnapshot;
 use houyicoder_protocol::frontend::tools::ToolEntry;
 use houyicoder_protocol::frontend::{LoginMode, SessionId};
 use ratatui::layout::Rect;
@@ -342,8 +340,6 @@ pub struct App {
     /// the panes and status paths read. One owner so those caches travel
     /// together as one value rather than a scatter of flat fields.
     pub(crate) capabilities: SessionCapabilities,
-    /// /context cache: last breakdown, rendered immediately on /context (refreshed in background). None until the first ContextResult.
-    pub context_cache: Option<ContextBreakdown>,
     /// The permission pane state: the selected tab, the cursor row, the
     /// typed-input sub-mode, and the pane-local search buffer. Pub(crate) so
     /// the key handler and render path reach a field directly; the whole value
@@ -352,11 +348,6 @@ pub struct App {
     /// The original working directory the session started in, shown at the top
     /// of the Workspace tab in /permissions (empty in a stub App).
     pub working_dir: String,
-    /// The latest protocol status snapshot. None while disconnected.
-    pub status_cache: Option<StatusSnapshot>,
-    /// When the last periodic StatusQuery was sent. Fires every
-    /// STATUS_POLL_INTERVAL_SECS so the bar + /sandbox stay recent.
-    pub last_status_poll: Option<Instant>,
     /// The registered-hook rows for the /hooks pane. Refreshed from the wire
     /// (HooksResult) when the user opens /hooks. Empty until the first reply.
     pub hook_entries: Vec<HookEntry>,
@@ -399,10 +390,6 @@ pub struct App {
     /// inline-editable (rather than a rename command).
     pub status_name_edit: Option<InputField>,
     pub last_title: Option<String>,
-    /// True when a /status command is awaiting a wire reply. The periodic
-    /// poll updates the cache silently; a command-initiated poll also renders
-    /// the full status block as a transcript line on reply. Cleared on reply.
-    pub pending_status_command: bool,
     /// True between an Esc-abort and the matching Done(Interrupted). Set in
     /// abort_run when the session/cancel notification ships; cleared in the
     /// Done handler. The honest form for a wire abort: the token fire is

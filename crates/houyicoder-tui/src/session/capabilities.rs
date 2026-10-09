@@ -7,11 +7,14 @@
 //! connection handle or a session reader port.
 
 use std::collections::HashMap;
+use std::time::Instant;
 
 use houyicoder_protocol::acp_wire::PermissionOptionKind;
+use houyicoder_protocol::frontend::context::ContextBreakdown;
 use houyicoder_protocol::frontend::permission::{
     PermissionDecisionEntry, PermissionMode, PermissionRule,
 };
+use houyicoder_protocol::frontend::status::StatusSnapshot;
 
 /// The session's permission state as the wire reports it: the current mode,
 /// the durable rule list, the allowed-directory list, and the ask-before-git
@@ -51,6 +54,28 @@ impl Default for PermissionCapability {
     }
 }
 
+/// The session's status caches and poll bookkeeping as the wire reports them:
+/// the last context breakdown, the latest status snapshot, the stamp of the
+/// last periodic status poll, and whether a command-initiated status request
+/// is in flight. All of it is wire-refreshed cache or poll bookkeeping; the
+/// server owns the truth.
+#[derive(Debug, Default)]
+pub(crate) struct StatusCapability {
+    /// The /context cache: the last breakdown, rendered immediately on a
+    /// /context command and refreshed in the background. None until the first
+    /// ContextResult.
+    pub(crate) context_cache: Option<ContextBreakdown>,
+    /// The latest status snapshot. None while disconnected.
+    pub(crate) status_cache: Option<StatusSnapshot>,
+    /// When the last periodic StatusQuery was sent. Re-fires on the poll
+    /// interval so the status bar and the sandbox pane stay recent.
+    pub(crate) last_status_poll: Option<Instant>,
+    /// True when a /status command is awaiting a wire reply. The periodic poll
+    /// updates the cache silently; a command-initiated poll also renders the
+    /// full status block as a transcript line on reply. Cleared on reply.
+    pub(crate) pending_status_command: bool,
+}
+
 /// The static composition of a session's named capabilities. It holds exactly
 /// the state the wire declared for this session and nothing else; the
 /// connection, run, and transcript live beside it, not inside it.
@@ -58,4 +83,7 @@ impl Default for PermissionCapability {
 pub(crate) struct SessionCapabilities {
     /// The permission capability: mode, rules, directories, and verdicts.
     pub(crate) permission: PermissionCapability,
+    /// The status capability: context cache, snapshot, poll stamp, and the
+    /// pending-command flag.
+    pub(crate) status: StatusCapability,
 }

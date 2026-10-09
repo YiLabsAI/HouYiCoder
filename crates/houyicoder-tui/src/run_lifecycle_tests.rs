@@ -375,8 +375,12 @@ fn test_status_snapshot_accumulates_live() {
     assert!(settled, "run should settle");
     // The TUI holds no engine handle, so the tally arrives over the wire: pump
     // the periodic status poll until the driver routes it back.
-    pump_until(&mut app, 200, |a| a.status_cache.is_some());
+    pump_until(&mut app, 200, |a| {
+        a.capabilities.status.status_cache.is_some()
+    });
     let snap = app
+        .capabilities
+        .status
         .status_cache
         .as_ref()
         .expect("status cache populated by the periodic poll after the run settles");
