@@ -90,34 +90,35 @@ impl ReviewQueue {
 impl App {
     /// True when every review finding has been signed off or rejected.
     pub fn all_findings_resolved(&self) -> bool {
-        !self.review.findings.is_empty() && self.review.findings.iter().all(|f| f.resolved())
+        !self.workflow.review.findings.is_empty()
+            && self.workflow.review.findings.iter().all(|f| f.resolved())
     }
 
     /// Number of review findings in the console queue.
     pub fn console_len(&self) -> usize {
-        self.review.len()
+        self.workflow.review.len()
     }
 
     /// Move the console review-queue focus up, wrapping around.
     pub fn console_focus_up(&mut self) {
-        self.review.focus_up();
+        self.workflow.review.focus_up();
     }
 
     /// Move the console review-queue focus down, wrapping around.
     pub fn console_focus_down(&mut self) {
-        self.review.focus_down();
+        self.workflow.review.focus_down();
     }
 
     /// Sign off on the focused finding: mark signed off and append an audit
     /// trail entry. No-op if the queue is empty or already signed off.
     pub fn signoff_focused(&mut self, who: &str, when: &str) {
-        self.review.signoff_focused(who, when);
+        self.workflow.review.signoff_focused(who, when);
     }
 
     /// Reject the focused finding: mark rejected and append an audit trail
     /// entry. Returns the org-eval feedback note when a rejection happened.
     pub fn reject_focused(&mut self, who: &str, when: &str) -> Option<String> {
-        self.review.reject_focused(who, when)
+        self.workflow.review.reject_focused(who, when)
     }
 }
 

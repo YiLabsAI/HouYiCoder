@@ -14,13 +14,14 @@ impl App {
     /// approves a hunk; review signs off a finding; verify completes the chain;
     /// artifact applies the pending proposed edit (stage-independent).
     pub(crate) fn approve_in_pane(&mut self) {
+        let stage = self.workflow.stage;
         match self.pane {
-            Pane::Spec | Pane::Plan if self.stage == Stage::Design => self.approve_design(),
-            Pane::Diff if self.stage == Stage::Implementing => self.approve_focused_hunk(),
-            Pane::Review if self.stage == Stage::Verify => self.signoff_focused_finding(),
-            Pane::Verify if self.stage == Stage::Verify => self.complete_verify(),
+            Pane::Spec | Pane::Plan if stage == Stage::Design => self.approve_design(),
+            Pane::Diff if stage == Stage::Implementing => self.approve_focused_hunk(),
+            Pane::Review if stage == Stage::Verify => self.signoff_focused_finding(),
+            Pane::Verify if stage == Stage::Verify => self.complete_verify(),
             Pane::Artifact => {
-                self.artifact.approve_pending();
+                self.workflow.artifact.approve_pending();
                 self.system_line("artifact: change applied (append-only audit updated)");
             }
             _ => {}
@@ -31,10 +32,10 @@ impl App {
     /// artifact pane rejects the pending proposed edit (stage-independent).
     pub(crate) fn reject_in_pane(&mut self) {
         match self.pane {
-            Pane::Diff if self.stage == Stage::Implementing => self.reject_focused_hunk(),
-            Pane::Review if self.stage == Stage::Verify => self.reject_focused_finding(),
+            Pane::Diff if self.workflow.stage == Stage::Implementing => self.reject_focused_hunk(),
+            Pane::Review if self.workflow.stage == Stage::Verify => self.reject_focused_finding(),
             Pane::Artifact => {
-                self.artifact.reject_pending();
+                self.workflow.artifact.reject_pending();
                 self.system_line("artifact: proposed edit rejected");
             }
             _ => {}
@@ -451,35 +452,35 @@ impl App {
         match self.pane {
             Pane::Diff => {
                 if down {
-                    self.diff.focus_down();
+                    self.workflow.diff.focus_down();
                 } else {
-                    self.diff.focus_up();
+                    self.workflow.diff.focus_up();
                 }
             }
             Pane::Review => {
                 if down {
-                    self.review.focus_down();
+                    self.workflow.review.focus_down();
                 } else {
-                    self.review.focus_up();
+                    self.workflow.review.focus_up();
                 }
             }
             Pane::Spec => {
-                self.spec_ctx.clause_focus = {
-                    let n = self.spec_clauses.len();
+                self.workflow.spec_ctx.clause_focus = {
+                    let n = self.workflow.spec_clauses.len();
                     if n == 0 {
                         0
                     } else if down {
-                        (self.spec_ctx.clause_focus + 1) % n
+                        (self.workflow.spec_ctx.clause_focus + 1) % n
                     } else {
-                        (self.spec_ctx.clause_focus + n - 1) % n
+                        (self.workflow.spec_ctx.clause_focus + n - 1) % n
                     }
                 }
             }
             Pane::Artifact => {
                 if down {
-                    self.artifact.focus_down();
+                    self.workflow.artifact.focus_down();
                 } else {
-                    self.artifact.focus_up();
+                    self.workflow.artifact.focus_up();
                 }
             }
             _ => {}
@@ -494,16 +495,16 @@ impl App {
     /// after submit. Empty text is a no-op (the mode is preserved so the user
     /// can type and resubmit, or Esc to cancel).
     pub(crate) fn artifact_submit_edit(&mut self, text: String) {
-        let line = self.artifact.focus() + 1;
-        match self.artifact.mode() {
+        let line = self.workflow.artifact.focus() + 1;
+        match self.workflow.artifact.mode() {
             ArtifactMode::Replace => {
                 if text.trim().is_empty() {
                     self.input.set(text);
                     return;
                 }
-                self.artifact.set_pending_replace(text);
-                self.artifact.cancel_mode();
-                self.system_line(if self.artifact.pending_proposal().is_some() {
+                self.workflow.artifact.set_pending_replace(text);
+                self.workflow.artifact.cancel_mode();
+                self.system_line(if self.workflow.artifact.pending_proposal().is_some() {
                     format!("artifact: replace proposed for line {line} (a=approve r=reject)")
                 } else {
                     "artifact: empty document, nothing to replace".to_string()
@@ -514,9 +515,9 @@ impl App {
                     self.input.set(text);
                     return;
                 }
-                self.artifact.set_pending_insert(text);
-                self.artifact.cancel_mode();
-                self.system_line(if self.artifact.pending_proposal().is_some() {
+                self.workflow.artifact.set_pending_insert(text);
+                self.workflow.artifact.cancel_mode();
+                self.system_line(if self.workflow.artifact.pending_proposal().is_some() {
                     format!("artifact: insert proposed below line {line} (a=approve r=reject)")
                 } else {
                     "artifact: empty document, nothing to insert below".to_string()
@@ -530,14 +531,14 @@ impl App {
                 // push_annotation mutates .artifact and ends; propose borrows
                 // .proposer and .artifact immutably (disjoint fields); the
                 // pending setter mutates .artifact.
-                let Some(annotation) = self.artifact.push_annotation(text) else {
-                    self.artifact.cancel_mode();
+                let Some(annotation) = self.workflow.artifact.push_annotation(text) else {
+                    self.workflow.artifact.cancel_mode();
                     self.system_line("artifact: empty document, nothing to annotate");
                     return;
                 };
-                match self.proposer.propose(&self.artifact, &annotation) {
+                match self.workflow.proposer.propose(&self.workflow.artifact, &annotation) {
                     Ok(Some(proposal)) => {
-                        self.artifact.set_pending(Some(proposal));
+                        self.workflow.artifact.set_pending(Some(proposal));
                         self.system_line(format!(
                             "artifact: NL proposal pending for line {line} (a=approve r=reject)"
                         ));
@@ -547,7 +548,7 @@ impl App {
                     ),
                     Err(_) => self.system_line("artifact: proposer error (stub)"),
                 }
-                self.artifact.cancel_mode();
+                self.workflow.artifact.cancel_mode();
             }
             ArtifactMode::Normal => {}
         }
@@ -556,9 +557,9 @@ impl App {
     /// Propose deleting the focused line immediately (the d key). Builds the
     /// pending proposal on the session without entering an edit mode.
     pub(crate) fn artifact_propose_delete(&mut self) {
-        let line = self.artifact.focus() + 1;
-        self.artifact.set_pending_delete();
-        self.system_line(if self.artifact.pending_proposal().is_some() {
+        let line = self.workflow.artifact.focus() + 1;
+        self.workflow.artifact.set_pending_delete();
+        self.system_line(if self.workflow.artifact.pending_proposal().is_some() {
             format!("artifact: delete proposed for line {line} (a=approve r=reject)")
         } else {
             "artifact: empty document, nothing to delete".to_string()
@@ -568,11 +569,11 @@ impl App {
     /// Approve the design (one approval covering spec + plan). Both artifacts
     /// are marked approved and the chain advances to implementing.
     fn approve_design(&mut self) {
-        if self.spec_artifact.approved && self.plan_artifact.approved {
+        if self.workflow.spec_artifact.approved && self.workflow.plan_artifact.approved {
             return;
         }
-        self.spec_artifact.approved = true;
-        self.plan_artifact.approved = true;
+        self.workflow.spec_artifact.approved = true;
+        self.workflow.plan_artifact.approved = true;
         self.enter_stage(
             Stage::Implementing,
             Pane::Diff,
@@ -581,12 +582,11 @@ impl App {
     }
 
     fn approve_focused_hunk(&mut self) {
-        if !self.diff.approve_focused() {
+        if !self.workflow.diff.approve_focused() {
             return;
         }
-        let clause_id = self
-            .diff
-            .current()
+        let hunk = self.workflow.diff.current();
+        let clause_id = hunk
             .map(|h| h.evidence.spec_clause_id.clone())
             .unwrap_or_default();
         // A change now implements the requirement: unimpl -> partial.
@@ -604,21 +604,21 @@ impl App {
             // key approves each change in turn, then trips the all-approved
             // transition. Without this the flow stalls on the just-approved
             // change (a on an approved change is a no-op).
-            self.diff.focus_next_pending();
+            self.workflow.diff.focus_next_pending();
         }
     }
 
     fn reject_focused_hunk(&mut self) {
-        if !self.diff.reject_focused() {
+        if !self.workflow.diff.reject_focused() {
             return;
         }
         self.system_line("change rejected (requirement status unchanged)");
     }
 
     fn signoff_focused_finding(&mut self) {
-        let before = self.review.audit_trail.len();
+        let before = self.workflow.review.audit_trail.len();
         self.signoff_focused("you", "now");
-        if self.review.audit_trail.len() > before {
+        if self.workflow.review.audit_trail.len() > before {
             self.system_line("finding approved -> decision log grew");
         }
         if self.all_findings_resolved() {
@@ -642,14 +642,14 @@ impl App {
         // Verify passes only when every check is green. A failed-checks
         // state blocks completion and routes the user to the rework path
         // (r) instead.
-        if !self.verify_result.passed {
+        if !self.workflow.verify_result.passed {
             self.system_line("verify: checks failed -- press r to rework (stub)");
             return;
         }
         // Verify passes: every requirement with an approved change is satisfied.
-        // Collect ids first to avoid borrowing self.diff while mutating clauses.
-        let approved_clauses: Vec<String> = self
-            .diff
+        // Collect ids first to avoid borrowing self.workflow.diff while mutating clauses.
+        let diff = &self.workflow.diff;
+        let approved_clauses: Vec<String> = diff
             .hunks
             .iter()
             .filter(|h| h.approved == crate::state::Verdict::Approved)
@@ -671,14 +671,14 @@ impl App {
     /// pressing r on failed checks sends the chain back to implementing.
     pub(crate) fn rework_in_pane(&mut self) {
         match self.pane {
-            Pane::Review if self.stage == Stage::Verify => self.rework_from_review(),
-            Pane::Verify if self.stage == Stage::Verify => self.rework_from_verify(),
+            Pane::Review if self.workflow.stage == Stage::Verify => self.rework_from_review(),
+            Pane::Verify if self.workflow.stage == Stage::Verify => self.rework_from_verify(),
             _ => {}
         }
     }
 
     fn rework_from_review(&mut self) {
-        let Some(f) = self.review.current() else {
+        let Some(f) = self.workflow.review.current() else {
             return;
         };
         if f.verdict != "real" {

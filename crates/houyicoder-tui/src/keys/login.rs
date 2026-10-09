@@ -46,7 +46,9 @@ pub fn handle_console(app: &mut App, k: KeyEvent) {
             app.system_line("finding approved -> decision log (stub)");
         }
         KeyCode::Enter => {
-            if app.console_len() == 0 || app.review.findings[app.review.focus].resolved() {
+            if app.console_len() == 0
+                || app.workflow.review.findings[app.workflow.review.focus].resolved()
+            {
                 app.screen = Screen::Working;
             } else {
                 app.signoff_focused("you", "now");
@@ -59,7 +61,7 @@ pub fn handle_console(app: &mut App, k: KeyEvent) {
             }
         }
         KeyCode::Char('p') => {
-            if let Some(r) = app.review.findings.get(app.review.focus) {
+            if let Some(r) = app.workflow.review.findings.get(app.workflow.review.focus) {
                 app.system_line(format!("replay -> {} (stub)", r.hunk_id));
             }
         }

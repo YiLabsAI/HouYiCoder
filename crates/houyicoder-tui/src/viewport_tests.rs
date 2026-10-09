@@ -97,7 +97,7 @@ fn test_focus_mode_chrome_budget() {
     let mut app = working();
     app.run_command(SlashCommand::Spec);
     app.approve_in_pane(); // design -> implement -> Focus
-    assert_eq!(app.stage, Stage::Implementing);
+    assert_eq!(app.workflow.stage, Stage::Implementing);
     assert_eq!(app.viewport, ViewportMode::Focus);
     let out = render(&app);
     println!("--- Focus mode (80x24) ---\n{out}\n--- end ---");
@@ -256,7 +256,7 @@ fn test_full_flow_viewport() {
         keys::handle_working(&mut app, key(KeyCode::Char(c)));
     }
     keys::handle_working(&mut app, key(KeyCode::Enter));
-    assert_eq!(app.stage, Stage::Design);
+    assert_eq!(app.workflow.stage, Stage::Design);
     assert_eq!(
         app.viewport,
         ViewportMode::Working,
@@ -273,7 +273,7 @@ fn test_full_flow_viewport() {
     //    tabs + input fold, diff pane full-width).
     app.input.clear();
     keys::handle_working(&mut app, key(KeyCode::Char('a')));
-    assert_eq!(app.stage, Stage::Implementing);
+    assert_eq!(app.workflow.stage, Stage::Implementing);
     assert_eq!(
         app.viewport,
         ViewportMode::Focus,
@@ -293,7 +293,11 @@ fn test_full_flow_viewport() {
     for _ in 0..3 {
         keys::handle_working(&mut app, key(KeyCode::Char('a')));
     }
-    assert_eq!(app.stage, Stage::Verify, "all changes approved -> verify");
+    assert_eq!(
+        app.workflow.stage,
+        Stage::Verify,
+        "all changes approved -> verify"
+    );
     assert_eq!(app.viewport, ViewportMode::Focus, "Verify stays in Focus");
     let out = render(&app);
     println!("--- step 3: all changes approved -> verify (Focus) ---\n{out}\n--- end ---");
@@ -308,7 +312,7 @@ fn test_full_flow_viewport() {
 
     // 5. Press a -> Done -> return to Working (header + tabs + input reappear).
     keys::handle_working(&mut app, key(KeyCode::Char('a')));
-    assert_eq!(app.stage, Stage::Done);
+    assert_eq!(app.workflow.stage, Stage::Done);
     assert_eq!(
         app.viewport,
         ViewportMode::Working,
@@ -355,7 +359,11 @@ fn test_focus_esc_then_pgup() {
     // Esc in Focus folds to Working (stage unchanged).
     keys::handle_working(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     assert_eq!(app.viewport, ViewportMode::Working);
-    assert_eq!(app.stage, Stage::Implementing, "stage unchanged by Esc");
+    assert_eq!(
+        app.workflow.stage,
+        Stage::Implementing,
+        "stage unchanged by Esc"
+    );
     // PgUp enters Scroll from Working.
     keys::handle_working(&mut app, KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE));
     assert_eq!(app.viewport, ViewportMode::Scroll);
@@ -431,7 +439,7 @@ fn test_scroll_typing_exits() {
     assert_eq!(app.viewport, ViewportMode::Scroll);
     // A typing key exits scroll to the previous mode (Focus). The key is
     // consumed by the exit and does not approve a hunk.
-    let before = app.diff.current().map(|h| h.approved);
+    let before = app.workflow.diff.current().map(|h| h.approved);
     keys::handle_working(
         &mut app,
         KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
@@ -442,7 +450,7 @@ fn test_scroll_typing_exits() {
         "typing should exit scroll to Focus"
     );
     assert_eq!(
-        app.diff.current().map(|h| h.approved),
+        app.workflow.diff.current().map(|h| h.approved),
         before,
         "exit key should not approve a hunk"
     );

@@ -57,27 +57,27 @@ pub(crate) fn pane_replaces_input(pane: Pane) -> bool {
 /// pane approves a pending proposed edit whenever one exists (stage-independent).
 pub(crate) fn pane_approvable(app: &App) -> bool {
     matches!(
-        (app.pane, app.stage),
+        (app.pane, app.workflow.stage),
         (Pane::Spec | Pane::Plan, Stage::Design)
             | (Pane::Diff, Stage::Implementing)
             | (Pane::Review | Pane::Verify, Stage::Verify)
-    ) || (app.pane == Pane::Artifact && app.artifact.pending_proposal().is_some())
+    ) || (app.pane == Pane::Artifact && app.workflow.artifact.pending_proposal().is_some())
 }
 
 /// True when the current pane + stage accepts a reject action. The artifact
 /// pane rejects a pending proposed edit whenever one exists.
 pub(crate) fn pane_rejectable(app: &App) -> bool {
     matches!(
-        (app.pane, app.stage),
+        (app.pane, app.workflow.stage),
         (Pane::Diff, Stage::Implementing) | (Pane::Review, Stage::Verify)
-    ) || (app.pane == Pane::Artifact && app.artifact.pending_proposal().is_some())
+    ) || (app.pane == Pane::Artifact && app.workflow.artifact.pending_proposal().is_some())
 }
 
 /// True when the current pane + stage accepts a rework action (backward path
 /// to implementing).
 pub(crate) fn pane_reworkable(app: &App) -> bool {
     matches!(
-        (app.pane, app.stage),
+        (app.pane, app.workflow.stage),
         (Pane::Review | Pane::Verify, Stage::Verify)
     )
 }
@@ -88,5 +88,5 @@ pub(crate) fn pane_reworkable(app: &App) -> bool {
 /// edit text without quitting or fleeing the pane. Only Esc, Enter, Backspace,
 /// and printable chars act.
 pub(crate) fn artifact_editing(app: &App) -> bool {
-    app.pane == Pane::Artifact && !app.artifact.mode().is_normal()
+    app.pane == Pane::Artifact && !app.workflow.artifact.mode().is_normal()
 }

@@ -44,9 +44,9 @@ fn pane_action_key(app: &mut App, k: KeyEvent) -> Option<KeyEvent> {
     // Esc in an artifact edit mode cancels to Normal (clearing any in-progress
     // text). Esc in Normal mode falls through to handle_generic_input, which
     // exits the pane to Transcript.
-    if app.pane == Pane::Artifact && !app.artifact.mode().is_normal() {
+    if app.pane == Pane::Artifact && !app.workflow.artifact.mode().is_normal() {
         if k.code == KeyCode::Esc {
-            app.artifact.cancel_mode();
+            app.workflow.artifact.cancel_mode();
             app.input.clear();
             return None;
         }
@@ -66,26 +66,26 @@ fn pane_action_key(app: &mut App, k: KeyEvent) -> Option<KeyEvent> {
         // In the artifact pane, PageUp/PageDown page the line cursor instead
         // of entering transcript scroll, so a long document stays navigable.
         KeyCode::PageUp if app.pane == Pane::Artifact => {
-            app.artifact.focus_page_up(ARTIFACT_PAGE_SIZE);
+            app.workflow.artifact.focus_page_up(ARTIFACT_PAGE_SIZE);
             return None;
         }
         KeyCode::PageDown if app.pane == Pane::Artifact => {
-            app.artifact.focus_page_down(ARTIFACT_PAGE_SIZE);
+            app.workflow.artifact.focus_page_down(ARTIFACT_PAGE_SIZE);
             return None;
         }
         // Artifact Normal mode edit keys (only when input is empty, so mid-
         // typing c/o/d/i go to the input box instead). c/o/i enter an edit
         // mode; d proposes an immediate delete of the focused line.
         KeyCode::Char('c') if empty && app.pane == Pane::Artifact => {
-            app.artifact.enter_replace();
+            app.workflow.artifact.enter_replace();
             return None;
         }
         KeyCode::Char('o') if empty && app.pane == Pane::Artifact => {
-            app.artifact.enter_insert();
+            app.workflow.artifact.enter_insert();
             return None;
         }
         KeyCode::Char('i') if empty && app.pane == Pane::Artifact => {
-            app.artifact.enter_nl();
+            app.workflow.artifact.enter_nl();
             return None;
         }
         KeyCode::Char('d') if empty && app.pane == Pane::Artifact => {

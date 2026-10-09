@@ -191,7 +191,7 @@ mod tests {
 
     #[test]
     fn test_consensus_line_verdicts() {
-        let findings = crate::composition::app().review.findings.clone();
+        let findings = crate::composition::app().workflow.review.findings.clone();
         let line = consensus_line(&findings);
         let joined: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
         // three lenses with check/cross marks, a weighted verdict, and a tally

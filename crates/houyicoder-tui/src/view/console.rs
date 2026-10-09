@@ -87,12 +87,17 @@ fn draw_review_queue(f: &mut Frame, area: Rect, app: &App) {
 
 fn draw_queue_summary(f: &mut Frame, area: Rect, app: &App) {
     let items: Vec<ListItem> = app
+        .workflow
         .review
         .findings
         .iter()
         .enumerate()
         .map(|(i, r)| {
-            let marker = if i == app.review.focus { "> " } else { "  " };
+            let marker = if i == app.workflow.review.focus {
+                "> "
+            } else {
+                "  "
+            };
             let tag = match r.signoff {
                 Verdict::Pending => "",
                 Verdict::Approved => " [ok]",
@@ -108,11 +113,12 @@ fn draw_queue_summary(f: &mut Frame, area: Rect, app: &App) {
 }
 
 fn draw_finding_detail(f: &mut Frame, area: Rect, app: &App) {
-    let Some(r) = app
-        .review
-        .findings
-        .get(app.review.focus.min(app.console_len().saturating_sub(1)))
-    else {
+    let Some(r) = app.workflow.review.findings.get(
+        app.workflow
+            .review
+            .focus
+            .min(app.console_len().saturating_sub(1)),
+    ) else {
         f.render_widget(
             Paragraph::new("(no findings)").style(Style::new().fg(Color::DarkGray)),
             area,
@@ -142,7 +148,7 @@ fn draw_finding_detail(f: &mut Frame, area: Rect, app: &App) {
             r.hunk_id, r.note, r.spec_clause_id, r.test_id
         ))
         .style(white),
-        components::consensus_line(&app.review.findings),
+        components::consensus_line(&app.workflow.review.findings),
         Line::from(format!("  replay: [p] jump to {} ", r.hunk_id)).style(dim),
         Line::from(""),
         components::signoff_row(r.signoff),
@@ -159,6 +165,7 @@ fn draw_audit_trail(f: &mut Frame, area: Rect, app: &App) {
         .border_type(BorderType::Rounded)
         .title(" decision log (hash-chain view) ");
     let items: Vec<ListItem> = app
+        .workflow
         .review
         .audit_trail
         .iter()

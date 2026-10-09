@@ -16,9 +16,9 @@ impl App {
     /// syncs the viewport to the new stage (implement and verify fold into
     /// Focus).
     pub fn set_stage(&mut self, stage: Stage) {
-        self.stage_history.push(self.stage);
-        self.stage = stage;
-        self.spec_ctx.step = stage.label().to_string();
+        self.workflow.stage_history.push(self.workflow.stage);
+        self.workflow.stage = stage;
+        self.workflow.spec_ctx.step = stage.label().to_string();
         self.sync_viewport_to_stage();
     }
 
@@ -27,7 +27,7 @@ impl App {
     /// open palette or search when leaving Working so the inline-only layout
     /// cells do not linger.
     pub fn sync_viewport_to_stage(&mut self) {
-        let next = ViewportMode::for_stage(self.stage);
+        let next = ViewportMode::for_stage(self.workflow.stage);
         if next != ViewportMode::Working {
             self.palette.close();
             self.transcript_view.search.close();
@@ -52,12 +52,12 @@ impl App {
     /// the restored stage when there was something to rewind to. Also syncs the
     /// viewport so rewinding from Focus back to design unfolds to Working.
     pub fn rewind_stage(&mut self) -> Option<Stage> {
-        if self.stage_history.is_empty() {
+        if self.workflow.stage_history.is_empty() {
             return None;
         }
-        let prev = self.stage_history.pop().expect("non-empty");
-        self.stage = prev;
-        self.spec_ctx.step = prev.label().to_string();
+        let prev = self.workflow.stage_history.pop().expect("non-empty");
+        self.workflow.stage = prev;
+        self.workflow.spec_ctx.step = prev.label().to_string();
         self.sync_viewport_to_stage();
         Some(prev)
     }

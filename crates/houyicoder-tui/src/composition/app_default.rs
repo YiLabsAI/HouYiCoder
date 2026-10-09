@@ -35,11 +35,12 @@ use crate::state::transcript::Transcript;
 use crate::state::{
     ModelPickerState, ParkedViewStates, QueueViewState, StatusTab, TrajectoryPaneState,
 };
+use crate::workflow::Workflow;
 
 pub fn app() -> App {
     App {
         screen: Screen::Login,
-        stage: Stage::Idle,
+        workflow: workflow(),
         pane: Pane::Transcript,
         viewport: ViewportMode::Working,
         prev_viewport: ViewportMode::Working,
@@ -61,21 +62,6 @@ pub fn app() -> App {
         palette: PaletteState::default(),
         prompt: None,
         status: status(),
-        spec_ctx: spec_context(),
-        spec_clauses: spec_clauses(),
-        diff: diff_data(),
-        spec_artifact: spec_artifact(),
-        plan_artifact: plan_artifact(),
-        review: ReviewQueue {
-            findings: review_findings(),
-            focus: 0,
-            audit_trail: audit_trail(),
-        },
-        console: ConsoleState {
-            todos: console_todos(),
-        },
-        verify_result: verify_result(),
-        graph_result: graph_result(),
         memory: MemoryPaneState::new(memory_entries()),
         queue_view: QueueViewState::default(),
         worktree_entries: Vec::new(),
@@ -84,11 +70,7 @@ pub fn app() -> App {
         trajectory: TrajectoryPaneState::default(),
         agents: Default::default(),
         agent_directory: None,
-        artifact: ArtifactSession::stub(),
-        proposer: StubProposer::new(),
         login_mode: None,
-        stage_history: Vec::new(),
-        replaying: false,
         quit: false,
         session_id: SessionId::new("test"),
         runtime: None,
@@ -124,5 +106,33 @@ pub fn app() -> App {
         status_name_edit: None,
         last_title: None,
         clipboard: Arc::new(SystemClipboard),
+    }
+}
+
+/// The seeded workflow state: the idle stage machine plus the stub spec,
+/// review, verify, artifact, and inbox defaults the composition starts from.
+/// A session switch rebuilds the whole App, so this is the single reset point.
+fn workflow() -> Workflow {
+    Workflow {
+        stage: Stage::Idle,
+        spec_ctx: spec_context(),
+        spec_clauses: spec_clauses(),
+        diff: diff_data(),
+        spec_artifact: spec_artifact(),
+        plan_artifact: plan_artifact(),
+        review: ReviewQueue {
+            findings: review_findings(),
+            focus: 0,
+            audit_trail: audit_trail(),
+        },
+        console: ConsoleState {
+            todos: console_todos(),
+        },
+        verify_result: verify_result(),
+        graph_result: graph_result(),
+        artifact: ArtifactSession::stub(),
+        proposer: StubProposer::new(),
+        stage_history: Vec::new(),
+        replaying: false,
     }
 }

@@ -58,6 +58,7 @@ pub mod todo_view;
 mod toggle_hint;
 pub mod transcript;
 pub mod view;
+mod workflow;
 
 #[cfg(feature = "bench")]
 pub mod bench_api;

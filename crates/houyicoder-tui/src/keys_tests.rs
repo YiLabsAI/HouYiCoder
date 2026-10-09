@@ -968,21 +968,24 @@ fn test_tab_cycles_pane() {
 fn test_diff_approve_key_sets() {
     let mut app = working_app();
     app.pane = Pane::Diff;
-    app.stage = Stage::Implementing;
+    app.workflow.stage = Stage::Implementing;
     app.input.clear();
     handle_working(&mut app, key(KeyCode::Down));
     handle_working(&mut app, key(KeyCode::Char('a')));
-    assert_eq!(app.diff.hunks[1].approved, Verdict::Approved);
+    assert_eq!(app.workflow.diff.hunks[1].approved, Verdict::Approved);
 }
 
 #[test]
 fn test_diff_reject_key_sets() {
     let mut app = working_app();
     app.pane = Pane::Diff;
-    app.stage = Stage::Implementing;
+    app.workflow.stage = Stage::Implementing;
     app.input.clear();
     handle_working(&mut app, key(KeyCode::Char('r')));
-    assert_eq!(app.diff.current().unwrap().approved, Verdict::Rejected);
+    assert_eq!(
+        app.workflow.diff.current().unwrap().approved,
+        Verdict::Rejected
+    );
 }
 
 /// The 'i' key on the Review pane in Verify stage routes to rework_in_pane.
@@ -993,7 +996,7 @@ fn test_diff_reject_key_sets() {
 fn test_review_rework_key_routes() {
     let mut app = working_app();
     app.pane = Pane::Review;
-    app.stage = Stage::Verify;
+    app.workflow.stage = Stage::Verify;
     app.input.clear();
     handle_working(&mut app, key(KeyCode::Char('i')));
     assert_eq!(app.pane, Pane::Review, "no finding -> rework is a no-op");
@@ -1101,9 +1104,9 @@ fn test_esc_cancelling_backs_trajectory() {
 fn test_console_signoff_appends_audit() {
     let mut app = composition::app();
     app.screen = Screen::Console;
-    let before = app.review.audit_trail.len();
+    let before = app.workflow.review.audit_trail.len();
     handle_console(&mut app, key(KeyCode::Char('a')));
-    assert_eq!(app.review.audit_trail.len(), before + 1);
+    assert_eq!(app.workflow.review.audit_trail.len(), before + 1);
 }
 
 #[test]
@@ -1111,7 +1114,7 @@ fn test_console_reject_writes_org() {
     let mut app = composition::app();
     app.screen = Screen::Console;
     handle_console(&mut app, key(KeyCode::Char('r')));
-    assert!(app.review.findings[app.review.focus].resolved());
+    assert!(app.workflow.review.findings[app.workflow.review.focus].resolved());
     assert!(matches!(app.transcript.last(),
             Some(TranscriptLine::System(s)) if s.contains("org eval")));
 }

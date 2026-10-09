@@ -201,7 +201,7 @@ fn test_wheel_scrolls_in_place() {
 fn test_slash_spec_starts_design() {
     let mut app = working_app();
     app.run_command(SlashCommand::Spec);
-    assert_eq!(app.stage, Stage::Design);
+    assert_eq!(app.workflow.stage, Stage::Design);
     assert_eq!(app.pane, Pane::Spec);
 }
 
@@ -209,7 +209,7 @@ fn test_slash_spec_starts_design() {
 fn test_slash_implement_opens_diff() {
     let mut app = working_app();
     app.run_command(SlashCommand::Implement);
-    assert_eq!(app.stage, Stage::Implementing);
+    assert_eq!(app.workflow.stage, Stage::Implementing);
     assert_eq!(app.pane, Pane::Diff);
     // /implement no longer raises the tool-approval popup; per-hunk
     // approval happens inline in the diff pane.
@@ -219,9 +219,9 @@ fn test_slash_implement_opens_diff() {
 #[test]
 fn test_clear_resets_session() {
     let mut app = working_app();
-    app.stage = Stage::Implementing;
+    app.workflow.stage = Stage::Implementing;
     app.pane = Pane::Diff;
-    app.spec_ctx.step = "implementing".to_string();
+    app.workflow.spec_ctx.step = "implementing".to_string();
     app.todos.set_cursor(4);
     app.loaded_from_frame.set(0);
     app.todos.items.push(TodoView {
@@ -230,8 +230,8 @@ fn test_clear_resets_session() {
         active_form: None,
     });
     app.run_command(SlashCommand::Clear);
-    assert_eq!(app.stage, Stage::Idle);
-    assert_eq!(app.spec_ctx.step, "idle");
+    assert_eq!(app.workflow.stage, Stage::Idle);
+    assert_eq!(app.workflow.spec_ctx.step, "idle");
     assert_eq!(app.pane, Pane::Transcript);
     assert_eq!(app.transcript.len(), 1);
     // The scrollback boundary names frames of the cleared log, so it returns to

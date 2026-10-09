@@ -28,7 +28,6 @@ use crate::agent_message::{FleetState, PaneAgents};
 use crate::composition::WorktreeEntry;
 #[cfg(test)]
 use crate::composition::app as test_app;
-use crate::console_state::ConsoleState;
 use crate::display_rows_cache::DisplayRowsCache;
 use crate::history::HistoryNav;
 use crate::hooks_state::HooksPaneState;
@@ -47,7 +46,6 @@ use crate::permission_pane_state::PermissionPaneState;
 use crate::records::TeammateView;
 use crate::render_cache::RenderCache;
 use crate::resume_picker::SessionPickerState;
-use crate::review_queue::ReviewQueue;
 use crate::run_metrics::RunMetrics;
 use crate::run_state::{RunProgress, RunState};
 use crate::selection::ClipboardWriter;
@@ -58,6 +56,7 @@ use crate::session::persistence::SessionPersistence;
 use crate::skill_picker_state::SkillPickerState;
 use crate::skills_state::SkillsPaneState;
 use crate::todo_view::TodoState;
+use crate::workflow::Workflow;
 use houyicoder_protocol::envelope::RequestId;
 
 pub(crate) use crate::state::cursors::EventCursor;
@@ -127,7 +126,9 @@ pub(crate) struct CurrentTurnBoundary {
 /// Top-level state composed from session wiring and domain-owned UI state.
 pub struct App {
     pub screen: Screen,
-    pub stage: Stage,
+    /// The spec-plan-review-verify-artifact lifecycle fields, bundled as one
+    /// owner toward the final shell.
+    pub(crate) workflow: Workflow,
     pub pane: Pane,
     /// The active viewport mode (Working / Focus / Scroll). Drives the layout
     /// in view::working: how many rows of chrome surround the content.
@@ -178,15 +179,6 @@ pub struct App {
     /// startup workspace-trust ask before any run. At most one at a time.
     pub prompt: Option<PendingPrompt>,
     pub status: StatusStub,
-    pub spec_ctx: SpecContext,
-    pub spec_clauses: Vec<SpecClause>,
-    pub diff: DiffData,
-    pub spec_artifact: SpecArtifact,
-    pub plan_artifact: PlanArtifact,
-    pub review: ReviewQueue,
-    pub console: ConsoleState,
-    pub verify_result: VerifyResult,
-    pub graph_result: GraphResult,
     pub(crate) memory: MemoryPaneState,
     /// Selection and hit-test state for the queued-input interface.
     pub queue_view: QueueViewState,
@@ -205,18 +197,7 @@ pub struct App {
     pub trajectory: TrajectoryPaneState,
     pub agents: PaneAgents,
     pub agent_directory: Option<String>,
-    /// An opened artifact for inline review and annotation. Stub content; real
-    /// wiring reads the file from disk.
-    pub artifact: ArtifactSession,
-    /// The proposer that turns an annotation into a pending proposed edit.
-    /// Concrete stub for now; the ChangeProposer trait is the seam for a real
-    /// LLM-backed proposer later.
-    pub proposer: StubProposer,
     pub login_mode: Option<LoginMode>,
-    /// Stack of stages the chain moved through, so /rewind can pop back one.
-    pub stage_history: Vec<Stage>,
-    /// True while a canned replay indicator is on screen (set by /replay).
-    pub replaying: bool,
     pub quit: bool,
     // --- real agent-loop wiring ---
     /// The active session id passed to the server over the wire. The TUI holds
@@ -405,7 +386,7 @@ impl std::fmt::Debug for App {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("App")
             .field("screen", &self.screen)
-            .field("stage", &self.stage)
+            .field("stage", &self.workflow.stage)
             .field("pane", &self.pane)
             .field("viewport", &self.viewport)
             .field("transcript_len", &self.transcript.len())

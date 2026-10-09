@@ -40,7 +40,7 @@ fn test_artifact_command_loads_real() {
     app.input.set(format!("/artifact {}", crate_src_path()));
     app.submit_input();
     assert_eq!(app.pane, Pane::Artifact);
-    assert!(app.artifact.current_lines().len() > 1);
+    assert!(app.workflow.artifact.current_lines().len() > 1);
     let out = render_text(&app, 100, 28);
     println!("--- artifact pane (100x28) ---\n{out}\n--- end ---");
     assert!(out.contains("artifact"), "title missing:\n{out}");
@@ -55,7 +55,7 @@ fn test_artifact_load_missing() {
     app.submit_input();
     assert_eq!(app.pane, Pane::Artifact);
     // The canned stub keeps the pane usable when the file cannot be read.
-    assert!(app.artifact.current_lines().len() > 1);
+    assert!(app.workflow.artifact.current_lines().len() > 1);
 }
 
 #[test]
@@ -82,12 +82,13 @@ fn test_artifact_replace_produces_pending() {
     let mut app = working_app();
     app.pane = Pane::Artifact;
     app.input.clear();
-    let focus = app.artifact.focus();
+    let focus = app.workflow.artifact.focus();
     // c enters Replace edit mode; typing + Enter proposes replacing the line.
     handle_working(&mut app, key(KeyCode::Char('c')));
     type_text(&mut app, "replacement line");
     handle_working(&mut app, key(KeyCode::Enter));
     let proposal = app
+        .workflow
         .artifact
         .pending_proposal()
         .expect("replace produces a proposal");
@@ -95,7 +96,7 @@ fn test_artifact_replace_produces_pending() {
     assert_eq!(proposal.line_start, focus);
     assert_eq!(
         proposal.original,
-        vec![app.artifact.current_lines()[focus].clone()]
+        vec![app.workflow.artifact.current_lines()[focus].clone()]
     );
 }
 
@@ -110,8 +111,8 @@ fn test_nl_note_skips_proposal() {
     handle_working(&mut app, key(KeyCode::Char('i')));
     type_text(&mut app, "rewrite this to be clearer");
     handle_working(&mut app, key(KeyCode::Enter));
-    assert!(app.artifact.pending_proposal().is_none());
-    assert_eq!(app.artifact.annotation_count(), 1);
+    assert!(app.workflow.artifact.pending_proposal().is_none());
+    assert_eq!(app.workflow.artifact.annotation_count(), 1);
     assert!(matches!(app.transcript.last(),
         Some(crate::state::TranscriptLine::System(s)) if s.contains("natural-language")));
 }
@@ -121,16 +122,16 @@ fn test_artifact_approve_applies_edit() {
     let mut app = working_app();
     app.pane = Pane::Artifact;
     app.input.clear();
-    let focus = app.artifact.focus();
+    let focus = app.workflow.artifact.focus();
     handle_working(&mut app, key(KeyCode::Char('c')));
     type_text(&mut app, "new content");
     handle_working(&mut app, key(KeyCode::Enter));
-    assert!(app.artifact.pending_proposal().is_some());
+    assert!(app.workflow.artifact.pending_proposal().is_some());
     // Empty input + pending proposal: a applies the proposed edit.
     handle_working(&mut app, key(KeyCode::Char('a')));
-    assert!(app.artifact.pending_proposal().is_none());
-    assert_eq!(app.artifact.applied_count(), 1);
-    assert_eq!(app.artifact.current_lines()[focus], "new content");
+    assert!(app.workflow.artifact.pending_proposal().is_none());
+    assert_eq!(app.workflow.artifact.applied_count(), 1);
+    assert_eq!(app.workflow.artifact.current_lines()[focus], "new content");
 }
 
 #[test]
@@ -141,23 +142,23 @@ fn test_artifact_reject_drops_proposal() {
     handle_working(&mut app, key(KeyCode::Char('c')));
     type_text(&mut app, "rejected text");
     handle_working(&mut app, key(KeyCode::Enter));
-    let focus = app.artifact.focus();
-    let before = app.artifact.current_lines()[focus].clone();
+    let focus = app.workflow.artifact.focus();
+    let before = app.workflow.artifact.current_lines()[focus].clone();
     handle_working(&mut app, key(KeyCode::Char('r')));
-    assert!(app.artifact.pending_proposal().is_none());
-    assert_eq!(app.artifact.applied_count(), 0);
-    assert_eq!(app.artifact.current_lines()[focus], before);
+    assert!(app.workflow.artifact.pending_proposal().is_none());
+    assert_eq!(app.workflow.artifact.applied_count(), 0);
+    assert_eq!(app.workflow.artifact.current_lines()[focus], before);
 }
 
 #[test]
 fn test_artifact_up_down_moves() {
     let mut app = working_app();
     app.pane = Pane::Artifact;
-    let start = app.artifact.focus();
+    let start = app.workflow.artifact.focus();
     handle_working(&mut app, key(KeyCode::Down));
-    assert_ne!(app.artifact.focus(), start);
+    assert_ne!(app.workflow.artifact.focus(), start);
     handle_working(&mut app, key(KeyCode::Up));
-    assert_eq!(app.artifact.focus(), start);
+    assert_eq!(app.workflow.artifact.focus(), start);
 }
 
 #[test]
@@ -165,9 +166,9 @@ fn test_empty_enter_adds_nothing() {
     let mut app = working_app();
     app.pane = Pane::Artifact;
     app.input.clear();
-    let before = app.artifact.annotation_count();
+    let before = app.workflow.artifact.annotation_count();
     handle_working(&mut app, key(KeyCode::Enter));
-    assert_eq!(app.artifact.annotation_count(), before);
+    assert_eq!(app.workflow.artifact.annotation_count(), before);
 }
 
 #[test]
@@ -200,7 +201,7 @@ fn test_artifact_applied_marker_render() {
     type_text(&mut app, "applied line");
     handle_working(&mut app, key(KeyCode::Enter));
     handle_working(&mut app, key(KeyCode::Char('a')));
-    assert_eq!(app.artifact.applied_count(), 1);
+    assert_eq!(app.workflow.artifact.applied_count(), 1);
     let out = render_text(&app, 100, 28);
     assert!(
         out.contains("ok"),
@@ -213,21 +214,21 @@ fn test_artifact_insert_applies() {
     let mut app = working_app();
     app.pane = Pane::Artifact;
     app.input.clear();
-    let focus = app.artifact.focus();
-    let before_len = app.artifact.current_lines().len();
+    let focus = app.workflow.artifact.focus();
+    let before_len = app.workflow.artifact.current_lines().len();
     handle_working(&mut app, key(KeyCode::Char('o')));
     type_text(&mut app, "inserted line");
     handle_working(&mut app, key(KeyCode::Enter));
-    assert!(app.artifact.pending_proposal().is_some());
+    assert!(app.workflow.artifact.pending_proposal().is_some());
     handle_working(&mut app, key(KeyCode::Char('a')));
-    assert_eq!(app.artifact.applied_count(), 1);
+    assert_eq!(app.workflow.artifact.applied_count(), 1);
     assert_eq!(
-        app.artifact.current_lines().len(),
+        app.workflow.artifact.current_lines().len(),
         before_len + 1,
         "insert grows the document"
     );
     assert_eq!(
-        app.artifact.current_lines()[focus + 1],
+        app.workflow.artifact.current_lines()[focus + 1],
         "inserted line",
         "inserted line lands after the focused line"
     );
@@ -238,21 +239,21 @@ fn test_artifact_delete_applies() {
     let mut app = working_app();
     app.pane = Pane::Artifact;
     app.input.clear();
-    let focus = app.artifact.focus();
-    let removed = app.artifact.current_lines()[focus].clone();
-    let before_len = app.artifact.current_lines().len();
+    let focus = app.workflow.artifact.focus();
+    let removed = app.workflow.artifact.current_lines()[focus].clone();
+    let before_len = app.workflow.artifact.current_lines().len();
     // d proposes an immediate delete of the focused line (no edit mode).
     handle_working(&mut app, key(KeyCode::Char('d')));
-    assert!(app.artifact.pending_proposal().is_some());
+    assert!(app.workflow.artifact.pending_proposal().is_some());
     handle_working(&mut app, key(KeyCode::Char('a')));
-    assert_eq!(app.artifact.applied_count(), 1);
+    assert_eq!(app.workflow.artifact.applied_count(), 1);
     assert_eq!(
-        app.artifact.current_lines().len(),
+        app.workflow.artifact.current_lines().len(),
         before_len - 1,
         "delete shrinks the document"
     );
     assert!(
-        !app.artifact.current_lines().contains(&removed),
+        !app.workflow.artifact.current_lines().contains(&removed),
         "deleted line is gone"
     );
 }
@@ -288,11 +289,11 @@ fn test_artifact_page_down_moves() {
     let mut app = working_app();
     app.pane = Pane::Artifact;
     app.input.clear();
-    let start = app.artifact.focus();
+    let start = app.workflow.artifact.focus();
     handle_working(&mut app, key(KeyCode::PageDown));
-    assert_ne!(app.artifact.focus(), start);
+    assert_ne!(app.workflow.artifact.focus(), start);
     assert!(
-        app.artifact.focus() >= start,
+        app.workflow.artifact.focus() >= start,
         "page down never moves backward"
     );
 }
@@ -306,10 +307,10 @@ fn test_artifact_page_up_moves() {
     app.input.clear();
     // Move down first so a PageUp has somewhere to go.
     handle_working(&mut app, key(KeyCode::PageDown));
-    let after_down = app.artifact.focus();
+    let after_down = app.workflow.artifact.focus();
     handle_working(&mut app, key(KeyCode::PageUp));
     assert_ne!(
-        app.artifact.focus(),
+        app.workflow.artifact.focus(),
         after_down,
         "page up must move the cursor back, not no-op"
     );
@@ -345,9 +346,9 @@ fn test_artifact_esc_cancels_edit() {
     handle_working(&mut app, key(KeyCode::Char('c')));
     type_text(&mut app, "draft");
     handle_working(&mut app, key(KeyCode::Esc));
-    assert!(app.artifact.mode().is_normal());
+    assert!(app.workflow.artifact.mode().is_normal());
     assert_eq!(app.pane, Pane::Artifact);
-    assert!(app.artifact.pending_proposal().is_none());
+    assert!(app.workflow.artifact.pending_proposal().is_none());
     assert!(app.input.is_empty());
 }
 
@@ -358,11 +359,11 @@ fn test_normal_text_dropped() {
     let mut app = working_app();
     app.pane = Pane::Artifact;
     app.input.clear();
-    let before = app.artifact.annotation_count();
+    let before = app.workflow.artifact.annotation_count();
     type_text(&mut app, "just typing");
     handle_working(&mut app, key(KeyCode::Enter));
-    assert_eq!(app.artifact.annotation_count(), before);
-    assert!(app.artifact.pending_proposal().is_none());
+    assert_eq!(app.workflow.artifact.annotation_count(), before);
+    assert!(app.workflow.artifact.pending_proposal().is_none());
     assert!(app.input.is_empty());
 }
 
@@ -375,14 +376,14 @@ fn test_artifact_edit_mode_suppresses() {
     app.pane = Pane::Artifact;
     app.input.clear();
     handle_working(&mut app, key(KeyCode::Char('c')));
-    assert!(!app.artifact.mode().is_normal());
+    assert!(!app.workflow.artifact.mode().is_normal());
     handle_working(&mut app, key(KeyCode::Char('q')));
     assert!(!app.quit, "q must not quit during an edit");
     assert_eq!(app.input.value(), "q");
     handle_working(&mut app, key(KeyCode::Tab));
     assert_eq!(app.pane, Pane::Artifact, "Tab must not flee the edit mode");
     assert!(
-        !app.artifact.mode().is_normal(),
+        !app.workflow.artifact.mode().is_normal(),
         "edit mode unchanged by Tab"
     );
 }

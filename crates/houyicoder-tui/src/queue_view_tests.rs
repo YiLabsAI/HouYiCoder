@@ -211,7 +211,7 @@ fn test_queue_strip_in_focus() {
     app.start_run_for_test(0);
     app.pending.push(PendingItem::Message("task a".into()));
     app.pending.push(PendingItem::Message("task b".into()));
-    app.stage = Stage::Implementing;
+    app.workflow.stage = Stage::Implementing;
     app.pane = Pane::Diff;
     app.viewport = crate::state::ViewportMode::Focus;
     let out = render(&app);

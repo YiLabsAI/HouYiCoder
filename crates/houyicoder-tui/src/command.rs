@@ -197,7 +197,7 @@ impl App {
             }
             C::Rewind => self.rewind(),
             C::Replay => {
-                self.replaying = true;
+                self.workflow.replaying = true;
                 self.system_line("replay: entering replay mode (canned indicator on)");
             }
             C::ReleaseNotes => self.system_line(composition::release_notes()),
@@ -345,8 +345,8 @@ impl App {
         // Host state invalidation is decoupled from id generation.
         self.demote_pending_to_parked();
         self.system_line("session archived, new session started");
-        self.stage = Stage::Idle;
-        self.spec_ctx.step = Stage::Idle.label().to_string();
+        self.workflow.stage = Stage::Idle;
+        self.workflow.spec_ctx.step = Stage::Idle.label().to_string();
         self.pane = Pane::Transcript;
         self.reset_chain_state();
         self.sync_viewport_to_stage();
@@ -385,12 +385,12 @@ impl App {
         };
         // Pop history until the current stage matches the target (or history
         // runs out), then ensure the target is active.
-        while self.stage != target {
+        while self.workflow.stage != target {
             if self.rewind_stage().is_none() {
                 break;
             }
         }
-        if self.stage != target {
+        if self.workflow.stage != target {
             self.set_stage(target);
         }
         self.pane = pane_for_stage(target);
@@ -407,8 +407,8 @@ impl App {
     /// chain reset path instead.
     fn unapprove_artifact(&mut self, stage: Stage) {
         if stage == Stage::Design {
-            self.spec_artifact.approved = false;
-            self.plan_artifact.approved = false;
+            self.workflow.spec_artifact.approved = false;
+            self.workflow.plan_artifact.approved = false;
         }
     }
 
@@ -458,7 +458,7 @@ impl App {
     /// task auto-enters the design stage.
     pub(crate) fn submit_input(&mut self) {
         // Artifact edit mode: Enter submits the edit, not a slash command.
-        if self.pane == Pane::Artifact && !self.artifact.mode().is_normal() {
+        if self.pane == Pane::Artifact && !self.workflow.artifact.mode().is_normal() {
             let text = self.input.take();
             self.artifact_submit_edit(text);
             return;
@@ -639,12 +639,12 @@ impl App {
             }
             let arg = name.strip_prefix("artifact-save").unwrap_or("").trim();
             let path = if arg.is_empty() {
-                self.artifact.path().to_string()
+                self.workflow.artifact.path().to_string()
             } else {
                 arg.to_string()
             };
-            let lines = self.artifact.current_lines().len();
-            match self.artifact.save(&path) {
+            let lines = self.workflow.artifact.current_lines().len();
+            match self.workflow.artifact.save(&path) {
                 Ok(()) => self.system_line(format!("artifact: saved {path} ({lines} lines)")),
                 Err(_) => self.system_line(format!("artifact: could not write {path}")),
             }
@@ -664,11 +664,11 @@ impl App {
             };
             match ArtifactSession::load(path) {
                 Ok(session) => {
-                    self.artifact = session;
+                    self.workflow.artifact = session;
                     self.pane = Pane::Artifact;
                     self.system_line(format!(
                         "artifact: opened {} (c=replace o=insert d=delete i=nl; a/r=review)",
-                        self.artifact.path()
+                        self.workflow.artifact.path()
                     ));
                 }
                 Err(_) => {

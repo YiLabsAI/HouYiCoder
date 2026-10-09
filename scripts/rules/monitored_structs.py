@@ -128,8 +128,22 @@ ACTIVE_OWNERS = {
         # the bytes-indexed and total cells, and the dispatched chunk slot)
         # became one IndexBuild owner, so the loop and the chrome read one
         # value.
-        "fields": 76,
+        # The workflow fields (the stage machine, the spec, plan, and diff
+        # artifacts, the review queue, the console inbox, the verify and graph
+        # results, the opened artifact with its proposer, and the rewind stack
+        # and replay flag) became one Workflow owner, so the App shell carries
+        # one owner and the composition root builds the workflow as one value.
+        "fields": 63,
         "mut_app": 44,
+    },
+    "crates/houyicoder-tui/src/workflow.rs:Workflow": {
+        # The spec-plan-review-verify-artifact lifecycle: the stage machine,
+        # the spec, plan, and diff artifacts, the review queue, the console
+        # inbox, the verify and graph results, the opened artifact with its
+        # proposer, and the rewind stack and replay flag. Fourteen flat App
+        # fields folded into one owner, so the composition root builds one
+        # workflow value.
+        "fields": 14,
     },
     "crates/houyicoder-tui/src/session/capabilities.rs:PermissionCapability": {
         # The session's wire-reported permission state: mode, rules, allowed

@@ -334,7 +334,11 @@ fn test_repeated_approve_advances() {
     for _ in 0..3 {
         keys::handle_working(&mut app, key(KeyCode::Char('a')));
     }
-    assert_eq!(app.stage, Stage::Verify, "all changes approved -> verify");
+    assert_eq!(
+        app.workflow.stage,
+        Stage::Verify,
+        "all changes approved -> verify"
+    );
     assert_eq!(app.pane, Pane::Review, "auto-advance should land on review");
     let out = render_text(&app, 100, 28);
     println!("--- 3x a -> verify/review ---\n{out}\n--- end ---");
@@ -344,7 +348,8 @@ fn test_repeated_approve_advances() {
     );
     // Every change is approved.
     assert!(
-        app.diff
+        app.workflow
+            .diff
             .hunks
             .iter()
             .all(|h| h.approved == crate::state::Verdict::Approved),

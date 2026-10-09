@@ -119,24 +119,26 @@ fn test_clear_resets_full_chain() {
     app.run_command(SlashCommand::Clear);
     let out = render(&app);
     println!("--- after /clear ---\n{out}\n--- end ---");
-    assert_eq!(app.stage, Stage::Idle);
+    assert_eq!(app.workflow.stage, Stage::Idle);
     assert_eq!(app.pane, Pane::Transcript);
-    assert!(app.spec_ctx.step == "idle");
+    assert!(app.workflow.spec_ctx.step == "idle");
     assert!(
-        app.diff
+        app.workflow
+            .diff
             .hunks
             .iter()
             .all(|h| h.approved == Verdict::Pending)
     );
     assert!(
-        app.review
+        app.workflow
+            .review
             .findings
             .iter()
             .all(|f| f.signoff == Verdict::Pending),
         "findings should reset to pending"
     );
     assert!(
-        app.review.audit_trail.is_empty(),
+        app.workflow.review.audit_trail.is_empty(),
         "audit trail should clear"
     );
     assert!(out.contains("archived"), "archive system line missing");
@@ -151,7 +153,11 @@ fn test_rewind_pops_last_stage() {
     app.run_command(SlashCommand::Rewind);
     let out = render(&app);
     println!("--- after /rewind ---\n{out}\n--- end ---");
-    assert_eq!(app.stage, Stage::Design, "rewind should restore design");
+    assert_eq!(
+        app.workflow.stage,
+        Stage::Design,
+        "rewind should restore design"
+    );
     assert!(out.contains("rewound"), "rewound system line missing");
 }
 
@@ -377,7 +383,7 @@ fn test_misc_commands_visible() {
     app.run_command(SlashCommand::Replay);
     let rp = render(&app);
     println!("--- /replay ---\n{rp}\n--- end ---");
-    assert!(app.replaying, "replaying flag not set");
+    assert!(app.workflow.replaying, "replaying flag not set");
     assert!(rp.contains("replay"), "replay indicator missing");
 }
 

@@ -27,7 +27,7 @@ pub fn progress_bar(app: &App) -> Line<'static> {
         if i > 0 {
             spans.push(Span::raw(" "));
         }
-        let (mark, style) = stage_mark(app.stage, *s);
+        let (mark, style) = stage_mark(app.workflow.stage, *s);
         spans.push(Span::styled(format!("{} {}", s.label(), mark), style));
     }
     Line::from(spans)
@@ -259,19 +259,19 @@ pub fn draw_focus_status(f: &mut Frame, area: Rect, app: &App) {
 /// per-pane approval keys but includes the focused item index so the user
 /// knows where they are without the input box prompt.
 fn focus_action_hint(app: &App) -> String {
-    match (app.pane, app.stage) {
+    match (app.pane, app.workflow.stage) {
         (crate::state::Pane::Diff, Stage::Implementing) => {
-            let n = app.diff.hunks.len();
-            let i = app.diff.focus + 1;
+            let n = app.workflow.diff.hunks.len();
+            let i = app.workflow.diff.focus + 1;
             format!("change {i}/{n}  a=approve r=reject  Up/Down=change")
         }
         (crate::state::Pane::Review, Stage::Verify) => {
-            let n = app.review.len();
-            let i = app.review.focus + 1;
+            let n = app.workflow.review.len();
+            let i = app.workflow.review.focus + 1;
             format!("finding {i}/{n}  a=approve r=reject i=rework")
         }
         (crate::state::Pane::Verify, Stage::Verify) => {
-            if app.verify_result.passed {
+            if app.workflow.verify_result.passed {
                 "a=complete  r=rework".to_string()
             } else {
                 "checks failed  r=rework".to_string()
@@ -395,7 +395,7 @@ pub fn draw_scroll_status(f: &mut Frame, area: Rect, app: &App) {
 /// The contextual hint for the current stage. Tells the user what action is
 /// available right now. Follows the per-stage approval keys.
 fn stage_hint(app: &App) -> String {
-    match app.stage {
+    match app.workflow.stage {
         Stage::Idle => {
             let saved = token_savings_k(app);
             if saved > 0 {

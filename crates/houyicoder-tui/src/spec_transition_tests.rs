@@ -26,21 +26,21 @@ fn test_design_approve_advances() {
     println!("--- /spec (design) ---\n{out}\n--- end ---");
     assert!(out.contains("spec"), "spec pane title missing");
     assert!(out.contains("acceptance:"), "acceptance missing");
-    assert_eq!(app.stage, Stage::Design);
+    assert_eq!(app.workflow.stage, Stage::Design);
     // one design approval -> implement (spec + plan merged into design)
     app.approve_in_pane();
     let out = render(&app);
     println!("--- after design approve ---\n{out}\n--- end ---");
-    assert_eq!(app.stage, Stage::Implementing);
+    assert_eq!(app.workflow.stage, Stage::Implementing);
     assert_eq!(app.pane, Pane::Diff);
     assert!(out.contains("diff approval"), "diff pane not shown");
     assert!(out.contains("change 1/3"), "change counter missing");
     assert!(
-        app.spec_artifact.approved,
+        app.workflow.spec_artifact.approved,
         "spec artifact should be approved"
     );
     assert!(
-        app.plan_artifact.approved,
+        app.workflow.plan_artifact.approved,
         "plan artifact should be approved"
     );
 }
@@ -59,14 +59,15 @@ fn test_implement_approve_advances() {
     let out = render(&app);
     println!("--- after all changes approved ---\n{out}\n--- end ---");
     assert_eq!(
-        app.stage,
+        app.workflow.stage,
         Stage::Verify,
         "should auto-advance to verify (agent review phase)"
     );
     assert_eq!(app.pane, Pane::Review);
     // requirement statuses moved unimpl -> partial (changes approved)
     assert!(
-        app.spec_clauses
+        app.workflow
+            .spec_clauses
             .iter()
             .all(|c| c.status == Divergence::Partial)
     );
@@ -89,7 +90,7 @@ fn test_review_signoff_advances() {
     let out = render(&app);
     println!("--- after all findings approved ---\n{out}\n--- end ---");
     assert_eq!(
-        app.stage,
+        app.workflow.stage,
         Stage::Verify,
         "stage stays verify across the two phases"
     );
@@ -112,10 +113,11 @@ fn test_spec_chain_completes() {
     app.approve_in_pane(); // complete machine check -> done
     let out = render(&app);
     println!("--- after verify complete ---\n{out}\n--- end ---");
-    assert_eq!(app.stage, Stage::Done);
+    assert_eq!(app.workflow.stage, Stage::Done);
     assert!(out.contains("DONE"), "completion indicator missing");
     assert!(
-        app.spec_clauses
+        app.workflow
+            .spec_clauses
             .iter()
             .all(|c| c.status == Divergence::Satisfied),
         "clauses should be satisfied after verify"
@@ -129,6 +131,9 @@ fn test_reject_hunk_state() {
     app.reject_in_pane();
     let out = render(&app);
     println!("--- after hunk reject ---\n{out}\n--- end ---");
-    assert_eq!(app.diff.current().unwrap().approved, Verdict::Rejected);
+    assert_eq!(
+        app.workflow.diff.current().unwrap().approved,
+        Verdict::Rejected
+    );
     assert!(out.contains("rejected"), "rejected state not visible");
 }

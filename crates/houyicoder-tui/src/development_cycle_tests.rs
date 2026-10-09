@@ -25,7 +25,11 @@ fn test_auto_start_task_enters() {
     let mut app = working();
     app.input.set("fix the login bug".to_string());
     app.submit_input();
-    assert_eq!(app.stage, Stage::Design, "task should auto-start design");
+    assert_eq!(
+        app.workflow.stage,
+        Stage::Design,
+        "task should auto-start design"
+    );
     assert_eq!(app.pane, Pane::Spec);
     assert!(
         matches!(
@@ -41,11 +45,11 @@ fn test_rewind_unapproves_artifact() {
     let mut app = working();
     app.run_command(SlashCommand::Spec);
     app.approve_in_pane(); // Approval advances from design to planning.
-    assert!(app.spec_artifact.approved);
+    assert!(app.workflow.spec_artifact.approved);
     app.run_command(SlashCommand::Rewind);
-    assert_eq!(app.stage, Stage::Design);
+    assert_eq!(app.workflow.stage, Stage::Design);
     assert!(
-        !app.spec_artifact.approved,
+        !app.workflow.spec_artifact.approved,
         "rewind should un-approve the spec artifact"
     );
     assert!(
@@ -65,8 +69,12 @@ fn test_rewind_targeted_to_named() {
     app.approve_in_pane(); // Approval advances to implementation.
     app.input.set("/rewind spec".to_string());
     app.submit_input();
-    assert_eq!(app.stage, Stage::Design, "targeted rewind to design");
-    assert!(!app.spec_artifact.approved);
+    assert_eq!(
+        app.workflow.stage,
+        Stage::Design,
+        "targeted rewind to design"
+    );
+    assert!(!app.workflow.spec_artifact.approved);
 }
 
 #[test]
@@ -78,23 +86,29 @@ fn test_rework_real_finding() {
     for _ in 0..3 {
         app.approve_in_pane();
     }
-    assert_eq!(app.stage, Stage::Verify);
+    assert_eq!(app.workflow.stage, Stage::Verify);
     // Focus the real security finding.
-    while app.review.current().is_none_or(|f| f.verdict != "real") {
+    while app
+        .workflow
+        .review
+        .current()
+        .is_none_or(|f| f.verdict != "real")
+    {
         app.navigate_pane(true);
-        if app.review.focus == 0 {
+        if app.workflow.review.focus == 0 {
             break;
         }
     }
     app.rework_in_pane();
     assert_eq!(
-        app.stage,
+        app.workflow.stage,
         Stage::Implementing,
         "rework from review should go back to implementing"
     );
     assert_eq!(app.pane, Pane::Diff);
     assert_eq!(
-        app.spec_clauses
+        app.workflow
+            .spec_clauses
             .iter()
             .find(|c| c.id == "clause-2")
             .map(|c| c.status),
@@ -116,19 +130,23 @@ fn test_verify_fail_rework() {
         app.approve_in_pane();
         app.navigate_pane(true);
     }
-    assert_eq!(app.stage, Stage::Verify);
+    assert_eq!(app.workflow.stage, Stage::Verify);
     // Simulate a failed verification directly because the dispatcher has no
     // dedicated test hook. The rework transition is the behavior under test.
-    app.verify_result.passed = false;
-    app.verify_result.checks = crate::composition::failing_checks();
-    assert!(!app.verify_result.passed);
+    app.workflow.verify_result.passed = false;
+    app.workflow.verify_result.checks = crate::composition::failing_checks();
+    assert!(!app.workflow.verify_result.passed);
     // Approval cannot complete while verification is failing.
     app.approve_in_pane();
-    assert_eq!(app.stage, Stage::Verify, "cannot complete on failed checks");
+    assert_eq!(
+        app.workflow.stage,
+        Stage::Verify,
+        "cannot complete on failed checks"
+    );
     // Rework returns to implementation.
     app.rework_in_pane();
     assert_eq!(
-        app.stage,
+        app.workflow.stage,
         Stage::Implementing,
         "verify rework should go back to implementing"
     );

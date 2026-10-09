@@ -19,12 +19,12 @@ use crate::view::{components, status};
 /// Render the artifact pane: header (path + line cursor + pending flag),
 /// content left, review surface right.
 pub fn draw(f: &mut Frame, area: Rect, app: &App) {
-    let total = app.artifact.current_lines().len();
-    let idx = app.artifact.focus().min(total.saturating_sub(1));
-    let pending = app.artifact.pending_proposal().is_some();
+    let total = app.workflow.artifact.current_lines().len();
+    let idx = app.workflow.artifact.focus().min(total.saturating_sub(1));
+    let pending = app.workflow.artifact.pending_proposal().is_some();
     let base = format!(
         "artifact | {} | line {}/{}{}",
-        app.artifact.path(),
+        app.workflow.artifact.path(),
         idx + 1,
         total,
         if pending { " | pending review" } else { "" },
@@ -70,10 +70,10 @@ fn draw_content(f: &mut Frame, area: Rect, app: &App) {
         .title(" content (structured) ");
     let inner = block.inner(area);
     f.render_widget(block, area);
-    let all = app.artifact.current_lines();
-    let marks = app.artifact.applied_marks();
+    let all = app.workflow.artifact.current_lines();
+    let marks = app.workflow.artifact.applied_marks();
     let total = all.len();
-    let focus = app.artifact.focus().min(total.saturating_sub(1));
+    let focus = app.workflow.artifact.focus().min(total.saturating_sub(1));
     let height = inner.height as usize;
     let start = focus.saturating_sub(height / 2);
     let end = (start + height).min(total);
@@ -84,7 +84,7 @@ fn draw_content(f: &mut Frame, area: Rect, app: &App) {
     let lines: Vec<Line> = (start..end)
         .map(|i| {
             let focused = i == focus;
-            let noted = app.artifact.has_annotation(i);
+            let noted = app.workflow.artifact.has_annotation(i);
             let applied = marks.get(i).copied().unwrap_or(false);
             let num = Span::styled(format!("{:>3} ", i + 1), dim);
             let marker = Span::styled(
@@ -123,7 +123,7 @@ fn draw_review(f: &mut Frame, area: Rect, app: &App) {
     let dim = Style::new().fg(Color::DarkGray);
     let accent = Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD);
     let mut lines: Vec<Line> = Vec::new();
-    if let Some(proposal) = app.artifact.pending_proposal() {
+    if let Some(proposal) = app.workflow.artifact.pending_proposal() {
         lines.push(Line::from(" proposed edit (pending)").style(accent));
         lines.push(Line::from(format!("   rationale: {}", proposal.rationale)).style(white));
         lines
@@ -134,9 +134,9 @@ fn draw_review(f: &mut Frame, area: Rect, app: &App) {
         lines.push(components::approve_reject_row(proposal.verdict));
         lines.push(Line::from("   a = apply    r = reject").style(dim));
     } else {
-        let focus = app.artifact.focus();
+        let focus = app.workflow.artifact.focus();
         lines.push(Line::from(format!(" line {} ", focus + 1)).style(accent));
-        let notes = app.artifact.annotations_for(focus);
+        let notes = app.workflow.artifact.annotations_for(focus);
         if notes.is_empty() {
             lines.push(Line::from("   (no annotations yet)").style(dim));
         } else {
@@ -148,12 +148,12 @@ fn draw_review(f: &mut Frame, area: Rect, app: &App) {
         lines.push(
             Line::from(format!(
                 " {} annotations, {} applied",
-                app.artifact.annotation_count(),
-                app.artifact.applied_count(),
+                app.workflow.artifact.annotation_count(),
+                app.workflow.artifact.applied_count(),
             ))
             .style(dim),
         );
-        if let Some(last) = app.artifact.applied_last() {
+        if let Some(last) = app.workflow.artifact.applied_last() {
             lines.push(
                 Line::from(format!(
                     " last applied: {} (line {})",

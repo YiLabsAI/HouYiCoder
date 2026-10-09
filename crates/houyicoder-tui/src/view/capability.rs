@@ -367,9 +367,10 @@ fn focus_titled_block(app: &App, base: &str) -> Block<'static> {
 /// approval state; in Focus mode the progress bar is fused into the title.
 /// The left column ends with inline approve/reject buttons.
 pub fn draw_diff_full(f: &mut Frame, area: Rect, app: &App) {
-    let total = app.diff.hunks.len();
-    let idx = app.diff.focus.min(total.saturating_sub(1));
-    let approved = app.diff.current().map_or(Verdict::Pending, |h| h.approved);
+    let diff = &app.workflow.diff;
+    let total = diff.hunks.len();
+    let idx = diff.focus.min(total.saturating_sub(1));
+    let approved = diff.current().map_or(Verdict::Pending, |h| h.approved);
     let state_label = match approved {
         Verdict::Pending => "pending",
         Verdict::Approved => "approved",
@@ -377,7 +378,7 @@ pub fn draw_diff_full(f: &mut Frame, area: Rect, app: &App) {
     };
     let base = format!(
         "diff approval | {} | change {}/{} | {}",
-        app.diff.path,
+        diff.path,
         idx + 1,
         total,
         state_label,
@@ -423,7 +424,7 @@ fn draw_evidence(f: &mut Frame, area: Rect, app: &App) {
         .title(" rationale (evidence) ");
     let inner = block.inner(area);
     f.render_widget(block, area);
-    let Some(h) = app.diff.current() else {
+    let Some(h) = app.workflow.diff.current() else {
         f.render_widget(
             Paragraph::new("(no changes)").style(Style::new().fg(Color::DarkGray)),
             inner,
@@ -463,11 +464,8 @@ fn draw_patch(f: &mut Frame, area: Rect, app: &App) {
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .title(" patch (what) ");
-    let patch = app
-        .diff
-        .current()
-        .map(|h| h.patch.as_str())
-        .unwrap_or("(no patch)");
+    let diff = &app.workflow.diff;
+    let patch = diff.current().map_or("(no patch)", |h| h.patch.as_str());
     f.render_widget(
         Paragraph::new(patch)
             .style(Style::new().fg(Color::White))
@@ -479,7 +477,7 @@ fn draw_patch(f: &mut Frame, area: Rect, app: &App) {
 
 fn draw_spec(f: &mut Frame, area: Rect, app: &App) {
     let block = titled_block(app, "spec draft");
-    let a = &app.spec_artifact;
+    let a = &app.workflow.spec_artifact;
     let mut lines: Vec<Line> = vec![
         kv_line("id", &a.id),
         kv_line("title", &a.title),
@@ -503,7 +501,7 @@ fn draw_spec(f: &mut Frame, area: Rect, app: &App) {
     lines.push(Line::from(""));
     lines.push(clauses_block(app));
     lines.push(approve_hint(
-        app.stage == Stage::Design,
+        app.workflow.stage == Stage::Design,
         "a: approve design -> implement",
     ));
     render_lines(f, area, block, lines);
@@ -511,7 +509,7 @@ fn draw_spec(f: &mut Frame, area: Rect, app: &App) {
 
 fn draw_plan(f: &mut Frame, area: Rect, app: &App) {
     let block = titled_block(app, "plan draft");
-    let p = &app.plan_artifact;
+    let p = &app.workflow.plan_artifact;
     let mut lines: Vec<Line> = vec![
         kv_line("id", &p.id),
         components::approval_line(p.approved, "plan"),
@@ -523,7 +521,7 @@ fn draw_plan(f: &mut Frame, area: Rect, app: &App) {
     }
     lines.push(Line::from(""));
     lines.push(approve_hint(
-        app.stage == Stage::Design,
+        app.workflow.stage == Stage::Design,
         "a: approve design -> implement",
     ));
     render_lines(f, area, block, lines);
@@ -533,7 +531,7 @@ fn draw_review(f: &mut Frame, area: Rect, app: &App) {
     let block = titled_block(app, "review findings");
     let inner = block.inner(area);
     f.render_widget(block, area);
-    let Some(r) = app.review.current() else {
+    let Some(r) = app.workflow.review.current() else {
         f.render_widget(
             Paragraph::new("(no findings)").style(Style::new().fg(Color::DarkGray)),
             inner,
@@ -565,15 +563,15 @@ fn draw_review(f: &mut Frame, area: Rect, app: &App) {
         .style(white),
         Line::from(format!("  note:     {}", r.note)).style(white),
         Line::from(""),
-        components::consensus_line(&app.review.findings),
+        components::consensus_line(&app.workflow.review.findings),
         Line::from(format!("  approved: {}", r.signoff_label())).style(white),
         Line::from(""),
         components::signoff_row(r.signoff),
         Line::from(""),
         Line::from(format!(
             "  finding {}/{}  (Up/Down=navigate a=approve r=reject i=rework)",
-            app.review.focus + 1,
-            app.review.len()
+            app.workflow.review.focus + 1,
+            app.workflow.review.len()
         ))
         .style(dim),
     ];
@@ -585,7 +583,7 @@ fn draw_review(f: &mut Frame, area: Rect, app: &App) {
 
 fn draw_verify(f: &mut Frame, area: Rect, app: &App) {
     let block = titled_block(app, "verify result");
-    let v = &app.verify_result;
+    let v = &app.workflow.verify_result;
     let pass_color = if v.passed { Color::Green } else { Color::Red };
     let mut lines: Vec<Line> = vec![
         Line::from(vec![
@@ -602,7 +600,7 @@ fn draw_verify(f: &mut Frame, area: Rect, app: &App) {
         lines.push(bullet(c));
     }
     lines.push(Line::from(""));
-    let done = app.stage == Stage::Done;
+    let done = app.workflow.stage == Stage::Done;
     let completion = if done {
         Span::styled(
             "DONE: all checks green, spec satisfied",
@@ -625,7 +623,7 @@ fn draw_verify(f: &mut Frame, area: Rect, app: &App) {
 
 fn draw_graph(f: &mut Frame, area: Rect, app: &App) {
     let block = titled_block(app, "code graph");
-    let g = &app.graph_result;
+    let g = &app.workflow.graph_result;
     let mut lines: Vec<Line> = vec![
         Line::from(format!("query: {}", g.query)).style(Style::new().fg(Color::White)),
         Line::from("").style(Style::new().fg(Color::White)),
@@ -707,11 +705,11 @@ fn clauses_block(app: &App) -> Line<'static> {
         "  clauses: ",
         Style::new().fg(Color::DarkGray),
     )];
-    for (i, c) in app.spec_clauses.iter().enumerate() {
+    for (i, c) in app.workflow.spec_clauses.iter().enumerate() {
         if i > 0 {
             spans.push(Span::raw(" "));
         }
-        let focused = i == app.spec_ctx.clause_focus;
+        let focused = i == app.workflow.spec_ctx.clause_focus;
         let style = if focused {
             Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)
         } else {
