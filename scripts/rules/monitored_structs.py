@@ -116,7 +116,11 @@ ACTIVE_OWNERS = {
         # skills, and the session disable set) became three capabilities under
         # the same composition; four flat fields folded into the one App field
         # named capabilities.
-        "fields": 85,
+        # The four read-side persistence collaborators (trajectory source,
+        # export writer, transcript snapshot, session catalog) became one
+        # SessionPersistence owner; the composition root injects them together,
+        # so the panes and commands read one owner rather than four fields.
+        "fields": 82,
         "mut_app": 44,
     },
     "crates/houyicoder-tui/src/session/capabilities.rs:PermissionCapability": {
@@ -157,6 +161,13 @@ ACTIVE_OWNERS = {
         # One capability value so the pane reads the entries and the disables
         # from one owner rather than two flat App fields.
         "fields": 2,
+    },
+    "crates/houyicoder-tui/src/session/persistence.rs:SessionPersistence": {
+        # The session's injected persistence collaborators: the trajectory
+        # reader, the transcript snapshot reader, the export writer, and the
+        # resumable-session catalog. Four flat App fields folded into one
+        # owner, injected together by the composition root.
+        "fields": 4,
     },
     "crates/houyicoder-tui/src/last_row_keys.rs:LastRowKeys": {
         # The four per-row key vectors of the last emitted visible row set:

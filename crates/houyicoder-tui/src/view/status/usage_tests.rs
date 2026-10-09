@@ -188,7 +188,7 @@ fn test_usage_tab_latency_rows() {
         ..TrajectoryView::default()
     };
     let mut app = crate::test_harness::working_app();
-    app.trajectory_log = Some(std::sync::Arc::new(Fixed(std::sync::Arc::new(view))));
+    app.persistence.trajectory_log = Some(std::sync::Arc::new(Fixed(std::sync::Arc::new(view))));
     let s = render_usage(&app);
     assert!(s.contains("model / tool time:"), "work time row: {s}");
     assert!(s.contains("91.2s / 28.4s"), "the split: {s}");
@@ -214,7 +214,7 @@ fn test_usage_tab_latency_rows() {
 #[test]
 fn test_usage_tab_short_latency() {
     let mut app = crate::test_harness::working_app();
-    app.trajectory_log = Some(std::sync::Arc::new(Fixed(std::sync::Arc::new(
+    app.persistence.trajectory_log = Some(std::sync::Arc::new(Fixed(std::sync::Arc::new(
         TrajectoryView {
             session_id: "s".into(),
             model: "m".into(),
@@ -254,7 +254,7 @@ fn test_usage_tab_short_latency() {
 #[test]
 fn test_usage_tab_no_timing() {
     let mut app = crate::test_harness::working_app();
-    app.trajectory_log = Some(std::sync::Arc::new(Fixed(std::sync::Arc::new(
+    app.persistence.trajectory_log = Some(std::sync::Arc::new(Fixed(std::sync::Arc::new(
         TrajectoryView {
             session_id: "s".into(),
             model: "m".into(),
@@ -282,7 +282,7 @@ fn test_usage_tab_no_timing() {
 #[test]
 fn test_usage_tab_delegated() {
     let mut app = crate::test_harness::working_app();
-    app.trajectory_log = Some(std::sync::Arc::new(Fixed(std::sync::Arc::new(
+    app.persistence.trajectory_log = Some(std::sync::Arc::new(Fixed(std::sync::Arc::new(
         TrajectoryView {
             session_id: "s".into(),
             model: "m".into(),
@@ -319,7 +319,7 @@ fn test_usage_tab_delegated() {
 #[test]
 fn test_usage_tab_no_delegated() {
     let mut app = crate::test_harness::working_app();
-    app.trajectory_log = Some(std::sync::Arc::new(Fixed(std::sync::Arc::new(
+    app.persistence.trajectory_log = Some(std::sync::Arc::new(Fixed(std::sync::Arc::new(
         TrajectoryView {
             session_id: "s".into(),
             model: "m".into(),
@@ -379,7 +379,7 @@ fn test_usage_cache_share() {
 #[test]
 fn test_usage_tab_delegated_unreported() {
     let mut app = crate::test_harness::working_app();
-    app.trajectory_log = Some(std::sync::Arc::new(Fixed(std::sync::Arc::new(
+    app.persistence.trajectory_log = Some(std::sync::Arc::new(Fixed(std::sync::Arc::new(
         TrajectoryView {
             session_id: "s".into(),
             model: "m".into(),

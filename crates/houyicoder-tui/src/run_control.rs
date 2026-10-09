@@ -469,7 +469,7 @@ impl App {
         self.apply_frames(batch);
         // Resolve a bounded number of resume rows per poll.
         if self.resume_picker.open
-            && let Some(catalog) = self.session_catalog.as_ref()
+            && let Some(catalog) = self.persistence.catalog.as_ref()
         {
             self.resume_picker.resolve_rows(catalog.as_ref(), 3);
         }

@@ -414,7 +414,7 @@ impl App {
     /// by one task at a time and a result nobody has looked at yet is never
     /// dispatched over.
     fn dispatch_history_read(&mut self) {
-        let Some(source) = self.snapshot.clone() else {
+        let Some(source) = self.persistence.snapshot.clone() else {
             return;
         };
         let Some(runtime) = self.runtime.clone() else {

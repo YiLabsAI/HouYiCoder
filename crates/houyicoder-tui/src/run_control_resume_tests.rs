@@ -35,9 +35,9 @@ impl SessionCatalog for ResolvingCatalog {
 #[test]
 fn test_poll_resolves_rows_progressively() {
     let mut app = composition::app();
-    app.session_catalog = Some(Arc::new(ResolvingCatalog(5)));
+    app.persistence.catalog = Some(Arc::new(ResolvingCatalog(5)));
     // Open the picker + load rows (same path as /resume with no arg).
-    app.resume_picker.rows = app.session_catalog.clone().unwrap().sessions("");
+    app.resume_picker.rows = app.persistence.catalog.clone().unwrap().sessions("");
     app.resume_picker.open();
     app.pane = Pane::Resume;
     assert!(app.resume_picker.resolved.is_empty());
@@ -77,9 +77,9 @@ fn test_poll_resolves_rows_progressively() {
 #[test]
 fn test_poll_skips_resolution_closed() {
     let mut app = composition::app();
-    app.session_catalog = Some(Arc::new(ResolvingCatalog(1)));
+    app.persistence.catalog = Some(Arc::new(ResolvingCatalog(1)));
     // Rows loaded but picker NOT open (e.g. closed by Esc, rows not cleared).
-    app.resume_picker.rows = app.session_catalog.clone().unwrap().sessions("");
+    app.resume_picker.rows = app.persistence.catalog.clone().unwrap().sessions("");
     assert!(!app.resume_picker.open);
     app.poll_agent();
     assert!(
@@ -131,8 +131,8 @@ fn test_poll_dedups_dup_titles() {
     }
 
     let mut app = composition::app();
-    app.session_catalog = Some(Arc::new(DupCatalog));
-    app.resume_picker.rows = app.session_catalog.clone().unwrap().sessions("");
+    app.persistence.catalog = Some(Arc::new(DupCatalog));
+    app.resume_picker.rows = app.persistence.catalog.clone().unwrap().sessions("");
     app.resume_picker.open();
     app.pane = Pane::Resume;
     // Both rows resolve in a single poll (2 rows < 3/frame cap). The newer

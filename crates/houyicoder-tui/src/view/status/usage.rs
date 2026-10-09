@@ -9,7 +9,7 @@ use crate::view::relative_time::span_label;
 /// disagree about the session. A row is omitted when the session recorded no
 /// sample for it — an unmeasured value is not a zero.
 fn render_usage_latency(app: &App, f: &impl Fn(&str, &str) -> String, s: &mut String) {
-    let Some(log) = app.trajectory_log.as_ref() else {
+    let Some(log) = app.persistence.trajectory_log.as_ref() else {
         return;
     };
     let view = log.trajectory();

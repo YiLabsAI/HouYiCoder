@@ -249,7 +249,7 @@ impl App {
         }
         // Connected but the export source is not installed: a capability gap,
         // not a disconnect.
-        let Some(log) = self.export_log.as_ref() else {
+        let Some(log) = self.persistence.export_log.as_ref() else {
             self.system_line("export: unavailable in this session");
             return;
         };

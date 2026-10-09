@@ -4,6 +4,7 @@
 
 pub(crate) mod capabilities;
 mod connection;
+pub(crate) mod persistence;
 
 pub use connection::{
     ConnectionStatus, EnqueueError, PollOutcome, RequestIdExhausted, SessionConnection,

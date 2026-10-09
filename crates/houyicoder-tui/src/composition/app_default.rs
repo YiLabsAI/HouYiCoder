@@ -25,6 +25,7 @@ use crate::run_state::RunState;
 use crate::selection::SystemClipboard;
 use crate::selections::Selections;
 use crate::session::capabilities::SessionCapabilities;
+use crate::session::persistence::SessionPersistence;
 use crate::skill_picker_state::SkillPickerState;
 use crate::skills_state::SkillsPaneState;
 use crate::state::history_read::HistoryReads;
@@ -56,10 +57,7 @@ pub fn app() -> App {
         index_total: Cell::new(0),
         index_done: Cell::new(false),
         pending_index_chunk: std::cell::RefCell::new(None),
-        trajectory_log: None,
-        export_log: None,
-        snapshot: None,
-        session_catalog: None,
+        persistence: SessionPersistence::default(),
         resume_picker: SessionPickerState::default(),
         pending_resume_target: None,
         palette: PaletteState::default(),

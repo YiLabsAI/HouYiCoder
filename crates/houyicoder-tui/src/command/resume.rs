@@ -18,7 +18,7 @@ impl App {
         }
         // Connected but the session catalog is not installed: a capability
         // gap, not a disconnect.
-        let Some(catalog) = self.session_catalog.clone() else {
+        let Some(catalog) = self.persistence.catalog.clone() else {
             self.system_line("resume: session history unavailable");
             return;
         };
@@ -185,7 +185,7 @@ mod tests {
     #[test]
     fn test_empty_store_reports_none() {
         let mut app = crate::test_harness::connected_app();
-        app.session_catalog = Some(Arc::new(EmptyCatalog));
+        app.persistence.catalog = Some(Arc::new(EmptyCatalog));
         app.run_resume(None);
         assert!(!app.resume_picker.open);
         assert!(app.pending_resume_target.is_none());
@@ -195,7 +195,7 @@ mod tests {
     #[test]
     fn test_opens_pane_with_rows() {
         let mut app = crate::test_harness::connected_app();
-        app.session_catalog = Some(Arc::new(TwoRowCatalog));
+        app.persistence.catalog = Some(Arc::new(TwoRowCatalog));
         app.run_resume(None);
         assert!(app.resume_picker.open);
         assert_eq!(app.resume_picker.rows.len(), 2);
@@ -206,7 +206,7 @@ mod tests {
     #[test]
     fn test_matches_sid_directly() {
         let mut app = crate::test_harness::connected_app();
-        app.session_catalog = Some(Arc::new(TwoRowCatalog));
+        app.persistence.catalog = Some(Arc::new(TwoRowCatalog));
         app.run_resume(Some("aaaa1111"));
         assert_eq!(app.pending_resume_target.as_deref(), Some("aaaa1111"));
         assert!(!app.quit, "in-process swap does not quit");
@@ -216,7 +216,7 @@ mod tests {
     #[test]
     fn test_matches_title_substring() {
         let mut app = crate::test_harness::connected_app();
-        app.session_catalog = Some(Arc::new(TwoRowCatalog));
+        app.persistence.catalog = Some(Arc::new(TwoRowCatalog));
         app.run_resume(Some("LOGIN"));
         assert_eq!(app.pending_resume_target.as_deref(), Some("aaaa1111"));
     }
@@ -225,7 +225,7 @@ mod tests {
     #[test]
     fn test_no_match_reports_error() {
         let mut app = crate::test_harness::connected_app();
-        app.session_catalog = Some(Arc::new(TwoRowCatalog));
+        app.persistence.catalog = Some(Arc::new(TwoRowCatalog));
         app.run_resume(Some("zzz"));
         assert!(app.pending_resume_target.is_none());
         assert!(!app.quit);
@@ -239,7 +239,7 @@ mod tests {
     #[test]
     fn test_busy_run_defers_resume() {
         let mut app = crate::composition::app();
-        app.session_catalog = Some(Arc::new(TwoRowCatalog));
+        app.persistence.catalog = Some(Arc::new(TwoRowCatalog));
         app.start_run_for_test(0);
         app.screen = crate::state::Screen::Working;
         // /resume <sid> mid-run -> enqueued as a Command, not executed.
@@ -262,7 +262,7 @@ mod tests {
     #[test]
     fn test_busy_bare_opens_picker() {
         let mut app = crate::test_harness::connected_app();
-        app.session_catalog = Some(Arc::new(TwoRowCatalog));
+        app.persistence.catalog = Some(Arc::new(TwoRowCatalog));
         app.start_run_for_test(0);
         app.screen = crate::state::Screen::Working;
         app.input.set("/resume".to_string());
@@ -306,7 +306,7 @@ mod tests {
     #[test]
     fn test_many_sessions_all_visible() {
         let mut app = crate::test_harness::connected_app();
-        app.session_catalog = Some(Arc::new(ManyRowCatalog(25)));
+        app.persistence.catalog = Some(Arc::new(ManyRowCatalog(25)));
         app.run_resume(None);
         assert_eq!(app.resume_picker.rows.len(), 25);
         assert_eq!(app.resume_picker.filtered().len(), 25, "at open");

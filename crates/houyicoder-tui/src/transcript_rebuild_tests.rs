@@ -1487,7 +1487,7 @@ fn test_scrollback_reads_log_rows() {
         .map(|i| TranscriptLine::User(format!("older {i}")))
         .collect();
     lines.extend(app.transcript.iter().cloned());
-    app.snapshot = Some(log_source(vec![log_window(lines, 100, 4096)]));
+    app.persistence.snapshot = Some(log_source(vec![log_window(lines, 100, 4096)]));
 
     app.whole_scroll_mut().jump_to(0);
     app.load_older_frames();
@@ -1531,7 +1531,7 @@ fn test_scrollback_chains_older_window() {
         TranscriptLine::User("oldest 0".into()),
         TranscriptLine::User("oldest 1".into()),
     ];
-    app.snapshot = Some(log_source(vec![
+    app.persistence.snapshot = Some(log_source(vec![
         log_window(oldest, 0, 100),
         log_window(tail, 100, 4096),
     ]));
@@ -1585,7 +1585,7 @@ fn test_scrollback_without_log_source() {
 fn test_scrollback_stops_without_match() {
     let mut app = drained_app();
     let shown = app.transcript.len();
-    app.snapshot = Some(log_source(vec![log_window(
+    app.persistence.snapshot = Some(log_source(vec![log_window(
         vec![TranscriptLine::Agent("unrelated row".into())],
         100,
         4096,
@@ -1608,7 +1608,7 @@ fn test_rows_leave_at_end() {
     let mut app = drained_app();
     let mut lines: Vec<TranscriptLine> = vec![TranscriptLine::User("older 0".into())];
     lines.extend(app.transcript.iter().cloned());
-    app.snapshot = Some(log_source(vec![log_window(lines, 100, 4096)]));
+    app.persistence.snapshot = Some(log_source(vec![log_window(lines, 100, 4096)]));
 
     app.whole_scroll_mut().jump_to(0);
     app.load_older_frames();
@@ -1664,7 +1664,7 @@ fn test_join_prefers_longest_run() {
         TranscriptLine::User("unrelated".into()),
     ];
     lines.extend(view.clone());
-    app.snapshot = Some(log_source(vec![log_window(lines, 100, 4096)]));
+    app.persistence.snapshot = Some(log_source(vec![log_window(lines, 100, 4096)]));
 
     app.whole_scroll_mut().jump_to(0);
     app.load_older_frames();
@@ -1696,7 +1696,7 @@ fn test_walk_crosses_log_windows() {
     ];
     older.extend(view[1..].iter().cloned());
     let newer: Vec<TranscriptLine> = view[1..].to_vec();
-    app.snapshot = Some(log_source(vec![
+    app.persistence.snapshot = Some(log_source(vec![
         log_window(older, 0, 100),
         log_window(newer, 100, 4096),
     ]));
@@ -1726,7 +1726,7 @@ fn test_walk_stops_without_progress() {
     let lines: Vec<TranscriptLine> = (0..8)
         .map(|i| TranscriptLine::User(format!("unrelated {i}")))
         .collect();
-    app.snapshot = Some(log_source(vec![log_window(lines, 4096, 4096)]));
+    app.persistence.snapshot = Some(log_source(vec![log_window(lines, 4096, 4096)]));
 
     app.whole_scroll_mut().jump_to(0);
     app.load_older_frames();
@@ -1746,7 +1746,7 @@ fn test_walk_stops_without_window() {
     let view: Vec<TranscriptLine> = app.transcript.iter().cloned().collect();
     let mut older: Vec<TranscriptLine> = vec![TranscriptLine::User("old 0".into())];
     older.extend(view);
-    app.snapshot = Some(Arc::new(MockSnapshot {
+    app.persistence.snapshot = Some(Arc::new(MockSnapshot {
         lines: Vec::new(),
         log_bytes: 5000,
         truncated: false,
@@ -1791,7 +1791,7 @@ fn test_dispatch_front_after_drain() {
             .push_frame(user_msg(&format!("drain {i} {text}")));
     }
     let front_before = app.transcript.frame_window_start();
-    app.snapshot = Some(log_source(vec![log_window(
+    app.persistence.snapshot = Some(log_source(vec![log_window(
         vec![TranscriptLine::User("x".into())],
         100,
         4096,
@@ -1822,7 +1822,7 @@ fn test_stale_history_read_dropped() {
     let lines: Vec<TranscriptLine> = (0..8)
         .map(|i| TranscriptLine::User(format!("unrelated {i}")))
         .collect();
-    app.snapshot = Some(log_source(vec![log_window(lines, 100, 4096)]));
+    app.persistence.snapshot = Some(log_source(vec![log_window(lines, 100, 4096)]));
     app.whole_scroll_mut().jump_to(0);
     app.load_older_frames();
     // Move the resident front past the dispatch front before the result lands.
@@ -1864,7 +1864,7 @@ fn test_rows_leave_on_drain() {
     let front = app.transcript.frame_window_start();
     let mut lines: Vec<TranscriptLine> = vec![TranscriptLine::User("older 0".into())];
     lines.extend(app.transcript.iter().cloned());
-    app.snapshot = Some(log_source(vec![log_window(lines, 100, 4096)]));
+    app.persistence.snapshot = Some(log_source(vec![log_window(lines, 100, 4096)]));
 
     app.whole_scroll_mut().jump_to(0);
     app.load_older_frames();
@@ -1926,7 +1926,7 @@ fn test_log_rows_capped() {
         .collect();
     app.transcript.prepend_disk_rows(rows, 100, 0);
     app.whole_scroll_mut().jump_to(0);
-    app.snapshot = Some(log_source(vec![log_window(
+    app.persistence.snapshot = Some(log_source(vec![log_window(
         vec![TranscriptLine::User("even older".into())],
         50,
         100,
@@ -1952,7 +1952,7 @@ fn test_log_rows_capped() {
 #[test]
 fn test_scrollback_without_rows() {
     let mut app = fresh_app();
-    app.snapshot = Some(log_source(vec![log_window(
+    app.persistence.snapshot = Some(log_source(vec![log_window(
         vec![TranscriptLine::User("older 0".into())],
         100,
         4096,

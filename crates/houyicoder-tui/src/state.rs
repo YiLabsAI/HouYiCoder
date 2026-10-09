@@ -45,19 +45,17 @@ use crate::pending_queue::PendingItem;
 use crate::permission_pane_state::PermissionPaneState;
 use crate::records::TeammateView;
 use crate::render_cache::RenderCache;
-use crate::resume_picker::{SessionCatalog, SessionPickerState};
+use crate::resume_picker::SessionPickerState;
 use crate::review_queue::ReviewQueue;
 use crate::run_state::{RunProgress, RunState};
 use crate::selection::ClipboardWriter;
 use crate::selections::Selections;
 use crate::session::SessionConnection;
 use crate::session::capabilities::SessionCapabilities;
+use crate::session::persistence::SessionPersistence;
 use crate::skill_picker_state::SkillPickerState;
 use crate::skills_state::SkillsPaneState;
 use crate::todo_view::TodoState;
-use crate::transcript::snapshot::TranscriptSnapshot;
-use crate::view::export_log::ExportLog;
-use crate::view::trajectory_pane::TrajectoryLog;
 use houyicoder_protocol::envelope::RequestId;
 
 pub(crate) use crate::state::cursors::EventCursor;
@@ -171,30 +169,8 @@ pub struct App {
     /// The index chunk dispatched and not yet applied, if any. A chunk reads
     /// the log, so the loop advances the build and the draw path never does.
     pub pending_index_chunk: std::cell::RefCell<Option<index_read::PendingIndexChunk>>,
-    /// Optional full-history disk-search seam. None in stub / unwired modes
-    /// (the /search --all flag then reports no disk results). When wired, the
-    /// composition root injects an impl that reads the durable session log +
-    /// maps SessionLogEntries to searchable text — the TUI never touches the log.
-    /// Optional trajectory-data seam. The composition root injects an impl
-    /// that reads the durable session log and folds events into a
-    /// TrajectoryView; None in stub and unwired modes falls back to the mock
-    /// trajectory so the pane still renders a demo.
-    pub trajectory_log: Option<Arc<dyn TrajectoryLog>>,
-    /// Optional export seam. The composition root injects an impl that reads
-    /// the durable session log and serializes the full trajectory, tool
-    /// stats, usage, checkpoints, and errors to a JSON document. None when
-    /// the export source is not installed; /export then reports the reason
-    /// (disconnected, or unavailable in this session).
-    pub export_log: Option<Arc<dyn ExportLog>>,
-    /// Optional transcript-snapshot seam. The composition root injects an
-    /// impl that loads the durable session log into a TranscriptLine
-    /// snapshot for the search view (the read-whole path for logs under
-    /// the threshold). None in stub or unwired modes, where the search
-    /// view falls back to the in-memory transcript vec.
-    pub snapshot: Option<Arc<dyn TranscriptSnapshot>>,
-    /// The session catalog for the /resume picker (resumable sessions with
-    /// derived titles). None in stub/test bundles.
-    pub session_catalog: Option<Arc<dyn SessionCatalog>>,
+    /// The session's injected persistence collaborators.
+    pub(crate) persistence: SessionPersistence,
     /// The session picker overlay state (opened by /resume with no arg).
     pub resume_picker: SessionPickerState,
     /// A pending resume request set when the user picks a session in the

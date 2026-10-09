@@ -22,6 +22,7 @@ use crate::palette::PaletteState;
 use crate::resume_picker::SessionCatalog;
 use crate::review_queue::ReviewQueue;
 use crate::session::SessionConnection;
+use crate::session::persistence::SessionPersistence;
 use crate::state::{App, Pane, Screen, SpecContext, Stage, StatusStub, ViewportMode};
 use crate::transcript::snapshot::TranscriptSnapshot;
 use crate::view::export_log::ExportLog;
@@ -153,10 +154,12 @@ pub fn build_app(bundle: RunnerBundle) -> App {
     app.session_id = session_id;
     app.runtime = Some(runtime);
     app.session = Some(live_session);
-    app.trajectory_log = trajectory_log;
-    app.export_log = export_log;
-    app.snapshot = snapshot;
-    app.session_catalog = session_catalog;
+    app.persistence = SessionPersistence {
+        trajectory_log,
+        export_log,
+        snapshot,
+        catalog: session_catalog,
+    };
     // Push the drained startup warnings as initial system lines BEFORE any run
     // output — synchronous so they land first + do not race with command
     // results (the async-sink path flaked timing tests; this is deterministic).
