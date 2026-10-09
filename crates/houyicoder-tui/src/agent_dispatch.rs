@@ -232,14 +232,14 @@ impl App {
                 // Remove exact committed inputs before promoting the next head.
                 // Stable identity prevents a delayed event from removing newer text.
                 for input in inputs {
-                    if let Some(pos) = self.pending.iter().position(|it| {
+                    if let Some(pos) = self.input.queue.iter().position(|it| {
                         matches!(
                             it,
                             InputItem::Message(current) | InputItem::ParkedMessage(current)
                                 if current.id == input.id
                         )
                     }) {
-                        self.pending.remove(pos);
+                        self.input.queue.remove(pos);
                     }
                 }
                 self.promote_next_pending();

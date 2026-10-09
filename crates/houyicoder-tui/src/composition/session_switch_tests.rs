@@ -288,12 +288,12 @@ fn test_resume_err_keeps_session() {
 fn test_idle_drain_consumes_idle() {
     let mut app = build_app(test_bundle());
     app.status.last_run_final = true;
-    app.pending.push(InputItem::Message("head".into()));
+    app.input.queue.push(InputItem::Message("head".into()));
     let mut dirty = false;
     // No resume target + idle + clean end: drain the queued head.
     app.idle_drain(None, &mut dirty);
     assert!(dirty, "drain flagged dirty");
-    assert!(app.pending.is_empty(), "head drained");
+    assert!(app.input.queue.is_empty(), "head drained");
 }
 
 /// Busy (a run in flight): idle_drain is a no-op -- neither swap nor
@@ -302,12 +302,12 @@ fn test_idle_drain_consumes_idle() {
 fn test_idle_drain_noop_busy() {
     let mut app = build_app(test_bundle());
     app.start_run_for_test(0);
-    app.pending.push(InputItem::Message("queued".into()));
+    app.input.queue.push(InputItem::Message("queued".into()));
     let mut dirty = false;
     app.idle_drain(None, &mut dirty);
     assert!(!dirty, "busy = no drain");
     assert_eq!(
-        app.pending,
+        app.input.queue,
         vec![InputItem::Message("queued".into())],
         "queue intact"
     );
@@ -322,12 +322,14 @@ fn test_idle_drain_noop_busy() {
 fn test_idle_drain_without_final() {
     let mut app = build_app(test_bundle());
     app.status.last_run_final = false;
-    app.pending.push(InputItem::ParkedMessage("parked".into()));
+    app.input
+        .queue
+        .push(InputItem::ParkedMessage("parked".into()));
     let mut dirty = false;
     app.idle_drain(None, &mut dirty);
     assert!(!dirty, "no drain on a non-clean end (interrupt/error)");
     assert_eq!(
-        app.pending,
+        app.input.queue,
         vec![InputItem::ParkedMessage("parked".into())],
         "queued item parks (not auto-sent) -- recallable via Esc"
     );
@@ -341,11 +343,16 @@ fn test_idle_drain_without_final() {
 fn test_clean_end_drains_parked() {
     let mut app = build_app(test_bundle());
     app.status.last_run_final = true;
-    app.pending.push(InputItem::ParkedMessage("parked".into()));
+    app.input
+        .queue
+        .push(InputItem::ParkedMessage("parked".into()));
     let mut dirty = false;
     app.idle_drain(None, &mut dirty);
     assert!(dirty, "drain on a clean end (FinalOutput)");
-    assert!(app.pending.is_empty(), "parked head drained (spawn_run)");
+    assert!(
+        app.input.queue.is_empty(),
+        "parked head drained (spawn_run)"
+    );
 }
 
 /// A deferred resume target with a queued message: idle_drain acts on the
@@ -358,7 +365,9 @@ fn test_clean_end_drains_parked() {
 fn test_resume_precedes_queued_message() {
     let mut app = build_app(test_bundle());
     app.pending_resume_target = Some("sid-target".to_string());
-    app.pending.push(InputItem::Message("queued msg".into()));
+    app.input
+        .queue
+        .push(InputItem::Message("queued msg".into()));
     let mut dirty = false;
     let builder: Box<ResumeBuilderRef> = Box::new(|_| Ok(test_bundle()));
     app.idle_drain(Some(&*builder), &mut dirty);
@@ -368,7 +377,7 @@ fn test_resume_precedes_queued_message() {
         "resume target consumed before the message drains"
     );
     assert!(
-        app.pending.is_empty(),
+        app.input.queue.is_empty(),
         "carried message drained in the new session (auto-sent as B's first turn)"
     );
 }
@@ -451,14 +460,16 @@ fn test_clears_session_local_state() {
 #[test]
 fn test_swap_carries_pending_across() {
     let mut app = build_app(test_bundle());
-    app.pending.push(InputItem::Message("task a".into()));
-    app.pending.push(InputItem::Command("/resume sid-b".into()));
-    app.pending.push(InputItem::Message("task c".into()));
+    app.input.queue.push(InputItem::Message("task a".into()));
+    app.input
+        .queue
+        .push(InputItem::Command("/resume sid-b".into()));
+    app.input.queue.push(InputItem::Message("task c".into()));
 
     app.switch_session(test_bundle());
 
     assert_eq!(
-        app.pending,
+        app.input.queue,
         vec![
             InputItem::ParkedMessage("task a".into()),
             InputItem::Command("/resume sid-b".into()),
@@ -528,12 +539,12 @@ fn test_tears_down_old_server() {
 fn test_idle_drain_noop_approval() {
     let mut app = build_app(test_bundle());
     app.session.prompt = Some(PendingPrompt::permission(RequestId(42), Vec::new()));
-    app.pending.push(InputItem::Message("queued".into()));
+    app.input.queue.push(InputItem::Message("queued".into()));
     let mut dirty = false;
     app.idle_drain(None, &mut dirty);
     assert!(!dirty, "approval pending = no drain and no swap");
     assert_eq!(
-        app.pending,
+        app.input.queue,
         vec![InputItem::Message("queued".into())],
         "queue intact while an approval is up"
     );
@@ -547,17 +558,21 @@ fn test_idle_drain_noop_approval() {
 #[test]
 fn test_drops_non_resume_commands() {
     let mut app = build_app(test_bundle());
-    app.pending.push(InputItem::Command("/clear".into()));
-    app.pending.push(InputItem::Message("kept msg".into()));
-    app.pending.push(InputItem::Command("/resume sid-c".into()));
-    app.pending.push(InputItem::Command("/rewind".into()));
-    app.pending.push(InputItem::Message("kept msg 2".into()));
+    app.input.queue.push(InputItem::Command("/clear".into()));
+    app.input.queue.push(InputItem::Message("kept msg".into()));
+    app.input
+        .queue
+        .push(InputItem::Command("/resume sid-c".into()));
+    app.input.queue.push(InputItem::Command("/rewind".into()));
+    app.input
+        .queue
+        .push(InputItem::Message("kept msg 2".into()));
 
     app.switch_session(test_bundle());
 
     // Messages + /resume stay; /clear + /rewind dropped.
     assert_eq!(
-        app.pending,
+        app.input.queue,
         vec![
             InputItem::ParkedMessage("kept msg".into()),
             InputItem::Command("/resume sid-c".into()),
@@ -585,15 +600,15 @@ fn test_drops_non_resume_commands() {
 fn test_clean_end_drains_messages() {
     let mut app = build_app(test_bundle());
     app.status.last_run_final = true;
-    app.pending.push(InputItem::Message("m1".into()));
-    app.pending.push(InputItem::Message("m2".into()));
-    app.pending.push(InputItem::Message("m3".into()));
+    app.input.queue.push(InputItem::Message("m1".into()));
+    app.input.queue.push(InputItem::Message("m2".into()));
+    app.input.queue.push(InputItem::Message("m3".into()));
     let mut dirty = false;
     app.idle_drain(None, &mut dirty);
     assert!(dirty, "batch drain flagged dirty");
     assert!(app.agent_busy(), "head (m1) spawned a run");
     assert_eq!(
-        app.pending,
+        app.input.queue,
         vec![
             InputItem::Message("m2".into()),
             InputItem::Message("m3".into()),
@@ -611,15 +626,15 @@ fn test_clean_end_drains_messages() {
 fn test_batch_stops_at_command() {
     let mut app = build_app(test_bundle());
     app.status.last_run_final = true;
-    app.pending.push(InputItem::Message("m1".into()));
-    app.pending.push(InputItem::Message("m2".into()));
-    app.pending.push(InputItem::Command("/clear".into()));
-    app.pending.push(InputItem::Message("m3".into()));
+    app.input.queue.push(InputItem::Message("m1".into()));
+    app.input.queue.push(InputItem::Message("m2".into()));
+    app.input.queue.push(InputItem::Command("/clear".into()));
+    app.input.queue.push(InputItem::Message("m3".into()));
     let mut dirty = false;
     app.idle_drain(None, &mut dirty);
     assert!(app.agent_busy(), "head (m1) spawned a run");
     assert_eq!(
-        app.pending,
+        app.input.queue,
         vec![
             InputItem::Message("m2".into()),
             InputItem::Command("/clear".into()),

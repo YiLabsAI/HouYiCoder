@@ -968,7 +968,7 @@ fn test_waiting_submit_parks() {
         "a submit during Waiting does not replace the waiting run"
     );
     assert!(
-        app.pending.len() == 1,
+        app.input.queue.len() == 1,
         "the submit parks in the queue instead of starting a second run"
     );
 }
@@ -982,11 +982,15 @@ fn test_busy_submit_parks() {
     assert!(app.spawn_run("first".into()));
     app.spawn_run("second".into());
     assert!(app.agent_busy(), "no second run while busy");
-    assert_eq!(app.pending.len(), 1, "the extra input parks in the queue");
+    assert_eq!(
+        app.input.queue.len(),
+        1,
+        "the extra input parks in the queue"
+    );
     // promote_next_pending attaches the single server mirror right away
     // (the live connection accepts it) — the contract is at most one.
     assert!(
-        matches!(app.pending.first(), Some(InputItem::Message(_))),
+        matches!(app.input.queue.first(), Some(InputItem::Message(_))),
         "the parked input is promoted to the single server mirror"
     );
 }

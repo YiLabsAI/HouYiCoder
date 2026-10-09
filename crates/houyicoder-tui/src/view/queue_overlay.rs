@@ -21,7 +21,8 @@ use crate::state::App;
 /// one-line summary.
 pub(super) fn strip_want(app: &App) -> u16 {
     let n = app
-        .pending
+        .input
+        .queue
         .iter()
         .filter(|s| !s.display().is_empty())
         .count();
@@ -55,7 +56,8 @@ fn preview_text(text: &str, width: usize) -> String {
 /// "· queued". Gate closed (idle after a non-final end): all -> "⏸ held".
 pub(super) fn draw_strip(f: &mut Frame, area: Rect, app: &App) {
     let items: Vec<_> = app
-        .pending
+        .input
+        .queue
         .iter()
         .filter(|s| !s.display().is_empty())
         .collect();

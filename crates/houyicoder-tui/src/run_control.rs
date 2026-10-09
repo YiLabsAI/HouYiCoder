@@ -149,8 +149,8 @@ impl App {
         // (approval card up) does not accept a second submit — the card
         // is the gate, not agent_busy.
         if self.session.run.is_active() {
-            self.pending
-                .push(InputItem::ParkedMessage(input.clone().into()));
+            let parked = InputItem::ParkedMessage(input.into());
+            self.input.queue.push(parked);
             self.promote_next_pending();
             return true;
         }
@@ -208,12 +208,12 @@ impl App {
     /// At most one parked message is promoted to the server queue. Returns
     /// false when no item is available or the enqueue was refused.
     pub fn drain_pending_head(&mut self) -> bool {
-        let Some(item) = self.pending.first().cloned() else {
+        let Some(item) = self.input.queue.first().cloned() else {
             return false;
         };
         match item {
             InputItem::Command(text) => {
-                self.pending.remove(0);
+                self.input.queue.remove(0);
                 self.run_slash_text(&text);
                 true
             }
@@ -229,24 +229,24 @@ impl App {
                     self.system_line(Self::enqueue_failure_line("queue", e));
                     return false;
                 }
-                self.pending.remove(0);
+                self.input.queue.remove(0);
                 let text = head.text.clone();
                 if !self.spawn_run(head.text) {
                     // The mirror is gone but the run could not start: keep the
                     // user content parked at the head so nothing is lost.
-                    self.pending
-                        .insert(0, InputItem::ParkedMessage(text.into()));
+                    let queue = &mut self.input.queue;
+                    queue.insert(0, InputItem::ParkedMessage(text.into()));
                     return false;
                 }
                 self.promote_next_pending();
                 true
             }
             InputItem::ParkedMessage(input) => {
-                self.pending.remove(0);
+                self.input.queue.remove(0);
                 let text = input.text.clone();
                 if !self.spawn_run(input.text) {
-                    self.pending
-                        .insert(0, InputItem::ParkedMessage(text.into()));
+                    let queue = &mut self.input.queue;
+                    queue.insert(0, InputItem::ParkedMessage(text.into()));
                     return false;
                 }
                 self.promote_next_pending();
@@ -552,15 +552,15 @@ impl App {
         let idx = self
             .queue_view
             .cursor
-            .min(self.pending.len().saturating_sub(1));
-        if idx >= self.pending.len() {
+            .min(self.input.queue.len().saturating_sub(1));
+        if idx >= self.input.queue.len() {
             return;
         }
         let Some(item) = self.remove_pending_at(idx) else {
             return;
         };
         self.queue_view
-            .clamp(self.pending.len().max(self.queue_view.cursor));
+            .clamp(self.input.queue.len().max(self.queue_view.cursor));
         self.merge_recalled_text(item.display().to_string());
     }
 
@@ -570,14 +570,14 @@ impl App {
         let idx = self
             .queue_view
             .cursor
-            .min(self.pending.len().saturating_sub(1));
-        if idx >= self.pending.len() {
+            .min(self.input.queue.len().saturating_sub(1));
+        if idx >= self.input.queue.len() {
             return;
         }
         if self.remove_pending_at(idx).is_none() {
             return;
         }
-        self.queue_view.clamp(self.pending.len());
+        self.queue_view.clamp(self.input.queue.len());
     }
 
     /// Recall queued messages into the input box before the current draft.
@@ -585,17 +585,14 @@ impl App {
     /// its server mirror: a refused mirror removal keeps the entry queued so
     /// the input cannot duplicate on the next drain.
     pub fn pop_queued_to_input(&mut self) {
-        if self
-            .pending
-            .iter()
-            .all(|it| matches!(it, InputItem::Command(_)))
-        {
+        let queue = &self.input.queue;
+        if queue.iter().all(|it| matches!(it, InputItem::Command(_))) {
             return;
         }
         let mut keep: Vec<InputItem> = Vec::new();
         let mut recalled: Vec<String> = Vec::new();
         let mut refused = false;
-        for it in std::mem::take(&mut self.pending) {
+        for it in std::mem::take(&mut self.input.queue) {
             match it {
                 InputItem::Message(input) => {
                     let session_id = self.session.identity.session_id.clone();
@@ -616,7 +613,7 @@ impl App {
                 other => keep.push(other),
             }
         }
-        self.pending = keep;
+        self.input.queue = keep;
         if refused {
             self.system_line("queue: connection lost — some entries stayed queued");
         }

@@ -14,6 +14,7 @@
 pub(crate) mod queue;
 
 use crate::history::HistoryNav;
+use crate::input::queue::InputItem;
 use crate::paste::{PasteStore, PendingPaste};
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
@@ -358,10 +359,11 @@ impl InputField {
 }
 
 /// The input subsystem's aggregate: the chat editor, the prompt-history
-/// navigation, and the two paste halves (the side table of replaced
-/// placeholders and the bracket-paste accumulator). Together they hold the
-/// text being composed and the past context that edits it, so they move as one
-/// value under a single owner boundary rather than four flat App fields.
+/// navigation, the two paste halves (the side table of replaced placeholders
+/// and the bracket-paste accumulator), and the queued-input FIFO. Together
+/// they hold the text being composed, the past context that edits it, and
+/// the input submitted while a run is in flight, so they move as one value
+/// under a single owner boundary rather than five flat App fields.
 #[derive(Default)]
 pub(crate) struct Input {
     /// The cursor-aware, wrapping chat editor.
@@ -372,6 +374,8 @@ pub(crate) struct Input {
     pub(crate) pasted: PasteStore,
     /// The bracket-paste accumulator drained on the gap flush.
     pub(crate) pending_paste: PendingPaste,
+    /// Queued user inputs submitted while a run was in flight, drained FIFO.
+    pub(crate) queue: Vec<InputItem>,
 }
 
 #[cfg(test)]

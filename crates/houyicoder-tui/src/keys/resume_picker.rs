@@ -25,7 +25,8 @@ pub(super) fn handle_resume_picker(app: &mut App, k: KeyEvent) {
                     // Defer: a run is in flight. Enqueue a Command so the
                     // swap happens when the run resolves (drained FIFO at
                     // idle), not now (would fight the run).
-                    app.pending
+                    app.input
+                        .queue
                         .push(InputItem::Command(format!("/resume {row}")));
                     app.system_line(app.deferred_command_message(&format!("resume {row}")));
                 } else {
@@ -37,7 +38,9 @@ pub(super) fn handle_resume_picker(app: &mut App, k: KeyEvent) {
                 app.resume_picker.close();
                 app.pane = Pane::Transcript;
                 if app.agent_busy() {
-                    app.pending.push(InputItem::Command(format!("/resume {q}")));
+                    app.input
+                        .queue
+                        .push(InputItem::Command(format!("/resume {q}")));
                     app.system_line(app.deferred_command_message(&format!("resume {q}")));
                 } else {
                     app.run_resume(Some(&q));

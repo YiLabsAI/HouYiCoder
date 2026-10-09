@@ -69,7 +69,6 @@ pub fn app() -> App {
         terminal_focused: true,
         layout_feedback: LayoutFeedback::default(),
         displayed_tokens: Cell::new(0),
-        pending: Vec::new(),
         selections: Selections::default(),
         layout_snapshot: LayoutSnapshot::default(),
         render_cache: RefCell::new(RenderCache::default()),

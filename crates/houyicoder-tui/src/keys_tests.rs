@@ -1028,11 +1028,12 @@ fn test_repeated_esc_keeps() {
     let mut app = working_app();
     crate::test_harness::attach_connection(&mut app);
     app.start_run_for_test(0);
-    app.pending.push(InputItem::Message("task a".into()));
+    app.input.queue.push(InputItem::Message("task a".into()));
     handle_working(&mut app, key(KeyCode::Esc));
     handle_working(&mut app, key(KeyCode::Esc));
     assert!(
-        app.pending
+        app.input
+            .queue
             .iter()
             .any(|p| matches!(p, InputItem::Message(t) if t == "task a")),
         "repeated Esc keeps the queued message"
@@ -1050,7 +1051,7 @@ fn test_recall_merges_draft() {
     let mut app = working_app();
     crate::test_harness::attach_connection(&mut app);
     app.start_run_for_test(0);
-    app.pending.push(InputItem::Message("task a".into()));
+    app.input.queue.push(InputItem::Message("task a".into()));
     app.input.editor.set("half draft".into());
     app.pane = Pane::Queue;
     handle_working(&mut app, key(KeyCode::Char('R')));
@@ -1069,7 +1070,7 @@ fn test_esc_cancelling_closes_pane() {
     let mut app = working_app();
     crate::test_harness::attach_connection(&mut app);
     app.start_run_for_test(0);
-    app.pending.push(InputItem::Message("task a".into()));
+    app.input.queue.push(InputItem::Message("task a".into()));
     // Esc1: interrupt (cancelling, agent_busy still true, queue intact).
     handle_working(&mut app, key(KeyCode::Esc));
     assert!(app.cancelling());
@@ -1079,7 +1080,7 @@ fn test_esc_cancelling_closes_pane() {
     handle_working(&mut app, key(KeyCode::Esc));
     assert_eq!(app.pane, Pane::Transcript, "Esc closes the Memory pane");
     assert!(
-        !app.pending.is_empty(),
+        !app.input.queue.is_empty(),
         "the queue is not popped while closing the pane"
     );
     assert!(
@@ -1098,7 +1099,7 @@ fn test_esc_cancelling_backs_trajectory() {
     let mut app = working_app();
     crate::test_harness::attach_connection(&mut app);
     app.start_run_for_test(0);
-    app.pending.push(InputItem::Message("task a".into()));
+    app.input.queue.push(InputItem::Message("task a".into()));
     handle_working(&mut app, key(KeyCode::Esc));
     assert!(app.cancelling());
     app.pane = Pane::Trajectory;
@@ -1110,7 +1111,7 @@ fn test_esc_cancelling_backs_trajectory() {
         "Esc backs the trajectory pane a level, not pops the queue"
     );
     assert!(
-        !app.pending.is_empty(),
+        !app.input.queue.is_empty(),
         "the queue is not popped while backing the pane"
     );
 }

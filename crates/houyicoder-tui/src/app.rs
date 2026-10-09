@@ -221,7 +221,8 @@ pub(crate) fn handle_mouse(app: &mut App, m: MouseEvent) {
             let qrect = app.queue_view.strip_rect.get();
             if qrect.width > 0 && qrect.height > 0 && in_rect(qrect, m.column, m.row) {
                 let n = app
-                    .pending
+                    .input
+                    .queue
                     .iter()
                     .filter(|s| !s.display().is_empty())
                     .count();
@@ -237,7 +238,8 @@ pub(crate) fn handle_mouse(app: &mut App, m: MouseEvent) {
                 let shown = if n > 2 { 1 } else { cmp::min(n, 2) } as usize;
                 if row < shown {
                     let Some(idx) = app
-                        .pending
+                        .input
+                        .queue
                         .iter()
                         .enumerate()
                         .filter(|(_, s)| !s.display().is_empty())

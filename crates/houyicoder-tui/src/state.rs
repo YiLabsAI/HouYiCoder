@@ -30,7 +30,6 @@ use crate::composition::WorktreeEntry;
 use crate::composition::app as test_app;
 use crate::display_rows_cache::DisplayRowsCache;
 use crate::hooks_state::HooksPaneState;
-use crate::input::queue::InputItem;
 use crate::input::{Input, InputField};
 use crate::last_row_keys::LastRowKeys;
 use crate::layout_feedback::LayoutFeedback;
@@ -200,9 +199,6 @@ pub struct App {
     /// Last token count displayed by the spinner. Lerps toward the actual
     /// count each frame for a smooth increment animation.
     pub displayed_tokens: Cell<u32>,
-    /// Queued user inputs submitted while a run was in flight (FIFO). A
-    /// Typed queue (messages + slash commands); drained FIFO at idle.
-    pub pending: Vec<InputItem>,
     /// The four per-region drag selections: the transcript's main selection
     /// and the status, pane, and approval selections, each in its own
     /// coordinate space so a drag on one region never collides with another.

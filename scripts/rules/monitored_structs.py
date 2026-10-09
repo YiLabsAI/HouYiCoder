@@ -162,19 +162,20 @@ ACTIVE_OWNERS = {
         # belongs to the session, so a switch rebuilds it empty instead of
         # carrying the previous session's frames across. App exposes one
         # read handle over it, not a field of its own. The chat editor, the
-        # prompt-history navigation, and the two paste halves folded into one
-        # Input owner, so a session switch resets them together rather than
-        # as four flat fields.
-        "fields": 47,
+        # prompt-history navigation, the two paste halves, and the queued-input
+        # FIFO folded into one Input owner, so a session switch resets them
+        # together rather than as five flat fields.
+        "fields": 46,
         "mut_app": 44,
     },
     "crates/houyicoder-tui/src/input.rs:Input": {
         # The input subsystem's aggregate: the chat editor, the prompt-history
-        # navigation, and the two paste halves (the side table of replaced
-        # placeholders and the bracket-paste accumulator). Four flat App fields
-        # folded into one owner so the composed text and the past context that
-        # edits it travel as one value and a session switch resets them whole.
-        "fields": 4,
+        # navigation, the two paste halves (the side table of replaced
+        # placeholders and the bracket-paste accumulator), and the queued-input
+        # FIFO. Five flat App fields folded into one owner so the composed text
+        # and the past context that edits it travel as one value and a session
+        # switch resets them whole.
+        "fields": 5,
     },
     "crates/houyicoder-tui/src/session.rs:Session": {
         # The presented session: its stable identity, the optional live

@@ -489,7 +489,7 @@ impl App {
             let cmd = stripped.split_whitespace().next().unwrap_or("");
             let bare_resume = cmd == "resume" && stripped.trim() == cmd;
             if self.agent_busy() && is_state_changing(stripped) && !bare_resume {
-                self.pending.push(InputItem::Command(text.clone()));
+                self.input.queue.push(InputItem::Command(text.clone()));
                 self.system_line(self.deferred_command_message(stripped));
                 return;
             }

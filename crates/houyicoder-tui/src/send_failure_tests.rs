@@ -97,13 +97,40 @@ fn test_child_inject_refused() {
 #[test]
 fn test_drain_refused() {
     let mut app = connection_lost_app();
-    app.pending.push(InputItem::Message("head".into()));
+    app.input.queue.push(InputItem::Message("head".into()));
     let promoted = app.drain_pending_head();
     assert!(!promoted, "a refused send must not report a promoted turn");
     assert_eq!(
-        app.pending.len(),
+        app.input.queue.len(),
         1,
         "the head stays queued when the send is refused"
+    );
+    assert!(
+        !app.agent_busy(),
+        "a refused send must not fake a running turn"
+    );
+    assert!(
+        last_line(&app).contains("connection lost"),
+        "the refusal is visible: {}",
+        last_line(&app)
+    );
+}
+
+/// A refused re-drain of a parked head re-parks it as a parked message: the
+/// user input is never dropped when the run cannot start, and the item stays
+/// frontend-only (it had no server mirror to begin with).
+#[test]
+fn test_drain_reparks_parked() {
+    let mut app = connection_lost_app();
+    app.input
+        .queue
+        .push(InputItem::ParkedMessage("head".into()));
+    let promoted = app.drain_pending_head();
+    assert!(!promoted, "a refused send must not report a promoted turn");
+    assert_eq!(app.input.queue.len(), 1, "the parked head stays queued");
+    assert!(
+        matches!(app.input.queue.first(), Some(InputItem::ParkedMessage(_))),
+        "the head re-parks as a parked message, not a live mirror"
     );
     assert!(
         !app.agent_busy(),
@@ -206,10 +233,10 @@ fn test_abort_refused() {
 #[test]
 fn test_recall_refused() {
     let mut app = connection_lost_app();
-    app.pending.push(InputItem::Message("head".into()));
+    app.input.queue.push(InputItem::Message("head".into()));
     app.pop_queued_to_input();
     assert_eq!(
-        app.pending.len(),
+        app.input.queue.len(),
         1,
         "the queued message stays while its server copy exists"
     );

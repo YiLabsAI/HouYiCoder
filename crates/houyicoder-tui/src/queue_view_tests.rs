@@ -41,14 +41,14 @@ fn key(c: char) -> KeyEvent {
 #[test]
 fn test_idle_esc_keeps() {
     let mut app = working();
-    app.pending.push(InputItem::Message("task a".into()));
-    app.pending.push(InputItem::Message("task b".into()));
+    app.input.queue.push(InputItem::Message("task a".into()));
+    app.input.queue.push(InputItem::Message("task b".into()));
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     assert!(
         app.input.editor.is_empty(),
         "Esc leaves the input box untouched"
     );
-    assert_eq!(app.pending.len(), 2, "Esc leaves the queue intact");
+    assert_eq!(app.input.queue.len(), 2, "Esc leaves the queue intact");
 }
 
 /// Repeated Esc events while a run is in flight stay idempotent aborts. They
@@ -58,8 +58,8 @@ fn test_busy_esc_keeps() {
     let mut app = working();
     crate::test_harness::attach_connection(&mut app);
     app.start_run_for_test(0);
-    app.pending.push(InputItem::Message("task a".into()));
-    app.pending.push(InputItem::Message("task b".into()));
+    app.input.queue.push(InputItem::Message("task a".into()));
+    app.input.queue.push(InputItem::Message("task b".into()));
     let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
     crate::keys::handle_working(&mut app, esc);
     crate::keys::handle_working(&mut app, esc);
@@ -68,7 +68,7 @@ fn test_busy_esc_keeps() {
         app.input.editor.is_empty(),
         "Esc does not touch the input box"
     );
-    assert_eq!(app.pending.len(), 2, "the queue stays intact");
+    assert_eq!(app.input.queue.len(), 2, "the queue stays intact");
 }
 
 /// Explicit recall includes parked messages in queue order.
@@ -76,11 +76,15 @@ fn test_busy_esc_keeps() {
 fn test_recall_includes_parked() {
     let mut app = working();
     app.pane = Pane::Queue;
-    app.pending.push(InputItem::ParkedMessage("held a".into()));
-    app.pending.push(InputItem::ParkedMessage("held b".into()));
+    app.input
+        .queue
+        .push(InputItem::ParkedMessage("held a".into()));
+    app.input
+        .queue
+        .push(InputItem::ParkedMessage("held b".into()));
     crate::keys::handle_working(&mut app, key('R'));
     assert_eq!(app.input.editor.value(), "held a\nheld b");
-    assert!(app.pending.is_empty(), "queue drained");
+    assert!(app.input.queue.is_empty(), "queue drained");
 }
 
 /// Slash commands stay queued when messages are explicitly recalled.
@@ -89,8 +93,8 @@ fn test_recall_keeps_command() {
     let mut app = working();
     crate::test_harness::attach_connection(&mut app);
     app.pane = Pane::Queue;
-    app.pending.push(InputItem::Message("do work".into()));
-    app.pending.push(InputItem::Command("/clear".into()));
+    app.input.queue.push(InputItem::Message("do work".into()));
+    app.input.queue.push(InputItem::Command("/clear".into()));
     crate::keys::handle_working(&mut app, key('R'));
     assert_eq!(
         app.input.editor.value(),
@@ -98,7 +102,7 @@ fn test_recall_keeps_command() {
         "only the message is recalled"
     );
     assert_eq!(
-        app.pending,
+        app.input.queue,
         vec![InputItem::Command("/clear".into())],
         "command stays queued"
     );
@@ -111,7 +115,8 @@ fn test_recall_clear_loses() {
     let mut app = working();
     crate::test_harness::attach_connection(&mut app);
     app.pane = Pane::Queue;
-    app.pending
+    app.input
+        .queue
         .push(InputItem::Message("important task".into()));
     crate::keys::handle_working(&mut app, key('R'));
     assert_eq!(
@@ -119,7 +124,7 @@ fn test_recall_clear_loses() {
         "important task",
         "message recalled to input"
     );
-    assert!(app.pending.is_empty(), "queue drained on recall");
+    assert!(app.input.queue.is_empty(), "queue drained on recall");
     // Clear the recalled input.
     crate::keys::handle_working(&mut app, ctrl('u'));
     assert!(
@@ -127,7 +132,7 @@ fn test_recall_clear_loses() {
         "Ctrl+U clears the recalled text"
     );
     assert!(
-        app.pending.is_empty(),
+        app.input.queue.is_empty(),
         "message is gone (remove-on-recall is by design)"
     );
     // Submitting empty no-ops.
@@ -175,8 +180,11 @@ fn test_input_stable_while_busy() {
 fn test_queue_strip_renders() {
     let mut app = working();
     app.start_run_for_test(0);
-    app.pending.push(InputItem::Message("fix the bug".into()));
-    app.pending
+    app.input
+        .queue
+        .push(InputItem::Message("fix the bug".into()));
+    app.input
+        .queue
         .push(InputItem::ParkedMessage("run tests".into()));
     let out = render(&app);
     assert!(
@@ -197,7 +205,7 @@ fn test_queue_strip_renders() {
 fn test_multiline_preview() {
     let mut app = working();
     app.start_run_for_test(0);
-    app.pending.push(InputItem::Message(
+    app.input.queue.push(InputItem::Message(
         "first line\nsecond line\nthird line".into(),
     ));
     let out = render(&app);
@@ -220,8 +228,8 @@ fn test_multiline_preview() {
 fn test_queue_strip_in_focus() {
     let mut app = working();
     app.start_run_for_test(0);
-    app.pending.push(InputItem::Message("task a".into()));
-    app.pending.push(InputItem::Message("task b".into()));
+    app.input.queue.push(InputItem::Message("task a".into()));
+    app.input.queue.push(InputItem::Message("task b".into()));
     app.workflow.stage = Stage::Implementing;
     app.pane = Pane::Diff;
     app.viewport = crate::state::ViewportMode::Focus;
@@ -237,8 +245,12 @@ fn test_queue_strip_in_focus() {
 #[test]
 fn test_click_footer_recalls_item() {
     let mut app = working_session();
-    app.pending.push(InputItem::Message("first task".into()));
-    app.pending.push(InputItem::Message("second task".into()));
+    app.input
+        .queue
+        .push(InputItem::Message("first task".into()));
+    app.input
+        .queue
+        .push(InputItem::Message("second task".into()));
     // Render so queue_view.strip_rect is stashed.
     render_buffer(&app, 100, 28);
     let qrect = app.queue_view.strip_rect.get();
@@ -252,7 +264,7 @@ fn test_click_footer_recalls_item() {
         "click on first preview recalls it"
     );
     assert_eq!(
-        app.pending,
+        app.input.queue,
         vec![InputItem::Message("second task".into())],
         "recalled item removed from queue"
     );
@@ -264,8 +276,12 @@ fn test_click_footer_recalls_item() {
 #[test]
 fn test_click_second_row_recalls() {
     let mut app = working_session();
-    app.pending.push(InputItem::Message("first task".into()));
-    app.pending.push(InputItem::Message("second task".into()));
+    app.input
+        .queue
+        .push(InputItem::Message("first task".into()));
+    app.input
+        .queue
+        .push(InputItem::Message("second task".into()));
     render_buffer(&app, 100, 28);
     let qrect = app.queue_view.strip_rect.get();
     assert!(qrect.height >= 2, "two-item queue gets two rows");
@@ -277,7 +293,7 @@ fn test_click_second_row_recalls() {
         "click on the second row recalls the second item"
     );
     assert_eq!(
-        app.pending,
+        app.input.queue,
         vec![InputItem::Message("first task".into())],
         "recalled item removed, first stays"
     );
@@ -290,8 +306,8 @@ fn test_click_second_row_recalls() {
 fn test_queue_row_above_input() {
     let mut app = working();
     app.start_run_for_test(0);
-    app.pending.push(InputItem::Message("one".into()));
-    app.pending.push(InputItem::Message("two".into()));
+    app.input.queue.push(InputItem::Message("one".into()));
+    app.input.queue.push(InputItem::Message("two".into()));
     let text = render_text(&app, 100, 28);
     let mut q = None;
     let mut p = None;
@@ -314,9 +330,9 @@ fn test_queue_row_above_input() {
 fn test_queue_summary_one_row() {
     let mut app = working();
     app.start_run_for_test(0);
-    app.pending.push(InputItem::Message("a".into()));
-    app.pending.push(InputItem::Message("b".into()));
-    app.pending.push(InputItem::Message("c".into()));
+    app.input.queue.push(InputItem::Message("a".into()));
+    app.input.queue.push(InputItem::Message("b".into()));
+    app.input.queue.push(InputItem::Message("c".into()));
     let out = render_text(&app, 80, 18);
     assert!(out.contains("→ +3"), "small window count summary: {out}");
 }
@@ -329,9 +345,11 @@ fn test_queue_summary_one_row() {
 fn test_queue_held_row() {
     let mut app = working();
     // working() defaults to idle + last_run_final=false (gate closed).
-    app.pending
+    app.input
+        .queue
         .push(InputItem::ParkedMessage("orphan a".into()));
-    app.pending
+    app.input
+        .queue
         .push(InputItem::ParkedMessage("orphan b".into()));
     let out = render_text(&app, 100, 28);
     assert!(
@@ -356,8 +374,10 @@ fn test_queue_held_row() {
 fn test_queue_next_row() {
     let mut app = working();
     app.start_run_for_test(0);
-    app.pending.push(InputItem::Message("live".into()));
-    app.pending.push(InputItem::ParkedMessage("queued".into()));
+    app.input.queue.push(InputItem::Message("live".into()));
+    app.input
+        .queue
+        .push(InputItem::ParkedMessage("queued".into()));
     let out = render_text(&app, 100, 28);
     assert!(out.contains("→ next"), "busy head shows next: {out}");
     assert!(
@@ -378,10 +398,10 @@ fn test_queue_next_row() {
 #[test]
 fn test_click_more_opens_queue() {
     let mut app = working();
-    app.pending.push(InputItem::Message("a".into()));
-    app.pending.push(InputItem::Message("b".into()));
-    app.pending.push(InputItem::Message("c".into()));
-    app.pending.push(InputItem::Message("d".into()));
+    app.input.queue.push(InputItem::Message("a".into()));
+    app.input.queue.push(InputItem::Message("b".into()));
+    app.input.queue.push(InputItem::Message("c".into()));
+    app.input.queue.push(InputItem::Message("d".into()));
     render_buffer(&app, 100, 28);
     let qrect = app.queue_view.strip_rect.get();
     assert!(qrect.height >= 2, "strip has the head row + a +N row");
@@ -394,7 +414,7 @@ fn test_click_more_opens_queue() {
         "+N row opens the queue pane"
     );
     assert_eq!(
-        app.pending.len(),
+        app.input.queue.len(),
         4,
         "queue items are not drained by opening the pane"
     );
@@ -418,8 +438,8 @@ fn mouse_at(x: u16, y: u16) -> MouseEvent {
 fn test_pane_enter_recalls_one() {
     let mut app = working_session();
     app.pane = Pane::Queue;
-    app.pending.push(InputItem::Message("alpha".into()));
-    app.pending.push(InputItem::Message("beta".into()));
+    app.input.queue.push(InputItem::Message("alpha".into()));
+    app.input.queue.push(InputItem::Message("beta".into()));
     app.queue_view.cursor = 1;
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     assert_eq!(
@@ -428,7 +448,7 @@ fn test_pane_enter_recalls_one() {
         "only the selected item is recalled"
     );
     assert_eq!(
-        app.pending,
+        app.input.queue,
         vec![InputItem::Message("alpha".into())],
         "the other item stays queued",
     );
@@ -441,9 +461,9 @@ fn test_pane_r_recalls_all() {
     let mut app = working();
     crate::test_harness::attach_connection(&mut app);
     app.pane = Pane::Queue;
-    app.pending.push(InputItem::Message("a".into()));
-    app.pending.push(InputItem::Message("b".into()));
-    app.pending.push(InputItem::Message("c".into()));
+    app.input.queue.push(InputItem::Message("a".into()));
+    app.input.queue.push(InputItem::Message("b".into()));
+    app.input.queue.push(InputItem::Message("c".into()));
     crate::keys::handle_working(
         &mut app,
         KeyEvent::new(KeyCode::Char('R'), KeyModifiers::NONE),
@@ -453,7 +473,7 @@ fn test_pane_r_recalls_all() {
         "a\nb\nc",
         "all items recalled in order"
     );
-    assert!(app.pending.is_empty(), "queue drained");
+    assert!(app.input.queue.is_empty(), "queue drained");
     assert_eq!(app.pane, Pane::Transcript, "pane closes after recall-all");
 }
 
@@ -462,8 +482,8 @@ fn test_pane_r_recalls_all() {
 fn test_pane_d_deletes_one() {
     let mut app = working_session();
     app.pane = Pane::Queue;
-    app.pending.push(InputItem::Message("alpha".into()));
-    app.pending.push(InputItem::Message("beta".into()));
+    app.input.queue.push(InputItem::Message("alpha".into()));
+    app.input.queue.push(InputItem::Message("beta".into()));
     app.queue_view.cursor = 0;
     crate::keys::handle_working(
         &mut app,
@@ -474,7 +494,7 @@ fn test_pane_d_deletes_one() {
         "input not filled on delete"
     );
     assert_eq!(
-        app.pending,
+        app.input.queue,
         vec![InputItem::Message("beta".into())],
         "only the selected item is removed",
     );
@@ -486,12 +506,14 @@ fn test_pane_recall_promotes_next() {
     let mut app = working_session();
     app.start_run_for_test(0);
     app.pane = Pane::Queue;
-    app.pending.push(InputItem::Message("first".into()));
-    app.pending.push(InputItem::ParkedMessage("second".into()));
+    app.input.queue.push(InputItem::Message("first".into()));
+    app.input
+        .queue
+        .push(InputItem::ParkedMessage("second".into()));
 
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
-    assert_eq!(app.pending, vec![InputItem::Message("second".into())]);
+    assert_eq!(app.input.queue, vec![InputItem::Message("second".into())]);
 }
 
 #[test]
@@ -499,29 +521,33 @@ fn test_pane_delete_promotes_next() {
     let mut app = working_session();
     app.start_run_for_test(0);
     app.pane = Pane::Queue;
-    app.pending.push(InputItem::Message("first".into()));
-    app.pending.push(InputItem::ParkedMessage("second".into()));
+    app.input.queue.push(InputItem::Message("first".into()));
+    app.input
+        .queue
+        .push(InputItem::ParkedMessage("second".into()));
 
     crate::keys::handle_working(
         &mut app,
         KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
     );
 
-    assert_eq!(app.pending, vec![InputItem::Message("second".into())]);
+    assert_eq!(app.input.queue, vec![InputItem::Message("second".into())]);
 }
 
 #[test]
 fn test_strip_recall_promotes_next() {
     let mut app = working_session();
     app.start_run_for_test(0);
-    app.pending.push(InputItem::Message("first".into()));
-    app.pending.push(InputItem::ParkedMessage("second".into()));
+    app.input.queue.push(InputItem::Message("first".into()));
+    app.input
+        .queue
+        .push(InputItem::ParkedMessage("second".into()));
     render_buffer(&app, 100, 28);
     let qrect = app.queue_view.strip_rect.get();
 
     crate::app::handle_mouse(&mut app, mouse_at(qrect.x + 2, qrect.y));
 
-    assert_eq!(app.pending, vec![InputItem::Message("second".into())]);
+    assert_eq!(app.input.queue, vec![InputItem::Message("second".into())]);
 }
 
 /// Esc closes the queue pane without recalling anything.
@@ -529,10 +555,10 @@ fn test_strip_recall_promotes_next() {
 fn test_queue_pane_esc_closes() {
     let mut app = working();
     app.pane = Pane::Queue;
-    app.pending.push(InputItem::Message("alpha".into()));
+    app.input.queue.push(InputItem::Message("alpha".into()));
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     assert_eq!(app.pane, Pane::Transcript, "Esc closes the pane");
-    assert_eq!(app.pending.len(), 1, "queue items are not touched");
+    assert_eq!(app.input.queue.len(), 1, "queue items are not touched");
 }
 
 /// The queue pane renders one bounded row per logical item, with a
@@ -541,9 +567,10 @@ fn test_queue_pane_esc_closes() {
 fn test_queue_pane_multiline_preview() {
     let mut app = working();
     app.pane = Pane::Queue;
-    app.pending
+    app.input
+        .queue
         .push(InputItem::Message("line one\nline two\nline three".into()));
-    app.pending.push(InputItem::Message("short".into()));
+    app.input.queue.push(InputItem::Message("short".into()));
     let text = render_text(&app, 80, 28);
     assert!(text.contains("line one"), "first line shown");
     assert!(text.contains("+2 lines"), "hidden line count shown");
@@ -555,9 +582,10 @@ fn test_queue_pane_multiline_preview() {
 fn test_queue_pane_narrow_terminal() {
     let mut app = working();
     app.pane = Pane::Queue;
-    app.pending
+    app.input
+        .queue
         .push(InputItem::Message("a somewhat long queued message".into()));
-    app.pending.push(InputItem::Message("b".into()));
+    app.input.queue.push(InputItem::Message("b".into()));
     let text = render_text(&app, 40, 20);
     assert!(text.contains("queue"), "header renders at narrow width");
 }
@@ -567,9 +595,9 @@ fn test_queue_pane_narrow_terminal() {
 fn test_queue_pane_nav() {
     let mut app = working();
     app.pane = Pane::Queue;
-    app.pending.push(InputItem::Message("a".into()));
-    app.pending.push(InputItem::Message("b".into()));
-    app.pending.push(InputItem::Message("c".into()));
+    app.input.queue.push(InputItem::Message("a".into()));
+    app.input.queue.push(InputItem::Message("b".into()));
+    app.input.queue.push(InputItem::Message("c".into()));
     app.queue_view.cursor = 0;
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     assert_eq!(app.queue_view.cursor, 1, "Down moves cursor");

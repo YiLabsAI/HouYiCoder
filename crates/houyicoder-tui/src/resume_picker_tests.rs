@@ -4,6 +4,7 @@
 
 use houyicoder_protocol::frontend::SlashCommand;
 
+use crate::input::queue::InputItem;
 use crate::resume_picker::{SessionCatalog, SessionPickerState, SessionRow};
 use crate::test_harness::render_text;
 
@@ -199,6 +200,53 @@ fn test_picker_enter_fall_back() {
         out.contains("no session matches"),
         "fall-back no-match should report:\n{out}"
     );
+}
+
+/// Enter with a selected row while a run is in flight defers the switch onto
+/// the queued-input FIFO instead of swapping now (a swap would fight the run).
+#[test]
+fn test_busy_defers_selection() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    let mut app = stub_catalog_app();
+    app.run_command(SlashCommand::Resume);
+    app.start_run_for_test(1);
+    crate::app::handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(
+        app.pending_resume_target.is_none(),
+        "busy Enter must not swap now"
+    );
+    assert_eq!(app.input.queue.len(), 1, "the switch is deferred");
+    match app.input.queue.first() {
+        Some(InputItem::Command(text)) => {
+            assert_eq!(text, "/resume aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
+        }
+        other => panic!("expected a deferred /resume command, got {other:?}"),
+    }
+}
+
+/// Enter with a typed query matching no row while busy defers the direct
+/// switch by query onto the queue. Covers the no-match defer branch.
+#[test]
+fn test_busy_defers_query() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    let mut app = stub_catalog_app();
+    app.run_command(SlashCommand::Resume);
+    for c in "zzz-no-match".chars() {
+        app.resume_picker.push(c);
+    }
+    app.start_run_for_test(1);
+    crate::app::handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(
+        app.pending_resume_target.is_none(),
+        "busy Enter must not swap now"
+    );
+    assert_eq!(app.input.queue.len(), 1, "the switch is deferred");
+    match app.input.queue.first() {
+        Some(InputItem::Command(text)) => {
+            assert_eq!(text, "/resume zzz-no-match");
+        }
+        other => panic!("expected a deferred /resume command, got {other:?}"),
+    }
 }
 
 /// Char keys reach the picker via handle_key (not just the push method), so

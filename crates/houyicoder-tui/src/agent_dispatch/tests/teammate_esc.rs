@@ -508,7 +508,7 @@ fn test_teammate_submit_steers() {
         "no parent echo for a steering submit"
     );
     assert!(
-        app.pending.is_empty(),
+        app.input.queue.is_empty(),
         "steering does not queue on the parent"
     );
 }

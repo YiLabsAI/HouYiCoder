@@ -246,7 +246,7 @@ mod tests {
         app.input.editor.set("/resume aaaa1111".to_string());
         app.submit_input();
         assert_eq!(
-            app.pending,
+            app.input.queue,
             vec![InputItem::Command("/resume aaaa1111".into())],
             "/resume <sid> mid-run enqueued as a Command"
         );
@@ -268,7 +268,7 @@ mod tests {
         app.input.editor.set("/resume".to_string());
         app.submit_input();
         assert!(
-            app.pending.is_empty(),
+            app.input.queue.is_empty(),
             "bare /resume does not enqueue (picker opens instead)"
         );
         assert!(app.resume_picker.open, "picker opens for browsing");

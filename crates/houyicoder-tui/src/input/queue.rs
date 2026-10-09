@@ -41,15 +41,6 @@ impl InputItem {
             InputItem::Command(t) => t,
         }
     }
-
-    /// Whether this item has a live server-side copy (InjectUser'd to the
-    /// server runner queue), so recall/delete must ship a wire QueueRemove to
-    /// keep the copy in sync. A ParkedMessage has no copy; a Command is
-    /// local-only. Used by recall/delete to decide whether to ship
-    /// QueueRemove.
-    pub fn is_message(&self) -> bool {
-        matches!(self, InputItem::Message(_))
-    }
 }
 
 /// Whether a slash command (the text after the leading slash, trimmed) is
@@ -86,12 +77,12 @@ impl App {
     /// copy is removed so a refused enqueue keeps the item queued and the
     /// local and server mirrors cannot diverge.
     pub(crate) fn remove_pending_at(&mut self, index: usize) -> Option<InputItem> {
-        if index >= self.pending.len() {
+        if index >= self.input.queue.len() {
             return None;
         }
         // Enqueue the server removal before touching the local copy: a closed
         // driver leaves the item in place rather than orphaning the mirror.
-        if let InputItem::Message(input) = &self.pending[index] {
+        if let InputItem::Message(input) = &self.input.queue[index] {
             let id = input.id;
             let session_id = self.session.identity.session_id.clone();
             if let Err(e) = self.enqueue(ClientCommand::QueueRemove { session_id, id }) {
@@ -99,7 +90,7 @@ impl App {
                 return None;
             }
         }
-        let item = self.pending.remove(index);
+        let item = self.input.queue.remove(index);
         self.promote_next_pending();
         Some(item)
     }
@@ -116,7 +107,7 @@ impl App {
         }
         // Clone the parked input without swapping the slot: the slot only
         // marks itself as a live mirror once the injection is queued.
-        let Some(input) = self.pending.first().and_then(|slot| match slot {
+        let Some(input) = self.input.queue.first().and_then(|slot| match slot {
             InputItem::ParkedMessage(input) => Some(input.clone()),
             _ => None,
         }) else {
@@ -125,7 +116,7 @@ impl App {
         let session_id = self.session.identity.session_id.clone();
         match self.enqueue(ClientCommand::InjectUser { session_id, input }) {
             Ok(()) => {
-                if let Some(slot) = self.pending.first_mut()
+                if let Some(slot) = self.input.queue.first_mut()
                     && let InputItem::ParkedMessage(input) = slot
                 {
                     let input = input.clone();
@@ -168,7 +159,7 @@ impl App {
     /// orphan. The host queue is the single truth source; the server
     /// queue is only the current run's buffer.
     pub(crate) fn demote_pending_to_parked(&mut self) {
-        for it in self.pending.iter_mut() {
+        for it in self.input.queue.iter_mut() {
             if let InputItem::Message(t) = it {
                 *it = InputItem::ParkedMessage(t.clone());
             }
@@ -241,13 +232,11 @@ mod tests {
     fn test_command_display_keeps_slash() {
         let c = InputItem::Command("/resume sid-123".into());
         assert_eq!(c.display(), "/resume sid-123");
-        assert!(!c.is_message());
     }
 
     #[test]
-    fn test_message_is_message() {
+    fn test_message_display_returns_text() {
         let m = InputItem::Message("hello".into());
-        assert!(m.is_message());
         assert_eq!(m.display(), "hello");
     }
 }

@@ -288,7 +288,8 @@ fn test_interrupt_restores_input() {
         user_msg("draft").into(),
     )));
     app.session.last_run_input = Some("draft".into());
-    app.pending
+    app.input
+        .queue
         .push(crate::input::queue::InputItem::ParkedMessage(
             "queued".into(),
         ));
@@ -338,7 +339,11 @@ fn test_interrupt_restores_input() {
         "draft",
         "a repeated Esc keeps the restore"
     );
-    assert_eq!(app.pending.len(), 1, "Esc does not recall pending input");
+    assert_eq!(
+        app.input.queue.len(),
+        1,
+        "Esc does not recall pending input"
+    );
 }
 
 /// A committed mid-turn input closes the original turn's rollback window.
@@ -352,7 +357,8 @@ fn test_commit_blocks_restore() {
     )));
     app.session.last_run_input = Some("origin".into());
     let committed = houyicoder_protocol::frontend::QueuedInput::new("follow-up");
-    app.pending
+    app.input
+        .queue
         .push(crate::input::queue::InputItem::Message(committed.clone()));
     app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(
         user_msg("follow-up").into(),
@@ -442,7 +448,7 @@ fn test_recall_survives_interrupt() {
     // Queue a message while the run is in flight (spawn_run's busy path:
     // pending push; the busy branch takes no send).
     app.spawn_run("zzsecond".into());
-    assert!(!app.pending.is_empty(), "message queues while busy");
+    assert!(!app.input.queue.is_empty(), "message queues while busy");
     // Esc1: interrupt the run. The queue stays intact; input stays empty.
     let esc = crossterm::event::KeyEvent::new(
         crossterm::event::KeyCode::Esc,
@@ -450,7 +456,10 @@ fn test_recall_survives_interrupt() {
     );
     crate::keys::handle_working(&mut app, esc);
     assert!(app.cancelling(), "first Esc interrupts the run");
-    assert!(!app.pending.is_empty(), "queue intact after the interrupt");
+    assert!(
+        !app.input.queue.is_empty(),
+        "queue intact after the interrupt"
+    );
     app.pop_queued_to_input();
     assert_eq!(
         app.input.editor.value(),
@@ -651,20 +660,24 @@ fn test_batch_keeps_tail() {
     tools.register(Arc::new(EchoTool));
     let mut app = app_with_provider(provider, tools);
     app.status.last_run_final = true;
-    app.pending.push(InputItem::Message("first".into()));
-    app.pending.push(InputItem::ParkedMessage("second".into()));
-    app.pending.push(InputItem::ParkedMessage("third".into()));
+    app.input.queue.push(InputItem::Message("first".into()));
+    app.input
+        .queue
+        .push(InputItem::ParkedMessage("second".into()));
+    app.input
+        .queue
+        .push(InputItem::ParkedMessage("third".into()));
     let mut dirty = false;
     app.idle_drain(None, &mut dirty);
     assert!(app.agent_busy(), "first spawned a run");
-    assert_eq!(app.pending.len(), 2, "second/third stay pending");
+    assert_eq!(app.input.queue.len(), 2, "second/third stay pending");
     assert_eq!(
-        app.pending[0],
+        app.input.queue[0],
         InputItem::Message("second".into()),
         "second holds the copy; third parked behind it"
     );
     assert_eq!(
-        app.pending[1],
+        app.input.queue[1],
         InputItem::ParkedMessage("third".into()),
         "third has no copy (single-copy invariant)"
     );
@@ -677,11 +690,11 @@ fn test_batch_keeps_tail() {
         tries += 1;
     }
     assert!(!app.agent_busy(), "run reached Done");
-    let texts: Vec<&str> = app.pending.iter().map(|it| it.display()).collect();
+    let texts: Vec<&str> = app.input.queue.iter().map(|it| it.display()).collect();
     assert!(
         matches!(texts.as_slice(), ["second", "third"] | ["third"]),
         "the undrainable tail must remain in FIFO order: {:?}",
-        app.pending
+        app.input.queue
     );
 }
 
@@ -715,14 +728,18 @@ fn test_batch_delivers_via_drain() {
     tools.register(Arc::new(EchoTool));
     let mut app = app_with_provider(provider, tools);
     app.status.last_run_final = true;
-    app.pending.push(InputItem::Message("first".into()));
-    app.pending.push(InputItem::ParkedMessage("second".into()));
-    app.pending.push(InputItem::ParkedMessage("third".into()));
+    app.input.queue.push(InputItem::Message("first".into()));
+    app.input
+        .queue
+        .push(InputItem::ParkedMessage("second".into()));
+    app.input
+        .queue
+        .push(InputItem::ParkedMessage("third".into()));
     let mut dirty = false;
     app.idle_drain(None, &mut dirty);
     assert!(app.agent_busy(), "first spawned a run");
     assert_eq!(
-        app.pending[0],
+        app.input.queue[0],
         InputItem::Message("second".into()),
         "second holds the copy; third parked"
     );
@@ -736,9 +753,9 @@ fn test_batch_delivers_via_drain() {
     }
     assert!(!app.agent_busy(), "run reached Done");
     assert!(
-        app.pending.is_empty(),
+        app.input.queue.is_empty(),
         "race won: one run drained the chain one boundary at a time:\n{:?}",
-        app.pending
+        app.input.queue
     );
 }
 
