@@ -44,6 +44,7 @@ pub mod resume_picker;
 pub mod review_queue;
 pub mod row_id;
 pub mod run_control;
+mod run_metrics;
 pub mod run_state;
 pub mod scroll;
 pub mod selection;

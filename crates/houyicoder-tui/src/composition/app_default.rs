@@ -21,6 +21,7 @@ use crate::paste::{PasteStore, PendingPaste};
 use crate::permission_pane_state::PermissionPaneState;
 use crate::render_cache::RenderCache;
 use crate::resume_picker::SessionPickerState;
+use crate::run_metrics::RunMetrics;
 use crate::run_state::RunState;
 use crate::selection::SystemClipboard;
 use crate::selections::Selections;
@@ -98,9 +99,7 @@ pub fn app() -> App {
         notifications: NotificationState::default(),
         terminal_focused: true,
         run_state: RunState::Idle,
-        session_started_at: None,
-        cumulative_tokens: 0,
-        cumulative_steps: 0,
+        run_metrics: RunMetrics::default(),
         todos: Default::default(),
         layout_feedback: LayoutFeedback::default(),
         displayed_tokens: Cell::new(0),

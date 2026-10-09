@@ -120,7 +120,11 @@ ACTIVE_OWNERS = {
         # export writer, transcript snapshot, session catalog) became one
         # SessionPersistence owner; the composition root injects them together,
         # so the panes and commands read one owner rather than four fields.
-        "fields": 82,
+        # The session's cumulative run metrics (first-run start, output token
+        # tally, model-call steps) became one RunMetrics owner, so the
+        # completion path records one value and a session switch resets it
+        # whole.
+        "fields": 80,
         "mut_app": 44,
     },
     "crates/houyicoder-tui/src/session/capabilities.rs:PermissionCapability": {
@@ -168,6 +172,12 @@ ACTIVE_OWNERS = {
         # resumable-session catalog. Four flat App fields folded into one
         # owner, injected together by the composition root.
         "fields": 4,
+    },
+    "crates/houyicoder-tui/src/run_metrics.rs:RunMetrics": {
+        # The session's cumulative run metrics: the first-run start and the
+        # output tokens and model-call steps accrued across completed runs.
+        # Three flat App fields folded into one owner, reset on session switch.
+        "fields": 3,
     },
     "crates/houyicoder-tui/src/last_row_keys.rs:LastRowKeys": {
         # The four per-row key vectors of the last emitted visible row set:

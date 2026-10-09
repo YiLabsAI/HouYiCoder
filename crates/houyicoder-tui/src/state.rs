@@ -47,6 +47,7 @@ use crate::records::TeammateView;
 use crate::render_cache::RenderCache;
 use crate::resume_picker::SessionPickerState;
 use crate::review_queue::ReviewQueue;
+use crate::run_metrics::RunMetrics;
 use crate::run_state::{RunProgress, RunState};
 use crate::selection::ClipboardWriter;
 use crate::selections::Selections;
@@ -250,12 +251,8 @@ pub struct App {
     /// The run lifecycle state machine: Idle, Running, Waiting, Cancelling.
     /// The single source of truth for whether a run is in flight.
     pub run_state: RunState,
-    /// When the session's first run started, for end-to-end elapsed.
-    pub session_started_at: Option<Instant>,
-    /// Cumulative output tokens across all turns this session.
-    pub cumulative_tokens: u64,
-    /// Cumulative model-call steps across all turns.
-    pub cumulative_steps: u32,
+    /// The session's cumulative run metrics, held in one owner.
+    pub(crate) run_metrics: RunMetrics,
     /// Session checklist content, expansion, and completion lifecycle.
     pub todos: TodoState,
     /// The renderer layout feedback: the last terminal height and transcript

@@ -794,7 +794,7 @@ fn test_finish_copies_start() {
         },
     });
     assert_eq!(
-        app.session_started_at, started,
+        app.run_metrics.session_started_at, started,
         "the run start is copied into the session start before the drop"
     );
 }

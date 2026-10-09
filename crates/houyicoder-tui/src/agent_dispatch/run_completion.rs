@@ -33,10 +33,11 @@ impl super::App {
                 let final_outcome = matches!(&run.outcome, RunOutcome::FinalOutput { .. });
                 match run.outcome {
                     RunOutcome::FinalOutput { .. } => {
-                        self.cumulative_tokens += run.usage.total_tokens as u64;
-                        self.cumulative_steps += run.turns;
-                        if self.session_started_at.is_none() {
-                            self.session_started_at = active.as_ref().map(|r| r.started_at);
+                        self.run_metrics.cumulative_tokens += run.usage.total_tokens as u64;
+                        self.run_metrics.cumulative_steps += run.turns;
+                        if self.run_metrics.session_started_at.is_none() {
+                            self.run_metrics.session_started_at =
+                                active.as_ref().map(|r| r.started_at);
                         }
                     }
                     RunOutcome::Handoff { agent } => {
