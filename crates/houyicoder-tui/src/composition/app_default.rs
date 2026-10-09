@@ -24,6 +24,7 @@ use crate::render_cache::RenderCache;
 use crate::resume_picker::SessionPickerState;
 use crate::run_state::RunState;
 use crate::selection::SystemClipboard;
+use crate::selections::Selections;
 use crate::skill_picker_state::SkillPickerState;
 use crate::skills_state::SkillsPaneState;
 use crate::state::history_read::HistoryReads;
@@ -109,11 +110,8 @@ pub fn app() -> App {
         displayed_tokens: Cell::new(0),
         last_run_input: None,
         pending: Vec::new(),
-        selection: Selection::default(),
+        selections: Selections::default(),
         layout_snapshot: LayoutSnapshot::default(),
-        status_selection: Selection::default(),
-        pane_selection: Selection::default(),
-        approval_selection: Selection::default(),
         render_cache: RefCell::new(RenderCache::default()),
         last_row_keys: LastRowKeys::default(),
         parked_view_states: ParkedViewStates::default(),

@@ -296,59 +296,59 @@ pub(crate) fn handle_mouse(app: &mut App, m: MouseEvent) {
                     TranscriptSurface { app: &mut *app }.handle_down(m.column, m.row);
                 }
             } else {
-                app.selection.clear();
-                app.pane_selection.clear();
-                app.status_selection.clear();
-                app.approval_selection.clear();
+                app.selections.transcript.clear();
+                app.selections.pane.clear();
+                app.selections.status.clear();
+                app.selections.approval.clear();
             }
         }
         MouseEventKind::Drag(MouseButton::Left) => {
-            if app.pane_selection.is_dragging {
+            if app.selections.pane.is_dragging {
                 PaneSurface { app: &mut *app }.handle_drag(m.column, m.row);
-            } else if app.status_selection.is_dragging {
+            } else if app.selections.status.is_dragging {
                 StatusSurface { app: &mut *app }.handle_drag(m.column, m.row);
-            } else if app.approval_selection.is_dragging {
+            } else if app.selections.approval.is_dragging {
                 ApprovalSelection { app: &mut *app }.handle_drag(m.column, m.row);
-            } else if app.selection.is_dragging {
+            } else if app.selections.transcript.is_dragging {
                 TranscriptSurface { app: &mut *app }.handle_drag(m.column, m.row);
             }
         }
         MouseEventKind::Moved => {
             // Motion without a pressed button closes any drag whose release
             // was lost. Multiple surfaces may still carry stale drag state.
-            if app.pane_selection.is_dragging {
+            if app.selections.pane.is_dragging {
                 PaneSurface { app: &mut *app }.handle_moved();
             }
-            if app.status_selection.is_dragging {
+            if app.selections.status.is_dragging {
                 StatusSurface { app: &mut *app }.handle_moved();
             }
-            if app.approval_selection.is_dragging {
+            if app.selections.approval.is_dragging {
                 ApprovalSelection { app: &mut *app }.handle_moved();
             }
-            if app.selection.is_dragging {
+            if app.selections.transcript.is_dragging {
                 TranscriptSurface { app: &mut *app }.handle_moved();
             }
         }
         MouseEventKind::Up(MouseButton::Left) => {
-            if app.pane_selection.is_dragging {
+            if app.selections.pane.is_dragging {
                 PaneSurface { app: &mut *app }.handle_up();
                 return;
             }
-            if app.status_selection.is_dragging {
+            if app.selections.status.is_dragging {
                 StatusSurface { app: &mut *app }.handle_up();
                 return;
             }
-            if app.approval_selection.is_dragging {
+            if app.selections.approval.is_dragging {
                 ApprovalSelection { app: &mut *app }.handle_up();
                 return;
             }
-            if app.selection.is_dragging {
+            if app.selections.transcript.is_dragging {
                 TranscriptSurface { app: &mut *app }.handle_up();
             }
         }
         MouseEventKind::ScrollUp => {
-            clear_stale_click(&mut app.selection);
-            clear_stale_click(&mut app.pane_selection);
+            clear_stale_click(&mut app.selections.transcript);
+            clear_stale_click(&mut app.selections.pane);
             if app.window_browsing() {
                 app.window_scroll_mut().line_up(3);
             } else {
@@ -356,8 +356,8 @@ pub(crate) fn handle_mouse(app: &mut App, m: MouseEvent) {
             }
         }
         MouseEventKind::ScrollDown => {
-            clear_stale_click(&mut app.selection);
-            clear_stale_click(&mut app.pane_selection);
+            clear_stale_click(&mut app.selections.transcript);
+            clear_stale_click(&mut app.selections.pane);
             if app.window_browsing() {
                 app.window_scroll_mut().line_down(3);
             } else {
@@ -384,7 +384,7 @@ pub(crate) fn apply_selection_overlay(f: &mut Frame, app: &App) {
             buf,
             app.layout_snapshot.transcript_rect.get(),
             &rows,
-            &app.selection,
+            &app.selections.transcript,
             scroll_top,
         );
     }
@@ -394,7 +394,7 @@ pub(crate) fn apply_selection_overlay(f: &mut Frame, app: &App) {
             buf,
             app.layout_snapshot.pane_rect.get(),
             &rows,
-            &app.pane_selection,
+            &app.selections.pane,
             0,
         );
     }
@@ -404,7 +404,7 @@ pub(crate) fn apply_selection_overlay(f: &mut Frame, app: &App) {
             buf,
             app.layout_snapshot.status_rect.get(),
             &rows,
-            &app.status_selection,
+            &app.selections.status,
             0,
         );
     }
@@ -414,7 +414,7 @@ pub(crate) fn apply_selection_overlay(f: &mut Frame, app: &App) {
             buf,
             app.layout_snapshot.approval_rect.get(),
             &rows,
-            &app.approval_selection,
+            &app.selections.approval,
             0,
         );
     }
@@ -429,7 +429,7 @@ pub(crate) fn handle_key(app: &mut App, k: KeyEvent) {
     // ctrl+C copies a selection (with a toast); interrupts a running turn;
     // otherwise no-op. It never quits -- the panic key is not an exit.
     if k.modifiers.contains(KeyModifiers::CONTROL) && k.code == KeyCode::Char('c') {
-        if app.selection.has_selection() {
+        if app.selections.transcript.has_selection() {
             let copied = TranscriptSurface { app: &mut *app }.copy_current();
             if let Some(text) = copied {
                 let path = get_clipboard_path();

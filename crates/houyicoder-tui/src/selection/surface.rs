@@ -269,7 +269,7 @@ impl Surface for TranscriptSurface<'_> {
     fn parts(&mut self) -> SurfaceParts<'_> {
         let rows = self.app.layout_snapshot.last_all_rows.borrow();
         SurfaceParts {
-            sel: &mut self.app.selection,
+            sel: &mut self.app.selections.transcript,
             rows,
             rect: self.app.layout_snapshot.transcript_rect.get(),
             clipboard: self.app.clipboard.as_ref(),
@@ -283,7 +283,7 @@ impl Surface for TranscriptSurface<'_> {
         true
     }
     fn is_dragging(&self) -> bool {
-        self.app.selection.is_dragging
+        self.app.selections.transcript.is_dragging
     }
 
     /// Press always starts a selection (the shared down body): a fold,
@@ -299,7 +299,7 @@ impl Surface for TranscriptSurface<'_> {
     /// through the POST-scroll offset so the focus row matches what the next
     /// render shows under the cursor.
     fn handle_drag(&mut self, x: u16, y: u16) {
-        if !self.app.selection.is_dragging {
+        if !self.app.selections.transcript.is_dragging {
             return;
         }
         let rect = self.app.layout_snapshot.transcript_rect.get();
@@ -320,9 +320,9 @@ impl Surface for TranscriptSurface<'_> {
     /// before parts because the toggles need &mut App wholesale; parts would
     /// split-borrow the App fields.
     fn handle_up(&mut self) {
-        let clean = !self.app.selection.drag_moved
-            && self.app.selection.is_click_only()
-            && self.app.selection.span_origin.is_none();
+        let clean = !self.app.selections.transcript.drag_moved
+            && self.app.selections.transcript.is_click_only()
+            && self.app.selections.transcript.span_origin.is_none();
         if clean {
             // Read the anchor row's tag, fold key, and turn handle, then drop
             // the borrows before the &mut App toggle calls.
@@ -357,14 +357,14 @@ impl Surface for TranscriptSurface<'_> {
             if let Some((ri, tag, fold_key, turn_id)) = target {
                 if tag == selection::TAG_FOLD {
                     self.app.toggle_fold_at_row(ri);
-                    self.app.selection.last_click = None;
-                    self.app.selection.clear();
+                    self.app.selections.transcript.last_click = None;
+                    self.app.selections.transcript.clear();
                     return;
                 }
                 if fold_key.is_some() {
                     self.app.toggle_subagent_expand_at_row(ri);
-                    self.app.selection.last_click = None;
-                    self.app.selection.clear();
+                    self.app.selections.transcript.last_click = None;
+                    self.app.selections.transcript.clear();
                     return;
                 }
                 // A row publishes a turn handle exactly when it offers a
@@ -373,13 +373,13 @@ impl Surface for TranscriptSurface<'_> {
                 // is unknown, because that text names a duration the row
                 // cannot state.
                 if turn_id.is_some() && self.app.toggle_thinking_expand_at_row(ri) {
-                    self.app.selection.last_click = None;
-                    self.app.selection.clear();
+                    self.app.selections.transcript.last_click = None;
+                    self.app.selections.transcript.clear();
                     return;
                 }
             }
             if self.app.collapse_expanded_under_anchor() {
-                self.app.selection.last_click = None;
+                self.app.selections.transcript.last_click = None;
                 return;
             }
         }
@@ -412,7 +412,7 @@ impl Surface for PaneSurface<'_> {
     fn parts(&mut self) -> SurfaceParts<'_> {
         let rows = self.app.layout_snapshot.last_pane_rows.borrow();
         SurfaceParts {
-            sel: &mut self.app.pane_selection,
+            sel: &mut self.app.selections.pane,
             rows,
             rect: self.app.layout_snapshot.pane_rect.get(),
             clipboard: self.app.clipboard.as_ref(),
@@ -422,7 +422,7 @@ impl Surface for PaneSurface<'_> {
         pane_mouse_to_content(self.app.layout_snapshot.pane_rect.get(), x, y)
     }
     fn is_dragging(&self) -> bool {
-        self.app.pane_selection.is_dragging
+        self.app.selections.pane.is_dragging
     }
 }
 
@@ -439,7 +439,7 @@ impl Surface for ApprovalSelection<'_> {
     fn parts(&mut self) -> SurfaceParts<'_> {
         let rows = self.app.layout_snapshot.last_approval_rows.borrow();
         SurfaceParts {
-            sel: &mut self.app.approval_selection,
+            sel: &mut self.app.selections.approval,
             rows,
             rect: self.app.layout_snapshot.approval_rect.get(),
             clipboard: self.app.clipboard.as_ref(),
@@ -449,7 +449,7 @@ impl Surface for ApprovalSelection<'_> {
         pane_mouse_to_content(self.app.layout_snapshot.approval_rect.get(), x, y)
     }
     fn is_dragging(&self) -> bool {
-        self.app.approval_selection.is_dragging
+        self.app.selections.approval.is_dragging
     }
 }
 
@@ -468,7 +468,7 @@ impl Surface for StatusSurface<'_> {
     fn parts(&mut self) -> SurfaceParts<'_> {
         let rows = self.app.layout_snapshot.last_status_rows.borrow();
         SurfaceParts {
-            sel: &mut self.app.status_selection,
+            sel: &mut self.app.selections.status,
             rows,
             rect: self.app.layout_snapshot.status_rect.get(),
             clipboard: self.app.clipboard.as_ref(),
@@ -478,7 +478,7 @@ impl Surface for StatusSurface<'_> {
         pane_mouse_to_content(self.app.layout_snapshot.status_rect.get(), x, y)
     }
     fn is_dragging(&self) -> bool {
-        self.app.status_selection.is_dragging
+        self.app.selections.status.is_dragging
     }
 }
 
@@ -547,10 +547,10 @@ pub(crate) fn paint_overlay(
 /// the focus content row from the cached cursor position plus the post-scroll
 /// offset. No-op when the cursor is not at an edge or no drag is active.
 pub(crate) fn edge_scroll_if_at_edge(app: &mut App) -> bool {
-    if !app.selection.is_dragging {
+    if !app.selections.transcript.is_dragging {
         return false;
     }
-    let Some((cx, cy)) = app.selection.cursor else {
+    let Some((cx, cy)) = app.selections.transcript.cursor else {
         return false;
     };
     let rect = app.layout_snapshot.transcript_rect.get();
@@ -567,7 +567,13 @@ pub(crate) fn edge_scroll_if_at_edge(app: &mut App) -> bool {
     }
     let (col, content_row) = transcript_mouse_to_content(app, rect, cx, cy);
     let rows = app.layout_snapshot.last_all_rows.borrow();
-    extend_drag(&mut app.selection, &rows, rect, col, content_row);
+    extend_drag(
+        &mut app.selections.transcript,
+        &rows,
+        rect,
+        col,
+        content_row,
+    );
     true
 }
 

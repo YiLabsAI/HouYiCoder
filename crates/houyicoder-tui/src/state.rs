@@ -49,7 +49,8 @@ use crate::render_cache::RenderCache;
 use crate::resume_picker::{SessionCatalog, SessionPickerState};
 use crate::review_queue::ReviewQueue;
 use crate::run_state::{RunProgress, RunState};
-use crate::selection::{ClipboardWriter, Selection};
+use crate::selection::ClipboardWriter;
+use crate::selections::Selections;
 use crate::session::SessionConnection;
 use crate::skill_picker_state::SkillPickerState;
 use crate::skills_state::SkillsPaneState;
@@ -306,22 +307,13 @@ pub struct App {
     /// Queued user inputs submitted while a run was in flight (FIFO). A
     /// Typed queue (messages + slash commands); drained FIFO at idle.
     pub pending: Vec<PendingItem>,
-    /// In-app text selection (drag-select in the transcript, copy on release).
-    pub selection: Selection,
+    /// The four per-region drag selections: the transcript's main selection
+    /// and the status, pane, and approval selections, each in its own
+    /// coordinate space so a drag on one region never collides with another.
+    pub(crate) selections: Selections,
     /// The renderer's layout snapshot: per-region rectangles and rendered-row
     /// caches the draw pass stashes, read back by the input and click paths.
     pub(crate) layout_snapshot: LayoutSnapshot,
-    /// Selection for the status bar surface; own coordinate space so it never
-    /// collides with the transcript or a pane.
-    pub status_selection: Selection,
-    /// In-app selection for the slash-command pane surface (separate from the
-    /// transcript selection so the two coordinate spaces never collide). A
-    /// drag in the pane starts here; mouse-up copies the pane text and clears
-    /// the range, since pane content rebuilds each frame and a persistent
-    /// highlight would not track the rows.
-    pub pane_selection: Selection,
-    /// Selection for the approval card surface (separate coordinate space).
-    pub approval_selection: Selection,
     /// Per-line render cache (content hash + width + expand key; indices are
     /// unstable — transcript rebuilds each batch). Count + render share it.
     pub render_cache: RefCell<RenderCache>,

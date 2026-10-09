@@ -97,7 +97,10 @@ ACTIVE_OWNERS = {
         # jump-to-bottom label rect) into one LayoutSnapshot owner, so each
         # region's rect and its rows are written together after the draw and
         # read together by the mouse-hit and selection paths.
-        "fields": 104,
+        # The four per-region drag selections (transcript, status, pane,
+        # approval) became one Selections owner, so each region's selection
+        # travels beside its siblings rather than as four loose App fields.
+        "fields": 101,
         "mut_app": 44,
     },
     "crates/houyicoder-tui/src/last_row_keys.rs:LastRowKeys": {
@@ -161,6 +164,14 @@ ACTIVE_OWNERS = {
         # One owner because each region's rect and its rows are written
         # together after the draw and read together by the hit-test paths.
         "fields": 10,
+    },
+    "crates/houyicoder-tui/src/selections.rs:Selections": {
+        # The four per-region drag selections: the transcript's main selection
+        # plus the status, pane, and approval selections, each a Selection in
+        # its own coordinate space. One owner so a drag on one region never
+        # collides with another and the four travel as one value rather than
+        # as four loose App fields.
+        "fields": 4,
     },
     "crates/houyicoder-tui/src/state/transcript/view.rs:TranscriptViewState": {
         # The transcript view's own state, one value per view: the whole-vec

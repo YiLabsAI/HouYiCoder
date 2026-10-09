@@ -858,7 +858,7 @@ fn test_notice_walk_matches_render() {
         .iter()
         .position(|(_, row)| row.contains("found auth"))
         .expect("the delegation head rendered");
-    app.selection.anchor = Some((0, head_row));
+    app.selections.transcript.anchor = Some((0, head_row));
     assert!(
         app.toggle_subagent_expand(),
         "the cursor on the delegation below the notice resolves to it (row {head_row})"
@@ -882,7 +882,7 @@ fn test_notice_ctrl_o_latest() {
             scope: MemoryChangeScope::Auto,
         }],
     }));
-    assert!(app.selection.anchor.is_none(), "no cursor");
+    assert!(app.selections.transcript.anchor.is_none(), "no cursor");
     handle_ctrl_o(&mut app);
     assert!(
         app.transcript_view.expanded.fold_groups.contains("mg#0"),

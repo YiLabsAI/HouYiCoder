@@ -181,7 +181,7 @@ fn test_fold_collapse_expand_toggle() {
     let fold_y = rect.y + fold_ri as u16;
     let scroll_top = app.whole_scroll().top_offset();
     let _ = fold_y;
-    app.selection.start(0, scroll_top + fold_ri);
+    app.selections.transcript.start(0, scroll_top + fold_ri);
     keys::handle_working(
         &mut app,
         KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL),
@@ -591,7 +591,11 @@ fn test_anchor_clamped_to_content() {
         },
     );
     // Anchor must be clamped to the last content row, not the blank tail.
-    let (_, acr) = app.selection.anchor.expect("anchor set after click");
+    let (_, acr) = app
+        .selections
+        .transcript
+        .anchor
+        .expect("anchor set after click");
     let last_content_row = scroll_top + (last_content_y as usize) - rect.y as usize;
     assert_eq!(
         acr, last_content_row,
@@ -613,7 +617,11 @@ fn test_anchor_clamped_to_content() {
             modifiers: KeyModifiers::NONE,
         },
     );
-    let (_, fcr) = app.selection.focus.expect("focus set after drag");
+    let (_, fcr) = app
+        .selections
+        .transcript
+        .focus
+        .expect("focus set after drag");
     assert!(
         fcr <= last_content_row,
         "focus row {fcr} must be clamped to the last content row {last_content_row}"
@@ -647,12 +655,12 @@ fn test_anchor_clamped_to_content() {
 
     // Render with a selection spanning into the blank tail and verify the
     // overlay never paints on border or blank-tail rows.
-    app.selection.start(rect.x, last_content_row);
-    app.selection.update(
+    app.selections.transcript.start(rect.x, last_content_row);
+    app.selections.transcript.update(
         rect.x + 10,
         scroll_top + (bottom as usize) - rect.y as usize,
     );
-    app.selection.finish();
+    app.selections.transcript.finish();
     let buf = render_buffer(&app, 80, 24);
     // Border row must have no selection bg.
     if border_y < 24 {

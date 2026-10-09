@@ -1656,7 +1656,7 @@ fn test_ctrl_o_expands_latest() {
         tool_summary: None,
         turn_id: "t1".into(),
     });
-    assert!(app.selection.anchor.is_none(), "no cursor");
+    assert!(app.selections.transcript.anchor.is_none(), "no cursor");
     handle_ctrl_o(&mut app);
     assert!(
         app.transcript_view.expanded.thinking.contains(&"t1".into()),
@@ -1704,7 +1704,7 @@ fn test_ctrl_o_follows_cursor() {
         .position(|(_, text)| text.contains("Thought for"))
         .expect("the reasoning row is on screen");
     let top = app.whole_scroll().top_offset();
-    app.selection.start(0, top + ri);
+    app.selections.transcript.start(0, top + ri);
     handle_ctrl_o(&mut app);
     assert!(
         app.transcript_view.expanded.thinking.contains(&"t1".into()),

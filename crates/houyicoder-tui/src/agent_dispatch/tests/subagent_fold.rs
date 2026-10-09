@@ -301,7 +301,7 @@ fn test_subagent_cursor_targeting() {
         folded_transcript: vec![TranscriptLine::Agent("child reply 2".into())],
         color: None,
     });
-    app.selection.start(0, 0);
+    app.selections.transcript.start(0, 0);
     assert!(
         app.toggle_subagent_expand(),
         "the cursor names a delegation"
@@ -315,7 +315,7 @@ fn test_subagent_cursor_targeting() {
         "the second line is not expanded when the cursor targets the first"
     );
     app.transcript_view.expanded.subagents.clear();
-    app.selection.anchor = None;
+    app.selections.transcript.anchor = None;
     assert!(
         !app.toggle_subagent_expand(),
         "with no cursor the walk resolves nothing"

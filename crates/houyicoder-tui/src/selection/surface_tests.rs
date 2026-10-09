@@ -2,8 +2,9 @@
 //! gesture tests (drive handle_mouse over a real render) live in
 //! src/view/pane_select_tests.rs and src/view/drag_select_bug_tests.rs.
 
+use crate::composition;
 use crate::selection::Selection;
-use crate::selection::surface::clear_stale_click;
+use crate::selection::surface::{clear_stale_click, edge_scroll_if_at_edge};
 
 fn sel_with(anchor: (u16, usize), focus: (u16, usize)) -> Selection {
     Selection {
@@ -32,4 +33,21 @@ fn test_clear_stale_click_only() {
     clear_stale_click(&mut sel);
     assert!(sel.is_dragging, "real drag preserved");
     assert!(sel.has_selection());
+}
+
+/// The edge auto-scroll poll does nothing without an active transcript drag,
+/// so a bare poll tick never scrolls the transcript.
+#[test]
+fn test_edge_scroll_requires_drag() {
+    let mut app = composition::app();
+    assert!(!edge_scroll_if_at_edge(&mut app));
+}
+
+/// The edge auto-scroll poll does nothing when a drag is active but the cursor
+/// was never published, so there is no edge coordinate to scroll from.
+#[test]
+fn test_edge_scroll_requires_cursor() {
+    let mut app = composition::app();
+    app.selections.transcript.start(0, 0);
+    assert!(!edge_scroll_if_at_edge(&mut app));
 }

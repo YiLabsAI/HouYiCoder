@@ -21,7 +21,6 @@ use crate::evidence::{
 use crate::palette::PaletteState;
 use crate::resume_picker::SessionCatalog;
 use crate::review_queue::ReviewQueue;
-use crate::selection::Selection;
 use crate::session::SessionConnection;
 use crate::state::{App, Pane, Screen, SpecContext, Stage, StatusStub, ViewportMode};
 use crate::transcript::snapshot::TranscriptSnapshot;

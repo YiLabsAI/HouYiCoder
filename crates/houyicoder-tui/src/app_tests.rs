@@ -59,11 +59,11 @@ fn test_status_bar_click_drags() {
         },
     );
     assert!(
-        app.status_selection.is_dragging,
+        app.selections.status.is_dragging,
         "click in status bar starts a status drag"
     );
     assert!(
-        !app.selection.is_dragging,
+        !app.selections.transcript.is_dragging,
         "transcript surface does not grab a status-bar click"
     );
 }

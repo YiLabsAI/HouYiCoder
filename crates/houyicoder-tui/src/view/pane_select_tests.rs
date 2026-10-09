@@ -82,7 +82,7 @@ fn test_drag_copies_pane_row() {
     );
     // The pane range is cleared on release — no stale highlight.
     assert!(
-        !app.pane_selection.is_dragging,
+        !app.selections.pane.is_dragging,
         "pane selection cleared on release"
     );
     let _ = ri; // row index used only for the screen-y derivation

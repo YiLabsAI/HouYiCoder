@@ -594,7 +594,7 @@ fn test_window_scrolls_no_drag() {
         },
     );
     assert!(
-        !app.selection.is_dragging,
+        !app.selections.transcript.is_dragging,
         "drag-select is deferred in window mode"
     );
 }

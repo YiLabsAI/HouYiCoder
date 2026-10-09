@@ -46,7 +46,7 @@ impl App {
     /// through the current scroll offset. None when no anchor is set or the
     /// anchor row is scrolled out of the viewport.
     pub(crate) fn anchor_visible_row(&self) -> Option<usize> {
-        let (_, content_row) = self.selection.anchor?;
+        let (_, content_row) = self.selections.transcript.anchor?;
         let top = self.active_scroll().top_offset();
         let ri = content_row.checked_sub(top)?;
         (ri < self.layout_snapshot.transcript_rect.get().height as usize).then_some(ri)
@@ -262,50 +262,53 @@ impl App {
             self.verbose,
         );
         let width = self.layout_feedback.transcript_width.get();
-        self.selection.anchor.and_then(|(_, content_row)| {
-            let mut row = 0usize;
-            let mut first = true;
-            for slot in &slots {
-                let (rows, line_idx, is_interrupted) = match slot {
-                    DisplaySlot::Line(i, _) => {
-                        let l = &transcript[*i];
-                        (
-                            self.line_display_rows(l),
-                            Some(*i),
-                            matches!(l, TranscriptLine::Interrupted),
-                        )
+        self.selections
+            .transcript
+            .anchor
+            .and_then(|(_, content_row)| {
+                let mut row = 0usize;
+                let mut first = true;
+                for slot in &slots {
+                    let (rows, line_idx, is_interrupted) = match slot {
+                        DisplaySlot::Line(i, _) => {
+                            let l = &transcript[*i];
+                            (
+                                self.line_display_rows(l),
+                                Some(*i),
+                                matches!(l, TranscriptLine::Interrupted),
+                            )
+                        }
+                        DisplaySlot::Summary(g) => (1 + g.hint.is_some() as usize, None, false),
+                        DisplaySlot::NoticeCollapsed { idx, .. }
+                        | DisplaySlot::NoticeExpanded { idx, .. } => (
+                            notice_slot_rows(slot, &transcript[*idx], width),
+                            Some(*idx),
+                            false,
+                        ),
+                    };
+                    if !first && !is_interrupted {
+                        row += 1;
                     }
-                    DisplaySlot::Summary(g) => (1 + g.hint.is_some() as usize, None, false),
-                    DisplaySlot::NoticeCollapsed { idx, .. }
-                    | DisplaySlot::NoticeExpanded { idx, .. } => (
-                        notice_slot_rows(slot, &transcript[*idx], width),
-                        Some(*idx),
-                        false,
-                    ),
-                };
-                if !first && !is_interrupted {
-                    row += 1;
-                }
-                if row + rows > content_row {
-                    // Cursor lands in this slot. A Summary slot or a
-                    // non-Subagent Line is not a delegation, so the answer
-                    // is None -- this walk does not look elsewhere.
-                    if let Some(i) = line_idx
-                        && let TranscriptLine::Subagent {
-                            child_sid,
-                            folded_transcript,
-                            ..
-                        } = &transcript[i]
-                    {
-                        return Some((child_sid.clone(), folded_transcript.is_empty()));
+                    if row + rows > content_row {
+                        // Cursor lands in this slot. A Summary slot or a
+                        // non-Subagent Line is not a delegation, so the answer
+                        // is None -- this walk does not look elsewhere.
+                        if let Some(i) = line_idx
+                            && let TranscriptLine::Subagent {
+                                child_sid,
+                                folded_transcript,
+                                ..
+                            } = &transcript[i]
+                        {
+                            return Some((child_sid.clone(), folded_transcript.is_empty()));
+                        }
+                        return None;
                     }
-                    return None;
+                    row += rows;
+                    first = false;
                 }
-                row += rows;
-                first = false;
-            }
-            None
-        })
+                None
+            })
     }
 
     /// The delegation the cursor is on, else the most recent. The drill-in key
@@ -437,7 +440,7 @@ impl App {
             return false;
         };
         self.transcript_view.expanded.fold_groups.remove(&key);
-        self.selection.clear();
+        self.selections.transcript.clear();
         true
     }
 

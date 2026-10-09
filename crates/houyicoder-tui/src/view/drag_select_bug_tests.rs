@@ -95,14 +95,14 @@ fn test_redrag_stays_char_mode() {
         mouse(MouseEventKind::Down(MouseButton::Left), x0, y),
     );
     assert!(
-        app.selection.span_origin.is_none(),
+        app.selections.transcript.span_origin.is_none(),
         "press after a completed drag must not escalate to word-select"
     );
     crate::app::handle_mouse(
         &mut app,
         mouse(MouseEventKind::Drag(MouseButton::Left), x0 + 2, y),
     );
-    let (ax, _) = app.selection.anchor.expect("anchor set");
+    let (ax, _) = app.selections.transcript.anchor.expect("anchor set");
     assert_eq!(
         ax, x0,
         "char-mode anchor must sit at the press column, not a word bound"
@@ -129,7 +129,7 @@ fn test_edge_drag_scrolls_line() {
             rect.y + 3,
         ),
     );
-    assert_eq!(app.selection.anchor.map(|(_, r)| r), Some(13));
+    assert_eq!(app.selections.transcript.anchor.map(|(_, r)| r), Some(13));
     crate::app::handle_mouse(
         &mut app,
         mouse(MouseEventKind::Drag(MouseButton::Left), rect.x + 2, rect.y),
@@ -137,12 +137,12 @@ fn test_edge_drag_scrolls_line() {
     let after = app.whole_scroll().top_offset();
     assert_eq!(after, 9, "edge drag must scroll one line, not a page");
     assert_eq!(
-        app.selection.anchor.map(|(_, r)| r),
+        app.selections.transcript.anchor.map(|(_, r)| r),
         Some(13),
         "anchor content row is fixed for the whole drag"
     );
     assert_eq!(
-        app.selection.focus.map(|(_, r)| r),
+        app.selections.transcript.focus.map(|(_, r)| r),
         Some(9),
         "focus content row must map through the post-scroll offset"
     );
@@ -874,7 +874,7 @@ fn test_approval_drag_resets() {
         mouse(MouseEventKind::Down(MouseButton::Left), arect.x, arect.y),
     );
     assert!(
-        app.approval_selection.is_dragging,
+        app.selections.approval.is_dragging,
         "down in card starts approval drag"
     );
     crate::app::handle_mouse(
@@ -890,7 +890,7 @@ fn test_approval_drag_resets() {
         mouse(MouseEventKind::Up(MouseButton::Left), arect.x + 5, arect.y),
     );
     assert!(
-        !app.approval_selection.is_dragging,
+        !app.selections.approval.is_dragging,
         "up ends the approval drag"
     );
 

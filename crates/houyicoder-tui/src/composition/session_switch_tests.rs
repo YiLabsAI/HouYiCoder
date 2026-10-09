@@ -390,8 +390,8 @@ fn test_clears_session_local_state() {
         RequestId(0),
         crate::records::Approval::default(),
     ));
-    app.selection.anchor = Some((0, 5));
-    app.selection.is_dragging = true;
+    app.selections.transcript.anchor = Some((0, 5));
+    app.selections.transcript.is_dragging = true;
     app.layout_snapshot
         .last_all_rows
         .borrow_mut()
@@ -402,7 +402,7 @@ fn test_clears_session_local_state() {
         .push(Some("stale-call".into()));
     // Sanity: the residue is there before the swap.
     assert!(!app.todos.items.is_empty());
-    assert!(app.selection.anchor.is_some());
+    assert!(app.selections.transcript.anchor.is_some());
 
     app.switch_session(test_bundle());
 
@@ -412,8 +412,14 @@ fn test_clears_session_local_state() {
     assert_eq!(app.displayed_tokens.get(), 0, "displayed_tokens cleared");
     assert_eq!(app.status.tokens, 0, "status.tokens cleared");
     assert!(app.approval().is_none(), "approval cleared");
-    assert!(app.selection.anchor.is_none(), "selection anchor cleared");
-    assert!(!app.selection.is_dragging, "selection drag cleared");
+    assert!(
+        app.selections.transcript.anchor.is_none(),
+        "selection anchor cleared"
+    );
+    assert!(
+        !app.selections.transcript.is_dragging,
+        "selection drag cleared"
+    );
     assert!(
         app.layout_snapshot.last_all_rows.borrow().is_empty(),
         "last_all_rows cleared"
