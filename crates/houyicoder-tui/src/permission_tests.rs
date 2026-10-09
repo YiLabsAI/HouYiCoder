@@ -158,7 +158,7 @@ fn test_status_bar_renders_manual() {
 fn test_approval_popup_no_placeholder() {
     let mut app = crate::composition::build_app_for_test(None);
     app.screen = crate::state::Screen::Working;
-    app.prompt = Some(PendingPrompt::approval_card(
+    app.session.prompt = Some(PendingPrompt::approval_card(
         RequestId(0),
         crate::state::Approval {
             tool: "bash".into(),
@@ -198,7 +198,7 @@ fn test_approval_r_binds_reject() {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     let mut app = crate::composition::build_app_for_test(None);
     app.screen = crate::state::Screen::Working;
-    app.prompt = Some(PendingPrompt::approval_card(
+    app.session.prompt = Some(PendingPrompt::approval_card(
         RequestId(0),
         crate::state::Approval {
             tool: "bash".into(),
@@ -226,7 +226,7 @@ fn test_entitlement_r_rejects() {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     let mut app = crate::composition::build_app_for_test(None);
     app.screen = crate::state::Screen::Working;
-    app.prompt = Some(PendingPrompt::approval_card(
+    app.session.prompt = Some(PendingPrompt::approval_card(
         RequestId(0),
         entitlement_approval(),
     ));

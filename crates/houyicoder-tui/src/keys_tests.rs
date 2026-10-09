@@ -1124,7 +1124,7 @@ fn test_approval_enter_clears_popup() {
     // The verdict is transient (a dismissable card, not a transcript row), so
     // Enter must clear the popup without logging a verdict line.
     let mut app = working_app();
-    app.prompt = Some(PendingPrompt::approval_card(
+    app.session.prompt = Some(PendingPrompt::approval_card(
         RequestId(0),
         crate::state::Approval {
             tool: "FsWrite".to_string(),
@@ -1148,7 +1148,7 @@ fn test_approval_enter_clears_popup() {
 
 fn approval_app(selected: usize) -> App {
     let mut app = working_app();
-    app.prompt = Some(PendingPrompt::approval_card(
+    app.session.prompt = Some(PendingPrompt::approval_card(
         RequestId(0),
         crate::state::Approval {
             tool: "bash".to_string(),
@@ -1281,7 +1281,7 @@ fn test_approval_nav_confirm_verdict() {
     assert!(
         app.approval().is_none(),
         "Up+Enter must clear the popup: {:?}",
-        app.prompt
+        app.session.prompt
     );
 }
 

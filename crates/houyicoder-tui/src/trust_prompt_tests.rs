@@ -32,14 +32,17 @@ fn test_trust_ask_resets_choice() {
     });
     assert_eq!(app.trust_choice(), TrustChoice::Accept);
     assert!(app.pending_trust().is_some());
-    assert_eq!(app.prompt.as_ref().map(|p| p.req_id()), Some(RequestId(3)));
+    assert_eq!(
+        app.session.prompt.as_ref().map(|p| p.req_id()),
+        Some(RequestId(3))
+    );
 }
 
 #[test]
 fn test_trust_down_selects_exit() {
     let mut app = composition::app();
     crate::test_harness::attach_connection(&mut app);
-    app.prompt = Some(PendingPrompt::trust_ask(
+    app.session.prompt = Some(PendingPrompt::trust_ask(
         RequestId(4),
         trust_prompt("/proj"),
     ));
@@ -55,26 +58,26 @@ fn test_login_enter_accepts_trust() {
     let mut app = composition::app();
     crate::test_harness::attach_connection(&mut app);
     app.screen = Screen::Login;
-    app.prompt = Some(PendingPrompt::trust_ask(
+    app.session.prompt = Some(PendingPrompt::trust_ask(
         RequestId(5),
         trust_prompt("/proj"),
     ));
     crate::app::handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     assert!(app.pending_trust().is_none());
-    assert!(app.prompt.is_none());
+    assert!(app.session.prompt.is_none());
 }
 
 #[test]
 fn test_resolve_trust_accept_clears() {
     let mut app = composition::app();
     crate::test_harness::attach_connection(&mut app);
-    app.prompt = Some(PendingPrompt::trust_ask(
+    app.session.prompt = Some(PendingPrompt::trust_ask(
         RequestId(7),
         trust_prompt("/proj"),
     ));
     app.resolve_trust(true);
     assert!(app.pending_trust().is_none(), "accept clears the ask");
-    assert!(app.prompt.is_none(), "accept clears the req_id");
+    assert!(app.session.prompt.is_none(), "accept clears the req_id");
 }
 
 /// resolve_trust(false) (decline) also clears the card — the server shuts
@@ -83,13 +86,13 @@ fn test_resolve_trust_accept_clears() {
 fn test_resolve_trust_decline_clears() {
     let mut app = composition::app();
     crate::test_harness::attach_connection(&mut app);
-    app.prompt = Some(PendingPrompt::trust_ask(
+    app.session.prompt = Some(PendingPrompt::trust_ask(
         RequestId(9),
         trust_prompt("/proj"),
     ));
     app.resolve_trust(false);
     assert!(app.pending_trust().is_none(), "decline clears the ask");
-    assert!(app.prompt.is_none(), "decline clears the req_id");
+    assert!(app.session.prompt.is_none(), "decline clears the req_id");
     assert!(app.quit, "decline exits the TUI");
 }
 
@@ -100,7 +103,7 @@ fn test_resolve_trust_noop_empty() {
     let mut app = composition::app();
     app.resolve_trust(true);
     assert!(app.pending_trust().is_none());
-    assert!(app.prompt.is_none());
+    assert!(app.session.prompt.is_none());
     app.resolve_trust(false);
     assert!(app.pending_trust().is_none());
 }
@@ -122,7 +125,7 @@ fn test_trust_ask_not_permission() {
 #[test]
 fn test_trust_up_selects_accept() {
     let mut app = composition::app();
-    app.prompt = Some(PendingPrompt::trust_ask(
+    app.session.prompt = Some(PendingPrompt::trust_ask(
         RequestId(2),
         trust_prompt("/proj"),
     ));

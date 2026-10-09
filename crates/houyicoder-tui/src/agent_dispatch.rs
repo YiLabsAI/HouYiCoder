@@ -384,7 +384,7 @@ impl App {
                 // run loop until the user answers. Raise the trust card (no
                 // run to pause — busy is already false at startup, but the
                 // card's presence gates new message sends until resolved).
-                self.prompt = Some(PendingPrompt::trust_ask(request, prompt));
+                self.session.prompt = Some(PendingPrompt::trust_ask(request, prompt));
             }
         }
     }

@@ -443,7 +443,11 @@ fn test_permission_ask_raises_popup() {
     });
     assert!(app.approval().is_some());
     assert_eq!(
-        app.prompt.as_ref().map(|p| p.request_count()).unwrap_or(0),
+        app.session
+            .prompt
+            .as_ref()
+            .map(|p| p.request_count())
+            .unwrap_or(0),
         1
     );
     let a = app.approval().unwrap();
@@ -599,7 +603,11 @@ fn test_spawn_run_interruption() {
     assert!(got, "agent message should arrive");
     assert!(app.approval().is_some(), "popup raised");
     assert_eq!(
-        app.prompt.as_ref().map(|p| p.request_count()).unwrap_or(0),
+        app.session
+            .prompt
+            .as_ref()
+            .map(|p| p.request_count())
+            .unwrap_or(0),
         1
     );
 }
@@ -699,7 +707,7 @@ fn test_resolve_clears_thinking_window() {
     let mut app = composition::app();
     crate::test_harness::attach_connection(&mut app);
     app.start_run_for_test(1);
-    app.prompt = Some(PendingPrompt::permission(RequestId(1), Vec::new()));
+    app.session.prompt = Some(PendingPrompt::permission(RequestId(1), Vec::new()));
     {
         let p = app.run_progress_mut().expect("active run");
         p.thinking_started_at = Some(std::time::Instant::now());
@@ -1097,7 +1105,7 @@ fn test_startup_handshake_drains_trust() {
         "handshake drains the trust ask"
     );
     assert_eq!(
-        app.prompt.as_ref().map(|p| p.req_id()),
+        app.session.prompt.as_ref().map(|p| p.req_id()),
         Some(houyicoder_protocol::envelope::RequestId(7))
     );
 }

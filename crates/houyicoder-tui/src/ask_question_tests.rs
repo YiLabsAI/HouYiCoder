@@ -266,7 +266,7 @@ fn test_render_card_question_options() {
     let mut app = crate::composition::app();
     app.screen = crate::state::Screen::Working;
     let aq = AskQuestion::parse("c1", &single_input()).expect("parse");
-    app.prompt = Some(PendingPrompt::question_card(RequestId(0), aq));
+    app.session.prompt = Some(PendingPrompt::question_card(RequestId(0), aq));
     let out = crate::test_harness::render_text(&app, 80, 24);
     assert!(
         out.contains("Which library?"),
@@ -287,7 +287,7 @@ fn test_render_card_cursor_marker() {
     app.screen = crate::state::Screen::Working;
     let mut aq = AskQuestion::parse("c1", &single_input()).expect("parse");
     aq.cursors[0] = 1; // focus on "time"
-    app.prompt = Some(PendingPrompt::question_card(RequestId(0), aq));
+    app.session.prompt = Some(PendingPrompt::question_card(RequestId(0), aq));
     let out = crate::test_harness::render_text(&app, 80, 24);
     assert!(out.contains('>'), "cursor marker missing:\n{out}");
     let lines: Vec<&str> = out.lines().collect();
@@ -302,7 +302,7 @@ fn test_render_card_multi_hint() {
     let mut app = crate::composition::app();
     app.screen = crate::state::Screen::Working;
     let aq = AskQuestion::parse("c1", &multi_input()).expect("parse");
-    app.prompt = Some(PendingPrompt::question_card(RequestId(0), aq));
+    app.session.prompt = Some(PendingPrompt::question_card(RequestId(0), aq));
     let out = crate::test_harness::render_text(&app, 80, 24);
     assert!(out.contains("toggle"), "multi-select hint missing:\n{out}");
     // Multi-select Other placeholder has no trailing period (single does).
@@ -321,7 +321,7 @@ fn test_render_card_single_hint() {
     let mut app = crate::composition::app();
     app.screen = crate::state::Screen::Working;
     let aq = AskQuestion::parse("c1", &single_input()).expect("parse");
-    app.prompt = Some(PendingPrompt::question_card(RequestId(0), aq));
+    app.session.prompt = Some(PendingPrompt::question_card(RequestId(0), aq));
     let out = crate::test_harness::render_text(&app, 80, 24);
     assert!(
         out.contains("enter select"),
@@ -334,7 +334,7 @@ fn test_render_card_esc_hint() {
     let mut app = crate::composition::app();
     app.screen = crate::state::Screen::Working;
     let aq = AskQuestion::parse("c1", &single_input()).expect("parse");
-    app.prompt = Some(PendingPrompt::question_card(RequestId(0), aq));
+    app.session.prompt = Some(PendingPrompt::question_card(RequestId(0), aq));
     let out = crate::test_harness::render_text(&app, 80, 24);
     assert!(out.contains("esc cancel"), "esc hint missing:\n{out}");
 }
@@ -345,7 +345,7 @@ fn test_render_card_selected_checkbox() {
     app.screen = crate::state::Screen::Working;
     let mut aq = AskQuestion::parse("c1", &single_input()).expect("parse");
     aq.selections[0] = vec![0]; // select chrono
-    app.prompt = Some(PendingPrompt::question_card(RequestId(0), aq));
+    app.session.prompt = Some(PendingPrompt::question_card(RequestId(0), aq));
     let out = crate::test_harness::render_text(&app, 80, 24);
     assert!(out.contains("[x]"), "checked box missing:\n{out}");
     assert!(out.contains("[ ]"), "unchecked box missing:\n{out}");
@@ -356,7 +356,7 @@ fn test_render_card_separator() {
     let mut app = crate::composition::app();
     app.screen = crate::state::Screen::Working;
     let aq = AskQuestion::parse("c1", &single_input()).expect("parse");
-    app.prompt = Some(PendingPrompt::question_card(RequestId(0), aq));
+    app.session.prompt = Some(PendingPrompt::question_card(RequestId(0), aq));
     let out = crate::test_harness::render_text(&app, 80, 24);
     assert!(out.contains('-'), "separator line missing:\n{out}");
 }
@@ -664,7 +664,7 @@ fn test_render_submit_title() {
     aq.selections[0] = vec![0];
     aq.selections[1] = vec![1];
     aq.current = aq.questions.len(); // submit view
-    app.prompt = Some(PendingPrompt::question_card(RequestId(0), aq));
+    app.session.prompt = Some(PendingPrompt::question_card(RequestId(0), aq));
     let out = crate::test_harness::render_text(&app, 80, 24);
     assert!(
         out.contains("Review your answers"),
@@ -680,7 +680,7 @@ fn test_render_submit_answers() {
     aq.selections[0] = vec![0]; // a
     aq.selections[1] = vec![1]; // d
     aq.current = aq.questions.len();
-    app.prompt = Some(PendingPrompt::question_card(RequestId(0), aq));
+    app.session.prompt = Some(PendingPrompt::question_card(RequestId(0), aq));
     let out = crate::test_harness::render_text(&app, 80, 24);
     assert!(out.contains("q1"), "question 1 missing:\n{out}");
     assert!(out.contains("-> a"), "answer 1 missing:\n{out}");
@@ -696,7 +696,7 @@ fn test_render_submit_warning() {
     aq.selections[0] = vec![0]; // only Q1 answered
     aq.selections[1] = vec![]; // Q2 unanswered
     aq.current = aq.questions.len();
-    app.prompt = Some(PendingPrompt::question_card(RequestId(0), aq));
+    app.session.prompt = Some(PendingPrompt::question_card(RequestId(0), aq));
     let out = crate::test_harness::render_text(&app, 80, 24);
     assert!(
         out.contains("not answered all questions"),
@@ -712,7 +712,7 @@ fn test_render_submit_cancel_opts() {
     aq.selections[0] = vec![0];
     aq.selections[1] = vec![1];
     aq.current = aq.questions.len();
-    app.prompt = Some(PendingPrompt::question_card(RequestId(0), aq));
+    app.session.prompt = Some(PendingPrompt::question_card(RequestId(0), aq));
     let out = crate::test_harness::render_text(&app, 80, 24);
     assert!(
         out.contains("Submit answers"),
@@ -730,7 +730,7 @@ fn test_question_enter_submits() {
     let mut app = crate::composition::app();
     app.screen = crate::state::Screen::Working;
     let aq = AskQuestion::parse("c1", &single_input()).expect("parse");
-    app.prompt = Some(PendingPrompt::question_card(RequestId(0), aq));
+    app.session.prompt = Some(PendingPrompt::question_card(RequestId(0), aq));
     crate::app::handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     assert!(app.ask_question().is_none(), "Enter takes the card");
 }

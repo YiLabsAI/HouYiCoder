@@ -40,7 +40,6 @@ use crate::memory_state::MemoryPaneState;
 use crate::notifications::NotificationState;
 use crate::palette::PaletteState;
 use crate::paste::{PasteStore, PendingPaste};
-use crate::pending_prompt::PendingPrompt;
 use crate::pending_queue::PendingItem;
 use crate::permission_pane_state::PermissionPaneState;
 use crate::records::TeammateView;
@@ -172,10 +171,6 @@ pub struct App {
     /// back + set quit, letting the caller fall back to a fresh re-enter.
     pub pending_resume_target: Option<String>,
     pub palette: PaletteState,
-    /// The reverse request awaiting a verdict, when one is up: a permission
-    /// ask (plain approval or interactive question) during Waiting, or a
-    /// startup workspace-trust ask before any run. At most one at a time.
-    pub prompt: Option<PendingPrompt>,
     pub status: StatusStub,
     pub(crate) memory: MemoryPaneState,
     /// Selection and hit-test state for the queued-input interface.
@@ -377,7 +372,7 @@ impl std::fmt::Debug for App {
             .field("viewport", &self.viewport)
             .field("transcript_len", &self.transcript.len())
             .field("agent_busy", &self.agent_busy())
-            .field("prompt", &self.prompt)
+            .field("prompt", &self.session.prompt)
             .field("quit", &self.quit)
             .finish()
     }

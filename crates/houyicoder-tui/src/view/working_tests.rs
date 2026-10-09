@@ -20,7 +20,7 @@ fn test_approval_keeps_prior_content() {
         TranscriptLine::User("hi".to_string()),
     ]
     .into();
-    app.prompt = Some(PendingPrompt::approval_card(
+    app.session.prompt = Some(PendingPrompt::approval_card(
         RequestId(0),
         Approval {
             tool: "bash".to_string(),

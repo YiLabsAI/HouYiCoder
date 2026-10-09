@@ -119,7 +119,7 @@ fn test_drain_refused() {
 #[test]
 fn test_verdict_refused() {
     let mut app = connection_lost_app();
-    app.prompt = Some(PendingPrompt::approval_card(
+    app.session.prompt = Some(PendingPrompt::approval_card(
         RequestId(7),
         crate::state::Approval {
             tool: "bash".into(),
@@ -142,7 +142,7 @@ fn test_verdict_refused() {
         "the card stays until the verdict is delivered"
     );
     assert!(
-        app.prompt.as_ref().map(|p| p.req_id()) == Some(RequestId(7)),
+        app.session.prompt.as_ref().map(|p| p.req_id()) == Some(RequestId(7)),
         "the request id stays until the verdict is delivered"
     );
     assert!(
@@ -161,7 +161,7 @@ fn test_verdict_refused() {
 #[test]
 fn test_trust_refused() {
     let mut app = connection_lost_app();
-    app.prompt = Some(PendingPrompt::trust_ask(
+    app.session.prompt = Some(PendingPrompt::trust_ask(
         RequestId(3),
         TrustPrompt {
             project_path: "/proj".into(),

@@ -843,7 +843,7 @@ fn test_approval_drag_resets() {
     use houyicoder_protocol::envelope::RequestId;
     let mut app = composition::app();
     app.screen = Screen::Working;
-    app.prompt = Some(PendingPrompt::approval_card(
+    app.session.prompt = Some(PendingPrompt::approval_card(
         RequestId(0),
         Approval {
             tool: "bash".into(),
@@ -896,7 +896,7 @@ fn test_approval_drag_resets() {
 
     // After dismissal the rect resets to zero so clicks route to
     // transcript, not stale approval rows.
-    app.prompt = None;
+    app.session.prompt = None;
     let _out = render_text(&app, 80, 24);
     let stale = app.layout_snapshot.approval_rect.get();
     assert_eq!(

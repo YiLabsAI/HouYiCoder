@@ -80,7 +80,11 @@ fn test_one_at_a_time() {
     // reverse permission ask, waits for the verdict, resumes, then re-asks
     // for any remaining. So the ask holds one approval, not the full batch.
     assert_eq!(
-        app.prompt.as_ref().map(|p| p.request_count()).unwrap_or(0),
+        app.session
+            .prompt
+            .as_ref()
+            .map(|p| p.request_count())
+            .unwrap_or(0),
         1,
         "one approval at a time"
     );
@@ -145,7 +149,7 @@ fn test_approval_renders_inline() {
 
     let mut app = composition::app();
     app.screen = crate::state::Screen::Working;
-    app.prompt = Some(PendingPrompt::approval_card(
+    app.session.prompt = Some(PendingPrompt::approval_card(
         RequestId(0),
         crate::state::Approval {
             tool: "bash".to_string(),
@@ -172,7 +176,7 @@ fn test_approval_renders_inline() {
     // No approval -> no separator or proceed question near tail.
     let mut app2 = composition::app();
     app2.screen = crate::state::Screen::Working;
-    app2.prompt = None;
+    app2.session.prompt = None;
     let text2 = render_text(&app2, 80, 24);
     assert!(
         !text2.contains("Do you want to proceed?"),
@@ -192,7 +196,7 @@ fn test_approval_esc_rejects_current() {
     }
     let mut app = composition::app();
     app.screen = crate::state::Screen::Working;
-    app.prompt = Some(PendingPrompt::approval_card(
+    app.session.prompt = Some(PendingPrompt::approval_card(
         RequestId(0),
         crate::state::Approval {
             tool: "bash".to_string(),
@@ -219,7 +223,7 @@ fn test_approval_enter_approve_current() {
     }
     let mut app = composition::app();
     app.screen = crate::state::Screen::Working;
-    app.prompt = Some(PendingPrompt::approval_card(
+    app.session.prompt = Some(PendingPrompt::approval_card(
         RequestId(0),
         crate::state::Approval {
             tool: "bash".to_string(),
@@ -255,13 +259,13 @@ fn test_approval_char_keys_select() {
         ..Default::default()
     };
     // 'a' (or '1') pins Yes.
-    app.prompt = Some(PendingPrompt::approval_card(RequestId(0), mk()));
+    app.session.prompt = Some(PendingPrompt::approval_card(RequestId(0), mk()));
     handle_working(&mut app, key(KeyCode::Char('a')));
     assert_eq!(app.approval().unwrap().selected, 0, "a pins Yes");
     assert!(app.approval().is_some(), "card stays open after a");
 
     // No is always index 1, whatever order the card displays.
-    app.prompt = Some(PendingPrompt::approval_card(RequestId(0), mk()));
+    app.session.prompt = Some(PendingPrompt::approval_card(RequestId(0), mk()));
     handle_working(&mut app, key(KeyCode::Char('r')));
     assert_eq!(app.approval().unwrap().selected, 1, "r pins No");
     assert!(app.approval().is_some(), "card stays open after r");
@@ -1044,7 +1048,10 @@ fn test_loss_during_waiting_settles() {
     assert!(!app.agent_busy(), "the loss settles the waiting run");
     assert!(!app.cancelling(), "nothing is left to cancel");
     assert_eq!(app.active_run_req_id(), None, "the run id clears on settle");
-    assert!(app.prompt.is_none(), "the approval prompt clears on settle");
+    assert!(
+        app.session.prompt.is_none(),
+        "the approval prompt clears on settle"
+    );
     assert!(!app.status.last_run_final, "an error settle is not final");
 }
 
@@ -1063,5 +1070,8 @@ fn test_loss_during_cancelling_settles() {
     assert!(!app.agent_busy(), "the loss settles the cancelling run");
     assert!(!app.cancelling(), "cancelling clears on settle");
     assert_eq!(app.active_run_req_id(), None, "the run id clears on settle");
-    assert!(app.prompt.is_none(), "the approval prompt clears on settle");
+    assert!(
+        app.session.prompt.is_none(),
+        "the approval prompt clears on settle"
+    );
 }

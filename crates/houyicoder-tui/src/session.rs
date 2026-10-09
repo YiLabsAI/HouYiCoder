@@ -3,6 +3,7 @@
 //! counter, and driver task. Session is the presented session, pairing the
 //! stable identity with that optional live connection.
 
+use crate::pending_prompt::PendingPrompt;
 use crate::run_metrics::RunMetrics;
 use crate::run_state::RunState;
 use crate::session::identity::SessionIdentity;
@@ -18,8 +19,9 @@ pub use connection::{
 };
 
 /// The presented session: its stable identity, the optional live engine
-/// connection, the in-flight run lifecycle, the run tally, the restore
-/// stash, and the checklist. The identity is always present. The
+/// connection, the in-flight run lifecycle, the run tally, the pending
+/// reverse ask, the restore stash, and the checklist. The identity is
+/// always present. The
 /// connection is a capability the session holds while connected and may
 /// lose without losing the identity or the already-observed state; the
 /// loss is carried inside SessionConnection as ConnectionStatus::Lost
@@ -43,6 +45,10 @@ pub(crate) struct Session {
     /// The submitted input of the run that produced no output yet, kept so
     /// an interruption can restore the turn.
     pub(crate) last_run_input: Option<String>,
+    /// The pending reverse ask awaiting a human verdict, when one is up: a
+    /// permission ask (approval or question) while waiting, or a startup
+    /// trust ask before any run.
+    pub(crate) prompt: Option<PendingPrompt>,
     /// The session checklist: derived items, expansion, and completion
     /// visibility.
     pub(crate) todos: TodoState,
@@ -50,8 +56,9 @@ pub(crate) struct Session {
 
 impl Session {
     /// A session with an identity, no connection, no run in flight, an
-    /// empty tally, and an empty checklist: the state the default app lands
-    /// in before the composition root attaches a connection.
+    /// empty tally, no pending ask, and an empty checklist: the state the
+    /// default app lands in before the composition root attaches a
+    /// connection.
     pub(crate) fn bare(identity: SessionIdentity) -> Self {
         Self {
             identity,
@@ -59,6 +66,7 @@ impl Session {
             run: RunState::Idle,
             run_metrics: RunMetrics::default(),
             last_run_input: None,
+            prompt: None,
             todos: TodoState::default(),
         }
     }

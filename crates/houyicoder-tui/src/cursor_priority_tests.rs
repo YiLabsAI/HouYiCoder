@@ -43,7 +43,7 @@ fn test_reject_records_sticky() {
     // bounced back to Yes each time.
     let mut app = composition::app();
     app.screen = Screen::Working;
-    app.prompt = Some(PendingPrompt::approval_card(
+    app.session.prompt = Some(PendingPrompt::approval_card(
         RequestId(0),
         approval_at("bash", 0),
     ));
@@ -64,7 +64,7 @@ fn test_persist_records_sticky() {
     // allow-always; the next popup preselects index 2.
     let mut app = composition::app();
     app.screen = Screen::Working;
-    app.prompt = Some(PendingPrompt::approval_card(
+    app.session.prompt = Some(PendingPrompt::approval_card(
         RequestId(0),
         approval_at("bash", 2),
     ));

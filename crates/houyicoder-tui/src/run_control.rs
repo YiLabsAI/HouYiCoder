@@ -258,7 +258,7 @@ impl App {
     /// verdict as the matching reverse response. No-op when no request awaits
     /// a decision.
     pub fn resolve_current_approval(&mut self, decision: ApprovalDecision) {
-        let req_id = match self.prompt.as_ref() {
+        let req_id = match self.session.prompt.as_ref() {
             Some(PendingPrompt::Permission { req_id, .. }) => *req_id,
             _ => return,
         };
@@ -268,7 +268,7 @@ impl App {
             self.system_line(Self::enqueue_failure_line("permission", e));
             return;
         }
-        self.prompt = None;
+        self.session.prompt = None;
         // Resume the run without resetting its clock: end_waiting flips
         // Waiting → Running preserving the original started_at.
         self.session.run.end_waiting();
@@ -286,7 +286,7 @@ impl App {
     /// Resolve the startup trust verdict. Rejection also exits the local TUI,
     /// but only after the verdict was actually queued.
     pub fn resolve_trust(&mut self, accept: bool) {
-        let req_id = match self.prompt.as_ref() {
+        let req_id = match self.session.prompt.as_ref() {
             Some(PendingPrompt::Trust { req_id, .. }) => *req_id,
             _ => return,
         };
@@ -296,7 +296,7 @@ impl App {
             self.system_line(Self::enqueue_failure_line("trust", e));
             return;
         }
-        self.prompt = None;
+        self.session.prompt = None;
         if !accept {
             self.quit = true;
         }
@@ -313,11 +313,11 @@ impl App {
         // verdict can resume without resetting the clock.
         self.session.run.begin_waiting();
         self.refresh_fold_active();
-        self.prompt = Some(PendingPrompt::permission(req_id, vec![ask.clone()]));
+        self.session.prompt = Some(PendingPrompt::permission(req_id, vec![ask.clone()]));
         if tool == "AskUserQuestion"
             && let Some(aq) = AskQuestion::parse(&call_id, &ask.input)
         {
-            if let Some(p) = self.prompt.as_mut() {
+            if let Some(p) = self.session.prompt.as_mut() {
                 p.set_question(Some(aq));
             }
             return;
@@ -342,7 +342,7 @@ impl App {
         if two_option && selected == 2 {
             selected = 0;
         }
-        if let Some(p) = self.prompt.as_mut() {
+        if let Some(p) = self.session.prompt.as_mut() {
             p.set_approval(Some(Approval {
                 tool,
                 args,
@@ -373,7 +373,10 @@ impl App {
     /// Whether a reverse request still awaits its verdict. Idle client
     /// requests pause so they cannot compete for response frames.
     pub fn reverse_request_in_flight(&self) -> bool {
-        self.prompt.as_ref().is_some_and(|p| p.is_permission())
+        self.session
+            .prompt
+            .as_ref()
+            .is_some_and(|p| p.is_permission())
     }
 
     /// Enqueue the status query, then drain startup messages by type until the

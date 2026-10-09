@@ -60,7 +60,6 @@ pub fn app() -> App {
         resume_picker: SessionPickerState::default(),
         pending_resume_target: None,
         palette: PaletteState::default(),
-        prompt: None,
         status: status(),
         memory: MemoryPaneState::new(memory_entries()),
         queue_view: QueueViewState::default(),

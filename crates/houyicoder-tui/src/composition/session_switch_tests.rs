@@ -389,7 +389,7 @@ fn test_clears_session_local_state() {
     app.session.run_metrics.cumulative_steps = 7;
     app.displayed_tokens.set(50);
     app.status.tokens = 999;
-    app.prompt = Some(PendingPrompt::approval_card(
+    app.session.prompt = Some(PendingPrompt::approval_card(
         RequestId(0),
         crate::records::Approval::default(),
     ));
@@ -524,7 +524,7 @@ fn test_tears_down_old_server() {
 #[test]
 fn test_idle_drain_noop_approval() {
     let mut app = build_app(test_bundle());
-    app.prompt = Some(PendingPrompt::permission(RequestId(42), Vec::new()));
+    app.session.prompt = Some(PendingPrompt::permission(RequestId(42), Vec::new()));
     app.pending.push(PendingItem::Message("queued".into()));
     let mut dirty = false;
     app.idle_drain(None, &mut dirty);

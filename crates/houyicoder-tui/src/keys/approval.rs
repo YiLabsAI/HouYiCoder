@@ -134,7 +134,7 @@ pub(super) fn handle_approval(app: &mut App, k: KeyEvent) {
                     },
                 );
             } else {
-                app.prompt = None;
+                app.session.prompt = None;
             }
         }
         KeyCode::Esc => {
@@ -161,7 +161,7 @@ pub(super) fn handle_approval(app: &mut App, k: KeyEvent) {
                     },
                 );
             } else {
-                app.prompt = None;
+                app.session.prompt = None;
             }
         }
         _ => {}

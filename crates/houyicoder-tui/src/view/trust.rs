@@ -93,7 +93,7 @@ mod tests {
     fn test_renders_trust_prompt() {
         let mut app = composition::app();
         app.screen = Screen::Working;
-        app.prompt = Some(PendingPrompt::trust_ask(
+        app.session.prompt = Some(PendingPrompt::trust_ask(
             RequestId(1),
             TrustPrompt {
                 project_path: "/home/alice/proj".into(),
@@ -123,7 +123,7 @@ mod tests {
     #[test]
     fn test_long_path_stays_single() {
         let mut app = composition::app();
-        app.prompt = Some(PendingPrompt::trust_ask(
+        app.session.prompt = Some(PendingPrompt::trust_ask(
             RequestId(1),
             TrustPrompt {
                 project_path: "/a/very/long/workspace/path/that/cannot/fit/target-repository"
@@ -166,7 +166,7 @@ mod tests {
     fn test_trust_is_sole_screen() {
         let mut app = composition::app();
         app.screen = Screen::Working;
-        app.prompt = Some(PendingPrompt::trust_ask(
+        app.session.prompt = Some(PendingPrompt::trust_ask(
             RequestId(1),
             TrustPrompt {
                 project_path: "/home/alice/proj".into(),
