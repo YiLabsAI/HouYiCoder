@@ -6,7 +6,7 @@
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
-use std::sync::{Arc, mpsc};
+use std::sync::Arc;
 use std::time::Instant;
 
 pub(crate) mod chain;
@@ -24,7 +24,7 @@ mod teammate_view;
 mod trajectory;
 pub(crate) mod transcript;
 
-use crate::agent_message::{FleetState, PaneAgents, SessionMessage};
+use crate::agent_message::{FleetState, PaneAgents};
 use crate::composition::WorktreeEntry;
 #[cfg(test)]
 use crate::composition::app as test_app;
@@ -268,9 +268,6 @@ pub struct App {
     pub session_id: SessionId,
     /// The tokio runtime that drives async run/resume. None while disconnected.
     pub runtime: Option<Arc<tokio::runtime::Runtime>>,
-    /// Sender cloned into each spawned task; the task ships the RunResult plus
-    /// the session replay back over this channel.
-    pub agent_tx: Option<mpsc::Sender<SessionMessage>>,
     /// The live connection with the engine: owns the command channel to the
     /// driver, the message channel back to the event loop, the request-id
     /// counter, and the driver task handle. None in the pure-stub path.

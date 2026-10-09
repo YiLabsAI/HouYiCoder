@@ -102,7 +102,9 @@ ACTIVE_OWNERS = {
         # The four per-region drag selections (transcript, status, pane,
         # approval) became one Selections owner, so each region's selection
         # travels beside its siblings rather than as four loose App fields.
-        "fields": 99,
+        # The agent sender went to the connection/harness assembly, not an App
+        # field; nothing on App read it.
+        "fields": 98,
         "mut_app": 44,
     },
     "crates/houyicoder-tui/src/last_row_keys.rs:LastRowKeys": {

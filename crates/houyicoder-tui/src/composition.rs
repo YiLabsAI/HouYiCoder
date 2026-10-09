@@ -152,7 +152,6 @@ pub fn build_app(bundle: RunnerBundle) -> App {
     app.status.sandbox = "mac-seatbelt".to_string();
     app.session_id = session_id;
     app.runtime = Some(runtime);
-    app.agent_tx = Some(agent_tx);
     app.session = Some(live_session);
     app.trajectory_log = trajectory_log;
     app.export_log = export_log;

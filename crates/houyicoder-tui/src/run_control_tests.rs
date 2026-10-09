@@ -48,6 +48,13 @@ fn agent_msg(text: &str) -> TranscriptFrame {
 /// production composition root: the runner is shared (Arc) between the server
 /// task and the TUI, and the driver task owns the client.
 pub(crate) fn app_with_provider(provider: Arc<dyn ModelProvider>, tools: ToolRegistry) -> App {
+    app_with_provider_and_tx(provider, tools).0
+}
+
+pub(crate) fn app_with_provider_and_tx(
+    provider: Arc<dyn ModelProvider>,
+    tools: ToolRegistry,
+) -> (App, mpsc::Sender<SessionMessage>) {
     // Attach the append-notify to the store (production wiring): without it
     // the store never wakes the server's mid-run drain, so every event
     // (frames + QueuedInputCommitted) would land only post-resolve and a mid-run
@@ -75,9 +82,9 @@ pub(crate) fn app_with_provider(provider: Arc<dyn ModelProvider>, tools: ToolReg
     let (runner, client, startup_warnings) =
         composition::start_local_server(runner, session, gate, append_notify, None);
     drop(runner); // server owns the runner; the TUI holds no engine handle.
-    composition::build_app(composition::RunnerBundle {
+    let app = composition::build_app(composition::RunnerBundle {
         client,
-        agent_tx: tx,
+        agent_tx: tx.clone(),
         agent_rx: rx,
         session: wire_session,
         model: "test-model".to_string(),
@@ -88,7 +95,8 @@ pub(crate) fn app_with_provider(provider: Arc<dyn ModelProvider>, tools: ToolReg
         skip_login: false,
         startup_warnings,
         history_path: std::env::temp_dir().join("houyi-history-rc-test.jsonl"),
-    })
+    });
+    (app, tx)
 }
 
 /// A guarded tool that requires approval, for the Interruption path.
@@ -1064,10 +1072,9 @@ fn test_model_switch_applies() {
 #[test]
 fn test_startup_handshake_drains_trust() {
     let p = Arc::new(FakeProvider::text("ok"));
-    let mut app = app_with_provider(p, ToolRegistry::new());
+    let (mut app, tx) = app_with_provider_and_tx(p, ToolRegistry::new());
     // Queue a trust ask before the handshake, simulating a server that
     // surfaces the gate before the first draw.
-    let tx = app.agent_tx.as_ref().expect("agent tx connected");
     tx.send(SessionMessage::Request {
         request: RequestId(7),
         payload: ServerRequest::Trust {

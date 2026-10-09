@@ -97,7 +97,6 @@ pub fn app() -> App {
         quit: false,
         session_id: SessionId::new("test"),
         runtime: None,
-        agent_tx: None,
         session: None,
         notifications: NotificationState::default(),
         terminal_focused: true,
