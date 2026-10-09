@@ -14,7 +14,7 @@
 pub(crate) mod queue;
 
 use crate::history::HistoryNav;
-use crate::input::queue::InputItem;
+use crate::input::queue::InputQueue;
 use crate::paste::{PasteStore, PendingPaste};
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
@@ -375,7 +375,7 @@ pub(crate) struct Input {
     /// The bracket-paste accumulator drained on the gap flush.
     pub(crate) pending_paste: PendingPaste,
     /// Queued user inputs submitted while a run was in flight, drained FIFO.
-    pub(crate) queue: Vec<InputItem>,
+    pub(crate) queue: InputQueue,
 }
 
 #[cfg(test)]

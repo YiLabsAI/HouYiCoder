@@ -550,7 +550,8 @@ impl App {
     /// Sends QueueRemove for a live server copy. Leaves other items queued.
     pub fn recall_queued_at_cursor(&mut self) {
         let idx = self
-            .queue_view
+            .input
+            .queue
             .cursor
             .min(self.input.queue.len().saturating_sub(1));
         if idx >= self.input.queue.len() {
@@ -559,8 +560,7 @@ impl App {
         let Some(item) = self.remove_pending_at(idx) else {
             return;
         };
-        self.queue_view
-            .clamp(self.input.queue.len().max(self.queue_view.cursor));
+        self.input.queue.clamp_cursor();
         self.merge_recalled_text(item.display().to_string());
     }
 
@@ -568,7 +568,8 @@ impl App {
     /// Sends QueueRemove for a live server copy.
     pub fn delete_queued_at_cursor(&mut self) {
         let idx = self
-            .queue_view
+            .input
+            .queue
             .cursor
             .min(self.input.queue.len().saturating_sub(1));
         if idx >= self.input.queue.len() {
@@ -577,7 +578,7 @@ impl App {
         if self.remove_pending_at(idx).is_none() {
             return;
         }
-        self.queue_view.clamp(self.input.queue.len());
+        self.input.queue.clamp_cursor();
     }
 
     /// Recall queued messages into the input box before the current draft.
@@ -592,7 +593,7 @@ impl App {
         let mut keep: Vec<InputItem> = Vec::new();
         let mut recalled: Vec<String> = Vec::new();
         let mut refused = false;
-        for it in std::mem::take(&mut self.input.queue) {
+        for it in self.input.queue.take_all() {
             match it {
                 InputItem::Message(input) => {
                     let session_id = self.session.identity.session_id.clone();
@@ -613,7 +614,7 @@ impl App {
                 other => keep.push(other),
             }
         }
-        self.input.queue = keep;
+        self.input.queue.replace_all(keep);
         if refused {
             self.system_line("queue: connection lost — some entries stayed queued");
         }

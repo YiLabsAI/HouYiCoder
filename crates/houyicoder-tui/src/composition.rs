@@ -254,7 +254,7 @@ impl App {
         if self.teammate_view.is_some() {
             self.exit_teammate_view();
         }
-        let mut pending = std::mem::take(&mut self.input.queue);
+        let mut pending = self.input.queue.take_all();
         // The open expansion sets belong to the session that owns them: park
         // them under the session being left and install the entry for the
         // session being entered, so a switch away and back keeps what the
@@ -298,7 +298,7 @@ impl App {
         // skip_login=true, but this one line makes that invariant unbreakable.
         self.screen = crate::state::Screen::Working;
         self.bump_transcript_version();
-        self.input.queue = pending;
+        self.input.queue.replace_all(pending);
         parked.park_session(leaving, open_keys);
         if let Some(keys) = parked.take_session(&self.session.identity.session_id) {
             self.set_expanded_keys(keys);

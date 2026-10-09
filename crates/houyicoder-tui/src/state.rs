@@ -85,30 +85,14 @@ pub use crate::records::{Approval, SpecContext, StatusStub, TranscriptLine};
 
 pub use crate::state::enums::*;
 
-/// Selection and hit-test geometry for the queued-input interface.
+/// Hit-test geometry for the queued-input interface. The selection cursor
+/// lives on the InputQueue itself (its boundary owns both the items and the
+/// index into them); this struct only carries the last-rendered footer strip
+/// rectangle the pointer handler reads back.
 #[derive(Default)]
 pub struct QueueViewState {
-    /// Selected row in the queue pane.
-    pub cursor: usize,
     /// Last-rendered queued-input footer strip rectangle.
     pub strip_rect: Cell<Rect>,
-}
-
-impl QueueViewState {
-    /// Clamp the selected row to the current queue length.
-    pub(crate) fn clamp(&mut self, len: usize) {
-        self.cursor = self.cursor.min(len.saturating_sub(1));
-    }
-
-    /// Move the selected row by a signed delta within the queue bounds.
-    pub(crate) fn move_cursor(&mut self, delta: i32, len: usize) {
-        if len == 0 {
-            self.cursor = 0;
-            return;
-        }
-        let cursor = self.cursor.min(len - 1) as i32;
-        self.cursor = (cursor + delta).clamp(0, (len - 1) as i32) as usize;
-    }
 }
 
 #[derive(Default, Debug)]

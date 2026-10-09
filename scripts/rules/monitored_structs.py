@@ -177,6 +177,14 @@ ACTIVE_OWNERS = {
         # switch resets them whole.
         "fields": 5,
     },
+    "crates/houyicoder-tui/src/input/queue.rs:InputQueue": {
+        # The queued-input FIFO and the selection cursor into it. The items
+        # stay private (order is a FIFO plus an explicit head insert) and the
+        # cursor is clamped against the same items it indexes, so the two
+        # invariants live beside the collection instead of drifting on the
+        # view state that used to carry the cursor.
+        "fields": 2,
+    },
     "crates/houyicoder-tui/src/session.rs:Session": {
         # The presented session: its stable identity, the optional live
         # engine connection, the in-flight run lifecycle, the run tally, the

@@ -314,10 +314,10 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
             app.pane = Pane::Transcript;
         }
         KeyCode::Up if app.pane == Pane::Queue => {
-            app.queue_view.move_cursor(-1, app.input.queue.len());
+            app.input.queue.move_cursor(-1);
         }
         KeyCode::Down if app.pane == Pane::Queue => {
-            app.queue_view.move_cursor(1, app.input.queue.len());
+            app.input.queue.move_cursor(1);
         }
         KeyCode::Enter if app.pane == Pane::Queue => {
             app.recall_queued_at_cursor();

@@ -440,7 +440,7 @@ fn test_pane_enter_recalls_one() {
     app.pane = Pane::Queue;
     app.input.queue.push(InputItem::Message("alpha".into()));
     app.input.queue.push(InputItem::Message("beta".into()));
-    app.queue_view.cursor = 1;
+    app.input.queue.cursor = 1;
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     assert_eq!(
         app.input.editor.value(),
@@ -484,7 +484,7 @@ fn test_pane_d_deletes_one() {
     app.pane = Pane::Queue;
     app.input.queue.push(InputItem::Message("alpha".into()));
     app.input.queue.push(InputItem::Message("beta".into()));
-    app.queue_view.cursor = 0;
+    app.input.queue.cursor = 0;
     crate::keys::handle_working(
         &mut app,
         KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
@@ -598,9 +598,9 @@ fn test_queue_pane_nav() {
     app.input.queue.push(InputItem::Message("a".into()));
     app.input.queue.push(InputItem::Message("b".into()));
     app.input.queue.push(InputItem::Message("c".into()));
-    app.queue_view.cursor = 0;
+    app.input.queue.cursor = 0;
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-    assert_eq!(app.queue_view.cursor, 1, "Down moves cursor");
+    assert_eq!(app.input.queue.cursor, 1, "Down moves cursor");
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
-    assert_eq!(app.queue_view.cursor, 0, "Up moves cursor back");
+    assert_eq!(app.input.queue.cursor, 0, "Up moves cursor back");
 }

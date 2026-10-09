@@ -2,6 +2,8 @@
 //!
 //! Queue order is local. At most one input is mirrored to the active runner.
 
+use std::ops::Index;
+
 use houyicoder_protocol::frontend::QueuedInput;
 
 use crate::run_control::ClientCommand;
@@ -69,6 +71,105 @@ pub fn command_first_token_is(raw: &str, token: &str) -> bool {
         .strip_prefix('/')
         .map(|rest| rest.split_whitespace().next().unwrap_or("") == token)
         .unwrap_or(false)
+}
+
+/// The queued-input FIFO and the selection cursor into it, held as one value.
+/// The items stay private so order is a first-in-first-out queue plus an
+/// explicit head insert, and the cursor is clamped against the same items it
+/// indexes, so the two invariants cannot drift apart.
+#[derive(Debug, Default)]
+pub(crate) struct InputQueue {
+    items: Vec<InputItem>,
+    pub(crate) cursor: usize,
+}
+
+impl InputQueue {
+    /// Append an item to the tail.
+    pub(crate) fn push(&mut self, item: InputItem) {
+        self.items.push(item);
+    }
+
+    /// Insert an item at the given index (re-parking the head after a failed
+    /// spawn inserts at index zero).
+    pub(crate) fn insert(&mut self, index: usize, item: InputItem) {
+        self.items.insert(index, item);
+    }
+
+    /// Remove and return the item at the given index.
+    pub(crate) fn remove(&mut self, index: usize) -> InputItem {
+        self.items.remove(index)
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.items.len()
+    }
+
+    // The drain reads the head rather than this predicate; only the
+    // queued-input tests assert emptiness, so the library target sees it
+    // as unused.
+    #[allow(dead_code)]
+    pub(crate) fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+
+    pub(crate) fn first(&self) -> Option<&InputItem> {
+        self.items.first()
+    }
+
+    pub(crate) fn first_mut(&mut self) -> Option<&mut InputItem> {
+        self.items.first_mut()
+    }
+
+    pub(crate) fn iter(&self) -> std::slice::Iter<'_, InputItem> {
+        self.items.iter()
+    }
+
+    pub(crate) fn iter_mut(&mut self) -> std::slice::IterMut<'_, InputItem> {
+        self.items.iter_mut()
+    }
+
+    /// Take the whole queue out, leaving an empty queue. The cursor is left
+    /// as-is, clamped by the same lazy read points as before.
+    pub(crate) fn take_all(&mut self) -> Vec<InputItem> {
+        std::mem::take(&mut self.items)
+    }
+
+    /// Replace the queue contents, leaving the cursor as-is.
+    pub(crate) fn replace_all(&mut self, items: Vec<InputItem>) {
+        self.items = items;
+    }
+
+    /// Clamp the selection cursor to the current queue length.
+    pub(crate) fn clamp_cursor(&mut self) {
+        self.cursor = self.cursor.min(self.items.len().saturating_sub(1));
+    }
+
+    /// Move the selection cursor by a signed delta within the queue bounds.
+    pub(crate) fn move_cursor(&mut self, delta: i32) {
+        if self.items.is_empty() {
+            self.cursor = 0;
+            return;
+        }
+        let cursor = self.cursor.min(self.items.len() - 1) as i32;
+        self.cursor = (cursor + delta).clamp(0, (self.items.len() - 1) as i32) as usize;
+    }
+}
+
+impl Index<usize> for InputQueue {
+    type Output = InputItem;
+
+    fn index(&self, index: usize) -> &InputItem {
+        &self.items[index]
+    }
+}
+
+/// Equality against an expected sequence compares only the queued items; the
+/// selection cursor is a view position, not queue content, so it is not part
+/// of value equality.
+impl PartialEq<Vec<InputItem>> for InputQueue {
+    fn eq(&self, other: &Vec<InputItem>) -> bool {
+        self.items == *other
+    }
 }
 
 impl App {
@@ -238,5 +339,19 @@ mod tests {
     fn test_message_display_returns_text() {
         let m = InputItem::Message("hello".into());
         assert_eq!(m.display(), "hello");
+    }
+
+    #[test]
+    fn test_cursor_clamps_to_bounds() {
+        let mut q = InputQueue::default();
+        q.move_cursor(1);
+        assert_eq!(q.cursor, 0, "an empty queue keeps the cursor at zero");
+        q.push(InputItem::Command("/a".into()));
+        q.push(InputItem::Command("/b".into()));
+        q.cursor = 1;
+        q.move_cursor(5);
+        assert_eq!(q.cursor, 1, "down movement stops at the last row");
+        q.move_cursor(-5);
+        assert_eq!(q.cursor, 0, "up movement stops at the first row");
     }
 }
