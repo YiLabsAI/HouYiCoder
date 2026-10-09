@@ -4,6 +4,7 @@
 
 pub(crate) mod capabilities;
 mod connection;
+pub(crate) mod identity;
 pub(crate) mod persistence;
 
 pub use connection::{

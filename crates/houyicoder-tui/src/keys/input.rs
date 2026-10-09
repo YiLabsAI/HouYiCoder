@@ -407,8 +407,8 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
         KeyCode::Up => {
             if !app.input.move_up(app.layout_feedback.terminal_cols.get()) && !editing {
                 let project = crate::history::current_project();
-                app.history
-                    .up(&mut app.input, &project, &app.session_id.to_string());
+                let session_key = app.identity.session_id.to_string();
+                app.history.up(&mut app.input, &project, &session_key);
             }
         }
         KeyCode::Down => {

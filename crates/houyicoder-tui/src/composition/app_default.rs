@@ -26,6 +26,7 @@ use crate::run_state::RunState;
 use crate::selection::SystemClipboard;
 use crate::selections::Selections;
 use crate::session::capabilities::SessionCapabilities;
+use crate::session::identity::SessionIdentity;
 use crate::session::persistence::SessionPersistence;
 use crate::skill_picker_state::SkillPickerState;
 use crate::skills_state::SkillsPaneState;
@@ -72,7 +73,10 @@ pub fn app() -> App {
         agent_directory: None,
         login_mode: None,
         quit: false,
-        session_id: SessionId::new("test"),
+        identity: SessionIdentity {
+            session_id: SessionId::new("test"),
+            working_dir: cwd_string(),
+        },
         runtime: None,
         session: None,
         notifications: NotificationState::default(),
@@ -96,7 +100,6 @@ pub fn app() -> App {
         pending_paste: PendingPaste::default(),
         capabilities: SessionCapabilities::default(),
         permission_pane: PermissionPaneState::default(),
-        working_dir: cwd_string(),
         skills_pane: SkillsPaneState::default(),
         skill_picker: SkillPickerState::default(),
         hooks_pane: HooksPaneState::default(),

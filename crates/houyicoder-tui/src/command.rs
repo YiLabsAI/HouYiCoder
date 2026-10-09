@@ -334,7 +334,7 @@ impl App {
         if let Some(s) = self.session.as_ref() {
             match s.next_request_id() {
                 Ok(req_id) => {
-                    let session_id = self.session_id.clone();
+                    let session_id = self.identity.session_id.clone();
                     let _ = s.enqueue(ClientCommand::SessionReset { req_id, session_id });
                 }
                 Err(_) => self.note_request_id_exhausted(),
@@ -528,7 +528,7 @@ impl App {
         if self.session.is_some() {
             let project = crate::history::current_project();
             self.history
-                .submit(&text, &project, &self.session_id.to_string());
+                .submit(&text, &project, &self.identity.session_id.to_string());
             self.spawn_run(text);
             return;
         }

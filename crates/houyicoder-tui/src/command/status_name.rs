@@ -43,7 +43,7 @@ impl App {
         };
         if let Err(e) = s.enqueue(ClientCommand::RenameSessionQuery {
             req_id,
-            session_id: self.session_id.clone(),
+            session_id: self.identity.session_id.clone(),
             name,
         }) {
             self.system_line(Self::enqueue_failure_line("rename", e));

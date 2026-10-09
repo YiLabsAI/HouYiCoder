@@ -52,6 +52,7 @@ use crate::selection::ClipboardWriter;
 use crate::selections::Selections;
 use crate::session::SessionConnection;
 use crate::session::capabilities::SessionCapabilities;
+use crate::session::identity::SessionIdentity;
 use crate::session::persistence::SessionPersistence;
 use crate::skill_picker_state::SkillPickerState;
 use crate::skills_state::SkillsPaneState;
@@ -67,7 +68,7 @@ pub(crate) use crate::state::parked_view_states::ParkedViewStates;
 pub use crate::state::trajectory::{
     TrajectoryDrill, TrajectoryPaneState, TrajectorySelection, TrajectoryTurnKey,
 };
-use houyicoder_protocol::frontend::{LoginMode, SessionId};
+use houyicoder_protocol::frontend::LoginMode;
 use ratatui::layout::Rect;
 
 /// Live progress for one long-running tool call (bash): elapsed seconds +
@@ -200,11 +201,11 @@ pub struct App {
     pub login_mode: Option<LoginMode>,
     pub quit: bool,
     // --- real agent-loop wiring ---
-    /// The active session id passed to the server over the wire. The TUI holds
-    /// no engine handle: run, resume, and streaming all cross the wire, driven
-    /// by the server task that owns the runner. None of the engine run/resume
-    /// paths live here.
-    pub session_id: SessionId,
+    /// The presented session's identity: the wire routing id and the working
+    /// directory the session started in. Both reset together on a session
+    /// switch, so they live as one value rather than two loose fields a swap
+    /// must reset in step.
+    pub(crate) identity: SessionIdentity,
     /// The tokio runtime that drives async run/resume. None while disconnected.
     pub runtime: Option<Arc<tokio::runtime::Runtime>>,
     /// The live connection with the engine: owns the command channel to the
@@ -286,9 +287,6 @@ pub struct App {
     /// the key handler and render path reach a field directly; the whole value
     /// is what a tab switch or input-mode entry replaces.
     pub(crate) permission_pane: PermissionPaneState,
-    /// The original working directory the session started in, shown at the top
-    /// of the Workspace tab in /permissions (empty in a stub App).
-    pub working_dir: String,
     /// The /skills pane view state: the list cursor and the open detail
     /// (body request, body text, scroll position). Kept together so the
     /// pane's view state is one owner, not a scatter of App fields.

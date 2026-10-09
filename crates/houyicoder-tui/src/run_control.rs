@@ -165,7 +165,7 @@ impl App {
             self.system_line("run: request ids exhausted");
             return false;
         };
-        let session_id = self.session_id.clone();
+        let session_id = self.identity.session_id.clone();
         let content = vec![ContentBlock::Text {
             text: input.clone(),
         }];
@@ -224,7 +224,7 @@ impl App {
                 // Remove the stale server copy before starting a fresh run; a
                 // refused removal keeps the head queued so the local copy and
                 // the server mirror cannot diverge.
-                let session_id = self.session_id.clone();
+                let session_id = self.identity.session_id.clone();
                 if let Err(e) = self.enqueue(ClientCommand::QueueRemove {
                     session_id,
                     id: head.id,
@@ -536,7 +536,7 @@ impl App {
         // refused abort would otherwise wait forever for a completion that
         // never comes.
         if let Err(e) = self.enqueue(ClientCommand::AbortRun {
-            session_id: self.session_id.clone(),
+            session_id: self.identity.session_id.clone(),
         }) {
             self.system_line(Self::enqueue_failure_line("run", e));
             return;
@@ -596,7 +596,7 @@ impl App {
         for it in std::mem::take(&mut self.pending) {
             match it {
                 PendingItem::Message(input) => {
-                    let session_id = self.session_id.clone();
+                    let session_id = self.identity.session_id.clone();
                     if self
                         .enqueue(ClientCommand::QueueRemove {
                             session_id,

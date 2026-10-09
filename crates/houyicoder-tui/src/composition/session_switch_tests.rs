@@ -122,7 +122,7 @@ fn test_switch_session_resets_view() {
         )),
         "previous session frames cleared"
     );
-    assert_eq!(app.session_id.0, new_sid, "session_id updated");
+    assert_eq!(app.identity.session_id.0, new_sid, "session_id updated");
     assert!(app.session.is_some(), "new session driver wired");
     assert!(!app.agent_busy(), "agent_busy cleared");
     assert!(app.whole_scroll().is_following_tail(), "scroll reset");
@@ -779,7 +779,7 @@ fn test_swap_restores_open_keys() {
 #[test]
 fn test_switch_parking_hygiene() {
     let mut app = build_app(test_bundle());
-    let first_sid = app.session_id.clone();
+    let first_sid = app.identity.session_id.clone();
     app.transcript.push(TranscriptLine::Subagent {
         child_sid: "c1".into(),
         subagent_type: "explore".into(),

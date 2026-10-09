@@ -22,7 +22,7 @@ impl App {
             self.system_line("resume: session history unavailable");
             return;
         };
-        let current_sid = self.session_id.0.clone();
+        let current_sid = self.identity.session_id.0.clone();
         match arg {
             None => {
                 let rows = catalog.sessions(&current_sid);

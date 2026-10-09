@@ -151,7 +151,7 @@ pub fn build_app(bundle: RunnerBundle) -> App {
     // snapshot lands, so the status bar names what the session runs.
     app.model_picker.snapshot.applied.id = model;
     app.status.sandbox = "mac-seatbelt".to_string();
-    app.session_id = session_id;
+    app.identity.session_id = session_id;
     app.runtime = Some(runtime);
     app.session = Some(live_session);
     app.persistence = SessionPersistence {
@@ -261,7 +261,7 @@ impl App {
         // session being entered, so a switch away and back keeps what the
         // user had open. The parked state is taken here too -- build_app
         // rebuilds the whole App.
-        let leaving = self.session_id.clone();
+        let leaving = self.identity.session_id.clone();
         let open_keys = self.take_expanded_keys();
         let mut parked = std::mem::take(&mut self.parked_view_states);
         // Drop session-scoped Commands (/clear /rewind /undo) the user typed
@@ -301,7 +301,7 @@ impl App {
         self.bump_transcript_version();
         self.pending = pending;
         parked.park_session(leaving, open_keys);
-        if let Some(keys) = parked.take_session(&self.session_id) {
+        if let Some(keys) = parked.take_session(&self.identity.session_id) {
             self.set_expanded_keys(keys);
         }
         // The new session's fleet is unrelated to the old one's children,

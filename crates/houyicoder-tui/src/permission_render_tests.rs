@@ -254,7 +254,7 @@ fn test_permission_workspace_cursor_clamps() {
     let mut app = app();
     app.pane = Pane::Permission;
     app.permission_pane.tab = PermissionTab::Workspace;
-    app.working_dir = "/repo".into();
+    app.identity.working_dir = "/repo".into();
     app.capabilities.permission.dirs_cache = vec!["/tmp/a".into(), "/tmp/b".into()];
     // A denial log longer than the dirs list — the trap condition.
     use houyicoder_protocol::frontend::permission::PermissionDecisionEntry;
@@ -305,7 +305,7 @@ fn test_permission_workspace_lists_dirs() {
     let mut app = app();
     app.pane = Pane::Permission;
     app.permission_pane.tab = PermissionTab::Workspace;
-    app.working_dir = "/repo".into();
+    app.identity.working_dir = "/repo".into();
     app.capabilities.permission.dirs_cache = vec!["/tmp/extra".into()];
     let text = render_text(&app, 80, 24);
     assert!(
@@ -340,7 +340,7 @@ fn test_workspace_nav_two_dirs() {
     let mut app = app();
     app.pane = Pane::Permission;
     app.permission_pane.tab = PermissionTab::Workspace;
-    app.working_dir = "/repo".into();
+    app.identity.working_dir = "/repo".into();
     app.capabilities.permission.dirs_cache = vec!["/tmp/a".into(), "/tmp/b".into()];
 
     let scan = |app: &App| -> (bool, bool) {

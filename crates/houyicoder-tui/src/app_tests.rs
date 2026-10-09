@@ -474,7 +474,7 @@ fn test_kill_all_no_running() {
 #[test]
 fn test_clear_ships_session_reset() {
     let (mut app, events) = connected_app_events();
-    let sid = app.session_id.clone();
+    let sid = app.identity.session_id.clone();
     app.run_command(SlashCommand::Clear);
     let req = wait_for_request(&events, |p| {
         matches!(p, FrontendRequest::SessionReset { .. })

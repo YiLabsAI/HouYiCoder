@@ -13,13 +13,15 @@ impl App {
     /// render shows the rows. Resets the cursor so it never points past the
     /// new list. No-op when no working directory is set.
     pub fn refresh_worktrees(&mut self) {
-        if self.working_dir.is_empty() {
+        if self.identity.working_dir.is_empty() {
             self.worktree_entries.clear();
             self.worktree_list.cursor = 0;
             return;
         }
-        let entries =
-            crate::composition::parse_worktrees(Some(&self.working_dir), &self.working_dir);
+        let entries = crate::composition::parse_worktrees(
+            Some(&self.identity.working_dir),
+            &self.identity.working_dir,
+        );
         self.worktree_list.clamp(entries.len());
         self.worktree_entries = entries;
     }
@@ -135,7 +137,7 @@ mod tests {
         let mut app = app();
         app.worktree_entries = vec![row("/stale")];
         app.worktree_list.cursor = 0;
-        app.working_dir = String::new();
+        app.identity.working_dir = String::new();
         app.refresh_worktrees();
         assert!(app.worktree_entries.is_empty(), "list cleared");
     }

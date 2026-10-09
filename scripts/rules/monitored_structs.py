@@ -133,7 +133,10 @@ ACTIVE_OWNERS = {
         # results, the opened artifact with its proposer, and the rewind stack
         # and replay flag) became one Workflow owner, so the App shell carries
         # one owner and the composition root builds the workflow as one value.
-        "fields": 63,
+        # The session's wire routing id and starting working directory became
+        # one SessionIdentity owner, so the two flat fields reset together on
+        # a session switch instead of a swap resetting them in step.
+        "fields": 62,
         "mut_app": 44,
     },
     "crates/houyicoder-tui/src/workflow.rs:Workflow": {
@@ -182,6 +185,13 @@ ACTIVE_OWNERS = {
         # the rows the /skills pane renders plus the names the user disabled.
         # One capability value so the pane reads the entries and the disables
         # from one owner rather than two flat App fields.
+        "fields": 2,
+    },
+    "crates/houyicoder-tui/src/session/identity.rs:SessionIdentity": {
+        # The presented session's identity: the wire routing id and the
+        # working directory the session started in. Two flat App fields folded
+        # into one owner because both reset together on a session switch, so
+        # the swap replaces one value rather than two fields in step.
         "fields": 2,
     },
     "crates/houyicoder-tui/src/session/persistence.rs:SessionPersistence": {
