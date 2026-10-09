@@ -42,8 +42,8 @@ fn memory_app() -> (crate::state::App, Arc<Mutex<Vec<String>>>) {
 /// stash_pane_rows, so the index maps straight to a screen row offset from
 /// pane_rect.y.
 fn pane_row(app: &crate::state::App, needle: &str) -> (usize, u16) {
-    let prect = app.pane_rect.get();
-    let rows = app.last_pane_rows.borrow();
+    let prect = app.layout_snapshot.pane_rect.get();
+    let rows = app.layout_snapshot.last_pane_rows.borrow();
     let ri = rows
         .iter()
         .position(|(_, s)| s.contains(needle))
@@ -59,7 +59,7 @@ fn pane_row(app: &crate::state::App, needle: &str) -> (usize, u16) {
 fn test_drag_copies_pane_row() {
     let (mut app, captured) = memory_app();
     let (ri, y) = pane_row(&app, "build-gate");
-    let prect = app.pane_rect.get();
+    let prect = app.layout_snapshot.pane_rect.get();
     let x0 = prect.x + 2;
     // Down starts the drag; drag right; up copies + clears (pane does not
     // persist the highlight).
@@ -95,7 +95,7 @@ fn test_drag_copies_pane_row() {
 fn test_pane_drag_paints_cells() {
     let (mut app, _captured) = memory_app();
     let (_, y) = pane_row(&app, "build-gate");
-    let prect = app.pane_rect.get();
+    let prect = app.layout_snapshot.pane_rect.get();
     let x0 = prect.x + 2;
     crate::app::handle_mouse(
         &mut app,

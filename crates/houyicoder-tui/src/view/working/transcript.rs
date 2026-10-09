@@ -141,16 +141,16 @@ pub(super) fn draw_transcript(f: &mut Frame, area: Rect, app: &App) {
         let cache = app.display_rows_cache.rows.borrow();
         let mut all: Vec<(u8, String)> = cache.iter().map(|(t, s, _)| (*t, s.clone())).collect();
         all.extend(live.all_rows);
-        *app.last_all_rows.borrow_mut() = all;
+        *app.layout_snapshot.last_all_rows.borrow_mut() = all;
     }
     let inner = area;
     // Stash rect + visible rows + callid table for mouse/copy/Ctrl+O.
-    app.transcript_rect.set(inner);
+    app.layout_snapshot.transcript_rect.set(inner);
     // Stash the transcript pane width so the count path (line_display_rows,
     // called from scroll handlers outside the draw borrow) soft-wraps to the
     // SAME width the render path just used — count == render rows.
     app.layout_feedback.transcript_width.set(inner.width);
-    *app.last_transcript_rows.borrow_mut() =
+    *app.layout_snapshot.last_transcript_rows.borrow_mut() =
         visible.iter().map(|(t, s, _)| (*t, s.clone())).collect();
     *app.last_row_keys.callids.borrow_mut() = visible_callids;
     *app.last_row_keys.fold_keys.borrow_mut() = visible_fold_keys;
@@ -311,9 +311,11 @@ pub(super) fn draw_transcript(f: &mut Frame, area: Rect, app: &App) {
             ))),
             rect,
         );
-        app.jump_to_bottom_rect.set(rect);
+        app.layout_snapshot.jump_to_bottom_rect.set(rect);
     } else {
-        app.jump_to_bottom_rect.set(Rect::new(0, 0, 0, 0));
+        app.layout_snapshot
+            .jump_to_bottom_rect
+            .set(Rect::new(0, 0, 0, 0));
     }
 }
 

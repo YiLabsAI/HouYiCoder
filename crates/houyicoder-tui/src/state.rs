@@ -35,6 +35,7 @@ use crate::hooks_state::HooksPaneState;
 use crate::input::InputField;
 use crate::last_row_keys::LastRowKeys;
 use crate::layout_feedback::LayoutFeedback;
+use crate::layout_snapshot::LayoutSnapshot;
 use crate::list_pane_state::ListPaneState;
 use crate::memory_state::MemoryPaneState;
 use crate::notifications::NotificationState;
@@ -307,38 +308,9 @@ pub struct App {
     pub pending: Vec<PendingItem>,
     /// In-app text selection (drag-select in the transcript, copy on release).
     pub selection: Selection,
-    /// Last-rendered transcript rect (screen coords), stashed by the draw
-    /// pass so the mouse handler can map a click cell to a transcript row.
-    pub transcript_rect: Cell<Rect>,
-    /// Last-rendered jump-to-bottom label rect; hit-tested before the
-    /// transcript surface. Zero rect when hidden.
-    pub jump_to_bottom_rect: Cell<Rect>,
-    /// Last-rendered transcript rows with their style tag (post-wrap, with
-    /// spacer blanks), stashed by the draw pass so copy can extract the
-    /// selected text and skip non-content rows (spinner).
-    pub last_transcript_rows: RefCell<Vec<(u8, String)>>,
-    /// Full transcript rows (pre-slice) stashed by the draw pass so copy can
-    /// access content beyond the visible viewport (selection past the bottom
-    /// edge, or viewport scrolled between draw and copy).
-    pub last_all_rows: RefCell<Vec<(u8, String)>>,
-    /// Last-rendered slash-command pane rect (the /permissions /search
-    /// /memory inner content region), stashed by the draw pass so the mouse
-    /// handler can route a drag in the pane to a pane-local selection. Zero
-    /// when no command pane is open.
-    pub pane_rect: Cell<Rect>,
-    /// Last-rendered pane content rows, stashed by reading the frame buffer
-    /// after the pane content closure draws. The panes render through
-    /// arbitrary widgets (List, Paragraph, SearchBox), so the rendered cells
-    /// are the single source of truth for the text the user sees — reading
-    /// them avoids duplicating each widget's row construction.
-    pub last_pane_rows: RefCell<Vec<(u8, String)>>,
-    /// Last-rendered status bar rect, published per viewport by the draw pass;
-    /// zeroed at view::draw top so it cannot go stale across viewports or
-    /// screens.
-    pub status_rect: Cell<Rect>,
-    /// Status bar rows read back from the frame buffer (like last_pane_rows)
-    /// so copy extracts the model/mode/context text the user sees.
-    pub last_status_rows: RefCell<Vec<(u8, String)>>,
+    /// The renderer's layout snapshot: per-region rectangles and rendered-row
+    /// caches the draw pass stashes, read back by the input and click paths.
+    pub(crate) layout_snapshot: LayoutSnapshot,
     /// Selection for the status bar surface; own coordinate space so it never
     /// collides with the transcript or a pane.
     pub status_selection: Selection,
@@ -348,13 +320,6 @@ pub struct App {
     /// the range, since pane content rebuilds each frame and a persistent
     /// highlight would not track the rows.
     pub pane_selection: Selection,
-    /// The approval card's screen rect (zero when no approval is shown),
-    /// stashed by the draw pass so the mouse handler routes a drag in the
-    /// card to a card-local selection.
-    pub approval_rect: Cell<Rect>,
-    /// Last-rendered approval card rows, read from the frame buffer like
-    /// last_pane_rows so copy extracts the text the user sees.
-    pub last_approval_rows: RefCell<Vec<(u8, String)>>,
     /// Selection for the approval card surface (separate coordinate space).
     pub approval_selection: Selection,
     /// Per-line render cache (content hash + width + expand key; indices are

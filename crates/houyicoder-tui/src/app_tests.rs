@@ -39,9 +39,9 @@ fn last_system(app: &App) -> &str {
 fn test_status_bar_click_drags() {
     let mut app = working_app();
     drop(crate::test_harness::render_text(&app, 80, 24));
-    let srect = app.status_rect.get();
+    let srect = app.layout_snapshot.status_rect.get();
     assert!(srect.height > 0, "status rect published by the draw pass");
-    let rows = app.last_status_rows.borrow();
+    let rows = app.layout_snapshot.last_status_rows.borrow();
     assert!(
         !rows.is_empty(),
         "status rows captured from the frame buffer"
@@ -82,7 +82,8 @@ fn test_status_rows_refresh() {
     use crate::state::ViewportMode;
     use crate::test_harness::render_text;
     let collect = |app: &App| -> String {
-        app.last_status_rows
+        app.layout_snapshot
+            .last_status_rows
             .borrow()
             .iter()
             .map(|(_, s)| s.as_str())
@@ -112,7 +113,7 @@ fn test_status_rows_refresh() {
         "Scroll status rows must carry the SCROLL tag (stale rows = bug): {scroll_rows}"
     );
     assert!(
-        app.status_rect.get().height > 0,
+        app.layout_snapshot.status_rect.get().height > 0,
         "Scroll re-publishes a status rect, not a stale zero"
     );
 
@@ -130,7 +131,7 @@ fn test_status_rows_refresh() {
         "Focus status rows hold the progress text: {focus_rows}"
     );
     assert!(
-        app.status_rect.get().height > 0,
+        app.layout_snapshot.status_rect.get().height > 0,
         "Focus re-publishes a status rect"
     );
 }
@@ -150,7 +151,7 @@ fn test_status_rect_zeroed_offscreen() {
     let mut app = working_app();
     drop(render_text(&app, 80, 24));
     assert!(
-        app.status_rect.get().height > 0,
+        app.layout_snapshot.status_rect.get().height > 0,
         "Working publishes a status rect"
     );
     // Switch to a screen that draws no status bar. view::draw zeroes
@@ -159,7 +160,7 @@ fn test_status_rect_zeroed_offscreen() {
     app.screen = Screen::Console;
     drop(render_text(&app, 80, 24));
     assert_eq!(
-        app.status_rect.get().height,
+        app.layout_snapshot.status_rect.get().height,
         0,
         "Console must not keep a stale Working status rect"
     );

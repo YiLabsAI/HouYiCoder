@@ -197,7 +197,7 @@ fn test_click_label_jumps() {
         out.contains("Jump to bottom (click)"),
         "idle label should carry the (click) hint:\n{out}"
     );
-    let rect = app.jump_to_bottom_rect.get();
+    let rect = app.layout_snapshot.jump_to_bottom_rect.get();
     assert!(
         rect.height > 0 && rect.width > 0,
         "label visible when scrolled back"
@@ -224,7 +224,7 @@ fn test_click_label_jumps() {
 #[test]
 fn test_label_side_falls_through() {
     let mut app = app_scrolled_back();
-    let rect = app.jump_to_bottom_rect.get();
+    let rect = app.layout_snapshot.jump_to_bottom_rect.get();
     assert!(
         rect.width < 80,
         "the hit rect is the label span, not the full row"
@@ -255,7 +255,7 @@ fn test_short_transcript_no_label() {
         "short transcript scroll keeps follow-tail"
     );
     let _out = render_text(&app, 80, 24);
-    let rect = app.jump_to_bottom_rect.get();
+    let rect = app.layout_snapshot.jump_to_bottom_rect.get();
     assert_eq!(rect.height, 0, "no ghost label on a short transcript");
 }
 
@@ -272,7 +272,7 @@ fn test_label_hidden_following() {
         app.whole_scroll().is_following_tail(),
         "default follows the tail"
     );
-    let rect = app.jump_to_bottom_rect.get();
+    let rect = app.layout_snapshot.jump_to_bottom_rect.get();
     assert_eq!(rect.height, 0, "label hidden while following the tail");
 }
 

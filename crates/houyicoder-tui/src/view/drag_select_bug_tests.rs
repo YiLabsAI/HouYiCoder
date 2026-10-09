@@ -30,14 +30,15 @@ fn app_with_lines(n: usize) -> (crate::state::App, Arc<Mutex<Vec<String>>>) {
 
 /// Screen row of the all-rows index under the current scroll offset.
 fn screen_y(app: &crate::state::App, ri: usize) -> u16 {
-    let rect = app.transcript_rect.get();
+    let rect = app.layout_snapshot.transcript_rect.get();
     let top = app.whole_scroll().top_offset();
     rect.y + (ri.saturating_sub(top)) as u16
 }
 
 /// Index into last_all_rows of the row containing the needle.
 fn row_index(app: &crate::state::App, needle: &str) -> usize {
-    app.last_all_rows
+    app.layout_snapshot
+        .last_all_rows
         .borrow()
         .iter()
         .position(|(_, s)| s.contains(needle))
@@ -70,7 +71,7 @@ fn test_redrag_stays_char_mode() {
         captured: captured.clone(),
     });
     let _out = render_text(&app, 80, 24);
-    let rect = app.transcript_rect.get();
+    let rect = app.layout_snapshot.transcript_rect.get();
     let y = screen_y(&app, row_index(&app, "alpha"));
     let x0 = rect.x + 8;
     // First gesture: press, drag right, release. A real drag.
@@ -115,7 +116,7 @@ fn test_redrag_stays_char_mode() {
 #[test]
 fn test_edge_drag_scrolls_line() {
     let (mut app, _captured) = app_with_lines(40);
-    let rect = app.transcript_rect.get();
+    let rect = app.layout_snapshot.transcript_rect.get();
     app.whole_scroll_mut().jump_to(10);
     let _out = render_text(&app, 80, 24);
     assert_eq!(app.whole_scroll().top_offset(), 10);
@@ -154,7 +155,7 @@ fn test_edge_drag_scrolls_line() {
 #[test]
 fn test_overlay_tracks_shifted_content() {
     let (mut app, _captured) = app_with_lines(40);
-    let rect = app.transcript_rect.get();
+    let rect = app.layout_snapshot.transcript_rect.get();
     let ri = row_index(&app, "history line 35");
     let y = screen_y(&app, ri);
     assert!(
@@ -199,7 +200,7 @@ fn test_overlay_tracks_shifted_content() {
 #[test]
 fn test_copy_tracks_shifted_content() {
     let (mut app, captured) = app_with_lines(40);
-    let rect = app.transcript_rect.get();
+    let rect = app.layout_snapshot.transcript_rect.get();
     let ri = row_index(&app, "history line 35");
     let y = screen_y(&app, ri);
     assert!(
@@ -270,9 +271,9 @@ fn test_click_thoughtfor_expands_one() {
     ]
     .into();
     let _out = render_text(&app, 80, 24);
-    let rect = app.transcript_rect.get();
+    let rect = app.layout_snapshot.transcript_rect.get();
     // Find the FIRST ThoughtFor row's visible index + screen y.
-    let rows = app.last_transcript_rows.borrow();
+    let rows = app.layout_snapshot.last_transcript_rows.borrow();
     let ri = rows
         .iter()
         .position(|(_, t)| t.contains("Thought for 2s"))
@@ -337,8 +338,8 @@ fn test_click_thoughtfor_none_reasoning() {
     ]
     .into();
     let _out = render_text(&app, 80, 24);
-    let rect = app.transcript_rect.get();
-    let rows = app.last_transcript_rows.borrow();
+    let rect = app.layout_snapshot.transcript_rect.get();
+    let rows = app.layout_snapshot.last_transcript_rows.borrow();
     // The Some row's header carries "(ctrl+o to expand)"; the None row does not.
     let ri = rows
         .iter()
@@ -393,8 +394,9 @@ fn test_click_thought_no_duration() {
     ]
     .into();
     let _out = render_text(&app, 80, 24);
-    let rect = app.transcript_rect.get();
+    let rect = app.layout_snapshot.transcript_rect.get();
     let ri = app
+        .layout_snapshot
         .last_transcript_rows
         .borrow()
         .iter()
@@ -415,8 +417,9 @@ fn test_click_thought_no_duration() {
     // The next summary carries no reasoning at all, so it offers no toggle:
     // the same gesture must leave the expand state alone.
     let _out = render_text(&app, 80, 24);
-    let rect = app.transcript_rect.get();
+    let rect = app.layout_snapshot.transcript_rect.get();
     let ri = app
+        .layout_snapshot
         .last_transcript_rows
         .borrow()
         .iter()
@@ -474,8 +477,8 @@ fn test_click_thoughtfor_scrolled_off() {
     app.transcript = transcript.into();
     // Small height so the tail viewport shows only t2 (t1 scrolled off top).
     let _out = render_text(&app, 80, 8);
-    let rect = app.transcript_rect.get();
-    let rows = app.last_transcript_rows.borrow();
+    let rect = app.layout_snapshot.transcript_rect.get();
+    let rows = app.layout_snapshot.last_transcript_rows.borrow();
     let ri = rows
         .iter()
         .position(|(_, t)| t.contains("Thought for 5s") && t.contains("ctrl+o"))
@@ -537,8 +540,8 @@ fn test_same_reason_thoughts_independent() {
     ]
     .into();
     let _out = render_text(&app, 80, 24);
-    let rect = app.transcript_rect.get();
-    let rows = app.last_transcript_rows.borrow();
+    let rect = app.layout_snapshot.transcript_rect.get();
+    let rows = app.layout_snapshot.last_transcript_rows.borrow();
     let ri = rows
         .iter()
         .position(|(_, t)| t.contains("Thought for 2s"))
@@ -618,7 +621,7 @@ fn expand_first_group(app: &mut crate::state::App) -> String {
         .iter()
         .position(|k| k.is_some())
         .expect("a fold summary row exists");
-    let rect = app.transcript_rect.get();
+    let rect = app.layout_snapshot.transcript_rect.get();
     let y = screen_y(app, fold_ri_to_all_rows_index(app, fold_ri));
     crate::app::handle_mouse(
         app,
@@ -651,7 +654,7 @@ fn test_click_body_collapses_group() {
     );
     // A body row (the bash call line) — NOT the summary header.
     let body_ri = row_index(&app, "Bash(ls");
-    let rect = app.transcript_rect.get();
+    let rect = app.layout_snapshot.transcript_rect.get();
     let y = screen_y(&app, body_ri);
     // Clean click: Down + Up at the same cell (no drag motion).
     crate::app::handle_mouse(
@@ -683,7 +686,7 @@ fn test_drag_expanded_block_copies() {
     });
     let key = expand_first_group(&mut app);
     let body_ri = row_index(&app, "Bash(ls");
-    let rect = app.transcript_rect.get();
+    let rect = app.layout_snapshot.transcript_rect.get();
     let y = screen_y(&app, body_ri);
     // A real drag: press, move right, release at a different column.
     crate::app::handle_mouse(
@@ -719,7 +722,7 @@ fn test_drag_return_keeps_group() {
     let mut app = app_with_fold_group();
     let key = expand_first_group(&mut app);
     let body_ri = row_index(&app, "Bash(ls");
-    let rect = app.transcript_rect.get();
+    let rect = app.layout_snapshot.transcript_rect.get();
     let y = screen_y(&app, body_ri);
     let x0 = rect.x + 2;
     // Press on the body row, drag right, drag back to the start cell, release.
@@ -763,7 +766,7 @@ fn test_drag_fold_summary_copies() {
         .iter()
         .position(|k| k.is_some())
         .expect("a fold summary row exists");
-    let rect = app.transcript_rect.get();
+    let rect = app.layout_snapshot.transcript_rect.get();
     let y = screen_y(&app, fold_ri_to_all_rows_index(&app, fold_ri));
     let x0 = rect.x;
     // A real drag: press on the summary, move right, release.
@@ -809,7 +812,7 @@ fn test_expanded_block_paints_gray() {
     let summary_y = screen_y(&app, summary_ri);
     let gray = Color::Indexed(238);
     let summary_cell = buf
-        .cell((app.transcript_rect.get().x + 1, summary_y))
+        .cell((app.layout_snapshot.transcript_rect.get().x + 1, summary_y))
         .expect("summary cell");
     assert_ne!(
         summary_cell.bg, gray,
@@ -821,7 +824,7 @@ fn test_expanded_block_paints_gray() {
     let buf = render_buffer(&app, 80, 24);
     let body_y = screen_y(&app, body_ri);
     let body_cell = buf
-        .cell((app.transcript_rect.get().x + 2, body_y))
+        .cell((app.layout_snapshot.transcript_rect.get().x + 2, body_y))
         .expect("body cell");
     assert_eq!(
         body_cell.bg, gray,
@@ -855,13 +858,13 @@ fn test_approval_drag_resets() {
         },
     ));
     let _out = render_text(&app, 80, 24);
-    let arect = app.approval_rect.get();
+    let arect = app.layout_snapshot.approval_rect.get();
     assert!(
         arect.width > 0 && arect.height > 0,
         "approval card rect published: {arect:?}"
     );
     assert!(
-        !app.last_approval_rows.borrow().is_empty(),
+        !app.layout_snapshot.last_approval_rows.borrow().is_empty(),
         "approval rows stashed"
     );
 
@@ -895,7 +898,7 @@ fn test_approval_drag_resets() {
     // transcript, not stale approval rows.
     app.prompt = None;
     let _out = render_text(&app, 80, 24);
-    let stale = app.approval_rect.get();
+    let stale = app.layout_snapshot.approval_rect.get();
     assert_eq!(
         (stale.width, stale.height),
         (0, 0),

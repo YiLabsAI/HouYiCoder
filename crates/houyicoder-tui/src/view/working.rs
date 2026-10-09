@@ -64,8 +64,8 @@ fn pane_hides_status(app: &App) -> bool {
 /// header or pane-tab strip; the status bar carries the progress bar.
 fn draw_working(f: &mut Frame, app: &App) {
     app.queue_view.strip_rect.set(Rect::new(0, 0, 0, 0));
-    app.pane_rect.set(Rect::new(0, 0, 0, 0));
-    app.approval_rect.set(Rect::new(0, 0, 0, 0));
+    app.layout_snapshot.pane_rect.set(Rect::new(0, 0, 0, 0));
+    app.layout_snapshot.approval_rect.set(Rect::new(0, 0, 0, 0));
     app.layout_feedback.terminal_rows.set(f.area().height);
     // Wrap columns for the input content: terminal width minus the top/bottom
     // border (2) and the "❯ " prompt (2). Stored on App so the key handlers
@@ -144,8 +144,8 @@ fn draw_working(f: &mut Frame, app: &App) {
 /// pad the clipboard. The status bar is one row; multi-row layouts keep the
 /// same per-row readback.
 fn stash_status_rows(f: &mut Frame, area: Rect, app: &App) {
-    app.status_rect.set(area);
-    let mut rows = app.last_status_rows.borrow_mut();
+    app.layout_snapshot.status_rect.set(area);
+    let mut rows = app.layout_snapshot.last_status_rows.borrow_mut();
     rows.clear();
     if area.width == 0 || area.height == 0 {
         return;
@@ -281,8 +281,8 @@ fn build_working_layout(
 /// actionable keys (a/r/i) plus the progress bar.
 fn draw_focus(f: &mut Frame, app: &App) {
     app.queue_view.strip_rect.set(Rect::new(0, 0, 0, 0));
-    app.pane_rect.set(Rect::new(0, 0, 0, 0));
-    app.approval_rect.set(Rect::new(0, 0, 0, 0));
+    app.layout_snapshot.pane_rect.set(Rect::new(0, 0, 0, 0));
+    app.layout_snapshot.approval_rect.set(Rect::new(0, 0, 0, 0));
     app.layout_feedback.terminal_rows.set(f.area().height);
     let total_h = f.area().height;
     let queue_h = footer_budget::allocate(total_h, 0, queue_overlay::strip_want(app), 0).queue;
@@ -312,8 +312,8 @@ fn draw_focus(f: &mut Frame, app: &App) {
 /// search/tail hints.
 fn draw_scroll(f: &mut Frame, app: &App) {
     app.queue_view.strip_rect.set(Rect::new(0, 0, 0, 0));
-    app.pane_rect.set(Rect::new(0, 0, 0, 0));
-    app.approval_rect.set(Rect::new(0, 0, 0, 0));
+    app.layout_snapshot.pane_rect.set(Rect::new(0, 0, 0, 0));
+    app.layout_snapshot.approval_rect.set(Rect::new(0, 0, 0, 0));
     app.layout_feedback.terminal_rows.set(f.area().height);
     let total_h = f.area().height;
     let queue_h = footer_budget::allocate(total_h, 0, queue_overlay::strip_want(app), 0).queue;
@@ -518,8 +518,8 @@ where
 /// closure has already finished drawing by the time this runs, so the cells
 /// reflect the final pane content for the frame.
 fn stash_pane_rows(f: &mut Frame, inner: Rect, app: &App) {
-    app.pane_rect.set(inner);
-    let mut rows = app.last_pane_rows.borrow_mut();
+    app.layout_snapshot.pane_rect.set(inner);
+    let mut rows = app.layout_snapshot.last_pane_rows.borrow_mut();
     rows.clear();
     if inner.width == 0 || inner.height == 0 {
         return;
@@ -541,8 +541,8 @@ fn stash_pane_rows(f: &mut Frame, inner: Rect, app: &App) {
 /// Stash the rendered approval card rows + rect so the in-app selection
 /// path can reach the text the approval card drew. Mirrors stash_pane_rows.
 fn stash_approval_rows(f: &mut Frame, area: Rect, app: &App) {
-    app.approval_rect.set(area);
-    let mut rows = app.last_approval_rows.borrow_mut();
+    app.layout_snapshot.approval_rect.set(area);
+    let mut rows = app.layout_snapshot.last_approval_rows.borrow_mut();
     rows.clear();
     if area.width == 0 || area.height == 0 {
         return;

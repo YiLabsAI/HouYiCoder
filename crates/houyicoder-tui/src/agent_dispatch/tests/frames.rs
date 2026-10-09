@@ -778,7 +778,7 @@ fn test_notice_rows_fit_pane() {
         &[("alpha", MemoryOperation::Created)],
     );
     let _out = render_text(&app, 24, 40);
-    let rows = app.last_all_rows.borrow();
+    let rows = app.layout_snapshot.last_all_rows.borrow();
     assert!(!rows.is_empty(), "the notice publishes rows");
     for (_, row) in rows.iter() {
         assert_eq!(
@@ -852,6 +852,7 @@ fn test_notice_walk_matches_render() {
     });
     let _out = render_text(&app, 24, 40);
     let head_row = app
+        .layout_snapshot
         .last_all_rows
         .borrow()
         .iter()

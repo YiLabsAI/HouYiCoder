@@ -267,16 +267,16 @@ pub struct TranscriptSurface<'a> {
 
 impl Surface for TranscriptSurface<'_> {
     fn parts(&mut self) -> SurfaceParts<'_> {
-        let rows = self.app.last_all_rows.borrow();
+        let rows = self.app.layout_snapshot.last_all_rows.borrow();
         SurfaceParts {
             sel: &mut self.app.selection,
             rows,
-            rect: self.app.transcript_rect.get(),
+            rect: self.app.layout_snapshot.transcript_rect.get(),
             clipboard: self.app.clipboard.as_ref(),
         }
     }
     fn to_content(&self, x: u16, y: u16) -> (u16, usize) {
-        let rect = self.app.transcript_rect.get();
+        let rect = self.app.layout_snapshot.transcript_rect.get();
         transcript_mouse_to_content(self.app, rect, x, y)
     }
     fn persist(&self) -> bool {
@@ -302,7 +302,7 @@ impl Surface for TranscriptSurface<'_> {
         if !self.app.selection.is_dragging {
             return;
         }
-        let rect = self.app.transcript_rect.get();
+        let rect = self.app.layout_snapshot.transcript_rect.get();
         if rect.height > 0 {
             if y <= rect.y {
                 self.app.scroll_transcript_line_up(1);
@@ -330,6 +330,7 @@ impl Surface for TranscriptSurface<'_> {
                 let ri = self.app.anchor_visible_row()?;
                 let tag = self
                     .app
+                    .layout_snapshot
                     .last_transcript_rows
                     .borrow()
                     .get(ri)
@@ -409,16 +410,16 @@ pub struct PaneSurface<'a> {
 
 impl Surface for PaneSurface<'_> {
     fn parts(&mut self) -> SurfaceParts<'_> {
-        let rows = self.app.last_pane_rows.borrow();
+        let rows = self.app.layout_snapshot.last_pane_rows.borrow();
         SurfaceParts {
             sel: &mut self.app.pane_selection,
             rows,
-            rect: self.app.pane_rect.get(),
+            rect: self.app.layout_snapshot.pane_rect.get(),
             clipboard: self.app.clipboard.as_ref(),
         }
     }
     fn to_content(&self, x: u16, y: u16) -> (u16, usize) {
-        pane_mouse_to_content(self.app.pane_rect.get(), x, y)
+        pane_mouse_to_content(self.app.layout_snapshot.pane_rect.get(), x, y)
     }
     fn is_dragging(&self) -> bool {
         self.app.pane_selection.is_dragging
@@ -436,16 +437,16 @@ pub struct ApprovalSelection<'a> {
 
 impl Surface for ApprovalSelection<'_> {
     fn parts(&mut self) -> SurfaceParts<'_> {
-        let rows = self.app.last_approval_rows.borrow();
+        let rows = self.app.layout_snapshot.last_approval_rows.borrow();
         SurfaceParts {
             sel: &mut self.app.approval_selection,
             rows,
-            rect: self.app.approval_rect.get(),
+            rect: self.app.layout_snapshot.approval_rect.get(),
             clipboard: self.app.clipboard.as_ref(),
         }
     }
     fn to_content(&self, x: u16, y: u16) -> (u16, usize) {
-        pane_mouse_to_content(self.app.approval_rect.get(), x, y)
+        pane_mouse_to_content(self.app.layout_snapshot.approval_rect.get(), x, y)
     }
     fn is_dragging(&self) -> bool {
         self.app.approval_selection.is_dragging
@@ -465,16 +466,16 @@ pub struct StatusSurface<'a> {
 
 impl Surface for StatusSurface<'_> {
     fn parts(&mut self) -> SurfaceParts<'_> {
-        let rows = self.app.last_status_rows.borrow();
+        let rows = self.app.layout_snapshot.last_status_rows.borrow();
         SurfaceParts {
             sel: &mut self.app.status_selection,
             rows,
-            rect: self.app.status_rect.get(),
+            rect: self.app.layout_snapshot.status_rect.get(),
             clipboard: self.app.clipboard.as_ref(),
         }
     }
     fn to_content(&self, x: u16, y: u16) -> (u16, usize) {
-        pane_mouse_to_content(self.app.status_rect.get(), x, y)
+        pane_mouse_to_content(self.app.layout_snapshot.status_rect.get(), x, y)
     }
     fn is_dragging(&self) -> bool {
         self.app.status_selection.is_dragging
@@ -552,7 +553,7 @@ pub(crate) fn edge_scroll_if_at_edge(app: &mut App) -> bool {
     let Some((cx, cy)) = app.selection.cursor else {
         return false;
     };
-    let rect = app.transcript_rect.get();
+    let rect = app.layout_snapshot.transcript_rect.get();
     if rect.height == 0 {
         return false;
     }
@@ -565,7 +566,7 @@ pub(crate) fn edge_scroll_if_at_edge(app: &mut App) -> bool {
         return false;
     }
     let (col, content_row) = transcript_mouse_to_content(app, rect, cx, cy);
-    let rows = app.last_all_rows.borrow();
+    let rows = app.layout_snapshot.last_all_rows.borrow();
     extend_drag(&mut app.selection, &rows, rect, col, content_row);
     true
 }

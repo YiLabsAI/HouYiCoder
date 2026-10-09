@@ -49,7 +49,7 @@ impl App {
         let (_, content_row) = self.selection.anchor?;
         let top = self.active_scroll().top_offset();
         let ri = content_row.checked_sub(top)?;
-        (ri < self.transcript_rect.get().height as usize).then_some(ri)
+        (ri < self.layout_snapshot.transcript_rect.get().height as usize).then_some(ri)
     }
 
     /// Toggle expand/collapse of a tool result row (Ctrl+O). If the selection

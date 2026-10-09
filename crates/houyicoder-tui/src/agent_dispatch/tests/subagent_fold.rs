@@ -187,7 +187,7 @@ fn test_click_subagent_head_expands() {
         color: None,
     });
     let _out = crate::test_harness::render_text(&app, 80, 24);
-    let rect = app.transcript_rect.get();
+    let rect = app.layout_snapshot.transcript_rect.get();
     assert!(
         !app.transcript_view.expanded.subagents.contains("c1"),
         "starts collapsed"
@@ -204,7 +204,7 @@ fn test_click_subagent_head_expands() {
     );
     // Toggle symmetry: a second click on the (still-head) row collapses.
     let _out = crate::test_harness::render_text(&app, 80, 24);
-    let rect = app.transcript_rect.get();
+    let rect = app.layout_snapshot.transcript_rect.get();
     {
         let mut surface = TranscriptSurface { app: &mut app };
         surface.handle_down(rect.x, rect.y);

@@ -210,7 +210,7 @@ pub(crate) fn handle_mouse(app: &mut App, m: MouseEvent) {
         MouseEventKind::Down(MouseButton::Left) => {
             // The jump-to-bottom label overlays the transcript, so it owns the
             // first hit-test when visible.
-            let rect = app.jump_to_bottom_rect.get();
+            let rect = app.layout_snapshot.jump_to_bottom_rect.get();
             if rect.width > 0 && rect.height > 0 && in_rect(rect, m.column, m.row) {
                 app.scroll_transcript_follow_tail();
                 return;
@@ -258,19 +258,19 @@ pub(crate) fn handle_mouse(app: &mut App, m: MouseEvent) {
             }
             // Pane content owns selection before the transcript beneath it.
             // Each surface manages its own drag lifecycle.
-            let prect = app.pane_rect.get();
+            let prect = app.layout_snapshot.pane_rect.get();
             if prect.width > 0 && prect.height > 0 && in_rect(prect, m.column, m.row) {
                 PaneSurface { app: &mut *app }.handle_down(m.column, m.row);
                 return;
             }
             // Status chrome owns selection before the transcript beneath it.
-            let srect = app.status_rect.get();
+            let srect = app.layout_snapshot.status_rect.get();
             if srect.width > 0 && srect.height > 0 && in_rect(srect, m.column, m.row) {
                 StatusSurface { app: &mut *app }.handle_down(m.column, m.row);
                 return;
             }
             // Approval cards retain a local copyable selection.
-            let arect = app.approval_rect.get();
+            let arect = app.layout_snapshot.approval_rect.get();
             if arect.width > 0 && arect.height > 0 && in_rect(arect, m.column, m.row) {
                 ApprovalSelection { app: &mut *app }.handle_down(m.column, m.row);
                 return;
@@ -288,7 +288,7 @@ pub(crate) fn handle_mouse(app: &mut App, m: MouseEvent) {
                 }
                 return;
             }
-            let rect = app.transcript_rect.get();
+            let rect = app.layout_snapshot.transcript_rect.get();
             if in_rect(rect, m.column, m.row) {
                 // Byte-window browsing does not share transcript selection
                 // coordinates, so clicks do not start a drag.
@@ -379,28 +379,40 @@ pub(crate) fn apply_selection_overlay(f: &mut Frame, app: &App) {
     let buf = f.buffer_mut();
     let scroll_top = app.active_scroll().top_offset();
     {
-        let rows = app.last_transcript_rows.borrow();
+        let rows = app.layout_snapshot.last_transcript_rows.borrow();
         paint_overlay(
             buf,
-            app.transcript_rect.get(),
+            app.layout_snapshot.transcript_rect.get(),
             &rows,
             &app.selection,
             scroll_top,
         );
     }
     {
-        let rows = app.last_pane_rows.borrow();
-        paint_overlay(buf, app.pane_rect.get(), &rows, &app.pane_selection, 0);
-    }
-    {
-        let rows = app.last_status_rows.borrow();
-        paint_overlay(buf, app.status_rect.get(), &rows, &app.status_selection, 0);
-    }
-    {
-        let rows = app.last_approval_rows.borrow();
+        let rows = app.layout_snapshot.last_pane_rows.borrow();
         paint_overlay(
             buf,
-            app.approval_rect.get(),
+            app.layout_snapshot.pane_rect.get(),
+            &rows,
+            &app.pane_selection,
+            0,
+        );
+    }
+    {
+        let rows = app.layout_snapshot.last_status_rows.borrow();
+        paint_overlay(
+            buf,
+            app.layout_snapshot.status_rect.get(),
+            &rows,
+            &app.status_selection,
+            0,
+        );
+    }
+    {
+        let rows = app.layout_snapshot.last_approval_rows.borrow();
+        paint_overlay(
+            buf,
+            app.layout_snapshot.approval_rect.get(),
             &rows,
             &app.approval_selection,
             0,

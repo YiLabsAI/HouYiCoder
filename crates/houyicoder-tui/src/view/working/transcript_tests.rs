@@ -41,7 +41,7 @@ fn test_hint_single_line() {
     ]
     .into();
     drop(render_text(&app, 32, 12));
-    let rows = app.last_all_rows.borrow();
+    let rows = app.layout_snapshot.last_all_rows.borrow();
     let hint = rows
         .iter()
         .map(|(_, row)| row)

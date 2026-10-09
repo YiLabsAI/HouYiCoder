@@ -22,8 +22,9 @@ fn test_drag_copies_agent_line() {
         captured: captured.clone(),
     });
     let _out = render_text(&app, 80, 24);
-    let rect = app.transcript_rect.get();
+    let rect = app.layout_snapshot.transcript_rect.get();
     let agent_ri = app
+        .layout_snapshot
         .last_all_rows
         .borrow()
         .iter()
@@ -79,8 +80,9 @@ fn test_drag_copies_second_line() {
         captured: captured.clone(),
     });
     let _out = render_text(&app, 80, 24);
-    let rect = app.transcript_rect.get();
+    let rect = app.layout_snapshot.transcript_rect.get();
     let second_ri = app
+        .layout_snapshot
         .last_all_rows
         .borrow()
         .iter()

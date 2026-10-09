@@ -91,7 +91,13 @@ ACTIVE_OWNERS = {
         # The @ skill-picker overlay's open flag and list cursor became one
         # SkillPickerState owner, so opening the picker resets the cursor to
         # zero as one value rather than two flat fields a caller sets in step.
-        "fields": 113,
+        # The renderer layout snapshot gathered the ten render-diff fields (five
+        # screen rects and five last-rendered-row caches: transcript, pane,
+        # status, approval regions plus the transcript full-rows cache and the
+        # jump-to-bottom label rect) into one LayoutSnapshot owner, so each
+        # region's rect and its rows are written together after the draw and
+        # read together by the mouse-hit and selection paths.
+        "fields": 104,
         "mut_app": 44,
     },
     "crates/houyicoder-tui/src/last_row_keys.rs:LastRowKeys": {
@@ -148,6 +154,13 @@ ACTIVE_OWNERS = {
         # dims of the last render, so a count path that read one dim while
         # the draw pass updated the other saw a render/count mismatch.
         "fields": 2,
+    },
+    "crates/houyicoder-tui/src/layout_snapshot.rs:LayoutSnapshot": {
+        # The renderer layout snapshot: per-region rectangles and rendered-row
+        # caches the draw pass stashes, read back by the input and click paths.
+        # One owner because each region's rect and its rows are written
+        # together after the draw and read together by the hit-test paths.
+        "fields": 10,
     },
     "crates/houyicoder-tui/src/state/transcript/view.rs:TranscriptViewState": {
         # The transcript view's own state, one value per view: the whole-vec

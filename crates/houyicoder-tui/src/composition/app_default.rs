@@ -14,6 +14,7 @@ use crate::hooks_state::HooksPaneState;
 use crate::input::InputField;
 use crate::last_row_keys::LastRowKeys;
 use crate::layout_feedback::LayoutFeedback;
+use crate::layout_snapshot::LayoutSnapshot;
 use crate::list_pane_state::ListPaneState;
 use crate::memory_state::MemoryPaneState;
 use crate::notifications::NotificationState;
@@ -109,18 +110,9 @@ pub fn app() -> App {
         last_run_input: None,
         pending: Vec::new(),
         selection: Selection::default(),
-        transcript_rect: Cell::new(Rect::new(0, 0, 0, 0)),
-        jump_to_bottom_rect: Cell::new(Rect::new(0, 0, 0, 0)),
-        last_transcript_rows: RefCell::new(Vec::new()),
-        last_all_rows: RefCell::new(Vec::new()),
-        pane_rect: Cell::new(Rect::new(0, 0, 0, 0)),
-        last_pane_rows: RefCell::new(Vec::new()),
-        status_rect: Cell::new(Rect::new(0, 0, 0, 0)),
-        last_status_rows: RefCell::new(Vec::new()),
+        layout_snapshot: LayoutSnapshot::default(),
         status_selection: Selection::default(),
         pane_selection: Selection::default(),
-        approval_rect: Cell::new(Rect::new(0, 0, 0, 0)),
-        last_approval_rows: RefCell::new(Vec::new()),
         approval_selection: Selection::default(),
         render_cache: RefCell::new(RenderCache::default()),
         last_row_keys: LastRowKeys::default(),

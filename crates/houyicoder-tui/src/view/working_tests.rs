@@ -177,7 +177,7 @@ fn test_fold_collapse_expand_toggle() {
         .iter()
         .position(|k| k.is_some())
         .expect("a fold row should exist");
-    let rect = app.transcript_rect.get();
+    let rect = app.layout_snapshot.transcript_rect.get();
     let fold_y = rect.y + fold_ri as u16;
     let scroll_top = app.whole_scroll().top_offset();
     let _ = fold_y;
@@ -229,7 +229,7 @@ fn test_fold_collapse_expand_toggle() {
         .iter()
         .position(|k| k.is_some())
         .expect("a fold row should exist");
-    let rect = app.transcript_rect.get();
+    let rect = app.layout_snapshot.transcript_rect.get();
     let fold_y = rect.y + fold_ri as u16;
     app::handle_mouse(
         &mut app,
@@ -263,7 +263,7 @@ fn test_fold_collapse_expand_toggle() {
         .iter()
         .position(|k| k.is_some())
         .expect("a fold row should exist");
-    let rect = app.transcript_rect.get();
+    let rect = app.layout_snapshot.transcript_rect.get();
     let fold_y = rect.y + fold_ri as u16;
     app::handle_mouse(
         &mut app,
@@ -395,7 +395,7 @@ fn test_copy_preserves_scrolled_content() {
     let _out = render_text(&app, 80, 24);
     // last_all_rows should have all 30 lines (plus spacers), not just the
     // ~20 visible ones.
-    let all_rows = app.last_all_rows.borrow();
+    let all_rows = app.layout_snapshot.last_all_rows.borrow();
     assert!(
         all_rows.len() > 25,
         "last_all_rows must contain the full transcript, got {} rows",
@@ -403,7 +403,7 @@ fn test_copy_preserves_scrolled_content() {
     );
     // Selection at screen row 0..1 maps to scroll_top + 0..1 in the full
     // rows. Verify the extracted text comes from the scrolled position.
-    let rect = app.transcript_rect.get();
+    let rect = app.layout_snapshot.transcript_rect.get();
     let top = app.whole_scroll().top_offset();
     let mut sel = Selection::default();
     sel.start(0, top);
@@ -478,7 +478,7 @@ fn test_fold_expand_one_only() {
     .into();
     render_text(&app, 80, 24);
     // Find the first fold-summary row (group A, key=c1) and click it.
-    let rect = app.transcript_rect.get();
+    let rect = app.layout_snapshot.transcript_rect.get();
     let fold_ri = app
         .last_row_keys
         .fold_keys
@@ -565,7 +565,7 @@ fn test_anchor_clamped_to_content() {
         captured: captured.clone(),
     });
     let _out = render_text(&app, 80, 24);
-    let rect = app.transcript_rect.get();
+    let rect = app.layout_snapshot.transcript_rect.get();
     assert!(rect.height > 1, "transcript rect must have height");
     let bottom = rect.y + rect.height - 1;
     let border_y = rect.y + rect.height;
@@ -598,9 +598,9 @@ fn test_anchor_clamped_to_content() {
         "anchor must be clamped to the last content row, not the blank tail"
     );
     assert!(
-        acr < app.last_all_rows.borrow().len(),
+        acr < app.layout_snapshot.last_all_rows.borrow().len(),
         "anchor content row {acr} must index a real row in last_all_rows (len={})",
-        app.last_all_rows.borrow().len()
+        app.layout_snapshot.last_all_rows.borrow().len()
     );
 
     // Drag past the bottom edge into the input border area.
@@ -770,7 +770,7 @@ fn test_todo_rows_are_selectable() {
         },
     ];
     let _out = render_text(&app, 80, 24);
-    let rows = app.last_all_rows.borrow();
+    let rows = app.layout_snapshot.last_all_rows.borrow();
     let todo_rows: Vec<&(u8, String)> = rows
         .iter()
         .filter(|(_, s)| s.contains("writing code") || s.contains("ship it"))
@@ -1051,7 +1051,7 @@ fn test_user_background_band() {
     app.screen = Screen::Working;
     app.transcript = vec![TranscriptLine::User("中途插话到底有没有问题".into())].into();
     let buf = render_buffer(&app, 31, 12);
-    let area = app.transcript_rect.get();
+    let area = app.layout_snapshot.transcript_rect.get();
     let user_y = (area.y..area.y + area.height)
         .find(|y| {
             buf.cell((area.x, *y))
@@ -1106,7 +1106,7 @@ fn test_user_background_clears() {
     terminal
         .draw(|frame| crate::view::draw(frame, &app))
         .expect("first draw");
-    let area = app.transcript_rect.get();
+    let area = app.layout_snapshot.transcript_rect.get();
     let user_y = (area.y..area.y + area.height)
         .find(|y| {
             terminal

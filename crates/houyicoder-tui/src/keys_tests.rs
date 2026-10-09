@@ -1697,6 +1697,7 @@ fn test_ctrl_o_follows_cursor() {
     });
     drop(crate::test_harness::render_text(&app, 80, 24));
     let ri = app
+        .layout_snapshot
         .last_transcript_rows
         .borrow()
         .iter()

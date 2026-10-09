@@ -392,7 +392,10 @@ fn test_clears_session_local_state() {
     ));
     app.selection.anchor = Some((0, 5));
     app.selection.is_dragging = true;
-    app.last_all_rows.borrow_mut().push((0, "stale row".into()));
+    app.layout_snapshot
+        .last_all_rows
+        .borrow_mut()
+        .push((0, "stale row".into()));
     app.last_row_keys
         .callids
         .borrow_mut()
@@ -412,7 +415,7 @@ fn test_clears_session_local_state() {
     assert!(app.selection.anchor.is_none(), "selection anchor cleared");
     assert!(!app.selection.is_dragging, "selection drag cleared");
     assert!(
-        app.last_all_rows.borrow().is_empty(),
+        app.layout_snapshot.last_all_rows.borrow().is_empty(),
         "last_all_rows cleared"
     );
     assert!(
