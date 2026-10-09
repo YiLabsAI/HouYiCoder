@@ -272,8 +272,8 @@ impl App {
         // user content, recallable + auto-drainable in the new session.
         let mut dropped: Vec<String> = Vec::new();
         pending.retain(|item| {
-            if let crate::pending_queue::PendingItem::Command(text) = item
-                && !crate::pending_queue::command_first_token_is(text, "resume")
+            if let crate::input::queue::InputItem::Command(text) = item
+                && !crate::input::queue::command_first_token_is(text, "resume")
             {
                 dropped.push(text.clone());
                 return false;
@@ -284,8 +284,8 @@ impl App {
         // (InjectUser'd to the old server) lost its server copy. Demote to
         // ParkedMessage so the barrier holds + the drain spawns it fresh.
         for item in pending.iter_mut() {
-            if let crate::pending_queue::PendingItem::Message(t) = item {
-                *item = crate::pending_queue::PendingItem::ParkedMessage(t.clone());
+            if let crate::input::queue::InputItem::Message(t) = item {
+                *item = crate::input::queue::InputItem::ParkedMessage(t.clone());
             }
         }
         *self = build_app(bundle);

@@ -33,7 +33,6 @@ pub mod notifications;
 pub mod palette;
 pub mod paste;
 pub mod pending_prompt;
-pub mod pending_queue;
 mod permission_input;
 mod permission_pane_state;
 pub mod records;

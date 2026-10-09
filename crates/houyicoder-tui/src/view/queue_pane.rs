@@ -13,13 +13,13 @@ use ratatui::{
     widgets::{List, ListItem, ListState, Paragraph},
 };
 
-use crate::pending_queue::PendingItem;
+use crate::input::queue::InputItem;
 use crate::state::App;
 
 /// The queue pane body: a header line, a scrollable list of pending items
 /// (one row per logical item), and a footer hint line.
 pub(super) fn draw_content(f: &mut Frame, area: Rect, app: &App) {
-    let items: Vec<&PendingItem> = app.pending.iter().collect();
+    let items: Vec<&InputItem> = app.pending.iter().collect();
     let n = items.len();
     let cursor = app.queue_view.cursor.min(n.saturating_sub(1));
     let chunks = Layout::default()
@@ -73,7 +73,7 @@ pub(super) fn draw_content(f: &mut Frame, area: Rect, app: &App) {
 
 /// Build the list items: one row per logical queued item, showing the first
 /// line plus a hidden-line count for multiline messages.
-fn queue_items(items: &[&PendingItem], cursor: usize) -> Vec<ListItem<'static>> {
+fn queue_items(items: &[&InputItem], cursor: usize) -> Vec<ListItem<'static>> {
     items
         .iter()
         .enumerate()
@@ -93,7 +93,7 @@ fn queue_items(items: &[&PendingItem], cursor: usize) -> Vec<ListItem<'static>> 
                     Style::new().fg(Color::DarkGray),
                 ));
             }
-            if let PendingItem::Command(_) = item {
+            if let InputItem::Command(_) = item {
                 spans.insert(0, Span::styled("cmd ", Style::new().fg(Color::DarkGray)));
             }
             ListItem::new(Line::from(spans))

@@ -1,4 +1,4 @@
-//! Pending user input and deferred session commands.
+//! Queued user input and deferred session commands.
 //!
 //! Queue order is local. At most one input is mirrored to the active runner.
 
@@ -9,7 +9,7 @@ use crate::state::App;
 
 /// One item awaiting commitment or local command execution.
 #[derive(Debug, Clone)]
-pub enum PendingItem {
+pub enum InputItem {
     /// User input mirrored to the active runner.
     Message(QueuedInput),
     /// User input held only by the frontend.
@@ -21,7 +21,7 @@ pub enum PendingItem {
     Command(String),
 }
 
-impl PartialEq for PendingItem {
+impl PartialEq for InputItem {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Message(a), Self::Message(b))
@@ -32,13 +32,13 @@ impl PartialEq for PendingItem {
     }
 }
 
-impl PendingItem {
+impl InputItem {
     /// The text to show in the queue strip: the message body, or the
     /// command text (with the slash the user typed).
     pub fn display(&self) -> &str {
         match self {
-            PendingItem::Message(input) | PendingItem::ParkedMessage(input) => &input.text,
-            PendingItem::Command(t) => t,
+            InputItem::Message(input) | InputItem::ParkedMessage(input) => &input.text,
+            InputItem::Command(t) => t,
         }
     }
 
@@ -48,7 +48,7 @@ impl PendingItem {
     /// local-only. Used by recall/delete to decide whether to ship
     /// QueueRemove.
     pub fn is_message(&self) -> bool {
-        matches!(self, PendingItem::Message(_))
+        matches!(self, InputItem::Message(_))
     }
 }
 
@@ -85,13 +85,13 @@ impl App {
     /// eligible head. The server-side QueueRemove is sent before the local
     /// copy is removed so a refused enqueue keeps the item queued and the
     /// local and server mirrors cannot diverge.
-    pub(crate) fn remove_pending_at(&mut self, index: usize) -> Option<PendingItem> {
+    pub(crate) fn remove_pending_at(&mut self, index: usize) -> Option<InputItem> {
         if index >= self.pending.len() {
             return None;
         }
         // Enqueue the server removal before touching the local copy: a closed
         // driver leaves the item in place rather than orphaning the mirror.
-        if let PendingItem::Message(input) = &self.pending[index] {
+        if let InputItem::Message(input) = &self.pending[index] {
             let id = input.id;
             let session_id = self.session.identity.session_id.clone();
             if let Err(e) = self.enqueue(ClientCommand::QueueRemove { session_id, id }) {
@@ -117,7 +117,7 @@ impl App {
         // Clone the parked input without swapping the slot: the slot only
         // marks itself as a live mirror once the injection is queued.
         let Some(input) = self.pending.first().and_then(|slot| match slot {
-            PendingItem::ParkedMessage(input) => Some(input.clone()),
+            InputItem::ParkedMessage(input) => Some(input.clone()),
             _ => None,
         }) else {
             return;
@@ -126,10 +126,10 @@ impl App {
         match self.enqueue(ClientCommand::InjectUser { session_id, input }) {
             Ok(()) => {
                 if let Some(slot) = self.pending.first_mut()
-                    && let PendingItem::ParkedMessage(input) = slot
+                    && let InputItem::ParkedMessage(input) = slot
                 {
                     let input = input.clone();
-                    *slot = PendingItem::Message(input);
+                    *slot = InputItem::Message(input);
                 }
             }
             Err(e) => {
@@ -169,8 +169,8 @@ impl App {
     /// queue is only the current run's buffer.
     pub(crate) fn demote_pending_to_parked(&mut self) {
         for it in self.pending.iter_mut() {
-            if let PendingItem::Message(t) = it {
-                *it = PendingItem::ParkedMessage(t.clone());
+            if let InputItem::Message(t) = it {
+                *it = InputItem::ParkedMessage(t.clone());
             }
         }
     }
@@ -239,14 +239,14 @@ mod tests {
 
     #[test]
     fn test_command_display_keeps_slash() {
-        let c = PendingItem::Command("/resume sid-123".into());
+        let c = InputItem::Command("/resume sid-123".into());
         assert_eq!(c.display(), "/resume sid-123");
         assert!(!c.is_message());
     }
 
     #[test]
     fn test_message_is_message() {
-        let m = PendingItem::Message("hello".into());
+        let m = InputItem::Message("hello".into());
         assert!(m.is_message());
         assert_eq!(m.display(), "hello");
     }

@@ -22,8 +22,8 @@ use crate::agent_message::{
 };
 use crate::command::render::{render_permission_rules_wire, render_trajectory_wire};
 use crate::composition::suggestions_for;
+use crate::input::queue::InputItem;
 use crate::pending_prompt::PendingPrompt;
-use crate::pending_queue::PendingItem;
 use crate::records::{ContextDrillDown, ContextView, TranscriptLine};
 use crate::state::enums::LiveBlock;
 use crate::state::{App, BashProgress};
@@ -235,7 +235,7 @@ impl App {
                     if let Some(pos) = self.pending.iter().position(|it| {
                         matches!(
                             it,
-                            PendingItem::Message(current) | PendingItem::ParkedMessage(current)
+                            InputItem::Message(current) | InputItem::ParkedMessage(current)
                                 if current.id == input.id
                         )
                     }) {

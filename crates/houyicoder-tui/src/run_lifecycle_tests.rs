@@ -986,7 +986,7 @@ fn test_busy_submit_parks() {
     // promote_next_pending attaches the single server mirror right away
     // (the live connection accepts it) — the contract is at most one.
     assert!(
-        matches!(app.pending.first(), Some(PendingItem::Message(_))),
+        matches!(app.pending.first(), Some(InputItem::Message(_))),
         "the parked input is promoted to the single server mirror"
     );
 }

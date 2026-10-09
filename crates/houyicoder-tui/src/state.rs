@@ -30,6 +30,7 @@ use crate::composition::WorktreeEntry;
 use crate::composition::app as test_app;
 use crate::display_rows_cache::DisplayRowsCache;
 use crate::hooks_state::HooksPaneState;
+use crate::input::queue::InputItem;
 use crate::input::{Input, InputField};
 use crate::last_row_keys::LastRowKeys;
 use crate::layout_feedback::LayoutFeedback;
@@ -38,7 +39,6 @@ use crate::list_pane_state::ListPaneState;
 use crate::memory_state::MemoryPaneState;
 use crate::notifications::NotificationState;
 use crate::palette::PaletteState;
-use crate::pending_queue::PendingItem;
 use crate::permission_pane_state::PermissionPaneState;
 use crate::records::TeammateView;
 use crate::render_cache::RenderCache;
@@ -202,7 +202,7 @@ pub struct App {
     pub displayed_tokens: Cell<u32>,
     /// Queued user inputs submitted while a run was in flight (FIFO). A
     /// Typed queue (messages + slash commands); drained FIFO at idle.
-    pub pending: Vec<PendingItem>,
+    pub pending: Vec<InputItem>,
     /// The four per-region drag selections: the transcript's main selection
     /// and the status, pane, and approval selections, each in its own
     /// coordinate space so a drag on one region never collides with another.

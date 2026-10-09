@@ -9,7 +9,7 @@ use houyicoder_protocol::frontend::SlashCommand;
 use houyicoder_protocol::frontend::status::StatusSnapshot;
 
 use crate::composition;
-use crate::pending_queue::{PendingItem, is_state_changing};
+use crate::input::queue::{InputItem, is_state_changing};
 use crate::run_control::ClientCommand;
 use crate::state::{App, ArtifactSession, Pane, Screen, Stage, TranscriptLine, pane_for_stage};
 
@@ -489,7 +489,7 @@ impl App {
             let cmd = stripped.split_whitespace().next().unwrap_or("");
             let bare_resume = cmd == "resume" && stripped.trim() == cmd;
             if self.agent_busy() && is_state_changing(stripped) && !bare_resume {
-                self.pending.push(PendingItem::Command(text.clone()));
+                self.pending.push(InputItem::Command(text.clone()));
                 self.system_line(self.deferred_command_message(stripped));
                 return;
             }

@@ -1024,17 +1024,17 @@ fn test_review_rework_key_routes() {
 /// leaves queued input intact throughout the cancellation round trip.
 #[test]
 fn test_repeated_esc_keeps() {
-    use crate::pending_queue::PendingItem;
+    use crate::input::queue::InputItem;
     let mut app = working_app();
     crate::test_harness::attach_connection(&mut app);
     app.start_run_for_test(0);
-    app.pending.push(PendingItem::Message("task a".into()));
+    app.pending.push(InputItem::Message("task a".into()));
     handle_working(&mut app, key(KeyCode::Esc));
     handle_working(&mut app, key(KeyCode::Esc));
     assert!(
         app.pending
             .iter()
-            .any(|p| matches!(p, PendingItem::Message(t) if t == "task a")),
+            .any(|p| matches!(p, InputItem::Message(t) if t == "task a")),
         "repeated Esc keeps the queued message"
     );
     let empty = app.input.editor.is_empty();
@@ -1046,11 +1046,11 @@ fn test_repeated_esc_keeps() {
 /// instead of overwriting it.
 #[test]
 fn test_recall_merges_draft() {
-    use crate::pending_queue::PendingItem;
+    use crate::input::queue::InputItem;
     let mut app = working_app();
     crate::test_harness::attach_connection(&mut app);
     app.start_run_for_test(0);
-    app.pending.push(PendingItem::Message("task a".into()));
+    app.pending.push(InputItem::Message("task a".into()));
     app.input.editor.set("half draft".into());
     app.pane = Pane::Queue;
     handle_working(&mut app, key(KeyCode::Char('R')));
@@ -1065,11 +1065,11 @@ fn test_recall_merges_draft() {
 /// the pane without changing the queued input.
 #[test]
 fn test_esc_cancelling_closes_pane() {
-    use crate::pending_queue::PendingItem;
+    use crate::input::queue::InputItem;
     let mut app = working_app();
     crate::test_harness::attach_connection(&mut app);
     app.start_run_for_test(0);
-    app.pending.push(PendingItem::Message("task a".into()));
+    app.pending.push(InputItem::Message("task a".into()));
     // Esc1: interrupt (cancelling, agent_busy still true, queue intact).
     handle_working(&mut app, key(KeyCode::Esc));
     assert!(app.cancelling());
@@ -1094,11 +1094,11 @@ fn test_esc_cancelling_closes_pane() {
 /// left in neither Esc arm.
 #[test]
 fn test_esc_cancelling_backs_trajectory() {
-    use crate::pending_queue::PendingItem;
+    use crate::input::queue::InputItem;
     let mut app = working_app();
     crate::test_harness::attach_connection(&mut app);
     app.start_run_for_test(0);
-    app.pending.push(PendingItem::Message("task a".into()));
+    app.pending.push(InputItem::Message("task a".into()));
     handle_working(&mut app, key(KeyCode::Esc));
     assert!(app.cancelling());
     app.pane = Pane::Trajectory;

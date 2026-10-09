@@ -6,8 +6,8 @@
 #![cfg(test)]
 
 use crate::agent_message::{ServerEvent, SessionMessage};
+use crate::input::queue::InputItem;
 use crate::pending_prompt::PendingPrompt;
-use crate::pending_queue::PendingItem;
 use crate::test_harness::connection_lost_app;
 use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::frontend::trust::TrustPrompt;
@@ -97,7 +97,7 @@ fn test_child_inject_refused() {
 #[test]
 fn test_drain_refused() {
     let mut app = connection_lost_app();
-    app.pending.push(PendingItem::Message("head".into()));
+    app.pending.push(InputItem::Message("head".into()));
     let promoted = app.drain_pending_head();
     assert!(!promoted, "a refused send must not report a promoted turn");
     assert_eq!(
@@ -206,7 +206,7 @@ fn test_abort_refused() {
 #[test]
 fn test_recall_refused() {
     let mut app = connection_lost_app();
-    app.pending.push(PendingItem::Message("head".into()));
+    app.pending.push(InputItem::Message("head".into()));
     app.pop_queued_to_input();
     assert_eq!(
         app.pending.len(),

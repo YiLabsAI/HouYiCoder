@@ -6,7 +6,7 @@
 
 use crossterm::event::{KeyCode, KeyEvent};
 
-use crate::pending_queue::PendingItem;
+use crate::input::queue::InputItem;
 use crate::state::{App, Pane};
 
 pub(super) fn handle_resume_picker(app: &mut App, k: KeyEvent) {
@@ -26,7 +26,7 @@ pub(super) fn handle_resume_picker(app: &mut App, k: KeyEvent) {
                     // swap happens when the run resolves (drained FIFO at
                     // idle), not now (would fight the run).
                     app.pending
-                        .push(PendingItem::Command(format!("/resume {row}")));
+                        .push(InputItem::Command(format!("/resume {row}")));
                     app.system_line(app.deferred_command_message(&format!("resume {row}")));
                 } else {
                     app.pending_resume_target = Some(row.clone());
@@ -37,8 +37,7 @@ pub(super) fn handle_resume_picker(app: &mut App, k: KeyEvent) {
                 app.resume_picker.close();
                 app.pane = Pane::Transcript;
                 if app.agent_busy() {
-                    app.pending
-                        .push(PendingItem::Command(format!("/resume {q}")));
+                    app.pending.push(InputItem::Command(format!("/resume {q}")));
                     app.system_line(app.deferred_command_message(&format!("resume {q}")));
                 } else {
                     app.run_resume(Some(&q));

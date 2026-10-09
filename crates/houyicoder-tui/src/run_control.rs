@@ -10,8 +10,8 @@ use houyicoder_protocol::frontend::permission::{AskSource, PermissionMode};
 use houyicoder_protocol::frontend::run::{ApprovalDecision, ApprovalRequest, ContentBlock};
 use houyicoder_protocol::frontend::session_update::SessionUpdate;
 
+use crate::input::queue::InputItem;
 use crate::pending_prompt::PendingPrompt;
-use crate::pending_queue::PendingItem;
 use crate::records::{Approval, AskQuestion, TranscriptLine};
 use crate::session::{ConnectionStatus, EnqueueError, PollOutcome};
 use crate::state::App;
@@ -150,7 +150,7 @@ impl App {
         // is the gate, not agent_busy.
         if self.session.run.is_active() {
             self.pending
-                .push(PendingItem::ParkedMessage(input.clone().into()));
+                .push(InputItem::ParkedMessage(input.clone().into()));
             self.promote_next_pending();
             return true;
         }
@@ -212,12 +212,12 @@ impl App {
             return false;
         };
         match item {
-            PendingItem::Command(text) => {
+            InputItem::Command(text) => {
                 self.pending.remove(0);
                 self.run_slash_text(&text);
                 true
             }
-            PendingItem::Message(head) => {
+            InputItem::Message(head) => {
                 // Remove the stale server copy before starting a fresh run; a
                 // refused removal keeps the head queued so the local copy and
                 // the server mirror cannot diverge.
@@ -235,18 +235,18 @@ impl App {
                     // The mirror is gone but the run could not start: keep the
                     // user content parked at the head so nothing is lost.
                     self.pending
-                        .insert(0, PendingItem::ParkedMessage(text.into()));
+                        .insert(0, InputItem::ParkedMessage(text.into()));
                     return false;
                 }
                 self.promote_next_pending();
                 true
             }
-            PendingItem::ParkedMessage(input) => {
+            InputItem::ParkedMessage(input) => {
                 self.pending.remove(0);
                 let text = input.text.clone();
                 if !self.spawn_run(input.text) {
                     self.pending
-                        .insert(0, PendingItem::ParkedMessage(text.into()));
+                        .insert(0, InputItem::ParkedMessage(text.into()));
                     return false;
                 }
                 self.promote_next_pending();
@@ -588,16 +588,16 @@ impl App {
         if self
             .pending
             .iter()
-            .all(|it| matches!(it, PendingItem::Command(_)))
+            .all(|it| matches!(it, InputItem::Command(_)))
         {
             return;
         }
-        let mut keep: Vec<PendingItem> = Vec::new();
+        let mut keep: Vec<InputItem> = Vec::new();
         let mut recalled: Vec<String> = Vec::new();
         let mut refused = false;
         for it in std::mem::take(&mut self.pending) {
             match it {
-                PendingItem::Message(input) => {
+                InputItem::Message(input) => {
                     let session_id = self.session.identity.session_id.clone();
                     if self
                         .enqueue(ClientCommand::QueueRemove {
@@ -609,10 +609,10 @@ impl App {
                         recalled.push(input.text);
                     } else {
                         refused = true;
-                        keep.push(PendingItem::Message(input));
+                        keep.push(InputItem::Message(input));
                     }
                 }
-                PendingItem::ParkedMessage(input) => recalled.push(input.text),
+                InputItem::ParkedMessage(input) => recalled.push(input.text),
                 other => keep.push(other),
             }
         }

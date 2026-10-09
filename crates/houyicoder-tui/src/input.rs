@@ -11,6 +11,8 @@
 //! mid-string editing and movement. The view layer reads wrapped_lines /
 //! line_count to size the input box and render wrapped content.
 
+pub(crate) mod queue;
+
 use crate::history::HistoryNav;
 use crate::paste::{PasteStore, PendingPaste};
 use unicode_segmentation::UnicodeSegmentation;

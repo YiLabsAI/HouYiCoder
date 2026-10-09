@@ -11,7 +11,7 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthStr;
 
-use crate::pending_queue::PendingItem;
+use crate::input::queue::InputItem;
 use crate::state::App;
 
 /// Rows the ambient queued-input strip would like, capped at two: the head
@@ -85,7 +85,7 @@ pub(super) fn draw_strip(f: &mut Frame, area: Rect, app: &App) {
         for (i, item) in items.iter().take(shown).enumerate() {
             let (glyph, label) = if gate_closed {
                 ("⏸", "held".to_string())
-            } else if i == 0 && matches!(item, PendingItem::Message(_)) {
+            } else if i == 0 && matches!(item, InputItem::Message(_)) {
                 ("→", "next".to_string())
             } else {
                 ("·", "queued".to_string())

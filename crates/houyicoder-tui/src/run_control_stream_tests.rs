@@ -289,7 +289,7 @@ fn test_interrupt_restores_input() {
     )));
     app.session.last_run_input = Some("draft".into());
     app.pending
-        .push(crate::pending_queue::PendingItem::ParkedMessage(
+        .push(crate::input::queue::InputItem::ParkedMessage(
             "queued".into(),
         ));
     let msg = SessionMessage::Response {
@@ -352,9 +352,8 @@ fn test_commit_blocks_restore() {
     )));
     app.session.last_run_input = Some("origin".into());
     let committed = houyicoder_protocol::frontend::QueuedInput::new("follow-up");
-    app.pending.push(crate::pending_queue::PendingItem::Message(
-        committed.clone(),
-    ));
+    app.pending
+        .push(crate::input::queue::InputItem::Message(committed.clone()));
     app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(
         user_msg("follow-up").into(),
     )));
@@ -652,22 +651,21 @@ fn test_batch_keeps_tail() {
     tools.register(Arc::new(EchoTool));
     let mut app = app_with_provider(provider, tools);
     app.status.last_run_final = true;
-    app.pending.push(PendingItem::Message("first".into()));
-    app.pending
-        .push(PendingItem::ParkedMessage("second".into()));
-    app.pending.push(PendingItem::ParkedMessage("third".into()));
+    app.pending.push(InputItem::Message("first".into()));
+    app.pending.push(InputItem::ParkedMessage("second".into()));
+    app.pending.push(InputItem::ParkedMessage("third".into()));
     let mut dirty = false;
     app.idle_drain(None, &mut dirty);
     assert!(app.agent_busy(), "first spawned a run");
     assert_eq!(app.pending.len(), 2, "second/third stay pending");
     assert_eq!(
         app.pending[0],
-        PendingItem::Message("second".into()),
+        InputItem::Message("second".into()),
         "second holds the copy; third parked behind it"
     );
     assert_eq!(
         app.pending[1],
-        PendingItem::ParkedMessage("third".into()),
+        InputItem::ParkedMessage("third".into()),
         "third has no copy (single-copy invariant)"
     );
     let mut tries = 0;
@@ -717,16 +715,15 @@ fn test_batch_delivers_via_drain() {
     tools.register(Arc::new(EchoTool));
     let mut app = app_with_provider(provider, tools);
     app.status.last_run_final = true;
-    app.pending.push(PendingItem::Message("first".into()));
-    app.pending
-        .push(PendingItem::ParkedMessage("second".into()));
-    app.pending.push(PendingItem::ParkedMessage("third".into()));
+    app.pending.push(InputItem::Message("first".into()));
+    app.pending.push(InputItem::ParkedMessage("second".into()));
+    app.pending.push(InputItem::ParkedMessage("third".into()));
     let mut dirty = false;
     app.idle_drain(None, &mut dirty);
     assert!(app.agent_busy(), "first spawned a run");
     assert_eq!(
         app.pending[0],
-        PendingItem::Message("second".into()),
+        InputItem::Message("second".into()),
         "second holds the copy; third parked"
     );
     let mut tries = 0;

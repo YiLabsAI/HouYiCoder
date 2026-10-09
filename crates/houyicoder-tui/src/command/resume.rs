@@ -107,7 +107,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pending_queue::PendingItem;
+    use crate::input::queue::InputItem;
     use crate::resume_picker::SessionRow;
     use std::sync::Arc;
 
@@ -247,7 +247,7 @@ mod tests {
         app.submit_input();
         assert_eq!(
             app.pending,
-            vec![PendingItem::Command("/resume aaaa1111".into())],
+            vec![InputItem::Command("/resume aaaa1111".into())],
             "/resume <sid> mid-run enqueued as a Command"
         );
         assert!(
