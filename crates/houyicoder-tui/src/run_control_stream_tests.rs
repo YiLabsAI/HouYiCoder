@@ -281,7 +281,7 @@ fn test_interrupt_restores_input() {
     app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(
         user_msg("draft").into(),
     )));
-    app.last_run_input = Some("draft".into());
+    app.session.last_run_input = Some("draft".into());
     app.pending
         .push(crate::pending_queue::PendingItem::ParkedMessage(
             "queued".into(),
@@ -338,7 +338,7 @@ fn test_commit_blocks_restore() {
     app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(
         user_msg("origin").into(),
     )));
-    app.last_run_input = Some("origin".into());
+    app.session.last_run_input = Some("origin".into());
     let committed = houyicoder_protocol::frontend::QueuedInput::new("follow-up");
     app.pending.push(crate::pending_queue::PendingItem::Message(
         committed.clone(),
@@ -381,7 +381,7 @@ fn test_live_blocks_restore() {
     app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(
         user_msg("origin").into(),
     )));
-    app.last_run_input = Some("origin".into());
+    app.session.last_run_input = Some("origin".into());
     app.start_run_for_test(14);
     app.handle_agent_message(SessionMessage::Event(ServerEvent::Delta {
         text: "visible response".into(),
@@ -402,7 +402,10 @@ fn test_live_blocks_restore() {
     });
 
     assert!(app.input.is_empty(), "visible output prevents rollback");
-    assert!(app.last_run_input.is_none(), "rollback stash is cleared");
+    assert!(
+        app.session.last_run_input.is_none(),
+        "rollback stash is cleared"
+    );
 }
 
 /// Esc during a busy run interrupts while an explicit queue action recalls
@@ -417,7 +420,7 @@ fn test_recall_survives_interrupt() {
     crate::test_harness::attach_connection(&mut app);
     app.screen = crate::state::Screen::Working;
     app.start_run_for_test(0);
-    app.last_run_input = Some("first".into());
+    app.session.last_run_input = Some("first".into());
     app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(
         user_msg("first").into(),
     )));

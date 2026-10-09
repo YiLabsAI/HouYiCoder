@@ -227,7 +227,7 @@ impl App {
                 // A committed mid-turn input makes the original submission no
                 // longer eligible for no-output rollback.
                 if !inputs.is_empty() {
-                    self.last_run_input = None;
+                    self.session.last_run_input = None;
                 }
                 // Remove exact committed inputs before promoting the next head.
                 // Stable identity prevents a delayed event from removing newer text.

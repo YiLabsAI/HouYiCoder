@@ -492,7 +492,10 @@ fn test_esc_aborts_busy_run() {
         app.input.is_empty(),
         "input must stay empty when real content was produced"
     );
-    assert!(app.last_run_input.is_none(), "stash cleared on Done");
+    assert!(
+        app.session.last_run_input.is_none(),
+        "stash cleared on Done"
+    );
 }
 
 #[test]
@@ -504,7 +507,7 @@ fn test_esc_abort_restores_input() {
     let original = "rewrite this as a pure function";
     app.spawn_run(original.into());
     assert!(app.agent_busy(), "run should be in flight");
-    assert_eq!(app.last_run_input.as_deref(), Some(original));
+    assert_eq!(app.session.last_run_input.as_deref(), Some(original));
     // The token is installed on a worker thread, so re-fire abort each tick
     // until the Done message arrives.
     let mut settled = false;
@@ -532,7 +535,10 @@ fn test_esc_abort_restores_input() {
         app.transcript
     );
     // The stash is cleared (no new run was spawned, agent_busy is false).
-    assert!(app.last_run_input.is_none(), "stash cleared after restore");
+    assert!(
+        app.session.last_run_input.is_none(),
+        "stash cleared after restore"
+    );
 }
 
 #[test]
@@ -794,7 +800,7 @@ fn test_finish_copies_start() {
         },
     });
     assert_eq!(
-        app.run_metrics.session_started_at, started,
+        app.session.run_metrics.session_started_at, started,
         "the run start is copied into the session start before the drop"
     );
 }

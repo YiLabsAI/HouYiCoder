@@ -385,8 +385,8 @@ fn test_clears_session_local_state() {
         status: TodoStatus::InProgress,
         active_form: None,
     });
-    app.run_metrics.cumulative_tokens = 1234;
-    app.run_metrics.cumulative_steps = 7;
+    app.session.run_metrics.cumulative_tokens = 1234;
+    app.session.run_metrics.cumulative_steps = 7;
     app.displayed_tokens.set(50);
     app.status.tokens = 999;
     app.prompt = Some(PendingPrompt::approval_card(
@@ -411,11 +411,11 @@ fn test_clears_session_local_state() {
 
     assert!(app.todos.items.is_empty(), "todos cleared");
     assert_eq!(
-        app.run_metrics.cumulative_tokens, 0,
+        app.session.run_metrics.cumulative_tokens, 0,
         "cumulative_tokens cleared"
     );
     assert_eq!(
-        app.run_metrics.cumulative_steps, 0,
+        app.session.run_metrics.cumulative_steps, 0,
         "cumulative_steps cleared"
     );
     assert_eq!(app.displayed_tokens.get(), 0, "displayed_tokens cleared");

@@ -476,7 +476,7 @@ fn test_commit_identity() {
 #[test]
 fn test_commit_clears_parked() {
     let mut app = working();
-    app.last_run_input = Some("origin".into());
+    app.session.last_run_input = Some("origin".into());
     let committed = houyicoder_protocol::frontend::QueuedInput::new("same");
     app.pending
         .push(PendingItem::ParkedMessage(committed.clone()));
@@ -487,7 +487,7 @@ fn test_commit_clears_parked() {
 
     assert!(app.pending.is_empty(), "committed parked mirror clears");
     assert!(
-        app.last_run_input.is_none(),
+        app.session.last_run_input.is_none(),
         "commit closes the original rollback window"
     );
 }

@@ -46,7 +46,6 @@ use crate::permission_pane_state::PermissionPaneState;
 use crate::records::TeammateView;
 use crate::render_cache::RenderCache;
 use crate::resume_picker::SessionPickerState;
-use crate::run_metrics::RunMetrics;
 use crate::run_state::{RunProgress, RunState};
 use crate::selection::ClipboardWriter;
 use crate::selections::Selections;
@@ -212,8 +211,6 @@ pub struct App {
     /// window is unfocused, following a renderPlaceholder terminal
     /// focus gate. Defaults true (assume focused at startup).
     pub terminal_focused: bool,
-    /// The session's cumulative run metrics, held in one owner.
-    pub(crate) run_metrics: RunMetrics,
     /// Session checklist content, expansion, and completion lifecycle.
     pub todos: TodoState,
     /// The renderer layout feedback: the last terminal height and transcript
@@ -223,9 +220,6 @@ pub struct App {
     /// Last token count displayed by the spinner. Lerps toward the actual
     /// count each frame for a smooth increment animation.
     pub displayed_tokens: Cell<u32>,
-    /// The original run input while it remains eligible for no-output rollback.
-    /// A committed mid-turn input or visible output closes this window.
-    pub last_run_input: Option<String>,
     /// Queued user inputs submitted while a run was in flight (FIFO). A
     /// Typed queue (messages + slash commands); drained FIFO at idle.
     pub pending: Vec<PendingItem>,

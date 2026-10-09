@@ -38,7 +38,7 @@ fn test_spawn_refused() {
         app.active_run_req_id().is_none(),
         "no pending run id without delivery"
     );
-    assert!(app.last_run_input.is_none(), "input stays editable");
+    assert!(app.session.last_run_input.is_none(), "input stays editable");
     assert!(
         !app.transcript
             .iter()

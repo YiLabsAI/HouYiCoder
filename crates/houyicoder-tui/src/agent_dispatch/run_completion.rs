@@ -33,10 +33,10 @@ impl super::App {
                 let final_outcome = matches!(&run.outcome, RunOutcome::FinalOutput { .. });
                 match run.outcome {
                     RunOutcome::FinalOutput { .. } => {
-                        self.run_metrics.cumulative_tokens += run.usage.total_tokens as u64;
-                        self.run_metrics.cumulative_steps += run.turns;
-                        if self.run_metrics.session_started_at.is_none() {
-                            self.run_metrics.session_started_at =
+                        self.session.run_metrics.cumulative_tokens += run.usage.total_tokens as u64;
+                        self.session.run_metrics.cumulative_steps += run.turns;
+                        if self.session.run_metrics.session_started_at.is_none() {
+                            self.session.run_metrics.session_started_at =
                                 active.as_ref().map(|r| r.started_at);
                         }
                     }
@@ -47,7 +47,7 @@ impl super::App {
                         // Restore the submission only when interruption arrived
                         // before real output, preserving any active draft.
                         tracing::debug!(reason, "interrupted");
-                        let restored = match self.last_run_input.take() {
+                        let restored = match self.session.last_run_input.take() {
                             Some(text)
                                 if !had_live_output
                                     && !should_preserve_interrupted_turn(
@@ -90,7 +90,7 @@ impl super::App {
             }
         };
         if !self.agent_busy() {
-            self.last_run_input = None;
+            self.session.last_run_input = None;
         }
         // Only final completion may advance queued input. Other outcomes
         // park pending messages for explicit user action.

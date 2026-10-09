@@ -181,7 +181,7 @@ impl App {
         self.session.run.start(req_id, Instant::now());
         self.todos.set_replaying_history(false);
         // Preserve the submitted input in case interruption restores the turn.
-        self.last_run_input = Some(input.clone());
+        self.session.last_run_input = Some(input.clone());
         // A fresh submission answers the previous turn's interruption, so its
         // notice and restore line leave the log before this turn's lines land:
         // both are rows the frontend raised, and a rebuild renders them again
@@ -619,7 +619,7 @@ impl App {
             return;
         }
         // Explicit recall supersedes automatic interrupted-turn restoration.
-        self.last_run_input = None;
+        self.session.last_run_input = None;
         self.merge_recalled_text(recalled.join("\n"));
     }
 
