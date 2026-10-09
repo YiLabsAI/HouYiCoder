@@ -209,7 +209,7 @@ fn test_focus_lost_hides_caret() {
         "caret should be inverted (bg White) when focused"
     );
     assert!(
-        app.native_cursor_position.get().is_some(),
+        app.layout_feedback.native_cursor_position.get().is_some(),
         "draw publishes the hidden cursor position for input methods"
     );
     // FocusLost event hides the caret.

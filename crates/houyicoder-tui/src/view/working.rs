@@ -68,10 +68,11 @@ fn draw_working(f: &mut Frame, app: &App) {
     app.layout_snapshot.approval_rect.set(Rect::new(0, 0, 0, 0));
     app.layout_feedback.terminal_rows.set(f.area().height);
     // Wrap columns for the input content: terminal width minus the top/bottom
-    // border (2) and the "❯ " prompt (2). Stored on App so the key handlers
-    // can move the cursor in wrapped space with the same column count.
+    // border (2) and the "❯ " prompt (2). Fed back with the rest of the
+    // layout feedback so the key handlers move the cursor with the same
+    // column count the render itself used.
     let content_cols = (f.area().width as usize).saturating_sub(4);
-    app.last_cols.set(content_cols);
+    app.layout_feedback.terminal_cols.set(content_cols);
     let pane_hides_input = pane_hides_input(app);
     let input_h = if pane_hides_input {
         0

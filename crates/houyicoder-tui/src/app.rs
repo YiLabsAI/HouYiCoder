@@ -95,12 +95,12 @@ pub fn run_with_runner(
         if dirty || app.agent_busy() {
             // Load older history before rendering its scroll position.
             app.load_older_frames();
-            app.native_cursor_position.set(None);
+            app.layout_feedback.native_cursor_position.set(None);
             terminal.draw(|f| {
                 view::draw(f, &app);
                 apply_selection_overlay(f, &app);
             })?;
-            if let Some((x, y)) = app.native_cursor_position.get() {
+            if let Some((x, y)) = app.layout_feedback.native_cursor_position.get() {
                 execute!(stdout(), MoveTo(x, y), Hide)?;
             }
             dirty = false;

@@ -120,8 +120,6 @@ pub fn app() -> App {
         verbose: false,
         pasted: PasteStore::default(),
         pending_paste: PendingPaste::default(),
-        last_cols: Cell::new(80),
-        native_cursor_position: Cell::new(None),
         mode_cache: None,
         rules_cache: Vec::new(),
         dirs_cache: Vec::new(),

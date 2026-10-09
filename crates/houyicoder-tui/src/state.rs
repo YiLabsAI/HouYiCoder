@@ -344,12 +344,6 @@ pub struct App {
     /// buffer text and the last-chunk timestamp together so a flush check
     /// drains and restores both as one value.
     pub(crate) pending_paste: PendingPaste,
-    /// Last computed input wrap column count (set by the draw pass, read by
-    /// key handlers for cursor up/down in wrapped space). Interior-mutable so
-    /// the draw borrow of App can update it without going through &mut.
-    pub last_cols: Cell<usize>,
-    /// Hidden hardware cursor position used by terminal input methods.
-    pub native_cursor_position: Cell<Option<(u16, u16)>>,
     /// The permission mode cache, wire-typed. Seeded once on the first idle
     /// poll (so the status-bar pill renders from session start), then updated
     /// by the PermissionMode / PermissionCycleMode responses the server ships

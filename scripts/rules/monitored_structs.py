@@ -84,10 +84,12 @@ ACTIVE_OWNERS = {
         # The pending paste chunks and the last-chunk timestamp became one
         # PendingPaste owner, so a flush check drains and restores both as
         # one value rather than two flat fields a caller must move in step.
-        # The renderer layout feedback (last terminal height and transcript
-        # pane width) became one LayoutFeedback owner: both are written by the
-        # draw pass and read by the count and layout paths, so they travel as
-        # the render's measured bounds rather than two loose cells.
+        # The renderer layout feedback (terminal height, transcript pane
+        # width, input wrap column count, and the native cursor position the
+        # input method parked) became one LayoutFeedback owner: all four are
+        # written by the draw pass and read by the count, layout, and input
+        # paths, so they travel as the render's measured feedback rather than
+        # four loose cells.
         # The @ skill-picker overlay's open flag and list cursor became one
         # SkillPickerState owner, so opening the picker resets the cursor to
         # zero as one value rather than two flat fields a caller sets in step.
@@ -100,7 +102,7 @@ ACTIVE_OWNERS = {
         # The four per-region drag selections (transcript, status, pane,
         # approval) became one Selections owner, so each region's selection
         # travels beside its siblings rather than as four loose App fields.
-        "fields": 101,
+        "fields": 99,
         "mut_app": 44,
     },
     "crates/houyicoder-tui/src/last_row_keys.rs:LastRowKeys": {
@@ -151,12 +153,14 @@ ACTIVE_OWNERS = {
         "fields": 2,
     },
     "crates/houyicoder-tui/src/layout_feedback.rs:LayoutFeedback": {
-        # The renderer layout feedback: the last terminal height and the
-        # transcript pane width, both Cell mirrors the draw pass writes and
-        # the count and layout paths read. One owner because both hold the
-        # dims of the last render, so a count path that read one dim while
-        # the draw pass updated the other saw a render/count mismatch.
-        "fields": 2,
+        # The renderer layout feedback: the terminal height, transcript pane
+        # width, input wrap column count, and the native cursor position the
+        # input method parked, all Cell mirrors the draw pass writes and the
+        # count, layout, and input paths read. One owner because together
+        # they hold the dims and caret of the last render, so a count path
+        # that read one dim while the draw pass updated another saw a
+        # render/count mismatch.
+        "fields": 4,
     },
     "crates/houyicoder-tui/src/layout_snapshot.rs:LayoutSnapshot": {
         # The renderer layout snapshot: per-region rectangles and rendered-row

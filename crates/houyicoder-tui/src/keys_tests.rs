@@ -1910,3 +1910,59 @@ fn test_focus_trajectory_esc_levels() {
         "the viewport is untouched"
     );
 }
+
+/// Up/Down move the cursor across wrapped input lines using the column count
+/// the draw pass fed back, so the cursor walks the same wrap the render shows
+/// rather than jumping to the text start.
+#[test]
+fn test_up_down_walk_wrap() {
+    let mut app = working_app();
+    app.input.set("word ".repeat(40));
+    let bottom = app.input.cursor();
+    handle_input(&mut app, key(KeyCode::Up));
+    let up = app.input.cursor();
+    handle_input(&mut app, key(KeyCode::Down));
+    let down = app.input.cursor();
+    assert!(up < bottom, "Up walks toward the top of the wrap");
+    assert!(down > up, "Down walks back toward the bottom");
+}
+
+/// Home/End land on the current wrapped line's start and end when the text
+/// wraps, instead of the whole text's boundaries, so the cursor follows the
+/// same wrap the render draws.
+#[test]
+fn test_home_end_wrap_line() {
+    let mut app = working_app();
+    app.input.set("word ".repeat(40));
+    let end = app.input.cursor();
+    handle_input(&mut app, key(KeyCode::Home));
+    let home = app.input.cursor();
+    assert!(
+        home > 0,
+        "Home lands on the wrapped line start, not the text start"
+    );
+    assert!(home < end, "Home leaves the text end");
+    handle_input(&mut app, key(KeyCode::End));
+    assert_eq!(
+        app.input.cursor(),
+        end,
+        "End returns to the wrapped line end"
+    );
+}
+
+/// Ctrl+U deletes backward to the wrapped line's start, leaving the earlier
+/// wrapped lines in the box rather than clearing the whole buffer.
+#[test]
+fn test_ctrl_u_kills_line() {
+    let mut app = working_app();
+    app.input.set("word ".repeat(40));
+    let before = app.input.value().len();
+    handle_input(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
+    );
+    assert!(
+        app.input.value().len() < before,
+        "Ctrl+U deletes to the wrapped line start"
+    );
+}

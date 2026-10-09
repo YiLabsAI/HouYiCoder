@@ -403,19 +403,23 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
         KeyCode::Left => app.input.move_left(),
         KeyCode::Right => app.input.move_right(),
         KeyCode::Up => {
-            if !app.input.move_up(app.last_cols.get()) && !editing {
+            if !app.input.move_up(app.layout_feedback.terminal_cols.get()) && !editing {
                 let project = crate::history::current_project();
                 app.history
                     .up(&mut app.input, &project, &app.session_id.to_string());
             }
         }
         KeyCode::Down => {
-            if !app.input.move_down(app.last_cols.get()) && !editing {
+            if !app.input.move_down(app.layout_feedback.terminal_cols.get()) && !editing {
                 app.history.down(&mut app.input);
             }
         }
-        KeyCode::Home => app.input.move_line_home(app.last_cols.get()),
-        KeyCode::End => app.input.move_line_end(app.last_cols.get()),
+        KeyCode::Home => app
+            .input
+            .move_line_home(app.layout_feedback.terminal_cols.get()),
+        KeyCode::End => app
+            .input
+            .move_line_end(app.layout_feedback.terminal_cols.get()),
         KeyCode::Char('a') if k.modifiers.contains(KeyModifiers::CONTROL) => {
             app.input.move_home();
         }
@@ -423,7 +427,8 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
             app.input.move_end();
         }
         KeyCode::Char('u') if k.modifiers.contains(KeyModifiers::CONTROL) => {
-            app.input.kill_to_line_start(app.last_cols.get());
+            app.input
+                .kill_to_line_start(app.layout_feedback.terminal_cols.get());
         }
         KeyCode::Backspace if !pane_replaces_input(app.pane) => app.input.pop(),
         KeyCode::Char(c) if !pane_replaces_input(app.pane) => app.input.push(c),
