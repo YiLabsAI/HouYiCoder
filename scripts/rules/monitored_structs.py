@@ -124,7 +124,11 @@ ACTIVE_OWNERS = {
         # tally, model-call steps) became one RunMetrics owner, so the
         # completion path records one value and a session switch resets it
         # whole.
-        "fields": 80,
+        # The G full-scan index build's five fields (the run and done flags,
+        # the bytes-indexed and total cells, and the dispatched chunk slot)
+        # became one IndexBuild owner, so the loop and the chrome read one
+        # value.
+        "fields": 76,
         "mut_app": 44,
     },
     "crates/houyicoder-tui/src/session/capabilities.rs:PermissionCapability": {
@@ -178,6 +182,13 @@ ACTIVE_OWNERS = {
         # output tokens and model-call steps accrued across completed runs.
         # Three flat App fields folded into one owner, reset on session switch.
         "fields": 3,
+    },
+    "crates/houyicoder-tui/src/state/index_build.rs:IndexBuild": {
+        # The G full-scan index build's progress mirror and pending chunk: the
+        # run and done flags, the bytes-indexed and total cells, and the
+        # dispatched chunk a worker still reads. Five flat App fields folded
+        # into one owner, reset on search-view exit.
+        "fields": 5,
     },
     "crates/houyicoder-tui/src/last_row_keys.rs:LastRowKeys": {
         # The four per-row key vectors of the last emitted visible row set:

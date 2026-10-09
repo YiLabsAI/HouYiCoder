@@ -30,6 +30,7 @@ use crate::session::persistence::SessionPersistence;
 use crate::skill_picker_state::SkillPickerState;
 use crate::skills_state::SkillsPaneState;
 use crate::state::history_read::HistoryReads;
+use crate::state::index_build::IndexBuild;
 use crate::state::transcript::Transcript;
 use crate::state::{
     ModelPickerState, ParkedViewStates, QueueViewState, StatusTab, TrajectoryPaneState,
@@ -53,11 +54,7 @@ pub fn app() -> App {
             c.version.set(u64::MAX);
             c
         },
-        indexing: Cell::new(false),
-        indexed_bytes: Cell::new(0),
-        index_total: Cell::new(0),
-        index_done: Cell::new(false),
-        pending_index_chunk: std::cell::RefCell::new(None),
+        index_build: IndexBuild::default(),
         persistence: SessionPersistence::default(),
         resume_picker: SessionPickerState::default(),
         pending_resume_target: None,

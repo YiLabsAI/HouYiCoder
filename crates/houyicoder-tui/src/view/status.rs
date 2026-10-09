@@ -336,9 +336,9 @@ pub fn draw_scroll_status(f: &mut Frame, area: Rect, app: &App) {
             // Indexing (the G full-scan): show progress instead of the
             // position, so the user sees the build advancing + knows Esc stops
             // it. Follows less's indexing indicator style.
-            if app.indexing.get() {
-                let total = app.index_total.get();
-                let pct = (100 * app.indexed_bytes.get())
+            if app.index_build.indexing.get() {
+                let total = app.index_build.index_total.get();
+                let pct = (100 * app.index_build.indexed_bytes.get())
                     .checked_div(total)
                     .unwrap_or(0);
                 format!(" SEARCH  {query}  indexing… {pct}%  Esc=stop  q=exit ")

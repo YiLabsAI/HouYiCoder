@@ -13,6 +13,7 @@ pub(crate) mod counts;
 mod cursors;
 pub(crate) mod enums;
 pub(crate) mod history_read;
+pub(crate) mod index_build;
 pub(crate) mod index_read;
 mod model_picker;
 mod parked_view_states;
@@ -156,20 +157,9 @@ pub struct App {
     /// them together. Pub(crate) so the draw pass reads and writes a vector
     /// directly, matching the per-vector visible_window slices.
     pub(crate) display_rows_cache: DisplayRowsCache,
-    /// True while the G full-scan builds the event-byte-offset index (one
-    /// chunk at a time keeps the UI responsive; Esc interrupts). The loop
-    /// advances the build while this is set, off the draw path.
-    pub indexing: Cell<bool>,
-    /// Bytes of the log indexed so far (for the indexing-percent chrome),
-    /// published as each chunk lands.
-    pub indexed_bytes: Cell<u64>,
-    /// Total log bytes the index covers (the frozen file size).
-    pub index_total: Cell<u64>,
-    /// True when the full index is built (event_count/byte_at answer).
-    pub index_done: Cell<bool>,
-    /// The index chunk dispatched and not yet applied, if any. A chunk reads
-    /// the log, so the loop advances the build and the draw path never does.
-    pub pending_index_chunk: std::cell::RefCell<Option<index_read::PendingIndexChunk>>,
+    /// The G full-scan index build's progress mirror and pending chunk, held
+    /// in one owner.
+    pub(crate) index_build: index_build::IndexBuild,
     /// The session's injected persistence collaborators.
     pub(crate) persistence: SessionPersistence,
     /// The session picker overlay state (opened by /resume with no arg).
