@@ -28,7 +28,6 @@ use crate::session::identity::SessionIdentity;
 use crate::session::persistence::SessionPersistence;
 use crate::skill_picker_state::SkillPickerState;
 use crate::skills_state::SkillsPaneState;
-use crate::state::transcript::Transcript;
 use crate::state::{
     ModelPickerState, ParkedViewStates, QueueViewState, StatusTab, TrajectoryPaneState,
 };
@@ -43,7 +42,6 @@ pub fn app() -> App {
         prev_viewport: ViewportMode::Working,
         input: InputField::new(),
         history: HistoryNav::default(),
-        transcript: Transcript::default(),
         verdict_cursor: 0,
         transcript_view: Default::default(),
         display_rows_cache: {

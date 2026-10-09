@@ -117,7 +117,6 @@ mod test_harness;
 #[cfg(test)]
 mod todolist_verify_tests;
 #[cfg(test)]
-#[path = "transcript_rebuild_tests.rs"]
 mod transcript_rebuild_tests;
 #[cfg(test)]
 mod viewport_tests;

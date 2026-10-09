@@ -12,6 +12,7 @@ use crate::session::capabilities::SessionCapabilities;
 use crate::session::identity::SessionIdentity;
 use crate::state::history_read::HistoryReads;
 use crate::state::index_build::IndexBuild;
+use crate::state::transcript::Transcript;
 use crate::todo_view::TodoState;
 
 pub(crate) mod capabilities;
@@ -25,15 +26,14 @@ pub use connection::{
 
 /// The presented session: its stable identity, the optional live engine
 /// connection, the in-flight run lifecycle, the run tally, the pending
-/// reverse ask, the restore stash, the checklist, and the transcript read
-/// state. The identity is
-/// always present. The
-/// connection is a capability the session holds while connected and may
-/// lose without losing the identity or the already-observed state; the
-/// loss is carried inside SessionConnection as ConnectionStatus::Lost
-/// rather than by dropping the session. The remaining fields share the
-/// session's lifetime and reset together on a session switch, not on a
-/// run's return to idle.
+/// reverse ask, the restore stash, the working transcript, the named
+/// capabilities, and the transcript read state. The identity is always
+/// present. The connection is a capability the session holds while
+/// connected and may lose without losing the identity or the
+/// already-observed state; the loss is carried inside SessionConnection
+/// as ConnectionStatus::Lost rather than by dropping the session. The
+/// remaining fields share the session's lifetime and reset together on a
+/// session switch, not on a run's return to idle.
 pub(crate) struct Session {
     /// The session's routing id and the starting working directory, stable
     /// for the session's lifetime.
@@ -51,6 +51,11 @@ pub(crate) struct Session {
     /// The submitted input of the run that produced no output yet, kept so
     /// an interruption can restore the turn.
     pub(crate) last_run_input: Option<String>,
+    /// The working transcript: the resident frame window and the lines,
+    /// blocks, and fold groups derived from it. The conversation belongs to
+    /// the session, so a switch rebuilds it empty instead of carrying the
+    /// previous session's frames across.
+    pub(crate) transcript: Transcript,
     /// The pending reverse ask awaiting a human verdict, when one is up: a
     /// permission ask (approval or question) while waiting, or a startup
     /// trust ask before any run.
@@ -92,6 +97,7 @@ impl Session {
             run: RunState::Idle,
             run_metrics: RunMetrics::default(),
             last_run_input: None,
+            transcript: Transcript::default(),
             prompt: None,
             todos: TodoState::default(),
             capabilities: SessionCapabilities::default(),

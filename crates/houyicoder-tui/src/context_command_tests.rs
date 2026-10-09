@@ -19,7 +19,8 @@ fn test_second_context_one_grid() {
     app.session.capabilities.status.context_cache = Some(stub_breakdown());
     app.run_command(SlashCommand::Context);
     let grids = |app: &App| {
-        app.transcript
+        app.session
+            .transcript
             .iter()
             .filter(|l| matches!(l, TranscriptLine::ContextGrid(_)))
             .count()
@@ -39,7 +40,7 @@ fn test_second_context_one_grid() {
         1,
         "the reply grid takes the cached one's place"
     );
-    let shows_fresh = app.transcript.iter().any(|l| {
+    let shows_fresh = app.session.transcript.iter().any(|l| {
         matches!(
             l,
             TranscriptLine::ContextGrid(view) if view.breakdown.total_tokens == 4_242
@@ -47,11 +48,13 @@ fn test_second_context_one_grid() {
     });
     assert!(shows_fresh, "the grid shows the numbers the reply carried");
     let grid_at = app
+        .session
         .transcript
         .iter()
         .position(|l| matches!(l, TranscriptLine::ContextGrid(_)))
         .expect("a grid row");
     let line_at = app
+        .session
         .transcript
         .iter()
         .position(|l| matches!(l, TranscriptLine::System(t) if t == "concurrent event"))
@@ -107,12 +110,14 @@ fn test_context_cache_renders_repeat() {
         "legend renders from real dispatch:\n{text}"
     );
     let before = app
+        .session
         .transcript
         .iter()
         .filter(|l| matches!(l, TranscriptLine::ContextGrid(_)))
         .count();
     app.run_command(SlashCommand::Context);
     let after = app
+        .session
         .transcript
         .iter()
         .filter(|l| matches!(l, TranscriptLine::ContextGrid(_)))
@@ -132,7 +137,8 @@ fn test_undo_ships_connected() {
     let mut app = app_with_provider(provider, ToolRegistry::new());
     app.run_command(SlashCommand::Undo);
     assert!(
-        app.transcript
+        app.session
+            .transcript
             .iter()
             .any(|l| matches!(l, TranscriptLine::System(s) if s.contains("undo:"))),
         "/undo should surface a system line"
@@ -140,10 +146,12 @@ fn test_undo_ships_connected() {
     for _ in 0..1000 {
         app.poll_agent();
         if app
+            .session
             .transcript
             .iter()
             .any(|l| matches!(l, TranscriptLine::System(s) if s.contains("undo:")))
             && app
+                .session
                 .transcript
                 .iter()
                 .filter(|l| matches!(l, TranscriptLine::System(s) if s.contains("undo:")))
@@ -155,6 +163,7 @@ fn test_undo_ships_connected() {
         std::thread::sleep(std::time::Duration::from_millis(2));
     }
     let undo_lines: Vec<String> = app
+        .session
         .transcript
         .iter()
         .filter_map(|l| match l {

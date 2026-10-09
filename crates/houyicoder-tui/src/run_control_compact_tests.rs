@@ -16,7 +16,8 @@ fn test_context_result_pushes_line() {
         },
     });
     assert!(
-        app.transcript
+        app.session
+            .transcript
             .iter()
             .any(|l| matches!(l, TranscriptLine::ContextGrid(_))),
         "ContextResult must render as the inline grid, not a flat system line"
@@ -44,6 +45,7 @@ fn test_result_renders_system_line() {
         },
     });
     let line = app
+        .session
         .transcript
         .iter()
         .find_map(|l| match l {
@@ -83,7 +85,7 @@ fn test_result_no_progress_honest() {
         },
     });
     assert!(
-        app.transcript
+        app.session.transcript
             .iter()
             .any(|l| matches!(l, TranscriptLine::System(s) if s.contains("Not enough messages to compact"))),
         "no-progress reply honest"
@@ -102,7 +104,8 @@ fn test_compact_dispatch_round_trip() {
     let mut app = app_with_provider(provider, ToolRegistry::new());
     app.run_command(SlashCommand::Compact);
     assert!(
-        app.transcript
+        app.session
+            .transcript
             .iter()
             .any(|l| matches!(l, TranscriptLine::System(s) if s.contains("compacting"))),
         "compacting system line lands for progress feedback"
@@ -111,7 +114,7 @@ fn test_compact_dispatch_round_trip() {
     // on an empty session returns a no-progress outcome quickly).
     for _ in 0..200 {
         app.poll_agent();
-        if app.transcript.iter().any(|l| {
+        if app.session.transcript.iter().any(|l| {
             matches!(
                 l,
                 TranscriptLine::System(s) if s.contains("compact") && !s.contains("compacting")
@@ -122,7 +125,7 @@ fn test_compact_dispatch_round_trip() {
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
     assert!(
-        app.transcript
+        app.session.transcript
             .iter()
             .any(|l| matches!(l, TranscriptLine::System(s) if s.contains("Not enough messages to compact"))),
         "compact reply should land the no-op outcome line"

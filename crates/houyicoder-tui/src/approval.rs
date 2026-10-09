@@ -59,11 +59,12 @@ impl App {
     /// call_id so the choice survives the wholesale transcript rebuild on each
     /// event batch.
     pub(crate) fn toggle_focused_result_expand(&mut self) {
+        let lines = self.transcript().lines();
         let target = self
             .anchor_visible_row()
             .and_then(|ri| self.last_row_keys.callid_at(ri))
             .or_else(|| {
-                self.transcript.lines().iter().rev().find_map(|l| match l {
+                lines.iter().rev().find_map(|l| match l {
                     crate::records::TranscriptLine::Tool { name, call_id, .. }
                         if name.as_str() == "result" =>
                     {
@@ -168,7 +169,7 @@ impl App {
     pub(crate) fn toggle_latest_memory_notice(&mut self) -> bool {
         let mut ordinal = 0usize;
         let mut latest: Option<String> = None;
-        for line in self.transcript.lines().iter() {
+        for line in self.session.transcript.lines().iter() {
             if crate::fold::is_memory_notice(line) {
                 latest = Some(format!("mg#{ordinal}"));
                 ordinal += 1;
@@ -196,9 +197,8 @@ impl App {
         // look up the matching Subagent line to decide first-expand fetch.
         // A missing match (stale stash) defaults to fetch — the backend's
         // empty-case guard surfaces "unavailable" rather than refetching.
-        let needs_fetch = self
-            .transcript
-            .lines()
+        let lines = self.transcript().lines();
+        let needs_fetch = lines
             .iter()
             .find_map(|line| match line {
                 crate::records::TranscriptLine::Subagent {
@@ -255,10 +255,10 @@ impl App {
     pub(crate) fn subagent_target_at_cursor(&self) -> Option<(String, bool)> {
         use crate::fold::{DisplaySlot, display_slots, notice_slot_rows};
         use crate::records::TranscriptLine;
-        let transcript = self.transcript.lines();
+        let transcript = self.session.transcript.lines();
         let slots = display_slots(
             transcript,
-            self.transcript.fold_groups(),
+            self.session.transcript.fold_groups(),
             &self.transcript_view.expanded.fold_groups,
             self.verbose,
         );
@@ -317,19 +317,16 @@ impl App {
     /// expand key has other kinds of block to weigh and defaults differently.
     pub(crate) fn subagent_target_or_last(&self) -> Option<(String, bool)> {
         use crate::records::TranscriptLine;
+        let lines = self.transcript().lines();
         self.subagent_target_at_cursor().or_else(|| {
-            self.transcript
-                .lines()
-                .iter()
-                .rev()
-                .find_map(|line| match line {
-                    TranscriptLine::Subagent {
-                        child_sid,
-                        folded_transcript,
-                        ..
-                    } => Some((child_sid.clone(), folded_transcript.is_empty())),
-                    _ => None,
-                })
+            lines.iter().rev().find_map(|line| match line {
+                TranscriptLine::Subagent {
+                    child_sid,
+                    folded_transcript,
+                    ..
+                } => Some((child_sid.clone(), folded_transcript.is_empty())),
+                _ => None,
+            })
         })
     }
 

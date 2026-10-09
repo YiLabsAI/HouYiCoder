@@ -8,7 +8,7 @@ use super::*;
 fn test_enter_teammate_targets_cursor() {
     use crate::records::TranscriptLine;
     let mut app = crate::composition::app();
-    app.transcript.push(TranscriptLine::Subagent {
+    app.session.transcript.push(TranscriptLine::Subagent {
         child_sid: "c1".into(),
         subagent_type: "explore".into(),
         summary: "first".into(),
@@ -16,7 +16,7 @@ fn test_enter_teammate_targets_cursor() {
         folded_transcript: vec![TranscriptLine::Agent("child reply".into())],
         color: None,
     });
-    app.transcript.push(TranscriptLine::Subagent {
+    app.session.transcript.push(TranscriptLine::Subagent {
         child_sid: "c2".into(),
         subagent_type: "plan".into(),
         summary: "second".into(),
@@ -49,8 +49,10 @@ fn test_enter_teammate_targets_cursor() {
 fn test_exit_teammate_clears_view() {
     use crate::records::TranscriptLine;
     let mut app = crate::composition::app();
-    app.transcript.push(TranscriptLine::Agent("parent".into()));
-    app.transcript.push(TranscriptLine::Subagent {
+    app.session
+        .transcript
+        .push(TranscriptLine::Agent("parent".into()));
+    app.session.transcript.push(TranscriptLine::Subagent {
         child_sid: "c1".into(),
         subagent_type: "explore".into(),
         summary: "first".into(),
@@ -81,7 +83,7 @@ fn test_teammate_view_fill_isomorphic() {
     use houyicoder_protocol::frontend::session_update::ContentChunk;
     use houyicoder_protocol::frontend::session_update::SessionUpdate;
     let mut app = crate::composition::app();
-    app.transcript.push(TranscriptLine::Subagent {
+    app.session.transcript.push(TranscriptLine::Subagent {
         child_sid: "c1".into(),
         subagent_type: "explore".into(),
         summary: "found auth".into(),
@@ -120,7 +122,7 @@ fn test_teammate_view_fill_isomorphic() {
     assert!(matches!(view.transcript[0], TranscriptLine::User(_)));
     assert!(matches!(view.transcript[1], TranscriptLine::Agent(_)));
     // Isomorphism: the fold-group and the view carry the same folded rows.
-    let folded = match &app.transcript[0] {
+    let folded = match &app.session.transcript[0] {
         TranscriptLine::Subagent {
             folded_transcript, ..
         } => folded_transcript.clone(),
@@ -150,7 +152,7 @@ fn test_other_child_keeps_view() {
     use houyicoder_protocol::frontend::session_update::ContentChunk;
     use houyicoder_protocol::frontend::session_update::SessionUpdate;
     let mut app = crate::composition::app();
-    app.transcript.push(TranscriptLine::Subagent {
+    app.session.transcript.push(TranscriptLine::Subagent {
         child_sid: "c1".into(),
         subagent_type: "explore".into(),
         summary: "first".into(),
@@ -158,7 +160,7 @@ fn test_other_child_keeps_view() {
         folded_transcript: vec![TranscriptLine::Agent("viewed child".into())],
         color: None,
     });
-    app.transcript.push(TranscriptLine::Subagent {
+    app.session.transcript.push(TranscriptLine::Subagent {
         child_sid: "c2".into(),
         subagent_type: "plan".into(),
         summary: "second".into(),
@@ -196,7 +198,9 @@ fn test_other_child_keeps_view() {
 fn test_enter_teammate_no_target() {
     use crate::records::TranscriptLine;
     let mut app = crate::composition::app();
-    app.transcript.push(TranscriptLine::Agent("plain".into()));
+    app.session
+        .transcript
+        .push(TranscriptLine::Agent("plain".into()));
     assert!(!app.enter_teammate_view(), "no Subagent line to target");
     assert!(app.teammate_view.is_none());
 }
@@ -209,7 +213,7 @@ fn test_enter_teammate_no_target() {
 fn test_cursor_past_tail_fallback() {
     use crate::records::TranscriptLine;
     let mut app = crate::composition::app();
-    app.transcript.push(TranscriptLine::Subagent {
+    app.session.transcript.push(TranscriptLine::Subagent {
         child_sid: "c1".into(),
         subagent_type: "explore".into(),
         summary: "first".into(),
@@ -236,7 +240,7 @@ fn test_cursor_after_fold_group() {
     use crate::records::{ToolOutcome, TranscriptLine};
     let mut app = crate::composition::app();
     // Two tool calls form a collapsed Summary slot before the Subagents.
-    app.transcript.push(TranscriptLine::Tool {
+    app.session.transcript.push(TranscriptLine::Tool {
         name: "bash".into(),
         tool: "bash".into(),
         status: "ls".into(),
@@ -246,7 +250,7 @@ fn test_cursor_after_fold_group() {
         body: String::new(),
         is_diff: false,
     });
-    app.transcript.push(TranscriptLine::Tool {
+    app.session.transcript.push(TranscriptLine::Tool {
         name: "result".into(),
         tool: "bash".into(),
         status: String::new(),
@@ -256,7 +260,7 @@ fn test_cursor_after_fold_group() {
         body: "ok\nline2\nline3".into(),
         is_diff: false,
     });
-    app.transcript.push(TranscriptLine::Subagent {
+    app.session.transcript.push(TranscriptLine::Subagent {
         child_sid: "c1".into(),
         subagent_type: "explore".into(),
         summary: "first".into(),
@@ -264,7 +268,7 @@ fn test_cursor_after_fold_group() {
         folded_transcript: vec![TranscriptLine::Agent("reply1".into())],
         color: None,
     });
-    app.transcript.push(TranscriptLine::Subagent {
+    app.session.transcript.push(TranscriptLine::Subagent {
         child_sid: "c2".into(),
         subagent_type: "plan".into(),
         summary: "second".into(),

@@ -153,7 +153,7 @@ impl App {
         };
         let mut count = 0usize;
         let mut prev_was_agent = false;
-        for f in &self.transcript.frames()[from..] {
+        for f in &self.session.transcript.frames()[from..] {
             match f.as_ref() {
                 // Turn boundary: a new user message starts a new assistant
                 // turn, so the next agent text counts again.
@@ -183,8 +183,8 @@ impl App {
     /// not shift. Both resolve to the frame count, so the label reads zero new
     /// turns at the moment of capture.
     fn event_cursor_at_tail(&self) -> EventCursor {
-        let abs = self.transcript.abs_frame_count() as u64;
-        match self.transcript.frames().last() {
+        let abs = self.session.transcript.abs_frame_count() as u64;
+        match self.session.transcript.frames().last() {
             // An unstamped tail keeps the boundary one past the last frame,
             // which is what the resolver shifts onto the resident range. The
             // local argument is not read here: a stamped tail takes the
@@ -205,9 +205,10 @@ impl App {
     /// longer resident, so the caller counts the whole window instead of
     /// reading it as empty.
     fn frame_index_for_cursor(&self, cursor: &EventCursor) -> Option<usize> {
-        let base = self.transcript.frame_window_start();
+        let base = self.session.transcript.frame_window_start();
         match cursor {
             EventCursor::Durable(id) => self
+                .session
                 .transcript
                 .frames()
                 .iter()
@@ -215,7 +216,7 @@ impl App {
                 .map(|i| i + 1),
             EventCursor::Local(n) => {
                 let abs = *n as usize;
-                (abs >= base).then(|| (abs - base).min(self.transcript.frame_count()))
+                (abs >= base).then(|| (abs - base).min(self.session.transcript.frame_count()))
             }
         }
     }
@@ -301,7 +302,9 @@ mod tests {
     #[test]
     fn test_tail_cursor_durable_anchored() {
         let mut app = composition::app();
-        app.transcript.push_frame(stamped_frame("e1", "first"));
+        app.session
+            .transcript
+            .push_frame(stamped_frame("e1", "first"));
         let expected = RowId::Durable {
             event: DurableEventId("e1".to_string()),
             slot: 0,
@@ -314,10 +317,11 @@ mod tests {
     #[test]
     fn test_tail_cursor_local_count() {
         let mut app = composition::app();
-        app.transcript
-            .push_frame(TranscriptFrame::Session(SessionUpdate::AgentMessageChunk(
-                ContentChunk::new(ContentBlock::Text { text: "hi".into() }),
-            )));
+        app.session.transcript.push_frame(TranscriptFrame::Session(
+            SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text {
+                text: "hi".into(),
+            })),
+        ));
         assert!(matches!(
             app.event_cursor_at_tail(),
             EventCursor::Local(n) if n == 1
@@ -339,9 +343,15 @@ mod tests {
     #[test]
     fn test_cursor_across_front_drain() {
         let mut app = composition::app();
-        app.transcript.push_frame(stamped_frame("e1", "first"));
-        app.transcript.push_frame(stamped_frame("e2", "second"));
-        app.transcript.push_frame(stamped_frame("e3", "third"));
+        app.session
+            .transcript
+            .push_frame(stamped_frame("e1", "first"));
+        app.session
+            .transcript
+            .push_frame(stamped_frame("e2", "second"));
+        app.session
+            .transcript
+            .push_frame(stamped_frame("e3", "third"));
         app.transcript_view.unseen_since = Some(EventCursor::Durable("e2".into()));
         assert_eq!(
             app.new_turn_count().count,
@@ -349,10 +359,12 @@ mod tests {
             "the third entry is the one unseen turn"
         );
 
-        let total = app.transcript.resident_bytes();
-        let freed = app.transcript.frames()[0].estimated_bytes() as u64;
+        let total = app.session.transcript.resident_bytes();
+        let freed = app.session.transcript.frames()[0].estimated_bytes() as u64;
         assert_eq!(
-            app.transcript.drain_front_to_budget(total - freed, Some(2)),
+            app.session
+                .transcript
+                .drain_front_to_budget(total - freed, Some(2)),
             1,
             "the drain takes the first entry alone"
         );
@@ -376,8 +388,12 @@ mod tests {
     #[test]
     fn test_cursor_resolves_durable_anchor() {
         let mut app = composition::app();
-        app.transcript.push_frame(stamped_frame("e1", "first"));
-        app.transcript.push_frame(stamped_frame("e2", "second"));
+        app.session
+            .transcript
+            .push_frame(stamped_frame("e1", "first"));
+        app.session
+            .transcript
+            .push_frame(stamped_frame("e2", "second"));
 
         app.transcript_view.unseen_since = Some(EventCursor::Durable("e1".into()));
         assert_eq!(

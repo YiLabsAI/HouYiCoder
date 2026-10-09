@@ -1,0 +1,489 @@
+use super::*;
+
+/// Trim runs only at the tail. A scrolled-back reader pins a fixed viewport,
+/// so draining the oldest lines would shift the content under it; a scroll-up
+/// session's loaded older frames must also survive the next rebuild. This
+/// floods the live transcript past the cap while scrolled back and asserts the
+/// lines accumulate rather than draining.
+#[test]
+fn test_trim_skips_scrollaway() {
+    use crate::scroll::VIEWABLE_SCROLLBACK_CAP;
+    let mut app = fresh_app();
+    app.screen = Screen::Working;
+    // Follow the tail: direct pushes trim down to the cap.
+    for _ in 0..(VIEWABLE_SCROLLBACK_CAP + 5) {
+        app.push_transcript_line(TranscriptLine::Agent("tail line".into()));
+    }
+    assert_eq!(
+        app.transcript().len(),
+        VIEWABLE_SCROLLBACK_CAP,
+        "follow-tail direct push trims to the cap"
+    );
+    // Scroll away from the tail, then keep pushing: trim must not drain a
+    // scrolled-back reader, so the lines accumulate past the cap.
+    app.whole_scroll_mut().jump_to(0);
+    let extra = 50;
+    for _ in 0..extra {
+        app.push_transcript_line(TranscriptLine::Agent("scrolled-back line".into()));
+    }
+    assert_eq!(
+        app.transcript().len(),
+        VIEWABLE_SCROLLBACK_CAP + extra,
+        "trim skips while scrolled back, so lines accumulate"
+    );
+}
+
+/// When trim drains at the tail, the turn boundary shifts with it so the next
+/// tail rebuild's stable-prefix slice stays aligned. Before the fix the cap
+/// drained underneath an unchanged boundary, leaving it pointing past the
+/// prefix the next rebuild would reuse.
+#[test]
+fn test_trim_shifts_boundary() {
+    use crate::scroll::VIEWABLE_SCROLLBACK_CAP;
+    let mut app = fresh_app();
+    app.screen = Screen::Working;
+    // A turn boundary with a real prefix: 100 user messages, then an agent
+    // frame, rebuild sets line_index to the prefix length (100).
+    for i in 0..100 {
+        app.transcript_mut()
+            .push_frame(user_msg(&format!("prefix {i}")));
+    }
+    app.transcript_mut().push_frame(agent_msg("turn body"));
+    app.rebuild_transcript();
+    let boundary_before = app.transcript_mut().current_turn_mut().line_index;
+    assert!(boundary_before > 0, "boundary names the prefix length");
+    // Flood past the cap at the tail: trim drains, and the boundary shifts
+    // down by the dropped count (saturating at zero).
+    let over = VIEWABLE_SCROLLBACK_CAP + 10;
+    for _ in 0..over {
+        app.push_transcript_line(TranscriptLine::Agent("flood".into()));
+    }
+    assert!(
+        app.transcript_mut().current_turn_mut().line_index <= app.transcript().len(),
+        "boundary stays within the post-trim transcript length"
+    );
+    assert!(
+        app.transcript_mut().current_turn_mut().line_index < boundary_before,
+        "boundary shifted down as the prefix was trimmed"
+    );
+}
+
+/// The scroll-up white-load: the user scrolled back and loaded older frames;
+/// a new frame arriving triggers a rebuild whose exit must not drain the rows
+/// just loaded. Before the fix the rebuild exit capped unconditionally and
+/// drained the prepended history, so scrolling up was defeated the moment new
+/// content arrived.
+#[test]
+fn test_scrollback_survives_frame() {
+    use crate::scroll::VIEWABLE_SCROLLBACK_CAP;
+    use crate::transcript::FrontendRow;
+    // Enough frames that repeated scroll-up prepends push the transcript
+    // past the viewable cap: the frame window keeps the newest rows, and the
+    // prepended older rows must push the total past the cap.
+    let frame_count = VIEWABLE_SCROLLBACK_CAP + 600;
+    let mut app = fresh_app();
+    app.screen = Screen::Working;
+    for i in 0..frame_count {
+        app.transcript_mut()
+            .push_frame(user_msg(&format!("msg {i}")));
+    }
+    app.rebuild_transcript();
+    // Scroll away and load older frames until the history boundary hits zero.
+    app.whole_scroll_mut().jump_to(0);
+    while app.session.loaded_from_frame.get() > 0 {
+        app.load_older_frames();
+        pump_history_read_blocking(&mut app, Duration::from_secs(5));
+    }
+    assert!(
+        app.transcript().len() > VIEWABLE_SCROLLBACK_CAP,
+        "prepended history pushes the transcript past the cap"
+    );
+    assert!(
+        app.transcript()
+            .iter()
+            .any(|l| matches!(l, TranscriptLine::User(t) if t.contains("msg 0"))),
+        "oldest loaded row present before the new frame"
+    );
+    // A new frontend row arrives while scrolled back. The rebuild exit must
+    // not trim a scrolled-back reader, so the prepended history survives.
+    app.transcript_mut()
+        .push_frame(TranscriptFrame::Frontend(FrontendRow::System("new".into())));
+    app.rebuild_transcript();
+    assert!(
+        app.transcript()
+            .iter()
+            .any(|l| matches!(l, TranscriptLine::User(t) if t.contains("msg 0"))),
+        "scroll-up history survives the frame arrival"
+    );
+}
+
+#[test]
+fn test_fold_cache_tracks_recompute() {
+    let mut app = fresh_app();
+    app.start_run_for_test(0);
+    pump(&mut app, user_msg("go"));
+    pump(&mut app, tool_call("c1", "bash"));
+    pump(&mut app, tool_result("c1"));
+    pump(&mut app, tool_call("c2", "bash"));
+    pump(&mut app, tool_result("c2"));
+    assert_eq!(fold_signature(&app), recompute_fold_signature(&app));
+
+    // More pairs in the same turn exercise the incremental tail recompute
+    // (the frozen prefix is reused, only the tail rescans).
+    pump(&mut app, tool_call("c3", "bash"));
+    pump(&mut app, tool_result("c3"));
+    assert_eq!(fold_signature(&app), recompute_fold_signature(&app));
+
+    // A new turn moves the boundary, re-derives the prefix, and flips the
+    // prior turn's group from active to complete.
+    pump(&mut app, user_msg("again"));
+    pump(&mut app, tool_call("d1", "bash"));
+    pump(&mut app, tool_result("d1"));
+    assert_eq!(fold_signature(&app), recompute_fold_signature(&app));
+
+    let sig = fold_signature(&app);
+    assert_eq!(sig.len(), 2, "one group per turn");
+    assert!(!sig[0].3, "prior turn group completes");
+    assert!(sig[1].3, "active turn group stays open");
+}
+
+/// A call id reused across turns must not collide in the fold cache. The
+/// incremental tail path seeds its per-call-id ordinal from the retained
+/// prefix, so turn two's re-emitted c1 continues to c1#1 instead of
+/// colliding with turn one's c1#0.
+#[test]
+fn test_fold_reused_call_id() {
+    let mut app = fresh_app();
+    app.start_run_for_test(0);
+    pump(&mut app, user_msg("go"));
+    pump(&mut app, tool_call("c1", "bash"));
+    pump(&mut app, tool_result("c1"));
+    pump(&mut app, user_msg("again"));
+    pump(&mut app, tool_call("c1", "bash"));
+    pump(&mut app, tool_result("c1"));
+
+    let sig = fold_signature(&app);
+    assert_eq!(sig.len(), 2, "one group per turn");
+    assert_ne!(sig[0].2, sig[1].2, "reused call id must not collide");
+    assert_eq!(sig, recompute_fold_signature(&app));
+}
+
+/// The active flag responds to a pause without a rebuild: begin_waiting
+/// collapses the active group and end_waiting reopens it, both through the
+/// refresh the run-state transitions trigger.
+#[test]
+fn test_fold_active_tracks_waiting() {
+    let mut app = fresh_app();
+    app.start_run_for_test(0);
+    pump(&mut app, user_msg("go"));
+    pump(&mut app, tool_call("w1", "bash"));
+    pump(&mut app, tool_result("w1"));
+    assert!(fold_signature(&app)[0].3, "running group is active");
+
+    app.session.run.begin_waiting();
+    app.refresh_fold_active();
+    assert!(!fold_signature(&app)[0].3, "waiting group collapses");
+
+    app.session.run.end_waiting();
+    app.refresh_fold_active();
+    assert!(fold_signature(&app)[0].3, "resumed group reopens");
+}
+
+/// The resident frame log is bounded by bytes: a session long enough to exceed
+/// the budget drains its oldest frames instead of holding every frame forever,
+/// and the newest rows still render.
+#[test]
+fn test_evicts_under_byte_budget() {
+    let mut app = fresh_app();
+    app.screen = Screen::Working;
+    app.transcript_mut().set_resident_byte_budget(100 * 1024);
+    let text = "x".repeat(100);
+    for i in 0..1000 {
+        app.transcript_mut()
+            .push_frame(user_msg(&format!("{i} {text}")));
+    }
+    app.rebuild_transcript();
+    assert!(
+        app.transcript().frame_window_start() > 0,
+        "frames past the budget are drained"
+    );
+    assert!(
+        app.transcript().resident_bytes() <= app.transcript().resident_byte_budget() as u64,
+        "the drain reaches the budget when the window itself fits under it"
+    );
+    assert!(
+        app.transcript()
+            .iter()
+            .any(|l| matches!(l, TranscriptLine::User(t) if t.starts_with("999 "))),
+        "the newest row renders"
+    );
+}
+
+/// No block names a frame below the resident front, and the drain keeps the
+/// row that opened the active turn: the frames it reclaims belong to turns the
+/// window has moved past, so every rendered row still derives from a resident
+/// frame.
+#[test]
+fn test_eviction_stops_at_front() {
+    let mut app = fresh_app();
+    app.screen = Screen::Working;
+    app.transcript_mut().set_resident_byte_budget(1024);
+    let text = "x".repeat(100);
+    for turn in 0..4 {
+        app.transcript_mut()
+            .push_frame(user_msg(&format!("turn {turn}")));
+        for i in 0..300 {
+            app.transcript_mut()
+                .push_frame(agent_msg(&format!("{turn}.{i} {text}")));
+        }
+    }
+    app.rebuild_transcript();
+    assert!(
+        app.transcript().frame_window_start() > 0,
+        "the budget drains the frames of the closed turns"
+    );
+    assert!(
+        app.transcript()
+            .iter()
+            .any(|l| matches!(l, TranscriptLine::User(t) if t == "turn 3")),
+        "the row that opened the active turn still renders"
+    );
+    assert!(
+        app.transcript()
+            .iter()
+            .any(|l| matches!(l, TranscriptLine::Agent(t) if t.starts_with("3.299 "))),
+        "the tail row renders after the drain"
+    );
+    app.rebuild_transcript();
+    for b in app.transcript().blocks().blocks() {
+        assert!(
+            b.frame_range.start >= app.transcript().frame_window_start(),
+            "block {:?} reaches below the resident front",
+            b.frame_range
+        );
+    }
+}
+
+/// A rebuild that drains keeps the verdicts of the frames it reclaims: the
+/// audit scan runs before the drain, so a frame that leaves the resident window
+/// in the same pass is already folded into the cache and stays there.
+#[test]
+fn test_verdict_survives_drain() {
+    let mut app = fresh_app();
+    app.screen = Screen::Working;
+    app.transcript_mut().set_resident_byte_budget(1024);
+    app.transcript_mut()
+        .push_frame(TranscriptFrame::Acpx(AcpxNotification::new(
+            AcpxMethod::ContextPermissionDecision,
+            json!({
+                "tool": "bash",
+                "verdict": "allow",
+                "scope": "once",
+                "callId": "c1",
+            }),
+        )));
+    let text = "x".repeat(100);
+    for turn in 0..4 {
+        app.transcript_mut()
+            .push_frame(user_msg(&format!("turn {turn}")));
+        for i in 0..300 {
+            app.transcript_mut()
+                .push_frame(agent_msg(&format!("{turn}.{i} {text}")));
+        }
+    }
+    app.rebuild_transcript();
+    assert!(
+        app.transcript().frame_window_start() > 0,
+        "the rebuild drains the frames below the active turn"
+    );
+    assert_eq!(
+        app.session.capabilities.permission.verdict_log_cache.len(),
+        1,
+        "the drained frame's verdict is in the audit cache"
+    );
+    assert_eq!(
+        app.session.capabilities.permission.verdict_log_cache[0].call_id,
+        "c1"
+    );
+}
+
+/// A log that holds no user frame still reaches the budget: with no turn
+/// boundary to protect, the drain takes the oldest frames down to the newest.
+/// The window a resumed session reads can start mid-turn, so the bound cannot
+/// depend on a user frame being resident.
+#[test]
+fn test_drain_without_user_frame() {
+    let mut app = fresh_app();
+    app.screen = Screen::Working;
+    app.transcript_mut().set_resident_byte_budget(8 * 1024);
+    let text = "x".repeat(1000);
+    for i in 0..40 {
+        app.transcript_mut()
+            .push_frame(agent_msg(&format!("{i} {text}")));
+    }
+    app.rebuild_transcript();
+    assert!(
+        app.transcript().frame_window_start() > 0,
+        "the budget drains a log whose window holds no user frame"
+    );
+    assert!(
+        app.transcript().resident_bytes() <= app.transcript().resident_byte_budget() as u64,
+        "the drain reaches the budget: {} > {}",
+        app.transcript().resident_bytes(),
+        app.transcript().resident_byte_budget()
+    );
+    assert!(
+        app.transcript()
+            .iter()
+            .any(|l| matches!(l, TranscriptLine::Agent(t) if t.starts_with("39 "))),
+        "the newest row renders"
+    );
+}
+
+/// Scrollback loading stops at the resident front: a batch whose frames were
+/// drained cannot be re-derived, so the loaded boundary holds at the front
+/// rather than naming frames the window cannot read.
+#[test]
+fn test_scrollback_stops_at_front() {
+    let mut app = fresh_app();
+    app.screen = Screen::Working;
+    app.transcript_mut().set_resident_byte_budget(512 * 1024);
+    let text = "x".repeat(400);
+    for i in 0..2000 {
+        app.transcript_mut()
+            .push_frame(user_msg(&format!("{i} {text}")));
+    }
+    app.rebuild_transcript();
+    let base = app.transcript().frame_window_start();
+    // The clamp binds only when the load reaches past the front while the frame
+    // cap still sits above it, which is where a load asks for drained frames.
+    let cap = 2000 - 500;
+    assert!(
+        base > 0 && base + 1 < cap,
+        "the drain leaves a loadable range below the frame cap: front={base}"
+    );
+    app.whole_scroll_mut().jump_to(0);
+    app.session.loaded_from_frame.set(base + 1);
+    app.load_older_frames();
+    pump_history_read_blocking(&mut app, Duration::from_secs(5));
+    assert_eq!(
+        app.session.loaded_from_frame.get(),
+        base,
+        "the loaded boundary stops at the resident front"
+    );
+    assert!(
+        app.transcript()
+            .iter()
+            .any(|l| matches!(l, TranscriptLine::User(t) if t.starts_with("1999 "))),
+        "the tail survives the load"
+    );
+}
+
+/// The active turn is what the viewport shows, so the drain keeps it and the
+/// row that opened it. A turn whose own bytes exceed the budget holds above it
+/// until the turn ends; bounding a single turn is a later step.
+#[test]
+fn test_active_turn_protected() {
+    let mut app = fresh_app();
+    app.screen = Screen::Working;
+    app.transcript_mut().set_resident_byte_budget(1024);
+    let text = "x".repeat(200);
+    app.transcript_mut().push_frame(user_msg("opening"));
+    for i in 0..100 {
+        app.transcript_mut()
+            .push_frame(agent_msg(&format!("{i} {text}")));
+    }
+    app.rebuild_transcript();
+    assert_eq!(
+        app.transcript().frame_window_start(),
+        0,
+        "the drain keeps the active turn and its opening frame"
+    );
+    assert!(
+        app.transcript().resident_bytes() > app.transcript().resident_byte_budget() as u64,
+        "the active turn's own frames stay resident above the budget"
+    );
+    assert!(
+        app.transcript()
+            .iter()
+            .any(|l| matches!(l, TranscriptLine::User(t) if t == "opening")),
+        "the opening row still renders"
+    );
+}
+
+/// A scrollback load lowers the window front below the frame cap. The byte
+/// budget still drains afterwards, so a session that reached for older frames
+/// is not exempt from the bound.
+#[test]
+fn test_load_boundary_keeps_draining() {
+    let mut app = fresh_app();
+    app.screen = Screen::Working;
+    app.transcript_mut().set_resident_byte_budget(128 * 1024);
+    let text = "x".repeat(100);
+    for i in 0..600 {
+        pump(&mut app, user_msg(&format!("{i} {text}")));
+    }
+    assert_eq!(
+        app.transcript().frame_window_start(),
+        0,
+        "the budget holds the frames before a load"
+    );
+    app.whole_scroll_mut().jump_to(0);
+    app.load_older_frames();
+    pump_history_read_blocking(&mut app, Duration::from_secs(5));
+    assert!(
+        app.session.loaded_from_frame.get() < 100,
+        "the load reaches below the frame cap: {}",
+        app.session.loaded_from_frame.get()
+    );
+    for i in 600..1000 {
+        pump(&mut app, user_msg(&format!("{i} {text}")));
+    }
+    let base = app.transcript().frame_window_start();
+    let bytes = app.transcript().resident_bytes();
+    let budget = app.transcript().resident_byte_budget() as u64;
+    assert!(base > 0, "the budget drains after a load: base={base}");
+    assert!(
+        bytes <= budget,
+        "resident bytes stay under the budget: {bytes} > {budget}"
+    );
+}
+
+/// A checklist whose todo-write frame was drained keeps its items: the cursor
+/// is an absolute frame index, so eviction neither resets the accumulator nor
+/// makes it re-read a frame that is gone.
+#[test]
+fn test_todo_survives_eviction() {
+    let mut app = fresh_app();
+    app.screen = Screen::Working;
+    app.transcript_mut().set_resident_byte_budget(1024);
+    let text = "x".repeat(100);
+    pump(
+        &mut app,
+        todo_write_frame("t1", &[("ship the window", "in_progress")]),
+    );
+    for i in 0..900 {
+        pump(&mut app, user_msg(&format!("{i} {text}")));
+    }
+    assert!(
+        app.transcript().frame_window_start() > 0,
+        "the todo-write frame was drained"
+    );
+    assert!(
+        app.session
+            .todos
+            .items
+            .iter()
+            .any(|t| t.content == "ship the window"),
+        "the drained frame's checklist survives"
+    );
+    pump(&mut app, user_msg("tail"));
+    assert!(
+        app.session
+            .todos
+            .items
+            .iter()
+            .any(|t| t.content == "ship the window"),
+        "the checklist survives the rebuild that follows"
+    );
+}

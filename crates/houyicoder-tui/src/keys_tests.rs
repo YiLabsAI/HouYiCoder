@@ -74,7 +74,8 @@ fn test_model_pane_keys() {
         "disconnected Enter keeps the pane open"
     );
     assert!(
-        app.transcript
+        app.session
+            .transcript
             .iter()
             .any(|l| matches!(l, TranscriptLine::System(s) if s.contains("model: not connected"))),
         "disconnected Enter reports not connected"
@@ -221,7 +222,8 @@ fn test_model_pane_tab_focus() {
 #[test]
 fn test_model_open_echoes_once() {
     fn echoes(app: &App) -> usize {
-        app.transcript
+        app.session
+            .transcript
             .iter()
             .filter(|l| matches!(l, TranscriptLine::User(s) if s == "/model"))
             .count()
@@ -802,15 +804,17 @@ fn test_login_local_skips_console() {
 fn test_login_lands_clean() {
     // Landing on Working leaves the transcript empty (placeholder hint only).
     let mut app = composition::app();
-    app.transcript.reset();
+    app.session.transcript.reset();
     handle_login(&mut app, key(KeyCode::Char('1')));
     assert_eq!(app.screen, Screen::Working);
-    assert_eq!(app.transcript.len(), 0);
+    assert_eq!(app.session.transcript.len(), 0);
     // landing again on an already-alive transcript does not seed anything
-    let before = app.transcript.len();
-    app.transcript.push(TranscriptLine::System("x".into()));
+    let before = app.session.transcript.len();
+    app.session
+        .transcript
+        .push(TranscriptLine::System("x".into()));
     handle_login(&mut app, key(KeyCode::Char('1')));
-    assert_eq!(app.transcript.len(), before + 1);
+    assert_eq!(app.session.transcript.len(), before + 1);
 }
 
 #[test]
@@ -834,13 +838,17 @@ fn test_palette_select_runs_command() {
     handle_palette(&mut app, key(KeyCode::Enter));
     assert!(!app.palette.open);
     assert!(
-        app.transcript
+        app.session
+            .transcript
             .iter()
             .any(|l| matches!(l, TranscriptLine::User(s) if s == "/context")),
         "palette select must echo the command as a User turn"
     );
     assert!(
-        matches!(app.transcript.last(), Some(TranscriptLine::ContextGrid(_))),
+        matches!(
+            app.session.transcript.last(),
+            Some(TranscriptLine::ContextGrid(_))
+        ),
         "the /context response should follow the echoed command"
     );
 }
@@ -877,13 +885,14 @@ fn test_palette_tui_local_via() {
     handle_palette(&mut app, key(KeyCode::Enter));
     assert!(!app.palette.open);
     assert!(
-        app.transcript
+        app.session
+            .transcript
             .iter()
             .any(|l| matches!(l, TranscriptLine::User(s) if s == "/debug")),
         "palette select of /debug must echo as a User turn"
     );
     assert!(
-        matches!(app.transcript.last(), Some(TranscriptLine::System(s)) if s.contains("debug")),
+        matches!(app.session.transcript.last(), Some(TranscriptLine::System(s)) if s.contains("debug")),
         "the debug response should follow the echo"
     );
     // A leading slash in the palette query is normalized, not doubled.
@@ -894,7 +903,7 @@ fn test_palette_tui_local_via() {
     }
     handle_palette(&mut app, key(KeyCode::Enter));
     assert!(
-        matches!(app.transcript.last(), Some(TranscriptLine::System(s)) if s.contains("debug")),
+        matches!(app.session.transcript.last(), Some(TranscriptLine::System(s)) if s.contains("debug")),
         "leading slash in palette query must be normalized, not double-slashed"
     );
 }
@@ -922,7 +931,8 @@ fn test_palette_arg_keeps_open() {
         "arg command seeds the query with name + space"
     );
     assert!(
-        app.transcript
+        app.session
+            .transcript
             .iter()
             .all(|l| !matches!(l, TranscriptLine::User(_))),
         "arg command must NOT auto-submit (waits for the query)"
@@ -1118,7 +1128,7 @@ fn test_console_reject_writes_org() {
     app.screen = Screen::Console;
     handle_console(&mut app, key(KeyCode::Char('r')));
     assert!(app.workflow.review.findings[app.workflow.review.focus].resolved());
-    assert!(matches!(app.transcript.last(),
+    assert!(matches!(app.session.transcript.last(),
             Some(TranscriptLine::System(s)) if s.contains("org eval")));
 }
 
@@ -1402,7 +1412,8 @@ fn test_worktree_e_enter() {
     assert_eq!(app.worktree_level.get(), 1, "Enter opens the detail");
     handle_working(&mut app, key(KeyCode::Char('e')));
     assert!(
-        app.transcript
+        app.session
+            .transcript
             .iter()
             .any(|l| matches!(l, TranscriptLine::System(s) if s.contains("not connected"))),
         "e in detail enters the worktree (not connected while disconnected)"
@@ -1616,7 +1627,7 @@ fn test_enter_fleet_drills_teammate() {
     let mut app = crate::composition::app();
     app.screen = Screen::Working;
     app.viewport = ViewportMode::Working;
-    app.transcript.push(TranscriptLine::Subagent {
+    app.session.transcript.push(TranscriptLine::Subagent {
         child_sid: "c1".into(),
         subagent_type: "explore".into(),
         summary: "found auth".into(),
@@ -1654,7 +1665,7 @@ fn test_enter_fleet_drills_teammate() {
 #[test]
 fn test_ctrl_o_expands_latest() {
     let mut app = working_app();
-    app.transcript.push(TranscriptLine::Subagent {
+    app.session.transcript.push(TranscriptLine::Subagent {
         child_sid: "c1".into(),
         subagent_type: "explore".into(),
         summary: "found auth".into(),
@@ -1662,7 +1673,7 @@ fn test_ctrl_o_expands_latest() {
         folded_transcript: Vec::new(),
         color: None,
     });
-    app.transcript.push(TranscriptLine::ThoughtFor {
+    app.session.transcript.push(TranscriptLine::ThoughtFor {
         ms: Some(19_000),
         reasoning: Some("a long train of reasoning".into()),
         tool_summary: None,
@@ -1693,13 +1704,13 @@ fn test_ctrl_o_expands_latest() {
 #[test]
 fn test_ctrl_o_follows_cursor() {
     let mut app = working_app();
-    app.transcript.push(TranscriptLine::ThoughtFor {
+    app.session.transcript.push(TranscriptLine::ThoughtFor {
         ms: Some(19_000),
         reasoning: Some("a long train of reasoning".into()),
         tool_summary: None,
         turn_id: "t1".into(),
     });
-    app.transcript.push(TranscriptLine::Subagent {
+    app.session.transcript.push(TranscriptLine::Subagent {
         child_sid: "c1".into(),
         subagent_type: "explore".into(),
         summary: "found auth".into(),
@@ -1798,8 +1809,8 @@ fn test_agents_enter_follows_list() {
         folded_transcript: vec![TranscriptLine::Agent("reply".into())],
         color: None,
     });
-    let v = app.transcript.revision();
-    app.agents.refresh(&app.transcript, v);
+    let v = app.session.transcript.revision();
+    app.agents.refresh(&app.session.transcript, v);
     app.fleet.entries.push(FleetEntry {
         agent_id: "live".into(),
         subagent_type: "explore".into(),

@@ -49,7 +49,7 @@ mod tests {
     }
 
     fn assert_system_not_connected(app: &crate::state::App) {
-        let last = app.transcript.last().expect("a line was pushed");
+        let last = app.session.transcript.last().expect("a line was pushed");
         match last {
             crate::records::TranscriptLine::System(text) => {
                 assert!(
@@ -90,7 +90,7 @@ mod tests {
                 },
             },
         });
-        let last = app.transcript.last().expect("a line was pushed");
+        let last = app.session.transcript.last().expect("a line was pushed");
         match last {
             crate::records::TranscriptLine::System(text) => {
                 assert!(
@@ -110,7 +110,7 @@ mod tests {
                 },
             },
         });
-        let last = app.transcript.last().expect("a line was pushed");
+        let last = app.session.transcript.last().expect("a line was pushed");
         match last {
             crate::records::TranscriptLine::System(text) => {
                 assert!(
@@ -128,7 +128,7 @@ mod tests {
     fn test_debug_connection_lost() {
         let mut app = crate::test_harness::connection_lost_app();
         app.run_debug("");
-        let last = app.transcript.last().expect("a line was pushed");
+        let last = app.session.transcript.last().expect("a line was pushed");
         match last {
             crate::records::TranscriptLine::System(text) => {
                 assert!(

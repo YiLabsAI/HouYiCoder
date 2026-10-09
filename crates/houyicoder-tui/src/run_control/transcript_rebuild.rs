@@ -37,7 +37,7 @@ impl App {
         let turn_start = self.current_turn_start();
         let newest_open = self.session.run.is_active();
         let frame_start = self.visible_frame_start();
-        let frame_end = self.transcript.abs_frame_count();
+        let frame_end = self.session.transcript.abs_frame_count();
         // Rows read back from the session log sit above the capped view while
         // the reader is at the tail, which is the only view that cannot reach
         // them. They leave with it, so the next scroll back reads afresh. They
@@ -45,9 +45,9 @@ impl App {
         // read to sit above: the frames between the two fronts are drained, so
         // holding them would leave a hole in the scrollback.
         if self.whole_scroll().is_following_tail()
-            || self.transcript.disk_rows_front() != self.transcript.frame_window_start()
+            || self.transcript().disk_rows_front() != self.transcript().frame_window_start()
         {
-            self.transcript.clear_disk_rows();
+            self.session.transcript.clear_disk_rows();
         }
         // The frozen prefix is one block re-derived as a whole when it grows
         // (a new turn moves turn_start forward, so the prior active run joins
@@ -68,9 +68,9 @@ impl App {
         let (changes, clear_all, prefix_reused) =
             self.build_block_changes(&ranges, frame_start, has_active, newest_open);
         if clear_all {
-            self.transcript.blocks_mut().clear();
+            self.session.transcript.blocks_mut().clear();
         }
-        self.transcript.blocks_mut().apply(changes);
+        self.session.transcript.blocks_mut().apply(changes);
 
         // Flatten the in-window blocks to the viewable line list. A block whose
         // frames sit before the window start (the frame cap, or a drain in an
@@ -79,9 +79,9 @@ impl App {
         // read back from the session log lead the list: they are older than
         // every block, so the current turn starts past them.
         let mut lines: Vec<TranscriptLine> = Vec::new();
-        let mut prefix_line_count = self.transcript.disk_row_count();
-        lines.extend_from_slice(self.transcript.disk_rows());
-        for b in self.transcript.blocks().blocks() {
+        let mut prefix_line_count = self.session.transcript.disk_row_count();
+        lines.extend_from_slice(self.session.transcript.disk_rows());
+        for b in self.session.transcript.blocks().blocks() {
             if b.frame_range.end <= frame_start || b.frame_range.start >= frame_end {
                 continue;
             }
@@ -90,8 +90,8 @@ impl App {
             }
             lines.extend_from_slice(&b.lines);
         }
-        self.transcript.replace_lines(lines);
-        self.transcript.current_turn_mut().line_index = prefix_line_count;
+        self.session.transcript.replace_lines(lines);
+        self.session.transcript.current_turn_mut().line_index = prefix_line_count;
         self.update_fold_cache(prefix_line_count, prefix_reused);
 
         // Every resident frame is scanned before the drain drops any of them,
@@ -102,10 +102,10 @@ impl App {
         // loaded rows were cut at, so the rows leave in the same pass: the
         // frames between the two fronts are gone, and rows above a front that
         // does not continue them would render a gap.
-        if self.transcript.disk_row_count() > 0
-            && self.transcript.disk_rows_front() != self.transcript.frame_window_start()
+        if self.transcript().disk_row_count() > 0
+            && self.transcript().disk_rows_front() != self.transcript().frame_window_start()
         {
-            let released = self.transcript.clear_disk_rows();
+            let released = self.session.transcript.clear_disk_rows();
             if !self.whole_scroll().is_following_tail() {
                 let top = self.whole_scroll().raw_top();
                 self.whole_scroll_mut()
@@ -133,7 +133,7 @@ impl App {
         let mut cur_idx = 0;
         let mut clear_all = false;
         let mut prefix_reused = false;
-        let blocks = self.transcript.blocks().blocks();
+        let blocks = self.session.transcript.blocks().blocks();
         // Evict blocks the cap advanced past: a block whose frame range ended
         // before the window start is out of view, so name the first survivor
         // for EvictBefore to drain the aged-out prefix. When no block
@@ -161,16 +161,16 @@ impl App {
             // stream seq never anchors a block: numbering restarts with the
             // service process, so an identity built from it would drift.
             let id = if is_active {
-                let base = self.transcript.frame_window_start();
+                let base = self.transcript().frame_window_start();
                 let opening = self
-                    .transcript
+                    .transcript()
                     .frames()
                     .get(range.start.saturating_sub(base));
                 let anchor = match opening {
                     Some(sf) => RowId::of(sf.as_ref(), sf.event_id.as_ref(), range.start as u64),
                     None => RowId::local(range.start as u64),
                 };
-                self.transcript.blocks().assign_id(anchor)
+                self.session.transcript.blocks().assign_id(anchor)
             } else {
                 BlockId(BlockAnchor::Local(0))
             };
@@ -184,8 +184,8 @@ impl App {
                 continue;
             }
             let lines = transcript_from_frames_at(
-                self.transcript.frames(),
-                self.transcript.frame_window_start(),
+                self.session.transcript.frames(),
+                self.session.transcript.frame_window_start(),
                 range.clone(),
                 newest_open && is_active,
             );
@@ -240,7 +240,7 @@ impl App {
         use std::collections::HashMap;
         let agent_busy = self.agent_busy();
         let groups = if prefix_reused {
-            let mut groups = std::mem::take(self.transcript.fold_groups_mut());
+            let mut groups = std::mem::take(self.session.transcript.fold_groups_mut());
             // A group that sits before the current turn boundary is in a
             // completed turn and never active. Count its calls per id first
             // so the tail continues each ordinal instead of reusing a key
@@ -252,16 +252,16 @@ impl App {
                 g.active = false;
             }
             groups.extend(fold_groups_in(
-                &self.transcript.lines()[prefix_line_count..],
+                &self.session.transcript.lines()[prefix_line_count..],
                 prefix_line_count,
                 agent_busy,
                 &mut ordinal,
             ));
             groups
         } else {
-            compute_fold_groups(self.transcript.lines(), agent_busy)
+            compute_fold_groups(self.session.transcript.lines(), agent_busy)
         };
-        *self.transcript.fold_groups_mut() = groups;
+        *self.session.transcript.fold_groups_mut() = groups;
     }
 
     /// Recompute each group's active flag after the run pauses or resumes.
@@ -270,8 +270,8 @@ impl App {
     /// stale until the next rebuild. Rare, so the full boundary scan is fine.
     pub(crate) fn refresh_fold_active(&mut self) {
         let agent_busy = self.agent_busy();
-        let threshold = crate::fold::last_turn_boundary(self.transcript.lines());
-        for g in self.transcript.fold_groups_mut() {
+        let threshold = crate::fold::last_turn_boundary(self.session.transcript.lines());
+        for g in self.session.transcript.fold_groups_mut() {
             g.active = agent_busy && g.start >= threshold;
         }
     }
@@ -291,14 +291,14 @@ impl App {
         // the re-derive cost is acceptable; the migrate pass still carries
         // fetched child rows because it runs against the cleared list's
         // successors (none) only on the tail path.
-        self.transcript.blocks_mut().clear();
+        self.session.transcript.blocks_mut().clear();
         self.rebuild_transcript();
     }
 
     /// The oldest frame the frame cap keeps in view, in absolute frame
     /// coordinates. A scrollback load may reach further back than this.
     fn capped_frame_start(&self) -> usize {
-        self.transcript
+        self.transcript()
             .abs_frame_count()
             .saturating_sub(MAX_REBUILD_FRAMES)
     }
@@ -312,7 +312,7 @@ impl App {
     fn visible_frame_start(&self) -> usize {
         self.capped_frame_start()
             .min(self.session.loaded_from_frame.get())
-            .max(self.transcript.frame_window_start())
+            .max(self.session.transcript.frame_window_start())
     }
 
     /// Drain the oldest resident frames until their estimated bytes fall to
@@ -324,16 +324,17 @@ impl App {
     /// kept front leave the viewable window: the durable log still holds the
     /// server frames, while rows the frontend raised live only in this log.
     fn enforce_frame_byte_budget(&mut self, turn_start: usize) {
-        let budget = self.transcript.resident_byte_budget() as u64;
-        if self.transcript.resident_bytes() <= budget {
+        let budget = self.session.transcript.resident_byte_budget() as u64;
+        if self.session.transcript.resident_bytes() <= budget {
             return;
         }
-        let keep_from = if turn_start > self.transcript.frame_window_start() {
+        let keep_from = if turn_start > self.session.transcript.frame_window_start() {
             Some(turn_start - 1)
         } else {
             None
         };
-        self.transcript.drain_front_to_budget(budget, keep_from);
+        let transcript = &mut self.session.transcript;
+        transcript.drain_front_to_budget(budget, keep_from);
     }
 
     /// Load older history when scrollback reaches the current boundary,
@@ -360,7 +361,7 @@ impl App {
             return;
         }
         let from = self.visible_frame_start();
-        if from <= self.transcript.frame_window_start() {
+        if from <= self.session.transcript.frame_window_start() {
             // The frames below the resident front are gone: dispatch a
             // background read of their rows from the session log. The draw
             // path never waits on disk; the result lands on a later pump.
@@ -373,14 +374,14 @@ impl App {
         // stays derivable.
         let batch_start = from
             .saturating_sub(PREPEND_BATCH)
-            .max(self.transcript.frame_window_start());
+            .max(self.session.transcript.frame_window_start());
         // Count the older batch's lines to hold the viewport steady across the
         // rebuild that follows. The batch's frames all precede the frames
         // already loaded, and a row the frontend raised among them rides the
         // batch's own fold.
         let prepended = transcript_from_frames_at(
-            self.transcript.frames(),
-            self.transcript.frame_window_start(),
+            self.session.transcript.frames(),
+            self.session.transcript.frame_window_start(),
             batch_start..from,
             self.session.run.is_active(),
         )
@@ -426,10 +427,10 @@ impl App {
         if !self.session.history_reads.may_dispatch() {
             return;
         }
-        if self.transcript.disk_row_count() >= LOG_ROW_BUDGET {
+        if self.session.transcript.disk_row_count() >= LOG_ROW_BUDGET {
             return;
         }
-        let job = match self.transcript.disk_front() {
+        let job = match self.session.transcript.disk_front() {
             DiskFront::Stopped => return,
             DiskFront::Unloaded => {
                 // The pass that drained frames still renders their rows.
@@ -454,8 +455,8 @@ impl App {
         // pre-rebuild capture would make the first read's own result look stale
         // and drop it. The sync path this replaced read the front after the
         // rebuild too.
-        let dispatch_front = self.transcript.frame_window_start();
-        let dispatch_disk_front = self.transcript.disk_front();
+        let dispatch_front = self.session.transcript.frame_window_start();
+        let dispatch_disk_front = self.session.transcript.disk_front();
         let (tx, rx) = mpsc::channel();
         // The owner issues the stop flag and the execution slot together, so the
         // flag the task watches is the one an invalidation raises and the budget
@@ -505,7 +506,7 @@ impl App {
                 // scroll keeps asking for rows no worker will ever bring back.
                 // The budget needs no help here: a worker frees its slot on its
                 // own when it leaves.
-                self.transcript.set_disk_front(DiskFront::Stopped);
+                self.session.transcript.set_disk_front(DiskFront::Stopped);
                 false
             }
         }
@@ -538,30 +539,30 @@ impl App {
             );
             return;
         }
-        if self.transcript.frame_window_start() != read.dispatch_front {
+        if self.session.transcript.frame_window_start() != read.dispatch_front {
             tracing::debug!(
                 dispatch_front = read.dispatch_front,
-                current = self.transcript.frame_window_start(),
+                current = self.session.transcript.frame_window_start(),
                 "history read dropped: the resident front moved"
             );
             return;
         }
-        if self.transcript.disk_front() != read.dispatch_disk_front {
+        if self.session.transcript.disk_front() != read.dispatch_disk_front {
             tracing::debug!(
                 dispatch_disk_front = ?read.dispatch_disk_front,
-                current = ?self.transcript.disk_front(),
+                current = ?self.session.transcript.disk_front(),
                 "history read dropped: the disk-rows state moved"
             );
             return;
         }
         match outcome {
             HistoryReadOutcome::Exhausted => {
-                self.transcript.set_disk_front(DiskFront::Stopped);
+                self.session.transcript.set_disk_front(DiskFront::Stopped);
             }
             HistoryReadOutcome::Rows(result) => {
                 let count = result.rows.len();
-                self.transcript
-                    .prepend_disk_rows(result.rows, result.anchor, read.dispatch_front);
+                let transcript = &mut self.session.transcript;
+                transcript.prepend_disk_rows(result.rows, result.anchor, read.dispatch_front);
                 // Hold the viewport still: the rows landed above it.
                 let cur = self.whole_scroll().raw_top();
                 self.whole_scroll_mut().set_raw_top(cur + count);
@@ -575,8 +576,8 @@ impl App {
     /// rows read from the log are matched against them to find where the two
     /// folds overlap.
     fn front_row_texts(&self) -> Vec<String> {
-        self.transcript
-            .lines()
+        let lines = self.transcript().lines();
+        lines
             .iter()
             .take(OVERLAP_FRONT_ROWS)
             .map(|line| line.render())
@@ -590,10 +591,10 @@ impl App {
     /// is re-derived from the front on the next rebuild.
     pub(crate) fn current_turn_start(&self) -> usize {
         use houyicoder_protocol::frontend::session_update::SessionUpdate;
-        let base = self.transcript.frame_window_start();
-        let mut search_from = self.transcript.frames().len();
+        let base = self.session.transcript.frame_window_start();
+        let mut search_from = self.session.transcript.frames().len();
         loop {
-            let Some(idx) = self.transcript.frames()[..search_from]
+            let Some(idx) = self.session.transcript.frames()[..search_from]
                 .iter()
                 .rposition(|sf| {
                     matches!(
@@ -620,8 +621,8 @@ impl App {
     /// log from the window's front, since frames before it were drained.
     fn prefix_has_unpaired_call(&self, candidate: usize) -> bool {
         use houyicoder_protocol::frontend::session_update::SessionUpdate;
-        let base = self.transcript.frame_window_start();
-        let frames = self.transcript.frames();
+        let base = self.session.transcript.frame_window_start();
+        let frames = self.session.transcript.frames();
         let at = candidate.saturating_sub(base).min(frames.len());
         let mut calls = std::collections::HashSet::new();
         let mut results = std::collections::HashSet::new();
@@ -660,7 +661,7 @@ impl App {
         // to match the truncated log. A front drain leaves the absolute count
         // unchanged, so it never trips this, and the rebuild drains only after
         // this scan, so every drained frame's verdict is already cached.
-        if self.verdict_cursor > self.transcript.abs_frame_count() {
+        if self.verdict_cursor > self.session.transcript.abs_frame_count() {
             self.verdict_cursor = 0;
             self.session
                 .capabilities
@@ -668,13 +669,9 @@ impl App {
                 .verdict_log_cache
                 .clear();
         }
-        let base = self.transcript.frame_window_start();
-        for sf in self
-            .transcript
-            .frames()
-            .iter()
-            .skip(self.verdict_cursor.saturating_sub(base))
-        {
+        let base = self.session.transcript.frame_window_start();
+        let frames = self.session.transcript.frames();
+        for sf in frames.iter().skip(self.verdict_cursor.saturating_sub(base)) {
             if let TranscriptFrame::Acpx(n) = sf.as_ref()
                 && matches!(n.method, AcpxMethod::ContextPermissionDecision)
                 && let Ok(entry) =
@@ -687,10 +684,10 @@ impl App {
                     .push(entry);
             }
         }
-        self.verdict_cursor = self.transcript.abs_frame_count();
+        self.verdict_cursor = self.session.transcript.abs_frame_count();
         self.session.todos.update(
-            self.transcript.frames(),
-            self.transcript.frame_window_start(),
+            self.session.transcript.frames(),
+            self.session.transcript.frame_window_start(),
             self.agent_busy(),
         );
     }

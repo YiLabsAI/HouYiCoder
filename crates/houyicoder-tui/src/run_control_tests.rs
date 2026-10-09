@@ -314,7 +314,7 @@ fn test_approve_yes_executes_tool() {
         boom.ran(),
         "the tool MUST actually execute after a human Yes"
     );
-    let leaked_error = app.transcript.iter().any(|l| match l {
+    let leaked_error = app.session.transcript.iter().any(|l| match l {
         TranscriptLine::Tool { body, .. } => body.contains("tool requires approval"),
         _ => false,
     });
@@ -322,7 +322,7 @@ fn test_approve_yes_executes_tool() {
         !leaked_error,
         "the guarded-tool re-check error must not leak as the tool result"
     );
-    assert!(app.transcript.iter().any(|l| matches!(
+    assert!(app.session.transcript.iter().any(|l| matches!(
         l,
         TranscriptLine::Agent(s) if s == "done"
     )));
@@ -369,7 +369,7 @@ fn test_reject_does_not_execute() {
     }
     assert!(settled, "resume should settle after reject");
     assert!(!boom.ran(), "the tool MUST NOT run after a human reject");
-    let rejected = app.transcript.iter().any(|l| match l {
+    let rejected = app.session.transcript.iter().any(|l| match l {
         TranscriptLine::Tool { body, .. } => body.contains("rejected by user"),
         _ => false,
     });
@@ -377,7 +377,7 @@ fn test_reject_does_not_execute() {
         rejected,
         "the rejected-by-user error must feed back as the tool result"
     );
-    assert!(app.transcript.iter().any(|l| matches!(
+    assert!(app.session.transcript.iter().any(|l| matches!(
         l,
         TranscriptLine::Agent(s) if s == "done"
     )));
@@ -416,11 +416,11 @@ fn test_handle_final_output_refreshes() {
     app.handle_agent_message(msg);
     assert!(!app.agent_busy());
     assert_eq!(app.status.tokens, 42);
-    assert!(app.transcript.iter().any(|l| matches!(
+    assert!(app.session.transcript.iter().any(|l| matches!(
         l,
         TranscriptLine::User(s) if s == "hi"
     )));
-    assert!(app.transcript.iter().any(|l| matches!(
+    assert!(app.session.transcript.iter().any(|l| matches!(
         l,
         TranscriptLine::Agent(s) if s == "hello back"
     )));
@@ -539,7 +539,7 @@ fn test_handle_error_records_system() {
     app.start_run_for_test(2);
     app.handle_agent_message(msg);
     assert!(!app.agent_busy());
-    assert!(app.transcript.iter().any(|l| matches!(
+    assert!(app.session.transcript.iter().any(|l| matches!(
         l,
         TranscriptLine::System(s) if s.contains("agent error")
     )));
@@ -563,7 +563,7 @@ fn test_spawn_run_final_output() {
         sleep(Duration::from_millis(10));
     }
     assert!(got, "agent message should arrive");
-    assert!(app.transcript.iter().any(|l| matches!(
+    assert!(app.session.transcript.iter().any(|l| matches!(
         l,
         TranscriptLine::Agent(s) if s.contains("real reply")
     )));
@@ -619,20 +619,23 @@ fn test_spawn_run_interruption() {
 #[test]
 fn test_rewind_drops_user_echo() {
     let mut app = composition::app();
-    app.transcript.push(TranscriptLine::User("hello".into()));
-    app.transcript.push_frame(user_msg("hello"));
-    app.transcript.push_frame(agent_msg("partial"));
+    app.session
+        .transcript
+        .push(TranscriptLine::User("hello".into()));
+    app.session.transcript.push_frame(user_msg("hello"));
+    app.session.transcript.push_frame(agent_msg("partial"));
     app.rewind_to_last_user_input();
     assert!(
-        app.transcript.frames().is_empty(),
+        app.session.transcript.frames().is_empty(),
         "user echo + partial turn content dropped from frames"
     );
     assert!(
-        !app.transcript
+        !app.session
+            .transcript
             .iter()
             .any(|l| matches!(l, TranscriptLine::User(s) if s == "hello")),
         "user echo dropped from transcript: {:?}",
-        app.transcript
+        app.session.transcript
     );
 }
 
@@ -691,7 +694,7 @@ fn test_resume_after_approval() {
     }
     assert!(got2, "resume message should arrive");
     assert!(app.approval().is_none());
-    assert!(app.transcript.iter().any(|l| matches!(
+    assert!(app.session.transcript.iter().any(|l| matches!(
         l,
         TranscriptLine::Agent(s) if s == "all done"
     )));
@@ -740,6 +743,7 @@ fn test_slash_queries_ship_connected() {
     for _ in 0..200 {
         app.poll_agent();
         if app
+            .session
             .transcript
             .iter()
             .any(|l| matches!(l, TranscriptLine::ContextGrid(_)))
@@ -749,7 +753,8 @@ fn test_slash_queries_ship_connected() {
         sleep(Duration::from_millis(10));
     }
     assert!(
-        app.transcript
+        app.session
+            .transcript
             .iter()
             .any(|l| matches!(l, TranscriptLine::ContextGrid(_))),
         "/context should land the breakdown grid"
@@ -913,7 +918,8 @@ fn test_forget_ships_queries_connected() {
         "a repeat d-press on the same row ships nothing new"
     );
     assert!(
-        !app.transcript
+        !app.session
+            .transcript
             .iter()
             .any(|l| matches!(l, TranscriptLine::System(s) if s.contains("forgetting"))),
         "no dangling in-progress line while the forget is in flight"
@@ -973,7 +979,7 @@ fn test_git_ops_ships_connected() {
     let mut app = app_with_provider(provider, ToolRegistry::new());
     app.input.set("/permissions git".to_string());
     app.submit_input();
-    assert!(app.transcript.iter().any(|l| matches!(
+    assert!(app.session.transcript.iter().any(|l| matches!(
         l,
         TranscriptLine::System(s) if s.contains("ask before git operations")
     )));
@@ -1050,14 +1056,15 @@ fn test_model_switch_applies() {
     // A rejected switch writes its reason as a pane outcome line; an applied
     // one writes the receipt below. The two are the reachable answers here.
     let failure_row = |app: &App| {
-        app.transcript
+        app.session
+            .transcript
             .iter()
             .any(|l| matches!(l, TranscriptLine::System(s) if s.starts_with("model: ")))
     };
     assert!(
         !failure_row(&app),
         "ModelSwitch wire round-trip must not error: {:?}",
-        app.transcript
+        app.session.transcript
     );
     assert_eq!(app.pane, Pane::Transcript, "the reply closes the pane");
     // The receipt is formatted from the reply, so it names the model the
@@ -1065,20 +1072,22 @@ fn test_model_switch_applies() {
     // host resolved and applied.
     let applied_id = app.status.model.clone();
     assert!(
-        app.transcript
+        app.session
+            .transcript
             .iter()
             .any(|l| matches!(l, TranscriptLine::System(s)
             if s.starts_with(&format!("Model set to {applied_id} ({applied_id})")))),
         "receipt names the resolved id: {:?}",
-        app.transcript
+        app.session.transcript
     );
     assert!(
-        !app.transcript
+        !app.session
+            .transcript
             .iter()
             .any(|l| matches!(l, TranscriptLine::System(s)
             if s.trim() == "model: Default")),
         "no bare model: Default line: {:?}",
-        app.transcript
+        app.session.transcript
     );
 }
 
@@ -1147,7 +1156,7 @@ fn acpx_frame(method: AcpxMethod, params: serde_json::Value) -> TranscriptFrame 
 fn test_batch_keeps_mark() {
     let (tx, rx) = mpsc::channel::<SessionMessage>();
     let mut app = composition::app();
-    app.transcript.reset();
+    app.session.transcript.reset();
     app.session.connection = Some(SessionConnection::from_receiver(rx));
     app.session.run.start(RequestId(0), Instant::now());
     let send = |frame: TranscriptFrame| {
@@ -1164,7 +1173,8 @@ fn test_batch_keeps_mark() {
         serde_json::json!({}),
     ));
     let rows = |app: &App| {
-        app.transcript
+        app.session
+            .transcript
             .iter()
             .filter(|l| matches!(l, TranscriptLine::ThoughtFor { .. }))
             .count()
@@ -1190,7 +1200,7 @@ fn test_batch_keeps_mark() {
 fn test_batch_keeps_identity() {
     let (tx, rx) = mpsc::channel::<SessionMessage>();
     let mut app = composition::app();
-    app.transcript.reset();
+    app.session.transcript.reset();
     app.session.connection = Some(SessionConnection::from_receiver(rx));
     let send = |seq: u64, id: &str, text: &str| {
         tx.send(SessionMessage::Event(ServerEvent::Frame(SequencedFrame {
@@ -1204,6 +1214,7 @@ fn test_batch_keeps_identity() {
     send(2, "01ARZ3NDEKTSV4RRFFQ69G5FBW", "second");
     app.poll_agent();
     let ids: Vec<Option<&str>> = app
+        .session
         .transcript
         .frames()
         .iter()

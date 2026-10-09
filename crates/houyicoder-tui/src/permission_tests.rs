@@ -56,7 +56,8 @@ fn run(app: &mut App, cmd: &str) {
 }
 
 fn last_system(app: &App) -> String {
-    app.transcript
+    app.session
+        .transcript
         .iter()
         .rev()
         .find_map(|l| match l {
@@ -293,7 +294,7 @@ fn test_git_show_disconnected() {
         last_system(&app)
     );
     assert!(
-        !app.transcript.iter().any(|l| matches!(l, crate::state::TranscriptLine::System(s) if s.contains("ask before git operations:"))),
+        !app.session.transcript.iter().any(|l| matches!(l, crate::state::TranscriptLine::System(s) if s.contains("ask before git operations:"))),
         "no cached-state line is shown while disconnected"
     );
 }
@@ -365,6 +366,7 @@ fn test_open_no_transcript_hint() {
     app.submit_input();
     assert_eq!(app.pane, Pane::Permission);
     let systems: Vec<String> = app
+        .session
         .transcript
         .iter()
         .rev()

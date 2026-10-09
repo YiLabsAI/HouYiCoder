@@ -189,8 +189,8 @@ mod tests {
             folded_transcript: Vec::new(),
             color: None,
         });
-        let v = app.transcript.revision();
-        app.agents.refresh(&app.transcript, v);
+        let v = app.session.transcript.revision();
+        app.agents.refresh(&app.session.transcript, v);
         let out = render(&app, 60, 8);
         assert!(
             out.contains("found the auth path"),

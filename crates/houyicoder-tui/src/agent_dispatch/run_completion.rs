@@ -25,7 +25,7 @@ impl super::App {
         let active = self.session.run.finish();
         self.session.prompt = None;
         self.rebuild_transcript();
-        self.debug_render_done(self.transcript.frames());
+        self.debug_render_done(self.session.transcript.frames());
         let was_final = match result {
             Ok(run) => {
                 self.status.tokens = run.usage.total_tokens as u64;
@@ -51,7 +51,7 @@ impl super::App {
                             Some(text)
                                 if !had_live_output
                                     && !should_preserve_interrupted_turn(
-                                        self.transcript.frames(),
+                                        self.session.transcript.frames(),
                                     )
                                     && self.input.is_empty() =>
                             {
@@ -124,6 +124,7 @@ mod tests {
             stop_reason: StopReason::EndTurn,
         }));
         let has_thought = app
+            .session
             .transcript
             .iter()
             .any(|l| matches!(l, TranscriptLine::ThoughtFor { .. }));
@@ -141,16 +142,16 @@ mod tests {
         use houyicoder_protocol::frontend::session_update::{ContentChunk, SessionUpdate};
         use houyicoder_protocol::llm::Usage;
         let mut app = crate::composition::app();
-        app.transcript
-            .push_frame(TranscriptFrame::Session(SessionUpdate::UserMessageChunk(
-                ContentChunk::new(ContentBlock::Text { text: "go".into() }),
-            )));
-        app.transcript
-            .push_frame(TranscriptFrame::Session(SessionUpdate::AgentThoughtChunk(
-                ContentChunk::new(ContentBlock::Text {
-                    text: "weighing the options".into(),
-                }),
-            )));
+        app.session.transcript.push_frame(TranscriptFrame::Session(
+            SessionUpdate::UserMessageChunk(ContentChunk::new(ContentBlock::Text {
+                text: "go".into(),
+            })),
+        ));
+        app.session.transcript.push_frame(TranscriptFrame::Session(
+            SessionUpdate::AgentThoughtChunk(ContentChunk::new(ContentBlock::Text {
+                text: "weighing the options".into(),
+            })),
+        ));
         app.handle_run_completion(Ok(RunResult {
             outcome: RunOutcome::FinalOutput {
                 content: vec![ContentBlock::Text {
@@ -161,7 +162,7 @@ mod tests {
             turns: 1,
             stop_reason: StopReason::EndTurn,
         }));
-        let has_thought = app.transcript.iter().any(|l| {
+        let has_thought = app.session.transcript.iter().any(|l| {
             matches!(
                 l,
                 TranscriptLine::ThoughtFor { reasoning: Some(r), .. }

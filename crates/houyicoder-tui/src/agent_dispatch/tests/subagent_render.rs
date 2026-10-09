@@ -9,7 +9,7 @@ fn test_subagent_renders_collapsed() {
     use crate::records::TranscriptLine;
     let mut app = crate::composition::app();
     app.screen = crate::state::Screen::Working;
-    app.transcript.push(TranscriptLine::Subagent {
+    app.session.transcript.push(TranscriptLine::Subagent {
         child_sid: "child-1".into(),
         subagent_type: "explore".into(),
         summary: "found auth module".into(),
@@ -35,7 +35,7 @@ fn test_subagent_renders_expanded() {
     use crate::records::TranscriptLine;
     let mut app = crate::composition::app();
     app.screen = crate::state::Screen::Working;
-    app.transcript.push(TranscriptLine::Subagent {
+    app.session.transcript.push(TranscriptLine::Subagent {
         child_sid: "child-1".into(),
         subagent_type: "explore".into(),
         summary: "found auth module".into(),
@@ -67,7 +67,7 @@ fn test_subagent_expanded_renders_child() {
     use crate::records::TranscriptLine;
     let mut app = crate::composition::app();
     app.screen = crate::state::Screen::Working;
-    app.transcript.push(TranscriptLine::Subagent {
+    app.session.transcript.push(TranscriptLine::Subagent {
         child_sid: "child-1".into(),
         subagent_type: "explore".into(),
         summary: "found auth module".into(),
@@ -95,7 +95,7 @@ fn test_subagent_toggle_expand() {
     use crate::records::TranscriptLine;
     let mut app = crate::composition::app();
     app.screen = crate::state::Screen::Working;
-    app.transcript.push(TranscriptLine::Subagent {
+    app.session.transcript.push(TranscriptLine::Subagent {
         child_sid: "child-1".into(),
         subagent_type: "explore".into(),
         summary: "found auth".into(),
@@ -127,7 +127,7 @@ fn test_child_transcript_fills() {
     use crate::records::TranscriptLine;
     let mut app = crate::composition::app();
     app.screen = crate::state::Screen::Working;
-    app.transcript.push(TranscriptLine::Subagent {
+    app.session.transcript.push(TranscriptLine::Subagent {
         child_sid: "child-1".into(),
         subagent_type: "explore".into(),
         summary: "found auth".into(),
@@ -151,6 +151,7 @@ fn test_child_transcript_fills() {
         },
     });
     let folded = app
+        .session
         .transcript
         .iter()
         .find_map(|l| match l {
@@ -186,8 +187,10 @@ fn test_subagent_toggle_repaints() {
     use crate::records::TranscriptLine;
     let mut app = crate::composition::app();
     app.screen = crate::state::Screen::Working;
-    app.transcript.push(TranscriptLine::User("task".into()));
-    app.transcript.push(TranscriptLine::Subagent {
+    app.session
+        .transcript
+        .push(TranscriptLine::User("task".into()));
+    app.session.transcript.push(TranscriptLine::Subagent {
         child_sid: "c1".into(),
         subagent_type: "explore".into(),
         summary: "found auth".into(),
@@ -224,7 +227,7 @@ fn test_child_fetch_repaints() {
     use crate::records::TranscriptLine;
     let mut app = crate::composition::app();
     app.screen = crate::state::Screen::Working;
-    app.transcript.push(TranscriptLine::Subagent {
+    app.session.transcript.push(TranscriptLine::Subagent {
         child_sid: "child-1".into(),
         subagent_type: "explore".into(),
         summary: "found auth".into(),
@@ -266,7 +269,7 @@ fn test_ctrl_o_fallthrough() {
     use crate::records::TranscriptLine;
     let mut app = crate::composition::app();
     app.screen = crate::state::Screen::Working;
-    app.transcript.push(TranscriptLine::ThoughtFor {
+    app.session.transcript.push(TranscriptLine::ThoughtFor {
         ms: Some(3_000),
         reasoning: Some("pondered the task".into()),
         tool_summary: None,
@@ -307,8 +310,10 @@ fn test_subagent_expand_stable_index() {
     use crate::records::TranscriptLine;
     let mut app = crate::composition::app();
     app.screen = crate::state::Screen::Working;
-    app.transcript.push(TranscriptLine::User("task".into()));
-    app.transcript.push(TranscriptLine::Subagent {
+    app.session
+        .transcript
+        .push(TranscriptLine::User("task".into()));
+    app.session.transcript.push(TranscriptLine::Subagent {
         child_sid: "child-1".into(),
         subagent_type: "explore".into(),
         summary: "found auth".into(),
@@ -316,25 +321,44 @@ fn test_subagent_expand_stable_index() {
         folded_transcript: vec![TranscriptLine::Agent("child reply".into())],
         color: None,
     });
-    app.transcript
+    app.session
+        .transcript
         .push(TranscriptLine::Agent("parent result".into()));
     // Content row indices: User=0, Subagent=1, Agent=2.
-    assert!(matches!(app.transcript[0], TranscriptLine::User(_)));
-    assert!(matches!(app.transcript[1], TranscriptLine::Subagent { .. }));
-    assert!(matches!(app.transcript[2], TranscriptLine::Agent(_)));
+    assert!(matches!(app.session.transcript[0], TranscriptLine::User(_)));
+    assert!(matches!(
+        app.session.transcript[1],
+        TranscriptLine::Subagent { .. }
+    ));
+    assert!(matches!(
+        app.session.transcript[2],
+        TranscriptLine::Agent(_)
+    ));
     // Expand the Subagent — the transcript Vec does not change.
     app.transcript_view
         .expanded
         .subagents
         .insert("child-1".into());
-    assert!(matches!(app.transcript[0], TranscriptLine::User(_)));
-    assert!(matches!(app.transcript[1], TranscriptLine::Subagent { .. }));
-    assert!(matches!(app.transcript[2], TranscriptLine::Agent(_)));
+    assert!(matches!(app.session.transcript[0], TranscriptLine::User(_)));
+    assert!(matches!(
+        app.session.transcript[1],
+        TranscriptLine::Subagent { .. }
+    ));
+    assert!(matches!(
+        app.session.transcript[2],
+        TranscriptLine::Agent(_)
+    ));
     // Collapse — still stable.
     app.transcript_view.expanded.subagents.remove("child-1");
-    assert!(matches!(app.transcript[0], TranscriptLine::User(_)));
-    assert!(matches!(app.transcript[1], TranscriptLine::Subagent { .. }));
-    assert!(matches!(app.transcript[2], TranscriptLine::Agent(_)));
+    assert!(matches!(app.session.transcript[0], TranscriptLine::User(_)));
+    assert!(matches!(
+        app.session.transcript[1],
+        TranscriptLine::Subagent { .. }
+    ));
+    assert!(matches!(
+        app.session.transcript[2],
+        TranscriptLine::Agent(_)
+    ));
 }
 
 /// line_display_rows must match the render row count for a Subagent:

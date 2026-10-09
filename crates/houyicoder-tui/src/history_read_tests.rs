@@ -28,7 +28,8 @@ fn working_app(rows: usize) -> App {
     let mut app = composition::app();
     app.screen = Screen::Working;
     for i in 0..rows {
-        app.transcript
+        app.session
+            .transcript
             .push_frame(user_frame(&format!("resident row {i}")));
     }
     app.rebuild_transcript();
@@ -47,8 +48,8 @@ fn landed_rows(text: &str, anchor: u64) -> HistoryReadOutcome {
 fn inject_read(app: &mut App) -> mpsc::Sender<HistoryReadOutcome> {
     app.whole_scroll_mut().jump_to(0);
     let (tx, rx) = mpsc::channel::<HistoryReadOutcome>();
-    let front = app.transcript.frame_window_start();
-    let disk_front = app.transcript.disk_front();
+    let front = app.session.transcript.frame_window_start();
+    let disk_front = app.session.transcript.disk_front();
     drop(app.session.history_reads.dispatch(front, disk_front, rx));
     tx
 }
@@ -68,9 +69,10 @@ fn test_reset_drops_pending_read() {
     tx.send(landed_rows("archived row", 100)).ok();
     app.pump_history_read();
 
-    assert_eq!(app.transcript.disk_row_count(), 0);
+    assert_eq!(app.session.transcript.disk_row_count(), 0);
     assert!(
-        app.transcript
+        app.session
+            .transcript
             .iter()
             .all(|line| line.render() != "archived row"),
         "a read dispatched before the reset never lands in the cleared view"
@@ -94,7 +96,7 @@ fn test_clear_stales_held_read() {
     app.pump_history_read();
 
     assert_eq!(
-        app.transcript.disk_row_count(),
+        app.session.transcript.disk_row_count(),
         0,
         "the epoch moved on, so the held record's result does not apply"
     );
@@ -116,7 +118,7 @@ fn test_rewind_spares_older_read() {
     app.pump_history_read();
 
     assert_eq!(
-        app.transcript.disk_row_count(),
+        app.session.transcript.disk_row_count(),
         1,
         "a rewind of the newest turn does not stale the older-history read"
     );
@@ -132,20 +134,20 @@ fn test_rewind_spares_older_read() {
 #[test]
 fn test_tail_return_stales_chain() {
     let mut app = working_app(30);
-    let front = app.transcript.frame_window_start();
-    app.transcript.prepend_disk_rows(
+    let front = app.session.transcript.frame_window_start();
+    app.session.transcript.prepend_disk_rows(
         vec![TranscriptLine::User("loaded older".into())],
         4096,
         front,
     );
-    assert_eq!(app.transcript.disk_front(), DiskFront::At(4096));
+    assert_eq!(app.session.transcript.disk_front(), DiskFront::At(4096));
     let tx = inject_read(&mut app);
 
     // The reader returns to the tail: the loaded stack is released.
     app.whole_scroll_mut().follow_tail();
     app.rebuild_transcript();
     assert_eq!(
-        app.transcript.disk_front(),
+        app.session.transcript.disk_front(),
         DiskFront::Unloaded,
         "the tail return released the loaded stack"
     );
@@ -157,7 +159,7 @@ fn test_tail_return_stales_chain() {
     app.pump_history_read();
 
     assert_eq!(
-        app.transcript.disk_row_count(),
+        app.session.transcript.disk_row_count(),
         0,
         "a chain read whose loaded stack was released does not apply"
     );
@@ -175,14 +177,14 @@ fn test_tail_return_stales_chain() {
 fn test_disconnect_clears_record() {
     let mut app = working_app(0);
     assert_ne!(
-        app.transcript.disk_front(),
+        app.session.transcript.disk_front(),
         DiskFront::Stopped,
         "the front is open before a dead worker latches it"
     );
     let (tx, rx) = mpsc::channel::<HistoryReadOutcome>();
     drop(tx);
-    let front = app.transcript.frame_window_start();
-    let disk_front = app.transcript.disk_front();
+    let front = app.session.transcript.frame_window_start();
+    let disk_front = app.session.transcript.disk_front();
     drop(app.session.history_reads.dispatch(front, disk_front, rx));
     assert!(
         app.session.history_reads.holds_pending(),
@@ -202,7 +204,7 @@ fn test_disconnect_clears_record() {
         "the record cleared, so the pump stops looking at a read that cannot land"
     );
     assert_eq!(
-        app.transcript.disk_front(),
+        app.session.transcript.disk_front(),
         DiskFront::Stopped,
         "the front latched to stop a re-dispatch storm"
     );

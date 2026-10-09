@@ -22,7 +22,7 @@ mod search_view;
 pub(crate) mod stage;
 mod teammate_view;
 mod trajectory;
-pub(crate) mod transcript;
+pub mod transcript;
 
 use crate::agent_message::{FleetState, PaneAgents};
 use crate::composition::WorktreeEntry;
@@ -135,7 +135,6 @@ pub struct App {
     /// Up/Down prompt history navigation (cache + cursor + draft + abort
     /// skip-set). Backed by a JSONL file at the config home.
     pub history: HistoryNav,
-    pub transcript: transcript::Transcript,
     /// Cursor into the frame log for the verdict audit cache. Stays on App:
     /// verdicts are an audit capability, not transcript content.
     pub verdict_cursor: usize,
@@ -285,6 +284,22 @@ pub struct App {
 }
 
 impl App {
+    /// The working transcript, borrowed for read paths and black-box tests.
+    /// The conversation lives on the session; App exposes one read handle so
+    /// callers do not reach through the session value.
+    pub fn transcript(&self) -> &transcript::Transcript {
+        &self.session.transcript
+    }
+
+    /// The working transcript, mutably borrowed for fixture setup and the
+    /// rebuild paths that inject resident frames. The write handle matches the
+    /// read handle so test fixtures reach the conversation the same way the
+    /// read assertions do instead of threading the session value.
+    #[cfg(test)]
+    pub(crate) fn transcript_mut(&mut self) -> &mut transcript::Transcript {
+        &mut self.session.transcript
+    }
+
     /// True while a run is in flight and not paused for approval. Excludes
     /// Waiting (the spinner stops while a card is up).
     pub fn agent_busy(&self) -> bool {
@@ -339,8 +354,9 @@ impl App {
         self.session.run.start(RequestId(req_id), Instant::now());
         // A running agent flips the tail fold group to active; recompute the
         // cache here because no rebuild follows a lines-built transcript.
-        let groups = crate::fold::compute_fold_groups(self.transcript.lines(), self.agent_busy());
-        *self.transcript.fold_groups_mut() = groups;
+        let groups =
+            crate::fold::compute_fold_groups(self.session.transcript.lines(), self.agent_busy());
+        *self.session.transcript.fold_groups_mut() = groups;
     }
 }
 
@@ -351,7 +367,7 @@ impl std::fmt::Debug for App {
             .field("stage", &self.workflow.stage)
             .field("pane", &self.pane)
             .field("viewport", &self.viewport)
-            .field("transcript_len", &self.transcript.len())
+            .field("transcript_len", &self.session.transcript.len())
             .field("agent_busy", &self.agent_busy())
             .field("prompt", &self.session.prompt)
             .field("quit", &self.quit)

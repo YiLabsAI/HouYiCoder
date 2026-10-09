@@ -42,7 +42,7 @@ fn test_transcript_diff_gutter_gap() {
     new.push_str("fn bar() {\n    let b = TWO;\n}\n");
     let diff = houyicoder_core::agent::unified_diff(&orig, &new, 3);
     let body = format!("{}\n{}", crate::brief::edit_diff_summary(2, 2), diff);
-    app.transcript = vec![
+    app.session.transcript = vec![
         TranscriptLine::User("update foo and bar".into()),
         TranscriptLine::Tool {
             name: "result".into(),
@@ -89,7 +89,7 @@ fn test_transcript_diff_bg_fill() {
     let new = "fn foo() {\n    let a = ONE;\n}\n";
     let diff = houyicoder_core::agent::unified_diff(orig, new, 3);
     let body = format!("{}\n{}", crate::brief::edit_diff_summary(1, 1), diff);
-    app.transcript = vec![TranscriptLine::Tool {
+    app.session.transcript = vec![TranscriptLine::Tool {
         name: "result".into(),
         tool: "result".into(),
         status: String::new(),
@@ -142,7 +142,7 @@ fn test_transcript_diff_word_highlight() {
     let new = "fn foo() {\n    let x = 2;\n}\n";
     let diff = houyicoder_core::agent::unified_diff(orig, new, 3);
     let body = format!("{}\n{}", crate::brief::edit_diff_summary(1, 1), diff);
-    app.transcript = vec![TranscriptLine::Tool {
+    app.session.transcript = vec![TranscriptLine::Tool {
         name: "result".into(),
         tool: "result".into(),
         status: String::new(),
@@ -207,7 +207,7 @@ fn test_transcript_diff_wraps() {
     let new = "fn foo() {\n    let x = ONE_TWO_THREE_FOUR_FIVE_SIX_SEVEN_EIGHT;\n}\n";
     let diff = houyicoder_core::agent::unified_diff(orig, new, 3);
     let body = format!("{}\n{}", crate::brief::edit_diff_summary(1, 1), diff);
-    app.transcript = vec![TranscriptLine::Tool {
+    app.session.transcript = vec![TranscriptLine::Tool {
         name: "result".into(),
         tool: "result".into(),
         status: String::new(),
@@ -447,7 +447,7 @@ fn test_edit_diff_not_folded() {
     let body = format!("{}\n{}", crate::brief::edit_diff_summary(1, 1), diff);
     // Real flow: a call row (name "Update") + its diff result row. NOT
     // the results set — the default view is what we assert on.
-    app.transcript = vec![
+    app.session.transcript = vec![
         TranscriptLine::User("update foo".into()),
         TranscriptLine::Tool {
             name: "Update".into(),
@@ -489,7 +489,7 @@ fn test_edit_diff_not_folded() {
 #[test]
 fn test_agent_markdown_count_matches() {
     let mut app = working();
-    app.transcript = vec![
+    app.session.transcript = vec![
         TranscriptLine::User("go".to_string()),
         TranscriptLine::Agent("para one\n\npara two\n\n```rust\nfn main() {}\n```".into()),
     ]
@@ -510,7 +510,7 @@ fn test_agent_markdown_count_matches() {
 fn test_agent_markdown_wraps_narrow() {
     let mut app = working();
     let long = "this is a very long agent paragraph that must soft-wrap to multiple rows at a narrow pane width and not drift the count";
-    app.transcript = vec![
+    app.session.transcript = vec![
         TranscriptLine::User("hi".to_string()),
         TranscriptLine::Agent(long.into()),
     ]
@@ -536,7 +536,7 @@ fn test_agent_markdown_wraps_narrow() {
 fn test_user_message_wraps_narrow() {
     let mut app = working();
     let long = "this is a very long user prompt that must soft-wrap to multiple rows at a narrow pane width and not drift the count";
-    app.transcript = vec![TranscriptLine::User(long.into())].into();
+    app.session.transcript = vec![TranscriptLine::User(long.into())].into();
     let out = render_text(&app, 30, 24);
     let count = app.transcript_display_rows();
     let rendered = app.whole_scroll().total.get();
@@ -564,7 +564,7 @@ fn test_resize_narrow_rebuilds_tail() {
     let mut app = working();
     let tail = "ZZZ_TAIL_MARKER_ZZZ";
     let long = format!("{}{}", "x".repeat(80), tail);
-    app.transcript = vec![TranscriptLine::User(long)].into();
+    app.session.transcript = vec![TranscriptLine::User(long)].into();
     // Wide render caches the slot text at width 120 (tail on row 1, fits).
     let _wide = render_text(&app, 120, 24);
     // Narrow render: width changed -> cache rebuilds -> tail wraps to a
@@ -582,7 +582,7 @@ fn test_resize_narrow_rebuilds_tail() {
 fn test_user_multiline_count_matches() {
     let mut app = working();
     let multi = "line one is long enough to wrap at this narrow width\nline two\nline three also long enough to wrap";
-    app.transcript = vec![TranscriptLine::User(multi.into())].into();
+    app.session.transcript = vec![TranscriptLine::User(multi.into())].into();
     let out = render_text(&app, 30, 24);
     let count = app.transcript_display_rows();
     let rendered = app.whole_scroll().total.get();
@@ -600,7 +600,7 @@ fn test_user_multiline_count_matches() {
 fn test_thought_expand_wraps_narrow() {
     let mut app = working();
     let reasoning = "this is a very long reasoning line that must soft-wrap to multiple rows when expanded at a narrow pane width and not drift the count";
-    app.transcript = vec![
+    app.session.transcript = vec![
         TranscriptLine::User("go".into()),
         TranscriptLine::Agent("ok".into()),
         TranscriptLine::ThoughtFor {
@@ -666,7 +666,7 @@ fn test_expanded_results_callid_collide() {
         body: body.to_string(),
         is_diff: false,
     };
-    app.transcript = vec![
+    app.session.transcript = vec![
         TranscriptLine::User("turn one".into()),
         call("c1", "cmd1"),
         result("c1", &r1),
@@ -725,7 +725,7 @@ fn test_verbose_count_matches() {
         .map(|i| format!("reasoning step {i} happens here"))
         .collect::<Vec<_>>()
         .join("\n");
-    app.transcript = vec![
+    app.session.transcript = vec![
         TranscriptLine::User("search".into()),
         TranscriptLine::ThoughtFor {
             ms: Some(5_000),

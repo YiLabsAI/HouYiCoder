@@ -39,11 +39,12 @@ fn app_with_parent(parent_rows: usize) -> App {
     let mut app = crate::composition::app();
     app.screen = crate::state::Screen::Working;
     for i in 0..parent_rows {
-        app.transcript
+        app.session
+            .transcript
             .push_frame(user_frame(&format!("parent row {i}")));
     }
     app.rebuild_transcript();
-    app.transcript.push(subagent_line(40));
+    app.session.transcript.push(subagent_line(40));
     app
 }
 
@@ -115,7 +116,8 @@ fn test_child_tail_spares_parent() {
     let mut app = crate::composition::app();
     app.screen = crate::state::Screen::Working;
     for i in 0..60 {
-        app.transcript
+        app.session
+            .transcript
             .push_frame(user_frame(&format!("parent row {i}")));
     }
     app.rebuild_transcript();
@@ -126,8 +128,8 @@ fn test_child_tail_spares_parent() {
         app.transcript_view.unseen_since.is_some(),
         "the parent marked where the reader scrolled away"
     );
-    app.transcript.push(subagent_line(40));
-    let len_before = app.transcript.lines().len();
+    app.session.transcript.push(subagent_line(40));
+    let len_before = app.session.transcript.lines().len();
     let top_before = app.whole_scroll().raw_top();
 
     assert!(app.enter_teammate_view());
@@ -141,7 +143,7 @@ fn test_child_tail_spares_parent() {
     );
 
     assert_eq!(
-        app.transcript.lines().len(),
+        app.session.transcript.lines().len(),
         len_before,
         "no parent trim ran"
     );
@@ -163,14 +165,14 @@ fn test_child_tail_spares_parent() {
 fn test_child_blocks_parent_reads() {
     let mut app = crate::composition::app();
     app.screen = crate::state::Screen::Working;
-    app.transcript.set_resident_byte_budget(4096);
+    app.session.transcript.set_resident_byte_budget(4096);
     let text = "x".repeat(200);
     for _ in 0..40 {
-        app.transcript.push_frame(user_frame(&text));
+        app.session.transcript.push_frame(user_frame(&text));
     }
     app.rebuild_transcript();
     app.rebuild_transcript();
-    app.transcript.push(subagent_line(2));
+    app.session.transcript.push(subagent_line(2));
     app.whole_scroll_mut().jump_to(0);
     app.persistence.snapshot = Some(Arc::new(MockSnapshot {
         lines: Vec::new(),
@@ -204,8 +206,8 @@ fn test_parent_read_spares_child() {
     let mut app = app_with_parent(5);
     app.whole_scroll_mut().jump_to(0);
     let (tx, rx) = mpsc::channel::<HistoryReadOutcome>();
-    let front = app.transcript.frame_window_start();
-    let disk_front = app.transcript.disk_front();
+    let front = app.session.transcript.frame_window_start();
+    let disk_front = app.session.transcript.disk_front();
     drop(app.session.history_reads.dispatch(front, disk_front, rx));
 
     assert!(app.enter_teammate_view());
@@ -220,7 +222,7 @@ fn test_parent_read_spares_child() {
     assert!(app.pump_history_read(), "the parent read landed");
 
     assert_eq!(
-        app.transcript.disk_row_count(),
+        app.session.transcript.disk_row_count(),
         1,
         "the rows went into the parent transcript"
     );

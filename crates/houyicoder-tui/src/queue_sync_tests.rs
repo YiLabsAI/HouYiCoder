@@ -159,7 +159,8 @@ fn test_pending_head_empty_noop() {
 fn test_busy_clear_enqueues_feedback() {
     let mut app = working();
     app.start_run_for_test(0);
-    app.transcript
+    app.session
+        .transcript
         .push(TranscriptLine::User("pre-clear".into()));
     app.input.set("/clear".to_string());
     app.submit_input();
@@ -169,7 +170,7 @@ fn test_busy_clear_enqueues_feedback() {
         "/clear enqueued as a Command mid-run"
     );
     assert!(
-        !app.transcript.is_empty(),
+        !app.session.transcript.is_empty(),
         "transcript NOT cleared mid-run (clear deferred)"
     );
 }
@@ -179,11 +180,14 @@ fn test_busy_clear_enqueues_feedback() {
 #[test]
 fn test_drain_command_dispatches_clear() {
     let mut app = working();
-    app.transcript.push(TranscriptLine::User("stale".into()));
+    app.session
+        .transcript
+        .push(TranscriptLine::User("stale".into()));
     app.pending.push(PendingItem::Command("/clear".into()));
     assert!(app.drain_pending_head(), "Command drained");
     assert!(
-        !app.transcript
+        !app.session
+            .transcript
             .iter()
             .any(|l| matches!(l, TranscriptLine::User(_))),
         "clear dispatched (User lines cleared; the archive notice remains)"

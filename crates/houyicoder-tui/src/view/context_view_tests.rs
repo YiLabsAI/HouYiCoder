@@ -486,6 +486,7 @@ fn test_grid_inline_renders_suggestions() {
 fn test_grid_variant_pushed_inline() {
     let app = working_app();
     let has_grid = app
+        .session
         .transcript
         .iter()
         .any(|l| matches!(l, crate::records::TranscriptLine::ContextGrid(_)));

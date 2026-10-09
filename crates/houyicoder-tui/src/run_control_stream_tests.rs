@@ -34,14 +34,15 @@ fn test_reasoning_streams_and_persists() {
     assert!(got, "run should settle");
     // The durable Reasoning event lands as a first-class Thinking line.
     assert!(
-        app.transcript
+        app.session
+            .transcript
             .iter()
             .any(|l| matches!(l, TranscriptLine::Thinking { text } if text.contains("pondering"))),
         "durable Thinking line missing: {:?}",
-        app.transcript
+        app.session.transcript
     );
     // And the assistant text follows it.
-    assert!(app.transcript.iter().any(|l| matches!(
+    assert!(app.session.transcript.iter().any(|l| matches!(
         l,
         TranscriptLine::Agent(s) if s.contains("answer")
     )));
@@ -85,7 +86,7 @@ fn test_run_row_from_record() {
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
     assert!(settled, "run should settle within the poll window");
-    let row = app.transcript.iter().find_map(|l| match l {
+    let row = app.session.transcript.iter().find_map(|l| match l {
         TranscriptLine::ThoughtFor {
             reasoning, turn_id, ..
         } => Some((reasoning.clone(), turn_id.clone())),
@@ -138,6 +139,7 @@ fn test_streamed_tail_survives_done() {
     // text is the full streamed reply. Concatenate every Agent line so a split
     // across lines (e.g. a length-recovery continuation) still passes.
     let agent_text = app
+        .session
         .transcript
         .iter()
         .filter_map(|l| match l {
@@ -183,7 +185,8 @@ fn test_durable_clears_preview() {
     assert!(p.live_assistant_text.is_empty());
     assert!(!p.live_active);
     assert_eq!(
-        app.transcript
+        app.session
+            .transcript
             .iter()
             .filter(|line| matches!(line, TranscriptLine::Agent(text) if text == "same paragraph"))
             .count(),
@@ -217,11 +220,13 @@ fn test_midturn_keeps_order() {
     )));
 
     let user = app
+        .session
         .transcript
         .iter()
         .position(|line| matches!(line, TranscriptLine::User(text) if text == "interjection"))
         .expect("interjection line");
     let responses: Vec<_> = app
+        .session
         .transcript
         .iter()
         .enumerate()
@@ -266,7 +271,8 @@ fn test_interrupted_content_shows_marker() {
     app.handle_agent_message(msg);
     assert!(!app.agent_busy(), "Interrupted clears busy");
     assert!(
-        app.transcript
+        app.session
+            .transcript
             .iter()
             .any(|l| matches!(l, TranscriptLine::Interrupted)),
         "Interrupted lands a visible marker row even with real content"
@@ -303,13 +309,15 @@ fn test_interrupt_restores_input() {
     app.handle_agent_message(msg);
     assert_eq!(app.input.value(), "draft", "input restored for editing");
     assert!(
-        app.transcript
+        app.session
+            .transcript
             .iter()
             .any(|l| matches!(l, TranscriptLine::System(s) if s == "input restored")),
         "restoring abort keeps its input-restored row"
     );
     assert!(
-        app.transcript
+        app.session
+            .transcript
             .iter()
             .any(|l| matches!(l, TranscriptLine::Interrupted)),
         "restoring abort also lands the Interrupted marker"
@@ -367,7 +375,8 @@ fn test_commit_blocks_restore() {
 
     assert!(app.input.is_empty(), "stale origin is not restored");
     assert!(
-        app.transcript
+        app.session
+            .transcript
             .iter()
             .any(|line| matches!(line, TranscriptLine::User(text) if text == "follow-up"))
     );
@@ -463,7 +472,8 @@ fn test_recall_survives_interrupt() {
         "popped text survives the interrupt's input restore"
     );
     assert!(
-        app.transcript
+        app.session
+            .transcript
             .iter()
             .any(|l| matches!(l, TranscriptLine::Interrupted)),
         "interrupt marker still lands"
@@ -506,13 +516,15 @@ fn test_resubmit_avoids_duplicate_interrupt() {
         },
     };
     let interrupts = |app: &App| {
-        app.transcript
+        app.session
+            .transcript
             .iter()
             .filter(|l| matches!(l, TranscriptLine::Interrupted))
             .count()
     };
     let restore_notices = |app: &App| {
-        app.transcript
+        app.session
+            .transcript
             .iter()
             .filter(|l| matches!(l, TranscriptLine::System(s) if s == "input restored"))
             .count()
@@ -545,13 +557,13 @@ fn test_resubmit_avoids_duplicate_interrupt() {
         interrupts(&app),
         1,
         "the resubmit stripped the prior pair; one Interrupted remains: {:?}",
-        app.transcript
+        app.session.transcript
     );
     assert_eq!(
         restore_notices(&app),
         1,
         "only the new restore notice remains: {:?}",
-        app.transcript
+        app.session.transcript
     );
 }
 
@@ -574,7 +586,7 @@ fn test_max_turns_records_hint() {
     app.start_run_for_test(16);
     app.handle_agent_message(msg);
     assert!(!app.agent_busy());
-    assert!(app.transcript.iter().any(|l| matches!(
+    assert!(app.session.transcript.iter().any(|l| matches!(
         l,
         TranscriptLine::System(s) if s.contains("reached max turns limit")
     )));
@@ -758,13 +770,15 @@ fn test_submit_clears_lone_interrupt() {
         },
     });
     assert!(
-        app.transcript
+        app.session
+            .transcript
             .iter()
             .any(|l| matches!(l, TranscriptLine::Interrupted)),
         "the interrupted run lands its notice"
     );
     assert!(
-        !app.transcript
+        !app.session
+            .transcript
             .iter()
             .any(|l| matches!(l, TranscriptLine::System(s) if s == "input restored")),
         "real output means no restore line, so the notice stands alone"
@@ -772,10 +786,11 @@ fn test_submit_clears_lone_interrupt() {
     // The next submission answers the notice.
     app.spawn_run("second".into());
     assert!(
-        !app.transcript
+        !app.session
+            .transcript
             .iter()
             .any(|l| matches!(l, TranscriptLine::Interrupted)),
         "an answered notice must not ride into the next turn: {:?}",
-        app.transcript
+        app.session.transcript
     );
 }

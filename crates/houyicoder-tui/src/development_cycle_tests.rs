@@ -33,7 +33,7 @@ fn test_auto_start_task_enters() {
     assert_eq!(app.pane, Pane::Spec);
     assert!(
         matches!(
-            app.transcript.last(),
+            app.session.transcript.last(),
             Some(TranscriptLine::System(s)) if s.contains("drafting design")
         ),
         "should log the design-draft transition"
@@ -54,7 +54,7 @@ fn test_rewind_unapproves_artifact() {
     );
     assert!(
         matches!(
-            app.transcript.last(),
+            app.session.transcript.last(),
             Some(TranscriptLine::System(s)) if s.contains("un-approved")
         ),
         "should log the un-approve note"

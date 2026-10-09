@@ -87,7 +87,7 @@ impl App {
                 );
             }
             None => {
-                let live = self.transcript.lines().to_vec();
+                let live = self.session.transcript.lines().to_vec();
                 self.transcript_view.search_corpus.enter_fallback(live);
             }
         }
@@ -175,7 +175,7 @@ impl App {
         } else if self.transcript_view.search.active {
             self.transcript_view.search_corpus.lines()
         } else {
-            self.transcript.lines()
+            self.session.transcript.lines()
         }
     }
 
@@ -187,7 +187,7 @@ impl App {
         let t: &[crate::records::TranscriptLine] = if self.transcript_view.search.active {
             self.transcript_view.search_corpus.lines()
         } else {
-            self.transcript.lines()
+            self.session.transcript.lines()
         };
         self.transcript_view.search.run(t);
     }

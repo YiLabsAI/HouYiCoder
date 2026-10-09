@@ -13,7 +13,8 @@ use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::frontend::trust::TrustPrompt;
 
 fn last_line(app: &crate::state::App) -> String {
-    app.transcript
+    app.session
+        .transcript
         .iter()
         .rev()
         .find_map(|l| match l {
@@ -40,7 +41,8 @@ fn test_spawn_refused() {
     );
     assert!(app.session.last_run_input.is_none(), "input stays editable");
     assert!(
-        !app.transcript
+        !app.session
+            .transcript
             .iter()
             .any(|l| matches!(l, crate::state::TranscriptLine::User(_))),
         "no optimistic user echo without delivery"

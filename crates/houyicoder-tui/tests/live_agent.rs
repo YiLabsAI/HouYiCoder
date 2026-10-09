@@ -128,7 +128,7 @@ fn test_live_bash_tool_roundtrip() {
     assert!(
         app.approval().is_some(),
         "expected an approval popup (model should call bash), got: {:?}",
-        app.transcript
+        app.transcript()
             .iter()
             .map(|l| l.render())
             .collect::<Vec<_>>()
@@ -152,7 +152,7 @@ fn test_live_bash_tool_roundtrip() {
         "agent did not finish after resume within 90s"
     );
     let transcript = app
-        .transcript
+        .transcript()
         .iter()
         .map(|l| l.render())
         .collect::<Vec<_>>()
@@ -176,18 +176,18 @@ fn test_chat_replies_to_greeting() {
     app.spawn_run("say hello in one short sentence".into());
     assert!(drain(&mut app, 30_000), "agent did not reply within 30s");
     let has_reply = app
-        .transcript
+        .transcript()
         .iter()
         .any(|l| matches!(l, TranscriptLine::Agent(s) if !s.is_empty()));
     assert!(has_reply, "transcript should carry a real agent reply");
     let is_stub = app
-        .transcript
+        .transcript()
         .iter()
         .any(|l| matches!(l, TranscriptLine::Agent(s) if s.contains("stub mode")));
     assert!(!is_stub, "should not be the stub fallback reply");
     println!(
         "transcript rows: {}",
-        app.transcript
+        app.transcript()
             .iter()
             .map(|l| l.render())
             .collect::<Vec<_>>()

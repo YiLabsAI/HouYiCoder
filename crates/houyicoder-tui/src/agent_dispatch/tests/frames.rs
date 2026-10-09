@@ -106,7 +106,7 @@ fn test_transcript_shows_redundant_calls() {
         },
     });
     assert!(
-        app.transcript.iter().any(|l| matches!(
+        app.session.transcript.iter().any(|l| matches!(
             l,
             TranscriptLine::System(s) if s.contains("same-message repeat")
         )),
@@ -147,7 +147,7 @@ fn test_apply_keeps_identity() {
         event_id: Some(DurableEventId("01ARZ3NDEKTSV4RRFFQ69G5FAV".into())),
         frame: tool_call_frame("call_1", "glob", ToolCallStatus::InProgress),
     })));
-    let stored = app.transcript.frames();
+    let stored = app.session.transcript.frames();
     assert_eq!(stored.len(), 1, "the frame landed in the log");
     assert_eq!(
         stored[0].event_id.as_ref().map(|id| id.0.as_str()),
@@ -414,7 +414,7 @@ fn test_pane_shows_command_result() {
             }),
         },
     });
-    assert!(app.transcript.iter().any(|line| matches!(
+    assert!(app.session.transcript.iter().any(|line| matches!(
         line,
         TranscriptLine::System(text) if text.contains("build-gate")
     )));
@@ -449,7 +449,8 @@ fn test_notice_shows_memory_changes() {
         changes,
     }));
     assert_eq!(
-        app.transcript
+        app.session
+            .transcript
             .iter()
             .filter(|line| matches!(line, TranscriptLine::System(text) if text.contains("Memory")))
             .count(),
@@ -707,7 +708,7 @@ fn test_notice_click_toggles_fold() {
 fn test_thought_keep_affordance() {
     let mut app = composition::app();
     app.screen = Screen::Working;
-    app.transcript.push(TranscriptLine::ThoughtFor {
+    app.session.transcript.push(TranscriptLine::ThoughtFor {
         ms: Some(42_000),
         reasoning: Some("a train of thought that expands inline".into()),
         tool_summary: None,
@@ -842,7 +843,7 @@ fn test_notice_walk_matches_render() {
         MemoryChangeCausality::ThisTurn,
         &[("alpha", MemoryOperation::Created)],
     );
-    app.transcript.push(TranscriptLine::Subagent {
+    app.session.transcript.push(TranscriptLine::Subagent {
         child_sid: "c1".into(),
         subagent_type: "explore".into(),
         summary: "found auth".into(),
@@ -942,12 +943,16 @@ fn stamped_record(id: &str, ms: u64) -> SequencedFrame {
 fn test_expand_survives_reread() {
     let mut app = composition::app();
     app.screen = Screen::Working;
-    app.transcript.push_frame(stamped_user("e1", "go"));
-    app.transcript
+    app.session.transcript.push_frame(stamped_user("e1", "go"));
+    app.session
+        .transcript
         .push_frame(stamped_thought("e2", "REREADMARK weighed the options"));
-    app.transcript.push_frame(stamped_record("e3", 3_000));
+    app.session
+        .transcript
+        .push_frame(stamped_record("e3", 3_000));
     app.rebuild_transcript();
     let key = app
+        .session
         .transcript
         .iter()
         .find_map(|l| match l {
@@ -968,13 +973,17 @@ fn test_expand_survives_reread() {
 
     // The same log read back with an older history ahead of it: every frame
     // position shifts, the row identity does not.
-    app.transcript.reset();
-    app.transcript
+    app.session.transcript.reset();
+    app.session
+        .transcript
         .push_frame(stamped_user("e0", "older history"));
-    app.transcript.push_frame(stamped_user("e1", "go"));
-    app.transcript
+    app.session.transcript.push_frame(stamped_user("e1", "go"));
+    app.session
+        .transcript
         .push_frame(stamped_thought("e2", "REREADMARK weighed the options"));
-    app.transcript.push_frame(stamped_record("e3", 3_000));
+    app.session
+        .transcript
+        .push_frame(stamped_record("e3", 3_000));
     app.rebuild_transcript();
     let after = render_text(&app, 100, 30);
     assert!(
@@ -992,10 +1001,13 @@ fn test_block_anchor_durable() {
     use crate::state::transcript::blocks::BlockAnchor;
     let mut app = composition::app();
     app.screen = Screen::Working;
-    app.transcript.push_frame(stamped_user("e1", "go"));
-    app.transcript.push_frame(stamped_thought("e2", "weighed"));
+    app.session.transcript.push_frame(stamped_user("e1", "go"));
+    app.session
+        .transcript
+        .push_frame(stamped_thought("e2", "weighed"));
     app.rebuild_transcript();
     let active = app
+        .session
         .transcript
         .blocks()
         .blocks()
@@ -1010,10 +1022,12 @@ fn test_block_anchor_durable() {
         ),
         "the active block carries its opening entry into the anchor: {active:?}"
     );
-    app.transcript
+    app.session
+        .transcript
         .push_frame(stamped_thought("e3", "pondered again"));
     app.rebuild_transcript();
     let again = app
+        .session
         .transcript
         .blocks()
         .blocks()

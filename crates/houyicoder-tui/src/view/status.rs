@@ -416,6 +416,7 @@ fn stage_hint(app: &App) -> String {
 /// still short so the nudge only appears once it would actually free context.
 fn token_savings_k(app: &App) -> u64 {
     let chars: usize = app
+        .session
         .transcript
         .lines()
         .iter()

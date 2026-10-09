@@ -113,7 +113,7 @@ mod tests {
 
     /// The most recent system line pushed to the transcript, if any.
     fn last_line(app: &App) -> Option<String> {
-        app.transcript.iter().rev().find_map(|l| match l {
+        app.session.transcript.iter().rev().find_map(|l| match l {
             crate::records::TranscriptLine::System(s) => Some(s.clone()),
             _ => None,
         })

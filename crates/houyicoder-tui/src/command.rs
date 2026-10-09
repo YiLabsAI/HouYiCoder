@@ -59,8 +59,8 @@ impl App {
             }
             C::Agents => {
                 self.pane = Pane::Agents;
-                let v = self.transcript.revision();
-                self.agents.refresh(self.transcript.lines(), v);
+                let v = self.session.transcript.revision();
+                self.agents.refresh(self.session.transcript.lines(), v);
                 if let Some(s) = self.session.connection.as_ref() {
                     match s.next_request_id() {
                         Ok(req_id) => {
@@ -316,7 +316,7 @@ impl App {
     /// /clear: archive the transcript, reset the full chain state, and land
     /// back on a fresh working surface (stage Idle, pane Transcript, step idle).
     fn clear_session(&mut self) {
-        self.transcript.reset();
+        self.session.transcript.reset();
         // A read running against the archived history belongs to it: drop the
         // record and move the generation on, so a late result cannot land in
         // the fresh view whose numbers match the old dispatch again.

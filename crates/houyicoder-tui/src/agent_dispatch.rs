@@ -588,24 +588,23 @@ impl App {
         };
         // Swap the child rows into the matching Subagent line in place
         // to preserve position. Mirrors the ContextGrid refresh.
-        let idx = self.transcript.lines().iter().rposition(
+        let idx = self.session.transcript.lines().iter().rposition(
             |l| matches!(l, TranscriptLine::Subagent { child_sid: c, .. } if c == &child_sid),
         );
         if let Some(idx) = idx {
-            let mut line = self.transcript.lines_mut().remove(idx);
+            let mut line = self.session.transcript.lines_mut().remove(idx);
             if let TranscriptLine::Subagent {
                 folded_transcript, ..
             } = &mut line
             {
                 *folded_transcript = folded.clone();
             }
-            self.transcript.lines_mut().insert(idx, line);
+            self.session.transcript.lines_mut().insert(idx, line);
             // The block holds the frame-derived copy the next rebuild
             // migrates from, so the fetched rows must reach it too, or a
             // rebuild that re-derives this block reads an empty old copy.
-            self.transcript
-                .blocks_mut()
-                .set_subagent_folded(&child_sid, &folded);
+            let blocks = self.session.transcript.blocks_mut();
+            blocks.set_subagent_folded(&child_sid, &folded);
             // The swap mutates a line's payload in place instead of
             // pushing, so the row cache needs an explicit bump — the
             // fetched child rows would otherwise stay invisible until
@@ -644,10 +643,11 @@ impl App {
             // append and the streaming token / tool-update hot path pays
             // nothing for echo bookkeeping.
             if let TranscriptFrame::Session(SessionUpdate::UserMessageChunk(chunk)) = frame {
-                self.transcript.drop_trailing_echo(chunk_text(chunk));
+                let transcript = &mut self.session.transcript;
+                transcript.drop_trailing_echo(chunk_text(chunk));
             }
             self.track_running_tool(frame);
-            self.transcript.push_frame(sequenced);
+            self.session.transcript.push_frame(sequenced);
             any = true;
         }
         if any {

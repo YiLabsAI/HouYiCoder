@@ -78,9 +78,10 @@ fn test_bundle_tracked() -> (RunnerBundle, tokio::task::JoinHandle<()>) {
 #[test]
 fn test_switch_session_resets_view() {
     let mut app = build_app(test_bundle());
-    app.transcript
+    app.session
+        .transcript
         .push(TranscriptLine::User("old content".into()));
-    app.transcript.push_frame(TranscriptFrame::Session(
+    app.session.transcript.push_frame(TranscriptFrame::Session(
         houyicoder_protocol::frontend::session_update::SessionUpdate::UserMessageChunk(
             houyicoder_protocol::frontend::session_update::ContentChunk::new(
                 houyicoder_protocol::frontend::run::ContentBlock::Text {
@@ -97,12 +98,13 @@ fn test_switch_session_resets_view() {
     // (e.g. a sandbox-fence notice) land as initial system lines, so the
     // transcript has exactly that many lines, not the old content.
     assert_eq!(
-        app.transcript.len(),
+        app.session.transcript.len(),
         new_warning_count,
         "transcript cleared of old content, only new startup warnings remain"
     );
     assert!(
-        !app.transcript
+        !app.session
+            .transcript
             .iter()
             .any(|l| matches!(l, TranscriptLine::User(t) if t.contains("old content"))),
         "old content gone"
@@ -113,7 +115,7 @@ fn test_switch_session_resets_view() {
     // the turn stream the previous session received from the server does
     // not survive the switch.
     assert!(
-        !app.transcript.frames().iter().any(|f| matches!(
+        !app.session.transcript.frames().iter().any(|f| matches!(
             f,
             SequencedFrame {
                 frame: TranscriptFrame::Session(_),
@@ -174,10 +176,10 @@ fn test_switch_drops_pending_read() {
 #[test]
 fn test_swap_bumps_transcript_version() {
     let mut app = build_app(test_bundle());
-    let v_before = app.transcript.revision();
+    let v_before = app.session.transcript.revision();
     app.switch_session(test_bundle());
     assert_ne!(
-        app.transcript.revision(),
+        app.session.transcript.revision(),
         v_before,
         "version bumped to invalidate cache"
     );
@@ -197,6 +199,7 @@ fn test_build_app_surfaces_warnings() {
         .push("sandbox.network: unknown".into());
     let app = build_app(bundle);
     let lines: Vec<&str> = app
+        .session
         .transcript
         .iter()
         .rev()
@@ -269,7 +272,7 @@ fn test_resume_err_keeps_session() {
         "target consumed on error (no retry-every-frame storm)"
     );
     assert!(
-        app.transcript.iter().any(
+        app.session.transcript.iter().any(
             |l| matches!(l, crate::state::TranscriptLine::System(s) if s.contains("resume failed"))
         ),
         "a 'resume failed' system line must surface the error"
@@ -568,13 +571,13 @@ fn test_drops_non_resume_commands() {
          messages demoted to ParkedMessage (new runner's server queue is empty)"
     );
     assert!(
-        app.transcript.iter().any(|l| matches!(
+        app.session.transcript.iter().any(|l| matches!(
             l,
             crate::state::TranscriptLine::System(s)
                 if s.contains("dropped 2 command(s)") && s.contains("/clear") && s.contains("/rewind")
         )),
         "a hint must name the dropped commands:\n{:?}",
-        app.transcript
+        app.session.transcript
     );
 }
 
@@ -656,8 +659,8 @@ fn folded_transcript() -> Vec<TranscriptLine> {
 /// summary alone.
 fn group_body_visible(app: &App) -> bool {
     crate::fold::display_slots(
-        &app.transcript,
-        app.transcript.fold_groups(),
+        &app.session.transcript,
+        app.session.transcript.fold_groups(),
         &app.transcript_view.expanded.fold_groups,
         false,
     )
@@ -679,7 +682,7 @@ fn test_swap_restores_open_keys() {
     let first = test_bundle();
     let first_sid = first.session.clone();
     let mut app = build_app(first);
-    app.transcript = folded_transcript().into();
+    app.session.transcript = folded_transcript().into();
     app.transcript_view.expanded.results.insert("call-1".into());
     app.transcript_view
         .expanded
@@ -718,7 +721,7 @@ fn test_swap_restores_open_keys() {
         app.transcript_view.expanded.subagents
     );
     // The second session opens the same group key plus a key of its own.
-    app.transcript = folded_transcript().into();
+    app.session.transcript = folded_transcript().into();
     assert!(
         !group_body_visible(&app),
         "the entered session starts collapsed, so the check below tells the sets apart"
@@ -736,7 +739,7 @@ fn test_swap_restores_open_keys() {
     let mut back = test_bundle();
     back.session = first_sid;
     app.switch_session(back);
-    app.transcript = folded_transcript().into();
+    app.session.transcript = folded_transcript().into();
     assert_eq!(
         app.transcript_view.expanded.results.len(),
         1,
@@ -787,7 +790,7 @@ fn test_swap_restores_open_keys() {
 fn test_switch_parking_hygiene() {
     let mut app = build_app(test_bundle());
     let first_sid = app.session.identity.session_id.clone();
-    app.transcript.push(TranscriptLine::Subagent {
+    app.session.transcript.push(TranscriptLine::Subagent {
         child_sid: "c1".into(),
         subagent_type: "explore".into(),
         summary: "first".into(),
@@ -834,7 +837,7 @@ fn test_switch_parking_hygiene() {
 #[test]
 fn test_switch_drops_child_park() {
     let mut app = build_app(test_bundle());
-    app.transcript.push(TranscriptLine::Subagent {
+    app.session.transcript.push(TranscriptLine::Subagent {
         child_sid: "c1".into(),
         subagent_type: "explore".into(),
         summary: "first".into(),
@@ -850,7 +853,7 @@ fn test_switch_drops_child_park() {
     app.exit_teammate_view();
 
     app.switch_session(test_bundle());
-    app.transcript.push(TranscriptLine::Subagent {
+    app.session.transcript.push(TranscriptLine::Subagent {
         child_sid: "c1".into(),
         subagent_type: "explore".into(),
         summary: "unrelated".into(),

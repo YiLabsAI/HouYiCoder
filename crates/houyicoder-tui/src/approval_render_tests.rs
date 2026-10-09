@@ -162,6 +162,7 @@ fn test_option3_no_duplicate_result() {
 
     // Exactly ONE result row (a Tool line with name == "result").
     let result_count = app
+        .session
         .transcript
         .iter()
         .filter(|l| matches!(l, TranscriptLine::Tool { name, .. } if name == "result"))
@@ -173,6 +174,7 @@ fn test_option3_no_duplicate_result() {
 
     // Exactly ONE reply row.
     let reply_count = app
+        .session
         .transcript
         .iter()
         .filter(|l| matches!(l, TranscriptLine::Agent(s) if s == "done"))
@@ -181,6 +183,7 @@ fn test_option3_no_duplicate_result() {
 
     // The system line stays a separate row, not fused into the reply.
     let sys_count = app
+        .session
         .transcript
         .iter()
         .filter(|l| matches!(l, TranscriptLine::System(s) if s == "added allow rule for boom"))

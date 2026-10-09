@@ -158,7 +158,7 @@ fn test_error_settles_skill_detail() {
     assert!(app.skills_pane.detail_body().is_none());
     use crate::records::TranscriptLine;
     assert!(
-        app.transcript.iter().any(
+        app.session.transcript.iter().any(
             |l| matches!(l, TranscriptLine::System(s) if s.contains("error: body read failed"))
         ),
         "the error still reaches the transcript"

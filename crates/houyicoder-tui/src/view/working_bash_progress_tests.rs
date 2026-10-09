@@ -33,7 +33,7 @@ fn tcall(cid: &str, name: &str, brief: &str, oc: ToolOutcome) -> TranscriptLine 
 fn test_bash_chip_shows_elapsed() {
     let mut app = composition::app();
     app.screen = Screen::Working;
-    app.transcript = vec![
+    app.session.transcript = vec![
         TranscriptLine::User("hi".into()),
         tcall("c1", "bash", "npm install", ToolOutcome::Success),
     ]

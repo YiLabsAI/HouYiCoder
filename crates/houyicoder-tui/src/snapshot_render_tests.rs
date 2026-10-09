@@ -31,16 +31,16 @@ use crate::test_harness::MockSnapshot;
 /// count==render must hold when the search view renders a frozen snapshot
 /// that differs from the live transcript. The accessor routes count + render
 /// through one source (active_transcript); a count path still reading
-/// self.transcript would desync by the snapshot/live delta. Asserts visible
+/// self.session.transcript would desync by the snapshot/live delta. Asserts visible
 /// output (the snapshot content renders, the live content does not), not
 /// internal state. Mutation-verified: reverting each of the six read points
 /// (fold_aware_rows display_slots + line index, transcript renderer
-/// display_slots + line index + focused-range line) to self.transcript /
-/// app.transcript reddens this test one at a time.
+/// display_slots + line index + focused-range line) to self.session.transcript /
+/// app.session.transcript reddens this test one at a time.
 #[test]
 fn test_count_matches_under_snapshot() {
     let mut app = working();
-    app.transcript = vec![
+    app.session.transcript = vec![
         TranscriptLine::User("live alpha".into()),
         TranscriptLine::User("live beta".into()),
     ]
@@ -56,7 +56,7 @@ fn test_count_matches_under_snapshot() {
     app.transcript_view.search.query = "snap".into();
     app.run_search();
     // Focus the LAST match so the focused-range line index reaches the
-    // snapshot's tail; a count path still reading self.transcript (2 lines)
+    // snapshot's tail; a count path still reading self.session.transcript (2 lines)
     // would index out of bounds here.
     app.transcript_view.search.focus = app.transcript_view.search.matches.len().saturating_sub(1);
     app.verbose = true;
@@ -115,9 +115,9 @@ fn test_bound_scrollback_skips_recompute() {
         "eviction must not recompute the snapshot's matches"
     );
     assert!(
-        app.transcript.len() <= 4000,
+        app.session.transcript.len() <= 4000,
         "eviction bounded the live vec (len={})",
-        app.transcript.len()
+        app.session.transcript.len()
     );
 }
 

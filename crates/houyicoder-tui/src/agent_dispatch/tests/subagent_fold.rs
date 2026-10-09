@@ -11,7 +11,7 @@ fn test_child_transcript_fills_folded() {
     use houyicoder_protocol::frontend::run::ContentBlock;
     use houyicoder_protocol::frontend::session_update::ContentChunk;
     let mut app = crate::composition::app();
-    app.transcript.push(TranscriptLine::Subagent {
+    app.session.transcript.push(TranscriptLine::Subagent {
         child_sid: "c1".into(),
         subagent_type: "explore".into(),
         summary: "found auth".into(),
@@ -38,7 +38,7 @@ fn test_child_transcript_fills_folded() {
             frames,
         },
     });
-    match &app.transcript[0] {
+    match &app.session.transcript[0] {
         TranscriptLine::Subagent {
             folded_transcript, ..
         } => {
@@ -58,7 +58,7 @@ fn test_child_transcript_fills_folded() {
 fn test_child_transcript_empty_unavailable() {
     use crate::records::TranscriptLine;
     let mut app = crate::composition::app();
-    app.transcript.push(TranscriptLine::Subagent {
+    app.session.transcript.push(TranscriptLine::Subagent {
         child_sid: "c1".into(),
         subagent_type: "explore".into(),
         summary: "found auth".into(),
@@ -73,7 +73,7 @@ fn test_child_transcript_empty_unavailable() {
             frames: Vec::new(),
         },
     });
-    match &app.transcript[0] {
+    match &app.session.transcript[0] {
         TranscriptLine::Subagent {
             folded_transcript, ..
         } => {
@@ -97,8 +97,10 @@ fn test_child_transcript_preserves_position() {
     use houyicoder_protocol::frontend::run::ContentBlock;
     use houyicoder_protocol::frontend::session_update::ContentChunk;
     let mut app = crate::composition::app();
-    app.transcript.push(TranscriptLine::Agent("before".into()));
-    app.transcript.push(TranscriptLine::Subagent {
+    app.session
+        .transcript
+        .push(TranscriptLine::Agent("before".into()));
+    app.session.transcript.push(TranscriptLine::Subagent {
         child_sid: "c1".into(),
         subagent_type: "explore".into(),
         summary: "found auth".into(),
@@ -106,7 +108,9 @@ fn test_child_transcript_preserves_position() {
         folded_transcript: Vec::new(),
         color: None,
     });
-    app.transcript.push(TranscriptLine::Agent("after".into()));
+    app.session
+        .transcript
+        .push(TranscriptLine::Agent("after".into()));
     app.handle_agent_message(SessionMessage::Response {
         request: RequestId(14),
         response: ServerResponse::ChildTranscript {
@@ -119,15 +123,15 @@ fn test_child_transcript_preserves_position() {
         },
     });
     assert!(
-        matches!(app.transcript[0], TranscriptLine::Agent(_)),
+        matches!(app.session.transcript[0], TranscriptLine::Agent(_)),
         "before stays at 0"
     );
     assert!(
-        matches!(app.transcript[1], TranscriptLine::Subagent { .. }),
+        matches!(app.session.transcript[1], TranscriptLine::Subagent { .. }),
         "subagent stays at 1"
     );
     assert!(
-        matches!(app.transcript[2], TranscriptLine::Agent(_)),
+        matches!(app.session.transcript[2], TranscriptLine::Agent(_)),
         "after stays at 2"
     );
 }
@@ -139,7 +143,7 @@ fn test_child_transcript_preserves_position() {
 fn test_subagent_collapse_keeps_folded() {
     use crate::records::TranscriptLine;
     let mut app = crate::composition::app();
-    app.transcript.push(TranscriptLine::Subagent {
+    app.session.transcript.push(TranscriptLine::Subagent {
         child_sid: "c1".into(),
         subagent_type: "explore".into(),
         summary: "found auth".into(),
@@ -155,7 +159,7 @@ fn test_subagent_collapse_keeps_folded() {
         !app.transcript_view.expanded.subagents.contains("c1"),
         "collapsed"
     );
-    match &app.transcript[0] {
+    match &app.session.transcript[0] {
         TranscriptLine::Subagent {
             folded_transcript, ..
         } => {
@@ -178,7 +182,7 @@ fn test_click_subagent_head_expands() {
     use crate::selection::surface::{Surface, TranscriptSurface};
     let mut app = crate::composition::app();
     app.screen = crate::state::Screen::Working;
-    app.transcript.push(TranscriptLine::Subagent {
+    app.session.transcript.push(TranscriptLine::Subagent {
         child_sid: "c1".into(),
         subagent_type: "explore".into(),
         summary: "found auth".into(),
@@ -224,7 +228,7 @@ fn test_subagent_toggle_no_key() {
     use crate::records::TranscriptLine;
     let mut app = crate::composition::app();
     app.screen = crate::state::Screen::Working;
-    app.transcript.push(TranscriptLine::Subagent {
+    app.session.transcript.push(TranscriptLine::Subagent {
         child_sid: "c1".into(),
         subagent_type: "explore".into(),
         summary: "found auth".into(),
@@ -252,7 +256,7 @@ fn test_subagent_toggle_stale_key() {
     use crate::records::TranscriptLine;
     let mut app = crate::composition::app();
     app.screen = crate::state::Screen::Working;
-    app.transcript.push(TranscriptLine::Subagent {
+    app.session.transcript.push(TranscriptLine::Subagent {
         child_sid: "real".into(),
         subagent_type: "explore".into(),
         summary: "found auth".into(),
@@ -285,7 +289,7 @@ fn test_subagent_toggle_stale_key() {
 fn test_subagent_cursor_targeting() {
     use crate::records::TranscriptLine;
     let mut app = crate::composition::app();
-    app.transcript.push(TranscriptLine::Subagent {
+    app.session.transcript.push(TranscriptLine::Subagent {
         child_sid: "c1".into(),
         subagent_type: "explore".into(),
         summary: "first".into(),
@@ -293,7 +297,7 @@ fn test_subagent_cursor_targeting() {
         folded_transcript: vec![TranscriptLine::Agent("child reply".into())],
         color: None,
     });
-    app.transcript.push(TranscriptLine::Subagent {
+    app.session.transcript.push(TranscriptLine::Subagent {
         child_sid: "c2".into(),
         subagent_type: "plan".into(),
         summary: "second".into(),
@@ -383,7 +387,8 @@ fn test_subagent_folded_survives_rebuild() {
     app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(call.into())));
     app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(result.into())));
     assert!(
-        app.transcript
+        app.session
+            .transcript
             .iter()
             .any(|l| matches!(l, TranscriptLine::Subagent { .. })),
         "subagent line rendered from the agent-tool result"
@@ -403,6 +408,7 @@ fn test_subagent_folded_survives_rebuild() {
     // A parent rebuild re-folds frames; the fetched child rows survive.
     app.rebuild_transcript();
     match app
+        .session
         .transcript
         .iter()
         .find(|l| matches!(l, TranscriptLine::Subagent { .. }))

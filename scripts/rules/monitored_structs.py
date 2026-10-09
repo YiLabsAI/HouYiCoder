@@ -158,8 +158,11 @@ ACTIVE_OWNERS = {
         # permission, status, hooks, tools, and skills caches travel as one
         # session value and reset on a switch, so a new session starts with
         # an empty cache instead of inheriting the previous one's server
-        # view.
-        "fields": 51,
+        # view. The working transcript joined it last: the conversation
+        # belongs to the session, so a switch rebuilds it empty instead of
+        # carrying the previous session's frames across. App exposes one
+        # read handle over it, not a field of its own.
+        "fields": 50,
         "mut_app": 44,
     },
     "crates/houyicoder-tui/src/session.rs:Session": {
@@ -169,12 +172,12 @@ ACTIVE_OWNERS = {
         # checklist, the named capabilities (the server-reported permission,
         # status, hooks, tools, and skills caches), and the transcript read
         # state (the dispatched history reads, the full-scan index progress,
-        # and the loaded-frame boundary), held as one value so a swap
-        # replaces the whole set at once and a lost connection never drops
-        # the identity or the already-observed state. Eleven fields that
-        # formerly sat detached on App now travel as one constructor
-        # boundary.
-        "fields": 11,
+        # and the loaded-frame boundary), and the working transcript, held
+        # as one value so a swap replaces the whole set at once and a lost
+        # connection never drops the identity or the already-observed
+        # state. Twelve fields that formerly sat detached on App now travel
+        # as one constructor boundary.
+        "fields": 12,
     },
     "crates/houyicoder-tui/src/workflow.rs:Workflow": {
         # The spec-plan-review-verify-artifact lifecycle: the stage machine,

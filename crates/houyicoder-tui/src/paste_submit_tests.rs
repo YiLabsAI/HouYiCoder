@@ -21,7 +21,7 @@ fn test_paste_submit_expands() {
     app.input.set(token);
     app.submit_input();
     // The echoed User line must be the expanded real text, not the token.
-    let user = app.transcript.iter().find_map(|l| match l {
+    let user = app.session.transcript.iter().find_map(|l| match l {
         crate::state::TranscriptLine::User(s) => Some(s.clone()),
         _ => None,
     });
@@ -40,6 +40,7 @@ fn test_two_pastes_submit_distinct() {
     app.input.set(app.pasted.ingest(&a));
     app.submit_input();
     let first = app
+        .session
         .transcript
         .iter()
         .rev()
@@ -53,6 +54,7 @@ fn test_two_pastes_submit_distinct() {
     app.input.set(app.pasted.ingest(&b));
     app.submit_input();
     let second = app
+        .session
         .transcript
         .iter()
         .rev()
