@@ -35,7 +35,7 @@ impl App {
     /// rewind truncates the stale tail.
     pub(crate) fn rebuild_transcript(&mut self) {
         let turn_start = self.current_turn_start();
-        let newest_open = self.run_state.is_active();
+        let newest_open = self.session.run.is_active();
         let frame_start = self.visible_frame_start();
         let frame_end = self.transcript.abs_frame_count();
         // Rows read back from the session log sit above the capped view while
@@ -382,7 +382,7 @@ impl App {
             self.transcript.frames(),
             self.transcript.frame_window_start(),
             batch_start..from,
-            self.run_state.is_active(),
+            self.session.run.is_active(),
         )
         .len();
         self.loaded_from_frame.set(batch_start);

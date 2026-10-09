@@ -22,7 +22,7 @@ impl super::App {
         // before the ActiveRun drops. Dropping it releases the streaming
         // progress, so the preview and tool-runtime state need no manual
         // clear here.
-        let active = self.run_state.finish();
+        let active = self.session.run.finish();
         self.prompt = None;
         self.rebuild_transcript();
         self.debug_render_done(self.transcript.frames());

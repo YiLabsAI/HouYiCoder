@@ -143,17 +143,21 @@ ACTIVE_OWNERS = {
         # two could drift out of sync. The runtime field went away with that
         # owner -- it was a second projection of the same wired fact the
         # connection now signals, and background reads reach the process
-        # runtime directly instead of carrying a copy on the shell.
-        "fields": 60,
+        # runtime directly instead of carrying a copy on the shell. The run
+        # lifecycle state machine then joined the same Session owner, so a
+        # run resolves on the session that started it rather than on a
+        # detached shell field.
+        "fields": 59,
         "mut_app": 44,
     },
     "crates/houyicoder-tui/src/session.rs:Session": {
-        # The presented session: its stable identity and the optional live
-        # engine connection, held as one value so a swap replaces both and a
-        # lost connection never drops the identity or the already-observed
-        # state. Two fields that formerly sat detached on App now travel as
-        # one constructor boundary.
-        "fields": 2,
+        # The presented session: its stable identity, the optional live
+        # engine connection, and the in-flight run lifecycle, held as one
+        # value so a swap replaces the whole set at once and a lost
+        # connection never drops the identity or the already-observed state.
+        # Three fields that formerly sat detached on App now travel as one
+        # constructor boundary.
+        "fields": 3,
     },
     "crates/houyicoder-tui/src/workflow.rs:Workflow": {
         # The spec-plan-review-verify-artifact lifecycle: the stage machine,

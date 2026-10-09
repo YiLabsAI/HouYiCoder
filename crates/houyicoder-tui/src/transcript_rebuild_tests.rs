@@ -1109,11 +1109,11 @@ fn test_fold_active_tracks_waiting() {
     pump(&mut app, tool_result("w1"));
     assert!(fold_signature(&app)[0].3, "running group is active");
 
-    app.run_state.begin_waiting();
+    app.session.run.begin_waiting();
     app.refresh_fold_active();
     assert!(!fold_signature(&app)[0].3, "waiting group collapses");
 
-    app.run_state.end_waiting();
+    app.session.run.end_waiting();
     app.refresh_fold_active();
     assert!(fold_signature(&app)[0].3, "resumed group reopens");
 }

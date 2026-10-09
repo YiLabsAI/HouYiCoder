@@ -1140,7 +1140,7 @@ fn test_batch_keeps_mark() {
     let mut app = composition::app();
     app.transcript.reset();
     app.session.connection = Some(SessionConnection::from_receiver(rx));
-    app.run_state.start(RequestId(0), Instant::now());
+    app.session.run.start(RequestId(0), Instant::now());
     let send = |frame: TranscriptFrame| {
         tx.send(SessionMessage::Event(ServerEvent::Frame(frame.into())))
             .expect("the connection receiver is alive")

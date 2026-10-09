@@ -212,9 +212,6 @@ pub struct App {
     /// window is unfocused, following a renderPlaceholder terminal
     /// focus gate. Defaults true (assume focused at startup).
     pub terminal_focused: bool,
-    /// The run lifecycle state machine: Idle, Running, Waiting, Cancelling.
-    /// The single source of truth for whether a run is in flight.
-    pub run_state: RunState,
     /// The session's cumulative run metrics, held in one owner.
     pub(crate) run_metrics: RunMetrics,
     /// Session checklist content, expansion, and completion lifecycle.
@@ -325,19 +322,19 @@ impl App {
     /// Waiting (the spinner stops while a card is up).
     pub fn agent_busy(&self) -> bool {
         matches!(
-            self.run_state,
+            self.session.run,
             RunState::Running(_) | RunState::Cancelling(_)
         )
     }
 
     /// The wall-clock start of the active run, or None when idle.
     pub fn run_started(&self) -> Option<Instant> {
-        self.run_state.started_at()
+        self.session.run.started_at()
     }
 
     /// True only while the user cancelled and the run is resolving.
     pub fn cancelling(&self) -> bool {
-        self.run_state.is_cancelling()
+        self.session.run.is_cancelling()
     }
 
     /// Whether the session holds a live engine connection handle, so the
@@ -350,21 +347,21 @@ impl App {
 
     /// The request id of the active run, or None when idle.
     pub fn active_run_req_id(&self) -> Option<RequestId> {
-        self.run_state.request_id()
+        self.session.run.request_id()
     }
 
     /// Borrow the streaming progress of the active run, or None when idle.
     /// Render paths read through this; the run-scoped preview does not exist
     /// outside a run.
     pub(crate) fn run_progress(&self) -> Option<&RunProgress> {
-        self.run_state.progress()
+        self.session.run.progress()
     }
 
     /// Mutably borrow the streaming progress, or None when idle. Write paths
     /// during a run go through this; callers that cannot be idle take it and
     /// expect an active run.
     pub(crate) fn run_progress_mut(&mut self) -> Option<&mut RunProgress> {
-        self.run_state.progress_mut()
+        self.session.run.progress_mut()
     }
 
     /// Test seam: transition to Running with a specific request id.
@@ -372,7 +369,7 @@ impl App {
     /// machine.
     #[cfg(test)]
     pub fn start_run_for_test(&mut self, req_id: u64) {
-        self.run_state.start(RequestId(req_id), Instant::now());
+        self.session.run.start(RequestId(req_id), Instant::now());
         // A running agent flips the tail fold group to active; recompute the
         // cache here because no rebuild follows a lines-built transcript.
         let groups = crate::fold::compute_fold_groups(self.transcript.lines(), self.agent_busy());

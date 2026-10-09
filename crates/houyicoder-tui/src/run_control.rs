@@ -148,7 +148,7 @@ impl App {
         // Active or waiting runs park new input locally. A waiting run
         // (approval card up) does not accept a second submit — the card
         // is the gate, not agent_busy.
-        if self.run_state.is_active() {
+        if self.session.run.is_active() {
             self.pending
                 .push(PendingItem::ParkedMessage(input.clone().into()));
             self.promote_next_pending();
@@ -178,7 +178,7 @@ impl App {
             return false;
         }
         // Only errors matching this request terminate the active run.
-        self.run_state.start(req_id, Instant::now());
+        self.session.run.start(req_id, Instant::now());
         self.todos.set_replaying_history(false);
         // Preserve the submitted input in case interruption restores the turn.
         self.last_run_input = Some(input.clone());
@@ -271,7 +271,7 @@ impl App {
         self.prompt = None;
         // Resume the run without resetting its clock: end_waiting flips
         // Waiting → Running preserving the original started_at.
-        self.run_state.end_waiting();
+        self.session.run.end_waiting();
         self.refresh_fold_active();
         // Clear stale thinking state before post-resume streaming begins. The
         // run carried its progress through the pause, so these resets clear
@@ -311,7 +311,7 @@ impl App {
         // Pause the spinner while the run waits on the human verdict.
         // begin_waiting preserves the run's identity and start time so the
         // verdict can resume without resetting the clock.
-        self.run_state.begin_waiting();
+        self.session.run.begin_waiting();
         self.refresh_fold_active();
         self.prompt = Some(PendingPrompt::permission(req_id, vec![ask.clone()]));
         if tool == "AskUserQuestion"
@@ -538,7 +538,7 @@ impl App {
             self.system_line(Self::enqueue_failure_line("run", e));
             return;
         }
-        self.run_state.begin_cancel();
+        self.session.run.begin_cancel();
     }
 
     /// Recall the queued item at the cursor position into the input box.
