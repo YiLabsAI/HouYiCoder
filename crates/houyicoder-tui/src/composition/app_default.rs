@@ -3,7 +3,6 @@
 use super::*;
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use houyicoder_protocol::frontend::SessionId;
@@ -34,7 +33,6 @@ use crate::state::{
     ModelPickerState, ParkedViewStates, QueueViewState, StatusTab, TrajectoryPaneState,
 };
 
-#[expect(clippy::too_many_lines, reason = "long by design, kept whole")]
 pub fn app() -> App {
     App {
         screen: Screen::Login,
@@ -123,11 +121,6 @@ pub fn app() -> App {
         capabilities: SessionCapabilities::default(),
         permission_pane: PermissionPaneState::default(),
         working_dir: cwd_string(),
-        hook_entries: Vec::new(),
-        tool_entries: Vec::new(),
-        skill_entries: Vec::new(),
-
-        skill_disabled: HashSet::new(),
         skills_pane: SkillsPaneState::default(),
         skill_picker: SkillPickerState::default(),
         hooks_pane: HooksPaneState::default(),

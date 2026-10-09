@@ -14,7 +14,7 @@ impl App {
     /// send that fails, settles the detail with the body unavailable instead
     /// of leaving it loading on a reply that will never come.
     pub(crate) fn open_skill_detail(&mut self) {
-        let ordered = display_order(&self.skill_entries);
+        let ordered = display_order(&self.capabilities.skills.entries);
         let selected = self
             .skills_pane
             .cursor()
@@ -42,7 +42,7 @@ impl App {
     /// Only a skill the user or the model can invoke has a state to flip; a
     /// frontmatter-blocked skill stays blocked until its file changes.
     pub(crate) fn toggle_skill_at_cursor(&mut self) {
-        let ordered = display_order(&self.skill_entries);
+        let ordered = display_order(&self.capabilities.skills.entries);
         let selected = self
             .skills_pane
             .cursor()
@@ -53,8 +53,8 @@ impl App {
         if !(entry.user_invocable || entry.invocable) {
             return;
         }
-        if !self.skill_disabled.insert(entry.name.clone()) {
-            self.skill_disabled.remove(&entry.name);
+        if !self.capabilities.skills.disabled.insert(entry.name.clone()) {
+            self.capabilities.skills.disabled.remove(&entry.name);
         }
     }
 }

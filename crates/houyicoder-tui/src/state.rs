@@ -4,7 +4,6 @@
 //! transitions in dedicated types rather than adding parallel fields here.
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashSet;
 use std::fmt;
 use std::sync::Arc;
 use std::time::Instant;
@@ -60,7 +59,6 @@ use crate::transcript::snapshot::TranscriptSnapshot;
 use crate::view::export_log::ExportLog;
 use crate::view::trajectory_pane::TrajectoryLog;
 use houyicoder_protocol::envelope::RequestId;
-use houyicoder_protocol::frontend::hooks::HookEntry;
 
 pub(crate) use crate::state::cursors::EventCursor;
 pub use crate::state::model_picker::{
@@ -70,8 +68,6 @@ pub(crate) use crate::state::parked_view_states::ParkedViewStates;
 pub use crate::state::trajectory::{
     TrajectoryDrill, TrajectoryPaneState, TrajectorySelection, TrajectoryTurnKey,
 };
-use houyicoder_protocol::frontend::skills::SkillEntry;
-use houyicoder_protocol::frontend::tools::ToolEntry;
 use houyicoder_protocol::frontend::{LoginMode, SessionId};
 use ratatui::layout::Rect;
 
@@ -336,9 +332,10 @@ pub struct App {
     /// buffer text and the last-chunk timestamp together so a flush check
     /// drains and restores both as one value.
     pub(crate) pending_paste: PendingPaste,
-    /// The session's named capability composition: the wire-reported caches
-    /// the panes and status paths read. One owner so those caches travel
-    /// together as one value rather than a scatter of flat fields.
+    /// The session's named capability composition: the server-reported caches
+    /// plus the client-local session state each capability keeps (such as the
+    /// disabled-skill set), together as one value rather than a scatter of
+    /// flat fields.
     pub(crate) capabilities: SessionCapabilities,
     /// The permission pane state: the selected tab, the cursor row, the
     /// typed-input sub-mode, and the pane-local search buffer. Pub(crate) so
@@ -348,21 +345,10 @@ pub struct App {
     /// The original working directory the session started in, shown at the top
     /// of the Workspace tab in /permissions (empty in a stub App).
     pub working_dir: String,
-    /// The registered-hook rows for the /hooks pane. Refreshed from the wire
-    /// (HooksResult) when the user opens /hooks. Empty until the first reply.
-    pub hook_entries: Vec<HookEntry>,
-    pub tool_entries: Vec<ToolEntry>,
-    /// The discovered-skill rows for the /skills pane. Refreshed from
-    /// the wire when the user opens /skills. Empty until the first
-    /// reply.
-    pub skill_entries: Vec<SkillEntry>,
     /// The /skills pane view state: the list cursor and the open detail
     /// (body request, body text, scroll position). Kept together so the
     /// pane's view state is one owner, not a scatter of App fields.
     pub(crate) skills_pane: SkillsPaneState,
-    /// Session-scoped disabled skills (toggled via t in the detail view).
-    /// Persisted disable is a follow-up (settings wire).
-    pub skill_disabled: HashSet<String>,
     /// The @ skill-picker overlay state: the open flag and its list cursor.
     /// Opening resets the cursor to zero, so the two move as one value.
     pub(crate) skill_picker: SkillPickerState,

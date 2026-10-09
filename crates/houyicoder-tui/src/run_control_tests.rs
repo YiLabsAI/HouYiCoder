@@ -810,7 +810,7 @@ impl Tool for MarkerTool {
 }
 
 /// /agents and /tools ship a wire query and land the server's reply on the
-/// App fields (agent_directory / tool_entries), proving the in-proc
+/// agent directory field and the tool cache, proving the in-proc
 /// server round-trip completes for these pane-query commands — not just the
 /// pane open. /agents goes None→Some; /tools (with a registered tool) goes
 /// empty→non-empty. A break in the driver→server→dispatch chain fails here.
@@ -843,7 +843,13 @@ fn test_agents_tools_round_trip() {
     let mut landed = false;
     for _ in 0..300 {
         app.poll_agent();
-        if app.tool_entries.iter().any(|t| t.name == "marker") {
+        if app
+            .capabilities
+            .tools
+            .entries
+            .iter()
+            .any(|t| t.name == "marker")
+        {
             landed = true;
             break;
         }

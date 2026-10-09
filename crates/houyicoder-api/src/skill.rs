@@ -378,7 +378,7 @@ pub trait SkillRegistry: Send + Sync {
     /// but stays visible in the /skills pane (marked disabled). The default
     /// is no-op: a registry that does not track session state silently
     /// drops the set. Called by the server before a run starts, from the
-    /// TUI's skill_disabled state.
+    /// TUI's disabled-skill set.
     fn set_session_disabled(&self, _disabled: HashSet<String>) {}
 }
 

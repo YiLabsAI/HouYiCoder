@@ -1,20 +1,24 @@
-//! The current session's named capabilities as the wire reports them.
+//! The current session's named capabilities.
 //!
-//! Each capability owns the caches its pane and status paths read, which
-//! travel together as one value rather than a scatter of flat App fields. This
-//! is the static capability composition from
-//! the application model: it holds data the wire declared, never a
-//! connection handle or a session reader port.
+//! Each capability owns the state its pane and status paths read, which
+//! travels together as one value rather than a scatter of flat App fields.
+//! This is the static capability composition from the application model: it
+//! holds the server-reported caches plus the client-local session state each
+//! capability keeps (such as the disabled-skill set), never a connection
+//! handle or a session reader port.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
 use houyicoder_protocol::acp_wire::PermissionOptionKind;
 use houyicoder_protocol::frontend::context::ContextBreakdown;
+use houyicoder_protocol::frontend::hooks::HookEntry;
 use houyicoder_protocol::frontend::permission::{
     PermissionDecisionEntry, PermissionMode, PermissionRule,
 };
+use houyicoder_protocol::frontend::skills::SkillEntry;
 use houyicoder_protocol::frontend::status::StatusSnapshot;
+use houyicoder_protocol::frontend::tools::ToolEntry;
 
 /// The session's permission state as the wire reports it: the current mode,
 /// the durable rule list, the allowed-directory list, and the ask-before-git
@@ -76,9 +80,38 @@ pub(crate) struct StatusCapability {
     pub(crate) pending_status_command: bool,
 }
 
-/// The static composition of a session's named capabilities. It holds exactly
-/// the state the wire declared for this session and nothing else; the
-/// connection, run, and transcript live beside it, not inside it.
+/// The session's registered-hook cache, the rows the /hooks pane renders.
+/// Empty until the first reply; the server owns the truth.
+#[derive(Debug, Default)]
+pub(crate) struct HooksCapability {
+    /// The hook rows in server order.
+    pub(crate) entries: Vec<HookEntry>,
+}
+
+/// The session's discovered-tool cache, the rows the /tools pane renders.
+/// Empty until the first reply; the server owns the truth.
+#[derive(Debug, Default)]
+pub(crate) struct ToolsCapability {
+    /// The tool rows in server order.
+    pub(crate) entries: Vec<ToolEntry>,
+}
+
+/// The session's discovered-skill cache and disable set: the rows the /skills
+/// pane renders plus the names the user disabled this session. The entries
+/// are server-refreshed (the server owns the truth); the disable set is
+/// client-local session state.
+#[derive(Debug, Default)]
+pub(crate) struct SkillsCapability {
+    /// The skill rows in server order.
+    pub(crate) entries: Vec<SkillEntry>,
+    /// The skill names the user disabled this session.
+    pub(crate) disabled: HashSet<String>,
+}
+
+/// The static composition of a session's named capabilities: the
+/// server-reported caches plus the client-local session state each capability
+/// keeps (such as the disabled-skill set). The connection, run, and transcript
+/// live beside it, not inside it.
 #[derive(Debug, Default)]
 pub(crate) struct SessionCapabilities {
     /// The permission capability: mode, rules, directories, and verdicts.
@@ -86,4 +119,10 @@ pub(crate) struct SessionCapabilities {
     /// The status capability: context cache, snapshot, poll stamp, and the
     /// pending-command flag.
     pub(crate) status: StatusCapability,
+    /// The hooks capability: the registered-hook cache.
+    pub(crate) hooks: HooksCapability,
+    /// The tools capability: the discovered-tool cache.
+    pub(crate) tools: ToolsCapability,
+    /// The skills capability: the discovered-skill cache and the disable set.
+    pub(crate) skills: SkillsCapability,
 }

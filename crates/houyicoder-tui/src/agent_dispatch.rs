@@ -452,7 +452,7 @@ impl App {
                 ));
             }
             ServerResponse::Tools { tools } => {
-                self.tool_entries = tools;
+                self.capabilities.tools.entries = tools;
             }
             ServerResponse::Agents { directory } => {
                 self.agent_directory = Some(directory);
@@ -461,10 +461,10 @@ impl App {
                 self.apply_child_transcript(child_sid, frames);
             }
             ServerResponse::Hooks { hooks } => {
-                self.hook_entries = hooks;
+                self.capabilities.hooks.entries = hooks;
             }
             ServerResponse::Skills { skills } => {
-                self.skill_entries = skills;
+                self.capabilities.skills.entries = skills;
             }
             ServerResponse::SkillBody { body } => {
                 self.skills_pane.apply_detail(request, body);

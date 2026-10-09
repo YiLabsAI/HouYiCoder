@@ -389,7 +389,7 @@ fn test_skills_pane_nav() {
     use houyicoder_protocol::frontend::skills::SkillEntry;
     let mut app = working_app();
     app.pane = Pane::Skills;
-    app.skill_entries = vec![
+    app.capabilities.skills.entries = vec![
         SkillEntry {
             name: "alpha".into(),
             description: "a".into(),
@@ -426,7 +426,7 @@ fn test_skills_pane_detail() {
     use houyicoder_protocol::frontend::skills::SkillEntry;
     let mut app = working_app();
     app.pane = Pane::Skills;
-    app.skill_entries = vec![SkillEntry {
+    app.capabilities.skills.entries = vec![SkillEntry {
         name: "alpha".into(),
         description: "a".into(),
         origin: "user".into(),
@@ -450,7 +450,7 @@ fn test_skills_pane_toggle() {
     use houyicoder_protocol::frontend::skills::SkillEntry;
     let mut app = working_app();
     app.pane = Pane::Skills;
-    app.skill_entries = vec![SkillEntry {
+    app.capabilities.skills.entries = vec![SkillEntry {
         name: "alpha".into(),
         description: "a".into(),
         origin: "user".into(),
@@ -460,11 +460,17 @@ fn test_skills_pane_toggle() {
         usage: None,
     }];
     app.skills_pane.open_unavailable("alpha".into());
-    assert!(app.skill_disabled.is_empty(), "starts clean");
+    assert!(app.capabilities.skills.disabled.is_empty(), "starts clean");
     handle_working(&mut app, key(KeyCode::Char('t')));
-    assert!(app.skill_disabled.contains("alpha"), "t disables alpha");
+    assert!(
+        app.capabilities.skills.disabled.contains("alpha"),
+        "t disables alpha"
+    );
     handle_working(&mut app, key(KeyCode::Char('t')));
-    assert!(!app.skill_disabled.contains("alpha"), "t re-enables alpha");
+    assert!(
+        !app.capabilities.skills.disabled.contains("alpha"),
+        "t re-enables alpha"
+    );
 }
 
 /// The @ key opens the skill picker from an empty input box and resets the
@@ -473,7 +479,7 @@ fn test_skills_pane_toggle() {
 fn test_skill_picker_opens() {
     use houyicoder_protocol::frontend::skills::SkillEntry;
     let mut app = working_app();
-    app.skill_entries = vec![SkillEntry {
+    app.capabilities.skills.entries = vec![SkillEntry {
         name: "alpha".into(),
         description: "a".into(),
         origin: "user".into(),
@@ -513,7 +519,7 @@ fn test_skill_picker_blocked() {
 fn test_skill_picker_nav() {
     use houyicoder_protocol::frontend::skills::SkillEntry;
     let mut app = working_app();
-    app.skill_entries = vec![
+    app.capabilities.skills.entries = vec![
         SkillEntry {
             name: "alpha".into(),
             description: "a".into(),
@@ -545,7 +551,7 @@ fn test_skill_picker_nav() {
 fn test_skill_picker_esc() {
     use houyicoder_protocol::frontend::skills::SkillEntry;
     let mut app = working_app();
-    app.skill_entries = vec![SkillEntry {
+    app.capabilities.skills.entries = vec![SkillEntry {
         name: "alpha".into(),
         description: "a".into(),
         origin: "user".into(),
@@ -567,7 +573,7 @@ fn test_skill_picker_esc() {
 fn test_skill_picker_enter_submit() {
     use houyicoder_protocol::frontend::skills::SkillEntry;
     let mut app = working_app();
-    app.skill_entries = vec![SkillEntry {
+    app.capabilities.skills.entries = vec![SkillEntry {
         name: "alpha".into(),
         description: "a".into(),
         origin: "user".into(),
@@ -609,7 +615,7 @@ fn test_skill_picker_enter_empty() {
 fn test_skill_picker_char() {
     use houyicoder_protocol::frontend::skills::SkillEntry;
     let mut app = working_app();
-    app.skill_entries = vec![SkillEntry {
+    app.capabilities.skills.entries = vec![SkillEntry {
         name: "alpha".into(),
         description: "a".into(),
         origin: "user".into(),
@@ -633,7 +639,7 @@ fn test_skill_picker_char() {
 fn test_skill_picker_backspace_close() {
     use houyicoder_protocol::frontend::skills::SkillEntry;
     let mut app = working_app();
-    app.skill_entries = vec![SkillEntry {
+    app.capabilities.skills.entries = vec![SkillEntry {
         name: "alpha".into(),
         description: "a".into(),
         origin: "user".into(),
@@ -653,7 +659,7 @@ fn test_skill_picker_backspace_close() {
 fn test_skill_picker_colon_closes() {
     use houyicoder_protocol::frontend::skills::SkillEntry;
     let mut app = working_app();
-    app.skill_entries = vec![SkillEntry {
+    app.capabilities.skills.entries = vec![SkillEntry {
         name: "alpha".into(),
         description: "a".into(),
         origin: "user".into(),
@@ -674,7 +680,7 @@ fn test_skill_picker_colon_closes() {
 fn test_skill_picker_filter_select() {
     use houyicoder_protocol::frontend::skills::SkillEntry;
     let mut app = working_app();
-    app.skill_entries = vec![
+    app.capabilities.skills.entries = vec![
         SkillEntry {
             name: "alpha".into(),
             description: "a".into(),

@@ -639,7 +639,7 @@ fn draw_graph(f: &mut Frame, area: Rect, app: &App) {
 
 fn draw_tools(f: &mut Frame, area: Rect, app: &App) {
     let block = titled_block(app, "tools");
-    if app.tool_entries.is_empty() {
+    if app.capabilities.tools.entries.is_empty() {
         render_lines(
             f,
             area,
@@ -648,7 +648,7 @@ fn draw_tools(f: &mut Frame, area: Rect, app: &App) {
         );
         return;
     }
-    let mut sorted = app.tool_entries.iter().collect::<Vec<_>>();
+    let mut sorted = app.capabilities.tools.entries.iter().collect::<Vec<_>>();
     sorted.sort_by(|a, b| a.name.cmp(&b.name));
     let lines: Vec<Line> = sorted
         .iter()

@@ -137,27 +137,31 @@ pub(crate) fn draw_content(f: &mut Frame, inner: Rect, app: &App) {
         chunks[0],
     );
 
-    let count = app.skill_entries.len();
+    let count = app.capabilities.skills.entries.len();
     f.render_widget(
         Paragraph::new(format!("{count} skills discovered"))
             .style(Style::new().fg(Color::DarkGray)),
         chunks[1],
     );
 
-    if app.skill_entries.is_empty() {
+    if app.capabilities.skills.entries.is_empty() {
         f.render_widget(
             Paragraph::new("No skills found. Create skills in .houyicoder/skills/")
                 .style(Style::new().fg(Color::DarkGray)),
             chunks[2],
         );
     } else {
-        let ordered = display_order(&app.skill_entries);
+        let ordered = display_order(&app.capabilities.skills.entries);
         let sel = app
             .skills_pane
             .cursor()
             .min(ordered.len().saturating_sub(1));
         f.render_widget(
-            Paragraph::new(grouped_lines(&ordered, sel, &app.skill_disabled)),
+            Paragraph::new(grouped_lines(
+                &ordered,
+                sel,
+                &app.capabilities.skills.disabled,
+            )),
             chunks[2],
         );
     }
@@ -189,8 +193,13 @@ fn draw_detail(f: &mut Frame, inner: Rect, app: &App, detail: &SkillDetail) {
     let name = match detail {
         SkillDetail::Loading { name, .. } | SkillDetail::Open { name, .. } => name.as_str(),
     };
-    let entry = app.skill_entries.iter().find(|e| e.name == name);
-    let user_disabled = app.skill_disabled.contains(name);
+    let entry = app
+        .capabilities
+        .skills
+        .entries
+        .iter()
+        .find(|e| e.name == name);
+    let user_disabled = app.capabilities.skills.disabled.contains(name);
     f.render_widget(
         Paragraph::new(header_lines(entry, name, user_disabled)),
         rows[0],

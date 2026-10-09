@@ -20,7 +20,7 @@ fn test_skills_pane_detail_renders() {
     let mut app = composition::app();
     app.screen = Screen::Working;
     app.pane = Pane::Skills;
-    app.skill_entries = vec![SkillEntry {
+    app.capabilities.skills.entries = vec![SkillEntry {
         name: "deep-review".into(),
         description: "the review standard".into(),
         origin: "project".into(),
@@ -48,7 +48,7 @@ fn test_detail_wraps_long_description() {
     let mut app = composition::app();
     app.screen = Screen::Working;
     app.pane = Pane::Skills;
-    app.skill_entries = vec![SkillEntry {
+    app.capabilities.skills.entries = vec![SkillEntry {
         name: "find-skills".into(),
         description: "Helps users discover and install agent skills when they ask questions like \
                       how do I do X, find a skill for X, or express interest in"
@@ -74,7 +74,7 @@ fn test_detail_body_scrolls() {
     let mut app = composition::app();
     app.screen = Screen::Working;
     app.pane = Pane::Skills;
-    app.skill_entries = vec![SkillEntry {
+    app.capabilities.skills.entries = vec![SkillEntry {
         name: "alpha".into(),
         description: "a skill".into(),
         origin: "user".into(),
@@ -115,7 +115,7 @@ fn test_detail_body_unavailable() {
     let mut app = composition::app();
     app.screen = Screen::Working;
     app.pane = Pane::Skills;
-    app.skill_entries = vec![SkillEntry {
+    app.capabilities.skills.entries = vec![SkillEntry {
         name: "alpha".into(),
         description: "a skill".into(),
         origin: "user".into(),
@@ -136,7 +136,7 @@ fn test_skills_pane_disabled_glyph() {
     let mut app = composition::app();
     app.screen = Screen::Working;
     app.pane = Pane::Skills;
-    app.skill_entries = vec![SkillEntry {
+    app.capabilities.skills.entries = vec![SkillEntry {
         name: "stale".into(),
         description: "a stale skill".into(),
         origin: "user".into(),
@@ -145,7 +145,7 @@ fn test_skills_pane_disabled_glyph() {
         user_invocable: true,
         usage: None,
     }];
-    app.skill_disabled.insert("stale".to_string());
+    app.capabilities.skills.disabled.insert("stale".to_string());
     let out = render(&app, 80, 24);
     assert!(out.contains("○"), "disabled glyph renders: {out}");
     assert!(
@@ -170,7 +170,7 @@ fn test_detail_usage_invoked() {
     let mut app = composition::app();
     app.screen = Screen::Working;
     app.pane = Pane::Skills;
-    app.skill_entries = vec![SkillEntry {
+    app.capabilities.skills.entries = vec![SkillEntry {
         name: "alpha".into(),
         description: "a skill".into(),
         origin: "user".into(),
@@ -197,7 +197,7 @@ fn test_detail_usage_never() {
     let mut app = composition::app();
     app.screen = Screen::Working;
     app.pane = Pane::Skills;
-    app.skill_entries = vec![SkillEntry {
+    app.capabilities.skills.entries = vec![SkillEntry {
         name: "beta".into(),
         description: "b skill".into(),
         origin: "user".into(),
@@ -224,7 +224,7 @@ fn test_user_only_skill_glyph() {
     let mut app = composition::app();
     app.screen = Screen::Working;
     app.pane = Pane::Skills;
-    app.skill_entries = vec![SkillEntry {
+    app.capabilities.skills.entries = vec![SkillEntry {
         name: "managed".into(),
         description: "user-only skill".into(),
         origin: "managed".into(),

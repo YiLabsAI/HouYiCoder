@@ -112,7 +112,11 @@ ACTIVE_OWNERS = {
         # poll stamp, and the pending-command flag) became one StatusCapability
         # under the same composition; four flat fields folded into the one App
         # field named capabilities.
-        "fields": 89,
+        # The entry caches (registered hooks, registered tools, discovered
+        # skills, and the session disable set) became three capabilities under
+        # the same composition; four flat fields folded into the one App field
+        # named capabilities.
+        "fields": 85,
         "mut_app": 44,
     },
     "crates/houyicoder-tui/src/session/capabilities.rs:PermissionCapability": {
@@ -132,8 +136,26 @@ ACTIVE_OWNERS = {
     },
     "crates/houyicoder-tui/src/session/capabilities.rs:SessionCapabilities": {
         # The static composition of a session's named capabilities: the
-        # permission and status capabilities. The catalog caches join it in a
-        # following increment.
+        # permission, status, hooks, tools, and skills capabilities. The
+        # connection, run, and transcript live beside it, not inside it.
+        "fields": 5,
+    },
+    "crates/houyicoder-tui/src/session/capabilities.rs:HooksCapability": {
+        # The session's registered-hook cache: the rows the /hooks pane
+        # renders, refreshed by the server reply and read by the pane. One
+        # capability value rather than a flat App field beside unrelated state.
+        "fields": 1,
+    },
+    "crates/houyicoder-tui/src/session/capabilities.rs:ToolsCapability": {
+        # The session's discovered-tool cache: the rows the /tools pane
+        # renders, refreshed by the server reply and read by the pane.
+        "fields": 1,
+    },
+    "crates/houyicoder-tui/src/session/capabilities.rs:SkillsCapability": {
+        # The session's discovered-skill cache and the session disable set:
+        # the rows the /skills pane renders plus the names the user disabled.
+        # One capability value so the pane reads the entries and the disables
+        # from one owner rather than two flat App fields.
         "fields": 2,
     },
     "crates/houyicoder-tui/src/last_row_keys.rs:LastRowKeys": {

@@ -289,11 +289,11 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
         }
         KeyCode::Up if app.pane == Pane::Skills => {
             app.skills_pane
-                .move_cursor(-1, display_order(&app.skill_entries).len());
+                .move_cursor(-1, display_order(&app.capabilities.skills.entries).len());
         }
         KeyCode::Down if app.pane == Pane::Skills => {
             app.skills_pane
-                .move_cursor(1, display_order(&app.skill_entries).len());
+                .move_cursor(1, display_order(&app.capabilities.skills.entries).len());
         }
         KeyCode::Enter if app.pane == Pane::Skills => {
             app.open_skill_detail();
@@ -339,7 +339,9 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
         }
         KeyCode::Down if app.pane == Pane::Hooks && app.hooks_pane.level.get() == 0 => {
             let len = app
-                .hook_entries
+                .capabilities
+                .hooks
+                .entries
                 .iter()
                 .filter(|h| h.source == "framework")
                 .count();

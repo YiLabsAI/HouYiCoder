@@ -169,7 +169,7 @@ impl App {
         let content = vec![ContentBlock::Text {
             text: input.clone(),
         }];
-        let disabled_skills = self.skill_disabled.clone();
+        let disabled_skills = self.capabilities.skills.disabled.clone();
         // Send before touching any run state: a dead driver must not leave a
         // fake running turn behind.
         if let Err(e) = self.enqueue(ClientCommand::SendMessage {

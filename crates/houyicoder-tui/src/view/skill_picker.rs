@@ -28,7 +28,7 @@ pub(crate) fn filtered_skills(
         .value()
         .strip_prefix('@')
         .unwrap_or_else(|| app.input.value());
-    let ordered = display_order(&app.skill_entries);
+    let ordered = display_order(&app.capabilities.skills.entries);
     if query.is_empty() {
         ordered
     } else {
@@ -201,7 +201,7 @@ mod tests {
     fn test_picker_renders_open() {
         let mut app = crate::composition::app();
         app.screen = crate::state::Screen::Working;
-        app.skill_entries = vec![houyicoder_protocol::frontend::skills::SkillEntry {
+        app.capabilities.skills.entries = vec![houyicoder_protocol::frontend::skills::SkillEntry {
             name: "alpha".to_string(),
             description: "does alpha".to_string(),
             origin: "user".to_string(),
@@ -234,7 +234,7 @@ mod tests {
     fn test_picker_filter() {
         let mut app = crate::composition::app();
         app.screen = crate::state::Screen::Working;
-        app.skill_entries = vec![
+        app.capabilities.skills.entries = vec![
             houyicoder_protocol::frontend::skills::SkillEntry {
                 name: "alpha".to_string(),
                 description: "a".to_string(),
@@ -267,7 +267,7 @@ mod tests {
     fn test_picker_hidden_closed() {
         let mut app = crate::composition::app();
         app.screen = crate::state::Screen::Working;
-        app.skill_entries = vec![houyicoder_protocol::frontend::skills::SkillEntry {
+        app.capabilities.skills.entries = vec![houyicoder_protocol::frontend::skills::SkillEntry {
             name: "alpha".to_string(),
             description: "does alpha".to_string(),
             origin: "user".to_string(),
