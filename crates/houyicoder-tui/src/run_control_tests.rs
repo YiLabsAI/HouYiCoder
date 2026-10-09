@@ -757,7 +757,7 @@ fn test_slash_queries_ship_connected() {
 
     app.run_command(SlashCommand::Status);
     assert!(
-        app.capabilities.status.pending_status_command,
+        app.session.capabilities.status.pending_status_command,
         "Status sets the pending-command flag"
     );
     assert_eq!(
@@ -852,6 +852,7 @@ fn test_agents_tools_round_trip() {
     for _ in 0..300 {
         app.poll_agent();
         if app
+            .session
             .capabilities
             .tools
             .entries

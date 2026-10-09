@@ -380,9 +380,10 @@ fn test_status_snapshot_accumulates_live() {
     // The TUI holds no engine handle, so the tally arrives over the wire: pump
     // the periodic status poll until the driver routes it back.
     pump_until(&mut app, 200, |a| {
-        a.capabilities.status.status_cache.is_some()
+        a.session.capabilities.status.status_cache.is_some()
     });
     let snap = app
+        .session
         .capabilities
         .status
         .status_cache

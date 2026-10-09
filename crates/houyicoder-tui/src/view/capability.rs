@@ -69,17 +69,17 @@ pub(crate) fn draw_permission_content(f: &mut Frame, area: Rect, app: &App) {
     let tab = app.permission_pane.tab;
     let rules = crate::permission_input::filtered_rules(
         tab,
-        &app.capabilities.permission.rules_cache,
+        &app.session.capabilities.permission.rules_cache,
         crate::permission_input::search_query(app),
     );
-    let denials = filtered_denials(&app.capabilities.permission.verdict_log_cache);
+    let denials = filtered_denials(&app.session.capabilities.permission.verdict_log_cache);
     // Clamp the cursor against the list the focused tab actually renders —
     // Workspace shows dirs (not rules), Recent shows denials, the rule tabs
     // show rules. Clamping against max(rules, denials) let the Workspace
     // cursor run past the dirs list (highlight vanished) when the denial log
     // was longer than the dirs list.
     let list_len = match tab {
-        PermissionTab::Workspace => app.capabilities.permission.dirs_cache.len(),
+        PermissionTab::Workspace => app.session.capabilities.permission.dirs_cache.len(),
         PermissionTab::Recent => denials.len(),
         PermissionTab::Allow | PermissionTab::Ask | PermissionTab::Deny => rules.len(),
     };
@@ -298,18 +298,19 @@ fn permission_workspace_body(app: &App, cursor: usize) -> Paragraph<'static> {
     } else {
         &app.session.identity.working_dir
     };
+    let dirs = &app.session.capabilities.permission.dirs_cache;
     let mut lines: Vec<Line<'static>> = vec![
         Line::from(format!("- {cwd}  (original working directory)"))
             .style(Style::new().fg(Color::White)),
         Line::from("").style(Style::new().fg(Color::White)),
     ];
-    if app.capabilities.permission.dirs_cache.is_empty() {
+    if dirs.is_empty() {
         lines.push(
             Line::from("(no additional directories — a to add one)")
                 .style(Style::new().fg(Color::DarkGray)),
         );
     } else {
-        for (i, dir) in app.capabilities.permission.dirs_cache.iter().enumerate() {
+        for (i, dir) in dirs.iter().enumerate() {
             let row = format!("- {dir}");
             let style = if i == cursor {
                 Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)
@@ -637,7 +638,8 @@ fn draw_graph(f: &mut Frame, area: Rect, app: &App) {
 
 fn draw_tools(f: &mut Frame, area: Rect, app: &App) {
     let block = titled_block(app, "tools");
-    if app.capabilities.tools.entries.is_empty() {
+    let tools = &app.session.capabilities.tools;
+    if tools.entries.is_empty() {
         render_lines(
             f,
             area,
@@ -646,7 +648,7 @@ fn draw_tools(f: &mut Frame, area: Rect, app: &App) {
         );
         return;
     }
-    let mut sorted = app.capabilities.tools.entries.iter().collect::<Vec<_>>();
+    let mut sorted = tools.entries.iter().collect::<Vec<_>>();
     sorted.sort_by(|a, b| a.name.cmp(&b.name));
     let lines: Vec<Line> = sorted
         .iter()

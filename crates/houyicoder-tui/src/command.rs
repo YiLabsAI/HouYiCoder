@@ -84,7 +84,7 @@ impl App {
                 // it — the ContextResult replaces this grid with fresh data.
                 // No cache yet (first /context on a fresh session): the
                 // server's prospective breakdown fills it on the first reply.
-                if let Some(breakdown) = self.capabilities.status.context_cache.clone() {
+                if let Some(breakdown) = self.session.capabilities.status.context_cache.clone() {
                     let suggestions = crate::composition::suggestions_for(&breakdown);
                     let view = crate::records::ContextView {
                         breakdown,
@@ -123,7 +123,7 @@ impl App {
                             // refused enqueue stays quiet: the ConnectionLost
                             // event announces the loss.
                             if s.enqueue(ClientCommand::StatusQuery { req_id }).is_ok() {
-                                self.capabilities.status.pending_status_command = true;
+                                self.session.capabilities.status.pending_status_command = true;
                             }
                         }
                         Err(_) => self.note_request_id_exhausted(),
@@ -296,7 +296,7 @@ impl App {
     }
 
     pub(crate) fn snapshot_or_stub(&self) -> StatusSnapshot {
-        let status_cache = self.capabilities.status.status_cache.clone();
+        let status_cache = self.session.capabilities.status.status_cache.clone();
         status_cache.unwrap_or_else(|| StatusSnapshot {
             model: self.status.model.clone(),
             breaker_state: None,
@@ -325,7 +325,8 @@ impl App {
         // one starts at the frame cap instead of an earlier window.
         self.session.loaded_from_frame.set(usize::MAX);
         self.verdict_cursor = 0;
-        self.capabilities.permission.verdict_log_cache.clear();
+        let verdict_log = &mut self.session.capabilities.permission.verdict_log_cache;
+        verdict_log.clear();
         self.session.todos.clear();
         // Reset the server's cumulative usage tally + audit trajectory so
         // /context reflects the new session only. Fire-and-forget: the host

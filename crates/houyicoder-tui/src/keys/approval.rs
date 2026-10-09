@@ -114,7 +114,8 @@ pub(super) fn handle_approval(app: &mut App, k: KeyEvent) {
                     approval_scope(a),
                 )
             };
-            app.capabilities
+            app.session
+                .capabilities
                 .permission
                 .sticky_choices
                 .insert(tool, kind);
@@ -147,7 +148,7 @@ pub(super) fn handle_approval(app: &mut App, k: KeyEvent) {
                 Some(a) => (a.call_id.clone(), a.tool.clone()),
                 None => return,
             };
-            app.capabilities.permission.sticky_choices.insert(
+            app.session.capabilities.permission.sticky_choices.insert(
                 tool,
                 houyicoder_protocol::acp_wire::PermissionOptionKind::RejectOnce,
             );

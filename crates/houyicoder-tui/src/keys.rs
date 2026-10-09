@@ -132,7 +132,7 @@ pub fn handle_working(app: &mut App, k: KeyEvent) {
         app.skill_picker.sel.set(0);
         // If skills haven't been queried yet (the user hasn't opened
         // /skills), fetch them now so the picker isn't empty.
-        if app.capabilities.skills.entries.is_empty()
+        if app.session.capabilities.skills.entries.is_empty()
             && let Some(s) = app.session.connection.as_ref()
         {
             match s.next_request_id() {

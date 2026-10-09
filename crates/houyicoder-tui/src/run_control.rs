@@ -165,7 +165,7 @@ impl App {
         let content = vec![ContentBlock::Text {
             text: input.clone(),
         }];
-        let disabled_skills = self.capabilities.skills.disabled.clone();
+        let disabled_skills = self.session.capabilities.skills.disabled.clone();
         // Send before touching any run state: a dead driver must not leave a
         // fake running turn behind.
         if let Err(e) = self.enqueue(ClientCommand::SendMessage {
@@ -360,7 +360,7 @@ impl App {
     /// Select the initial approval choice. A remembered verdict wins;
     /// automatic mode and the default both select one-time approval.
     fn initial_cursor(&self, tool: &str) -> usize {
-        let permission = &self.capabilities.permission;
+        let permission = &self.session.capabilities.permission;
         if let Some(kind) = permission.sticky_choices.get(tool) {
             return Approval::index_for_kind(*kind);
         }
@@ -410,7 +410,8 @@ impl App {
                 break;
             };
             self.handle_agent_message(message);
-            if self.pending_trust().is_some() || self.capabilities.status.status_cache.is_some() {
+            let status_present = self.session.capabilities.status.status_cache.is_some();
+            if self.pending_trust().is_some() || status_present {
                 break;
             }
         }
@@ -476,12 +477,12 @@ impl App {
         // Refresh status while idle. Active runs and reverse requests retain
         // exclusive ownership of response frames.
         const STATUS_POLL_INTERVAL_SECS: u64 = 1;
-        let last_poll = self.capabilities.status.last_status_poll;
+        let last_poll = self.session.capabilities.status.last_status_poll;
         let poll_due = last_poll
             .map(|t| t.elapsed().as_secs() >= STATUS_POLL_INTERVAL_SECS)
             .unwrap_or(true);
         if !self.agent_busy() && !self.reverse_request_in_flight() && poll_due {
-            self.capabilities.status.last_status_poll = Some(Instant::now());
+            self.session.capabilities.status.last_status_poll = Some(Instant::now());
             if let Some(s) = self.session.connection.as_ref() {
                 match s.next_request_id() {
                     Ok(req_id) => {
@@ -489,7 +490,7 @@ impl App {
                             // Seed the mode cache once so the status pill renders at
                             // startup. A refused enqueue stays quiet: the
                             // ConnectionLost event announces the loss.
-                            if self.capabilities.permission.mode_cache.is_none() {
+                            if self.session.capabilities.permission.mode_cache.is_none() {
                                 match s.next_request_id() {
                                     Ok(req_id) => {
                                         let _ = s

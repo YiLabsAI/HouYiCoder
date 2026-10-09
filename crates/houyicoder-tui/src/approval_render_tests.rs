@@ -132,7 +132,7 @@ fn test_option3_no_duplicate_result() {
     // verdict + system line, then resume with an approve decision -- the
     // exact side effects of handle_approval Enter with selected=2.
     let call_id = app.approval().unwrap().call_id.clone();
-    app.capabilities.permission.rules_cache.push(
+    app.session.capabilities.permission.rules_cache.push(
         houyicoder_protocol::frontend::permission::PermissionRule {
             action: "boom".to_string(),
             content: None,

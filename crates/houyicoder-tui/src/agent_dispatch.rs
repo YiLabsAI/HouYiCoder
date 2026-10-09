@@ -414,11 +414,11 @@ impl App {
             ServerResponse::Status { snapshot } => {
                 // Cache the snapshot for the status bar + /status pane. NOTE:
                 // rename's reply rides this variant (a racing /status is swallowed).
-                self.capabilities.status.pending_status_command = false;
+                self.session.capabilities.status.pending_status_command = false;
                 // Sync the terminal tab title (OSC 0/2) on change only (not
                 // unconditionally every status update).
                 sync_terminal_title(&snapshot, &mut self.last_title);
-                self.capabilities.status.status_cache = Some(*snapshot);
+                self.session.capabilities.status.status_cache = Some(*snapshot);
             }
             ServerResponse::Trajectory { entries, redundant } => {
                 self.system_line(render_trajectory_wire(&entries, &redundant));
@@ -434,17 +434,17 @@ impl App {
                 // next render. No transcript line — mode switching is a
                 // background state change, not a conversation event. The
                 // /mode command pushes its own feedback when invoked.
-                self.capabilities.permission.mode_cache = Some(mode);
+                self.session.capabilities.permission.mode_cache = Some(mode);
             }
             ServerResponse::PermissionRules { rules } => {
-                self.capabilities.permission.rules_cache = rules.clone();
+                self.session.capabilities.permission.rules_cache = rules.clone();
                 self.system_line(render_permission_rules_wire(&rules));
             }
             ServerResponse::PermissionDirs { dirs } => {
-                self.capabilities.permission.dirs_cache = dirs.clone();
+                self.session.capabilities.permission.dirs_cache = dirs.clone();
             }
             ServerResponse::PermissionAskBeforeGit { enabled } => {
-                self.capabilities.permission.ask_before_git_enabled = enabled;
+                self.session.capabilities.permission.ask_before_git_enabled = enabled;
                 self.system_line(format!(
                     "permission: ask before git operations: {} (git commit/rebase/reset/tag {} before running)",
                     if enabled { "on" } else { "off" },
@@ -452,7 +452,7 @@ impl App {
                 ));
             }
             ServerResponse::Tools { tools } => {
-                self.capabilities.tools.entries = tools;
+                self.session.capabilities.tools.entries = tools;
             }
             ServerResponse::Agents { directory } => {
                 self.agent_directory = Some(directory);
@@ -461,10 +461,10 @@ impl App {
                 self.apply_child_transcript(child_sid, frames);
             }
             ServerResponse::Hooks { hooks } => {
-                self.capabilities.hooks.entries = hooks;
+                self.session.capabilities.hooks.entries = hooks;
             }
             ServerResponse::Skills { skills } => {
-                self.capabilities.skills.entries = skills;
+                self.session.capabilities.skills.entries = skills;
             }
             ServerResponse::SkillBody { body } => {
                 self.skills_pane.apply_detail(request, body);
@@ -534,7 +534,7 @@ impl App {
     /// Drill-down (memory files, skills) is empty until the server ships
     /// those sections; the grid itself is honest data from the breakdown.
     fn apply_context_breakdown(&mut self, breakdown: ContextBreakdown) {
-        self.capabilities.status.context_cache = Some(breakdown.clone());
+        self.session.capabilities.status.context_cache = Some(breakdown.clone());
         let suggestions = suggestions_for(&breakdown);
         let view = ContextView {
             breakdown,

@@ -49,7 +49,6 @@ use crate::run_state::{RunProgress, RunState};
 use crate::selection::ClipboardWriter;
 use crate::selections::Selections;
 use crate::session::Session;
-use crate::session::capabilities::SessionCapabilities;
 use crate::session::persistence::SessionPersistence;
 use crate::skill_picker_state::SkillPickerState;
 use crate::skills_state::SkillsPaneState;
@@ -244,11 +243,6 @@ pub struct App {
     /// buffer text and the last-chunk timestamp together so a flush check
     /// drains and restores both as one value.
     pub(crate) pending_paste: PendingPaste,
-    /// The session's named capability composition: the server-reported caches
-    /// plus the client-local session state each capability keeps (such as the
-    /// disabled-skill set), together as one value rather than a scatter of
-    /// flat fields.
-    pub(crate) capabilities: SessionCapabilities,
     /// The permission pane state: the selected tab, the cursor row, the
     /// typed-input sub-mode, and the pane-local search buffer. Pub(crate) so
     /// the key handler and render path reach a field directly; the whole value

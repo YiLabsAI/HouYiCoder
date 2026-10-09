@@ -16,7 +16,7 @@ fn test_second_context_one_grid() {
     app.screen = crate::state::Screen::Working;
     // The cache a first /context filled stands in for that reply: the fast
     // path renders from it without a round trip.
-    app.capabilities.status.context_cache = Some(stub_breakdown());
+    app.session.capabilities.status.context_cache = Some(stub_breakdown());
     app.run_command(SlashCommand::Context);
     let grids = |app: &App| {
         app.transcript
@@ -74,13 +74,13 @@ fn test_context_cache_renders_repeat() {
     app.run_command(SlashCommand::Context);
     for _ in 0..1000 {
         app.poll_agent();
-        if app.capabilities.status.context_cache.is_some() {
+        if app.session.capabilities.status.context_cache.is_some() {
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(2));
     }
     assert!(
-        app.capabilities.status.context_cache.is_some(),
+        app.session.capabilities.status.context_cache.is_some(),
         "first /context populates cache"
     );
     // Assert the REAL dispatch output renders (② rendered buffer, not just ①

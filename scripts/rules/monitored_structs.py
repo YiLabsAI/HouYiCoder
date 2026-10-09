@@ -153,21 +153,28 @@ ACTIVE_OWNERS = {
         # pending reverse ask then joined it: it awaits a verdict on the
         # session, not on the shell. The transcript read state joined it
         # last: the dispatched history reads, the full-scan index progress,
-        # and the loaded-frame boundary all reset with the session.
-        "fields": 52,
+        # and the loaded-frame boundary all reset with the session. The
+        # named capabilities joined it after that: the server-reported
+        # permission, status, hooks, tools, and skills caches travel as one
+        # session value and reset on a switch, so a new session starts with
+        # an empty cache instead of inheriting the previous one's server
+        # view.
+        "fields": 51,
         "mut_app": 44,
     },
     "crates/houyicoder-tui/src/session.rs:Session": {
         # The presented session: its stable identity, the optional live
         # engine connection, the in-flight run lifecycle, the run tally, the
         # pending reverse ask, the interruption restore stash, the
-        # checklist, and the transcript read state (the dispatched history
-        # reads, the full-scan index progress, and the loaded-frame
-        # boundary), held as one value so a swap replaces the whole set at
-        # once and a lost connection never drops the identity or the
-        # already-observed state. Ten fields that formerly sat detached on
-        # App now travel as one constructor boundary.
-        "fields": 10,
+        # checklist, the named capabilities (the server-reported permission,
+        # status, hooks, tools, and skills caches), and the transcript read
+        # state (the dispatched history reads, the full-scan index progress,
+        # and the loaded-frame boundary), held as one value so a swap
+        # replaces the whole set at once and a lost connection never drops
+        # the identity or the already-observed state. Eleven fields that
+        # formerly sat detached on App now travel as one constructor
+        # boundary.
+        "fields": 11,
     },
     "crates/houyicoder-tui/src/workflow.rs:Workflow": {
         # The spec-plan-review-verify-artifact lifecycle: the stage machine,

@@ -40,7 +40,7 @@ fn test_usage_tab_shows_reasoning() {
     let mut app = crate::test_harness::working_app();
     let mut snap = app.snapshot_or_stub();
     snap.cumulative_usage.reasoning_tokens = 1500;
-    app.capabilities.status.status_cache = Some(snap);
+    app.session.capabilities.status.status_cache = Some(snap);
     let s = render_usage(&app);
     assert!(s.contains("reasoning:"), "reasoning row: {s}");
     assert!(s.contains("incl. in output"), "inclusion note: {s}");
@@ -49,7 +49,7 @@ fn test_usage_tab_shows_reasoning() {
     let mut app = crate::test_harness::working_app();
     let mut snap = app.snapshot_or_stub();
     snap.cumulative_usage.reasoning_tokens = 0;
-    app.capabilities.status.status_cache = Some(snap);
+    app.session.capabilities.status.status_cache = Some(snap);
     let s = render_usage(&app);
     assert!(!s.contains("reasoning:"), "no reasoning when 0: {s}");
 }
@@ -67,7 +67,7 @@ fn test_single_omits_per_model() {
         output_tokens: 500,
         ..Default::default()
     }];
-    app.capabilities.status.status_cache = Some(snap);
+    app.session.capabilities.status.status_cache = Some(snap);
     let s = render_usage(&app);
     assert!(
         !s.contains("Usage by model:"),
@@ -100,7 +100,7 @@ fn test_per_model_lists_models() {
             reasoning_tokens: 8_000,
         },
     ];
-    app.capabilities.status.status_cache = Some(snap);
+    app.session.capabilities.status.status_cache = Some(snap);
     let s = render_usage(&app);
     assert!(s.contains("Usage by model:"), "section header: {s}");
     let lines: Vec<&str> = s.lines().collect();
@@ -138,7 +138,7 @@ fn test_long_model_id_spacing() {
             ..Default::default()
         },
     ];
-    app.capabilities.status.status_cache = Some(snap);
+    app.session.capabilities.status.status_cache = Some(snap);
     let s = render_usage(&app);
     assert!(
         s.contains("deepseek-v4-pro-0813: 2m input"),
@@ -348,6 +348,7 @@ fn test_usage_cache_share() {
     use houyicoder_protocol::llm::Usage;
     let mut app = crate::test_harness::working_app();
     let mut snap = app
+        .session
         .capabilities
         .status
         .status_cache
@@ -360,14 +361,14 @@ fn test_usage_cache_share() {
         cache_read_input_tokens: 500,
         ..Default::default()
     };
-    app.capabilities.status.status_cache = Some(snap.clone());
+    app.session.capabilities.status.status_cache = Some(snap.clone());
     let s = render_usage(&app);
     assert!(s.contains("50.0% of input"), "the share is shown: {s}");
     snap.cumulative_usage = Usage {
         cache_read_input_tokens: 500,
         ..Default::default()
     };
-    app.capabilities.status.status_cache = Some(snap);
+    app.session.capabilities.status.status_cache = Some(snap);
     let s = render_usage(&app);
     assert!(s.contains("cached input"), "the row is present: {s}");
     assert!(s.contains("500"), "the count stands: {s}");

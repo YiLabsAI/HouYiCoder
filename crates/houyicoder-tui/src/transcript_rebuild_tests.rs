@@ -1223,12 +1223,12 @@ fn test_verdict_survives_drain() {
         "the rebuild drains the frames below the active turn"
     );
     assert_eq!(
-        app.capabilities.permission.verdict_log_cache.len(),
+        app.session.capabilities.permission.verdict_log_cache.len(),
         1,
         "the drained frame's verdict is in the audit cache"
     );
     assert_eq!(
-        app.capabilities.permission.verdict_log_cache[0].call_id,
+        app.session.capabilities.permission.verdict_log_cache[0].call_id,
         "c1"
     );
 }

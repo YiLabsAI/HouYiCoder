@@ -24,7 +24,6 @@ use crate::resume_picker::SessionPickerState;
 use crate::selection::SystemClipboard;
 use crate::selections::Selections;
 use crate::session::Session;
-use crate::session::capabilities::SessionCapabilities;
 use crate::session::identity::SessionIdentity;
 use crate::session::persistence::SessionPersistence;
 use crate::skill_picker_state::SkillPickerState;
@@ -86,7 +85,6 @@ pub fn app() -> App {
         verbose: false,
         pasted: PasteStore::default(),
         pending_paste: PendingPaste::default(),
-        capabilities: SessionCapabilities::default(),
         permission_pane: PermissionPaneState::default(),
         skills_pane: SkillsPaneState::default(),
         skill_picker: SkillPickerState::default(),

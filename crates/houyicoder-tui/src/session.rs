@@ -8,6 +8,7 @@ use std::cell::Cell;
 use crate::pending_prompt::PendingPrompt;
 use crate::run_metrics::RunMetrics;
 use crate::run_state::RunState;
+use crate::session::capabilities::SessionCapabilities;
 use crate::session::identity::SessionIdentity;
 use crate::state::history_read::HistoryReads;
 use crate::state::index_build::IndexBuild;
@@ -57,6 +58,12 @@ pub(crate) struct Session {
     /// The session checklist: derived items, expansion, and completion
     /// visibility.
     pub(crate) todos: TodoState,
+    /// The session's named capabilities: the server-reported permission,
+    /// status, hook, tool, and skill caches plus the client-local state each
+    /// capability keeps. They travel together as one session value and reset
+    /// on a switch, so a new session starts with an empty cache instead of
+    /// inheriting the previous session's server view.
+    pub(crate) capabilities: SessionCapabilities,
     /// The background reads of the working transcript and the history
     /// generation each was dispatched against. Beside the transcript, not
     /// inside it: the transcript owns the resident facts, while this owner
@@ -75,9 +82,9 @@ pub(crate) struct Session {
 
 impl Session {
     /// A session with an identity, no connection, no run in flight, an
-    /// empty tally, no pending ask, an empty checklist, and an unread
-    /// transcript: the state the default app lands in before the
-    /// composition root attaches a connection.
+    /// empty tally, no pending ask, an empty checklist, empty capability
+    /// caches, and an unread transcript: the state the default app lands
+    /// in before the composition root attaches a connection.
     pub(crate) fn bare(identity: SessionIdentity) -> Self {
         Self {
             identity,
@@ -87,6 +94,7 @@ impl Session {
             last_run_input: None,
             prompt: None,
             todos: TodoState::default(),
+            capabilities: SessionCapabilities::default(),
             history_reads: HistoryReads::default(),
             index_build: IndexBuild::default(),
             loaded_from_frame: Cell::new(usize::MAX),

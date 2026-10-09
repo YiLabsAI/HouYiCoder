@@ -28,7 +28,7 @@ pub(crate) fn filtered_skills(
         .value()
         .strip_prefix('@')
         .unwrap_or_else(|| app.input.value());
-    let ordered = display_order(&app.capabilities.skills.entries);
+    let ordered = display_order(&app.session.capabilities.skills.entries);
     if query.is_empty() {
         ordered
     } else {
@@ -201,15 +201,16 @@ mod tests {
     fn test_picker_renders_open() {
         let mut app = crate::composition::app();
         app.screen = crate::state::Screen::Working;
-        app.capabilities.skills.entries = vec![houyicoder_protocol::frontend::skills::SkillEntry {
-            name: "alpha".to_string(),
-            description: "does alpha".to_string(),
-            origin: "user".to_string(),
-            invocable: true,
-            body_token_estimate: 100,
-            user_invocable: true,
-            usage: None,
-        }];
+        app.session.capabilities.skills.entries =
+            vec![houyicoder_protocol::frontend::skills::SkillEntry {
+                name: "alpha".to_string(),
+                description: "does alpha".to_string(),
+                origin: "user".to_string(),
+                invocable: true,
+                body_token_estimate: 100,
+                user_invocable: true,
+                usage: None,
+            }];
         app.skill_picker.open = true;
         let out = crate::test_harness::render_text(&app, 80, 24);
         assert!(out.contains("alpha"), "skill name in picker: {out}");
@@ -234,7 +235,7 @@ mod tests {
     fn test_picker_filter() {
         let mut app = crate::composition::app();
         app.screen = crate::state::Screen::Working;
-        app.capabilities.skills.entries = vec![
+        app.session.capabilities.skills.entries = vec![
             houyicoder_protocol::frontend::skills::SkillEntry {
                 name: "alpha".to_string(),
                 description: "a".to_string(),
@@ -267,15 +268,16 @@ mod tests {
     fn test_picker_hidden_closed() {
         let mut app = crate::composition::app();
         app.screen = crate::state::Screen::Working;
-        app.capabilities.skills.entries = vec![houyicoder_protocol::frontend::skills::SkillEntry {
-            name: "alpha".to_string(),
-            description: "does alpha".to_string(),
-            origin: "user".to_string(),
-            invocable: true,
-            body_token_estimate: 100,
-            user_invocable: true,
-            usage: None,
-        }];
+        app.session.capabilities.skills.entries =
+            vec![houyicoder_protocol::frontend::skills::SkillEntry {
+                name: "alpha".to_string(),
+                description: "does alpha".to_string(),
+                origin: "user".to_string(),
+                invocable: true,
+                body_token_estimate: 100,
+                user_invocable: true,
+                usage: None,
+            }];
         let out = crate::test_harness::render_text(&app, 80, 24);
         assert!(
             !out.contains("Enter to insert"),
