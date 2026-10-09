@@ -80,7 +80,7 @@ fn fresh_app() -> App {
 /// The question is whether a record is on file, not whether a worker runs: a
 /// read can have finished and left its result waiting for the pump.
 fn pump_history_read_blocking(app: &mut App, timeout: Duration) -> bool {
-    if !app.history_reads.holds_pending() {
+    if !app.session.history_reads.holds_pending() {
         return false;
     }
     let start = Instant::now();
@@ -98,7 +98,7 @@ fn pump_history_read_blocking(app: &mut App, timeout: Duration) -> bool {
 /// exits, so the count right after a landing can still see it on its way out.
 fn wait_for_workers_to_leave(app: &App) {
     let deadline = Instant::now() + Duration::from_secs(5);
-    while app.history_reads.running() > 0 && Instant::now() < deadline {
+    while app.session.history_reads.running() > 0 && Instant::now() < deadline {
         thread::sleep(Duration::from_millis(2));
     }
 }
@@ -575,7 +575,7 @@ fn test_prepend_survives_rebuild() {
         app.transcript.push_frame(user_msg(&format!("recent {i}")));
     }
     app.rebuild_transcript();
-    assert!(app.loaded_from_frame.get() > 0);
+    assert!(app.session.loaded_from_frame.get() > 0);
     app.whole_scroll_mut().jump_to(0);
     app.load_older_frames();
     pump_history_read_blocking(&mut app, Duration::from_secs(5));
@@ -999,7 +999,7 @@ fn test_scrollback_survives_frame() {
     app.rebuild_transcript();
     // Scroll away and load older frames until the history boundary hits zero.
     app.whole_scroll_mut().jump_to(0);
-    while app.loaded_from_frame.get() > 0 {
+    while app.session.loaded_from_frame.get() > 0 {
         app.load_older_frames();
         pump_history_read_blocking(&mut app, Duration::from_secs(5));
     }
@@ -1287,11 +1287,11 @@ fn test_scrollback_stops_at_front() {
         "the drain leaves a loadable range below the frame cap: front={base}"
     );
     app.whole_scroll_mut().jump_to(0);
-    app.loaded_from_frame.set(base + 1);
+    app.session.loaded_from_frame.set(base + 1);
     app.load_older_frames();
     pump_history_read_blocking(&mut app, Duration::from_secs(5));
     assert_eq!(
-        app.loaded_from_frame.get(),
+        app.session.loaded_from_frame.get(),
         base,
         "the loaded boundary stops at the resident front"
     );
@@ -1355,9 +1355,9 @@ fn test_load_boundary_keeps_draining() {
     app.load_older_frames();
     pump_history_read_blocking(&mut app, Duration::from_secs(5));
     assert!(
-        app.loaded_from_frame.get() < 100,
+        app.session.loaded_from_frame.get() < 100,
         "the load reaches below the frame cap: {}",
-        app.loaded_from_frame.get()
+        app.session.loaded_from_frame.get()
     );
     for i in 600..1000 {
         pump(&mut app, user_msg(&format!("{i} {text}")));
@@ -1808,7 +1808,11 @@ fn test_dispatch_front_after_drain() {
         front_after > front_before,
         "the in-dispatch rebuild drained the resident front"
     );
-    let pending = app.history_reads.take().expect("a read was dispatched");
+    let pending = app
+        .session
+        .history_reads
+        .take()
+        .expect("a read was dispatched");
     assert_eq!(
         pending.dispatch_front, front_after,
         "dispatch_front is the front after the rebuild, not before it"
@@ -1849,7 +1853,7 @@ fn test_stale_history_read_dropped() {
     );
     wait_for_workers_to_leave(&app);
     assert_eq!(
-        app.history_reads.running(),
+        app.session.history_reads.running(),
         0,
         "throwing the stale result away still let its worker leave, so the \
          budget is free for the scroll that asks again"

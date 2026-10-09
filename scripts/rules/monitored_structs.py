@@ -151,19 +151,23 @@ ACTIVE_OWNERS = {
         # switch, not on the run state machine. The checklist joined last:
         # it is transcript content, so it shares the session's lifetime. The
         # pending reverse ask then joined it: it awaits a verdict on the
-        # session, not on the shell.
-        "fields": 55,
+        # session, not on the shell. The transcript read state joined it
+        # last: the dispatched history reads, the full-scan index progress,
+        # and the loaded-frame boundary all reset with the session.
+        "fields": 52,
         "mut_app": 44,
     },
     "crates/houyicoder-tui/src/session.rs:Session": {
         # The presented session: its stable identity, the optional live
         # engine connection, the in-flight run lifecycle, the run tally, the
-        # pending reverse ask, the interruption restore stash, and the
-        # checklist, held as one value so a swap replaces the whole set at
+        # pending reverse ask, the interruption restore stash, the
+        # checklist, and the transcript read state (the dispatched history
+        # reads, the full-scan index progress, and the loaded-frame
+        # boundary), held as one value so a swap replaces the whole set at
         # once and a lost connection never drops the identity or the
-        # already-observed state. Seven fields that formerly sat detached on
+        # already-observed state. Ten fields that formerly sat detached on
         # App now travel as one constructor boundary.
-        "fields": 7,
+        "fields": 10,
     },
     "crates/houyicoder-tui/src/workflow.rs:Workflow": {
         # The spec-plan-review-verify-artifact lifecycle: the stage machine,

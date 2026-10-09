@@ -137,11 +137,6 @@ pub struct App {
     /// skip-set). Backed by a JSONL file at the config home.
     pub history: HistoryNav,
     pub transcript: transcript::Transcript,
-    /// The background history reads of the working transcript and the history
-    /// generation each was dispatched against. Beside the transcript, not
-    /// inside it: the transcript owns the resident facts, while this owner
-    /// governs a read task's lifecycle across those facts being reset.
-    pub history_reads: history_read::HistoryReads,
     /// Cursor into the frame log for the verdict audit cache. Stays on App:
     /// verdicts are an audit capability, not transcript content.
     pub verdict_cursor: usize,
@@ -155,9 +150,6 @@ pub struct App {
     /// them together. Pub(crate) so the draw pass reads and writes a vector
     /// directly, matching the per-vector visible_window slices.
     pub(crate) display_rows_cache: DisplayRowsCache,
-    /// The G full-scan index build's progress mirror and pending chunk, held
-    /// in one owner.
-    pub(crate) index_build: index_build::IndexBuild,
     /// The session's injected persistence collaborators.
     pub(crate) persistence: SessionPersistence,
     /// The session picker overlay state (opened by /resume with no arg).
@@ -274,11 +266,6 @@ pub struct App {
     /// key handler and render path step a field directly; the level and the
     /// selection move together on enter and return.
     pub(crate) hooks_pane: HooksPaneState,
-    /// The oldest frame the scrollback has loaded, in absolute frame
-    /// coordinates, or usize::MAX before any load. It is the view's requested
-    /// boundary; the transcript's resident front is the memory boundary, and a
-    /// load stops at it since a drained frame cannot be rendered.
-    pub loaded_from_frame: Cell<usize>,
     /// The /model picker: host snapshot, draft, and the commit in flight.
     pub model_picker: ModelPickerState,
     /// The active /status sub-tab (Status / Config / Usage). Tab or Left/Right

@@ -3,10 +3,14 @@
 //! counter, and driver task. Session is the presented session, pairing the
 //! stable identity with that optional live connection.
 
+use std::cell::Cell;
+
 use crate::pending_prompt::PendingPrompt;
 use crate::run_metrics::RunMetrics;
 use crate::run_state::RunState;
 use crate::session::identity::SessionIdentity;
+use crate::state::history_read::HistoryReads;
+use crate::state::index_build::IndexBuild;
 use crate::todo_view::TodoState;
 
 pub(crate) mod capabilities;
@@ -20,7 +24,8 @@ pub use connection::{
 
 /// The presented session: its stable identity, the optional live engine
 /// connection, the in-flight run lifecycle, the run tally, the pending
-/// reverse ask, the restore stash, and the checklist. The identity is
+/// reverse ask, the restore stash, the checklist, and the transcript read
+/// state. The identity is
 /// always present. The
 /// connection is a capability the session holds while connected and may
 /// lose without losing the identity or the already-observed state; the
@@ -52,13 +57,27 @@ pub(crate) struct Session {
     /// The session checklist: derived items, expansion, and completion
     /// visibility.
     pub(crate) todos: TodoState,
+    /// The background reads of the working transcript and the history
+    /// generation each was dispatched against. Beside the transcript, not
+    /// inside it: the transcript owns the resident facts, while this owner
+    /// governs a read task's lifecycle across those facts being reset.
+    pub(crate) history_reads: HistoryReads,
+    /// The full transcript scan's index progress mirror and pending chunk,
+    /// held in one owner.
+    pub(crate) index_build: IndexBuild,
+    /// The oldest frame the scrollback has loaded, in absolute frame
+    /// coordinates, or usize::MAX before any load. It is the view's
+    /// requested boundary; the transcript's resident front is the memory
+    /// boundary, and a load stops at it since a drained frame cannot be
+    /// rendered.
+    pub(crate) loaded_from_frame: Cell<usize>,
 }
 
 impl Session {
     /// A session with an identity, no connection, no run in flight, an
-    /// empty tally, no pending ask, and an empty checklist: the state the
-    /// default app lands in before the composition root attaches a
-    /// connection.
+    /// empty tally, no pending ask, an empty checklist, and an unread
+    /// transcript: the state the default app lands in before the
+    /// composition root attaches a connection.
     pub(crate) fn bare(identity: SessionIdentity) -> Self {
         Self {
             identity,
@@ -68,6 +87,9 @@ impl Session {
             last_run_input: None,
             prompt: None,
             todos: TodoState::default(),
+            history_reads: HistoryReads::default(),
+            index_build: IndexBuild::default(),
+            loaded_from_frame: Cell::new(usize::MAX),
         }
     }
 }

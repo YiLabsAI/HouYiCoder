@@ -29,8 +29,6 @@ use crate::session::identity::SessionIdentity;
 use crate::session::persistence::SessionPersistence;
 use crate::skill_picker_state::SkillPickerState;
 use crate::skills_state::SkillsPaneState;
-use crate::state::history_read::HistoryReads;
-use crate::state::index_build::IndexBuild;
 use crate::state::transcript::Transcript;
 use crate::state::{
     ModelPickerState, ParkedViewStates, QueueViewState, StatusTab, TrajectoryPaneState,
@@ -47,7 +45,6 @@ pub fn app() -> App {
         input: InputField::new(),
         history: HistoryNav::default(),
         transcript: Transcript::default(),
-        history_reads: HistoryReads::default(),
         verdict_cursor: 0,
         transcript_view: Default::default(),
         display_rows_cache: {
@@ -55,7 +52,6 @@ pub fn app() -> App {
             c.version.set(u64::MAX);
             c
         },
-        index_build: IndexBuild::default(),
         persistence: SessionPersistence::default(),
         resume_picker: SessionPickerState::default(),
         pending_resume_target: None,
@@ -95,7 +91,6 @@ pub fn app() -> App {
         skills_pane: SkillsPaneState::default(),
         skill_picker: SkillPickerState::default(),
         hooks_pane: HooksPaneState::default(),
-        loaded_from_frame: Cell::new(usize::MAX),
         model_picker: ModelPickerState::default(),
         status_tab: StatusTab::default(),
         status_name_edit: None,

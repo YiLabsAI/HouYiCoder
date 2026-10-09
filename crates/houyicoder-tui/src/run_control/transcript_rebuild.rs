@@ -311,7 +311,7 @@ impl App {
     /// resident front, whose frames are gone.
     fn visible_frame_start(&self) -> usize {
         self.capped_frame_start()
-            .min(self.loaded_from_frame.get())
+            .min(self.session.loaded_from_frame.get())
             .max(self.transcript.frame_window_start())
     }
 
@@ -385,7 +385,7 @@ impl App {
             self.session.run.is_active(),
         )
         .len();
-        self.loaded_from_frame.set(batch_start);
+        self.session.loaded_from_frame.set(batch_start);
         if prepended == 0 {
             return;
         }
@@ -423,7 +423,7 @@ impl App {
             // running at all, matching the no-source short-circuit.
             return;
         }
-        if !self.history_reads.may_dispatch() {
+        if !self.session.history_reads.may_dispatch() {
             return;
         }
         if self.transcript.disk_row_count() >= LOG_ROW_BUDGET {
@@ -464,6 +464,7 @@ impl App {
         // slot for the length of the walk: an invalidation before that point
         // stops the worker but cannot take the slot back from it.
         let lease = self
+            .session
             .history_reads
             .dispatch(dispatch_front, dispatch_disk_front, rx);
         crate::composition::shared_runtime().spawn_blocking(move || {
@@ -486,12 +487,12 @@ impl App {
     /// Called from the loop body every pass, not inside the dirty gate, so an
     /// idle loop still picks the result up.
     pub(crate) fn pump_history_read(&mut self) -> bool {
-        let Some(pending) = self.history_reads.take() else {
+        let Some(pending) = self.session.history_reads.take() else {
             return false;
         };
         match pending.poll() {
             HistoryReadPoll::Pending => {
-                self.history_reads.put_back(pending);
+                self.session.history_reads.put_back(pending);
                 false
             }
             HistoryReadPoll::Ready(outcome) => {
@@ -529,10 +530,10 @@ impl App {
             tracing::debug!("history read dropped: the reader returned to the tail");
             return;
         }
-        if read.epoch != self.history_reads.epoch() {
+        if read.epoch != self.session.history_reads.epoch() {
             tracing::debug!(
                 read_epoch = read.epoch,
-                current = self.history_reads.epoch(),
+                current = self.session.history_reads.epoch(),
                 "history read dropped: the history was invalidated"
             );
             return;

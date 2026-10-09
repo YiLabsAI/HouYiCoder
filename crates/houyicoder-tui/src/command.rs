@@ -320,10 +320,10 @@ impl App {
         // A read running against the archived history belongs to it: drop the
         // record and move the generation on, so a late result cannot land in
         // the fresh view whose numbers match the old dispatch again.
-        self.history_reads.invalidate();
+        self.session.history_reads.invalidate();
         // The scrollback boundary belongs to the cleared session, so the next
         // one starts at the frame cap instead of an earlier window.
-        self.loaded_from_frame.set(usize::MAX);
+        self.session.loaded_from_frame.set(usize::MAX);
         self.verdict_cursor = 0;
         self.capabilities.permission.verdict_log_cache.clear();
         self.session.todos.clear();

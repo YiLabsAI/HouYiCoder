@@ -223,7 +223,7 @@ fn test_clear_resets_session() {
     app.pane = Pane::Diff;
     app.workflow.spec_ctx.step = "implementing".to_string();
     app.session.todos.set_cursor(4);
-    app.loaded_from_frame.set(0);
+    app.session.loaded_from_frame.set(0);
     app.session.todos.items.push(TodoView {
         content: "stale".into(),
         status: TodoStatus::Pending,
@@ -236,7 +236,7 @@ fn test_clear_resets_session() {
     assert_eq!(app.transcript.len(), 1);
     // The scrollback boundary names frames of the cleared log, so it returns to
     // the frame cap rather than holding the window the old session had loaded.
-    assert_eq!(app.loaded_from_frame.get(), usize::MAX);
+    assert_eq!(app.session.loaded_from_frame.get(), usize::MAX);
     // The checklist cursor restarts on the cleared log rather than keeping
     // the stale 4, so it stands where the reset left the log it reads.
     assert_eq!(app.session.todos.cursor(), app.transcript.abs_frame_count());

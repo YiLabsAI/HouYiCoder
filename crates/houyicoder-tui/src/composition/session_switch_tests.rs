@@ -144,17 +144,20 @@ fn test_switch_session_resets_view() {
 fn test_switch_drops_pending_read() {
     let mut app = build_app(test_bundle());
     let (tx, rx) = mpsc::channel::<HistoryReadOutcome>();
-    let lease = app.history_reads.dispatch(0, DiskFront::Unloaded, rx);
-    assert_eq!(app.history_reads.running(), 1);
+    let lease = app
+        .session
+        .history_reads
+        .dispatch(0, DiskFront::Unloaded, rx);
+    assert_eq!(app.session.history_reads.running(), 1);
 
     app.switch_session(test_bundle());
 
     assert!(
-        !app.history_reads.holds_pending(),
+        !app.session.history_reads.holds_pending(),
         "the rebuilt App starts with no read against the old log"
     );
     assert_eq!(
-        app.history_reads.running(),
+        app.session.history_reads.running(),
         0,
         "and it does not inherit the slot the abandoned worker still holds"
     );

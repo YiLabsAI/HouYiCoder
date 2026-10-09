@@ -49,7 +49,7 @@ fn inject_read(app: &mut App) -> mpsc::Sender<HistoryReadOutcome> {
     let (tx, rx) = mpsc::channel::<HistoryReadOutcome>();
     let front = app.transcript.frame_window_start();
     let disk_front = app.transcript.disk_front();
-    drop(app.history_reads.dispatch(front, disk_front, rx));
+    drop(app.session.history_reads.dispatch(front, disk_front, rx));
     tx
 }
 
@@ -85,10 +85,10 @@ fn test_reset_drops_pending_read() {
 fn test_clear_stales_held_read() {
     let mut app = working_app(5);
     let tx = inject_read(&mut app);
-    let held = app.history_reads.take().expect("a read is pending");
+    let held = app.session.history_reads.take().expect("a read is pending");
 
     app.run_command(SlashCommand::Clear);
-    app.history_reads.put_back(held);
+    app.session.history_reads.put_back(held);
 
     tx.send(landed_rows("archived row", 100)).ok();
     app.pump_history_read();
@@ -183,13 +183,13 @@ fn test_disconnect_clears_record() {
     drop(tx);
     let front = app.transcript.frame_window_start();
     let disk_front = app.transcript.disk_front();
-    drop(app.history_reads.dispatch(front, disk_front, rx));
+    drop(app.session.history_reads.dispatch(front, disk_front, rx));
     assert!(
-        app.history_reads.holds_pending(),
+        app.session.history_reads.holds_pending(),
         "the record the dead worker left is still on file"
     );
     assert_eq!(
-        app.history_reads.running(),
+        app.session.history_reads.running(),
         0,
         "the lease going away freed the slot with it"
     );
@@ -198,7 +198,7 @@ fn test_disconnect_clears_record() {
 
     assert!(!landed, "a disconnected worker sets no dirty flag");
     assert!(
-        !app.history_reads.holds_pending(),
+        !app.session.history_reads.holds_pending(),
         "the record cleared, so the pump stops looking at a read that cannot land"
     );
     assert_eq!(

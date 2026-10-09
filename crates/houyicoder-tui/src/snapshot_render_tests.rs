@@ -749,19 +749,25 @@ fn test_g_completes_full_index() {
         index_calls: std::sync::atomic::AtomicU32::new(0),
     }));
     app.enter_search_view("tail");
-    assert!(!app.index_build.indexing.get(), "indexing off before G");
+    assert!(
+        !app.session.index_build.indexing.get(),
+        "indexing off before G"
+    );
     crate::app::handle_key(
         &mut app,
         KeyEvent::new(KeyCode::Char('G'), KeyModifiers::NONE),
     );
-    assert!(app.index_build.indexing.get(), "G starts the index build");
+    assert!(
+        app.session.index_build.indexing.get(),
+        "G starts the index build"
+    );
     // One render pump completes the build (the mock's index_steps == 1).
     app.pump_index_chunk();
     assert!(
-        !app.index_build.indexing.get(),
+        !app.session.index_build.indexing.get(),
         "index build completed + stopped"
     );
-    assert!(app.index_build.index_done.get(), "done flag set");
+    assert!(app.session.index_build.index_done.get(), "done flag set");
     let out = render_text(&app, 100, 24);
     // No longer indexing -> the chrome shows byte-%, not "indexing".
     assert!(
@@ -792,10 +798,13 @@ fn test_esc_interrupts_full_index() {
         &mut app,
         KeyEvent::new(KeyCode::Char('G'), KeyModifiers::NONE),
     );
-    assert!(app.index_build.indexing.get(), "G started the build");
+    assert!(
+        app.session.index_build.indexing.get(),
+        "G started the build"
+    );
     crate::app::handle_key(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     assert!(
-        !app.index_build.indexing.get(),
+        !app.session.index_build.indexing.get(),
         "Esc interrupted the index build"
     );
     assert!(
@@ -848,7 +857,10 @@ fn test_draw_reads_no_index() {
         &mut app,
         KeyEvent::new(KeyCode::Char('G'), KeyModifiers::NONE),
     );
-    assert!(app.index_build.indexing.get(), "G starts the index build");
+    assert!(
+        app.session.index_build.indexing.get(),
+        "G starts the index build"
+    );
 
     let calls_before = source
         .index_calls
@@ -885,20 +897,23 @@ fn test_index_runs_on_worker() {
         &mut app,
         KeyEvent::new(KeyCode::Char('G'), KeyModifiers::NONE),
     );
-    assert!(app.index_build.indexing.get(), "G starts the build");
+    assert!(app.session.index_build.indexing.get(), "G starts the build");
 
     let deadline = Instant::now() + Duration::from_secs(5);
     while Instant::now() < deadline {
-        if app.pump_background_reads() && app.index_build.index_done.get() {
+        if app.pump_background_reads() && app.session.index_build.index_done.get() {
             break;
         }
         thread::sleep(Duration::from_millis(5));
     }
     assert!(
-        app.index_build.index_done.get(),
+        app.session.index_build.index_done.get(),
         "the worker's chunk finished the build"
     );
-    assert!(!app.index_build.indexing.get(), "and the build stopped");
+    assert!(
+        !app.session.index_build.indexing.get(),
+        "and the build stopped"
+    );
 }
 
 /// A worker that dies without sending stops the build rather than stalling it:
@@ -925,15 +940,19 @@ fn test_index_worker_death_stops() {
     // A record whose sender is already gone stands in for a dead worker.
     let (tx, rx) = mpsc::channel();
     drop(tx);
-    *app.index_build.pending_index_chunk.borrow_mut() = Some(PendingIndexChunk::new(rx));
+    *app.session.index_build.pending_index_chunk.borrow_mut() = Some(PendingIndexChunk::new(rx));
 
     assert!(app.pump_index_chunk(), "the dead worker is noticed");
     assert!(
-        !app.index_build.indexing.get(),
+        !app.session.index_build.indexing.get(),
         "and the build stops rather than stalling"
     );
     assert!(
-        app.index_build.pending_index_chunk.borrow().is_none(),
+        app.session
+            .index_build
+            .pending_index_chunk
+            .borrow()
+            .is_none(),
         "the record is cleared so a later G can dispatch again"
     );
 }
@@ -961,10 +980,10 @@ fn test_index_landing_after_interrupt() {
         &mut app,
         KeyEvent::new(KeyCode::Char('G'), KeyModifiers::NONE),
     );
-    assert!(app.index_build.indexing.get(), "G starts the build");
+    assert!(app.session.index_build.indexing.get(), "G starts the build");
     // A held sender stands in for the chunk's worker.
     let (tx, rx) = mpsc::channel();
-    *app.index_build.pending_index_chunk.borrow_mut() = Some(PendingIndexChunk::new(rx));
+    *app.session.index_build.pending_index_chunk.borrow_mut() = Some(PendingIndexChunk::new(rx));
 
     assert!(app.interrupt_index(), "the interrupt consumed the Esc");
     tx.send(IndexProgress {
@@ -976,12 +995,12 @@ fn test_index_landing_after_interrupt() {
 
     assert!(app.pump_index_chunk(), "the landed chunk is noticed");
     assert_eq!(
-        app.index_build.indexed_bytes.get(),
+        app.session.index_build.indexed_bytes.get(),
         512,
         "its progress applied"
     );
     assert!(
-        !app.index_build.indexing.get(),
+        !app.session.index_build.indexing.get(),
         "the interrupted build did not resume on the landing"
     );
 
@@ -989,16 +1008,19 @@ fn test_index_landing_after_interrupt() {
     let (_tx, rx) = mpsc::channel::<crate::agent_message::SessionMessage>();
     app.session.connection = Some(crate::session::SessionConnection::from_receiver(rx));
     app.start_full_index();
-    assert!(app.index_build.indexing.get(), "G restarts the build");
+    assert!(
+        app.session.index_build.indexing.get(),
+        "G restarts the build"
+    );
     let deadline = Instant::now() + Duration::from_secs(5);
     while Instant::now() < deadline {
-        if app.pump_background_reads() && app.index_build.index_done.get() {
+        if app.pump_background_reads() && app.session.index_build.index_done.get() {
             break;
         }
         thread::sleep(Duration::from_millis(5));
     }
     assert!(
-        app.index_build.index_done.get(),
+        app.session.index_build.index_done.get(),
         "the restarted build completed"
     );
 }
@@ -1024,9 +1046,9 @@ fn test_index_restart_waits() {
         index_calls: std::sync::atomic::AtomicU32::new(0),
     }));
     app.enter_search_view("tail");
-    app.index_build.indexing.set(true);
+    app.session.index_build.indexing.set(true);
     let (tx, rx) = mpsc::channel();
-    *app.index_build.pending_index_chunk.borrow_mut() = Some(PendingIndexChunk::new(rx));
+    *app.session.index_build.pending_index_chunk.borrow_mut() = Some(PendingIndexChunk::new(rx));
 
     crate::app::handle_key(
         &mut app,
@@ -1044,7 +1066,7 @@ fn test_index_restart_waits() {
     );
     assert!(app.pump_index_chunk(), "and its progress still lands");
     assert_eq!(
-        app.index_build.indexed_bytes.get(),
+        app.session.index_build.indexed_bytes.get(),
         7,
         "from the chunk that was already running, not a second one"
     );
@@ -1069,9 +1091,9 @@ fn test_index_pump_waits() {
         index_calls: std::sync::atomic::AtomicU32::new(0),
     }));
     app.enter_search_view("tail");
-    app.index_build.indexing.set(true);
+    app.session.index_build.indexing.set(true);
     let (tx, rx) = mpsc::channel();
-    *app.index_build.pending_index_chunk.borrow_mut() = Some(PendingIndexChunk::new(rx));
+    *app.session.index_build.pending_index_chunk.borrow_mut() = Some(PendingIndexChunk::new(rx));
 
     assert!(
         !app.pump_index_chunk(),
