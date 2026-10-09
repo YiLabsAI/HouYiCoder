@@ -78,7 +78,6 @@ pub fn app() -> App {
         }),
         notifications: NotificationState::default(),
         terminal_focused: true,
-        todos: Default::default(),
         layout_feedback: LayoutFeedback::default(),
         displayed_tokens: Cell::new(0),
         pending: Vec::new(),

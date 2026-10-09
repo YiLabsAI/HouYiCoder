@@ -6,6 +6,7 @@
 use crate::run_metrics::RunMetrics;
 use crate::run_state::RunState;
 use crate::session::identity::SessionIdentity;
+use crate::todo_view::TodoState;
 
 pub(crate) mod capabilities;
 mod connection;
@@ -17,13 +18,14 @@ pub use connection::{
 };
 
 /// The presented session: its stable identity, the optional live engine
-/// connection, the in-flight run lifecycle, and the run tally that
-/// outlives any one run. The identity is always present. The connection is
-/// a capability the session holds while connected and may lose without
-/// losing the identity or the already-observed state; the loss is carried
-/// inside SessionConnection as ConnectionStatus::Lost rather than by
-/// dropping the session. The tally spans the whole session while resetting
-/// on a session switch, so it does not belong to the run state machine.
+/// connection, the in-flight run lifecycle, the run tally, the restore
+/// stash, and the checklist. The identity is always present. The
+/// connection is a capability the session holds while connected and may
+/// lose without losing the identity or the already-observed state; the
+/// loss is carried inside SessionConnection as ConnectionStatus::Lost
+/// rather than by dropping the session. The remaining fields share the
+/// session's lifetime and reset together on a session switch, not on a
+/// run's return to idle.
 pub(crate) struct Session {
     /// The session's routing id and the starting working directory, stable
     /// for the session's lifetime.
@@ -41,12 +43,15 @@ pub(crate) struct Session {
     /// The submitted input of the run that produced no output yet, kept so
     /// an interruption can restore the turn.
     pub(crate) last_run_input: Option<String>,
+    /// The session checklist: derived items, expansion, and completion
+    /// visibility.
+    pub(crate) todos: TodoState,
 }
 
 impl Session {
-    /// A session with an identity, no connection, no run in flight, and an
-    /// empty tally: the state the default app lands in before the
-    /// composition root attaches a connection.
+    /// A session with an identity, no connection, no run in flight, an
+    /// empty tally, and an empty checklist: the state the default app lands
+    /// in before the composition root attaches a connection.
     pub(crate) fn bare(identity: SessionIdentity) -> Self {
         Self {
             identity,
@@ -54,6 +59,7 @@ impl Session {
             run: RunState::Idle,
             run_metrics: RunMetrics::default(),
             last_run_input: None,
+            todos: TodoState::default(),
         }
     }
 }

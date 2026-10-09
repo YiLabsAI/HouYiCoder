@@ -380,7 +380,7 @@ fn test_clears_session_local_state() {
     use crate::todo_view::{TodoStatus, TodoView};
     let mut app = build_app(test_bundle());
     // Populate with old-session residue.
-    app.todos.items.push(TodoView {
+    app.session.todos.items.push(TodoView {
         content: "old todo".into(),
         status: TodoStatus::InProgress,
         active_form: None,
@@ -404,12 +404,12 @@ fn test_clears_session_local_state() {
         .borrow_mut()
         .push(Some("stale-call".into()));
     // Sanity: the residue is there before the swap.
-    assert!(!app.todos.items.is_empty());
+    assert!(!app.session.todos.items.is_empty());
     assert!(app.selections.transcript.anchor.is_some());
 
     app.switch_session(test_bundle());
 
-    assert!(app.todos.items.is_empty(), "todos cleared");
+    assert!(app.session.todos.items.is_empty(), "todos cleared");
     assert_eq!(
         app.session.run_metrics.cumulative_tokens, 0,
         "cumulative_tokens cleared"

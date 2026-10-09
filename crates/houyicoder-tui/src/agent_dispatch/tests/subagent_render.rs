@@ -286,14 +286,14 @@ fn test_ctrl_o_fallthrough() {
 fn test_ctrl_o_todo_expand() {
     let mut app = crate::composition::app();
     app.screen = crate::state::Screen::Working;
-    app.todos.items.push(crate::todo_view::TodoView {
+    app.session.todos.items.push(crate::todo_view::TodoView {
         content: "do the thing".into(),
         status: crate::todo_view::TodoStatus::Pending,
         active_form: None,
     });
-    assert!(!app.todos.expanded);
+    assert!(!app.session.todos.expanded);
     crate::keys::handle_ctrl_o(&mut app);
-    assert!(app.todos.expanded, "Ctrl+O expands the todo list");
+    assert!(app.session.todos.expanded, "Ctrl+O expands the todo list");
 }
 
 /// Expanding/collapsing a Subagent fold does not shift the content row

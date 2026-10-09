@@ -222,9 +222,9 @@ fn test_clear_resets_session() {
     app.workflow.stage = Stage::Implementing;
     app.pane = Pane::Diff;
     app.workflow.spec_ctx.step = "implementing".to_string();
-    app.todos.set_cursor(4);
+    app.session.todos.set_cursor(4);
     app.loaded_from_frame.set(0);
-    app.todos.items.push(TodoView {
+    app.session.todos.items.push(TodoView {
         content: "stale".into(),
         status: TodoStatus::Pending,
         active_form: None,
@@ -239,8 +239,8 @@ fn test_clear_resets_session() {
     assert_eq!(app.loaded_from_frame.get(), usize::MAX);
     // The checklist cursor restarts on the cleared log rather than keeping
     // the stale 4, so it stands where the reset left the log it reads.
-    assert_eq!(app.todos.cursor(), app.transcript.abs_frame_count());
-    assert!(app.todos.items.is_empty());
+    assert_eq!(app.session.todos.cursor(), app.transcript.abs_frame_count());
+    assert!(app.session.todos.items.is_empty());
 }
 
 #[test]

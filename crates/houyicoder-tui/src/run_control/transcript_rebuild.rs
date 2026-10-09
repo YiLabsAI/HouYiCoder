@@ -679,7 +679,7 @@ impl App {
             }
         }
         self.verdict_cursor = self.transcript.abs_frame_count();
-        self.todos.update(
+        self.session.todos.update(
             self.transcript.frames(),
             self.transcript.frame_window_start(),
             self.agent_busy(),

@@ -148,19 +148,20 @@ ACTIVE_OWNERS = {
         # run resolves on the session that started it rather than on a
         # detached shell field. The run tally and the restore stash joined
         # it next: both are session-scoped facts that reset on a session
-        # switch, not on the run state machine.
-        "fields": 57,
+        # switch, not on the run state machine. The checklist joined last:
+        # it is transcript content, so it shares the session's lifetime.
+        "fields": 56,
         "mut_app": 44,
     },
     "crates/houyicoder-tui/src/session.rs:Session": {
         # The presented session: its stable identity, the optional live
-        # engine connection, the in-flight run lifecycle, the run tally, and
-        # the interruption restore stash, held as one value so a swap
-        # replaces the whole set at once and a lost connection never drops
-        # the identity or the already-observed state. Five fields that
+        # engine connection, the in-flight run lifecycle, the run tally, the
+        # interruption restore stash, and the checklist, held as one value so
+        # a swap replaces the whole set at once and a lost connection never
+        # drops the identity or the already-observed state. Six fields that
         # formerly sat detached on App now travel as one constructor
         # boundary.
-        "fields": 5,
+        "fields": 6,
     },
     "crates/houyicoder-tui/src/workflow.rs:Workflow": {
         # The spec-plan-review-verify-artifact lifecycle: the stage machine,

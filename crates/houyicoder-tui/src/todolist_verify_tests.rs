@@ -40,9 +40,10 @@ fn test_collapsed_renders_active_footer() {
         ("docs c", TodoStatus::Pending),
     ]);
     let mut app = working_app();
-    app.todos.items = todos;
+    app.session.todos.items = todos;
     // A fresh completion timestamp keeps the done item visible (30s TTL).
-    app.todos
+    app.session
+        .todos
         .completion_at
         .insert("setup".into(), std::time::Instant::now());
     let out = render_text(&app, 80, 24);
@@ -69,9 +70,10 @@ fn test_collapsed_no_footer_visible() {
         ("next", TodoStatus::Pending),
     ]);
     let mut app = working_app();
-    app.todos.items = todos;
+    app.session.todos.items = todos;
     // A fresh completion timestamp keeps the done item visible (30s TTL).
-    app.todos
+    app.session
+        .todos
         .completion_at
         .insert("done".into(), std::time::Instant::now());
     let out = render_text(&app, 80, 24);
@@ -86,7 +88,7 @@ fn test_collapsed_no_footer_visible() {
 #[test]
 fn test_empty_checklist_no_block() {
     let mut app = working_app();
-    app.todos.items = Vec::new();
+    app.session.todos.items = Vec::new();
     let out = render_text(&app, 80, 24);
     assert!(
         !out.contains("◼"),
@@ -103,15 +105,21 @@ fn test_empty_checklist_no_block() {
 #[test]
 fn test_done_tasks_clear() {
     let mut app = working_app();
-    app.todos.items = seeded_todos(&[
+    app.session.todos.items = seeded_todos(&[
         ("first", TodoStatus::Completed),
         ("second", TodoStatus::Completed),
     ]);
     let now = std::time::Instant::now();
     let completed = now - std::time::Duration::from_secs(6);
-    app.todos.completion_at.insert("first".into(), completed);
-    app.todos.completion_at.insert("second".into(), completed);
-    assert!(app.todos.prune(now));
+    app.session
+        .todos
+        .completion_at
+        .insert("first".into(), completed);
+    app.session
+        .todos
+        .completion_at
+        .insert("second".into(), completed);
+    assert!(app.session.todos.prune(now));
 
     let out = render_text(&app, 80, 24);
 
@@ -128,11 +136,11 @@ fn test_done_tasks_clear() {
 #[test]
 fn test_done_stays_open() {
     let mut app = working_app();
-    app.todos.items = seeded_todos(&[
+    app.session.todos.items = seeded_todos(&[
         ("finished", TodoStatus::Completed),
         ("next", TodoStatus::Pending),
     ]);
-    app.todos.completion_at.insert(
+    app.session.todos.completion_at.insert(
         "finished".into(),
         std::time::Instant::now() - std::time::Duration::from_secs(31),
     );
@@ -150,7 +158,7 @@ fn test_done_stays_open() {
 fn test_status_shows_session_tasks() {
     let todos = seeded_todos(&[("run tests", TodoStatus::InProgress)]);
     let mut app = working_app();
-    app.todos.items = todos;
+    app.session.todos.items = todos;
     app.run_command(SlashCommand::Status);
     // /status opens a pane (the shared Pane template), not a transcript dump;
     // render the working surface to read the pane content. A tall-enough
@@ -171,7 +179,7 @@ fn test_status_shows_session_tasks() {
 #[test]
 fn test_status_no_tasks_section() {
     let mut app = working_app();
-    app.todos.items = Vec::new();
+    app.session.todos.items = Vec::new();
     app.run_command(SlashCommand::Status);
     // A taller terminal so the status pane admits the full field set.
     let out = render_text(&app, 80, 40);

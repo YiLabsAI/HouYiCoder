@@ -179,7 +179,7 @@ impl App {
         }
         // Only errors matching this request terminate the active run.
         self.session.run.start(req_id, Instant::now());
-        self.todos.set_replaying_history(false);
+        self.session.todos.set_replaying_history(false);
         // Preserve the submitted input in case interruption restores the turn.
         self.session.last_run_input = Some(input.clone());
         // A fresh submission answers the previous turn's interruption, so its
@@ -651,7 +651,7 @@ impl App {
             return;
         };
         self.transcript.with_frames_mut(|log| log.truncate(start));
-        self.todos.set_replaying_history(true);
+        self.session.todos.set_replaying_history(true);
         self.rebuild_transcript();
     }
 }

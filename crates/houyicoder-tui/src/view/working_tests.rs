@@ -712,7 +712,7 @@ fn test_todo_count_matches_render() {
     let mut app = composition::app();
     app.screen = Screen::Working;
     app.transcript = vec![TranscriptLine::User("go".to_string())].into();
-    app.todos.items = vec![
+    app.session.todos.items = vec![
         item("a", TodoStatus::Completed),
         item("b", TodoStatus::InProgress),
         item("c", TodoStatus::Pending),
@@ -728,7 +728,7 @@ fn test_todo_count_matches_render() {
     );
 
     // Expanded: every item renders.
-    app.todos.expanded = true;
+    app.session.todos.expanded = true;
     let _out = render_text(&app, 80, 24);
     assert_eq!(
         app.transcript_display_rows(),
@@ -737,8 +737,8 @@ fn test_todo_count_matches_render() {
     );
 
     // All done: a single summary line.
-    app.todos.expanded = false;
-    app.todos.items = vec![
+    app.session.todos.expanded = false;
+    app.session.todos.items = vec![
         item("a", TodoStatus::Completed),
         item("b", TodoStatus::Completed),
     ];
@@ -765,7 +765,7 @@ fn test_todo_rows_are_selectable() {
     let mut app = composition::app();
     app.screen = Screen::Working;
     app.transcript = vec![TranscriptLine::User("go".to_string())].into();
-    app.todos.items = vec![
+    app.session.todos.items = vec![
         TodoView {
             content: "write code".into(),
             status: TodoStatus::InProgress,

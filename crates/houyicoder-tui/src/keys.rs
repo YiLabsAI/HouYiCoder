@@ -184,8 +184,8 @@ pub(crate) fn handle_ctrl_o(app: &mut App) {
     if app.toggle_latest_memory_notice() {
         return;
     }
-    if !app.todos.items.is_empty() {
-        app.todos.expanded = !app.todos.expanded;
+    if !app.session.todos.items.is_empty() {
+        app.session.todos.expanded = !app.session.todos.expanded;
         return;
     }
     app.toggle_focused_result_expand();

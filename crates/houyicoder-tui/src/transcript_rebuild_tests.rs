@@ -376,12 +376,12 @@ fn test_todo_survives_user() {
         &mut app,
         todo_write_frame("c1", &[("task one", "in_progress")]),
     );
-    assert_eq!(app.todos.items.len(), 1);
+    assert_eq!(app.session.todos.items.len(), 1);
 
     pump(&mut app, user_msg("mid-turn note"));
 
-    assert_eq!(app.todos.items.len(), 1);
-    assert_eq!(app.todos.items[0].content, "task one");
+    assert_eq!(app.session.todos.items.len(), 1);
+    assert_eq!(app.session.todos.items[0].content, "task one");
 }
 
 #[test]
@@ -393,7 +393,7 @@ fn test_resumed_todo_paused() {
         todo_write_frame("c1", &[("unfinished", "in_progress")]),
     );
 
-    assert_eq!(app.todos.items[0].status, TodoStatus::Paused);
+    assert_eq!(app.session.todos.items[0].status, TodoStatus::Paused);
 }
 
 #[test]
@@ -408,7 +408,7 @@ fn test_resumed_batches_paused() {
         todo_write_frame("c2", &[("unfinished", "in_progress")]),
     );
 
-    assert_eq!(app.todos.items[0].status, TodoStatus::Paused);
+    assert_eq!(app.session.todos.items[0].status, TodoStatus::Paused);
 }
 
 /// A rewind replays the truncated transcript as restored history: the
@@ -426,13 +426,13 @@ fn test_rewind_clears_completed() {
         &mut app,
         todo_write_frame("c2", &[("task one", "completed")]),
     );
-    assert!(app.todos.completion_at.contains_key("task one"));
+    assert!(app.session.todos.completion_at.contains_key("task one"));
     pump(&mut app, user_msg("later"));
 
     app.rewind_to_last_user_input();
 
-    assert!(app.todos.items.is_empty());
-    assert!(app.todos.completion_at.is_empty());
+    assert!(app.session.todos.items.is_empty());
+    assert!(app.session.todos.completion_at.is_empty());
 }
 
 /// The other side of a rewind: open work survives as restored history, and
@@ -453,13 +453,13 @@ fn test_rewind_keeps_open() {
         &mut app,
         todo_write_frame("c2", &[("task one", "completed"), ("task two", "pending")]),
     );
-    assert!(app.todos.completion_at.contains_key("task one"));
+    assert!(app.session.todos.completion_at.contains_key("task one"));
     pump(&mut app, user_msg("later"));
 
     app.rewind_to_last_user_input();
 
-    assert_eq!(app.todos.items.len(), 2);
-    assert!(app.todos.completion_at.is_empty());
+    assert_eq!(app.session.todos.items.len(), 2);
+    assert!(app.session.todos.completion_at.is_empty());
 }
 
 /// A tool call with no result does not move the current-turn boundary backward.
@@ -1393,7 +1393,8 @@ fn test_todo_survives_eviction() {
         "the todo-write frame was drained"
     );
     assert!(
-        app.todos
+        app.session
+            .todos
             .items
             .iter()
             .any(|t| t.content == "ship the window"),
@@ -1401,7 +1402,8 @@ fn test_todo_survives_eviction() {
     );
     pump(&mut app, user_msg("tail"));
     assert!(
-        app.todos
+        app.session
+            .todos
             .items
             .iter()
             .any(|t| t.content == "ship the window"),

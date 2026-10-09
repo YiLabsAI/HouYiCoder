@@ -83,7 +83,7 @@ pub fn run_with_runner(
         if app.notifications.tick(now) {
             dirty = true;
         }
-        if app.todos.prune(now) {
+        if app.session.todos.prune(now) {
             dirty = true;
         }
         // Drain a background history read outside the dirty gate: an idle

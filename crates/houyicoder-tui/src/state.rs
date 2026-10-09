@@ -54,7 +54,6 @@ use crate::session::capabilities::SessionCapabilities;
 use crate::session::persistence::SessionPersistence;
 use crate::skill_picker_state::SkillPickerState;
 use crate::skills_state::SkillsPaneState;
-use crate::todo_view::TodoState;
 use crate::workflow::Workflow;
 use houyicoder_protocol::envelope::RequestId;
 
@@ -211,8 +210,6 @@ pub struct App {
     /// window is unfocused, following a renderPlaceholder terminal
     /// focus gate. Defaults true (assume focused at startup).
     pub terminal_focused: bool,
-    /// Session checklist content, expansion, and completion lifecycle.
-    pub todos: TodoState,
     /// The renderer layout feedback: the last terminal height and transcript
     /// pane width the draw pass measured, held in one owner so the count and
     /// layout paths read the same dims the last render used.
