@@ -22,7 +22,6 @@ use crate::agent_message::{
 };
 use crate::command::render::{render_permission_rules_wire, render_trajectory_wire};
 use crate::composition::suggestions_for;
-use crate::input::queue::InputItem;
 use crate::pending_prompt::PendingPrompt;
 use crate::records::{ContextDrillDown, ContextView, TranscriptLine};
 use crate::state::enums::LiveBlock;
@@ -231,19 +230,10 @@ impl App {
                 if !inputs.is_empty() {
                     self.sessions.current.last_run_input = None;
                 }
-                // Remove exact committed inputs before promoting the next head.
-                // Stable identity prevents a delayed event from removing newer text.
-                for input in inputs {
-                    if let Some(pos) = self.input.queue.iter().position(|it| {
-                        matches!(
-                            it,
-                            InputItem::Message(current) | InputItem::ParkedMessage(current)
-                                if current.id == input.id
-                        )
-                    }) {
-                        self.input.queue.remove(pos);
-                    }
-                }
+                // Remove the committed inputs before promoting the next head;
+                // the queue matches them by stable identity so a delayed event
+                // cannot remove newer text sitting at the same position.
+                self.input.queue.remove_committed(&inputs);
                 self.promote_next_pending();
             }
             ServerEvent::MemoryChanged {

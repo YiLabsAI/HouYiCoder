@@ -103,7 +103,7 @@ impl super::App {
         // park pending messages for explicit user action.
         self.status.last_run_final = was_final;
         if !was_final {
-            self.demote_pending_to_parked();
+            self.input.queue.demote_to_parked();
         }
     }
 }

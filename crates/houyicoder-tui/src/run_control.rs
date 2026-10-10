@@ -542,36 +542,22 @@ impl App {
     /// Recall the queued item at the cursor position into the input box.
     /// Sends QueueRemove for a live server copy. Leaves other items queued.
     pub fn recall_queued_at_cursor(&mut self) {
-        let idx = self
-            .input
-            .queue
-            .cursor
-            .min(self.input.queue.len().saturating_sub(1));
-        if idx >= self.input.queue.len() {
+        let Some(idx) = self.input.queue.selected_index() else {
             return;
-        }
+        };
         let Some(item) = self.remove_pending_at(idx) else {
             return;
         };
-        self.input.queue.clamp_cursor();
         self.merge_recalled_text(item.display().to_string());
     }
 
     /// Delete the queued item at the cursor position without recalling it.
     /// Sends QueueRemove for a live server copy.
     pub fn delete_queued_at_cursor(&mut self) {
-        let idx = self
-            .input
-            .queue
-            .cursor
-            .min(self.input.queue.len().saturating_sub(1));
-        if idx >= self.input.queue.len() {
+        let Some(idx) = self.input.queue.selected_index() else {
             return;
-        }
-        if self.remove_pending_at(idx).is_none() {
-            return;
-        }
-        self.input.queue.clamp_cursor();
+        };
+        drop(self.remove_pending_at(idx));
     }
 
     /// Recall queued messages into the input box before the current draft.

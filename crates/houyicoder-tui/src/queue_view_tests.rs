@@ -402,6 +402,7 @@ fn test_click_more_opens_queue() {
     app.input.queue.push(InputItem::Message("b".into()));
     app.input.queue.push(InputItem::Message("c".into()));
     app.input.queue.push(InputItem::Message("d".into()));
+    app.input.queue.move_cursor(1);
     render_buffer(&app, 100, 28);
     let qrect = app.queue_view.strip_rect.get();
     assert!(qrect.height >= 2, "strip has the head row + a +N row");
@@ -418,9 +419,48 @@ fn test_click_more_opens_queue() {
         4,
         "queue items are not drained by opening the pane"
     );
+    assert_eq!(
+        app.input.queue.selected_index(),
+        Some(0),
+        "opening the pane resets the selection to the top"
+    );
     assert!(
         app.input.editor.value().is_empty(),
         "input box is not filled by opening the pane"
+    );
+}
+
+/// A tight window degrades the strip to its one-row summary. Clicking the
+/// summary opens the queue pane with the selection reset to the top, not
+/// left wherever it sat before the click.
+#[test]
+fn test_collapsed_strip_opens_queue() {
+    let mut app = working();
+    app.input.queue.push(InputItem::Message("alpha".into()));
+    app.input.queue.push(InputItem::Message("beta".into()));
+    app.input.queue.push(InputItem::Message("gamma".into()));
+    app.input.queue.move_cursor(2);
+    render_buffer(&app, 100, 16);
+    let qrect = app.queue_view.strip_rect.get();
+    assert_eq!(
+        qrect.height, 1,
+        "a tight window leaves the strip its summary row"
+    );
+    crate::app::handle_mouse(&mut app, mouse_at(qrect.x + 1, qrect.y));
+    assert_eq!(
+        app.pane,
+        Pane::Queue,
+        "the summary row opens the queue pane"
+    );
+    assert_eq!(
+        app.input.queue.selected_index(),
+        Some(0),
+        "opening resets the selection to the top"
+    );
+    let text = render_text(&app, 100, 28);
+    assert!(
+        text.contains("❯ alpha"),
+        "the highlight sits on the first row: {text}"
     );
 }
 
@@ -440,7 +480,7 @@ fn test_pane_enter_recalls_one() {
     app.pane = Pane::Queue;
     app.input.queue.push(InputItem::Message("alpha".into()));
     app.input.queue.push(InputItem::Message("beta".into()));
-    app.input.queue.cursor = 1;
+    app.input.queue.move_cursor(1);
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     assert_eq!(
         app.input.editor.value(),
@@ -484,7 +524,6 @@ fn test_pane_d_deletes_one() {
     app.pane = Pane::Queue;
     app.input.queue.push(InputItem::Message("alpha".into()));
     app.input.queue.push(InputItem::Message("beta".into()));
-    app.input.queue.cursor = 0;
     crate::keys::handle_working(
         &mut app,
         KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
@@ -590,17 +629,35 @@ fn test_queue_pane_narrow_terminal() {
     assert!(text.contains("queue"), "header renders at narrow width");
 }
 
-/// Up/Down navigate the queue pane cursor.
+/// Up/Down navigate the queue pane cursor and the rendered highlight
+/// follows the selection.
 #[test]
 fn test_queue_pane_nav() {
     let mut app = working();
     app.pane = Pane::Queue;
-    app.input.queue.push(InputItem::Message("a".into()));
-    app.input.queue.push(InputItem::Message("b".into()));
-    app.input.queue.push(InputItem::Message("c".into()));
-    app.input.queue.cursor = 0;
+    app.input.queue.push(InputItem::Message("alpha".into()));
+    app.input.queue.push(InputItem::Message("beta".into()));
+    app.input.queue.push(InputItem::Message("gamma".into()));
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-    assert_eq!(app.input.queue.cursor, 1, "Down moves cursor");
+    assert_eq!(
+        app.input.queue.selected_index(),
+        Some(1),
+        "Down moves cursor"
+    );
+    let text = render_text(&app, 80, 28);
+    assert!(
+        text.contains("❯ beta"),
+        "the highlight follows the selection down: {text}"
+    );
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
-    assert_eq!(app.input.queue.cursor, 0, "Up moves cursor back");
+    assert_eq!(
+        app.input.queue.selected_index(),
+        Some(0),
+        "Up moves cursor back"
+    );
+    let text = render_text(&app, 80, 28);
+    assert!(
+        text.contains("❯ alpha"),
+        "the highlight follows the selection up: {text}"
+    );
 }

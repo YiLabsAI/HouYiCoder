@@ -21,7 +21,7 @@ use crate::state::App;
 pub(super) fn draw_content(f: &mut Frame, area: Rect, app: &App) {
     let items: Vec<&InputItem> = app.input.queue.iter().collect();
     let n = items.len();
-    let cursor = app.input.queue.cursor.min(n.saturating_sub(1));
+    let cursor = app.input.queue.selected_index().unwrap_or(0);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([

@@ -354,7 +354,7 @@ impl App {
         // The reset clears the server buffer regardless of whether a req_id
         // was issued, so a Message still in the pending copy is now an orphan.
         // Host state invalidation is decoupled from id generation.
-        self.demote_pending_to_parked();
+        self.input.queue.demote_to_parked();
         self.system_line("session archived, new session started");
         self.workflow.stage = Stage::Idle;
         self.workflow.spec_ctx.step = Stage::Idle.label().to_string();

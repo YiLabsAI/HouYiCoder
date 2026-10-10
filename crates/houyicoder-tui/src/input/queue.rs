@@ -96,13 +96,14 @@ pub fn command_first_token_is(raw: &str, token: &str) -> bool {
 }
 
 /// The queued-input FIFO and the selection cursor into it, held as one value.
-/// The items stay private so order is a first-in-first-out queue plus an
-/// explicit head insert, and the cursor is clamped against the same items it
-/// indexes, so the two invariants cannot drift apart.
+/// The items and the cursor stay private: order is a first-in-first-out queue
+/// plus an explicit head insert, and the transitions that shrink the queue
+/// clamp the cursor back into range, so the cursor and the items it indexes
+/// cannot drift apart.
 #[derive(Debug, Default)]
 pub(crate) struct InputQueue {
     items: Vec<InputItem>,
-    pub(crate) cursor: usize,
+    cursor: usize,
 }
 
 impl InputQueue {
@@ -117,9 +118,12 @@ impl InputQueue {
         self.items.insert(index, item);
     }
 
-    /// Remove and return the item at the given index.
+    /// Remove and return the item at the given index, clamping the cursor so
+    /// it stays within the shortened queue.
     pub(crate) fn remove(&mut self, index: usize) -> InputItem {
-        self.items.remove(index)
+        let item = self.items.remove(index);
+        self.clamp_cursor();
+        item
     }
 
     pub(crate) fn len(&self) -> usize {
@@ -146,10 +150,6 @@ impl InputQueue {
         self.items.iter()
     }
 
-    pub(crate) fn iter_mut(&mut self) -> std::slice::IterMut<'_, InputItem> {
-        self.items.iter_mut()
-    }
-
     /// Take the head if it is a /resume Command with a resolved target,
     /// returning the target and removing the item. A non-/resume head or a
     /// bare /resume (no arg) leaves the queue intact and returns None. The
@@ -162,24 +162,27 @@ impl InputQueue {
             .and_then(resume_command_target)
             .map(str::to_string);
         if target.is_some() {
-            self.items.remove(0);
+            self.remove(0);
         }
         target
     }
 
-    /// Take the whole queue out, leaving an empty queue. The cursor is left
-    /// as-is, clamped by the same lazy read points as before.
+    /// Take the whole queue out, leaving an empty queue with the cursor reset
+    /// to the start.
     pub(crate) fn take_all(&mut self) -> Vec<InputItem> {
+        self.cursor = 0;
         std::mem::take(&mut self.items)
     }
 
-    /// Replace the queue contents, leaving the cursor as-is.
+    /// Replace the queue contents, clamping the cursor to the new length so a
+    /// shorter replacement keeps the selection in range.
     pub(crate) fn replace_all(&mut self, items: Vec<InputItem>) {
         self.items = items;
+        self.clamp_cursor();
     }
 
     /// Clamp the selection cursor to the current queue length.
-    pub(crate) fn clamp_cursor(&mut self) {
+    fn clamp_cursor(&mut self) {
         self.cursor = self.cursor.min(self.items.len().saturating_sub(1));
     }
 
@@ -191,6 +194,57 @@ impl InputQueue {
         }
         let cursor = self.cursor.min(self.items.len() - 1) as i32;
         self.cursor = (cursor + delta).clamp(0, (self.items.len() - 1) as i32) as usize;
+    }
+
+    /// Reset the selection to the first row. Opening the queue pane from a
+    /// collapsed strip or a summary click starts the selection at the top.
+    pub(crate) fn select_first(&mut self) {
+        self.cursor = 0;
+    }
+
+    /// The index the cursor selects, clamped into the queue, or None when the
+    /// queue is empty. Callers read the selection through this rather than the
+    /// private cursor field.
+    pub(crate) fn selected_index(&self) -> Option<usize> {
+        if self.items.is_empty() {
+            return None;
+        }
+        Some(self.cursor.min(self.items.len() - 1))
+    }
+
+    /// Demote every queued Message to a ParkedMessage. Call this when the
+    /// server's injection buffer is invalidated -- any non-final run end
+    /// (interrupt, max-turns, verify-failed, handoff, error), a /clear
+    /// reset, or a swap -- because a Message still in the host queue has
+    /// lost its server copy. Leaving it as a Message would break the
+    /// single-copy invariant (a stale-live item the run no longer backs)
+    /// and let the next promotion advance a different head, stranding the
+    /// orphan. The host queue is the single truth source; the server queue
+    /// is only the current run's buffer.
+    pub(crate) fn demote_to_parked(&mut self) {
+        for it in self.items.iter_mut() {
+            if let InputItem::Message(t) = it {
+                *it = InputItem::ParkedMessage(t.clone());
+            }
+        }
+    }
+
+    /// Remove the queued items whose stable identity matches a committed
+    /// input, so a delayed commit event cannot remove newer text that happens
+    /// to sit at the same position. Membership cleanup only; the caller
+    /// promotes the next head afterward.
+    pub(crate) fn remove_committed(&mut self, inputs: &[QueuedInput]) {
+        for input in inputs {
+            if let Some(pos) = self.items.iter().position(|it| {
+                matches!(
+                    it,
+                    InputItem::Message(current) | InputItem::ParkedMessage(current)
+                        if current.id == input.id
+                )
+            }) {
+                self.remove(pos);
+            }
+        }
     }
 }
 
@@ -289,23 +343,6 @@ impl App {
         false
     }
 
-    /// Demote every queued Message to ParkedMessage. Call this when the
-    /// server's injection buffer is invalidated -- any non-final run end
-    /// (interrupt, max-turns, verify-failed, handoff, error), a /clear
-    /// reset, or a swap -- because a Message still in the host queue has
-    /// lost its server copy. Leaving it as a Message would break the
-    /// single-copy invariant (a stale-live item the run no longer backs),
-    /// and let promote_next_pending promote a different head, stranding the
-    /// orphan. The host queue is the single truth source; the server
-    /// queue is only the current run's buffer.
-    pub(crate) fn demote_pending_to_parked(&mut self) {
-        for it in self.input.queue.iter_mut() {
-            if let InputItem::Message(t) = it {
-                *it = InputItem::ParkedMessage(t.clone());
-            }
-        }
-    }
-
     /// The one-time message when a state-changing command is deferred onto the
     /// queue (busy). Resume keeps its busy-aware switch message; the others
     /// get a uniform "will run when the run finishes" line.
@@ -322,6 +359,8 @@ impl App {
 
 #[cfg(test)]
 mod tests {
+    use std::slice::from_ref;
+
     use super::*;
 
     #[test]
@@ -384,14 +423,27 @@ mod tests {
     fn test_cursor_clamps_to_bounds() {
         let mut q = InputQueue::default();
         q.move_cursor(1);
-        assert_eq!(q.cursor, 0, "an empty queue keeps the cursor at zero");
+        assert_eq!(q.selected_index(), None, "an empty queue selects nothing");
         q.push(InputItem::Command("/a".into()));
         q.push(InputItem::Command("/b".into()));
-        q.cursor = 1;
+        q.move_cursor(1);
+        assert_eq!(
+            q.selected_index(),
+            Some(1),
+            "down movement reaches the last row"
+        );
         q.move_cursor(5);
-        assert_eq!(q.cursor, 1, "down movement stops at the last row");
+        assert_eq!(
+            q.selected_index(),
+            Some(1),
+            "down movement stops at the last row"
+        );
         q.move_cursor(-5);
-        assert_eq!(q.cursor, 0, "up movement stops at the first row");
+        assert_eq!(
+            q.selected_index(),
+            Some(0),
+            "up movement stops at the first row"
+        );
     }
 
     #[test]
@@ -457,5 +509,123 @@ mod tests {
             "a bare /resume head has no target to drain"
         );
         assert_eq!(bare.len(), 1, "a bare /resume head stays queued");
+    }
+
+    #[test]
+    fn test_selected_index_bounds() {
+        let mut q = InputQueue::default();
+        assert_eq!(q.selected_index(), None, "an empty queue selects nothing");
+        q.push(InputItem::Command("/a".into()));
+        assert_eq!(q.selected_index(), Some(0), "a single item is selected");
+    }
+
+    #[test]
+    fn test_remove_clamps_cursor() {
+        let mut q = InputQueue::default();
+        q.push(InputItem::Command("/a".into()));
+        q.push(InputItem::Command("/b".into()));
+        q.move_cursor(1);
+        assert_eq!(
+            q.selected_index(),
+            Some(1),
+            "the cursor sits on the last row"
+        );
+        q.remove(1);
+        assert_eq!(
+            q.selected_index(),
+            Some(0),
+            "removing the selected last row clamps to the new last row"
+        );
+    }
+
+    #[test]
+    fn test_replace_clamps_cursor() {
+        let mut q = InputQueue::default();
+        q.push(InputItem::Command("/a".into()));
+        q.push(InputItem::Command("/b".into()));
+        q.push(InputItem::Command("/c".into()));
+        q.move_cursor(1);
+        q.move_cursor(1);
+        assert_eq!(
+            q.selected_index(),
+            Some(2),
+            "the cursor sits on the last row"
+        );
+        q.replace_all(vec![InputItem::Command("/only".into())]);
+        assert_eq!(
+            q.selected_index(),
+            Some(0),
+            "a shorter replacement clamps the cursor into range"
+        );
+    }
+
+    #[test]
+    fn test_take_resets_cursor() {
+        let mut q = InputQueue::default();
+        q.push(InputItem::Command("/a".into()));
+        q.push(InputItem::Command("/b".into()));
+        q.move_cursor(1);
+        assert_eq!(
+            q.selected_index(),
+            Some(1),
+            "the cursor sits on the last row"
+        );
+        let taken = q.take_all();
+        assert_eq!(taken.len(), 2, "take_all hands out the whole queue");
+        assert_eq!(q.selected_index(), None, "an emptied queue selects nothing");
+        q.push(InputItem::Command("/c".into()));
+        q.push(InputItem::Command("/d".into()));
+        assert_eq!(
+            q.selected_index(),
+            Some(0),
+            "the selection restarts at the head, not the stale row"
+        );
+    }
+
+    /// A commit removes exactly the items whose stable identity matches, so a
+    /// delayed or repeated event cannot drop newer text at the same position.
+    #[test]
+    fn test_remove_committed() {
+        let mut q = InputQueue::default();
+        let kept = QueuedInput::new("kept");
+        let gone = QueuedInput::new("gone");
+        q.push(InputItem::Message(kept.clone()));
+        q.push(InputItem::Message(gone.clone()));
+        q.remove_committed(from_ref(&gone));
+        assert_eq!(q.len(), 1, "the committed item leaves the queue");
+        assert_eq!(
+            q.first().unwrap().display(),
+            "kept",
+            "the uncommitted item stays"
+        );
+        q.remove_committed(from_ref(&gone));
+        assert_eq!(q.len(), 1, "a repeated commit for the same id is a no-op");
+        let absent = QueuedInput::new("absent");
+        q.remove_committed(&[absent]);
+        assert_eq!(q.len(), 1, "a commit for an unqueued id is a no-op");
+        let parked = QueuedInput::new("parked");
+        q.push(InputItem::ParkedMessage(parked.clone()));
+        q.remove_committed(from_ref(&parked));
+        assert_eq!(
+            q.len(),
+            1,
+            "a committed parked item leaves the queue by the same identity"
+        );
+    }
+
+    #[test]
+    fn test_demote_parks_messages() {
+        let mut q = InputQueue::default();
+        q.push(InputItem::Message("live".into()));
+        q.push(InputItem::Command("/cmd".into()));
+        q.demote_to_parked();
+        assert!(
+            matches!(q[0], InputItem::ParkedMessage(_)),
+            "a live message becomes parked"
+        );
+        assert!(
+            matches!(q[1], InputItem::Command(_)),
+            "a command is left alone"
+        );
     }
 }

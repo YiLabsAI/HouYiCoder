@@ -234,7 +234,7 @@ pub(crate) fn handle_mouse(app: &mut App, m: MouseEvent) {
                 let row = (m.row - qrect.y) as usize;
                 if qrect.height <= 1 {
                     app.pane = Pane::Queue;
-                    app.input.queue.cursor = 0;
+                    app.input.queue.select_first();
                     return;
                 }
                 let shown = if n > 2 { 1 } else { cmp::min(n, 2) } as usize;
@@ -256,7 +256,7 @@ pub(crate) fn handle_mouse(app: &mut App, m: MouseEvent) {
                     app.merge_recalled_text(item.display().to_string());
                 } else {
                     app.pane = Pane::Queue;
-                    app.input.queue.cursor = 0;
+                    app.input.queue.select_first();
                 }
                 return;
             }
