@@ -296,6 +296,14 @@ impl App {
         &self.model_picker.snapshot.applied.id
     }
 
+    /// The last observed status snapshot, or None while disconnected or
+    /// before the first status reply. The status bar reads the breaker state
+    /// and the context gauge through this instead of reaching into the
+    /// session's capability nesting.
+    pub(crate) fn status_snapshot(&self) -> Option<&StatusSnapshot> {
+        self.sessions.current.capabilities.status.snapshot()
+    }
+
     pub(crate) fn snapshot_or_stub(&self) -> StatusSnapshot {
         let status = &self.sessions.current.capabilities.status;
         let status_cache = status.snapshot().cloned();

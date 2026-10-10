@@ -120,7 +120,7 @@ fn draw_agent_status_bar(f: &mut Frame, area: Rect, app: &App) {
         left.push(Span::styled(hint, dim));
     }
     let mut right: Option<Line<'static>> = None;
-    if let Some(snap) = app.sessions.current.capabilities.status.snapshot() {
+    if let Some(snap) = app.status_snapshot() {
         if snap.breaker_state.as_deref() == Some("Open") {
             left.push(Span::styled(" · ", dim));
             left.push(Span::styled("breaker Open", Style::new().fg(Color::Red)));

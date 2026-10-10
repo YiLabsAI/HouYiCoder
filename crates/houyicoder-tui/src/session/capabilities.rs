@@ -74,16 +74,20 @@ pub(crate) struct StatusCapability {
     /// When the last periodic StatusQuery was sent. Re-fires on the poll
     /// interval so the status bar and the sandbox pane stay recent.
     pub(crate) last_status_poll: Option<Instant>,
-    /// True when a /status command is awaiting a wire reply. The periodic poll
-    /// updates the cache silently; a command-initiated poll also renders the
-    /// full status block as a transcript line on reply. Cleared on reply.
+    /// Set when a /status command enqueues its query and cleared when the
+    /// reply's snapshot is recorded. No production reader is connected yet:
+    /// the path that would render the full status block as a transcript line
+    /// on a command reply is not built, so the /status pane renders from the
+    /// cached snapshot whether or not a command is pending. Kept for that
+    /// path to read once it exists; wiring or removing the flag is a separate
+    /// change.
     pub(crate) pending_status_command: bool,
 }
 
 impl StatusCapability {
-    /// The poll cadence for idle status refresh. A command poll renders the
-    /// full block on reply; this periodic poll keeps the bar and the pane
-    /// recent without adding a transcript line.
+    /// The poll cadence for idle status refresh. Each periodic poll updates
+    /// the cached snapshot so the status bar and the /status pane stay recent;
+    /// it adds no transcript line.
     const POLL_INTERVAL: Duration = Duration::from_secs(1);
 
     /// The cached status snapshot for the status bar and the /status pane, or
