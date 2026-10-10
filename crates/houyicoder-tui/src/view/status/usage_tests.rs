@@ -188,7 +188,8 @@ fn test_usage_tab_latency_rows() {
         ..TrajectoryView::default()
     };
     let mut app = crate::test_harness::working_app();
-    app.persistence.trajectory_log = Some(std::sync::Arc::new(Fixed(std::sync::Arc::new(view))));
+    app.sessions.persistence.trajectory_log =
+        Some(std::sync::Arc::new(Fixed(std::sync::Arc::new(view))));
     let s = render_usage(&app);
     assert!(s.contains("model / tool time:"), "work time row: {s}");
     assert!(s.contains("91.2s / 28.4s"), "the split: {s}");
@@ -214,8 +215,8 @@ fn test_usage_tab_latency_rows() {
 #[test]
 fn test_usage_tab_short_latency() {
     let mut app = crate::test_harness::working_app();
-    app.persistence.trajectory_log = Some(std::sync::Arc::new(Fixed(std::sync::Arc::new(
-        TrajectoryView {
+    app.sessions.persistence.trajectory_log = Some(std::sync::Arc::new(Fixed(
+        std::sync::Arc::new(TrajectoryView {
             session_id: "s".into(),
             model: "m".into(),
             total_turns: 1,
@@ -238,8 +239,8 @@ fn test_usage_tab_short_latency() {
             subagent_usage: None,
             rows: Vec::new(),
             ..TrajectoryView::default()
-        },
-    ))));
+        }),
+    )));
     let s = render_usage(&app);
     assert!(s.contains("20ms / 10ms"), "work time in milliseconds: {s}");
     assert!(
@@ -254,8 +255,8 @@ fn test_usage_tab_short_latency() {
 #[test]
 fn test_usage_tab_no_timing() {
     let mut app = crate::test_harness::working_app();
-    app.persistence.trajectory_log = Some(std::sync::Arc::new(Fixed(std::sync::Arc::new(
-        TrajectoryView {
+    app.sessions.persistence.trajectory_log = Some(std::sync::Arc::new(Fixed(
+        std::sync::Arc::new(TrajectoryView {
             session_id: "s".into(),
             model: "m".into(),
             total_turns: 0,
@@ -269,8 +270,8 @@ fn test_usage_tab_no_timing() {
             subagent_usage: None,
             rows: Vec::new(),
             ..TrajectoryView::default()
-        },
-    ))));
+        }),
+    )));
     let s = render_usage(&app);
     assert!(!s.contains("ttft:"), "no ttft row without samples: {s}");
     assert!(!s.contains("decode speed:"), "no decode row: {s}");
@@ -282,8 +283,8 @@ fn test_usage_tab_no_timing() {
 #[test]
 fn test_usage_tab_delegated() {
     let mut app = crate::test_harness::working_app();
-    app.persistence.trajectory_log = Some(std::sync::Arc::new(Fixed(std::sync::Arc::new(
-        TrajectoryView {
+    app.sessions.persistence.trajectory_log = Some(std::sync::Arc::new(Fixed(
+        std::sync::Arc::new(TrajectoryView {
             session_id: "s".into(),
             model: "m".into(),
             total_turns: 1,
@@ -302,8 +303,8 @@ fn test_usage_tab_delegated() {
             }),
             rows: Vec::new(),
             ..TrajectoryView::default()
-        },
-    ))));
+        }),
+    )));
     let s = render_usage(&app);
     assert!(s.contains("delegated usage:"), "the row is present: {s}");
     assert!(s.contains("812k input"), "input shown: {s}");
@@ -319,8 +320,8 @@ fn test_usage_tab_delegated() {
 #[test]
 fn test_usage_tab_no_delegated() {
     let mut app = crate::test_harness::working_app();
-    app.persistence.trajectory_log = Some(std::sync::Arc::new(Fixed(std::sync::Arc::new(
-        TrajectoryView {
+    app.sessions.persistence.trajectory_log = Some(std::sync::Arc::new(Fixed(
+        std::sync::Arc::new(TrajectoryView {
             session_id: "s".into(),
             model: "m".into(),
             total_turns: 1,
@@ -334,8 +335,8 @@ fn test_usage_tab_no_delegated() {
             subagent_usage: None,
             rows: Vec::new(),
             ..TrajectoryView::default()
-        },
-    ))));
+        }),
+    )));
     let s = render_usage(&app);
     assert!(!s.contains("delegated usage:"), "no row: {s}");
 }
@@ -381,8 +382,8 @@ fn test_usage_cache_share() {
 #[test]
 fn test_usage_tab_delegated_unreported() {
     let mut app = crate::test_harness::working_app();
-    app.persistence.trajectory_log = Some(std::sync::Arc::new(Fixed(std::sync::Arc::new(
-        TrajectoryView {
+    app.sessions.persistence.trajectory_log = Some(std::sync::Arc::new(Fixed(
+        std::sync::Arc::new(TrajectoryView {
             session_id: "s".into(),
             model: "m".into(),
             total_turns: 1,
@@ -401,8 +402,8 @@ fn test_usage_tab_delegated_unreported() {
             }),
             rows: Vec::new(),
             ..TrajectoryView::default()
-        },
-    ))));
+        }),
+    )));
     let s = render_usage(&app);
     assert!(s.contains("delegated usage:"), "the row is present: {s}");
     assert!(

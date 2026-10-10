@@ -14,7 +14,7 @@ fn note_selected_turn(app: &App) {
     if app.trajectory.level() != 0 {
         return;
     }
-    if let Some(log) = app.persistence.trajectory_log.as_ref() {
+    if let Some(log) = app.sessions.persistence.trajectory_log.as_ref() {
         trajectory_pane::note_selected_turn(&app.trajectory, &log.trajectory());
     }
 }
@@ -41,7 +41,7 @@ pub fn handle(app: &mut App, k: KeyEvent) -> bool {
                     // list widens: at the record levels the window is not what
                     // the user is moving in, and loading behind it would
                     // re-point the drilled turn under them.
-                    if let Some(log) = app.persistence.trajectory_log.as_ref() {
+                    if let Some(log) = app.sessions.persistence.trajectory_log.as_ref() {
                         log.load_older();
                     }
                 }
@@ -69,7 +69,7 @@ pub fn handle(app: &mut App, k: KeyEvent) -> bool {
         // which the window moves would otherwise re-point under the drill.
         KeyCode::Home => {
             if app.trajectory.level() == 0
-                && let Some(log) = app.persistence.trajectory_log.as_ref()
+                && let Some(log) = app.sessions.persistence.trajectory_log.as_ref()
             {
                 log.load_earliest();
                 // The history's first turn, so the cursor lands on it once the
@@ -85,7 +85,7 @@ pub fn handle(app: &mut App, k: KeyEvent) -> bool {
         KeyCode::End => {
             match (
                 app.trajectory.level(),
-                app.persistence.trajectory_log.as_ref(),
+                app.sessions.persistence.trajectory_log.as_ref(),
             ) {
                 (0, Some(log)) => {
                     log.return_to_tail();
@@ -122,7 +122,7 @@ pub fn handle(app: &mut App, k: KeyEvent) -> bool {
                 note_selected_turn(app);
                 // The drill's identity is the row's key: a row index names
                 // another turn once the window moves.
-                if let Some(log) = app.persistence.trajectory_log.as_ref() {
+                if let Some(log) = app.sessions.persistence.trajectory_log.as_ref() {
                     trajectory_pane::note_drilled_row(&app.trajectory, &log.trajectory());
                     // Ask now: the source captures the bytes the turn starts at,
                     // so the read survives the window moving past the turn

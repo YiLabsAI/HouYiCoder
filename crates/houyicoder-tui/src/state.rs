@@ -45,7 +45,6 @@ use crate::resume_picker::SessionPickerState;
 use crate::run_state::{RunProgress, RunState};
 use crate::selection::ClipboardWriter;
 use crate::selections::Selections;
-use crate::session::persistence::SessionPersistence;
 use crate::sessions::Sessions;
 use crate::skill_picker_state::SkillPickerState;
 use crate::skills_state::SkillsPaneState;
@@ -129,8 +128,6 @@ pub struct App {
     /// them together. Pub(crate) so the draw pass reads and writes a vector
     /// directly, matching the per-vector visible_window slices.
     pub(crate) display_rows_cache: DisplayRowsCache,
-    /// The session's injected persistence collaborators.
-    pub(crate) persistence: SessionPersistence,
     /// The session picker overlay state (opened by /resume with no arg).
     pub resume_picker: SessionPickerState,
     /// A pending resume request set when the user picks a session in the

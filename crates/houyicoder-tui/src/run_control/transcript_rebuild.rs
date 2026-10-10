@@ -416,7 +416,7 @@ impl App {
     /// by one task at a time and a result nobody has looked at yet is never
     /// dispatched over.
     fn dispatch_history_read(&mut self) {
-        let Some(source) = self.persistence.snapshot.clone() else {
+        let Some(source) = self.sessions.persistence.snapshot.clone() else {
             return;
         };
         if self.sessions.current.connection.is_none() {

@@ -153,7 +153,7 @@ pub fn build_app(bundle: RunnerBundle) -> App {
     app.status.sandbox = "mac-seatbelt".to_string();
     app.sessions.current.identity.session_id = session_id;
     app.sessions.current.connection = Some(live_session);
-    app.persistence = SessionPersistence {
+    app.sessions.persistence = SessionPersistence {
         trajectory_log,
         export_log,
         snapshot,

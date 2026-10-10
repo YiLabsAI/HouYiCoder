@@ -1,5 +1,5 @@
-//! The session's injected persistence collaborators, injected by the
-//! composition root when it assembles a session.
+//! The session's injected persistence collaborators, held by the Sessions
+//! owner beside the presented session.
 
 use std::sync::Arc;
 
@@ -10,9 +10,11 @@ use crate::view::trajectory_pane::TrajectoryLog;
 /// The session's injected persistence collaborators: the trajectory reader,
 /// the transcript snapshot reader, and the export writer, each facing the
 /// durable session log. The composition root injects them together when it
-/// assembles a session; each is None in the stub and bare paths, where the
-/// pane or command falls back to a mock reply or reports the session as
-/// unavailable. The resumable-session catalog lives on the Sessions owner,
+/// assembles a live session; each is None in the stub and bare paths, where
+/// the pane or command falls back to a mock reply or reports the session as
+/// unavailable. The owner lives on Sessions beside the presented session,
+/// because these ports are the current session's collaborators and swap
+/// together on a switch; the resumable-session catalog lives there too,
 /// beside rather than inside the presented session.
 #[derive(Default)]
 pub(crate) struct SessionPersistence {

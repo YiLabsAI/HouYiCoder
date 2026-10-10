@@ -168,7 +168,7 @@ fn test_attached_seam_supplies_view() {
     let flag = Arc::new(Mutex::new(false));
     let mut app = crate::composition::app();
     app.pane = crate::state::Pane::Trajectory;
-    app.persistence.trajectory_log = Some(Arc::new(StubLog {
+    app.sessions.persistence.trajectory_log = Some(Arc::new(StubLog {
         called: flag.clone(),
     }));
     let backend = TestBackend::new(80, 24);

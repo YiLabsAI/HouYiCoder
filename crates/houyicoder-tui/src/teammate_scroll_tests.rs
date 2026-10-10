@@ -182,7 +182,7 @@ fn test_child_blocks_parent_reads() {
     app.rebuild_transcript();
     app.sessions.current.transcript.push(subagent_line(2));
     app.whole_scroll_mut().jump_to(0);
-    app.persistence.snapshot = Some(Arc::new(MockSnapshot {
+    app.sessions.persistence.snapshot = Some(Arc::new(MockSnapshot {
         lines: Vec::new(),
         log_bytes: 4096,
         truncated: false,

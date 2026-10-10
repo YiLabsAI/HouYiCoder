@@ -49,7 +49,7 @@ fn test_export_writes_file_reports() {
     std::fs::create_dir_all(&dir).unwrap();
     let target = dir.join("out.json");
     let mut app = crate::test_harness::connected_app();
-    app.persistence.export_log = Some(Arc::new(StubExport {
+    app.sessions.persistence.export_log = Some(Arc::new(StubExport {
         payload: ExportPayload {
             filename: "ignored.json".into(),
             json: "{\"hello\":\"world\"}".into(),
@@ -102,7 +102,7 @@ fn test_export_source_gap() {
 #[test]
 fn test_unwritable_path_reports_error() {
     let mut app = crate::test_harness::connected_app();
-    app.persistence.export_log = Some(Arc::new(StubExport {
+    app.sessions.persistence.export_log = Some(Arc::new(StubExport {
         payload: ExportPayload {
             filename: "x.json".into(),
             json: "{}".into(),
@@ -132,7 +132,7 @@ fn test_dispatched_via_local_command() {
     std::fs::create_dir_all(&dir).unwrap();
     let target = dir.join("dispatched.json");
     let mut app = crate::test_harness::connected_app();
-    app.persistence.export_log = Some(Arc::new(StubExport {
+    app.sessions.persistence.export_log = Some(Arc::new(StubExport {
         payload: ExportPayload {
             filename: "d.json".into(),
             json: "{}".into(),

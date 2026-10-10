@@ -60,7 +60,7 @@ impl App {
             Over { log_bytes: u64, w: WindowLoad },
             Under { load: SnapshotLoad },
         }
-        let loaded = self.persistence.snapshot.as_ref().map(|snap| {
+        let loaded = self.sessions.persistence.snapshot.as_ref().map(|snap| {
             let log_bytes = snap.log_size();
             if log_bytes > crate::scroll::SEARCH_LOG_THRESHOLD {
                 let w = snap.tail_window(crate::scroll::WINDOW_MAX_BYTES);
@@ -238,7 +238,7 @@ impl App {
             self.jump_to_focused_match();
             return;
         }
-        let Some(snap) = self.persistence.snapshot.clone() else {
+        let Some(snap) = self.sessions.persistence.snapshot.clone() else {
             return;
         };
         // Scan up to BOUND windows older; focus the NEWEST match in the first
@@ -286,7 +286,7 @@ impl App {
             self.jump_to_focused_match();
             return;
         }
-        let Some(snap) = self.persistence.snapshot.clone() else {
+        let Some(snap) = self.sessions.persistence.snapshot.clone() else {
             return;
         };
         const BOUND: usize = 64;
@@ -397,7 +397,7 @@ impl App {
         }
         // No connection: the read happens where it stands instead, which is what
         // the bare and test compositions exercise.
-        if let Some(snap) = self.persistence.snapshot.clone() {
+        if let Some(snap) = self.sessions.persistence.snapshot.clone() {
             let p = snap.index_chunk();
             self.apply_index_chunk(p);
             moved = true;
@@ -421,7 +421,7 @@ impl App {
         if self.sessions.current.connection.is_none() {
             return;
         }
-        let Some(snap) = self.persistence.snapshot.clone() else {
+        let Some(snap) = self.sessions.persistence.snapshot.clone() else {
             return;
         };
         let (tx, rx) = std::sync::mpsc::channel();

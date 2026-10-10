@@ -23,7 +23,6 @@ use crate::selection::SystemClipboard;
 use crate::selections::Selections;
 use crate::session::Session;
 use crate::session::identity::SessionIdentity;
-use crate::session::persistence::SessionPersistence;
 use crate::sessions::Sessions;
 use crate::skill_picker_state::SkillPickerState;
 use crate::skills_state::SkillsPaneState;
@@ -47,7 +46,6 @@ pub fn app() -> App {
             c.version.set(u64::MAX);
             c
         },
-        persistence: SessionPersistence::default(),
         resume_picker: SessionPickerState::default(),
         pending_resume_target: None,
         palette: PaletteState::default(),

@@ -168,7 +168,11 @@ ACTIVE_OWNERS = {
         # became one Sessions aggregate field that also holds the
         # resumable-session catalog, so the two reset together on a swap and
         # the catalog does not stay detached beside the presented session.
-        "fields": 46,
+        # The persistence read ports (trajectory/export/snapshot) moved off
+        # App onto the Sessions owner beside the catalog: they are the
+        # current session's injected collaborators, swapped together on a
+        # switch, so a swap replaces the catalog and the read ports at once.
+        "fields": 45,
         "mut_app": 44,
     },
     "crates/houyicoder-tui/src/input.rs:Input": {
@@ -203,11 +207,15 @@ ACTIVE_OWNERS = {
         "fields": 12,
     },
     "crates/houyicoder-tui/src/sessions.rs:Sessions": {
-        # The frontend's session holdings: the presented session and the
-        # resumable-session catalog. The catalog moved here from
+        # The frontend's session holdings: the presented session, the
+        # resumable-session catalog, and the current session's injected
+        # persistence read ports. The catalog moved here from
         # SessionPersistence because it spans every resumable session while
         # the presented session is one, so a swap replaces both at once.
-        "fields": 2,
+        # The persistence ports (trajectory/export/snapshot) moved here off
+        # App for the same reason: they are the current session's
+        # collaborators, swapped together on a switch.
+        "fields": 3,
     },
     "crates/houyicoder-tui/src/workflow.rs:Workflow": {
         # The spec-plan-review-verify-artifact lifecycle: the stage machine,
@@ -269,7 +277,9 @@ ACTIVE_OWNERS = {
         # reader, the transcript snapshot reader, and the export writer. Three
         # flat App fields folded into one owner, injected together by the
         # composition root. The resumable-session catalog moved to the
-        # Sessions owner beside the presented session.
+        # Sessions owner beside the presented session. The persistence owner
+        # itself moved off App onto Sessions too: it is the current
+        # session's collaborator set, swapped together on a switch.
         "fields": 3,
     },
     "crates/houyicoder-tui/src/run_metrics.rs:RunMetrics": {

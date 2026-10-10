@@ -132,7 +132,7 @@ fn test_uncapped_finds_old_match() {
         .map(|i| TranscriptLine::Agent(format!("filler {i}")))
         .collect();
     lines.push(TranscriptLine::User("needle deep in history".into()));
-    app.persistence.snapshot = Some(Arc::new(MockSnapshot {
+    app.sessions.persistence.snapshot = Some(Arc::new(MockSnapshot {
         lines,
         log_bytes: 1024,
         truncated: false,
@@ -166,7 +166,7 @@ fn test_uncapped_finds_old_match() {
 #[test]
 fn test_search_finds_synthesized_name() {
     let mut app = working();
-    app.persistence.snapshot = Some(Arc::new(MockSnapshot {
+    app.sessions.persistence.snapshot = Some(Arc::new(MockSnapshot {
         lines: vec![
             TranscriptLine::Tool {
                 name: "Update".into(),
@@ -205,7 +205,7 @@ fn test_search_finds_synthesized_name() {
 fn test_large_log_opens_mode() {
     let mut app = working();
     let total = 20 * 1024 * 1024u64;
-    app.persistence.snapshot = Some(Arc::new(MockSnapshot {
+    app.sessions.persistence.snapshot = Some(Arc::new(MockSnapshot {
         lines: Vec::new(),
         log_bytes: total,
         truncated: false,
@@ -257,7 +257,7 @@ fn test_large_log_opens_mode() {
 #[test]
 fn test_skipped_lines_in_chrome() {
     let mut app = working();
-    app.persistence.snapshot = Some(Arc::new(MockSnapshot {
+    app.sessions.persistence.snapshot = Some(Arc::new(MockSnapshot {
         lines: vec![TranscriptLine::User("needle in the snapshot".into())],
         log_bytes: 1024,
         truncated: false,
@@ -288,7 +288,7 @@ fn test_skipped_lines_in_chrome() {
 #[test]
 fn test_exit_clears_snapshot() {
     let mut app = working();
-    app.persistence.snapshot = Some(Arc::new(MockSnapshot {
+    app.sessions.persistence.snapshot = Some(Arc::new(MockSnapshot {
         lines: vec![
             TranscriptLine::User("snap one".into()),
             TranscriptLine::User("snap two".into()),
@@ -415,7 +415,7 @@ fn test_flat_count_matches_render() {
         TranscriptLine::Agent("answer paragraph".into()),
     ];
     let total = 20 * 1024 * 1024u64;
-    app.persistence.snapshot = Some(Arc::new(MockSnapshot {
+    app.sessions.persistence.snapshot = Some(Arc::new(MockSnapshot {
         lines: Vec::new(),
         log_bytes: total,
         truncated: false,
@@ -457,7 +457,7 @@ fn test_flat_count_matches_render() {
 #[test]
 fn test_exit_clears_window_state() {
     let mut app = working();
-    app.persistence.snapshot = Some(Arc::new(MockSnapshot {
+    app.sessions.persistence.snapshot = Some(Arc::new(MockSnapshot {
         lines: Vec::new(),
         log_bytes: 20 * 1024 * 1024,
         truncated: false,
@@ -492,7 +492,7 @@ fn test_exit_clears_window_state() {
 #[test]
 fn test_window_keys_scroll_window() {
     let mut app = working();
-    app.persistence.snapshot = Some(Arc::new(MockSnapshot {
+    app.sessions.persistence.snapshot = Some(Arc::new(MockSnapshot {
         lines: Vec::new(),
         log_bytes: 20 * 1024 * 1024,
         truncated: false,
@@ -555,7 +555,7 @@ fn test_window_keys_scroll_window() {
 #[test]
 fn test_window_scrolls_no_drag() {
     let mut app = working();
-    app.persistence.snapshot = Some(Arc::new(MockSnapshot {
+    app.sessions.persistence.snapshot = Some(Arc::new(MockSnapshot {
         lines: Vec::new(),
         log_bytes: 20 * 1024 * 1024,
         truncated: false,
@@ -640,7 +640,7 @@ fn test_walks_older_across_windows() {
             bytes_total: total,
         },
     ];
-    app.persistence.snapshot = Some(Arc::new(MockSnapshot {
+    app.sessions.persistence.snapshot = Some(Arc::new(MockSnapshot {
         lines: Vec::new(),
         log_bytes: total,
         truncated: false,
@@ -700,7 +700,7 @@ fn test_walks_newer_across_windows() {
             bytes_total: total,
         },
     ];
-    app.persistence.snapshot = Some(Arc::new(MockSnapshot {
+    app.sessions.persistence.snapshot = Some(Arc::new(MockSnapshot {
         lines: Vec::new(),
         log_bytes: total,
         truncated: false,
@@ -737,7 +737,7 @@ fn test_walks_newer_across_windows() {
 #[test]
 fn test_g_completes_full_index() {
     let mut app = working();
-    app.persistence.snapshot = Some(Arc::new(MockSnapshot {
+    app.sessions.persistence.snapshot = Some(Arc::new(MockSnapshot {
         lines: Vec::new(),
         log_bytes: 20 * 1024 * 1024,
         truncated: false,
@@ -785,7 +785,7 @@ fn test_g_completes_full_index() {
 #[test]
 fn test_esc_interrupts_full_index() {
     let mut app = working();
-    app.persistence.snapshot = Some(Arc::new(MockSnapshot {
+    app.sessions.persistence.snapshot = Some(Arc::new(MockSnapshot {
         lines: Vec::new(),
         log_bytes: 20 * 1024 * 1024,
         truncated: false,
@@ -854,7 +854,7 @@ fn test_draw_reads_no_index() {
         index_steps: 3,
         index_calls: std::sync::atomic::AtomicU32::new(0),
     });
-    app.persistence.snapshot = Some(source.clone());
+    app.sessions.persistence.snapshot = Some(source.clone());
     app.enter_search_view("tail");
     crate::app::handle_key(
         &mut app,
@@ -884,7 +884,7 @@ fn test_draw_reads_no_index() {
 #[test]
 fn test_index_runs_on_worker() {
     let mut app = connected_working();
-    app.persistence.snapshot = Some(Arc::new(MockSnapshot {
+    app.sessions.persistence.snapshot = Some(Arc::new(MockSnapshot {
         lines: Vec::new(),
         log_bytes: 20 * 1024 * 1024,
         truncated: false,
@@ -927,7 +927,7 @@ fn test_index_runs_on_worker() {
 #[test]
 fn test_index_worker_death_stops() {
     let mut app = working();
-    app.persistence.snapshot = Some(Arc::new(MockSnapshot {
+    app.sessions.persistence.snapshot = Some(Arc::new(MockSnapshot {
         lines: Vec::new(),
         log_bytes: 20 * 1024 * 1024,
         truncated: false,
@@ -975,7 +975,7 @@ fn test_index_worker_death_stops() {
 #[test]
 fn test_index_landing_after_interrupt() {
     let mut app = working();
-    app.persistence.snapshot = Some(Arc::new(MockSnapshot {
+    app.sessions.persistence.snapshot = Some(Arc::new(MockSnapshot {
         lines: Vec::new(),
         log_bytes: 20 * 1024 * 1024,
         truncated: false,
@@ -1052,7 +1052,7 @@ fn test_index_landing_after_interrupt() {
 #[test]
 fn test_index_restart_waits() {
     let mut app = connected_working();
-    app.persistence.snapshot = Some(Arc::new(MockSnapshot {
+    app.sessions.persistence.snapshot = Some(Arc::new(MockSnapshot {
         lines: Vec::new(),
         log_bytes: 20 * 1024 * 1024,
         truncated: false,
@@ -1101,7 +1101,7 @@ fn test_index_restart_waits() {
 #[test]
 fn test_index_pump_waits() {
     let mut app = connected_working();
-    app.persistence.snapshot = Some(Arc::new(MockSnapshot {
+    app.sessions.persistence.snapshot = Some(Arc::new(MockSnapshot {
         lines: Vec::new(),
         log_bytes: 20 * 1024 * 1024,
         truncated: false,

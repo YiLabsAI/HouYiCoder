@@ -282,7 +282,7 @@ fn detail_for(
     let Some(drill) = drill else {
         return Arc::new(TrajectoryDetailView::default());
     };
-    match app.persistence.trajectory_log.as_ref() {
+    match app.sessions.persistence.trajectory_log.as_ref() {
         Some(log) => {
             // Asking again is how a draw polls; the source answers from what it
             // has and asks the disk once per drill.
@@ -304,6 +304,7 @@ pub fn draw_content(f: &mut Frame, area: Rect, app: &crate::state::App) {
     // Real data when wired; fallback sample in unwired modes so the pane
     // still renders demonstration rows.
     let traj = app
+        .sessions
         .persistence
         .trajectory_log
         .as_ref()
