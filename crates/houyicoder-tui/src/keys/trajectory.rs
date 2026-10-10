@@ -107,7 +107,7 @@ pub fn handle(app: &mut App, k: KeyEvent) -> bool {
             }
             true
         }
-        KeyCode::Enter if app.input.editor.is_empty() => {
+        KeyCode::Enter if app.ui.input.editor.is_empty() => {
             let level = app.trajectory.level();
             if level == 0 && app.trajectory.list_len() > 0 {
                 // Freeze the turn-list selection so the turn-detail and
@@ -148,7 +148,7 @@ pub fn handle(app: &mut App, k: KeyEvent) -> bool {
         // not intercepted. Closing first is what keeps that from typing into a
         // box the pane is covering.
         KeyCode::Char(_) => {
-            app.pane = Pane::Transcript;
+            app.ui.navigation.pane = Pane::Transcript;
             // Closing the pane must also leave the viewport that drew it: a
             // pane closed while Focus still owns the screen would send the
             // character to a box the user cannot see.
@@ -159,7 +159,7 @@ pub fn handle(app: &mut App, k: KeyEvent) -> bool {
             let level = app.trajectory.level();
             match level {
                 0 => {
-                    app.pane = Pane::Transcript;
+                    app.ui.navigation.pane = Pane::Transcript;
                     app.fold_to_working();
                 }
                 // Back at the turn list, the cursor returns to the turn the

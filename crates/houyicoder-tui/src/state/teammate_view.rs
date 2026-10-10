@@ -167,7 +167,8 @@ impl App {
             // Idle: Esc is a no-op on the run, so teach the exit gesture
             // instead of leaving the press silent. The banner advertises
             // shift+↑↓, but a misguessed Esc is the moment to remind.
-            self.notifications
+            self.ui
+                .notifications
                 .add(crate::notifications::Notification::immediate(
                     "teammate-exit-hint",
                     crate::notifications::NotifKind::Text {

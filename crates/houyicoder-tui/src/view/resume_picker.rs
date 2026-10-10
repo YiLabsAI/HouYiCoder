@@ -40,12 +40,12 @@ pub fn draw_content(f: &mut Frame, inner: Rect, app: &App) {
             Style::new().fg(Color::White).add_modifier(Modifier::BOLD),
         ),
         Span::styled(
-            format!(" | filter: {}", app.resume_picker.query),
+            format!(" | filter: {}", app.ui.navigation.resume_picker.query),
             Style::new().fg(Color::DarkGray),
         ),
     ]));
     f.render_widget(header, chunks[0]);
-    let filtered = app.resume_picker.filtered();
+    let filtered = app.ui.navigation.resume_picker.filtered();
     if filtered.is_empty() {
         f.render_widget(
             Paragraph::new("  no session matches your filter")
@@ -63,7 +63,11 @@ pub fn draw_content(f: &mut Frame, inner: Rect, app: &App) {
             .collect();
         let mut state = ListState::default();
         state.select(Some(
-            app.resume_picker.sel.min(filtered.len().saturating_sub(1)),
+            app.ui
+                .navigation
+                .resume_picker
+                .sel
+                .min(filtered.len().saturating_sub(1)),
         ));
         let list = List::new(items)
             .style(Style::default().fg(Color::White))

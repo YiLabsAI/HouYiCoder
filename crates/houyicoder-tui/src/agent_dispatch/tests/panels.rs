@@ -104,7 +104,7 @@ fn test_stale_skill_body_dropped() {
 #[test]
 fn test_open_detail_without_session() {
     let mut app = crate::composition::app();
-    app.pane = Pane::Skills;
+    app.ui.navigation.pane = Pane::Skills;
     app.sessions.current.capabilities.skills.entries = vec![skill_entry("alpha")];
     app.open_skill_detail();
     assert!(matches!(
@@ -119,7 +119,7 @@ fn test_open_detail_without_session() {
 #[test]
 fn test_lost_send_settles_detail() {
     let mut app = crate::test_harness::connection_lost_app();
-    app.pane = Pane::Skills;
+    app.ui.navigation.pane = Pane::Skills;
     app.sessions.current.capabilities.skills.entries = vec![skill_entry("alpha")];
     app.open_skill_detail();
     assert!(matches!(
@@ -194,7 +194,7 @@ fn test_error_keeps_detail_loading() {
 #[test]
 fn test_toggle_skill_at_cursor() {
     let mut app = crate::composition::app();
-    app.pane = Pane::Skills;
+    app.ui.navigation.pane = Pane::Skills;
     app.sessions.current.capabilities.skills.entries = vec![skill_entry("alpha")];
     app.toggle_skill_at_cursor();
     assert!(
@@ -223,7 +223,7 @@ fn test_toggle_skill_at_cursor() {
 #[test]
 fn test_toggle_blocked_skill_noop() {
     let mut app = crate::composition::app();
-    app.pane = Pane::Skills;
+    app.ui.navigation.pane = Pane::Skills;
     let mut blocked = skill_entry("alpha");
     blocked.user_invocable = false;
     blocked.invocable = false;
@@ -241,8 +241,8 @@ fn test_toggle_blocked_skill_noop() {
 #[test]
 fn test_skills_pane_renders_entries() {
     let mut app = crate::composition::app();
-    app.screen = crate::state::Screen::Working;
-    app.pane = crate::state::Pane::Skills;
+    app.ui.navigation.screen = crate::state::Screen::Working;
+    app.ui.navigation.pane = crate::state::Pane::Skills;
     app.sessions.current.capabilities.skills.entries = vec![
         SkillEntry {
             name: "pdf-export".into(),
@@ -284,8 +284,8 @@ fn test_skills_pane_renders_entries() {
 #[test]
 fn test_skills_pane_showcase() {
     let mut app = crate::composition::app();
-    app.screen = crate::state::Screen::Working;
-    app.pane = crate::state::Pane::Skills;
+    app.ui.navigation.screen = crate::state::Screen::Working;
+    app.ui.navigation.pane = crate::state::Pane::Skills;
     app.sessions.current.capabilities.skills.entries = vec![
         SkillEntry {
             name: "pdf-export".into(),
@@ -326,8 +326,8 @@ fn test_skills_pane_showcase() {
 fn test_tools_pane_renders_entries() {
     use houyicoder_protocol::frontend::tools::ToolEntry;
     let mut app = crate::composition::app();
-    app.screen = crate::state::Screen::Working;
-    app.pane = crate::state::Pane::Tools;
+    app.ui.navigation.screen = crate::state::Screen::Working;
+    app.ui.navigation.pane = crate::state::Pane::Tools;
     app.sessions.current.capabilities.tools.entries = vec![
         ToolEntry {
             name: "zed".into(),
@@ -358,8 +358,8 @@ fn test_tools_pane_renders_entries() {
 #[test]
 fn test_tools_pane_renders_empty() {
     let mut app = crate::composition::app();
-    app.screen = crate::state::Screen::Working;
-    app.pane = crate::state::Pane::Tools;
+    app.ui.navigation.screen = crate::state::Screen::Working;
+    app.ui.navigation.pane = crate::state::Pane::Tools;
     app.sessions.current.capabilities.tools.entries = vec![];
     let out = crate::test_harness::render_text(&app, 80, 24);
     assert!(
@@ -371,8 +371,8 @@ fn test_tools_pane_renders_empty() {
 #[test]
 fn test_agents_directory_renders_lines() {
     let mut app = crate::composition::app();
-    app.screen = crate::state::Screen::Working;
-    app.pane = crate::state::Pane::Agents;
+    app.ui.navigation.screen = crate::state::Screen::Working;
+    app.ui.navigation.pane = crate::state::Pane::Agents;
     app.sessions.current.agent_directory =
         Some("## Available agents\n\n- explore: fast search\n- plan: design".into());
     let out = crate::test_harness::render_text(&app, 80, 24);
@@ -391,8 +391,8 @@ fn test_agents_directory_renders_lines() {
 #[test]
 fn test_agents_directory_empty_placeholder() {
     let mut app = crate::composition::app();
-    app.screen = crate::state::Screen::Working;
-    app.pane = crate::state::Pane::Agents;
+    app.ui.navigation.screen = crate::state::Screen::Working;
+    app.ui.navigation.pane = crate::state::Pane::Agents;
     app.sessions.current.agent_directory = Some(String::new());
     let out = crate::test_harness::render_text(&app, 80, 24);
     assert!(

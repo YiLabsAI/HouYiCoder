@@ -16,7 +16,7 @@ use crate::test_harness::render_text;
 
 fn working() -> crate::state::App {
     let mut app = composition::app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app
 }
 
@@ -251,11 +251,11 @@ fn test_focus_renders_diff_full() {
     let mut app = working();
     app.set_stage(Stage::Implementing);
     assert_eq!(
-        app.viewport,
+        app.ui.navigation.viewport,
         ViewportMode::Focus,
         "set_stage(Implementing) must sync viewport to Focus"
     );
-    app.pane = Pane::Diff;
+    app.ui.navigation.pane = Pane::Diff;
     let out = render_text(&app, 80, 24);
     println!("--- Focus mode (diff full-width) ---\n{out}\n--- end ---");
     assert!(
@@ -313,7 +313,7 @@ fn test_no_hunk_rendered() {
     );
 
     // Console replay line references the change id.
-    app.screen = Screen::Console;
+    app.ui.navigation.screen = Screen::Console;
     let console = render_text(&app, 100, 28);
     println!("--- console ---\n{console}\n--- end ---");
     assert!(
@@ -339,7 +339,11 @@ fn test_repeated_approve_advances() {
         Stage::Verify,
         "all changes approved -> verify"
     );
-    assert_eq!(app.pane, Pane::Review, "auto-advance should land on review");
+    assert_eq!(
+        app.ui.navigation.pane,
+        Pane::Review,
+        "auto-advance should land on review"
+    );
     let out = render_text(&app, 100, 28);
     println!("--- 3x a -> verify/review ---\n{out}\n--- end ---");
     assert!(
@@ -367,7 +371,7 @@ fn test_scroll_overlay_tag() {
     }
     drop(render_text(&app, 80, 24));
     keys::handle_working(&mut app, key(KeyCode::PageUp));
-    assert_eq!(app.viewport, ViewportMode::Scroll);
+    assert_eq!(app.ui.navigation.viewport, ViewportMode::Scroll);
     let out = render_text(&app, 80, 24);
     println!("--- scroll overlay ---\n{out}\n--- end ---");
     let last = out.lines().last().expect("last row");

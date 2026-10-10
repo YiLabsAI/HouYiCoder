@@ -264,7 +264,7 @@ fn test_decision_reject() {
 #[test]
 fn test_render_card_question_options() {
     let mut app = crate::composition::app();
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
     let aq = AskQuestion::parse("c1", &single_input()).expect("parse");
     app.sessions.current.prompt = Some(PendingPrompt::question_card(RequestId(0), aq));
     let out = crate::test_harness::render_text(&app, 80, 24);
@@ -284,7 +284,7 @@ fn test_render_card_question_options() {
 #[test]
 fn test_render_card_cursor_marker() {
     let mut app = crate::composition::app();
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
     let mut aq = AskQuestion::parse("c1", &single_input()).expect("parse");
     aq.cursors[0] = 1; // focus on "time"
     app.sessions.current.prompt = Some(PendingPrompt::question_card(RequestId(0), aq));
@@ -300,7 +300,7 @@ fn test_render_card_cursor_marker() {
 #[test]
 fn test_render_card_multi_hint() {
     let mut app = crate::composition::app();
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
     let aq = AskQuestion::parse("c1", &multi_input()).expect("parse");
     app.sessions.current.prompt = Some(PendingPrompt::question_card(RequestId(0), aq));
     let out = crate::test_harness::render_text(&app, 80, 24);
@@ -319,7 +319,7 @@ fn test_render_card_multi_hint() {
 #[test]
 fn test_render_card_single_hint() {
     let mut app = crate::composition::app();
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
     let aq = AskQuestion::parse("c1", &single_input()).expect("parse");
     app.sessions.current.prompt = Some(PendingPrompt::question_card(RequestId(0), aq));
     let out = crate::test_harness::render_text(&app, 80, 24);
@@ -332,7 +332,7 @@ fn test_render_card_single_hint() {
 #[test]
 fn test_render_card_esc_hint() {
     let mut app = crate::composition::app();
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
     let aq = AskQuestion::parse("c1", &single_input()).expect("parse");
     app.sessions.current.prompt = Some(PendingPrompt::question_card(RequestId(0), aq));
     let out = crate::test_harness::render_text(&app, 80, 24);
@@ -342,7 +342,7 @@ fn test_render_card_esc_hint() {
 #[test]
 fn test_render_card_selected_checkbox() {
     let mut app = crate::composition::app();
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
     let mut aq = AskQuestion::parse("c1", &single_input()).expect("parse");
     aq.selections[0] = vec![0]; // select chrono
     app.sessions.current.prompt = Some(PendingPrompt::question_card(RequestId(0), aq));
@@ -354,7 +354,7 @@ fn test_render_card_selected_checkbox() {
 #[test]
 fn test_render_card_separator() {
     let mut app = crate::composition::app();
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
     let aq = AskQuestion::parse("c1", &single_input()).expect("parse");
     app.sessions.current.prompt = Some(PendingPrompt::question_card(RequestId(0), aq));
     let out = crate::test_harness::render_text(&app, 80, 24);
@@ -659,7 +659,7 @@ fn test_cancel_via_tool() {
 #[test]
 fn test_render_submit_title() {
     let mut app = crate::composition::app();
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
     let mut aq = AskQuestion::parse("c1", &two_question_input()).expect("parse");
     aq.selections[0] = vec![0];
     aq.selections[1] = vec![1];
@@ -675,7 +675,7 @@ fn test_render_submit_title() {
 #[test]
 fn test_render_submit_answers() {
     let mut app = crate::composition::app();
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
     let mut aq = AskQuestion::parse("c1", &two_question_input()).expect("parse");
     aq.selections[0] = vec![0]; // a
     aq.selections[1] = vec![1]; // d
@@ -691,7 +691,7 @@ fn test_render_submit_answers() {
 #[test]
 fn test_render_submit_warning() {
     let mut app = crate::composition::app();
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
     let mut aq = AskQuestion::parse("c1", &two_question_input()).expect("parse");
     aq.selections[0] = vec![0]; // only Q1 answered
     aq.selections[1] = vec![]; // Q2 unanswered
@@ -707,7 +707,7 @@ fn test_render_submit_warning() {
 #[test]
 fn test_render_submit_cancel_opts() {
     let mut app = crate::composition::app();
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
     let mut aq = AskQuestion::parse("c1", &two_question_input()).expect("parse");
     aq.selections[0] = vec![0];
     aq.selections[1] = vec![1];
@@ -728,7 +728,7 @@ fn test_question_enter_submits() {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     let mut app = crate::composition::app();
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
     let aq = AskQuestion::parse("c1", &single_input()).expect("parse");
     app.sessions.current.prompt = Some(PendingPrompt::question_card(RequestId(0), aq));
     crate::app::handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));

@@ -101,8 +101,8 @@ fn test_slash_echo_survives_rebuild() {
 #[test]
 fn test_submission_echo_one_row() {
     let mut app = fresh_app();
-    app.screen = Screen::Working;
-    app.input.editor.set("hi".to_string());
+    app.ui.navigation.screen = Screen::Working;
+    app.ui.input.editor.set("hi".to_string());
     app.submit_input();
     app.rebuild_after_frame_edit();
     let echoes = app
@@ -132,7 +132,7 @@ fn test_submission_echo_one_row() {
 #[test]
 fn test_context_refresh_after_turn() {
     let mut app = fresh_app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app.push_transcript_line(TranscriptLine::ContextGrid(composition::context_view()));
     app.transcript_mut().push_frame(user_msg("go"));
     app.system_line("marker");

@@ -40,8 +40,8 @@ impl App {
         use SlashCommand as C;
         match cmd {
             C::Exit => self.quit = true,
-            C::Login => self.screen = Screen::Login,
-            C::Console => self.screen = Screen::Console,
+            C::Login => self.ui.navigation.screen = Screen::Login,
+            C::Console => self.ui.navigation.screen = Screen::Console,
             C::Clear => self.clear_session(),
             C::Init => self.enter_stage(Stage::Design, Pane::Spec, "initializing project spec"),
             C::Spec => self.enter_stage(Stage::Design, Pane::Spec, "drafting design (spec)"),
@@ -50,15 +50,15 @@ impl App {
             C::Review => self.enter_stage(Stage::Verify, Pane::Review, "verifying: agent review"),
             C::Verify => self.enter_stage(Stage::Verify, Pane::Verify, "verifying: machine check"),
             C::Graph => {
-                self.pane = Pane::Graph;
+                self.ui.navigation.pane = Pane::Graph;
                 self.system_line("graph: showing impact_set result in the graph pane");
             }
             C::Diff => {
-                self.pane = Pane::Diff;
+                self.ui.navigation.pane = Pane::Diff;
                 self.system_line("diff: showing changes in the diff pane");
             }
             C::Agents => {
-                self.pane = Pane::Agents;
+                self.ui.navigation.pane = Pane::Agents;
                 self.sessions.current.refresh_agents();
                 if let Some(s) = self.sessions.current.connection.as_ref() {
                     match s.next_request_id() {
@@ -113,7 +113,7 @@ impl App {
                 // open; the reply updates the cache + the pane re-renders,
                 // not a transcript text dump. The stub path renders from
                 // snapshot_or_stub the pane content reads.
-                self.pane = Pane::Status;
+                self.ui.navigation.pane = Pane::Status;
                 if let Some(s) = self.sessions.current.connection.as_ref() {
                     match s.next_request_id() {
                         Ok(req_id) => {
@@ -132,7 +132,7 @@ impl App {
                 }
             }
             C::Trajectory => {
-                self.pane = Pane::Trajectory;
+                self.ui.navigation.pane = Pane::Trajectory;
                 self.trajectory.set_level(0);
                 self.trajectory.set_turn_idx(0);
                 // No turn is selected yet: the pane opens on the tail and
@@ -144,7 +144,7 @@ impl App {
                 self.trajectory.set_cursor(usize::MAX);
             }
             C::Tools => {
-                self.pane = Pane::Tools;
+                self.ui.navigation.pane = Pane::Tools;
                 if let Some(s) = self.sessions.current.connection.as_ref() {
                     match s.next_request_id() {
                         Ok(req_id) => {
@@ -155,7 +155,7 @@ impl App {
                 }
             }
             C::Skills => {
-                self.pane = Pane::Skills;
+                self.ui.navigation.pane = Pane::Skills;
                 if let Some(s) = self.sessions.current.connection.as_ref() {
                     match s.next_request_id() {
                         Ok(req_id) => {
@@ -166,7 +166,7 @@ impl App {
                 }
             }
             C::Hooks => {
-                self.pane = Pane::Hooks;
+                self.ui.navigation.pane = Pane::Hooks;
                 if let Some(s) = self.sessions.current.connection.as_ref() {
                     match s.next_request_id() {
                         Ok(req_id) => {
@@ -177,7 +177,7 @@ impl App {
                 }
             }
             C::Memory => {
-                self.pane = Pane::Memory;
+                self.ui.navigation.pane = Pane::Memory;
                 self.memory.close_detail();
                 if let Some(s) = self.sessions.current.connection.as_ref() {
                     match s.next_request_id() {
@@ -204,7 +204,7 @@ impl App {
             C::ReleaseNotes => self.system_line(composition::release_notes()),
             C::Help => self.system_line(composition::help_text()),
             C::Worktree => {
-                self.pane = Pane::Worktree;
+                self.ui.navigation.pane = Pane::Worktree;
                 self.refresh_worktrees();
             }
             C::Compact => self.run_compact(),
@@ -277,7 +277,7 @@ impl App {
     /// stage + pane, update the spec strip step, and log the transition.
     pub(crate) fn enter_stage(&mut self, stage: Stage, pane: Pane, msg: &str) {
         self.set_stage(stage);
-        self.pane = pane;
+        self.ui.navigation.pane = pane;
         self.system_line(msg.to_string());
     }
 
@@ -354,11 +354,11 @@ impl App {
         // The reset clears the server buffer regardless of whether a req_id
         // was issued, so a Message still in the pending copy is now an orphan.
         // Host state invalidation is decoupled from id generation.
-        self.input.queue.demote_to_parked();
+        self.ui.input.queue.demote_to_parked();
         self.system_line("session archived, new session started");
         self.workflow.stage = Stage::Idle;
         self.workflow.spec_ctx.step = Stage::Idle.label().to_string();
-        self.pane = Pane::Transcript;
+        self.ui.navigation.pane = Pane::Transcript;
         self.reset_chain_state();
         self.sync_viewport_to_stage();
     }
@@ -368,7 +368,7 @@ impl App {
     fn rewind(&mut self) {
         match self.rewind_stage() {
             Some(prev) => {
-                self.pane = pane_for_stage(prev);
+                self.ui.navigation.pane = pane_for_stage(prev);
                 self.unapprove_artifact(prev);
                 self.system_line(format!(
                     "rewound to {} (artifact un-approved)",
@@ -404,7 +404,7 @@ impl App {
         if self.workflow.stage != target {
             self.set_stage(target);
         }
-        self.pane = pane_for_stage(target);
+        self.ui.navigation.pane = pane_for_stage(target);
         self.unapprove_artifact(target);
         self.system_line(format!(
             "rewound to {} (artifact un-approved)",
@@ -430,10 +430,10 @@ impl App {
     /// palette query is the arg surface once a command is selected; routing a
     /// paste there lets the user paste a file path / sid into the popup.
     pub(crate) fn apply_paste_token(&mut self, token: &str) {
-        if self.palette.open {
-            self.palette.query.push_str(token);
+        if self.ui.navigation.palette.open {
+            self.ui.navigation.palette.query.push_str(token);
         } else {
-            self.input.editor.insert_str(token);
+            self.ui.input.editor.insert_str(token);
         }
     }
 
@@ -445,18 +445,18 @@ impl App {
     /// the next check.
     pub(crate) fn flush_pending_paste(&mut self) -> bool {
         let (Some(buf), Some(last)) = (
-            self.input.pending_paste.buffer.take(),
-            self.input.pending_paste.last.take(),
+            self.ui.input.pending_paste.buffer.take(),
+            self.ui.input.pending_paste.last.take(),
         ) else {
             return false;
         };
         if last.elapsed().as_millis() >= 50 {
-            let token = self.input.pasted.ingest(&buf);
+            let token = self.ui.input.pasted.ingest(&buf);
             self.apply_paste_token(&token);
             true
         } else {
-            self.input.pending_paste.buffer = Some(buf);
-            self.input.pending_paste.last = Some(last);
+            self.ui.input.pending_paste.buffer = Some(buf);
+            self.ui.input.pending_paste.last = Some(last);
             false
         }
     }
@@ -469,15 +469,15 @@ impl App {
     /// task auto-enters the design stage.
     pub(crate) fn submit_input(&mut self) {
         // Artifact edit mode: Enter submits the edit, not a slash command.
-        if self.pane == Pane::Artifact && !self.workflow.artifact.mode().is_normal() {
-            let text = self.input.editor.take();
+        if self.ui.navigation.pane == Pane::Artifact && !self.workflow.artifact.mode().is_normal() {
+            let text = self.ui.input.editor.take();
             self.artifact_submit_edit(text);
             return;
         }
         // /permissions typed sub-mode (add / remove / search): Enter submits the
         // pane's typed text, not a chat turn or slash command.
-        if self.pane == Pane::Permission && self.permission_pane.input.is_active() {
-            let text = self.input.editor.take();
+        if self.ui.navigation.pane == Pane::Permission && self.permission_pane.input.is_active() {
+            let text = self.ui.input.editor.take();
             crate::permission_input::submit_permission_input(self, text);
             return;
         }
@@ -485,7 +485,7 @@ impl App {
         // back to the tail so new content streams in under their attention,
         // clearing any new-messages indicator left from reading history.
         self.scroll_transcript_follow_tail();
-        let text = self.input.editor.take();
+        let text = self.ui.input.editor.take();
         if text.is_empty() {
             return;
         }
@@ -499,7 +499,7 @@ impl App {
             let cmd = stripped.split_whitespace().next().unwrap_or("");
             let bare_resume = cmd == "resume" && stripped.trim() == cmd;
             if self.agent_busy() && is_state_changing(stripped) && !bare_resume {
-                self.input.queue.push(InputItem::Command(text.clone()));
+                self.ui.input.queue.push(InputItem::Command(text.clone()));
                 self.system_line(self.deferred_command_message(stripped));
                 return;
             }
@@ -525,7 +525,7 @@ impl App {
         // Artifact Normal mode: plain text is not auto-annotated. The input box
         // is for slash commands; direct edits start with c/o/d/i. Drop the text
         // with a hint so the user knows why nothing happened.
-        if self.pane == Pane::Artifact {
+        if self.ui.navigation.pane == Pane::Artifact {
             self.system_line("artifact: use c/o/d/i to edit, / for commands");
             return;
         }
@@ -535,11 +535,11 @@ impl App {
         // will follow this submission: the frontend raises the row, and the typed
         // task opens the drafting surface it would open with a runner. No reply
         // follows, because there is nothing to reply with.
-        let text = crate::paste::PasteStore::expand(&text, &self.input.pasted);
+        let text = crate::paste::PasteStore::expand(&text, &self.ui.input.pasted);
         if self.sessions.current.connection.is_some() {
             let project = crate::history::current_project();
             let session_id = self.sessions.current.identity.session_id.to_string();
-            self.input.history.submit(&text, &project, &session_id);
+            self.ui.input.history.submit(&text, &project, &session_id);
             self.spawn_run(text);
             return;
         }
@@ -644,7 +644,7 @@ impl App {
         // disk. Writes to the loaded path by default, or the given path. No
         // auto-save: explicit only. TUI-local (not in the protocol palette).
         if name == "artifact-save" || name.starts_with("artifact-save ") {
-            if self.pane != Pane::Artifact {
+            if self.ui.navigation.pane != Pane::Artifact {
                 self.system_line("artifact-save: open an artifact first (/artifact <path>)");
                 return true;
             }
@@ -676,14 +676,14 @@ impl App {
             match ArtifactSession::load(path) {
                 Ok(session) => {
                     self.workflow.artifact = session;
-                    self.pane = Pane::Artifact;
+                    self.ui.navigation.pane = Pane::Artifact;
                     self.system_line(format!(
                         "artifact: opened {} (c=replace o=insert d=delete i=nl; a/r=review)",
                         self.workflow.artifact.path()
                     ));
                 }
                 Err(_) => {
-                    self.pane = Pane::Artifact;
+                    self.ui.navigation.pane = Pane::Artifact;
                     self.system_line(format!(
                         "artifact: could not read {path}, showing canned stub"
                     ));

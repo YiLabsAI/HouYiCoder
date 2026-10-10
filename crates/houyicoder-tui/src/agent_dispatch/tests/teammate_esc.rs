@@ -32,7 +32,7 @@ fn test_abort_viewed_child_turn() {
         "Esc on a running child aborts the turn but keeps the view open"
     );
     assert!(
-        app.notifications.current().is_none(),
+        app.ui.notifications.current().is_none(),
         "a running child sends a cancel, not the exit-hint toast"
     );
     app.fleet.entries[0].completed = Some("completed".into());
@@ -42,7 +42,8 @@ fn test_abort_viewed_child_turn() {
         "Esc on an idle child keeps the view — exit is on Shift+Up/Down"
     );
     assert!(
-        app.notifications
+        app.ui
+            .notifications
             .current()
             .is_some_and(|n| n.key == "teammate-exit-hint"),
         "an idle Esc pops the exit-gesture toast instead of staying silent"
@@ -499,7 +500,7 @@ fn test_completed_child_unavailable() {
 fn test_teammate_submit_steers() {
     use crate::records::{TeammateView, TranscriptLine};
     let mut app = crate::composition::app();
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
     app.teammate_view = Some(TeammateView {
         child_sid: "c1".into(),
         ..Default::default()
@@ -515,7 +516,7 @@ fn test_teammate_submit_steers() {
         "no parent echo for a steering submit"
     );
     assert!(
-        app.input.queue.is_empty(),
+        app.ui.input.queue.is_empty(),
         "steering does not queue on the parent"
     );
 }

@@ -60,13 +60,13 @@ impl super::App {
                                     && !should_preserve_interrupted_turn(
                                         self.sessions.current.transcript.frames(),
                                     )
-                                    && self.input.editor.is_empty() =>
+                                    && self.ui.input.editor.is_empty() =>
                             {
                                 // Remove the empty submission from transcript
                                 // and history before restoring it for editing.
                                 self.rewind_to_last_user_input();
-                                self.input.history.remove_last();
-                                self.input.editor.set(text);
+                                self.ui.input.history.remove_last();
+                                self.ui.input.editor.set(text);
                                 true
                             }
                             _ => false,
@@ -103,7 +103,7 @@ impl super::App {
         // park pending messages for explicit user action.
         self.status.last_run_final = was_final;
         if !was_final {
-            self.input.queue.demote_to_parked();
+            self.ui.input.queue.demote_to_parked();
         }
     }
 }

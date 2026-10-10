@@ -16,8 +16,8 @@ use houyicoder_protocol::extension::ENTITLEMENT_TOOL;
 
 fn app() -> App {
     let mut app = composition::app();
-    app.screen = crate::state::Screen::Working;
-    app.pane = Pane::Transcript;
+    app.ui.navigation.screen = crate::state::Screen::Working;
+    app.ui.navigation.pane = Pane::Transcript;
     app
 }
 
@@ -51,7 +51,7 @@ fn test_reasoning_no_live_block() {
 }
 
 fn run(app: &mut App, cmd: &str) {
-    app.input.editor.set(cmd.to_string());
+    app.ui.input.editor.set(cmd.to_string());
     app.submit_input();
 }
 
@@ -74,8 +74,8 @@ fn test_permission_rule_add_list() {
     // them on a connected app + pump the driver between commands so the server's
     // PermissionRulesResult replies land in rules_cache before the next read.
     let mut app = crate::composition::build_app_for_test(None);
-    app.screen = crate::state::Screen::Working;
-    app.pane = Pane::Transcript;
+    app.ui.navigation.screen = crate::state::Screen::Working;
+    app.ui.navigation.pane = Pane::Transcript;
     run(&mut app, "/permissions add bash allow");
     assert!(last_system(&app).contains("added"));
     pump_rules(&mut app);
@@ -154,7 +154,7 @@ fn test_status_bar_renders_mode() {
     // A connected app shows the mode pill in the agent status bar. Render and
     // confirm the current mode label lands in the bottom status line.
     let mut app = crate::composition::build_app_for_test(None);
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
     app.sessions.current.capabilities.permission.mode_cache =
         Some(houyicoder_protocol::frontend::permission::PermissionMode::Auto);
     let text = render_text(&app, 100, 28);
@@ -168,7 +168,7 @@ fn test_status_bar_renders_mode() {
 fn test_status_bar_renders_manual() {
     // Manual mode shows the pause-glyph pill in the status bar.
     let mut app = crate::composition::build_app_for_test(None);
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
     app.sessions.current.capabilities.permission.mode_cache =
         Some(houyicoder_protocol::frontend::permission::PermissionMode::Manual);
     let text = render_text(&app, 100, 28);
@@ -181,7 +181,7 @@ fn test_status_bar_renders_manual() {
 #[test]
 fn test_approval_popup_no_placeholder() {
     let mut app = crate::composition::build_app_for_test(None);
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
     app.sessions.current.prompt = Some(PendingPrompt::approval_card(
         RequestId(0),
         crate::state::Approval {
@@ -221,7 +221,7 @@ fn test_approval_r_binds_reject() {
     // regardless of card layout.
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     let mut app = crate::composition::build_app_for_test(None);
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
     app.sessions.current.prompt = Some(PendingPrompt::approval_card(
         RequestId(0),
         crate::state::Approval {
@@ -249,7 +249,7 @@ fn test_approval_r_binds_reject() {
 fn test_entitlement_r_rejects() {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     let mut app = crate::composition::build_app_for_test(None);
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
     app.sessions.current.prompt = Some(PendingPrompt::approval_card(
         RequestId(0),
         entitlement_approval(),
@@ -295,7 +295,7 @@ fn test_git_toggle_disconnected() {
             .ask_before_git_enabled,
         "default on"
     );
-    app.input.editor.set("/permissions git off".to_string());
+    app.ui.input.editor.set("/permissions git off".to_string());
     app.submit_input();
     assert!(
         app.sessions
@@ -317,7 +317,7 @@ fn test_git_show_disconnected() {
     // Disconnected, /permissions git reports not connected: the cached value
     // may be stale and a refresh cannot ship, so no state line is pushed.
     let mut app = app();
-    app.input.editor.set("/permissions git".to_string());
+    app.ui.input.editor.set("/permissions git".to_string());
     app.submit_input();
     assert!(
         last_system(&app).contains("permission: not connected"),
@@ -378,10 +378,10 @@ fn test_permission_pane_esc_exits() {
     // transcript.
     use crate::state::Pane;
     let mut app = app();
-    app.input.editor.set("/permissions".to_string());
+    app.ui.input.editor.set("/permissions".to_string());
     app.submit_input();
     assert_eq!(
-        app.pane,
+        app.ui.navigation.pane,
         Pane::Permission,
         "bare /permissions opens the pane"
     );
@@ -395,7 +395,11 @@ fn test_permission_pane_esc_exits() {
             state: crossterm::event::KeyEventState::NONE,
         },
     );
-    assert_eq!(app.pane, Pane::Transcript, "Esc exits the permission pane");
+    assert_eq!(
+        app.ui.navigation.pane,
+        Pane::Transcript,
+        "Esc exits the permission pane"
+    );
 }
 
 #[test]
@@ -405,9 +409,9 @@ fn test_open_no_transcript_hint() {
     // not echo a "rule manager ..." system line into the transcript.
     use crate::state::Pane;
     let mut app = app();
-    app.input.editor.set("/permissions".to_string());
+    app.ui.input.editor.set("/permissions".to_string());
     app.submit_input();
-    assert_eq!(app.pane, Pane::Permission);
+    assert_eq!(app.ui.navigation.pane, Pane::Permission);
     let systems: Vec<String> = app
         .sessions
         .current
@@ -432,7 +436,7 @@ fn test_permission_pane_renders_tabs() {
     // footer hint. Active tab defaults to Allow.
     use crate::state::PermissionTab;
     let mut app = app();
-    app.pane = Pane::Permission;
+    app.ui.navigation.pane = Pane::Permission;
     let text = render_text(&app, 120, 24);
     assert!(text.contains("Allow"), "tab header lists Allow");
     assert!(text.contains("Ask"), "tab header lists Ask");
@@ -456,7 +460,7 @@ fn test_pane_tab_cycle_wraps() {
     // Tab order is denials-first, workspace-last.
     use crate::state::PermissionTab;
     let mut app = app();
-    app.pane = Pane::Permission;
+    app.ui.navigation.pane = Pane::Permission;
     let key = |code: crossterm::event::KeyCode| crossterm::event::KeyEvent {
         code,
         modifiers: crossterm::event::KeyModifiers::NONE,
@@ -489,7 +493,7 @@ fn test_permission_ignores_unknown_key() {
     // A non-nav key in the permission pane falls through (no state change) so
     // the rest of the working keyset can handle it.
     let mut app = app();
-    app.pane = Pane::Permission;
+    app.ui.navigation.pane = Pane::Permission;
     let before_tab = app.permission_pane.tab;
     let before_cursor = app.permission_pane.cursor;
     crate::keys::handle_working(
@@ -501,7 +505,7 @@ fn test_permission_ignores_unknown_key() {
             state: crossterm::event::KeyEventState::NONE,
         },
     );
-    assert_eq!(app.pane, Pane::Permission, "pane unchanged");
+    assert_eq!(app.ui.navigation.pane, Pane::Permission, "pane unchanged");
     assert_eq!(app.permission_pane.tab, before_tab, "tab unchanged");
     assert_eq!(
         app.permission_pane.cursor, before_cursor,
@@ -517,7 +521,7 @@ fn test_permission_slash_blocked_browsing() {
     // then '/' to open the palette. This matches the other panes (Model,
     // Status, Memory, etc.) — a uniform pane-input rule.
     let mut app = app();
-    app.pane = Pane::Permission;
+    app.ui.navigation.pane = Pane::Permission;
     app.permission_pane.input = crate::state::PermissionInput::None;
     crate::keys::handle_working(&mut app, key_press(crossterm::event::KeyCode::Char('/')));
     assert_eq!(
@@ -526,7 +530,7 @@ fn test_permission_slash_blocked_browsing() {
         "'/' must not enter the search sub-mode"
     );
     assert!(
-        !app.palette.open,
+        !app.ui.navigation.palette.open,
         "'/' swallowed in browse mode, no palette behind pane"
     );
 }
@@ -546,14 +550,14 @@ fn test_permission_add_submode_flow() {
     // sub-mode clears. (In connected mode the pane does not render; asserts state.)
     use crate::state::PermissionInput;
     let mut app = crate::composition::build_app_for_test(None);
-    app.screen = crate::state::Screen::Working;
-    app.pane = Pane::Permission;
+    app.ui.navigation.screen = crate::state::Screen::Working;
+    app.ui.navigation.pane = Pane::Permission;
     crate::keys::handle_working(&mut app, key_press(crossterm::event::KeyCode::Char('a')));
     assert_eq!(app.permission_pane.input, PermissionInput::Add);
     for c in "bash npm:allow".chars() {
         crate::keys::handle_working(&mut app, key_press(crossterm::event::KeyCode::Char(c)));
     }
-    assert_eq!(app.input.editor.value(), "bash npm:allow");
+    assert_eq!(app.ui.input.editor.value(), "bash npm:allow");
     crate::keys::handle_working(&mut app, key_press(crossterm::event::KeyCode::Enter));
     // Enter on the spec advances to the destination pick (default project),
     // not a ship — the Add flow is two steps now.
@@ -575,7 +579,7 @@ fn test_permission_add_submode_flow() {
         PermissionInput::None,
         "destination Enter ships + clears sub-mode"
     );
-    assert!(app.input.editor.is_empty(), "input cleared after submit");
+    assert!(app.ui.input.editor.is_empty(), "input cleared after submit");
     pump_rules(&mut app);
     let added = app
         .sessions
@@ -603,7 +607,7 @@ fn test_permission_add_prompt_renders() {
     // Stub app (no runner) renders the pane; the Add sub-mode shows its prompt.
     use crate::state::PermissionInput;
     let mut app = app();
-    app.pane = Pane::Permission;
+    app.ui.navigation.pane = Pane::Permission;
     app.permission_pane.input = PermissionInput::Add;
     let text = render_text(&app, 100, 28);
     assert!(text.contains("add:"), "Add prompt renders: {text}");
@@ -631,8 +635,8 @@ fn test_permission_remove_submode_deletes() {
     // index resolution.
     use crate::state::PermissionInput;
     let mut app = crate::composition::build_app_for_test(None);
-    app.screen = crate::state::Screen::Working;
-    app.pane = Pane::Permission;
+    app.ui.navigation.screen = crate::state::Screen::Working;
+    app.ui.navigation.pane = Pane::Permission;
     run(&mut app, "/permissions add bash allow");
     pump_rules(&mut app);
     assert!(
@@ -681,8 +685,8 @@ fn test_permission_workspace_add_flow() {
     // connected app so typed chars route to the input box like the rule Add flow.
     use crate::state::{PermissionInput, PermissionTab};
     let mut app = crate::composition::build_app_for_test(None);
-    app.screen = crate::state::Screen::Working;
-    app.pane = Pane::Permission;
+    app.ui.navigation.screen = crate::state::Screen::Working;
+    app.ui.navigation.pane = Pane::Permission;
     app.permission_pane.tab = PermissionTab::Workspace;
     crate::keys::handle_working(&mut app, key_press(crossterm::event::KeyCode::Char('a')));
     assert_eq!(
@@ -693,7 +697,7 @@ fn test_permission_workspace_add_flow() {
     for c in "/tmp/extra".chars() {
         crate::keys::handle_working(&mut app, key_press(crossterm::event::KeyCode::Char(c)));
     }
-    assert_eq!(app.input.editor.value(), "/tmp/extra");
+    assert_eq!(app.ui.input.editor.value(), "/tmp/extra");
     crate::keys::handle_working(&mut app, key_press(crossterm::event::KeyCode::Enter));
     assert_eq!(
         app.permission_pane.input,
@@ -714,7 +718,7 @@ fn test_permission_workspace_remove_flow() {
     // line; the sub-mode clears. Covers the Remove directory confirm flow.
     use crate::state::{PermissionInput, PermissionTab};
     let mut app = app();
-    app.pane = Pane::Permission;
+    app.ui.navigation.pane = Pane::Permission;
     app.permission_pane.tab = PermissionTab::Workspace;
     app.sessions.current.capabilities.permission.dirs_cache = vec!["/tmp/extra".into()];
     crate::keys::handle_working(&mut app, key_press(crossterm::event::KeyCode::Char('d')));
@@ -758,8 +762,8 @@ fn test_permission_add_bad_effect() {
     // and leaves the sub-mode.
     use crate::state::PermissionInput;
     let mut app = crate::composition::build_app_for_test(None);
-    app.screen = crate::state::Screen::Working;
-    app.pane = Pane::Permission;
+    app.ui.navigation.screen = crate::state::Screen::Working;
+    app.ui.navigation.pane = Pane::Permission;
     crate::keys::handle_working(&mut app, key_press(crossterm::event::KeyCode::Char('a')));
     for c in "bash bodge".chars() {
         crate::keys::handle_working(&mut app, key_press(crossterm::event::KeyCode::Char(c)));
@@ -786,7 +790,11 @@ fn test_permission_palette_opens_pane() {
     assert_eq!(SlashCommand::Permission.name(), "/permissions");
     let mut app = app();
     app.run_command(SlashCommand::Permission);
-    assert_eq!(app.pane, Pane::Permission, "run_command opens the pane");
+    assert_eq!(
+        app.ui.navigation.pane,
+        Pane::Permission,
+        "run_command opens the pane"
+    );
 }
 
 #[test]
@@ -796,8 +804,8 @@ fn test_permissions_pane_renders_connected() {
     // artifact pane — so the tab header + rule list render, not the chat
     // stream. Guards the draw_main overlay routing.
     let mut app = crate::composition::build_app_for_test(None);
-    app.screen = crate::state::Screen::Working;
-    app.pane = Pane::Permission;
+    app.ui.navigation.screen = crate::state::Screen::Working;
+    app.ui.navigation.pane = Pane::Permission;
     let text = render_text(&app, 100, 28);
     assert!(
         text.contains("Allow"),
@@ -819,7 +827,7 @@ fn test_git_toggle_connection_lost() {
             .ask_before_git_enabled,
         "default on"
     );
-    app.input.editor.set("/permissions git off".to_string());
+    app.ui.input.editor.set("/permissions git off".to_string());
     app.submit_input();
     assert!(
         app.sessions
@@ -840,7 +848,7 @@ fn test_git_toggle_connection_lost() {
 fn test_git_show_connection_lost() {
     // A dead driver refuses the refresh, so no cached state line is shown.
     let mut app = crate::test_harness::connection_lost_app();
-    app.input.editor.set("/permissions git".to_string());
+    app.ui.input.editor.set("/permissions git".to_string());
     app.submit_input();
     assert!(
         last_system(&app).contains("permission: connection lost"),

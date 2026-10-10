@@ -219,7 +219,7 @@ fn test_frame_timing_benchmark() {
         for &area in SIZES {
             // Idle: redraw the same history; the cache should not rebuild.
             let mut app = crate::composition::app();
-            app.screen = crate::state::Screen::Working;
+            app.ui.navigation.screen = crate::state::Screen::Working;
             app.sessions.current.transcript = lines.clone().into();
             app.sessions.current.transcript.bump_revision();
             render(&app, area);
@@ -238,7 +238,7 @@ fn test_frame_timing_benchmark() {
             for rate in [100usize, 500, 2000] {
                 let per_frame = (rate / 60).max(1);
                 let mut app = crate::composition::app();
-                app.screen = crate::state::Screen::Working;
+                app.ui.navigation.screen = crate::state::Screen::Working;
                 app.sessions.current.transcript = lines.clone().into();
                 app.sessions.current.transcript.bump_revision();
                 let mut lcg = Lcg(0xFEED + rate as u64);
@@ -272,7 +272,7 @@ fn test_frame_timing_benchmark() {
 
             // Search: a frozen snapshot view.
             let mut app = crate::composition::app();
-            app.screen = crate::state::Screen::Working;
+            app.ui.navigation.screen = crate::state::Screen::Working;
             app.sessions.current.transcript = lines.clone().into();
             app.transcript_view
                 .search_corpus
@@ -301,7 +301,7 @@ fn test_frame_timing_benchmark() {
         for _ in 0..20 {
             let start = Instant::now();
             let mut app = crate::composition::app();
-            app.screen = crate::state::Screen::Working;
+            app.ui.navigation.screen = crate::state::Screen::Working;
             app.sessions.current.transcript = lines.clone().into();
             app.sessions.current.transcript.bump_revision();
             let mut watch = RebuildWatch::new(&app);
@@ -318,7 +318,7 @@ fn test_frame_timing_benchmark() {
     // the streaming scenarios.
     let lines = synth_lines(1000, 0x5EED);
     let mut app = crate::composition::app();
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
     app.sessions.current.transcript = lines.clone().into();
     app.sessions.current.transcript.bump_revision();
     render(&app, (80, 24));
@@ -352,7 +352,7 @@ fn test_frame_timing_benchmark() {
 
     // Parent/child: a teammate view with its own child transcript.
     let mut app = crate::composition::app();
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
     app.teammate_view = Some(crate::records::TeammateView {
         child_sid: "c1".into(),
         ..Default::default()

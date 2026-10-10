@@ -33,13 +33,13 @@ impl App {
     /// Apply a memory-detail reply: into the pane when the pane asked and the
     /// request is still pending, otherwise rendered as one transcript line.
     pub(super) fn apply_memory_show(&mut self, req_id: RequestId, entry: Option<MemoryDetail>) {
-        if self.pane == Pane::Memory && self.memory.is_pending(req_id) {
+        if self.ui.navigation.pane == Pane::Memory && self.memory.is_pending(req_id) {
             let missing = entry.is_none();
             self.memory.apply_detail(req_id, entry);
             if missing {
                 self.system_line("memory: no such key");
             }
-        } else if self.pane != Pane::Memory && self.memory.pending_key().is_some() {
+        } else if self.ui.navigation.pane != Pane::Memory && self.memory.pending_key().is_some() {
             self.memory.close_detail();
         } else if self.memory.pending_key().is_none() {
             match entry {
@@ -110,7 +110,7 @@ impl App {
         // the notice always lands in the transcript, and the open pane also
         // refreshes to show the new state.
         self.system_line(notice);
-        if self.pane == Pane::Memory
+        if self.ui.navigation.pane == Pane::Memory
             && let Some(s) = self.sessions.current.connection.as_ref()
         {
             match s.next_request_id() {

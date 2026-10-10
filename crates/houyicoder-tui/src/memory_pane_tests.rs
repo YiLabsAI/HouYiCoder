@@ -11,7 +11,7 @@ use crate::test_harness::{connected_app_events, render_text, wait_for_request};
 
 fn working() -> crate::state::App {
     let mut app = composition::app();
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
     app
 }
 
@@ -105,7 +105,7 @@ fn test_list_result_resets_cursor() {
     assert!(app.memory.entries().iter().any(|m| m.topic == "fresh-gate"));
     assert!(render(&app).contains("source: project · age: now"));
     assert_eq!(app.sessions.current.transcript.len(), transcript_len);
-    assert_eq!(app.pane, crate::state::Pane::Memory);
+    assert_eq!(app.ui.navigation.pane, crate::state::Pane::Memory);
 }
 
 /// Pane navigation and actions route to the selected memory.
@@ -209,7 +209,7 @@ fn test_memory_detail_inline() {
 
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     assert!(app.memory.detail().is_none());
-    assert_eq!(app.pane, crate::state::Pane::Memory);
+    assert_eq!(app.ui.navigation.pane, crate::state::Pane::Memory);
 }
 
 #[test]
@@ -218,7 +218,7 @@ fn test_stale_detail_ignored() {
     use houyicoder_protocol::envelope::RequestId;
     use houyicoder_protocol::frontend::memory::MemoryDetail;
     let mut app = working();
-    app.pane = Pane::Memory;
+    app.ui.navigation.pane = Pane::Memory;
     app.memory.request_detail(RequestId(1), "old".into());
     app.memory.request_detail(RequestId(2), "new".into());
     app.handle_agent_message(SessionMessage::Response {
@@ -276,7 +276,7 @@ fn test_memory_pane_renders_rows() {
     let mut app = working();
     app.run_command(SlashCommand::Memory);
     let on = render(&app);
-    assert_eq!(app.pane, Pane::Memory);
+    assert_eq!(app.ui.navigation.pane, Pane::Memory);
     assert!(
         on.contains("a to toggle ● auto-memory") && on.contains("c to toggle ● auto-dream"),
         "each toggle key must name its target"

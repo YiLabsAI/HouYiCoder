@@ -38,7 +38,7 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         .border_style(Style::new().fg(Color::Cyan))
         .title(format!(
             " / commands | filter: {} | Up/Down to select \u{00b7} Enter to run \u{00b7} Esc to close ",
-            app.palette.query,
+            app.ui.navigation.palette.query,
         ));
     f.render_widget(block, area);
 
@@ -56,7 +56,13 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         .map(|c| ListItem::new(format_one(*c, help_max)))
         .collect();
     let mut state = ListState::default();
-    state.select(Some(app.palette.sel.min(filtered.len().saturating_sub(1))));
+    state.select(Some(
+        app.ui
+            .navigation
+            .palette
+            .sel
+            .min(filtered.len().saturating_sub(1)),
+    ));
     let list = List::new(items)
         .style(Style::default().fg(Color::White))
         .highlight_style(
@@ -71,9 +77,13 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
     // after a selected arg-taking command (show the arg hint — the
     // "hint-after-space" behavior) or genuinely nothing matches (say so).
     if filtered.is_empty() {
-        let hint = arg_hint_for(&app.palette.query);
+        let hint = arg_hint_for(&app.ui.navigation.palette.query);
         let text = match hint {
-            Some(hint) => format!("  {} {}  ", arg_command_name(&app.palette.query), hint),
+            Some(hint) => format!(
+                "  {} {}  ",
+                arg_command_name(&app.ui.navigation.palette.query),
+                hint
+            ),
             None => "  no command matches your filter".to_string(),
         };
         f.render_widget(

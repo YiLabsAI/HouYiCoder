@@ -13,15 +13,15 @@ use crate::state::{App, Screen};
 pub fn handle_login(app: &mut App, k: KeyEvent) {
     match k.code {
         KeyCode::Char('1') | KeyCode::Char('s') => {
-            app.login_mode = Some(LoginMode::Sso);
+            app.ui.navigation.login_mode = Some(LoginMode::Sso);
             land_on_working(app);
         }
         KeyCode::Char('2') | KeyCode::Char('a') => {
-            app.login_mode = Some(LoginMode::ApiKey);
+            app.ui.navigation.login_mode = Some(LoginMode::ApiKey);
             land_on_working(app);
         }
         KeyCode::Char('3') | KeyCode::Char('l') => {
-            app.login_mode = Some(LoginMode::Local);
+            app.ui.navigation.login_mode = Some(LoginMode::Local);
             app.status.sandbox = "off (local)".to_string();
             land_on_working(app);
         }
@@ -31,7 +31,7 @@ pub fn handle_login(app: &mut App, k: KeyEvent) {
 }
 
 fn land_on_working(app: &mut App) {
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
 }
 
 /// Console review keys (review-node console): Up/Down move focus, a/Enter sign off, r
@@ -49,7 +49,7 @@ pub fn handle_console(app: &mut App, k: KeyEvent) {
             if app.console_len() == 0
                 || app.workflow.review.findings[app.workflow.review.focus].resolved()
             {
-                app.screen = Screen::Working;
+                app.ui.navigation.screen = Screen::Working;
             } else {
                 app.signoff_focused("you", "now");
                 app.system_line("finding approved -> decision log (stub)");

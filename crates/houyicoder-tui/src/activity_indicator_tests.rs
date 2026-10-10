@@ -8,7 +8,7 @@ use crate::test_harness::render_text;
 
 fn working() -> crate::state::App {
     let mut app = composition::app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app
 }
 

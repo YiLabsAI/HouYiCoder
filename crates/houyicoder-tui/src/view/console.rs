@@ -45,7 +45,7 @@ pub fn draw(f: &mut Frame, app: &App) {
 }
 
 fn draw_topbar(f: &mut Frame, area: Rect, app: &App) {
-    let mode = match app.login_mode {
+    let mode = match app.ui.navigation.login_mode {
         Some(houyicoder_protocol::frontend::LoginMode::Sso) => "SSO",
         Some(houyicoder_protocol::frontend::LoginMode::ApiKey) => "API key",
         Some(houyicoder_protocol::frontend::LoginMode::Local) => "local",

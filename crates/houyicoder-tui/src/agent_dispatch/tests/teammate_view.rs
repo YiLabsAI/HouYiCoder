@@ -30,7 +30,7 @@ fn test_enter_teammate_targets_cursor() {
             folded_transcript: vec![TranscriptLine::Agent("child reply 2".into())],
             color: None,
         });
-    app.selections.transcript.start(0, 0);
+    app.ui.selection.transcript.start(0, 0);
     assert!(
         app.enter_teammate_view(),
         "cursor on a Subagent line enters"
@@ -187,7 +187,7 @@ fn test_other_child_keeps_view() {
             folded_transcript: Vec::new(),
             color: None,
         });
-    app.selections.transcript.start(0, 0);
+    app.ui.selection.transcript.start(0, 0);
     assert!(app.enter_teammate_view());
     assert_eq!(app.teammate_view.as_ref().unwrap().child_sid, "c1");
     // A fetch for c2 arrives while viewing c1.
@@ -245,7 +245,7 @@ fn test_cursor_past_tail_fallback() {
             color: None,
         });
     // A content row well past the one line in the transcript.
-    app.selections.transcript.start(999, 999);
+    app.ui.selection.transcript.start(999, 999);
     assert!(
         app.enter_teammate_view(),
         "cursor past tail falls back to the last Subagent"
@@ -309,7 +309,7 @@ fn test_cursor_after_fold_group() {
     // the same space the mouse sets content_row. A flat walk would land it
     // one slot earlier inside the Summary and miss, falling back to c2.
     let c1_row = app.fold_aware_rows(Some(2));
-    app.selections.transcript.start(0, c1_row);
+    app.ui.selection.transcript.start(0, c1_row);
     assert!(app.enter_teammate_view(), "cursor on c1 enters");
     assert_eq!(
         app.teammate_view.as_ref().unwrap().child_sid,

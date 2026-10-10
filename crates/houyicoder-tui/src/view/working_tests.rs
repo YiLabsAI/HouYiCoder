@@ -14,7 +14,7 @@ fn test_approval_keeps_prior_content() {
     use crate::test_harness::render_text;
     use houyicoder_protocol::envelope::RequestId;
     let mut app = composition::app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app.sessions.current.transcript = vec![
         TranscriptLine::ContextGrid(composition::context_view()),
         TranscriptLine::User("hi".to_string()),
@@ -57,7 +57,7 @@ fn test_thinking_not_above_answer() {
     use crate::test_harness::render_text;
 
     let mut app = composition::app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app.sessions.current.transcript = vec![
         TranscriptLine::User("hi".to_string()),
         TranscriptLine::Thinking {
@@ -127,7 +127,7 @@ fn test_fold_collapse_expand_toggle() {
     }
 
     let mut app = composition::app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app.sessions.current.transcript = vec![
         TranscriptLine::User("hi".to_string()),
         tcall("c1", "bash", "ls -la", ToolOutcome::Success),
@@ -181,7 +181,7 @@ fn test_fold_collapse_expand_toggle() {
     let fold_y = rect.y + fold_ri as u16;
     let scroll_top = app.whole_scroll().top_offset();
     let _ = fold_y;
-    app.selections.transcript.start(0, scroll_top + fold_ri);
+    app.ui.selection.transcript.start(0, scroll_top + fold_ri);
     keys::handle_working(
         &mut app,
         KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL),
@@ -301,7 +301,7 @@ fn test_busy_count_matches_render() {
     use crate::state::Screen;
     use crate::test_harness::render_text;
     let mut app = composition::app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app.sessions.current.transcript = vec![
         TranscriptLine::User("hi".to_string()),
         TranscriptLine::Agent("working".to_string()),
@@ -349,7 +349,7 @@ fn test_markdown_strips_syntax() {
     use crate::state::Screen;
     use crate::test_harness::render_text;
     let mut app = composition::app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app.sessions.current.transcript = vec![TranscriptLine::Agent(
         "## Header\n\nSome **bold** and `code` here.".to_string(),
     )]
@@ -386,7 +386,7 @@ fn test_copy_preserves_scrolled_content() {
     use crate::test_harness::render_text;
     use ratatui::layout::Rect;
     let mut app = composition::app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     // 30 transcript lines; visible area is ~20 rows.
     let lines: Vec<TranscriptLine> = (0..30)
         .map(|i| TranscriptLine::Agent(format!("reply line {i}")))
@@ -460,7 +460,7 @@ fn test_fold_expand_one_only() {
     }
 
     let mut app = composition::app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app.sessions.current.transcript = vec![
         TranscriptLine::User("hi".to_string()),
         // Group A: two consecutive bash calls, keyed by c1.
@@ -554,14 +554,14 @@ fn test_anchor_clamped_to_content() {
     use std::sync::{Arc, Mutex};
 
     let mut app = composition::app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app.sessions.current.transcript = vec![
         crate::records::TranscriptLine::User("alpha bravo charlie".into()),
         crate::records::TranscriptLine::Agent("delta echo foxtrot".into()),
     ]
     .into();
     let captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
-    app.clipboard = Arc::new(RecordingClipboard {
+    app.ui.clipboard = Arc::new(RecordingClipboard {
         captured: captured.clone(),
     });
     let _out = render_text(&app, 80, 24);
@@ -592,7 +592,8 @@ fn test_anchor_clamped_to_content() {
     );
     // Anchor must be clamped to the last content row, not the blank tail.
     let (_, acr) = app
-        .selections
+        .ui
+        .selection
         .transcript
         .anchor
         .expect("anchor set after click");
@@ -618,7 +619,8 @@ fn test_anchor_clamped_to_content() {
         },
     );
     let (_, fcr) = app
-        .selections
+        .ui
+        .selection
         .transcript
         .focus
         .expect("focus set after drag");
@@ -655,12 +657,12 @@ fn test_anchor_clamped_to_content() {
 
     // Render with a selection spanning into the blank tail and verify the
     // overlay never paints on border or blank-tail rows.
-    app.selections.transcript.start(rect.x, last_content_row);
-    app.selections.transcript.update(
+    app.ui.selection.transcript.start(rect.x, last_content_row);
+    app.ui.selection.transcript.update(
         rect.x + 10,
         scroll_top + (bottom as usize) - rect.y as usize,
     );
-    app.selections.transcript.finish();
+    app.ui.selection.transcript.finish();
     let buf = render_buffer(&app, 80, 24);
     // Border row must have no selection bg.
     if border_y < 24 {
@@ -710,7 +712,7 @@ fn test_todo_count_matches_render() {
     }
 
     let mut app = composition::app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app.sessions.current.transcript = vec![TranscriptLine::User("go".to_string())].into();
     app.sessions.current.todos.items = vec![
         item("a", TodoStatus::Completed),
@@ -763,7 +765,7 @@ fn test_todo_rows_are_selectable() {
     use crate::todo_view::{TodoStatus, TodoView};
 
     let mut app = composition::app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app.sessions.current.transcript = vec![TranscriptLine::User("go".to_string())].into();
     app.sessions.current.todos.items = vec![
         TodoView {
@@ -869,7 +871,7 @@ fn test_subagent_head_dim() {
     use crate::test_harness::render_buffer;
     use ratatui::style::Color;
     let mut app = composition::app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app.sessions
         .current
         .transcript
@@ -905,7 +907,7 @@ fn test_child_rows_hide_handles() {
     use crate::state::Screen;
     use crate::test_harness::render_text;
     let mut app = composition::app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app.sessions
         .current
         .transcript
@@ -958,7 +960,7 @@ fn test_expanded_subagent_shaded() {
     use ratatui::style::Color;
     let shade = Color::Indexed(238);
     let mut app = composition::app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app.sessions
         .current
         .transcript
@@ -1021,7 +1023,7 @@ fn test_fleet_click_selects() {
     use crate::state::Screen;
     use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
     let mut app = composition::app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     for i in 0..2 {
         app.fleet.entries.push(FleetEntry {
             agent_id: format!("c{i}"),
@@ -1065,7 +1067,7 @@ fn test_user_background_band() {
     use ratatui::style::Color;
 
     let mut app = composition::app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app.sessions.current.transcript =
         vec![TranscriptLine::User("中途插话到底有没有问题".into())].into();
     let buf = render_buffer(&app, 31, 12);
@@ -1118,7 +1120,7 @@ fn test_user_background_clears() {
     use ratatui::{Terminal, backend::TestBackend};
 
     let mut app = composition::app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app.sessions.current.transcript = vec![TranscriptLine::User("中途插话".into())].into();
     let mut terminal = Terminal::new(TestBackend::new(31, 12)).expect("terminal");
     terminal
@@ -1162,7 +1164,7 @@ fn test_thought_row_subsecond_draw() {
     use crate::test_harness::render_text;
 
     let mut app = composition::app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app.sessions.current.transcript = vec![
         TranscriptLine::Agent("done".into()),
         TranscriptLine::ThoughtFor {

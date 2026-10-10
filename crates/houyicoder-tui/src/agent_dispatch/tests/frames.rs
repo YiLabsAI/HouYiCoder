@@ -26,7 +26,7 @@ fn app_with_notice(
     keys: &[(&str, MemoryOperation)],
 ) -> App {
     let mut app = composition::app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app.handle_agent_message(SessionMessage::Event(ServerEvent::MemoryChanged {
         id: MemoryChangeId(id.into()),
         origin: MemoryChangeOrigin::AutoMemory,
@@ -253,7 +253,7 @@ fn test_completed_list_timestamped() {
 fn test_replayed_done_clears() {
     for _ in 0..3 {
         let mut app = composition::app();
-        app.screen = Screen::Working;
+        app.ui.navigation.screen = Screen::Working;
         app.sessions.current.todos.set_replaying_history(true);
         app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(
             todo_frame(&[("old work", "completed"), ("current", "completed")]).into(),
@@ -278,7 +278,7 @@ fn test_replayed_done_clears() {
 #[test]
 fn test_replayed_later_frame_clears() {
     let mut app = composition::app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app.sessions.current.todos.set_replaying_history(true);
     app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(
         todo_frame(&[("one", "in_progress"), ("two", "pending")]).into(),
@@ -305,7 +305,7 @@ fn test_replayed_later_frame_clears() {
 #[test]
 fn test_replayed_open_renders() {
     let mut app = composition::app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app.sessions.current.todos.set_replaying_history(true);
     app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(
         todo_frame(&[("old work", "completed"), ("open task", "pending")]).into(),
@@ -326,7 +326,7 @@ fn test_toggle_state_applies_view() {
     use houyicoder_protocol::frontend::memory::ToggleState;
     // On the pane: the snapshot applies + the pane stays open.
     let mut app = composition::app();
-    app.pane = Pane::Memory;
+    app.ui.navigation.pane = Pane::Memory;
     app.handle_agent_message(SessionMessage::Response {
         request: RequestId(1),
         response: ServerResponse::MemoryToggleState {
@@ -338,11 +338,11 @@ fn test_toggle_state_applies_view() {
     });
     assert!(!app.memory.toggles().auto_memory, "auto-memory applied");
     assert!(app.memory.toggles().auto_dream, "auto-dream applied");
-    assert_eq!(app.pane, Pane::Memory, "pane stays open");
+    assert_eq!(app.ui.navigation.pane, Pane::Memory, "pane stays open");
     // Dismissed (pane moved away): the snapshot still applies, but the
     // pane is NOT yanked back to Memory.
     let mut app = composition::app();
-    app.pane = Pane::Spec;
+    app.ui.navigation.pane = Pane::Spec;
     app.handle_agent_message(SessionMessage::Response {
         request: RequestId(2),
         response: ServerResponse::MemoryToggleState {
@@ -357,7 +357,7 @@ fn test_toggle_state_applies_view() {
         "auto-memory applied on dismissal"
     );
     assert_eq!(
-        app.pane,
+        app.ui.navigation.pane,
         Pane::Spec,
         "late result does not yank back a dismissed pane"
     );
@@ -370,7 +370,7 @@ fn test_memory_list_respects_dismissal() {
     use houyicoder_protocol::frontend::memory::MemorySummaryEntry;
     // On the pane: the list populates + the pane stays open.
     let mut app = composition::app();
-    app.pane = Pane::Memory;
+    app.ui.navigation.pane = Pane::Memory;
     app.handle_agent_message(SessionMessage::Response {
         request: RequestId(1),
         response: ServerResponse::MemoryList {
@@ -383,7 +383,11 @@ fn test_memory_list_respects_dismissal() {
             }],
         },
     });
-    assert_eq!(app.pane, Pane::Memory, "pane stays open on active refresh");
+    assert_eq!(
+        app.ui.navigation.pane,
+        Pane::Memory,
+        "pane stays open on active refresh"
+    );
     assert!(
         app.memory.entries().iter().any(|e| e.topic == "build-gate"),
         "list entry populated"
@@ -391,7 +395,7 @@ fn test_memory_list_respects_dismissal() {
     // Dismissed (pane moved away): the data still lands, but the pane is
     // NOT yanked back to Memory.
     let mut app = composition::app();
-    app.pane = Pane::Spec;
+    app.ui.navigation.pane = Pane::Spec;
     app.handle_agent_message(SessionMessage::Response {
         request: RequestId(2),
         response: ServerResponse::MemoryList {
@@ -405,7 +409,7 @@ fn test_memory_list_respects_dismissal() {
         },
     });
     assert_eq!(
-        app.pane,
+        app.ui.navigation.pane,
         Pane::Spec,
         "late list does not yank back a dismissed pane"
     );
@@ -421,7 +425,7 @@ fn test_pane_shows_command_result() {
     use houyicoder_protocol::frontend::memory::MemoryDetail;
 
     let mut app = composition::app();
-    app.pane = Pane::Memory;
+    app.ui.navigation.pane = Pane::Memory;
     app.handle_agent_message(SessionMessage::Response {
         request: RequestId(9),
         response: ServerResponse::MemoryShow {
@@ -443,7 +447,7 @@ fn test_pane_shows_command_result() {
 #[test]
 fn test_notice_shows_memory_changes() {
     let mut app = composition::app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     let changes = vec![
         MemoryChange {
             key: "alpha".into(),
@@ -540,7 +544,7 @@ fn test_unknown_causality_reads_earlier() {
 #[test]
 fn test_notice_detail_names_scope() {
     let mut app = composition::app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app.handle_agent_message(SessionMessage::Event(ServerEvent::MemoryChanged {
         id: MemoryChangeId("change-scope".into()),
         origin: MemoryChangeOrigin::PrimaryAgent,
@@ -575,7 +579,7 @@ fn test_notice_detail_names_scope() {
 #[test]
 fn test_notice_skips_unknown_scope() {
     let mut app = composition::app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app.handle_agent_message(SessionMessage::Event(ServerEvent::MemoryChanged {
         id: MemoryChangeId("change-noscope".into()),
         origin: MemoryChangeOrigin::PrimaryAgent,
@@ -604,7 +608,7 @@ fn test_notice_skips_unknown_scope() {
 #[test]
 fn test_notice_summarizes_many_changes() {
     let mut app = composition::app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     let changes = (0..4)
         .map(|index| MemoryChange {
             key: format!("project-memory-with-a-deliberately-long-key-{index}"),
@@ -645,7 +649,7 @@ fn test_notice_summarizes_many_changes() {
 #[test]
 fn test_notice_single_change_wraps() {
     let mut app = composition::app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     let changes = vec![MemoryChange {
         key: "a-single-memory-with-a-long-key-for-a-narrow-notice".into(),
         operation: MemoryOperation::Created,
@@ -687,7 +691,7 @@ fn test_notice_single_change_wraps() {
 #[test]
 fn test_notice_click_toggles_fold() {
     let mut app = composition::app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app.handle_agent_message(SessionMessage::Event(ServerEvent::MemoryChanged {
         id: MemoryChangeId("click-1".into()),
         origin: MemoryChangeOrigin::PrimaryAgent,
@@ -728,7 +732,7 @@ fn test_notice_click_toggles_fold() {
 #[test]
 fn test_thought_keep_affordance() {
     let mut app = composition::app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app.sessions
         .current
         .transcript
@@ -886,7 +890,7 @@ fn test_notice_walk_matches_render() {
         .iter()
         .position(|(_, row)| row.contains("found auth"))
         .expect("the delegation head rendered");
-    app.selections.transcript.anchor = Some((0, head_row));
+    app.ui.selection.transcript.anchor = Some((0, head_row));
     assert!(
         app.toggle_subagent_expand(),
         "the cursor on the delegation below the notice resolves to it (row {head_row})"
@@ -899,7 +903,7 @@ fn test_notice_walk_matches_render() {
 #[test]
 fn test_notice_ctrl_o_latest() {
     let mut app = composition::app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app.handle_agent_message(SessionMessage::Event(ServerEvent::MemoryChanged {
         id: MemoryChangeId("k1".into()),
         origin: MemoryChangeOrigin::PrimaryAgent,
@@ -910,7 +914,7 @@ fn test_notice_ctrl_o_latest() {
             scope: MemoryChangeScope::Auto,
         }],
     }));
-    assert!(app.selections.transcript.anchor.is_none(), "no cursor");
+    assert!(app.ui.selection.transcript.anchor.is_none(), "no cursor");
     handle_ctrl_o(&mut app);
     assert!(
         app.transcript_view.expanded.fold_groups.contains("mg#0"),
@@ -969,7 +973,7 @@ fn stamped_record(id: &str, ms: u64) -> SequencedFrame {
 #[test]
 fn test_expand_survives_reread() {
     let mut app = composition::app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app.sessions
         .current
         .transcript
@@ -1039,7 +1043,7 @@ fn test_expand_survives_reread() {
 fn test_block_anchor_durable() {
     use crate::state::transcript::blocks::BlockAnchor;
     let mut app = composition::app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app.sessions
         .current
         .transcript

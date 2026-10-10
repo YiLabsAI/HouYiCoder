@@ -18,7 +18,7 @@ use crate::state::{Screen, TranscriptLine};
 
 fn working() -> crate::state::App {
     let mut app = composition::app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app
 }
 
@@ -39,8 +39,9 @@ fn test_final_output_defers_drain() {
     let mut app = working();
     crate::test_harness::attach_connection(&mut app);
     app.start_run_for_test(6);
-    app.input.queue.push(InputItem::Message("head".into()));
-    app.input
+    app.ui.input.queue.push(InputItem::Message("head".into()));
+    app.ui
+        .input
         .queue
         .push(InputItem::ParkedMessage("tail".into()));
     app.handle_agent_message(SessionMessage::Response {
@@ -58,7 +59,7 @@ fn test_final_output_defers_drain() {
     });
     assert!(!app.agent_busy(), "busy cleared by run end");
     assert_eq!(
-        app.input.queue,
+        app.ui.input.queue,
         vec![
             InputItem::Message("head".into()),
             InputItem::ParkedMessage("tail".into())
@@ -72,7 +73,7 @@ fn test_final_output_defers_drain() {
     );
     // With a live connection the parked tail is promoted to the single
     // server-side mirror right after the head drained.
-    assert_eq!(app.input.queue, vec![InputItem::Message("tail".into())]);
+    assert_eq!(app.ui.input.queue, vec![InputItem::Message("tail".into())]);
 }
 
 /// Interruption clears busy and parks the queued message after its server
@@ -83,7 +84,7 @@ fn test_interrupt_demotes_then_drains() {
     let mut app = working();
     crate::test_harness::attach_connection(&mut app);
     app.start_run_for_test(7);
-    app.input.queue.push(InputItem::Message("parked".into()));
+    app.ui.input.queue.push(InputItem::Message("parked".into()));
     app.handle_agent_message(SessionMessage::Response {
         request: RequestId(7),
         response: ServerResponse::Done {
@@ -99,7 +100,7 @@ fn test_interrupt_demotes_then_drains() {
     });
     assert!(!app.agent_busy(), "busy cleared by interrupt");
     assert_eq!(
-        app.input.queue,
+        app.ui.input.queue,
         vec![InputItem::ParkedMessage("parked".into())],
         "queued message demoted to ParkedMessage after an interrupt (server \
          buffer cleared; host FIFO preserved for the follow-up drain)"
@@ -109,7 +110,7 @@ fn test_interrupt_demotes_then_drains() {
         app.drain_pending_head(),
         "parked message can drain explicitly"
     );
-    assert!(app.input.queue.is_empty(), "parked message consumed");
+    assert!(app.ui.input.queue.is_empty(), "parked message consumed");
 }
 
 /// A request error matching the active run settles that run and clears its
@@ -151,7 +152,7 @@ fn test_mismatched_error_system_line() {
 fn test_pending_head_empty_noop() {
     let mut app = working();
     assert!(!app.drain_pending_head(), "empty queue = no drain");
-    assert!(app.input.queue.is_empty());
+    assert!(app.ui.input.queue.is_empty());
 }
 
 /// A state-changing command (/clear) submitted mid-run is deferred: enqueued
@@ -165,10 +166,10 @@ fn test_busy_clear_enqueues_feedback() {
         .current
         .transcript
         .push(TranscriptLine::User("pre-clear".into()));
-    app.input.editor.set("/clear".to_string());
+    app.ui.input.editor.set("/clear".to_string());
     app.submit_input();
     assert_eq!(
-        app.input.queue,
+        app.ui.input.queue,
         vec![InputItem::Command("/clear".into())],
         "/clear enqueued as a Command mid-run"
     );
@@ -187,7 +188,7 @@ fn test_drain_command_dispatches_clear() {
         .current
         .transcript
         .push(TranscriptLine::User("stale".into()));
-    app.input.queue.push(InputItem::Command("/clear".into()));
+    app.ui.input.queue.push(InputItem::Command("/clear".into()));
     assert!(app.drain_pending_head(), "Command drained");
     assert!(
         !app.sessions
@@ -197,7 +198,7 @@ fn test_drain_command_dispatches_clear() {
             .any(|l| matches!(l, TranscriptLine::User(_))),
         "clear dispatched (User lines cleared; the archive notice remains)"
     );
-    assert!(app.input.queue.is_empty(), "Command consumed");
+    assert!(app.ui.input.queue.is_empty(), "Command consumed");
 }
 
 /// Single-copy invariant: a second message enqueued while busy parks (no
@@ -210,13 +211,13 @@ fn test_second_enqueue_parks() {
     app.start_run_for_test(0);
     app.spawn_run("task a".into());
     assert_eq!(
-        app.input.queue,
+        app.ui.input.queue,
         vec![InputItem::Message("task a".into())],
         "empty queue gives the head the copy"
     );
     app.spawn_run("task b".into());
     assert_eq!(
-        app.input.queue,
+        app.ui.input.queue,
         vec![
             InputItem::Message("task a".into()),
             InputItem::ParkedMessage("task b".into()),
@@ -224,7 +225,8 @@ fn test_second_enqueue_parks() {
         "non-empty queue parks the newcomer; one live copy"
     );
     assert_eq!(
-        app.input
+        app.ui
+            .input
             .queue
             .iter()
             .filter(|it| matches!(it, InputItem::Message(_)))
@@ -243,18 +245,22 @@ fn test_second_enqueue_parks() {
 fn test_command_head_blocks() {
     let mut app = working();
     app.start_run_for_test(0);
-    app.input.queue.push(InputItem::Command("/rewind".into()));
-    app.input
+    app.ui
+        .input
+        .queue
+        .push(InputItem::Command("/rewind".into()));
+    app.ui
+        .input
         .queue
         .push(InputItem::ParkedMessage("after".into()));
     app.promote_next_pending();
     assert_eq!(
-        app.input.queue[0],
+        app.ui.input.queue[0],
         InputItem::Command("/rewind".into()),
         "Command head is a barrier; promote_next leaves it"
     );
     assert_eq!(
-        app.input.queue[1],
+        app.ui.input.queue[1],
         InputItem::ParkedMessage("after".into()),
         "promote_next does not promote past a Command head"
     );
@@ -266,13 +272,13 @@ fn test_command_head_blocks() {
 #[test]
 fn test_refused_remove_keeps() {
     let mut app = working();
-    app.input.queue.push(InputItem::Message("held".into()));
+    app.ui.input.queue.push(InputItem::Message("held".into()));
     assert!(
         app.remove_pending_at(0).is_none(),
         "a refused removal reports None"
     );
     assert_eq!(
-        app.input.queue,
+        app.ui.input.queue,
         vec![InputItem::Message("held".into())],
         "the refused item stays queued"
     );
@@ -293,12 +299,13 @@ fn test_refused_remove_keeps() {
 fn test_refused_promote_parks() {
     let mut app = working();
     app.start_run_for_test(0);
-    app.input
+    app.ui
+        .input
         .queue
         .push(InputItem::ParkedMessage("waiting".into()));
     app.promote_next_pending();
     assert_eq!(
-        app.input.queue[0],
+        app.ui.input.queue[0],
         InputItem::ParkedMessage("waiting".into()),
         "the refused promotion leaves the slot parked"
     );
@@ -320,15 +327,19 @@ fn test_refused_promote_parks() {
 fn test_command_drain_promotes() {
     let mut app = working_session();
     app.start_run_for_test(0);
-    app.input.queue.push(InputItem::Command("/rewind".into()));
-    app.input
+    app.ui
+        .input
+        .queue
+        .push(InputItem::Command("/rewind".into()));
+    app.ui
+        .input
         .queue
         .push(InputItem::ParkedMessage("after".into()));
     // The Command drains (local dispatch removes it from the head).
-    app.input.queue.remove(0);
+    app.ui.input.queue.remove(0);
     app.promote_next_pending();
     assert_eq!(
-        app.input.queue[0],
+        app.ui.input.queue[0],
         InputItem::Message("after".into()),
         "after the Command barrier drains, promote_next promotes the next head"
     );
@@ -345,7 +356,8 @@ fn test_command_drain_promotes() {
 fn test_orphan_promoted_on_enqueue() {
     let mut app = working_session();
     // Simulate a prior interrupt that orphaned a queued message.
-    app.input
+    app.ui
+        .input
         .queue
         .push(InputItem::ParkedMessage("orphan".into()));
     app.status.last_run_final = false;
@@ -354,7 +366,7 @@ fn test_orphan_promoted_on_enqueue() {
     // setting agent_busy; simulate the post-spawn state manually.
     app.start_run_for_test(0);
     assert_eq!(
-        app.input.queue[0],
+        app.ui.input.queue[0],
         InputItem::ParkedMessage("orphan".into()),
         "real-spawn path does not promote; orphan stays parked"
     );
@@ -362,17 +374,18 @@ fn test_orphan_promoted_on_enqueue() {
     // fires promote_next_pending, which promotes the orphaned head.
     app.spawn_run("another".into());
     assert_eq!(
-        app.input.queue[0],
+        app.ui.input.queue[0],
         InputItem::Message("orphan".into()),
         "enqueue-time promote fires for the orphaned head (FIFO: it runs first)"
     );
     assert_eq!(
-        app.input.queue[1],
+        app.ui.input.queue[1],
         InputItem::ParkedMessage("another".into()),
         "the newcomer parks behind the promoted orphan"
     );
     assert_eq!(
-        app.input
+        app.ui
+            .input
             .queue
             .iter()
             .filter(|it| matches!(it, InputItem::Message(_)))
@@ -392,24 +405,27 @@ fn test_orphan_promoted_on_enqueue() {
 #[test]
 fn test_clear_orphans_pending_mirror() {
     let mut app = working();
-    app.input.queue.push(InputItem::Command("/clear".into()));
-    app.input
+    app.ui.input.queue.push(InputItem::Command("/clear".into()));
+    app.ui
+        .input
         .queue
         .push(InputItem::Message("queued after clear".into()));
     assert!(
-        !app.input.queue.is_empty(),
+        !app.ui.input.queue.is_empty(),
         "command ahead blocks promoting"
     );
     assert!(app.drain_pending_head(), "clear drained");
     assert!(
-        app.input
+        app.ui
+            .input
             .queue
             .iter()
             .all(|it| matches!(it, InputItem::ParkedMessage(_))),
         "a /clear orphans every queued Message to ParkedMessage"
     );
     assert!(
-        app.input
+        app.ui
+            .input
             .queue
             .iter()
             .all(|it| !matches!(it, InputItem::Message(_))),
@@ -425,11 +441,14 @@ fn test_clear_orphans_pending_mirror() {
 fn test_head_drains_first_fifo() {
     let mut app = working();
     crate::test_harness::attach_connection(&mut app);
-    app.input.queue.push(InputItem::Message("head msg".into()));
-    app.input.queue.push(InputItem::Command("/clear".into()));
+    app.ui
+        .input
+        .queue
+        .push(InputItem::Message("head msg".into()));
+    app.ui.input.queue.push(InputItem::Command("/clear".into()));
     assert!(app.drain_pending_head(), "head Message drains");
     assert_eq!(
-        app.input.queue,
+        app.ui.input.queue,
         vec![InputItem::Command("/clear".into())],
         "Command stays for the next drain (strict FIFO)"
     );
@@ -441,15 +460,17 @@ fn test_head_drains_first_fifo() {
 fn test_parked_head_drains_first() {
     let mut app = working();
     crate::test_harness::attach_connection(&mut app);
-    app.input
+    app.ui
+        .input
         .queue
         .push(InputItem::ParkedMessage("parked".into()));
-    app.input
+    app.ui
+        .input
         .queue
         .push(InputItem::Command("/resume sid-b".into()));
     assert!(app.drain_pending_head(), "parked head drains");
     assert_eq!(
-        app.input.queue,
+        app.ui.input.queue,
         vec![InputItem::Command("/resume sid-b".into())],
         "Command stays for the next drain (strict FIFO, parked head)"
     );
@@ -471,8 +492,8 @@ fn test_busy_reqid_stable() {
         Some(in_flight),
         "queue path must not overwrite the in-flight run's req_id"
     );
-    assert_eq!(app.input.queue.len(), 1, "second input queued");
-    assert_eq!(app.input.queue[0], InputItem::Message("second".into()));
+    assert_eq!(app.ui.input.queue.len(), 1, "second input queued");
+    assert_eq!(app.ui.input.queue[0], InputItem::Message("second".into()));
 }
 
 /// Only the queue head may hold a server-side copy.
@@ -482,27 +503,31 @@ fn test_parked_head_promotes() {
     let mut app = app_with_provider(p, ToolRegistry::new());
     app.start_run_for_test(0);
     // A parked head carried across a swap is promoted in the current run.
-    app.input
+    app.ui
+        .input
         .queue
         .push(InputItem::ParkedMessage("carried".into()));
     app.spawn_run("newcomer".into());
     assert_eq!(
-        app.input.queue[0],
+        app.ui.input.queue[0],
         InputItem::Message("carried".into()),
         "the parked head is promoted when a run is in flight"
     );
     assert_eq!(
-        app.input.queue[1],
+        app.ui.input.queue[1],
         InputItem::ParkedMessage("newcomer".into()),
         "the newcomer parks behind the live head; one live copy"
     );
     // A Message head already holds the copy, so the newcomer still parks.
     let mut app2 = app_with_provider(Arc::new(FakeProvider::text("ok")), ToolRegistry::new());
     app2.start_run_for_test(0);
-    app2.input.queue.push(InputItem::Message("injected".into()));
+    app2.ui
+        .input
+        .queue
+        .push(InputItem::Message("injected".into()));
     app2.spawn_run("newcomer".into());
     assert_eq!(
-        app2.input.queue[1],
+        app2.ui.input.queue[1],
         InputItem::ParkedMessage("newcomer".into()),
         "a Message head holds the copy; the newcomer parks so only one races"
     );
@@ -515,17 +540,23 @@ fn test_commit_promotes_next() {
     let mut app = app_with_provider(p, ToolRegistry::new());
     app.start_run_for_test(0);
     let committed = houyicoder_protocol::frontend::QueuedInput::new("a");
-    app.input.queue.push(InputItem::Message(committed.clone()));
-    app.input.queue.push(InputItem::ParkedMessage("b".into()));
+    app.ui
+        .input
+        .queue
+        .push(InputItem::Message(committed.clone()));
+    app.ui
+        .input
+        .queue
+        .push(InputItem::ParkedMessage("b".into()));
     app.handle_agent_message(SessionMessage::Event(ServerEvent::QueuedInputCommitted {
         inputs: vec![committed],
     }));
     assert_eq!(
-        app.input.queue,
+        app.ui.input.queue,
         vec![InputItem::Message("b".into())],
         "b promoted into the live-copy slot after a was committed"
     );
-    assert_eq!(app.input.queue.len(), 1, "only b remains, live");
+    assert_eq!(app.ui.input.queue.len(), 1, "only b remains, live");
 }
 
 /// A delayed commit cannot remove a newer input with equal text.
@@ -535,13 +566,13 @@ fn test_commit_identity() {
     app.start_run_for_test(0);
     let old = houyicoder_protocol::frontend::QueuedInput::new("same");
     let new = houyicoder_protocol::frontend::QueuedInput::new("same");
-    app.input.queue.push(InputItem::Message(new.clone()));
+    app.ui.input.queue.push(InputItem::Message(new.clone()));
 
     app.handle_agent_message(SessionMessage::Event(ServerEvent::QueuedInputCommitted {
         inputs: vec![old],
     }));
 
-    let InputItem::Message(remaining) = &app.input.queue[0] else {
+    let InputItem::Message(remaining) = &app.ui.input.queue[0] else {
         panic!("new input must remain live");
     };
     assert_eq!(remaining.id, new.id);
@@ -555,7 +586,8 @@ fn test_commit_clears_parked() {
     let mut app = working();
     app.sessions.current.last_run_input = Some("origin".into());
     let committed = houyicoder_protocol::frontend::QueuedInput::new("same");
-    app.input
+    app.ui
+        .input
         .queue
         .push(InputItem::ParkedMessage(committed.clone()));
 
@@ -563,7 +595,10 @@ fn test_commit_clears_parked() {
         inputs: vec![committed],
     }));
 
-    assert!(app.input.queue.is_empty(), "committed parked mirror clears");
+    assert!(
+        app.ui.input.queue.is_empty(),
+        "committed parked mirror clears"
+    );
     assert!(
         app.sessions.current.last_run_input.is_none(),
         "commit closes the original rollback window"
@@ -578,13 +613,13 @@ fn test_busy_submit_mirrors_queue() {
     app.start_run_for_test(0);
     app.spawn_run("first interjection".into());
     assert_eq!(
-        app.input.queue,
+        app.ui.input.queue,
         vec![InputItem::Message("first interjection".into())],
         "busy submit lands in the queue",
     );
     // A second submit while still busy appends in first-in, first-out order.
     app.spawn_run("second interjection".into());
-    assert_eq!(app.input.queue.len(), 2, "FIFO queue order");
+    assert_eq!(app.ui.input.queue.len(), 2, "FIFO queue order");
 }
 
 /// A QueuedInputCommitted event removes the exact identified entry from the
@@ -593,13 +628,16 @@ fn test_busy_submit_mirrors_queue() {
 fn test_consumed_removes_from_mirror() {
     let mut app = working();
     let consumed = houyicoder_protocol::frontend::QueuedInput::new("alpha");
-    app.input.queue.push(InputItem::Message(consumed.clone()));
-    app.input.queue.push(InputItem::Message("beta".into()));
+    app.ui
+        .input
+        .queue
+        .push(InputItem::Message(consumed.clone()));
+    app.ui.input.queue.push(InputItem::Message("beta".into()));
     app.handle_agent_message(SessionMessage::Event(ServerEvent::QueuedInputCommitted {
         inputs: vec![consumed],
     }));
     assert_eq!(
-        app.input.queue,
+        app.ui.input.queue,
         vec![InputItem::Message("beta".into())],
         "consumed entry removed from the copy",
     );

@@ -205,7 +205,7 @@ impl App {
     /// (case-insensitive), composed with the active scope tab. Resets the
     /// cursor so it never points past the narrowed list.
     pub fn set_memory_search(&mut self, term: &str) {
-        self.pane = Pane::Memory;
+        self.ui.navigation.pane = Pane::Memory;
         self.memory.set_search(term);
     }
 }

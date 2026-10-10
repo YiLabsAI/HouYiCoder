@@ -16,12 +16,12 @@ use crate::test_harness::{render_buffer, render_text};
 /// are published. Returns the app plus the clipboard capture handle.
 fn app_with_lines(n: usize) -> (crate::state::App, Arc<Mutex<Vec<String>>>) {
     let mut app = composition::app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     for i in 0..n {
         app.system_line(format!("history line {i:02}"));
     }
     let captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
-    app.clipboard = Arc::new(RecordingClipboard {
+    app.ui.clipboard = Arc::new(RecordingClipboard {
         captured: captured.clone(),
     });
     let _out = render_text(&app, 80, 24);
@@ -61,13 +61,13 @@ fn mouse(kind: MouseEventKind, column: u16, row: u16) -> MouseEvent {
 #[test]
 fn test_redrag_stays_char_mode() {
     let mut app = composition::app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app.sessions.current.transcript = vec![crate::records::TranscriptLine::Agent(
         "alpha bravo charlie".into(),
     )]
     .into();
     let captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
-    app.clipboard = Arc::new(RecordingClipboard {
+    app.ui.clipboard = Arc::new(RecordingClipboard {
         captured: captured.clone(),
     });
     let _out = render_text(&app, 80, 24);
@@ -95,14 +95,14 @@ fn test_redrag_stays_char_mode() {
         mouse(MouseEventKind::Down(MouseButton::Left), x0, y),
     );
     assert!(
-        app.selections.transcript.span_origin.is_none(),
+        app.ui.selection.transcript.span_origin.is_none(),
         "press after a completed drag must not escalate to word-select"
     );
     crate::app::handle_mouse(
         &mut app,
         mouse(MouseEventKind::Drag(MouseButton::Left), x0 + 2, y),
     );
-    let (ax, _) = app.selections.transcript.anchor.expect("anchor set");
+    let (ax, _) = app.ui.selection.transcript.anchor.expect("anchor set");
     assert_eq!(
         ax, x0,
         "char-mode anchor must sit at the press column, not a word bound"
@@ -129,7 +129,7 @@ fn test_edge_drag_scrolls_line() {
             rect.y + 3,
         ),
     );
-    assert_eq!(app.selections.transcript.anchor.map(|(_, r)| r), Some(13));
+    assert_eq!(app.ui.selection.transcript.anchor.map(|(_, r)| r), Some(13));
     crate::app::handle_mouse(
         &mut app,
         mouse(MouseEventKind::Drag(MouseButton::Left), rect.x + 2, rect.y),
@@ -137,12 +137,12 @@ fn test_edge_drag_scrolls_line() {
     let after = app.whole_scroll().top_offset();
     assert_eq!(after, 9, "edge drag must scroll one line, not a page");
     assert_eq!(
-        app.selections.transcript.anchor.map(|(_, r)| r),
+        app.ui.selection.transcript.anchor.map(|(_, r)| r),
         Some(13),
         "anchor content row is fixed for the whole drag"
     );
     assert_eq!(
-        app.selections.transcript.focus.map(|(_, r)| r),
+        app.ui.selection.transcript.focus.map(|(_, r)| r),
         Some(9),
         "focus content row must map through the post-scroll offset"
     );
@@ -248,7 +248,7 @@ fn test_copy_tracks_shifted_content() {
 fn test_click_thoughtfor_expands_one() {
     use crate::records::TranscriptLine;
     let mut app = composition::app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     let r1 = "reasoning for turn one".to_string();
     let r2 = "reasoning for turn two".to_string();
     app.sessions.current.transcript = vec![
@@ -315,7 +315,7 @@ fn test_click_thoughtfor_expands_one() {
 fn test_click_thoughtfor_none_reasoning() {
     use crate::records::TranscriptLine;
     let mut app = composition::app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app.sessions.current.transcript = vec![
         TranscriptLine::User("q1".into()),
         TranscriptLine::Agent("a1".into()),
@@ -375,7 +375,7 @@ fn test_click_thoughtfor_none_reasoning() {
 fn test_click_thought_no_duration() {
     use crate::records::TranscriptLine;
     let mut app = composition::app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app.sessions.current.transcript = vec![
         TranscriptLine::User("q1".into()),
         TranscriptLine::Agent("a1".into()),
@@ -451,7 +451,7 @@ fn test_click_thought_no_duration() {
 fn test_click_thoughtfor_scrolled_off() {
     use crate::records::TranscriptLine;
     let mut app = composition::app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     let mut transcript = vec![
         TranscriptLine::User("q1".into()),
         TranscriptLine::Agent("a1".into()),
@@ -518,7 +518,7 @@ fn test_click_thoughtfor_scrolled_off() {
 fn test_same_reason_thoughts_independent() {
     use crate::records::TranscriptLine;
     let mut app = composition::app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     let shared = "the model reasoned the same way twice".to_string();
     app.sessions.current.transcript = vec![
         TranscriptLine::User("q1".into()),
@@ -574,7 +574,7 @@ fn test_same_reason_thoughts_independent() {
 fn app_with_fold_group() -> crate::state::App {
     use crate::records::{ToolOutcome, TranscriptLine};
     let mut app = composition::app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     let tcall = |cid: &str, name: &str, brief: &str, oc: ToolOutcome| TranscriptLine::Tool {
         name: name.to_string(),
         tool: name.to_string(),
@@ -681,7 +681,7 @@ fn test_drag_expanded_block_copies() {
     let mut app = app_with_fold_group();
     // Recording clipboard so we can assert a copy fired.
     let captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
-    app.clipboard = Arc::new(RecordingClipboard {
+    app.ui.clipboard = Arc::new(RecordingClipboard {
         captured: captured.clone(),
     });
     let key = expand_first_group(&mut app);
@@ -755,7 +755,7 @@ fn test_drag_return_keeps_group() {
 fn test_drag_fold_summary_copies() {
     let mut app = app_with_fold_group();
     let captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
-    app.clipboard = Arc::new(RecordingClipboard {
+    app.ui.clipboard = Arc::new(RecordingClipboard {
         captured: captured.clone(),
     });
     let _out = render_text(&app, 80, 24);
@@ -842,7 +842,7 @@ fn test_approval_drag_resets() {
     use crate::records::Approval;
     use houyicoder_protocol::envelope::RequestId;
     let mut app = composition::app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app.sessions.current.prompt = Some(PendingPrompt::approval_card(
         RequestId(0),
         Approval {
@@ -874,7 +874,7 @@ fn test_approval_drag_resets() {
         mouse(MouseEventKind::Down(MouseButton::Left), arect.x, arect.y),
     );
     assert!(
-        app.selections.approval.is_dragging,
+        app.ui.selection.approval.is_dragging,
         "down in card starts approval drag"
     );
     crate::app::handle_mouse(
@@ -890,7 +890,7 @@ fn test_approval_drag_resets() {
         mouse(MouseEventKind::Up(MouseButton::Left), arect.x + 5, arect.y),
     );
     assert!(
-        !app.selections.approval.is_dragging,
+        !app.ui.selection.approval.is_dragging,
         "up ends the approval drag"
     );
 

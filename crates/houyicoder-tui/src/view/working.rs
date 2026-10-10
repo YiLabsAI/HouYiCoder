@@ -37,7 +37,7 @@ mod transcript;
 /// search bar render inline (a layout cell below the input box) when open in
 /// Working mode, so they push the transcript up rather than float over it.
 pub fn draw(f: &mut Frame, app: &App) {
-    match app.viewport {
+    match app.ui.navigation.viewport {
         ViewportMode::Working => draw_working(f, app),
         ViewportMode::Focus => draw_focus(f, app),
         ViewportMode::Scroll => draw_scroll(f, app),
@@ -47,7 +47,7 @@ pub fn draw(f: &mut Frame, app: &App) {
 /// Whether the open command pane retracts the input box. /permissions is
 /// excluded — its Add/Remove sub-mode types rule specs into the input box.
 fn pane_hides_input(app: &App) -> bool {
-    crate::keys::pane_replaces_input(app.pane)
+    crate::keys::pane_replaces_input(app.ui.navigation.pane)
 }
 
 /// Whether the open command pane retracts the status bar. Broader than
@@ -56,14 +56,14 @@ fn pane_hides_input(app: &App) -> bool {
 /// status bar, so hiding drops two permission-relevant reads (follow-up:
 /// move them into the pane).
 fn pane_hides_status(app: &App) -> bool {
-    pane_hides_input(app) || matches!(app.pane, Pane::Permission)
+    pane_hides_input(app) || matches!(app.ui.navigation.pane, Pane::Permission)
 }
 
 /// Working mode layout: content area, an inline palette/search cell when open,
 /// the 1-line status bar, and the input box pinned to the bottom. No progress
 /// header or pane-tab strip; the status bar carries the progress bar.
 fn draw_working(f: &mut Frame, app: &App) {
-    app.queue_view.strip_rect.set(Rect::new(0, 0, 0, 0));
+    app.ui.queue_view.strip_rect.set(Rect::new(0, 0, 0, 0));
     app.layout_snapshot.pane_rect.set(Rect::new(0, 0, 0, 0));
     app.layout_snapshot.approval_rect.set(Rect::new(0, 0, 0, 0));
     app.layout_feedback.terminal_rows.set(f.area().height);
@@ -77,7 +77,10 @@ fn draw_working(f: &mut Frame, app: &App) {
     let input_h = if pane_hides_input {
         0
     } else {
-        app.input.editor.input_height(f.area().height, content_cols)
+        app.ui
+            .input
+            .editor
+            .input_height(f.area().height, content_cols)
     };
     let total_h = f.area().height;
     // Layout top-to-bottom: transcript (fills the remainder), an optional
@@ -115,9 +118,9 @@ fn draw_working(f: &mut Frame, app: &App) {
     // (pushes transcript up) rather than floating over it, matching the
     // palette's layout. The resume picker renders as a Pane instead.
     if let Some(i) = layout.slots.overlay {
-        if app.palette.open {
+        if app.ui.navigation.palette.open {
             palette::draw(f, app, outer[i]);
-        } else if app.skill_picker.open {
+        } else if app.ui.navigation.skill_picker.open {
             skill_picker::draw(f, app, outer[i]);
         } else {
             input_bar::draw_inline_search(f, outer[i], app);
@@ -239,7 +242,7 @@ fn build_working_layout(
         None
     };
     let mut overlay: Option<usize> = None;
-    if app.palette.open || app.skill_picker.open {
+    if app.ui.navigation.palette.open || app.ui.navigation.skill_picker.open {
         constraints.push(Constraint::Length(10));
         overlay = Some(constraints.len() - 1);
     }
@@ -281,7 +284,7 @@ fn build_working_layout(
 /// draw_diff_full and focus_titled_block). The status bar carries the
 /// actionable keys (a/r/i) plus the progress bar.
 fn draw_focus(f: &mut Frame, app: &App) {
-    app.queue_view.strip_rect.set(Rect::new(0, 0, 0, 0));
+    app.ui.queue_view.strip_rect.set(Rect::new(0, 0, 0, 0));
     app.layout_snapshot.pane_rect.set(Rect::new(0, 0, 0, 0));
     app.layout_snapshot.approval_rect.set(Rect::new(0, 0, 0, 0));
     app.layout_feedback.terminal_rows.set(f.area().height);
@@ -312,7 +315,7 @@ fn draw_focus(f: &mut Frame, app: &App) {
 /// reading, with a 1-line overlay status bar showing the line position plus
 /// search/tail hints.
 fn draw_scroll(f: &mut Frame, app: &App) {
-    app.queue_view.strip_rect.set(Rect::new(0, 0, 0, 0));
+    app.ui.queue_view.strip_rect.set(Rect::new(0, 0, 0, 0));
     app.layout_snapshot.pane_rect.set(Rect::new(0, 0, 0, 0));
     app.layout_snapshot.approval_rect.set(Rect::new(0, 0, 0, 0));
     app.layout_feedback.terminal_rows.set(f.area().height);
@@ -349,7 +352,7 @@ fn draw_scroll(f: &mut Frame, app: &App) {
 
 /// Render the active pane full-width in Focus mode (a full-width code area).
 fn draw_focus_main(f: &mut Frame, area: Rect, app: &App) {
-    match app.pane {
+    match app.ui.navigation.pane {
         Pane::Diff => capability::draw_diff_full(f, area, app),
         Pane::Transcript => transcript::draw_transcript(f, area, app),
         Pane::Memory => draw_memory_pane(f, area, app),
@@ -381,7 +384,7 @@ fn draw_main(f: &mut Frame, area: Rect, app: &App) {
     // the Pane owns a lower band. One path for both stub and wired modes —
     // no stub-vs-wired style divergence (/permissions renders
     // below the REPL prompt in both contexts).
-    if matches!(app.pane, Pane::Permission) {
+    if matches!(app.ui.navigation.pane, Pane::Permission) {
         draw_permission_pane(f, area, app);
         return;
     }
@@ -389,7 +392,7 @@ fn draw_main(f: &mut Frame, area: Rect, app: &App) {
     // /permissions and /search): transcript tail above, the memory list +
     // toggle rows in the lower band. NOT an external editor — the user stays
     // in-TUI, mirroring /permissions and /search. One path for stub + wired.
-    if matches!(app.pane, Pane::Memory) {
+    if matches!(app.ui.navigation.pane, Pane::Memory) {
         draw_memory_pane(f, area, app);
         return;
     }
@@ -399,11 +402,11 @@ fn draw_main(f: &mut Frame, area: Rect, app: &App) {
     // equivalent command elsewhere, so this pane is the in-TUI manager. Selection +
     // copy come free via the shared PaneSurface (the mouse router keys on
     // the pane rect, which draw_command_pane stashes).
-    if matches!(app.pane, Pane::Worktree) {
+    if matches!(app.ui.navigation.pane, Pane::Worktree) {
         draw_worktree_pane(f, area, app);
         return;
     }
-    if matches!(app.pane, Pane::Trajectory) {
+    if matches!(app.ui.navigation.pane, Pane::Trajectory) {
         draw_trajectory_pane(f, area, app);
         return;
     }
@@ -412,7 +415,7 @@ fn draw_main(f: &mut Frame, area: Rect, app: &App) {
     // status fields below. NOT a transcript text dump — the command opens a
     // live pane so Esc dismisses + the field set stays visible while the
     // cache refreshes.
-    if matches!(app.pane, Pane::Status) {
+    if matches!(app.ui.navigation.pane, Pane::Status) {
         draw_status_pane(f, area, app);
         return;
     }
@@ -420,38 +423,38 @@ fn draw_main(f: &mut Frame, area: Rect, app: &App) {
     // above, the filtered session list below. NOT a bottom-anchored popover;
     // the shared template keeps the transcript tail visible + selection +
     // copy working for free.
-    if matches!(app.pane, Pane::Resume) {
+    if matches!(app.ui.navigation.pane, Pane::Resume) {
         draw_resume_pane(f, area, app);
         return;
     }
     // The /hooks pane renders inline (the Pane primitive): transcript tail
     // above, the hook list below.
-    if matches!(app.pane, Pane::Hooks) {
+    if matches!(app.ui.navigation.pane, Pane::Hooks) {
         draw_hooks_pane(f, area, app);
         return;
     }
     // The /skills pane renders inline (the Pane primitive): transcript tail
     // above, the discovered-skill list below.
-    if matches!(app.pane, Pane::Skills) {
+    if matches!(app.ui.navigation.pane, Pane::Skills) {
         draw_skills_pane(f, area, app);
         return;
     }
     // The /model pane renders inline (the Pane primitive): transcript tail
     // above, the selectable model list below.
-    if matches!(app.pane, Pane::Model) {
+    if matches!(app.ui.navigation.pane, Pane::Model) {
         draw_model_pane(f, area, app);
         return;
     }
     // The /agents pane renders inline (the Pane primitive): transcript tail
     // above, the live fleet or the registered directory below.
-    if matches!(app.pane, Pane::Agents) {
+    if matches!(app.ui.navigation.pane, Pane::Agents) {
         draw_agents_pane(f, area, app);
         return;
     }
     // The queue pane renders inline (the Pane primitive): transcript tail
     // above, the queued-item list below. Opened by clicking the collapsed
     // +N more strip, not by a slash command.
-    if matches!(app.pane, Pane::Queue) {
+    if matches!(app.ui.navigation.pane, Pane::Queue) {
         draw_queue_pane(f, area, app);
         return;
     }
@@ -460,22 +463,22 @@ fn draw_main(f: &mut Frame, area: Rect, app: &App) {
         // mode (otherwise the main area is the chat transcript). The artifact
         // pane is the slash-command surface that owns the whole main area when
         // open.
-        if matches!(app.pane, Pane::Artifact) {
+        if matches!(app.ui.navigation.pane, Pane::Artifact) {
             artifact::draw(f, area, app);
             return;
         }
         transcript::draw_transcript(f, area, app);
         return;
     }
-    if matches!(app.pane, Pane::Diff) {
+    if matches!(app.ui.navigation.pane, Pane::Diff) {
         capability::draw_diff_full(f, area, app);
         return;
     }
-    if matches!(app.pane, Pane::Transcript) {
+    if matches!(app.ui.navigation.pane, Pane::Transcript) {
         transcript::draw_transcript(f, area, app);
         return;
     }
-    if matches!(app.pane, Pane::Artifact) {
+    if matches!(app.ui.navigation.pane, Pane::Artifact) {
         artifact::draw(f, area, app);
         return;
     }

@@ -75,7 +75,7 @@ fn test_down_clamps_last_row() {
     // glyph vanish (no row matched the out-of-range cursor). With clamping
     // in both render and the key handler, the cursor pins to the last row.
     let mut app = crate::composition::app();
-    app.pane = crate::state::Pane::Trajectory;
+    app.ui.navigation.pane = crate::state::Pane::Trajectory;
     // First render stashes the list length; simulate by drawing once.
     let backend = TestBackend::new(80, 24);
     let mut terminal = Terminal::new(backend).unwrap();
@@ -112,7 +112,7 @@ fn test_pane_label_is_trajectory() {
 #[test]
 fn test_level0_renders_turn_list() {
     let mut app = crate::composition::app();
-    app.pane = crate::state::Pane::Trajectory;
+    app.ui.navigation.pane = crate::state::Pane::Trajectory;
     let backend = TestBackend::new(80, 24);
     let mut terminal = Terminal::new(backend).unwrap();
     terminal
@@ -167,7 +167,7 @@ fn test_attached_seam_supplies_view() {
     // call; a render pass leaves it set.
     let flag = Arc::new(Mutex::new(false));
     let mut app = crate::composition::app();
-    app.pane = crate::state::Pane::Trajectory;
+    app.ui.navigation.pane = crate::state::Pane::Trajectory;
     app.sessions.persistence.trajectory_log = Some(Arc::new(StubLog {
         called: flag.clone(),
     }));
@@ -189,7 +189,7 @@ fn test_level1_renders_row_detail() {
     // Drilling a [bg] row (dream/compact/save) shows that row's detail at L1,
     // not the first turn's events. turn_idx 2 = the dream [bg] row in the mock.
     let mut app = crate::composition::app();
-    app.pane = crate::state::Pane::Trajectory;
+    app.ui.navigation.pane = crate::state::Pane::Trajectory;
     app.trajectory.set_level(1);
     app.trajectory.set_turn_idx(2);
     let backend = TestBackend::new(80, 24);
@@ -208,7 +208,7 @@ fn test_level1_renders_row_detail() {
 #[test]
 fn test_level1_renders_turn_detail() {
     let mut app = crate::composition::app();
-    app.pane = crate::state::Pane::Trajectory;
+    app.ui.navigation.pane = crate::state::Pane::Trajectory;
     app.trajectory.set_level(1);
     let backend = TestBackend::new(80, 24);
     let mut terminal = Terminal::new(backend).unwrap();
@@ -222,7 +222,7 @@ fn test_level1_renders_turn_detail() {
 #[test]
 fn test_level2_renders_event_detail() {
     let mut app = crate::composition::app();
-    app.pane = crate::state::Pane::Trajectory;
+    app.ui.navigation.pane = crate::state::Pane::Trajectory;
     app.trajectory.set_level(2);
     let backend = TestBackend::new(80, 24);
     let mut terminal = Terminal::new(backend).unwrap();
@@ -330,8 +330,8 @@ fn test_level2_renders_record_detail() {
 #[test]
 fn test_trajectory_bar_invariants_mock() {
     let mut app = crate::composition::app();
-    app.screen = crate::state::Screen::Working;
-    app.pane = crate::state::Pane::Trajectory;
+    app.ui.navigation.screen = crate::state::Screen::Working;
+    app.ui.navigation.pane = crate::state::Pane::Trajectory;
     app.trajectory.set_level(1);
     let out = crate::test_harness::render_text(&app, 100, 40);
     assert!(
@@ -398,7 +398,7 @@ fn test_event_detail_redacts_secrets() {
 #[test]
 fn test_enter_drill_esc_back() {
     let mut app = crate::composition::app();
-    app.pane = crate::state::Pane::Trajectory;
+    app.ui.navigation.pane = crate::state::Pane::Trajectory;
     // Render once so the turn-list length is stashed — the drill guard reads
     // it to decide whether Enter may drill (it must not drill into an empty
     // row list). Without this render the stashed length is 0 and the guard
@@ -416,13 +416,13 @@ fn test_enter_drill_esc_back() {
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     assert_eq!(app.trajectory.level(), 0);
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-    assert_eq!(app.pane, crate::state::Pane::Transcript);
+    assert_eq!(app.ui.navigation.pane, crate::state::Pane::Transcript);
 }
 
 #[test]
 fn test_up_down_move_cursor() {
     let mut app = crate::composition::app();
-    app.pane = crate::state::Pane::Trajectory;
+    app.ui.navigation.pane = crate::state::Pane::Trajectory;
     app.trajectory.set_list_len(5);
     assert_eq!(app.trajectory.cursor(), 0);
     // Down advances
@@ -654,7 +654,7 @@ fn test_enter_trajectory_clamps_tail() {
 #[test]
 fn test_level1_navigates_events() {
     let mut app = crate::composition::app();
-    app.pane = crate::state::Pane::Trajectory;
+    app.ui.navigation.pane = crate::state::Pane::Trajectory;
     app.trajectory.set_level(1);
     app.trajectory.set_turn_idx(0);
     app.trajectory.set_cursor(0);

@@ -14,7 +14,7 @@ use houyicoder_protocol::frontend::session_update::{ContentChunk, SessionUpdate}
 
 fn working() -> crate::state::App {
     let mut app = composition::app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app
 }
 
@@ -197,14 +197,14 @@ fn test_focus_lost_hides_caret() {
     use crossterm::event::Event;
     use ratatui::style::Color;
     let mut app = working();
-    app.input.editor.set("abc".to_string());
+    app.ui.input.editor.set("abc".to_string());
     let has_white = |buf: &ratatui::buffer::Buffer| {
         (0..buf.area().height).any(|y| {
             (0..buf.area().width)
                 .any(|x| buf.cell((x, y)).unwrap().style().bg == Some(Color::White))
         })
     };
-    app.terminal_focused = true;
+    app.ui.terminal_focused = true;
     let buf = render_buffer(&app, 80, 24);
     assert!(
         has_white(&buf),
@@ -216,12 +216,15 @@ fn test_focus_lost_hides_caret() {
     );
     // FocusLost event hides the caret.
     assert!(crate::app::handle_event(&mut app, Event::FocusLost).unwrap());
-    assert!(!app.terminal_focused, "FocusLost clears terminal_focused");
+    assert!(
+        !app.ui.terminal_focused,
+        "FocusLost clears terminal_focused"
+    );
     let buf = render_buffer(&app, 80, 24);
     assert!(!has_white(&buf), "no inverted caret when focus lost");
     // FocusGained re-inverts.
     assert!(crate::app::handle_event(&mut app, Event::FocusGained).unwrap());
-    assert!(app.terminal_focused, "FocusGained sets terminal_focused");
+    assert!(app.ui.terminal_focused, "FocusGained sets terminal_focused");
     let buf = render_buffer(&app, 80, 24);
     assert!(has_white(&buf), "caret re-inverted on refocus");
 }
@@ -289,7 +292,7 @@ fn fill_transcript(app: &mut crate::state::App, n: usize) {
 fn test_grid_survives_page_up() {
     let mut app = context_app();
     fill_transcript(&mut app, 20);
-    app.viewport = crate::state::ViewportMode::Scroll;
+    app.ui.navigation.viewport = crate::state::ViewportMode::Scroll;
     drop(render(&app));
     app.whole_scroll_mut().page_up();
     app.whole_scroll_mut().page_up();
@@ -302,7 +305,7 @@ fn test_grid_survives_page_up() {
 fn test_context_grid_visible_top() {
     let mut app = context_app();
     fill_transcript(&mut app, 20);
-    app.viewport = crate::state::ViewportMode::Scroll;
+    app.ui.navigation.viewport = crate::state::ViewportMode::Scroll;
     app.whole_scroll_mut().jump_to(0);
     drop(render(&app));
     let out = render(&app);
@@ -321,7 +324,7 @@ fn test_context_grid_visible_top() {
 fn test_context_grid_renders_overlap() {
     let mut app = context_app();
     fill_transcript(&mut app, 20);
-    app.viewport = crate::state::ViewportMode::Scroll;
+    app.ui.navigation.viewport = crate::state::ViewportMode::Scroll;
     drop(render(&app));
     app.whole_scroll_mut().jump_to(5);
     let out = render(&app);
@@ -335,7 +338,7 @@ fn test_context_grid_renders_overlap() {
 fn test_context_grid_pgup_working() {
     let mut app = context_app();
     fill_transcript(&mut app, 20);
-    app.viewport = crate::state::ViewportMode::Working;
+    app.ui.navigation.viewport = crate::state::ViewportMode::Working;
     drop(render(&app));
     app.enter_scroll();
     drop(render(&app));
@@ -354,7 +357,7 @@ fn test_context_grid_pgup_working() {
 fn test_slash_prefix_needs_boundary() {
     use crate::state::TranscriptLine;
     let mut app = working();
-    app.input.editor.set("/searchalot".to_string());
+    app.ui.input.editor.set("/searchalot".to_string());
     app.submit_input();
     assert!(
         !app.transcript_view.search.active,
@@ -369,7 +372,7 @@ fn test_slash_prefix_needs_boundary() {
     );
 
     let mut app = working();
-    app.input.editor.set("/rewindfoo".to_string());
+    app.ui.input.editor.set("/rewindfoo".to_string());
     app.submit_input();
     assert!(
         !app.sessions
@@ -401,7 +404,11 @@ fn test_search_opens_newest_match() {
     app.enter_search_view("needle");
     assert!(app.transcript_view.search.active, "in_search set on entry");
     assert!(app.verbose, "verbose set on entry");
-    assert_eq!(app.viewport, ViewportMode::Scroll, "enters Scroll mode");
+    assert_eq!(
+        app.ui.navigation.viewport,
+        ViewportMode::Scroll,
+        "enters Scroll mode"
+    );
     let matches = &app.transcript_view.search.matches;
     assert_eq!(matches.len(), 1, "one needle match");
     assert_eq!(*matches.last().unwrap(), 0, "match is the first line");
@@ -424,7 +431,7 @@ fn test_search_opens_newest_match() {
     );
     assert!(!app.verbose, "verbose cleared on exit");
     assert_ne!(
-        app.viewport,
+        app.ui.navigation.viewport,
         ViewportMode::Scroll,
         "viewport restored on exit"
     );

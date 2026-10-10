@@ -14,7 +14,7 @@ impl App {
     /// fresh snapshot. The draft starts as a copy of what is applied, so the
     /// pane shows the session's state rather than the last thing touched.
     pub(crate) fn open_model_pane(&mut self) {
-        self.pane = Pane::Model;
+        self.ui.navigation.pane = Pane::Model;
         self.model_picker.reseed();
         if let Some(s) = self.sessions.current.connection.as_ref() {
             match s.next_request_id() {
@@ -49,7 +49,7 @@ impl App {
             return;
         }
         self.model_picker.reseed();
-        self.pane = Pane::Transcript;
+        self.ui.navigation.pane = Pane::Transcript;
     }
 
     /// Commit the draft: one request carries the model, the effort and the
@@ -127,7 +127,7 @@ impl App {
             crate::model_receipt::receipt_line(&result, &label, prior_speed, fast_available);
         if settles {
             self.model_picker.settle(None);
-            self.pane = Pane::Transcript;
+            self.ui.navigation.pane = Pane::Transcript;
         }
         self.model_picker.snapshot.applied = result.applied.clone();
         self.model_picker.snapshot.selected = result.selected.clone();

@@ -297,12 +297,12 @@ impl App {
     /// copy is removed so a refused enqueue keeps the item queued and the
     /// local and server mirrors cannot diverge.
     pub(crate) fn remove_pending_at(&mut self, index: usize) -> Option<InputItem> {
-        if index >= self.input.queue.len() {
+        if index >= self.ui.input.queue.len() {
             return None;
         }
         // Enqueue the server removal before touching the local copy: a closed
         // driver leaves the item in place rather than orphaning the mirror.
-        if let InputItem::Message(input) = &self.input.queue[index] {
+        if let InputItem::Message(input) = &self.ui.input.queue[index] {
             let id = input.id;
             let session_id = self.sessions.current.identity.session_id.clone();
             if let Err(e) = self.enqueue(ClientCommand::QueueRemove { session_id, id }) {
@@ -310,7 +310,7 @@ impl App {
                 return None;
             }
         }
-        let item = self.input.queue.remove(index);
+        let item = self.ui.input.queue.remove(index);
         self.promote_next_pending();
         Some(item)
     }
@@ -327,7 +327,7 @@ impl App {
         }
         // Clone the parked input without swapping the slot: the slot only
         // marks itself as a live mirror once the injection is queued.
-        let Some(input) = self.input.queue.first().and_then(|slot| match slot {
+        let Some(input) = self.ui.input.queue.first().and_then(|slot| match slot {
             InputItem::ParkedMessage(input) => Some(input.clone()),
             _ => None,
         }) else {
@@ -336,7 +336,7 @@ impl App {
         let session_id = self.sessions.current.identity.session_id.clone();
         match self.enqueue(ClientCommand::InjectUser { session_id, input }) {
             Ok(()) => {
-                if let Some(slot) = self.input.queue.first_mut()
+                if let Some(slot) = self.ui.input.queue.first_mut()
                     && let InputItem::ParkedMessage(input) = slot
                 {
                     let input = input.clone();

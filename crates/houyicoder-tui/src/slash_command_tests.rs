@@ -11,7 +11,7 @@ use crate::test_harness::{model_caps, model_entry, model_snapshot, render_text};
 
 fn working() -> crate::state::App {
     let mut app = composition::app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app.sessions.current.agent_directory =
         Some("## Available agents\n\n- explore: fast read-only search".into());
     app
@@ -80,7 +80,7 @@ fn test_tab_cycle_disconnected() {
 fn test_tab_cycles_panes() {
     let mut app = working();
     for p in Pane::CYCLE {
-        app.pane = p;
+        app.ui.navigation.pane = p;
         let out = render(&app);
         println!("--- pane {p:?} ---\n{out}\n--- end ---");
         // each pane renders without panic; its identity appears somewhere in
@@ -121,7 +121,7 @@ fn test_clear_resets_full_chain() {
     let out = render(&app);
     println!("--- after /clear ---\n{out}\n--- end ---");
     assert_eq!(app.workflow.stage, Stage::Idle);
-    assert_eq!(app.pane, Pane::Transcript);
+    assert_eq!(app.ui.navigation.pane, Pane::Transcript);
     assert!(app.workflow.spec_ctx.step == "idle");
     assert!(
         app.workflow
@@ -174,7 +174,7 @@ fn test_resume_reports_no_store() {
         "disconnected /resume reports not connected:\n{out}"
     );
     assert!(
-        !app.resume_picker.open,
+        !app.ui.navigation.resume_picker.open,
         "picker must not open without a catalog"
     );
 }
@@ -221,7 +221,11 @@ fn test_status_shows_runtime_state() {
 fn test_model_opens_pane() {
     let mut app = working();
     app.run_command(SlashCommand::Model);
-    assert_eq!(app.pane, crate::state::Pane::Model, "/model opens the pane");
+    assert_eq!(
+        app.ui.navigation.pane,
+        crate::state::Pane::Model,
+        "/model opens the pane"
+    );
     // Simulate the ModelInfo reply landing (stub app has no session to fetch).
     app.model_picker
         .refresh_snapshot(model_snapshot(vec![model_entry(
@@ -311,17 +315,17 @@ fn test_utility_panes_switch() {
     app.run_command(SlashCommand::Graph);
     let g = render(&app);
     println!("--- /graph ---\n{g}\n--- end ---");
-    assert_eq!(app.pane, Pane::Graph);
+    assert_eq!(app.ui.navigation.pane, Pane::Graph);
     assert!(g.contains("impact set"), "graph content missing");
     app.run_command(SlashCommand::Memory);
     let m = render(&app);
     println!("--- /memory ---\n{m}\n--- end ---");
-    assert_eq!(app.pane, Pane::Memory);
+    assert_eq!(app.ui.navigation.pane, Pane::Memory);
     assert!(m.contains("build-gate"), "memory content missing");
     app.run_command(SlashCommand::Agents);
     let a = render(&app);
     println!("--- /agents ---\n{a}\n--- end ---");
-    assert_eq!(app.pane, Pane::Agents);
+    assert_eq!(app.ui.navigation.pane, Pane::Agents);
     assert!(a.contains("explore"), "agents directory content missing");
 }
 
@@ -360,7 +364,7 @@ fn test_help_text_visible() {
     println!("--- /help ---\n{h}\n--- end ---");
     assert!(h.contains("show help"), "help missing");
     // /tips is TUI-local (not in SlashCommand); submit via input
-    app.input.editor.set("/tips".to_string());
+    app.ui.input.editor.set("/tips".to_string());
     app.submit_input();
     let t = render(&app);
     println!("--- /tips ---\n{t}\n--- end ---");
@@ -392,11 +396,11 @@ fn test_misc_commands_visible() {
 fn test_login_console_exit_commands() {
     let mut app = working();
     app.run_command(SlashCommand::Login);
-    assert_eq!(app.screen, Screen::Login);
-    app.screen = Screen::Working;
+    assert_eq!(app.ui.navigation.screen, Screen::Login);
+    app.ui.navigation.screen = Screen::Working;
     app.run_command(SlashCommand::Console);
-    assert_eq!(app.screen, Screen::Console);
-    app.screen = Screen::Working;
+    assert_eq!(app.ui.navigation.screen, Screen::Console);
+    app.ui.navigation.screen = Screen::Working;
     app.run_command(SlashCommand::Exit);
     assert!(app.quit, "/exit should quit");
 }

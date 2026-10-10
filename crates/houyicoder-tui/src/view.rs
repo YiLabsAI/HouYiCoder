@@ -94,7 +94,7 @@ pub fn draw(f: &mut Frame, app: &App) {
         trust::draw(f, app);
         return;
     }
-    match app.screen {
+    match app.ui.navigation.screen {
         Screen::Login => login::draw(f, app),
         Screen::Console => console::draw(f, app),
         Screen::Working => working::draw(f, app),
@@ -128,7 +128,7 @@ mod tests {
     #[test]
     fn test_dump_working_after_login() {
         let mut app = composition::app();
-        app.screen = crate::state::Screen::Working;
+        app.ui.navigation.screen = crate::state::Screen::Working;
         let out = render_text(&app, 80, 24);
         // sanity: status bar tiny mark present
         assert!(
@@ -147,7 +147,7 @@ mod tests {
     #[test]
     fn test_dump_palette_render() {
         let mut app = composition::app();
-        app.screen = crate::state::Screen::Working;
+        app.ui.navigation.screen = crate::state::Screen::Working;
         app.open_palette();
         let out = render_text(&app, 80, 24);
         println!("--- palette AFTER (80x24) ---\n{out}\n--- end ---");
@@ -205,7 +205,7 @@ mod tests {
     #[test]
     fn test_status_bar_is_contextual() {
         let mut app = composition::app();
-        app.screen = crate::state::Screen::Working;
+        app.ui.navigation.screen = crate::state::Screen::Working;
         let out = render_text(&app, 80, 24);
         println!("--- status bar (80x24) ---\n{out}\n--- end ---");
         // The status bar sits above the bottom-pinned input box; find it by its

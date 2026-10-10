@@ -26,16 +26,16 @@ mod palette;
 /// mode (Scroll takes over; Focus handles only action keys; Working is full
 /// input).
 pub fn handle_working(app: &mut App, k: KeyEvent) {
-    if app.viewport == ViewportMode::Scroll {
+    if app.ui.navigation.viewport == ViewportMode::Scroll {
         pager::handle_scroll(app, k);
         return;
     }
     // Clear a lingering name editor when focus leaves the Status pane (an
     // approval/Focus takeover or a /command that switches pane would otherwise
     // leave an invisible Some, so the next 'e' inserts into the stale buffer
-    // instead of opening fresh. switch_session rebuilds via build_app so
-    // it clears too, but this covers the in-session pane switches.
-    if app.pane != Pane::Status {
+    // instead of opening fresh. A session switch clears the editor in the
+    // session-local reset; this covers the in-session pane switches.
+    if app.ui.navigation.pane != Pane::Status {
         app.status_name_edit = None;
     }
     // /permission pane: nav and sub-mode entry keys live in the pane's own
@@ -62,32 +62,35 @@ pub fn handle_working(app: &mut App, k: KeyEvent) {
     }
     // Shift+Up/Down move the footer-pill fleet selection before input
     // handling so it works even while the input box has focus.
-    if fleet::fleet_shift_selected(&mut app.fleet, app.viewport, k) {
+    if fleet::fleet_shift_selected(&mut app.fleet, app.ui.navigation.viewport, k) {
         return;
     }
     // Status-name edit: a focused input mode on the /status Status tab. Takes
     // priority so typed chars edit the buffer instead of cycling tabs or
     // hitting the generic pane arms.
-    if app.pane == Pane::Status && app.status_name_edit.is_some() {
+    if app.ui.navigation.pane == Pane::Status && app.status_name_edit.is_some() {
         handle_status_name_edit(app, k);
         return;
     }
-    if app.resume_picker.open {
+    if app.ui.navigation.resume_picker.open {
         handle_resume_picker(app, k);
         return;
     }
-    if app.palette.open {
+    if app.ui.navigation.palette.open {
         palette::handle_palette(app, k);
         return;
     }
-    if app.skill_picker.open && skill_picker::handle(app, k) {
+    if app.ui.navigation.skill_picker.open && skill_picker::handle(app, k) {
         return; // consumed by picker (Up/Down/Enter/Esc/Backspace)
     }
     // Esc while viewing a teammate only interrupts the viewed child's
     // current turn; it never exits the view and never leaks to the parent
     // (an input draft does not redirect it to abort_run on the parent).
     // Exit is on Shift+Up/Down. A pane that owns Esc closes first.
-    if app.teammate_view.is_some() && k.code == KeyCode::Esc && !pane_owns_esc(app.pane) {
+    if app.teammate_view.is_some()
+        && k.code == KeyCode::Esc
+        && !pane_owns_esc(app.ui.navigation.pane)
+    {
         app.abort_viewed_child_turn();
         return;
     }
@@ -95,11 +98,13 @@ pub fn handle_working(app: &mut App, k: KeyEvent) {
     // screen. Without this the pane is rendered but dead: its characters,
     // Enter, and Home/End never arrive, and Esc would fold the viewport
     // instead of closing the pane.
-    if app.viewport == ViewportMode::Focus && app.pane == Pane::Trajectory {
+    if app.ui.navigation.viewport == ViewportMode::Focus
+        && app.ui.navigation.pane == Pane::Trajectory
+    {
         if trajectory::handle(app, k) {
             return;
         }
-        if app.pane != Pane::Trajectory {
+        if app.ui.navigation.pane != Pane::Trajectory {
             // The key closed the pane (an ordinary character), which also
             // unfolded the viewport: it goes on to the editor, which is on
             // screen by now.
@@ -107,7 +112,7 @@ pub fn handle_working(app: &mut App, k: KeyEvent) {
             return;
         }
     }
-    if app.viewport == ViewportMode::Focus {
+    if app.ui.navigation.viewport == ViewportMode::Focus {
         handle_focus(app, k);
         return;
     }
@@ -117,7 +122,7 @@ pub fn handle_working(app: &mut App, k: KeyEvent) {
     // asynchronous cancellation is pending. Queue recall is explicit through
     // its strip or pane, so a delayed terminal event cannot move unsent input.
     // Panes that own Esc are gated out so Esc closes the pane first.
-    if app.agent_busy() && k.code == KeyCode::Esc && !pane_owns_esc(app.pane) {
+    if app.agent_busy() && k.code == KeyCode::Esc && !pane_owns_esc(app.ui.navigation.pane) {
         tracing::debug!("abort_run (busy, queue left intact)");
         app.abort_run();
         return;
@@ -127,10 +132,12 @@ pub fn handle_working(app: &mut App, k: KeyEvent) {
     // (the picker stays open and narrows the list). A colon closes the
     // picker for free-form @skill:name input. Selecting from the picker
     // overwrites the input with the full @skill:name.
-    if k.code == KeyCode::Char('@') && app.input.editor.is_empty() && !pane_replaces_input(app.pane)
+    if k.code == KeyCode::Char('@')
+        && app.ui.input.editor.is_empty()
+        && !pane_replaces_input(app.ui.navigation.pane)
     {
-        app.skill_picker.open = true;
-        app.skill_picker.sel.set(0);
+        app.ui.navigation.skill_picker.open = true;
+        app.ui.navigation.skill_picker.sel.set(0);
         // If skills haven't been queried yet (the user hasn't opened
         // /skills), fetch them now so the picker isn't empty.
         if app.sessions.current.capabilities.skills.entries.is_empty()

@@ -16,7 +16,7 @@ use crate::test_harness::render_text;
 
 fn working() -> crate::state::App {
     let mut app = composition::app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app
     // stub starts at Idle / Working.
 }
@@ -52,7 +52,7 @@ fn test_working_mode_chrome_budget() {
     let app = working();
     let out = render(&app);
     println!("--- Working mode (80x24) ---\n{out}\n--- end ---");
-    assert_eq!(app.viewport, ViewportMode::Working);
+    assert_eq!(app.ui.navigation.viewport, ViewportMode::Working);
     // No 2-line menu bar: no spec strip, no progress header row, no pane tabs.
     assert!(
         !out.contains("spec-001"),
@@ -98,7 +98,7 @@ fn test_focus_mode_chrome_budget() {
     app.run_command(SlashCommand::Spec);
     app.approve_in_pane(); // design -> implement -> Focus
     assert_eq!(app.workflow.stage, Stage::Implementing);
-    assert_eq!(app.viewport, ViewportMode::Focus);
+    assert_eq!(app.ui.navigation.viewport, ViewportMode::Focus);
     let out = render(&app);
     println!("--- Focus mode (80x24) ---\n{out}\n--- end ---");
     // The header is fused into the pane border title (0 extra rows): the diff
@@ -141,7 +141,7 @@ fn test_scroll_mode_chrome_budget() {
     drop(render(&app));
     // PgUp enters Scroll mode.
     keys::handle_working(&mut app, KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE));
-    assert_eq!(app.viewport, ViewportMode::Scroll);
+    assert_eq!(app.ui.navigation.viewport, ViewportMode::Scroll);
     let out = render(&app);
     println!("--- Scroll mode (80x24) ---\n{out}\n--- end ---");
     // Header, tabs, and input are all hidden. The input box title always
@@ -183,7 +183,7 @@ fn test_status_bar_fits_80() {
         app.set_stage(stage);
         app.fold_to_working();
         assert_eq!(
-            app.viewport,
+            app.ui.navigation.viewport,
             ViewportMode::Working,
             "stage {stage:?} should fold to Working"
         );
@@ -212,7 +212,7 @@ fn test_status_bar_fits_80() {
 #[test]
 fn test_pane_hides_status_bar() {
     let mut app = working();
-    app.pane = Pane::Hooks;
+    app.ui.navigation.pane = Pane::Hooks;
     let out = render(&app);
     assert!(
         !out.contains("implement"),
@@ -233,7 +233,7 @@ fn test_pane_hides_status_bar() {
 #[test]
 fn test_permission_keeps_input() {
     let mut app = working();
-    app.pane = Pane::Permission;
+    app.ui.navigation.pane = Pane::Permission;
     let out = render(&app);
     assert!(
         !out.contains("implement"),
@@ -258,7 +258,7 @@ fn test_full_flow_viewport() {
     keys::handle_working(&mut app, key(KeyCode::Enter));
     assert_eq!(app.workflow.stage, Stage::Design);
     assert_eq!(
-        app.viewport,
+        app.ui.navigation.viewport,
         ViewportMode::Working,
         "Design should be Working"
     );
@@ -271,11 +271,11 @@ fn test_full_flow_viewport() {
 
     // 2. Press a -> auto-advance to Implementing -> auto-enter Focus (header +
     //    tabs + input fold, diff pane full-width).
-    app.input.editor.clear();
+    app.ui.input.editor.clear();
     keys::handle_working(&mut app, key(KeyCode::Char('a')));
     assert_eq!(app.workflow.stage, Stage::Implementing);
     assert_eq!(
-        app.viewport,
+        app.ui.navigation.viewport,
         ViewportMode::Focus,
         "Implementing should fold to Focus"
     );
@@ -298,7 +298,11 @@ fn test_full_flow_viewport() {
         Stage::Verify,
         "all changes approved -> verify"
     );
-    assert_eq!(app.viewport, ViewportMode::Focus, "Verify stays in Focus");
+    assert_eq!(
+        app.ui.navigation.viewport,
+        ViewportMode::Focus,
+        "Verify stays in Focus"
+    );
     let out = render(&app);
     println!("--- step 3: all changes approved -> verify (Focus) ---\n{out}\n--- end ---");
 
@@ -307,14 +311,18 @@ fn test_full_flow_viewport() {
         keys::handle_working(&mut app, key(KeyCode::Char('a')));
         keys::handle_working(&mut app, key(KeyCode::Down));
     }
-    assert_eq!(app.pane, Pane::Verify, "agent review done -> machine check");
-    assert_eq!(app.viewport, ViewportMode::Focus);
+    assert_eq!(
+        app.ui.navigation.pane,
+        Pane::Verify,
+        "agent review done -> machine check"
+    );
+    assert_eq!(app.ui.navigation.viewport, ViewportMode::Focus);
 
     // 5. Press a -> Done -> return to Working (header + tabs + input reappear).
     keys::handle_working(&mut app, key(KeyCode::Char('a')));
     assert_eq!(app.workflow.stage, Stage::Done);
     assert_eq!(
-        app.viewport,
+        app.ui.navigation.viewport,
         ViewportMode::Working,
         "Done should unfold to Working"
     );
@@ -331,7 +339,7 @@ fn test_full_flow_viewport() {
 
     // 6. PgUp -> enter Scroll (chrome folds, full-screen transcript).
     keys::handle_working(&mut app, key(KeyCode::PageUp));
-    assert_eq!(app.viewport, ViewportMode::Scroll);
+    assert_eq!(app.ui.navigation.viewport, ViewportMode::Scroll);
     let out = render(&app);
     println!("--- step 6: PgUp -> scroll ---\n{out}\n--- end ---");
     assert!(out.contains("Esc=tail"), "scroll overlay should show");
@@ -339,7 +347,7 @@ fn test_full_flow_viewport() {
     // 7. Esc -> return to Working.
     keys::handle_working(&mut app, key(KeyCode::Esc));
     assert_eq!(
-        app.viewport,
+        app.ui.navigation.viewport,
         ViewportMode::Working,
         "Esc should return to Working"
     );
@@ -355,10 +363,10 @@ fn test_full_flow_viewport() {
 fn test_focus_esc_then_pgup() {
     let mut app = working();
     app.run_command(SlashCommand::Implement); // -> Implementing -> Focus
-    assert_eq!(app.viewport, ViewportMode::Focus);
+    assert_eq!(app.ui.navigation.viewport, ViewportMode::Focus);
     // Esc in Focus folds to Working (stage unchanged).
     keys::handle_working(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-    assert_eq!(app.viewport, ViewportMode::Working);
+    assert_eq!(app.ui.navigation.viewport, ViewportMode::Working);
     assert_eq!(
         app.workflow.stage,
         Stage::Implementing,
@@ -366,11 +374,11 @@ fn test_focus_esc_then_pgup() {
     );
     // PgUp enters Scroll from Working.
     keys::handle_working(&mut app, KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE));
-    assert_eq!(app.viewport, ViewportMode::Scroll);
+    assert_eq!(app.ui.navigation.viewport, ViewportMode::Scroll);
     // Esc returns to the previous mode (Working, not Focus).
     keys::handle_working(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     assert_eq!(
-        app.viewport,
+        app.ui.navigation.viewport,
         ViewportMode::Working,
         "Esc from scroll should return to Working, not Focus"
     );
@@ -385,10 +393,14 @@ fn test_focus_esc_then_pgup() {
 fn test_esc_closes_memory_pane() {
     let mut app = working();
     app.run_command(SlashCommand::Memory);
-    assert_eq!(app.pane, Pane::Memory, "memory pane should open");
+    assert_eq!(
+        app.ui.navigation.pane,
+        Pane::Memory,
+        "memory pane should open"
+    );
     keys::handle_working(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     assert_eq!(
-        app.pane,
+        app.ui.navigation.pane,
         Pane::Transcript,
         "Esc should dismiss the memory pane"
     );
@@ -398,7 +410,7 @@ fn test_esc_closes_memory_pane() {
     app.memory.set_search("alpha");
     keys::handle_working(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     assert_eq!(
-        app.pane,
+        app.ui.navigation.pane,
         Pane::Memory,
         "Esc clears the filter, not the pane"
     );
@@ -417,10 +429,14 @@ fn test_esc_closes_memory_busy() {
     crate::test_harness::attach_connection(&mut app);
     app.run_command(SlashCommand::Memory);
     app.start_run_for_test(0);
-    assert_eq!(app.pane, Pane::Memory, "memory pane open mid-run");
+    assert_eq!(
+        app.ui.navigation.pane,
+        Pane::Memory,
+        "memory pane open mid-run"
+    );
     keys::handle_working(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     assert_eq!(
-        app.pane,
+        app.ui.navigation.pane,
         Pane::Transcript,
         "Esc dismisses the pane mid-run, not abort the run"
     );
@@ -436,7 +452,7 @@ fn test_scroll_typing_exits() {
     let mut app = working();
     app.run_command(SlashCommand::Implement); // Focus
     keys::handle_working(&mut app, KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE));
-    assert_eq!(app.viewport, ViewportMode::Scroll);
+    assert_eq!(app.ui.navigation.viewport, ViewportMode::Scroll);
     // A typing key exits scroll to the previous mode (Focus). The key is
     // consumed by the exit and does not approve a hunk.
     let before = app.workflow.diff.current().map(|h| h.approved);
@@ -445,7 +461,7 @@ fn test_scroll_typing_exits() {
         KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
     );
     assert_eq!(
-        app.viewport,
+        app.ui.navigation.viewport,
         ViewportMode::Focus,
         "typing should exit scroll to Focus"
     );
@@ -463,7 +479,7 @@ fn test_scroll_typing_exits() {
 #[test]
 fn test_worktree_pane_renders_columns() {
     let mut app = working();
-    app.pane = Pane::Worktree;
+    app.ui.navigation.pane = Pane::Worktree;
     app.worktree_entries = vec![
         crate::composition::WorktreeEntry {
             path: "/some/repo/alpha".into(),
@@ -501,7 +517,7 @@ fn test_worktree_pane_renders_columns() {
 #[test]
 fn test_worktree_pane_scroll() {
     let mut app = working();
-    app.pane = Pane::Worktree;
+    app.ui.navigation.pane = Pane::Worktree;
     let entries: Vec<crate::composition::WorktreeEntry> = (0..20)
         .map(|i| crate::composition::WorktreeEntry {
             path: format!("/repo/wt-{i}"),
@@ -530,7 +546,7 @@ fn test_worktree_pane_scroll() {
 #[test]
 fn test_memory_pane_scroll() {
     let mut app = working();
-    app.pane = Pane::Memory;
+    app.ui.navigation.pane = Pane::Memory;
     let entries: Vec<crate::state::MemoryEntry> = (0..20)
         .map(|i| crate::state::MemoryEntry {
             topic: format!("topic-{i}"),
@@ -554,7 +570,7 @@ fn test_memory_pane_scroll() {
 #[test]
 fn test_worktree_pane_detail() {
     let mut app = working();
-    app.pane = Pane::Worktree;
+    app.ui.navigation.pane = Pane::Worktree;
     app.worktree_entries = vec![crate::composition::WorktreeEntry {
         path: "/some/repo/alpha".into(),
         head: "abcdef0".into(),

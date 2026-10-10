@@ -11,8 +11,8 @@ use crate::test_harness::render_text;
 
 fn app() -> App {
     let mut app = composition::app();
-    app.screen = crate::state::Screen::Working;
-    app.pane = Pane::Transcript;
+    app.ui.navigation.screen = crate::state::Screen::Working;
+    app.ui.navigation.pane = Pane::Transcript;
     app
 }
 
@@ -41,7 +41,7 @@ fn test_permission_tab_filters_rules() {
         ..Default::default()
     };
     let mut app = app();
-    app.pane = Pane::Permission;
+    app.ui.navigation.pane = Pane::Permission;
     app.sessions.current.capabilities.permission.rules_cache = vec![
         rule("bash", PermissionEffect::Allow, Some("npm")),
         rule("bash", PermissionEffect::Reject, Some("rm")),
@@ -87,7 +87,7 @@ fn test_permission_cursor_recent_tab() {
         PermissionDecisionEntry, PermissionEffect, PermissionRule, PermissionRuleContent,
     };
     let mut app = app();
-    app.pane = Pane::Permission;
+    app.ui.navigation.pane = Pane::Permission;
     app.sessions.current.capabilities.permission.rules_cache = vec![
         PermissionRule {
             action: "bash".into(),
@@ -179,7 +179,7 @@ fn test_permission_search_submode_filters() {
         PermissionEffect, PermissionRule, PermissionRuleContent,
     };
     let mut app = app();
-    app.pane = Pane::Permission;
+    app.ui.navigation.pane = Pane::Permission;
     app.sessions.current.capabilities.permission.rules_cache = vec![
         PermissionRule {
             action: "bash".into(),
@@ -234,7 +234,7 @@ fn test_pane_renders_pane_frame() {
     // and a shared tab header. Both modes (stub + wired) render inline below
     // the transcript tail — no stub-vs-wired style divergence.
     let mut app = app();
-    app.pane = Pane::Permission;
+    app.ui.navigation.pane = Pane::Permission;
     let text = render_text(&app, 100, 28);
     assert!(
         text.contains("Recently denied"),
@@ -256,7 +256,7 @@ fn test_permission_workspace_cursor_clamps() {
     use crate::state::PermissionTab;
     use ratatui::style::{Color, Modifier, Style};
     let mut app = app();
-    app.pane = Pane::Permission;
+    app.ui.navigation.pane = Pane::Permission;
     app.permission_pane.tab = PermissionTab::Workspace;
     app.sessions.current.identity.working_dir = "/repo".into();
     app.sessions.current.capabilities.permission.dirs_cache =
@@ -312,7 +312,7 @@ fn test_permission_workspace_lists_dirs() {
     // per runtime-added directory; the empty state names what the tab holds.
     use crate::state::PermissionTab;
     let mut app = app();
-    app.pane = Pane::Permission;
+    app.ui.navigation.pane = Pane::Permission;
     app.permission_pane.tab = PermissionTab::Workspace;
     app.sessions.current.identity.working_dir = "/repo".into();
     app.sessions.current.capabilities.permission.dirs_cache = vec!["/tmp/extra".into()];
@@ -352,7 +352,7 @@ fn test_workspace_nav_two_dirs() {
     let is_cyan_bold =
         |st: &Style| st.fg == Some(Color::Cyan) && st.add_modifier.contains(Modifier::BOLD);
     let mut app = app();
-    app.pane = Pane::Permission;
+    app.ui.navigation.pane = Pane::Permission;
     app.permission_pane.tab = PermissionTab::Workspace;
     app.sessions.current.identity.working_dir = "/repo".into();
     app.sessions.current.capabilities.permission.dirs_cache =
@@ -400,7 +400,7 @@ fn test_destination_arrows_match_direction() {
     use crate::state::PermissionInput;
     use houyicoder_protocol::frontend::permission::{PermissionEffect, RuleDestination};
     let mut app = app();
-    app.pane = Pane::Permission;
+    app.ui.navigation.pane = Pane::Permission;
     app.permission_pane.input = PermissionInput::AddDestination {
         action: "bash".into(),
         content: None,

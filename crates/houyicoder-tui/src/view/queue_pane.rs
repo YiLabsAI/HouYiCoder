@@ -19,9 +19,9 @@ use crate::state::App;
 /// The queue pane body: a header line, a scrollable list of pending items
 /// (one row per logical item), and a footer hint line.
 pub(super) fn draw_content(f: &mut Frame, area: Rect, app: &App) {
-    let items: Vec<&InputItem> = app.input.queue.iter().collect();
+    let items: Vec<&InputItem> = app.ui.input.queue.iter().collect();
     let n = items.len();
-    let cursor = app.input.queue.selected_index().unwrap_or(0);
+    let cursor = app.ui.input.queue.selected_index().unwrap_or(0);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([

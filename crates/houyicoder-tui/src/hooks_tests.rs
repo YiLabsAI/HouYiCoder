@@ -9,7 +9,11 @@ use houyicoder_protocol::envelope::RequestId;
 fn test_hooks_opens_pane_connected() {
     let mut app = crate::composition::build_app_for_test(None);
     app.run_command(houyicoder_protocol::frontend::SlashCommand::Hooks);
-    assert_eq!(app.pane, crate::state::Pane::Hooks, "/hooks opens the pane");
+    assert_eq!(
+        app.ui.navigation.pane,
+        crate::state::Pane::Hooks,
+        "/hooks opens the pane"
+    );
 }
 
 /// /hooks with no runner connected still opens the pane (shows the empty hook
@@ -18,7 +22,7 @@ fn test_hooks_opens_pane_connected() {
 fn test_opens_pane_no_runner() {
     let mut app = working();
     app.run_command(houyicoder_protocol::frontend::SlashCommand::Hooks);
-    assert_eq!(app.pane, crate::state::Pane::Hooks);
+    assert_eq!(app.ui.navigation.pane, crate::state::Pane::Hooks);
     assert!(app.sessions.current.capabilities.hooks.entries.is_empty());
 }
 
@@ -69,7 +73,7 @@ fn test_hooks_pane_list_detail() {
     use crate::agent_message::{ServerResponse, SessionMessage};
     use houyicoder_protocol::frontend::hooks::HookEntry;
     let mut app = working();
-    app.pane = crate::state::Pane::Hooks;
+    app.ui.navigation.pane = crate::state::Pane::Hooks;
     app.handle_agent_message(SessionMessage::Response {
         request: RequestId(2),
         response: ServerResponse::Hooks {
@@ -140,7 +144,7 @@ fn hkey(c: KeyCode) -> KeyEvent {
 #[test]
 fn test_hooks_esc_to_list() {
     let mut app = working();
-    app.pane = crate::state::Pane::Hooks;
+    app.ui.navigation.pane = crate::state::Pane::Hooks;
     app.hooks_pane.level.set(1);
     crate::keys::handle_working(&mut app, hkey(KeyCode::Esc));
     assert_eq!(
@@ -149,7 +153,7 @@ fn test_hooks_esc_to_list() {
         "Esc at level 1 returns to the list"
     );
     assert_eq!(
-        app.pane,
+        app.ui.navigation.pane,
         crate::state::Pane::Hooks,
         "stays in the hooks pane"
     );
@@ -158,11 +162,11 @@ fn test_hooks_esc_to_list() {
 #[test]
 fn test_hooks_esc_exits() {
     let mut app = working();
-    app.pane = crate::state::Pane::Hooks;
+    app.ui.navigation.pane = crate::state::Pane::Hooks;
     app.hooks_pane.level.set(0);
     crate::keys::handle_working(&mut app, hkey(KeyCode::Esc));
     assert_eq!(
-        app.pane,
+        app.ui.navigation.pane,
         crate::state::Pane::Transcript,
         "Esc at level 0 exits"
     );
@@ -171,7 +175,7 @@ fn test_hooks_esc_exits() {
 #[test]
 fn test_hooks_up_moves() {
     let mut app = working();
-    app.pane = crate::state::Pane::Hooks;
+    app.ui.navigation.pane = crate::state::Pane::Hooks;
     app.hooks_pane.level.set(0);
     app.hooks_pane.sel.set(2);
     crate::keys::handle_working(&mut app, hkey(KeyCode::Up));
@@ -181,7 +185,7 @@ fn test_hooks_up_moves() {
 #[test]
 fn test_hooks_down_clamps() {
     let mut app = working();
-    app.pane = crate::state::Pane::Hooks;
+    app.ui.navigation.pane = crate::state::Pane::Hooks;
     app.hooks_pane.level.set(0);
     app.hooks_pane.sel.set(0);
     crate::keys::handle_working(&mut app, hkey(KeyCode::Down));
@@ -195,7 +199,7 @@ fn test_hooks_down_clamps() {
 #[test]
 fn test_hooks_enter_detail() {
     let mut app = working();
-    app.pane = crate::state::Pane::Hooks;
+    app.ui.navigation.pane = crate::state::Pane::Hooks;
     app.hooks_pane.level.set(0);
     crate::keys::handle_working(&mut app, hkey(KeyCode::Enter));
     assert_eq!(

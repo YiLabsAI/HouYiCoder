@@ -15,8 +15,8 @@ impl App {
     /// Enter Scroll mode, remembering the current viewport so Esc/End returns
     /// to it. Triggered by PgUp.
     pub fn enter_scroll(&mut self) {
-        self.prev_viewport = self.viewport;
-        self.viewport = crate::state::ViewportMode::Scroll;
+        self.ui.navigation.prev_viewport = self.ui.navigation.viewport;
+        self.ui.navigation.viewport = crate::state::ViewportMode::Scroll;
     }
 
     /// Enter the full-screen search view: Scroll mode with verbose render and
@@ -33,7 +33,7 @@ impl App {
     /// silent; searching a child's own log is a separate capability.
     pub fn enter_search_view(&mut self, query: &str) {
         if self.teammate_view.is_some() {
-            self.notifications.add(Notification::immediate(
+            self.ui.notifications.add(Notification::immediate(
                 "search-blocked-teammate",
                 NotifKind::Text {
                     text: "shift+↑↓ to exit the teammate view, then search".to_string(),

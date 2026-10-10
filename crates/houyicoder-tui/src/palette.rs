@@ -119,47 +119,47 @@ impl PaletteState {
 impl App {
     /// The filtered slash-command list, reduced by the inline query.
     pub fn palette_filtered(&self) -> Vec<SlashCommand> {
-        self.palette.filtered()
+        self.ui.navigation.palette.filtered()
     }
 
     /// Number of palette entries after filtering.
     pub fn palette_len(&self) -> usize {
-        self.palette.len()
+        self.ui.navigation.palette.len()
     }
 
     /// The currently selected slash command, if the palette is open.
     pub fn selected_command(&self) -> Option<SlashCommand> {
-        self.palette.selected()
+        self.ui.navigation.palette.selected()
     }
 
     /// Move the palette selection up, wrapping around.
     pub fn palette_up(&mut self) {
-        self.palette.prev();
+        self.ui.navigation.palette.prev();
     }
 
     /// Move the palette selection down, wrapping around.
     pub fn palette_down(&mut self) {
-        self.palette.next();
+        self.ui.navigation.palette.next();
     }
 
     /// Push a char onto the inline filter and reset the selection.
     pub fn palette_push(&mut self, c: char) {
-        self.palette.push(c);
+        self.ui.navigation.palette.push(c);
     }
 
     /// Remove the trailing char of the inline filter query.
     pub fn palette_pop(&mut self) {
-        self.palette.pop();
+        self.ui.navigation.palette.pop();
     }
 
     /// Open the palette with an empty filter at the first command.
     pub fn open_palette(&mut self) {
-        self.palette.open();
+        self.ui.navigation.palette.open();
     }
 
     /// Close the palette without running a command.
     pub fn close_palette(&mut self) {
-        self.palette.close();
+        self.ui.navigation.palette.close();
     }
 }
 

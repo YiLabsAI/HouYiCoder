@@ -15,7 +15,7 @@ use houyicoder_protocol::envelope::RequestId;
 #[test]
 fn test_render_nav_tabs() {
     let mut app = crate::composition::app();
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
     let aq = AskQuestion::parse("c1", &two_question_input()).expect("parse");
     app.sessions.current.prompt = Some(PendingPrompt::question_card(RequestId(0), aq));
     let out = crate::test_harness::render_text(&app, 80, 24);
@@ -27,7 +27,7 @@ fn test_render_nav_tabs() {
 #[test]
 fn test_render_nav_hidden_single() {
     let mut app = crate::composition::app();
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
     let aq = AskQuestion::parse("c1", &single_input()).expect("parse");
     app.sessions.current.prompt = Some(PendingPrompt::question_card(RequestId(0), aq));
     let out = crate::test_harness::render_text(&app, 80, 24);
@@ -51,7 +51,7 @@ fn test_render_multi_next_btn() {
         ]
     });
     let mut app = crate::composition::app();
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
     let aq = AskQuestion::parse("c1", &input).expect("parse");
     app.sessions.current.prompt = Some(PendingPrompt::question_card(RequestId(0), aq));
     let out = crate::test_harness::render_text(&app, 80, 24);
@@ -67,7 +67,7 @@ fn test_render_multi_submit_last() {
         ]
     });
     let mut app = crate::composition::app();
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
     let mut aq = AskQuestion::parse("c1", &input).expect("parse");
     aq.current = 1; // last question
     app.sessions.current.prompt = Some(PendingPrompt::question_card(RequestId(0), aq));

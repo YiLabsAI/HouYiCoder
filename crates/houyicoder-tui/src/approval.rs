@@ -15,7 +15,7 @@ impl App {
     /// artifact applies the pending proposed edit (stage-independent).
     pub(crate) fn approve_in_pane(&mut self) {
         let stage = self.workflow.stage;
-        match self.pane {
+        match self.ui.navigation.pane {
             Pane::Spec | Pane::Plan if stage == Stage::Design => self.approve_design(),
             Pane::Diff if stage == Stage::Implementing => self.approve_focused_hunk(),
             Pane::Review if stage == Stage::Verify => self.signoff_focused_finding(),
@@ -31,7 +31,7 @@ impl App {
     /// Reject the focused hunk/finding/proposal for the current pane. The
     /// artifact pane rejects the pending proposed edit (stage-independent).
     pub(crate) fn reject_in_pane(&mut self) {
-        match self.pane {
+        match self.ui.navigation.pane {
             Pane::Diff if self.workflow.stage == Stage::Implementing => self.reject_focused_hunk(),
             Pane::Review if self.workflow.stage == Stage::Verify => self.reject_focused_finding(),
             Pane::Artifact => {
@@ -47,7 +47,7 @@ impl App {
     /// through the current scroll offset. None when no anchor is set or the
     /// anchor row is scrolled out of the viewport.
     pub(crate) fn anchor_visible_row(&self) -> Option<usize> {
-        let (_, content_row) = self.selections.transcript.anchor?;
+        let (_, content_row) = self.ui.selection.transcript.anchor?;
         let top = self.active_scroll().top_offset();
         let ri = content_row.checked_sub(top)?;
         (ri < self.layout_snapshot.transcript_rect.get().height as usize).then_some(ri)
@@ -263,7 +263,8 @@ impl App {
             self.verbose,
         );
         let width = self.layout_feedback.transcript_width.get();
-        self.selections
+        self.ui
+            .selection
             .transcript
             .anchor
             .and_then(|(_, content_row)| {
@@ -438,7 +439,7 @@ impl App {
             return false;
         };
         self.transcript_view.expanded.fold_groups.remove(&key);
-        self.selections.transcript.clear();
+        self.ui.selection.transcript.clear();
         true
     }
 
@@ -446,7 +447,7 @@ impl App {
     /// review, clauses in spec, lines in artifact). No-op on panes without a
     /// focusable list.
     pub(crate) fn navigate_pane(&mut self, down: bool) {
-        match self.pane {
+        match self.ui.navigation.pane {
             Pane::Diff => {
                 if down {
                     self.workflow.diff.focus_down();
@@ -496,7 +497,7 @@ impl App {
         match self.workflow.artifact.mode() {
             ArtifactMode::Replace => {
                 if text.trim().is_empty() {
-                    self.input.editor.set(text);
+                    self.ui.input.editor.set(text);
                     return;
                 }
                 self.workflow.artifact.set_pending_replace(text);
@@ -509,7 +510,7 @@ impl App {
             }
             ArtifactMode::Insert => {
                 if text.trim().is_empty() {
-                    self.input.editor.set(text);
+                    self.ui.input.editor.set(text);
                     return;
                 }
                 self.workflow.artifact.set_pending_insert(text);
@@ -522,7 +523,7 @@ impl App {
             }
             ArtifactMode::NaturalLanguage => {
                 if text.trim().is_empty() {
-                    self.input.editor.set(text);
+                    self.ui.input.editor.set(text);
                     return;
                 }
                 // push_annotation mutates .artifact and ends; propose borrows
@@ -620,7 +621,7 @@ impl App {
         }
         if self.all_findings_resolved() {
             // Agent review done -> machine-check phase (same verify stage).
-            self.pane = Pane::Verify;
+            self.ui.navigation.pane = Pane::Verify;
             self.system_line("agent review done -> machine check");
         }
     }
@@ -630,7 +631,7 @@ impl App {
             self.system_line(note);
         }
         if self.all_findings_resolved() {
-            self.pane = Pane::Verify;
+            self.ui.navigation.pane = Pane::Verify;
             self.system_line("agent review done -> machine check");
         }
     }
@@ -667,7 +668,7 @@ impl App {
     /// finding's spec requirement to partial. From the machine-check phase,
     /// pressing r on failed checks sends the chain back to implementing.
     pub(crate) fn rework_in_pane(&mut self) {
-        match self.pane {
+        match self.ui.navigation.pane {
             Pane::Review if self.workflow.stage == Stage::Verify => self.rework_from_review(),
             Pane::Verify if self.workflow.stage == Stage::Verify => self.rework_from_verify(),
             _ => {}

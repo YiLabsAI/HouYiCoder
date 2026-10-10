@@ -26,7 +26,7 @@ fn seeded_todos(items: &[(&str, TodoStatus)]) -> Vec<TodoView> {
 
 fn working_app() -> crate::state::App {
     let mut app = composition::app();
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
     app
 }
 

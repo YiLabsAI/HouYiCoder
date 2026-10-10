@@ -24,11 +24,12 @@ pub(crate) fn filtered_skills(
     app: &App,
 ) -> Vec<&houyicoder_protocol::frontend::skills::SkillEntry> {
     let query = app
+        .ui
         .input
         .editor
         .value()
         .strip_prefix('@')
-        .unwrap_or_else(|| app.input.editor.value());
+        .unwrap_or_else(|| app.ui.input.editor.value());
     let ordered = display_order(&app.sessions.current.capabilities.skills.entries);
     if query.is_empty() {
         ordered
@@ -76,7 +77,9 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         .collect();
     let mut state = ListState::default();
     state.select(Some(
-        app.skill_picker
+        app.ui
+            .navigation
+            .skill_picker
             .sel
             .get()
             .min(filtered.len().saturating_sub(1)),
@@ -201,7 +204,7 @@ mod tests {
     #[test]
     fn test_picker_renders_open() {
         let mut app = crate::composition::app();
-        app.screen = crate::state::Screen::Working;
+        app.ui.navigation.screen = crate::state::Screen::Working;
         app.sessions.current.capabilities.skills.entries =
             vec![houyicoder_protocol::frontend::skills::SkillEntry {
                 name: "alpha".to_string(),
@@ -212,7 +215,7 @@ mod tests {
                 user_invocable: true,
                 usage: None,
             }];
-        app.skill_picker.open = true;
+        app.ui.navigation.skill_picker.open = true;
         let out = crate::test_harness::render_text(&app, 80, 24);
         assert!(out.contains("alpha"), "skill name in picker: {out}");
         assert!(out.contains("Enter to insert"), "nav hint in picker: {out}");
@@ -222,8 +225,8 @@ mod tests {
     #[test]
     fn test_picker_empty_state() {
         let mut app = crate::composition::app();
-        app.screen = crate::state::Screen::Working;
-        app.skill_picker.open = true;
+        app.ui.navigation.screen = crate::state::Screen::Working;
+        app.ui.navigation.skill_picker.open = true;
         let out = crate::test_harness::render_text(&app, 80, 24);
         assert!(
             out.contains("no skills match"),
@@ -235,7 +238,7 @@ mod tests {
     #[test]
     fn test_picker_filter() {
         let mut app = crate::composition::app();
-        app.screen = crate::state::Screen::Working;
+        app.ui.navigation.screen = crate::state::Screen::Working;
         app.sessions.current.capabilities.skills.entries = vec![
             houyicoder_protocol::frontend::skills::SkillEntry {
                 name: "alpha".to_string(),
@@ -256,9 +259,9 @@ mod tests {
                 usage: None,
             },
         ];
-        app.skill_picker.open = true;
-        app.input.editor.push('@');
-        app.input.editor.push('b');
+        app.ui.navigation.skill_picker.open = true;
+        app.ui.input.editor.push('@');
+        app.ui.input.editor.push('b');
         let out = crate::test_harness::render_text(&app, 80, 24);
         assert!(out.contains("beta"), "filter matches beta: {out}");
         assert!(!out.contains("alpha"), "alpha filtered out: {out}");
@@ -268,7 +271,7 @@ mod tests {
     #[test]
     fn test_picker_hidden_closed() {
         let mut app = crate::composition::app();
-        app.screen = crate::state::Screen::Working;
+        app.ui.navigation.screen = crate::state::Screen::Working;
         app.sessions.current.capabilities.skills.entries =
             vec![houyicoder_protocol::frontend::skills::SkillEntry {
                 name: "alpha".to_string(),

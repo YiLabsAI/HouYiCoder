@@ -115,7 +115,7 @@ fn test_option3_no_duplicate_result() {
         houyicoder_permission::PermissionMode::Manual,
         multiline_call_then_reply(),
     );
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
     app.spawn_run("go".into());
     let mut raised = false;
     for _ in 0..200 {

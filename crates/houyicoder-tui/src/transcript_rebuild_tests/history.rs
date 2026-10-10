@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn test_replay_caps_history() {
     let mut app = fresh_app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     for i in 0..600 {
         app.transcript_mut()
             .push_frame(user_msg(&format!("msg {i}")));
@@ -25,7 +25,7 @@ fn test_replay_caps_history() {
 #[test]
 fn test_rebuild_caps_history() {
     let mut app = fresh_app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     for i in 0..600 {
         app.transcript_mut()
             .push_frame(user_msg(&format!("msg {i}")));
@@ -47,7 +47,7 @@ fn test_rebuild_caps_history() {
 #[test]
 fn test_small_history_complete() {
     let mut app = fresh_app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     for i in 0..10 {
         app.transcript_mut()
             .push_frame(user_msg(&format!("msg {i}")));
@@ -63,7 +63,7 @@ fn test_small_history_complete() {
 #[test]
 fn test_prepend_loads_history() {
     let mut app = fresh_app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     for i in 0..600 {
         app.transcript_mut()
             .push_frame(user_msg(&format!("msg {i}")));
@@ -84,7 +84,7 @@ fn test_prepend_loads_history() {
 #[test]
 fn test_prepend_skips_tail() {
     let mut app = fresh_app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     for i in 0..600 {
         app.transcript_mut()
             .push_frame(user_msg(&format!("msg {i}")));
@@ -99,7 +99,7 @@ fn test_prepend_skips_tail() {
 #[test]
 fn test_prepend_survives_rebuild() {
     let mut app = fresh_app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     for i in 0..100 {
         app.transcript_mut()
             .push_frame(user_msg(&format!("old {i}")));
@@ -140,7 +140,7 @@ fn test_prepend_survives_rebuild() {
 #[test]
 fn test_prepend_keeps_echo_place() {
     let mut app = fresh_app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     for i in 0..120 {
         app.transcript_mut()
             .push_frame(user_msg(&format!("old {i}")));
@@ -257,7 +257,7 @@ fn test_echo_survives_result() {
 #[test]
 fn test_slide_drops_notice_row() {
     let mut app = fresh_app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     for i in 0..10 {
         app.transcript_mut()
             .push_frame(user_msg(&format!("msg {i}")));
@@ -301,7 +301,7 @@ fn test_slide_drops_notice_row() {
 #[test]
 fn test_log_notice_single_row() {
     let mut app = fresh_app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     pump(&mut app, user_msg("go"));
     pump(&mut app, compaction_frame());
     pump(&mut app, agent_msg("ok"));
@@ -324,7 +324,7 @@ fn test_log_notice_single_row() {
 #[test]
 fn test_system_row_leaves_window() {
     let mut app = fresh_app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     for i in 0..10 {
         app.transcript_mut()
             .push_frame(user_msg(&format!("msg {i}")));
@@ -356,7 +356,7 @@ fn test_system_row_leaves_window() {
 #[test]
 fn test_notice_undrawn_after_window() {
     let mut app = fresh_app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app.system_line("debug: logging to /tmp/houyi.log");
     let drawn = crate::test_harness::render_text(&app, 80, 40);
     assert!(
@@ -385,7 +385,7 @@ fn test_notice_undrawn_after_window() {
 #[test]
 fn test_echo_row_leaves_window() {
     let mut app = fresh_app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     for i in 0..10 {
         app.transcript_mut()
             .push_frame(user_msg(&format!("msg {i}")));
@@ -417,7 +417,7 @@ fn test_echo_row_leaves_window() {
 #[test]
 fn test_system_row_keeps_place() {
     let mut app = fresh_app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     pump(&mut app, user_msg("msg 0"));
     app.system_line("model set to haiku");
     pump(&mut app, user_msg("msg 1"));

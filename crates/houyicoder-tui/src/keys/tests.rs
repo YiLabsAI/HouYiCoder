@@ -24,7 +24,7 @@ fn key(code: KeyCode) -> KeyEvent {
 }
 fn working_app() -> App {
     let mut app = composition::app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app
 }
 fn catalog_app(rows: &[(&str, bool, bool)]) -> App {
@@ -53,7 +53,7 @@ fn catalog_app(rows: &[(&str, bool, bool)]) -> App {
 #[test]
 fn test_model_pane_keys() {
     let mut app = catalog_app(&[("a", true, true), ("b", true, true), ("c", true, true)]);
-    app.pane = Pane::Model;
+    app.ui.navigation.pane = Pane::Model;
     assert_eq!(
         app.model_picker.draft.row, 1,
         "the draft opens on the session's model"
@@ -69,7 +69,7 @@ fn test_model_pane_keys() {
         "disconnected Enter keeps the applied model"
     );
     assert_eq!(
-        app.pane,
+        app.ui.navigation.pane,
         Pane::Model,
         "disconnected Enter keeps the pane open"
     );
@@ -89,7 +89,7 @@ fn test_model_pane_keys() {
 #[test]
 fn test_model_pane_reseeds_effort() {
     let mut app = catalog_app(&[("qwen3.7-max", true, true), ("deepseek-chat", false, true)]);
-    app.pane = Pane::Model;
+    app.ui.navigation.pane = Pane::Model;
     assert_eq!(
         app.model_picker.draft.effort,
         Some(EffortLevel::Medium),
@@ -118,7 +118,7 @@ fn test_model_pane_reseeds_effort() {
 #[test]
 fn test_model_pane_adjusts_effort() {
     let mut app = catalog_app(&[("qwen3.7-max", true, true)]);
-    app.pane = Pane::Model;
+    app.ui.navigation.pane = Pane::Model;
     handle_input(&mut app, key(KeyCode::Down));
     assert_eq!(app.model_picker.draft.row, 1);
     handle_input(&mut app, key(KeyCode::Right));
@@ -148,7 +148,7 @@ fn test_model_pane_adjusts_effort() {
 #[test]
 fn test_model_pane_cycles_auto() {
     let mut app = catalog_app(&[("qwen3.7-max", true, true)]);
-    app.pane = Pane::Model;
+    app.ui.navigation.pane = Pane::Model;
     assert_eq!(
         app.model_picker.draft.effort,
         Some(EffortLevel::Medium),
@@ -175,7 +175,7 @@ fn test_model_pane_cycles_auto() {
 #[test]
 fn test_model_pane_ignores_unsupported() {
     let mut app = catalog_app(&[("deepseek-chat", false, false)]);
-    app.pane = Pane::Model;
+    app.ui.navigation.pane = Pane::Model;
     handle_input(&mut app, key(KeyCode::Down));
     handle_input(&mut app, key(KeyCode::Right));
     assert!(
@@ -190,7 +190,7 @@ fn test_model_pane_ignores_unsupported() {
         "neither setting is supported, so the focus stays on effort"
     );
     assert_eq!(
-        app.pane,
+        app.ui.navigation.pane,
         Pane::Model,
         "Tab inside the pane never switches panes"
     );
@@ -201,7 +201,7 @@ fn test_model_pane_ignores_unsupported() {
 #[test]
 fn test_model_pane_tab_focus() {
     let mut app = catalog_app(&[("qwen3.7-max", true, true)]);
-    app.pane = Pane::Model;
+    app.ui.navigation.pane = Pane::Model;
     handle_input(&mut app, key(KeyCode::Down));
     assert_eq!(app.model_picker.draft.focus, ModelSettingFocus::Effort);
     handle_input(&mut app, key(KeyCode::Tab));
@@ -231,12 +231,20 @@ fn test_model_open_echoes_once() {
             .count()
     }
     let mut app = catalog_app(&[("qwen3.7-max", true, true), ("other", true, true)]);
-    app.input.editor.set("/model".to_string());
+    app.ui.input.editor.set("/model".to_string());
     app.submit_input();
-    assert_eq!(app.pane, Pane::Model, "the command opens the pane");
+    assert_eq!(
+        app.ui.navigation.pane,
+        Pane::Model,
+        "the command opens the pane"
+    );
     assert_eq!(echoes(&app), 1, "one /model echo on open");
     handle_input(&mut app, key(KeyCode::Esc));
-    assert_eq!(app.pane, Pane::Transcript, "Esc closes the pane");
+    assert_eq!(
+        app.ui.navigation.pane,
+        Pane::Transcript,
+        "Esc closes the pane"
+    );
     assert_eq!(echoes(&app), 1, "Esc adds no second echo");
 }
 
@@ -245,12 +253,12 @@ fn test_model_open_echoes_once() {
 #[test]
 fn test_model_pane_esc_closes() {
     let mut app = catalog_app(&[("qwen3.7-max", true, true), ("other", true, true)]);
-    app.pane = Pane::Model;
+    app.ui.navigation.pane = Pane::Model;
     let applied = app.model_picker.snapshot.applied.clone();
     handle_input(&mut app, key(KeyCode::Down));
     handle_input(&mut app, key(KeyCode::Right));
     handle_input(&mut app, key(KeyCode::Esc));
-    assert_eq!(app.pane, Pane::Transcript);
+    assert_eq!(app.ui.navigation.pane, Pane::Transcript);
     assert_eq!(
         app.model_picker.snapshot.applied, applied,
         "Esc applies nothing"
@@ -282,7 +290,7 @@ fn test_picker_fast_inline() {
     // catalog fixtures: one Right takes focus Medium -> High.
     catalog.effort_level = Some(EffortLevel::Medium);
     app.model_picker.refresh_snapshot(catalog);
-    app.pane = Pane::Model;
+    app.ui.navigation.pane = Pane::Model;
     // The level is adjusted while the arrows are on Effort, so the commit has
     // all three dimensions to carry.
     handle_input(&mut app, key(KeyCode::Right));
@@ -307,7 +315,7 @@ fn test_picker_fast_inline() {
         SlashCommand::ALL.iter().all(|cmd| cmd.name() != "fast"),
         "the palette offers no tier command"
     );
-    app.input.editor.set("/fast".to_string());
+    app.ui.input.editor.set("/fast".to_string());
     app.submit_input();
     assert_eq!(
         app.model_picker.effective_speed(),
@@ -338,7 +346,7 @@ fn test_picker_fast_inline() {
 #[test]
 fn test_picker_fast_refused_off() {
     let mut app = catalog_app(&[("glm-5.2", true, true), ("plain-model", true, false)]);
-    app.pane = Pane::Model;
+    app.ui.navigation.pane = Pane::Model;
     handle_input(&mut app, key(KeyCode::Tab));
     handle_input(&mut app, key(KeyCode::Right));
     assert_eq!(
@@ -378,9 +386,9 @@ fn test_picker_fast_refused_off() {
 fn test_skills_pane_esc_closes() {
     let mut app = working_app();
     app.start_run_for_test(0);
-    app.pane = Pane::Skills;
+    app.ui.navigation.pane = Pane::Skills;
     handle_working(&mut app, key(KeyCode::Esc));
-    assert_eq!(app.pane, Pane::Transcript);
+    assert_eq!(app.ui.navigation.pane, Pane::Transcript);
     assert!(
         !app.cancelling(),
         "closing a pane must not interrupt the running agent"
@@ -392,7 +400,7 @@ fn test_skills_pane_esc_closes() {
 fn test_skills_pane_nav() {
     use houyicoder_protocol::frontend::skills::SkillEntry;
     let mut app = working_app();
-    app.pane = Pane::Skills;
+    app.ui.navigation.pane = Pane::Skills;
     app.sessions.current.capabilities.skills.entries = vec![
         SkillEntry {
             name: "alpha".into(),
@@ -429,7 +437,7 @@ fn test_skills_pane_nav() {
 fn test_skills_pane_detail() {
     use houyicoder_protocol::frontend::skills::SkillEntry;
     let mut app = working_app();
-    app.pane = Pane::Skills;
+    app.ui.navigation.pane = Pane::Skills;
     app.sessions.current.capabilities.skills.entries = vec![SkillEntry {
         name: "alpha".into(),
         description: "a".into(),
@@ -453,7 +461,7 @@ fn test_skills_pane_detail() {
 fn test_skills_pane_toggle() {
     use houyicoder_protocol::frontend::skills::SkillEntry;
     let mut app = working_app();
-    app.pane = Pane::Skills;
+    app.ui.navigation.pane = Pane::Skills;
     app.sessions.current.capabilities.skills.entries = vec![SkillEntry {
         name: "alpha".into(),
         description: "a".into(),
@@ -505,12 +513,16 @@ fn test_skill_picker_opens() {
         user_invocable: true,
         usage: None,
     }];
-    assert!(!app.skill_picker.open);
+    assert!(!app.ui.navigation.skill_picker.open);
     handle_working(&mut app, key(KeyCode::Char('@')));
-    assert!(app.skill_picker.open, "@ opens the picker");
-    assert_eq!(app.skill_picker.sel.get(), 0, "cursor resets to 0");
+    assert!(app.ui.navigation.skill_picker.open, "@ opens the picker");
+    assert_eq!(
+        app.ui.navigation.skill_picker.sel.get(),
+        0,
+        "cursor resets to 0"
+    );
     assert!(
-        app.input.editor.value().contains('@'),
+        app.ui.input.editor.value().contains('@'),
         "@ pushed into input so free-form typing survives"
     );
 }
@@ -519,14 +531,14 @@ fn test_skill_picker_opens() {
 #[test]
 fn test_skill_picker_blocked() {
     let mut app = working_app();
-    app.input.editor.push('x');
+    app.ui.input.editor.push('x');
     handle_working(&mut app, key(KeyCode::Char('@')));
     assert!(
-        !app.skill_picker.open,
+        !app.ui.navigation.skill_picker.open,
         "@ must not open when input non-empty"
     );
     assert!(
-        app.input.editor.value().contains('@'),
+        app.ui.input.editor.value().contains('@'),
         "@ landed in the input box instead"
     );
 }
@@ -558,9 +570,13 @@ fn test_skill_picker_nav() {
     ];
     handle_working(&mut app, key(KeyCode::Char('@')));
     handle_working(&mut app, key(KeyCode::Down));
-    assert_eq!(app.skill_picker.sel.get(), 1, "Down moves picker cursor");
+    assert_eq!(
+        app.ui.navigation.skill_picker.sel.get(),
+        1,
+        "Down moves picker cursor"
+    );
     handle_working(&mut app, key(KeyCode::Up));
-    assert_eq!(app.skill_picker.sel.get(), 0, "Up moves back");
+    assert_eq!(app.ui.navigation.skill_picker.sel.get(), 0, "Up moves back");
 }
 
 /// Esc closes the picker without inserting anything.
@@ -578,10 +594,13 @@ fn test_skill_picker_esc() {
         usage: None,
     }];
     handle_working(&mut app, key(KeyCode::Char('@')));
-    assert!(app.skill_picker.open);
+    assert!(app.ui.navigation.skill_picker.open);
     handle_working(&mut app, key(KeyCode::Esc));
-    assert!(!app.skill_picker.open, "Esc closes the picker");
-    assert!(app.input.editor.is_empty(), "no text inserted on Esc");
+    assert!(
+        !app.ui.navigation.skill_picker.open,
+        "Esc closes the picker"
+    );
+    assert!(app.ui.input.editor.is_empty(), "no text inserted on Esc");
 }
 
 /// Enter inserts the selected skill into the input box (does not auto-submit,
@@ -601,13 +620,16 @@ fn test_skill_picker_enter_submit() {
     }];
     handle_working(&mut app, key(KeyCode::Char('@')));
     handle_working(&mut app, key(KeyCode::Enter));
-    assert!(!app.skill_picker.open, "Enter closes the picker");
     assert!(
-        app.input.editor.value().contains("@skill:alpha"),
+        !app.ui.navigation.skill_picker.open,
+        "Enter closes the picker"
+    );
+    assert!(
+        app.ui.input.editor.value().contains("@skill:alpha"),
         "@skill:alpha inserted into the input box"
     );
     assert!(
-        !app.input.editor.value().is_empty(),
+        !app.ui.input.editor.value().is_empty(),
         "input holds the text for a second Enter to submit"
     );
 }
@@ -619,9 +641,12 @@ fn test_skill_picker_enter_empty() {
     let mut app = working_app();
     handle_working(&mut app, key(KeyCode::Char('@')));
     handle_working(&mut app, key(KeyCode::Enter));
-    assert!(!app.skill_picker.open, "Enter closes on empty list");
     assert!(
-        app.input.editor.value().contains('@'),
+        !app.ui.navigation.skill_picker.open,
+        "Enter closes on empty list"
+    );
+    assert!(
+        app.ui.input.editor.value().contains('@'),
         "lone @ stays in input when no skill selected"
     );
 }
@@ -642,11 +667,14 @@ fn test_skill_picker_char() {
         usage: None,
     }];
     handle_working(&mut app, key(KeyCode::Char('@')));
-    assert!(app.skill_picker.open);
+    assert!(app.ui.navigation.skill_picker.open);
     handle_working(&mut app, key(KeyCode::Char('x')));
-    assert!(app.skill_picker.open, "picker stays open for filter typing");
     assert!(
-        app.input.editor.value().contains('x'),
+        app.ui.navigation.skill_picker.open,
+        "picker stays open for filter typing"
+    );
+    assert!(
+        app.ui.input.editor.value().contains('x'),
         "char lands in input as filter"
     );
 }
@@ -667,8 +695,11 @@ fn test_skill_picker_backspace_close() {
     }];
     handle_working(&mut app, key(KeyCode::Char('@')));
     handle_working(&mut app, key(KeyCode::Backspace));
-    assert!(!app.skill_picker.open, "backspace on lone @ closes picker");
-    assert!(app.input.editor.is_empty(), "input cleared");
+    assert!(
+        !app.ui.navigation.skill_picker.open,
+        "backspace on lone @ closes picker"
+    );
+    assert!(app.ui.input.editor.is_empty(), "input cleared");
 }
 
 /// A colon signals a namespace prefix — closes the picker for free-form.
@@ -688,7 +719,10 @@ fn test_skill_picker_colon_closes() {
     handle_working(&mut app, key(KeyCode::Char('@')));
     handle_working(&mut app, key(KeyCode::Char('s')));
     handle_working(&mut app, key(KeyCode::Char(':')));
-    assert!(!app.skill_picker.open, "colon closes picker for free-form");
+    assert!(
+        !app.ui.navigation.skill_picker.open,
+        "colon closes picker for free-form"
+    );
 }
 
 /// Filter narrows the list; Down+Enter selects from the filtered list
@@ -721,16 +755,16 @@ fn test_skill_picker_filter_select() {
     handle_working(&mut app, key(KeyCode::Char('b')));
     // Filter narrows to just "beta". Enter should select beta.
     handle_working(&mut app, key(KeyCode::Enter));
-    assert!(!app.skill_picker.open, "Enter closes picker");
+    assert!(!app.ui.navigation.skill_picker.open, "Enter closes picker");
     assert!(
-        app.input.editor.value().contains("@skill:beta"),
+        app.ui.input.editor.value().contains("@skill:beta"),
         "filtered selection inserts beta: {}",
-        app.input.editor.value()
+        app.ui.input.editor.value()
     );
     assert!(
-        !app.input.editor.value().contains("alpha"),
+        !app.ui.input.editor.value().contains("alpha"),
         "alpha not selected: {}",
-        app.input.editor.value()
+        app.ui.input.editor.value()
     );
 }
 
@@ -743,21 +777,21 @@ fn test_skill_picker_filter_select() {
 fn test_pane_swallows_typing() {
     for pane in [Pane::Agents, Pane::Skills] {
         let mut app = working_app();
-        app.pane = pane;
+        app.ui.navigation.pane = pane;
         handle_working(&mut app, key(KeyCode::Char('x')));
         assert!(
-            app.input.editor.is_empty(),
+            app.ui.input.editor.is_empty(),
             "{pane:?}: a character must not enter the hidden input box"
         );
         handle_working(&mut app, key(KeyCode::Char('/')));
         assert!(
-            !app.palette.open,
+            !app.ui.navigation.palette.open,
             "{pane:?}: slash does not open the palette over a pane"
         );
-        app.input.editor.push('a');
+        app.ui.input.editor.push('a');
         handle_working(&mut app, key(KeyCode::Backspace));
         assert_eq!(
-            app.input.editor.value(),
+            app.ui.input.editor.value(),
             "a",
             "{pane:?}: backspace does not edit the hidden box"
         );
@@ -772,14 +806,14 @@ fn test_paste_routes_palette_open() {
     // Palette open: paste lands in the query (the arg surface).
     let mut app = working_app();
     app.open_palette();
-    app.palette.query = "resume ".into();
+    app.ui.navigation.palette.query = "resume ".into();
     app.apply_paste_token("/tmp/export.json");
     assert_eq!(
-        app.palette.query, "resume /tmp/export.json",
+        app.ui.navigation.palette.query, "resume /tmp/export.json",
         "palette paste should append to the query"
     );
     assert_eq!(
-        app.input.editor.value(),
+        app.ui.input.editor.value(),
         "",
         "input must stay empty when palette open"
     );
@@ -787,7 +821,7 @@ fn test_paste_routes_palette_open() {
     // Palette closed: paste lands in the input box.
     let mut app = working_app();
     app.apply_paste_token("hello");
-    let text = app.input.editor.value();
+    let text = app.ui.input.editor.value();
     assert_eq!(text, "hello", "input paste appends to the box");
 }
 
@@ -796,7 +830,7 @@ fn test_paste_routes_palette_open() {
 #[test]
 fn test_status_pane_cycles_subtab() {
     let mut app = working_app();
-    app.pane = Pane::Status;
+    app.ui.navigation.pane = Pane::Status;
     handle_input(&mut app, key(KeyCode::Right));
     assert_eq!(app.status_tab, crate::state::enums::StatusTab::Config);
     handle_input(&mut app, key(KeyCode::Right));
@@ -809,8 +843,8 @@ fn test_status_pane_cycles_subtab() {
 fn test_login_local_skips_console() {
     let mut app = composition::app();
     handle_login(&mut app, key(KeyCode::Char('3')));
-    assert_eq!(app.screen, Screen::Working);
-    assert_eq!(app.login_mode, Some(LoginMode::Local));
+    assert_eq!(app.ui.navigation.screen, Screen::Working);
+    assert_eq!(app.ui.navigation.login_mode, Some(LoginMode::Local));
 }
 
 #[test]
@@ -819,7 +853,7 @@ fn test_login_lands_clean() {
     let mut app = composition::app();
     app.sessions.current.transcript.reset();
     handle_login(&mut app, key(KeyCode::Char('1')));
-    assert_eq!(app.screen, Screen::Working);
+    assert_eq!(app.ui.navigation.screen, Screen::Working);
     assert_eq!(app.sessions.current.transcript.len(), 0);
     // landing again on an already-alive transcript does not seed anything
     let before = app.sessions.current.transcript.len();
@@ -836,7 +870,7 @@ fn test_palette_enter_runs_selected() {
     let mut app = working_app();
     app.open_palette();
     handle_palette(&mut app, key(KeyCode::Enter));
-    assert!(!app.palette.open);
+    assert!(!app.ui.navigation.palette.open);
 }
 
 #[test]
@@ -850,7 +884,7 @@ fn test_palette_select_runs_command() {
     }
     assert_eq!(app.selected_command().map(|c| c.name()), Some("/context"));
     handle_palette(&mut app, key(KeyCode::Enter));
-    assert!(!app.palette.open);
+    assert!(!app.ui.navigation.palette.open);
     assert!(
         app.sessions
             .current
@@ -881,9 +915,9 @@ fn test_palette_accepts_space_separator() {
         handle_palette(&mut app, key(KeyCode::Char(c)));
     }
     assert!(
-        app.palette.query.contains(' '),
+        app.ui.navigation.palette.query.contains(' '),
         "space must land in the query, not be dropped: {:?}",
-        app.palette.query
+        app.ui.navigation.palette.query
     );
 }
 
@@ -898,7 +932,7 @@ fn test_palette_tui_local_via() {
         handle_palette(&mut app, key(KeyCode::Char(c)));
     }
     handle_palette(&mut app, key(KeyCode::Enter));
-    assert!(!app.palette.open);
+    assert!(!app.ui.navigation.palette.open);
     assert!(
         app.sessions
             .current
@@ -941,9 +975,12 @@ fn test_palette_arg_keeps_open() {
         "/search must be palette-discoverable"
     );
     handle_palette(&mut app, key(KeyCode::Enter));
-    assert!(app.palette.open, "palette stays open for the arg");
+    assert!(
+        app.ui.navigation.palette.open,
+        "palette stays open for the arg"
+    );
     assert_eq!(
-        app.palette.query, "search ",
+        app.ui.navigation.palette.query, "search ",
         "arg command seeds the query with name + space"
     );
     assert!(
@@ -967,7 +1004,7 @@ fn test_palette_typing_filters() {
     handle_palette(&mut app, key(KeyCode::Char('s')));
     handle_palette(&mut app, key(KeyCode::Char('p')));
     handle_palette(&mut app, key(KeyCode::Char('e')));
-    assert_eq!(app.palette.sel, 0);
+    assert_eq!(app.ui.navigation.palette.sel, 0);
     let cmd = app.selected_command().expect("filtered list non-empty");
     assert!(cmd.name().contains("spe"));
     assert!(app.palette_len() < houyicoder_protocol::frontend::SlashCommand::ALL.len());
@@ -978,28 +1015,28 @@ fn test_palette_backspace_edits() {
     let mut app = working_app();
     app.open_palette();
     handle_palette(&mut app, key(KeyCode::Char('x')));
-    assert!(!app.palette.query.is_empty());
+    assert!(!app.ui.navigation.palette.query.is_empty());
     handle_palette(&mut app, key(KeyCode::Backspace));
-    assert!(app.palette.query.is_empty());
-    assert!(app.palette.open);
+    assert!(app.ui.navigation.palette.query.is_empty());
+    assert!(app.ui.navigation.palette.open);
     handle_palette(&mut app, key(KeyCode::Backspace));
-    assert!(!app.palette.open);
+    assert!(!app.ui.navigation.palette.open);
 }
 
 #[test]
 fn test_tab_cycles_pane() {
     let mut app = working_app();
-    assert_eq!(app.pane, Pane::Transcript);
+    assert_eq!(app.ui.navigation.pane, Pane::Transcript);
     cycle_pane(&mut app);
-    assert_eq!(app.pane, Pane::Spec);
+    assert_eq!(app.ui.navigation.pane, Pane::Spec);
 }
 
 #[test]
 fn test_diff_approve_key_sets() {
     let mut app = working_app();
-    app.pane = Pane::Diff;
+    app.ui.navigation.pane = Pane::Diff;
     app.workflow.stage = Stage::Implementing;
-    app.input.editor.clear();
+    app.ui.input.editor.clear();
     handle_working(&mut app, key(KeyCode::Down));
     handle_working(&mut app, key(KeyCode::Char('a')));
     assert_eq!(app.workflow.diff.hunks[1].approved, Verdict::Approved);
@@ -1008,9 +1045,9 @@ fn test_diff_approve_key_sets() {
 #[test]
 fn test_diff_reject_key_sets() {
     let mut app = working_app();
-    app.pane = Pane::Diff;
+    app.ui.navigation.pane = Pane::Diff;
     app.workflow.stage = Stage::Implementing;
-    app.input.editor.clear();
+    app.ui.input.editor.clear();
     handle_working(&mut app, key(KeyCode::Char('r')));
     assert_eq!(
         app.workflow.diff.current().unwrap().approved,
@@ -1025,13 +1062,17 @@ fn test_diff_reject_key_sets() {
 #[test]
 fn test_review_rework_key_routes() {
     let mut app = working_app();
-    app.pane = Pane::Review;
+    app.ui.navigation.pane = Pane::Review;
     app.workflow.stage = Stage::Verify;
-    app.input.editor.clear();
+    app.ui.input.editor.clear();
     handle_working(&mut app, key(KeyCode::Char('i')));
-    assert_eq!(app.pane, Pane::Review, "no finding -> rework is a no-op");
+    assert_eq!(
+        app.ui.navigation.pane,
+        Pane::Review,
+        "no finding -> rework is a no-op"
+    );
     assert!(
-        app.input.editor.is_empty(),
+        app.ui.input.editor.is_empty(),
         "i consumed by the rework arm, not pushed to the input box"
     );
 }
@@ -1044,17 +1085,18 @@ fn test_repeated_esc_keeps() {
     let mut app = working_app();
     crate::test_harness::attach_connection(&mut app);
     app.start_run_for_test(0);
-    app.input.queue.push(InputItem::Message("task a".into()));
+    app.ui.input.queue.push(InputItem::Message("task a".into()));
     handle_working(&mut app, key(KeyCode::Esc));
     handle_working(&mut app, key(KeyCode::Esc));
     assert!(
-        app.input
+        app.ui
+            .input
             .queue
             .iter()
             .any(|p| matches!(p, InputItem::Message(t) if t == "task a")),
         "repeated Esc keeps the queued message"
     );
-    let empty = app.input.editor.is_empty();
+    let empty = app.ui.input.editor.is_empty();
     assert!(empty, "Esc does not touch the input box");
     assert!(app.cancelling(), "Esc leaves cancellation in flight");
 }
@@ -1067,12 +1109,12 @@ fn test_recall_merges_draft() {
     let mut app = working_app();
     crate::test_harness::attach_connection(&mut app);
     app.start_run_for_test(0);
-    app.input.queue.push(InputItem::Message("task a".into()));
-    app.input.editor.set("half draft".into());
-    app.pane = Pane::Queue;
+    app.ui.input.queue.push(InputItem::Message("task a".into()));
+    app.ui.input.editor.set("half draft".into());
+    app.ui.navigation.pane = Pane::Queue;
     handle_working(&mut app, key(KeyCode::Char('R')));
     assert_eq!(
-        app.input.editor.value(),
+        app.ui.input.editor.value(),
         "task a\nhalf draft",
         "explicit recall prepends the message without overwriting the draft"
     );
@@ -1086,21 +1128,25 @@ fn test_esc_cancelling_closes_pane() {
     let mut app = working_app();
     crate::test_harness::attach_connection(&mut app);
     app.start_run_for_test(0);
-    app.input.queue.push(InputItem::Message("task a".into()));
+    app.ui.input.queue.push(InputItem::Message("task a".into()));
     // Esc1: interrupt (cancelling, agent_busy still true, queue intact).
     handle_working(&mut app, key(KeyCode::Esc));
     assert!(app.cancelling());
     // Open a pane with its own Esc, then Esc: the pane closes, the queue
     // is NOT popped (the pane-close key is not stolen for a recall).
-    app.pane = Pane::Memory;
+    app.ui.navigation.pane = Pane::Memory;
     handle_working(&mut app, key(KeyCode::Esc));
-    assert_eq!(app.pane, Pane::Transcript, "Esc closes the Memory pane");
+    assert_eq!(
+        app.ui.navigation.pane,
+        Pane::Transcript,
+        "Esc closes the Memory pane"
+    );
     assert!(
-        !app.input.queue.is_empty(),
+        !app.ui.input.queue.is_empty(),
         "the queue is not popped while closing the pane"
     );
     assert!(
-        app.input.editor.is_empty(),
+        app.ui.input.editor.is_empty(),
         "input stays empty -- no recall on the pane-close Esc"
     );
 }
@@ -1115,10 +1161,10 @@ fn test_esc_cancelling_backs_trajectory() {
     let mut app = working_app();
     crate::test_harness::attach_connection(&mut app);
     app.start_run_for_test(0);
-    app.input.queue.push(InputItem::Message("task a".into()));
+    app.ui.input.queue.push(InputItem::Message("task a".into()));
     handle_working(&mut app, key(KeyCode::Esc));
     assert!(app.cancelling());
-    app.pane = Pane::Trajectory;
+    app.ui.navigation.pane = Pane::Trajectory;
     app.trajectory.set_level(1);
     handle_working(&mut app, key(KeyCode::Esc));
     assert_eq!(
@@ -1127,7 +1173,7 @@ fn test_esc_cancelling_backs_trajectory() {
         "Esc backs the trajectory pane a level, not pops the queue"
     );
     assert!(
-        !app.input.queue.is_empty(),
+        !app.ui.input.queue.is_empty(),
         "the queue is not popped while backing the pane"
     );
 }
@@ -1135,7 +1181,7 @@ fn test_esc_cancelling_backs_trajectory() {
 #[test]
 fn test_console_signoff_appends_audit() {
     let mut app = composition::app();
-    app.screen = Screen::Console;
+    app.ui.navigation.screen = Screen::Console;
     let before = app.workflow.review.audit_trail.len();
     handle_console(&mut app, key(KeyCode::Char('a')));
     assert_eq!(app.workflow.review.audit_trail.len(), before + 1);
@@ -1144,7 +1190,7 @@ fn test_console_signoff_appends_audit() {
 #[test]
 fn test_console_reject_writes_org() {
     let mut app = composition::app();
-    app.screen = Screen::Console;
+    app.ui.navigation.screen = Screen::Console;
     handle_console(&mut app, key(KeyCode::Char('r')));
     assert!(app.workflow.review.findings[app.workflow.review.focus].resolved());
     assert!(matches!(app.sessions.current.transcript.last(),
@@ -1334,10 +1380,10 @@ fn test_approval_nav_full_cycle() {
 #[test]
 fn test_esc_keeps_input() {
     let mut app = working_app();
-    app.input.editor.set("draft".into());
+    app.ui.input.editor.set("draft".into());
     handle_working(&mut app, key(KeyCode::Esc));
     assert!(!app.quit, "idle Esc must not quit");
-    let text = app.input.editor.value();
+    let text = app.ui.input.editor.value();
     assert_eq!(text, "draft", "Ctrl+U owns input clearing");
 }
 
@@ -1351,10 +1397,10 @@ fn test_busy_esc_keeps_draft() {
     let mut app = working_app();
     crate::test_harness::attach_connection(&mut app);
     app.start_run_for_test(0);
-    app.input.editor.set("draft".into());
+    app.ui.input.editor.set("draft".into());
     handle_working(&mut app, key(KeyCode::Esc));
     assert!(app.cancelling(), "busy Esc interrupts the run");
-    let text = app.input.editor.value();
+    let text = app.ui.input.editor.value();
     assert_eq!(text, "draft", "the draft is left untouched");
 }
 
@@ -1367,11 +1413,15 @@ fn test_busy_esc_keeps_draft() {
 #[test]
 fn test_worktree_esc_closes_busy() {
     let mut app = working_app();
-    app.pane = Pane::Worktree;
+    app.ui.navigation.pane = Pane::Worktree;
     app.start_run_for_test(0);
-    app.input.editor.clear();
+    app.ui.input.editor.clear();
     handle_working(&mut app, key(KeyCode::Esc));
-    assert_eq!(app.pane, Pane::Transcript, "Esc closes the worktree pane");
+    assert_eq!(
+        app.ui.navigation.pane,
+        Pane::Transcript,
+        "Esc closes the worktree pane"
+    );
     assert!(
         !app.cancelling(),
         "must not abort the run when dismissing the worktree pane"
@@ -1385,7 +1435,7 @@ fn test_worktree_esc_closes_busy() {
 /// cover the keys/worktree_pane::handle arms without a PTY.
 fn worktree_app_with_rows() -> App {
     let mut app = working_app();
-    app.pane = Pane::Worktree;
+    app.ui.navigation.pane = Pane::Worktree;
     app.worktree_entries = vec![
         composition::WorktreeEntry {
             path: "/a".into(),
@@ -1409,7 +1459,7 @@ fn worktree_app_with_rows() -> App {
             ..Default::default()
         },
     ];
-    app.input.editor.clear();
+    app.ui.input.editor.clear();
     app
 }
 
@@ -1474,11 +1524,15 @@ fn test_worktree_esc_clears_search() {
     // First Esc clears the search, not the pane.
     handle_working(&mut app, key(KeyCode::Esc));
     assert!(!app.worktree_list.searching(), "Esc clears the query");
-    assert_eq!(app.pane, Pane::Worktree, "Esc in search stays in the pane");
+    assert_eq!(
+        app.ui.navigation.pane,
+        Pane::Worktree,
+        "Esc in search stays in the pane"
+    );
     // Second Esc (no search) closes the pane.
     handle_working(&mut app, key(KeyCode::Esc));
     assert_eq!(
-        app.pane,
+        app.ui.navigation.pane,
         Pane::Transcript,
         "Esc with no search closes the pane"
     );
@@ -1507,8 +1561,8 @@ fn shift_key(code: KeyCode) -> KeyEvent {
 
 fn fleet_app(n: usize) -> App {
     let mut app = composition::app();
-    app.screen = Screen::Working;
-    app.viewport = ViewportMode::Working;
+    app.ui.navigation.screen = Screen::Working;
+    app.ui.navigation.viewport = ViewportMode::Working;
     for i in 0..n {
         app.fleet.entries.push(crate::agent_message::FleetEntry {
             agent_id: format!("child-{i}"),
@@ -1590,7 +1644,7 @@ fn test_teammate_esc_no_leak() {
     use crate::records::TeammateView;
     let mut app = fleet_app(1);
     app.start_run_for_test(0);
-    app.input.editor.set("a draft steering note".into());
+    app.ui.input.editor.set("a draft steering note".into());
     app.teammate_view = Some(TeammateView {
         child_sid: "child-0".into(),
         ..Default::default()
@@ -1605,7 +1659,7 @@ fn test_teammate_esc_no_leak() {
         "Esc keeps the view open (exit is on Shift+Up/Down)"
     );
     assert!(
-        !app.input.editor.is_empty(),
+        !app.ui.input.editor.is_empty(),
         "Esc does not clear the draft (Ctrl+U owns that)"
     );
 }
@@ -1617,13 +1671,17 @@ fn test_teammate_esc_pane_first() {
     use crate::records::TeammateView;
     let mut app = fleet_app(1);
     app.start_run_for_test(0);
-    app.pane = Pane::Agents;
+    app.ui.navigation.pane = Pane::Agents;
     app.teammate_view = Some(TeammateView {
         child_sid: "child-0".into(),
         ..Default::default()
     });
     handle_working(&mut app, key(KeyCode::Esc));
-    assert_eq!(app.pane, Pane::Transcript, "pane closes first");
+    assert_eq!(
+        app.ui.navigation.pane,
+        Pane::Transcript,
+        "pane closes first"
+    );
     assert!(app.teammate_view.is_some(), "view stays open");
     assert!(!app.cancelling(), "child not interrupted");
 }
@@ -1647,8 +1705,8 @@ fn test_fleet_pill_renders_rows() {
 fn test_enter_fleet_drills_teammate() {
     use crate::records::TranscriptLine;
     let mut app = crate::composition::app();
-    app.screen = Screen::Working;
-    app.viewport = ViewportMode::Working;
+    app.ui.navigation.screen = Screen::Working;
+    app.ui.navigation.viewport = ViewportMode::Working;
     app.sessions
         .current
         .transcript
@@ -1710,7 +1768,7 @@ fn test_ctrl_o_expands_latest() {
             tool_summary: None,
             turn_id: "t1".into(),
         });
-    assert!(app.selections.transcript.anchor.is_none(), "no cursor");
+    assert!(app.ui.selection.transcript.anchor.is_none(), "no cursor");
     handle_ctrl_o(&mut app);
     assert!(
         app.transcript_view.expanded.thinking.contains(&"t1".into()),
@@ -1764,7 +1822,7 @@ fn test_ctrl_o_follows_cursor() {
         .position(|(_, text)| text.contains("Thought for"))
         .expect("the reasoning row is on screen");
     let top = app.whole_scroll().top_offset();
-    app.selections.transcript.start(0, top + ri);
+    app.ui.selection.transcript.start(0, top + ri);
     handle_ctrl_o(&mut app);
     assert!(
         app.transcript_view.expanded.thinking.contains(&"t1".into()),
@@ -1784,20 +1842,20 @@ mod agents_pane;
 #[test]
 fn test_char_closes_trajectory_pane() {
     let mut app = working_app();
-    app.pane = Pane::Trajectory;
+    app.ui.navigation.pane = Pane::Trajectory;
     handle_working(&mut app, key(KeyCode::Char('h')));
     assert_eq!(
-        app.pane,
+        app.ui.navigation.pane,
         Pane::Transcript,
         "a character key closes the trajectory pane"
     );
     assert_eq!(
-        app.viewport,
+        app.ui.navigation.viewport,
         ViewportMode::Working,
         "and leaves the viewport that drew the pane"
     );
     assert_eq!(
-        app.input.editor.value(),
+        app.ui.input.editor.value(),
         "h",
         "and the character lands in the visible input box"
     );
@@ -1809,22 +1867,22 @@ fn test_char_closes_trajectory_pane() {
 #[test]
 fn test_focus_routes_trajectory_char() {
     let mut app = working_app();
-    app.viewport = ViewportMode::Focus;
-    app.pane = Pane::Trajectory;
+    app.ui.navigation.viewport = ViewportMode::Focus;
+    app.ui.navigation.pane = Pane::Trajectory;
     handle_working(&mut app, key(KeyCode::Char('h')));
     assert_eq!(
-        app.pane,
+        app.ui.navigation.pane,
         Pane::Transcript,
         "a character closes the pane in Focus too"
     );
     assert_eq!(
-        app.viewport,
+        app.ui.navigation.viewport,
         ViewportMode::Working,
         "and the viewport it was drawn in goes back to the working one, or the
          editor the character lands in would not be on screen"
     );
     assert_eq!(
-        app.input.editor.value(),
+        app.ui.input.editor.value(),
         "h",
         "and lands in the editor rather than being dropped"
     );
@@ -1837,16 +1895,16 @@ fn test_focus_routes_trajectory_char() {
 #[test]
 fn test_focus_trajectory_esc_closes() {
     let mut app = working_app();
-    app.viewport = ViewportMode::Focus;
-    app.pane = Pane::Trajectory;
+    app.ui.navigation.viewport = ViewportMode::Focus;
+    app.ui.navigation.pane = Pane::Trajectory;
     handle_working(&mut app, key(KeyCode::Esc));
     assert_eq!(
-        app.pane,
+        app.ui.navigation.pane,
         Pane::Transcript,
         "Esc at the root closes the pane"
     );
     assert_eq!(
-        app.viewport,
+        app.ui.navigation.viewport,
         ViewportMode::Working,
         "and the viewport goes back to the working one"
     );
@@ -1855,8 +1913,8 @@ fn test_focus_trajectory_esc_closes() {
 #[test]
 fn test_focus_trajectory_esc_levels() {
     let mut app = working_app();
-    app.viewport = ViewportMode::Focus;
-    app.pane = Pane::Trajectory;
+    app.ui.navigation.viewport = ViewportMode::Focus;
+    app.ui.navigation.pane = Pane::Trajectory;
     app.trajectory.set_level(1);
     handle_working(&mut app, key(KeyCode::Esc));
     assert_eq!(
@@ -1865,12 +1923,12 @@ fn test_focus_trajectory_esc_levels() {
         "Esc backs the pane a level instead of folding the viewport"
     );
     assert_eq!(
-        app.pane,
+        app.ui.navigation.pane,
         Pane::Trajectory,
         "the pane stays open one level down"
     );
     assert_eq!(
-        app.viewport,
+        app.ui.navigation.viewport,
         ViewportMode::Focus,
         "the viewport is untouched"
     );

@@ -10,7 +10,7 @@ use crate::test_harness::render_text;
 
 fn working() -> crate::state::App {
     let mut app = composition::app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app
 }
 
@@ -32,7 +32,7 @@ fn test_design_approve_advances() {
     let out = render(&app);
     println!("--- after design approve ---\n{out}\n--- end ---");
     assert_eq!(app.workflow.stage, Stage::Implementing);
-    assert_eq!(app.pane, Pane::Diff);
+    assert_eq!(app.ui.navigation.pane, Pane::Diff);
     assert!(out.contains("diff approval"), "diff pane not shown");
     assert!(out.contains("change 1/3"), "change counter missing");
     assert!(
@@ -63,7 +63,7 @@ fn test_implement_approve_advances() {
         Stage::Verify,
         "should auto-advance to verify (agent review phase)"
     );
-    assert_eq!(app.pane, Pane::Review);
+    assert_eq!(app.ui.navigation.pane, Pane::Review);
     // requirement statuses moved unimpl -> partial (changes approved)
     assert!(
         app.workflow
@@ -94,7 +94,11 @@ fn test_review_signoff_advances() {
         Stage::Verify,
         "stage stays verify across the two phases"
     );
-    assert_eq!(app.pane, Pane::Verify, "should move to machine-check phase");
+    assert_eq!(
+        app.ui.navigation.pane,
+        Pane::Verify,
+        "should move to machine-check phase"
+    );
     assert!(out.contains("verify result"), "verify pane not shown");
 }
 

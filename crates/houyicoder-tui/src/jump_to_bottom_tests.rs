@@ -43,7 +43,7 @@ fn mouse(kind: MouseEventKind, column: u16, row: u16) -> MouseEvent {
 /// scroll back one line-step, and re-render so the label rect is published.
 fn app_scrolled_back() -> App {
     let mut app = composition::app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     for i in 0..50 {
         app.system_line(format!("history line {i:02}"));
     }
@@ -98,7 +98,7 @@ fn test_agent_count_rises() {
 #[test]
 fn test_evicted_keeps_count() {
     let mut app = composition::app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     for i in 0..VIEWABLE_SCROLLBACK_CAP + 1 {
         app.push_transcript_line(TranscriptLine::User(format!("filler line {i}")));
     }
@@ -250,7 +250,7 @@ fn test_label_side_falls_through() {
 #[test]
 fn test_short_transcript_no_label() {
     let mut app = composition::app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app.system_line("only one line");
     let _out = render_text(&app, 80, 24);
     app.scroll_transcript_line_up(3);
@@ -267,7 +267,7 @@ fn test_short_transcript_no_label() {
 #[test]
 fn test_label_hidden_following() {
     let mut app = composition::app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     for i in 0..50 {
         app.system_line(format!("line {i}"));
     }
@@ -288,7 +288,7 @@ fn test_label_hidden_following() {
 #[test]
 fn test_wheel_moves_content() {
     let mut app = composition::app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     for i in 0..50 {
         app.system_line(format!("history line {i:02}"));
     }
@@ -330,7 +330,7 @@ fn pump(app: &mut App, frame: TranscriptFrame) {
 #[test]
 fn test_floor_count_after_drain() {
     let mut app = composition::app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     let text = "x".repeat(100);
     for i in 0..500 {
         pump(&mut app, user_msg(&format!("u{i} {text}")));

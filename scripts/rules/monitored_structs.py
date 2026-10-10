@@ -180,8 +180,35 @@ ACTIVE_OWNERS = {
         # transcript, the directory is the last listing the session fetched),
         # so a switch resets them with the bare constructor instead of two
         # flat App resets.
-        "fields": 42,
+        # The frontend presentation and interaction state became one Ui owner
+        # with a Navigation owner inside it: the screen, the pane, the two
+        # viewport modes, the login mode, and the resume, palette, and
+        # skill-picker overlays travel as one navigation value a session
+        # switch resets together, and the chat input, the queued-input
+        # hit-test geometry, the drag selections, the toast notifications,
+        # the clipboard port, and the terminal-focus flag joined the same Ui
+        # value. Fourteen flat fields folded into one. The clipboard and the
+        # focus flag stay out of the switch reset: they are process
+        # resources, not session state.
+        "fields": 29,
         "mut_app": 44,
+    },
+    "crates/houyicoder-tui/src/ui.rs:Ui": {
+        # The frontend's presentation and interaction state: where the user
+        # is looking (Navigation), what the user has typed but not sent
+        # (Input), the queued-input hit-test geometry, the drag selections,
+        # the toast notifications, the clipboard port, and the terminal-focus
+        # flag. Holds no session data and no connection handles; views read
+        # server-returned state through App.
+        "fields": 7,
+    },
+    "crates/houyicoder-tui/src/ui/navigation.rs:Navigation": {
+        # The user's position in the frontend: the screen, the open pane, the
+        # two viewport modes, the resolved login mode, and the resume,
+        # palette, and skill-picker overlays. A session switch resets these
+        # together; the clipboard and the focus flag are process resources
+        # and deliberately stay out.
+        "fields": 8,
     },
     "crates/houyicoder-tui/src/input.rs:Input": {
         # The input subsystem's aggregate: the chat editor, the prompt-history

@@ -299,7 +299,8 @@ fn test_interrupt_restores_input() {
         user_msg("draft").into(),
     )));
     app.sessions.current.last_run_input = Some("draft".into());
-    app.input
+    app.ui
+        .input
         .queue
         .push(crate::input::queue::InputItem::ParkedMessage(
             "queued".into(),
@@ -320,7 +321,7 @@ fn test_interrupt_restores_input() {
     app.start_run_for_test(12);
     app.handle_agent_message(msg);
     assert_eq!(
-        app.input.editor.value(),
+        app.ui.input.editor.value(),
         "draft",
         "input restored for editing"
     );
@@ -348,12 +349,12 @@ fn test_interrupt_restores_input() {
         ),
     );
     assert_eq!(
-        app.input.editor.value(),
+        app.ui.input.editor.value(),
         "draft",
         "a repeated Esc keeps the restore"
     );
     assert_eq!(
-        app.input.queue.len(),
+        app.ui.input.queue.len(),
         1,
         "Esc does not recall pending input"
     );
@@ -370,7 +371,8 @@ fn test_commit_blocks_restore() {
     )));
     app.sessions.current.last_run_input = Some("origin".into());
     let committed = houyicoder_protocol::frontend::QueuedInput::new("follow-up");
-    app.input
+    app.ui
+        .input
         .queue
         .push(crate::input::queue::InputItem::Message(committed.clone()));
     app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(
@@ -395,7 +397,10 @@ fn test_commit_blocks_restore() {
         },
     });
 
-    assert!(app.input.editor.is_empty(), "stale origin is not restored");
+    assert!(
+        app.ui.input.editor.is_empty(),
+        "stale origin is not restored"
+    );
     assert!(
         app.sessions
             .current
@@ -434,7 +439,7 @@ fn test_live_blocks_restore() {
     });
 
     assert!(
-        app.input.editor.is_empty(),
+        app.ui.input.editor.is_empty(),
         "visible output prevents rollback"
     );
     assert!(
@@ -453,7 +458,7 @@ fn test_live_blocks_restore() {
 fn test_recall_survives_interrupt() {
     let mut app = composition::app();
     crate::test_harness::attach_connection(&mut app);
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
     app.start_run_for_test(0);
     app.sessions.current.last_run_input = Some("first".into());
     app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(
@@ -462,7 +467,7 @@ fn test_recall_survives_interrupt() {
     // Queue a message while the run is in flight (spawn_run's busy path:
     // pending push; the busy branch takes no send).
     app.spawn_run("zzsecond".into());
-    assert!(!app.input.queue.is_empty(), "message queues while busy");
+    assert!(!app.ui.input.queue.is_empty(), "message queues while busy");
     // Esc1: interrupt the run. The queue stays intact; input stays empty.
     let esc = crossterm::event::KeyEvent::new(
         crossterm::event::KeyCode::Esc,
@@ -471,12 +476,12 @@ fn test_recall_survives_interrupt() {
     crate::keys::handle_working(&mut app, esc);
     assert!(app.cancelling(), "first Esc interrupts the run");
     assert!(
-        !app.input.queue.is_empty(),
+        !app.ui.input.queue.is_empty(),
         "queue intact after the interrupt"
     );
     app.pop_queued_to_input();
     assert_eq!(
-        app.input.editor.value(),
+        app.ui.input.editor.value(),
         "zzsecond",
         "explicit recall moves the queue head into the input"
     );
@@ -496,7 +501,7 @@ fn test_recall_survives_interrupt() {
         },
     });
     assert_eq!(
-        app.input.editor.value(),
+        app.ui.input.editor.value(),
         "zzsecond",
         "popped text survives the interrupt's input restore"
     );
@@ -564,7 +569,7 @@ fn test_resubmit_avoids_duplicate_interrupt() {
 
     let mut app = composition::app();
     crate::test_harness::attach_connection(&mut app);
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
 
     // Turn 1: submit, then interrupt before output -> restore for editing.
     app.spawn_run("analysis".into());
@@ -573,11 +578,11 @@ fn test_resubmit_avoids_duplicate_interrupt() {
     )));
     let turn1 = app.active_run_req_id().expect("turn 1 running");
     app.handle_agent_message(interrupted_done(turn1));
-    assert_eq!(app.input.editor.value(), "analysis", "turn 1 restored");
+    assert_eq!(app.ui.input.editor.value(), "analysis", "turn 1 restored");
     assert_eq!(interrupts(&app), 1, "one Interrupted after turn 1");
 
     // Resubmit the restored input, then interrupt again.
-    drop(app.input.editor.take());
+    drop(app.ui.input.editor.take());
     app.spawn_run("analysis".into());
     app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(
         user_msg("analysis").into(),
@@ -677,24 +682,26 @@ fn test_batch_keeps_tail() {
     tools.register(Arc::new(EchoTool));
     let mut app = app_with_provider(provider, tools);
     app.status.last_run_final = true;
-    app.input.queue.push(InputItem::Message("first".into()));
-    app.input
+    app.ui.input.queue.push(InputItem::Message("first".into()));
+    app.ui
+        .input
         .queue
         .push(InputItem::ParkedMessage("second".into()));
-    app.input
+    app.ui
+        .input
         .queue
         .push(InputItem::ParkedMessage("third".into()));
     let mut dirty = false;
     app.idle_drain(None, &mut dirty);
     assert!(app.agent_busy(), "first spawned a run");
-    assert_eq!(app.input.queue.len(), 2, "second/third stay pending");
+    assert_eq!(app.ui.input.queue.len(), 2, "second/third stay pending");
     assert_eq!(
-        app.input.queue[0],
+        app.ui.input.queue[0],
         InputItem::Message("second".into()),
         "second holds the copy; third parked behind it"
     );
     assert_eq!(
-        app.input.queue[1],
+        app.ui.input.queue[1],
         InputItem::ParkedMessage("third".into()),
         "third has no copy (single-copy invariant)"
     );
@@ -707,11 +714,11 @@ fn test_batch_keeps_tail() {
         tries += 1;
     }
     assert!(!app.agent_busy(), "run reached Done");
-    let texts: Vec<&str> = app.input.queue.iter().map(|it| it.display()).collect();
+    let texts: Vec<&str> = app.ui.input.queue.iter().map(|it| it.display()).collect();
     assert!(
         matches!(texts.as_slice(), ["second", "third"] | ["third"]),
         "the undrainable tail must remain in FIFO order: {:?}",
-        app.input.queue
+        app.ui.input.queue
     );
 }
 
@@ -745,18 +752,20 @@ fn test_batch_delivers_via_drain() {
     tools.register(Arc::new(EchoTool));
     let mut app = app_with_provider(provider, tools);
     app.status.last_run_final = true;
-    app.input.queue.push(InputItem::Message("first".into()));
-    app.input
+    app.ui.input.queue.push(InputItem::Message("first".into()));
+    app.ui
+        .input
         .queue
         .push(InputItem::ParkedMessage("second".into()));
-    app.input
+    app.ui
+        .input
         .queue
         .push(InputItem::ParkedMessage("third".into()));
     let mut dirty = false;
     app.idle_drain(None, &mut dirty);
     assert!(app.agent_busy(), "first spawned a run");
     assert_eq!(
-        app.input.queue[0],
+        app.ui.input.queue[0],
         InputItem::Message("second".into()),
         "second holds the copy; third parked"
     );
@@ -770,9 +779,9 @@ fn test_batch_delivers_via_drain() {
     }
     assert!(!app.agent_busy(), "run reached Done");
     assert!(
-        app.input.queue.is_empty(),
+        app.ui.input.queue.is_empty(),
         "race won: one run drained the chain one boundary at a time:\n{:?}",
-        app.input.queue
+        app.ui.input.queue
     );
 }
 
@@ -784,7 +793,7 @@ fn test_batch_delivers_via_drain() {
 fn test_submit_clears_lone_interrupt() {
     let mut app = composition::app();
     crate::test_harness::attach_connection(&mut app);
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
     // A run with real output, interrupted: a lone notice, no restore pair.
     app.spawn_run("first".into());
     app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(

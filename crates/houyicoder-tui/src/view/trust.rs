@@ -92,7 +92,7 @@ mod tests {
     #[test]
     fn test_renders_trust_prompt() {
         let mut app = composition::app();
-        app.screen = Screen::Working;
+        app.ui.navigation.screen = Screen::Working;
         app.sessions.current.prompt = Some(PendingPrompt::trust_ask(
             RequestId(1),
             TrustPrompt {
@@ -151,7 +151,7 @@ mod tests {
     #[test]
     fn test_no_render_without_ask() {
         let mut app = composition::app();
-        app.screen = Screen::Working;
+        app.ui.navigation.screen = Screen::Working;
         let out = render_text(&app, 80, 24);
         assert!(
             !out.contains("Trust this workspace?"),
@@ -165,7 +165,7 @@ mod tests {
     #[test]
     fn test_trust_is_sole_screen() {
         let mut app = composition::app();
-        app.screen = Screen::Working;
+        app.ui.navigation.screen = Screen::Working;
         app.sessions.current.prompt = Some(PendingPrompt::trust_ask(
             RequestId(1),
             TrustPrompt {

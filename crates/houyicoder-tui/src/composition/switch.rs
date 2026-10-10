@@ -24,6 +24,7 @@ impl App {
         dirty: &mut bool,
     ) -> bool {
         let Some(target) = self
+            .ui
             .input
             .queue
             .first()
@@ -37,7 +38,7 @@ impl App {
         // re-acquiring it would report the lock held by this process itself.
         let current = self.sessions.current.identity.session_id.0.clone();
         if target == current {
-            self.input.queue.remove(0);
+            self.ui.input.queue.remove(0);
             self.system_line(format!("already on session {target}"));
             *dirty = true;
             return false;
@@ -48,14 +49,14 @@ impl App {
         if let Some(builder) = resume_builder {
             match builder(&target) {
                 Ok((new_bundle, startup)) => {
-                    self.input.queue.remove(0);
+                    self.ui.input.queue.remove(0);
                     self.switch_session(new_bundle);
                     self.apply_frontend_startup(startup);
                     *dirty = true;
                     true
                 }
                 Err(e) => {
-                    self.input.queue.remove(0);
+                    self.ui.input.queue.remove(0);
                     self.system_line(format!("resume failed: {e}"));
                     *dirty = true;
                     false
@@ -104,7 +105,7 @@ impl App {
         // The pending queue is carried across (only session-scoped fields
         // reset); the queue owns the carry rules and reports the dropped
         // command texts for the notice at the end of the swap.
-        let dropped = self.input.queue.transfer_across_sessions();
+        let dropped = self.ui.input.queue.transfer_across_sessions();
         let leaving = self.sessions.current.identity.session_id.clone();
         let open_keys = self.take_expanded_keys();
         let mut parked = std::mem::take(&mut self.parked_view_states);
@@ -170,11 +171,11 @@ impl App {
         // the transcript when they /resume), so force Working regardless of
         // the frontend startup policy. The landing screen and login mode
         // come from apply_frontend_startup, which the caller runs next.
-        self.screen = Screen::Working;
+        self.ui.navigation.screen = Screen::Working;
         self.quit = false;
-        self.input.editor = Default::default();
-        self.input.pasted = Default::default();
-        self.input.pending_paste = Default::default();
+        self.ui.input.editor = Default::default();
+        self.ui.input.pasted = Default::default();
+        self.ui.input.pending_paste = Default::default();
 
         self.sessions.current.todos.set_replaying_history(true);
         self.bump_transcript_version();
@@ -208,8 +209,8 @@ impl App {
             history_path,
         } = startup;
         if skip_login {
-            self.screen = Screen::Working;
-            self.login_mode = Some(LoginMode::Local);
+            self.ui.navigation.screen = Screen::Working;
+            self.ui.navigation.login_mode = Some(LoginMode::Local);
         }
         // Push the drained startup warnings as initial system lines BEFORE any
         // run output — synchronous so they land first + do not race with
@@ -218,7 +219,7 @@ impl App {
         for w in startup_warnings {
             self.system_line(w);
         }
-        self.input.history = HistoryNav::with_path(history_path);
+        self.ui.input.history = HistoryNav::with_path(history_path);
     }
 
     /// Reset the App-side session-local fields a session switch must clear so
@@ -237,25 +238,25 @@ impl App {
     /// session-scoped, run-state, and carry-across fields.
     fn reset_session_local(&mut self) {
         self.workflow = app_default::workflow();
-        self.pane = Pane::Transcript;
-        self.viewport = ViewportMode::Working;
-        self.prev_viewport = ViewportMode::Working;
+        self.ui.navigation.pane = Pane::Transcript;
+        self.ui.navigation.viewport = ViewportMode::Working;
+        self.ui.navigation.prev_viewport = ViewportMode::Working;
         self.verdict_cursor = 0;
         self.transcript_view = Default::default();
         self.verbose = false;
         self.display_rows_cache = Default::default();
         self.display_rows_cache.version.set(u64::MAX);
-        self.resume_picker = Default::default();
-        self.palette = Default::default();
+        self.ui.navigation.resume_picker = Default::default();
+        self.ui.navigation.palette = Default::default();
         self.memory = MemoryPaneState::new(memory_entries());
-        self.queue_view = Default::default();
+        self.ui.queue_view = Default::default();
         self.worktree_entries = Vec::new();
         self.worktree_list = Default::default();
         self.worktree_level = Cell::new(0);
         self.trajectory = Default::default();
-        self.notifications = Default::default();
+        self.ui.notifications = Default::default();
         self.displayed_tokens = Cell::new(0);
-        self.selections = Default::default();
+        self.ui.selection = Default::default();
         self.layout_snapshot = Default::default();
         self.render_cache = RefCell::new(Default::default());
         self.last_row_keys = Default::default();
@@ -263,7 +264,7 @@ impl App {
         self.fleet = Default::default();
         self.permission_pane = Default::default();
         self.skills_pane = Default::default();
-        self.skill_picker = Default::default();
+        self.ui.navigation.skill_picker = Default::default();
         self.hooks_pane = Default::default();
         self.model_picker = Default::default();
         self.status_tab = Default::default();

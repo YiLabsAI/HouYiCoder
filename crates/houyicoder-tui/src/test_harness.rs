@@ -174,7 +174,7 @@ impl TranscriptSnapshot for MockSnapshot {
 /// A working-screen App for tests (no runner, disconnected).
 pub(crate) fn working_app() -> App {
     let mut app = crate::composition::app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app
 }
 

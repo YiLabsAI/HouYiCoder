@@ -21,14 +21,14 @@ pub fn handle(app: &mut App, k: KeyEvent) -> bool {
             true
         }
         // Enter on the list opens the Level 1 detail.
-        KeyCode::Enter if level == 0 && app.input.editor.is_empty() => {
+        KeyCode::Enter if level == 0 && app.ui.input.editor.is_empty() => {
             app.worktree_level.set(1);
             true
         }
         // 'e' in the detail view opens the worktree (the enter ability).
         // Only at Level 1 so it never conflicts with search typing on the
         // list (where 'e' is a normal query character).
-        KeyCode::Char('e') if level == 1 && app.input.editor.is_empty() => {
+        KeyCode::Char('e') if level == 1 && app.ui.input.editor.is_empty() => {
             app.worktree_level.set(0);
             app.enter_worktree_at_cursor();
             true
@@ -39,17 +39,19 @@ pub fn handle(app: &mut App, k: KeyEvent) -> bool {
             } else if app.worktree_list.searching() {
                 app.worktree_list.clear_query();
             } else {
-                app.pane = Pane::Transcript;
+                app.ui.navigation.pane = Pane::Transcript;
             }
             true
         }
         KeyCode::Char(c)
-            if level == 0 && app.input.editor.is_empty() && (c.is_ascii_graphic() || c == ' ') =>
+            if level == 0
+                && app.ui.input.editor.is_empty()
+                && (c.is_ascii_graphic() || c == ' ') =>
         {
             app.worktree_list.query.push(c);
             true
         }
-        KeyCode::Backspace if level == 0 && app.input.editor.is_empty() => {
+        KeyCode::Backspace if level == 0 && app.ui.input.editor.is_empty() => {
             app.worktree_list.query.pop();
             true
         }

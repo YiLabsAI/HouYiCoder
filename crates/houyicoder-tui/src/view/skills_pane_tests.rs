@@ -18,8 +18,8 @@ fn key(code: KeyCode) -> crossterm::event::KeyEvent {
 #[test]
 fn test_skills_pane_detail_renders() {
     let mut app = composition::app();
-    app.screen = Screen::Working;
-    app.pane = Pane::Skills;
+    app.ui.navigation.screen = Screen::Working;
+    app.ui.navigation.pane = Pane::Skills;
     app.sessions.current.capabilities.skills.entries = vec![SkillEntry {
         name: "deep-review".into(),
         description: "the review standard".into(),
@@ -46,8 +46,8 @@ fn test_skills_pane_detail_renders() {
 #[test]
 fn test_detail_wraps_long_description() {
     let mut app = composition::app();
-    app.screen = Screen::Working;
-    app.pane = Pane::Skills;
+    app.ui.navigation.screen = Screen::Working;
+    app.ui.navigation.pane = Pane::Skills;
     app.sessions.current.capabilities.skills.entries = vec![SkillEntry {
         name: "find-skills".into(),
         description: "Helps users discover and install agent skills when they ask questions like \
@@ -72,8 +72,8 @@ fn test_detail_wraps_long_description() {
 #[test]
 fn test_detail_body_scrolls() {
     let mut app = composition::app();
-    app.screen = Screen::Working;
-    app.pane = Pane::Skills;
+    app.ui.navigation.screen = Screen::Working;
+    app.ui.navigation.pane = Pane::Skills;
     app.sessions.current.capabilities.skills.entries = vec![SkillEntry {
         name: "alpha".into(),
         description: "a skill".into(),
@@ -113,8 +113,8 @@ fn test_detail_body_scrolls() {
 #[test]
 fn test_detail_body_unavailable() {
     let mut app = composition::app();
-    app.screen = Screen::Working;
-    app.pane = Pane::Skills;
+    app.ui.navigation.screen = Screen::Working;
+    app.ui.navigation.pane = Pane::Skills;
     app.sessions.current.capabilities.skills.entries = vec![SkillEntry {
         name: "alpha".into(),
         description: "a skill".into(),
@@ -134,8 +134,8 @@ fn test_detail_body_unavailable() {
 #[test]
 fn test_skills_pane_disabled_glyph() {
     let mut app = composition::app();
-    app.screen = Screen::Working;
-    app.pane = Pane::Skills;
+    app.ui.navigation.screen = Screen::Working;
+    app.ui.navigation.pane = Pane::Skills;
     app.sessions.current.capabilities.skills.entries = vec![SkillEntry {
         name: "stale".into(),
         description: "a stale skill".into(),
@@ -173,8 +173,8 @@ fn test_skills_pane_disabled_glyph() {
 #[test]
 fn test_detail_usage_invoked() {
     let mut app = composition::app();
-    app.screen = Screen::Working;
-    app.pane = Pane::Skills;
+    app.ui.navigation.screen = Screen::Working;
+    app.ui.navigation.pane = Pane::Skills;
     app.sessions.current.capabilities.skills.entries = vec![SkillEntry {
         name: "alpha".into(),
         description: "a skill".into(),
@@ -200,8 +200,8 @@ fn test_detail_usage_invoked() {
 #[test]
 fn test_detail_usage_never() {
     let mut app = composition::app();
-    app.screen = Screen::Working;
-    app.pane = Pane::Skills;
+    app.ui.navigation.screen = Screen::Working;
+    app.ui.navigation.pane = Pane::Skills;
     app.sessions.current.capabilities.skills.entries = vec![SkillEntry {
         name: "beta".into(),
         description: "b skill".into(),
@@ -227,8 +227,8 @@ fn test_detail_usage_never() {
 #[test]
 fn test_user_only_skill_glyph() {
     let mut app = composition::app();
-    app.screen = Screen::Working;
-    app.pane = Pane::Skills;
+    app.ui.navigation.screen = Screen::Working;
+    app.ui.navigation.pane = Pane::Skills;
     app.sessions.current.capabilities.skills.entries = vec![SkillEntry {
         name: "managed".into(),
         description: "user-only skill".into(),

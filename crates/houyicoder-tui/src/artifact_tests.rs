@@ -17,7 +17,7 @@ fn key(code: KeyCode) -> KeyEvent {
 
 fn working_app() -> App {
     let mut app = composition::app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app
 }
 
@@ -37,11 +37,12 @@ fn type_text(app: &mut App, text: &str) {
 #[test]
 fn test_artifact_command_loads_real() {
     let mut app = working_app();
-    app.input
+    app.ui
+        .input
         .editor
         .set(format!("/artifact {}", crate_src_path()));
     app.submit_input();
-    assert_eq!(app.pane, Pane::Artifact);
+    assert_eq!(app.ui.navigation.pane, Pane::Artifact);
     assert!(app.workflow.artifact.current_lines().len() > 1);
     let out = render_text(&app, 100, 28);
     println!("--- artifact pane (100x28) ---\n{out}\n--- end ---");
@@ -53,11 +54,12 @@ fn test_artifact_command_loads_real() {
 #[test]
 fn test_artifact_load_missing() {
     let mut app = working_app();
-    app.input
+    app.ui
+        .input
         .editor
         .set("/artifact /no/such/path.md".to_string());
     app.submit_input();
-    assert_eq!(app.pane, Pane::Artifact);
+    assert_eq!(app.ui.navigation.pane, Pane::Artifact);
     // The canned stub keeps the pane usable when the file cannot be read.
     assert!(app.workflow.artifact.current_lines().len() > 1);
 }
@@ -72,20 +74,20 @@ fn test_artifact_palette_fallback() {
     for c in "artifact".chars() {
         handle_working(&mut app, key(KeyCode::Char(c)));
     }
-    assert_eq!(app.palette.query, "artifact");
+    assert_eq!(app.ui.navigation.palette.query, "artifact");
     assert!(
         app.selected_command().is_none(),
         "/artifact is intentionally not in the palette (scaffold command)"
     );
     handle_working(&mut app, key(KeyCode::Enter));
-    assert_eq!(app.pane, Pane::Artifact);
+    assert_eq!(app.ui.navigation.pane, Pane::Artifact);
 }
 
 #[test]
 fn test_artifact_replace_produces_pending() {
     let mut app = working_app();
-    app.pane = Pane::Artifact;
-    app.input.editor.clear();
+    app.ui.navigation.pane = Pane::Artifact;
+    app.ui.input.editor.clear();
     let focus = app.workflow.artifact.focus();
     // c enters Replace edit mode; typing + Enter proposes replacing the line.
     handle_working(&mut app, key(KeyCode::Char('c')));
@@ -110,8 +112,8 @@ fn test_nl_note_skips_proposal() {
     // proposer. The stub cannot interpret NL without an LLM, so no proposal is
     // produced; the user is directed to the direct edit keys.
     let mut app = working_app();
-    app.pane = Pane::Artifact;
-    app.input.editor.clear();
+    app.ui.navigation.pane = Pane::Artifact;
+    app.ui.input.editor.clear();
     handle_working(&mut app, key(KeyCode::Char('i')));
     type_text(&mut app, "rewrite this to be clearer");
     handle_working(&mut app, key(KeyCode::Enter));
@@ -124,8 +126,8 @@ fn test_nl_note_skips_proposal() {
 #[test]
 fn test_artifact_approve_applies_edit() {
     let mut app = working_app();
-    app.pane = Pane::Artifact;
-    app.input.editor.clear();
+    app.ui.navigation.pane = Pane::Artifact;
+    app.ui.input.editor.clear();
     let focus = app.workflow.artifact.focus();
     handle_working(&mut app, key(KeyCode::Char('c')));
     type_text(&mut app, "new content");
@@ -141,8 +143,8 @@ fn test_artifact_approve_applies_edit() {
 #[test]
 fn test_artifact_reject_drops_proposal() {
     let mut app = working_app();
-    app.pane = Pane::Artifact;
-    app.input.editor.clear();
+    app.ui.navigation.pane = Pane::Artifact;
+    app.ui.input.editor.clear();
     handle_working(&mut app, key(KeyCode::Char('c')));
     type_text(&mut app, "rejected text");
     handle_working(&mut app, key(KeyCode::Enter));
@@ -157,7 +159,7 @@ fn test_artifact_reject_drops_proposal() {
 #[test]
 fn test_artifact_up_down_moves() {
     let mut app = working_app();
-    app.pane = Pane::Artifact;
+    app.ui.navigation.pane = Pane::Artifact;
     let start = app.workflow.artifact.focus();
     handle_working(&mut app, key(KeyCode::Down));
     assert_ne!(app.workflow.artifact.focus(), start);
@@ -168,8 +170,8 @@ fn test_artifact_up_down_moves() {
 #[test]
 fn test_empty_enter_adds_nothing() {
     let mut app = working_app();
-    app.pane = Pane::Artifact;
-    app.input.editor.clear();
+    app.ui.navigation.pane = Pane::Artifact;
+    app.ui.input.editor.clear();
     let before = app.workflow.artifact.annotation_count();
     handle_working(&mut app, key(KeyCode::Enter));
     assert_eq!(app.workflow.artifact.annotation_count(), before);
@@ -178,8 +180,8 @@ fn test_empty_enter_adds_nothing() {
 #[test]
 fn test_proposal_renders() {
     let mut app = working_app();
-    app.pane = Pane::Artifact;
-    app.input.editor.clear();
+    app.ui.navigation.pane = Pane::Artifact;
+    app.ui.input.editor.clear();
     handle_working(&mut app, key(KeyCode::Char('c')));
     type_text(&mut app, "rendered");
     handle_working(&mut app, key(KeyCode::Enter));
@@ -199,8 +201,8 @@ fn test_artifact_applied_marker_render() {
     // After approving a replace, the applied line shows the ok marker in the
     // content column so the user can see which lines were reviewed and applied.
     let mut app = working_app();
-    app.pane = Pane::Artifact;
-    app.input.editor.clear();
+    app.ui.navigation.pane = Pane::Artifact;
+    app.ui.input.editor.clear();
     handle_working(&mut app, key(KeyCode::Char('c')));
     type_text(&mut app, "applied line");
     handle_working(&mut app, key(KeyCode::Enter));
@@ -216,8 +218,8 @@ fn test_artifact_applied_marker_render() {
 #[test]
 fn test_artifact_insert_applies() {
     let mut app = working_app();
-    app.pane = Pane::Artifact;
-    app.input.editor.clear();
+    app.ui.navigation.pane = Pane::Artifact;
+    app.ui.input.editor.clear();
     let focus = app.workflow.artifact.focus();
     let before_len = app.workflow.artifact.current_lines().len();
     handle_working(&mut app, key(KeyCode::Char('o')));
@@ -241,8 +243,8 @@ fn test_artifact_insert_applies() {
 #[test]
 fn test_artifact_delete_applies() {
     let mut app = working_app();
-    app.pane = Pane::Artifact;
-    app.input.editor.clear();
+    app.ui.navigation.pane = Pane::Artifact;
+    app.ui.input.editor.clear();
     let focus = app.workflow.artifact.focus();
     let removed = app.workflow.artifact.current_lines()[focus].clone();
     let before_len = app.workflow.artifact.current_lines().len();
@@ -270,13 +272,13 @@ fn test_artifact_save_command_writes() {
     );
     drop(std::fs::remove_file(&path));
     let mut app = working_app();
-    app.pane = Pane::Artifact;
-    app.input.editor.clear();
+    app.ui.navigation.pane = Pane::Artifact;
+    app.ui.input.editor.clear();
     handle_working(&mut app, key(KeyCode::Char('c')));
     type_text(&mut app, "saved content");
     handle_working(&mut app, key(KeyCode::Enter));
     handle_working(&mut app, key(KeyCode::Char('a')));
-    app.input.editor.set(format!("/artifact-save {path}"));
+    app.ui.input.editor.set(format!("/artifact-save {path}"));
     app.submit_input();
     let reloaded = crate::state::ArtifactSession::load(&path).expect("saved file loads back");
     assert!(
@@ -291,8 +293,8 @@ fn test_artifact_save_command_writes() {
 #[test]
 fn test_artifact_page_down_moves() {
     let mut app = working_app();
-    app.pane = Pane::Artifact;
-    app.input.editor.clear();
+    app.ui.navigation.pane = Pane::Artifact;
+    app.ui.input.editor.clear();
     let start = app.workflow.artifact.focus();
     handle_working(&mut app, key(KeyCode::PageDown));
     assert_ne!(app.workflow.artifact.focus(), start);
@@ -307,8 +309,8 @@ fn test_artifact_page_up_moves() {
     // PageUp in the artifact pane pages the line cursor instead of entering
     // transcript scroll, so a long document stays navigable in place.
     let mut app = working_app();
-    app.pane = Pane::Artifact;
-    app.input.editor.clear();
+    app.ui.navigation.pane = Pane::Artifact;
+    app.ui.input.editor.clear();
     // Move down first so a PageUp has somewhere to go.
     handle_working(&mut app, key(KeyCode::PageDown));
     let after_down = app.workflow.artifact.focus();
@@ -325,35 +327,35 @@ fn test_artifact_esc_exits() {
     // Esc with empty input in Normal mode exits the artifact pane back to the
     // main transcript view.
     let mut app = working_app();
-    app.pane = Pane::Artifact;
-    app.input.editor.clear();
+    app.ui.navigation.pane = Pane::Artifact;
+    app.ui.input.editor.clear();
     handle_working(&mut app, key(KeyCode::Esc));
-    assert_eq!(app.pane, Pane::Transcript);
+    assert_eq!(app.ui.navigation.pane, Pane::Transcript);
 }
 
 #[test]
 fn test_artifact_esc_mid_typing() {
     // Mid-typing Esc in Normal mode is a no-op so typed text is not lost.
     let mut app = working_app();
-    app.pane = Pane::Artifact;
-    app.input.editor.set("some text".to_string());
+    app.ui.navigation.pane = Pane::Artifact;
+    app.ui.input.editor.set("some text".to_string());
     handle_working(&mut app, key(KeyCode::Esc));
-    assert_eq!(app.pane, Pane::Artifact);
+    assert_eq!(app.ui.navigation.pane, Pane::Artifact);
 }
 
 #[test]
 fn test_artifact_esc_cancels_edit() {
     // Esc in an edit mode cancels to Normal without exiting the pane.
     let mut app = working_app();
-    app.pane = Pane::Artifact;
-    app.input.editor.clear();
+    app.ui.navigation.pane = Pane::Artifact;
+    app.ui.input.editor.clear();
     handle_working(&mut app, key(KeyCode::Char('c')));
     type_text(&mut app, "draft");
     handle_working(&mut app, key(KeyCode::Esc));
     assert!(app.workflow.artifact.mode().is_normal());
-    assert_eq!(app.pane, Pane::Artifact);
+    assert_eq!(app.ui.navigation.pane, Pane::Artifact);
     assert!(app.workflow.artifact.pending_proposal().is_none());
-    assert!(app.input.editor.is_empty());
+    assert!(app.ui.input.editor.is_empty());
 }
 
 #[test]
@@ -361,14 +363,14 @@ fn test_normal_text_dropped() {
     // In Normal mode, plain (non-slash) text + Enter is a no-op: the input box
     // is for slash commands; edits start with c/o/d/i. The text is dropped.
     let mut app = working_app();
-    app.pane = Pane::Artifact;
-    app.input.editor.clear();
+    app.ui.navigation.pane = Pane::Artifact;
+    app.ui.input.editor.clear();
     let before = app.workflow.artifact.annotation_count();
     type_text(&mut app, "just typing");
     handle_working(&mut app, key(KeyCode::Enter));
     assert_eq!(app.workflow.artifact.annotation_count(), before);
     assert!(app.workflow.artifact.pending_proposal().is_none());
-    assert!(app.input.editor.is_empty());
+    assert!(app.ui.input.editor.is_empty());
 }
 
 #[test]
@@ -377,15 +379,19 @@ fn test_artifact_edit_mode_suppresses() {
     // edit (no quit), and Tab does not cycle the pane (the mode is not
     // orphaned on a non-Artifact pane where Esc could no longer cancel it).
     let mut app = working_app();
-    app.pane = Pane::Artifact;
-    app.input.editor.clear();
+    app.ui.navigation.pane = Pane::Artifact;
+    app.ui.input.editor.clear();
     handle_working(&mut app, key(KeyCode::Char('c')));
     assert!(!app.workflow.artifact.mode().is_normal());
     handle_working(&mut app, key(KeyCode::Char('q')));
     assert!(!app.quit, "q must not quit during an edit");
-    assert_eq!(app.input.editor.value(), "q");
+    assert_eq!(app.ui.input.editor.value(), "q");
     handle_working(&mut app, key(KeyCode::Tab));
-    assert_eq!(app.pane, Pane::Artifact, "Tab must not flee the edit mode");
+    assert_eq!(
+        app.ui.navigation.pane,
+        Pane::Artifact,
+        "Tab must not flee the edit mode"
+    );
     assert!(
         !app.workflow.artifact.mode().is_normal(),
         "edit mode unchanged by Tab"
@@ -398,14 +404,15 @@ fn test_artifact_command_working_mode() {
     // editing needs the input box that Focus mode hides.
     let mut app = working_app();
     app.run_command(SlashCommand::Implement);
-    assert_eq!(app.viewport, ViewportMode::Focus);
-    app.input
+    assert_eq!(app.ui.navigation.viewport, ViewportMode::Focus);
+    app.ui
+        .input
         .editor
         .set(format!("/artifact {}", crate_src_path()));
     app.submit_input();
-    assert_eq!(app.pane, Pane::Artifact);
+    assert_eq!(app.ui.navigation.pane, Pane::Artifact);
     assert_eq!(
-        app.viewport,
+        app.ui.navigation.viewport,
         ViewportMode::Working,
         "artifact pane must open in Working mode so the input box shows"
     );

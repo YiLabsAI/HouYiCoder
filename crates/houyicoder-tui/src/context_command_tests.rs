@@ -13,7 +13,7 @@ fn test_second_context_one_grid() {
     use houyicoder_protocol::frontend::context::stub_breakdown;
     let provider = Arc::new(FakeProvider::new(vec![]));
     let mut app = app_with_provider(provider, ToolRegistry::new());
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
     // The cache a first /context filled stands in for that reply: the fast
     // path renders from it without a round trip.
     app.sessions.current.capabilities.status.context_cache = Some(stub_breakdown());
@@ -105,7 +105,7 @@ fn test_context_cache_renders_repeat() {
     // App state) — the default-gate wiring test for dispatch→wire→render.
     // Must be on the Working screen to render the transcript (app_with_provider
     // starts on Login).
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
     use crate::test_harness::render_buffer;
     let buf = render_buffer(&app, 100, 40);
     let text: String = (0..buf.area().height)

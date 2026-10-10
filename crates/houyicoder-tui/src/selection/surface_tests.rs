@@ -48,6 +48,6 @@ fn test_edge_scroll_requires_drag() {
 #[test]
 fn test_edge_scroll_requires_cursor() {
     let mut app = composition::app();
-    app.selections.transcript.start(0, 0);
+    app.ui.selection.transcript.start(0, 0);
     assert!(!edge_scroll_if_at_edge(&mut app));
 }

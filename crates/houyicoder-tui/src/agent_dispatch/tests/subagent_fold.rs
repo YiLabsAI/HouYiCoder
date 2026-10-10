@@ -198,7 +198,7 @@ fn test_click_subagent_head_expands() {
     use crate::records::TranscriptLine;
     use crate::selection::surface::{Surface, TranscriptSurface};
     let mut app = crate::composition::app();
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
     app.sessions
         .current
         .transcript
@@ -247,7 +247,7 @@ fn test_click_subagent_head_expands() {
 fn test_subagent_toggle_no_key() {
     use crate::records::TranscriptLine;
     let mut app = crate::composition::app();
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
     app.sessions
         .current
         .transcript
@@ -278,7 +278,7 @@ fn test_subagent_toggle_no_key() {
 fn test_subagent_toggle_stale_key() {
     use crate::records::TranscriptLine;
     let mut app = crate::composition::app();
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
     app.sessions
         .current
         .transcript
@@ -337,7 +337,7 @@ fn test_subagent_cursor_targeting() {
             folded_transcript: vec![TranscriptLine::Agent("child reply 2".into())],
             color: None,
         });
-    app.selections.transcript.start(0, 0);
+    app.ui.selection.transcript.start(0, 0);
     assert!(
         app.toggle_subagent_expand(),
         "the cursor names a delegation"
@@ -351,7 +351,7 @@ fn test_subagent_cursor_targeting() {
         "the second line is not expanded when the cursor targets the first"
     );
     app.transcript_view.expanded.subagents.clear();
-    app.selections.transcript.anchor = None;
+    app.ui.selection.transcript.anchor = None;
     assert!(
         !app.toggle_subagent_expand(),
         "with no cursor the walk resolves nothing"

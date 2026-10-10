@@ -29,16 +29,30 @@ use crate::skills_state::SkillsPaneState;
 use crate::state::{
     ModelPickerState, ParkedViewStates, QueueViewState, StatusTab, TrajectoryPaneState,
 };
+use crate::ui::{Navigation, Ui};
 use crate::workflow::Workflow;
 
 pub fn app() -> App {
     App {
-        screen: Screen::Login,
+        ui: Ui {
+            navigation: Navigation {
+                screen: Screen::Login,
+                pane: Pane::Transcript,
+                viewport: ViewportMode::Working,
+                prev_viewport: ViewportMode::Working,
+                login_mode: None,
+                resume_picker: SessionPickerState::default(),
+                palette: PaletteState::default(),
+                skill_picker: SkillPickerState::default(),
+            },
+            input: Input::default(),
+            queue_view: QueueViewState::default(),
+            selection: Selections::default(),
+            notifications: NotificationState::default(),
+            clipboard: Arc::new(SystemClipboard),
+            terminal_focused: true,
+        },
         workflow: workflow(),
-        pane: Pane::Transcript,
-        viewport: ViewportMode::Working,
-        prev_viewport: ViewportMode::Working,
-        input: Input::default(),
         verdict_cursor: 0,
         transcript_view: Default::default(),
         display_rows_cache: {
@@ -46,26 +60,19 @@ pub fn app() -> App {
             c.version.set(u64::MAX);
             c
         },
-        resume_picker: SessionPickerState::default(),
-        palette: PaletteState::default(),
         status: default_status(),
         memory: MemoryPaneState::new(memory_entries()),
-        queue_view: QueueViewState::default(),
         worktree_entries: Vec::new(),
         worktree_list: ListPaneState::default(),
         worktree_level: Cell::new(0),
         trajectory: TrajectoryPaneState::default(),
-        login_mode: None,
         quit: false,
         sessions: Sessions::new(Session::bare(SessionIdentity {
             session_id: SessionId::new("test"),
             working_dir: cwd_string(),
         })),
-        notifications: NotificationState::default(),
-        terminal_focused: true,
         layout_feedback: LayoutFeedback::default(),
         displayed_tokens: Cell::new(0),
-        selections: Selections::default(),
         layout_snapshot: LayoutSnapshot::default(),
         render_cache: RefCell::new(RenderCache::default()),
         last_row_keys: LastRowKeys::default(),
@@ -75,13 +82,11 @@ pub fn app() -> App {
         verbose: false,
         permission_pane: PermissionPaneState::default(),
         skills_pane: SkillsPaneState::default(),
-        skill_picker: SkillPickerState::default(),
         hooks_pane: HooksPaneState::default(),
         model_picker: ModelPickerState::default(),
         status_tab: StatusTab::default(),
         status_name_edit: None,
         last_title: None,
-        clipboard: Arc::new(SystemClipboard),
     }
 }
 

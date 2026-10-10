@@ -93,7 +93,7 @@ fn test_memory_change_refreshes_pane() {
         MemoryOperation,
     };
     let (mut app, events) = connected_app_events();
-    app.pane = Pane::Memory;
+    app.ui.navigation.pane = Pane::Memory;
     app.handle_agent_message(SessionMessage::Event(ServerEvent::MemoryChanged {
         id: MemoryChangeId("change-1".into()),
         origin: MemoryChangeOrigin::PrimaryAgent,
@@ -120,7 +120,7 @@ fn test_open_pane_keeps_notice() {
         MemoryOperation,
     };
     let (mut app, events) = connected_app_events();
-    app.pane = Pane::Memory;
+    app.ui.navigation.pane = Pane::Memory;
     app.handle_agent_message(SessionMessage::Event(ServerEvent::MemoryChanged {
         id: MemoryChangeId("c1".into()),
         origin: MemoryChangeOrigin::PrimaryAgent,
@@ -141,7 +141,7 @@ fn test_open_pane_keeps_notice() {
     assert_eq!(open_lines, 1, "an open pane still records the notice");
     let _req = wait_for_request(&events, |p| matches!(p, FrontendRequest::MemoryList));
 
-    app.pane = Pane::Transcript;
+    app.ui.navigation.pane = Pane::Transcript;
     app.handle_agent_message(SessionMessage::Event(ServerEvent::MemoryChanged {
         id: MemoryChangeId("c2".into()),
         origin: MemoryChangeOrigin::PrimaryAgent,

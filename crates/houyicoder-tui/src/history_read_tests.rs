@@ -26,7 +26,7 @@ fn user_frame(text: &str) -> TranscriptFrame {
 /// No byte drain runs (default budget), so the resident front stays at zero.
 fn working_app(rows: usize) -> App {
     let mut app = composition::app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     for i in 0..rows {
         app.sessions
             .current

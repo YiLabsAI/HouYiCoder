@@ -15,7 +15,7 @@ use houyicoder_protocol::frontend::FrontendRequest;
 fn test_expand_fires_child_fetch() {
     let provider = Arc::new(FakeProvider::new(vec![]));
     let mut app = app_with_provider(provider, ToolRegistry::new());
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
     app.sessions
         .current
         .transcript

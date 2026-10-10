@@ -29,10 +29,10 @@ impl App {
     pub fn sync_viewport_to_stage(&mut self) {
         let next = ViewportMode::for_stage(self.workflow.stage);
         if next != ViewportMode::Working {
-            self.palette.close();
+            self.ui.navigation.palette.close();
             self.transcript_view.search.close();
         }
-        self.viewport = next;
+        self.ui.navigation.viewport = next;
     }
 
     /// Leave Scroll mode and restore the prior viewport. Only switches the
@@ -40,12 +40,12 @@ impl App {
     /// from scroll mode keeps the view. Esc and End add follow_tail at their
     /// call sites for the tail-return behavior.
     pub fn exit_scroll(&mut self) {
-        self.viewport = self.prev_viewport;
+        self.ui.navigation.viewport = self.ui.navigation.prev_viewport;
     }
 
     /// Fold Focus into Working (user pressed Esc in Focus). Stage unchanged.
     pub fn fold_to_working(&mut self) {
-        self.viewport = ViewportMode::Working;
+        self.ui.navigation.viewport = ViewportMode::Working;
     }
 
     /// Pop the most recent stage off the history stack and restore it. Returns

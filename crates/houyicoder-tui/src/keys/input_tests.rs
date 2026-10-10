@@ -15,7 +15,7 @@ fn key(code: KeyCode) -> KeyEvent {
 /// An app on the working screen with the transcript pane focused.
 fn working_app() -> App {
     let mut app = composition::app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app
 }
 
@@ -24,12 +24,16 @@ fn working_app() -> App {
 #[test]
 fn test_left_right_move_cursor() {
     let mut app = working_app();
-    app.input.editor.set("ab".to_string());
+    app.ui.input.editor.set("ab".to_string());
     handle_input(&mut app, key(KeyCode::Left));
-    assert_eq!(app.input.editor.cursor(), 1, "Left moves one grapheme back");
+    assert_eq!(
+        app.ui.input.editor.cursor(),
+        1,
+        "Left moves one grapheme back"
+    );
     handle_input(&mut app, key(KeyCode::Right));
     assert_eq!(
-        app.input.editor.cursor(),
+        app.ui.input.editor.cursor(),
         2,
         "Right moves one grapheme forward"
     );
@@ -40,17 +44,17 @@ fn test_left_right_move_cursor() {
 #[test]
 fn test_ctrl_jump_whole_text() {
     let mut app = working_app();
-    app.input.editor.set("hello".to_string());
+    app.ui.input.editor.set("hello".to_string());
     handle_input(
         &mut app,
         KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL),
     );
-    assert_eq!(app.input.editor.cursor(), 0, "Ctrl+A parks at the start");
+    assert_eq!(app.ui.input.editor.cursor(), 0, "Ctrl+A parks at the start");
     handle_input(
         &mut app,
         KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL),
     );
-    assert_eq!(app.input.editor.cursor(), 5, "Ctrl+E parks at the end");
+    assert_eq!(app.ui.input.editor.cursor(), 5, "Ctrl+E parks at the end");
 }
 
 /// Up/Down move the cursor across wrapped input lines using the column count
@@ -59,12 +63,12 @@ fn test_ctrl_jump_whole_text() {
 #[test]
 fn test_up_down_walk_wrap() {
     let mut app = working_app();
-    app.input.editor.set("word ".repeat(40));
-    let bottom = app.input.editor.cursor();
+    app.ui.input.editor.set("word ".repeat(40));
+    let bottom = app.ui.input.editor.cursor();
     handle_input(&mut app, key(KeyCode::Up));
-    let up = app.input.editor.cursor();
+    let up = app.ui.input.editor.cursor();
     handle_input(&mut app, key(KeyCode::Down));
-    let down = app.input.editor.cursor();
+    let down = app.ui.input.editor.cursor();
     assert!(up < bottom, "Up walks toward the top of the wrap");
     assert!(down > up, "Down walks back toward the bottom");
 }
@@ -75,10 +79,10 @@ fn test_up_down_walk_wrap() {
 #[test]
 fn test_home_end_wrap_line() {
     let mut app = working_app();
-    app.input.editor.set("word ".repeat(40));
-    let end = app.input.editor.cursor();
+    app.ui.input.editor.set("word ".repeat(40));
+    let end = app.ui.input.editor.cursor();
     handle_input(&mut app, key(KeyCode::Home));
-    let home = app.input.editor.cursor();
+    let home = app.ui.input.editor.cursor();
     assert!(
         home > 0,
         "Home lands on the wrapped line start, not the text start"
@@ -86,7 +90,7 @@ fn test_home_end_wrap_line() {
     assert!(home < end, "Home leaves the text end");
     handle_input(&mut app, key(KeyCode::End));
     assert_eq!(
-        app.input.editor.cursor(),
+        app.ui.input.editor.cursor(),
         end,
         "End returns to the wrapped line end"
     );
@@ -97,14 +101,14 @@ fn test_home_end_wrap_line() {
 #[test]
 fn test_ctrl_u_kills_line() {
     let mut app = working_app();
-    app.input.editor.set("word ".repeat(40));
-    let before = app.input.editor.value().len();
+    app.ui.input.editor.set("word ".repeat(40));
+    let before = app.ui.input.editor.value().len();
     handle_input(
         &mut app,
         KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
     );
     assert!(
-        app.input.editor.value().len() < before,
+        app.ui.input.editor.value().len() < before,
         "Ctrl+U deletes to the wrapped line start"
     );
 }

@@ -102,11 +102,11 @@ fn test_child_inject_refused() {
 #[test]
 fn test_drain_refused() {
     let mut app = connection_lost_app();
-    app.input.queue.push(InputItem::Message("head".into()));
+    app.ui.input.queue.push(InputItem::Message("head".into()));
     let promoted = app.drain_pending_head();
     assert!(!promoted, "a refused send must not report a promoted turn");
     assert_eq!(
-        app.input.queue.len(),
+        app.ui.input.queue.len(),
         1,
         "the head stays queued when the send is refused"
     );
@@ -127,14 +127,18 @@ fn test_drain_refused() {
 #[test]
 fn test_drain_reparks_parked() {
     let mut app = connection_lost_app();
-    app.input
+    app.ui
+        .input
         .queue
         .push(InputItem::ParkedMessage("head".into()));
     let promoted = app.drain_pending_head();
     assert!(!promoted, "a refused send must not report a promoted turn");
-    assert_eq!(app.input.queue.len(), 1, "the parked head stays queued");
+    assert_eq!(app.ui.input.queue.len(), 1, "the parked head stays queued");
     assert!(
-        matches!(app.input.queue.first(), Some(InputItem::ParkedMessage(_))),
+        matches!(
+            app.ui.input.queue.first(),
+            Some(InputItem::ParkedMessage(_))
+        ),
         "the head re-parks as a parked message, not a live mirror"
     );
     assert!(
@@ -238,15 +242,15 @@ fn test_abort_refused() {
 #[test]
 fn test_recall_refused() {
     let mut app = connection_lost_app();
-    app.input.queue.push(InputItem::Message("head".into()));
+    app.ui.input.queue.push(InputItem::Message("head".into()));
     app.pop_queued_to_input();
     assert_eq!(
-        app.input.queue.len(),
+        app.ui.input.queue.len(),
         1,
         "the queued message stays while its server copy exists"
     );
     assert!(
-        app.input.editor.value().is_empty(),
+        app.ui.input.editor.value().is_empty(),
         "nothing is recalled into the editor when the mirror removal fails"
     );
     assert!(

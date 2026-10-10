@@ -12,35 +12,44 @@ use crate::state::{App, Pane};
 pub(super) fn handle_resume_picker(app: &mut App, k: KeyEvent) {
     match k.code {
         KeyCode::Esc => {
-            app.resume_picker.close();
-            app.pane = Pane::Transcript;
+            app.ui.navigation.resume_picker.close();
+            app.ui.navigation.pane = Pane::Transcript;
         }
-        KeyCode::Up => app.resume_picker.prev(),
-        KeyCode::Down => app.resume_picker.next(),
+        KeyCode::Up => app.ui.navigation.resume_picker.prev(),
+        KeyCode::Down => app.ui.navigation.resume_picker.next(),
         KeyCode::Enter => {
-            if let Some(row) = app.resume_picker.selected().map(|r| r.sid_str.clone()) {
-                app.resume_picker.close();
-                app.pane = Pane::Transcript;
+            if let Some(row) = app
+                .ui
+                .navigation
+                .resume_picker
+                .selected()
+                .map(|r| r.sid_str.clone())
+            {
+                app.ui.navigation.resume_picker.close();
+                app.ui.navigation.pane = Pane::Transcript;
                 if app.agent_busy() {
                     // Defer: a run is in flight. Enqueue a Command so the
                     // swap happens when the run resolves (drained FIFO at
                     // idle), not now (would fight the run).
-                    app.input
+                    app.ui
+                        .input
                         .queue
                         .push(InputItem::Command(format!("/resume {row}")));
                     app.system_line(app.deferred_command_message(&format!("resume {row}")));
                 } else {
-                    app.input
+                    app.ui
+                        .input
                         .queue
                         .insert(0, InputItem::Command(format!("/resume {row}")));
                     app.system_line(app.resume_switch_message(&row));
                 }
-            } else if !app.resume_picker.query.is_empty() {
-                let q = app.resume_picker.query.trim().to_string();
-                app.resume_picker.close();
-                app.pane = Pane::Transcript;
+            } else if !app.ui.navigation.resume_picker.query.is_empty() {
+                let q = app.ui.navigation.resume_picker.query.trim().to_string();
+                app.ui.navigation.resume_picker.close();
+                app.ui.navigation.pane = Pane::Transcript;
                 if app.agent_busy() {
-                    app.input
+                    app.ui
+                        .input
                         .queue
                         .push(InputItem::Command(format!("/resume {q}")));
                     app.system_line(app.deferred_command_message(&format!("resume {q}")));
@@ -50,14 +59,16 @@ pub(super) fn handle_resume_picker(app: &mut App, k: KeyEvent) {
             }
         }
         KeyCode::Backspace => {
-            if app.resume_picker.query.is_empty() {
-                app.resume_picker.close();
-                app.pane = Pane::Transcript;
+            if app.ui.navigation.resume_picker.query.is_empty() {
+                app.ui.navigation.resume_picker.close();
+                app.ui.navigation.pane = Pane::Transcript;
             } else {
-                app.resume_picker.pop();
+                app.ui.navigation.resume_picker.pop();
             }
         }
-        KeyCode::Char(c) if c.is_ascii_graphic() || c == ' ' => app.resume_picker.push(c),
+        KeyCode::Char(c) if c.is_ascii_graphic() || c == ' ' => {
+            app.ui.navigation.resume_picker.push(c)
+        }
         _ => {}
     }
 }

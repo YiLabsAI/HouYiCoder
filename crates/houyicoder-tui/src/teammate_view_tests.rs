@@ -40,7 +40,7 @@ fn subagent_line(sid: &str, rows: usize) -> TranscriptLine {
 /// followed by two delegation lines with loaded child transcripts.
 fn app_with_two_children(parent_rows: usize) -> App {
     let mut app = crate::composition::app();
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
     for i in 0..parent_rows {
         app.sessions
             .current
@@ -154,7 +154,7 @@ fn test_child_blocks_search() {
         "the hidden parent's viewport did not move"
     );
     assert!(
-        app.notifications.current().is_some(),
+        app.ui.notifications.current().is_some(),
         "the refusal is told to the reader, not silent"
     );
 }
@@ -207,7 +207,7 @@ fn test_sibling_view_swap() {
 #[test]
 fn test_ctrl_o_expands_child() {
     let mut app = crate::composition::app();
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
     app.sessions
         .current
         .transcript

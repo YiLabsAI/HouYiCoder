@@ -259,7 +259,7 @@ pub fn draw_focus_status(f: &mut Frame, area: Rect, app: &App) {
 /// per-pane approval keys but includes the focused item index so the user
 /// knows where they are without the input box prompt.
 fn focus_action_hint(app: &App) -> String {
-    match (app.pane, app.workflow.stage) {
+    match (app.ui.navigation.pane, app.workflow.stage) {
         (crate::state::Pane::Diff, Stage::Implementing) => {
             let n = app.workflow.diff.hunks.len();
             let i = app.workflow.diff.focus + 1;
@@ -434,7 +434,7 @@ fn token_savings_k(app: &App) -> u64 {
 /// Convenience: true when the viewport is Focus (used by capability pane
 /// title fusion to prepend the progress bar).
 pub fn is_focus(app: &App) -> bool {
-    app.viewport == ViewportMode::Focus
+    app.ui.navigation.viewport == ViewportMode::Focus
 }
 
 #[cfg(test)]

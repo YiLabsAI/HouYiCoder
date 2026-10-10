@@ -8,7 +8,7 @@ use houyicoder_protocol::frontend::SlashCommand;
 
 fn working_app() -> crate::state::App {
     let mut app = composition::app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app.run_command(SlashCommand::Context);
     app
 }
@@ -36,7 +36,7 @@ fn working_app_with_drill() -> crate::state::App {
         suggestions,
     };
     let mut app = composition::app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app.push_transcript_line(crate::state::TranscriptLine::ContextGrid(view));
     app
 }
@@ -500,7 +500,7 @@ fn test_context_block_persists_line() {
     // Push ContextGrid, then a System line, render, and assert both the
     // grid text and the system line are present in the same render.
     let mut app = composition::app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app.run_command(SlashCommand::Context);
     app.system_line("done reading files");
     let buf = render_buffer(&app, 100, 50);

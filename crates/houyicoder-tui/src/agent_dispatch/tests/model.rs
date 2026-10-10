@@ -34,7 +34,7 @@ fn model_info_response(req_id: u64, catalog: ModelCatalog) -> SessionMessage {
 #[test]
 fn test_model_result_updates_status() {
     let mut app = crate::composition::app();
-    app.pane = Pane::Model;
+    app.ui.navigation.pane = Pane::Model;
     app.model_picker.pending_request = Some(PendingCommit {
         req_id: RequestId(1),
         prior_speed: SpeedMode::Standard,
@@ -51,7 +51,7 @@ fn test_model_result_updates_status() {
         app.status.model, "qwen3.8-max",
         "status.model follows the applied model"
     );
-    assert_eq!(app.pane, Pane::Transcript, "the pane closes");
+    assert_eq!(app.ui.navigation.pane, Pane::Transcript, "the pane closes");
     let last = app
         .sessions
         .current
@@ -194,7 +194,7 @@ fn test_system_line_renders_notice() {
 #[test]
 fn test_model_info_stashes_catalog() {
     let mut app = crate::composition::app();
-    app.pane = Pane::Model;
+    app.ui.navigation.pane = Pane::Model;
     let mut catalog = model_snapshot(vec![
         model_entry("a", "A", model_caps(true, false)),
         model_entry("b", "B", model_caps(true, false)),
@@ -217,7 +217,7 @@ fn test_model_info_stashes_catalog() {
 #[test]
 fn test_model_info_keeps_draft() {
     let mut app = crate::composition::app();
-    app.pane = Pane::Model;
+    app.ui.navigation.pane = Pane::Model;
     app.model_picker.refresh_snapshot(model_snapshot(vec![
         model_entry("a", "A", model_caps(true, false)),
         model_entry("b", "B", model_caps(true, false)),
@@ -242,7 +242,7 @@ fn test_model_info_keeps_draft() {
 #[test]
 fn test_missing_selection_falls_back() {
     let mut app = crate::composition::app();
-    app.pane = Pane::Model;
+    app.ui.navigation.pane = Pane::Model;
     let mut catalog = model_snapshot(vec![model_entry("a", "A", model_caps(true, false))]);
     catalog.selected = ModelChoice::Explicit {
         id: "not-here".into(),
@@ -260,16 +260,16 @@ fn test_missing_selection_falls_back() {
 fn test_model_pane_swallows_chars() {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     let mut app = crate::composition::app();
-    app.screen = Screen::Working;
-    app.pane = Pane::Model;
+    app.ui.navigation.screen = Screen::Working;
+    app.ui.navigation.pane = Pane::Model;
     crate::keys::handle_working(
         &mut app,
         KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
     );
     assert!(
-        app.input.editor.value().is_empty(),
+        app.ui.input.editor.value().is_empty(),
         "char swallowed by Model pane, not pushed to input: {}",
-        app.input.editor.value()
+        app.ui.input.editor.value()
     );
 }
 
@@ -284,7 +284,7 @@ fn test_picker_draft_isolated() {
     ]);
     catalog.applied.id = "a".into();
     let mut app = model_app(catalog);
-    app.pane = Pane::Model;
+    app.ui.navigation.pane = Pane::Model;
     let start = app.model_picker.draft.row;
     let status_before = app.status.model.clone();
     app.move_model_focus(1);
@@ -369,7 +369,7 @@ fn test_model_send_failure() {
             "Fable",
             model_caps(true, true),
         )]));
-    app.pane = Pane::Model;
+    app.ui.navigation.pane = Pane::Model;
     let applied_before = app.model_picker.snapshot.applied.clone();
     app.commit_model_pick();
     assert_eq!(
@@ -380,7 +380,11 @@ fn test_model_send_failure() {
         !app.model_picker.is_pending(),
         "a switch that never shipped is not pending"
     );
-    assert_eq!(app.pane, Pane::Model, "the pane stays open for retry");
+    assert_eq!(
+        app.ui.navigation.pane,
+        Pane::Model,
+        "the pane stays open for retry"
+    );
     let last = app
         .sessions
         .current
@@ -408,7 +412,7 @@ fn test_fast_degrades_on_commit() {
         model_entry("qwen3.8-max", "Max", model_caps(true, true)),
         model_entry("plain-model", "Plain", model_caps(true, false)),
     ]));
-    app.pane = Pane::Model;
+    app.ui.navigation.pane = Pane::Model;
     // The session ran Fast; the focus moves to the row that cannot serve it.
     app.model_picker.snapshot.applied.speed = SpeedMode::Fast;
     app.model_picker.draft.speed = SpeedMode::Fast;
@@ -484,7 +488,7 @@ fn test_model_result_stashes_effort() {
 #[test]
 fn test_unmatched_result_still_applies() {
     let mut app = crate::composition::app();
-    app.pane = Pane::Model;
+    app.ui.navigation.pane = Pane::Model;
     app.model_picker.pending_request = Some(PendingCommit {
         req_id: RequestId(2),
         prior_speed: SpeedMode::Standard,
@@ -499,7 +503,7 @@ fn test_unmatched_result_still_applies() {
         "a stale reply leaves the held commit in flight"
     );
     assert_eq!(
-        app.pane,
+        app.ui.navigation.pane,
         Pane::Model,
         "a stale reply does not close the pane"
     );
@@ -511,7 +515,7 @@ fn test_unmatched_result_still_applies() {
         !app.model_picker.is_pending(),
         "the held commit's own reply settles it"
     );
-    assert_eq!(app.pane, Pane::Transcript);
+    assert_eq!(app.ui.navigation.pane, Pane::Transcript);
 }
 
 /// A stale reply moves the session but must not wipe the draft the user is
@@ -519,7 +523,7 @@ fn test_unmatched_result_still_applies() {
 #[test]
 fn test_stale_reply_keeps_draft() {
     let mut app = crate::composition::app();
-    app.pane = Pane::Model;
+    app.ui.navigation.pane = Pane::Model;
     app.model_picker.pending_request = Some(PendingCommit {
         req_id: RequestId(2),
         prior_speed: SpeedMode::Standard,

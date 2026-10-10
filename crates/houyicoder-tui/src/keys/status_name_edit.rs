@@ -41,9 +41,9 @@ mod tests {
     /// the state the e key opens the editor from.
     fn status_tab_app() -> App {
         let mut app = crate::test_harness::working_app();
-        app.screen = Screen::Working;
-        app.viewport = ViewportMode::Working;
-        app.pane = Pane::Status;
+        app.ui.navigation.screen = Screen::Working;
+        app.ui.navigation.viewport = ViewportMode::Working;
+        app.ui.navigation.pane = Pane::Status;
         app.status_tab = crate::state::enums::StatusTab::Status;
         app
     }

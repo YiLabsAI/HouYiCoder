@@ -98,7 +98,7 @@ mod tests {
         use crate::records::TranscriptLine;
         use crate::test_harness::render_text;
         let mut app = app();
-        app.screen = crate::state::Screen::Working;
+        app.ui.navigation.screen = crate::state::Screen::Working;
         app.teammate_view = Some(crate::records::TeammateView {
             child_sid: "c1".into(),
             subagent_type: "explore".into(),
@@ -133,7 +133,7 @@ mod tests {
     fn test_no_banner_without_teammate() {
         use crate::test_harness::render_text;
         let mut app = app();
-        app.screen = crate::state::Screen::Working;
+        app.ui.navigation.screen = crate::state::Screen::Working;
         let out = render_text(&app, 80, 24);
         assert!(
             !out.contains("Viewing @"),

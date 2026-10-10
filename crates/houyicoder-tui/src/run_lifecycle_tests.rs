@@ -149,7 +149,7 @@ fn test_approval_renders_inline() {
     use render_text;
 
     let mut app = composition::app();
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
     app.sessions.current.prompt = Some(PendingPrompt::approval_card(
         RequestId(0),
         crate::state::Approval {
@@ -176,7 +176,7 @@ fn test_approval_renders_inline() {
 
     // No approval -> no separator or proceed question near tail.
     let mut app2 = composition::app();
-    app2.screen = crate::state::Screen::Working;
+    app2.ui.navigation.screen = crate::state::Screen::Working;
     app2.sessions.current.prompt = None;
     let text2 = render_text(&app2, 80, 24);
     assert!(
@@ -196,7 +196,7 @@ fn test_approval_esc_rejects_current() {
         KeyEvent::new(c, KeyModifiers::NONE)
     }
     let mut app = composition::app();
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
     app.sessions.current.prompt = Some(PendingPrompt::approval_card(
         RequestId(0),
         crate::state::Approval {
@@ -223,7 +223,7 @@ fn test_approval_enter_approve_current() {
         KeyEvent::new(c, KeyModifiers::NONE)
     }
     let mut app = composition::app();
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
     app.sessions.current.prompt = Some(PendingPrompt::approval_card(
         RequestId(0),
         crate::state::Approval {
@@ -249,7 +249,7 @@ fn test_approval_char_keys_select() {
         KeyEvent::new(c, KeyModifiers::NONE)
     }
     let mut app = composition::app();
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
     let mk = || crate::state::Approval {
         tool: "bash".to_string(),
         args: "".to_string(),
@@ -509,7 +509,7 @@ fn test_esc_aborts_busy_run() {
     // The run streamed a delta before the abort, so it produced real content:
     // the input must NOT be restored.
     assert!(
-        app.input.editor.is_empty(),
+        app.ui.input.editor.is_empty(),
         "input must stay empty when real content was produced"
     );
     assert!(
@@ -546,7 +546,7 @@ fn test_esc_abort_restores_input() {
     assert!(settled, "aborted run should settle via Interrupted");
     // The input box is restored to the original text, cursor at the end.
     assert_eq!(
-        app.input.editor.value(),
+        app.ui.input.editor.value(),
         original,
         "input must be restored after a no-content abort"
     );
@@ -573,7 +573,7 @@ fn test_context_grid_after_run() {
     // to the tail.
     let p = Arc::new(FakeProvider::text("hello back"));
     let mut app = app_with_provider(p, ToolRegistry::new());
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
     // Simulate /context: raise the command echo + ContextGrid rows.
     app.push_unanswered_echo("/context".into());
     app.push_transcript_line(TranscriptLine::ContextGrid(composition::context_view()));
@@ -650,10 +650,10 @@ fn test_slash_echo_visible() {
     // the rendered output above the ContextGrid block, not be overwritten
     // by the block Clear.
     let mut app = composition::app();
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
     // Simulate the real /context path: submit_input pushes User echo
     // THEN run_command pushes ContextGrid.
-    app.input.editor.set("/context".to_string());
+    app.ui.input.editor.set("/context".to_string());
     app.submit_input();
     // Assert the transcript has both lines.
     assert!(
@@ -693,7 +693,7 @@ fn test_tui_lines_survive_runs() {
     // accumulate at the tail or vanish.
     let p = Arc::new(FakeProvider::text("first reply"));
     let mut app = app_with_provider(p, ToolRegistry::new());
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
     app.push_transcript_line(TranscriptLine::User("/context".into()));
     app.push_transcript_line(TranscriptLine::ContextGrid(composition::context_view()));
     // First run.
@@ -764,7 +764,7 @@ fn approval_ask(call_id: &str) -> ApprovalRequest {
 #[test]
 fn test_ask_preserves_start() {
     let mut app = composition::app();
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
     attach_connection(&mut app);
     assert!(
         app.spawn_run("work".into()),
@@ -798,7 +798,7 @@ fn test_ask_preserves_start() {
 #[test]
 fn test_resolve_resumes_run() {
     let mut app = composition::app();
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
     attach_connection(&mut app);
     assert!(
         app.spawn_run("work".into()),
@@ -825,7 +825,7 @@ fn test_resolve_resumes_run() {
 fn test_ask_preserves_progress() {
     use crate::agent_message::ServerEvent;
     let mut app = composition::app();
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
     attach_connection(&mut app);
     assert!(app.spawn_run("work".into()));
     app.handle_agent_message(SessionMessage::Event(ServerEvent::Delta {
@@ -860,7 +860,7 @@ fn test_ask_preserves_progress() {
 #[test]
 fn test_finish_copies_start() {
     let mut app = composition::app();
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
     attach_connection(&mut app);
     assert!(app.spawn_run("work".into()));
     let run_req = app.active_run_req_id().unwrap();
@@ -890,7 +890,7 @@ fn test_finish_copies_start() {
 #[test]
 fn test_final_run_survives_loss() {
     let mut app = composition::app();
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
     attach_connection(&mut app);
     assert!(app.spawn_run("work".into()));
     let run_req = app.active_run_req_id().unwrap();
@@ -930,7 +930,7 @@ fn test_final_run_survives_loss() {
 #[test]
 fn test_stale_done_settles_nothing() {
     let mut app = composition::app();
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
     attach_connection(&mut app);
     assert!(app.spawn_run("work".into()));
     let run_req = app.active_run_req_id().unwrap();
@@ -977,7 +977,7 @@ fn test_stale_done_settles_nothing() {
 #[test]
 fn test_cycles_preserve_start() {
     let mut app = composition::app();
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
     attach_connection(&mut app);
     assert!(app.spawn_run("work".into()));
     let first_start = app.run_started();
@@ -1007,7 +1007,7 @@ fn test_cycles_preserve_start() {
 #[test]
 fn test_waiting_submit_parks() {
     let mut app = composition::app();
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
     attach_connection(&mut app);
     assert!(app.spawn_run("first".into()));
     let first_req = app.active_run_req_id();
@@ -1020,7 +1020,7 @@ fn test_waiting_submit_parks() {
         "a submit during Waiting does not replace the waiting run"
     );
     assert!(
-        app.input.queue.len() == 1,
+        app.ui.input.queue.len() == 1,
         "the submit parks in the queue instead of starting a second run"
     );
 }
@@ -1029,20 +1029,20 @@ fn test_waiting_submit_parks() {
 #[test]
 fn test_busy_submit_parks() {
     let mut app = composition::app();
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
     attach_connection(&mut app);
     assert!(app.spawn_run("first".into()));
     app.spawn_run("second".into());
     assert!(app.agent_busy(), "no second run while busy");
     assert_eq!(
-        app.input.queue.len(),
+        app.ui.input.queue.len(),
         1,
         "the extra input parks in the queue"
     );
     // promote_next_pending attaches the single server mirror right away
     // (the live connection accepts it) — the contract is at most one.
     assert!(
-        matches!(app.input.queue.first(), Some(InputItem::Message(_))),
+        matches!(app.ui.input.queue.first(), Some(InputItem::Message(_))),
         "the parked input is promoted to the single server mirror"
     );
 }
@@ -1053,7 +1053,7 @@ fn test_busy_submit_parks() {
 fn test_loss_unsent_vs_unknown() {
     use crate::agent_message::{ConnectionEvent, SessionMessage};
     let mut app = composition::app();
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
     attach_connection(&mut app);
     assert!(app.spawn_run("work".into()));
     let run_req = app.active_run_req_id().unwrap();
@@ -1076,7 +1076,7 @@ fn test_loss_unsent_vs_unknown() {
 
     // Reset for the unknown case.
     let mut app = composition::app();
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
     attach_connection(&mut app);
     assert!(app.spawn_run("work".into()));
     app.handle_agent_message(SessionMessage::Connection(ConnectionEvent::Lost {
@@ -1102,7 +1102,7 @@ fn test_loss_unsent_vs_unknown() {
 #[test]
 fn test_cancel_during_waiting() {
     let mut app = composition::app();
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
     attach_connection(&mut app);
     assert!(app.spawn_run("work".into()));
     let run_req = app.active_run_req_id().unwrap();
@@ -1125,7 +1125,7 @@ fn test_cancel_during_waiting() {
 #[test]
 fn test_loss_during_waiting_settles() {
     let mut app = composition::app();
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
     attach_connection(&mut app);
     assert!(app.spawn_run("work".into()));
     app.raise_agent_approval(approval_ask("c1"), RequestId(1));
@@ -1149,7 +1149,7 @@ fn test_loss_during_waiting_settles() {
 #[test]
 fn test_loss_during_cancelling_settles() {
     let mut app = composition::app();
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
     attach_connection(&mut app);
     assert!(app.spawn_run("work".into()));
     app.raise_agent_approval(approval_ask("c1"), RequestId(1));

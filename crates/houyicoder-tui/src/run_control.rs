@@ -150,7 +150,7 @@ impl App {
         // is the gate, not agent_busy.
         if self.sessions.current.run.is_active() {
             let parked = InputItem::ParkedMessage(input.into());
-            self.input.queue.push(parked);
+            self.ui.input.queue.push(parked);
             self.promote_next_pending();
             return true;
         }
@@ -208,12 +208,12 @@ impl App {
     /// At most one parked message is promoted to the server queue. Returns
     /// false when no item is available or the enqueue was refused.
     pub fn drain_pending_head(&mut self) -> bool {
-        let Some(item) = self.input.queue.first().cloned() else {
+        let Some(item) = self.ui.input.queue.first().cloned() else {
             return false;
         };
         match item {
             InputItem::Command(text) => {
-                self.input.queue.remove(0);
+                self.ui.input.queue.remove(0);
                 self.run_slash_text(&text);
                 true
             }
@@ -229,12 +229,12 @@ impl App {
                     self.system_line(Self::enqueue_failure_line("queue", e));
                     return false;
                 }
-                self.input.queue.remove(0);
+                self.ui.input.queue.remove(0);
                 let text = head.text.clone();
                 if !self.spawn_run(head.text) {
                     // The mirror is gone but the run could not start: keep the
                     // user content parked at the head so nothing is lost.
-                    let queue = &mut self.input.queue;
+                    let queue = &mut self.ui.input.queue;
                     queue.insert(0, InputItem::ParkedMessage(text.into()));
                     return false;
                 }
@@ -242,10 +242,10 @@ impl App {
                 true
             }
             InputItem::ParkedMessage(input) => {
-                self.input.queue.remove(0);
+                self.ui.input.queue.remove(0);
                 let text = input.text.clone();
                 if !self.spawn_run(input.text) {
-                    let queue = &mut self.input.queue;
+                    let queue = &mut self.ui.input.queue;
                     queue.insert(0, InputItem::ParkedMessage(text.into()));
                     return false;
                 }
@@ -466,10 +466,13 @@ impl App {
         }
         self.apply_frames(batch);
         // Resolve a bounded number of resume rows per poll.
-        if self.resume_picker.open
+        if self.ui.navigation.resume_picker.open
             && let Some(catalog) = self.sessions.catalog.as_ref()
         {
-            self.resume_picker.resolve_rows(catalog.as_ref(), 3);
+            self.ui
+                .navigation
+                .resume_picker
+                .resolve_rows(catalog.as_ref(), 3);
         }
         // Refresh status while idle. Active runs and reverse requests retain
         // exclusive ownership of response frames.
@@ -542,7 +545,7 @@ impl App {
     /// Recall the queued item at the cursor position into the input box.
     /// Sends QueueRemove for a live server copy. Leaves other items queued.
     pub fn recall_queued_at_cursor(&mut self) {
-        let Some(idx) = self.input.queue.selected_index() else {
+        let Some(idx) = self.ui.input.queue.selected_index() else {
             return;
         };
         let Some(item) = self.remove_pending_at(idx) else {
@@ -554,7 +557,7 @@ impl App {
     /// Delete the queued item at the cursor position without recalling it.
     /// Sends QueueRemove for a live server copy.
     pub fn delete_queued_at_cursor(&mut self) {
-        let Some(idx) = self.input.queue.selected_index() else {
+        let Some(idx) = self.ui.input.queue.selected_index() else {
             return;
         };
         drop(self.remove_pending_at(idx));
@@ -565,14 +568,14 @@ impl App {
     /// its server mirror: a refused mirror removal keeps the entry queued so
     /// the input cannot duplicate on the next drain.
     pub fn pop_queued_to_input(&mut self) {
-        let queue = &self.input.queue;
+        let queue = &self.ui.input.queue;
         if queue.iter().all(|it| matches!(it, InputItem::Command(_))) {
             return;
         }
         let mut keep: Vec<InputItem> = Vec::new();
         let mut recalled: Vec<String> = Vec::new();
         let mut refused = false;
-        for it in self.input.queue.take_all() {
+        for it in self.ui.input.queue.take_all() {
             match it {
                 InputItem::Message(input) => {
                     let session_id = self.sessions.current.identity.session_id.clone();
@@ -593,7 +596,7 @@ impl App {
                 other => keep.push(other),
             }
         }
-        self.input.queue.replace_all(keep);
+        self.ui.input.queue.replace_all(keep);
         if refused {
             self.system_line("queue: connection lost — some entries stayed queued");
         }
@@ -608,14 +611,14 @@ impl App {
     /// Insert recalled text before the current draft. The cursor remains at
     /// the draft boundary so editing can continue without losing input.
     pub(crate) fn merge_recalled_text(&mut self, text: String) {
-        let draft = self.input.editor.value().to_string();
+        let draft = self.ui.input.editor.value().to_string();
         if draft.is_empty() {
-            self.input.editor.set(text);
+            self.ui.input.editor.set(text);
         } else {
             let merged = format!("{text}\n{draft}");
             let draft_start = text.len() + 1; // past the text + newline
-            self.input.editor.set(merged);
-            self.input.editor.move_to(draft_start);
+            self.ui.input.editor.set(merged);
+            self.ui.input.editor.move_to(draft_start);
         }
     }
 

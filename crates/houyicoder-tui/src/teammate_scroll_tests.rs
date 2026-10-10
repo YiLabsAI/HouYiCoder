@@ -37,7 +37,7 @@ fn subagent_line(rows: usize) -> TranscriptLine {
 /// Subagent line rides after the rebuild so the rebuild cannot drop it.
 fn app_with_parent(parent_rows: usize) -> App {
     let mut app = crate::composition::app();
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
     for i in 0..parent_rows {
         app.sessions
             .current
@@ -115,7 +115,7 @@ fn test_child_scroll_leaves_parent() {
 #[test]
 fn test_child_tail_spares_parent() {
     let mut app = crate::composition::app();
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
     for i in 0..60 {
         app.sessions
             .current
@@ -166,7 +166,7 @@ fn test_child_tail_spares_parent() {
 #[test]
 fn test_child_blocks_parent_reads() {
     let mut app = crate::composition::app();
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
     app.sessions
         .current
         .transcript

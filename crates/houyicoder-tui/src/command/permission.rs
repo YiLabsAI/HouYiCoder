@@ -83,7 +83,7 @@ impl App {
     /// view switch, not a turn that needs an in-stream acknowledgment. Esc
     /// returns to the transcript.
     pub(crate) fn open_permission_pane(&mut self) {
-        self.pane = Pane::Permission;
+        self.ui.navigation.pane = Pane::Permission;
     }
 
     /// Add a rule through the same parser used by the permission pane.

@@ -502,7 +502,7 @@ fn test_entitlement_ask_two_option() {
 #[test]
 fn test_approval_ask_carries_delegation() {
     let mut app = composition::app();
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
     let ask = ApprovalRequest {
         call_id: "c1".into(),
         tool_name: "bash".into(),
@@ -786,25 +786,37 @@ fn test_slash_queries_ship_connected() {
         "Status sets the pending-command flag"
     );
     assert_eq!(
-        app.pane,
+        app.ui.navigation.pane,
         Pane::Status,
         "Status opens the Status pane (not a transcript dump)"
     );
 
     app.run_command(SlashCommand::Model);
-    assert_eq!(app.pane, Pane::Model, "Model opens the Model pane");
+    assert_eq!(
+        app.ui.navigation.pane,
+        Pane::Model,
+        "Model opens the Model pane"
+    );
 
     // /trajectory now opens a pane directly (mock data, no server query),
     // so it does not produce a "fetching" system line. The pane is the surface.
     app.run_command(SlashCommand::Trajectory);
-    assert_eq!(app.pane, Pane::Trajectory);
+    assert_eq!(app.ui.navigation.pane, Pane::Trajectory);
 
     app.run_command(SlashCommand::Tools);
-    assert_eq!(app.pane, Pane::Tools, "Tools opens the Tools pane");
+    assert_eq!(
+        app.ui.navigation.pane,
+        Pane::Tools,
+        "Tools opens the Tools pane"
+    );
     assert_eq!(Pane::Tools.label(), "tools");
 
     app.run_command(SlashCommand::Agents);
-    assert_eq!(app.pane, Pane::Agents, "Agents opens the Agents pane");
+    assert_eq!(
+        app.ui.navigation.pane,
+        Pane::Agents,
+        "Agents opens the Agents pane"
+    );
     app.tab_cycle_mode();
 }
 
@@ -856,7 +868,7 @@ fn test_agents_tools_round_trip() {
     let mut app = app_with_provider(provider, tools);
 
     app.run_command(SlashCommand::Agents);
-    assert_eq!(app.pane, Pane::Agents);
+    assert_eq!(app.ui.navigation.pane, Pane::Agents);
     let mut landed = false;
     for _ in 0..300 {
         app.poll_agent();
@@ -872,7 +884,7 @@ fn test_agents_tools_round_trip() {
     );
 
     app.run_command(SlashCommand::Tools);
-    assert_eq!(app.pane, Pane::Tools);
+    assert_eq!(app.ui.navigation.pane, Pane::Tools);
     let mut landed = false;
     for _ in 0..300 {
         app.poll_agent();
@@ -999,7 +1011,7 @@ fn test_toggle_repeat_press_dropped() {
 fn test_git_ops_ships_connected() {
     let provider = Arc::new(FakeProvider::new(vec![]));
     let mut app = app_with_provider(provider, ToolRegistry::new());
-    app.input.editor.set("/permissions git".to_string());
+    app.ui.input.editor.set("/permissions git".to_string());
     app.submit_input();
     assert!(app.sessions.current.transcript.iter().any(|l| matches!(
         l,
@@ -1043,7 +1055,7 @@ fn test_model_switch_applies() {
     let provider = Arc::new(FakeProvider::new(vec![]));
     let mut app = app_with_provider(provider, ToolRegistry::new());
     app.open_model_pane();
-    assert_eq!(app.pane, Pane::Model, "/model opens the pane");
+    assert_eq!(app.ui.navigation.pane, Pane::Model, "/model opens the pane");
     // Pump until the host's ModelInfo reply lands: the commit picks from the
     // reply's rows, and an empty pane has nothing to save.
     let mut seeded = false;
@@ -1089,7 +1101,11 @@ fn test_model_switch_applies() {
         "ModelSwitch wire round-trip must not error: {:?}",
         app.sessions.current.transcript
     );
-    assert_eq!(app.pane, Pane::Transcript, "the reply closes the pane");
+    assert_eq!(
+        app.ui.navigation.pane,
+        Pane::Transcript,
+        "the reply closes the pane"
+    );
     // The receipt is formatted from the reply, so it names the model the
     // session will actually send: the snapshot's focused row, which the
     // host resolved and applied.

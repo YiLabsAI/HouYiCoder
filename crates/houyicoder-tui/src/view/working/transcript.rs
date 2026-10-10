@@ -285,7 +285,7 @@ pub(super) fn draw_transcript(f: &mut Frame, area: Rect, app: &App) {
     // open, or in Scroll mode, whose status bar already advertises Esc=tail.
     // The hit rect is the label span, not the full row, so a click beside the
     // label falls through to the transcript surface and starts a drag-select.
-    let label_visible = app.viewport != ViewportMode::Scroll
+    let label_visible = app.ui.navigation.viewport != ViewportMode::Scroll
         && !app.active_scroll().is_following_tail()
         && !app.transcript_view.search.active;
     if label_visible {

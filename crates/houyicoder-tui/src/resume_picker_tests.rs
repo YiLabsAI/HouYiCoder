@@ -11,7 +11,8 @@ use crate::test_harness::render_text;
 
 /// The resolved target carried by a queued /resume Command at the head.
 fn queued_target(app: &crate::state::App) -> Option<String> {
-    app.input
+    app.ui
+        .input
         .queue
         .first()
         .and_then(resume_command_target)
@@ -72,7 +73,10 @@ fn stub_catalog_app() -> crate::state::App {
 fn test_resume_opens_picker_catalog() {
     let mut app = stub_catalog_app();
     app.run_command(SlashCommand::Resume);
-    assert!(app.resume_picker.open, "picker must open with a catalog");
+    assert!(
+        app.ui.navigation.resume_picker.open,
+        "picker must open with a catalog"
+    );
     let out = render(&app);
     println!("--- /resume picker ---\n{out}\n--- end ---");
     assert!(
@@ -104,7 +108,7 @@ fn test_resume_name_switches_directly() {
     let mut app = stub_catalog_app();
     app.run_tui_local_command("resume login flow");
     assert!(
-        !app.resume_picker.open,
+        !app.ui.navigation.resume_picker.open,
         "direct switch must not open picker"
     );
     assert_eq!(
@@ -120,10 +124,14 @@ fn test_resume_name_switches_directly() {
 fn test_resume_picker_filters_query() {
     let mut app = stub_catalog_app();
     app.run_command(SlashCommand::Resume);
-    app.resume_picker.push('s');
-    app.resume_picker.push('e');
-    app.resume_picker.push('a');
-    assert_eq!(app.resume_picker.len(), 1, "query narrows to one row");
+    app.ui.navigation.resume_picker.push('s');
+    app.ui.navigation.resume_picker.push('e');
+    app.ui.navigation.resume_picker.push('a');
+    assert_eq!(
+        app.ui.navigation.resume_picker.len(),
+        1,
+        "query narrows to one row"
+    );
     let out = render(&app);
     assert!(out.contains("search pane"), "filtered row shown:\n{out}");
     assert!(
@@ -141,11 +149,17 @@ fn test_keys_navigate_select_close() {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     let mut app = stub_catalog_app();
     app.run_command(SlashCommand::Resume);
-    assert!(app.resume_picker.open);
+    assert!(app.ui.navigation.resume_picker.open);
     crate::app::handle_key(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-    assert_eq!(app.resume_picker.sel, 1, "Down moves to row 1");
+    assert_eq!(
+        app.ui.navigation.resume_picker.sel, 1,
+        "Down moves to row 1"
+    );
     crate::app::handle_key(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
-    assert_eq!(app.resume_picker.sel, 0, "Up wraps back to row 0");
+    assert_eq!(
+        app.ui.navigation.resume_picker.sel, 0,
+        "Up wraps back to row 0"
+    );
     crate::app::handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     assert_eq!(
         queued_target(&app).as_deref(),
@@ -153,11 +167,17 @@ fn test_keys_navigate_select_close() {
         "Enter resumes the selected row"
     );
     assert!(!app.quit, "in-process swap does not quit");
-    assert!(!app.resume_picker.open, "Enter closes the picker");
-    drop(app.input.queue.take_all());
+    assert!(
+        !app.ui.navigation.resume_picker.open,
+        "Enter closes the picker"
+    );
+    drop(app.ui.input.queue.take_all());
     app.run_command(SlashCommand::Resume);
     crate::app::handle_key(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-    assert!(!app.resume_picker.open, "Esc closes the picker");
+    assert!(
+        !app.ui.navigation.resume_picker.open,
+        "Esc closes the picker"
+    );
     assert!(queued_target(&app).is_none(), "Esc does not resume");
 }
 
@@ -169,17 +189,17 @@ fn test_picker_backspace_pops_closes() {
     let mut app = stub_catalog_app();
     app.run_command(SlashCommand::Resume);
     // Type then backspace: pops the char.
-    app.resume_picker.push('s');
+    app.ui.navigation.resume_picker.push('s');
     crate::app::handle_key(
         &mut app,
         KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
     );
     assert!(
-        app.resume_picker.open,
+        app.ui.navigation.resume_picker.open,
         "backspace on non-empty query stays open"
     );
     assert!(
-        app.resume_picker.query.is_empty(),
+        app.ui.navigation.resume_picker.query.is_empty(),
         "backspace pops the char"
     );
     // Backspace on empty query closes.
@@ -187,7 +207,10 @@ fn test_picker_backspace_pops_closes() {
         &mut app,
         KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
     );
-    assert!(!app.resume_picker.open, "backspace on empty query closes");
+    assert!(
+        !app.ui.navigation.resume_picker.open,
+        "backspace on empty query closes"
+    );
 }
 
 /// Enter with a query that matches no row falls back to a direct switch by
@@ -200,9 +223,12 @@ fn test_picker_enter_fall_back() {
     app.run_command(SlashCommand::Resume);
     // Type a query matching neither row's sid nor title.
     for c in "zzz-no-match".chars() {
-        app.resume_picker.push(c);
+        app.ui.navigation.resume_picker.push(c);
     }
-    assert!(app.resume_picker.selected().is_none(), "no row matches");
+    assert!(
+        app.ui.navigation.resume_picker.selected().is_none(),
+        "no row matches"
+    );
     crate::app::handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     assert!(!app.quit, "no match must not quit (no resume)");
     let out = render(&app);
@@ -226,8 +252,8 @@ fn test_busy_defers_selection() {
         app.sessions.current.identity.session_id.0, sid_before,
         "busy Enter must not swap now"
     );
-    assert_eq!(app.input.queue.len(), 1, "the switch is deferred");
-    match app.input.queue.first() {
+    assert_eq!(app.ui.input.queue.len(), 1, "the switch is deferred");
+    match app.ui.input.queue.first() {
         Some(InputItem::Command(text)) => {
             assert_eq!(text, "/resume aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
         }
@@ -243,7 +269,7 @@ fn test_busy_defers_query() {
     let mut app = stub_catalog_app();
     app.run_command(SlashCommand::Resume);
     for c in "zzz-no-match".chars() {
-        app.resume_picker.push(c);
+        app.ui.navigation.resume_picker.push(c);
     }
     app.start_run_for_test(1);
     let sid_before = app.sessions.current.identity.session_id.0.clone();
@@ -252,8 +278,8 @@ fn test_busy_defers_query() {
         app.sessions.current.identity.session_id.0, sid_before,
         "busy Enter must not swap now"
     );
-    assert_eq!(app.input.queue.len(), 1, "the switch is deferred");
-    match app.input.queue.first() {
+    assert_eq!(app.ui.input.queue.len(), 1, "the switch is deferred");
+    match app.ui.input.queue.first() {
         Some(InputItem::Command(text)) => {
             assert_eq!(text, "/resume zzz-no-match");
         }
@@ -272,13 +298,19 @@ fn test_char_keys_reach_push() {
         &mut app,
         KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
     );
-    assert_eq!(app.resume_picker.query, "l", "Char pushes to the query");
+    assert_eq!(
+        app.ui.navigation.resume_picker.query, "l",
+        "Char pushes to the query"
+    );
     // A non-graphic char (e.g. newline) is ignored (the _ arm).
     crate::app::handle_key(
         &mut app,
         KeyEvent::new(KeyCode::Char('\n'), KeyModifiers::NONE),
     );
-    assert_eq!(app.resume_picker.query, "l", "non-graphic char ignored");
+    assert_eq!(
+        app.ui.navigation.resume_picker.query, "l",
+        "non-graphic char ignored"
+    );
 }
 
 /// /resume with no other sessions on disk shows a system line instead of
@@ -289,7 +321,10 @@ fn test_resume_picker_empty_list() {
     let mut app = working();
     app.sessions.catalog = Some(std::sync::Arc::new(StubCatalog(vec![])));
     app.run_command(SlashCommand::Resume);
-    assert!(!app.resume_picker.open, "picker must not open on empty");
+    assert!(
+        !app.ui.navigation.resume_picker.open,
+        "picker must not open on empty"
+    );
     assert!(queued_target(&app).is_none(), "no sid on empty");
     let out = render(&app);
     assert!(

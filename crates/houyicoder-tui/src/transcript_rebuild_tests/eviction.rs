@@ -9,7 +9,7 @@ use super::*;
 fn test_trim_skips_scrollaway() {
     use crate::scroll::VIEWABLE_SCROLLBACK_CAP;
     let mut app = fresh_app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     // Follow the tail: direct pushes trim down to the cap.
     for _ in 0..(VIEWABLE_SCROLLBACK_CAP + 5) {
         app.push_transcript_line(TranscriptLine::Agent("tail line".into()));
@@ -41,7 +41,7 @@ fn test_trim_skips_scrollaway() {
 fn test_trim_shifts_boundary() {
     use crate::scroll::VIEWABLE_SCROLLBACK_CAP;
     let mut app = fresh_app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     // A turn boundary with a real prefix: 100 user messages, then an agent
     // frame, rebuild sets line_index to the prefix length (100).
     for i in 0..100 {
@@ -82,7 +82,7 @@ fn test_scrollback_survives_frame() {
     // prepended older rows must push the total past the cap.
     let frame_count = VIEWABLE_SCROLLBACK_CAP + 600;
     let mut app = fresh_app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     for i in 0..frame_count {
         app.transcript_mut()
             .push_frame(user_msg(&format!("msg {i}")));
@@ -195,7 +195,7 @@ fn test_fold_active_tracks_waiting() {
 #[test]
 fn test_evicts_under_byte_budget() {
     let mut app = fresh_app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app.transcript_mut().set_resident_byte_budget(100 * 1024);
     let text = "x".repeat(100);
     for i in 0..1000 {
@@ -226,7 +226,7 @@ fn test_evicts_under_byte_budget() {
 #[test]
 fn test_eviction_stops_at_front() {
     let mut app = fresh_app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app.transcript_mut().set_resident_byte_budget(1024);
     let text = "x".repeat(100);
     for turn in 0..4 {
@@ -270,7 +270,7 @@ fn test_eviction_stops_at_front() {
 #[test]
 fn test_verdict_survives_drain() {
     let mut app = fresh_app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app.transcript_mut().set_resident_byte_budget(1024);
     app.transcript_mut()
         .push_frame(TranscriptFrame::Acpx(AcpxNotification::new(
@@ -324,7 +324,7 @@ fn test_verdict_survives_drain() {
 #[test]
 fn test_drain_without_user_frame() {
     let mut app = fresh_app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app.transcript_mut().set_resident_byte_budget(8 * 1024);
     let text = "x".repeat(1000);
     for i in 0..40 {
@@ -356,7 +356,7 @@ fn test_drain_without_user_frame() {
 #[test]
 fn test_scrollback_stops_at_front() {
     let mut app = fresh_app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app.transcript_mut().set_resident_byte_budget(512 * 1024);
     let text = "x".repeat(400);
     for i in 0..2000 {
@@ -395,7 +395,7 @@ fn test_scrollback_stops_at_front() {
 #[test]
 fn test_active_turn_protected() {
     let mut app = fresh_app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app.transcript_mut().set_resident_byte_budget(1024);
     let text = "x".repeat(200);
     app.transcript_mut().push_frame(user_msg("opening"));
@@ -427,7 +427,7 @@ fn test_active_turn_protected() {
 #[test]
 fn test_load_boundary_keeps_draining() {
     let mut app = fresh_app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app.transcript_mut().set_resident_byte_budget(128 * 1024);
     let text = "x".repeat(100);
     for i in 0..600 {
@@ -465,7 +465,7 @@ fn test_load_boundary_keeps_draining() {
 #[test]
 fn test_todo_survives_eviction() {
     let mut app = fresh_app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app.transcript_mut().set_resident_byte_budget(1024);
     let text = "x".repeat(100);
     pump(

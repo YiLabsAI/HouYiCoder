@@ -5,7 +5,6 @@
 
 use std::cell::{Cell, RefCell};
 use std::fmt;
-use std::sync::Arc;
 use std::time::Instant;
 
 pub(crate) mod chain;
@@ -30,24 +29,19 @@ use crate::composition::WorktreeEntry;
 use crate::composition::app as test_app;
 use crate::display_rows_cache::DisplayRowsCache;
 use crate::hooks_state::HooksPaneState;
-use crate::input::{Input, InputField};
+use crate::input::InputField;
 use crate::last_row_keys::LastRowKeys;
 use crate::layout_feedback::LayoutFeedback;
 use crate::layout_snapshot::LayoutSnapshot;
 use crate::list_pane_state::ListPaneState;
 use crate::memory_state::MemoryPaneState;
-use crate::notifications::NotificationState;
-use crate::palette::PaletteState;
 use crate::permission_pane_state::PermissionPaneState;
 use crate::records::TeammateView;
 use crate::render_cache::RenderCache;
-use crate::resume_picker::SessionPickerState;
 use crate::run_state::{RunProgress, RunState};
-use crate::selection::ClipboardWriter;
-use crate::selections::Selections;
 use crate::sessions::Sessions;
-use crate::skill_picker_state::SkillPickerState;
 use crate::skills_state::SkillsPaneState;
+use crate::ui::Ui;
 use crate::workflow::Workflow;
 use houyicoder_protocol::envelope::RequestId;
 
@@ -59,7 +53,6 @@ pub(crate) use crate::state::parked_view_states::ParkedViewStates;
 pub use crate::state::trajectory::{
     TrajectoryDrill, TrajectoryPaneState, TrajectorySelection, TrajectoryTurnKey,
 };
-use houyicoder_protocol::frontend::LoginMode;
 use ratatui::layout::Rect;
 
 /// Live progress for one long-running tool call (bash): elapsed seconds +
@@ -101,20 +94,11 @@ pub(crate) struct CurrentTurnBoundary {
 
 /// Top-level state composed from session wiring and domain-owned UI state.
 pub struct App {
-    pub screen: Screen,
+    /// The frontend's presentation and interaction state.
+    pub ui: Ui,
     /// The spec-plan-review-verify-artifact lifecycle fields, bundled as one
     /// owner toward the final shell.
     pub(crate) workflow: Workflow,
-    pub pane: Pane,
-    /// The active viewport mode (Working / Focus / Scroll). Drives the layout
-    /// in view::working: how many rows of chrome surround the content.
-    pub viewport: ViewportMode,
-    /// The viewport the user was in before entering Scroll, so Esc/End returns to it rather than re-deriving from stage (which would lose a manual Focus->Working fold).
-    pub prev_viewport: ViewportMode,
-    /// The input subsystem: the chat editor, the prompt-history navigation,
-    /// and the two paste halves, held as one value so a session switch resets
-    /// them together.
-    pub(crate) input: Input,
     /// Cursor into the frame log for the verdict audit cache. Stays on App:
     /// verdicts are an audit capability, not transcript content.
     pub verdict_cursor: usize,
@@ -128,13 +112,8 @@ pub struct App {
     /// them together. Pub(crate) so the draw pass reads and writes a vector
     /// directly, matching the per-vector visible_window slices.
     pub(crate) display_rows_cache: DisplayRowsCache,
-    /// The session picker overlay state (opened by /resume with no arg).
-    pub resume_picker: SessionPickerState,
-    pub palette: PaletteState,
     pub status: StatusStub,
     pub(crate) memory: MemoryPaneState,
-    /// Selection and hit-test state for the queued-input interface.
-    pub queue_view: QueueViewState,
     /// The linked-worktree rows for the /worktrees pane. Refreshed from
     /// parse_worktrees on pane-open. Empty until the user opens the pane (no
     /// background poll — the list is cheap and the pane is one-shot).
@@ -148,21 +127,12 @@ pub struct App {
     /// for the pane's position, because the selection and the cursor are kept
     /// consistent by the same transitions.
     pub trajectory: TrajectoryPaneState,
-    pub login_mode: Option<LoginMode>,
     pub quit: bool,
     // --- real agent-loop wiring ---
     /// The presented session and the resumable-session catalog, held as one
     /// value so a swap replaces both and a lost connection never drops the
     /// identity.
     pub(crate) sessions: Sessions,
-    /// Transient notification toast: one-line auto-expiring hint above the
-    /// input box (copy feedback, exit-again prompt). Poll-driven expiry.
-    pub notifications: NotificationState,
-    /// Whether the terminal window has focus (FocusGained/FocusLost events).
-    /// The input cursor (invert) gates on this so the caret hides when the
-    /// window is unfocused, following a renderPlaceholder terminal
-    /// focus gate. Defaults true (assume focused at startup).
-    pub terminal_focused: bool,
     /// The renderer layout feedback: the last terminal height and transcript
     /// pane width the draw pass measured, held in one owner so the count and
     /// layout paths read the same dims the last render used.
@@ -170,10 +140,6 @@ pub struct App {
     /// Last token count displayed by the spinner. Lerps toward the actual
     /// count each frame for a smooth increment animation.
     pub displayed_tokens: Cell<u32>,
-    /// The four per-region drag selections: the transcript's main selection
-    /// and the status, pane, and approval selections, each in its own
-    /// coordinate space so a drag on one region never collides with another.
-    pub(crate) selections: Selections,
     /// The renderer's layout snapshot: per-region rectangles and rendered-row
     /// caches the draw pass stashes, read back by the input and click paths.
     pub(crate) layout_snapshot: LayoutSnapshot,
@@ -209,9 +175,6 @@ pub struct App {
     /// (body request, body text, scroll position). Kept together so the
     /// pane's view state is one owner, not a scatter of App fields.
     pub(crate) skills_pane: SkillsPaneState,
-    /// The @ skill-picker overlay state: the open flag and its list cursor.
-    /// Opening resets the cursor to zero, so the two move as one value.
-    pub(crate) skill_picker: SkillPickerState,
     /// The hooks pane state: the drill-down level (0 = event list, 1 = the
     /// selected event detail) and the selected event index. Pub(crate) so the
     /// key handler and render path step a field directly; the level and the
@@ -231,14 +194,6 @@ pub struct App {
     /// inline-editable (rather than a rename command).
     pub status_name_edit: Option<InputField>,
     pub last_title: Option<String>,
-    /// True between an Esc-abort and the matching Done(Interrupted). Set in
-    /// abort_run when the session/cancel notification ships; cleared in the
-    /// Done handler. The honest form for a wire abort: the token fire is
-    /// Pluggable clipboard writer. Production holds a SystemClipboard
-    /// (pbcopy/OSC 52); adversarial selection tests inject a RecordingClipboard
-    /// so the exact copied text can be asserted without touching the OS
-    /// clipboard. Arc<dyn> so App stays Send + Sync across the TUI/runner.
-    pub clipboard: Arc<dyn ClipboardWriter>,
 }
 
 impl App {
@@ -349,10 +304,10 @@ impl App {
 impl std::fmt::Debug for App {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("App")
-            .field("screen", &self.screen)
+            .field("screen", &self.ui.navigation.screen)
             .field("stage", &self.workflow.stage)
-            .field("pane", &self.pane)
-            .field("viewport", &self.viewport)
+            .field("pane", &self.ui.navigation.pane)
+            .field("viewport", &self.ui.navigation.viewport)
             .field("transcript_len", &self.sessions.current.transcript.len())
             .field("agent_busy", &self.agent_busy())
             .field("prompt", &self.sessions.current.prompt)

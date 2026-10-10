@@ -81,7 +81,7 @@ pub fn run_with_runner(
         if app.fleet.tick_elapsed(now) {
             dirty = true;
         }
-        if app.notifications.tick(now) {
+        if app.ui.notifications.tick(now) {
             dirty = true;
         }
         if app.sessions.current.todos.prune(now) {
@@ -136,7 +136,7 @@ pub fn run_with_runner(
     // In-process resume consumes the /resume Command during the swap. A
     // command survives only when the caller must rebuild the session outside
     // this loop (no in-process builder), so hand its target up.
-    Ok(app.input.queue.drain_resume_target())
+    Ok(app.ui.input.queue.drain_resume_target())
 }
 
 /// Enable SGR mouse reporting for clicks, drag, hover, and wheel events.
@@ -161,12 +161,12 @@ pub(crate) fn handle_event(app: &mut App, event: Event) -> io::Result<bool> {
         Event::Paste(data) => {
             // Accumulate chunks (large pastes arrive in multiple Paste
             // events). Flushed in the run loop when the gap exceeds 50ms.
-            if let Some(buf) = app.input.pending_paste.buffer.as_mut() {
+            if let Some(buf) = app.ui.input.pending_paste.buffer.as_mut() {
                 buf.push_str(&data);
             } else {
-                app.input.pending_paste.buffer = Some(data);
+                app.ui.input.pending_paste.buffer = Some(data);
             }
-            app.input.pending_paste.last = Some(Instant::now());
+            app.ui.input.pending_paste.last = Some(Instant::now());
             Ok(true)
         }
         Event::Resize(_, _) => {
@@ -180,13 +180,13 @@ pub(crate) fn handle_event(app: &mut App, event: Event) -> io::Result<bool> {
             // Focus changes can reset terminal mouse modes; re-enabling them
             // is idempotent.
             assert_mouse_modes()?;
-            app.terminal_focused = true;
+            app.ui.terminal_focused = true;
             Ok(true)
         }
         Event::FocusLost => {
             // Keep the logical caret position while hiding it from an
             // unfocused terminal so input composition resumes correctly.
-            app.terminal_focused = false;
+            app.ui.terminal_focused = false;
             Ok(true)
         }
     }
@@ -220,9 +220,10 @@ pub(crate) fn handle_mouse(app: &mut App, m: MouseEvent) {
             // Footer queue strip: click a previewed item to recall it into
             // the input box, or click the +N / summary row to open the queue
             // pane (non-destructive — does not recall all items).
-            let qrect = app.queue_view.strip_rect.get();
+            let qrect = app.ui.queue_view.strip_rect.get();
             if qrect.width > 0 && qrect.height > 0 && in_rect(qrect, m.column, m.row) {
                 let n = app
+                    .ui
                     .input
                     .queue
                     .iter()
@@ -233,13 +234,14 @@ pub(crate) fn handle_mouse(app: &mut App, m: MouseEvent) {
                 }
                 let row = (m.row - qrect.y) as usize;
                 if qrect.height <= 1 {
-                    app.pane = Pane::Queue;
-                    app.input.queue.select_first();
+                    app.ui.navigation.pane = Pane::Queue;
+                    app.ui.input.queue.select_first();
                     return;
                 }
                 let shown = if n > 2 { 1 } else { cmp::min(n, 2) } as usize;
                 if row < shown {
                     let Some(idx) = app
+                        .ui
                         .input
                         .queue
                         .iter()
@@ -255,8 +257,8 @@ pub(crate) fn handle_mouse(app: &mut App, m: MouseEvent) {
                     };
                     app.merge_recalled_text(item.display().to_string());
                 } else {
-                    app.pane = Pane::Queue;
-                    app.input.queue.select_first();
+                    app.ui.navigation.pane = Pane::Queue;
+                    app.ui.input.queue.select_first();
                 }
                 return;
             }
@@ -300,59 +302,59 @@ pub(crate) fn handle_mouse(app: &mut App, m: MouseEvent) {
                     TranscriptSurface { app: &mut *app }.handle_down(m.column, m.row);
                 }
             } else {
-                app.selections.transcript.clear();
-                app.selections.pane.clear();
-                app.selections.status.clear();
-                app.selections.approval.clear();
+                app.ui.selection.transcript.clear();
+                app.ui.selection.pane.clear();
+                app.ui.selection.status.clear();
+                app.ui.selection.approval.clear();
             }
         }
         MouseEventKind::Drag(MouseButton::Left) => {
-            if app.selections.pane.is_dragging {
+            if app.ui.selection.pane.is_dragging {
                 PaneSurface { app: &mut *app }.handle_drag(m.column, m.row);
-            } else if app.selections.status.is_dragging {
+            } else if app.ui.selection.status.is_dragging {
                 StatusSurface { app: &mut *app }.handle_drag(m.column, m.row);
-            } else if app.selections.approval.is_dragging {
+            } else if app.ui.selection.approval.is_dragging {
                 ApprovalSelection { app: &mut *app }.handle_drag(m.column, m.row);
-            } else if app.selections.transcript.is_dragging {
+            } else if app.ui.selection.transcript.is_dragging {
                 TranscriptSurface { app: &mut *app }.handle_drag(m.column, m.row);
             }
         }
         MouseEventKind::Moved => {
             // Motion without a pressed button closes any drag whose release
             // was lost. Multiple surfaces may still carry stale drag state.
-            if app.selections.pane.is_dragging {
+            if app.ui.selection.pane.is_dragging {
                 PaneSurface { app: &mut *app }.handle_moved();
             }
-            if app.selections.status.is_dragging {
+            if app.ui.selection.status.is_dragging {
                 StatusSurface { app: &mut *app }.handle_moved();
             }
-            if app.selections.approval.is_dragging {
+            if app.ui.selection.approval.is_dragging {
                 ApprovalSelection { app: &mut *app }.handle_moved();
             }
-            if app.selections.transcript.is_dragging {
+            if app.ui.selection.transcript.is_dragging {
                 TranscriptSurface { app: &mut *app }.handle_moved();
             }
         }
         MouseEventKind::Up(MouseButton::Left) => {
-            if app.selections.pane.is_dragging {
+            if app.ui.selection.pane.is_dragging {
                 PaneSurface { app: &mut *app }.handle_up();
                 return;
             }
-            if app.selections.status.is_dragging {
+            if app.ui.selection.status.is_dragging {
                 StatusSurface { app: &mut *app }.handle_up();
                 return;
             }
-            if app.selections.approval.is_dragging {
+            if app.ui.selection.approval.is_dragging {
                 ApprovalSelection { app: &mut *app }.handle_up();
                 return;
             }
-            if app.selections.transcript.is_dragging {
+            if app.ui.selection.transcript.is_dragging {
                 TranscriptSurface { app: &mut *app }.handle_up();
             }
         }
         MouseEventKind::ScrollUp => {
-            clear_stale_click(&mut app.selections.transcript);
-            clear_stale_click(&mut app.selections.pane);
+            clear_stale_click(&mut app.ui.selection.transcript);
+            clear_stale_click(&mut app.ui.selection.pane);
             if app.window_browsing() {
                 app.window_scroll_mut().line_up(3);
             } else {
@@ -360,8 +362,8 @@ pub(crate) fn handle_mouse(app: &mut App, m: MouseEvent) {
             }
         }
         MouseEventKind::ScrollDown => {
-            clear_stale_click(&mut app.selections.transcript);
-            clear_stale_click(&mut app.selections.pane);
+            clear_stale_click(&mut app.ui.selection.transcript);
+            clear_stale_click(&mut app.ui.selection.pane);
             if app.window_browsing() {
                 app.window_scroll_mut().line_down(3);
             } else {
@@ -388,7 +390,7 @@ pub(crate) fn apply_selection_overlay(f: &mut Frame, app: &App) {
             buf,
             app.layout_snapshot.transcript_rect.get(),
             &rows,
-            &app.selections.transcript,
+            &app.ui.selection.transcript,
             scroll_top,
         );
     }
@@ -398,7 +400,7 @@ pub(crate) fn apply_selection_overlay(f: &mut Frame, app: &App) {
             buf,
             app.layout_snapshot.pane_rect.get(),
             &rows,
-            &app.selections.pane,
+            &app.ui.selection.pane,
             0,
         );
     }
@@ -408,7 +410,7 @@ pub(crate) fn apply_selection_overlay(f: &mut Frame, app: &App) {
             buf,
             app.layout_snapshot.status_rect.get(),
             &rows,
-            &app.selections.status,
+            &app.ui.selection.status,
             0,
         );
     }
@@ -418,7 +420,7 @@ pub(crate) fn apply_selection_overlay(f: &mut Frame, app: &App) {
             buf,
             app.layout_snapshot.approval_rect.get(),
             &rows,
-            &app.selections.approval,
+            &app.ui.selection.approval,
             0,
         );
     }
@@ -433,11 +435,11 @@ pub(crate) fn handle_key(app: &mut App, k: KeyEvent) {
     // ctrl+C copies a selection (with a toast); interrupts a running turn;
     // otherwise no-op. It never quits -- the panic key is not an exit.
     if k.modifiers.contains(KeyModifiers::CONTROL) && k.code == KeyCode::Char('c') {
-        if app.selections.transcript.has_selection() {
+        if app.ui.selection.transcript.has_selection() {
             let copied = TranscriptSurface { app: &mut *app }.copy_current();
             if let Some(text) = copied {
                 let path = get_clipboard_path();
-                app.notifications.add(copy_toast(&text, path));
+                app.ui.notifications.add(copy_toast(&text, path));
             }
             return;
         }
@@ -450,17 +452,18 @@ pub(crate) fn handle_key(app: &mut App, k: KeyEvent) {
     // base working surface.
     if k.modifiers.contains(KeyModifiers::CONTROL)
         && k.code == KeyCode::Char('d')
-        && app.pane == Pane::Transcript
-        && app.viewport == ViewportMode::Working
+        && app.ui.navigation.pane == Pane::Transcript
+        && app.ui.navigation.viewport == ViewportMode::Working
     {
         let pending = app
+            .ui
             .notifications
             .current()
             .is_some_and(|n| n.key == "exit-confirm");
         if pending {
             app.quit = true;
         } else {
-            app.notifications.add(Notification::immediate(
+            app.ui.notifications.add(Notification::immediate(
                 "exit-confirm",
                 NotifKind::Text {
                     text: "Press Ctrl+D again to exit".to_string(),
@@ -473,9 +476,9 @@ pub(crate) fn handle_key(app: &mut App, k: KeyEvent) {
     }
     // k stops the selected child; a confirmed K stops all children. Esc keeps
     // its non-terminal interrupt role.
-    if app.pane == Pane::Transcript
-        && app.viewport == ViewportMode::Working
-        && app.input.editor.is_empty()
+    if app.ui.navigation.pane == Pane::Transcript
+        && app.ui.navigation.viewport == ViewportMode::Working
+        && app.ui.input.editor.is_empty()
         && app.teammate_view.is_none()
     {
         let running = app
@@ -486,16 +489,17 @@ pub(crate) fn handle_key(app: &mut App, k: KeyEvent) {
             .count();
         if k.code == KeyCode::Char('K') && running > 0 {
             let pending = app
+                .ui
                 .notifications
                 .current()
                 .is_some_and(|n| n.key == "kill-agents-confirm");
             if pending {
-                app.notifications.remove("kill-agents-confirm");
+                app.ui.notifications.remove("kill-agents-confirm");
                 if let Err(e) = app.enqueue(ClientCommand::KillAllChildren) {
                     app.system_line(App::enqueue_failure_line("kill", e));
                 }
             } else {
-                app.notifications.add(Notification::immediate(
+                app.ui.notifications.add(Notification::immediate(
                     "kill-agents-confirm",
                     NotifKind::Text {
                         text: format!(
@@ -523,7 +527,7 @@ pub(crate) fn handle_key(app: &mut App, k: KeyEvent) {
         }
         // No valid running selection: fall through so 'k' types.
     }
-    match app.screen {
+    match app.ui.navigation.screen {
         Screen::Login => keys::handle_login(app, k),
         Screen::Console => keys::handle_console(app, k),
         Screen::Working => keys::handle_working(app, k),

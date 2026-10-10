@@ -32,19 +32,23 @@ impl App {
                     self.system_line("resume: no other sessions on disk");
                     return;
                 }
-                self.resume_picker.rows = rows;
-                self.resume_picker.open();
-                self.pane = Pane::Resume;
+                self.ui.navigation.resume_picker.rows = rows;
+                self.ui.navigation.resume_picker.open();
+                self.ui.navigation.pane = Pane::Resume;
                 // Resolve the first visible rows immediately so the picker
                 // shows real titles + last-active times on the first render,
                 // not placeholders. Subsequent rows resolve a few per frame
                 // in the poll loop.
-                self.resume_picker.resolve_rows(catalog.as_ref(), 20);
+                self.ui
+                    .navigation
+                    .resume_picker
+                    .resolve_rows(catalog.as_ref(), 20);
             }
             Some(query) => {
                 if is_export_file_path(query) {
-                    self.resume_picker.close();
-                    self.input
+                    self.ui.navigation.resume_picker.close();
+                    self.ui
+                        .input
                         .queue
                         .insert(0, InputItem::Command(format!("/resume {query}")));
                     self.system_line(self.resume_switch_message(query));
@@ -69,9 +73,10 @@ impl App {
                     .map(|r| r.sid_str);
                 match sid {
                     Some(s) => {
-                        self.resume_picker.close();
-                        self.pane = Pane::Transcript;
-                        self.input
+                        self.ui.navigation.resume_picker.close();
+                        self.ui.navigation.pane = Pane::Transcript;
+                        self.ui
+                            .input
                             .queue
                             .insert(0, InputItem::Command(format!("/resume {s}")));
                         self.system_line(self.resume_switch_message(&s));
@@ -120,7 +125,8 @@ mod tests {
 
     /// The resolved target carried by a queued /resume Command at the head.
     fn queued_target(app: &App) -> Option<String> {
-        app.input
+        app.ui
+            .input
             .queue
             .first()
             .and_then(resume_command_target)
@@ -176,8 +182,8 @@ mod tests {
     fn test_resume_disconnected() {
         let mut app = crate::composition::app();
         app.run_resume(None);
-        assert!(app.resume_picker.rows.is_empty());
-        assert!(!app.resume_picker.open);
+        assert!(app.ui.navigation.resume_picker.rows.is_empty());
+        assert!(!app.ui.navigation.resume_picker.open);
         assert!(queued_target(&app).is_none());
         assert!(
             last_line(&app)
@@ -193,7 +199,7 @@ mod tests {
     fn test_resume_catalog_gap() {
         let mut app = crate::test_harness::connected_app();
         app.run_resume(None);
-        assert!(!app.resume_picker.open);
+        assert!(!app.ui.navigation.resume_picker.open);
         assert!(
             last_line(&app)
                 .expect("a system line lands")
@@ -208,7 +214,7 @@ mod tests {
         let mut app = crate::test_harness::connected_app();
         app.sessions.catalog = Some(Arc::new(EmptyCatalog));
         app.run_resume(None);
-        assert!(!app.resume_picker.open);
+        assert!(!app.ui.navigation.resume_picker.open);
         assert!(queued_target(&app).is_none());
     }
 
@@ -218,9 +224,9 @@ mod tests {
         let mut app = crate::test_harness::connected_app();
         app.sessions.catalog = Some(Arc::new(TwoRowCatalog));
         app.run_resume(None);
-        assert!(app.resume_picker.open);
-        assert_eq!(app.resume_picker.rows.len(), 2);
-        assert_eq!(app.pane, crate::state::Pane::Resume);
+        assert!(app.ui.navigation.resume_picker.open);
+        assert_eq!(app.ui.navigation.resume_picker.rows.len(), 2);
+        assert_eq!(app.ui.navigation.pane, crate::state::Pane::Resume);
     }
 
     /// /resume with a sid arg matches a row by sid and enqueues the switch.
@@ -262,12 +268,12 @@ mod tests {
         let mut app = crate::composition::app();
         app.sessions.catalog = Some(Arc::new(TwoRowCatalog));
         app.start_run_for_test(0);
-        app.screen = crate::state::Screen::Working;
+        app.ui.navigation.screen = crate::state::Screen::Working;
         // /resume <sid> mid-run -> enqueued as a Command, not executed.
-        app.input.editor.set("/resume aaaa1111".to_string());
+        app.ui.input.editor.set("/resume aaaa1111".to_string());
         app.submit_input();
         assert_eq!(
-            app.input.queue,
+            app.ui.input.queue,
             vec![InputItem::Command("/resume aaaa1111".into())],
             "/resume <sid> mid-run enqueued as a Command"
         );
@@ -285,14 +291,17 @@ mod tests {
         let mut app = crate::test_harness::connected_app();
         app.sessions.catalog = Some(Arc::new(TwoRowCatalog));
         app.start_run_for_test(0);
-        app.screen = crate::state::Screen::Working;
-        app.input.editor.set("/resume".to_string());
+        app.ui.navigation.screen = crate::state::Screen::Working;
+        app.ui.input.editor.set("/resume".to_string());
         app.submit_input();
         assert!(
-            app.input.queue.is_empty(),
+            app.ui.input.queue.is_empty(),
             "bare /resume does not enqueue (picker opens instead)"
         );
-        assert!(app.resume_picker.open, "picker opens for browsing");
+        assert!(
+            app.ui.navigation.resume_picker.open,
+            "picker opens for browsing"
+        );
     }
 
     /// A non-existent .json path is NOT treated as an export file.
@@ -357,13 +366,17 @@ mod tests {
         let mut app = crate::test_harness::connected_app();
         app.sessions.catalog = Some(Arc::new(ManyRowCatalog(25)));
         app.run_resume(None);
-        assert_eq!(app.resume_picker.rows.len(), 25);
-        assert_eq!(app.resume_picker.filtered().len(), 25, "at open");
+        assert_eq!(app.ui.navigation.resume_picker.rows.len(), 25);
+        assert_eq!(
+            app.ui.navigation.resume_picker.filtered().len(),
+            25,
+            "at open"
+        );
         for _ in 0..4 {
             app.poll_agent();
         }
         assert_eq!(
-            app.resume_picker.filtered().len(),
+            app.ui.navigation.resume_picker.filtered().len(),
             25,
             "every named session stays listed after the poll loop resolves the rest"
         );

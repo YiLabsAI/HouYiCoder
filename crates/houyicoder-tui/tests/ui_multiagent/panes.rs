@@ -216,8 +216,8 @@ fn test_foreground_parent_after_fold() {
 fn test_agents_pane_lists_returned() {
     use houyicoder_tui::records::TranscriptLine;
     let mut app = houyicoder_tui::composition::app();
-    app.screen = houyicoder_tui::state::Screen::Working;
-    app.pane = houyicoder_tui::state::Pane::Agents;
+    app.ui.navigation.screen = houyicoder_tui::state::Screen::Working;
+    app.ui.navigation.pane = houyicoder_tui::state::Pane::Agents;
     app.push_transcript_line(TranscriptLine::Subagent {
         child_sid: "c1".into(),
         subagent_type: "explore".into(),
@@ -254,8 +254,8 @@ fn test_agents_pane_lists_returned() {
 fn test_agents_pane_cursor_walks() {
     use houyicoder_tui::records::TranscriptLine;
     let mut app = houyicoder_tui::composition::app();
-    app.screen = houyicoder_tui::state::Screen::Working;
-    app.pane = houyicoder_tui::state::Pane::Agents;
+    app.ui.navigation.screen = houyicoder_tui::state::Screen::Working;
+    app.ui.navigation.pane = houyicoder_tui::state::Pane::Agents;
     for (sid, summary) in [("c1", "first"), ("c2", "second")] {
         app.push_transcript_line(TranscriptLine::Subagent {
             child_sid: sid.into(),

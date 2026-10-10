@@ -24,9 +24,9 @@ use houyicoder_protocol::frontend::permission::{
     PermissionDecisionEntry, PermissionRule, PermissionRuleContent,
 };
 
-/// Render the capability pane for the current app.pane (right column).
+/// Render the right-column content for the currently open pane.
 pub fn draw(f: &mut Frame, area: Rect, app: &App) {
-    match app.pane {
+    match app.ui.navigation.pane {
         Pane::Spec => draw_spec(f, area, app),
         Pane::Plan => draw_plan(f, area, app),
         Pane::Review => draw_review(f, area, app),

@@ -88,7 +88,7 @@ fn test_cursor_restored_by_turn() {
         window_view(301, 500, 500, 1),
     ]));
     let mut app = crate::composition::app();
-    app.pane = crate::state::Pane::Trajectory;
+    app.ui.navigation.pane = crate::state::Pane::Trajectory;
     app.sessions.persistence.trajectory_log = Some(log.clone());
     let mut terminal = Terminal::new(TestBackend::new(80, 40)).unwrap();
 
@@ -127,7 +127,7 @@ fn test_cursor_restored_by_turn() {
 fn test_home_end_move_window() {
     let log = Arc::new(ScriptedLog::new(vec![window_view(401, 500, 500, 1)]));
     let mut app = crate::composition::app();
-    app.pane = crate::state::Pane::Trajectory;
+    app.ui.navigation.pane = crate::state::Pane::Trajectory;
     app.sessions.persistence.trajectory_log = Some(log.clone());
     let mut terminal = Terminal::new(TestBackend::new(80, 40)).unwrap();
     terminal
@@ -183,7 +183,7 @@ fn test_header_reports_newer() {
 #[test]
 fn test_level1_move_keeps_selection() {
     let mut app = crate::composition::app();
-    app.pane = crate::state::Pane::Trajectory;
+    app.ui.navigation.pane = crate::state::Pane::Trajectory;
     app.trajectory.set_level(1);
     app.trajectory.select(7, 1);
     app.trajectory.set_list_len(3);
@@ -204,7 +204,7 @@ fn test_selection_dropped_across_history() {
         window_view(1, 100, 100, 2),
     ]));
     let mut app = crate::composition::app();
-    app.pane = crate::state::Pane::Trajectory;
+    app.ui.navigation.pane = crate::state::Pane::Trajectory;
     app.sessions.persistence.trajectory_log = Some(log.clone());
     let mut terminal = Terminal::new(TestBackend::new(80, 40)).unwrap();
 
@@ -245,7 +245,7 @@ fn test_selection_dropped_across_history() {
 fn test_home_end_stay_local() {
     let log = Arc::new(ScriptedLog::new(vec![window_view(401, 500, 500, 1)]));
     let mut app = crate::composition::app();
-    app.pane = crate::state::Pane::Trajectory;
+    app.ui.navigation.pane = crate::state::Pane::Trajectory;
     app.sessions.persistence.trajectory_log = Some(log.clone());
     app.trajectory.set_level(1);
     app.trajectory.set_list_len(4);
@@ -284,7 +284,7 @@ fn test_home_end_stay_local() {
 fn test_esc_restores_turn() {
     let log = Arc::new(ScriptedLog::new(vec![window_view(401, 500, 500, 1)]));
     let mut app = crate::composition::app();
-    app.pane = crate::state::Pane::Trajectory;
+    app.ui.navigation.pane = crate::state::Pane::Trajectory;
     app.sessions.persistence.trajectory_log = Some(log.clone());
     let mut terminal = Terminal::new(TestBackend::new(80, 40)).unwrap();
     terminal
@@ -317,7 +317,7 @@ fn test_esc_restores_turn() {
 #[test]
 fn test_esc_keeps_record() {
     let mut app = crate::composition::app();
-    app.pane = crate::state::Pane::Trajectory;
+    app.ui.navigation.pane = crate::state::Pane::Trajectory;
     app.trajectory.set_level(2);
     app.trajectory.set_cursor(3);
 
@@ -333,7 +333,7 @@ fn test_esc_keeps_record() {
 fn test_level1_up_keeps_window() {
     let log = Arc::new(ScriptedLog::new(vec![window_view(401, 500, 500, 1)]));
     let mut app = crate::composition::app();
-    app.pane = crate::state::Pane::Trajectory;
+    app.ui.navigation.pane = crate::state::Pane::Trajectory;
     app.sessions.persistence.trajectory_log = Some(log.clone());
     app.trajectory.set_level(1);
     app.trajectory.set_list_len(4);
@@ -381,7 +381,7 @@ fn test_esc_survives_window_move() {
         window_view(402, 501, 501, 1),
     ]));
     let mut app = crate::composition::app();
-    app.pane = crate::state::Pane::Trajectory;
+    app.ui.navigation.pane = crate::state::Pane::Trajectory;
     app.sessions.persistence.trajectory_log = Some(log.clone());
     let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
     terminal
@@ -443,7 +443,7 @@ fn test_bg_row_clears_selection() {
     }));
     let log = Arc::new(ScriptedLog::new(vec![view]));
     let mut app = crate::composition::app();
-    app.pane = crate::state::Pane::Trajectory;
+    app.ui.navigation.pane = crate::state::Pane::Trajectory;
     app.sessions.persistence.trajectory_log = Some(log.clone());
     let mut terminal = Terminal::new(TestBackend::new(80, 40)).unwrap();
     terminal
@@ -471,7 +471,7 @@ fn test_bg_row_clears_selection() {
 #[test]
 fn test_down_before_first_page() {
     let mut app = crate::composition::app();
-    app.pane = crate::state::Pane::Trajectory;
+    app.ui.navigation.pane = crate::state::Pane::Trajectory;
     // What opening the pane leaves behind: no rows loaded yet.
     app.trajectory.set_cursor(usize::MAX);
     app.trajectory.set_list_len(0);
@@ -492,7 +492,7 @@ fn test_drill_gone_when_evicted() {
         window_view(402, 501, 501, 1),
     ]));
     let mut app = crate::composition::app();
-    app.pane = crate::state::Pane::Trajectory;
+    app.ui.navigation.pane = crate::state::Pane::Trajectory;
     app.sessions.persistence.trajectory_log = Some(log.clone());
     let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
     terminal
@@ -532,7 +532,7 @@ fn test_drill_drops_across_history() {
         window_view(1, 10, 10, 2),
     ]));
     let mut app = crate::composition::app();
-    app.pane = crate::state::Pane::Trajectory;
+    app.ui.navigation.pane = crate::state::Pane::Trajectory;
     app.sessions.persistence.trajectory_log = Some(log.clone());
     let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
     terminal
@@ -573,7 +573,7 @@ fn test_drill_drops_across_history() {
 fn test_drill_holds_key() {
     let log = Arc::new(ScriptedLog::new(vec![window_view(401, 500, 500, 1)]));
     let mut app = crate::composition::app();
-    app.pane = crate::state::Pane::Trajectory;
+    app.ui.navigation.pane = crate::state::Pane::Trajectory;
     app.sessions.persistence.trajectory_log = Some(log.clone());
     let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
     terminal
@@ -612,7 +612,7 @@ fn test_drill_survives_eviction() {
         None,
     )]));
     let mut app = crate::composition::app();
-    app.pane = crate::state::Pane::Trajectory;
+    app.ui.navigation.pane = crate::state::Pane::Trajectory;
     app.sessions.persistence.trajectory_log = Some(log.clone());
     let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
     terminal

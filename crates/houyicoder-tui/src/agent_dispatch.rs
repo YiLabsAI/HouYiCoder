@@ -233,7 +233,7 @@ impl App {
                 // Remove the committed inputs before promoting the next head;
                 // the queue matches them by stable identity so a delayed event
                 // cannot remove newer text sitting at the same position.
-                self.input.queue.remove_committed(&inputs);
+                self.ui.input.queue.remove_committed(&inputs);
                 self.promote_next_pending();
             }
             ServerEvent::MemoryChanged {

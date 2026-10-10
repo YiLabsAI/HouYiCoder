@@ -57,6 +57,7 @@ pub mod terminal_title;
 pub mod todo_view;
 mod toggle_hint;
 pub mod transcript;
+pub mod ui;
 pub mod view;
 mod workflow;
 

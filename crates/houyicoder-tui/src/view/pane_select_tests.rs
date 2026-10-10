@@ -27,10 +27,10 @@ fn mouse(kind: MouseEventKind, column: u16, row: u16) -> MouseEvent {
 
 fn memory_app() -> (crate::state::App, Arc<Mutex<Vec<String>>>) {
     let mut app = composition::app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app.run_command(SlashCommand::Memory);
     let captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
-    app.clipboard = Arc::new(RecordingClipboard {
+    app.ui.clipboard = Arc::new(RecordingClipboard {
         captured: captured.clone(),
     });
     let _rendered = render_text(&app, 100, 28);
@@ -82,7 +82,7 @@ fn test_drag_copies_pane_row() {
     );
     // The pane range is cleared on release — no stale highlight.
     assert!(
-        !app.selections.pane.is_dragging,
+        !app.ui.selection.pane.is_dragging,
         "pane selection cleared on release"
     );
     let _ = ri; // row index used only for the screen-y derivation

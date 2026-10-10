@@ -59,7 +59,7 @@ fn test_trust_down_selects_exit() {
 fn test_login_enter_accepts_trust() {
     let mut app = composition::app();
     crate::test_harness::attach_connection(&mut app);
-    app.screen = Screen::Login;
+    app.ui.navigation.screen = Screen::Login;
     app.sessions.current.prompt = Some(PendingPrompt::trust_ask(
         RequestId(5),
         trust_prompt("/proj"),
@@ -208,7 +208,8 @@ fn test_loss_unblocks_exit() {
         KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL),
     );
     assert!(
-        app.notifications
+        app.ui
+            .notifications
             .current()
             .is_some_and(|n| n.key == "exit-confirm"),
         "first Ctrl+D raises exit confirmation after loss"

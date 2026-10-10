@@ -23,29 +23,30 @@ pub(super) fn handle_palette(app: &mut App, k: KeyEvent) {
                 // typing; our popup stays open and guides the argument. Argless
                 // commands auto-run on select.
                 if cmd.takes_arg() {
-                    app.palette.query = format!("{} ", cmd.name().trim_start_matches('/'));
-                    app.palette.sel = 0;
+                    app.ui.navigation.palette.query =
+                        format!("{} ", cmd.name().trim_start_matches('/'));
+                    app.ui.navigation.palette.sel = 0;
                 } else {
                     app.close_palette();
-                    app.input.editor.set(cmd.name().to_string());
+                    app.ui.input.editor.set(cmd.name().to_string());
                     app.submit_input();
                 }
-            } else if !app.palette.query.is_empty() {
+            } else if !app.ui.navigation.palette.query.is_empty() {
                 // No palette entry matches the query. Submit it as a slash
                 // command so arg-bearing forms typed in the filter
                 // (/permissions git off, /resume file.json) and genuinely
                 // unknown tokens (/nope) still run instead of dropping Enter on
                 // the floor. Strip any leading slash the user typed so it does
                 // not double-slash.
-                let q = app.palette.query.trim_start_matches('/');
+                let q = app.ui.navigation.palette.query.trim_start_matches('/');
                 let raw = format!("/{q}");
                 app.close_palette();
-                app.input.editor.set(raw);
+                app.ui.input.editor.set(raw);
                 app.submit_input();
             }
         }
         KeyCode::Backspace => {
-            if app.palette.query.is_empty() {
+            if app.ui.navigation.palette.query.is_empty() {
                 app.close_palette();
             } else {
                 app.palette_pop();

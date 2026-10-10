@@ -21,6 +21,7 @@ use crate::state::App;
 /// one-line summary.
 pub(super) fn strip_want(app: &App) -> u16 {
     let n = app
+        .ui
         .input
         .queue
         .iter()
@@ -56,17 +57,18 @@ fn preview_text(text: &str, width: usize) -> String {
 /// "· queued". Gate closed (idle after a non-final end): all -> "⏸ held".
 pub(super) fn draw_strip(f: &mut Frame, area: Rect, app: &App) {
     let items: Vec<_> = app
+        .ui
         .input
         .queue
         .iter()
         .filter(|s| !s.display().is_empty())
         .collect();
     if items.is_empty() {
-        app.queue_view.strip_rect.set(Rect::new(0, 0, 0, 0));
+        app.ui.queue_view.strip_rect.set(Rect::new(0, 0, 0, 0));
         return;
     }
     // Stash the strip rect so mouse clicks can map to a queued item.
-    app.queue_view.strip_rect.set(area);
+    app.ui.queue_view.strip_rect.set(area);
     let dim = Style::new().fg(Color::DarkGray);
     // Drain gate: open while busy or after a clean run end; closed when idle
     // after a non-final end (interrupt/error), so the queue parks.

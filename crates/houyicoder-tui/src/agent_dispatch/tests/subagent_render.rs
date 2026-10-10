@@ -8,7 +8,7 @@ use super::*;
 fn test_subagent_renders_collapsed() {
     use crate::records::TranscriptLine;
     let mut app = crate::composition::app();
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
     app.sessions
         .current
         .transcript
@@ -37,7 +37,7 @@ fn test_subagent_renders_collapsed() {
 fn test_subagent_renders_expanded() {
     use crate::records::TranscriptLine;
     let mut app = crate::composition::app();
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
     app.sessions
         .current
         .transcript
@@ -72,7 +72,7 @@ fn test_subagent_renders_expanded() {
 fn test_subagent_expanded_renders_child() {
     use crate::records::TranscriptLine;
     let mut app = crate::composition::app();
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
     app.sessions
         .current
         .transcript
@@ -103,7 +103,7 @@ fn test_subagent_expanded_renders_child() {
 fn test_subagent_toggle_expand() {
     use crate::records::TranscriptLine;
     let mut app = crate::composition::app();
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
     app.sessions
         .current
         .transcript
@@ -138,7 +138,7 @@ fn test_subagent_toggle_expand() {
 fn test_child_transcript_fills() {
     use crate::records::TranscriptLine;
     let mut app = crate::composition::app();
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
     app.sessions
         .current
         .transcript
@@ -202,7 +202,7 @@ fn test_child_transcript_fills() {
 fn test_subagent_toggle_repaints() {
     use crate::records::TranscriptLine;
     let mut app = crate::composition::app();
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
     app.sessions
         .current
         .transcript
@@ -246,7 +246,7 @@ fn test_subagent_toggle_repaints() {
 fn test_child_fetch_repaints() {
     use crate::records::TranscriptLine;
     let mut app = crate::composition::app();
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
     app.sessions
         .current
         .transcript
@@ -291,7 +291,7 @@ fn test_child_fetch_repaints() {
 fn test_ctrl_o_fallthrough() {
     use crate::records::TranscriptLine;
     let mut app = crate::composition::app();
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
     app.sessions
         .current
         .transcript
@@ -314,7 +314,7 @@ fn test_ctrl_o_fallthrough() {
 #[test]
 fn test_ctrl_o_todo_expand() {
     let mut app = crate::composition::app();
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
     app.sessions
         .current
         .todos
@@ -342,7 +342,7 @@ fn test_ctrl_o_todo_expand() {
 fn test_subagent_expand_stable_index() {
     use crate::records::TranscriptLine;
     let mut app = crate::composition::app();
-    app.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = crate::state::Screen::Working;
     app.sessions
         .current
         .transcript

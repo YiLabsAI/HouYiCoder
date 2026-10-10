@@ -12,7 +12,7 @@ use crate::test_harness::render_text;
 
 fn working() -> crate::state::App {
     let mut app = composition::app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app
 }
 
@@ -23,14 +23,14 @@ fn render(app: &crate::state::App) -> String {
 #[test]
 fn test_auto_start_task_enters() {
     let mut app = working();
-    app.input.editor.set("fix the login bug".to_string());
+    app.ui.input.editor.set("fix the login bug".to_string());
     app.submit_input();
     assert_eq!(
         app.workflow.stage,
         Stage::Design,
         "task should auto-start design"
     );
-    assert_eq!(app.pane, Pane::Spec);
+    assert_eq!(app.ui.navigation.pane, Pane::Spec);
     assert!(
         matches!(
             app.sessions.current.transcript.last(),
@@ -67,7 +67,7 @@ fn test_rewind_targeted_to_named() {
     app.run_command(SlashCommand::Spec);
     app.approve_in_pane(); // Approval advances to planning.
     app.approve_in_pane(); // Approval advances to implementation.
-    app.input.editor.set("/rewind spec".to_string());
+    app.ui.input.editor.set("/rewind spec".to_string());
     app.submit_input();
     assert_eq!(
         app.workflow.stage,
@@ -105,7 +105,7 @@ fn test_rework_real_finding() {
         Stage::Implementing,
         "rework from review should go back to implementing"
     );
-    assert_eq!(app.pane, Pane::Diff);
+    assert_eq!(app.ui.navigation.pane, Pane::Diff);
     assert_eq!(
         app.workflow
             .spec_clauses

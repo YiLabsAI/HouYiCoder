@@ -448,7 +448,7 @@ mod tests {
                 .map(|(id, name)| model_entry(id, name, model_caps(true, false)))
                 .collect(),
         ));
-        app.pane = Pane::Model;
+        app.ui.navigation.pane = Pane::Model;
         app
     }
 
@@ -482,7 +482,7 @@ mod tests {
                 ..model_caps(true, false)
             },
         )]));
-        app.pane = Pane::Model;
+        app.ui.navigation.pane = Pane::Model;
         let out = render_text(&app, WIDE_INNER_WIDTH + 4, 24);
         assert!(
             out.contains("unavailable (rate limited until 12:00)"),
@@ -501,7 +501,7 @@ mod tests {
     #[test]
     fn test_picker_empty_footer_short() {
         let mut app = model_app(model_snapshot(Vec::new()));
-        app.pane = Pane::Model;
+        app.ui.navigation.pane = Pane::Model;
         let out = render_text(&app, 40, 24);
         assert!(
             out.contains("no catalog configured"),
@@ -666,7 +666,7 @@ mod tests {
             "One",
             model_caps(true, true),
         )]));
-        app.pane = Pane::Model;
+        app.ui.navigation.pane = Pane::Model;
         let out = render_text(&app, 84, 24);
         assert!(
             out.contains("auto (default)"),
@@ -681,7 +681,7 @@ mod tests {
         let mut caps = model_caps(true, true);
         caps.fast = FastModeAvailability::NotConfigured;
         let mut app = model_app(model_snapshot(vec![model_entry("model-one", "One", caps)]));
-        app.pane = Pane::Model;
+        app.ui.navigation.pane = Pane::Model;
         let wide = render_text(&app, WIDE_INNER_WIDTH + 4, 24);
         assert!(
             !wide.contains("Fast Mode"),

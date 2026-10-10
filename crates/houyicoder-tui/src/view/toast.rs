@@ -21,7 +21,7 @@ const FRIENDLY_DEFAULT: Color = Color::Cyan;
 /// the transcript so it paints over the row it covers. No-op when nothing is
 /// current.
 pub fn draw_toast(f: &mut Frame, transcript_area: Rect, app: &App) {
-    let Some(n) = app.notifications.current() else {
+    let Some(n) = app.ui.notifications.current() else {
         return;
     };
     let area = Rect {

@@ -131,7 +131,7 @@ fn recompute_fold_signature(app: &App) -> Vec<(usize, usize, String, bool)> {
 /// gone, so a scroll back to the front has only the session log to read from.
 fn drained_app() -> App {
     let mut app = fresh_app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app.transcript_mut().set_resident_byte_budget(4096);
     let text = "x".repeat(200);
     for i in 0..40 {

@@ -13,10 +13,10 @@ use super::*;
 #[test]
 fn test_esc_closes_agents_pane() {
     let mut app = working_app();
-    app.pane = Pane::Agents;
+    app.ui.navigation.pane = Pane::Agents;
     handle_working(&mut app, key(KeyCode::Esc));
     assert_eq!(
-        app.pane,
+        app.ui.navigation.pane,
         Pane::Transcript,
         "Esc must close the agents pane back to the transcript"
     );
@@ -29,9 +29,13 @@ fn test_esc_closes_agents_pane() {
 fn test_agents_esc_no_abort() {
     let mut app = working_app();
     app.start_run_for_test(0);
-    app.pane = Pane::Agents;
+    app.ui.navigation.pane = Pane::Agents;
     handle_working(&mut app, key(KeyCode::Esc));
-    assert_eq!(app.pane, Pane::Transcript, "Esc closes the pane");
+    assert_eq!(
+        app.ui.navigation.pane,
+        Pane::Transcript,
+        "Esc closes the pane"
+    );
     assert!(
         !app.cancelling(),
         "a pane-open Esc must not interrupt the running agents"
@@ -50,7 +54,7 @@ fn test_agents_pane_hides_input() {
         before.contains("for commands"),
         "the input box shows its prompt while the transcript is up"
     );
-    app.pane = Pane::Agents;
+    app.ui.navigation.pane = Pane::Agents;
     let after = crate::test_harness::render_text(&app, 80, 24);
     assert!(
         !after.contains("for commands"),
@@ -67,7 +71,7 @@ fn test_agents_enter_follows_list() {
     use crate::agent_message::FleetEntry;
     use crate::records::TranscriptLine;
     let mut app = working_app();
-    app.pane = Pane::Agents;
+    app.ui.navigation.pane = Pane::Agents;
     app.push_transcript_line(TranscriptLine::Subagent {
         child_sid: "returned".into(),
         subagent_type: "explore".into(),
@@ -111,7 +115,7 @@ fn test_agents_enter_follows_list() {
 fn test_agents_enter_returned_delegation() {
     use crate::records::TranscriptLine;
     let mut app = working_app();
-    app.pane = Pane::Agents;
+    app.ui.navigation.pane = Pane::Agents;
     app.push_transcript_line(TranscriptLine::Subagent {
         child_sid: "c1".into(),
         subagent_type: "explore".into(),

@@ -18,7 +18,7 @@ fn key(code: KeyCode) -> KeyEvent {
 
 fn working_app() -> App {
     let mut app = crate::composition::app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app
 }
 
@@ -65,11 +65,11 @@ fn test_status_bar_click_drags() {
         },
     );
     assert!(
-        app.selections.status.is_dragging,
+        app.ui.selection.status.is_dragging,
         "click in status bar starts a status drag"
     );
     assert!(
-        !app.selections.transcript.is_dragging,
+        !app.ui.selection.transcript.is_dragging,
         "transcript surface does not grab a status-bar click"
     );
 }
@@ -111,7 +111,7 @@ fn test_status_rows_refresh() {
 
     // Scroll re-publishes its own status (line position + SCROLL tag),
     // so the rows must change to the right content, not just any change.
-    app.viewport = ViewportMode::Scroll;
+    app.ui.navigation.viewport = ViewportMode::Scroll;
     drop(render_text(&app, 80, 24));
     let scroll_rows = collect(&app);
     assert!(
@@ -125,7 +125,7 @@ fn test_status_rows_refresh() {
 
     // Focus re-publishes its own status (progress chain + input hint),
     // distinct from Scroll's tag.
-    app.viewport = ViewportMode::Focus;
+    app.ui.navigation.viewport = ViewportMode::Focus;
     drop(render_text(&app, 80, 24));
     let focus_rows = collect(&app);
     assert_ne!(
@@ -163,7 +163,7 @@ fn test_status_rect_zeroed_offscreen() {
     // Switch to a screen that draws no status bar. view::draw zeroes
     // status_rect at the frame top; Console never re-publishes, so the
     // rect stays zero — a drag cannot target stale Working chrome.
-    app.screen = Screen::Console;
+    app.ui.navigation.screen = Screen::Console;
     drop(render_text(&app, 80, 24));
     assert_eq!(
         app.layout_snapshot.status_rect.get().height,
@@ -187,13 +187,13 @@ fn test_wheel_scrolls_in_place() {
     for _ in 0..40 {
         app.system_line("a long line of transcript history");
     }
-    assert_eq!(app.viewport, ViewportMode::Working);
+    assert_eq!(app.ui.navigation.viewport, ViewportMode::Working);
     assert!(app.whole_scroll().is_following_tail());
     // Wheel up scrolls the transcript in place — it must NOT enter the
     // full-screen Scroll viewport (which would hide the input box).
     handle_mouse(&mut app, wheel(MouseEventKind::ScrollUp));
     assert_eq!(
-        app.viewport,
+        app.ui.navigation.viewport,
         ViewportMode::Working,
         "wheel must not enter fullscreen Scroll"
     );
@@ -208,7 +208,7 @@ fn test_slash_spec_starts_design() {
     let mut app = working_app();
     app.run_command(SlashCommand::Spec);
     assert_eq!(app.workflow.stage, Stage::Design);
-    assert_eq!(app.pane, Pane::Spec);
+    assert_eq!(app.ui.navigation.pane, Pane::Spec);
 }
 
 #[test]
@@ -216,7 +216,7 @@ fn test_slash_implement_opens_diff() {
     let mut app = working_app();
     app.run_command(SlashCommand::Implement);
     assert_eq!(app.workflow.stage, Stage::Implementing);
-    assert_eq!(app.pane, Pane::Diff);
+    assert_eq!(app.ui.navigation.pane, Pane::Diff);
     // /implement no longer raises the tool-approval popup; per-hunk
     // approval happens inline in the diff pane.
     assert!(app.approval().is_none());
@@ -226,7 +226,7 @@ fn test_slash_implement_opens_diff() {
 fn test_clear_resets_session() {
     let mut app = working_app();
     app.workflow.stage = Stage::Implementing;
-    app.pane = Pane::Diff;
+    app.ui.navigation.pane = Pane::Diff;
     app.workflow.spec_ctx.step = "implementing".to_string();
     app.sessions.current.todos.set_cursor(4);
     app.sessions.current.loaded_from_frame.set(0);
@@ -238,7 +238,7 @@ fn test_clear_resets_session() {
     app.run_command(SlashCommand::Clear);
     assert_eq!(app.workflow.stage, Stage::Idle);
     assert_eq!(app.workflow.spec_ctx.step, "idle");
-    assert_eq!(app.pane, Pane::Transcript);
+    assert_eq!(app.ui.navigation.pane, Pane::Transcript);
     assert_eq!(app.sessions.current.transcript.len(), 1);
     // The scrollback boundary names frames of the cleared log, so it returns to
     // the frame cap rather than holding the window the old session had loaded.
@@ -276,7 +276,8 @@ fn test_ctrl_d_twice_quits() {
     handle_key(&mut app, d);
     assert!(!app.quit, "a single ctrl+D must not quit");
     assert!(
-        app.notifications
+        app.ui
+            .notifications
             .current()
             .is_some_and(|n| n.key == "exit-confirm"),
         "the first ctrl+D shows the exit-confirm toast"
@@ -290,7 +291,7 @@ fn test_q_empty_no_quit() {
     let mut app = working_app();
     crate::keys::handle_working(&mut app, key(KeyCode::Char('q')));
     assert!(!app.quit, "q with empty input must not quit (it types)");
-    assert_eq!(app.input.editor.value(), "q");
+    assert_eq!(app.ui.input.editor.value(), "q");
 }
 
 /// An unknown /-prefix (not a known command) is a message to the model,
@@ -300,7 +301,7 @@ fn test_q_empty_no_quit() {
 #[test]
 fn test_unknown_slash_is_message() {
     let mut app = working_app();
-    app.input.editor.set("/nope".to_string());
+    app.ui.input.editor.set("/nope".to_string());
     app.submit_input();
     let unknown = app
         .sessions
@@ -322,7 +323,7 @@ fn test_unknown_slash_is_message() {
 #[test]
 fn test_command_echoes_user_turn() {
     let mut app = working_app();
-    app.input.editor.set("/debug".to_string());
+    app.ui.input.editor.set("/debug".to_string());
     app.submit_input();
     let echoed = app
         .sessions
@@ -345,7 +346,10 @@ fn test_command_echoes_user_turn() {
 #[test]
 fn test_slash_path_is_text() {
     let mut app = working_app();
-    app.input.editor.set("/home/you/sample-project".to_string());
+    app.ui
+        .input
+        .editor
+        .set("/home/you/sample-project".to_string());
     app.submit_input();
     let unknown = app
         .sessions
@@ -403,8 +407,8 @@ fn test_scrollback_evicts_oldest() {
 fn test_login_sso_via_dispatch() {
     let mut app = crate::composition::app();
     handle_key(&mut app, key(KeyCode::Char('1')));
-    assert_eq!(app.screen, Screen::Working);
-    assert_eq!(app.login_mode, Some(LoginMode::Sso));
+    assert_eq!(app.ui.navigation.screen, Screen::Working);
+    assert_eq!(app.ui.navigation.login_mode, Some(LoginMode::Sso));
 }
 
 /// A fleet with one running child, selected, for the kill tests.
@@ -433,14 +437,16 @@ fn test_kill_all_two_press() {
     let big_k = KeyEvent::new(KeyCode::Char('K'), KeyModifiers::SHIFT);
     handle_key(&mut app, big_k);
     assert!(
-        app.notifications
+        app.ui
+            .notifications
             .current()
             .is_some_and(|n| n.key == "kill-agents-confirm"),
         "first K shows the confirm toast"
     );
     handle_key(&mut app, big_k);
     assert!(
-        app.notifications
+        app.ui
+            .notifications
             .current()
             .is_none_or(|n| n.key != "kill-agents-confirm"),
         "second K clears the toast and sends the kill"
@@ -454,7 +460,8 @@ fn test_single_kill_selected() {
     let mut app = running_fleet_app();
     handle_key(&mut app, key(KeyCode::Char('k')));
     assert!(
-        app.notifications
+        app.ui
+            .notifications
             .current()
             .is_none_or(|n| n.key != "kill-agents-confirm"),
         "lowercase k is single kill, not kill-all"
@@ -471,11 +478,11 @@ fn test_single_kill_without_selection() {
     app.fleet.selected = None;
     handle_key(&mut app, key(KeyCode::Char('k')));
     assert!(
-        !app.input.editor.is_empty(),
+        !app.ui.input.editor.is_empty(),
         "k with no selection types, not swallowed"
     );
     assert!(
-        app.notifications.current().is_none(),
+        app.ui.notifications.current().is_none(),
         "no toast when no selection"
     );
 }
@@ -487,7 +494,7 @@ fn test_kill_all_no_running() {
     let big_k = KeyEvent::new(KeyCode::Char('K'), KeyModifiers::SHIFT);
     handle_key(&mut app, big_k);
     assert!(
-        app.notifications.current().is_none(),
+        app.ui.notifications.current().is_none(),
         "K with no running children shows no toast"
     );
 }

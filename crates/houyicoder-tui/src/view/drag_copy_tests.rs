@@ -15,11 +15,11 @@ fn test_drag_copies_agent_line() {
     use std::sync::{Arc, Mutex};
 
     let mut app = composition::app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app.sessions.current.transcript =
         vec![crate::records::TranscriptLine::Agent("hello world".into())].into();
     let captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
-    app.clipboard = Arc::new(RecordingClipboard {
+    app.ui.clipboard = Arc::new(RecordingClipboard {
         captured: captured.clone(),
     });
     let _out = render_text(&app, 80, 24);
@@ -71,13 +71,13 @@ fn test_drag_copies_second_line() {
     use std::sync::{Arc, Mutex};
 
     let mut app = composition::app();
-    app.screen = Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app.sessions.current.transcript = vec![crate::records::TranscriptLine::Agent(
         "first line\nsecond line\nthird line".into(),
     )]
     .into();
     let captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
-    app.clipboard = Arc::new(RecordingClipboard {
+    app.ui.clipboard = Arc::new(RecordingClipboard {
         captured: captured.clone(),
     });
     let _out = render_text(&app, 80, 24);

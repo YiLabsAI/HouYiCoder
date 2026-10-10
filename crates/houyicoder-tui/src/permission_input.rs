@@ -221,7 +221,7 @@ fn content_text(r: &PermissionRule) -> String {
 /// the generic input handler so Add/Remove typing + Enter still work.
 pub(crate) fn handle_permission_key(app: &mut App, k: ratatui::crossterm::event::KeyEvent) -> bool {
     use ratatui::crossterm::event::KeyCode;
-    if app.pane != Pane::Permission {
+    if app.ui.navigation.pane != Pane::Permission {
         return false;
     }
     // Esc: leave a sub-mode first, then the pane.
@@ -232,7 +232,7 @@ pub(crate) fn handle_permission_key(app: &mut App, k: ratatui::crossterm::event:
             // Leaving the pane is a big layout transition; force a full
             // repaint so the ratatui diff against the prior pane frame does
             // not drop the transcript input box on the first redraw.
-            app.pane = Pane::Transcript;
+            app.ui.navigation.pane = Pane::Transcript;
         }
         return true;
     }
@@ -395,7 +395,7 @@ fn handle_search_keys(app: &mut App, code: ratatui::crossterm::event::KeyCode) -
 /// the cursor. Entry keys fire only on an empty input + a rule tab.
 fn handle_nav_keys(app: &mut App, code: ratatui::crossterm::event::KeyCode) -> bool {
     use ratatui::crossterm::event::KeyCode;
-    let empty = app.input.editor.is_empty();
+    let empty = app.ui.input.editor.is_empty();
     let on_rule_tab = matches!(
         app.permission_pane.tab,
         PermissionTab::Allow | PermissionTab::Ask | PermissionTab::Deny
@@ -421,7 +421,7 @@ fn handle_nav_keys(app: &mut App, code: ratatui::crossterm::event::KeyCode) -> b
         }
         KeyCode::Char('a') if empty && on_rule_tab => {
             app.permission_pane.input = PermissionInput::Add;
-            app.input.editor.clear();
+            app.ui.input.editor.clear();
             true
         }
         KeyCode::Char('a') if empty && app.permission_pane.tab == PermissionTab::Workspace => {
@@ -429,7 +429,7 @@ fn handle_nav_keys(app: &mut App, code: ratatui::crossterm::event::KeyCode) -> b
             // ships it. The server canonicalizes + extends the fence; the
             // PermissionDirsResult ack refreshes dirs_cache.
             app.permission_pane.input = PermissionInput::AddDir;
-            app.input.editor.clear();
+            app.ui.input.editor.clear();
             true
         }
         KeyCode::Char('d') if empty && on_rule_tab => {
@@ -440,7 +440,7 @@ fn handle_nav_keys(app: &mut App, code: ratatui::crossterm::event::KeyCode) -> b
                     idx,
                     confirm: false,
                 };
-                app.input.editor.clear();
+                app.ui.input.editor.clear();
             }
             true
         }
@@ -469,7 +469,7 @@ fn handle_nav_keys(app: &mut App, code: ratatui::crossterm::event::KeyCode) -> b
                     idx,
                     confirm: false,
                 };
-                app.input.editor.clear();
+                app.ui.input.editor.clear();
             }
             true
         }
@@ -486,7 +486,7 @@ fn handle_nav_keys(app: &mut App, code: ratatui::crossterm::event::KeyCode) -> b
 /// Leave any sub-mode and clear the input box.
 fn exit_input(app: &mut App) {
     app.permission_pane.input = PermissionInput::None;
-    app.input.editor.clear();
+    app.ui.input.editor.clear();
     app.permission_pane.search.clear();
 }
 
@@ -503,7 +503,7 @@ pub(crate) fn submit_permission_input(app: &mut App, text: String) {
                 // parsed spec as pub protocol types so the enum stays
                 // externally nameable. Clear the input so it is free for the
                 // Select's Left/Right/Enter.
-                app.input.editor.clear();
+                app.ui.input.editor.clear();
                 app.permission_pane.input = PermissionInput::AddDestination {
                     action: spec.action,
                     content: spec.content,

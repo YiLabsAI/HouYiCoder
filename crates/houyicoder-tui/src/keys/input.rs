@@ -40,14 +40,14 @@ pub(super) fn handle_input(app: &mut App, k: KeyEvent) {
 /// immediate delete; in an edit mode, Esc cancels to Normal. Returns the key
 /// to keep processing when not consumed here.
 fn pane_action_key(app: &mut App, k: KeyEvent) -> Option<KeyEvent> {
-    let empty = app.input.editor.is_empty();
+    let empty = app.ui.input.editor.is_empty();
     // Esc in an artifact edit mode cancels to Normal (clearing any in-progress
     // text). Esc in Normal mode falls through to handle_generic_input, which
     // exits the pane to Transcript.
-    if app.pane == Pane::Artifact && !app.workflow.artifact.mode().is_normal() {
+    if app.ui.navigation.pane == Pane::Artifact && !app.workflow.artifact.mode().is_normal() {
         if k.code == KeyCode::Esc {
             app.workflow.artifact.cancel_mode();
-            app.input.editor.clear();
+            app.ui.input.editor.clear();
             return None;
         }
         // In an edit mode, all other keys fall through to the generic input
@@ -65,30 +65,30 @@ fn pane_action_key(app: &mut App, k: KeyEvent) -> Option<KeyEvent> {
         }
         // In the artifact pane, PageUp/PageDown page the line cursor instead
         // of entering transcript scroll, so a long document stays navigable.
-        KeyCode::PageUp if app.pane == Pane::Artifact => {
+        KeyCode::PageUp if app.ui.navigation.pane == Pane::Artifact => {
             app.workflow.artifact.focus_page_up(ARTIFACT_PAGE_SIZE);
             return None;
         }
-        KeyCode::PageDown if app.pane == Pane::Artifact => {
+        KeyCode::PageDown if app.ui.navigation.pane == Pane::Artifact => {
             app.workflow.artifact.focus_page_down(ARTIFACT_PAGE_SIZE);
             return None;
         }
         // Artifact Normal mode edit keys (only when input is empty, so mid-
         // typing c/o/d/i go to the input box instead). c/o/i enter an edit
         // mode; d proposes an immediate delete of the focused line.
-        KeyCode::Char('c') if empty && app.pane == Pane::Artifact => {
+        KeyCode::Char('c') if empty && app.ui.navigation.pane == Pane::Artifact => {
             app.workflow.artifact.enter_replace();
             return None;
         }
-        KeyCode::Char('o') if empty && app.pane == Pane::Artifact => {
+        KeyCode::Char('o') if empty && app.ui.navigation.pane == Pane::Artifact => {
             app.workflow.artifact.enter_insert();
             return None;
         }
-        KeyCode::Char('i') if empty && app.pane == Pane::Artifact => {
+        KeyCode::Char('i') if empty && app.ui.navigation.pane == Pane::Artifact => {
             app.workflow.artifact.enter_nl();
             return None;
         }
-        KeyCode::Char('d') if empty && app.pane == Pane::Artifact => {
+        KeyCode::Char('d') if empty && app.ui.navigation.pane == Pane::Artifact => {
             app.artifact_propose_delete();
             return None;
         }
@@ -117,8 +117,9 @@ fn pane_action_key(app: &mut App, k: KeyEvent) -> Option<KeyEvent> {
 fn handle_generic_input(app: &mut App, k: KeyEvent) {
     // Permission pane browsing mode (not in Add/AddDir sub-mode): swallow
     // all input. When Add is active, permission_input.is_active() returns
-    // true, and the chars must reach app.input (the user types the rule spec).
-    if app.pane == Pane::Permission && !app.permission_pane.input.is_active() {
+    // true, and the chars must reach the input editor (the user types the
+    // rule spec).
+    if app.ui.navigation.pane == Pane::Permission && !app.permission_pane.input.is_active() {
         return;
     }
     // Approval pending: a/r decide, Enter confirms the focus, Esc dismisses.
@@ -134,7 +135,7 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
         handle_ask_question(app, k);
         return;
     }
-    if app.pane == Pane::Memory && app.memory.detail().is_some() {
+    if app.ui.navigation.pane == Pane::Memory && app.memory.detail().is_some() {
         match k.code {
             KeyCode::Esc => {
                 app.memory.close_detail();
@@ -150,7 +151,7 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
     // The /skills detail owns Esc, the scroll keys, and the disable toggle.
     // The list stays behind it, so Esc returns to the list rather than
     // leaving the pane.
-    if app.pane == Pane::Skills && app.skills_pane.detail().is_some() {
+    if app.ui.navigation.pane == Pane::Skills && app.skills_pane.detail().is_some() {
         match k.code {
             KeyCode::Esc => app.skills_pane.close_detail(),
             KeyCode::Up => app.skills_pane.scroll_detail(-1),
@@ -162,7 +163,7 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
         }
         return;
     }
-    if app.pane == Pane::Trajectory && trajectory::handle(app, k) {
+    if app.ui.navigation.pane == Pane::Trajectory && trajectory::handle(app, k) {
         return;
     }
     let editing = artifact_editing(app);
@@ -171,13 +172,19 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
         // view). Only when the input is empty so mid-typing Esc is a no-op
         // (the user can still Backspace to clear, then Esc to exit). Esc in
         // an edit mode is caught earlier by pane_action_key (cancel to Normal).
-        KeyCode::Esc if app.pane == Pane::Artifact && app.input.editor.is_empty() => {
-            app.pane = Pane::Transcript;
+        KeyCode::Esc
+            if app.ui.navigation.pane == Pane::Artifact && app.ui.input.editor.is_empty() =>
+        {
+            app.ui.navigation.pane = Pane::Transcript;
         }
         // In the /status pane, Tab cycles the sub-tab (Status, Config, Usage)
         // instead of the whole pane (the pane owns its tab bar).
-        KeyCode::Tab if app.pane == Pane::Status => app.status_tab = app.status_tab.next(),
-        KeyCode::Tab if app.pane == Pane::Memory && app.input.editor.is_empty() => {
+        KeyCode::Tab if app.ui.navigation.pane == Pane::Status => {
+            app.status_tab = app.status_tab.next()
+        }
+        KeyCode::Tab
+            if app.ui.navigation.pane == Pane::Memory && app.ui.input.editor.is_empty() =>
+        {
             app.cycle_memory_scope()
         }
         // On the /status Status tab, the e key opens the inline session-name
@@ -185,14 +192,14 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
         // inline-editable rather than a rename command). Gated on the Status tab and an empty input box so
         // the palette-style input path stays the fallback elsewhere.
         KeyCode::Char('e')
-            if app.pane == Pane::Status
+            if app.ui.navigation.pane == Pane::Status
                 && app.status_tab == StatusTab::Status
                 && app.status_name_edit.is_none()
-                && app.input.editor.is_empty() =>
+                && app.ui.input.editor.is_empty() =>
         {
             app.enter_status_name_edit();
         }
-        KeyCode::Tab if app.pane == Pane::Model => app.cycle_model_setting(),
+        KeyCode::Tab if app.ui.navigation.pane == Pane::Model => app.cycle_model_setting(),
         KeyCode::Tab if !editing => cycle_pane(app),
         // /memory pane: Up/Down move the cursor, d forgets the row under it,
         // enter shows the body, Left/Right cycle the storage-scope filter,
@@ -200,30 +207,42 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
         // keys keep their normal meaning elsewhere. Left/Right match the
         // /permissions pane's tab switching; Shift+Tab stays the global
         // mode cycle instead of being shadowed by this pane.
-        KeyCode::Left if app.pane == Pane::Memory && app.input.editor.is_empty() => {
+        KeyCode::Left
+            if app.ui.navigation.pane == Pane::Memory && app.ui.input.editor.is_empty() =>
+        {
             app.cycle_memory_scope_prev()
         }
-        KeyCode::Right if app.pane == Pane::Memory && app.input.editor.is_empty() => {
+        KeyCode::Right
+            if app.ui.navigation.pane == Pane::Memory && app.ui.input.editor.is_empty() =>
+        {
             app.cycle_memory_scope()
         }
-        KeyCode::Up if app.pane == Pane::Memory => app.move_memory_cursor(-1),
-        KeyCode::Down if app.pane == Pane::Memory => app.move_memory_cursor(1),
-        KeyCode::Up if app.pane == Pane::Agents && !app.fleet.entries.is_empty() => {
+        KeyCode::Up if app.ui.navigation.pane == Pane::Memory => app.move_memory_cursor(-1),
+        KeyCode::Down if app.ui.navigation.pane == Pane::Memory => app.move_memory_cursor(1),
+        KeyCode::Up if app.ui.navigation.pane == Pane::Agents && !app.fleet.entries.is_empty() => {
             app.fleet.move_selection(-1);
         }
-        KeyCode::Down if app.pane == Pane::Agents && !app.fleet.entries.is_empty() => {
+        KeyCode::Down
+            if app.ui.navigation.pane == Pane::Agents && !app.fleet.entries.is_empty() =>
+        {
             app.fleet.move_selection(1);
         }
         // Fleet dropped: the pane lists this session's returned delegations,
         // and the same arrows walk them.
-        KeyCode::Up if app.pane == Pane::Agents => app.sessions.current.agents.move_selection(-1),
-        KeyCode::Down if app.pane == Pane::Agents => app.sessions.current.agents.move_selection(1),
+        KeyCode::Up if app.ui.navigation.pane == Pane::Agents => {
+            app.sessions.current.agents.move_selection(-1)
+        }
+        KeyCode::Down if app.ui.navigation.pane == Pane::Agents => {
+            app.sessions.current.agents.move_selection(1)
+        }
         // Enter drills into the selected row of the list being rendered. The
         // branch follows the render (the live fleet when it has entries, else
         // the returned delegations), not the presence of a selection: keying
         // off the selection let an unselected live fleet fall through and
         // open a delegation that was not even on screen.
-        KeyCode::Enter if app.pane == Pane::Agents && app.input.editor.is_empty() => {
+        KeyCode::Enter
+            if app.ui.navigation.pane == Pane::Agents && app.ui.input.editor.is_empty() =>
+        {
             if app.fleet.entries.is_empty() {
                 if let Some(row) = app
                     .sessions
@@ -243,111 +262,127 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
         // Shift+Tab moves the /model pane's setting focus (the pane owns Tab while
         // it is on top); everywhere else it cycles the permission mode:
         // default, auto, bypass, default.
-        KeyCode::BackTab if app.pane == Pane::Model => app.cycle_model_setting(),
+        KeyCode::BackTab if app.ui.navigation.pane == Pane::Model => app.cycle_model_setting(),
         KeyCode::BackTab => app.tab_cycle_mode(),
-        KeyCode::Char('a') if app.pane == Pane::Memory && app.input.editor.is_empty() => {
+        KeyCode::Char('a')
+            if app.ui.navigation.pane == Pane::Memory && app.ui.input.editor.is_empty() =>
+        {
             app.toggle_memory_setting(MemoryToggleWhich::Auto)
         }
-        KeyCode::Char('c') if app.pane == Pane::Memory && app.input.editor.is_empty() => {
+        KeyCode::Char('c')
+            if app.ui.navigation.pane == Pane::Memory && app.ui.input.editor.is_empty() =>
+        {
             app.toggle_memory_setting(MemoryToggleWhich::Dream)
         }
-        KeyCode::Char('d') if app.pane == Pane::Memory && app.input.editor.is_empty() => {
+        KeyCode::Char('d')
+            if app.ui.navigation.pane == Pane::Memory && app.ui.input.editor.is_empty() =>
+        {
             app.forget_memory_at_cursor()
         }
-        KeyCode::Enter if app.pane == Pane::Memory && app.input.editor.is_empty() => {
+        KeyCode::Enter
+            if app.ui.navigation.pane == Pane::Memory && app.ui.input.editor.is_empty() =>
+        {
             app.show_memory_at_cursor()
         }
-        KeyCode::Esc if app.pane == Pane::Memory && app.memory.searching() => {
+        KeyCode::Esc if app.ui.navigation.pane == Pane::Memory && app.memory.searching() => {
             app.memory.clear_search();
         }
-        KeyCode::Esc if app.pane == Pane::Memory => {
-            app.pane = Pane::Transcript;
+        KeyCode::Esc if app.ui.navigation.pane == Pane::Memory => {
+            app.ui.navigation.pane = Pane::Transcript;
         }
         // /worktrees pane: delegated to keys/worktree_pane.rs.
-        _ if app.pane == Pane::Worktree && worktree_pane::handle(app, k) => {}
+        _ if app.ui.navigation.pane == Pane::Worktree && worktree_pane::handle(app, k) => {}
         // /status pane: Left/Right (or Tab) cycle the sub-tab (Status,
         // Config, Usage), Esc dismisses back to the transcript. A
         // Settings-modal-style tabbed status.
-        KeyCode::Left if app.pane == Pane::Status => app.status_tab = app.status_tab.prev(),
-        KeyCode::Right if app.pane == Pane::Status => app.status_tab = app.status_tab.next(),
-        KeyCode::Esc if app.pane == Pane::Status => {
-            app.pane = Pane::Transcript;
+        KeyCode::Left if app.ui.navigation.pane == Pane::Status => {
+            app.status_tab = app.status_tab.prev()
+        }
+        KeyCode::Right if app.ui.navigation.pane == Pane::Status => {
+            app.status_tab = app.status_tab.next()
+        }
+        KeyCode::Esc if app.ui.navigation.pane == Pane::Status => {
+            app.ui.navigation.pane = Pane::Transcript;
         }
         // /model pane: Up/Down move the model focus, Tab switches the setting
         // focus, Left/Right adjust the focused setting, Enter commits the
         // draft, Esc discards it. Tab is taken by the pane (the global Tab
         // cycles panes elsewhere), and Shift+Tab moves the setting focus here
         // rather than cycling the permission mode.
-        KeyCode::Down if app.pane == Pane::Model => app.move_model_focus(1),
-        KeyCode::Up if app.pane == Pane::Model => app.move_model_focus(-1),
-        KeyCode::Left if app.pane == Pane::Model => app.adjust_model_setting(false),
-        KeyCode::Right if app.pane == Pane::Model => app.adjust_model_setting(true),
-        KeyCode::Enter if app.pane == Pane::Model && app.input.editor.is_empty() => {
+        KeyCode::Down if app.ui.navigation.pane == Pane::Model => app.move_model_focus(1),
+        KeyCode::Up if app.ui.navigation.pane == Pane::Model => app.move_model_focus(-1),
+        KeyCode::Left if app.ui.navigation.pane == Pane::Model => app.adjust_model_setting(false),
+        KeyCode::Right if app.ui.navigation.pane == Pane::Model => app.adjust_model_setting(true),
+        KeyCode::Enter
+            if app.ui.navigation.pane == Pane::Model && app.ui.input.editor.is_empty() =>
+        {
             app.commit_model_pick();
         }
-        KeyCode::Esc if app.pane == Pane::Model => {
+        KeyCode::Esc if app.ui.navigation.pane == Pane::Model => {
             app.discard_model_pick();
         }
         // The /skills list view. The open detail is handled above, so these
         // arms only see the list.
-        KeyCode::Esc if app.pane == Pane::Skills => {
-            app.pane = Pane::Transcript;
+        KeyCode::Esc if app.ui.navigation.pane == Pane::Skills => {
+            app.ui.navigation.pane = Pane::Transcript;
         }
-        KeyCode::Up if app.pane == Pane::Skills => {
+        KeyCode::Up if app.ui.navigation.pane == Pane::Skills => {
             app.skills_pane.move_cursor(
                 -1,
                 display_order(&app.sessions.current.capabilities.skills.entries).len(),
             );
         }
-        KeyCode::Down if app.pane == Pane::Skills => {
+        KeyCode::Down if app.ui.navigation.pane == Pane::Skills => {
             app.skills_pane.move_cursor(
                 1,
                 display_order(&app.sessions.current.capabilities.skills.entries).len(),
             );
         }
-        KeyCode::Enter if app.pane == Pane::Skills => {
+        KeyCode::Enter if app.ui.navigation.pane == Pane::Skills => {
             app.open_skill_detail();
         }
         // /agents pane: same close-to-transcript as the other slash panes.
         // Without this arm the key fell through to the recall/abort arms --
         // while agents ran, Esc interrupted the parent run.
-        KeyCode::Esc if app.pane == Pane::Agents => {
-            app.pane = Pane::Transcript;
+        KeyCode::Esc if app.ui.navigation.pane == Pane::Agents => {
+            app.ui.navigation.pane = Pane::Transcript;
         }
         // Queue pane: Up/Down navigate, Enter recalls the selected item,
         // R recalls all, d deletes the selected item, Esc closes.
-        KeyCode::Esc if app.pane == Pane::Queue => {
-            app.pane = Pane::Transcript;
+        KeyCode::Esc if app.ui.navigation.pane == Pane::Queue => {
+            app.ui.navigation.pane = Pane::Transcript;
         }
-        KeyCode::Up if app.pane == Pane::Queue => {
-            app.input.queue.move_cursor(-1);
+        KeyCode::Up if app.ui.navigation.pane == Pane::Queue => {
+            app.ui.input.queue.move_cursor(-1);
         }
-        KeyCode::Down if app.pane == Pane::Queue => {
-            app.input.queue.move_cursor(1);
+        KeyCode::Down if app.ui.navigation.pane == Pane::Queue => {
+            app.ui.input.queue.move_cursor(1);
         }
-        KeyCode::Enter if app.pane == Pane::Queue => {
+        KeyCode::Enter if app.ui.navigation.pane == Pane::Queue => {
             app.recall_queued_at_cursor();
-            app.pane = Pane::Transcript;
+            app.ui.navigation.pane = Pane::Transcript;
         }
-        KeyCode::Char('R') if app.pane == Pane::Queue => {
+        KeyCode::Char('R') if app.ui.navigation.pane == Pane::Queue => {
             app.pop_queued_to_input();
-            app.pane = Pane::Transcript;
+            app.ui.navigation.pane = Pane::Transcript;
         }
-        KeyCode::Char('d') if app.pane == Pane::Queue => {
+        KeyCode::Char('d') if app.ui.navigation.pane == Pane::Queue => {
             app.delete_queued_at_cursor();
         }
-        KeyCode::Esc if app.pane == Pane::Hooks => {
+        KeyCode::Esc if app.ui.navigation.pane == Pane::Hooks => {
             if app.hooks_pane.level.get() > 0 {
                 app.hooks_pane.level.set(0);
             } else {
-                app.pane = Pane::Transcript;
+                app.ui.navigation.pane = Pane::Transcript;
             }
         }
-        KeyCode::Up if app.pane == Pane::Hooks && app.hooks_pane.level.get() == 0 => {
+        KeyCode::Up if app.ui.navigation.pane == Pane::Hooks && app.hooks_pane.level.get() == 0 => {
             let cur = app.hooks_pane.sel.get();
             app.hooks_pane.sel.set(cur.saturating_sub(1));
         }
-        KeyCode::Down if app.pane == Pane::Hooks && app.hooks_pane.level.get() == 0 => {
+        KeyCode::Down
+            if app.ui.navigation.pane == Pane::Hooks && app.hooks_pane.level.get() == 0 =>
+        {
             let len = app
                 .sessions
                 .current
@@ -360,7 +395,9 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
             let next = app.hooks_pane.sel.get() + 1;
             app.hooks_pane.sel.set(next.min(len.saturating_sub(1)));
         }
-        KeyCode::Enter if app.pane == Pane::Hooks && app.hooks_pane.level.get() == 0 => {
+        KeyCode::Enter
+            if app.ui.navigation.pane == Pane::Hooks && app.hooks_pane.level.get() == 0 =>
+        {
             app.hooks_pane.level.set(1);
         }
         // '/' opens the slash palette only when no typed permission sub-mode
@@ -369,10 +406,10 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
         // not snap to the palette. The other sub-modes own their keys
         // (handle_permission_key consumes them) so they never reach here.
         KeyCode::Char('/')
-            if app.input.editor.is_empty()
+            if app.ui.input.editor.is_empty()
                 && !editing
                 && !app.permission_pane.input.is_active()
-                && !pane_replaces_input(app.pane) =>
+                && !pane_replaces_input(app.ui.navigation.pane) =>
         {
             app.open_palette()
         }
@@ -380,10 +417,10 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
         // it opens the picker and falls through so @ lands in the input box
         // via the generic Char(c) arm below. Free-form @skill:name typing
         // works because the next char closes the picker and appends.
-        KeyCode::Enter if !pane_replaces_input(app.pane) => {
+        KeyCode::Enter if !pane_replaces_input(app.ui.navigation.pane) => {
             // Empty-input Enter drills into a teammate view: the pill
             // selection takes priority, then the Subagent line at cursor.
-            if app.input.editor.is_empty() && app.teammate_view.is_none() {
+            if app.ui.input.editor.is_empty() && app.teammate_view.is_none() {
                 if let Some(sid) = fleet::selected_fleet_sid(app) {
                     app.enter_teammate_view_for_sid(&sid, true);
                     return;
@@ -409,17 +446,18 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
         KeyCode::End if k.modifiers.contains(KeyModifiers::CONTROL) => {
             app.scroll_transcript_follow_tail();
         }
-        KeyCode::End if !editing && app.input.editor.is_empty() => {
+        KeyCode::End if !editing && app.ui.input.editor.is_empty() => {
             app.scroll_transcript_follow_tail()
         }
         // Cursor movement within the (possibly wrapped) input. Home/End and
         // Ctrl+A/E operate on the visual wrapped line (readline semantics),
         // not the whole text; double-press Home walks up wrapped lines.
         // Up/Down use the wrap column count stashed by the draw pass.
-        KeyCode::Left => app.input.editor.move_left(),
-        KeyCode::Right => app.input.editor.move_right(),
+        KeyCode::Left => app.ui.input.editor.move_left(),
+        KeyCode::Right => app.ui.input.editor.move_right(),
         KeyCode::Up => {
             if !app
+                .ui
                 .input
                 .editor
                 .move_up(app.layout_feedback.terminal_cols.get())
@@ -427,42 +465,51 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
             {
                 let project = crate::history::current_project();
                 let session_key = app.sessions.current.identity.session_id.to_string();
-                app.input
+                app.ui
+                    .input
                     .history
-                    .up(&mut app.input.editor, &project, &session_key);
+                    .up(&mut app.ui.input.editor, &project, &session_key);
             }
         }
         KeyCode::Down => {
             if !app
+                .ui
                 .input
                 .editor
                 .move_down(app.layout_feedback.terminal_cols.get())
                 && !editing
             {
-                app.input.history.down(&mut app.input.editor);
+                app.ui.input.history.down(&mut app.ui.input.editor);
             }
         }
         KeyCode::Home => app
+            .ui
             .input
             .editor
             .move_line_home(app.layout_feedback.terminal_cols.get()),
         KeyCode::End => app
+            .ui
             .input
             .editor
             .move_line_end(app.layout_feedback.terminal_cols.get()),
         KeyCode::Char('a') if k.modifiers.contains(KeyModifiers::CONTROL) => {
-            app.input.editor.move_home();
+            app.ui.input.editor.move_home();
         }
         KeyCode::Char('e') if k.modifiers.contains(KeyModifiers::CONTROL) => {
-            app.input.editor.move_end();
+            app.ui.input.editor.move_end();
         }
         KeyCode::Char('u') if k.modifiers.contains(KeyModifiers::CONTROL) => {
-            app.input
+            app.ui
+                .input
                 .editor
                 .kill_to_line_start(app.layout_feedback.terminal_cols.get());
         }
-        KeyCode::Backspace if !pane_replaces_input(app.pane) => app.input.editor.pop(),
-        KeyCode::Char(c) if !pane_replaces_input(app.pane) => app.input.editor.push(c),
+        KeyCode::Backspace if !pane_replaces_input(app.ui.navigation.pane) => {
+            app.ui.input.editor.pop()
+        }
+        KeyCode::Char(c) if !pane_replaces_input(app.ui.navigation.pane) => {
+            app.ui.input.editor.push(c)
+        }
         _ => {}
     }
 }
@@ -477,10 +524,10 @@ pub(super) fn cycle_pane(app: &mut App) {
     }
     let next = Pane::PRIMARY
         .iter()
-        .position(|&p| p == app.pane)
+        .position(|&p| p == app.ui.navigation.pane)
         .map(|i| (i + 1) % Pane::PRIMARY.len())
         .unwrap_or(0);
-    app.pane = Pane::PRIMARY[next];
+    app.ui.navigation.pane = Pane::PRIMARY[next];
 }
 
 #[cfg(test)]
