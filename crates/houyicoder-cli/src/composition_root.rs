@@ -5,6 +5,7 @@
 //! fresh and resume paths share one wiring and cannot drift.
 
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::mpsc::channel;
 
 use houyicoder_client::{Client, InProcTransport};
@@ -19,6 +20,7 @@ use houyicoder_tui::composition::{RunnerBundle, shared_runtime};
 use crate::housekeeping;
 use crate::session_catalog;
 use crate::session_history;
+use crate::session_lock::SessionLock;
 use crate::session_log_snapshot;
 use crate::trajectory;
 
@@ -26,6 +28,48 @@ use crate::trajectory;
 /// session-scoped tasks. The fresh and resume paths both produce this so a
 /// session switch can reap the prior host before installing the new one.
 pub(crate) type WiredBundle = (RunnerBundle, HostLifecycle);
+
+/// A host lifecycle owner paired with the session's exclusive lock. The
+/// lock lives as long as the host: shutting the host down drops the lock
+/// in the same step, so a writer never outlives its lease and a lease
+/// never outlives its writer. A switch reaps the old lease (cancel + reap
+/// its tasks, drop its lock) only after the new bundle builds, so a
+/// failed switch strands the user on the live session with its lease
+/// intact. The sid is the canonical display string the lock was acquired
+/// for, so a same-session resume can be recognized as a no-op before
+/// re-acquiring a lock this process already holds.
+pub(crate) struct HostLease {
+    pub(crate) host: HostLifecycle,
+    pub(crate) lock: Option<SessionLock>,
+    pub(crate) sid: Option<String>,
+}
+
+impl HostLease {
+    #[cfg(test)]
+    pub(crate) fn new(host: HostLifecycle) -> Self {
+        Self {
+            host,
+            lock: None,
+            sid: None,
+        }
+    }
+
+    /// Cancel the host's tasks, reap them on the shared runtime, and drop
+    /// the lock. The handle is the shared process runtime the tasks were
+    /// spawned on. The host shutdown cancels the token and spawns a
+    /// detached reaper for the serve, drain, and relay tasks; the lock
+    /// drops right after the reaper is spawned, not after it finishes, so a
+    /// second process may acquire the flock while the old reaper is still
+    /// draining its last write.
+    pub(crate) fn shutdown(self, handle: &tokio::runtime::Handle) {
+        self.host.shutdown(handle);
+        drop(self.lock);
+    }
+}
+
+/// The slot a run loop holds one host lease in. A switch takes the old
+/// lease out, shuts it down, and stores the new one under the mutex.
+pub(crate) type HostLeaseSlot = Arc<Mutex<Option<HostLease>>>;
 
 /// The composition root: build the runner via the service layer, install its
 /// event handlers, Arc the runner so the server task and the TUI share one, pair an

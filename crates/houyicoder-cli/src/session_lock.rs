@@ -1,32 +1,27 @@
 //! Per-session exclusive file lock (advisory flock) at
 //! <sessions_root>/<sid>/session.lock. Guards the hash chain's single-writer
-//! invariant when two processes resume the same session id at once (without
-//! it, two interactive sessions silently double-write, corrupting the
-//! chain). The lock is held for the process
-//! lifetime: the guard's Drop releases the flock + closes the fd, so a
-//! clean exit or a crash (the OS releases the fd on process death) both
-//! free the lock. Advisory (flock) not mandatory: a process that does not
-//! call acquire is not blocked, so a legacy writer is not fenced out.
-//!
-//! Unix-only: flock is a unix primitive. A non-unix build has no
-//! SessionLock (the lock is a no-op guard that does not block).
+//! invariant when two processes resume the same session id at once. The
+//! guard's Drop releases the flock, so a clean exit or a crash both free it.
+//! Unix holds a real flock; a non-unix build has no flock primitive, so
+//! acquire is a no-op guard and the gap is explicit in the type.
 
-#![cfg(unix)]
-
-use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
 
 use houyicoder_context::SessionId;
 use houyicoder_context::session_class::session_dir;
-use nix::errno::Errno;
-use nix::fcntl::{Flock, FlockArg};
 
-/// An held exclusive lock on a session's session.lock file. Drop releases it.
-/// The fd is kept open for the guard's lifetime -- the lock lives as long as
-/// the guard does.
+/// An held exclusive lock on a session's session.lock file. Drop releases
+/// it. On unix the fd is kept open for the guard's lifetime; on a non-unix
+/// build the guard holds nothing because no flock primitive exists.
+#[cfg(unix)]
 pub struct SessionLock {
-    _lock: Flock<File>,
+    _lock: nix::fcntl::Flock<std::fs::File>,
 }
+
+/// A no-op lock guard on a platform without flock. Holds nothing; acquire
+/// always succeeds.
+#[cfg(not(unix))]
+pub struct SessionLock;
 
 /// A lock acquisition failure: the lock dir could not be created, the lock
 /// file could not be opened, or another process holds the lock.
@@ -49,12 +44,12 @@ impl std::fmt::Display for LockError {
 
 impl std::error::Error for LockError {}
 
+#[cfg(unix)]
 impl SessionLock {
     /// Acquire an exclusive lock on <sessions_root>/<sid>/session.lock,
-    /// creating the dir + file if absent. Blocks until the lock is acquired
-    /// OR fails with EWOULDBLOCK when another process holds it (the
-    /// non-blocking variant is used so a contended resume fails fast with a
-    /// message, not a hang).
+    /// creating the dir and file if absent. Fails fast with HeldByOther
+    /// when another process holds the lock (non-blocking, so a contended
+    /// resume fails with a message, not a hang).
     ///
     /// A sid that parses resolves through the store's own spelling rule, so a
     /// session whose directory is named in the other spelling locks beside its
@@ -70,25 +65,36 @@ impl SessionLock {
             .create(&dir)
             .map_err(|e| LockError::Io(format!("mkdir {dir:?}: {e}")))?;
         let lock_path = dir.join("session.lock");
-        let file = OpenOptions::new()
+        let file = std::fs::OpenOptions::new()
             .create(true)
             .truncate(true)
             .write(true)
             .open(&lock_path)
             .map_err(|e| LockError::Io(format!("open {lock_path:?}: {e}")))?;
         // Non-blocking exclusive flock: EAGAIN means another live process
-        // holds the lock -- the resume must refuse + point at fork-session
-        // (a new sid gets a new, uncontended lock) or at closing the other
-        // window. Flock is RAII: the guard's Drop releases the lock.
+        // holds the lock. Flock is RAII: the guard's Drop releases the lock.
+        use nix::fcntl::{Flock, FlockArg};
         match Flock::lock(file, FlockArg::LockExclusiveNonblock) {
             Ok(lock) => Ok(Self { _lock: lock }),
-            Err((_file, Errno::EAGAIN)) => Err(LockError::HeldByOther(sid_str.to_string())),
+            Err((_file, nix::errno::Errno::EAGAIN)) => {
+                Err(LockError::HeldByOther(sid_str.to_string()))
+            }
             Err((_, e)) => Err(LockError::Io(format!("flock {lock_path:?}: {e}"))),
         }
     }
 }
 
+#[cfg(not(unix))]
+impl SessionLock {
+    /// No-op acquire: a platform without flock has no exclusive lock to
+    /// hold. Always succeeds with a guard that enforces nothing.
+    pub fn acquire(_sid_str: &str, _sessions_root: &Path) -> Result<Self, LockError> {
+        Ok(Self)
+    }
+}
+
 #[cfg(test)]
+#[cfg(unix)]
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -101,7 +107,7 @@ mod tests {
         p
     }
 
-    /// A first acquire succeeds + holds; a second acquire on the same sid
+    /// A first acquire succeeds and holds; a second acquire on the same sid
     /// fails (held by other) while the first guard lives. Dropping the first
     /// frees the lock so a third acquire succeeds.
     #[test]

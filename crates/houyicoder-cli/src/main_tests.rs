@@ -5,7 +5,8 @@
 
 use super::*;
 
-use houyicoder_service::composition::host_lifecycle::{HostLifecycle, HostSlot};
+use crate::composition_root::{HostLease, HostLeaseSlot};
+use houyicoder_service::composition::host_lifecycle::HostLifecycle;
 use houyicoder_service::composition::resolve_provider;
 use std::sync::Mutex;
 
@@ -300,7 +301,7 @@ fn test_pair_completes_handshake() {
 /// even attempted.
 #[test]
 fn test_bad_target_keeps_host() {
-    let slot: HostSlot = Arc::new(Mutex::new(Some(HostLifecycle::new())));
+    let slot: HostLeaseSlot = Arc::new(Mutex::new(Some(HostLease::new(HostLifecycle::new()))));
     let provider = resolve_provider(None);
     let err = match build_bundle_for_target("not-a-path-and-not-a-sid", None, provider, &slot) {
         Err(e) => e,
@@ -316,4 +317,54 @@ fn test_bad_target_keeps_host() {
             .is_some(),
         "the prior host stays in the slot when the build fails"
     );
+}
+
+/// A resume target that names the session the live lease already holds is a
+/// no-op, not a contention error. The lease already holds that sid's lock,
+/// so re-acquiring would report it held by this process itself. The check
+/// fires before lock acquisition, so the prior lease stays in the slot.
+#[test]
+fn test_same_session_noop() {
+    let sid = houyicoder_context::SessionId::new();
+    let sid_str = sid.to_string();
+    let slot: HostLeaseSlot = Arc::new(Mutex::new(Some(HostLease {
+        host: HostLifecycle::new(),
+        lock: None,
+        sid: Some(sid_str.clone()),
+    })));
+    let provider = resolve_provider(None);
+    let err = match build_bundle_for_target(&sid_str, None, provider, &slot) {
+        Err(e) => e,
+        Ok(_) => panic!("same-session target must be a no-op, not a build"),
+    };
+    assert!(err.to_string().contains("already on session"), "got: {err}");
+    assert!(
+        slot.lock()
+            .expect("host lifecycle slot must not poison")
+            .is_some(),
+        "the prior lease stays in the slot on a same-session no-op"
+    );
+}
+
+/// The same-session no-op must hold across spellings of one sid, not just an
+/// exact string match: the live lease stores the ULID spelling, the target
+/// names the UUID spelling, and the canonical comparison through the context
+/// type recognizes them as the same session. A plain string comparison would
+/// miss this and reach the lock as a false contention error.
+#[test]
+fn test_cross_spelling_noop() {
+    let sid = houyicoder_context::SessionId::new();
+    let uuid_form = sid.to_string();
+    let ulid_form = sid.ulid_name();
+    let slot: HostLeaseSlot = Arc::new(Mutex::new(Some(HostLease {
+        host: HostLifecycle::new(),
+        lock: None,
+        sid: Some(ulid_form),
+    })));
+    let provider = resolve_provider(None);
+    let err = match build_bundle_for_target(&uuid_form, None, provider, &slot) {
+        Err(e) => e,
+        Ok(_) => panic!("cross-spelling target must be a no-op, not a build"),
+    };
+    assert!(err.to_string().contains("already on session"), "got: {err}");
 }

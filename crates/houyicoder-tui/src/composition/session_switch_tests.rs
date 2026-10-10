@@ -265,6 +265,35 @@ fn test_try_no_builder_quits() {
     );
 }
 
+/// A resume target naming the session already presented is a no-op: the
+/// live lease holds that sid's lock, so re-acquiring would report it held
+/// by this process itself. The fast path reports cleanly without calling
+/// the builder, so no swap and no quit.
+#[test]
+fn test_same_session_noop() {
+    let mut app = build_app(test_bundle());
+    let current_sid = app.sessions.current.identity.session_id.0.clone();
+    app.pending_resume_target = Some(current_sid);
+    let mut dirty = false;
+    let builder: Box<ResumeBuilderRef> =
+        Box::new(|_| panic!("builder must not run for a same-session no-op"));
+    app.try_switch_session(Some(&*builder), &mut dirty);
+    assert!(dirty, "the no-op system line flags dirty");
+    assert!(!app.quit, "same-session is a no-op, not a quit");
+    assert!(
+        app.pending_resume_target.is_none(),
+        "target consumed on no-op (no retry-every-frame storm)"
+    );
+    assert!(
+        app.sessions
+            .current
+            .transcript
+            .iter()
+            .any(|l| matches!(l, TranscriptLine::System(s) if s.contains("already on session"))),
+        "an 'already on session' system line must surface"
+    );
+}
+
 /// Adversarial: a resume_builder that returns Err surfaces a system line +
 /// does NOT swap (the session stays), does NOT quit (unlike the no-builder
 /// fallback). A builder failure (disk read, sid resolution, provider) must

@@ -180,6 +180,18 @@ impl App {
         let Some(target) = self.pending_resume_target.take() else {
             return;
         };
+        // A resume target that names the session already presented is a
+        // no-op: the live lease already holds that sid's lock, so
+        // re-acquiring it would report the lock held by this process itself.
+        // This fast path catches the exact-string case so the no-op reports
+        // cleanly; a different spelling of the same session is caught by the
+        // builder, which owns the canonical comparison.
+        let current = self.sessions.current.identity.session_id.0.clone();
+        if target == current {
+            self.system_line(format!("already on session {target}"));
+            *dirty = true;
+            return;
+        }
         // The caller (the event loop's idle guard) already gates on
         // !agent_busy && !reverse_request_in_flight, so a target that
         // survives to here is ready to swap. The old busy put-back branch
