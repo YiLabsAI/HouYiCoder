@@ -38,8 +38,12 @@ fn test_resume_sid_reopens_history() {
         s.wait_for("let's build, or / for commands", RENDER_TIMEOUT),
         "working screen after sid resume"
     );
+    // Poll for the model label rather than reading the output once: the
+    // placeholder can reach the PTY ahead of the status bar's bytes, so a
+    // single read taken the moment the placeholder matches can miss the
+    // label under contention.
     assert!(
-        s.output().contains("sid-reopen-model"),
+        s.wait_for("sid-reopen-model", RENDER_TIMEOUT),
         "model should be restored from the descriptor:\n{}",
         s.output()
     );

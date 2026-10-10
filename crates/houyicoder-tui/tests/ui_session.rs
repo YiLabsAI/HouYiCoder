@@ -202,8 +202,9 @@ fn test_resume_export_persists_history() {
         "working screen should render (skip_login):\n{}",
         s.output()
     );
+    // Poll: the label can trail the placeholder's bytes under contention.
     assert!(
-        s.output().contains("stub-resume-model"),
+        s.wait_for("stub-resume-model", RENDER_TIMEOUT),
         "the export model should be restored on the status line:\n{}",
         s.output()
     );
@@ -652,8 +653,9 @@ fn test_continue_resumes_latest_session() {
         "working screen after --continue:\n{}",
         s.output()
     );
+    // Poll: the label can trail the placeholder's bytes under contention.
     assert!(
-        s.output().contains("continue-model"),
+        s.wait_for("continue-model", RENDER_TIMEOUT),
         "--continue should restore the latest session's model:\n{}",
         s.output()
     );
@@ -714,8 +716,9 @@ fn test_fork_keeps_source_untouched() {
         "working screen after fork:\n{}",
         s.output()
     );
+    // Poll: the label can trail the placeholder's bytes under contention.
     assert!(
-        s.output().contains("fork-model"),
+        s.wait_for("fork-model", RENDER_TIMEOUT),
         "fork should restore the source's model:\n{}",
         s.output()
     );
