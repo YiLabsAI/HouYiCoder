@@ -91,20 +91,24 @@ fn live_app_with_tools(manual: bool) -> houyicoder_tui::state::App {
     let (tx, rx) = channel::<SessionMessage>();
     let (runner, client) = pair_inproc(runner, session, gate, tx.clone());
     drop(runner); // server owns the runner; the TUI holds no engine handle.
-    houyicoder_tui::composition::build_app(houyicoder_tui::composition::RunnerBundle {
-        client,
-        agent_tx: tx,
-        agent_rx: rx,
-        session: wire_session,
-        model: houyicoder_config::resolve_model(),
-        trajectory_log: None,
-        export_log: None,
-        snapshot: None,
-        session_catalog: None,
-        skip_login: false,
-        startup_warnings: Vec::new(),
-        history_path: std::env::temp_dir().join("houyi-history-live-test.jsonl"),
-    })
+    houyicoder_tui::composition::build_app(
+        houyicoder_tui::composition::RunnerBundle {
+            client,
+            agent_tx: tx,
+            agent_rx: rx,
+            session: wire_session,
+            model: houyicoder_config::resolve_model(),
+            trajectory_log: None,
+            export_log: None,
+            snapshot: None,
+            session_catalog: None,
+        },
+        houyicoder_tui::composition::FrontendStartup {
+            skip_login: false,
+            startup_warnings: Vec::new(),
+            history_path: std::env::temp_dir().join("houyi-history-live-test.jsonl"),
+        },
+    )
 }
 
 #[test]

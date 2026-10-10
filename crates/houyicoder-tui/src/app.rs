@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 
 use houyicoder_protocol::frontend::SlashCommand;
 
-use crate::composition::{RunnerBundle, build_app};
+use crate::composition::{FrontendStartup, RunnerBundle, build_app};
 use crate::keys;
 use crate::notifications::{NotifKind, Notification, copy_toast};
 use crate::run_control::ClientCommand;
@@ -35,10 +35,11 @@ use crate::view::working::fleet_pill::{FleetClick, click_route};
 
 /// Run the alternate-screen TUI and restore terminal state on exit.
 /// Mouse input belongs to in-app scrolling and selection while active.
-type ResumeBuilder = Box<dyn Fn(&str) -> Result<RunnerBundle, Box<dyn Error>>>;
+type ResumeBuilder = Box<dyn Fn(&str) -> Result<(RunnerBundle, FrontendStartup), Box<dyn Error>>>;
 
 pub fn run_with_runner(
     bundle: RunnerBundle,
+    startup: FrontendStartup,
     resume_builder: Option<ResumeBuilder>,
 ) -> io::Result<Option<String>> {
     enable_raw_mode()?;
@@ -47,7 +48,7 @@ pub fn run_with_runner(
     assert_mouse_modes()?;
     let backend = CrosstermBackend::new(stdout());
     let mut terminal = Terminal::new(backend)?;
-    let mut app = build_app(bundle);
+    let mut app = build_app(bundle, startup);
     app.startup_handshake(Duration::from_secs(2));
     let mut dirty = true;
     // Tracks the last busy state reported to the terminal emulator via the

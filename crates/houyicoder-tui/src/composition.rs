@@ -19,7 +19,6 @@ use crate::evidence::{
     AuditEntry, ConsoleTodo, DiffData, Divergence, GraphResult, Hunk, HunkEvidence, MemoryEntry,
     PlanArtifact, ReviewFinding, SpecArtifact, SpecClause, Verdict, VerifyResult, audit_entry,
 };
-use crate::history::HistoryNav;
 use crate::memory_state::MemoryPaneState;
 use crate::palette::PaletteState;
 use crate::resume_picker::SessionCatalog;
@@ -54,7 +53,11 @@ use std::sync::mpsc;
 /// id. The runner + the permission gate stay with the server task — the TUI
 /// holds no engine handle and no permission gate. The TUI never constructs
 /// these itself; the composition root owns construction so the TUI stays a
-/// presentation layer.
+/// presentation layer. The session values (client, channels, id, model) and
+/// the host resources (trajectory, export, snapshot, catalog) travel here; the
+/// frontend startup policy (skip-login, startup warnings, history path)
+/// travels separately in FrontendStartup so the session commit does not mix
+/// lifecycle domains.
 pub struct RunnerBundle {
     /// The protocol client the driver task owns. Un-connected at hand-off;
     /// the driver performs the Hello handshake on spawn.
@@ -78,14 +81,18 @@ pub struct RunnerBundle {
     pub snapshot: Option<Arc<dyn TranscriptSnapshot>>,
     /// The session catalog for the /resume picker. None in stub/test.
     pub session_catalog: Option<Arc<dyn SessionCatalog>>,
+}
+
+/// Frontend startup policy the composition root resolves and the TUI applies
+/// to its Ui and Input owners, separate from the session commit. skip_login
+/// sets the landing screen and login mode; startup_warnings land as initial
+/// transcript system lines before any run output; history_path wires the
+/// prompt-history file the Input owner reads and appends to. These are not
+/// session data — a Session never carries them — so the bundle that builds a
+/// Session does not carry them either.
+pub struct FrontendStartup {
     pub skip_login: bool,
-    /// Startup warnings (bad settings fields, network-policy typos) the host
-    /// pushes as initial transcript system lines. Drained from the runner at
-    /// pair time so they land before any run output (no async-sink race).
-    /// Empty on the stub/test path.
     pub startup_warnings: Vec<String>,
-    /// The prompt-history JSONL file path. Injected by the host (which owns
-    /// the config home) so the TUI never imports the config layer.
     pub history_path: std::path::PathBuf,
 }
 
@@ -122,8 +129,11 @@ fn cwd_string() -> String {
 /// Wire a working-surface App to the wired bundle the composition root built.
 /// Spawns the long-lived client driver, which owns the protocol client,
 /// performs Hello, and routes ordered server frames onto the agent channel.
-/// Lands on the Login screen like app(), so the login flow is unchanged.
-pub fn build_app(bundle: RunnerBundle) -> App {
+/// Lands on the Login screen like app(), so the login flow is unchanged. The
+/// frontend startup policy (skip-login, warnings, history path) is applied
+/// after the session wiring so the session commit does not mix lifecycle
+/// domains.
+pub fn build_app(bundle: RunnerBundle, startup: FrontendStartup) -> App {
     let mut app = app();
     let RunnerBundle {
         client,
@@ -135,9 +145,6 @@ pub fn build_app(bundle: RunnerBundle) -> App {
         export_log,
         snapshot,
         session_catalog,
-        skip_login,
-        startup_warnings,
-        history_path,
     } = bundle;
     // The live session: spawns the driver task on the shared runtime and
     // hands App the command channel + the message receiver + the request-id
@@ -149,10 +156,6 @@ pub fn build_app(bundle: RunnerBundle) -> App {
     let driver_agent_tx = agent_tx.clone();
     let live_session =
         SessionConnection::spawn(client, driver_agent_tx, agent_rx, &shared_runtime());
-    if skip_login {
-        app.screen = crate::state::Screen::Working;
-        app.login_mode = Some(houyicoder_protocol::frontend::LoginMode::Local);
-    }
     app.status.model = model.clone();
     // The launch model stands in for the applied model until the host
     // snapshot lands, so the status bar names what the session runs.
@@ -166,17 +169,12 @@ pub fn build_app(bundle: RunnerBundle) -> App {
         snapshot,
     };
     app.sessions.catalog = session_catalog;
-    // Push the drained startup warnings as initial system lines BEFORE any run
-    // output — synchronous so they land first + do not race with command
-    // results (the async-sink path flaked timing tests; this is deterministic).
-    for w in startup_warnings {
-        app.system_line(w);
-    }
-    app.input.history = crate::history::HistoryNav::with_path(history_path);
+    app.apply_frontend_startup(startup);
     app
 }
 
-pub type ResumeBuilderRef = dyn Fn(&str) -> Result<RunnerBundle, Box<dyn std::error::Error>>;
+pub type ResumeBuilderRef =
+    dyn Fn(&str) -> Result<(RunnerBundle, FrontendStartup), Box<dyn std::error::Error>>;
 
 /// Build the runner bundle via the composition root and wire it, matching the
 /// build_app_for_test(project) API so the existing test suite needs
@@ -198,27 +196,31 @@ pub fn build_app_for_test(project: Option<String>) -> App {
         bundle.bus,
     );
     drop(runner); // server owns the runner; the TUI holds no engine handle.
-    build_app(RunnerBundle {
-        client,
-        agent_tx: tx,
-        agent_rx: rx,
-        session: wire_session,
-        model: "test-model".to_string(),
-        trajectory_log: None,
-        export_log: None,
-        snapshot: None,
-        session_catalog: None,
-        skip_login: false,
-        startup_warnings,
-        history_path: std::env::temp_dir().join(format!(
-            "houyi-history-test-{}-{}.jsonl",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
-        )),
-    })
+    build_app(
+        RunnerBundle {
+            client,
+            agent_tx: tx,
+            agent_rx: rx,
+            session: wire_session,
+            model: "test-model".to_string(),
+            trajectory_log: None,
+            export_log: None,
+            snapshot: None,
+            session_catalog: None,
+        },
+        FrontendStartup {
+            skip_login: false,
+            startup_warnings,
+            history_path: std::env::temp_dir().join(format!(
+                "houyi-history-test-{}-{}.jsonl",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos())
+                    .unwrap_or(0)
+            )),
+        },
+    )
 }
 
 /// Pair an in-memory server and client around a runner. The test-only helper

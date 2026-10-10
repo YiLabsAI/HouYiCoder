@@ -29,7 +29,7 @@ fn enqueue_resume_target(app: &mut App, target: &str) {
         .insert(0, InputItem::Command(format!("/resume {target}")));
 }
 
-fn test_bundle() -> RunnerBundle {
+fn test_bundle() -> (RunnerBundle, FrontendStartup) {
     let bundle = houyicoder_service::composition::build_runner(
         houyicoder_service::composition::BuildRunnerOptions::default(),
     );
@@ -42,25 +42,38 @@ fn test_bundle() -> RunnerBundle {
     let (runner, client, startup_warnings) =
         start_local_server(runner, session, gate, append_notify, None);
     drop(runner);
-    RunnerBundle {
-        client,
-        agent_tx: tx,
-        agent_rx: rx,
-        session: wire_session,
-        model: "test-model".to_string(),
-        trajectory_log: None,
-        export_log: None,
-        snapshot: None,
-        session_catalog: None,
-        skip_login: false,
-        startup_warnings,
-        history_path: std::env::temp_dir().join("houyi-history-swap-test.jsonl"),
-    }
+    (
+        RunnerBundle {
+            client,
+            agent_tx: tx,
+            agent_rx: rx,
+            session: wire_session,
+            model: "test-model".to_string(),
+            trajectory_log: None,
+            export_log: None,
+            snapshot: None,
+            session_catalog: None,
+        },
+        FrontendStartup {
+            skip_login: false,
+            startup_warnings,
+            history_path: std::env::temp_dir().join("houyi-history-swap-test.jsonl"),
+        },
+    )
+}
+
+/// Build a working App from the test pairing, applying both the session
+/// bundle and the frontend startup policy the pairing resolved. Mirrors the
+/// production composition root, which never builds a Session without also
+/// resolving the frontend policy.
+fn test_app() -> App {
+    let (bundle, startup) = test_bundle();
+    build_app(bundle, startup)
 }
 
 /// Like test_bundle but returns the server task's JoinHandle so a test can
 /// assert the serve loop exited after the session is torn down.
-fn test_bundle_tracked() -> (RunnerBundle, tokio::task::JoinHandle<()>) {
+fn test_bundle_tracked() -> ((RunnerBundle, FrontendStartup), tokio::task::JoinHandle<()>) {
     let bundle = houyicoder_service::composition::build_runner(
         houyicoder_service::composition::BuildRunnerOptions::default(),
     );
@@ -74,27 +87,31 @@ fn test_bundle_tracked() -> (RunnerBundle, tokio::task::JoinHandle<()>) {
         start_local_server_tracked(runner, session, gate, append_notify, None);
     drop(runner);
     (
-        RunnerBundle {
-            client,
-            agent_tx: tx,
-            agent_rx: rx,
-            session: wire_session,
-            model: "test-model".to_string(),
-            trajectory_log: None,
-            export_log: None,
-            snapshot: None,
-            session_catalog: None,
-            skip_login: false,
-            startup_warnings,
-            history_path: std::env::temp_dir().join("houyi-history-swap2-test.jsonl"),
-        },
+        (
+            RunnerBundle {
+                client,
+                agent_tx: tx,
+                agent_rx: rx,
+                session: wire_session,
+                model: "test-model".to_string(),
+                trajectory_log: None,
+                export_log: None,
+                snapshot: None,
+                session_catalog: None,
+            },
+            FrontendStartup {
+                skip_login: false,
+                startup_warnings,
+                history_path: std::env::temp_dir().join("houyi-history-swap2-test.jsonl"),
+            },
+        ),
         serve,
     )
 }
 
 #[test]
 fn test_switch_session_resets_view() {
-    let mut app = build_app(test_bundle());
+    let mut app = test_app();
     app.sessions
         .current
         .transcript
@@ -111,10 +128,11 @@ fn test_switch_session_resets_view() {
                 ),
             ),
         ));
-    let new_bundle = test_bundle();
+    let (new_bundle, new_startup) = test_bundle();
     let new_sid = new_bundle.session.0.clone();
-    let new_warning_count = new_bundle.startup_warnings.len();
+    let new_warning_count = new_startup.startup_warnings.len();
     app.switch_session(new_bundle);
+    app.apply_frontend_startup(new_startup);
     // swap clears the old transcript; the new bundle's startup warnings
     // (e.g. a sandbox-fence notice) land as initial system lines, so the
     // transcript has exactly that many lines, not the old content.
@@ -174,7 +192,7 @@ fn test_switch_session_resets_view() {
 /// new view.
 #[test]
 fn test_switch_drops_pending_read() {
-    let mut app = build_app(test_bundle());
+    let mut app = test_app();
     let (tx, rx) = mpsc::channel::<HistoryReadOutcome>();
     let lease = app
         .sessions
@@ -183,7 +201,7 @@ fn test_switch_drops_pending_read() {
         .dispatch(0, DiskFront::Unloaded, rx);
     assert_eq!(app.sessions.current.history_reads.running(), 1);
 
-    app.switch_session(test_bundle());
+    app.switch_session(test_bundle().0);
 
     assert!(
         !app.sessions.current.history_reads.holds_pending(),
@@ -206,9 +224,9 @@ fn test_switch_drops_pending_read() {
 
 #[test]
 fn test_swap_bumps_transcript_version() {
-    let mut app = build_app(test_bundle());
+    let mut app = test_app();
     let v_before = app.sessions.current.transcript.revision();
-    app.switch_session(test_bundle());
+    app.switch_session(test_bundle().0);
     assert_ne!(
         app.sessions.current.transcript.revision(),
         v_before,
@@ -221,14 +239,14 @@ fn test_swap_bumps_transcript_version() {
 /// surfaces as a system line instead of silently dropping.
 #[test]
 fn test_build_app_surfaces_warnings() {
-    let mut bundle = test_bundle();
-    bundle
+    let (bundle, mut startup) = test_bundle();
+    startup
         .startup_warnings
         .push("model.effort_level: bad".into());
-    bundle
+    startup
         .startup_warnings
         .push("sandbox.network: unknown".into());
-    let app = build_app(bundle);
+    let app = build_app(bundle, startup);
     let lines: Vec<&str> = app
         .sessions
         .current
@@ -253,7 +271,7 @@ fn test_build_app_surfaces_warnings() {
 
 #[test]
 fn test_try_noop_without_target() {
-    let mut app = build_app(test_bundle());
+    let mut app = test_app();
     let mut dirty = false;
     app.try_switch_session(None, &mut dirty);
     assert!(!dirty, "no target = no-op");
@@ -269,7 +287,7 @@ fn test_try_noop_without_target() {
 
 #[test]
 fn test_try_no_builder_quits() {
-    let mut app = build_app(test_bundle());
+    let mut app = test_app();
     enqueue_resume_target(&mut app, "some-sid");
     let mut dirty = false;
     app.try_switch_session(None, &mut dirty);
@@ -288,7 +306,7 @@ fn test_try_no_builder_quits() {
 /// re-dispatch the command, relying on run_resume re-enqueuing it.
 #[test]
 fn test_quit_keeps_resume_target() {
-    let mut app = build_app(test_bundle());
+    let mut app = test_app();
     enqueue_resume_target(&mut app, "some-sid");
     app.status.last_run_final = true;
     let mut dirty = false;
@@ -308,7 +326,7 @@ fn test_quit_keeps_resume_target() {
 /// the builder, so no swap and no quit.
 #[test]
 fn test_same_session_noop() {
-    let mut app = build_app(test_bundle());
+    let mut app = test_app();
     let current_sid = app.sessions.current.identity.session_id.0.clone();
     enqueue_resume_target(&mut app, &current_sid);
     let mut dirty = false;
@@ -338,7 +356,7 @@ fn test_same_session_noop() {
 /// preserved, and the target is consumed (not retried every frame).
 #[test]
 fn test_resume_err_keeps_session() {
-    let mut app = build_app(test_bundle());
+    let mut app = test_app();
     enqueue_resume_target(&mut app, "bad-sid");
     let mut dirty = false;
     let builder: Box<ResumeBuilderRef> = Box::new(|_| Err("sid not on disk".into()));
@@ -367,7 +385,7 @@ fn test_resume_err_keeps_session() {
 /// the user to recall + edit).
 #[test]
 fn test_idle_drain_consumes_idle() {
-    let mut app = build_app(test_bundle());
+    let mut app = test_app();
     app.status.last_run_final = true;
     app.input.queue.push(InputItem::Message("head".into()));
     let mut dirty = false;
@@ -381,7 +399,7 @@ fn test_idle_drain_consumes_idle() {
 /// drain. The continuous-state poll runs every frame but consumes nothing.
 #[test]
 fn test_idle_drain_noop_busy() {
-    let mut app = build_app(test_bundle());
+    let mut app = test_app();
     app.start_run_for_test(0);
     app.input.queue.push(InputItem::Message("queued".into()));
     let mut dirty = false;
@@ -401,7 +419,7 @@ fn test_idle_drain_noop_busy() {
 /// idle_drain_consumes_when_idle.
 #[test]
 fn test_idle_drain_without_final() {
-    let mut app = build_app(test_bundle());
+    let mut app = test_app();
     app.status.last_run_final = false;
     app.input
         .queue
@@ -422,7 +440,7 @@ fn test_idle_drain_without_final() {
 /// wired session.
 #[test]
 fn test_clean_end_drains_parked() {
-    let mut app = build_app(test_bundle());
+    let mut app = test_app();
     app.status.last_run_final = true;
     app.input
         .queue
@@ -444,7 +462,7 @@ fn test_clean_end_drains_parked() {
 /// session, auto-sending the carried message as the first turn in B.
 #[test]
 fn test_resume_precedes_queued_message() {
-    let mut app = build_app(test_bundle());
+    let mut app = test_app();
     enqueue_resume_target(&mut app, "sid-target");
     app.input
         .queue
@@ -472,7 +490,7 @@ fn test_resume_precedes_queued_message() {
 #[test]
 fn test_clears_session_local_state() {
     use crate::todo_view::{TodoStatus, TodoView};
-    let mut app = build_app(test_bundle());
+    let mut app = test_app();
     // Populate with old-session residue.
     app.sessions.current.todos.items.push(TodoView {
         content: "old todo".into(),
@@ -501,7 +519,7 @@ fn test_clears_session_local_state() {
     assert!(!app.sessions.current.todos.items.is_empty());
     assert!(app.selections.transcript.anchor.is_some());
 
-    app.switch_session(test_bundle());
+    app.switch_session(test_bundle().0);
 
     assert!(app.sessions.current.todos.items.is_empty(), "todos cleared");
     assert_eq!(
@@ -540,14 +558,14 @@ fn test_clears_session_local_state() {
 /// idle (a queued message from A sends in B as the next turn), unless a Command barrier holds.
 #[test]
 fn test_swap_carries_pending_across() {
-    let mut app = build_app(test_bundle());
+    let mut app = test_app();
     app.input.queue.push(InputItem::Message("task a".into()));
     app.input
         .queue
         .push(InputItem::Command("/resume sid-b".into()));
     app.input.queue.push(InputItem::Message("task c".into()));
 
-    app.switch_session(test_bundle());
+    app.switch_session(test_bundle().0);
 
     assert_eq!(
         app.input.queue,
@@ -570,8 +588,8 @@ fn test_swap_carries_pending_across() {
 /// because the shared runtime runs the server task on its own threads.
 #[test]
 fn test_tears_down_old_server() {
-    let (bundle, old_serve) = test_bundle_tracked();
-    let mut app = build_app(bundle);
+    let ((bundle, bundle_startup), old_serve) = test_bundle_tracked();
+    let mut app = build_app(bundle, bundle_startup);
     // The old server serves an established session before the swap: wait for
     // the driver's readiness announcement, which the handshake produces once,
     // so the server is proven to be serving rather than merely not yet dead.
@@ -595,7 +613,7 @@ fn test_tears_down_old_server() {
     // Swap: build_app resets self, dropping the old connection. The driver
     // JoinHandle is detached (the task is not aborted), but the driver exits
     // when its command channel returns None.
-    app.switch_session(test_bundle());
+    app.switch_session(test_bundle().0);
     // The teardown chain is async on the shared runtime; poll for completion.
     let mut tries = 0;
     while !old_serve.is_finished() && tries < 200 {
@@ -619,7 +637,7 @@ fn test_tears_down_old_server() {
 /// approval-pending axis the busy test does not cover.
 #[test]
 fn test_idle_drain_noop_approval() {
-    let mut app = build_app(test_bundle());
+    let mut app = test_app();
     app.sessions.current.prompt = Some(PendingPrompt::permission(RequestId(42), Vec::new()));
     app.input.queue.push(InputItem::Message("queued".into()));
     let mut dirty = false;
@@ -639,7 +657,7 @@ fn test_idle_drain_noop_approval() {
 /// stay (switch intent is still valid); Messages stay (parked, recallable).
 #[test]
 fn test_drops_non_resume_commands() {
-    let mut app = build_app(test_bundle());
+    let mut app = test_app();
     app.input.queue.push(InputItem::Command("/clear".into()));
     app.input.queue.push(InputItem::Message("kept msg".into()));
     app.input
@@ -650,7 +668,7 @@ fn test_drops_non_resume_commands() {
         .queue
         .push(InputItem::Message("kept msg 2".into()));
 
-    app.switch_session(test_bundle());
+    app.switch_session(test_bundle().0);
 
     // Messages + /resume stay; /clear + /rewind dropped.
     assert_eq!(
@@ -680,7 +698,7 @@ fn test_drops_non_resume_commands() {
 /// drive_loop drains them at the next turn boundary. Stops at a non-Message.
 #[test]
 fn test_clean_end_drains_messages() {
-    let mut app = build_app(test_bundle());
+    let mut app = test_app();
     app.status.last_run_final = true;
     app.input.queue.push(InputItem::Message("m1".into()));
     app.input.queue.push(InputItem::Message("m2".into()));
@@ -706,7 +724,7 @@ fn test_clean_end_drains_messages() {
 /// injection).
 #[test]
 fn test_batch_stops_at_command() {
-    let mut app = build_app(test_bundle());
+    let mut app = test_app();
     app.status.last_run_final = true;
     app.input.queue.push(InputItem::Message("m1".into()));
     app.input.queue.push(InputItem::Message("m2".into()));
@@ -772,9 +790,9 @@ fn group_body_visible(app: &App) -> bool {
 /// session holds no row at that position.
 #[test]
 fn test_swap_restores_open_keys() {
-    let first = test_bundle();
+    let (first, first_startup) = test_bundle();
     let first_sid = first.session.clone();
-    let mut app = build_app(first);
+    let mut app = build_app(first, first_startup);
     app.sessions.current.transcript = folded_transcript().into();
     app.transcript_view.expanded.results.insert("call-1".into());
     app.transcript_view
@@ -795,7 +813,7 @@ fn test_swap_restores_open_keys() {
         "the open group draws its body rows before the switch"
     );
 
-    let second = test_bundle();
+    let (second, _second_startup) = test_bundle();
     let second_sid = second.session.clone();
     assert_ne!(
         first_sid, second_sid,
@@ -829,7 +847,7 @@ fn test_swap_restores_open_keys() {
         .insert("second-only".into());
     assert!(group_body_visible(&app));
 
-    let mut back = test_bundle();
+    let (mut back, _back_startup) = test_bundle();
     back.session = first_sid;
     app.switch_session(back);
     app.sessions.current.transcript = folded_transcript().into();
@@ -881,7 +899,7 @@ fn test_swap_restores_open_keys() {
 /// back would expand rows the parent reader never opened.
 #[test]
 fn test_switch_parking_hygiene() {
-    let mut app = build_app(test_bundle());
+    let mut app = test_app();
     let first_sid = app.sessions.current.identity.session_id.clone();
     app.sessions
         .current
@@ -905,13 +923,13 @@ fn test_switch_parking_hygiene() {
         .results
         .insert("child-key".into());
 
-    app.switch_session(test_bundle());
+    app.switch_session(test_bundle().0);
     assert!(
         app.teammate_view.is_none(),
         "the switch leaves the child view behind"
     );
 
-    let mut back = test_bundle();
+    let (mut back, _back_startup) = test_bundle();
     back.session = first_sid;
     app.switch_session(back);
     assert!(
@@ -932,7 +950,7 @@ fn test_switch_parking_hygiene() {
 /// child's view.
 #[test]
 fn test_switch_drops_child_park() {
-    let mut app = build_app(test_bundle());
+    let mut app = test_app();
     app.sessions
         .current
         .transcript
@@ -951,7 +969,7 @@ fn test_switch_drops_child_park() {
         .insert("child-key".into());
     app.exit_teammate_view();
 
-    app.switch_session(test_bundle());
+    app.switch_session(test_bundle().0);
     app.sessions
         .current
         .transcript
@@ -977,9 +995,9 @@ fn test_switch_drops_child_park() {
 /// leaves them alone so a focus loss survives a session switch.
 #[test]
 fn test_swap_preserves_terminal_focus() {
-    let mut app = build_app(test_bundle());
+    let mut app = test_app();
     app.terminal_focused = false;
-    app.switch_session(test_bundle());
+    app.switch_session(test_bundle().0);
     assert!(
         !app.terminal_focused,
         "terminal_focused preserved, not reset to the app() default"
@@ -992,9 +1010,9 @@ fn test_swap_preserves_terminal_focus() {
 /// with no search view open. The old rebuild cleared it via app()'s defaults.
 #[test]
 fn test_swap_resets_verbose() {
-    let mut app = build_app(test_bundle());
+    let mut app = test_app();
     app.verbose = true;
-    app.switch_session(test_bundle());
+    app.switch_session(test_bundle().0);
     assert!(
         !app.verbose,
         "verbose reset to false, not carried from the search view"
@@ -1008,9 +1026,9 @@ fn test_swap_resets_verbose() {
 /// the idle drain's switched flag instead.
 #[test]
 fn test_swap_carries_run_final() {
-    let mut app = build_app(test_bundle());
+    let mut app = test_app();
     app.status.last_run_final = false;
-    app.switch_session(test_bundle());
+    app.switch_session(test_bundle().0);
     assert!(
         !app.status.last_run_final,
         "last_run_final carried from the pre-switch value, not forged true"
@@ -1018,9 +1036,9 @@ fn test_swap_carries_run_final() {
     // The true case distinguishes carry from reset-false: a reset would drop
     // it to false, a forge would set it true regardless. Carry keeps the
     // pre-switch value, so true stays true.
-    let mut app2 = build_app(test_bundle());
+    let mut app2 = test_app();
     app2.status.last_run_final = true;
-    app2.switch_session(test_bundle());
+    app2.switch_session(test_bundle().0);
     assert!(
         app2.status.last_run_final,
         "true carried, not reset to false"
@@ -1034,7 +1052,7 @@ fn test_swap_carries_run_final() {
 /// is the replacement for the old forged last_run_final=true.
 #[test]
 fn test_switch_drains_carried_queue() {
-    let mut app = build_app(test_bundle());
+    let mut app = test_app();
     app.status.last_run_final = false;
     enqueue_resume_target(&mut app, "sid-target");
     app.input.queue.push(InputItem::Message("carried".into()));

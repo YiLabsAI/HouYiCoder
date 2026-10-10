@@ -82,20 +82,24 @@ pub(crate) fn app_with_provider_and_tx(
     let (runner, client, startup_warnings) =
         composition::start_local_server(runner, session, gate, append_notify, None);
     drop(runner); // server owns the runner; the TUI holds no engine handle.
-    let app = composition::build_app(composition::RunnerBundle {
-        client,
-        agent_tx: tx.clone(),
-        agent_rx: rx,
-        session: wire_session,
-        model: "test-model".to_string(),
-        trajectory_log: None,
-        export_log: None,
-        snapshot: None,
-        session_catalog: None,
-        skip_login: false,
-        startup_warnings,
-        history_path: std::env::temp_dir().join("houyi-history-rc-test.jsonl"),
-    });
+    let app = composition::build_app(
+        composition::RunnerBundle {
+            client,
+            agent_tx: tx.clone(),
+            agent_rx: rx,
+            session: wire_session,
+            model: "test-model".to_string(),
+            trajectory_log: None,
+            export_log: None,
+            snapshot: None,
+            session_catalog: None,
+        },
+        composition::FrontendStartup {
+            skip_login: false,
+            startup_warnings,
+            history_path: std::env::temp_dir().join("houyi-history-rc-test.jsonl"),
+        },
+    );
     (app, tx)
 }
 

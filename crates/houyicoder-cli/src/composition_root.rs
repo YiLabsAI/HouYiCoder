@@ -15,7 +15,7 @@ use houyicoder_service::composition::host_lifecycle::HostLifecycle;
 use houyicoder_service::composition::session_log_root;
 use houyicoder_service::server::{FrameCarrier, Server};
 use houyicoder_tui::agent_message::SessionMessage;
-use houyicoder_tui::composition::{RunnerBundle, shared_runtime};
+use houyicoder_tui::composition::{FrontendStartup, RunnerBundle, shared_runtime};
 
 use crate::housekeeping;
 use crate::session_catalog;
@@ -24,10 +24,13 @@ use crate::session_lock::SessionLock;
 use crate::session_log_snapshot;
 use crate::trajectory;
 
-/// A wired TUI bundle paired with the host lifecycle owner for its
-/// session-scoped tasks. The fresh and resume paths both produce this so a
-/// session switch can reap the prior host before installing the new one.
-pub(crate) type WiredBundle = (RunnerBundle, HostLifecycle);
+/// A wired TUI bundle, the frontend startup policy the TUI applies to its Ui
+/// and Input owners, and the host lifecycle owner for the session's background
+/// tasks. The fresh and resume paths both produce this so a session switch can
+/// reap the prior host before installing the new one. The frontend policy
+/// travels alongside the bundle rather than inside it so a Session never
+/// carries frontend startup state.
+pub(crate) type WiredBundle = (RunnerBundle, FrontendStartup, HostLifecycle);
 
 /// A host lifecycle owner paired with the session's exclusive lock. The
 /// lock lives as long as the host: shutting the host down drops the lock
@@ -216,6 +219,8 @@ pub(crate) fn assemble_bundle(
                 session_log,
                 session_log_root(),
             ))),
+        },
+        FrontendStartup {
             skip_login,
             startup_warnings,
             history_path: houyicoder_config::config_home().join("history.jsonl"),

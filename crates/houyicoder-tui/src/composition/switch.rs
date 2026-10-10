@@ -6,6 +6,7 @@
 
 use super::*;
 
+use crate::history::HistoryNav;
 use crate::input::queue::InputItem;
 use crate::input::queue::command_first_token_is;
 use crate::input::queue::resume_command_target;
@@ -48,9 +49,10 @@ impl App {
         // survives to here is ready to swap.
         if let Some(builder) = resume_builder {
             match builder(&target) {
-                Ok(new_bundle) => {
+                Ok((new_bundle, startup)) => {
                     self.input.queue.remove(0);
                     self.switch_session(new_bundle);
+                    self.apply_frontend_startup(startup);
                     *dirty = true;
                     true
                 }
@@ -135,11 +137,11 @@ impl App {
             }
         }
         // Deconstruct the bundle: the session-construction half (client,
-        // channels, id) builds the new Session; the non-session half (model,
-        // ports, startup policy, history) is applied by App against its own
-        // fields, because these are frontend policy or injected read ports
-        // rather than session-owned facts. set_current takes only the
-        // Session; the rest is applied around it, never carried inside it.
+        // channels, id) builds the new Session; the host resources
+        // (trajectory, export, snapshot, catalog) are applied to Sessions.
+        // The frontend startup policy (skip-login, warnings, history path)
+        // is not here — the caller applies it via apply_frontend_startup so
+        // the session commit does not mix lifecycle domains.
         let RunnerBundle {
             client,
             agent_tx,
@@ -150,9 +152,6 @@ impl App {
             export_log,
             snapshot,
             session_catalog,
-            skip_login,
-            startup_warnings,
-            history_path,
         } = bundle;
         let driver_agent_tx = agent_tx.clone();
         let live_session =
@@ -197,23 +196,13 @@ impl App {
         self.model_picker.snapshot.applied.id = model;
         // A swap is always initiated from the working screen (the user is on
         // the transcript when they /resume), so force Working regardless of
-        // the bundle's skip_login. This nails the skip_login coupling: a
-        // bundle that carried skip_login=false would otherwise drop the user
-        // back to the login screen mid-session.
+        // the frontend startup policy. The landing screen and login mode
+        // come from apply_frontend_startup, which the caller runs next.
         self.screen = Screen::Working;
-        self.login_mode = if skip_login {
-            Some(LoginMode::Local)
-        } else {
-            None
-        };
         self.quit = false;
         self.input.editor = Default::default();
         self.input.pasted = Default::default();
         self.input.pending_paste = Default::default();
-        self.input.history = HistoryNav::with_path(history_path);
-        for w in startup_warnings {
-            self.system_line(w);
-        }
 
         self.sessions.current.todos.set_replaying_history(true);
         self.bump_transcript_version();
@@ -234,6 +223,31 @@ impl App {
                 dropped.join(", ")
             ));
         }
+    }
+
+    /// Apply the frontend startup policy the composition root resolved:
+    /// skip-login sets the landing screen and login mode, startup warnings
+    /// land as initial transcript system lines before any run output, and
+    /// the history path wires the prompt-history file. Separate from the
+    /// session commit so a Session never carries frontend policy.
+    pub fn apply_frontend_startup(&mut self, startup: FrontendStartup) {
+        let FrontendStartup {
+            skip_login,
+            startup_warnings,
+            history_path,
+        } = startup;
+        if skip_login {
+            self.screen = Screen::Working;
+            self.login_mode = Some(LoginMode::Local);
+        }
+        // Push the drained startup warnings as initial system lines BEFORE any
+        // run output — synchronous so they land first + do not race with
+        // command results (the async-sink path flaked timing tests; this is
+        // deterministic).
+        for w in startup_warnings {
+            self.system_line(w);
+        }
+        self.input.history = HistoryNav::with_path(history_path);
     }
 
     /// Reset the App-side session-local fields a session switch must clear so
