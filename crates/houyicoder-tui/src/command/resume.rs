@@ -1,16 +1,18 @@
 //! /resume command: open the session picker, switch by sid/name, or resume
 //! from an export file.
 
+use crate::input::queue::InputItem;
 use crate::state::{App, Pane};
 
 impl App {
     /// /resume [arg]: with no arg, open the session picker. With an arg:
     /// (a) an existing .json file path resumes from an exported transcript;
     /// (b) a session id or title match switches directly. The session swap
-    /// is in-process: set pending_resume_target; the event loop calls the
-    /// resume_builder to get a new bundle, swaps the session in-place, and
-    /// continues the same event loop (no quit, no restart). An in-process
-    /// switch-session path.
+    /// is in-process: enqueue a /resume Command with the resolved target at
+    /// the queue head; the event loop's idle drain calls try_switch_session,
+    /// which reads that command, invokes the resume_builder to get a new
+    /// bundle, swaps the session in-place, and continues the same event loop
+    /// (no quit, no restart). An in-process switch-session path.
     pub(crate) fn run_resume(&mut self, arg: Option<&str>) {
         if self.sessions.current.connection.is_none() {
             self.system_line("resume: not connected");
@@ -42,7 +44,9 @@ impl App {
             Some(query) => {
                 if is_export_file_path(query) {
                     self.resume_picker.close();
-                    self.pending_resume_target = Some(query.to_string());
+                    self.input
+                        .queue
+                        .insert(0, InputItem::Command(format!("/resume {query}")));
                     self.system_line(self.resume_switch_message(query));
                     return;
                 }
@@ -67,7 +71,9 @@ impl App {
                     Some(s) => {
                         self.resume_picker.close();
                         self.pane = Pane::Transcript;
-                        self.pending_resume_target = Some(s.clone());
+                        self.input
+                            .queue
+                            .insert(0, InputItem::Command(format!("/resume {s}")));
                         self.system_line(self.resume_switch_message(&s));
                     }
                     None => {
@@ -108,8 +114,18 @@ impl App {
 mod tests {
     use super::*;
     use crate::input::queue::InputItem;
+    use crate::input::queue::resume_command_target;
     use crate::resume_picker::SessionRow;
     use std::sync::Arc;
+
+    /// The resolved target carried by a queued /resume Command at the head.
+    fn queued_target(app: &App) -> Option<String> {
+        app.input
+            .queue
+            .first()
+            .and_then(resume_command_target)
+            .map(str::to_string)
+    }
 
     /// The most recent system line pushed to the transcript, if any.
     fn last_line(app: &App) -> Option<String> {
@@ -162,7 +178,7 @@ mod tests {
         app.run_resume(None);
         assert!(app.resume_picker.rows.is_empty());
         assert!(!app.resume_picker.open);
-        assert!(app.pending_resume_target.is_none());
+        assert!(queued_target(&app).is_none());
         assert!(
             last_line(&app)
                 .expect("a system line lands")
@@ -193,7 +209,7 @@ mod tests {
         app.sessions.catalog = Some(Arc::new(EmptyCatalog));
         app.run_resume(None);
         assert!(!app.resume_picker.open);
-        assert!(app.pending_resume_target.is_none());
+        assert!(queued_target(&app).is_none());
     }
 
     /// /resume with no arg and sessions opens the Resume pane.
@@ -207,13 +223,13 @@ mod tests {
         assert_eq!(app.pane, crate::state::Pane::Resume);
     }
 
-    /// /resume with a sid arg matches a row by sid and sets the pending target.
+    /// /resume with a sid arg matches a row by sid and enqueues the switch.
     #[test]
     fn test_matches_sid_directly() {
         let mut app = crate::test_harness::connected_app();
         app.sessions.catalog = Some(Arc::new(TwoRowCatalog));
         app.run_resume(Some("aaaa1111"));
-        assert_eq!(app.pending_resume_target.as_deref(), Some("aaaa1111"));
+        assert_eq!(queued_target(&app).as_deref(), Some("aaaa1111"));
         assert!(!app.quit, "in-process swap does not quit");
     }
 
@@ -223,7 +239,7 @@ mod tests {
         let mut app = crate::test_harness::connected_app();
         app.sessions.catalog = Some(Arc::new(TwoRowCatalog));
         app.run_resume(Some("LOGIN"));
-        assert_eq!(app.pending_resume_target.as_deref(), Some("aaaa1111"));
+        assert_eq!(queued_target(&app).as_deref(), Some("aaaa1111"));
     }
 
     /// /resume with a nonexistent token reports no match and does not quit.
@@ -232,14 +248,14 @@ mod tests {
         let mut app = crate::test_harness::connected_app();
         app.sessions.catalog = Some(Arc::new(TwoRowCatalog));
         app.run_resume(Some("zzz"));
-        assert!(app.pending_resume_target.is_none());
+        assert!(queued_target(&app).is_none());
         assert!(!app.quit);
     }
 
     /// A mid-run /resume <sid> defers: it is enqueued as a Command (not
     /// executed now), drained FIFO at idle so it does not fight the run's
-    /// writes. The target is NOT set at enqueue time -- the drain calls
-    /// run_resume (which sets the target) when the run resolves. A bare
+    /// writes. The swap does NOT happen at enqueue -- the drain re-dispatches
+    /// the command at idle, and try_switch_session does the swap. A bare
     /// /resume (no arg) still opens the picker (read-only browsing).
     #[test]
     fn test_busy_run_defers_resume() {
@@ -255,9 +271,9 @@ mod tests {
             vec![InputItem::Command("/resume aaaa1111".into())],
             "/resume <sid> mid-run enqueued as a Command"
         );
-        assert!(
-            app.pending_resume_target.is_none(),
-            "target not set at enqueue (the drain sets it at idle)"
+        assert_eq!(
+            app.sessions.current.identity.session_id.0, "test",
+            "mid-run /resume defers the swap (no switch at enqueue)"
         );
         assert!(app.agent_busy(), "the run is still in progress");
     }
@@ -284,6 +300,34 @@ mod tests {
     fn test_missing_json_not_export() {
         assert!(!is_export_file_path("./nonexistent-export.json"));
         assert!(!is_export_file_path("abc123"));
+    }
+
+    /// An existing .json path is an export resume: a /resume Command with that
+    /// path is enqueued at the head, so the event loop's idle drain swaps the
+    /// session in-process (or hands the target up on loop exit).
+    #[test]
+    fn test_export_path_enqueues_resume() {
+        let dir = std::env::temp_dir().join(format!(
+            "houyi-resume-export-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("transcript.json");
+        std::fs::write(&path, "[]").expect("write export file");
+        let mut app = crate::test_harness::connected_app();
+        app.sessions.catalog = Some(Arc::new(EmptyCatalog));
+        let arg = path.to_str().expect("utf8 path").to_string();
+        app.run_resume(Some(&arg));
+        assert_eq!(
+            queued_target(&app).as_deref(),
+            Some(arg.as_str()),
+            "the export path rides a /resume Command at the head"
+        );
+        assert!(!app.quit, "in-process swap does not quit");
+        drop(std::fs::remove_dir_all(&dir));
     }
 
     /// A catalog of named sessions, so resolve_detail leaves every title as

@@ -2,6 +2,7 @@ use super::*;
 use crate::agent_message::ConnectionEvent;
 use crate::fold::DisplaySlot;
 use crate::input::queue::InputItem;
+use crate::input::queue::resume_command_target;
 use crate::pending_prompt::PendingPrompt;
 use crate::records::ToolOutcome;
 use crate::row_id::RowId;
@@ -11,6 +12,22 @@ use crate::state::transcript::DiskFront;
 use crate::transcript::{SequencedFrame, TranscriptFrame};
 use houyicoder_protocol::envelope::RequestId;
 use std::sync::atomic::Ordering;
+
+/// The resolved target carried by a queued /resume Command at the head.
+fn queued_target(app: &App) -> Option<String> {
+    app.input
+        .queue
+        .first()
+        .and_then(resume_command_target)
+        .map(str::to_string)
+}
+
+/// Enqueue a /resume Command with a resolved target at the head.
+fn enqueue_resume_target(app: &mut App, target: &str) {
+    app.input
+        .queue
+        .insert(0, InputItem::Command(format!("/resume {target}")));
+}
 
 fn test_bundle() -> RunnerBundle {
     let bundle = houyicoder_service::composition::build_runner(
@@ -253,15 +270,35 @@ fn test_try_noop_without_target() {
 #[test]
 fn test_try_no_builder_quits() {
     let mut app = build_app(test_bundle());
-    app.pending_resume_target = Some("some-sid".to_string());
+    enqueue_resume_target(&mut app, "some-sid");
     let mut dirty = false;
     app.try_switch_session(None, &mut dirty);
     assert!(!dirty, "no builder = no swap");
     assert!(app.quit, "no builder = fallback quit");
     assert_eq!(
-        app.pending_resume_target.as_deref(),
+        queued_target(&app).as_deref(),
         Some("some-sid"),
         "target put back for caller"
+    );
+}
+
+/// The no-builder path through idle_drain with a clean run end: the quit
+/// guard keeps the /resume on the queue so the loop-exit drain hands the
+/// target up. Without the guard, drain_pending_head would remove +
+/// re-dispatch the command, relying on run_resume re-enqueuing it.
+#[test]
+fn test_quit_keeps_resume_target() {
+    let mut app = build_app(test_bundle());
+    enqueue_resume_target(&mut app, "some-sid");
+    app.status.last_run_final = true;
+    let mut dirty = false;
+    app.idle_drain(None, &mut dirty);
+    assert!(!dirty, "no swap = no dirty");
+    assert!(app.quit, "no builder sets quit");
+    assert_eq!(
+        queued_target(&app).as_deref(),
+        Some("some-sid"),
+        "the target stays queued for the loop-exit drain"
     );
 }
 
@@ -273,7 +310,7 @@ fn test_try_no_builder_quits() {
 fn test_same_session_noop() {
     let mut app = build_app(test_bundle());
     let current_sid = app.sessions.current.identity.session_id.0.clone();
-    app.pending_resume_target = Some(current_sid);
+    enqueue_resume_target(&mut app, &current_sid);
     let mut dirty = false;
     let builder: Box<ResumeBuilderRef> =
         Box::new(|_| panic!("builder must not run for a same-session no-op"));
@@ -281,7 +318,7 @@ fn test_same_session_noop() {
     assert!(dirty, "the no-op system line flags dirty");
     assert!(!app.quit, "same-session is a no-op, not a quit");
     assert!(
-        app.pending_resume_target.is_none(),
+        queued_target(&app).is_none(),
         "target consumed on no-op (no retry-every-frame storm)"
     );
     assert!(
@@ -302,7 +339,7 @@ fn test_same_session_noop() {
 #[test]
 fn test_resume_err_keeps_session() {
     let mut app = build_app(test_bundle());
-    app.pending_resume_target = Some("bad-sid".to_string());
+    enqueue_resume_target(&mut app, "bad-sid");
     let mut dirty = false;
     let builder: Box<ResumeBuilderRef> = Box::new(|_| Err("sid not on disk".into()));
     app.try_switch_session(Some(&*builder), &mut dirty);
@@ -312,7 +349,7 @@ fn test_resume_err_keeps_session() {
         "a builder error is not a quit (unlike no builder)"
     );
     assert!(
-        app.pending_resume_target.is_none(),
+        queued_target(&app).is_none(),
         "target consumed on error (no retry-every-frame storm)"
     );
     assert!(
@@ -408,7 +445,7 @@ fn test_clean_end_drains_parked() {
 #[test]
 fn test_resume_precedes_queued_message() {
     let mut app = build_app(test_bundle());
-    app.pending_resume_target = Some("sid-target".to_string());
+    enqueue_resume_target(&mut app, "sid-target");
     app.input
         .queue
         .push(InputItem::Message("queued msg".into()));
@@ -417,7 +454,7 @@ fn test_resume_precedes_queued_message() {
     app.idle_drain(Some(&*builder), &mut dirty);
     assert!(dirty, "swap flagged dirty");
     assert!(
-        app.pending_resume_target.is_none(),
+        queued_target(&app).is_none(),
         "resume target consumed before the message drains"
     );
     assert!(
@@ -999,16 +1036,13 @@ fn test_swap_carries_run_final() {
 fn test_switch_drains_carried_queue() {
     let mut app = build_app(test_bundle());
     app.status.last_run_final = false;
-    app.pending_resume_target = Some("sid-target".to_string());
+    enqueue_resume_target(&mut app, "sid-target");
     app.input.queue.push(InputItem::Message("carried".into()));
     let mut dirty = false;
     let builder: Box<ResumeBuilderRef> = Box::new(|_| Ok(test_bundle()));
     app.idle_drain(Some(&*builder), &mut dirty);
     assert!(dirty, "swap + drain flagged dirty");
-    assert!(
-        app.pending_resume_target.is_none(),
-        "resume target consumed"
-    );
+    assert!(queued_target(&app).is_none(), "resume target consumed");
     assert!(
         app.input.queue.is_empty(),
         "carried message drained via the switched gate, not a forged last_run_final"

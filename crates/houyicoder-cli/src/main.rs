@@ -335,8 +335,9 @@ fn run_attach(socket: String, session_id: String) -> Result<(), Box<dyn Error>> 
         startup_warnings: Vec::new(),
         history_path: houyicoder_config::config_home().join("history.jsonl"),
     };
-    // Attach mode has no session_log/descriptor_store, so the /resume picker cannot
-    // open (run_resume reports no store wired); pending_resume_target stays None.
+    // Attach mode has no session_log/descriptor_store, so the /resume picker
+    // cannot open (run_resume reports no store wired); no /resume Command is
+    // enqueued.
     drop(houyicoder_tui::app::run_with_runner(bundle, None)?);
     Ok(())
 }

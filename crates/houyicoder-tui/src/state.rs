@@ -130,14 +130,6 @@ pub struct App {
     pub(crate) display_rows_cache: DisplayRowsCache,
     /// The session picker overlay state (opened by /resume with no arg).
     pub resume_picker: SessionPickerState,
-    /// A pending resume request set when the user picks a session in the
-    /// picker (or /resume <id|name|file>). Carries a session id OR an export
-    /// file path (the resume builder dispatches on which). The event loop's
-    /// try_switch_session consumes it: with a resume_builder wired (the normal
-    /// path), it builds the new bundle and switch_session swaps in place — no
-    /// quit, no restart. Only when no builder is wired does it put the target
-    /// back + set quit, letting the caller fall back to a fresh re-enter.
-    pub pending_resume_target: Option<String>,
     pub palette: PaletteState,
     pub status: StatusStub,
     pub(crate) memory: MemoryPaneState,

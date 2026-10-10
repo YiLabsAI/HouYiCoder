@@ -60,6 +60,28 @@ pub fn is_state_changing(stripped: &str) -> bool {
     matches!(cmd, "clear" | "resume" | "rewind" | "undo")
 }
 
+/// The resolved target (sid or export path) of a queued /resume Command, if
+/// the item is one. None for any other item or a bare /resume with no arg.
+/// The target is the whole remainder after the resume verb, so an export path
+/// that contains spaces survives intact rather than being truncated to its
+/// first whitespace token. The /resume Command is the carrier for a switch
+/// intent across idle ticks and across a loop exit.
+pub fn resume_command_target(item: &InputItem) -> Option<&str> {
+    let InputItem::Command(text) = item else {
+        return None;
+    };
+    let rest = text.trim_start().strip_prefix('/')?;
+    let (verb, tail) = rest.split_once(char::is_whitespace)?;
+    if verb != "resume" {
+        return None;
+    }
+    let target = tail.trim();
+    if target.is_empty() {
+        return None;
+    }
+    Some(target)
+}
+
 /// Whether a slash command's raw text (with the leading slash) has the given
 /// first token (e.g. "resume" for "/resume sid"). Compares the first
 /// whitespace-separated token after the slash, so "/resume" + "/resume sid"
@@ -126,6 +148,23 @@ impl InputQueue {
 
     pub(crate) fn iter_mut(&mut self) -> std::slice::IterMut<'_, InputItem> {
         self.items.iter_mut()
+    }
+
+    /// Take the head if it is a /resume Command with a resolved target,
+    /// returning the target and removing the item. A non-/resume head or a
+    /// bare /resume (no arg) leaves the queue intact and returns None. The
+    /// loop-exit path calls this to hand a pending resume up to the caller
+    /// that rebuilds the session outside this loop (no in-process builder).
+    pub(crate) fn drain_resume_target(&mut self) -> Option<String> {
+        let target = self
+            .items
+            .first()
+            .and_then(resume_command_target)
+            .map(str::to_string);
+        if target.is_some() {
+            self.items.remove(0);
+        }
+        target
     }
 
     /// Take the whole queue out, leaving an empty queue. The cursor is left
@@ -353,5 +392,70 @@ mod tests {
         assert_eq!(q.cursor, 1, "down movement stops at the last row");
         q.move_cursor(-5);
         assert_eq!(q.cursor, 0, "up movement stops at the first row");
+    }
+
+    #[test]
+    fn test_resume_target_extracted() {
+        let cmd = InputItem::Command("/resume sid-123".into());
+        assert_eq!(resume_command_target(&cmd), Some("sid-123"));
+    }
+
+    #[test]
+    fn test_resume_path_keeps_spaces() {
+        let cmd = InputItem::Command("/resume /tmp/my transcript.json".into());
+        assert_eq!(
+            resume_command_target(&cmd),
+            Some("/tmp/my transcript.json"),
+            "an export path with spaces survives intact, not truncated"
+        );
+    }
+
+    #[test]
+    fn test_resume_target_rejects_others() {
+        assert_eq!(
+            resume_command_target(&InputItem::Command("/resume".into())),
+            None,
+            "a bare /resume has no target"
+        );
+        assert_eq!(
+            resume_command_target(&InputItem::Command("/clear".into())),
+            None,
+            "a non-resume command has no target"
+        );
+        assert_eq!(
+            resume_command_target(&InputItem::Message("hello".into())),
+            None,
+            "a message is not a command"
+        );
+    }
+
+    #[test]
+    fn test_drain_resume_takes_head() {
+        let mut q = InputQueue::default();
+        q.push(InputItem::Message("tail".into()));
+        q.insert(0, InputItem::Command("/resume sid-xyz".into()));
+        assert_eq!(q.drain_resume_target(), Some("sid-xyz".to_string()));
+        assert_eq!(q.len(), 1, "the head was removed, the tail stays");
+    }
+
+    #[test]
+    fn test_drain_skips_without_target() {
+        let mut q = InputQueue::default();
+        q.push(InputItem::Message("hello".into()));
+        assert_eq!(
+            q.drain_resume_target(),
+            None,
+            "a message head is not drained"
+        );
+        assert_eq!(q.len(), 1, "the queue is untouched");
+
+        let mut bare = InputQueue::default();
+        bare.push(InputItem::Command("/resume".into()));
+        assert_eq!(
+            bare.drain_resume_target(),
+            None,
+            "a bare /resume head has no target to drain"
+        );
+        assert_eq!(bare.len(), 1, "a bare /resume head stays queued");
     }
 }

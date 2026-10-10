@@ -8,30 +8,37 @@ use super::*;
 
 use crate::input::queue::InputItem;
 use crate::input::queue::command_first_token_is;
+use crate::input::queue::resume_command_target;
 
 impl App {
-    /// Try to consume a deferred resume target and swap the session. Returns
-    /// true when a swap landed, so the caller's queue drain can treat the
-    /// swap itself as a clean transition without forging last_run_final: a
-    /// carried pending item drains in the new session because the swap
-    /// happened at idle after a clean run end or a user-initiated pick, not
-    /// because a forged run result says so.
+    /// Try to consume a queued /resume Command at the head and swap the
+    /// session. Returns true when a swap landed, so the caller's queue drain
+    /// can treat the swap itself as a clean transition without forging
+    /// last_run_final: a carried pending item drains in the new session
+    /// because the swap happened at idle after a clean run end or a
+    /// user-initiated pick, not because a forged run result says so. The
+    /// /resume Command at the head is the cross-tick carrier (run_resume
+    /// enqueues it with the resolved target).
     pub fn try_switch_session(
         &mut self,
         resume_builder: Option<&ResumeBuilderRef>,
         dirty: &mut bool,
     ) -> bool {
-        let Some(target) = self.pending_resume_target.take() else {
+        let Some(target) = self
+            .input
+            .queue
+            .first()
+            .and_then(resume_command_target)
+            .map(str::to_string)
+        else {
             return false;
         };
         // A resume target that names the session already presented is a
         // no-op: the live lease already holds that sid's lock, so
         // re-acquiring it would report the lock held by this process itself.
-        // This fast path catches the exact-string case so the no-op reports
-        // cleanly; a different spelling of the same session is caught by the
-        // builder, which owns the canonical comparison.
         let current = self.sessions.current.identity.session_id.0.clone();
         if target == current {
+            self.input.queue.remove(0);
             self.system_line(format!("already on session {target}"));
             *dirty = true;
             return false;
@@ -42,18 +49,22 @@ impl App {
         if let Some(builder) = resume_builder {
             match builder(&target) {
                 Ok(new_bundle) => {
+                    self.input.queue.remove(0);
                     self.switch_session(new_bundle);
                     *dirty = true;
                     true
                 }
                 Err(e) => {
+                    self.input.queue.remove(0);
                     self.system_line(format!("resume failed: {e}"));
                     *dirty = true;
                     false
                 }
             }
         } else {
-            self.pending_resume_target = Some(target);
+            // No in-process builder: leave the /resume Command queued and
+            // quit so the caller reads the target from the queue and
+            // rebuilds the session outside this loop.
             self.quit = true;
             false
         }
@@ -71,7 +82,11 @@ impl App {
     pub fn idle_drain(&mut self, resume_builder: Option<&ResumeBuilderRef>, dirty: &mut bool) {
         if !self.agent_busy() && !self.reverse_request_in_flight() {
             let switched = self.try_switch_session(resume_builder, dirty);
-            if (self.status.last_run_final || switched) && self.drain_pending_head() {
+            // A no-builder try_switch_session sets quit and leaves the /resume
+            // queued for the external caller; draining it here would remove +
+            // re-dispatch the command, so the guard keeps the target on the
+            // queue for the loop-exit drain.
+            if !self.quit && (self.status.last_run_final || switched) && self.drain_pending_head() {
                 *dirty = true;
             }
         }

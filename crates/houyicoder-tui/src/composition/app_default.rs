@@ -47,7 +47,6 @@ pub fn app() -> App {
             c
         },
         resume_picker: SessionPickerState::default(),
-        pending_resume_target: None,
         palette: PaletteState::default(),
         status: default_status(),
         memory: MemoryPaneState::new(memory_entries()),

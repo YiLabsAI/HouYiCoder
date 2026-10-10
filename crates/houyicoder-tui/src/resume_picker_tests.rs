@@ -5,8 +5,18 @@
 use houyicoder_protocol::frontend::SlashCommand;
 
 use crate::input::queue::InputItem;
+use crate::input::queue::resume_command_target;
 use crate::resume_picker::{SessionCatalog, SessionPickerState, SessionRow};
 use crate::test_harness::render_text;
+
+/// The resolved target carried by a queued /resume Command at the head.
+fn queued_target(app: &crate::state::App) -> Option<String> {
+    app.input
+        .queue
+        .first()
+        .and_then(resume_command_target)
+        .map(str::to_string)
+}
 
 fn working() -> crate::state::App {
     // Picker flows drive run_resume, which needs a live session (the
@@ -87,7 +97,7 @@ fn test_resume_opens_picker_catalog() {
     );
 }
 
-/// /resume <name> switches directly (sets pending_resume_target, no quit —
+/// /resume <name> switches directly (enqueues a /resume Command, no quit —
 /// the event loop swaps the session in-process via resume_builder).
 #[test]
 fn test_resume_name_switches_directly() {
@@ -98,7 +108,7 @@ fn test_resume_name_switches_directly() {
         "direct switch must not open picker"
     );
     assert_eq!(
-        app.pending_resume_target.as_deref(),
+        queued_target(&app).as_deref(),
         Some("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
         "pending sid must be the matched row sid"
     );
@@ -123,7 +133,7 @@ fn test_resume_picker_filters_query() {
 }
 
 /// Picker keys: Up/Down move the selection, typing narrows, Enter resumes
-/// (sets pending_resume_target, no quit — in-process swap), Esc closes.
+/// (enqueues a /resume Command, no quit — in-process swap), Esc closes.
 /// Drives the real handle_key path so the key dispatch (not just the state
 /// methods) is covered.
 #[test]
@@ -138,17 +148,17 @@ fn test_keys_navigate_select_close() {
     assert_eq!(app.resume_picker.sel, 0, "Up wraps back to row 0");
     crate::app::handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     assert_eq!(
-        app.pending_resume_target.as_deref(),
+        queued_target(&app).as_deref(),
         Some("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
         "Enter resumes the selected row"
     );
     assert!(!app.quit, "in-process swap does not quit");
     assert!(!app.resume_picker.open, "Enter closes the picker");
-    app.pending_resume_target = None;
+    drop(app.input.queue.take_all());
     app.run_command(SlashCommand::Resume);
     crate::app::handle_key(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     assert!(!app.resume_picker.open, "Esc closes the picker");
-    assert!(app.pending_resume_target.is_none(), "Esc does not resume");
+    assert!(queued_target(&app).is_none(), "Esc does not resume");
 }
 
 /// Backspace on an empty query closes the picker; on a non-empty query it
@@ -210,9 +220,10 @@ fn test_busy_defers_selection() {
     let mut app = stub_catalog_app();
     app.run_command(SlashCommand::Resume);
     app.start_run_for_test(1);
+    let sid_before = app.sessions.current.identity.session_id.0.clone();
     crate::app::handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-    assert!(
-        app.pending_resume_target.is_none(),
+    assert_eq!(
+        app.sessions.current.identity.session_id.0, sid_before,
         "busy Enter must not swap now"
     );
     assert_eq!(app.input.queue.len(), 1, "the switch is deferred");
@@ -235,9 +246,10 @@ fn test_busy_defers_query() {
         app.resume_picker.push(c);
     }
     app.start_run_for_test(1);
+    let sid_before = app.sessions.current.identity.session_id.0.clone();
     crate::app::handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-    assert!(
-        app.pending_resume_target.is_none(),
+    assert_eq!(
+        app.sessions.current.identity.session_id.0, sid_before,
         "busy Enter must not swap now"
     );
     assert_eq!(app.input.queue.len(), 1, "the switch is deferred");
@@ -278,7 +290,7 @@ fn test_resume_picker_empty_list() {
     app.sessions.catalog = Some(std::sync::Arc::new(StubCatalog(vec![])));
     app.run_command(SlashCommand::Resume);
     assert!(!app.resume_picker.open, "picker must not open on empty");
-    assert!(app.pending_resume_target.is_none(), "no sid on empty");
+    assert!(queued_target(&app).is_none(), "no sid on empty");
     let out = render(&app);
     assert!(
         out.contains("no other sessions"),

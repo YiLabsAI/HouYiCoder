@@ -172,7 +172,10 @@ ACTIVE_OWNERS = {
         # App onto the Sessions owner beside the catalog: they are the
         # current session's injected collaborators, swapped together on a
         # switch, so a swap replaces the catalog and the read ports at once.
-        "fields": 45,
+        # The resume switch intent stopped being a flat field: it rides the
+        # queued-input FIFO as a /resume Command, so the carrier is the queue
+        # head and no detached pending-target field can drift beside it.
+        "fields": 44,
         "mut_app": 44,
     },
     "crates/houyicoder-tui/src/input.rs:Input": {

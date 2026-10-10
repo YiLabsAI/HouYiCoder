@@ -530,9 +530,9 @@ fn test_swap_carries_queued_message() {
     // Now enqueue a message AFTER the barrier: host-side only, no InjectUser.
     s.send_str("task after swap");
     s.send_key(&Key::Enter);
-    // The run ends -> idle drain: /resume Command sets pending_resume_target
-    // -> next idle swap to the new session, carrying the queued message
-    // across (demoted to ParkedMessage). The carried message then
+    // The run ends -> idle drain: the queued /resume Command swaps to the
+    // new session, carrying the queued message across (demoted to
+    // ParkedMessage). The carried message then
     // auto-drains + sends as the new session's first turn (the
     // queue processor fires it on idle). The status bar's model name is the
     // stable swap-landed signal (the seeded prompt + the auto-sent message

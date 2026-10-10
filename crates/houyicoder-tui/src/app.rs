@@ -132,9 +132,10 @@ pub fn run_with_runner(
         Show,
         SetCursorStyle::DefaultUserShape
     )?;
-    // In-process resume consumes the target. A target survives only when the
-    // caller must rebuild the session outside this loop.
-    Ok(app.pending_resume_target.take())
+    // In-process resume consumes the /resume Command during the swap. A
+    // command survives only when the caller must rebuild the session outside
+    // this loop (no in-process builder), so hand its target up.
+    Ok(app.input.queue.drain_resume_target())
 }
 
 /// Enable SGR mouse reporting for clicks, drag, hover, and wheel events.

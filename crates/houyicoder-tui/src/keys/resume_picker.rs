@@ -30,7 +30,9 @@ pub(super) fn handle_resume_picker(app: &mut App, k: KeyEvent) {
                         .push(InputItem::Command(format!("/resume {row}")));
                     app.system_line(app.deferred_command_message(&format!("resume {row}")));
                 } else {
-                    app.pending_resume_target = Some(row.clone());
+                    app.input
+                        .queue
+                        .insert(0, InputItem::Command(format!("/resume {row}")));
                     app.system_line(app.resume_switch_message(&row));
                 }
             } else if !app.resume_picker.query.is_empty() {
