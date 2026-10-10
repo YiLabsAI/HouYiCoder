@@ -74,6 +74,11 @@ pub struct Ui {
     /// key handler and render path step a field directly; the level and the
     /// selection move together on enter and return.
     pub(crate) hooks_pane: HooksPaneState,
+    /// The /agents pane's list cursor: which returned-delegation row the
+    /// marker highlights. The rows are the session's record; the cursor is
+    /// pane interaction state, kept within the rows by every rebuild, step,
+    /// and read, and reset on a session switch.
+    pub agents_sel: usize,
     /// The /trajectory pane's drill level, cursor, and selection. One owner
     /// for the pane's position, because the selection and the cursor are kept
     /// consistent by the same transitions.

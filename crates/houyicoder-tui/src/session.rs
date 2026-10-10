@@ -87,10 +87,10 @@ pub(crate) struct Session {
     /// boundary, and a load stops at it since a drained frame cannot be
     /// rendered.
     pub(crate) loaded_from_frame: Cell<usize>,
-    /// The returned-delegation rows derived from the transcript, plus the
-    /// selection cursor. They reset with the session because the rows are
-    /// rebuilt from the session transcript. The cursor rides here until the
-    /// Ui owner exists to hold pane interaction state alongside its peers.
+    /// The returned-delegation rows derived from the transcript. They reset
+    /// with the session because they are rebuilt from the session transcript;
+    /// the pane's cursor lives with the Ui pane interaction state alongside
+    /// its peers.
     pub(crate) agents: PaneAgents,
     /// The agent directory listing the last /agents query fetched, kept so
     /// the pane can render it before any delegation has returned. It is

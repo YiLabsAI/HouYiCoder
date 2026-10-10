@@ -55,6 +55,7 @@ pub fn app() -> App {
             permission_pane: PermissionPaneState::default(),
             skills_pane: SkillsPaneState::default(),
             hooks_pane: HooksPaneState::default(),
+            agents_sel: 0,
             trajectory: TrajectoryPaneState::default(),
             worktree_list: ListPaneState::default(),
             worktree_level: Cell::new(0),

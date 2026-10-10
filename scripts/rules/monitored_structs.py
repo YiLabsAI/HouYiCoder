@@ -209,6 +209,10 @@ ACTIVE_OWNERS = {
         # linked-worktree listing became a worktree capability of its own.
         # Both now reset with the session by construction, so the manual
         # switch-reset lines for them are gone.
+        # The /agents pane cursor followed the same boundary: the
+        # returned-delegation rows stay the session's record, while the
+        # cursor became a Ui pane field beside its peers, fulfilling the
+        # note that had parked it on Session.
         "fields": 13,
         "mut_app": 44,
     },
@@ -218,15 +222,16 @@ ACTIVE_OWNERS = {
         # (Input), the transcript view state and the states parked for views
         # off screen, the teammate drill, the verbose render flag, the
         # permission, skills, hooks, trajectory, and worktree pane
-        # interaction states, the spinner's displayed token count, the
-        # last-written terminal title, the queued-input hit-test geometry,
+        # interaction states, the agents pane list cursor, the spinner's
+        # displayed token count, the last-written terminal title,
+        # the queued-input hit-test geometry,
         # the drag selections, the toast notifications, the clipboard port,
         # and the terminal-focus flag. Holds no connection handles and no
         # authoritative session record; the session stays the source of truth
         # and views read it through App. On-demand pane content (a drilled-in
         # teammate's lines, an opened skill body, a search corpus) lives here
         # as display copies whose loss costs a re-fetch, never a record.
-        "fields": 19,
+        "fields": 20,
     },
     "crates/houyicoder-tui/src/ui/navigation.rs:Navigation": {
         # The user's position in the frontend: the screen, the open pane, the

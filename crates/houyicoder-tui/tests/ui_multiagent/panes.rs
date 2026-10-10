@@ -248,8 +248,8 @@ fn test_agents_pane_lists_returned() {
         "the loaded fold is copied into the view"
     );
 }
-/// Arrows walk the returned-delegation list when the fleet is empty, and
-/// the cursor clamps at the bounds.
+/// The agents cursor steps and clamps at the bounds of the
+/// returned-delegation list; an empty list leaves it put.
 #[test]
 fn test_agents_pane_cursor_walks() {
     use houyicoder_tui::records::TranscriptLine;
@@ -269,12 +269,15 @@ fn test_agents_pane_cursor_walks() {
     let v = app.transcript().revision();
     let rows = app.transcript().to_vec();
     app.agents_mut().refresh(&rows, v);
-    app.agents_mut().move_selection(1);
-    assert_eq!(app.agents().sel, 1);
-    app.agents_mut().move_selection(1);
-    assert_eq!(app.agents().sel, 1, "clamped at the last row");
-    app.agents_mut().move_selection(-1);
-    assert_eq!(app.agents().sel, 0, "clamped at the first row");
+    app.move_agents_cursor(1);
+    assert_eq!(app.ui.agents_sel, 1);
+    app.move_agents_cursor(1);
+    assert_eq!(app.ui.agents_sel, 1, "clamped at the last row");
+    app.move_agents_cursor(-1);
+    assert_eq!(app.ui.agents_sel, 0, "clamped at the first row");
+    app.agents_mut().rows.clear();
+    app.move_agents_cursor(1);
+    assert_eq!(app.ui.agents_sel, 0, "an empty list leaves the cursor put");
 }
 
 /// Exit a teammate view and drill into a DIFFERENT completed child. Proves

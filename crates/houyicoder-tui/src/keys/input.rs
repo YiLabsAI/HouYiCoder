@@ -229,12 +229,8 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
         }
         // Fleet dropped: the pane lists this session's returned delegations,
         // and the same arrows walk them.
-        KeyCode::Up if app.ui.navigation.pane == Pane::Agents => {
-            app.sessions.current.agents.move_selection(-1)
-        }
-        KeyCode::Down if app.ui.navigation.pane == Pane::Agents => {
-            app.sessions.current.agents.move_selection(1)
-        }
+        KeyCode::Up if app.ui.navigation.pane == Pane::Agents => app.move_agents_cursor(-1),
+        KeyCode::Down if app.ui.navigation.pane == Pane::Agents => app.move_agents_cursor(1),
         // Enter drills into the selected row of the list being rendered. The
         // branch follows the render (the live fleet when it has entries, else
         // the returned delegations), not the presence of a selection: keying
@@ -244,13 +240,9 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
             if app.ui.navigation.pane == Pane::Agents && app.ui.input.editor.is_empty() =>
         {
             if app.fleet.entries.is_empty() {
-                if let Some(row) = app
-                    .sessions
-                    .current
-                    .agents
-                    .rows
-                    .get(app.sessions.current.agents.sel)
-                {
+                let rows = &app.sessions.current.agents.rows;
+                let cur = app.ui.agents_sel.min(rows.len().saturating_sub(1));
+                if let Some(row) = rows.get(cur) {
                     let sid = row.child_sid.clone();
                     let loaded = row.loaded;
                     app.enter_teammate_view_for_sid(&sid, !loaded);

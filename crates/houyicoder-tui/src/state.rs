@@ -134,8 +134,8 @@ impl App {
         &self.sessions.current.transcript
     }
 
-    /// Public read seam for the session-owned returned-delegation rows and
-    /// cursor. In-crate render and key paths read the session field directly;
+    /// Public read seam for the session-owned returned-delegation rows.
+    /// In-crate render and key paths read the session field directly;
     /// external integration tests reach the rows through this handle instead of
     /// the crate-private sessions field.
     pub fn agents(&self) -> &crate::agent_message::PaneAgents {
@@ -143,18 +143,33 @@ impl App {
     }
 
     /// Public mut seam for the session-owned returned-delegation rows: external
-    /// integration tests move the cursor and stage fixtures through it.
+    /// integration tests stage fixtures through it.
     pub fn agents_mut(&mut self) -> &mut crate::agent_message::PaneAgents {
         &mut self.sessions.current.agents
     }
 
     /// Rebuild the returned-delegation rows from the session transcript when
-    /// its revision moved, forwarding to the session so the transcript and the
-    /// agents are borrowed as disjoint fields inside one call. The /agents
-    /// command calls the session method directly in-crate; this public forward
-    /// is the seam external integration tests trigger a rebuild through.
+    /// its revision moved, then pull the pane cursor back inside the rebuilt
+    /// rows so an emptied or shortened list never leaves it pointing past the
+    /// end. The session call borrows the transcript and the agents as disjoint
+    /// fields inside one step; this method is also the seam external
+    /// integration tests trigger a rebuild through.
     pub fn refresh_agents(&mut self) {
         self.sessions.current.refresh_agents();
+        let rows = self.sessions.current.agents.rows.len();
+        self.ui.agents_sel = self.ui.agents_sel.min(rows.saturating_sub(1));
+    }
+
+    /// Move the /agents pane cursor by a signed delta, clamped to the
+    /// session's returned-delegation rows and a no-op while they are empty.
+    /// The cursor lives with the Ui pane state; the rows it indexes are the
+    /// session's, so one call reads the rows and steps the cursor.
+    pub fn move_agents_cursor(&mut self, delta: i32) {
+        let rows = self.sessions.current.agents.rows.len();
+        if rows == 0 {
+            return;
+        }
+        self.ui.agents_sel = (self.ui.agents_sel as i32 + delta).clamp(0, rows as i32 - 1) as usize;
     }
 
     /// The working transcript, mutably borrowed for fixture setup and the

@@ -59,7 +59,7 @@ impl App {
             }
             C::Agents => {
                 self.ui.navigation.pane = Pane::Agents;
-                self.sessions.current.refresh_agents();
+                self.refresh_agents();
                 if let Some(s) = self.sessions.current.connection.as_ref() {
                     match s.next_request_id() {
                         Ok(req_id) => {

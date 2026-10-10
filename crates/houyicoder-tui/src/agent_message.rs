@@ -50,15 +50,15 @@ pub struct DelegationRow {
     pub loaded: bool,
 }
 
-/// The /agents pane's list of this session's returned delegations, plus its
-/// cursor. Rebuilt from the transcript when the transcript version moves; a
-/// returned delegation is durable history, so the list survives the footer
-/// strip's grace window (the strip is the present tense, this is
-/// the record).
+/// The /agents pane's list of this session's returned delegations. Rebuilt
+/// from the transcript when the transcript version moves; a returned
+/// delegation is durable history, so the list survives the footer strip's
+/// grace window (the strip is the present tense, this is the record). The
+/// pane's cursor is interaction state and lives on the Ui owner beside its
+/// peers; every rebuild, step, and read keeps it within these rows.
 #[derive(Debug, Default)]
 pub struct PaneAgents {
     pub rows: Vec<DelegationRow>,
-    pub sel: usize,
     version: u64,
 }
 
@@ -91,15 +91,6 @@ impl PaneAgents {
                 _ => None,
             })
             .collect();
-        self.sel = self.sel.min(self.rows.len().saturating_sub(1));
-    }
-
-    /// Move the cursor by a signed delta, clamped at the bounds.
-    pub fn move_selection(&mut self, delta: i32) {
-        if self.rows.is_empty() {
-            return;
-        }
-        self.sel = (self.sel as i32 + delta).clamp(0, self.rows.len() as i32 - 1) as usize;
     }
 }
 
@@ -749,27 +740,5 @@ mod pane_agents_tests {
         pane.refresh(&t, 1);
         assert!(pane.rows[0].loaded, "non-empty fold = loaded");
         assert!(!pane.rows[1].loaded, "empty fold = not loaded");
-    }
-
-    /// The cursor clamps at the bounds, so a delta past either end stays
-    /// on the first or last row rather than wrapping or panicking.
-    #[test]
-    fn test_move_selection_clamps() {
-        let mut pane = PaneAgents::default();
-        pane.refresh(
-            &[
-                subagent("a", "x", Vec::new()),
-                subagent("b", "y", Vec::new()),
-            ],
-            1,
-        );
-        pane.move_selection(5);
-        assert_eq!(pane.sel, 1, "clamped at last");
-        pane.move_selection(-5);
-        assert_eq!(pane.sel, 0, "clamped at first");
-        // Empty list: no-op, no panic.
-        pane.rows.clear();
-        pane.move_selection(1);
-        assert_eq!(pane.sel, 0);
     }
 }

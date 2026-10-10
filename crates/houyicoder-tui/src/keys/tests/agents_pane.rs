@@ -106,11 +106,11 @@ fn test_agents_enter_follows_list() {
     );
 }
 
-/// With no live fleet, Enter drills into the selected returned delegation
-/// and opens its view. Also drives the App-level accessors for the agents
-/// pane state -- the public seam external integration tests reach the
-/// session-owned rows through, since in-crate code reads the session field
-/// directly.
+/// With no live fleet, the arrows step the agents cursor with clamping and
+/// Enter drills into the selected returned delegation, opening its view.
+/// Also drives the App-level accessors for the agents pane state -- the
+/// public seam external integration tests reach the session-owned rows
+/// through, since in-crate code reads the session field directly.
 #[test]
 fn test_agents_enter_returned_delegation() {
     use crate::records::TranscriptLine;
@@ -127,8 +127,9 @@ fn test_agents_enter_returned_delegation() {
     app.refresh_agents();
     assert_eq!(app.agents().rows.len(), 1, "accessor reads the rows");
     assert!(app.agents().rows[0].loaded, "loaded fold detected");
-    app.agents_mut().move_selection(1);
-    assert_eq!(app.agents().sel, 0, "cursor clamps at the single row");
+    handle_working(&mut app, key(KeyCode::Down));
+    handle_working(&mut app, key(KeyCode::Up));
+    assert_eq!(app.ui.agents_sel, 0, "cursor clamps at the single row");
     handle_working(&mut app, key(KeyCode::Enter));
     let view = app.ui.teammate_view.as_ref().expect("view opened");
     assert_eq!(view.child_sid, "c1");
@@ -136,4 +137,61 @@ fn test_agents_enter_returned_delegation() {
         !view.transcript.is_empty(),
         "the loaded fold is copied into the view"
     );
+    app.sessions.current.agents.rows.clear();
+    handle_working(&mut app, key(KeyCode::Down));
+    assert_eq!(app.ui.agents_sel, 0, "an empty list leaves the cursor put");
+}
+
+/// A cursor past the end still opens the row the render highlights: the
+/// Enter drill clamps against the rows as the marker does.
+#[test]
+fn test_enter_clamps() {
+    use crate::records::TranscriptLine;
+    let mut app = working_app();
+    app.ui.navigation.pane = Pane::Agents;
+    for (sid, summary) in [("c1", "first"), ("c2", "second")] {
+        app.push_transcript_line(TranscriptLine::Subagent {
+            child_sid: sid.into(),
+            subagent_type: "explore".into(),
+            summary: summary.into(),
+            prompt: String::new(),
+            folded_transcript: vec![TranscriptLine::Agent("reply".into())],
+            color: None,
+        });
+    }
+    app.refresh_agents();
+    app.ui.agents_sel = 5;
+    handle_working(&mut app, key(KeyCode::Enter));
+    assert_eq!(
+        app.ui.teammate_view.as_ref().map(|v| v.child_sid.as_str()),
+        Some("c2"),
+        "Enter opens the last row the clamped cursor lands on"
+    );
+}
+
+/// A rebuild that empties the list parks the cursor at the top, so a later
+/// repopulation starts from the first row instead of inheriting a position
+/// from the previous list.
+#[test]
+fn test_rebuild_parks_cursor() {
+    use crate::records::TranscriptLine;
+    let mut app = working_app();
+    app.ui.navigation.pane = Pane::Agents;
+    for (sid, summary) in [("c1", "first"), ("c2", "second")] {
+        app.push_transcript_line(TranscriptLine::Subagent {
+            child_sid: sid.into(),
+            subagent_type: "explore".into(),
+            summary: summary.into(),
+            prompt: String::new(),
+            folded_transcript: Vec::new(),
+            color: None,
+        });
+    }
+    app.refresh_agents();
+    app.move_agents_cursor(1);
+    assert_eq!(app.ui.agents_sel, 1);
+    app.sessions.current.transcript = Default::default();
+    app.refresh_agents();
+    assert_eq!(app.agents().rows.len(), 0, "the rebuild emptied the rows");
+    assert_eq!(app.ui.agents_sel, 0, "the emptied list parks the cursor");
 }

@@ -252,6 +252,7 @@ impl App {
         self.ui.worktree_list = Default::default();
         self.ui.worktree_level = Cell::new(0);
         self.ui.trajectory = Default::default();
+        self.ui.agents_sel = 0;
         self.ui.notifications = Default::default();
         self.ui.displayed_tokens = Cell::new(0);
         self.ui.selection = Default::default();

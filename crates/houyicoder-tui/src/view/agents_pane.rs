@@ -60,16 +60,14 @@ pub(crate) fn draw_content(f: &mut Frame, area: Rect, app: &App) {
     // completed child after its grace window, but the pane is the record of
     // what ran this session, selectable and enterable.
     if !app.sessions.current.agents.rows.is_empty() {
-        let items: Vec<ListItem> = app
-            .sessions
-            .current
-            .agents
-            .rows
+        let rows = &app.sessions.current.agents.rows;
+        let cur = app.ui.agents_sel.min(rows.len().saturating_sub(1));
+        let items: Vec<ListItem> = rows
             .iter()
             .enumerate()
             .map(|(i, r)| {
                 let row = format!("\u{2713} {} \u{00b7} {}", r.subagent_type, r.summary);
-                if app.sessions.current.agents.sel == i {
+                if cur == i {
                     ListItem::new(format!("\u{25b6} {row}"))
                 } else {
                     ListItem::new(format!("  {row}"))
@@ -207,6 +205,43 @@ mod tests {
         assert!(
             out.contains("\u{25b6}"),
             "the selected row carries the cursor marker: {out}"
+        );
+    }
+
+    /// The cursor marker lands on the row the Ui-owned selection names, and
+    /// a selection past the end still marks the last row: the render clamps
+    /// the cursor against the session's rows.
+    #[test]
+    fn test_marker_follows_selection() {
+        use crate::records::TranscriptLine;
+        let mut app = composition::app();
+        for (sid, summary) in [("c1", "first row"), ("c2", "second row")] {
+            app.push_transcript_line(TranscriptLine::Subagent {
+                child_sid: sid.into(),
+                subagent_type: "explore".into(),
+                summary: summary.into(),
+                prompt: String::new(),
+                folded_transcript: Vec::new(),
+                color: None,
+            });
+        }
+        app.sessions.current.refresh_agents();
+        let marked = "\u{25b6} \u{2713} explore \u{00b7} ";
+        app.ui.agents_sel = 1;
+        let out = render(&app, 60, 8);
+        assert!(
+            out.contains(&format!("{marked}second row")),
+            "the marker follows the cursor: {out}"
+        );
+        assert!(
+            !out.contains(&format!("{marked}first row")),
+            "the unselected row carries no marker: {out}"
+        );
+        app.ui.agents_sel = 5;
+        let out = render(&app, 60, 8);
+        assert!(
+            out.contains(&format!("{marked}second row")),
+            "a stale cursor clamps to the last row: {out}"
         );
     }
 }
