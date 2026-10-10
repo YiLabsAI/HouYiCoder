@@ -12,7 +12,7 @@ use crate::state::App;
 /// move the caret. Returns nothing; the caller returns after this (the
 /// editor is a focused input mode that swallows all keys).
 pub(super) fn handle_status_name_edit(app: &mut App, k: KeyEvent) {
-    let Some(field) = app.status_name_edit.as_mut() else {
+    let Some(field) = app.ui.navigation.status_name_edit.as_mut() else {
         return;
     };
     match k.code {
@@ -44,7 +44,7 @@ mod tests {
         app.ui.navigation.screen = Screen::Working;
         app.ui.navigation.viewport = ViewportMode::Working;
         app.ui.navigation.pane = Pane::Status;
-        app.status_tab = crate::state::enums::StatusTab::Status;
+        app.ui.navigation.status_tab = crate::state::enums::StatusTab::Status;
         app
     }
 
@@ -53,7 +53,10 @@ mod tests {
     fn test_e_opens_editor() {
         let mut app = status_tab_app();
         handle_working(&mut app, key(KeyCode::Char('e')));
-        assert!(app.status_name_edit.is_some(), "editor opened");
+        assert!(
+            app.ui.navigation.status_name_edit.is_some(),
+            "editor opened"
+        );
     }
 
     /// e while editing does NOT open a second editor (the routing block
@@ -61,10 +64,10 @@ mod tests {
     #[test]
     fn test_e_inserts_while_editing() {
         let mut app = status_tab_app();
-        app.status_name_edit = Some(InputField::new());
+        app.ui.navigation.status_name_edit = Some(InputField::new());
         handle_working(&mut app, key(KeyCode::Char('e')));
         assert_eq!(
-            app.status_name_edit.as_ref().unwrap().value(),
+            app.ui.navigation.status_name_edit.as_ref().unwrap().value(),
             "e",
             "e while editing types into the buffer, not opens a new editor"
         );
@@ -75,10 +78,15 @@ mod tests {
     #[test]
     fn test_chars_edit_buffer() {
         let mut app = status_tab_app();
-        app.status_name_edit = Some(InputField::new());
+        app.ui.navigation.status_name_edit = Some(InputField::new());
         handle_working(&mut app, key(KeyCode::Char('h')));
         handle_working(&mut app, key(KeyCode::Char('i')));
-        let field = app.status_name_edit.as_ref().expect("editor open");
+        let field = app
+            .ui
+            .navigation
+            .status_name_edit
+            .as_ref()
+            .expect("editor open");
         assert_eq!(field.value(), "hi", "chars landed in the buffer");
     }
 
@@ -88,10 +96,10 @@ mod tests {
         let mut app = status_tab_app();
         let mut f = InputField::new();
         f.insert_str("ab");
-        app.status_name_edit = Some(f);
+        app.ui.navigation.status_name_edit = Some(f);
         handle_working(&mut app, key(KeyCode::Backspace));
         assert_eq!(
-            app.status_name_edit.as_ref().unwrap().value(),
+            app.ui.navigation.status_name_edit.as_ref().unwrap().value(),
             "a",
             "backspace trimmed"
         );
@@ -101,9 +109,12 @@ mod tests {
     #[test]
     fn test_esc_cancels_editor() {
         let mut app = status_tab_app();
-        app.status_name_edit = Some(InputField::new());
+        app.ui.navigation.status_name_edit = Some(InputField::new());
         handle_working(&mut app, key(KeyCode::Esc));
-        assert!(app.status_name_edit.is_none(), "editor closed on Esc");
+        assert!(
+            app.ui.navigation.status_name_edit.is_none(),
+            "editor closed on Esc"
+        );
     }
 
     /// Enter commits: while disconnected, the commit reports not connected
@@ -114,8 +125,11 @@ mod tests {
         app.sessions.current.connection = None;
         let mut f = InputField::new();
         f.insert_str("x");
-        app.status_name_edit = Some(f);
+        app.ui.navigation.status_name_edit = Some(f);
         handle_working(&mut app, key(KeyCode::Enter));
-        assert!(app.status_name_edit.is_none(), "editor closed on commit");
+        assert!(
+            app.ui.navigation.status_name_edit.is_none(),
+            "editor closed on commit"
+        );
     }
 }

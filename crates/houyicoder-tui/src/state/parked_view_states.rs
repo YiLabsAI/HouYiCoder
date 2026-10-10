@@ -141,13 +141,13 @@ impl ParkedViewStates {
 impl App {
     /// Take the visible view's expansion sets as one value, leaving it empty.
     pub(crate) fn take_expanded_keys(&mut self) -> ExpandedKeys {
-        std::mem::take(&mut self.transcript_view.expanded)
+        std::mem::take(&mut self.ui.transcript_view.expanded)
     }
 
     /// Install a view's expansion sets as the visible ones, replacing the
     /// current value whole.
     pub(crate) fn set_expanded_keys(&mut self, keys: ExpandedKeys) {
-        self.transcript_view.expanded = keys;
+        self.ui.transcript_view.expanded = keys;
     }
 }
 

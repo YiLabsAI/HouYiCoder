@@ -30,7 +30,7 @@ fn test_expand_fires_child_fetch() {
     // First expand: fires a one-shot fetch (the line has no child rows yet).
     assert!(app.toggle_tail_expand(), "toggle targeted the subagent");
     assert!(
-        app.transcript_view.expanded.subagents.contains("c1"),
+        app.ui.transcript_view.expanded.subagents.contains("c1"),
         "expanded"
     );
     // Pump the driver round-trip until the fill arm swaps in the child rows

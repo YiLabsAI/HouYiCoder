@@ -40,13 +40,13 @@ pub fn spinner_row_text(
         p.live_assistant_text.chars().count() + p.live_reasoning_text.chars().count()
     });
     let actual_tok = (live_chars / 4) as u32;
-    let displayed = app.displayed_tokens.get();
+    let displayed = app.ui.displayed_tokens.get();
     let tok = if actual_tok > displayed {
         displayed + (actual_tok - displayed).div_ceil(4)
     } else {
         actual_tok
     };
-    app.displayed_tokens.set(tok);
+    app.ui.displayed_tokens.set(tok);
     format!(
         "{} {}… ({})",
         glyph,

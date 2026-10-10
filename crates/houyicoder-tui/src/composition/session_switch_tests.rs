@@ -508,7 +508,7 @@ fn test_clears_session_local_state() {
     });
     app.sessions.current.run_metrics.cumulative_tokens = 1234;
     app.sessions.current.run_metrics.cumulative_steps = 7;
-    app.displayed_tokens.set(50);
+    app.ui.displayed_tokens.set(50);
     app.status.tokens = 999;
     app.sessions.current.prompt = Some(PendingPrompt::approval_card(
         RequestId(0),
@@ -539,7 +539,7 @@ fn test_clears_session_local_state() {
         app.sessions.current.run_metrics.cumulative_steps, 0,
         "cumulative_steps cleared"
     );
-    assert_eq!(app.displayed_tokens.get(), 0, "displayed_tokens cleared");
+    assert_eq!(app.ui.displayed_tokens.get(), 0, "displayed_tokens cleared");
     assert_eq!(app.status.tokens, 0, "status.tokens cleared");
     assert!(app.approval().is_none(), "approval cleared");
     assert!(
@@ -790,7 +790,7 @@ fn group_body_visible(app: &App) -> bool {
     crate::fold::display_slots(
         &app.sessions.current.transcript,
         app.sessions.current.transcript.fold_groups(),
-        &app.transcript_view.expanded.fold_groups,
+        &app.ui.transcript_view.expanded.fold_groups,
         false,
     )
     .iter()
@@ -812,20 +812,14 @@ fn test_swap_restores_open_keys() {
     let first_sid = first.session.clone();
     let mut app = build_app(first, first_startup);
     app.sessions.current.transcript = folded_transcript().into();
-    app.transcript_view.expanded.results.insert("call-1".into());
-    app.transcript_view
-        .expanded
-        .fold_groups
-        .insert("call-1#0".into());
-    app.transcript_view.expanded.thinking.insert("1".into());
-    app.transcript_view
-        .expanded
-        .thinking
-        .insert(RowId::local(9));
-    app.transcript_view
-        .expanded
-        .subagents
-        .insert("child-1".into());
+    {
+        let sets = &mut app.ui.transcript_view.expanded;
+        sets.results.insert("call-1".into());
+        sets.fold_groups.insert("call-1#0".into());
+        sets.thinking.insert("1".into());
+        sets.thinking.insert(RowId::local(9));
+        sets.subagents.insert("child-1".into());
+    }
     assert!(
         group_body_visible(&app),
         "the open group draws its body rows before the switch"
@@ -838,73 +832,68 @@ fn test_swap_restores_open_keys() {
         "the two bundles are distinct sessions"
     );
     app.switch_session(second);
-    assert!(
-        app.transcript_view.expanded.results.is_empty()
-            && app.transcript_view.expanded.fold_groups.is_empty()
-            && app.transcript_view.expanded.thinking.is_empty()
-            && app.transcript_view.expanded.subagents.is_empty(),
-        "the session entered starts with nothing open: {:?} {:?} {:?} {:?}",
-        app.transcript_view.expanded.results,
-        app.transcript_view.expanded.fold_groups,
-        app.transcript_view.expanded.thinking,
-        app.transcript_view.expanded.subagents
-    );
+    {
+        let sets = &app.ui.transcript_view.expanded;
+        assert!(
+            sets.results.is_empty()
+                && sets.fold_groups.is_empty()
+                && sets.thinking.is_empty()
+                && sets.subagents.is_empty(),
+            "the session entered starts with nothing open: {:?} {:?} {:?} {:?}",
+            sets.results,
+            sets.fold_groups,
+            sets.thinking,
+            sets.subagents
+        );
+    }
     // The second session opens the same group key plus a key of its own.
     app.sessions.current.transcript = folded_transcript().into();
     assert!(
         !group_body_visible(&app),
         "the entered session starts collapsed, so the check below tells the sets apart"
     );
-    app.transcript_view
-        .expanded
-        .fold_groups
-        .insert("call-1#0".into());
-    app.transcript_view
-        .expanded
-        .results
-        .insert("second-only".into());
+    {
+        let sets = &mut app.ui.transcript_view.expanded;
+        sets.fold_groups.insert("call-1#0".into());
+        sets.results.insert("second-only".into());
+    }
     assert!(group_body_visible(&app));
 
     let (mut back, _back_startup) = test_bundle();
     back.session = first_sid;
     app.switch_session(back);
     app.sessions.current.transcript = folded_transcript().into();
+    let sets = &app.ui.transcript_view.expanded;
     assert_eq!(
-        app.transcript_view.expanded.results.len(),
+        sets.results.len(),
         1,
         "the first session's own keys come back: {:?}",
-        app.transcript_view.expanded.results
+        sets.results
     );
-    assert!(app.transcript_view.expanded.results.contains("call-1"));
+    assert!(sets.results.contains("call-1"));
     assert!(
-        !app.transcript_view.expanded.results.contains("second-only"),
+        !sets.results.contains("second-only"),
         "the second session's keys stay with it: {:?}",
-        app.transcript_view.expanded.results
+        sets.results
     );
     assert!(
-        app.transcript_view
-            .expanded
-            .fold_groups
-            .contains("call-1#0"),
+        sets.fold_groups.contains("call-1#0"),
         "the group the user had open comes back: {:?}",
-        app.transcript_view.expanded.fold_groups
+        sets.fold_groups
     );
     assert!(
-        app.transcript_view.expanded.thinking.contains(&"1".into()),
+        sets.thinking.contains(&"1".into()),
         "a thinking key held on a log entry comes back: the rebuilt session \
          reads the same entry: {:?}",
-        app.transcript_view.expanded.thinking
+        sets.thinking
     );
     assert!(
-        !app.transcript_view
-            .expanded
-            .thinking
-            .contains(&RowId::local(9)),
+        !sets.thinking.contains(&RowId::local(9)),
         "a thinking key held on a frame position does not come back: the \
          rebuilt session holds no row at it: {:?}",
-        app.transcript_view.expanded.thinking
+        sets.thinking
     );
-    assert!(app.transcript_view.expanded.subagents.contains("child-1"));
+    assert!(sets.subagents.contains("child-1"));
     assert!(
         group_body_visible(&app),
         "the returned session draws the group the user had open"
@@ -930,20 +919,22 @@ fn test_switch_parking_hygiene() {
             folded_transcript: Vec::new(),
             color: None,
         });
-    app.transcript_view
+    app.ui
+        .transcript_view
         .expanded
         .results
         .insert("parent-key".into());
     assert!(app.enter_teammate_view_for_sid("c1", false));
     // A row opened while the child view is on screen.
-    app.transcript_view
+    app.ui
+        .transcript_view
         .expanded
         .results
         .insert("child-key".into());
 
     app.switch_session(test_bundle().0);
     assert!(
-        app.teammate_view.is_none(),
+        app.ui.teammate_view.is_none(),
         "the switch leaves the child view behind"
     );
 
@@ -951,14 +942,22 @@ fn test_switch_parking_hygiene() {
     back.session = first_sid;
     app.switch_session(back);
     assert!(
-        app.transcript_view.expanded.results.contains("parent-key"),
+        app.ui
+            .transcript_view
+            .expanded
+            .results
+            .contains("parent-key"),
         "the parent's own open rows come back: {:?}",
-        app.transcript_view.expanded.results
+        app.ui.transcript_view.expanded.results
     );
     assert!(
-        !app.transcript_view.expanded.results.contains("child-key"),
+        !app.ui
+            .transcript_view
+            .expanded
+            .results
+            .contains("child-key"),
         "the child's open rows do not ride into the parent: {:?}",
-        app.transcript_view.expanded.results
+        app.ui.transcript_view.expanded.results
     );
 }
 
@@ -981,7 +980,8 @@ fn test_switch_drops_child_park() {
             color: None,
         });
     assert!(app.enter_teammate_view_for_sid("c1", false));
-    app.transcript_view
+    app.ui
+        .transcript_view
         .expanded
         .results
         .insert("child-key".into());
@@ -1001,9 +1001,9 @@ fn test_switch_drops_child_park() {
         });
     assert!(app.enter_teammate_view_for_sid("c1", false));
     assert!(
-        app.transcript_view.expanded.results.is_empty(),
+        app.ui.transcript_view.expanded.results.is_empty(),
         "the new session's child starts with no parked view state: {:?}",
-        app.transcript_view.expanded.results
+        app.ui.transcript_view.expanded.results
     );
 }
 
@@ -1029,10 +1029,10 @@ fn test_swap_preserves_terminal_focus() {
 #[test]
 fn test_swap_resets_verbose() {
     let mut app = test_app();
-    app.verbose = true;
+    app.ui.verbose = true;
     app.switch_session(test_bundle().0);
     assert!(
-        !app.verbose,
+        !app.ui.verbose,
         "verbose reset to false, not carried from the search view"
     );
 }

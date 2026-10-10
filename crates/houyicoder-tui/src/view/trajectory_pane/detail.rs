@@ -72,7 +72,7 @@ pub(super) fn draw_turn_detail(
     let mut body = Vec::new();
     {
         {
-            app.trajectory.set_at_bg(false);
+            app.ui.trajectory.set_at_bg(false);
             let clamped = cursor.min(detail.records.len().saturating_sub(1));
             let cache_str = format_turn_cache(turn);
             header.push(line(vec![
@@ -164,7 +164,7 @@ pub(super) fn draw_bg_detail(
     let mut body = Vec::new();
     {
         {
-            app.trajectory.set_at_bg(true);
+            app.ui.trajectory.set_at_bg(true);
             let mut bg_head = vec![
                 sp(format!(" [bg] {} ", bg.kind), Color::Cyan),
                 sp(truncate_width(&bg.summary, 50), Color::White),

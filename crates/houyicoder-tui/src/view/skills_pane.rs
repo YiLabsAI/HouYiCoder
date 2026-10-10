@@ -115,7 +115,7 @@ pub(crate) fn display_order(entries: &[SkillEntry]) -> Vec<&SkillEntry> {
 }
 
 pub(crate) fn draw_content(f: &mut Frame, inner: Rect, app: &App) {
-    if let Some(detail) = app.skills_pane.detail() {
+    if let Some(detail) = app.ui.skills_pane.detail() {
         draw_detail(f, inner, app, detail);
         return;
     }
@@ -153,6 +153,7 @@ pub(crate) fn draw_content(f: &mut Frame, inner: Rect, app: &App) {
     } else {
         let ordered = display_order(&app.sessions.current.capabilities.skills.entries);
         let sel = app
+            .ui
             .skills_pane
             .cursor()
             .min(ordered.len().saturating_sub(1));
@@ -237,7 +238,7 @@ fn draw_detail(f: &mut Frame, inner: Rect, app: &App, detail: &SkillDetail) {
         }
     };
     let max_offset = max_scroll_offset(&body, rows[1].width, rows[1].height);
-    app.skills_pane.set_detail_max_offset(max_offset);
+    app.ui.skills_pane.set_detail_max_offset(max_offset);
     f.render_widget(
         Paragraph::new(body)
             .wrap(Wrap { trim: false })

@@ -16,6 +16,7 @@ impl App {
     pub(crate) fn open_skill_detail(&mut self) {
         let ordered = display_order(&self.sessions.current.capabilities.skills.entries);
         let selected = self
+            .ui
             .skills_pane
             .cursor()
             .min(ordered.len().saturating_sub(1));
@@ -24,17 +25,17 @@ impl App {
         };
         let name = entry.name.clone();
         let Some(session) = self.sessions.current.connection.as_ref() else {
-            self.skills_pane.open_unavailable(name);
+            self.ui.skills_pane.open_unavailable(name);
             return;
         };
         let Ok(req_id) = session.next_request_id() else {
-            self.skills_pane.open_unavailable(name);
+            self.ui.skills_pane.open_unavailable(name);
             return;
         };
-        self.skills_pane.request_detail(req_id, name.clone());
+        self.ui.skills_pane.request_detail(req_id, name.clone());
         let query = ClientCommand::SkillBodyQuery { req_id, name };
         if self.enqueue(query).is_err() {
-            self.skills_pane.fail_detail(req_id);
+            self.ui.skills_pane.fail_detail(req_id);
         }
     }
 
@@ -44,6 +45,7 @@ impl App {
     pub(crate) fn toggle_skill_at_cursor(&mut self) {
         let ordered = display_order(&self.sessions.current.capabilities.skills.entries);
         let selected = self
+            .ui
             .skills_pane
             .cursor()
             .min(ordered.len().saturating_sub(1));

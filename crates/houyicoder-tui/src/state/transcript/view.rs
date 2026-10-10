@@ -316,57 +316,57 @@ struct HistoryWindow {
 impl App {
     /// Whole-vec scroll; parent-only paths read this, not the dispatch.
     pub(crate) fn whole_scroll(&self) -> &TranscriptScroll {
-        self.transcript_view.whole_scroll()
+        self.ui.transcript_view.whole_scroll()
     }
 
     /// Mutable whole-vec scroll.
     pub(crate) fn whole_scroll_mut(&mut self) -> &mut TranscriptScroll {
-        self.transcript_view.whole_scroll_mut()
+        self.ui.transcript_view.whole_scroll_mut()
     }
 
     /// Within-window scroll (the search view's own row space).
     pub(crate) fn window_scroll(&self) -> &TranscriptScroll {
-        self.transcript_view.window_scroll()
+        self.ui.transcript_view.window_scroll()
     }
 
     /// Mutable within-window scroll.
     pub(crate) fn window_scroll_mut(&mut self) -> &mut TranscriptScroll {
-        self.transcript_view.window_scroll_mut()
+        self.ui.transcript_view.window_scroll_mut()
     }
 
     /// True while the search view browses a byte window.
     pub(crate) fn window_browsing(&self) -> bool {
-        self.transcript_view.window_browsing()
+        self.ui.transcript_view.window_browsing()
     }
 
     /// Enter or leave byte-window browsing.
     pub(crate) fn set_window_browsing(&mut self, on: bool) {
-        self.transcript_view.set_window_browsing(on);
+        self.ui.transcript_view.set_window_browsing(on);
     }
 
     /// Reset the within-window scroll for a fresh window load.
     pub(crate) fn reset_window_scroll(&mut self) {
-        self.transcript_view.reset_window_scroll();
+        self.ui.transcript_view.reset_window_scroll();
     }
 
     /// Byte offset where the loaded window starts.
     pub(crate) fn window_anchor(&self) -> u64 {
-        self.transcript_view.window_anchor()
+        self.ui.transcript_view.window_anchor()
     }
 
     /// Byte offset past the loaded window's last line.
     pub(crate) fn window_end(&self) -> u64 {
-        self.transcript_view.window_end()
+        self.ui.transcript_view.window_end()
     }
 
     /// The log byte size frozen at enter; window reads stay in its bounds.
     pub(crate) fn frozen_file_size(&self) -> u64 {
-        self.transcript_view.frozen_file_size()
+        self.ui.transcript_view.frozen_file_size()
     }
 
     /// Corrupt lines skipped in the current window.
     pub(crate) fn window_skipped(&self) -> usize {
-        self.transcript_view.window_skipped()
+        self.ui.transcript_view.window_skipped()
     }
 
     /// Enter byte-window mode: freeze the file size and load the first window.
@@ -377,18 +377,20 @@ impl App {
         end: u64,
         skipped: usize,
     ) {
-        self.transcript_view
+        self.ui
+            .transcript_view
             .enter_history_window(frozen, anchor, end, skipped);
     }
 
     /// Replace the window for a navigation step; the frozen size stays.
     pub(crate) fn replace_history_window(&mut self, anchor: u64, end: u64, skipped: usize) {
-        self.transcript_view
+        self.ui
+            .transcript_view
             .replace_history_window(anchor, end, skipped);
     }
 
     /// Exit: clear the window and the frozen boundary.
     pub(crate) fn exit_history_window(&mut self) {
-        self.transcript_view.exit_history_window();
+        self.ui.transcript_view.exit_history_window();
     }
 }

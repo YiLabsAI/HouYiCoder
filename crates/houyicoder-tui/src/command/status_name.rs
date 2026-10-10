@@ -19,17 +19,17 @@ impl App {
     /// session check lives at commit (the editor is harmless while
     /// disconnected -- Enter reports not connected then).
     pub(crate) fn enter_status_name_edit(&mut self) {
-        self.status_name_edit = Some(InputField::new());
+        self.ui.navigation.status_name_edit = Some(InputField::new());
     }
 
     /// Cancel the name edit without sending a request.
     pub(crate) fn cancel_status_name_edit(&mut self) {
-        self.status_name_edit = None;
+        self.ui.navigation.status_name_edit = None;
     }
 
     /// Send the buffered name; an empty value restores automatic naming.
     pub(crate) fn commit_status_name_edit(&mut self) {
-        let Some(field) = self.status_name_edit.take() else {
+        let Some(field) = self.ui.navigation.status_name_edit.take() else {
             return;
         };
         let name = field.value().to_string();
@@ -65,7 +65,7 @@ mod tests {
         app.sessions.current.connection = None;
         app.enter_status_name_edit();
         assert!(
-            app.status_name_edit.is_some(),
+            app.ui.navigation.status_name_edit.is_some(),
             "editor opens without a session (commit is the gate)"
         );
     }
@@ -74,9 +74,9 @@ mod tests {
     #[test]
     fn test_cancel_drops_editor() {
         let mut app = crate::composition::app();
-        app.status_name_edit = Some(InputField::new());
+        app.ui.navigation.status_name_edit = Some(InputField::new());
         app.cancel_status_name_edit();
-        assert!(app.status_name_edit.is_none());
+        assert!(app.ui.navigation.status_name_edit.is_none());
     }
 
     /// commit with no editor is a no-op (does not panic).
@@ -84,7 +84,7 @@ mod tests {
     fn test_commit_no_editor_noop() {
         let mut app = crate::composition::app();
         app.commit_status_name_edit();
-        assert!(app.status_name_edit.is_none());
+        assert!(app.ui.navigation.status_name_edit.is_none());
     }
 
     /// Commit with a typed name ships a RenameSession request under the
@@ -95,7 +95,7 @@ mod tests {
         let (mut app, events) = connected_app_events();
         let mut field = InputField::new();
         field.set("my session".into());
-        app.status_name_edit = Some(field);
+        app.ui.navigation.status_name_edit = Some(field);
         app.commit_status_name_edit();
         let req = wait_for_request(&events, |p| {
             matches!(p, FrontendRequest::RenameSession { .. })

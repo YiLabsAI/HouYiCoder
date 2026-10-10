@@ -66,12 +66,12 @@ fn app_with_two_children(parent_rows: usize) -> App {
 fn test_child_expansion_isolation() {
     let mut app = app_with_two_children(5);
     assert!(app.enter_teammate_view_for_sid("c1", false));
-    app.transcript_view.expanded.thinking.insert("1".into());
+    app.ui.transcript_view.expanded.thinking.insert("1".into());
     app.exit_teammate_view();
 
     assert!(app.enter_teammate_view_for_sid("c2", false));
     assert!(
-        app.transcript_view.expanded.thinking.is_empty(),
+        app.ui.transcript_view.expanded.thinking.is_empty(),
         "a sibling child starts with its own empty sets, not the last child's keys"
     );
 }
@@ -82,17 +82,21 @@ fn test_child_expansion_isolation() {
 #[test]
 fn test_parent_expansion_survives() {
     let mut app = app_with_two_children(5);
-    app.transcript_view.expanded.results.insert("call-p".into());
+    app.ui
+        .transcript_view
+        .expanded
+        .results
+        .insert("call-p".into());
 
     assert!(app.enter_teammate_view_for_sid("c1", false));
     assert!(
-        !app.transcript_view.expanded.results.contains("call-p"),
+        !app.ui.transcript_view.expanded.results.contains("call-p"),
         "the child view does not carry the parent's open rows"
     );
 
     app.exit_teammate_view();
     assert!(
-        app.transcript_view.expanded.results.contains("call-p"),
+        app.ui.transcript_view.expanded.results.contains("call-p"),
         "the parent's expansion is restored on exit"
     );
 }
@@ -109,6 +113,7 @@ fn test_child_scroll_restored() {
     app.scroll_transcript_up();
     let parked = crate::test_harness::render_text(&app, 80, 24);
     let top = app
+        .ui
         .teammate_view
         .as_ref()
         .expect("child on view")
@@ -117,7 +122,7 @@ fn test_child_scroll_restored() {
 
     app.exit_teammate_view();
     assert!(app.enter_teammate_view_for_sid("c1", false));
-    let view = app.teammate_view.as_ref().expect("child on view");
+    let view = app.ui.teammate_view.as_ref().expect("child on view");
     assert_eq!(
         view.scroll.raw_top(),
         top,
@@ -144,10 +149,10 @@ fn test_child_blocks_search() {
     app.enter_search_view("row");
 
     assert!(
-        !app.transcript_view.search.active,
+        !app.ui.transcript_view.search.active,
         "search stays closed while a child is on view"
     );
-    assert!(app.teammate_view.is_some(), "the child view stands");
+    assert!(app.ui.teammate_view.is_some(), "the child view stands");
     assert_eq!(
         app.whole_scroll().raw_top(),
         top,
@@ -166,37 +171,54 @@ fn test_child_blocks_search() {
 #[test]
 fn test_sibling_view_swap() {
     let mut app = app_with_two_children(5);
-    app.transcript_view
+    app.ui
+        .transcript_view
         .expanded
         .results
         .insert("parent-key".into());
 
     assert!(app.enter_teammate_view_for_sid("c1", false));
-    app.transcript_view.expanded.thinking.insert("a1".into());
+    app.ui.transcript_view.expanded.thinking.insert("a1".into());
     assert!(app.enter_teammate_view_for_sid("c2", false));
     assert_eq!(
-        app.teammate_view.as_ref().expect("child on view").child_sid,
+        app.ui
+            .teammate_view
+            .as_ref()
+            .expect("child on view")
+            .child_sid,
         "c2",
         "the hop lands on the second child"
     );
     assert!(
-        app.transcript_view.expanded.thinking.is_empty(),
+        app.ui.transcript_view.expanded.thinking.is_empty(),
         "the second child does not inherit the first child's keys"
     );
 
     app.exit_teammate_view();
     assert!(
-        app.transcript_view.expanded.results.contains("parent-key"),
+        app.ui
+            .transcript_view
+            .expanded
+            .results
+            .contains("parent-key"),
         "the hop exits through the parent's own sets"
     );
     assert!(
-        !app.transcript_view.expanded.thinking.contains(&"a1".into()),
+        !app.ui
+            .transcript_view
+            .expanded
+            .thinking
+            .contains(&"a1".into()),
         "the first child's key does not ride out to the parent"
     );
 
     assert!(app.enter_teammate_view_for_sid("c1", false));
     assert!(
-        app.transcript_view.expanded.thinking.contains(&"a1".into()),
+        app.ui
+            .transcript_view
+            .expanded
+            .thinking
+            .contains(&"a1".into()),
         "re-entering the first child restores what it had open"
     );
 }
@@ -240,9 +262,13 @@ fn test_ctrl_o_expands_child() {
     );
     crate::keys::handle_ctrl_o(&mut app);
     assert!(
-        app.transcript_view.expanded.thinking.contains(&"f3".into()),
+        app.ui
+            .transcript_view
+            .expanded
+            .thinking
+            .contains(&"f3".into()),
         "the toggle targets the child row, set: {:?}",
-        app.transcript_view.expanded.thinking
+        app.ui.transcript_view.expanded.thinking
     );
     let after = crate::test_harness::render_text(&app, 100, 30);
     assert!(after.contains("CHILDTHINK"), "the row expands:\n{after}");
@@ -298,8 +324,11 @@ fn test_search_ignores_fleet_click() {
         );
     }
     assert!(
-        app.teammate_view.is_none(),
+        app.ui.teammate_view.is_none(),
         "a click on the old strip does not open a child view during search"
     );
-    assert!(app.transcript_view.search.active, "the search view stands");
+    assert!(
+        app.ui.transcript_view.search.active,
+        "the search view stands"
+    );
 }

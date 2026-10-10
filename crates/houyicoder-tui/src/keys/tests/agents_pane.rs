@@ -94,13 +94,13 @@ fn test_agents_enter_follows_list() {
     });
     handle_working(&mut app, key(KeyCode::Enter));
     assert!(
-        app.teammate_view.is_none(),
+        app.ui.teammate_view.is_none(),
         "an unselected live fleet opens nothing, not the off-screen delegation"
     );
     app.fleet.selected = Some(0);
     handle_working(&mut app, key(KeyCode::Enter));
     assert_eq!(
-        app.teammate_view.as_ref().map(|v| v.child_sid.as_str()),
+        app.ui.teammate_view.as_ref().map(|v| v.child_sid.as_str()),
         Some("live"),
         "Enter opens the selected fleet child"
     );
@@ -130,7 +130,7 @@ fn test_agents_enter_returned_delegation() {
     app.agents_mut().move_selection(1);
     assert_eq!(app.agents().sel, 0, "cursor clamps at the single row");
     handle_working(&mut app, key(KeyCode::Enter));
-    let view = app.teammate_view.as_ref().expect("view opened");
+    let view = app.ui.teammate_view.as_ref().expect("view opened");
     assert_eq!(view.child_sid, "c1");
     assert!(
         !view.transcript.is_empty(),

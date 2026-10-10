@@ -29,7 +29,7 @@ fn test_skills_pane_detail_renders() {
         user_invocable: true,
         usage: None,
     }];
-    app.skills_pane.open_unavailable("deep-review".into());
+    app.ui.skills_pane.open_unavailable("deep-review".into());
     let out = render(&app, 80, 24);
     assert!(out.contains("deep-review"), "name in detail: {out}");
     assert!(out.contains("the review standard"), "desc in detail: {out}");
@@ -59,7 +59,7 @@ fn test_detail_wraps_long_description() {
         user_invocable: true,
         usage: None,
     }];
-    app.skills_pane.open_unavailable("find-skills".into());
+    app.ui.skills_pane.open_unavailable("find-skills".into());
     let out = render(&app, 60, 24);
     assert!(
         out.contains("express interest in"),
@@ -91,8 +91,10 @@ fn test_detail_body_scrolls() {
         .map(|index| format!("body line {index}"))
         .collect::<Vec<_>>()
         .join("\n");
-    app.skills_pane.request_detail(RequestId(4), "alpha".into());
-    assert!(app.skills_pane.apply_detail(RequestId(4), Some(body)));
+    app.ui
+        .skills_pane
+        .request_detail(RequestId(4), "alpha".into());
+    assert!(app.ui.skills_pane.apply_detail(RequestId(4), Some(body)));
     let top = render(&app, 80, 24);
     assert!(top.contains("body line 0"), "body renders: {top}");
     assert!(top.contains("invoked 2"), "usage pinned: {top}");
@@ -124,8 +126,10 @@ fn test_detail_body_unavailable() {
         user_invocable: true,
         usage: None,
     }];
-    app.skills_pane.request_detail(RequestId(1), "alpha".into());
-    assert!(app.skills_pane.apply_detail(RequestId(1), None));
+    app.ui
+        .skills_pane
+        .request_detail(RequestId(1), "alpha".into());
+    assert!(app.ui.skills_pane.apply_detail(RequestId(1), None));
     let out = render(&app, 80, 24);
     assert!(out.contains("body unavailable"), "unavailable note: {out}");
     assert!(out.contains("alpha"), "the header still renders: {out}");
@@ -159,7 +163,7 @@ fn test_skills_pane_disabled_glyph() {
     );
     // The detail opened from that row shows the same disabled glyph, so the
     // header never claims a skill is usable while the toggle says otherwise.
-    app.skills_pane.open_unavailable("stale".into());
+    app.ui.skills_pane.open_unavailable("stale".into());
     let detail = render(&app, 80, 24);
     assert!(detail.contains("○"), "disabled glyph in detail: {detail}");
     assert!(
@@ -188,7 +192,7 @@ fn test_detail_usage_invoked() {
             last_used_secs: 1,
         }),
     }];
-    app.skills_pane.open_unavailable("alpha".into());
+    app.ui.skills_pane.open_unavailable("alpha".into());
     let out = render(&app, 80, 24);
     assert!(out.contains("invoked 3"), "invocation count: {out}");
     assert!(out.contains("1 refused"), "refusal count: {out}");
@@ -211,7 +215,7 @@ fn test_detail_usage_never() {
         user_invocable: true,
         usage: Some(SkillUsage::default()),
     }];
-    app.skills_pane.open_unavailable("beta".into());
+    app.ui.skills_pane.open_unavailable("beta".into());
     let out = render(&app, 80, 24);
     assert!(
         out.contains("never invoked this session"),
@@ -243,7 +247,7 @@ fn test_user_only_skill_glyph() {
     assert!(out.contains("✓"), "usable glyph in listing: {out}");
     assert!(!out.contains("✗"), "must not show disabled glyph: {out}");
     // Detail view: also checkmark.
-    app.skills_pane.open_unavailable("managed".into());
+    app.ui.skills_pane.open_unavailable("managed".into());
     let out = render(&app, 80, 24);
     assert!(out.contains("✓"), "usable glyph in detail: {out}");
     assert!(

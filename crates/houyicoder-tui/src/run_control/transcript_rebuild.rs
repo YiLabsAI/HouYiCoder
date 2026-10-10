@@ -349,7 +349,7 @@ impl App {
         // view hides the parent, and loading hidden history would spend disk
         // reads and mutate parent scroll state the reader cannot see; the gate
         // lives here, not at the call site, so a later caller cannot bypass it.
-        if self.teammate_view.is_some() {
+        if self.ui.teammate_view.is_some() {
             return;
         }
         // Don't prepend when following the tail (user is at the bottom).

@@ -104,6 +104,7 @@ impl App {
     pub fn spawn_run(&mut self, input: String) -> bool {
         // A viewed child receives input directly and shows an optimistic echo.
         let steer = self
+            .ui
             .teammate_view
             .as_ref()
             .filter(|_| !input.is_empty())
@@ -134,7 +135,7 @@ impl App {
                 self.system_line(Self::enqueue_failure_line("child", e));
                 return false;
             }
-            if let Some(view) = self.teammate_view.as_mut() {
+            if let Some(view) = self.ui.teammate_view.as_mut() {
                 view.transcript.push(TranscriptLine::User(input.clone()));
                 view.pending_echo = Some(input);
                 // The child's own scroll follows its tail so the echo lands in
@@ -190,7 +191,7 @@ impl App {
         transcript.with_frames_mut(clear_interruption_markers);
         self.rebuild_transcript();
         self.push_transcript_line(TranscriptLine::User(input));
-        self.displayed_tokens.set(0);
+        self.ui.displayed_tokens.set(0);
         // start() just built fresh progress, so these preview resets touch
         // default values; routed through the run for the same reason the
         // resume path clears: a future caller that reuses progress keeps

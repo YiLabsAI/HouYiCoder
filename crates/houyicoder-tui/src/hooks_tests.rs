@@ -120,8 +120,8 @@ fn test_hooks_pane_list_detail() {
     if let (Some(p), Some(pt)) = (pre, post) {
         assert!(p < pt, "configured sorts before unconfigured: {out}");
     }
-    app.hooks_pane.level.set(1);
-    app.hooks_pane.sel.set(0);
+    app.ui.hooks_pane.level.set(1);
+    app.ui.hooks_pane.sel.set(0);
     let detail = super::render(&app);
     assert!(
         detail.contains("Input to command is JSON"),
@@ -145,10 +145,10 @@ fn hkey(c: KeyCode) -> KeyEvent {
 fn test_hooks_esc_to_list() {
     let mut app = working();
     app.ui.navigation.pane = crate::state::Pane::Hooks;
-    app.hooks_pane.level.set(1);
+    app.ui.hooks_pane.level.set(1);
     crate::keys::handle_working(&mut app, hkey(KeyCode::Esc));
     assert_eq!(
-        app.hooks_pane.level.get(),
+        app.ui.hooks_pane.level.get(),
         0,
         "Esc at level 1 returns to the list"
     );
@@ -163,7 +163,7 @@ fn test_hooks_esc_to_list() {
 fn test_hooks_esc_exits() {
     let mut app = working();
     app.ui.navigation.pane = crate::state::Pane::Hooks;
-    app.hooks_pane.level.set(0);
+    app.ui.hooks_pane.level.set(0);
     crate::keys::handle_working(&mut app, hkey(KeyCode::Esc));
     assert_eq!(
         app.ui.navigation.pane,
@@ -176,21 +176,21 @@ fn test_hooks_esc_exits() {
 fn test_hooks_up_moves() {
     let mut app = working();
     app.ui.navigation.pane = crate::state::Pane::Hooks;
-    app.hooks_pane.level.set(0);
-    app.hooks_pane.sel.set(2);
+    app.ui.hooks_pane.level.set(0);
+    app.ui.hooks_pane.sel.set(2);
     crate::keys::handle_working(&mut app, hkey(KeyCode::Up));
-    assert_eq!(app.hooks_pane.sel.get(), 1, "Up moves the cursor back");
+    assert_eq!(app.ui.hooks_pane.sel.get(), 1, "Up moves the cursor back");
 }
 
 #[test]
 fn test_hooks_down_clamps() {
     let mut app = working();
     app.ui.navigation.pane = crate::state::Pane::Hooks;
-    app.hooks_pane.level.set(0);
-    app.hooks_pane.sel.set(0);
+    app.ui.hooks_pane.level.set(0);
+    app.ui.hooks_pane.sel.set(0);
     crate::keys::handle_working(&mut app, hkey(KeyCode::Down));
     assert_eq!(
-        app.hooks_pane.sel.get(),
+        app.ui.hooks_pane.sel.get(),
         0,
         "Down clamps at 0 with no entries"
     );
@@ -200,10 +200,10 @@ fn test_hooks_down_clamps() {
 fn test_hooks_enter_detail() {
     let mut app = working();
     app.ui.navigation.pane = crate::state::Pane::Hooks;
-    app.hooks_pane.level.set(0);
+    app.ui.hooks_pane.level.set(0);
     crate::keys::handle_working(&mut app, hkey(KeyCode::Enter));
     assert_eq!(
-        app.hooks_pane.level.get(),
+        app.ui.hooks_pane.level.get(),
         1,
         "Enter drills into the detail level"
     );

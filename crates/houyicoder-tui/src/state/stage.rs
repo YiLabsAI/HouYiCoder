@@ -30,7 +30,7 @@ impl App {
         let next = ViewportMode::for_stage(self.workflow.stage);
         if next != ViewportMode::Working {
             self.ui.navigation.palette.close();
-            self.transcript_view.search.close();
+            self.ui.transcript_view.search.close();
         }
         self.ui.navigation.viewport = next;
     }

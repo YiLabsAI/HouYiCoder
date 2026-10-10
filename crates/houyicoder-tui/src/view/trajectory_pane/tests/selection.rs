@@ -93,14 +93,14 @@ fn test_cursor_restored_by_turn() {
     let mut terminal = Terminal::new(TestBackend::new(80, 40)).unwrap();
 
     // The user is on turn 401 when the walk back starts.
-    app.trajectory.set_cursor(0);
-    app.trajectory.select(401, 1);
+    app.ui.trajectory.set_cursor(0);
+    app.ui.trajectory.select(401, 1);
     terminal
         .draw(|f| {
             working::draw(f, &app);
         })
         .unwrap();
-    assert_eq!(app.trajectory.cursor(), 0, "401 is the first row");
+    assert_eq!(app.ui.trajectory.cursor(), 0, "401 is the first row");
 
     // The older page lands, growing the window behind the selection.
     log.advance();
@@ -110,12 +110,12 @@ fn test_cursor_restored_by_turn() {
         })
         .unwrap();
     assert_eq!(
-        app.trajectory.cursor(),
+        app.ui.trajectory.cursor(),
         100,
         "the cursor follows the turn, not the row index"
     );
     let view = log.trajectory();
-    match &view.rows[app.trajectory.cursor()] {
+    match &view.rows[app.ui.trajectory.cursor()] {
         TrajectoryRow::Turn(turn) => assert_eq!(turn.n, 401, "still the same turn"),
         _ => panic!("the cursor sits on a turn row"),
     }
@@ -143,7 +143,7 @@ fn test_home_end_move_window() {
         "Home reads the head"
     );
     assert_eq!(selected_number(&app), Some(1));
-    assert_eq!(app.trajectory.cursor(), 0);
+    assert_eq!(app.ui.trajectory.cursor(), 0);
 
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
     assert_eq!(log.tail.load(Ordering::Relaxed), 1, "End reads the tail");
@@ -184,9 +184,9 @@ fn test_header_reports_newer() {
 fn test_level1_move_keeps_selection() {
     let mut app = crate::composition::app();
     app.ui.navigation.pane = crate::state::Pane::Trajectory;
-    app.trajectory.set_level(1);
-    app.trajectory.select(7, 1);
-    app.trajectory.set_list_len(3);
+    app.ui.trajectory.set_level(1);
+    app.ui.trajectory.select(7, 1);
+    app.ui.trajectory.set_list_len(3);
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     assert_eq!(
         selected_number(&app),
@@ -209,17 +209,17 @@ fn test_selection_dropped_across_history() {
     let mut terminal = Terminal::new(TestBackend::new(80, 40)).unwrap();
 
     // The user selected turn 80 of the first history.
-    app.trajectory.select(80, 1);
+    app.ui.trajectory.select(80, 1);
     terminal
         .draw(|f| {
             working::draw(f, &app);
         })
         .unwrap();
-    assert_eq!(app.trajectory.cursor(), 79, "the row of turn 80");
+    assert_eq!(app.ui.trajectory.cursor(), 79, "the row of turn 80");
 
     // The pane reads a window of the same numbers, but of a new history, and
     // the cursor sits where the user left it.
-    app.trajectory.set_cursor(0);
+    app.ui.trajectory.set_cursor(0);
     log.advance();
     terminal
         .draw(|f| {
@@ -232,7 +232,7 @@ fn test_selection_dropped_across_history() {
         "a selection from another history is dropped"
     );
     assert_eq!(
-        app.trajectory.cursor(),
+        app.ui.trajectory.cursor(),
         0,
         "and it does not drag the cursor to a turn it does not name"
     );
@@ -247,11 +247,11 @@ fn test_home_end_stay_local() {
     let mut app = crate::composition::app();
     app.ui.navigation.pane = crate::state::Pane::Trajectory;
     app.sessions.persistence.trajectory_log = Some(log.clone());
-    app.trajectory.set_level(1);
-    app.trajectory.set_list_len(4);
+    app.ui.trajectory.set_level(1);
+    app.ui.trajectory.set_list_len(4);
 
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
-    assert_eq!(app.trajectory.cursor(), 3, "End is the last record");
+    assert_eq!(app.ui.trajectory.cursor(), 3, "End is the last record");
     assert_eq!(
         log.tail.load(Ordering::Relaxed),
         0,
@@ -259,7 +259,7 @@ fn test_home_end_stay_local() {
     );
 
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
-    assert_eq!(app.trajectory.cursor(), 0, "Home is the first record");
+    assert_eq!(app.ui.trajectory.cursor(), 0, "Home is the first record");
     assert_eq!(
         log.earliest.load(Ordering::Relaxed),
         0,
@@ -268,11 +268,15 @@ fn test_home_end_stay_local() {
 
     // The event detail holds one record: there is no list to move in, and the
     // window is not its to move either.
-    app.trajectory.set_level(2);
-    app.trajectory.set_cursor(0);
+    app.ui.trajectory.set_level(2);
+    app.ui.trajectory.set_cursor(0);
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
-    assert_eq!(app.trajectory.cursor(), 0, "an event detail does not move");
+    assert_eq!(
+        app.ui.trajectory.cursor(),
+        0,
+        "an event detail does not move"
+    );
     assert_eq!(log.tail.load(Ordering::Relaxed), 0);
     assert_eq!(log.earliest.load(Ordering::Relaxed), 0);
 }
@@ -297,15 +301,15 @@ fn test_esc_restores_turn() {
     for _ in 0..4 {
         crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     }
-    assert_eq!(app.trajectory.cursor(), 4);
+    assert_eq!(app.ui.trajectory.cursor(), 4);
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-    assert_eq!(app.trajectory.level(), 1);
+    assert_eq!(app.ui.trajectory.level(), 1);
     assert_eq!(selected_number(&app), Some(405), "the drill is about 405");
 
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-    assert_eq!(app.trajectory.level(), 0, "Esc returns to the turn list");
+    assert_eq!(app.ui.trajectory.level(), 0, "Esc returns to the turn list");
     assert_eq!(
-        app.trajectory.cursor(),
+        app.ui.trajectory.cursor(),
         4,
         "and the cursor is back on the turn it left"
     );
@@ -318,12 +322,20 @@ fn test_esc_restores_turn() {
 fn test_esc_keeps_record() {
     let mut app = crate::composition::app();
     app.ui.navigation.pane = crate::state::Pane::Trajectory;
-    app.trajectory.set_level(2);
-    app.trajectory.set_cursor(3);
+    app.ui.trajectory.set_level(2);
+    app.ui.trajectory.set_cursor(3);
 
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-    assert_eq!(app.trajectory.level(), 1, "Esc returns to the record list");
-    assert_eq!(app.trajectory.cursor(), 3, "with the record still selected");
+    assert_eq!(
+        app.ui.trajectory.level(),
+        1,
+        "Esc returns to the record list"
+    );
+    assert_eq!(
+        app.ui.trajectory.cursor(),
+        3,
+        "with the record still selected"
+    );
 }
 
 /// Up at the top of the record list stays there. Only the turn list widens its
@@ -335,12 +347,12 @@ fn test_level1_up_keeps_window() {
     let mut app = crate::composition::app();
     app.ui.navigation.pane = crate::state::Pane::Trajectory;
     app.sessions.persistence.trajectory_log = Some(log.clone());
-    app.trajectory.set_level(1);
-    app.trajectory.set_list_len(4);
-    app.trajectory.set_cursor(0);
+    app.ui.trajectory.set_level(1);
+    app.ui.trajectory.set_list_len(4);
+    app.ui.trajectory.set_cursor(0);
 
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
-    assert_eq!(app.trajectory.cursor(), 0, "the top of the record list");
+    assert_eq!(app.ui.trajectory.cursor(), 0, "the top of the record list");
     assert_eq!(
         log.older.load(Ordering::Relaxed),
         0,
@@ -348,7 +360,7 @@ fn test_level1_up_keeps_window() {
     );
 
     // At the turn list the same key does widen the window.
-    app.trajectory.set_level(0);
+    app.ui.trajectory.set_level(0);
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
     assert_eq!(
         log.older.load(Ordering::Relaxed),
@@ -415,14 +427,14 @@ fn test_esc_survives_window_move() {
             working::draw(f, &app);
         })
         .unwrap();
-    assert_eq!(app.trajectory.level(), 0, "Esc returns to the turn list");
+    assert_eq!(app.ui.trajectory.level(), 0, "Esc returns to the turn list");
     assert_eq!(
         selected_number(&app),
         Some(405),
         "and the turn it named is not rewritten by the moved window"
     );
     let view = log.trajectory();
-    match &view.rows[app.trajectory.cursor()] {
+    match &view.rows[app.ui.trajectory.cursor()] {
         TrajectoryRow::Turn(turn) => assert_eq!(
             turn.n, 405,
             "the cursor sits on the turn the drill was about"
@@ -457,7 +469,7 @@ fn test_bg_row_clears_selection() {
     for _ in 0..2 {
         crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     }
-    assert_eq!(app.trajectory.cursor(), 3, "the background row");
+    assert_eq!(app.ui.trajectory.cursor(), 3, "the background row");
     assert_eq!(
         selected_number(&app),
         None,
@@ -473,13 +485,17 @@ fn test_down_before_first_page() {
     let mut app = crate::composition::app();
     app.ui.navigation.pane = crate::state::Pane::Trajectory;
     // What opening the pane leaves behind: no rows loaded yet.
-    app.trajectory.set_cursor(usize::MAX);
-    app.trajectory.set_list_len(0);
+    app.ui.trajectory.set_cursor(usize::MAX);
+    app.ui.trajectory.set_list_len(0);
 
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-    assert_eq!(app.trajectory.cursor(), 0, "the cursor stays on a real row");
+    assert_eq!(
+        app.ui.trajectory.cursor(),
+        0,
+        "the cursor stays on a real row"
+    );
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
-    assert_eq!(app.trajectory.cursor(), 0);
+    assert_eq!(app.ui.trajectory.cursor(), 0);
 }
 
 /// A turn the drill named can leave the window: the window moves past it, and
@@ -586,13 +602,13 @@ fn test_drill_holds_key() {
         crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     }
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-    let drill = app.trajectory.drill().expect("a drill");
+    let drill = app.ui.trajectory.drill().expect("a drill");
     assert_eq!(drill.key.as_str(), "t403", "the key of the row it opened");
     assert_eq!(drill.history_generation, 1);
 
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     assert_eq!(
-        app.trajectory.drill(),
+        app.ui.trajectory.drill(),
         None,
         "stepping back drops the drill"
     );

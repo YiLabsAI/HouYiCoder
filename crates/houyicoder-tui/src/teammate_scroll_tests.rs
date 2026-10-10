@@ -94,7 +94,7 @@ fn test_child_scroll_leaves_parent() {
     app.scroll_transcript_up();
     app.scroll_transcript_up();
     app.scroll_transcript_line_down(1);
-    let view = app.teammate_view.as_ref().expect("child on view");
+    let view = app.ui.teammate_view.as_ref().expect("child on view");
     assert!(
         !view.scroll.is_following_tail(),
         "the child did scroll away"
@@ -127,7 +127,7 @@ fn test_child_tail_spares_parent() {
     // parent's unseen count, the state a child-side tail step must not touch.
     app.scroll_transcript_up();
     assert!(
-        app.transcript_view.unseen_since.is_some(),
+        app.ui.transcript_view.unseen_since.is_some(),
         "the parent marked where the reader scrolled away"
     );
     app.sessions.current.transcript.push(subagent_line(40));
@@ -138,7 +138,7 @@ fn test_child_tail_spares_parent() {
     app.scroll_transcript_up();
     app.scroll_transcript_down();
     app.scroll_transcript_follow_tail();
-    let view = app.teammate_view.as_ref().expect("child on view");
+    let view = app.ui.teammate_view.as_ref().expect("child on view");
     assert!(
         view.scroll.is_following_tail(),
         "the child reached its tail"
@@ -155,7 +155,7 @@ fn test_child_tail_spares_parent() {
         "the parent top is where the reader parked it"
     );
     assert!(
-        app.transcript_view.unseen_since.is_some(),
+        app.ui.transcript_view.unseen_since.is_some(),
         "the parent's unseen marker survives the child's tail step"
     );
 }

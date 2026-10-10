@@ -73,7 +73,7 @@ pub fn run_with_runner(
         app.idle_drain(resume_builder.as_deref(), &mut dirty);
         // Completed child rows drop after their grace period. The child
         // currently open in teammate view remains pinned.
-        let retain_viewed = app.teammate_view.as_ref().map(|v| v.child_sid.as_str());
+        let retain_viewed = app.ui.teammate_view.as_ref().map(|v| v.child_sid.as_str());
         if app.fleet.drop_completed(retain_viewed) {
             dirty = true;
         }
@@ -479,7 +479,7 @@ pub(crate) fn handle_key(app: &mut App, k: KeyEvent) {
     if app.ui.navigation.pane == Pane::Transcript
         && app.ui.navigation.viewport == ViewportMode::Working
         && app.ui.input.editor.is_empty()
-        && app.teammate_view.is_none()
+        && app.ui.teammate_view.is_none()
     {
         let running = app
             .fleet

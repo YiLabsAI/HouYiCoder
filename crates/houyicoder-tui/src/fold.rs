@@ -609,7 +609,7 @@ impl crate::state::App {
     /// search view fold a transcript the cache was not built over, so they
     /// compute groups on demand.
     pub(crate) fn active_fold_groups(&self) -> Cow<'_, [FoldGroup]> {
-        if self.teammate_view.is_some() || self.transcript_view.search.active {
+        if self.ui.teammate_view.is_some() || self.ui.transcript_view.search.active {
             Cow::Owned(compute_fold_groups(
                 self.active_transcript(),
                 self.agent_busy(),
@@ -630,8 +630,8 @@ impl crate::state::App {
         let slots = display_slots(
             transcript,
             groups.as_ref(),
-            &self.transcript_view.expanded.fold_groups,
-            self.verbose,
+            &self.ui.transcript_view.expanded.fold_groups,
+            self.ui.verbose,
         );
         let width = self.layout_feedback.transcript_width.get();
         let mut total = 0;
@@ -639,9 +639,9 @@ impl crate::state::App {
         for slot in &slots {
             let (needs_spacer, rows) = match slot {
                 DisplaySlot::Line(i, group) => {
-                    let full = self.verbose
+                    let full = self.ui.verbose
                         || group.as_ref().is_some_and(|key| {
-                            self.transcript_view.expanded.fold_groups.contains(key)
+                            self.ui.transcript_view.expanded.fold_groups.contains(key)
                         });
                     (true, self.line_display_rows_mode(&transcript[*i], full))
                 }

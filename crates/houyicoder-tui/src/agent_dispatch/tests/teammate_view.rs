@@ -35,7 +35,11 @@ fn test_enter_teammate_targets_cursor() {
         app.enter_teammate_view(),
         "cursor on a Subagent line enters"
     );
-    let view = app.teammate_view.as_ref().expect("teammate view is open");
+    let view = app
+        .ui
+        .teammate_view
+        .as_ref()
+        .expect("teammate view is open");
     assert_eq!(view.child_sid, "c1", "cursor targets the first line");
     assert_eq!(view.subagent_type, "explore");
     assert_eq!(view.prompt, "");
@@ -71,10 +75,10 @@ fn test_exit_teammate_clears_view() {
             color: None,
         });
     assert!(app.enter_teammate_view());
-    assert!(app.teammate_view.is_some());
+    assert!(app.ui.teammate_view.is_some());
     assert_eq!(app.active_transcript().len(), 1, "viewing child");
     app.exit_teammate_view();
-    assert!(app.teammate_view.is_none(), "view cleared on exit");
+    assert!(app.ui.teammate_view.is_none(), "view cleared on exit");
     assert_eq!(
         app.active_transcript().len(),
         2,
@@ -107,7 +111,7 @@ fn test_teammate_view_fill_isomorphic() {
     // Enter with an unloaded fold: the view opens empty and the fetch fires.
     assert!(app.enter_teammate_view());
     assert_eq!(
-        app.teammate_view.as_ref().unwrap().transcript.len(),
+        app.ui.teammate_view.as_ref().unwrap().transcript.len(),
         0,
         "view empty until fetch lands"
     );
@@ -130,7 +134,7 @@ fn test_teammate_view_fill_isomorphic() {
             frames,
         },
     });
-    let view = app.teammate_view.as_ref().unwrap();
+    let view = app.ui.teammate_view.as_ref().unwrap();
     assert_eq!(view.transcript.len(), 2, "view filled by the fetch");
     assert!(matches!(view.transcript[0], TranscriptLine::User(_)));
     assert!(matches!(view.transcript[1], TranscriptLine::Agent(_)));
@@ -189,7 +193,7 @@ fn test_other_child_keeps_view() {
         });
     app.ui.selection.transcript.start(0, 0);
     assert!(app.enter_teammate_view());
-    assert_eq!(app.teammate_view.as_ref().unwrap().child_sid, "c1");
+    assert_eq!(app.ui.teammate_view.as_ref().unwrap().child_sid, "c1");
     // A fetch for c2 arrives while viewing c1.
     app.handle_agent_message(SessionMessage::Response {
         request: RequestId(26),
@@ -202,7 +206,7 @@ fn test_other_child_keeps_view() {
             ))],
         },
     });
-    let view = app.teammate_view.as_ref().unwrap();
+    let view = app.ui.teammate_view.as_ref().unwrap();
     assert_eq!(view.child_sid, "c1", "view unchanged");
     assert_eq!(view.transcript.len(), 1, "view transcript not clobbered");
     assert!(
@@ -222,7 +226,7 @@ fn test_enter_teammate_no_target() {
         .transcript
         .push(TranscriptLine::Agent("plain".into()));
     assert!(!app.enter_teammate_view(), "no Subagent line to target");
-    assert!(app.teammate_view.is_none());
+    assert!(app.ui.teammate_view.is_none());
 }
 
 /// A cursor whose content row falls past the last transcript line misses
@@ -250,7 +254,7 @@ fn test_cursor_past_tail_fallback() {
         app.enter_teammate_view(),
         "cursor past tail falls back to the last Subagent"
     );
-    assert_eq!(app.teammate_view.as_ref().unwrap().child_sid, "c1");
+    assert_eq!(app.ui.teammate_view.as_ref().unwrap().child_sid, "c1");
 }
 
 /// A collapsed fold-group before a Subagent shifts the Subagent's content
@@ -312,13 +316,13 @@ fn test_cursor_after_fold_group() {
     app.ui.selection.transcript.start(0, c1_row);
     assert!(app.enter_teammate_view(), "cursor on c1 enters");
     assert_eq!(
-        app.teammate_view.as_ref().unwrap().child_sid,
+        app.ui.teammate_view.as_ref().unwrap().child_sid,
         "c1",
         "cursor after a folded group targets the clicked delegation, not the fallback"
     );
     // The flat walk would have resolved to c2 (last) — confirm it does not.
     assert!(
-        !app.transcript_view.expanded.subagents.contains("c2"),
+        !app.ui.transcript_view.expanded.subagents.contains("c2"),
         "the non-targeted delegation is untouched"
     );
 }
@@ -365,7 +369,7 @@ fn test_teammate_view_auto_exit() {
     use crate::agent_message::{ServerEvent, SessionMessage};
     use crate::records::TeammateView;
     let mut app = crate::composition::app();
-    app.teammate_view = Some(TeammateView {
+    app.ui.teammate_view = Some(TeammateView {
         child_sid: "c1".into(),
         ..Default::default()
     });
@@ -379,7 +383,7 @@ fn test_teammate_view_auto_exit() {
         last_activity: None,
         completed: Some("completed".into()),
     }));
-    assert!(app.teammate_view.is_some(), "completed stays for review");
+    assert!(app.ui.teammate_view.is_some(), "completed stays for review");
     // A failure: the view auto-exits back to the parent.
     app.handle_agent_message(SessionMessage::Event(ServerEvent::AgentStatus {
         agent_id: "c1".into(),
@@ -391,11 +395,11 @@ fn test_teammate_view_auto_exit() {
         completed: Some("failed".into()),
     }));
     assert!(
-        app.teammate_view.is_none(),
+        app.ui.teammate_view.is_none(),
         "abnormal terminal auto-exits the teammate view"
     );
     // A status for a different child does not touch the view.
-    app.teammate_view = Some(TeammateView {
+    app.ui.teammate_view = Some(TeammateView {
         child_sid: "c1".into(),
         ..Default::default()
     });
@@ -409,7 +413,7 @@ fn test_teammate_view_auto_exit() {
         completed: Some("failed".into()),
     }));
     assert!(
-        app.teammate_view.is_some(),
+        app.ui.teammate_view.is_some(),
         "a different child status does not exit the view"
     );
     // A turn-limit (max_turns hit): partial output, the view stays for review.
@@ -423,7 +427,7 @@ fn test_teammate_view_auto_exit() {
         completed: Some("turn_limit".into()),
     }));
     assert!(
-        app.teammate_view.is_some(),
+        app.ui.teammate_view.is_some(),
         "turn-limit leaves the view for partial-output review"
     );
 }
@@ -437,7 +441,7 @@ fn test_teammate_live_refetch() {
     use crate::agent_message::{ServerEvent, SessionMessage};
     use crate::records::TeammateView;
     let mut app = crate::composition::app();
-    app.teammate_view = Some(TeammateView {
+    app.ui.teammate_view = Some(TeammateView {
         child_sid: "c1".into(),
         ..Default::default()
     });
@@ -451,11 +455,17 @@ fn test_teammate_live_refetch() {
         completed: None,
     }));
     assert_eq!(
-        app.teammate_view.as_ref().and_then(|v| v.last_fetched_turn),
+        app.ui
+            .teammate_view
+            .as_ref()
+            .and_then(|v| v.last_fetched_turn),
         Some(2),
         "running status stamps the viewed child's last-fetched turn"
     );
-    assert!(app.teammate_view.is_some(), "running keeps the view open");
+    assert!(
+        app.ui.teammate_view.is_some(),
+        "running keeps the view open"
+    );
     app.handle_agent_message(SessionMessage::Event(ServerEvent::AgentStatus {
         agent_id: "c1".into(),
         subagent_type: "explore".into(),
@@ -466,7 +476,10 @@ fn test_teammate_live_refetch() {
         completed: None,
     }));
     assert_eq!(
-        app.teammate_view.as_ref().and_then(|v| v.last_fetched_turn),
+        app.ui
+            .teammate_view
+            .as_ref()
+            .and_then(|v| v.last_fetched_turn),
         Some(2),
         "a same-turn echo does not refire the refetch guard"
     );
@@ -480,7 +493,10 @@ fn test_teammate_live_refetch() {
         completed: None,
     }));
     assert_eq!(
-        app.teammate_view.as_ref().and_then(|v| v.last_fetched_turn),
+        app.ui
+            .teammate_view
+            .as_ref()
+            .and_then(|v| v.last_fetched_turn),
         Some(2),
         "a different child status does not touch the viewed child's turn"
     );

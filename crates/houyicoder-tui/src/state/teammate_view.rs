@@ -43,7 +43,7 @@ impl App {
         child_sid: &str,
         needs_fetch: bool,
     ) -> bool {
-        if self.teammate_view.is_some() {
+        if self.ui.teammate_view.is_some() {
             self.exit_teammate_view();
         }
         let mut view = TeammateView {
@@ -88,11 +88,15 @@ impl App {
         // keeps its own position regardless; a child with nothing parked
         // starts with empty sets at the tail.
         let parent_keys = self.take_expanded_keys();
-        if let Some(parked) = self.parked_view_states.enter_child(child_sid, parent_keys) {
+        if let Some(parked) = self
+            .ui
+            .parked_view_states
+            .enter_child(child_sid, parent_keys)
+        {
             view.scroll = parked.scroll;
             self.set_expanded_keys(parked.keys);
         }
-        self.teammate_view = Some(view);
+        self.ui.teammate_view = Some(view);
         // The render cache keys on transcript_version, which is the
         // invalidation signal for whatever active_transcript returns. Entering
         // the view swaps that source, so bump here or the cache holds the
@@ -117,7 +121,7 @@ impl App {
     /// child transcript is fetched on demand from the durable log, not
     /// retained for streaming.
     pub(crate) fn exit_teammate_view(&mut self) {
-        let Some(view) = self.teammate_view.take() else {
+        let Some(view) = self.ui.teammate_view.take() else {
             return;
         };
         // Swap the open-row sets back: the child's rows and viewport park
@@ -132,6 +136,7 @@ impl App {
             scroll: view.scroll,
         };
         if let Some(parent_keys) = self
+            .ui
             .parked_view_states
             .exit_child(&view.child_sid, view_state)
         {
@@ -151,7 +156,7 @@ impl App {
     /// Shift+Up/Down, which ignores the running state, so a child that never
     /// idles (a per-turn cancel does not stop the run) cannot trap the user.
     pub(crate) fn abort_viewed_child_turn(&mut self) {
-        let Some(view) = self.teammate_view.as_ref() else {
+        let Some(view) = self.ui.teammate_view.as_ref() else {
             return;
         };
         let child_sid = view.child_sid.clone();

@@ -241,7 +241,7 @@ fn test_agents_pane_lists_returned() {
             crossterm::event::KeyModifiers::NONE,
         ),
     );
-    let view = app.teammate_view.as_ref().expect("view opened");
+    let view = app.ui.teammate_view.as_ref().expect("view opened");
     assert_eq!(view.child_sid, "c1");
     assert!(
         !view.transcript.is_empty(),

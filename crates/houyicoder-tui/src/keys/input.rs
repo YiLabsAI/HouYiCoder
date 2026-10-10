@@ -119,7 +119,7 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
     // all input. When Add is active, permission_input.is_active() returns
     // true, and the chars must reach the input editor (the user types the
     // rule spec).
-    if app.ui.navigation.pane == Pane::Permission && !app.permission_pane.input.is_active() {
+    if app.ui.navigation.pane == Pane::Permission && !app.ui.permission_pane.input.is_active() {
         return;
     }
     // Approval pending: a/r decide, Enter confirms the focus, Esc dismisses.
@@ -151,13 +151,13 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
     // The /skills detail owns Esc, the scroll keys, and the disable toggle.
     // The list stays behind it, so Esc returns to the list rather than
     // leaving the pane.
-    if app.ui.navigation.pane == Pane::Skills && app.skills_pane.detail().is_some() {
+    if app.ui.navigation.pane == Pane::Skills && app.ui.skills_pane.detail().is_some() {
         match k.code {
-            KeyCode::Esc => app.skills_pane.close_detail(),
-            KeyCode::Up => app.skills_pane.scroll_detail(-1),
-            KeyCode::Down => app.skills_pane.scroll_detail(1),
-            KeyCode::PageUp => app.skills_pane.scroll_detail(-10),
-            KeyCode::PageDown => app.skills_pane.scroll_detail(10),
+            KeyCode::Esc => app.ui.skills_pane.close_detail(),
+            KeyCode::Up => app.ui.skills_pane.scroll_detail(-1),
+            KeyCode::Down => app.ui.skills_pane.scroll_detail(1),
+            KeyCode::PageUp => app.ui.skills_pane.scroll_detail(-10),
+            KeyCode::PageDown => app.ui.skills_pane.scroll_detail(10),
             KeyCode::Char('t') => app.toggle_skill_at_cursor(),
             _ => {}
         }
@@ -180,7 +180,7 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
         // In the /status pane, Tab cycles the sub-tab (Status, Config, Usage)
         // instead of the whole pane (the pane owns its tab bar).
         KeyCode::Tab if app.ui.navigation.pane == Pane::Status => {
-            app.status_tab = app.status_tab.next()
+            app.ui.navigation.status_tab = app.ui.navigation.status_tab.next()
         }
         KeyCode::Tab
             if app.ui.navigation.pane == Pane::Memory && app.ui.input.editor.is_empty() =>
@@ -193,8 +193,8 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
         // the palette-style input path stays the fallback elsewhere.
         KeyCode::Char('e')
             if app.ui.navigation.pane == Pane::Status
-                && app.status_tab == StatusTab::Status
-                && app.status_name_edit.is_none()
+                && app.ui.navigation.status_tab == StatusTab::Status
+                && app.ui.navigation.status_name_edit.is_none()
                 && app.ui.input.editor.is_empty() =>
         {
             app.enter_status_name_edit();
@@ -296,10 +296,10 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
         // Config, Usage), Esc dismisses back to the transcript. A
         // Settings-modal-style tabbed status.
         KeyCode::Left if app.ui.navigation.pane == Pane::Status => {
-            app.status_tab = app.status_tab.prev()
+            app.ui.navigation.status_tab = app.ui.navigation.status_tab.prev()
         }
         KeyCode::Right if app.ui.navigation.pane == Pane::Status => {
-            app.status_tab = app.status_tab.next()
+            app.ui.navigation.status_tab = app.ui.navigation.status_tab.next()
         }
         KeyCode::Esc if app.ui.navigation.pane == Pane::Status => {
             app.ui.navigation.pane = Pane::Transcript;
@@ -327,13 +327,13 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
             app.ui.navigation.pane = Pane::Transcript;
         }
         KeyCode::Up if app.ui.navigation.pane == Pane::Skills => {
-            app.skills_pane.move_cursor(
+            app.ui.skills_pane.move_cursor(
                 -1,
                 display_order(&app.sessions.current.capabilities.skills.entries).len(),
             );
         }
         KeyCode::Down if app.ui.navigation.pane == Pane::Skills => {
-            app.skills_pane.move_cursor(
+            app.ui.skills_pane.move_cursor(
                 1,
                 display_order(&app.sessions.current.capabilities.skills.entries).len(),
             );
@@ -370,18 +370,20 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
             app.delete_queued_at_cursor();
         }
         KeyCode::Esc if app.ui.navigation.pane == Pane::Hooks => {
-            if app.hooks_pane.level.get() > 0 {
-                app.hooks_pane.level.set(0);
+            if app.ui.hooks_pane.level.get() > 0 {
+                app.ui.hooks_pane.level.set(0);
             } else {
                 app.ui.navigation.pane = Pane::Transcript;
             }
         }
-        KeyCode::Up if app.ui.navigation.pane == Pane::Hooks && app.hooks_pane.level.get() == 0 => {
-            let cur = app.hooks_pane.sel.get();
-            app.hooks_pane.sel.set(cur.saturating_sub(1));
+        KeyCode::Up
+            if app.ui.navigation.pane == Pane::Hooks && app.ui.hooks_pane.level.get() == 0 =>
+        {
+            let cur = app.ui.hooks_pane.sel.get();
+            app.ui.hooks_pane.sel.set(cur.saturating_sub(1));
         }
         KeyCode::Down
-            if app.ui.navigation.pane == Pane::Hooks && app.hooks_pane.level.get() == 0 =>
+            if app.ui.navigation.pane == Pane::Hooks && app.ui.hooks_pane.level.get() == 0 =>
         {
             let len = app
                 .sessions
@@ -392,13 +394,13 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
                 .iter()
                 .filter(|h| h.source == "framework")
                 .count();
-            let next = app.hooks_pane.sel.get() + 1;
-            app.hooks_pane.sel.set(next.min(len.saturating_sub(1)));
+            let next = app.ui.hooks_pane.sel.get() + 1;
+            app.ui.hooks_pane.sel.set(next.min(len.saturating_sub(1)));
         }
         KeyCode::Enter
-            if app.ui.navigation.pane == Pane::Hooks && app.hooks_pane.level.get() == 0 =>
+            if app.ui.navigation.pane == Pane::Hooks && app.ui.hooks_pane.level.get() == 0 =>
         {
-            app.hooks_pane.level.set(1);
+            app.ui.hooks_pane.level.set(1);
         }
         // '/' opens the slash palette only when no typed permission sub-mode
         // (add rule / add directory) is active; an AddDir path typically
@@ -408,7 +410,7 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
         KeyCode::Char('/')
             if app.ui.input.editor.is_empty()
                 && !editing
-                && !app.permission_pane.input.is_active()
+                && !app.ui.permission_pane.input.is_active()
                 && !pane_replaces_input(app.ui.navigation.pane) =>
         {
             app.open_palette()
@@ -420,7 +422,7 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
         KeyCode::Enter if !pane_replaces_input(app.ui.navigation.pane) => {
             // Empty-input Enter drills into a teammate view: the pill
             // selection takes priority, then the Subagent line at cursor.
-            if app.ui.input.editor.is_empty() && app.teammate_view.is_none() {
+            if app.ui.input.editor.is_empty() && app.ui.teammate_view.is_none() {
                 if let Some(sid) = fleet::selected_fleet_sid(app) {
                     app.enter_teammate_view_for_sid(&sid, true);
                     return;

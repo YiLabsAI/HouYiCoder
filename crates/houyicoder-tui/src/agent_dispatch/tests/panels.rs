@@ -69,7 +69,8 @@ fn test_skills_result_stored() {
 #[test]
 fn test_skill_body_fills_detail() {
     let mut app = crate::composition::app();
-    app.skills_pane
+    app.ui
+        .skills_pane
         .request_detail(RequestId(21), "alpha".into());
     app.handle_agent_message(SessionMessage::Response {
         request: RequestId(21),
@@ -77,7 +78,7 @@ fn test_skill_body_fills_detail() {
             body: Some("run the alpha step".into()),
         },
     });
-    assert_eq!(app.skills_pane.detail_body(), Some("run the alpha step"));
+    assert_eq!(app.ui.skills_pane.detail_body(), Some("run the alpha step"));
 }
 
 /// A reply for a superseded request leaves the current detail loading: the
@@ -85,7 +86,9 @@ fn test_skill_body_fills_detail() {
 #[test]
 fn test_stale_skill_body_dropped() {
     let mut app = crate::composition::app();
-    app.skills_pane.request_detail(RequestId(22), "beta".into());
+    app.ui
+        .skills_pane
+        .request_detail(RequestId(22), "beta".into());
     app.handle_agent_message(SessionMessage::Response {
         request: RequestId(21),
         response: ServerResponse::SkillBody {
@@ -93,10 +96,10 @@ fn test_stale_skill_body_dropped() {
         },
     });
     assert!(matches!(
-        app.skills_pane.detail(),
+        app.ui.skills_pane.detail(),
         Some(SkillDetail::Loading { .. })
     ));
-    assert!(app.skills_pane.detail_body().is_none());
+    assert!(app.ui.skills_pane.detail_body().is_none());
 }
 
 /// A session-less App cannot request a body, so Enter opens the detail with
@@ -108,10 +111,10 @@ fn test_open_detail_without_session() {
     app.sessions.current.capabilities.skills.entries = vec![skill_entry("alpha")];
     app.open_skill_detail();
     assert!(matches!(
-        app.skills_pane.detail(),
+        app.ui.skills_pane.detail(),
         Some(SkillDetail::Open { .. })
     ));
-    assert!(app.skills_pane.detail_body().is_none());
+    assert!(app.ui.skills_pane.detail_body().is_none());
 }
 
 /// A send the lost connection refuses settles the detail it opened, so the
@@ -123,24 +126,25 @@ fn test_lost_send_settles_detail() {
     app.sessions.current.capabilities.skills.entries = vec![skill_entry("alpha")];
     app.open_skill_detail();
     assert!(matches!(
-        app.skills_pane.detail(),
+        app.ui.skills_pane.detail(),
         Some(SkillDetail::Open { .. })
     ));
-    assert!(app.skills_pane.detail_body().is_none());
+    assert!(app.ui.skills_pane.detail_body().is_none());
 }
 
 /// A connection loss settles a loading detail, because no reply is coming.
 #[test]
 fn test_loss_settles_skill_detail() {
     let (mut app, _events) = crate::test_harness::connected_app_with_events();
-    app.skills_pane
+    app.ui
+        .skills_pane
         .request_detail(RequestId(31), "alpha".into());
     assert!(app.apply_connection_loss("connect failed: no server".into(), Vec::new()));
     assert!(matches!(
-        app.skills_pane.detail(),
+        app.ui.skills_pane.detail(),
         Some(SkillDetail::Open { .. })
     ));
-    assert!(app.skills_pane.detail_body().is_none());
+    assert!(app.ui.skills_pane.detail_body().is_none());
 }
 
 /// An error reply for the request the detail waits on settles it as
@@ -149,7 +153,8 @@ fn test_loss_settles_skill_detail() {
 #[test]
 fn test_error_settles_skill_detail() {
     let (mut app, _events) = crate::test_harness::connected_app_with_events();
-    app.skills_pane
+    app.ui
+        .skills_pane
         .request_detail(RequestId(41), "alpha".into());
     app.handle_agent_message(SessionMessage::Response {
         request: RequestId(41),
@@ -158,10 +163,10 @@ fn test_error_settles_skill_detail() {
         },
     });
     assert!(matches!(
-        app.skills_pane.detail(),
+        app.ui.skills_pane.detail(),
         Some(SkillDetail::Open { .. })
     ));
-    assert!(app.skills_pane.detail_body().is_none());
+    assert!(app.ui.skills_pane.detail_body().is_none());
     use crate::records::TranscriptLine;
     assert!(
         app.sessions.current.transcript.iter().any(
@@ -176,7 +181,8 @@ fn test_error_settles_skill_detail() {
 #[test]
 fn test_error_keeps_detail_loading() {
     let (mut app, _events) = crate::test_harness::connected_app_with_events();
-    app.skills_pane
+    app.ui
+        .skills_pane
         .request_detail(RequestId(42), "alpha".into());
     app.handle_agent_message(SessionMessage::Response {
         request: RequestId(41),
@@ -185,7 +191,7 @@ fn test_error_keeps_detail_loading() {
         },
     });
     assert!(matches!(
-        app.skills_pane.detail(),
+        app.ui.skills_pane.detail(),
         Some(SkillDetail::Loading { .. })
     ));
 }

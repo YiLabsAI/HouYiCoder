@@ -32,7 +32,7 @@ impl App {
     /// hidden parent's viewport. The refusal says why instead of staying
     /// silent; searching a child's own log is a separate capability.
     pub fn enter_search_view(&mut self, query: &str) {
-        if self.teammate_view.is_some() {
+        if self.ui.teammate_view.is_some() {
             self.ui.notifications.add(Notification::immediate(
                 "search-blocked-teammate",
                 NotifKind::Text {
@@ -44,7 +44,7 @@ impl App {
             return;
         }
         self.enter_scroll();
-        self.verbose = true;
+        self.ui.verbose = true;
         // Load the snapshot from the durable log via the seam when wired;
         // else fall back to a clone of the live transcript (the 4000-row
         // cap still bounds the live vec, so the clone is the legacy path).
@@ -72,7 +72,8 @@ impl App {
         });
         match loaded {
             Some(Loaded::Over { log_bytes, w }) => {
-                self.transcript_view
+                self.ui
+                    .transcript_view
                     .search_corpus
                     .enter_over_window(w.lines, log_bytes, w.skipped);
                 self.set_window_browsing(true);
@@ -80,7 +81,7 @@ impl App {
                 self.reset_window_scroll();
             }
             Some(Loaded::Under { load }) => {
-                self.transcript_view.search_corpus.enter_under(
+                self.ui.transcript_view.search_corpus.enter_under(
                     load.lines,
                     load.truncated,
                     load.skipped,
@@ -88,17 +89,17 @@ impl App {
             }
             None => {
                 let live = self.sessions.current.transcript.lines().to_vec();
-                self.transcript_view.search_corpus.enter_fallback(live);
+                self.ui.transcript_view.search_corpus.enter_fallback(live);
             }
         }
-        self.transcript_view.search.active = true;
-        self.transcript_view.search.query = query.to_string();
+        self.ui.transcript_view.search.active = true;
+        self.ui.transcript_view.search.query = query.to_string();
         self.run_search();
         // Newest first: matches are in transcript order (oldest->newest), so
         // the newest is the last index. Opening there matches the "find the
         // most recent discussion of X" intent.
-        if !self.transcript_view.search.matches.is_empty() {
-            self.transcript_view.search.focus = self.transcript_view.search.matches.len() - 1;
+        if !self.ui.transcript_view.search.matches.is_empty() {
+            self.ui.transcript_view.search.focus = self.ui.transcript_view.search.matches.len() - 1;
             self.jump_to_focused_match();
         }
     }
@@ -106,14 +107,14 @@ impl App {
     /// Leave the search view: clear verbose + in_search + the query, then
     /// restore the viewport active before scrolling.
     pub fn exit_search_view(&mut self) {
-        self.verbose = false;
-        self.transcript_view.search.active = false;
-        self.transcript_view.search.input_mode = false;
-        self.transcript_view.search.query.clear();
-        self.transcript_view.search.matches.clear();
-        self.transcript_view.search.input.clear();
-        self.transcript_view.search.focus = 0;
-        self.transcript_view.search_corpus.exit();
+        self.ui.verbose = false;
+        self.ui.transcript_view.search.active = false;
+        self.ui.transcript_view.search.input_mode = false;
+        self.ui.transcript_view.search.query.clear();
+        self.ui.transcript_view.search.matches.clear();
+        self.ui.transcript_view.search.input.clear();
+        self.ui.transcript_view.search.focus = 0;
+        self.ui.transcript_view.search_corpus.exit();
         self.set_window_browsing(false);
         self.exit_history_window();
         self.reset_window_scroll();
@@ -130,11 +131,12 @@ impl App {
     /// commits, so Esc cancel is a trivial no-op restore -- no snapshot
     /// to save and roll back.
     pub fn enter_search_input(&mut self) {
-        self.transcript_view
+        self.ui
+            .transcript_view
             .search
             .input
-            .set(self.transcript_view.search.query.clone());
-        self.transcript_view.search.input_mode = true;
+            .set(self.ui.transcript_view.search.query.clone());
+        self.ui.transcript_view.search.input_mode = true;
     }
 
     /// Commit the in-view slash bar: the buffer becomes the new query,
@@ -143,12 +145,13 @@ impl App {
     /// viewport jumps to it. An empty buffer yields no matches (chrome
     /// shows no-match); the view stays open so the user can retry.
     pub fn commit_search_input(&mut self) {
-        self.transcript_view.search.query = self.transcript_view.search.input.value().to_string();
-        self.transcript_view.search.input.clear();
-        self.transcript_view.search.input_mode = false;
+        self.ui.transcript_view.search.query =
+            self.ui.transcript_view.search.input.value().to_string();
+        self.ui.transcript_view.search.input.clear();
+        self.ui.transcript_view.search.input_mode = false;
         self.run_search();
-        if !self.transcript_view.search.matches.is_empty() {
-            self.transcript_view.search.focus = self.transcript_view.search.matches.len() - 1;
+        if !self.ui.transcript_view.search.matches.is_empty() {
+            self.ui.transcript_view.search.focus = self.ui.transcript_view.search.matches.len() - 1;
             self.jump_to_focused_match();
         }
     }
@@ -157,8 +160,8 @@ impl App {
     /// query and matches untouched. The view stays in search mode at its
     /// prior position.
     pub fn cancel_search_input(&mut self) {
-        self.transcript_view.search.input.clear();
-        self.transcript_view.search.input_mode = false;
+        self.ui.transcript_view.search.input.clear();
+        self.ui.transcript_view.search.input_mode = false;
     }
 
     /// The transcript the view currently renders + counts against: the
@@ -170,10 +173,10 @@ impl App {
     /// bitten (the first two were the verbose-count desync + the live/disk
     /// split), and the accessor is the structural fix.
     pub fn active_transcript(&self) -> &[crate::records::TranscriptLine] {
-        if let Some(tv) = &self.teammate_view {
+        if let Some(tv) = &self.ui.teammate_view {
             &tv.transcript
-        } else if self.transcript_view.search.active {
-            self.transcript_view.search_corpus.lines()
+        } else if self.ui.transcript_view.search.active {
+            self.ui.transcript_view.search_corpus.lines()
         } else {
             self.sessions.current.transcript.lines()
         }
@@ -184,23 +187,23 @@ impl App {
     /// search.run borrows the query state mutably); a method returning the
     /// slice would over-borrow self, so the branching stays inline here.
     pub fn run_search(&mut self) {
-        let t: &[crate::records::TranscriptLine] = if self.transcript_view.search.active {
-            self.transcript_view.search_corpus.lines()
+        let t: &[crate::records::TranscriptLine] = if self.ui.transcript_view.search.active {
+            self.ui.transcript_view.search_corpus.lines()
         } else {
             self.sessions.current.transcript.lines()
         };
-        self.transcript_view.search.run(t);
+        self.ui.transcript_view.search.run(t);
     }
 
     /// Advance the focused search match and scroll the transcript to it.
     pub fn search_next_and_jump(&mut self) {
-        self.transcript_view.search.next();
+        self.ui.transcript_view.search.next();
         self.jump_to_focused_match();
     }
 
     /// Step the focused search match backward and scroll the transcript to it.
     pub fn search_prev_and_jump(&mut self) {
-        self.transcript_view.search.prev();
+        self.ui.transcript_view.search.prev();
         self.jump_to_focused_match();
     }
 
@@ -208,7 +211,7 @@ impl App {
     /// byte-window mode the row math is flat (no fold) and the scroll state
     /// is window_scroll -- separate from the whole-vec TranscriptScroll.
     pub fn jump_to_focused_match(&mut self) {
-        if let Some(idx) = self.transcript_view.search.focused_line() {
+        if let Some(idx) = self.ui.transcript_view.search.focused_line() {
             if self.window_browsing() {
                 let row = self.history_row_of_line(idx);
                 self.window_scroll_mut().jump_to(row);
@@ -227,14 +230,14 @@ impl App {
     /// (the chrome shows the partial total) -- honest, not a false "no more".
     pub fn window_search_older(&mut self) {
         if !self.window_browsing() {
-            self.transcript_view.search.prev();
+            self.ui.transcript_view.search.prev();
             self.jump_to_focused_match();
             return;
         }
         // In-window older match: the current match is not the oldest in this
         // window (focus > 0).
-        if self.transcript_view.search.focus > 0 {
-            self.transcript_view.search.prev();
+        if self.ui.transcript_view.search.focus > 0 {
+            self.ui.transcript_view.search.prev();
             self.jump_to_focused_match();
             return;
         }
@@ -254,13 +257,14 @@ impl App {
                 return; // no progress (corrupt/empty) -- stop.
             }
             let new_anchor = w.start_offset;
-            self.transcript_view.search_corpus.replace_lines(w.lines);
+            self.ui.transcript_view.search_corpus.replace_lines(w.lines);
             self.replace_history_window(new_anchor, w.next_offset, w.skipped);
             self.reset_window_scroll();
             self.run_search();
-            if !self.transcript_view.search.matches.is_empty() {
+            if !self.ui.transcript_view.search.matches.is_empty() {
                 // Newest match in this older window = last index.
-                self.transcript_view.search.focus = self.transcript_view.search.matches.len() - 1;
+                self.ui.transcript_view.search.focus =
+                    self.ui.transcript_view.search.matches.len() - 1;
                 self.jump_to_focused_match();
                 return;
             }
@@ -274,15 +278,16 @@ impl App {
     /// load newer windows (forward) searching for the next newer match.
     pub fn window_search_newer(&mut self) {
         if !self.window_browsing() {
-            self.transcript_view.search.next();
+            self.ui.transcript_view.search.next();
             self.jump_to_focused_match();
             return;
         }
         // In-window newer match: current match is not the newest (focus < n-1).
-        if !self.transcript_view.search.matches.is_empty()
-            && self.transcript_view.search.focus + 1 < self.transcript_view.search.matches.len()
+        if !self.ui.transcript_view.search.matches.is_empty()
+            && self.ui.transcript_view.search.focus + 1
+                < self.ui.transcript_view.search.matches.len()
         {
-            self.transcript_view.search.next();
+            self.ui.transcript_view.search.next();
             self.jump_to_focused_match();
             return;
         }
@@ -300,15 +305,15 @@ impl App {
                 return; // no progress -- stop.
             }
             let new_end = w.next_offset;
-            self.transcript_view.search_corpus.replace_lines(w.lines);
+            self.ui.transcript_view.search_corpus.replace_lines(w.lines);
             self.replace_history_window(w.start_offset, new_end, w.skipped);
             self.reset_window_scroll();
             self.run_search();
-            if !self.transcript_view.search.matches.is_empty() {
+            if !self.ui.transcript_view.search.matches.is_empty() {
                 // Newest match in a forward (older->newer) window = last index,
                 // but N walks toward newer so the FIRST match is the closest
                 // newer one.
-                self.transcript_view.search.focus = 0;
+                self.ui.transcript_view.search.focus = 0;
                 self.jump_to_focused_match();
                 return;
             }

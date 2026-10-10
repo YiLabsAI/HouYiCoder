@@ -310,26 +310,26 @@ pub fn draw_content(f: &mut Frame, area: Rect, app: &crate::state::App) {
         .as_ref()
         .map(|l| l.trajectory())
         .unwrap_or_else(|| std::sync::Arc::new(sample_trajectory()));
-    let level = app.trajectory.level();
+    let level = app.ui.trajectory.level();
     // The window slides, so the selection is a turn number and the row is
     // found from it again rather than carried as an index.
     if level == 0 {
-        restore_selected_cursor(&app.trajectory, &traj);
+        restore_selected_cursor(&app.ui.trajectory, &traj);
     }
-    let cursor = app.trajectory.cursor();
+    let cursor = app.ui.trajectory.cursor();
     // The drill levels render the turn the drill named, not the row index it
     // had when the drill started: a page can arrive under that index while the
     // user reads.
     let drilled = match level {
         0 => None,
-        _ => drilled_row(&app.trajectory, &traj),
+        _ => drilled_row(&app.ui.trajectory, &traj),
     };
     // The records come from the detail seam, asked for by the key the drill
     // holds: a draw serves what the read has produced.
     let row = drilled.map(|index| &traj.rows[index]);
     // The drill names the turn; a row in hand names it too, which is what the
     // level renders from before the drill is recorded.
-    let drill = app.trajectory.drill().or_else(|| match row {
+    let drill = app.ui.trajectory.drill().or_else(|| match row {
         Some(TrajectoryRow::Turn(turn)) => Some(TrajectoryDrill {
             key: turn.key.clone(),
             number: turn.n,
@@ -364,9 +364,9 @@ pub fn draw_content(f: &mut Frame, area: Rect, app: &crate::state::App) {
         _ => 0,
     };
     if active_len > 0 && cursor >= active_len {
-        app.trajectory.set_cursor(active_len.saturating_sub(1));
+        app.ui.trajectory.set_cursor(active_len.saturating_sub(1));
     }
-    app.trajectory.set_list_len(active_len);
+    app.ui.trajectory.set_list_len(active_len);
     render_scrolled(f, area, header, body, footer, sel_line);
 }
 

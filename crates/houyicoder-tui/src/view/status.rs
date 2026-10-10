@@ -298,9 +298,9 @@ pub fn draw_scroll_status(f: &mut Frame, area: Rect, app: &App) {
     let total = app.active_scroll().total.get();
     let line = top.saturating_add(1);
     let style = Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD);
-    let line_widget = if app.transcript_view.search.input_mode {
-        let buf = app.transcript_view.search.input.value();
-        let cur = app.transcript_view.search.input.cursor();
+    let line_widget = if app.ui.transcript_view.search.input_mode {
+        let buf = app.ui.transcript_view.search.input.value();
+        let cur = app.ui.transcript_view.search.input.cursor();
         let (pre, post) = buf.split_at(cur);
         let cursor_char = post.chars().next().unwrap_or(' ');
         let mut spans: Vec<Span<'static>> = vec![
@@ -317,18 +317,18 @@ pub fn draw_scroll_status(f: &mut Frame, area: Rect, app: &App) {
             spans.push(Span::styled("  (empty = no match)", style));
         }
         Line::from(spans)
-    } else if app.transcript_view.search.active {
-        let n = app.transcript_view.search.matches.len();
+    } else if app.ui.transcript_view.search.active {
+        let n = app.ui.transcript_view.search.matches.len();
         let focus = if n == 0 {
             0
         } else {
-            app.transcript_view.search.focus + 1
+            app.ui.transcript_view.search.focus + 1
         };
-        let query = app.transcript_view.search.query.trim();
-        let text = if app.transcript_view.search_corpus.truncated() {
+        let query = app.ui.transcript_view.search.query.trim();
+        let text = if app.ui.transcript_view.search_corpus.truncated() {
             // Honest degrade: the log is over the threshold, so the snapshot
             // is empty -- not a "no match". Tell the user why.
-            let mb = (app.transcript_view.search_corpus.log_bytes() / (1024 * 1024)).max(1);
+            let mb = (app.ui.transcript_view.search_corpus.log_bytes() / (1024 * 1024)).max(1);
             format!(
                 " SEARCH  {query}  log {mb}MB too large — full search needs disk viewport (not built)  q=exit "
             )
@@ -370,10 +370,10 @@ pub fn draw_scroll_status(f: &mut Frame, area: Rect, app: &App) {
         } else if n == 0 {
             format!(" SEARCH  {query}  no match  q=exit ")
         } else {
-            let skipped = if app.transcript_view.search_corpus.skipped() > 0 {
+            let skipped = if app.ui.transcript_view.search_corpus.skipped() > 0 {
                 format!(
                     "  · {} lines skipped",
-                    app.transcript_view.search_corpus.skipped()
+                    app.ui.transcript_view.search_corpus.skipped()
                 )
             } else {
                 String::new()

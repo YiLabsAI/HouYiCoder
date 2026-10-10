@@ -421,13 +421,13 @@ fn test_skills_pane_nav() {
             usage: None,
         },
     ];
-    assert_eq!(app.skills_pane.cursor(), 0);
+    assert_eq!(app.ui.skills_pane.cursor(), 0);
     handle_working(&mut app, key(KeyCode::Down));
-    assert_eq!(app.skills_pane.cursor(), 1, "Down moves cursor to 1");
+    assert_eq!(app.ui.skills_pane.cursor(), 1, "Down moves cursor to 1");
     handle_working(&mut app, key(KeyCode::Up));
-    assert_eq!(app.skills_pane.cursor(), 0, "Up moves cursor back to 0");
+    assert_eq!(app.ui.skills_pane.cursor(), 0, "Up moves cursor back to 0");
     handle_working(&mut app, key(KeyCode::Up));
-    assert_eq!(app.skills_pane.cursor(), 0, "Up saturates at 0");
+    assert_eq!(app.ui.skills_pane.cursor(), 0, "Up saturates at 0");
 }
 
 /// Enter opens the detail view; Esc returns to the list. Without a session
@@ -448,10 +448,13 @@ fn test_skills_pane_detail() {
         usage: None,
     }];
     handle_working(&mut app, key(KeyCode::Enter));
-    assert!(app.skills_pane.detail().is_some(), "Enter opens the detail");
+    assert!(
+        app.ui.skills_pane.detail().is_some(),
+        "Enter opens the detail"
+    );
     handle_working(&mut app, key(KeyCode::Esc));
     assert!(
-        app.skills_pane.detail().is_none(),
+        app.ui.skills_pane.detail().is_none(),
         "Esc returns to the list"
     );
 }
@@ -471,7 +474,7 @@ fn test_skills_pane_toggle() {
         user_invocable: true,
         usage: None,
     }];
-    app.skills_pane.open_unavailable("alpha".into());
+    app.ui.skills_pane.open_unavailable("alpha".into());
     assert!(
         app.sessions.current.capabilities.skills.disabled.is_empty(),
         "starts clean"
@@ -832,11 +835,20 @@ fn test_status_pane_cycles_subtab() {
     let mut app = working_app();
     app.ui.navigation.pane = Pane::Status;
     handle_input(&mut app, key(KeyCode::Right));
-    assert_eq!(app.status_tab, crate::state::enums::StatusTab::Config);
+    assert_eq!(
+        app.ui.navigation.status_tab,
+        crate::state::enums::StatusTab::Config
+    );
     handle_input(&mut app, key(KeyCode::Right));
-    assert_eq!(app.status_tab, crate::state::enums::StatusTab::Usage);
+    assert_eq!(
+        app.ui.navigation.status_tab,
+        crate::state::enums::StatusTab::Usage
+    );
     handle_input(&mut app, key(KeyCode::Right));
-    assert_eq!(app.status_tab, crate::state::enums::StatusTab::Status);
+    assert_eq!(
+        app.ui.navigation.status_tab,
+        crate::state::enums::StatusTab::Status
+    );
 }
 
 #[test]
@@ -1165,10 +1177,10 @@ fn test_esc_cancelling_backs_trajectory() {
     handle_working(&mut app, key(KeyCode::Esc));
     assert!(app.cancelling());
     app.ui.navigation.pane = Pane::Trajectory;
-    app.trajectory.set_level(1);
+    app.ui.trajectory.set_level(1);
     handle_working(&mut app, key(KeyCode::Esc));
     assert_eq!(
-        app.trajectory.level(),
+        app.ui.trajectory.level(),
         0,
         "Esc backs the trajectory pane a level, not pops the queue"
     );
@@ -1467,11 +1479,11 @@ fn worktree_app_with_rows() -> App {
 fn test_worktree_cursor_down_up() {
     let mut app = worktree_app_with_rows();
     handle_working(&mut app, key(KeyCode::Down));
-    assert_eq!(app.worktree_list.cursor, 1, "Down moves the cursor down");
+    assert_eq!(app.ui.worktree_list.cursor, 1, "Down moves the cursor down");
     handle_working(&mut app, key(KeyCode::Down));
-    assert_eq!(app.worktree_list.cursor, 2, "Down again");
+    assert_eq!(app.ui.worktree_list.cursor, 2, "Down again");
     handle_working(&mut app, key(KeyCode::Up));
-    assert_eq!(app.worktree_list.cursor, 1, "Up moves back up");
+    assert_eq!(app.ui.worktree_list.cursor, 1, "Up moves back up");
 }
 
 #[test]
@@ -1480,7 +1492,7 @@ fn test_worktree_e_enter() {
     // Enter opens the detail (level 1), then 'e' in the detail opens the
     // worktree (the enter ability, kept beyond the display-only round).
     handle_working(&mut app, key(KeyCode::Enter));
-    assert_eq!(app.worktree_level.get(), 1, "Enter opens the detail");
+    assert_eq!(app.ui.worktree_level.get(), 1, "Enter opens the detail");
     handle_working(&mut app, key(KeyCode::Char('e')));
     assert!(
         app.sessions
@@ -1498,11 +1510,11 @@ fn test_worktree_char_into_query() {
     handle_working(&mut app, key(KeyCode::Char('b')));
     handle_working(&mut app, key(KeyCode::Char('e')));
     assert_eq!(
-        app.worktree_list.query, "be",
+        app.ui.worktree_list.query, "be",
         "char keys append to the query"
     );
     assert!(
-        app.worktree_list.searching(),
+        app.ui.worktree_list.searching(),
         "a non-empty query is searching"
     );
 }
@@ -1513,17 +1525,20 @@ fn test_worktree_backspace_query() {
     handle_working(&mut app, key(KeyCode::Char('a')));
     handle_working(&mut app, key(KeyCode::Char('b')));
     handle_working(&mut app, key(KeyCode::Backspace));
-    assert_eq!(app.worktree_list.query, "a", "Backspace pops the last char");
+    assert_eq!(
+        app.ui.worktree_list.query, "a",
+        "Backspace pops the last char"
+    );
 }
 
 #[test]
 fn test_worktree_esc_clears_search() {
     let mut app = worktree_app_with_rows();
     handle_working(&mut app, key(KeyCode::Char('a')));
-    assert!(app.worktree_list.searching());
+    assert!(app.ui.worktree_list.searching());
     // First Esc clears the search, not the pane.
     handle_working(&mut app, key(KeyCode::Esc));
-    assert!(!app.worktree_list.searching(), "Esc clears the query");
+    assert!(!app.ui.worktree_list.searching(), "Esc clears the query");
     assert_eq!(
         app.ui.navigation.pane,
         Pane::Worktree,
@@ -1541,16 +1556,16 @@ fn test_worktree_esc_clears_search() {
 #[test]
 fn test_worktree_unknown_key_noop() {
     let mut app = worktree_app_with_rows();
-    let before = app.worktree_list.cursor;
+    let before = app.ui.worktree_list.cursor;
     // An unmapped function key: the handler does not consume it and leaves
     // the cursor + query untouched.
     handle_working(&mut app, key(KeyCode::F(1)));
     assert_eq!(
-        app.worktree_list.cursor, before,
+        app.ui.worktree_list.cursor, before,
         "unknown key does not move cursor"
     );
     assert!(
-        !app.worktree_list.searching(),
+        !app.ui.worktree_list.searching(),
         "unknown key does not open search"
     );
 }
@@ -1610,22 +1625,22 @@ fn test_shift_arrow_moves_fleet() {
 fn test_shift_arrow_exits_teammate() {
     use crate::records::TeammateView;
     let mut app = fleet_app(1);
-    app.teammate_view = Some(TeammateView {
+    app.ui.teammate_view = Some(TeammateView {
         child_sid: "child-0".into(),
         ..Default::default()
     });
     handle_working(&mut app, shift_key(KeyCode::Down));
     assert!(
-        app.teammate_view.is_none(),
+        app.ui.teammate_view.is_none(),
         "Shift+Down exits the teammate view even while the child runs"
     );
-    app.teammate_view = Some(TeammateView {
+    app.ui.teammate_view = Some(TeammateView {
         child_sid: "child-0".into(),
         ..Default::default()
     });
     handle_working(&mut app, shift_key(KeyCode::Up));
     assert!(
-        app.teammate_view.is_none(),
+        app.ui.teammate_view.is_none(),
         "Shift+Up also exits the teammate view"
     );
     assert!(
@@ -1645,7 +1660,7 @@ fn test_teammate_esc_no_leak() {
     let mut app = fleet_app(1);
     app.start_run_for_test(0);
     app.ui.input.editor.set("a draft steering note".into());
-    app.teammate_view = Some(TeammateView {
+    app.ui.teammate_view = Some(TeammateView {
         child_sid: "child-0".into(),
         ..Default::default()
     });
@@ -1655,7 +1670,7 @@ fn test_teammate_esc_no_leak() {
         "Esc in the teammate view must not interrupt the parent run"
     );
     assert!(
-        app.teammate_view.is_some(),
+        app.ui.teammate_view.is_some(),
         "Esc keeps the view open (exit is on Shift+Up/Down)"
     );
     assert!(
@@ -1672,7 +1687,7 @@ fn test_teammate_esc_pane_first() {
     let mut app = fleet_app(1);
     app.start_run_for_test(0);
     app.ui.navigation.pane = Pane::Agents;
-    app.teammate_view = Some(TeammateView {
+    app.ui.teammate_view = Some(TeammateView {
         child_sid: "child-0".into(),
         ..Default::default()
     });
@@ -1682,7 +1697,7 @@ fn test_teammate_esc_pane_first() {
         Pane::Transcript,
         "pane closes first"
     );
-    assert!(app.teammate_view.is_some(), "view stays open");
+    assert!(app.ui.teammate_view.is_some(), "view stays open");
     assert!(!app.cancelling(), "child not interrupted");
 }
 
@@ -1732,11 +1747,11 @@ fn test_enter_fleet_drills_teammate() {
     app.fleet.selected = Some(0);
     handle_working(&mut app, key(KeyCode::Enter));
     assert!(
-        app.teammate_view.is_some(),
+        app.ui.teammate_view.is_some(),
         "Enter on the selected fleet row opens the teammate view"
     );
     assert_eq!(
-        app.teammate_view.as_ref().unwrap().child_sid,
+        app.ui.teammate_view.as_ref().unwrap().child_sid,
         "c1",
         "view targets the fleet agent id"
     );
@@ -1771,18 +1786,22 @@ fn test_ctrl_o_expands_latest() {
     assert!(app.ui.selection.transcript.anchor.is_none(), "no cursor");
     handle_ctrl_o(&mut app);
     assert!(
-        app.transcript_view.expanded.thinking.contains(&"t1".into()),
+        app.ui
+            .transcript_view
+            .expanded
+            .thinking
+            .contains(&"t1".into()),
         "the later block expands: {:?}",
-        app.transcript_view.expanded.thinking
+        app.ui.transcript_view.expanded.thinking
     );
     assert!(
-        app.transcript_view.expanded.subagents.is_empty(),
+        app.ui.transcript_view.expanded.subagents.is_empty(),
         "the earlier delegation is untouched: {:?}",
-        app.transcript_view.expanded.subagents
+        app.ui.transcript_view.expanded.subagents
     );
     handle_ctrl_o(&mut app);
     assert!(
-        app.transcript_view.expanded.thinking.is_empty(),
+        app.ui.transcript_view.expanded.thinking.is_empty(),
         "the same key collapses what it expanded"
     );
 }
@@ -1825,11 +1844,15 @@ fn test_ctrl_o_follows_cursor() {
     app.ui.selection.transcript.start(0, top + ri);
     handle_ctrl_o(&mut app);
     assert!(
-        app.transcript_view.expanded.thinking.contains(&"t1".into()),
+        app.ui
+            .transcript_view
+            .expanded
+            .thinking
+            .contains(&"t1".into()),
         "the row under the cursor expands"
     );
     assert!(
-        app.transcript_view.expanded.subagents.is_empty(),
+        app.ui.transcript_view.expanded.subagents.is_empty(),
         "the later delegation stays collapsed"
     );
 }
@@ -1915,10 +1938,10 @@ fn test_focus_trajectory_esc_levels() {
     let mut app = working_app();
     app.ui.navigation.viewport = ViewportMode::Focus;
     app.ui.navigation.pane = Pane::Trajectory;
-    app.trajectory.set_level(1);
+    app.ui.trajectory.set_level(1);
     handle_working(&mut app, key(KeyCode::Esc));
     assert_eq!(
-        app.trajectory.level(),
+        app.ui.trajectory.level(),
         0,
         "Esc backs the pane a level instead of folding the viewport"
     );

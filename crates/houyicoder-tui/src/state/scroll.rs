@@ -17,9 +17,9 @@ impl App {
     /// status) read this; parent-only domain work (rebuild, trim, history
     /// reads) reads the whole-vec scroll directly and never this.
     pub(crate) fn active_scroll(&self) -> &TranscriptScroll {
-        match &self.teammate_view {
+        match &self.ui.teammate_view {
             Some(view) => &view.scroll,
-            None => self.transcript_view.scroll_on_view(),
+            None => self.ui.transcript_view.scroll_on_view(),
         }
     }
 
@@ -28,9 +28,9 @@ impl App {
     /// (snapshot_scroll_away, resume_tail_trim) off this when a child is on
     /// view; the scroll commands below branch those by surface instead.
     pub(crate) fn active_scroll_mut(&mut self) -> &mut TranscriptScroll {
-        match &mut self.teammate_view {
+        match &mut self.ui.teammate_view {
             Some(view) => &mut view.scroll,
-            None => self.transcript_view.scroll_on_view_mut(),
+            None => self.ui.transcript_view.scroll_on_view_mut(),
         }
     }
 
@@ -54,7 +54,7 @@ impl App {
     pub fn scroll_transcript_up(&mut self) {
         self.ensure_rows_published();
         let total = self.transcript_display_rows();
-        let viewing_child = self.teammate_view.is_some();
+        let viewing_child = self.ui.teammate_view.is_some();
         let before = self.active_scroll().top_offset();
         let was_following = self.active_scroll().is_following_tail();
         self.active_scroll_mut().page_up();
@@ -74,7 +74,7 @@ impl App {
     pub fn scroll_transcript_down(&mut self) {
         self.ensure_rows_published();
         let total = self.transcript_display_rows();
-        let viewing_child = self.teammate_view.is_some();
+        let viewing_child = self.ui.teammate_view.is_some();
         let before = self.active_scroll().top_offset();
         let transition = self.active_scroll_mut().page_down();
         if !viewing_child && transition == ScrollTransition::ReachedTail {
@@ -92,7 +92,7 @@ impl App {
     /// position and its cap. Called by the jump-to-bottom label click, a new
     /// user submission, End, Ctrl+End, and PageDown-to-bottom.
     pub fn scroll_transcript_follow_tail(&mut self) {
-        let viewing_child = self.teammate_view.is_some();
+        let viewing_child = self.ui.teammate_view.is_some();
         self.active_scroll_mut().follow_tail();
         if !viewing_child {
             self.resume_tail_trim();
@@ -116,9 +116,9 @@ impl App {
     fn snapshot_scroll_away(&mut self, was_following: bool) {
         if was_following
             && !self.whole_scroll().is_following_tail()
-            && self.transcript_view.unseen_since.is_none()
+            && self.ui.transcript_view.unseen_since.is_none()
         {
-            self.transcript_view.unseen_since = Some(self.event_cursor_at_tail());
+            self.ui.transcript_view.unseen_since = Some(self.event_cursor_at_tail());
         }
     }
 
@@ -127,7 +127,7 @@ impl App {
     /// trim actually dropped lines, so a no-op return to the tail does not
     /// invalidate the render cache.
     fn resume_tail_trim(&mut self) {
-        self.transcript_view.unseen_since = None;
+        self.ui.transcript_view.unseen_since = None;
         let dropped = self.trim_live_transcript();
         if dropped > 0 {
             self.bump_transcript_version();
@@ -144,7 +144,7 @@ impl App {
     /// length, so the cap that drops the oldest pushed rows does not silently
     /// zero the count.
     pub fn new_turn_count(&self) -> NewTurnCount {
-        let Some(cursor) = self.transcript_view.unseen_since.as_ref() else {
+        let Some(cursor) = self.ui.transcript_view.unseen_since.as_ref() else {
             return NewTurnCount::default();
         };
         let (from, is_lower_bound) = match self.frame_index_for_cursor(cursor) {
@@ -230,7 +230,7 @@ impl App {
     pub fn scroll_transcript_line_up(&mut self, n: usize) {
         self.ensure_rows_published();
         let total = self.transcript_display_rows();
-        let viewing_child = self.teammate_view.is_some();
+        let viewing_child = self.ui.teammate_view.is_some();
         let before = self.active_scroll().top_offset();
         let was_following = self.active_scroll().is_following_tail();
         self.active_scroll_mut().line_up(n);
@@ -248,7 +248,7 @@ impl App {
     pub fn scroll_transcript_line_down(&mut self, n: usize) {
         self.ensure_rows_published();
         let total = self.transcript_display_rows();
-        let viewing_child = self.teammate_view.is_some();
+        let viewing_child = self.ui.teammate_view.is_some();
         let before = self.active_scroll().top_offset();
         let transition = self.active_scroll_mut().line_down(n);
         if !viewing_child && transition == ScrollTransition::ReachedTail {
@@ -359,7 +359,7 @@ mod tests {
             .current
             .transcript
             .push_frame(stamped_frame("e3", "third"));
-        app.transcript_view.unseen_since = Some(EventCursor::Durable("e2".into()));
+        app.ui.transcript_view.unseen_since = Some(EventCursor::Durable("e2".into()));
         assert_eq!(
             app.new_turn_count().count,
             1,
@@ -383,7 +383,7 @@ mod tests {
         );
         assert!(!app.new_turn_count().is_lower_bound);
 
-        app.transcript_view.unseen_since = Some(EventCursor::Durable("e1".into()));
+        app.ui.transcript_view.unseen_since = Some(EventCursor::Durable("e1".into()));
         assert!(
             app.new_turn_count().is_lower_bound,
             "an anchor the drain took leaves the count a floor"
@@ -405,7 +405,7 @@ mod tests {
             .transcript
             .push_frame(stamped_frame("e2", "second"));
 
-        app.transcript_view.unseen_since = Some(EventCursor::Durable("e1".into()));
+        app.ui.transcript_view.unseen_since = Some(EventCursor::Durable("e1".into()));
         assert_eq!(
             app.new_turn_count().count,
             1,
@@ -413,7 +413,7 @@ mod tests {
         );
         assert!(!app.new_turn_count().is_lower_bound);
 
-        app.transcript_view.unseen_since = Some(EventCursor::Durable("absent".into()));
+        app.ui.transcript_view.unseen_since = Some(EventCursor::Durable("absent".into()));
         assert_eq!(
             app.new_turn_count().count,
             1,

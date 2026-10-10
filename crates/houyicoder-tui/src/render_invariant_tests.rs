@@ -57,7 +57,8 @@ fn test_transcript_diff_gutter_gap() {
     ]
     .into();
     // Expand so the full diff (not the collapsed head) is on screen.
-    app.transcript_view
+    app.ui
+        .transcript_view
         .expanded
         .results
         .insert("c1".to_string());
@@ -100,7 +101,8 @@ fn test_transcript_diff_bg_fill() {
         is_diff: true,
     }]
     .into();
-    app.transcript_view
+    app.ui
+        .transcript_view
         .expanded
         .results
         .insert("c1".to_string());
@@ -153,7 +155,8 @@ fn test_transcript_diff_word_highlight() {
         is_diff: true,
     }]
     .into();
-    app.transcript_view
+    app.ui
+        .transcript_view
         .expanded
         .results
         .insert("c1".to_string());
@@ -218,7 +221,8 @@ fn test_transcript_diff_wraps() {
         is_diff: true,
     }]
     .into();
-    app.transcript_view
+    app.ui
+        .transcript_view
         .expanded
         .results
         .insert("c1".to_string());
@@ -615,7 +619,7 @@ fn test_thought_expand_wraps_narrow() {
         },
     ]
     .into();
-    app.transcript_view.expanded.thinking.insert("t1".into());
+    app.ui.transcript_view.expanded.thinking.insert("t1".into());
     let out = render_text(&app, 30, 24);
     let count = app.transcript_display_rows();
     let rendered = app.whole_scroll().total.get();
@@ -681,15 +685,18 @@ fn test_expanded_results_callid_collide() {
     .into();
     // Expand both fold groups so the result rows are visible (not hidden behind
     // a collapsed summary), then expand result 1's BODY via the results set.
-    app.transcript_view
+    app.ui
+        .transcript_view
         .expanded
         .fold_groups
         .insert("c1#0".to_string());
-    app.transcript_view
+    app.ui
+        .transcript_view
         .expanded
         .fold_groups
         .insert("c1#1".to_string());
-    app.transcript_view
+    app.ui
+        .transcript_view
         .expanded
         .results
         .insert("c1".to_string());
@@ -763,7 +770,7 @@ fn test_verbose_count_matches() {
         TranscriptLine::Agent("done".into()),
     ]
     .into();
-    app.verbose = true;
+    app.ui.verbose = true;
     for w in [40, 80, 120] {
         let out = render_text(&app, w, 50);
         let count = app.transcript_display_rows();

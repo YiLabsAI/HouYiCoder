@@ -1,10 +1,11 @@
 //! Where the frontend is looking: the screen, the open pane, the two
 //! viewport modes, and the overlay pickers.
 
+use crate::input::InputField;
 use crate::palette::PaletteState;
 use crate::resume_picker::SessionPickerState;
 use crate::skill_picker_state::SkillPickerState;
-use crate::state::enums::{Pane, Screen, ViewportMode};
+use crate::state::enums::{Pane, Screen, StatusTab, ViewportMode};
 use houyicoder_protocol::frontend::LoginMode;
 
 /// The user's position in the frontend: which screen and pane are showing,
@@ -32,4 +33,14 @@ pub struct Navigation {
     /// The @ skill-picker overlay state: the open flag and its list cursor.
     /// Opening resets the cursor to zero, so the two move as one value.
     pub(crate) skill_picker: SkillPickerState,
+    /// The active /status sub-tab (Status / Config / Usage). Tab or
+    /// Left/Right cycles it; the pane header renders the three titles with
+    /// the active one highlighted.
+    pub status_tab: StatusTab,
+    /// In-place session-name edit buffer for the status Status tab. None
+    /// unless the user pressed e on the Status tab to rename; the pane
+    /// renders the name row as an editable input + the keys route char,
+    /// backspace, Left/Right to the buffer. Enter commits (sends a
+    /// RenameSession request), Esc cancels.
+    pub status_name_edit: Option<InputField>,
 }

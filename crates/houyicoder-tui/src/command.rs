@@ -133,15 +133,15 @@ impl App {
             }
             C::Trajectory => {
                 self.ui.navigation.pane = Pane::Trajectory;
-                self.trajectory.set_level(0);
-                self.trajectory.set_turn_idx(0);
+                self.ui.trajectory.set_level(0);
+                self.ui.trajectory.set_turn_idx(0);
                 // No turn is selected yet: the pane opens on the tail and
                 // follows it until the user picks a row.
-                self.trajectory.clear_selection();
-                self.trajectory.clear_drill();
+                self.ui.trajectory.clear_selection();
+                self.ui.trajectory.clear_drill();
                 // Initialize cursor to tail; draw_content will clamp and persist
                 // it to the active row count on first render.
-                self.trajectory.set_cursor(usize::MAX);
+                self.ui.trajectory.set_cursor(usize::MAX);
             }
             C::Tools => {
                 self.ui.navigation.pane = Pane::Tools;
@@ -476,7 +476,8 @@ impl App {
         }
         // /permissions typed sub-mode (add / remove / search): Enter submits the
         // pane's typed text, not a chat turn or slash command.
-        if self.ui.navigation.pane == Pane::Permission && self.permission_pane.input.is_active() {
+        if self.ui.navigation.pane == Pane::Permission && self.ui.permission_pane.input.is_active()
+        {
             let text = self.ui.input.editor.take();
             crate::permission_input::submit_permission_input(self, text);
             return;

@@ -11,7 +11,7 @@ fn test_abort_viewed_child_turn() {
     use crate::agent_message::FleetEntry;
     use crate::records::TeammateView;
     let mut app = crate::composition::app();
-    app.teammate_view = Some(TeammateView {
+    app.ui.teammate_view = Some(TeammateView {
         child_sid: "c1".into(),
         ..Default::default()
     });
@@ -28,7 +28,7 @@ fn test_abort_viewed_child_turn() {
     });
     app.abort_viewed_child_turn();
     assert!(
-        app.teammate_view.is_some(),
+        app.ui.teammate_view.is_some(),
         "Esc on a running child aborts the turn but keeps the view open"
     );
     assert!(
@@ -38,7 +38,7 @@ fn test_abort_viewed_child_turn() {
     app.fleet.entries[0].completed = Some("completed".into());
     app.abort_viewed_child_turn();
     assert!(
-        app.teammate_view.is_some(),
+        app.ui.teammate_view.is_some(),
         "Esc on an idle child keeps the view — exit is on Shift+Up/Down"
     );
     assert!(
@@ -63,7 +63,7 @@ fn test_teammate_echo_preserved() {
     use houyicoder_protocol::frontend::ContentBlock;
     use houyicoder_protocol::frontend::session_update::{ContentChunk, SessionUpdate};
     let mut app = crate::composition::app();
-    app.teammate_view = Some(TeammateView {
+    app.ui.teammate_view = Some(TeammateView {
         child_sid: "c1".into(),
         pending_echo: Some("steer this".into()),
         transcript: vec![TranscriptLine::User("steer this".into())],
@@ -81,7 +81,7 @@ fn test_teammate_echo_preserved() {
             ))],
         },
     });
-    let view = app.teammate_view.as_ref().expect("view stays");
+    let view = app.ui.teammate_view.as_ref().expect("view stays");
     assert!(
         view.transcript
             .iter()
@@ -107,7 +107,8 @@ fn test_teammate_echo_preserved() {
         },
     });
     assert!(
-        app.teammate_view
+        app.ui
+            .teammate_view
             .as_ref()
             .is_some_and(|v| v.pending_echo.is_none()),
         "the echo clears once the durable line lands"
@@ -124,7 +125,7 @@ fn test_steer_completed_surfaces_notice() {
     use crate::records::{TeammateView, TranscriptLine};
     let mut app = crate::composition::app();
     crate::test_harness::attach_connection(&mut app);
-    app.teammate_view = Some(TeammateView {
+    app.ui.teammate_view = Some(TeammateView {
         child_sid: "c1".into(),
         ..Default::default()
     });
@@ -144,7 +145,7 @@ fn test_steer_completed_surfaces_notice() {
     // view + surfaces a notice in the PARENT transcript (visible at the tail)
     // so the user learns the child is done + is back at the parent.
     assert!(
-        app.teammate_view.is_none(),
+        app.ui.teammate_view.is_none(),
         "steering a completed child exits the view"
     );
     assert!(
@@ -167,7 +168,7 @@ fn test_steer_completed_surfaces_notice() {
     // A running child still steers (echo appended, no notice). The completed
     // steer above exited the view, so re-enter it for the running case.
     app.fleet.entries[0].completed = None;
-    app.teammate_view = Some(TeammateView {
+    app.ui.teammate_view = Some(TeammateView {
         child_sid: "c1".into(),
         ..Default::default()
     });
@@ -182,7 +183,7 @@ fn test_steer_completed_surfaces_notice() {
         "a running child does not surface the finished notice"
     );
     assert!(
-        app.teammate_view.as_ref().is_some_and(|v| v
+        app.ui.teammate_view.as_ref().is_some_and(|v| v
             .transcript
             .iter()
             .any(|l| matches!(l, TranscriptLine::User(t) if t == "steer running"))),
@@ -352,6 +353,7 @@ fn test_view_fleet_type_fallback() {
     });
     app.enter_teammate_view_for_sid("c1", true);
     let view = app
+        .ui
         .teammate_view
         .as_ref()
         .expect("view opens for a running child even with no fold-group row");
@@ -396,7 +398,7 @@ fn test_view_fold_row_wins() {
         started_at: None,
     });
     app.enter_teammate_view_for_sid("c1", true);
-    let view = app.teammate_view.as_ref().expect("view opens");
+    let view = app.ui.teammate_view.as_ref().expect("view opens");
     assert_eq!(
         view.subagent_type, "plan",
         "fold-row value wins — fleet fallback did not overwrite"
@@ -418,7 +420,7 @@ fn test_running_child_starting() {
     use crate::agent_message::FleetEntry;
     use crate::records::{TeammateView, TranscriptLine};
     let mut app = crate::composition::app();
-    app.teammate_view = Some(TeammateView {
+    app.ui.teammate_view = Some(TeammateView {
         child_sid: "c1".into(),
         ..Default::default()
     });
@@ -440,7 +442,7 @@ fn test_running_child_starting() {
             frames: Vec::new(),
         },
     });
-    let view = app.teammate_view.as_ref().expect("view stays");
+    let view = app.ui.teammate_view.as_ref().expect("view stays");
     assert!(
         view.transcript
             .iter()
@@ -463,7 +465,7 @@ fn test_completed_child_unavailable() {
     use crate::agent_message::FleetEntry;
     use crate::records::{TeammateView, TranscriptLine};
     let mut app = crate::composition::app();
-    app.teammate_view = Some(TeammateView {
+    app.ui.teammate_view = Some(TeammateView {
         child_sid: "c1".into(),
         ..Default::default()
     });
@@ -485,7 +487,7 @@ fn test_completed_child_unavailable() {
             frames: Vec::new(),
         },
     });
-    let view = app.teammate_view.as_ref().expect("view stays");
+    let view = app.ui.teammate_view.as_ref().expect("view stays");
     assert!(
         view.transcript
             .iter()
@@ -501,7 +503,7 @@ fn test_teammate_submit_steers() {
     use crate::records::{TeammateView, TranscriptLine};
     let mut app = crate::composition::app();
     app.ui.navigation.screen = crate::state::Screen::Working;
-    app.teammate_view = Some(TeammateView {
+    app.ui.teammate_view = Some(TeammateView {
         child_sid: "c1".into(),
         ..Default::default()
     });

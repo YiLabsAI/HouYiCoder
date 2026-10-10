@@ -451,7 +451,7 @@ fn test_permission_pane_renders_tabs() {
         text.contains("Esc to close"),
         "rule-tab footer shows the close hint: {text}"
     );
-    assert_eq!(app.permission_pane.tab, PermissionTab::Allow);
+    assert_eq!(app.ui.permission_pane.tab, PermissionTab::Allow);
 }
 
 #[test]
@@ -468,24 +468,24 @@ fn test_pane_tab_cycle_wraps() {
         state: crossterm::event::KeyEventState::NONE,
     };
     crate::keys::handle_working(&mut app, key(crossterm::event::KeyCode::Right));
-    assert_eq!(app.permission_pane.tab, PermissionTab::Ask);
+    assert_eq!(app.ui.permission_pane.tab, PermissionTab::Ask);
     crate::keys::handle_working(&mut app, key(crossterm::event::KeyCode::Right));
-    assert_eq!(app.permission_pane.tab, PermissionTab::Deny);
+    assert_eq!(app.ui.permission_pane.tab, PermissionTab::Deny);
     crate::keys::handle_working(&mut app, key(crossterm::event::KeyCode::Right));
-    assert_eq!(app.permission_pane.tab, PermissionTab::Workspace);
+    assert_eq!(app.ui.permission_pane.tab, PermissionTab::Workspace);
     crate::keys::handle_working(&mut app, key(crossterm::event::KeyCode::Right));
-    assert_eq!(app.permission_pane.tab, PermissionTab::Recent);
+    assert_eq!(app.ui.permission_pane.tab, PermissionTab::Recent);
     crate::keys::handle_working(&mut app, key(crossterm::event::KeyCode::Right));
     assert_eq!(
-        app.permission_pane.tab,
+        app.ui.permission_pane.tab,
         PermissionTab::Allow,
         "wraps to Allow"
     );
     // Left goes the other way: Allow -> Recently denied.
     crate::keys::handle_working(&mut app, key(crossterm::event::KeyCode::Left));
-    assert_eq!(app.permission_pane.tab, PermissionTab::Recent);
+    assert_eq!(app.ui.permission_pane.tab, PermissionTab::Recent);
     crate::keys::handle_working(&mut app, key(crossterm::event::KeyCode::Tab));
-    assert_eq!(app.permission_pane.tab, PermissionTab::Allow);
+    assert_eq!(app.ui.permission_pane.tab, PermissionTab::Allow);
 }
 
 #[test]
@@ -494,8 +494,8 @@ fn test_permission_ignores_unknown_key() {
     // the rest of the working keyset can handle it.
     let mut app = app();
     app.ui.navigation.pane = Pane::Permission;
-    let before_tab = app.permission_pane.tab;
-    let before_cursor = app.permission_pane.cursor;
+    let before_tab = app.ui.permission_pane.tab;
+    let before_cursor = app.ui.permission_pane.cursor;
     crate::keys::handle_working(
         &mut app,
         crossterm::event::KeyEvent {
@@ -506,9 +506,9 @@ fn test_permission_ignores_unknown_key() {
         },
     );
     assert_eq!(app.ui.navigation.pane, Pane::Permission, "pane unchanged");
-    assert_eq!(app.permission_pane.tab, before_tab, "tab unchanged");
+    assert_eq!(app.ui.permission_pane.tab, before_tab, "tab unchanged");
     assert_eq!(
-        app.permission_pane.cursor, before_cursor,
+        app.ui.permission_pane.cursor, before_cursor,
         "cursor unchanged"
     );
 }
@@ -522,10 +522,10 @@ fn test_permission_slash_blocked_browsing() {
     // Status, Memory, etc.) — a uniform pane-input rule.
     let mut app = app();
     app.ui.navigation.pane = Pane::Permission;
-    app.permission_pane.input = crate::state::PermissionInput::None;
+    app.ui.permission_pane.input = crate::state::PermissionInput::None;
     crate::keys::handle_working(&mut app, key_press(crossterm::event::KeyCode::Char('/')));
     assert_eq!(
-        app.permission_pane.input,
+        app.ui.permission_pane.input,
         crate::state::PermissionInput::None,
         "'/' must not enter the search sub-mode"
     );
@@ -553,7 +553,7 @@ fn test_permission_add_submode_flow() {
     app.ui.navigation.screen = crate::state::Screen::Working;
     app.ui.navigation.pane = Pane::Permission;
     crate::keys::handle_working(&mut app, key_press(crossterm::event::KeyCode::Char('a')));
-    assert_eq!(app.permission_pane.input, PermissionInput::Add);
+    assert_eq!(app.ui.permission_pane.input, PermissionInput::Add);
     for c in "bash npm:allow".chars() {
         crate::keys::handle_working(&mut app, key_press(crossterm::event::KeyCode::Char(c)));
     }
@@ -564,18 +564,18 @@ fn test_permission_add_submode_flow() {
     use houyicoder_protocol::frontend::permission::RuleDestination;
     assert!(
         matches!(
-            app.permission_pane.input,
+            app.ui.permission_pane.input,
             PermissionInput::AddDestination {
                 destination: RuleDestination::Project,
                 ..
             }
         ),
         "Add spec Enter advances to destination pick: {:?}",
-        app.permission_pane.input
+        app.ui.permission_pane.input
     );
     crate::keys::handle_working(&mut app, key_press(crossterm::event::KeyCode::Enter));
     assert_eq!(
-        app.permission_pane.input,
+        app.ui.permission_pane.input,
         PermissionInput::None,
         "destination Enter ships + clears sub-mode"
     );
@@ -608,10 +608,10 @@ fn test_permission_add_prompt_renders() {
     use crate::state::PermissionInput;
     let mut app = app();
     app.ui.navigation.pane = Pane::Permission;
-    app.permission_pane.input = PermissionInput::Add;
+    app.ui.permission_pane.input = PermissionInput::Add;
     let text = render_text(&app, 100, 28);
     assert!(text.contains("add:"), "Add prompt renders: {text}");
-    app.permission_pane.input = PermissionInput::Remove {
+    app.ui.permission_pane.input = PermissionInput::Remove {
         idx: 0,
         confirm: false,
     };
@@ -620,7 +620,7 @@ fn test_permission_add_prompt_renders() {
         text.contains("remove this rule"),
         "Remove prompt renders: {text}"
     );
-    app.permission_pane.input = PermissionInput::Search;
+    app.ui.permission_pane.input = PermissionInput::Search;
     let text = render_text(&app, 100, 28);
     assert!(
         text.contains("Search"),
@@ -650,18 +650,18 @@ fn test_permission_remove_submode_deletes() {
     // Cursor sits on the only rule; 'd' enters Remove (No preselected).
     crate::keys::handle_working(&mut app, key_press(crossterm::event::KeyCode::Char('d')));
     assert!(matches!(
-        app.permission_pane.input,
+        app.ui.permission_pane.input,
         PermissionInput::Remove { confirm: false, .. }
     ));
     // Right moves to Yes; Enter confirms + ships.
     crate::keys::handle_working(&mut app, key_press(crossterm::event::KeyCode::Right));
     assert!(matches!(
-        app.permission_pane.input,
+        app.ui.permission_pane.input,
         PermissionInput::Remove { confirm: true, .. }
     ));
     crate::keys::handle_working(&mut app, key_press(crossterm::event::KeyCode::Enter));
     assert_eq!(
-        app.permission_pane.input,
+        app.ui.permission_pane.input,
         PermissionInput::None,
         "Remove Enter clears sub-mode"
     );
@@ -687,10 +687,10 @@ fn test_permission_workspace_add_flow() {
     let mut app = crate::composition::build_app_for_test(None);
     app.ui.navigation.screen = crate::state::Screen::Working;
     app.ui.navigation.pane = Pane::Permission;
-    app.permission_pane.tab = PermissionTab::Workspace;
+    app.ui.permission_pane.tab = PermissionTab::Workspace;
     crate::keys::handle_working(&mut app, key_press(crossterm::event::KeyCode::Char('a')));
     assert_eq!(
-        app.permission_pane.input,
+        app.ui.permission_pane.input,
         PermissionInput::AddDir,
         "'a' on Workspace enters AddDir"
     );
@@ -700,7 +700,7 @@ fn test_permission_workspace_add_flow() {
     assert_eq!(app.ui.input.editor.value(), "/tmp/extra");
     crate::keys::handle_working(&mut app, key_press(crossterm::event::KeyCode::Enter));
     assert_eq!(
-        app.permission_pane.input,
+        app.ui.permission_pane.input,
         PermissionInput::None,
         "AddDir Enter clears the sub-mode"
     );
@@ -719,12 +719,12 @@ fn test_permission_workspace_remove_flow() {
     use crate::state::{PermissionInput, PermissionTab};
     let mut app = app();
     app.ui.navigation.pane = Pane::Permission;
-    app.permission_pane.tab = PermissionTab::Workspace;
+    app.ui.permission_pane.tab = PermissionTab::Workspace;
     app.sessions.current.capabilities.permission.dirs_cache = vec!["/tmp/extra".into()];
     crate::keys::handle_working(&mut app, key_press(crossterm::event::KeyCode::Char('d')));
     assert!(
         matches!(
-            app.permission_pane.input,
+            app.ui.permission_pane.input,
             PermissionInput::RemoveDir { confirm: false, .. }
         ),
         "'d' on a dir enters RemoveDir (No preselected)"
@@ -732,7 +732,7 @@ fn test_permission_workspace_remove_flow() {
     crate::keys::handle_working(&mut app, key_press(crossterm::event::KeyCode::Right));
     crate::keys::handle_working(&mut app, key_press(crossterm::event::KeyCode::Enter));
     assert_eq!(
-        app.permission_pane.input,
+        app.ui.permission_pane.input,
         PermissionInput::None,
         "RemoveDir Enter clears the sub-mode"
     );
@@ -741,7 +741,7 @@ fn test_permission_workspace_remove_flow() {
     crate::keys::handle_working(&mut app, key_press(crossterm::event::KeyCode::Char('d')));
     crate::keys::handle_working(&mut app, key_press(crossterm::event::KeyCode::Esc));
     assert_eq!(
-        app.permission_pane.input,
+        app.ui.permission_pane.input,
         PermissionInput::None,
         "Esc cancels RemoveDir"
     );
@@ -769,7 +769,7 @@ fn test_permission_add_bad_effect() {
         crate::keys::handle_working(&mut app, key_press(crossterm::event::KeyCode::Char(c)));
     }
     crate::keys::handle_working(&mut app, key_press(crossterm::event::KeyCode::Enter));
-    assert_eq!(app.permission_pane.input, PermissionInput::None);
+    assert_eq!(app.ui.permission_pane.input, PermissionInput::None);
     let out = last_system(&app);
     assert!(out.contains("unknown effect"), "error surfaced: {out}");
 }

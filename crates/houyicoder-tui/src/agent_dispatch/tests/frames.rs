@@ -512,7 +512,8 @@ fn test_notice_shows_memory_changes() {
         !out.contains("⎿  created gamma"),
         "a second single-change notice is collapsed too: {out}"
     );
-    app.transcript_view
+    app.ui
+        .transcript_view
         .expanded
         .fold_groups
         .insert("mg#1".into());
@@ -562,7 +563,8 @@ fn test_notice_detail_names_scope() {
             },
         ],
     }));
-    app.transcript_view
+    app.ui
+        .transcript_view
         .expanded
         .fold_groups
         .insert("mg#0".into());
@@ -590,7 +592,8 @@ fn test_notice_skips_unknown_scope() {
             scope: MemoryChangeScope::Unknown,
         }],
     }));
-    app.transcript_view
+    app.ui
+        .transcript_view
         .expanded
         .fold_groups
         .insert("mg#0".into());
@@ -634,7 +637,8 @@ fn test_notice_summarizes_many_changes() {
     );
     // Expanding the notice reveals each change as its own ⎿ row (the long keys
     // hard-break across rows, so the per-key rows are the stable assertion).
-    app.transcript_view
+    app.ui
+        .transcript_view
         .expanded
         .fold_groups
         .insert("mg#0".into());
@@ -672,7 +676,8 @@ fn test_notice_single_change_wraps() {
         "the collapsed notice hides its key until expanded: {out}"
     );
     // Expanded (Ctrl+O on the summary), a long key wraps rather than clips.
-    app.transcript_view
+    app.ui
+        .transcript_view
         .expanded
         .fold_groups
         .insert("mg#0".into());
@@ -712,12 +717,12 @@ fn test_notice_click_toggles_fold() {
         .position(|k| k.as_deref() == Some("mg#0"))
         .expect("the notice row carries its fold key");
     assert!(
-        !app.transcript_view.expanded.fold_groups.contains("mg#0"),
+        !app.ui.transcript_view.expanded.fold_groups.contains("mg#0"),
         "the notice starts collapsed"
     );
     app.toggle_fold_at_row(ri);
     assert!(
-        app.transcript_view.expanded.fold_groups.contains("mg#0"),
+        app.ui.transcript_view.expanded.fold_groups.contains("mg#0"),
         "a click routes the notice to the fold toggle"
     );
     let out = render_text(&app, 100, 24);
@@ -757,7 +762,11 @@ fn test_thought_keep_affordance() {
         .expect("the thought row publishes its turn id");
     app.toggle_thinking_expand_at_row(ri);
     assert!(
-        app.transcript_view.expanded.thinking.contains(&"t1".into()),
+        app.ui
+            .transcript_view
+            .expanded
+            .thinking
+            .contains(&"t1".into()),
         "the thought still toggles open on the thought-click path"
     );
 }
@@ -777,7 +786,8 @@ fn test_notice_hint_matches_state() {
         out.contains("(ctrl+o to expand)"),
         "the collapsed summary offers the expand toggle: {out}"
     );
-    app.transcript_view
+    app.ui
+        .transcript_view
         .expanded
         .fold_groups
         .insert("mg#0".into());
@@ -843,7 +853,8 @@ fn test_notice_count_matches_render() {
         app.whole_scroll().total.get(),
         "the count and the rows the draw published agree"
     );
-    app.transcript_view
+    app.ui
+        .transcript_view
         .expanded
         .fold_groups
         .insert("mg#0".into());
@@ -917,12 +928,12 @@ fn test_notice_ctrl_o_latest() {
     assert!(app.ui.selection.transcript.anchor.is_none(), "no cursor");
     handle_ctrl_o(&mut app);
     assert!(
-        app.transcript_view.expanded.fold_groups.contains("mg#0"),
+        app.ui.transcript_view.expanded.fold_groups.contains("mg#0"),
         "no-cursor Ctrl+O opens the notice"
     );
     handle_ctrl_o(&mut app);
     assert!(
-        !app.transcript_view.expanded.fold_groups.contains("mg#0"),
+        !app.ui.transcript_view.expanded.fold_groups.contains("mg#0"),
         "the same key closes it again"
     );
 }
@@ -1001,7 +1012,7 @@ fn test_expand_survives_reread() {
         matches!(key, RowId::Durable { slot: 1, .. }),
         "the closing record names the row at the notification slot: {key:?}"
     );
-    app.transcript_view.expanded.thinking.insert(key);
+    app.ui.transcript_view.expanded.thinking.insert(key);
     let before = render_text(&app, 100, 30);
     assert!(
         before.contains("REREADMARK"),

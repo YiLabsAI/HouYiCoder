@@ -45,21 +45,27 @@ fn test_count_matches_under_snapshot() {
         TranscriptLine::User("live beta".into()),
     ]
     .into();
-    app.transcript_view.search_corpus.replace_lines(vec![
+    app.ui.transcript_view.search_corpus.replace_lines(vec![
         TranscriptLine::User("snap one".into()),
         TranscriptLine::User("snap two".into()),
         TranscriptLine::User("snap three".into()),
         TranscriptLine::User("snap four".into()),
         TranscriptLine::User("snap five".into()),
     ]);
-    app.transcript_view.search.active = true;
-    app.transcript_view.search.query = "snap".into();
+    app.ui.transcript_view.search.active = true;
+    app.ui.transcript_view.search.query = "snap".into();
     app.run_search();
     // Focus the LAST match so the focused-range line index reaches the
     // snapshot's tail; a count path still reading self.sessions.current.transcript (2 lines)
     // would index out of bounds here.
-    app.transcript_view.search.focus = app.transcript_view.search.matches.len().saturating_sub(1);
-    app.verbose = true;
+    app.ui.transcript_view.search.focus = app
+        .ui
+        .transcript_view
+        .search
+        .matches
+        .len()
+        .saturating_sub(1);
+    app.ui.verbose = true;
     // Pre-render: transcript_display_rows falls back to fold_aware_rows
     // (the Cell is 0 before any render), so this exercises the count path
     // reading active_transcript (5 snapshot lines, not 2 live lines).
@@ -96,14 +102,14 @@ fn test_count_matches_under_snapshot() {
 #[test]
 fn test_bound_scrollback_skips_recompute() {
     let mut app = working();
-    app.transcript_view.search_corpus.replace_lines(vec![
+    app.ui.transcript_view.search_corpus.replace_lines(vec![
         TranscriptLine::User("snap match".into()),
         TranscriptLine::User("snap other".into()),
     ]);
-    app.transcript_view.search.active = true;
-    app.transcript_view.search.query = "match".into();
+    app.ui.transcript_view.search.active = true;
+    app.ui.transcript_view.search.query = "match".into();
     app.run_search();
-    let matches_before = app.transcript_view.search.matches.clone();
+    let matches_before = app.ui.transcript_view.search.matches.clone();
     // Push past the 4000-row cap on the LIVE transcript to trigger eviction
     // while the search view is open. bound_scrollback must NOT recompute
     // search.matches against the drained live vec.
@@ -111,7 +117,7 @@ fn test_bound_scrollback_skips_recompute() {
         app.push_transcript_line(TranscriptLine::User(format!("live drain {i}")));
     }
     assert_eq!(
-        app.transcript_view.search.matches, matches_before,
+        app.ui.transcript_view.search.matches, matches_before,
         "eviction must not recompute the snapshot's matches"
     );
     assert!(
@@ -145,7 +151,7 @@ fn test_uncapped_finds_old_match() {
     }));
     app.enter_search_view("needle");
     assert_eq!(
-        app.transcript_view.search.matches,
+        app.ui.transcript_view.search.matches,
         vec![5000],
         "the snapshot must find the match beyond the 4000-row cap"
     );
@@ -155,7 +161,7 @@ fn test_uncapped_finds_old_match() {
         "the deep match must render:\n{out}"
     );
     assert!(
-        !app.transcript_view.search_corpus.truncated(),
+        !app.ui.transcript_view.search_corpus.truncated(),
         "a small log must not degrade"
     );
 }
@@ -191,7 +197,7 @@ fn test_search_finds_synthesized_name() {
     }));
     app.enter_search_view("Update");
     assert!(
-        !app.transcript_view.search.matches.is_empty(),
+        !app.ui.transcript_view.search.matches.is_empty(),
         "search must find the synthesized Update chip name: search reads the rendered rows"
     );
 }
@@ -225,7 +231,7 @@ fn test_large_log_opens_mode() {
         "over-threshold opens byte-window mode"
     );
     assert!(
-        !app.transcript_view.search_corpus.truncated(),
+        !app.ui.transcript_view.search_corpus.truncated(),
         "window mode is the real path, not a degrade"
     );
     assert_eq!(
@@ -236,7 +242,7 @@ fn test_large_log_opens_mode() {
     assert_eq!(app.window_anchor(), 19 * 1024 * 1024);
     assert_eq!(app.window_end(), total, "tail window reaches EOF");
     assert!(
-        app.transcript_view.search.matches.len() == 1,
+        app.ui.transcript_view.search.matches.len() == 1,
         "search found the tail needle in the window"
     );
     let out = render_text(&app, 100, 24);
@@ -270,7 +276,7 @@ fn test_skipped_lines_in_chrome() {
     }));
     app.enter_search_view("needle");
     assert_eq!(
-        app.transcript_view.search_corpus.skipped(),
+        app.ui.transcript_view.search_corpus.skipped(),
         2,
         "skip count carried from the load"
     );
@@ -304,20 +310,20 @@ fn test_exit_clears_snapshot() {
     }));
     app.enter_search_view("snap");
     assert!(
-        !app.transcript_view.search_corpus.lines().is_empty(),
+        !app.ui.transcript_view.search_corpus.lines().is_empty(),
         "snapshot loaded on enter"
     );
     app.exit_search_view();
     assert!(
-        app.transcript_view.search_corpus.lines().is_empty(),
+        app.ui.transcript_view.search_corpus.lines().is_empty(),
         "exit frees the snapshot vec"
     );
     assert!(
-        !app.transcript_view.search_corpus.truncated(),
+        !app.ui.transcript_view.search_corpus.truncated(),
         "truncated flag cleared"
     );
     assert_eq!(
-        app.transcript_view.search_corpus.skipped(),
+        app.ui.transcript_view.search_corpus.skipped(),
         0,
         "skipped count cleared"
     );
@@ -477,7 +483,7 @@ fn test_exit_clears_window_state() {
     app.exit_search_view();
     assert!(!app.window_browsing(), "exit clears window mode");
     assert!(
-        app.transcript_view.search_corpus.lines().is_empty(),
+        app.ui.transcript_view.search_corpus.lines().is_empty(),
         "exit frees the window vec"
     );
     assert_eq!(app.frozen_file_size(), 0, "frozen boundary cleared");
@@ -811,7 +817,7 @@ fn test_esc_interrupts_full_index() {
         "Esc interrupted the index build"
     );
     assert!(
-        app.transcript_view.search.active,
+        app.ui.transcript_view.search.active,
         "Esc during indexing stays in the view (does not exit)"
     );
 }

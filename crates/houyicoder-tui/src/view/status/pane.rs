@@ -45,11 +45,11 @@ pub(crate) fn draw_content(f: &mut Frame, inner: Rect, app: &App) {
         .split(inner);
     // Sub-tab header: Status / Config / Usage, the active one bold cyan.
     f.render_widget(
-        Paragraph::new(tab_header(app.status_tab, &STATUS_TABS)),
+        Paragraph::new(tab_header(app.ui.navigation.status_tab, &STATUS_TABS)),
         chunks[0],
     );
     // Body: the active tab's content.
-    draw_tab_body(f, app.status_tab, chunks[1], app);
+    draw_tab_body(f, app.ui.navigation.status_tab, chunks[1], app);
     let footer = Paragraph::new(key_hint(&[
         ("Tab/Left/Right", "switch tab"),
         ("Esc", "close"),
@@ -92,7 +92,7 @@ fn draw_tab_body(f: &mut Frame, tab: StatusTab, area: Rect, app: &App) {
                 .starts_with("Session name")
         })
     {
-        match app.status_name_edit.as_ref() {
+        match app.ui.navigation.status_name_edit.as_ref() {
             // Editing: replace the row with the editable caret line + a hint.
             Some(field) => lines[idx] = name_edit_line(field),
             // Browsing: append a dim "e to rename" hint to the static row.

@@ -207,7 +207,7 @@ fn build_working_layout(
     fleet_h: u16,
 ) -> WorkingLayout {
     let mut constraints: Vec<Constraint> = vec![];
-    let banner_h = if app.teammate_view.is_some() {
+    let banner_h = if app.ui.teammate_view.is_some() {
         3u16
     } else {
         0u16
@@ -629,7 +629,7 @@ fn draw_worktree_pane(f: &mut Frame, area: Rect, app: &App) {
 /// the /search detail fullscreen pattern. Shows mock trajectory data until the
 /// observability log is wired into the agent loop.
 fn draw_trajectory_pane(f: &mut Frame, area: Rect, app: &App) {
-    if app.trajectory.level() >= 1 {
+    if app.ui.trajectory.level() >= 1 {
         crate::view::pane::render(f, area, Color::Cyan, |f, inner| {
             trajectory_pane::draw_content(f, inner, app);
             stash_pane_rows(f, inner, app);

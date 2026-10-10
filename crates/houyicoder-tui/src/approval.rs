@@ -76,8 +76,8 @@ impl App {
         if let Some(id) = target {
             // remove returns true if it was present; insert only when it was
             // not, giving a clean toggle in one pass.
-            if !self.transcript_view.expanded.results.remove(&id) {
-                self.transcript_view.expanded.results.insert(id);
+            if !self.ui.transcript_view.expanded.results.remove(&id) {
+                self.ui.transcript_view.expanded.results.insert(id);
             }
         }
     }
@@ -92,8 +92,8 @@ impl App {
         let Some(key) = key else {
             return false;
         };
-        if !self.transcript_view.expanded.fold_groups.remove(&key) {
-            self.transcript_view.expanded.fold_groups.insert(key);
+        if !self.ui.transcript_view.expanded.fold_groups.remove(&key) {
+            self.ui.transcript_view.expanded.fold_groups.insert(key);
         }
         true
     }
@@ -178,8 +178,8 @@ impl App {
         let Some(key) = latest else {
             return false;
         };
-        if !self.transcript_view.expanded.fold_groups.remove(&key) {
-            self.transcript_view.expanded.fold_groups.insert(key);
+        if !self.ui.transcript_view.expanded.fold_groups.remove(&key) {
+            self.ui.transcript_view.expanded.fold_groups.insert(key);
         }
         true
     }
@@ -218,7 +218,7 @@ impl App {
     /// transcript fetch. The fetch lands asynchronously and fills
     /// folded_transcript in place; a re-expand reuses the cached rows.
     fn apply_subagent_toggle(&mut self, child_sid: String, needs_fetch: bool) {
-        let subagents = &mut self.transcript_view.expanded.subagents;
+        let subagents = &mut self.ui.transcript_view.expanded.subagents;
         let expanding = !subagents.contains(&child_sid);
         if expanding {
             subagents.insert(child_sid.clone());
@@ -259,8 +259,8 @@ impl App {
         let slots = display_slots(
             transcript,
             self.sessions.current.transcript.fold_groups(),
-            &self.transcript_view.expanded.fold_groups,
-            self.verbose,
+            &self.ui.transcript_view.expanded.fold_groups,
+            self.ui.verbose,
         );
         let width = self.layout_feedback.transcript_width.get();
         self.ui
@@ -357,8 +357,8 @@ impl App {
         let Some(turn_id) = target else {
             return false;
         };
-        if !self.transcript_view.expanded.thinking.remove(&turn_id) {
-            self.transcript_view.expanded.thinking.insert(turn_id);
+        if !self.ui.transcript_view.expanded.thinking.remove(&turn_id) {
+            self.ui.transcript_view.expanded.thinking.insert(turn_id);
         }
         self.pin_transcript_top();
         true
@@ -399,7 +399,7 @@ impl App {
         if !has_reasoning {
             return false;
         }
-        let thinking = &mut self.transcript_view.expanded.thinking;
+        let thinking = &mut self.ui.transcript_view.expanded.thinking;
         if !thinking.remove(&turn_id) {
             thinking.insert(turn_id.clone());
         }
@@ -413,9 +413,9 @@ impl App {
     pub(crate) fn toggle_fold_at_row(&mut self, ri: usize) {
         let key = self.last_row_keys.fold_key_at(ri);
         if let Some(key) = key
-            && !self.transcript_view.expanded.fold_groups.remove(&key)
+            && !self.ui.transcript_view.expanded.fold_groups.remove(&key)
         {
-            self.transcript_view.expanded.fold_groups.insert(key);
+            self.ui.transcript_view.expanded.fold_groups.insert(key);
         }
     }
 
@@ -434,11 +434,11 @@ impl App {
         let key = self
             .last_row_keys
             .expanded_group_at(ri)
-            .filter(|k| self.transcript_view.expanded.fold_groups.contains(k));
+            .filter(|k| self.ui.transcript_view.expanded.fold_groups.contains(k));
         let Some(key) = key else {
             return false;
         };
-        self.transcript_view.expanded.fold_groups.remove(&key);
+        self.ui.transcript_view.expanded.fold_groups.remove(&key);
         self.ui.selection.transcript.clear();
         true
     }

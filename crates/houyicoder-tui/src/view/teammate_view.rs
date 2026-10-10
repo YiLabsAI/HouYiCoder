@@ -21,7 +21,7 @@ use crate::view::badge_color;
 /// carrying the delegation summary. A blank margin follows, reserved by
 /// the layout so the title sits clear of the transcript.
 pub fn draw_banner(f: &mut Frame, app: &App, area: Rect) {
-    let Some(view) = app.teammate_view.as_ref() else {
+    let Some(view) = app.ui.teammate_view.as_ref() else {
         return;
     };
     let name = if view.subagent_type.is_empty() {
@@ -53,7 +53,7 @@ mod tests {
     #[test]
     fn test_banner_shows_type() {
         let mut app = app();
-        app.teammate_view = Some(crate::records::TeammateView {
+        app.ui.teammate_view = Some(crate::records::TeammateView {
             child_sid: "c1".into(),
             subagent_type: "explore".into(),
             prompt: "find auth".into(),
@@ -61,7 +61,7 @@ mod tests {
             transcript: vec![],
             ..Default::default()
         });
-        let view = app.teammate_view.as_ref().unwrap();
+        let view = app.ui.teammate_view.as_ref().unwrap();
         let name = if view.subagent_type.is_empty() {
             "agent"
         } else {
@@ -73,7 +73,7 @@ mod tests {
     #[test]
     fn test_banner_type_fallback() {
         let mut app = app();
-        app.teammate_view = Some(crate::records::TeammateView {
+        app.ui.teammate_view = Some(crate::records::TeammateView {
             child_sid: "c2".into(),
             subagent_type: String::new(),
             prompt: String::new(),
@@ -81,7 +81,7 @@ mod tests {
             transcript: vec![],
             ..Default::default()
         });
-        let view = app.teammate_view.as_ref().unwrap();
+        let view = app.ui.teammate_view.as_ref().unwrap();
         let name = if view.subagent_type.is_empty() {
             "agent"
         } else {
@@ -99,7 +99,7 @@ mod tests {
         use crate::test_harness::render_text;
         let mut app = app();
         app.ui.navigation.screen = crate::state::Screen::Working;
-        app.teammate_view = Some(crate::records::TeammateView {
+        app.ui.teammate_view = Some(crate::records::TeammateView {
             child_sid: "c1".into(),
             subagent_type: "explore".into(),
             prompt: "find auth".into(),
@@ -148,7 +148,7 @@ mod tests {
     fn test_banner_carries_badge_color() {
         use crate::test_harness::{render_buffer, working_app};
         let mut app = working_app();
-        app.teammate_view = Some(crate::records::TeammateView {
+        app.ui.teammate_view = Some(crate::records::TeammateView {
             child_sid: "c1".into(),
             subagent_type: "verify".into(),
             prompt: "ran deep review".into(),

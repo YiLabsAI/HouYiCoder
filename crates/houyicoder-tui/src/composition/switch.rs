@@ -1,7 +1,7 @@
 //! Session switch: commit a new session without rebuilding the whole App.
 //! The session-local fields reset explicitly (reset_session_local), the new
 //! session is committed via Sessions::set_current, and the process-level
-//! resources (terminal focus, clipboard, layout feedback, verbose) stay. This
+//! resources (terminal focus, clipboard, layout feedback) stay. This
 //! replaces the old rebuild-from-build_app safety net.
 
 use super::*;
@@ -97,9 +97,9 @@ impl App {
         // A swap commits a new session without rebuilding the whole App.
         // reset_session_local clears the session-local fields, set_current
         // commits the new session, and process-level resources (focus,
-        // clipboard, layout feedback, verbose) stay. Bump transcript_version
+        // clipboard, layout feedback) stay. Bump transcript_version
         // so a stale cached render does not ride into the new session.
-        if self.teammate_view.is_some() {
+        if self.ui.teammate_view.is_some() {
             self.exit_teammate_view();
         }
         // The pending queue is carried across (only session-scoped fields
@@ -108,7 +108,7 @@ impl App {
         let dropped = self.ui.input.queue.transfer_across_sessions();
         let leaving = self.sessions.current.identity.session_id.clone();
         let open_keys = self.take_expanded_keys();
-        let mut parked = std::mem::take(&mut self.parked_view_states);
+        let mut parked = std::mem::take(&mut self.ui.parked_view_states);
         // Deconstruct the bundle: the session-construction half (client,
         // channels, id) builds the new Session; the host resources
         // (trajectory, export, snapshot, catalog) are applied to Sessions.
@@ -187,7 +187,7 @@ impl App {
         // and a child id can repeat across sessions: no parked child
         // view state crosses the switch.
         parked.clear_children();
-        self.parked_view_states = parked;
+        self.ui.parked_view_states = parked;
         if !dropped.is_empty() {
             self.system_line(format!(
                 "resume: dropped {} command(s) from the old session ({}) -- re-issue in the new session if needed",
@@ -242,8 +242,8 @@ impl App {
         self.ui.navigation.viewport = ViewportMode::Working;
         self.ui.navigation.prev_viewport = ViewportMode::Working;
         self.verdict_cursor = 0;
-        self.transcript_view = Default::default();
-        self.verbose = false;
+        self.ui.transcript_view = Default::default();
+        self.ui.verbose = false;
         self.display_rows_cache = Default::default();
         self.display_rows_cache.version.set(u64::MAX);
         self.ui.navigation.resume_picker = Default::default();
@@ -251,24 +251,24 @@ impl App {
         self.memory = MemoryPaneState::new(memory_entries());
         self.ui.queue_view = Default::default();
         self.worktree_entries = Vec::new();
-        self.worktree_list = Default::default();
-        self.worktree_level = Cell::new(0);
-        self.trajectory = Default::default();
+        self.ui.worktree_list = Default::default();
+        self.ui.worktree_level = Cell::new(0);
+        self.ui.trajectory = Default::default();
         self.ui.notifications = Default::default();
-        self.displayed_tokens = Cell::new(0);
+        self.ui.displayed_tokens = Cell::new(0);
         self.ui.selection = Default::default();
         self.layout_snapshot = Default::default();
         self.render_cache = RefCell::new(Default::default());
         self.last_row_keys = Default::default();
-        self.teammate_view = None;
+        self.ui.teammate_view = None;
         self.fleet = Default::default();
-        self.permission_pane = Default::default();
-        self.skills_pane = Default::default();
+        self.ui.permission_pane = Default::default();
+        self.ui.skills_pane = Default::default();
         self.ui.navigation.skill_picker = Default::default();
-        self.hooks_pane = Default::default();
+        self.ui.hooks_pane = Default::default();
         self.model_picker = Default::default();
-        self.status_tab = Default::default();
-        self.status_name_edit = None;
-        self.last_title = None;
+        self.ui.navigation.status_tab = Default::default();
+        self.ui.navigation.status_name_edit = None;
+        self.ui.last_title = None;
     }
 }

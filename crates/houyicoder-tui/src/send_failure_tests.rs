@@ -64,7 +64,7 @@ fn test_spawn_refused() {
 #[test]
 fn test_child_inject_refused() {
     let mut app = connection_lost_app();
-    app.teammate_view = Some(crate::records::TeammateView {
+    app.ui.teammate_view = Some(crate::records::TeammateView {
         child_sid: "c1".into(),
         ..Default::default()
     });
@@ -80,7 +80,7 @@ fn test_child_inject_refused() {
         completed: None,
     }));
     app.spawn_run(" steer text ".into());
-    let view = app.teammate_view.as_ref().expect("view stays open");
+    let view = app.ui.teammate_view.as_ref().expect("view stays open");
     assert!(
         view.transcript.is_empty(),
         "no optimistic echo without delivery: {:?}",

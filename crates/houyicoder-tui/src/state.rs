@@ -28,19 +28,13 @@ use crate::composition::WorktreeEntry;
 #[cfg(test)]
 use crate::composition::app as test_app;
 use crate::display_rows_cache::DisplayRowsCache;
-use crate::hooks_state::HooksPaneState;
-use crate::input::InputField;
 use crate::last_row_keys::LastRowKeys;
 use crate::layout_feedback::LayoutFeedback;
 use crate::layout_snapshot::LayoutSnapshot;
-use crate::list_pane_state::ListPaneState;
 use crate::memory_state::MemoryPaneState;
-use crate::permission_pane_state::PermissionPaneState;
-use crate::records::TeammateView;
 use crate::render_cache::RenderCache;
 use crate::run_state::{RunProgress, RunState};
 use crate::sessions::Sessions;
-use crate::skills_state::SkillsPaneState;
 use crate::ui::Ui;
 use crate::workflow::Workflow;
 use houyicoder_protocol::envelope::RequestId;
@@ -102,11 +96,6 @@ pub struct App {
     /// Cursor into the frame log for the verdict audit cache. Stays on App:
     /// verdicts are an audit capability, not transcript content.
     pub verdict_cursor: usize,
-    /// The transcript view's own state, as one value the view on screen
-    /// holds: the two scroll objects and the window flag today, the search
-    /// view and the expansion sets as their readers migrate in. The flat
-    /// fields below stay until each group's readers move over.
-    pub(crate) transcript_view: transcript::view::TranscriptViewState,
     /// The pre-rendered display-row cache: the rows, the four per-row key
     /// vectors, the pre-rendered lines, and the version stamp that guards
     /// them together. Pub(crate) so the draw pass reads and writes a vector
@@ -118,15 +107,6 @@ pub struct App {
     /// parse_worktrees on pane-open. Empty until the user opens the pane (no
     /// background poll — the list is cheap and the pane is one-shot).
     pub worktree_entries: Vec<WorktreeEntry>,
-    /// Cursor + search query for the /worktrees pane. The first pane to
-    /// adopt ListPaneState; others migrate on touch-ratchet.
-    pub worktree_list: ListPaneState,
-    /// /worktrees pane drill-down: 0 = list, 1 = detail.
-    pub worktree_level: Cell<u8>,
-    /// The /trajectory pane's drill level, cursor, and selection. One owner
-    /// for the pane's position, because the selection and the cursor are kept
-    /// consistent by the same transitions.
-    pub trajectory: TrajectoryPaneState,
     pub quit: bool,
     // --- real agent-loop wiring ---
     /// The presented session and the resumable-session catalog, held as one
@@ -137,9 +117,6 @@ pub struct App {
     /// pane width the draw pass measured, held in one owner so the count and
     /// layout paths read the same dims the last render used.
     pub(crate) layout_feedback: LayoutFeedback,
-    /// Last token count displayed by the spinner. Lerps toward the actual
-    /// count each frame for a smooth increment animation.
-    pub displayed_tokens: Cell<u32>,
     /// The renderer's layout snapshot: per-region rectangles and rendered-row
     /// caches the draw pass stashes, read back by the input and click paths.
     pub(crate) layout_snapshot: LayoutSnapshot,
@@ -151,49 +128,10 @@ pub struct App {
     /// carries, parallel to the rows. Pub(crate) so the click and Ctrl+O
     /// handlers and the draw pass reach a vector directly.
     pub(crate) last_row_keys: LastRowKeys,
-    /// State parked for views that are not on screen: the sessions switched
-    /// away from, the children stepped out of, and the parent's own sets
-    /// while a child view covers it. The visible view's four open-row sets
-    /// live on the transcript view state; every render and toggle path reads
-    /// them without knowing which view is on screen.
-    pub(crate) parked_view_states: ParkedViewStates,
-    /// Drilled-in teammate transcript; when Some, active_transcript swaps to
-    /// the child's turns with a banner. Enter opens, Shift+Up/Down closes;
-    /// Esc interrupts the viewed child's turn.
-    pub teammate_view: Option<TeammateView>,
     /// Footer fleet state: the child snapshots + the Shift-arrow selection.
     pub fleet: FleetState,
-    /// Verbose render: force results, reasoning, and fold groups expanded
-    /// with untruncated chips. Set in the search view, cleared on exit.
-    pub verbose: bool,
-    /// The permission pane state: the selected tab, the cursor row, the
-    /// typed-input sub-mode, and the pane-local search buffer. Pub(crate) so
-    /// the key handler and render path reach a field directly; the whole value
-    /// is what a tab switch or input-mode entry replaces.
-    pub(crate) permission_pane: PermissionPaneState,
-    /// The /skills pane view state: the list cursor and the open detail
-    /// (body request, body text, scroll position). Kept together so the
-    /// pane's view state is one owner, not a scatter of App fields.
-    pub(crate) skills_pane: SkillsPaneState,
-    /// The hooks pane state: the drill-down level (0 = event list, 1 = the
-    /// selected event detail) and the selected event index. Pub(crate) so the
-    /// key handler and render path step a field directly; the level and the
-    /// selection move together on enter and return.
-    pub(crate) hooks_pane: HooksPaneState,
     /// The /model picker: host snapshot, draft, and the commit in flight.
     pub model_picker: ModelPickerState,
-    /// The active /status sub-tab (Status / Config / Usage). Tab or Left/Right
-    /// cycles it; the pane header renders the three titles with the active one
-    /// highlighted. A Settings-modal-style multiple tabs.
-    pub status_tab: StatusTab,
-    /// In-place session-name edit buffer for the status Status tab. None
-    /// unless the user pressed e on the Status tab to rename; the pane
-    /// renders the name row as an editable input + the keys route char,
-    /// backspace, Left/Right to the buffer. Enter commits (sends a
-    /// RenameSession request), Esc cancels. Houyi makes the session name
-    /// inline-editable (rather than a rename command).
-    pub status_name_edit: Option<InputField>,
-    pub last_title: Option<String>,
 }
 
 impl App {

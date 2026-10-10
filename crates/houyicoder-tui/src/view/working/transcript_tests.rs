@@ -68,7 +68,8 @@ fn test_expand_shows_command() {
         bash_result(),
     ]
     .into();
-    app.transcript_view
+    app.ui
+        .transcript_view
         .expanded
         .fold_groups
         .insert("c1#0".into());
@@ -213,7 +214,7 @@ fn test_steer_echo_renders() {
         completed_at: None,
         started_at: None,
     });
-    app.teammate_view = Some(TeammateView {
+    app.ui.teammate_view = Some(TeammateView {
         child_sid: "c1".into(),
         ..Default::default()
     });
@@ -286,7 +287,7 @@ fn test_view_hides_tail() {
         p.live_active = true;
         p.live_assistant_text = "parent streaming text".into();
     }
-    app.teammate_view = Some(TeammateView {
+    app.ui.teammate_view = Some(TeammateView {
         child_sid: "c1".into(),
         ..Default::default()
     });

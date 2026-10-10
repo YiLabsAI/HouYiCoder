@@ -190,25 +190,43 @@ ACTIVE_OWNERS = {
         # value. Fourteen flat fields folded into one. The clipboard and the
         # focus flag stay out of the switch reset: they are process
         # resources, not session state.
-        "fields": 29,
+        # The pane-local interaction state followed: the status sub-tab and
+        # the session-name edit buffer joined Navigation, and the transcript
+        # view state, the parked view states, the teammate drill, the verbose
+        # flag, the permission, skills, hooks, trajectory, and worktree pane
+        # states, the spinner's displayed token count, and the last-written
+        # terminal title became direct Ui fields. Fourteen more flat fields
+        # folded in; no signature changed. What stays on App: the Ui owner
+        # itself, the session-returned caches awaiting their capability
+        # owners, the render caches awaiting the Renderer owner, the sessions
+        # and workflow owners, and the quit flag.
+        "fields": 15,
         "mut_app": 44,
     },
     "crates/houyicoder-tui/src/ui.rs:Ui": {
         # The frontend's presentation and interaction state: where the user
         # is looking (Navigation), what the user has typed but not sent
-        # (Input), the queued-input hit-test geometry, the drag selections,
-        # the toast notifications, the clipboard port, and the terminal-focus
-        # flag. Holds no session data and no connection handles; views read
-        # server-returned state through App.
-        "fields": 7,
+        # (Input), the transcript view state and the states parked for views
+        # off screen, the teammate drill, the verbose render flag, the
+        # permission, skills, hooks, trajectory, and worktree pane
+        # interaction states, the spinner's displayed token count, the
+        # last-written terminal title, the queued-input hit-test geometry,
+        # the drag selections, the toast notifications, the clipboard port,
+        # and the terminal-focus flag. Holds no connection handles and no
+        # authoritative session record; the session stays the source of truth
+        # and views read it through App. On-demand pane content (a drilled-in
+        # teammate's lines, an opened skill body, a search corpus) lives here
+        # as display copies whose loss costs a re-fetch, never a record.
+        "fields": 19,
     },
     "crates/houyicoder-tui/src/ui/navigation.rs:Navigation": {
         # The user's position in the frontend: the screen, the open pane, the
-        # two viewport modes, the resolved login mode, and the resume,
-        # palette, and skill-picker overlays. A session switch resets these
-        # together; the clipboard and the focus flag are process resources
-        # and deliberately stay out.
-        "fields": 8,
+        # two viewport modes, the resolved login mode, the active status
+        # sub-tab, the session-name edit buffer, and the resume, palette, and
+        # skill-picker overlays. A session switch resets these together; the
+        # clipboard and the focus flag are process resources and deliberately
+        # stay out.
+        "fields": 10,
     },
     "crates/houyicoder-tui/src/input.rs:Input": {
         # The input subsystem's aggregate: the chat editor, the prompt-history

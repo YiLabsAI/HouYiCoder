@@ -36,7 +36,7 @@ pub fn handle_working(app: &mut App, k: KeyEvent) {
     // instead of opening fresh. A session switch clears the editor in the
     // session-local reset; this covers the in-session pane switches.
     if app.ui.navigation.pane != Pane::Status {
-        app.status_name_edit = None;
+        app.ui.navigation.status_name_edit = None;
     }
     // /permission pane: nav and sub-mode entry keys live in the pane's own
     // handler. In a typed sub-mode (add / remove / search) the key falls
@@ -53,7 +53,7 @@ pub fn handle_working(app: &mut App, k: KeyEvent) {
     // cancel does not stop the run, so an Esc-based exit could trap the
     // user behind a child that never idles. Outside a teammate view the
     // same keys move the fleet selection.
-    if app.teammate_view.is_some()
+    if app.ui.teammate_view.is_some()
         && k.modifiers.contains(KeyModifiers::SHIFT)
         && matches!(k.code, KeyCode::Up | KeyCode::Down)
     {
@@ -68,7 +68,7 @@ pub fn handle_working(app: &mut App, k: KeyEvent) {
     // Status-name edit: a focused input mode on the /status Status tab. Takes
     // priority so typed chars edit the buffer instead of cycling tabs or
     // hitting the generic pane arms.
-    if app.ui.navigation.pane == Pane::Status && app.status_name_edit.is_some() {
+    if app.ui.navigation.pane == Pane::Status && app.ui.navigation.status_name_edit.is_some() {
         handle_status_name_edit(app, k);
         return;
     }
@@ -87,7 +87,7 @@ pub fn handle_working(app: &mut App, k: KeyEvent) {
     // current turn; it never exits the view and never leaks to the parent
     // (an input draft does not redirect it to abort_run on the parent).
     // Exit is on Shift+Up/Down. A pane that owns Esc closes first.
-    if app.teammate_view.is_some()
+    if app.ui.teammate_view.is_some()
         && k.code == KeyCode::Esc
         && !pane_owns_esc(app.ui.navigation.pane)
     {

@@ -11,11 +11,11 @@ use crossterm::event::{KeyCode, KeyEvent};
 /// Record the turn the L0 cursor sits on, so a page that arrives under it can
 /// put the cursor back on the same turn instead of the same row index.
 fn note_selected_turn(app: &App) {
-    if app.trajectory.level() != 0 {
+    if app.ui.trajectory.level() != 0 {
         return;
     }
     if let Some(log) = app.sessions.persistence.trajectory_log.as_ref() {
-        trajectory_pane::note_selected_turn(&app.trajectory, &log.trajectory());
+        trajectory_pane::note_selected_turn(&app.ui.trajectory, &log.trajectory());
     }
 }
 
@@ -32,9 +32,9 @@ pub fn handle(app: &mut App, k: KeyEvent) -> bool {
         // switcher — Up/Down is a no-op there; switch records at L1. The keys
         // are still consumed so they never move the input cursor.
         KeyCode::Up => {
-            if app.trajectory.level() < 2 {
-                let c = app.trajectory.cursor();
-                if c == 0 && app.trajectory.level() == 0 {
+            if app.ui.trajectory.level() < 2 {
+                let c = app.ui.trajectory.cursor();
+                if c == 0 && app.ui.trajectory.level() == 0 {
                     // At the top of the loaded turn list there is nowhere to
                     // move, so widen it: the pane loads the tail first and
                     // older history arrives a page at a time. Only the turn
@@ -45,19 +45,19 @@ pub fn handle(app: &mut App, k: KeyEvent) -> bool {
                         log.load_older();
                     }
                 }
-                app.trajectory.set_cursor(c.saturating_sub(1));
+                app.ui.trajectory.set_cursor(c.saturating_sub(1));
                 note_selected_turn(app);
             }
             true
         }
         KeyCode::Down => {
-            if app.trajectory.level() < 2 {
-                let c = app.trajectory.cursor();
-                let last = app.trajectory.list_len().saturating_sub(1);
+            if app.ui.trajectory.level() < 2 {
+                let c = app.ui.trajectory.cursor();
+                let last = app.ui.trajectory.list_len().saturating_sub(1);
                 // Saturating: the pane opens with a cursor that asks for the
                 // last row, and before the first page lands there is no row to
                 // clamp it against.
-                app.trajectory.set_cursor(c.saturating_add(1).min(last));
+                app.ui.trajectory.set_cursor(c.saturating_add(1).min(last));
                 note_selected_turn(app);
             }
             true
@@ -68,23 +68,23 @@ pub fn handle(app: &mut App, k: KeyEvent) -> bool {
         // tail. At the record levels they stay the ends of the list in hand,
         // which the window moves would otherwise re-point under the drill.
         KeyCode::Home => {
-            if app.trajectory.level() == 0
+            if app.ui.trajectory.level() == 0
                 && let Some(log) = app.sessions.persistence.trajectory_log.as_ref()
             {
                 log.load_earliest();
                 // The history's first turn, so the cursor lands on it once the
                 // head page arrives.
                 let generation = log.trajectory().history_generation;
-                app.trajectory.select(1, generation);
+                app.ui.trajectory.select(1, generation);
             }
-            if app.trajectory.level() < 2 {
-                app.trajectory.set_cursor(0);
+            if app.ui.trajectory.level() < 2 {
+                app.ui.trajectory.set_cursor(0);
             }
             true
         }
         KeyCode::End => {
             match (
-                app.trajectory.level(),
+                app.ui.trajectory.level(),
                 app.sessions.persistence.trajectory_log.as_ref(),
             ) {
                 (0, Some(log)) => {
@@ -94,49 +94,50 @@ pub fn handle(app: &mut App, k: KeyEvent) -> bool {
                     // alone: until then it names a row of the window being
                     // replaced.
                     let view = log.trajectory();
-                    app.trajectory
+                    app.ui
+                        .trajectory
                         .select(view.total_turns, view.history_generation);
                 }
                 // A record list, or a turn list with no paged history: the
                 // rows in hand are the whole list, so the last one is the end.
                 (1, _) | (0, None) => {
-                    let last = app.trajectory.list_len().saturating_sub(1);
-                    app.trajectory.set_cursor(last);
+                    let last = app.ui.trajectory.list_len().saturating_sub(1);
+                    app.ui.trajectory.set_cursor(last);
                 }
                 _ => {}
             }
             true
         }
         KeyCode::Enter if app.ui.input.editor.is_empty() => {
-            let level = app.trajectory.level();
-            if level == 0 && app.trajectory.list_len() > 0 {
+            let level = app.ui.trajectory.level();
+            if level == 0 && app.ui.trajectory.list_len() > 0 {
                 // Freeze the turn-list selection so the turn-detail and
                 // event-detail levels render THAT row, not the first turn.
                 // Works for both Turn and [bg] rows. Skip the drill when the
                 // row list is empty (a fresh session with no turns yet) —
                 // drilling into no rows rendered "no row data" at the
                 // turn-detail level, which read as a crash.
-                app.trajectory.set_turn_idx(app.trajectory.cursor());
+                app.ui.trajectory.set_turn_idx(app.ui.trajectory.cursor());
                 // Record the turn the drill is about, so stepping back returns
                 // to it even if a page arrives under the row index meanwhile.
                 note_selected_turn(app);
                 // The drill's identity is the row's key: a row index names
                 // another turn once the window moves.
                 if let Some(log) = app.sessions.persistence.trajectory_log.as_ref() {
-                    trajectory_pane::note_drilled_row(&app.trajectory, &log.trajectory());
+                    trajectory_pane::note_drilled_row(&app.ui.trajectory, &log.trajectory());
                     // Ask now: the source captures the bytes the turn starts at,
                     // so the read survives the window moving past the turn
                     // before the next draw.
-                    if let Some(drill) = app.trajectory.drill() {
+                    if let Some(drill) = app.ui.trajectory.drill() {
                         log.request_detail(&drill);
                     }
                 }
-                app.trajectory.set_level(1);
-                app.trajectory.set_cursor(0);
+                app.ui.trajectory.set_level(1);
+                app.ui.trajectory.set_cursor(0);
             } else if level == 1 {
                 // [bg] rows have no event list to drill into — stay at L1.
-                if !app.trajectory.at_bg() {
-                    app.trajectory.set_level(2);
+                if !app.ui.trajectory.at_bg() {
+                    app.ui.trajectory.set_level(2);
                     // Keep the cursor so L2 shows the event selected at L1.
                 }
             }
@@ -156,7 +157,7 @@ pub fn handle(app: &mut App, k: KeyEvent) -> bool {
             false
         }
         KeyCode::Esc => {
-            let level = app.trajectory.level();
+            let level = app.ui.trajectory.level();
             match level {
                 0 => {
                     app.ui.navigation.pane = Pane::Transcript;
@@ -169,18 +170,18 @@ pub fn handle(app: &mut App, k: KeyEvent) -> bool {
                 // selection is what the draw restores from, so a page that
                 // arrived during the drill still lands on the same turn.
                 1 => {
-                    app.trajectory.set_level(0);
+                    app.ui.trajectory.set_level(0);
                     // The row index is only a fallback for a drill whose turn
                     // the window no longer holds. The selection the drill
                     // recorded is what the draw restores the cursor from, so
                     // recording it again here would rewrite it from whatever
                     // turn the index happens to name now.
-                    app.trajectory.set_cursor(app.trajectory.turn_idx());
-                    app.trajectory.clear_drill();
+                    app.ui.trajectory.set_cursor(app.ui.trajectory.turn_idx());
+                    app.ui.trajectory.clear_drill();
                 }
                 // The record levels keep their cursor: the user was looking at
                 // one record, and stepping back shows the list it came from.
-                _ => app.trajectory.set_level(level - 1),
+                _ => app.ui.trajectory.set_level(level - 1),
             }
             true
         }

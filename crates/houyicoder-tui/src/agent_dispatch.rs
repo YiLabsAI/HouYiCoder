@@ -93,7 +93,7 @@ impl App {
         let run_req = self.active_run_req_id();
         let run_not_sent = run_req.is_some_and(|r| not_sent.contains(&r));
         self.memory.clear_pending();
-        self.skills_pane.clear_pending();
+        self.ui.skills_pane.clear_pending();
         let run_line = if run_not_sent {
             "run not sent — connection failed before the request reached the transport"
         } else {
@@ -127,7 +127,7 @@ impl App {
     /// line appears, the echo clears. follow_tail is left as-is so a live
     /// refetch does not yank a scrolled-up user.
     fn fill_teammate_view(&mut self, child_sid: &str, mut folded: Vec<TranscriptLine>) {
-        let Some(view) = self.teammate_view.as_mut() else {
+        let Some(view) = self.ui.teammate_view.as_mut() else {
             return;
         };
         if view.child_sid != child_sid {
@@ -290,6 +290,7 @@ impl App {
         // the view stays — the user exits with Shift+Up/Down (Esc
         // only interrupts the viewed child's current turn).
         if self
+            .ui
             .teammate_view
             .as_ref()
             .is_some_and(|v| v.child_sid == agent_id)
@@ -337,7 +338,7 @@ impl App {
         // echo. A completed child stops refetching (the final fetch
         // on enter already holds the full result).
         if is_running
-            && let Some(view) = self.teammate_view.as_mut()
+            && let Some(view) = self.ui.teammate_view.as_mut()
             && view.child_sid == agent_id
             && view.last_fetched_turn.is_none_or(|t| turn > t)
         {
@@ -409,7 +410,7 @@ impl App {
                 // Sync the terminal tab title (OSC 0/2) on change only (not
                 // unconditionally every status update).
                 let status = &mut self.sessions.current.capabilities.status;
-                sync_terminal_title(&snapshot, &mut self.last_title);
+                sync_terminal_title(&snapshot, &mut self.ui.last_title);
                 status.record_snapshot(*snapshot);
             }
             ServerResponse::Trajectory { entries, redundant } => {
@@ -460,7 +461,7 @@ impl App {
                 self.sessions.current.capabilities.skills.entries = skills;
             }
             ServerResponse::SkillBody { body } => {
-                self.skills_pane.apply_detail(request, body);
+                self.ui.skills_pane.apply_detail(request, body);
             }
             ServerResponse::Model { result } => {
                 self.apply_model_result(request, result);
@@ -514,7 +515,7 @@ impl App {
             // An error for the request the skills detail waits on settles it
             // as unavailable rather than leaving it loading on a reply that
             // cannot arrive; any other request id leaves the detail alone.
-            self.skills_pane.fail_detail(request);
+            self.ui.skills_pane.fail_detail(request);
             self.system_line(format!("error: {message}"));
         }
     }
@@ -608,6 +609,7 @@ impl App {
         // When the fetched child is the one the user is viewing, swap
         // the rows into the teammate view too.
         if self
+            .ui
             .teammate_view
             .as_ref()
             .is_some_and(|v| v.child_sid == child_sid)

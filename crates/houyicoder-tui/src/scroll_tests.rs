@@ -360,7 +360,7 @@ fn test_slash_prefix_needs_boundary() {
     app.ui.input.editor.set("/searchalot".to_string());
     app.submit_input();
     assert!(
-        !app.transcript_view.search.active,
+        !app.ui.transcript_view.search.active,
         "/searchalot must not open the search pane"
     );
     assert!(
@@ -402,18 +402,21 @@ fn test_search_opens_newest_match() {
     }
     app.sessions.current.transcript = transcript.into();
     app.enter_search_view("needle");
-    assert!(app.transcript_view.search.active, "in_search set on entry");
-    assert!(app.verbose, "verbose set on entry");
+    assert!(
+        app.ui.transcript_view.search.active,
+        "in_search set on entry"
+    );
+    assert!(app.ui.verbose, "verbose set on entry");
     assert_eq!(
         app.ui.navigation.viewport,
         ViewportMode::Scroll,
         "enters Scroll mode"
     );
-    let matches = &app.transcript_view.search.matches;
+    let matches = &app.ui.transcript_view.search.matches;
     assert_eq!(matches.len(), 1, "one needle match");
     assert_eq!(*matches.last().unwrap(), 0, "match is the first line");
     assert_eq!(
-        matches[app.transcript_view.search.focus], 0,
+        matches[app.ui.transcript_view.search.focus], 0,
         "focus = newest (only) match"
     );
     // The match line must be ON SCREEN on entry, not just pointed at. The
@@ -426,17 +429,17 @@ fn test_search_opens_newest_match() {
     );
     app.exit_search_view();
     assert!(
-        !app.transcript_view.search.active,
+        !app.ui.transcript_view.search.active,
         "in_search cleared on exit"
     );
-    assert!(!app.verbose, "verbose cleared on exit");
+    assert!(!app.ui.verbose, "verbose cleared on exit");
     assert_ne!(
         app.ui.navigation.viewport,
         ViewportMode::Scroll,
         "viewport restored on exit"
     );
     assert!(
-        app.transcript_view.search.query.is_empty(),
+        app.ui.transcript_view.search.query.is_empty(),
         "query cleared on exit"
     );
 }
@@ -456,10 +459,10 @@ fn test_search_chrome_exit_key() {
     assert!(out.contains("foo"), "query in chrome: {out}");
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     assert!(
-        !app.transcript_view.search.active,
+        !app.ui.transcript_view.search.active,
         "Esc exits the search view"
     );
-    assert!(!app.verbose, "Esc clears verbose");
+    assert!(!app.ui.verbose, "Esc clears verbose");
 }
 
 // n walks toward the older matches, N toward the newer, and each jump lands
@@ -617,10 +620,10 @@ fn test_search_all_informs_user() {
     agent_row(&mut app, "needle in window");
     app.run_tui_local_command("search --all needle");
     assert!(
-        app.transcript_view.search.active,
+        app.ui.transcript_view.search.active,
         "--all still enters the search view"
     );
-    assert!(app.verbose);
+    assert!(app.ui.verbose);
     assert!(
         app.sessions.current.transcript.iter().any(|l| matches!(
             l,
@@ -629,7 +632,7 @@ fn test_search_all_informs_user() {
         "must inform the user full-history is unavailable"
     );
     assert_eq!(
-        app.transcript_view.search.matches.len(),
+        app.ui.transcript_view.search.matches.len(),
         1,
         "still searches the in-memory window"
     );

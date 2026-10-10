@@ -44,7 +44,7 @@ pub(super) fn build_tail_rows(area: Rect, app: &App, has_slots: bool) -> TailRow
     // view. Suppress them while a teammate view is open so the child's
     // transcript renders alone — the parent is not talking to the user
     // while they are viewing a child.
-    if app.teammate_view.is_some() {
+    if app.ui.teammate_view.is_some() {
         return TailRows::default();
     }
 

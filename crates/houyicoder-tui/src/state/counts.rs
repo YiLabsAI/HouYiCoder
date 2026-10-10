@@ -18,7 +18,7 @@ impl App {
     /// offset past real rows and surfaced as blank space + skipped tool calls
     /// when scrolled); anything else falls back to its rendered lines.
     pub(crate) fn line_display_rows(&self, line: &TranscriptLine) -> usize {
-        self.line_display_rows_mode(line, self.verbose)
+        self.line_display_rows_mode(line, self.ui.verbose)
     }
 
     pub(crate) fn line_display_rows_mode(
@@ -34,7 +34,8 @@ impl App {
             } => {
                 let mut n = 1; // header row + expanded reasoning (width-wrapped)
                 if let Some(r) = reasoning
-                    && (self.transcript_view.expanded.thinking.contains(turn_id) || self.verbose)
+                    && (self.ui.transcript_view.expanded.thinking.contains(turn_id)
+                        || self.ui.verbose)
                 {
                     n += self.render_cache.borrow_mut().thought_row_count(r, w);
                 }
@@ -54,7 +55,7 @@ impl App {
                 body,
                 call_id,
                 Some(*outcome),
-                self.transcript_view.expanded.results.contains(call_id) || self.verbose,
+                self.ui.transcript_view.expanded.results.contains(call_id) || self.ui.verbose,
                 *is_diff,
                 w,
             ),
@@ -68,7 +69,14 @@ impl App {
                 ..
             } => {
                 let mut n = 1; // head row
-                if self.transcript_view.expanded.subagents.contains(child_sid) || self.verbose {
+                if self
+                    .ui
+                    .transcript_view
+                    .expanded
+                    .subagents
+                    .contains(child_sid)
+                    || self.ui.verbose
+                {
                     if folded_transcript.is_empty() {
                         n += 1; // placeholder row
                     } else {
@@ -86,7 +94,7 @@ impl App {
                 .tool_call_rows(w, full_tool_call)
                 .map_or(1, |rows| rows.len()),
             TranscriptLine::System(_) => {
-                let text = if self.verbose {
+                let text = if self.ui.verbose {
                     line.render_verbose()
                 } else {
                     line.render()
@@ -100,7 +108,7 @@ impl App {
             // truncated status occupies one) — count the same form the
             // draw path emits, or the scroll offset drifts past real rows.
             _ => {
-                let text = if self.verbose {
+                let text = if self.ui.verbose {
                     line.render_verbose()
                 } else {
                     line.render()
@@ -122,7 +130,7 @@ impl App {
         // empty on the same guard). Without this, count == render breaks
         // — the count path inflates by the parent's live rows while the
         // render path shows zero, desyncing scroll + fold-aware offsets.
-        if self.teammate_view.is_some() {
+        if self.ui.teammate_view.is_some() {
             return 0;
         }
         let mut n = 0;

@@ -44,23 +44,23 @@ pub(super) fn draw_transcript(f: &mut Frame, area: Rect, app: &App) {
     let slots_version = {
         let mut v = app.sessions.current.transcript.revision();
         v = v.wrapping_mul(31).wrapping_add(app.agent_busy() as u64);
-        v = v.wrapping_mul(31).wrapping_add(app.verbose as u64);
+        v = v.wrapping_mul(31).wrapping_add(app.ui.verbose as u64);
+        v = v.wrapping_mul(31).wrapping_add(set_content_hash(
+            &app.ui.transcript_view.expanded.fold_groups,
+        ));
         v = v
             .wrapping_mul(31)
-            .wrapping_add(set_content_hash(&app.transcript_view.expanded.fold_groups));
+            .wrapping_add(set_content_hash(&app.ui.transcript_view.expanded.thinking));
         v = v
             .wrapping_mul(31)
-            .wrapping_add(set_content_hash(&app.transcript_view.expanded.thinking));
-        v = v
-            .wrapping_mul(31)
-            .wrapping_add(set_content_hash(&app.transcript_view.expanded.results));
+            .wrapping_add(set_content_hash(&app.ui.transcript_view.expanded.results));
         // Subagent expansion changes the row set like the other three expand
         // states: the head hint flips and child rows insert below it. Leaving
         // it out made each toggle a no-op until an unrelated input bumped the
         // version, reading as a broken toggle then a block appearing later.
         v = v
             .wrapping_mul(31)
-            .wrapping_add(set_content_hash(&app.transcript_view.expanded.subagents));
+            .wrapping_add(set_content_hash(&app.ui.transcript_view.expanded.subagents));
         // bash_progress hash: same as the expand sets above, the chip suffix
         // is baked into the slot text, so the cache rebuilds on a content
         // change (a tick, ~1/sec during a bash run).
@@ -158,8 +158,13 @@ pub(super) fn draw_transcript(f: &mut Frame, area: Rect, app: &App) {
     *app.last_row_keys.turn_ids.borrow_mut() = visible_turn_ids;
     f.render_widget(Block::default().borders(Borders::NONE), area);
 
-    let q = if app.transcript_view.search.active {
-        app.transcript_view.search.query.trim().to_ascii_lowercase()
+    let q = if app.ui.transcript_view.search.active {
+        app.ui
+            .transcript_view
+            .search
+            .query
+            .trim()
+            .to_ascii_lowercase()
     } else {
         String::new()
     };
@@ -170,8 +175,8 @@ pub(super) fn draw_transcript(f: &mut Frame, area: Rect, app: &App) {
     // focused line (it no-ops current=true on rows with no query, so non-query
     // rows in the range stay plain). search.matches keys on transcript line,
     // so all in-line occurrences are the same match.
-    let focused_range = if app.transcript_view.search.active && !q.is_empty() {
-        app.transcript_view.search.focused_line().map(|i| {
+    let focused_range = if app.ui.transcript_view.search.active && !q.is_empty() {
+        app.ui.transcript_view.search.focused_line().map(|i| {
             let start = app.transcript_row_of_line(i);
             let rows = app.line_display_rows(&app.active_transcript()[i]);
             start..start + rows
@@ -182,8 +187,8 @@ pub(super) fn draw_transcript(f: &mut Frame, area: Rect, app: &App) {
     let user_bg = Style::new().bg(Color::Indexed(238));
     let dim = Style::new().fg(Color::DarkGray);
     let exp_grp = app.last_row_keys.expanded_group.borrow();
-    let exp_groups = &app.transcript_view.expanded.fold_groups;
-    let subagents = &app.transcript_view.expanded.subagents;
+    let exp_groups = &app.ui.transcript_view.expanded.fold_groups;
+    let subagents = &app.ui.transcript_view.expanded.subagents;
     let spin_elapsed = app.run_started().map(|t| t.elapsed()).unwrap_or_default();
     // A running tool produces no token deltas but is not a stall: exempt it
     // from the stall gradient; its presence drives the breathing pulse.
@@ -287,7 +292,7 @@ pub(super) fn draw_transcript(f: &mut Frame, area: Rect, app: &App) {
     // label falls through to the transcript surface and starts a drag-select.
     let label_visible = app.ui.navigation.viewport != ViewportMode::Scroll
         && !app.active_scroll().is_following_tail()
-        && !app.transcript_view.search.active;
+        && !app.ui.transcript_view.search.active;
     if label_visible {
         let new = app.new_turn_count();
         let label = if new.count > 0 {
@@ -325,8 +330,9 @@ fn rendered_tool_rows(
     width: u16,
     app: &App,
 ) -> Option<Vec<String>> {
-    let full_call = grp.is_some_and(|key| app.transcript_view.expanded.fold_groups.contains(key))
-        || app.verbose;
+    let full_call = grp
+        .is_some_and(|key| app.ui.transcript_view.expanded.fold_groups.contains(key))
+        || app.ui.verbose;
     let mut rows = line.tool_call_rows(width, full_call)?;
     // Live bash-elapsed suffix: a long-running bash call shows (Ns) on its
     // chip after 2s so a stalled-looking command is distinguishable from a
@@ -409,8 +415,8 @@ pub(crate) fn push_line_rows(
         && name.as_str() == "result"
     {
         let (body, is_diff) = line.result_body();
-        let results = &app.transcript_view.expanded.results;
-        let expanded = results.contains(call_id.as_str()) || app.verbose;
+        let results = &app.ui.transcript_view.expanded.results;
+        let expanded = results.contains(call_id.as_str()) || app.ui.verbose;
         for (tag, text, oc, cid, word) in app
             .render_cache
             .borrow_mut()
@@ -485,7 +491,7 @@ pub(crate) fn push_line_rows(
         reasoning, turn_id, ..
     } = line
     {
-        let expanded = app.transcript_view.expanded.thinking.contains(turn_id) || app.verbose;
+        let expanded = app.ui.transcript_view.expanded.thinking.contains(turn_id) || app.ui.verbose;
         // Inside an expanded delegation the reasoning row is shown, not
         // operated: no hint, and no turn id below, so the enclosing block
         // stays the only thing the next toggle acts on.
@@ -526,7 +532,7 @@ pub(crate) fn push_line_rows(
         }
         return true;
     }
-    let text = if app.verbose {
+    let text = if app.ui.verbose {
         line.render_verbose()
     } else {
         line.render()
@@ -723,12 +729,12 @@ fn build_slots_rows(area: Rect, app: &App) -> RowParts {
     let mut sink = RowBuffer::default();
 
     let groups = app.active_fold_groups();
-    let fold_groups = &app.transcript_view.expanded.fold_groups;
+    let fold_groups = &app.ui.transcript_view.expanded.fold_groups;
     let slots = crate::fold::display_slots(
         app.active_transcript(),
         groups.as_ref(),
         fold_groups,
-        app.verbose,
+        app.ui.verbose,
     );
     for slot in &slots {
         match slot {

@@ -274,7 +274,8 @@ fn test_frame_timing_benchmark() {
             let mut app = crate::composition::app();
             app.ui.navigation.screen = crate::state::Screen::Working;
             app.sessions.current.transcript = lines.clone().into();
-            app.transcript_view
+            app.ui
+                .transcript_view
                 .search_corpus
                 .replace_lines(lines.clone());
             app.sessions.current.transcript.bump_revision();
@@ -340,9 +341,9 @@ fn test_frame_timing_benchmark() {
         // one, so the expanded set truly toggles instead of only growing.
         let call_id = format!("call-{}", 6 + ((i / 2) % 200));
         if i.is_multiple_of(2) {
-            app.transcript_view.expanded.results.insert(call_id);
+            app.ui.transcript_view.expanded.results.insert(call_id);
         } else {
-            app.transcript_view.expanded.results.remove(&call_id);
+            app.ui.transcript_view.expanded.results.remove(&call_id);
         }
         app.sessions.current.transcript.bump_revision();
         durations.push(render(&app, (80, 24)));
@@ -353,11 +354,11 @@ fn test_frame_timing_benchmark() {
     // Parent/child: a teammate view with its own child transcript.
     let mut app = crate::composition::app();
     app.ui.navigation.screen = crate::state::Screen::Working;
-    app.teammate_view = Some(crate::records::TeammateView {
+    app.ui.teammate_view = Some(crate::records::TeammateView {
         child_sid: "c1".into(),
         ..Default::default()
     });
-    app.teammate_view.as_mut().unwrap().transcript = synth_lines(1000, 0xFADE);
+    app.ui.teammate_view.as_mut().unwrap().transcript = synth_lines(1000, 0xFADE);
     app.sessions.current.transcript = synth_lines(1000, 0xC0FFEE).into();
     app.sessions.current.transcript.bump_revision();
     render(&app, (80, 24));

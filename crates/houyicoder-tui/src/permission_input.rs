@@ -175,8 +175,8 @@ pub(crate) fn filtered_rules<'a>(
 /// Search is active, an empty string otherwise (so Add/Remove/nav never
 /// filter the list).
 pub(crate) fn search_query(app: &App) -> &str {
-    if matches!(app.permission_pane.input, PermissionInput::Search) {
-        &app.permission_pane.search
+    if matches!(app.ui.permission_pane.input, PermissionInput::Search) {
+        &app.ui.permission_pane.search
     } else {
         ""
     }
@@ -185,17 +185,21 @@ pub(crate) fn search_query(app: &App) -> &str {
 /// The index into rules_cache of the cursor-th filtered rule, for removal.
 pub(crate) fn filtered_rule_index(app: &App) -> Option<usize> {
     if matches!(
-        app.permission_pane.tab,
+        app.ui.permission_pane.tab,
         PermissionTab::Recent | PermissionTab::Workspace
     ) {
         return None;
     }
     let view = filtered_rules(
-        app.permission_pane.tab,
+        app.ui.permission_pane.tab,
         &app.sessions.current.capabilities.permission.rules_cache,
         search_query(app),
     );
-    let cursor = app.permission_pane.cursor.min(view.len().saturating_sub(1));
+    let cursor = app
+        .ui
+        .permission_pane
+        .cursor
+        .min(view.len().saturating_sub(1));
     let target = view.get(cursor).copied()? as *const PermissionRule;
     app.sessions
         .current
@@ -226,7 +230,7 @@ pub(crate) fn handle_permission_key(app: &mut App, k: ratatui::crossterm::event:
     }
     // Esc: leave a sub-mode first, then the pane.
     if k.code == KeyCode::Esc {
-        if app.permission_pane.input.is_active() {
+        if app.ui.permission_pane.input.is_active() {
             exit_input(app);
         } else {
             // Leaving the pane is a big layout transition; force a full
@@ -236,7 +240,7 @@ pub(crate) fn handle_permission_key(app: &mut App, k: ratatui::crossterm::event:
         }
         return true;
     }
-    match app.permission_pane.input {
+    match app.ui.permission_pane.input {
         // Search owns its keystrokes in a pane-local buffer (return true) so
         // the main input box stays free for a slash command after Esc.
         PermissionInput::Search => handle_search_keys(app, k.code),
@@ -256,7 +260,7 @@ pub(crate) fn handle_permission_key(app: &mut App, k: ratatui::crossterm::event:
 /// are swallowed so the main input box is never touched.
 fn handle_select_keys(app: &mut App, code: ratatui::crossterm::event::KeyCode) -> bool {
     use ratatui::crossterm::event::KeyCode;
-    match &mut app.permission_pane.input {
+    match &mut app.ui.permission_pane.input {
         PermissionInput::AddDestination { destination, .. } => match code {
             KeyCode::Left => {
                 *destination = prev_destination(*destination);
@@ -267,7 +271,7 @@ fn handle_select_keys(app: &mut App, code: ratatui::crossterm::event::KeyCode) -
                 true
             }
             KeyCode::Enter => {
-                let (action, content, effect, destination) = match &app.permission_pane.input {
+                let (action, content, effect, destination) = match &app.ui.permission_pane.input {
                     PermissionInput::AddDestination {
                         action,
                         content,
@@ -296,7 +300,7 @@ fn handle_select_keys(app: &mut App, code: ratatui::crossterm::event::KeyCode) -
                 true
             }
             KeyCode::Enter => {
-                let (idx, confirm) = match &app.permission_pane.input {
+                let (idx, confirm) = match &app.ui.permission_pane.input {
                     PermissionInput::Remove { idx, confirm } => (*idx, *confirm),
                     _ => unreachable!(),
                 };
@@ -316,7 +320,7 @@ fn handle_select_keys(app: &mut App, code: ratatui::crossterm::event::KeyCode) -
                 true
             }
             KeyCode::Enter => {
-                let (idx, confirm) = match &app.permission_pane.input {
+                let (idx, confirm) = match &app.ui.permission_pane.input {
                     PermissionInput::RemoveDir { idx, confirm } => (*idx, *confirm),
                     _ => unreachable!(),
                 };
@@ -365,13 +369,13 @@ fn handle_search_keys(app: &mut App, code: ratatui::crossterm::event::KeyCode) -
     use ratatui::crossterm::event::KeyCode;
     match code {
         KeyCode::Char(c) => {
-            app.permission_pane.search.push(c);
-            app.permission_pane.cursor = 0;
+            app.ui.permission_pane.search.push(c);
+            app.ui.permission_pane.cursor = 0;
             true
         }
         KeyCode::Backspace => {
-            app.permission_pane.search.pop();
-            app.permission_pane.cursor = 0;
+            app.ui.permission_pane.search.pop();
+            app.ui.permission_pane.cursor = 0;
             true
         }
         KeyCode::Enter => {
@@ -379,11 +383,11 @@ fn handle_search_keys(app: &mut App, code: ratatui::crossterm::event::KeyCode) -
             true
         }
         KeyCode::Up => {
-            app.permission_pane.cursor = app.permission_pane.cursor.saturating_sub(1);
+            app.ui.permission_pane.cursor = app.ui.permission_pane.cursor.saturating_sub(1);
             true
         }
         KeyCode::Down => {
-            app.permission_pane.cursor = app.permission_pane.cursor.saturating_add(1);
+            app.ui.permission_pane.cursor = app.ui.permission_pane.cursor.saturating_add(1);
             true
         }
         _ => true,
@@ -397,38 +401,38 @@ fn handle_nav_keys(app: &mut App, code: ratatui::crossterm::event::KeyCode) -> b
     use ratatui::crossterm::event::KeyCode;
     let empty = app.ui.input.editor.is_empty();
     let on_rule_tab = matches!(
-        app.permission_pane.tab,
+        app.ui.permission_pane.tab,
         PermissionTab::Allow | PermissionTab::Ask | PermissionTab::Deny
     );
     match code {
         KeyCode::Left => {
-            app.permission_pane.tab = app.permission_pane.tab.prev();
-            app.permission_pane.cursor = 0;
+            app.ui.permission_pane.tab = app.ui.permission_pane.tab.prev();
+            app.ui.permission_pane.cursor = 0;
             true
         }
         KeyCode::Right | KeyCode::Tab => {
-            app.permission_pane.tab = app.permission_pane.tab.next();
-            app.permission_pane.cursor = 0;
+            app.ui.permission_pane.tab = app.ui.permission_pane.tab.next();
+            app.ui.permission_pane.cursor = 0;
             true
         }
         KeyCode::Up => {
-            app.permission_pane.cursor = app.permission_pane.cursor.saturating_sub(1);
+            app.ui.permission_pane.cursor = app.ui.permission_pane.cursor.saturating_sub(1);
             true
         }
         KeyCode::Down => {
-            app.permission_pane.cursor = app.permission_pane.cursor.saturating_add(1);
+            app.ui.permission_pane.cursor = app.ui.permission_pane.cursor.saturating_add(1);
             true
         }
         KeyCode::Char('a') if empty && on_rule_tab => {
-            app.permission_pane.input = PermissionInput::Add;
+            app.ui.permission_pane.input = PermissionInput::Add;
             app.ui.input.editor.clear();
             true
         }
-        KeyCode::Char('a') if empty && app.permission_pane.tab == PermissionTab::Workspace => {
+        KeyCode::Char('a') if empty && app.ui.permission_pane.tab == PermissionTab::Workspace => {
             // Add-directory flow: type a path in the main input box, Enter
             // ships it. The server canonicalizes + extends the fence; the
             // PermissionDirsResult ack refreshes dirs_cache.
-            app.permission_pane.input = PermissionInput::AddDir;
+            app.ui.permission_pane.input = PermissionInput::AddDir;
             app.ui.input.editor.clear();
             true
         }
@@ -436,7 +440,7 @@ fn handle_nav_keys(app: &mut App, code: ratatui::crossterm::event::KeyCode) -> b
             // Enter Remove with No preselected (confirm=false): the user must
             // move to Yes + Enter to delete, so a stray Enter never removes.
             if let Some(idx) = filtered_rule_index(app) {
-                app.permission_pane.input = PermissionInput::Remove {
+                app.ui.permission_pane.input = PermissionInput::Remove {
                     idx,
                     confirm: false,
                 };
@@ -444,11 +448,11 @@ fn handle_nav_keys(app: &mut App, code: ratatui::crossterm::event::KeyCode) -> b
             }
             true
         }
-        KeyCode::Char('d') if empty && app.permission_pane.tab == PermissionTab::Workspace => {
+        KeyCode::Char('d') if empty && app.ui.permission_pane.tab == PermissionTab::Workspace => {
             // Remove the cursor-selected directory. No preselected (confirm=
             // false) so a stray Enter cannot drop a dir. The cursor indexes
             // into dirs_cache; saturating-clamped at render + ship time.
-            let idx = app.permission_pane.cursor.min(
+            let idx = app.ui.permission_pane.cursor.min(
                 app.sessions
                     .current
                     .capabilities
@@ -465,7 +469,7 @@ fn handle_nav_keys(app: &mut App, code: ratatui::crossterm::event::KeyCode) -> b
                 .dirs_cache
                 .is_empty()
             {
-                app.permission_pane.input = PermissionInput::RemoveDir {
+                app.ui.permission_pane.input = PermissionInput::RemoveDir {
                     idx,
                     confirm: false,
                 };
@@ -474,9 +478,9 @@ fn handle_nav_keys(app: &mut App, code: ratatui::crossterm::event::KeyCode) -> b
             true
         }
         KeyCode::Char('s') if empty && on_rule_tab => {
-            app.permission_pane.input = PermissionInput::Search;
-            app.permission_pane.search.clear();
-            app.permission_pane.cursor = 0;
+            app.ui.permission_pane.input = PermissionInput::Search;
+            app.ui.permission_pane.search.clear();
+            app.ui.permission_pane.cursor = 0;
             true
         }
         _ => false,
@@ -485,9 +489,9 @@ fn handle_nav_keys(app: &mut App, code: ratatui::crossterm::event::KeyCode) -> b
 
 /// Leave any sub-mode and clear the input box.
 fn exit_input(app: &mut App) {
-    app.permission_pane.input = PermissionInput::None;
+    app.ui.permission_pane.input = PermissionInput::None;
     app.ui.input.editor.clear();
-    app.permission_pane.search.clear();
+    app.ui.permission_pane.search.clear();
 }
 
 /// Submit the Add / AddDir sub-mode's typed text (called from submit_input
@@ -496,7 +500,7 @@ fn exit_input(app: &mut App) {
 /// other sub-modes (AddDestination, Remove, RemoveDir, Search) own their
 /// own Enter in handle_permission_key and never reach here.
 pub(crate) fn submit_permission_input(app: &mut App, text: String) {
-    match app.permission_pane.input.clone() {
+    match app.ui.permission_pane.input.clone() {
         PermissionInput::Add => match parse_rule_spec(&text) {
             Ok(spec) => {
                 // Advance to the destination pick (default project); carry the
@@ -504,7 +508,7 @@ pub(crate) fn submit_permission_input(app: &mut App, text: String) {
                 // externally nameable. Clear the input so it is free for the
                 // Select's Left/Right/Enter.
                 app.ui.input.editor.clear();
-                app.permission_pane.input = PermissionInput::AddDestination {
+                app.ui.permission_pane.input = PermissionInput::AddDestination {
                     action: spec.action,
                     content: spec.content,
                     effect: spec.effect,
@@ -588,7 +592,7 @@ fn remove_dir_at(app: &mut App, index: usize) {
 
 /// The one-line prompt shown above the rule list when a sub-mode is active.
 pub(crate) fn permission_prompt(app: &App) -> Option<String> {
-    match app.permission_pane.input {
+    match app.ui.permission_pane.input {
         PermissionInput::Add => Some(
             "add: <tool> [content:]<allow|ask|deny>  ·  e.g. bash npm:allow  ·  Enter to pick destination  ·  Esc cancel".into(),
         ),

@@ -48,7 +48,7 @@ fn test_permission_tab_filters_rules() {
         rule("edit", PermissionEffect::Ask, None),
     ];
     // Allow tab: npm rule only.
-    app.permission_pane.tab = crate::state::PermissionTab::Allow;
+    app.ui.permission_pane.tab = crate::state::PermissionTab::Allow;
     let text = render_text(&app, 80, 24);
     assert!(
         text.contains("Bash(npm"),
@@ -59,7 +59,7 @@ fn test_permission_tab_filters_rules() {
         "Allow tab hides the deny rule: {text}"
     );
     // Deny tab: rm rule only.
-    app.permission_pane.tab = crate::state::PermissionTab::Deny;
+    app.ui.permission_pane.tab = crate::state::PermissionTab::Deny;
     let text = render_text(&app, 80, 24);
     assert!(
         text.contains("Bash(rm"),
@@ -70,7 +70,7 @@ fn test_permission_tab_filters_rules() {
         "Deny tab hides the allow rule: {text}"
     );
     // Ask tab: tool-level rule renders as "Edit" (no content).
-    app.permission_pane.tab = crate::state::PermissionTab::Ask;
+    app.ui.permission_pane.tab = crate::state::PermissionTab::Ask;
     let text = render_text(&app, 80, 24);
     assert!(text.contains("Edit"), "Ask tab shows the edit rule: {text}");
     assert!(
@@ -114,18 +114,21 @@ fn test_permission_cursor_recent_tab() {
     };
     // Down moves the cursor to row 1; Up moves it back to 0 (saturating).
     crate::keys::handle_working(&mut app, key(ratatui::crossterm::event::KeyCode::Down));
-    assert_eq!(app.permission_pane.cursor, 1);
+    assert_eq!(app.ui.permission_pane.cursor, 1);
     crate::keys::handle_working(&mut app, key(ratatui::crossterm::event::KeyCode::Down));
     assert_eq!(
-        app.permission_pane.cursor, 2,
+        app.ui.permission_pane.cursor, 2,
         "cursor keeps growing; render clamps"
     );
     crate::keys::handle_working(&mut app, key(ratatui::crossterm::event::KeyCode::Up));
-    assert_eq!(app.permission_pane.cursor, 1);
+    assert_eq!(app.ui.permission_pane.cursor, 1);
     crate::keys::handle_working(&mut app, key(ratatui::crossterm::event::KeyCode::Up));
-    assert_eq!(app.permission_pane.cursor, 0);
+    assert_eq!(app.ui.permission_pane.cursor, 0);
     crate::keys::handle_working(&mut app, key(ratatui::crossterm::event::KeyCode::Up));
-    assert_eq!(app.permission_pane.cursor, 0, "saturating sub stops at 0");
+    assert_eq!(
+        app.ui.permission_pane.cursor, 0,
+        "saturating sub stops at 0"
+    );
 
     // Allow tab renders Exact and Glob arms as "Bash(git push)" and "Bash(git *)".
     let text = render_text(&app, 80, 24);
@@ -139,7 +142,7 @@ fn test_permission_cursor_recent_tab() {
     );
 
     // Recently-denied tab: empty verdicts show the placeholder.
-    app.permission_pane.tab = crate::state::PermissionTab::Recent;
+    app.ui.permission_pane.tab = crate::state::PermissionTab::Recent;
     let text = render_text(&app, 80, 24);
     assert!(
         text.contains("no recent denials"),
@@ -198,12 +201,12 @@ fn test_permission_search_submode_filters() {
             ..Default::default()
         },
     ];
-    app.permission_pane.tab = PermissionTab::Allow;
+    app.ui.permission_pane.tab = PermissionTab::Allow;
     crate::keys::handle_working(
         &mut app,
         key_press(ratatui::crossterm::event::KeyCode::Char('s')),
     );
-    assert_eq!(app.permission_pane.input, PermissionInput::Search);
+    assert_eq!(app.ui.permission_pane.input, PermissionInput::Search);
     for c in "npm".chars() {
         crate::keys::handle_working(
             &mut app,
@@ -224,7 +227,7 @@ fn test_permission_search_submode_filters() {
         &mut app,
         key_press(ratatui::crossterm::event::KeyCode::Enter),
     );
-    assert_eq!(app.permission_pane.input, PermissionInput::None);
+    assert_eq!(app.ui.permission_pane.input, PermissionInput::None);
 }
 
 #[test]
@@ -257,7 +260,7 @@ fn test_permission_workspace_cursor_clamps() {
     use ratatui::style::{Color, Modifier, Style};
     let mut app = app();
     app.ui.navigation.pane = Pane::Permission;
-    app.permission_pane.tab = PermissionTab::Workspace;
+    app.ui.permission_pane.tab = PermissionTab::Workspace;
     app.sessions.current.identity.working_dir = "/repo".into();
     app.sessions.current.capabilities.permission.dirs_cache =
         vec!["/tmp/a".into(), "/tmp/b".into()];
@@ -276,7 +279,7 @@ fn test_permission_workspace_cursor_clamps() {
         })
         .collect();
     // Cursor set past the dirs list — must clamp to the last dir (index 1).
-    app.permission_pane.cursor = 4;
+    app.ui.permission_pane.cursor = 4;
     let buf = crate::test_harness::render_buffer(&app, 80, 24);
     // Partial cell-style match: ratatui composes bg(Reset)/underline_color(Reset)
     // into the stored style, so a full Style == comparison never matches.
@@ -313,7 +316,7 @@ fn test_permission_workspace_lists_dirs() {
     use crate::state::PermissionTab;
     let mut app = app();
     app.ui.navigation.pane = Pane::Permission;
-    app.permission_pane.tab = PermissionTab::Workspace;
+    app.ui.permission_pane.tab = PermissionTab::Workspace;
     app.sessions.current.identity.working_dir = "/repo".into();
     app.sessions.current.capabilities.permission.dirs_cache = vec!["/tmp/extra".into()];
     let text = render_text(&app, 80, 24);
@@ -353,7 +356,7 @@ fn test_workspace_nav_two_dirs() {
         |st: &Style| st.fg == Some(Color::Cyan) && st.add_modifier.contains(Modifier::BOLD);
     let mut app = app();
     app.ui.navigation.pane = Pane::Permission;
-    app.permission_pane.tab = PermissionTab::Workspace;
+    app.ui.permission_pane.tab = PermissionTab::Workspace;
     app.sessions.current.identity.working_dir = "/repo".into();
     app.sessions.current.capabilities.permission.dirs_cache =
         vec!["/tmp/a".into(), "/tmp/b".into()];
@@ -377,12 +380,12 @@ fn test_workspace_nav_two_dirs() {
         (a, b)
     };
 
-    app.permission_pane.cursor = 0;
+    app.ui.permission_pane.cursor = 0;
     let (a, b) = scan(&app);
     assert!(a, "cursor 0 highlights dir A");
     assert!(!b, "cursor 0 does not highlight dir B");
 
-    app.permission_pane.cursor = 1;
+    app.ui.permission_pane.cursor = 1;
     let (a, b) = scan(&app);
     assert!(b, "cursor 1 highlights dir B");
     assert!(!a, "cursor 1 does not highlight dir A");
@@ -401,13 +404,13 @@ fn test_destination_arrows_match_direction() {
     use houyicoder_protocol::frontend::permission::{PermissionEffect, RuleDestination};
     let mut app = app();
     app.ui.navigation.pane = Pane::Permission;
-    app.permission_pane.input = PermissionInput::AddDestination {
+    app.ui.permission_pane.input = PermissionInput::AddDestination {
         action: "bash".into(),
         content: None,
         effect: PermissionEffect::Allow,
         destination: RuleDestination::Project,
     };
-    let dest = |app: &App| match &app.permission_pane.input {
+    let dest = |app: &App| match &app.ui.permission_pane.input {
         PermissionInput::AddDestination { destination, .. } => *destination,
         _ => unreachable!(),
     };
