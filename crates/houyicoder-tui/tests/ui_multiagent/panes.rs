@@ -218,7 +218,6 @@ fn test_agents_pane_lists_returned() {
     let mut app = houyicoder_tui::composition::app();
     app.screen = houyicoder_tui::state::Screen::Working;
     app.pane = houyicoder_tui::state::Pane::Agents;
-    app.agent_directory = None;
     app.push_transcript_line(TranscriptLine::Subagent {
         child_sid: "c1".into(),
         subagent_type: "explore".into(),
@@ -227,15 +226,13 @@ fn test_agents_pane_lists_returned() {
         folded_transcript: vec![TranscriptLine::Agent("child reply".into())],
         color: None,
     });
-    let v = app.transcript().revision();
-    let rows = app.transcript().to_vec();
-    app.agents.refresh(&rows, v);
+    app.refresh_agents();
     assert_eq!(
-        app.agents.rows.len(),
+        app.agents().rows.len(),
         1,
         "the returned delegation is listed"
     );
-    assert!(app.agents.rows[0].loaded, "loaded fold detected");
+    assert!(app.agents().rows[0].loaded, "loaded fold detected");
     // Enter on the selected row opens that delegation's view.
     houyicoder_tui::keys::handle_working(
         &mut app,
@@ -271,13 +268,13 @@ fn test_agents_pane_cursor_walks() {
     }
     let v = app.transcript().revision();
     let rows = app.transcript().to_vec();
-    app.agents.refresh(&rows, v);
-    app.agents.move_selection(1);
-    assert_eq!(app.agents.sel, 1);
-    app.agents.move_selection(1);
-    assert_eq!(app.agents.sel, 1, "clamped at the last row");
-    app.agents.move_selection(-1);
-    assert_eq!(app.agents.sel, 0, "clamped at the first row");
+    app.agents_mut().refresh(&rows, v);
+    app.agents_mut().move_selection(1);
+    assert_eq!(app.agents().sel, 1);
+    app.agents_mut().move_selection(1);
+    assert_eq!(app.agents().sel, 1, "clamped at the last row");
+    app.agents_mut().move_selection(-1);
+    assert_eq!(app.agents().sel, 0, "clamped at the first row");
 }
 
 /// Exit a teammate view and drill into a DIFFERENT completed child. Proves

@@ -11,7 +11,7 @@ fn test_agents_result_stores_directory() {
         },
     });
     assert_eq!(
-        app.agent_directory.as_deref(),
+        app.sessions.current.agent_directory.as_deref(),
         Some("## Available agents\n\n- explore: fast"),
     );
 }
@@ -373,7 +373,7 @@ fn test_agents_directory_renders_lines() {
     let mut app = crate::composition::app();
     app.screen = crate::state::Screen::Working;
     app.pane = crate::state::Pane::Agents;
-    app.agent_directory =
+    app.sessions.current.agent_directory =
         Some("## Available agents\n\n- explore: fast search\n- plan: design".into());
     let out = crate::test_harness::render_text(&app, 80, 24);
     let header_row = out.lines().position(|l| l.contains("Available agents"));
@@ -393,7 +393,7 @@ fn test_agents_directory_empty_placeholder() {
     let mut app = crate::composition::app();
     app.screen = crate::state::Screen::Working;
     app.pane = crate::state::Pane::Agents;
-    app.agent_directory = Some(String::new());
+    app.sessions.current.agent_directory = Some(String::new());
     let out = crate::test_harness::render_text(&app, 80, 24);
     assert!(
         out.contains("(no agent directory loaded)"),

@@ -5,6 +5,7 @@
 
 use std::cell::Cell;
 
+use crate::agent_message::PaneAgents;
 use crate::pending_prompt::PendingPrompt;
 use crate::run_metrics::RunMetrics;
 use crate::run_state::RunState;
@@ -86,6 +87,15 @@ pub(crate) struct Session {
     /// boundary, and a load stops at it since a drained frame cannot be
     /// rendered.
     pub(crate) loaded_from_frame: Cell<usize>,
+    /// The returned-delegation rows derived from the transcript, plus the
+    /// selection cursor. They reset with the session because the rows are
+    /// rebuilt from the session transcript. The cursor rides here until the
+    /// Ui owner exists to hold pane interaction state alongside its peers.
+    pub(crate) agents: PaneAgents,
+    /// The agent directory listing the last /agents query fetched, kept so
+    /// the pane can render it before any delegation has returned. It is
+    /// session-scoped server read state, reset on a switch.
+    pub(crate) agent_directory: Option<String>,
 }
 
 impl Session {
@@ -107,6 +117,8 @@ impl Session {
             history_reads: HistoryReads::default(),
             index_build: IndexBuild::default(),
             loaded_from_frame: Cell::new(usize::MAX),
+            agents: PaneAgents::default(),
+            agent_directory: None,
         }
     }
 
@@ -145,5 +157,15 @@ impl Session {
     /// that owns the finish or the loss.
     pub(crate) fn clear_prompt(&mut self) {
         self.prompt = None;
+    }
+
+    /// Rebuild the returned-delegation rows from the session transcript when
+    /// its revision moved. Borrows the transcript and the agents as disjoint
+    /// fields of the session, so the rebuild and the version check see one
+    /// consistent transcript without handing the caller a split borrow.
+    pub(crate) fn refresh_agents(&mut self) {
+        let version = self.transcript.revision();
+        let lines = self.transcript.lines();
+        self.agents.refresh(lines, version);
     }
 }

@@ -12,7 +12,8 @@ use crate::test_harness::{model_caps, model_entry, model_snapshot, render_text};
 fn working() -> crate::state::App {
     let mut app = composition::app();
     app.screen = Screen::Working;
-    app.agent_directory = Some("## Available agents\n\n- explore: fast read-only search".into());
+    app.sessions.current.agent_directory =
+        Some("## Available agents\n\n- explore: fast read-only search".into());
     app
 }
 

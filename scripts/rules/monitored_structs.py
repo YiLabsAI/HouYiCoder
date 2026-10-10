@@ -175,7 +175,12 @@ ACTIVE_OWNERS = {
         # The resume switch intent stopped being a flat field: it rides the
         # queued-input FIFO as a /resume Command, so the carrier is the queue
         # head and no detached pending-target field can drift beside it.
-        "fields": 44,
+        # The returned-delegation pane and its directory cache moved to
+        # Session: both are session-scoped (the rows derive from the
+        # transcript, the directory is the last listing the session fetched),
+        # so a switch resets them with the bare constructor instead of two
+        # flat App resets.
+        "fields": 42,
         "mut_app": 44,
     },
     "crates/houyicoder-tui/src/input.rs:Input": {
@@ -202,12 +207,13 @@ ACTIVE_OWNERS = {
         # checklist, the named capabilities (the server-reported permission,
         # status, hooks, tools, and skills caches), and the transcript read
         # state (the dispatched history reads, the full-scan index progress,
-        # and the loaded-frame boundary), and the working transcript, held
-        # as one value so a swap replaces the whole set at once and a lost
+        # and the loaded-frame boundary), the working transcript, the
+        # returned-delegation pane, and the agent directory cache, held as
+        # one value so a swap replaces the whole set at once and a lost
         # connection never drops the identity or the already-observed
-        # state. Twelve fields that formerly sat detached on App now travel
-        # as one constructor boundary.
-        "fields": 12,
+        # state. Fourteen fields that formerly sat detached on App now
+        # travel as one constructor boundary.
+        "fields": 14,
     },
     "crates/houyicoder-tui/src/sessions.rs:Sessions": {
         # The frontend's session holdings: the presented session, the

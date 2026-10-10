@@ -254,16 +254,16 @@ impl App {
     /// the new session renders as if fresh rather than layered over the old
     /// one's pane state, caches, or selection. The fields the new Session owns
     /// (run, transcript, prompt, todos, capabilities, history_reads,
-    /// index_build) are fresh by construction in set_current, so this resets
-    /// only what stays on App: the transcript view state, the render and row
-    /// caches, the pane drill-downs, the selection, the fleet, and the
-    /// verbose flag. The process-level resources (terminal_focused,
-    /// clipboard) and the render-measured feedback (layout_feedback, rewritten
-    /// each draw) are intentionally absent: a switch does not impersonate a
-    /// cleanup of terminal focus or the clipboard, and layout_feedback
-    /// self-corrects. status and input are handled by the caller at the field
-    /// level because they mix session-scoped, run-state, and carry-across
-    /// fields.
+    /// index_build, agents, agent_directory) are fresh by construction in
+    /// set_current, so this resets only what stays on App: the transcript view
+    /// state, the render and row caches, the pane drill-downs, the selection,
+    /// the fleet, and the verbose flag. The process-level resources
+    /// (terminal_focused, clipboard) and the render-measured feedback
+    /// (layout_feedback, rewritten each draw) are intentionally absent: a
+    /// switch does not impersonate a cleanup of terminal focus or the
+    /// clipboard, and layout_feedback self-corrects. status and input are
+    /// handled by the caller at the field level because they mix
+    /// session-scoped, run-state, and carry-across fields.
     fn reset_session_local(&mut self) {
         self.workflow = app_default::workflow();
         self.pane = Pane::Transcript;
@@ -282,8 +282,6 @@ impl App {
         self.worktree_list = Default::default();
         self.worktree_level = Cell::new(0);
         self.trajectory = Default::default();
-        self.agents = Default::default();
-        self.agent_directory = None;
         self.notifications = Default::default();
         self.displayed_tokens = Cell::new(0);
         self.selections = Default::default();

@@ -55,8 +55,6 @@ pub fn app() -> App {
         worktree_list: ListPaneState::default(),
         worktree_level: Cell::new(0),
         trajectory: TrajectoryPaneState::default(),
-        agents: Default::default(),
-        agent_directory: None,
         login_mode: None,
         quit: false,
         sessions: Sessions::new(Session::bare(SessionIdentity {

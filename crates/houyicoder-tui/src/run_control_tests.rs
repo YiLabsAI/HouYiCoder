@@ -860,7 +860,7 @@ fn test_agents_tools_round_trip() {
     let mut landed = false;
     for _ in 0..300 {
         app.poll_agent();
-        if app.agent_directory.is_some() {
+        if app.sessions.current.agent_directory.is_some() {
             landed = true;
             break;
         }

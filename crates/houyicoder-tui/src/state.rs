@@ -24,7 +24,7 @@ mod teammate_view;
 mod trajectory;
 pub mod transcript;
 
-use crate::agent_message::{FleetState, PaneAgents};
+use crate::agent_message::FleetState;
 use crate::composition::WorktreeEntry;
 #[cfg(test)]
 use crate::composition::app as test_app;
@@ -148,8 +148,6 @@ pub struct App {
     /// for the pane's position, because the selection and the cursor are kept
     /// consistent by the same transitions.
     pub trajectory: TrajectoryPaneState,
-    pub agents: PaneAgents,
-    pub agent_directory: Option<String>,
     pub login_mode: Option<LoginMode>,
     pub quit: bool,
     // --- real agent-loop wiring ---
@@ -249,6 +247,29 @@ impl App {
     /// callers do not reach through the session value.
     pub fn transcript(&self) -> &transcript::Transcript {
         &self.sessions.current.transcript
+    }
+
+    /// Public read seam for the session-owned returned-delegation rows and
+    /// cursor. In-crate render and key paths read the session field directly;
+    /// external integration tests reach the rows through this handle instead of
+    /// the crate-private sessions field.
+    pub fn agents(&self) -> &crate::agent_message::PaneAgents {
+        &self.sessions.current.agents
+    }
+
+    /// Public mut seam for the session-owned returned-delegation rows: external
+    /// integration tests move the cursor and stage fixtures through it.
+    pub fn agents_mut(&mut self) -> &mut crate::agent_message::PaneAgents {
+        &mut self.sessions.current.agents
+    }
+
+    /// Rebuild the returned-delegation rows from the session transcript when
+    /// its revision moved, forwarding to the session so the transcript and the
+    /// agents are borrowed as disjoint fields inside one call. The /agents
+    /// command calls the session method directly in-crate; this public forward
+    /// is the seam external integration tests trigger a rebuild through.
+    pub fn refresh_agents(&mut self) {
+        self.sessions.current.refresh_agents();
     }
 
     /// The working transcript, mutably borrowed for fixture setup and the

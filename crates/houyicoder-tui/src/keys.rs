@@ -232,5 +232,4 @@ mod trajectory;
 mod worktree_pane;
 
 #[cfg(test)]
-#[path = "keys_tests.rs"]
 mod tests;

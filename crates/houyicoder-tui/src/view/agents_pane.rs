@@ -59,15 +59,17 @@ pub(crate) fn draw_content(f: &mut Frame, area: Rect, app: &App) {
     // Returned delegations outlive the footer strip: the strip drops a
     // completed child after its grace window, but the pane is the record of
     // what ran this session, selectable and enterable.
-    if !app.agents.rows.is_empty() {
+    if !app.sessions.current.agents.rows.is_empty() {
         let items: Vec<ListItem> = app
+            .sessions
+            .current
             .agents
             .rows
             .iter()
             .enumerate()
             .map(|(i, r)| {
                 let row = format!("\u{2713} {} \u{00b7} {}", r.subagent_type, r.summary);
-                if app.agents.sel == i {
+                if app.sessions.current.agents.sel == i {
                     ListItem::new(format!("\u{25b6} {row}"))
                 } else {
                     ListItem::new(format!("  {row}"))
@@ -79,6 +81,8 @@ pub(crate) fn draw_content(f: &mut Frame, area: Rect, app: &App) {
     }
     // Nothing live and nothing returned yet: the registered directory.
     let dir = app
+        .sessions
+        .current
         .agent_directory
         .as_deref()
         .filter(|s| !s.is_empty())
@@ -120,7 +124,8 @@ mod tests {
     #[test]
     fn test_directory_renders_when_fetched() {
         let mut app = composition::app();
-        app.agent_directory = Some("## Available agents\n\n- explore: fast".into());
+        app.sessions.current.agent_directory =
+            Some("## Available agents\n\n- explore: fast".into());
         let content = render(&app, 40, 6);
         assert!(
             content.contains("Available agents"),
@@ -137,7 +142,7 @@ mod tests {
     #[test]
     fn test_fleet_row_precedes_directory() {
         let mut app = composition::app();
-        app.agent_directory = Some("## Available agents".into());
+        app.sessions.current.agent_directory = Some("## Available agents".into());
         app.fleet.entries.push(FleetEntry {
             agent_id: "c1".into(),
             subagent_type: "explore".into(),
@@ -180,7 +185,7 @@ mod tests {
     fn test_returned_list_over_directory() {
         use crate::records::TranscriptLine;
         let mut app = composition::app();
-        app.agent_directory = Some("## Available agents\n- explore: fast".into());
+        app.sessions.current.agent_directory = Some("## Available agents\n- explore: fast".into());
         app.push_transcript_line(TranscriptLine::Subagent {
             child_sid: "c1".into(),
             subagent_type: "explore".into(),
@@ -189,8 +194,7 @@ mod tests {
             folded_transcript: Vec::new(),
             color: None,
         });
-        let v = app.sessions.current.transcript.revision();
-        app.agents.refresh(&app.sessions.current.transcript, v);
+        app.sessions.current.refresh_agents();
         let out = render(&app, 60, 8);
         assert!(
             out.contains("found the auth path"),

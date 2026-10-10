@@ -59,9 +59,7 @@ impl App {
             }
             C::Agents => {
                 self.pane = Pane::Agents;
-                let v = self.sessions.current.transcript.revision();
-                self.agents
-                    .refresh(self.sessions.current.transcript.lines(), v);
+                self.sessions.current.refresh_agents();
                 if let Some(s) = self.sessions.current.connection.as_ref() {
                     match s.next_request_id() {
                         Ok(req_id) => {
