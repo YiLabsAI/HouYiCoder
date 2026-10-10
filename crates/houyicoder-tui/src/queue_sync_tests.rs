@@ -260,6 +260,58 @@ fn test_command_head_blocks() {
     );
 }
 
+/// remove_pending_at sends QueueRemove before touching the local copy, so a
+/// refusal (no connection here) leaves the item queued and reports None:
+/// the local mirror never moves ahead of the server's agreement.
+#[test]
+fn test_refused_remove_keeps() {
+    let mut app = working();
+    app.input.queue.push(InputItem::Message("held".into()));
+    assert!(
+        app.remove_pending_at(0).is_none(),
+        "a refused removal reports None"
+    );
+    assert_eq!(
+        app.input.queue,
+        vec![InputItem::Message("held".into())],
+        "the refused item stays queued"
+    );
+    assert!(
+        app.sessions
+            .current
+            .transcript
+            .iter()
+            .any(|l| matches!(l, TranscriptLine::System(s) if s.contains("queue: not connected"))),
+        "the refusal is reported to the user"
+    );
+}
+
+/// promote_next_pending enqueues InjectUser before swapping the parked slot
+/// to a live Message, so a refusal leaves the input parked: a slot never
+/// claims a server copy the server did not accept.
+#[test]
+fn test_refused_promote_parks() {
+    let mut app = working();
+    app.start_run_for_test(0);
+    app.input
+        .queue
+        .push(InputItem::ParkedMessage("waiting".into()));
+    app.promote_next_pending();
+    assert_eq!(
+        app.input.queue[0],
+        InputItem::ParkedMessage("waiting".into()),
+        "the refused promotion leaves the slot parked"
+    );
+    assert!(
+        app.sessions
+            .current
+            .transcript
+            .iter()
+            .any(|l| matches!(l, TranscriptLine::System(s) if s.contains("queue: not connected"))),
+        "the refusal is reported to the user"
+    );
+}
+
 /// promote_next_pending contract: once the Command barrier drains (removed
 /// from the head), the next ParkedMessage promotes into the live-copy
 /// slot -- the queue re-promotes the next head once the state-changing

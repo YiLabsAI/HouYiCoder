@@ -85,9 +85,9 @@ pub fn resume_command_target(item: &InputItem) -> Option<&str> {
 /// Whether a slash command's raw text (with the leading slash) has the given
 /// first token (e.g. "resume" for "/resume sid"). Compares the first
 /// whitespace-separated token after the slash, so "/resume" + "/resume sid"
-/// match but "/resumefoo" does not. Used by switch_session to keep /resume
-/// Commands (a switch intent valid in the new session) while dropping other
-/// state-changing Commands typed in the OLD session.
+/// match but "/resumefoo" does not. Drives the session-switch carry rule:
+/// /resume Commands cross (a switch intent valid in the new session) while
+/// other state-changing Commands typed in the OLD session drop.
 pub fn command_first_token_is(raw: &str, token: &str) -> bool {
     raw.trim_start()
         .strip_prefix('/')
@@ -227,6 +227,32 @@ impl InputQueue {
                 *it = InputItem::ParkedMessage(t.clone());
             }
         }
+    }
+
+    /// Carry the queue across a session switch and return the dropped
+    /// command texts for the caller's notice. Session-scoped Commands
+    /// (/clear, /rewind, /undo) typed in the old session drop: they act on
+    /// whichever session is current when they drain, so carrying one would
+    /// apply the old session's intent to the new one. A /resume Command
+    /// stays -- the switch intent is still valid in the new session.
+    /// Messages stay as user content, demoted to ParkedMessage because the
+    /// new runner's server queue is empty: a carried live Message lost its
+    /// server copy, and the drain starts a fresh run for it. The selection
+    /// resets to the top; a position into the old session's queue is stale.
+    pub(crate) fn transfer_across_sessions(&mut self) -> Vec<String> {
+        let mut dropped: Vec<String> = Vec::new();
+        self.items.retain(|item| {
+            if let InputItem::Command(text) = item
+                && !command_first_token_is(text, "resume")
+            {
+                dropped.push(text.clone());
+                return false;
+            }
+            true
+        });
+        self.demote_to_parked();
+        self.cursor = 0;
+        dropped
     }
 
     /// Remove the queued items whose stable identity matches a committed
@@ -626,6 +652,45 @@ mod tests {
         assert!(
             matches!(q[1], InputItem::Command(_)),
             "a command is left alone"
+        );
+    }
+
+    /// The switch carry rules: both resume forms and messages cross, other
+    /// commands drop, carried messages park, and the selection resets to
+    /// the top. An empty queue transfers to nothing.
+    #[test]
+    fn test_transfer_carry_rules() {
+        let mut q = InputQueue::default();
+        assert!(
+            q.transfer_across_sessions().is_empty(),
+            "an empty queue has nothing to carry or report"
+        );
+        q.push(InputItem::Message("task".into()));
+        q.push(InputItem::Command("/clear".into()));
+        q.push(InputItem::Command("/resume sid-1".into()));
+        q.push(InputItem::Command("/resume".into()));
+        q.push(InputItem::ParkedMessage("held".into()));
+        q.move_cursor(4);
+        let dropped = q.transfer_across_sessions();
+        assert_eq!(
+            dropped,
+            vec!["/clear".to_string()],
+            "the dropped command is reported for the notice"
+        );
+        assert_eq!(
+            q,
+            vec![
+                InputItem::ParkedMessage("task".into()),
+                InputItem::Command("/resume sid-1".into()),
+                InputItem::Command("/resume".into()),
+                InputItem::ParkedMessage("held".into()),
+            ],
+            "messages cross parked, both resume forms cross, the rest drops"
+        );
+        assert_eq!(
+            q.selected_index(),
+            Some(0),
+            "the old session's selection does not carry"
         );
     }
 }

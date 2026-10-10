@@ -7,8 +7,6 @@
 use super::*;
 
 use crate::history::HistoryNav;
-use crate::input::queue::InputItem;
-use crate::input::queue::command_first_token_is;
 use crate::input::queue::resume_command_target;
 
 impl App {
@@ -103,39 +101,13 @@ impl App {
         if self.teammate_view.is_some() {
             self.exit_teammate_view();
         }
-        let mut pending = self.input.queue.take_all();
         // The pending queue is carried across (only session-scoped fields
-        // reset). Session-scoped Commands (/clear /rewind /undo) typed in
-        // the OLD session are DROPPED, not carried -- a /clear in A would
-        // clear B. /resume Commands stay; Messages stay (user content).
+        // reset); the queue owns the carry rules and reports the dropped
+        // command texts for the notice at the end of the swap.
+        let dropped = self.input.queue.transfer_across_sessions();
         let leaving = self.sessions.current.identity.session_id.clone();
         let open_keys = self.take_expanded_keys();
         let mut parked = std::mem::take(&mut self.parked_view_states);
-        // Drop session-scoped Commands (/clear /rewind /undo) the user typed
-        // in the OLD session: they operate on the current session, so
-        // carrying them to the NEW session + auto-draining would apply the
-        // old session's intent to the new one (a /clear typed in A would
-        // clear B). /resume Commands stay -- they express a switch intent
-        // that is still valid in the new session. Messages stay -- they are
-        // user content, recallable + auto-drainable in the new session.
-        let mut dropped: Vec<String> = Vec::new();
-        pending.retain(|item| {
-            if let InputItem::Command(text) = item
-                && !command_first_token_is(text, "resume")
-            {
-                dropped.push(text.clone());
-                return false;
-            }
-            true
-        });
-        // The new runner's server queue is empty, so a carried Message
-        // (InjectUser'd to the old server) lost its server copy. Demote to
-        // ParkedMessage so the barrier holds + the drain spawns it fresh.
-        for item in pending.iter_mut() {
-            if let InputItem::Message(t) = item {
-                *item = InputItem::ParkedMessage(t.clone());
-            }
-        }
         // Deconstruct the bundle: the session-construction half (client,
         // channels, id) builds the new Session; the host resources
         // (trajectory, export, snapshot, catalog) are applied to Sessions.
@@ -206,7 +178,6 @@ impl App {
 
         self.sessions.current.todos.set_replaying_history(true);
         self.bump_transcript_version();
-        self.input.queue.replace_all(pending);
         parked.park_session(leaving, open_keys);
         if let Some(keys) = parked.take_session(&self.sessions.current.identity.session_id) {
             self.set_expanded_keys(keys);
