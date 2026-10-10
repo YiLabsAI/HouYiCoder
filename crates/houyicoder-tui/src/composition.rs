@@ -6,6 +6,7 @@
 
 mod app_default;
 mod placeholder;
+mod switch;
 mod worktree;
 pub use app_default::app;
 pub use placeholder::*;
@@ -18,10 +19,14 @@ use crate::evidence::{
     AuditEntry, ConsoleTodo, DiffData, Divergence, GraphResult, Hunk, HunkEvidence, MemoryEntry,
     PlanArtifact, ReviewFinding, SpecArtifact, SpecClause, Verdict, VerifyResult, audit_entry,
 };
+use crate::history::HistoryNav;
+use crate::memory_state::MemoryPaneState;
 use crate::palette::PaletteState;
 use crate::resume_picker::SessionCatalog;
 use crate::review_queue::ReviewQueue;
+use crate::session::Session;
 use crate::session::SessionConnection;
+use crate::session::identity::SessionIdentity;
 use crate::session::persistence::SessionPersistence;
 use crate::state::{App, Pane, Screen, SpecContext, Stage, StatusStub, ViewportMode};
 use crate::transcript::snapshot::TranscriptSnapshot;
@@ -34,6 +39,8 @@ use houyicoder_core::SessionId;
 use houyicoder_core::agent::Runner;
 #[cfg(test)]
 use houyicoder_permission::DefaultModeGate;
+use houyicoder_protocol::frontend::LoginMode;
+use std::cell::{Cell, RefCell};
 use std::sync::Arc;
 #[cfg(test)]
 use std::sync::atomic::AtomicU64;
@@ -171,172 +178,6 @@ pub fn build_app(bundle: RunnerBundle) -> App {
 
 pub type ResumeBuilderRef = dyn Fn(&str) -> Result<RunnerBundle, Box<dyn std::error::Error>>;
 
-impl App {
-    pub fn try_switch_session(
-        &mut self,
-        resume_builder: Option<&ResumeBuilderRef>,
-        dirty: &mut bool,
-    ) {
-        let Some(target) = self.pending_resume_target.take() else {
-            return;
-        };
-        // A resume target that names the session already presented is a
-        // no-op: the live lease already holds that sid's lock, so
-        // re-acquiring it would report the lock held by this process itself.
-        // This fast path catches the exact-string case so the no-op reports
-        // cleanly; a different spelling of the same session is caught by the
-        // builder, which owns the canonical comparison.
-        let current = self.sessions.current.identity.session_id.0.clone();
-        if target == current {
-            self.system_line(format!("already on session {target}"));
-            *dirty = true;
-            return;
-        }
-        // The caller (the event loop's idle guard) already gates on
-        // !agent_busy && !reverse_request_in_flight, so a target that
-        // survives to here is ready to swap. The old busy put-back branch
-        // is gone -- it was a workaround for try_switch_session being called
-        // every frame (even mid-run); polling a continuous state (agent_busy)
-        // + putting the target back each frame forced the "no system_line or
-        // it floods" hack. The drain now binds to the consume action, not the
-        // idle condition.
-        if let Some(builder) = resume_builder {
-            match builder(&target) {
-                Ok(new_bundle) => {
-                    self.switch_session(new_bundle);
-                    *dirty = true;
-                }
-                Err(e) => {
-                    self.system_line(format!("resume failed: {e}"));
-                    *dirty = true;
-                }
-            }
-        } else {
-            self.pending_resume_target = Some(target);
-            self.quit = true;
-        }
-    }
-
-    /// The event loop's idle drain: continuous-state polling + consumptive
-    /// idempotency. !agent_busy holds every frame; no flood because drain/take
-    /// CONSUMES the item, so the next frame has nothing to do. Side effects
-    /// here MUST bind to the consume action, not the idle condition (binding
-    /// to the condition floods -- that was the old try_switch_session busy
-    /// branch's flaw). A queued item auto-sends ONLY when the prior run ended
-    /// FinalOutput (a clean end) -- the user got their answer, so drain FIFO.
-    /// An interrupt/error does NOT auto-send: the queued item stays parked for
-    /// the user to recall to the input box, edit, and re-send. A redirect on
-    /// interrupt must not auto-fire pending input; recall remains an explicit
-    /// queue strip or pane action.
-    pub fn idle_drain(&mut self, resume_builder: Option<&ResumeBuilderRef>, dirty: &mut bool) {
-        if !self.agent_busy() && !self.reverse_request_in_flight() {
-            self.try_switch_session(resume_builder, dirty);
-            if self.status.last_run_final && self.drain_pending_head() {
-                *dirty = true;
-            }
-        }
-    }
-
-    pub fn switch_session(&mut self, bundle: RunnerBundle) {
-        // Reverse-default: a swap is "fresh App + new bundle" -- rebuild from
-        // build_app (the launch-time equivalent), which resets every
-        // session-local field via app()'s defaults and applies only the bundle.
-        // This terminates the whitelist-clear approach that kept leaking fields
-        // (todos, bash_progress, selection, run-domain req ids, ...) across
-        // swaps: a new session-local field added to App cannot leak, because
-        // only the items named below cross the rebuild. Bump
-        // transcript_version to invalidate the slots
-        // cache (build_app leaves it at the default 0; the bump is explicit
-        // so a stale cached render does not ride into the new session).
-        //
-        // The pending queue is carried across (a session switch does not
-        // clear the pending queue — only session-scoped fields). Carried
-        // items auto-drain in the new session on the next idle: a queued
-        // message from session A sends in session B as the next turn. The
-        // one deliberate divergence: session-scoped Commands (/clear /rewind
-        // /undo) the user typed in the OLD session are DROPPED, not carried
-        // -- they operate on the current session, so carrying + auto-draining
-        // them would apply the old session's intent to the new one (a /clear
-        // typed in A would clear B). /resume Commands stay (switch intent is
-        // still valid); Messages stay (user content). Dropping old-session
-        // Commands prevents a stale /clear firing in B.
-        // A child view open at switch time exits through the canonical path
-        // first, so the flat sets hold the parent's own keys again and the
-        // park below stores them under the right session.
-        if self.teammate_view.is_some() {
-            self.exit_teammate_view();
-        }
-        let mut pending = self.input.queue.take_all();
-        // The open expansion sets belong to the session that owns them: park
-        // them under the session being left and install the entry for the
-        // session being entered, so a switch away and back keeps what the
-        // user had open. The parked state is taken here too -- build_app
-        // rebuilds the whole App.
-        let leaving = self.sessions.current.identity.session_id.clone();
-        let open_keys = self.take_expanded_keys();
-        let mut parked = std::mem::take(&mut self.parked_view_states);
-        // Drop session-scoped Commands (/clear /rewind /undo) the user typed
-        // in the OLD session: they operate on the current session, so
-        // carrying them to the NEW session + auto-draining would apply the
-        // old session's intent to the new one (a /clear typed in A would
-        // clear B). /resume Commands stay -- they express a switch intent
-        // that is still valid in the new session. Messages stay -- they are
-        // user content, recallable + auto-drainable in the new session.
-        let mut dropped: Vec<String> = Vec::new();
-        pending.retain(|item| {
-            if let crate::input::queue::InputItem::Command(text) = item
-                && !crate::input::queue::command_first_token_is(text, "resume")
-            {
-                dropped.push(text.clone());
-                return false;
-            }
-            true
-        });
-        // The new runner's server queue is empty, so a carried Message
-        // (InjectUser'd to the old server) lost its server copy. Demote to
-        // ParkedMessage so the barrier holds + the drain spawns it fresh.
-        for item in pending.iter_mut() {
-            if let crate::input::queue::InputItem::Message(t) = item {
-                *item = crate::input::queue::InputItem::ParkedMessage(t.clone());
-            }
-        }
-        *self = build_app(bundle);
-        self.sessions.current.todos.set_replaying_history(true);
-        // A swap is always initiated from the working screen (the user is on
-        // the transcript when they /resume), so force Working regardless of the
-        // bundle's skip_login. This nails the skip_login coupling: a bundle
-        // that carried skip_login=false would otherwise drop the user back to
-        // the login screen mid-session. Every current swap bundle passes
-        // skip_login=true, but this one line makes that invariant unbreakable.
-        self.screen = crate::state::Screen::Working;
-        self.bump_transcript_version();
-        self.input.queue.replace_all(pending);
-        parked.park_session(leaving, open_keys);
-        if let Some(keys) = parked.take_session(&self.sessions.current.identity.session_id) {
-            self.set_expanded_keys(keys);
-        }
-        // The new session's fleet is unrelated to the old one's children,
-        // and a child id can repeat across sessions: no parked child
-        // view state crosses the switch.
-        parked.clear_children();
-        self.parked_view_states = parked;
-        // A swap is a clean transition (the prior run ended FinalOutput, the
-        // /resume Command drained at idle, then the swap ran). Carried items
-        // auto-drain in the new session (a queued message from A sends in B
-        // as the next turn). build_app reset last_run_final to false, so
-        // re-set it true here or the carried queue would park (re-introducing
-        // the old carry-park behavior).
-        self.status.last_run_final = true;
-        if !dropped.is_empty() {
-            self.system_line(format!(
-                "resume: dropped {} command(s) from the old session ({}) -- re-issue in the new session if needed",
-                dropped.len(),
-                dropped.join(", ")
-            ));
-        }
-    }
-}
-
 /// Build the runner bundle via the composition root and wire it, matching the
 /// build_app_for_test(project) API so the existing test suite needs
 /// no per-call change. Test-only: the pairing (server spawn + client
@@ -464,7 +305,7 @@ fn local_test_settings_path() -> std::path::PathBuf {
     std::env::temp_dir().join(format!("houyi-settings-{}-{}.json", std::process::id(), n))
 }
 
-fn status() -> StatusStub {
+fn default_status() -> StatusStub {
     StatusStub {
         session_id: "sess-stub".to_string(),
         model: "model-stub".to_string(),

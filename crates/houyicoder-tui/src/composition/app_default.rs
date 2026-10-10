@@ -49,7 +49,7 @@ pub fn app() -> App {
         resume_picker: SessionPickerState::default(),
         pending_resume_target: None,
         palette: PaletteState::default(),
-        status: status(),
+        status: default_status(),
         memory: MemoryPaneState::new(memory_entries()),
         queue_view: QueueViewState::default(),
         worktree_entries: Vec::new(),
@@ -90,8 +90,9 @@ pub fn app() -> App {
 
 /// The seeded workflow state: the idle stage machine plus the stub spec,
 /// review, verify, artifact, and inbox defaults the composition starts from.
-/// A session switch rebuilds the whole App, so this is the single reset point.
-fn workflow() -> Workflow {
+/// A session switch resets it via reset_session_local, so this is the single
+/// reset point.
+pub(crate) fn workflow() -> Workflow {
     Workflow {
         stage: Stage::Idle,
         spec_ctx: spec_context(),

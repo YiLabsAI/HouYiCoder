@@ -933,3 +933,84 @@ fn test_switch_drops_child_park() {
         app.transcript_view.expanded.results
     );
 }
+
+/// A swap does not reset the process-level resources the terminal owns:
+/// terminal focus and the clipboard. The old rebuild reset them via app()'s
+/// defaults, impersonating a cleanup of the terminal. The no-rebuild swap
+/// leaves them alone so a focus loss survives a session switch.
+#[test]
+fn test_swap_preserves_terminal_focus() {
+    let mut app = build_app(test_bundle());
+    app.terminal_focused = false;
+    app.switch_session(test_bundle());
+    assert!(
+        !app.terminal_focused,
+        "terminal_focused preserved, not reset to the app() default"
+    );
+}
+
+/// A swap resets verbose: it is a search-view lifecycle flag (set on enter,
+/// cleared on exit), not a process resource. A switch out of an open search
+/// view must clear it, or the new session renders expanded and untruncated
+/// with no search view open. The old rebuild cleared it via app()'s defaults.
+#[test]
+fn test_swap_resets_verbose() {
+    let mut app = build_app(test_bundle());
+    app.verbose = true;
+    app.switch_session(test_bundle());
+    assert!(
+        !app.verbose,
+        "verbose reset to false, not carried from the search view"
+    );
+}
+
+/// A swap carries last_run_final from its pre-switch value rather than
+/// forging it true. The old rebuild reset it false via app()'s defaults then
+/// re-set it true so the carried queue would drain -- a forged run result.
+/// The no-rebuild swap keeps the true value; the carried queue drains via
+/// the idle drain's switched flag instead.
+#[test]
+fn test_swap_carries_run_final() {
+    let mut app = build_app(test_bundle());
+    app.status.last_run_final = false;
+    app.switch_session(test_bundle());
+    assert!(
+        !app.status.last_run_final,
+        "last_run_final carried from the pre-switch value, not forged true"
+    );
+    // The true case distinguishes carry from reset-false: a reset would drop
+    // it to false, a forge would set it true regardless. Carry keeps the
+    // pre-switch value, so true stays true.
+    let mut app2 = build_app(test_bundle());
+    app2.status.last_run_final = true;
+    app2.switch_session(test_bundle());
+    assert!(
+        app2.status.last_run_final,
+        "true carried, not reset to false"
+    );
+}
+
+/// A swap drains a carried queued message even when last_run_final is false:
+/// the idle drain's switched flag treats the swap itself as a clean
+/// transition (it runs at idle after a user pick or a clean end), so the
+/// carried item drains in the new session without a forged run result. This
+/// is the replacement for the old forged last_run_final=true.
+#[test]
+fn test_switch_drains_carried_queue() {
+    let mut app = build_app(test_bundle());
+    app.status.last_run_final = false;
+    app.pending_resume_target = Some("sid-target".to_string());
+    app.input.queue.push(InputItem::Message("carried".into()));
+    let mut dirty = false;
+    let builder: Box<ResumeBuilderRef> = Box::new(|_| Ok(test_bundle()));
+    app.idle_drain(Some(&*builder), &mut dirty);
+    assert!(dirty, "swap + drain flagged dirty");
+    assert!(
+        app.pending_resume_target.is_none(),
+        "resume target consumed"
+    );
+    assert!(
+        app.input.queue.is_empty(),
+        "carried message drained via the switched gate, not a forged last_run_final"
+    );
+}

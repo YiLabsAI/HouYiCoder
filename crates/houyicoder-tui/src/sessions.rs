@@ -39,4 +39,17 @@ impl Sessions {
             persistence: SessionPersistence::default(),
         }
     }
+
+    /// Commit a new presented session in one step. The caller prepares the
+    /// session (identity, connection, and a fresh run, transcript, prompt,
+    /// todos, and capabilities) plus the session-local App reset and the
+    /// queue or parked transfer, all before or around this call, so the
+    /// swap lands in one event-loop step with no draw or message processing
+    /// in between. The persistence and catalog collaborators are applied
+    /// by the caller against this owner, not carried inside the session,
+    /// because they are read ports the composition root injects rather than
+    /// session-owned facts.
+    pub(crate) fn set_current(&mut self, session: Session) {
+        self.current = session;
+    }
 }
