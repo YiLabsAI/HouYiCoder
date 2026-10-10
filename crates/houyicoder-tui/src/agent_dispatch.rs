@@ -107,14 +107,14 @@ impl App {
             // it locally (no fake decline), surface project + cause, and
             // release the exit keys the card was swallowing. Other prompts
             // return to the field so a later settle still owns them.
-            let prompt = self.sessions.current.prompt.take();
-            if let Some(PendingPrompt::Trust { prompt: tp, .. }) = prompt {
-                self.system_line(format!(
-                    "trust verdict undelivered for {}: {run_line}",
-                    tp.project_path
-                ));
+            let trust_path = match self.sessions.current.prompt.as_ref() {
+                Some(PendingPrompt::Trust { prompt: tp, .. }) => Some(tp.project_path.clone()),
+                _ => None,
+            };
+            if let Some(path) = trust_path {
+                self.sessions.current.clear_prompt();
+                self.system_line(format!("trust verdict undelivered for {path}: {run_line}"));
             } else {
-                self.sessions.current.prompt = prompt;
                 self.system_line(format!("agent error: {run_line}"));
             }
         }
@@ -386,7 +386,7 @@ impl App {
                 // run loop until the user answers. Raise the trust card (no
                 // run to pause — busy is already false at startup, but the
                 // card's presence gates new message sends until resolved).
-                self.sessions.current.prompt = Some(PendingPrompt::trust_ask(request, prompt));
+                self.sessions.current.raise_trust(request, prompt);
             }
         }
     }

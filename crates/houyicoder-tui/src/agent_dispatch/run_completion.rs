@@ -23,7 +23,7 @@ impl super::App {
         // progress, so the preview and tool-runtime state need no manual
         // clear here.
         let active = self.sessions.current.run.finish();
-        self.sessions.current.prompt = None;
+        self.sessions.current.clear_prompt();
         self.rebuild_transcript();
         self.debug_render_done(self.sessions.current.transcript.frames());
         let was_final = match result {

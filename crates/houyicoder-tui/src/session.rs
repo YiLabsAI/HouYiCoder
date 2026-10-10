@@ -14,6 +14,9 @@ use crate::state::history_read::HistoryReads;
 use crate::state::index_build::IndexBuild;
 use crate::state::transcript::Transcript;
 use crate::todo_view::TodoState;
+use houyicoder_protocol::envelope::RequestId;
+use houyicoder_protocol::frontend::run::ApprovalRequest;
+use houyicoder_protocol::frontend::trust::TrustPrompt;
 
 pub(crate) mod capabilities;
 mod connection;
@@ -105,5 +108,42 @@ impl Session {
             index_build: IndexBuild::default(),
             loaded_from_frame: Cell::new(usize::MAX),
         }
+    }
+
+    /// Raise a permission ask and pause the run for the verdict. The run
+    /// enters Waiting so its clock pauses, and the prompt holds the ask the
+    /// verdict will resolve. The two move together: a permission ask without
+    /// a paused run, or a paused run with no tracked ask, would leave the
+    /// verdict unable to resume the right run. Callers that mutate the card
+    /// or question after raising do so through the prompt accessor, after
+    /// this method has committed both halves of the transition.
+    pub(crate) fn raise_permission(&mut self, req_id: RequestId, requests: Vec<ApprovalRequest>) {
+        self.run.begin_waiting();
+        self.prompt = Some(PendingPrompt::permission(req_id, requests));
+    }
+
+    /// Clear a permission ask and resume the run. The verdict reached the
+    /// driver, so the run leaves Waiting preserving its original start time.
+    /// Only call this against a permission ask; a trust ask has no paused run
+    /// to resume, and a run finishing on its own clears with clear_prompt so
+    /// the run state is left to the finish transition.
+    pub(crate) fn resolve_permission(&mut self) {
+        self.prompt = None;
+        self.run.end_waiting();
+    }
+
+    /// Raise the startup trust ask. No run is in flight at startup, so the
+    /// run state is untouched; the prompt's presence gates new sends until
+    /// answered.
+    pub(crate) fn raise_trust(&mut self, req_id: RequestId, prompt: TrustPrompt) {
+        self.prompt = Some(PendingPrompt::trust_ask(req_id, prompt));
+    }
+
+    /// Clear whatever prompt is up, with no run transition. Used when the run
+    /// is finishing on its own (completion or cancel) or when the connection
+    /// is gone so no verdict can be sent. The run state is left to the path
+    /// that owns the finish or the loss.
+    pub(crate) fn clear_prompt(&mut self) {
+        self.prompt = None;
     }
 }

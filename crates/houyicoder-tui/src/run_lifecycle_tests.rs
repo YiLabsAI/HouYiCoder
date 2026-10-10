@@ -791,6 +791,34 @@ fn test_ask_preserves_start() {
     );
 }
 
+// Resolving an approval resumes the run, not just clears the card: the run
+// leaves Waiting for Running, so the spinner restarts. The raise and the
+// resolve each carry one half of the pairing, and this guards the resolve
+// half against a clear that forgets to end the wait.
+#[test]
+fn test_resolve_resumes_run() {
+    let mut app = composition::app();
+    app.screen = crate::state::Screen::Working;
+    attach_connection(&mut app);
+    assert!(
+        app.spawn_run("work".into()),
+        "run starts on a live connection"
+    );
+    assert!(app.agent_busy(), "a fresh run is busy before the ask");
+    app.raise_agent_approval(approval_ask("c1"), RequestId(1));
+    assert!(!app.agent_busy(), "the spinner pauses while the card is up");
+    app.resolve_current_approval(ApprovalDecision {
+        call_id: "c1".into(),
+        approved: true,
+        updated_input: None,
+        scope: "once".into(),
+    });
+    assert!(
+        app.agent_busy(),
+        "the verdict resumes the run, not just clears the card"
+    );
+}
+
 // Streamed text and a tracked running tool both survive the Waiting
 // transition, and a post-resume delta appends to the same preview.
 #[test]

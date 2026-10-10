@@ -269,10 +269,9 @@ impl App {
             self.system_line(Self::enqueue_failure_line("permission", e));
             return;
         }
-        self.sessions.current.prompt = None;
-        // Resume the run without resetting its clock: end_waiting flips
-        // Waiting → Running preserving the original started_at.
-        self.sessions.current.run.end_waiting();
+        // Resume the run without resetting its clock: resolve_permission
+        // flips Waiting → Running preserving the original started_at.
+        self.sessions.current.resolve_permission();
         self.refresh_fold_active();
         // Clear stale thinking state before post-resume streaming begins. The
         // run carried its progress through the pause, so these resets clear
@@ -297,7 +296,7 @@ impl App {
             self.system_line(Self::enqueue_failure_line("trust", e));
             return;
         }
-        self.sessions.current.prompt = None;
+        self.sessions.current.clear_prompt();
         if !accept {
             self.quit = true;
         }
@@ -310,11 +309,12 @@ impl App {
         let call_id = ask.call_id.clone();
         let tool = ask.tool_name.clone();
         // Pause the spinner while the run waits on the human verdict.
-        // begin_waiting preserves the run's identity and start time so the
-        // verdict can resume without resetting the clock.
-        self.sessions.current.run.begin_waiting();
+        // raise_permission enters Waiting and raises the ask in one step, so
+        // the verdict can resume without resetting the clock.
+        self.sessions
+            .current
+            .raise_permission(req_id, vec![ask.clone()]);
         self.refresh_fold_active();
-        self.sessions.current.prompt = Some(PendingPrompt::permission(req_id, vec![ask.clone()]));
         if tool == "AskUserQuestion"
             && let Some(aq) = AskQuestion::parse(&call_id, &ask.input)
         {
