@@ -78,11 +78,7 @@ pub(crate) fn build_bundle_for_resume(
             houyicoder_permission::FileRuleStore::default_paths(),
         )),
         provider,
-    )
-    .map_err(|e| {
-        eprintln!("resume failed: {e}");
-        e
-    })?;
+    )?;
     Ok(assemble_bundle(
         resumed.assembled.runner,
         resumed.assembled.session,
