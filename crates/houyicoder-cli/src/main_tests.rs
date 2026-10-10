@@ -368,3 +368,68 @@ fn test_cross_spelling_noop() {
     };
     assert!(err.to_string().contains("already on session"), "got: {err}");
 }
+
+/// A resume target whose sid a live process holds is rejected without
+/// touching the prior lease. The hash chain needs a single writer, so a
+/// session another process is still writing cannot be resumed in-process;
+/// the user is pointed at attach or fork instead. The live check fires
+/// before lock acquisition and before any writer is built, so the prior
+/// host stays in the slot. Mirrors test_bad_target_keeps_host for the
+/// held-target axis the invalid-target test does not reach.
+#[cfg(unix)]
+#[test]
+fn test_held_target_keeps_host() {
+    // The target sid must parse as a real SessionId (the sid-resume branch
+    // gates on from_display_string), so it cannot carry a test- prefix.
+    // A Drop guard removes the staged socket + pidfile even on a panic, and
+    // writing the socket too lets cleanup_stale reclaim the pair if the guard
+    // never runs (a kill between write and drop).
+    struct LiveSessionGuard {
+        sid: String,
+    }
+    impl Drop for LiveSessionGuard {
+        fn drop(&mut self) {
+            std::fs::remove_file(crate::detach::session_socket(&self.sid)).ok();
+            std::fs::remove_file(crate::detach::sessions_dir().join(format!("{}.pid", self.sid)))
+                .ok();
+        }
+    }
+    let target_sid = houyicoder_context::SessionId::new();
+    let target_str = target_sid.to_string();
+    // Stage a live pidfile + socket so is_session_live reports the target held
+    // by the current process (which is alive by definition).
+    let _guard = LiveSessionGuard {
+        sid: target_str.clone(),
+    };
+    std::fs::write(crate::detach::session_socket(&target_str), b"").expect("write test socket");
+    std::fs::write(
+        crate::detach::sessions_dir().join(format!("{target_str}.pid")),
+        std::process::id().to_string(),
+    )
+    .expect("write live pidfile");
+    assert!(
+        crate::detach::is_session_live(&target_str),
+        "the staged pidfile makes the target held by this process"
+    );
+    // The prior lease holds a different sid so the same-session no-op does not fire.
+    let slot: HostLeaseSlot = Arc::new(Mutex::new(Some(HostLease {
+        host: HostLifecycle::new(),
+        lock: None,
+        sid: Some(houyicoder_context::SessionId::new().to_string()),
+    })));
+    let provider = resolve_provider(None);
+    let err = match build_bundle_for_target(&target_str, None, provider, &slot) {
+        Err(e) => e,
+        Ok(_) => panic!("a held target must error, not build"),
+    };
+    assert!(
+        err.to_string().contains("is live in another process"),
+        "got: {err}"
+    );
+    assert!(
+        slot.lock()
+            .expect("host lifecycle slot must not poison")
+            .is_some(),
+        "the prior lease stays when the target is held"
+    );
+}
