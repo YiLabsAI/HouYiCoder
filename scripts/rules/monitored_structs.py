@@ -22,8 +22,10 @@ ACTIVE_OWNERS = {
         # carries the four expansion sets across a session switch. The turn
         # counter went with the live turn summary it named. Transcript took
         # the turn boundary and the render version (two fields; the lines
-        # field changed type in place). verdict_cursor stays as an audit
-        # capability; scrolled_from_frame waits for the view-state owner.
+        # field changed type in place). verdict_cursor later joined the
+        # permission capability beside the audit trail it guards, and
+        # scrolled_from_frame became the unseen-event cursor inside the
+        # transcript view state.
         # RunProgress took the eight streaming-progress fields (assistant
         # preview, reasoning preview, live block, the two timing clocks,
         # the running tool set, the bash ticker map) into ActiveRun, so
@@ -200,7 +202,14 @@ ACTIVE_OWNERS = {
         # itself, the session-returned caches awaiting their capability
         # owners, the render caches awaiting the Renderer owner, the sessions
         # and workflow owners, and the quit flag.
-        "fields": 15,
+        # Two of those caches then reached their capability owners: the
+        # verdict audit's frame-log read position joined the permission
+        # capability beside the trail it guards, so clearing the trail and
+        # rewinding the read position became one owner operation, and the
+        # linked-worktree listing became a worktree capability of its own.
+        # Both now reset with the session by construction, so the manual
+        # switch-reset lines for them are gone.
+        "fields": 13,
         "mut_app": 44,
     },
     "crates/houyicoder-tui/src/ui.rs:Ui": {
@@ -281,12 +290,14 @@ ACTIVE_OWNERS = {
         "fields": 14,
     },
     "crates/houyicoder-tui/src/session/capabilities.rs:PermissionCapability": {
-        # The session's wire-reported permission state: mode, rules, allowed
+        # The session's server-reported permission state: mode, rules, allowed
         # directories, the ask-before-git toggle, per-tool sticky verdicts,
-        # and the verdict audit trail. Six cache fields refreshed by the same
-        # wire replies and read by the same pane and status paths, so they
-        # move as one capability value.
-        "fields": 6,
+        # the verdict audit trail, and the frame-log read position that guards
+        # the trail. Six cache fields refreshed by the same server replies,
+        # plus the audit scan's read position that resets with the trail; the
+        # same pane and status paths read them all, so they move as one
+        # capability value.
+        "fields": 7,
     },
     "crates/houyicoder-tui/src/session/capabilities.rs:StatusCapability": {
         # The session's status caches and poll bookkeeping: the last context
@@ -297,9 +308,9 @@ ACTIVE_OWNERS = {
     },
     "crates/houyicoder-tui/src/session/capabilities.rs:SessionCapabilities": {
         # The static composition of a session's named capabilities: the
-        # permission, status, hooks, tools, and skills capabilities. The
-        # connection, run, and transcript live beside it, not inside it.
-        "fields": 5,
+        # permission, status, hooks, tools, skills, and worktree capabilities.
+        # The connection, run, and transcript live beside it, not inside it.
+        "fields": 6,
     },
     "crates/houyicoder-tui/src/session/capabilities.rs:HooksCapability": {
         # The session's registered-hook cache: the rows the /hooks pane
@@ -318,6 +329,13 @@ ACTIVE_OWNERS = {
         # One capability value so the pane reads the entries and the disables
         # from one owner rather than two flat App fields.
         "fields": 2,
+    },
+    "crates/houyicoder-tui/src/session/capabilities.rs:WorktreeCapability": {
+        # The session's linked-worktree listing: the rows the /worktrees pane
+        # renders, filled by the pane-open git listing against the session's
+        # working directory. One capability value so a session switch resets
+        # the rows by construction instead of a manual App reset.
+        "fields": 1,
     },
     "crates/houyicoder-tui/src/session/identity.rs:SessionIdentity": {
         # The presented session's identity: the wire routing id and the

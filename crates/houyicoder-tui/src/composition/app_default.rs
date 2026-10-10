@@ -67,7 +67,6 @@ pub fn app() -> App {
             terminal_focused: true,
         },
         workflow: workflow(),
-        verdict_cursor: 0,
         display_rows_cache: {
             let c = DisplayRowsCache::default();
             c.version.set(u64::MAX);
@@ -75,7 +74,6 @@ pub fn app() -> App {
         },
         status: default_status(),
         memory: MemoryPaneState::new(memory_entries()),
-        worktree_entries: Vec::new(),
         quit: false,
         sessions: Sessions::new(Session::bare(SessionIdentity {
             session_id: SessionId::new("test"),

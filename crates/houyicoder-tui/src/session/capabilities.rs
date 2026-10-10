@@ -20,11 +20,14 @@ use houyicoder_protocol::frontend::skills::SkillEntry;
 use houyicoder_protocol::frontend::status::StatusSnapshot;
 use houyicoder_protocol::frontend::tools::ToolEntry;
 
-/// The session's permission state as the wire reports it: the current mode,
+use crate::composition::WorktreeEntry;
+
+/// The session's permission state as the server reports it: the current mode,
 /// the durable rule list, the allowed-directory list, and the ask-before-git
-/// checkpoint, plus the per-tool sticky verdicts and the client-side verdict
-/// audit trail. All of it is wire-refreshed cache; the server owns the truth,
-/// the pane renders whatever the last reply shipped.
+/// checkpoint, plus the per-tool sticky verdicts, the client-side verdict
+/// audit trail, and the frame-log read position that guards the trail. The
+/// caches are server-refreshed: the server owns the truth, and the pane
+/// renders whatever the last reply shipped.
 #[derive(Debug)]
 pub(crate) struct PermissionCapability {
     /// The permission mode cache. Seeded on the first idle poll so the status
@@ -43,6 +46,11 @@ pub(crate) struct PermissionCapability {
     /// The session verdict log from the permission stream: the client-side
     /// audit trail of every approve or deny.
     pub(crate) verdict_log_cache: Vec<PermissionDecisionEntry>,
+    /// The frame-log read position of the verdict audit scan: frames below
+    /// this cursor are already folded into verdict_log_cache. A truncation
+    /// that rewinds the log past the cursor resets both together so the scan
+    /// re-parses from zero against the truncated log.
+    pub(crate) verdict_cursor: usize,
 }
 
 impl Default for PermissionCapability {
@@ -54,6 +62,7 @@ impl Default for PermissionCapability {
             ask_before_git_enabled: true,
             sticky_choices: HashMap::new(),
             verdict_log_cache: Vec::new(),
+            verdict_cursor: 0,
         }
     }
 }
@@ -153,6 +162,17 @@ pub(crate) struct SkillsCapability {
     pub(crate) disabled: HashSet<String>,
 }
 
+/// The session's linked-worktree listing, the rows the /worktrees pane
+/// renders. Filled by the pane-open refresh, which runs a host-side git
+/// listing against the session's working directory; empty until then, and
+/// reset with the session so rows never ride into a different working
+/// directory.
+#[derive(Debug, Default)]
+pub(crate) struct WorktreeCapability {
+    /// The worktree rows in listing order.
+    pub(crate) entries: Vec<WorktreeEntry>,
+}
+
 /// The static composition of a session's named capabilities: the
 /// server-reported caches plus the client-local session state each capability
 /// keeps (such as the disabled-skill set). The connection, run, and transcript
@@ -170,4 +190,6 @@ pub(crate) struct SessionCapabilities {
     pub(crate) tools: ToolsCapability,
     /// The skills capability: the discovered-skill cache and the disable set.
     pub(crate) skills: SkillsCapability,
+    /// The worktree capability: the linked-worktree listing cache.
+    pub(crate) worktree: WorktreeCapability,
 }

@@ -23,11 +23,12 @@ use crate::view::navigation::key_hint;
 const PATH_WIDTH: usize = 32;
 
 pub(super) fn draw_content(f: &mut Frame, area: Rect, app: &App) {
-    let n = app.worktree_entries.len();
+    let entries = &app.sessions.current.capabilities.worktree.entries;
+    let n = entries.len();
     // Level 1 detail (Enter on the list opens this).
     if app.ui.worktree_level.get() == 1 && n > 0 {
         let cur = app.ui.worktree_list.cursor.min(n.saturating_sub(1));
-        if let Some(e) = app.worktree_entries.get(cur) {
+        if let Some(e) = entries.get(cur) {
             draw_detail(f, area, e);
             return;
         }
@@ -61,14 +62,13 @@ pub(super) fn draw_content(f: &mut Frame, area: Rect, app: &App) {
             chunks[1],
         );
     }
-    let filtered_idx: Vec<usize> = filter_by_query(
-        &app.worktree_entries,
-        &app.ui.worktree_list.query,
-        |e: &WorktreeEntry| vec![&e.path, &e.branch],
-    );
+    let filtered_idx: Vec<usize> =
+        filter_by_query(entries, &app.ui.worktree_list.query, |e: &WorktreeEntry| {
+            vec![&e.path, &e.branch]
+        });
     let cur = app.ui.worktree_list.cursor.min(n.saturating_sub(1));
     if filtered_idx.is_empty() {
-        let msg = if app.worktree_entries.is_empty() {
+        let msg = if entries.is_empty() {
             "  (no worktrees; run from a git repo or add one with enter_worktree)"
         } else {
             "  (no worktrees match the search)"
@@ -79,7 +79,7 @@ pub(super) fn draw_content(f: &mut Frame, area: Rect, app: &App) {
         );
     } else {
         let cursor_pos = filtered_idx.iter().position(|&i| i == cur);
-        let items = worktree_items(app, &filtered_idx, cur);
+        let items = worktree_items(entries, &filtered_idx, cur);
         let mut state = ListState::default();
         state.select(cursor_pos);
         f.render_stateful_widget(
@@ -138,13 +138,18 @@ fn draw_detail(f: &mut Frame, area: Rect, e: &WorktreeEntry) {
 }
 
 /// Build the list rows (one per filtered worktree). The cursor is an index
-/// into worktree_entries (not the filtered list); when search is active the
-/// cursor's item may be filtered out, in which case no row is selected.
-fn worktree_items(app: &App, filtered_idx: &[usize], cur: usize) -> Vec<ListItem<'static>> {
+/// into the session's worktree rows (not the filtered list); when search is
+/// active the cursor's item may be filtered out, in which case no row is
+/// selected.
+fn worktree_items(
+    entries: &[WorktreeEntry],
+    filtered_idx: &[usize],
+    cur: usize,
+) -> Vec<ListItem<'static>> {
     filtered_idx
         .iter()
         .map(|&idx| {
-            let e = &app.worktree_entries[idx];
+            let e = &entries[idx];
             let is_cursor = idx == cur;
             let cur_marker = if e.is_current {
                 " * "

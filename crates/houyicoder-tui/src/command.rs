@@ -334,8 +334,8 @@ impl App {
         // The scrollback boundary belongs to the cleared session, so the next
         // one starts at the frame cap instead of an earlier window.
         self.sessions.current.loaded_from_frame.set(usize::MAX);
-        self.verdict_cursor = 0;
         let permission = &mut self.sessions.current.capabilities.permission;
+        permission.verdict_cursor = 0;
         permission.verdict_log_cache.clear();
         self.sessions.current.todos.clear();
         // Reset the server's cumulative usage tally + audit trajectory so

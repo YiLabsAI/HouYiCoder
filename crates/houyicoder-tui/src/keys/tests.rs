@@ -1448,7 +1448,7 @@ fn test_worktree_esc_closes_busy() {
 fn worktree_app_with_rows() -> App {
     let mut app = working_app();
     app.ui.navigation.pane = Pane::Worktree;
-    app.worktree_entries = vec![
+    app.sessions.current.capabilities.worktree.entries = vec![
         composition::WorktreeEntry {
             path: "/a".into(),
             head: "abcdef0".into(),

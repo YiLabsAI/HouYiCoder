@@ -24,7 +24,6 @@ mod trajectory;
 pub mod transcript;
 
 use crate::agent_message::FleetState;
-use crate::composition::WorktreeEntry;
 #[cfg(test)]
 use crate::composition::app as test_app;
 use crate::display_rows_cache::DisplayRowsCache;
@@ -93,9 +92,6 @@ pub struct App {
     /// The spec-plan-review-verify-artifact lifecycle fields, bundled as one
     /// owner toward the final shell.
     pub(crate) workflow: Workflow,
-    /// Cursor into the frame log for the verdict audit cache. Stays on App:
-    /// verdicts are an audit capability, not transcript content.
-    pub verdict_cursor: usize,
     /// The pre-rendered display-row cache: the rows, the four per-row key
     /// vectors, the pre-rendered lines, and the version stamp that guards
     /// them together. Pub(crate) so the draw pass reads and writes a vector
@@ -103,10 +99,6 @@ pub struct App {
     pub(crate) display_rows_cache: DisplayRowsCache,
     pub status: StatusStub,
     pub(crate) memory: MemoryPaneState,
-    /// The linked-worktree rows for the /worktrees pane. Refreshed from
-    /// parse_worktrees on pane-open. Empty until the user opens the pane (no
-    /// background poll — the list is cheap and the pane is one-shot).
-    pub worktree_entries: Vec<WorktreeEntry>,
     pub quit: bool,
     // --- real agent-loop wiring ---
     /// The presented session and the resumable-session catalog, held as one

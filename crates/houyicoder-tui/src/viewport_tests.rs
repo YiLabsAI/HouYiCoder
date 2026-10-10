@@ -480,7 +480,7 @@ fn test_scroll_typing_exits() {
 fn test_worktree_pane_renders_columns() {
     let mut app = working();
     app.ui.navigation.pane = Pane::Worktree;
-    app.worktree_entries = vec![
+    app.sessions.current.capabilities.worktree.entries = vec![
         crate::composition::WorktreeEntry {
             path: "/some/repo/alpha".into(),
             head: "abcdef0".into(),
@@ -527,7 +527,7 @@ fn test_worktree_pane_scroll() {
             ..Default::default()
         })
         .collect();
-    app.worktree_entries = entries;
+    app.sessions.current.capabilities.worktree.entries = entries;
     app.ui.worktree_list.cursor = 19;
     let out = render(&app);
     assert!(
@@ -571,7 +571,7 @@ fn test_memory_pane_scroll() {
 fn test_worktree_pane_detail() {
     let mut app = working();
     app.ui.navigation.pane = Pane::Worktree;
-    app.worktree_entries = vec![crate::composition::WorktreeEntry {
+    app.sessions.current.capabilities.worktree.entries = vec![crate::composition::WorktreeEntry {
         path: "/some/repo/alpha".into(),
         head: "abcdef0".into(),
         branch: "main".into(),

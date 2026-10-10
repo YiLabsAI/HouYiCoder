@@ -662,24 +662,26 @@ impl App {
         // to match the truncated log. A front drain leaves the absolute count
         // unchanged, so it never trips this, and the rebuild drains only after
         // this scan, so every drained frame's verdict is already cached.
-        if self.verdict_cursor > self.sessions.current.transcript.abs_frame_count() {
-            self.verdict_cursor = 0;
-            let permission = &mut self.sessions.current.capabilities.permission;
+        let permission = &mut self.sessions.current.capabilities.permission;
+        if permission.verdict_cursor > self.sessions.current.transcript.abs_frame_count() {
+            permission.verdict_cursor = 0;
             permission.verdict_log_cache.clear();
         }
         let base = self.sessions.current.transcript.frame_window_start();
         let frames = self.sessions.current.transcript.frames();
-        for sf in frames.iter().skip(self.verdict_cursor.saturating_sub(base)) {
+        for sf in frames
+            .iter()
+            .skip(permission.verdict_cursor.saturating_sub(base))
+        {
             if let TranscriptFrame::Acpx(n) = sf.as_ref()
                 && matches!(n.method, AcpxMethod::ContextPermissionDecision)
                 && let Ok(entry) =
                     serde_json::from_value::<PermissionDecisionEntry>(n.params.clone())
             {
-                let permission = &mut self.sessions.current.capabilities.permission;
                 permission.verdict_log_cache.push(entry);
             }
         }
-        self.verdict_cursor = self.sessions.current.transcript.abs_frame_count();
+        permission.verdict_cursor = self.sessions.current.transcript.abs_frame_count();
         self.sessions.current.todos.update(
             self.sessions.current.transcript.frames(),
             self.sessions.current.transcript.frame_window_start(),

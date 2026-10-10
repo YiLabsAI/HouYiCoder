@@ -241,7 +241,6 @@ impl App {
         self.ui.navigation.pane = Pane::Transcript;
         self.ui.navigation.viewport = ViewportMode::Working;
         self.ui.navigation.prev_viewport = ViewportMode::Working;
-        self.verdict_cursor = 0;
         self.ui.transcript_view = Default::default();
         self.ui.verbose = false;
         self.display_rows_cache = Default::default();
@@ -250,7 +249,6 @@ impl App {
         self.ui.navigation.palette = Default::default();
         self.memory = MemoryPaneState::new(memory_entries());
         self.ui.queue_view = Default::default();
-        self.worktree_entries = Vec::new();
         self.ui.worktree_list = Default::default();
         self.ui.worktree_level = Cell::new(0);
         self.ui.trajectory = Default::default();
