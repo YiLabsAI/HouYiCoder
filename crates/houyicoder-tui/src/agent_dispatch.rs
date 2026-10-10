@@ -44,7 +44,7 @@ impl App {
                     // so a failed Hello leaves the status at Connecting until
                     // the loss lands. The transition is constrained: a late
                     // confirmation cannot revive a lost connection.
-                    if let Some(s) = self.session.connection.as_mut() {
+                    if let Some(s) = self.sessions.current.connection.as_mut() {
                         s.mark_ready();
                     }
                 }
@@ -84,7 +84,7 @@ impl App {
         cause: String,
         not_sent: Vec<RequestId>,
     ) -> bool {
-        let first = match self.session.connection.as_mut() {
+        let first = match self.sessions.current.connection.as_mut() {
             Some(s) => s.mark_lost(cause.clone()),
             // No connection exists: nothing was lost twice, so run the sweep
             // for this observation. A synthetic loss on a session-less App
@@ -227,7 +227,7 @@ impl App {
                 // A committed mid-turn input makes the original submission no
                 // longer eligible for no-output rollback.
                 if !inputs.is_empty() {
-                    self.session.last_run_input = None;
+                    self.sessions.current.last_run_input = None;
                 }
                 // Remove exact committed inputs before promoting the next head.
                 // Stable identity prevents a delayed event from removing newer text.
@@ -350,7 +350,7 @@ impl App {
             && view.last_fetched_turn.is_none_or(|t| turn > t)
         {
             view.last_fetched_turn = Some(turn);
-            if let Some(s) = self.session.connection.as_ref() {
+            if let Some(s) = self.sessions.current.connection.as_ref() {
                 match s.next_request_id() {
                     Ok(req_id) => {
                         self.enqueue_refresh(ClientCommand::ChildTranscriptQuery {
@@ -384,7 +384,7 @@ impl App {
                 // run loop until the user answers. Raise the trust card (no
                 // run to pause — busy is already false at startup, but the
                 // card's presence gates new message sends until resolved).
-                self.session.prompt = Some(PendingPrompt::trust_ask(request, prompt));
+                self.sessions.current.prompt = Some(PendingPrompt::trust_ask(request, prompt));
             }
         }
     }
@@ -414,11 +414,11 @@ impl App {
             ServerResponse::Status { snapshot } => {
                 // Cache the snapshot for the status bar + /status pane. NOTE:
                 // rename's reply rides this variant (a racing /status is swallowed).
-                self.session.capabilities.status.pending_status_command = false;
                 // Sync the terminal tab title (OSC 0/2) on change only (not
                 // unconditionally every status update).
+                let status = &mut self.sessions.current.capabilities.status;
                 sync_terminal_title(&snapshot, &mut self.last_title);
-                self.session.capabilities.status.status_cache = Some(*snapshot);
+                status.record_snapshot(*snapshot);
             }
             ServerResponse::Trajectory { entries, redundant } => {
                 self.system_line(render_trajectory_wire(&entries, &redundant));
@@ -434,17 +434,18 @@ impl App {
                 // next render. No transcript line — mode switching is a
                 // background state change, not a conversation event. The
                 // /mode command pushes its own feedback when invoked.
-                self.session.capabilities.permission.mode_cache = Some(mode);
+                self.sessions.current.capabilities.permission.mode_cache = Some(mode);
             }
             ServerResponse::PermissionRules { rules } => {
-                self.session.capabilities.permission.rules_cache = rules.clone();
+                self.sessions.current.capabilities.permission.rules_cache = rules.clone();
                 self.system_line(render_permission_rules_wire(&rules));
             }
             ServerResponse::PermissionDirs { dirs } => {
-                self.session.capabilities.permission.dirs_cache = dirs.clone();
+                self.sessions.current.capabilities.permission.dirs_cache = dirs.clone();
             }
             ServerResponse::PermissionAskBeforeGit { enabled } => {
-                self.session.capabilities.permission.ask_before_git_enabled = enabled;
+                let permission = &mut self.sessions.current.capabilities.permission;
+                permission.ask_before_git_enabled = enabled;
                 self.system_line(format!(
                     "permission: ask before git operations: {} (git commit/rebase/reset/tag {} before running)",
                     if enabled { "on" } else { "off" },
@@ -452,7 +453,7 @@ impl App {
                 ));
             }
             ServerResponse::Tools { tools } => {
-                self.session.capabilities.tools.entries = tools;
+                self.sessions.current.capabilities.tools.entries = tools;
             }
             ServerResponse::Agents { directory } => {
                 self.agent_directory = Some(directory);
@@ -461,10 +462,10 @@ impl App {
                 self.apply_child_transcript(child_sid, frames);
             }
             ServerResponse::Hooks { hooks } => {
-                self.session.capabilities.hooks.entries = hooks;
+                self.sessions.current.capabilities.hooks.entries = hooks;
             }
             ServerResponse::Skills { skills } => {
-                self.session.capabilities.skills.entries = skills;
+                self.sessions.current.capabilities.skills.entries = skills;
             }
             ServerResponse::SkillBody { body } => {
                 self.skills_pane.apply_detail(request, body);
@@ -534,7 +535,7 @@ impl App {
     /// Drill-down (memory files, skills) is empty until the server ships
     /// those sections; the grid itself is honest data from the breakdown.
     fn apply_context_breakdown(&mut self, breakdown: ContextBreakdown) {
-        self.session.capabilities.status.context_cache = Some(breakdown.clone());
+        self.sessions.current.capabilities.status.context_cache = Some(breakdown.clone());
         let suggestions = suggestions_for(&breakdown);
         let view = ContextView {
             breakdown,
@@ -588,22 +589,23 @@ impl App {
         };
         // Swap the child rows into the matching Subagent line in place
         // to preserve position. Mirrors the ContextGrid refresh.
-        let idx = self.session.transcript.lines().iter().rposition(
+        let idx = self.sessions.current.transcript.lines().iter().rposition(
             |l| matches!(l, TranscriptLine::Subagent { child_sid: c, .. } if c == &child_sid),
         );
         if let Some(idx) = idx {
-            let mut line = self.session.transcript.lines_mut().remove(idx);
+            let mut line = self.sessions.current.transcript.lines_mut().remove(idx);
             if let TranscriptLine::Subagent {
                 folded_transcript, ..
             } = &mut line
             {
                 *folded_transcript = folded.clone();
             }
-            self.session.transcript.lines_mut().insert(idx, line);
+            let lines = self.sessions.current.transcript.lines_mut();
+            lines.insert(idx, line);
             // The block holds the frame-derived copy the next rebuild
             // migrates from, so the fetched rows must reach it too, or a
             // rebuild that re-derives this block reads an empty old copy.
-            let blocks = self.session.transcript.blocks_mut();
+            let blocks = self.sessions.current.transcript.blocks_mut();
             blocks.set_subagent_folded(&child_sid, &folded);
             // The swap mutates a line's payload in place instead of
             // pushing, so the row cache needs an explicit bump — the
@@ -643,11 +645,11 @@ impl App {
             // append and the streaming token / tool-update hot path pays
             // nothing for echo bookkeeping.
             if let TranscriptFrame::Session(SessionUpdate::UserMessageChunk(chunk)) = frame {
-                let transcript = &mut self.session.transcript;
+                let transcript = &mut self.sessions.current.transcript;
                 transcript.drop_trailing_echo(chunk_text(chunk));
             }
             self.track_running_tool(frame);
-            self.session.transcript.push_frame(sequenced);
+            self.sessions.current.transcript.push_frame(sequenced);
             any = true;
         }
         if any {

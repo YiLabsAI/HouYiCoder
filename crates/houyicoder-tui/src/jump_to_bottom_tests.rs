@@ -103,7 +103,7 @@ fn test_evicted_keeps_count() {
         app.push_transcript_line(TranscriptLine::User(format!("filler line {i}")));
     }
     assert_eq!(
-        app.session.transcript.len(),
+        app.sessions.current.transcript.len(),
         VIEWABLE_SCROLLBACK_CAP,
         "the fill leaves the window at its cap"
     );
@@ -121,7 +121,7 @@ fn test_evicted_keeps_count() {
     // aged-out echo frame too: one extra row versus the old direct-push model.
     app.push_transcript_line(TranscriptLine::User("one past the cap".into()));
     assert_eq!(
-        app.session.transcript.len(),
+        app.sessions.current.transcript.len(),
         VIEWABLE_SCROLLBACK_CAP + 3,
         "trim skips while scrolled back, so the line accumulates"
     );
@@ -135,19 +135,21 @@ fn test_evicted_keeps_count() {
     // The cap holds at the tail: resume trims the accumulated rows back.
     app.scroll_transcript_follow_tail();
     assert_eq!(
-        app.session.transcript.len(),
+        app.sessions.current.transcript.len(),
         VIEWABLE_SCROLLBACK_CAP,
         "resume-to-tail trims back to the cap"
     );
     assert!(
-        app.session
+        app.sessions
+            .current
             .transcript
             .iter()
             .any(|l| matches!(l, TranscriptLine::User(s) if s == "one past the cap")),
         "the newest row survives the resume trim"
     );
     assert!(
-        !app.session
+        !app.sessions
+            .current
             .transcript
             .iter()
             .any(|l| matches!(l, TranscriptLine::User(s) if s == "filler line 1")),
@@ -336,12 +338,15 @@ fn test_floor_count_after_drain() {
     }
     // The user scrolls back from the tail: the anchor is the frame count then.
     app.transcript_view.unseen_since = Some(EventCursor::Local(1000));
-    app.session.transcript.set_resident_byte_budget(1024);
+    app.sessions
+        .current
+        .transcript
+        .set_resident_byte_budget(1024);
     for i in 500..800 {
         pump(&mut app, user_msg(&format!("u{i} {text}")));
         pump(&mut app, agent_msg(&format!("a{i} {text}")));
     }
-    let base = app.session.transcript.frame_window_start();
+    let base = app.sessions.current.transcript.frame_window_start();
     let new = app.new_turn_count();
     assert!(
         base > 1000,

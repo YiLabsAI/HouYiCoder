@@ -137,21 +137,21 @@ pub(crate) fn draw_content(f: &mut Frame, inner: Rect, app: &App) {
         chunks[0],
     );
 
-    let count = app.session.capabilities.skills.entries.len();
+    let count = app.sessions.current.capabilities.skills.entries.len();
     f.render_widget(
         Paragraph::new(format!("{count} skills discovered"))
             .style(Style::new().fg(Color::DarkGray)),
         chunks[1],
     );
 
-    if app.session.capabilities.skills.entries.is_empty() {
+    if app.sessions.current.capabilities.skills.entries.is_empty() {
         f.render_widget(
             Paragraph::new("No skills found. Create skills in .houyicoder/skills/")
                 .style(Style::new().fg(Color::DarkGray)),
             chunks[2],
         );
     } else {
-        let ordered = display_order(&app.session.capabilities.skills.entries);
+        let ordered = display_order(&app.sessions.current.capabilities.skills.entries);
         let sel = app
             .skills_pane
             .cursor()
@@ -160,7 +160,7 @@ pub(crate) fn draw_content(f: &mut Frame, inner: Rect, app: &App) {
             Paragraph::new(grouped_lines(
                 &ordered,
                 sel,
-                &app.session.capabilities.skills.disabled,
+                &app.sessions.current.capabilities.skills.disabled,
             )),
             chunks[2],
         );
@@ -194,13 +194,20 @@ fn draw_detail(f: &mut Frame, inner: Rect, app: &App, detail: &SkillDetail) {
         SkillDetail::Loading { name, .. } | SkillDetail::Open { name, .. } => name.as_str(),
     };
     let entry = app
-        .session
+        .sessions
+        .current
         .capabilities
         .skills
         .entries
         .iter()
         .find(|e| e.name == name);
-    let user_disabled = app.session.capabilities.skills.disabled.contains(name);
+    let user_disabled = app
+        .sessions
+        .current
+        .capabilities
+        .skills
+        .disabled
+        .contains(name);
     f.render_widget(
         Paragraph::new(header_lines(entry, name, user_disabled)),
         rows[0],

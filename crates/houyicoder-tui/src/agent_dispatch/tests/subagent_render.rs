@@ -9,14 +9,17 @@ fn test_subagent_renders_collapsed() {
     use crate::records::TranscriptLine;
     let mut app = crate::composition::app();
     app.screen = crate::state::Screen::Working;
-    app.session.transcript.push(TranscriptLine::Subagent {
-        child_sid: "child-1".into(),
-        subagent_type: "explore".into(),
-        summary: "found auth module".into(),
-        prompt: String::new(),
-        folded_transcript: Vec::new(),
-        color: None,
-    });
+    app.sessions
+        .current
+        .transcript
+        .push(TranscriptLine::Subagent {
+            child_sid: "child-1".into(),
+            subagent_type: "explore".into(),
+            summary: "found auth module".into(),
+            prompt: String::new(),
+            folded_transcript: Vec::new(),
+            color: None,
+        });
     let out = crate::test_harness::render_text(&app, 80, 24);
     assert!(out.contains("explore"), "subagent type renders: {out}");
     assert!(out.contains("found auth module"), "summary renders: {out}");
@@ -35,14 +38,17 @@ fn test_subagent_renders_expanded() {
     use crate::records::TranscriptLine;
     let mut app = crate::composition::app();
     app.screen = crate::state::Screen::Working;
-    app.session.transcript.push(TranscriptLine::Subagent {
-        child_sid: "child-1".into(),
-        subagent_type: "explore".into(),
-        summary: "found auth module".into(),
-        prompt: String::new(),
-        folded_transcript: Vec::new(),
-        color: None,
-    });
+    app.sessions
+        .current
+        .transcript
+        .push(TranscriptLine::Subagent {
+            child_sid: "child-1".into(),
+            subagent_type: "explore".into(),
+            summary: "found auth module".into(),
+            prompt: String::new(),
+            folded_transcript: Vec::new(),
+            color: None,
+        });
     app.transcript_view
         .expanded
         .subagents
@@ -67,14 +73,17 @@ fn test_subagent_expanded_renders_child() {
     use crate::records::TranscriptLine;
     let mut app = crate::composition::app();
     app.screen = crate::state::Screen::Working;
-    app.session.transcript.push(TranscriptLine::Subagent {
-        child_sid: "child-1".into(),
-        subagent_type: "explore".into(),
-        summary: "found auth module".into(),
-        prompt: String::new(),
-        folded_transcript: vec![TranscriptLine::Agent("child reply: auth is here".into())],
-        color: None,
-    });
+    app.sessions
+        .current
+        .transcript
+        .push(TranscriptLine::Subagent {
+            child_sid: "child-1".into(),
+            subagent_type: "explore".into(),
+            summary: "found auth module".into(),
+            prompt: String::new(),
+            folded_transcript: vec![TranscriptLine::Agent("child reply: auth is here".into())],
+            color: None,
+        });
     app.transcript_view
         .expanded
         .subagents
@@ -95,14 +104,17 @@ fn test_subagent_toggle_expand() {
     use crate::records::TranscriptLine;
     let mut app = crate::composition::app();
     app.screen = crate::state::Screen::Working;
-    app.session.transcript.push(TranscriptLine::Subagent {
-        child_sid: "child-1".into(),
-        subagent_type: "explore".into(),
-        summary: "found auth".into(),
-        prompt: String::new(),
-        folded_transcript: Vec::new(),
-        color: None,
-    });
+    app.sessions
+        .current
+        .transcript
+        .push(TranscriptLine::Subagent {
+            child_sid: "child-1".into(),
+            subagent_type: "explore".into(),
+            summary: "found auth".into(),
+            prompt: String::new(),
+            folded_transcript: Vec::new(),
+            color: None,
+        });
     assert!(
         app.transcript_view.expanded.subagents.is_empty(),
         "starts collapsed"
@@ -127,14 +139,17 @@ fn test_child_transcript_fills() {
     use crate::records::TranscriptLine;
     let mut app = crate::composition::app();
     app.screen = crate::state::Screen::Working;
-    app.session.transcript.push(TranscriptLine::Subagent {
-        child_sid: "child-1".into(),
-        subagent_type: "explore".into(),
-        summary: "found auth".into(),
-        prompt: String::new(),
-        folded_transcript: Vec::new(),
-        color: None,
-    });
+    app.sessions
+        .current
+        .transcript
+        .push(TranscriptLine::Subagent {
+            child_sid: "child-1".into(),
+            subagent_type: "explore".into(),
+            summary: "found auth".into(),
+            prompt: String::new(),
+            folded_transcript: Vec::new(),
+            color: None,
+        });
     app.transcript_view
         .expanded
         .subagents
@@ -151,7 +166,8 @@ fn test_child_transcript_fills() {
         },
     });
     let folded = app
-        .session
+        .sessions
+        .current
         .transcript
         .iter()
         .find_map(|l| match l {
@@ -187,17 +203,21 @@ fn test_subagent_toggle_repaints() {
     use crate::records::TranscriptLine;
     let mut app = crate::composition::app();
     app.screen = crate::state::Screen::Working;
-    app.session
+    app.sessions
+        .current
         .transcript
         .push(TranscriptLine::User("task".into()));
-    app.session.transcript.push(TranscriptLine::Subagent {
-        child_sid: "c1".into(),
-        subagent_type: "explore".into(),
-        summary: "found auth".into(),
-        prompt: String::new(),
-        folded_transcript: vec![TranscriptLine::Agent("child reply here".into())],
-        color: None,
-    });
+    app.sessions
+        .current
+        .transcript
+        .push(TranscriptLine::Subagent {
+            child_sid: "c1".into(),
+            subagent_type: "explore".into(),
+            summary: "found auth".into(),
+            prompt: String::new(),
+            folded_transcript: vec![TranscriptLine::Agent("child reply here".into())],
+            color: None,
+        });
     let out = crate::test_harness::render_text(&app, 80, 24);
     assert!(
         !out.contains("child reply here"),
@@ -227,14 +247,17 @@ fn test_child_fetch_repaints() {
     use crate::records::TranscriptLine;
     let mut app = crate::composition::app();
     app.screen = crate::state::Screen::Working;
-    app.session.transcript.push(TranscriptLine::Subagent {
-        child_sid: "child-1".into(),
-        subagent_type: "explore".into(),
-        summary: "found auth".into(),
-        prompt: String::new(),
-        folded_transcript: Vec::new(),
-        color: None,
-    });
+    app.sessions
+        .current
+        .transcript
+        .push(TranscriptLine::Subagent {
+            child_sid: "child-1".into(),
+            subagent_type: "explore".into(),
+            summary: "found auth".into(),
+            prompt: String::new(),
+            folded_transcript: Vec::new(),
+            color: None,
+        });
     app.transcript_view
         .expanded
         .subagents
@@ -269,12 +292,15 @@ fn test_ctrl_o_fallthrough() {
     use crate::records::TranscriptLine;
     let mut app = crate::composition::app();
     app.screen = crate::state::Screen::Working;
-    app.session.transcript.push(TranscriptLine::ThoughtFor {
-        ms: Some(3_000),
-        reasoning: Some("pondered the task".into()),
-        tool_summary: None,
-        turn_id: "t1".into(),
-    });
+    app.sessions
+        .current
+        .transcript
+        .push(TranscriptLine::ThoughtFor {
+            ms: Some(3_000),
+            reasoning: Some("pondered the task".into()),
+            tool_summary: None,
+            turn_id: "t1".into(),
+        });
     assert!(app.transcript_view.expanded.thinking.is_empty());
     crate::keys::handle_ctrl_o(&mut app);
     assert!(
@@ -289,14 +315,21 @@ fn test_ctrl_o_fallthrough() {
 fn test_ctrl_o_todo_expand() {
     let mut app = crate::composition::app();
     app.screen = crate::state::Screen::Working;
-    app.session.todos.items.push(crate::todo_view::TodoView {
-        content: "do the thing".into(),
-        status: crate::todo_view::TodoStatus::Pending,
-        active_form: None,
-    });
-    assert!(!app.session.todos.expanded);
+    app.sessions
+        .current
+        .todos
+        .items
+        .push(crate::todo_view::TodoView {
+            content: "do the thing".into(),
+            status: crate::todo_view::TodoStatus::Pending,
+            active_form: None,
+        });
+    assert!(!app.sessions.current.todos.expanded);
     crate::keys::handle_ctrl_o(&mut app);
-    assert!(app.session.todos.expanded, "Ctrl+O expands the todo list");
+    assert!(
+        app.sessions.current.todos.expanded,
+        "Ctrl+O expands the todo list"
+    );
 }
 
 /// Expanding/collapsing a Subagent fold does not shift the content row
@@ -310,28 +343,36 @@ fn test_subagent_expand_stable_index() {
     use crate::records::TranscriptLine;
     let mut app = crate::composition::app();
     app.screen = crate::state::Screen::Working;
-    app.session
+    app.sessions
+        .current
         .transcript
         .push(TranscriptLine::User("task".into()));
-    app.session.transcript.push(TranscriptLine::Subagent {
-        child_sid: "child-1".into(),
-        subagent_type: "explore".into(),
-        summary: "found auth".into(),
-        prompt: String::new(),
-        folded_transcript: vec![TranscriptLine::Agent("child reply".into())],
-        color: None,
-    });
-    app.session
+    app.sessions
+        .current
+        .transcript
+        .push(TranscriptLine::Subagent {
+            child_sid: "child-1".into(),
+            subagent_type: "explore".into(),
+            summary: "found auth".into(),
+            prompt: String::new(),
+            folded_transcript: vec![TranscriptLine::Agent("child reply".into())],
+            color: None,
+        });
+    app.sessions
+        .current
         .transcript
         .push(TranscriptLine::Agent("parent result".into()));
     // Content row indices: User=0, Subagent=1, Agent=2.
-    assert!(matches!(app.session.transcript[0], TranscriptLine::User(_)));
     assert!(matches!(
-        app.session.transcript[1],
+        app.sessions.current.transcript[0],
+        TranscriptLine::User(_)
+    ));
+    assert!(matches!(
+        app.sessions.current.transcript[1],
         TranscriptLine::Subagent { .. }
     ));
     assert!(matches!(
-        app.session.transcript[2],
+        app.sessions.current.transcript[2],
         TranscriptLine::Agent(_)
     ));
     // Expand the Subagent — the transcript Vec does not change.
@@ -339,24 +380,30 @@ fn test_subagent_expand_stable_index() {
         .expanded
         .subagents
         .insert("child-1".into());
-    assert!(matches!(app.session.transcript[0], TranscriptLine::User(_)));
     assert!(matches!(
-        app.session.transcript[1],
+        app.sessions.current.transcript[0],
+        TranscriptLine::User(_)
+    ));
+    assert!(matches!(
+        app.sessions.current.transcript[1],
         TranscriptLine::Subagent { .. }
     ));
     assert!(matches!(
-        app.session.transcript[2],
+        app.sessions.current.transcript[2],
         TranscriptLine::Agent(_)
     ));
     // Collapse — still stable.
     app.transcript_view.expanded.subagents.remove("child-1");
-    assert!(matches!(app.session.transcript[0], TranscriptLine::User(_)));
     assert!(matches!(
-        app.session.transcript[1],
+        app.sessions.current.transcript[0],
+        TranscriptLine::User(_)
+    ));
+    assert!(matches!(
+        app.sessions.current.transcript[1],
         TranscriptLine::Subagent { .. }
     ));
     assert!(matches!(
-        app.session.transcript[2],
+        app.sessions.current.transcript[2],
         TranscriptLine::Agent(_)
     ));
 }

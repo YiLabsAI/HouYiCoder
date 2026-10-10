@@ -19,7 +19,7 @@ fn test_opens_pane_no_runner() {
     let mut app = working();
     app.run_command(houyicoder_protocol::frontend::SlashCommand::Hooks);
     assert_eq!(app.pane, crate::state::Pane::Hooks);
-    assert!(app.session.capabilities.hooks.entries.is_empty());
+    assert!(app.sessions.current.capabilities.hooks.entries.is_empty());
 }
 
 /// A HooksResult populates the hooks capability cache (a live view).
@@ -51,8 +51,11 @@ fn test_hooks_result_stores_entries() {
             ],
         },
     });
-    assert_eq!(app.session.capabilities.hooks.entries.len(), 2);
-    assert_eq!(app.session.capabilities.hooks.entries[0].name, "pre-check");
+    assert_eq!(app.sessions.current.capabilities.hooks.entries.len(), 2);
+    assert_eq!(
+        app.sessions.current.capabilities.hooks.entries[0].name,
+        "pre-check"
+    );
 }
 
 /// The /hooks pane journey: with framework + configured entries, the list

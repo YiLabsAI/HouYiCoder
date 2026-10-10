@@ -28,8 +28,11 @@ fn test_tool_list_result_stored() {
             }],
         },
     });
-    assert_eq!(app.session.capabilities.tools.entries.len(), 1);
-    assert_eq!(app.session.capabilities.tools.entries[0].name, "bash");
+    assert_eq!(app.sessions.current.capabilities.tools.entries.len(), 1);
+    assert_eq!(
+        app.sessions.current.capabilities.tools.entries[0].name,
+        "bash"
+    );
 }
 
 #[test]
@@ -49,13 +52,16 @@ fn test_skills_result_stored() {
             }],
         },
     });
-    assert_eq!(app.session.capabilities.skills.entries.len(), 1);
+    assert_eq!(app.sessions.current.capabilities.skills.entries.len(), 1);
     assert_eq!(
-        app.session.capabilities.skills.entries[0].name,
+        app.sessions.current.capabilities.skills.entries[0].name,
         "pdf-export"
     );
-    assert_eq!(app.session.capabilities.skills.entries[0].origin, "user");
-    assert!(app.session.capabilities.skills.entries[0].invocable);
+    assert_eq!(
+        app.sessions.current.capabilities.skills.entries[0].origin,
+        "user"
+    );
+    assert!(app.sessions.current.capabilities.skills.entries[0].invocable);
 }
 
 /// A body reply for the request the detail waits on fills it with the text
@@ -99,7 +105,7 @@ fn test_stale_skill_body_dropped() {
 fn test_open_detail_without_session() {
     let mut app = crate::composition::app();
     app.pane = Pane::Skills;
-    app.session.capabilities.skills.entries = vec![skill_entry("alpha")];
+    app.sessions.current.capabilities.skills.entries = vec![skill_entry("alpha")];
     app.open_skill_detail();
     assert!(matches!(
         app.skills_pane.detail(),
@@ -114,7 +120,7 @@ fn test_open_detail_without_session() {
 fn test_lost_send_settles_detail() {
     let mut app = crate::test_harness::connection_lost_app();
     app.pane = Pane::Skills;
-    app.session.capabilities.skills.entries = vec![skill_entry("alpha")];
+    app.sessions.current.capabilities.skills.entries = vec![skill_entry("alpha")];
     app.open_skill_detail();
     assert!(matches!(
         app.skills_pane.detail(),
@@ -158,7 +164,7 @@ fn test_error_settles_skill_detail() {
     assert!(app.skills_pane.detail_body().is_none());
     use crate::records::TranscriptLine;
     assert!(
-        app.session.transcript.iter().any(
+        app.sessions.current.transcript.iter().any(
             |l| matches!(l, TranscriptLine::System(s) if s.contains("error: body read failed"))
         ),
         "the error still reaches the transcript"
@@ -189,15 +195,25 @@ fn test_error_keeps_detail_loading() {
 fn test_toggle_skill_at_cursor() {
     let mut app = crate::composition::app();
     app.pane = Pane::Skills;
-    app.session.capabilities.skills.entries = vec![skill_entry("alpha")];
+    app.sessions.current.capabilities.skills.entries = vec![skill_entry("alpha")];
     app.toggle_skill_at_cursor();
     assert!(
-        app.session.capabilities.skills.disabled.contains("alpha"),
+        app.sessions
+            .current
+            .capabilities
+            .skills
+            .disabled
+            .contains("alpha"),
         "the first press disables"
     );
     app.toggle_skill_at_cursor();
     assert!(
-        !app.session.capabilities.skills.disabled.contains("alpha"),
+        !app.sessions
+            .current
+            .capabilities
+            .skills
+            .disabled
+            .contains("alpha"),
         "the second press re-enables"
     );
 }
@@ -211,10 +227,10 @@ fn test_toggle_blocked_skill_noop() {
     let mut blocked = skill_entry("alpha");
     blocked.user_invocable = false;
     blocked.invocable = false;
-    app.session.capabilities.skills.entries = vec![blocked];
+    app.sessions.current.capabilities.skills.entries = vec![blocked];
     app.toggle_skill_at_cursor();
     assert!(
-        app.session.capabilities.skills.disabled.is_empty(),
+        app.sessions.current.capabilities.skills.disabled.is_empty(),
         "a blocked skill stays blocked"
     );
 }
@@ -227,7 +243,7 @@ fn test_skills_pane_renders_entries() {
     let mut app = crate::composition::app();
     app.screen = crate::state::Screen::Working;
     app.pane = crate::state::Pane::Skills;
-    app.session.capabilities.skills.entries = vec![
+    app.sessions.current.capabilities.skills.entries = vec![
         SkillEntry {
             name: "pdf-export".into(),
             description: "export chat to pdf".into(),
@@ -270,7 +286,7 @@ fn test_skills_pane_showcase() {
     let mut app = crate::composition::app();
     app.screen = crate::state::Screen::Working;
     app.pane = crate::state::Pane::Skills;
-    app.session.capabilities.skills.entries = vec![
+    app.sessions.current.capabilities.skills.entries = vec![
         SkillEntry {
             name: "pdf-export".into(),
             description: "export the chat transcript to a pdf file".into(),
@@ -312,7 +328,7 @@ fn test_tools_pane_renders_entries() {
     let mut app = crate::composition::app();
     app.screen = crate::state::Screen::Working;
     app.pane = crate::state::Pane::Tools;
-    app.session.capabilities.tools.entries = vec![
+    app.sessions.current.capabilities.tools.entries = vec![
         ToolEntry {
             name: "zed".into(),
             description: "edits files".into(),
@@ -344,7 +360,7 @@ fn test_tools_pane_renders_empty() {
     let mut app = crate::composition::app();
     app.screen = crate::state::Screen::Working;
     app.pane = crate::state::Pane::Tools;
-    app.session.capabilities.tools.entries = vec![];
+    app.sessions.current.capabilities.tools.entries = vec![];
     let out = crate::test_harness::render_text(&app, 80, 24);
     assert!(
         out.contains("(no tools loaded)"),

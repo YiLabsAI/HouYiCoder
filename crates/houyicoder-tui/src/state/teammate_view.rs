@@ -51,7 +51,7 @@ impl App {
             ..Default::default()
         };
         let mut fire_fetch = needs_fetch;
-        for line in self.session.transcript.lines() {
+        for line in self.sessions.current.transcript.lines() {
             if let TranscriptLine::Subagent {
                 child_sid: sid,
                 subagent_type,
@@ -98,7 +98,7 @@ impl App {
         // the view swaps that source, so bump here or the cache holds the
         // parent rows and the child transcript never renders.
         self.bump_transcript_version();
-        if fire_fetch && let Some(s) = self.session.connection.as_ref() {
+        if fire_fetch && let Some(s) = self.sessions.current.connection.as_ref() {
             match s.next_request_id() {
                 Ok(req_id) => {
                     self.enqueue_refresh(ClientCommand::ChildTranscriptQuery {

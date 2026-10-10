@@ -188,7 +188,7 @@ fn hidden_summary(
 /// line keeps the glyph colors and strikethrough on screen. Empty when there
 /// is no checklist, so the caller adds no rows.
 pub fn render_rows(app: &App) -> Vec<(String, Line<'static>)> {
-    let todos = &app.session.todos.items;
+    let todos = &app.sessions.current.todos.items;
     if todos.is_empty() {
         return Vec::new();
     }
@@ -210,10 +210,10 @@ pub fn render_rows(app: &App) -> Vec<(String, Line<'static>)> {
         Line::from(Span::styled(h, Style::default().fg(Color::DarkGray))),
     )];
     let term_rows = app.layout_feedback.terminal_rows.get();
-    let body = if app.session.todos.expanded {
+    let body = if app.sessions.current.todos.expanded {
         render_expanded(todos, term_rows)
     } else {
-        render_collapsed(todos, &app.session.todos.completion_at, term_rows)
+        render_collapsed(todos, &app.sessions.current.todos.completion_at, term_rows)
     };
     out.extend(body);
     out

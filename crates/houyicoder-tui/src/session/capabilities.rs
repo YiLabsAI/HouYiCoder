@@ -8,7 +8,7 @@
 //! handle or a session reader port.
 
 use std::collections::{HashMap, HashSet};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use houyicoder_protocol::acp_wire::PermissionOptionKind;
 use houyicoder_protocol::frontend::context::ContextBreakdown;
@@ -78,6 +78,47 @@ pub(crate) struct StatusCapability {
     /// updates the cache silently; a command-initiated poll also renders the
     /// full status block as a transcript line on reply. Cleared on reply.
     pub(crate) pending_status_command: bool,
+}
+
+impl StatusCapability {
+    /// The poll cadence for idle status refresh. A command poll renders the
+    /// full block on reply; this periodic poll keeps the bar and the pane
+    /// recent without adding a transcript line.
+    const POLL_INTERVAL: Duration = Duration::from_secs(1);
+
+    /// The cached status snapshot for the status bar and the /status pane, or
+    /// None while disconnected or before the first reply.
+    pub(crate) fn snapshot(&self) -> Option<&StatusSnapshot> {
+        self.status_cache.as_ref()
+    }
+
+    /// Whether the poll interval has elapsed since the last periodic poll, or
+    /// no poll has run yet.
+    pub(crate) fn poll_due(&self) -> bool {
+        self.last_status_poll
+            .map(|t| t.elapsed() >= Self::POLL_INTERVAL)
+            .unwrap_or(true)
+    }
+
+    /// Absorb a status reply: cache the snapshot and clear the pending-command
+    /// flag together, so a command poll cannot stay pending past its reply.
+    pub(crate) fn record_snapshot(&mut self, snapshot: StatusSnapshot) {
+        self.pending_status_command = false;
+        self.status_cache = Some(snapshot);
+    }
+
+    /// Mark a command-initiated status poll as awaiting its reply. The caller
+    /// sets this only after the query enqueue is accepted, so a refused
+    /// enqueue never leaves a pending flag waiting on a reply that will not
+    /// come.
+    pub(crate) fn mark_command_pending(&mut self) {
+        self.pending_status_command = true;
+    }
+
+    /// Stamp the last periodic poll, throttling the next one by the interval.
+    pub(crate) fn mark_poll_sent(&mut self) {
+        self.last_status_poll = Some(Instant::now());
+    }
 }
 
 /// The session's registered-hook cache, the rows the /hooks pane renders.

@@ -138,7 +138,7 @@ fn test_recall_clear_loses() {
     // Submitting empty no-ops.
     app.submit_input();
     assert!(
-        app.session.transcript.is_empty(),
+        app.sessions.current.transcript.is_empty(),
         "empty submit no-ops (no User turn recorded)"
     );
 }

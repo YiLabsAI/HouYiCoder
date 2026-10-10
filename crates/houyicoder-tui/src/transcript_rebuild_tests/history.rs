@@ -110,7 +110,7 @@ fn test_prepend_survives_rebuild() {
             .push_frame(user_msg(&format!("recent {i}")));
     }
     app.rebuild_transcript();
-    assert!(app.session.loaded_from_frame.get() > 0);
+    assert!(app.sessions.current.loaded_from_frame.get() > 0);
     app.whole_scroll_mut().jump_to(0);
     app.load_older_frames();
     pump_history_read_blocking(&mut app, Duration::from_secs(5));

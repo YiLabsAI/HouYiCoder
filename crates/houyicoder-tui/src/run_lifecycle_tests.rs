@@ -80,7 +80,8 @@ fn test_one_at_a_time() {
     // reverse permission ask, waits for the verdict, resumes, then re-asks
     // for any remaining. So the ask holds one approval, not the full batch.
     assert_eq!(
-        app.session
+        app.sessions
+            .current
             .prompt
             .as_ref()
             .map(|p| p.request_count())
@@ -134,7 +135,7 @@ fn test_one_at_a_time() {
         !a.agent_busy() && !a.reverse_request_in_flight()
     });
     assert!(settled, "run should settle after second decision");
-    assert!(app.session.transcript.iter().any(|l| matches!(
+    assert!(app.sessions.current.transcript.iter().any(|l| matches!(
         l,
         TranscriptLine::Agent(s) if s == "both handled"
     )));
@@ -149,7 +150,7 @@ fn test_approval_renders_inline() {
 
     let mut app = composition::app();
     app.screen = crate::state::Screen::Working;
-    app.session.prompt = Some(PendingPrompt::approval_card(
+    app.sessions.current.prompt = Some(PendingPrompt::approval_card(
         RequestId(0),
         crate::state::Approval {
             tool: "bash".to_string(),
@@ -176,7 +177,7 @@ fn test_approval_renders_inline() {
     // No approval -> no separator or proceed question near tail.
     let mut app2 = composition::app();
     app2.screen = crate::state::Screen::Working;
-    app2.session.prompt = None;
+    app2.sessions.current.prompt = None;
     let text2 = render_text(&app2, 80, 24);
     assert!(
         !text2.contains("Do you want to proceed?"),
@@ -196,7 +197,7 @@ fn test_approval_esc_rejects_current() {
     }
     let mut app = composition::app();
     app.screen = crate::state::Screen::Working;
-    app.session.prompt = Some(PendingPrompt::approval_card(
+    app.sessions.current.prompt = Some(PendingPrompt::approval_card(
         RequestId(0),
         crate::state::Approval {
             tool: "bash".to_string(),
@@ -223,7 +224,7 @@ fn test_approval_enter_approve_current() {
     }
     let mut app = composition::app();
     app.screen = crate::state::Screen::Working;
-    app.session.prompt = Some(PendingPrompt::approval_card(
+    app.sessions.current.prompt = Some(PendingPrompt::approval_card(
         RequestId(0),
         crate::state::Approval {
             tool: "bash".to_string(),
@@ -259,13 +260,13 @@ fn test_approval_char_keys_select() {
         ..Default::default()
     };
     // 'a' (or '1') pins Yes.
-    app.session.prompt = Some(PendingPrompt::approval_card(RequestId(0), mk()));
+    app.sessions.current.prompt = Some(PendingPrompt::approval_card(RequestId(0), mk()));
     handle_working(&mut app, key(KeyCode::Char('a')));
     assert_eq!(app.approval().unwrap().selected, 0, "a pins Yes");
     assert!(app.approval().is_some(), "card stays open after a");
 
     // No is always index 1, whatever order the card displays.
-    app.session.prompt = Some(PendingPrompt::approval_card(RequestId(0), mk()));
+    app.sessions.current.prompt = Some(PendingPrompt::approval_card(RequestId(0), mk()));
     handle_working(&mut app, key(KeyCode::Char('r')));
     assert_eq!(app.approval().unwrap().selected, 1, "r pins No");
     assert!(app.approval().is_some(), "card stays open after r");
@@ -299,21 +300,23 @@ fn test_approval_pretext_survives_rebuild() {
     assert!(got_approval, "approval card should appear");
     // The agent's pre-text must be in the transcript as an Agent line.
     assert!(
-        app.session
+        app.sessions
+            .current
             .transcript
             .iter()
             .any(|l| matches!(l, TranscriptLine::Agent(s) if s.contains("guarded tool"))),
         "assistant pre-text must survive the rebuild, transcript: {:?}",
-        app.session.transcript
+        app.sessions.current.transcript
     );
     // The user's input must also survive.
     assert!(
-        app.session
+        app.sessions
+            .current
             .transcript
             .iter()
             .any(|l| matches!(l, TranscriptLine::User(s) if s == "go ahead")),
         "user input must survive the rebuild, transcript: {:?}",
-        app.session.transcript
+        app.sessions.current.transcript
     );
 }
 
@@ -382,10 +385,16 @@ fn test_status_snapshot_accumulates_live() {
     // The TUI holds no engine handle, so the tally arrives over the wire: pump
     // the periodic status poll until the driver routes it back.
     pump_until(&mut app, 200, |a| {
-        a.session.capabilities.status.status_cache.is_some()
+        a.sessions
+            .current
+            .capabilities
+            .status
+            .status_cache
+            .is_some()
     });
     let snap = app
-        .session
+        .sessions
+        .current
         .capabilities
         .status
         .status_cache
@@ -411,7 +420,8 @@ fn test_status_snapshot_accumulates_live() {
     // is pushed as a ContextGrid transcript line, not a System text line.
     app.push_transcript_line(TranscriptLine::ContextGrid(composition::context_view()));
     let has_grid = app
-        .session
+        .sessions
+        .current
         .transcript
         .iter()
         .any(|l| matches!(l, crate::state::TranscriptLine::ContextGrid(_)));
@@ -488,12 +498,13 @@ fn test_esc_aborts_busy_run() {
     let settled = pump_until(&mut app, 200, |a| !a.agent_busy());
     assert!(settled, "aborted run should settle via Interrupted");
     assert!(
-        !app.session
+        !app.sessions
+            .current
             .transcript
             .iter()
             .any(|l| matches!(l, TranscriptLine::System(s) if s.contains("interrupted by user"))),
         "no user-facing interrupted-by-user line — the interrupt is implicit: {:?}",
-        app.session.transcript
+        app.sessions.current.transcript
     );
     // The run streamed a delta before the abort, so it produced real content:
     // the input must NOT be restored.
@@ -502,7 +513,7 @@ fn test_esc_aborts_busy_run() {
         "input must stay empty when real content was produced"
     );
     assert!(
-        app.session.last_run_input.is_none(),
+        app.sessions.current.last_run_input.is_none(),
         "stash cleared on Done"
     );
 }
@@ -516,7 +527,10 @@ fn test_esc_abort_restores_input() {
     let original = "rewrite this as a pure function";
     app.spawn_run(original.into());
     assert!(app.agent_busy(), "run should be in flight");
-    assert_eq!(app.session.last_run_input.as_deref(), Some(original));
+    assert_eq!(
+        app.sessions.current.last_run_input.as_deref(),
+        Some(original)
+    );
     // The token is installed on a worker thread, so re-fire abort each tick
     // until the Done message arrives.
     let mut settled = false;
@@ -537,16 +551,17 @@ fn test_esc_abort_restores_input() {
         "input must be restored after a no-content abort"
     );
     assert!(
-        app.session
+        app.sessions
+            .current
             .transcript
             .iter()
             .any(|l| matches!(l, TranscriptLine::System(s) if s == "input restored")),
         "transcript must carry the restore line: {:?}",
-        app.session.transcript
+        app.sessions.current.transcript
     );
     // The stash is cleared (no new run was spawned, agent_busy is false).
     assert!(
-        app.session.last_run_input.is_none(),
+        app.sessions.current.last_run_input.is_none(),
         "stash cleared after restore"
     );
 }
@@ -568,44 +583,48 @@ fn test_context_grid_after_run() {
     assert!(settled, "run should settle");
     // Assert correct ORDER: User(/context), ContextGrid, User(hi), Agent.
     let ctx_user = app
-        .session
+        .sessions
+        .current
         .transcript
         .iter()
         .position(|l| matches!(l, TranscriptLine::User(s) if s == "/context"));
     let ctx_grid = app
-        .session
+        .sessions
+        .current
         .transcript
         .iter()
         .position(|l| matches!(l, TranscriptLine::ContextGrid(_)));
     let hi_user = app
-        .session
+        .sessions
+        .current
         .transcript
         .iter()
         .position(|l| matches!(l, TranscriptLine::User(s) if s == "hi"));
     let agent = app
-        .session
+        .sessions
+        .current
         .transcript
         .iter()
         .position(|l| matches!(l, TranscriptLine::Agent(s) if s.contains("hello")));
     assert!(
         ctx_user.is_some(),
         "User(/context) missing: {:?}",
-        app.session.transcript
+        app.sessions.current.transcript
     );
     assert!(
         ctx_grid.is_some(),
         "ContextGrid missing: {:?}",
-        app.session.transcript
+        app.sessions.current.transcript
     );
     assert!(
         hi_user.is_some(),
         "User(hi) missing: {:?}",
-        app.session.transcript
+        app.sessions.current.transcript
     );
     assert!(
         agent.is_some(),
         "Agent reply missing: {:?}",
-        app.session.transcript
+        app.sessions.current.transcript
     );
     let cu = ctx_user.unwrap();
     let cg = ctx_grid.unwrap();
@@ -638,14 +657,16 @@ fn test_slash_echo_visible() {
     app.submit_input();
     // Assert the transcript has both lines.
     assert!(
-        app.session
+        app.sessions
+            .current
             .transcript
             .iter()
             .any(|l| matches!(l, TranscriptLine::User(s) if s == "/context")),
         "User echo missing from transcript"
     );
     assert!(
-        app.session
+        app.sessions
+            .current
             .transcript
             .iter()
             .any(|l| matches!(l, TranscriptLine::ContextGrid(_))),
@@ -683,17 +704,20 @@ fn test_tui_lines_survive_runs() {
     pump_until(&mut app, 200, |a| !a.agent_busy());
     // ContextGrid must still be present and before both User(hi) and User(again).
     let cg = app
-        .session
+        .sessions
+        .current
         .transcript
         .iter()
         .position(|l| matches!(l, TranscriptLine::ContextGrid(_)));
     let hi = app
-        .session
+        .sessions
+        .current
         .transcript
         .iter()
         .position(|l| matches!(l, TranscriptLine::User(s) if s == "hi"));
     let again = app
-        .session
+        .sessions
+        .current
         .transcript
         .iter()
         .position(|l| matches!(l, TranscriptLine::User(s) if s == "again"));
@@ -827,7 +851,7 @@ fn test_finish_copies_start() {
         },
     });
     assert_eq!(
-        app.session.run_metrics.session_started_at, started,
+        app.sessions.current.run_metrics.session_started_at, started,
         "the run start is copied into the session start before the drop"
     );
 }
@@ -856,7 +880,7 @@ fn test_final_run_survives_loss() {
         },
     });
     assert!(app.status.last_run_final, "the Done settled as final");
-    let before = app.session.transcript.len();
+    let before = app.sessions.current.transcript.len();
     app.apply_connection_loss("connect failed: no server".into(), Vec::new());
     assert!(
         app.status.last_run_final,
@@ -868,7 +892,7 @@ fn test_final_run_survives_loss() {
         "the loss finds no run to settle"
     );
     assert!(
-        app.session.transcript.len() > before,
+        app.sessions.current.transcript.len() > before,
         "the loss still pushes its notice line"
     );
 }
@@ -1011,7 +1035,12 @@ fn test_loss_unsent_vs_unknown() {
         cause: "send failed: pipe broken".into(),
         not_sent: vec![run_req],
     }));
-    let last = app.session.transcript.last().expect("a line landed");
+    let last = app
+        .sessions
+        .current
+        .transcript
+        .last()
+        .expect("a line landed");
     assert!(
         matches!(last, TranscriptLine::System(s) if s.contains("not sent")),
         "a not sent run must say so, got {last:?}"
@@ -1026,7 +1055,12 @@ fn test_loss_unsent_vs_unknown() {
         cause: "send failed: pipe broken".into(),
         not_sent: vec![],
     }));
-    let last = app.session.transcript.last().expect("a line landed");
+    let last = app
+        .sessions
+        .current
+        .transcript
+        .last()
+        .expect("a line landed");
     assert!(
         matches!(last, TranscriptLine::System(s) if s.contains("send failed")),
         "an unknown run must carry the cause, got {last:?}"
@@ -1076,7 +1110,7 @@ fn test_loss_during_waiting_settles() {
     assert!(!app.cancelling(), "nothing is left to cancel");
     assert_eq!(app.active_run_req_id(), None, "the run id clears on settle");
     assert!(
-        app.session.prompt.is_none(),
+        app.sessions.current.prompt.is_none(),
         "the approval prompt clears on settle"
     );
     assert!(!app.status.last_run_final, "an error settle is not final");
@@ -1098,7 +1132,7 @@ fn test_loss_during_cancelling_settles() {
     assert!(!app.cancelling(), "cancelling clears on settle");
     assert_eq!(app.active_run_req_id(), None, "the run id clears on settle");
     assert!(
-        app.session.prompt.is_none(),
+        app.sessions.current.prompt.is_none(),
         "the approval prompt clears on settle"
     );
 }

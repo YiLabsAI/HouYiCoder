@@ -24,7 +24,13 @@ fn working_app() -> App {
 
 /// The text of the newest transcript system line.
 fn last_system(app: &App) -> &str {
-    match app.session.transcript.last().expect("a line was pushed") {
+    match app
+        .sessions
+        .current
+        .transcript
+        .last()
+        .expect("a line was pushed")
+    {
         TranscriptLine::System(t) => t,
         other => panic!("expected a system line, got {other:?}"),
     }
@@ -222,9 +228,9 @@ fn test_clear_resets_session() {
     app.workflow.stage = Stage::Implementing;
     app.pane = Pane::Diff;
     app.workflow.spec_ctx.step = "implementing".to_string();
-    app.session.todos.set_cursor(4);
-    app.session.loaded_from_frame.set(0);
-    app.session.todos.items.push(TodoView {
+    app.sessions.current.todos.set_cursor(4);
+    app.sessions.current.loaded_from_frame.set(0);
+    app.sessions.current.todos.items.push(TodoView {
         content: "stale".into(),
         status: TodoStatus::Pending,
         active_form: None,
@@ -233,17 +239,17 @@ fn test_clear_resets_session() {
     assert_eq!(app.workflow.stage, Stage::Idle);
     assert_eq!(app.workflow.spec_ctx.step, "idle");
     assert_eq!(app.pane, Pane::Transcript);
-    assert_eq!(app.session.transcript.len(), 1);
+    assert_eq!(app.sessions.current.transcript.len(), 1);
     // The scrollback boundary names frames of the cleared log, so it returns to
     // the frame cap rather than holding the window the old session had loaded.
-    assert_eq!(app.session.loaded_from_frame.get(), usize::MAX);
+    assert_eq!(app.sessions.current.loaded_from_frame.get(), usize::MAX);
     // The checklist cursor restarts on the cleared log rather than keeping
     // the stale 4, so it stands where the reset left the log it reads.
     assert_eq!(
-        app.session.todos.cursor(),
-        app.session.transcript.abs_frame_count()
+        app.sessions.current.todos.cursor(),
+        app.sessions.current.transcript.abs_frame_count()
     );
-    assert!(app.session.todos.items.is_empty());
+    assert!(app.sessions.current.todos.items.is_empty());
 }
 
 #[test]
@@ -297,13 +303,15 @@ fn test_unknown_slash_is_message() {
     app.input.editor.set("/nope".to_string());
     app.submit_input();
     let unknown = app
-        .session
+        .sessions
+        .current
         .transcript
         .iter()
         .any(|l| matches!(l, TranscriptLine::System(s) if s.contains("unknown command")));
     assert!(!unknown, "an unknown /-prefix must not error as a command");
     let echoed = app
-        .session
+        .sessions
+        .current
         .transcript
         .iter()
         .any(|l| matches!(l, TranscriptLine::User(s) if s == "/nope"));
@@ -317,7 +325,8 @@ fn test_command_echoes_user_turn() {
     app.input.editor.set("/debug".to_string());
     app.submit_input();
     let echoed = app
-        .session
+        .sessions
+        .current
         .transcript
         .iter()
         .any(|l| matches!(l, TranscriptLine::User(s) if s == "/debug"));
@@ -326,7 +335,7 @@ fn test_command_echoes_user_turn() {
         "/debug must echo as a User turn before its response"
     );
     assert!(
-        matches!(app.session.transcript.last(), Some(TranscriptLine::System(s)) if s.contains("debug")),
+        matches!(app.sessions.current.transcript.last(), Some(TranscriptLine::System(s)) if s.contains("debug")),
         "the debug response should follow the echoed command"
     );
 }
@@ -339,7 +348,8 @@ fn test_slash_path_is_text() {
     app.input.editor.set("/home/you/sample-project".to_string());
     app.submit_input();
     let unknown = app
-        .session
+        .sessions
+        .current
         .transcript
         .iter()
         .any(|l| matches!(l, TranscriptLine::System(s) if s.contains("unknown command")));
@@ -348,7 +358,8 @@ fn test_slash_path_is_text() {
         "a leading-slash path must not be parsed as a command"
     );
     let echoed = app
-        .session
+        .sessions
+        .current
         .transcript
         .iter()
         .any(|l| matches!(l, TranscriptLine::User(s) if s.contains("sample-project")));
@@ -366,19 +377,21 @@ fn test_scrollback_evicts_oldest() {
         app.push_transcript_line(TranscriptLine::User(format!("line-{i}")));
     }
     assert_eq!(
-        app.session.transcript.len(),
+        app.sessions.current.transcript.len(),
         4000,
         "viewable buffer must cap at the scrollback limit"
     );
     assert!(
-        app.session
+        app.sessions
+            .current
             .transcript
             .iter()
             .any(|l| matches!(l, TranscriptLine::User(s) if s == "line-4004")),
         "the newest line must be kept"
     );
     assert!(
-        !app.session
+        !app.sessions
+            .current
             .transcript
             .iter()
             .any(|l| matches!(l, TranscriptLine::User(s) if s == "line-0")),
@@ -484,7 +497,7 @@ fn test_kill_all_no_running() {
 #[test]
 fn test_clear_ships_session_reset() {
     let (mut app, events) = connected_app_events();
-    let sid = app.session.identity.session_id.clone();
+    let sid = app.sessions.current.identity.session_id.clone();
     app.run_command(SlashCommand::Clear);
     let req = wait_for_request(&events, |p| {
         matches!(p, FrontendRequest::SessionReset { .. })
@@ -505,7 +518,8 @@ fn test_clear_ships_session_reset() {
 fn test_exhausted_commands_report() {
     use houyicoder_protocol::frontend::memory::MemoryToggleWhich;
     let (mut app, _events) = connected_app_events();
-    app.session
+    app.sessions
+        .current
         .connection
         .as_ref()
         .expect("connected session")
@@ -529,11 +543,11 @@ fn test_exhausted_commands_report() {
 
     // Auto refreshes share one connection-level notice: the first round
     // announces exactly one line, later rounds stay quiet.
-    let before = app.session.transcript.len();
+    let before = app.sessions.current.transcript.len();
     app.run_command(SlashCommand::Agents);
-    assert_eq!(app.session.transcript.len(), before + 1);
+    assert_eq!(app.sessions.current.transcript.len(), before + 1);
     assert_eq!(last_system(&app), "request ids exhausted");
-    let after_first = app.session.transcript.len();
+    let after_first = app.sessions.current.transcript.len();
     app.run_command(SlashCommand::Model);
     app.run_command(SlashCommand::Context);
     app.run_command(SlashCommand::Tools);
@@ -542,7 +556,7 @@ fn test_exhausted_commands_report() {
     app.run_command(SlashCommand::Memory);
     app.run_command(SlashCommand::Status);
     assert_eq!(
-        app.session.transcript.len(),
+        app.sessions.current.transcript.len(),
         after_first,
         "later automatic refreshes do not repeat the notice"
     );
@@ -554,7 +568,8 @@ fn test_exhausted_commands_report() {
 #[test]
 fn test_exhausted_clear_no_repeat() {
     let (mut app, _events) = connected_app_events();
-    app.session
+    app.sessions
+        .current
         .connection
         .as_ref()
         .expect("connected session")
@@ -565,13 +580,19 @@ fn test_exhausted_clear_no_repeat() {
     // no exhaustion notice may appear anywhere, and the post-clear line is
     // the session-archived one.
     assert!(
-        !app.session.transcript.iter().any(|line| matches!(
+        !app.sessions.current.transcript.iter().any(|line| matches!(
             line,
             TranscriptLine::System(t) if t.contains("request ids exhausted")
         )),
         "clear must not repeat the exhaustion notice"
     );
-    match app.session.transcript.last().expect("a line was pushed") {
+    match app
+        .sessions
+        .current
+        .transcript
+        .last()
+        .expect("a line was pushed")
+    {
         TranscriptLine::System(t) => assert!(
             t.contains("session archived"),
             "the post-clear line archives the session, got {t}"
@@ -680,7 +701,7 @@ fn test_closed_commands_report_loss() {
     // Auto refreshes never write a loss line: the driver's ConnectionLost
     // event is the single visible notice. The transcript stays unchanged
     // across every auto refresh even though each enqueue returns Closed.
-    let before = app.session.transcript.len();
+    let before = app.sessions.current.transcript.len();
     app.run_command(SlashCommand::Agents);
     app.run_command(SlashCommand::Model);
     app.run_command(SlashCommand::Context);
@@ -690,7 +711,7 @@ fn test_closed_commands_report_loss() {
     app.run_command(SlashCommand::Memory);
     app.run_command(SlashCommand::Status);
     assert_eq!(
-        app.session.transcript.len(),
+        app.sessions.current.transcript.len(),
         before,
         "auto refreshes never write a connection-loss line"
     );
@@ -707,13 +728,19 @@ fn test_closed_clear_no_repeat() {
     // Auto paths never write a loss line (the ConnectionLost event is the
     // sole notice), so the whole post-clear transcript holds no loss line.
     assert!(
-        !app.session.transcript.iter().any(|line| matches!(
+        !app.sessions.current.transcript.iter().any(|line| matches!(
             line,
             TranscriptLine::System(t) if t.contains("connection lost")
         )),
         "clear must not add a loss line"
     );
-    match app.session.transcript.last().expect("a line was pushed") {
+    match app
+        .sessions
+        .current
+        .transcript
+        .last()
+        .expect("a line was pushed")
+    {
         TranscriptLine::System(t) => assert!(
             t.contains("session archived"),
             "the post-clear line archives the session, got {t}"
@@ -736,7 +763,7 @@ fn test_auto_refresh_silent() {
         "agent error: connect failed: no server",
         "the settled loss writes the run-completion error line"
     );
-    let after_loss = app.session.transcript.len();
+    let after_loss = app.sessions.current.transcript.len();
     assert!(matches!(
         app.connection_status(),
         ConnectionStatus::Lost(ref cause) if !cause.contains("driver stopped")
@@ -746,14 +773,14 @@ fn test_auto_refresh_silent() {
     app.run_command(SlashCommand::Agents);
     app.run_command(SlashCommand::Model);
     assert_eq!(
-        app.session.transcript.len(),
+        app.sessions.current.transcript.len(),
         after_loss,
         "auto refreshes after the settled loss write no second line"
     );
     // The closed channel (a repeat observation) also stays quiet.
     app.poll_agent();
     assert_eq!(
-        app.session.transcript.len(),
+        app.sessions.current.transcript.len(),
         after_loss,
         "a closed channel after the settled loss stays quiet"
     );
@@ -767,13 +794,19 @@ fn test_auto_refresh_silent() {
 fn test_connection_status_ready() {
     let (mut app, _events) = connected_app_events();
     assert_eq!(
-        app.session.connection.as_ref().expect("session").status(),
+        app.sessions
+            .current
+            .connection
+            .as_ref()
+            .expect("session")
+            .status(),
         &ConnectionStatus::Connecting,
         "before the handshake result the status is Connecting"
     );
     // Block for the driver's real ConnectionReady and apply it.
     let msg = app
-        .session
+        .sessions
+        .current
         .connection
         .as_mut()
         .expect("session")
@@ -818,12 +851,12 @@ fn test_late_ready_keeps_lost() {
 #[test]
 fn test_first_loss_cause_wins() {
     let mut app = connection_lost_app();
-    let after_death = app.session.transcript.len();
+    let after_death = app.sessions.current.transcript.len();
     // The closed channel (a second observation after the announced death)
     // must not overwrite the cause or write another line.
     app.poll_agent();
     assert_eq!(
-        app.session.transcript.len(),
+        app.sessions.current.transcript.len(),
         after_death,
         "a closed channel after the announced death stays quiet"
     );
@@ -856,7 +889,13 @@ fn test_connection_status_disconnected() {
 fn test_poll_closed_distinct() {
     let mut app = connection_lost_app();
     // The fixture consumed the death announcement; the channel is exhausted.
-    let outcome = app.session.connection.as_mut().expect("session").poll();
+    let outcome = app
+        .sessions
+        .current
+        .connection
+        .as_mut()
+        .expect("session")
+        .poll();
     assert!(
         matches!(outcome, PollOutcome::Closed),
         "an exhausted channel reports Closed, not Idle: {outcome:?}"
@@ -865,7 +904,8 @@ fn test_poll_closed_distinct() {
     // ConnectionReady, then poll the quiet channel.
     let (mut live, _events) = connected_app_events();
     let msg = live
-        .session
+        .sessions
+        .current
         .connection
         .as_mut()
         .expect("session")
@@ -875,7 +915,13 @@ fn test_poll_closed_distinct() {
         matches!(msg, SessionMessage::Connection(ConnectionEvent::Ready)),
         "the driver announces readiness, got {msg:?}"
     );
-    let outcome = live.session.connection.as_mut().expect("session").poll();
+    let outcome = live
+        .sessions
+        .current
+        .connection
+        .as_mut()
+        .expect("session")
+        .poll();
     assert!(
         matches!(outcome, PollOutcome::Idle),
         "a live quiet channel reports Idle, not Closed: {outcome:?}"
@@ -894,7 +940,7 @@ fn test_closed_settles_loss() {
         let (agent_tx, agent_rx) = std::sync::mpsc::channel();
         let session = SessionConnection::spawn(client, agent_tx, agent_rx, &runtime);
         let mut a = working_app();
-        a.session.connection = Some(session);
+        a.sessions.current.connection = Some(session);
         a
     };
     // Consume the death announcement WITHOUT applying it — the panic path
@@ -902,7 +948,8 @@ fn test_closed_settles_loss() {
     // is still Connecting. poll_startup blocks for the driver's death
     // message, so the arrival does not race the assertion.
     let death = app
-        .session
+        .sessions
+        .current
         .connection
         .as_mut()
         .expect("session")
@@ -915,7 +962,7 @@ fn test_closed_settles_loss() {
         ),
         "the death is readable but treated as lost, got {death:?}"
     );
-    let before = app.session.transcript.len();
+    let before = app.sessions.current.transcript.len();
     // The driver sent the death and returned, but the runtime may not have
     // dropped the task's agent_tx yet — poll with a real deadline until the
     // channel closes, so a slow instrumented run does not race the drop.
@@ -933,7 +980,7 @@ fn test_closed_settles_loss() {
         "the first closed observation marks state dirty"
     );
     assert_eq!(
-        app.session.transcript.len(),
+        app.sessions.current.transcript.len(),
         before + 1,
         "the closed channel settles one visible loss line"
     );
@@ -943,14 +990,14 @@ fn test_closed_settles_loss() {
     );
     assert!(!app.agent_busy(), "the closed channel ends any active run");
     // A repeat poll stays quiet: no second settlement, no line, not dirty.
-    let after_loss = app.session.transcript.len();
+    let after_loss = app.sessions.current.transcript.len();
     let repeat_changed = app.poll_agent();
     assert!(
         !repeat_changed,
         "a repeat closed observation does not re-mark dirty"
     );
     assert_eq!(
-        app.session.transcript.len(),
+        app.sessions.current.transcript.len(),
         after_loss,
         "a repeat closed observation does not settle again"
     );

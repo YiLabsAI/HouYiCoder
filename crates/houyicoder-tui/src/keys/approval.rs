@@ -114,12 +114,13 @@ pub(super) fn handle_approval(app: &mut App, k: KeyEvent) {
                     approval_scope(a),
                 )
             };
-            app.session
+            app.sessions
+                .current
                 .capabilities
                 .permission
                 .sticky_choices
                 .insert(tool, kind);
-            if app.session.connection.is_some() {
+            if app.sessions.current.connection.is_some() {
                 // Ship the verdict over the wire as a reverse response; the
                 // server drives runner.resume, records the audit event, and,
                 // when scope is "always", computes the bash command prefix
@@ -135,7 +136,7 @@ pub(super) fn handle_approval(app: &mut App, k: KeyEvent) {
                     },
                 );
             } else {
-                app.session.prompt = None;
+                app.sessions.current.prompt = None;
             }
         }
         KeyCode::Esc => {
@@ -148,11 +149,16 @@ pub(super) fn handle_approval(app: &mut App, k: KeyEvent) {
                 Some(a) => (a.call_id.clone(), a.tool.clone()),
                 None => return,
             };
-            app.session.capabilities.permission.sticky_choices.insert(
-                tool,
-                houyicoder_protocol::acp_wire::PermissionOptionKind::RejectOnce,
-            );
-            if app.session.connection.is_some() {
+            app.sessions
+                .current
+                .capabilities
+                .permission
+                .sticky_choices
+                .insert(
+                    tool,
+                    houyicoder_protocol::acp_wire::PermissionOptionKind::RejectOnce,
+                );
+            if app.sessions.current.connection.is_some() {
                 app.resolve_current_approval(
                     houyicoder_protocol::frontend::run::ApprovalDecision {
                         call_id,
@@ -162,7 +168,7 @@ pub(super) fn handle_approval(app: &mut App, k: KeyEvent) {
                     },
                 );
             } else {
-                app.session.prompt = None;
+                app.sessions.current.prompt = None;
             }
         }
         _ => {}

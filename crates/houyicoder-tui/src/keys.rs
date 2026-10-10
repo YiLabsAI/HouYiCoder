@@ -133,8 +133,8 @@ pub fn handle_working(app: &mut App, k: KeyEvent) {
         app.skill_picker.sel.set(0);
         // If skills haven't been queried yet (the user hasn't opened
         // /skills), fetch them now so the picker isn't empty.
-        if app.session.capabilities.skills.entries.is_empty()
-            && let Some(s) = app.session.connection.as_ref()
+        if app.sessions.current.capabilities.skills.entries.is_empty()
+            && let Some(s) = app.sessions.current.connection.as_ref()
         {
             match s.next_request_id() {
                 Ok(req_id) => {
@@ -185,8 +185,8 @@ pub(crate) fn handle_ctrl_o(app: &mut App) {
     if app.toggle_latest_memory_notice() {
         return;
     }
-    if !app.session.todos.items.is_empty() {
-        app.session.todos.expanded = !app.session.todos.expanded;
+    if !app.sessions.current.todos.items.is_empty() {
+        app.sessions.current.todos.expanded = !app.sessions.current.todos.expanded;
         return;
     }
     app.toggle_focused_result_expand();

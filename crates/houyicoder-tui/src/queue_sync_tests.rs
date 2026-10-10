@@ -161,7 +161,8 @@ fn test_pending_head_empty_noop() {
 fn test_busy_clear_enqueues_feedback() {
     let mut app = working();
     app.start_run_for_test(0);
-    app.session
+    app.sessions
+        .current
         .transcript
         .push(TranscriptLine::User("pre-clear".into()));
     app.input.editor.set("/clear".to_string());
@@ -172,7 +173,7 @@ fn test_busy_clear_enqueues_feedback() {
         "/clear enqueued as a Command mid-run"
     );
     assert!(
-        !app.session.transcript.is_empty(),
+        !app.sessions.current.transcript.is_empty(),
         "transcript NOT cleared mid-run (clear deferred)"
     );
 }
@@ -182,13 +183,15 @@ fn test_busy_clear_enqueues_feedback() {
 #[test]
 fn test_drain_command_dispatches_clear() {
     let mut app = working();
-    app.session
+    app.sessions
+        .current
         .transcript
         .push(TranscriptLine::User("stale".into()));
     app.input.queue.push(InputItem::Command("/clear".into()));
     assert!(app.drain_pending_head(), "Command drained");
     assert!(
-        !app.session
+        !app.sessions
+            .current
             .transcript
             .iter()
             .any(|l| matches!(l, TranscriptLine::User(_))),
@@ -498,7 +501,7 @@ fn test_commit_identity() {
 #[test]
 fn test_commit_clears_parked() {
     let mut app = working();
-    app.session.last_run_input = Some("origin".into());
+    app.sessions.current.last_run_input = Some("origin".into());
     let committed = houyicoder_protocol::frontend::QueuedInput::new("same");
     app.input
         .queue
@@ -510,7 +513,7 @@ fn test_commit_clears_parked() {
 
     assert!(app.input.queue.is_empty(), "committed parked mirror clears");
     assert!(
-        app.session.last_run_input.is_none(),
+        app.sessions.current.last_run_input.is_none(),
         "commit closes the original rollback window"
     );
 }

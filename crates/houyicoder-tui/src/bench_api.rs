@@ -17,7 +17,8 @@ use crate::transcript::{SequencedFrame, TranscriptFrame};
 pub fn app_with_frames(frames: Vec<TranscriptFrame>) -> App {
     let mut app = composition::app();
     let sequenced: Vec<SequencedFrame> = frames.into_iter().map(Into::into).collect();
-    app.session
+    app.sessions
+        .current
         .transcript
         .with_frames_mut(|log| *log = sequenced);
     app
@@ -36,8 +37,8 @@ pub fn rebuild_transcript(mut app: App) -> App {
 /// so the two values are read together.
 pub fn resident_frame_bytes(app: &App) -> (u64, usize) {
     (
-        app.session.transcript.resident_bytes(),
-        app.session.transcript.resident_byte_budget(),
+        app.sessions.current.transcript.resident_bytes(),
+        app.sessions.current.transcript.resident_byte_budget(),
     )
 }
 
@@ -45,7 +46,7 @@ pub fn resident_frame_bytes(app: &App) -> (u64, usize) {
 /// the byte total, because a payload-heavy log holds under the ceiling only by
 /// draining the frames before this front.
 pub fn resident_frame_front(app: &App) -> usize {
-    app.session.transcript.frame_window_start()
+    app.sessions.current.transcript.frame_window_start()
 }
 
 /// Recompute the fold groups from the transcript lines and return the count.
@@ -53,7 +54,8 @@ pub fn resident_frame_front(app: &App) -> usize {
 /// measures the fold work now confined to the rebuild instead of repeated per
 /// draw; the bench keeps it as the comparable fold-cost metric.
 pub fn recompute_fold_group_count(app: &App) -> usize {
-    crate::fold::compute_fold_groups(app.session.transcript.lines(), app.agent_busy()).len()
+    crate::fold::compute_fold_groups(app.sessions.current.transcript.lines(), app.agent_busy())
+        .len()
 }
 
 /// The fold groups the draw path reads: the cache the rebuild maintains.

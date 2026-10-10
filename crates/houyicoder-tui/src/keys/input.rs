@@ -290,13 +290,13 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
         KeyCode::Up if app.pane == Pane::Skills => {
             app.skills_pane.move_cursor(
                 -1,
-                display_order(&app.session.capabilities.skills.entries).len(),
+                display_order(&app.sessions.current.capabilities.skills.entries).len(),
             );
         }
         KeyCode::Down if app.pane == Pane::Skills => {
             app.skills_pane.move_cursor(
                 1,
-                display_order(&app.session.capabilities.skills.entries).len(),
+                display_order(&app.sessions.current.capabilities.skills.entries).len(),
             );
         }
         KeyCode::Enter if app.pane == Pane::Skills => {
@@ -343,7 +343,8 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
         }
         KeyCode::Down if app.pane == Pane::Hooks && app.hooks_pane.level.get() == 0 => {
             let len = app
-                .session
+                .sessions
+                .current
                 .capabilities
                 .hooks
                 .entries
@@ -419,7 +420,7 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
                 && !editing
             {
                 let project = crate::history::current_project();
-                let session_key = app.session.identity.session_id.to_string();
+                let session_key = app.sessions.current.identity.session_id.to_string();
                 app.input
                     .history
                     .up(&mut app.input.editor, &project, &session_key);
@@ -465,7 +466,7 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
 /// (runner wired) Tab is a no-op: the working screen is a single chat stream,
 /// not a pane tab system.
 pub(super) fn cycle_pane(app: &mut App) {
-    if app.session.connection.is_some() {
+    if app.sessions.current.connection.is_some() {
         return;
     }
     let next = Pane::PRIMARY

@@ -8,22 +8,28 @@ use super::*;
 fn test_enter_teammate_targets_cursor() {
     use crate::records::TranscriptLine;
     let mut app = crate::composition::app();
-    app.session.transcript.push(TranscriptLine::Subagent {
-        child_sid: "c1".into(),
-        subagent_type: "explore".into(),
-        summary: "first".into(),
-        prompt: String::new(),
-        folded_transcript: vec![TranscriptLine::Agent("child reply".into())],
-        color: None,
-    });
-    app.session.transcript.push(TranscriptLine::Subagent {
-        child_sid: "c2".into(),
-        subagent_type: "plan".into(),
-        summary: "second".into(),
-        prompt: String::new(),
-        folded_transcript: vec![TranscriptLine::Agent("child reply 2".into())],
-        color: None,
-    });
+    app.sessions
+        .current
+        .transcript
+        .push(TranscriptLine::Subagent {
+            child_sid: "c1".into(),
+            subagent_type: "explore".into(),
+            summary: "first".into(),
+            prompt: String::new(),
+            folded_transcript: vec![TranscriptLine::Agent("child reply".into())],
+            color: None,
+        });
+    app.sessions
+        .current
+        .transcript
+        .push(TranscriptLine::Subagent {
+            child_sid: "c2".into(),
+            subagent_type: "plan".into(),
+            summary: "second".into(),
+            prompt: String::new(),
+            folded_transcript: vec![TranscriptLine::Agent("child reply 2".into())],
+            color: None,
+        });
     app.selections.transcript.start(0, 0);
     assert!(
         app.enter_teammate_view(),
@@ -49,17 +55,21 @@ fn test_enter_teammate_targets_cursor() {
 fn test_exit_teammate_clears_view() {
     use crate::records::TranscriptLine;
     let mut app = crate::composition::app();
-    app.session
+    app.sessions
+        .current
         .transcript
         .push(TranscriptLine::Agent("parent".into()));
-    app.session.transcript.push(TranscriptLine::Subagent {
-        child_sid: "c1".into(),
-        subagent_type: "explore".into(),
-        summary: "first".into(),
-        prompt: String::new(),
-        folded_transcript: vec![TranscriptLine::Agent("child reply".into())],
-        color: None,
-    });
+    app.sessions
+        .current
+        .transcript
+        .push(TranscriptLine::Subagent {
+            child_sid: "c1".into(),
+            subagent_type: "explore".into(),
+            summary: "first".into(),
+            prompt: String::new(),
+            folded_transcript: vec![TranscriptLine::Agent("child reply".into())],
+            color: None,
+        });
     assert!(app.enter_teammate_view());
     assert!(app.teammate_view.is_some());
     assert_eq!(app.active_transcript().len(), 1, "viewing child");
@@ -83,14 +93,17 @@ fn test_teammate_view_fill_isomorphic() {
     use houyicoder_protocol::frontend::session_update::ContentChunk;
     use houyicoder_protocol::frontend::session_update::SessionUpdate;
     let mut app = crate::composition::app();
-    app.session.transcript.push(TranscriptLine::Subagent {
-        child_sid: "c1".into(),
-        subagent_type: "explore".into(),
-        summary: "found auth".into(),
-        prompt: String::new(),
-        folded_transcript: Vec::new(),
-        color: None,
-    });
+    app.sessions
+        .current
+        .transcript
+        .push(TranscriptLine::Subagent {
+            child_sid: "c1".into(),
+            subagent_type: "explore".into(),
+            summary: "found auth".into(),
+            prompt: String::new(),
+            folded_transcript: Vec::new(),
+            color: None,
+        });
     // Enter with an unloaded fold: the view opens empty and the fetch fires.
     assert!(app.enter_teammate_view());
     assert_eq!(
@@ -122,7 +135,7 @@ fn test_teammate_view_fill_isomorphic() {
     assert!(matches!(view.transcript[0], TranscriptLine::User(_)));
     assert!(matches!(view.transcript[1], TranscriptLine::Agent(_)));
     // Isomorphism: the fold-group and the view carry the same folded rows.
-    let folded = match &app.session.transcript[0] {
+    let folded = match &app.sessions.current.transcript[0] {
         TranscriptLine::Subagent {
             folded_transcript, ..
         } => folded_transcript.clone(),
@@ -152,22 +165,28 @@ fn test_other_child_keeps_view() {
     use houyicoder_protocol::frontend::session_update::ContentChunk;
     use houyicoder_protocol::frontend::session_update::SessionUpdate;
     let mut app = crate::composition::app();
-    app.session.transcript.push(TranscriptLine::Subagent {
-        child_sid: "c1".into(),
-        subagent_type: "explore".into(),
-        summary: "first".into(),
-        prompt: String::new(),
-        folded_transcript: vec![TranscriptLine::Agent("viewed child".into())],
-        color: None,
-    });
-    app.session.transcript.push(TranscriptLine::Subagent {
-        child_sid: "c2".into(),
-        subagent_type: "plan".into(),
-        summary: "second".into(),
-        prompt: String::new(),
-        folded_transcript: Vec::new(),
-        color: None,
-    });
+    app.sessions
+        .current
+        .transcript
+        .push(TranscriptLine::Subagent {
+            child_sid: "c1".into(),
+            subagent_type: "explore".into(),
+            summary: "first".into(),
+            prompt: String::new(),
+            folded_transcript: vec![TranscriptLine::Agent("viewed child".into())],
+            color: None,
+        });
+    app.sessions
+        .current
+        .transcript
+        .push(TranscriptLine::Subagent {
+            child_sid: "c2".into(),
+            subagent_type: "plan".into(),
+            summary: "second".into(),
+            prompt: String::new(),
+            folded_transcript: Vec::new(),
+            color: None,
+        });
     app.selections.transcript.start(0, 0);
     assert!(app.enter_teammate_view());
     assert_eq!(app.teammate_view.as_ref().unwrap().child_sid, "c1");
@@ -198,7 +217,8 @@ fn test_other_child_keeps_view() {
 fn test_enter_teammate_no_target() {
     use crate::records::TranscriptLine;
     let mut app = crate::composition::app();
-    app.session
+    app.sessions
+        .current
         .transcript
         .push(TranscriptLine::Agent("plain".into()));
     assert!(!app.enter_teammate_view(), "no Subagent line to target");
@@ -213,14 +233,17 @@ fn test_enter_teammate_no_target() {
 fn test_cursor_past_tail_fallback() {
     use crate::records::TranscriptLine;
     let mut app = crate::composition::app();
-    app.session.transcript.push(TranscriptLine::Subagent {
-        child_sid: "c1".into(),
-        subagent_type: "explore".into(),
-        summary: "first".into(),
-        prompt: String::new(),
-        folded_transcript: vec![TranscriptLine::Agent("reply".into())],
-        color: None,
-    });
+    app.sessions
+        .current
+        .transcript
+        .push(TranscriptLine::Subagent {
+            child_sid: "c1".into(),
+            subagent_type: "explore".into(),
+            summary: "first".into(),
+            prompt: String::new(),
+            folded_transcript: vec![TranscriptLine::Agent("reply".into())],
+            color: None,
+        });
     // A content row well past the one line in the transcript.
     app.selections.transcript.start(999, 999);
     assert!(
@@ -240,7 +263,7 @@ fn test_cursor_after_fold_group() {
     use crate::records::{ToolOutcome, TranscriptLine};
     let mut app = crate::composition::app();
     // Two tool calls form a collapsed Summary slot before the Subagents.
-    app.session.transcript.push(TranscriptLine::Tool {
+    app.sessions.current.transcript.push(TranscriptLine::Tool {
         name: "bash".into(),
         tool: "bash".into(),
         status: "ls".into(),
@@ -250,7 +273,7 @@ fn test_cursor_after_fold_group() {
         body: String::new(),
         is_diff: false,
     });
-    app.session.transcript.push(TranscriptLine::Tool {
+    app.sessions.current.transcript.push(TranscriptLine::Tool {
         name: "result".into(),
         tool: "bash".into(),
         status: String::new(),
@@ -260,22 +283,28 @@ fn test_cursor_after_fold_group() {
         body: "ok\nline2\nline3".into(),
         is_diff: false,
     });
-    app.session.transcript.push(TranscriptLine::Subagent {
-        child_sid: "c1".into(),
-        subagent_type: "explore".into(),
-        summary: "first".into(),
-        prompt: String::new(),
-        folded_transcript: vec![TranscriptLine::Agent("reply1".into())],
-        color: None,
-    });
-    app.session.transcript.push(TranscriptLine::Subagent {
-        child_sid: "c2".into(),
-        subagent_type: "plan".into(),
-        summary: "second".into(),
-        prompt: String::new(),
-        folded_transcript: vec![TranscriptLine::Agent("reply2".into())],
-        color: None,
-    });
+    app.sessions
+        .current
+        .transcript
+        .push(TranscriptLine::Subagent {
+            child_sid: "c1".into(),
+            subagent_type: "explore".into(),
+            summary: "first".into(),
+            prompt: String::new(),
+            folded_transcript: vec![TranscriptLine::Agent("reply1".into())],
+            color: None,
+        });
+    app.sessions
+        .current
+        .transcript
+        .push(TranscriptLine::Subagent {
+            child_sid: "c2".into(),
+            subagent_type: "plan".into(),
+            summary: "second".into(),
+            prompt: String::new(),
+            folded_transcript: vec![TranscriptLine::Agent("reply2".into())],
+            color: None,
+        });
     // c1 sits at transcript index 2. fold_aware_rows gives its start row in
     // the same space the mouse sets content_row. A flat walk would land it
     // one slot earlier inside the Summary and miss, falling back to c2.

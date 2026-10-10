@@ -68,9 +68,9 @@ fn draw_tab_body(f: &mut Frame, tab: StatusTab, area: Rect, app: &App) {
             let snap = app.snapshot_or_stub();
             render_status(
                 &snap,
-                &app.session.identity.session_id,
+                &app.sessions.current.identity.session_id,
                 &app.status.sandbox,
-                &app.session.todos.items,
+                &app.sessions.current.todos.items,
             )
         }
         StatusTab::Config => render_config(app),
@@ -217,7 +217,7 @@ mod tests {
         let mut snap = app.snapshot_or_stub();
         snap.auto_memory = false;
         snap.auto_dream = true;
-        app.session.capabilities.status.status_cache = Some(snap);
+        app.sessions.current.capabilities.status.status_cache = Some(snap);
         let s = render_config(&app);
         let memory_line = s
             .lines()

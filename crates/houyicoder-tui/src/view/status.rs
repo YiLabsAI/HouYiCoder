@@ -80,7 +80,7 @@ pub fn draw_status_bar(f: &mut Frame, area: Rect, app: &App) {
     // Approval pending: the modal popup (view::approval) is the sole approval
     // surface; the status bar keeps showing the normal agent bar (mode pill +
     // model + tokens) underneath, so the two no longer duplicate the request.
-    if app.session.connection.is_some() {
+    if app.sessions.current.connection.is_some() {
         draw_agent_status_bar(f, area, app);
         return;
     }
@@ -120,7 +120,7 @@ fn draw_agent_status_bar(f: &mut Frame, area: Rect, app: &App) {
         left.push(Span::styled(hint, dim));
     }
     let mut right: Option<Line<'static>> = None;
-    if let Some(snap) = &app.session.capabilities.status.status_cache {
+    if let Some(snap) = app.sessions.current.capabilities.status.snapshot() {
         if snap.breaker_state.as_deref() == Some("Open") {
             left.push(Span::styled(" · ", dim));
             left.push(Span::styled("breaker Open", Style::new().fg(Color::Red)));
@@ -336,9 +336,9 @@ pub fn draw_scroll_status(f: &mut Frame, area: Rect, app: &App) {
             // Indexing (the G full-scan): show progress instead of the
             // position, so the user sees the build advancing + knows Esc stops
             // it. Follows less's indexing indicator style.
-            if app.session.index_build.indexing.get() {
-                let total = app.session.index_build.index_total.get();
-                let pct = (100 * app.session.index_build.indexed_bytes.get())
+            if app.sessions.current.index_build.indexing.get() {
+                let total = app.sessions.current.index_build.index_total.get();
+                let pct = (100 * app.sessions.current.index_build.indexed_bytes.get())
                     .checked_div(total)
                     .unwrap_or(0);
                 format!(" SEARCH  {query}  indexing… {pct}%  Esc=stop  q=exit ")
@@ -416,7 +416,8 @@ fn stage_hint(app: &App) -> String {
 /// still short so the nudge only appears once it would actually free context.
 fn token_savings_k(app: &App) -> u64 {
     let chars: usize = app
-        .session
+        .sessions
+        .current
         .transcript
         .lines()
         .iter()
@@ -610,7 +611,7 @@ mod tests {
         use ratatui::{Terminal, backend::TestBackend};
         let mut app = crate::composition::app();
         app.model_picker.snapshot.applied.id = "test-model".into();
-        app.session.capabilities.status.status_cache = Some(StatusSnapshot {
+        app.sessions.current.capabilities.status.status_cache = Some(StatusSnapshot {
             model: "test-model".into(),
             breaker_state: None,
             cumulative_usage: Usage {
@@ -668,7 +669,7 @@ mod tests {
                 (Some(180000), Some("90% used · /compact")),
                 (None, None),
             ] {
-                app.session.capabilities.status.status_cache = Some(StatusSnapshot {
+                app.sessions.current.capabilities.status.status_cache = Some(StatusSnapshot {
                     model: "test-model".into(),
                     context_used_tokens: used,
                     context_window: 200_000,

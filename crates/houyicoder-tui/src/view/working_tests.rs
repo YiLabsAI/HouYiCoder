@@ -15,12 +15,12 @@ fn test_approval_keeps_prior_content() {
     use houyicoder_protocol::envelope::RequestId;
     let mut app = composition::app();
     app.screen = Screen::Working;
-    app.session.transcript = vec![
+    app.sessions.current.transcript = vec![
         TranscriptLine::ContextGrid(composition::context_view()),
         TranscriptLine::User("hi".to_string()),
     ]
     .into();
-    app.session.prompt = Some(PendingPrompt::approval_card(
+    app.sessions.current.prompt = Some(PendingPrompt::approval_card(
         RequestId(0),
         Approval {
             tool: "bash".to_string(),
@@ -58,7 +58,7 @@ fn test_thinking_not_above_answer() {
 
     let mut app = composition::app();
     app.screen = Screen::Working;
-    app.session.transcript = vec![
+    app.sessions.current.transcript = vec![
         TranscriptLine::User("hi".to_string()),
         TranscriptLine::Thinking {
             text: "the user said hi, respond briefly".into(),
@@ -128,7 +128,7 @@ fn test_fold_collapse_expand_toggle() {
 
     let mut app = composition::app();
     app.screen = Screen::Working;
-    app.session.transcript = vec![
+    app.sessions.current.transcript = vec![
         TranscriptLine::User("hi".to_string()),
         tcall("c1", "bash", "ls -la", ToolOutcome::Success),
         tresult("c1", "done", ToolOutcome::Success),
@@ -302,7 +302,7 @@ fn test_busy_count_matches_render() {
     use crate::test_harness::render_text;
     let mut app = composition::app();
     app.screen = Screen::Working;
-    app.session.transcript = vec![
+    app.sessions.current.transcript = vec![
         TranscriptLine::User("hi".to_string()),
         TranscriptLine::Agent("working".to_string()),
     ]
@@ -350,7 +350,7 @@ fn test_markdown_strips_syntax() {
     use crate::test_harness::render_text;
     let mut app = composition::app();
     app.screen = Screen::Working;
-    app.session.transcript = vec![TranscriptLine::Agent(
+    app.sessions.current.transcript = vec![TranscriptLine::Agent(
         "## Header\n\nSome **bold** and `code` here.".to_string(),
     )]
     .into();
@@ -391,7 +391,7 @@ fn test_copy_preserves_scrolled_content() {
     let lines: Vec<TranscriptLine> = (0..30)
         .map(|i| TranscriptLine::Agent(format!("reply line {i}")))
         .collect();
-    app.session.transcript = lines.into();
+    app.sessions.current.transcript = lines.into();
     let _out = render_text(&app, 80, 24);
     // last_all_rows should have all 30 lines (plus spacers), not just the
     // ~20 visible ones.
@@ -461,7 +461,7 @@ fn test_fold_expand_one_only() {
 
     let mut app = composition::app();
     app.screen = Screen::Working;
-    app.session.transcript = vec![
+    app.sessions.current.transcript = vec![
         TranscriptLine::User("hi".to_string()),
         // Group A: two consecutive bash calls, keyed by c1.
         tcall("c1", "bash", "ls -la", ToolOutcome::Success),
@@ -555,7 +555,7 @@ fn test_anchor_clamped_to_content() {
 
     let mut app = composition::app();
     app.screen = Screen::Working;
-    app.session.transcript = vec![
+    app.sessions.current.transcript = vec![
         crate::records::TranscriptLine::User("alpha bravo charlie".into()),
         crate::records::TranscriptLine::Agent("delta echo foxtrot".into()),
     ]
@@ -711,8 +711,8 @@ fn test_todo_count_matches_render() {
 
     let mut app = composition::app();
     app.screen = Screen::Working;
-    app.session.transcript = vec![TranscriptLine::User("go".to_string())].into();
-    app.session.todos.items = vec![
+    app.sessions.current.transcript = vec![TranscriptLine::User("go".to_string())].into();
+    app.sessions.current.todos.items = vec![
         item("a", TodoStatus::Completed),
         item("b", TodoStatus::InProgress),
         item("c", TodoStatus::Pending),
@@ -728,7 +728,7 @@ fn test_todo_count_matches_render() {
     );
 
     // Expanded: every item renders.
-    app.session.todos.expanded = true;
+    app.sessions.current.todos.expanded = true;
     let _out = render_text(&app, 80, 24);
     assert_eq!(
         app.transcript_display_rows(),
@@ -737,8 +737,8 @@ fn test_todo_count_matches_render() {
     );
 
     // All done: a single summary line.
-    app.session.todos.expanded = false;
-    app.session.todos.items = vec![
+    app.sessions.current.todos.expanded = false;
+    app.sessions.current.todos.items = vec![
         item("a", TodoStatus::Completed),
         item("b", TodoStatus::Completed),
     ];
@@ -764,8 +764,8 @@ fn test_todo_rows_are_selectable() {
 
     let mut app = composition::app();
     app.screen = Screen::Working;
-    app.session.transcript = vec![TranscriptLine::User("go".to_string())].into();
-    app.session.todos.items = vec![
+    app.sessions.current.transcript = vec![TranscriptLine::User("go".to_string())].into();
+    app.sessions.current.todos.items = vec![
         TodoView {
             content: "write code".into(),
             status: TodoStatus::InProgress,
@@ -870,14 +870,17 @@ fn test_subagent_head_dim() {
     use ratatui::style::Color;
     let mut app = composition::app();
     app.screen = Screen::Working;
-    app.session.transcript.push(TranscriptLine::Subagent {
-        child_sid: "c1".into(),
-        subagent_type: "explore".into(),
-        summary: "found auth".into(),
-        prompt: String::new(),
-        folded_transcript: Vec::new(),
-        color: None,
-    });
+    app.sessions
+        .current
+        .transcript
+        .push(TranscriptLine::Subagent {
+            child_sid: "c1".into(),
+            subagent_type: "explore".into(),
+            summary: "found auth".into(),
+            prompt: String::new(),
+            folded_transcript: Vec::new(),
+            color: None,
+        });
     let buf = render_buffer(&app, 80, 24);
     let handle = buf
         .content()
@@ -903,22 +906,25 @@ fn test_child_rows_hide_handles() {
     use crate::test_harness::render_text;
     let mut app = composition::app();
     app.screen = Screen::Working;
-    app.session.transcript.push(TranscriptLine::Subagent {
-        child_sid: "c1".into(),
-        subagent_type: "explore".into(),
-        summary: "found auth".into(),
-        prompt: String::new(),
-        folded_transcript: vec![
-            TranscriptLine::ThoughtFor {
-                ms: Some(4_000),
-                reasoning: Some("child reasoning".into()),
-                tool_summary: None,
-                turn_id: "child-turn".into(),
-            },
-            TranscriptLine::Agent("child answer".into()),
-        ],
-        color: None,
-    });
+    app.sessions
+        .current
+        .transcript
+        .push(TranscriptLine::Subagent {
+            child_sid: "c1".into(),
+            subagent_type: "explore".into(),
+            summary: "found auth".into(),
+            prompt: String::new(),
+            folded_transcript: vec![
+                TranscriptLine::ThoughtFor {
+                    ms: Some(4_000),
+                    reasoning: Some("child reasoning".into()),
+                    tool_summary: None,
+                    turn_id: "child-turn".into(),
+                },
+                TranscriptLine::Agent("child answer".into()),
+            ],
+            color: None,
+        });
     app.transcript_view.expanded.subagents.insert("c1".into());
     let out = render_text(&app, 80, 24);
     assert!(out.contains("child answer"), "child rows render: {out}");
@@ -953,14 +959,17 @@ fn test_expanded_subagent_shaded() {
     let shade = Color::Indexed(238);
     let mut app = composition::app();
     app.screen = Screen::Working;
-    app.session.transcript.push(TranscriptLine::Subagent {
-        child_sid: "c1".into(),
-        subagent_type: "explore".into(),
-        summary: "found auth".into(),
-        prompt: String::new(),
-        folded_transcript: vec![TranscriptLine::Agent("child answer".into())],
-        color: None,
-    });
+    app.sessions
+        .current
+        .transcript
+        .push(TranscriptLine::Subagent {
+            child_sid: "c1".into(),
+            subagent_type: "explore".into(),
+            summary: "found auth".into(),
+            prompt: String::new(),
+            folded_transcript: vec![TranscriptLine::Agent("child answer".into())],
+            color: None,
+        });
     // Collapsed: the head is ordinary transcript, no block background.
     let buf = render_buffer(&app, 80, 24);
     let head_bg = |buf: &ratatui::buffer::Buffer| {
@@ -1057,7 +1066,8 @@ fn test_user_background_band() {
 
     let mut app = composition::app();
     app.screen = Screen::Working;
-    app.session.transcript = vec![TranscriptLine::User("中途插话到底有没有问题".into())].into();
+    app.sessions.current.transcript =
+        vec![TranscriptLine::User("中途插话到底有没有问题".into())].into();
     let buf = render_buffer(&app, 31, 12);
     let area = app.layout_snapshot.transcript_rect.get();
     let user_y = (area.y..area.y + area.height)
@@ -1109,7 +1119,7 @@ fn test_user_background_clears() {
 
     let mut app = composition::app();
     app.screen = Screen::Working;
-    app.session.transcript = vec![TranscriptLine::User("中途插话".into())].into();
+    app.sessions.current.transcript = vec![TranscriptLine::User("中途插话".into())].into();
     let mut terminal = Terminal::new(TestBackend::new(31, 12)).expect("terminal");
     terminal
         .draw(|frame| crate::view::draw(frame, &app))
@@ -1125,7 +1135,7 @@ fn test_user_background_clears() {
         })
         .expect("user row");
 
-    app.session.transcript = vec![TranscriptLine::Agent("replacement".into())].into();
+    app.sessions.current.transcript = vec![TranscriptLine::Agent("replacement".into())].into();
     app.bump_transcript_version();
     terminal
         .draw(|frame| crate::view::draw(frame, &app))
@@ -1153,7 +1163,7 @@ fn test_thought_row_subsecond_draw() {
 
     let mut app = composition::app();
     app.screen = Screen::Working;
-    app.session.transcript = vec![
+    app.sessions.current.transcript = vec![
         TranscriptLine::Agent("done".into()),
         TranscriptLine::ThoughtFor {
             ms: Some(620),

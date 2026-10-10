@@ -39,7 +39,7 @@ impl App {
 
     /// Show the durable rule set from the protocol cache.
     fn show_permission_rules(&mut self) {
-        let rules = &self.session.capabilities.permission.rules_cache;
+        let rules = &self.sessions.current.capabilities.permission.rules_cache;
         if rules.is_empty() {
             self.system_line("permission: no rules (mode defaults apply)");
             return;
@@ -58,11 +58,21 @@ impl App {
     /// Show the active mode, durable rules, and session verdict log.
     fn show_permission_view(&mut self) {
         let mode = self.current_mode();
-        let ask_before_git = self.session.capabilities.permission.ask_before_git_enabled;
+        let ask_before_git = self
+            .sessions
+            .current
+            .capabilities
+            .permission
+            .ask_before_git_enabled;
         self.system_line(super::render::render_permission_view(
             mode,
-            &self.session.capabilities.permission.rules_cache,
-            &self.session.capabilities.permission.verdict_log_cache,
+            &self.sessions.current.capabilities.permission.rules_cache,
+            &self
+                .sessions
+                .current
+                .capabilities
+                .permission
+                .verdict_log_cache,
             ask_before_git,
         ));
     }
@@ -91,7 +101,8 @@ impl App {
 
     /// Return the cached permission mode, defaulting to Auto.
     pub fn current_mode(&self) -> PermissionMode {
-        self.session
+        self.sessions
+            .current
             .capabilities
             .permission
             .mode_cache
@@ -106,7 +117,7 @@ impl App {
         // next render, so no system line is pushed -- the footer pill is the
         // single source of mode truth. The server is the authority; it cycles
         // + responds with the new mode, which lands in mode_cache.
-        let Some(s) = self.session.connection.as_ref() else {
+        let Some(s) = self.sessions.current.connection.as_ref() else {
             self.system_line("permission: not connected");
             return;
         };
@@ -123,7 +134,7 @@ impl App {
     /// running (from the cache; a server round-trip refreshes it via
     /// PermissionAskBeforeGitResult).
     fn show_ask_before_git(&mut self) {
-        let Some(s) = self.session.connection.as_ref() else {
+        let Some(s) = self.sessions.current.connection.as_ref() else {
             self.system_line("permission: not connected");
             return;
         };
@@ -142,7 +153,12 @@ impl App {
             self.system_line(Self::enqueue_failure_line("permission", e));
             return;
         }
-        let on = self.session.capabilities.permission.ask_before_git_enabled;
+        let on = self
+            .sessions
+            .current
+            .capabilities
+            .permission
+            .ask_before_git_enabled;
         self.system_line(format!(
             "permission: ask before git operations: {} (git commit/rebase/reset/tag {} before running; /permissions git on|off to toggle)",
             if on { "on" } else { "off" },
@@ -154,7 +170,7 @@ impl App {
     /// before running. The server is the authority; the reply
     /// (PermissionAskBeforeGitResult) refreshes the cache + surfaces the state.
     fn request_ask_before_git(&mut self, enabled: bool) {
-        let Some(s) = self.session.connection.as_ref() else {
+        let Some(s) = self.sessions.current.connection.as_ref() else {
             self.system_line("permission: not connected");
             return;
         };

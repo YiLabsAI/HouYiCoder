@@ -132,14 +132,17 @@ fn test_option3_no_duplicate_result() {
     // verdict + system line, then resume with an approve decision -- the
     // exact side effects of handle_approval Enter with selected=2.
     let call_id = app.approval().unwrap().call_id.clone();
-    app.session.capabilities.permission.rules_cache.push(
-        houyicoder_protocol::frontend::permission::PermissionRule {
+    app.sessions
+        .current
+        .capabilities
+        .permission
+        .rules_cache
+        .push(houyicoder_protocol::frontend::permission::PermissionRule {
             action: "boom".to_string(),
             content: None,
             effect: houyicoder_protocol::frontend::permission::PermissionEffect::Allow,
             ..Default::default()
-        },
-    );
+        });
     app.system_line("added allow rule for boom");
     app.resolve_current_approval(houyicoder_protocol::frontend::run::ApprovalDecision {
         call_id,
@@ -162,7 +165,8 @@ fn test_option3_no_duplicate_result() {
 
     // Exactly ONE result row (a Tool line with name == "result").
     let result_count = app
-        .session
+        .sessions
+        .current
         .transcript
         .iter()
         .filter(|l| matches!(l, TranscriptLine::Tool { name, .. } if name == "result"))
@@ -174,7 +178,8 @@ fn test_option3_no_duplicate_result() {
 
     // Exactly ONE reply row.
     let reply_count = app
-        .session
+        .sessions
+        .current
         .transcript
         .iter()
         .filter(|l| matches!(l, TranscriptLine::Agent(s) if s == "done"))
@@ -183,7 +188,8 @@ fn test_option3_no_duplicate_result() {
 
     // The system line stays a separate row, not fused into the reply.
     let sys_count = app
-        .session
+        .sessions
+        .current
         .transcript
         .iter()
         .filter(|l| matches!(l, TranscriptLine::System(s) if s == "added allow rule for boom"))

@@ -52,10 +52,10 @@ fn test_tab_cycle_connected() {
     // truth, so the chat surface stays clean (the cycle itself lands
     // server-side; the pill flips when the PermissionMode reply arrives).
     let mut app = crate::test_harness::connected_app();
-    let before = app.session.transcript.len();
+    let before = app.sessions.current.transcript.len();
     app.tab_cycle_mode();
     assert_eq!(
-        app.session.transcript.len(),
+        app.sessions.current.transcript.len(),
         before,
         "connected Shift+Tab must not pollute the chat surface"
     );
@@ -65,10 +65,10 @@ fn test_tab_cycle_connected() {
 fn test_tab_cycle_disconnected() {
     // Disconnected Shift+Tab refuses honestly instead of a silent no-op.
     let mut app = working();
-    let before = app.session.transcript.len();
+    let before = app.sessions.current.transcript.len();
     app.tab_cycle_mode();
     assert_eq!(
-        app.session.transcript.len(),
+        app.sessions.current.transcript.len(),
         before + 1,
         "disconnected Shift+Tab pushes exactly one report line"
     );
@@ -142,7 +142,7 @@ fn test_clear_resets_full_chain() {
         "audit trail should clear"
     );
     assert!(out.contains("archived"), "archive system line missing");
-    assert_eq!(app.session.transcript.len(), 1);
+    assert_eq!(app.sessions.current.transcript.len(), 1);
 }
 
 #[test]
@@ -331,7 +331,7 @@ fn test_compact_honest_and_preserves() {
     for _ in 0..10 {
         app.system_line("a long line of transcript history");
     }
-    let before = app.session.transcript.len();
+    let before = app.sessions.current.transcript.len();
     app.run_command(SlashCommand::Compact);
     let out = render(&app);
     println!("--- /compact ---\n{out}\n--- end ---");
@@ -341,7 +341,7 @@ fn test_compact_honest_and_preserves() {
         "honest disconnected message missing: {out}"
     );
     assert_eq!(
-        app.session.transcript.len(),
+        app.sessions.current.transcript.len(),
         before + 1,
         "compact must not drain prior lines (only its own system line is added)"
     );
@@ -439,7 +439,7 @@ fn test_trajectory_renders_chain() {
 fn test_compact_connection_lost() {
     // A dead driver refuses the compact: no in-progress line is pushed.
     let mut app = crate::test_harness::connection_lost_app();
-    let before = app.session.transcript.len();
+    let before = app.sessions.current.transcript.len();
     app.run_command(SlashCommand::Compact);
     let out = render(&app);
     assert!(
@@ -447,7 +447,7 @@ fn test_compact_connection_lost() {
         "send failure reports connection lost:\n{out}"
     );
     assert_eq!(
-        app.session.transcript.len(),
+        app.sessions.current.transcript.len(),
         before + 1,
         "only the refusal line is added"
     );

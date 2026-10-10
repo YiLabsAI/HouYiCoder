@@ -21,10 +21,15 @@ fn test_paste_submit_expands() {
     app.input.editor.set(token);
     app.submit_input();
     // The echoed User line must be the expanded real text, not the token.
-    let user = app.session.transcript.iter().find_map(|l| match l {
-        crate::state::TranscriptLine::User(s) => Some(s.clone()),
-        _ => None,
-    });
+    let user = app
+        .sessions
+        .current
+        .transcript
+        .iter()
+        .find_map(|l| match l {
+            crate::state::TranscriptLine::User(s) => Some(s.clone()),
+            _ => None,
+        });
     assert_eq!(user.as_deref(), Some(big.as_str()));
     // Store is NOT cleared after submit — ids increment across the session
     // (entries persist for the session lifetime).
@@ -43,7 +48,8 @@ fn test_two_pastes_submit_distinct() {
     app.input.editor.set(app.input.pasted.ingest(&a));
     app.submit_input();
     let first = app
-        .session
+        .sessions
+        .current
         .transcript
         .iter()
         .rev()
@@ -57,7 +63,8 @@ fn test_two_pastes_submit_distinct() {
     app.input.editor.set(app.input.pasted.ingest(&b));
     app.submit_input();
     let second = app
-        .session
+        .sessions
+        .current
         .transcript
         .iter()
         .rev()

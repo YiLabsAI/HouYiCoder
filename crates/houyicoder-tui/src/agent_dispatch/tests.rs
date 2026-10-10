@@ -132,7 +132,8 @@ fn test_open_pane_keeps_notice() {
         }],
     }));
     let open_lines = app
-        .session
+        .sessions
+        .current
         .transcript
         .iter()
         .filter(|l| matches!(l, TranscriptLine::System(t) if t.contains("Memory")))
@@ -152,7 +153,8 @@ fn test_open_pane_keeps_notice() {
         }],
     }));
     let closed_lines = app
-        .session
+        .sessions
+        .current
         .transcript
         .iter()
         .filter(|l| matches!(l, TranscriptLine::System(t) if t.contains("Memory")))

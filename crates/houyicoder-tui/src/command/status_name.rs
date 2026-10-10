@@ -33,7 +33,7 @@ impl App {
             return;
         };
         let name = field.value().to_string();
-        let Some(s) = self.session.connection.as_ref() else {
+        let Some(s) = self.sessions.current.connection.as_ref() else {
             self.system_line("rename: not connected");
             return;
         };
@@ -43,7 +43,7 @@ impl App {
         };
         if let Err(e) = s.enqueue(ClientCommand::RenameSessionQuery {
             req_id,
-            session_id: self.session.identity.session_id.clone(),
+            session_id: self.sessions.current.identity.session_id.clone(),
             name,
         }) {
             self.system_line(Self::enqueue_failure_line("rename", e));
@@ -62,7 +62,7 @@ mod tests {
     #[test]
     fn test_enter_opens_without_session() {
         let mut app = crate::composition::app();
-        app.session.connection = None;
+        app.sessions.current.connection = None;
         app.enter_status_name_edit();
         assert!(
             app.status_name_edit.is_some(),

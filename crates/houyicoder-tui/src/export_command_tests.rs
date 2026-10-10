@@ -26,10 +26,15 @@ impl ExportLog for StubExport {
 }
 
 fn last_system_line(app: &App) -> Option<String> {
-    app.session.transcript.iter().rev().find_map(|l| match l {
-        TranscriptLine::System(s) => Some(s.clone()),
-        _ => None,
-    })
+    app.sessions
+        .current
+        .transcript
+        .iter()
+        .rev()
+        .find_map(|l| match l {
+            TranscriptLine::System(s) => Some(s.clone()),
+            _ => None,
+        })
 }
 
 #[test]

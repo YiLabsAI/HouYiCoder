@@ -16,14 +16,17 @@ fn test_expand_fires_child_fetch() {
     let provider = Arc::new(FakeProvider::new(vec![]));
     let mut app = app_with_provider(provider, ToolRegistry::new());
     app.screen = crate::state::Screen::Working;
-    app.session.transcript.push(TranscriptLine::Subagent {
-        child_sid: "c1".into(),
-        subagent_type: "explore".into(),
-        summary: "found auth".into(),
-        prompt: String::new(),
-        folded_transcript: Vec::new(),
-        color: None,
-    });
+    app.sessions
+        .current
+        .transcript
+        .push(TranscriptLine::Subagent {
+            child_sid: "c1".into(),
+            subagent_type: "explore".into(),
+            summary: "found auth".into(),
+            prompt: String::new(),
+            folded_transcript: Vec::new(),
+            color: None,
+        });
     // First expand: fires a one-shot fetch (the line has no child rows yet).
     assert!(app.toggle_tail_expand(), "toggle targeted the subagent");
     assert!(
@@ -39,7 +42,7 @@ fn test_expand_fires_child_fetch() {
         app.poll_agent();
         if let TranscriptLine::Subagent {
             folded_transcript, ..
-        } = &app.session.transcript[0]
+        } = &app.sessions.current.transcript[0]
             && !folded_transcript.is_empty()
         {
             filled = true;
@@ -48,7 +51,7 @@ fn test_expand_fires_child_fetch() {
         std::thread::sleep(std::time::Duration::from_millis(2));
     }
     assert!(filled, "fetch round-trip populated the fold-group");
-    match &app.session.transcript[0] {
+    match &app.sessions.current.transcript[0] {
         TranscriptLine::Subagent {
             folded_transcript, ..
         } => {

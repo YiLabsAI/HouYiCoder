@@ -333,7 +333,8 @@ fn test_dispatch_front_after_drain() {
         "the in-dispatch rebuild drained the resident front"
     );
     let pending = app
-        .session
+        .sessions
+        .current
         .history_reads
         .take()
         .expect("a read was dispatched");
@@ -377,7 +378,7 @@ fn test_stale_history_read_dropped() {
     );
     wait_for_workers_to_leave(&app);
     assert_eq!(
-        app.session.history_reads.running(),
+        app.sessions.current.history_reads.running(),
         0,
         "throwing the stale result away still let its worker leave, so the \
          budget is free for the scroll that asks again"

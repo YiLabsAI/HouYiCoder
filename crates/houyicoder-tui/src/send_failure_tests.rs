@@ -13,7 +13,8 @@ use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::frontend::trust::TrustPrompt;
 
 fn last_line(app: &crate::state::App) -> String {
-    app.session
+    app.sessions
+        .current
         .transcript
         .iter()
         .rev()
@@ -39,9 +40,13 @@ fn test_spawn_refused() {
         app.active_run_req_id().is_none(),
         "no pending run id without delivery"
     );
-    assert!(app.session.last_run_input.is_none(), "input stays editable");
     assert!(
-        !app.session
+        app.sessions.current.last_run_input.is_none(),
+        "input stays editable"
+    );
+    assert!(
+        !app.sessions
+            .current
             .transcript
             .iter()
             .any(|l| matches!(l, crate::state::TranscriptLine::User(_))),
@@ -148,7 +153,7 @@ fn test_drain_reparks_parked() {
 #[test]
 fn test_verdict_refused() {
     let mut app = connection_lost_app();
-    app.session.prompt = Some(PendingPrompt::approval_card(
+    app.sessions.current.prompt = Some(PendingPrompt::approval_card(
         RequestId(7),
         crate::state::Approval {
             tool: "bash".into(),
@@ -171,7 +176,7 @@ fn test_verdict_refused() {
         "the card stays until the verdict is delivered"
     );
     assert!(
-        app.session.prompt.as_ref().map(|p| p.req_id()) == Some(RequestId(7)),
+        app.sessions.current.prompt.as_ref().map(|p| p.req_id()) == Some(RequestId(7)),
         "the request id stays until the verdict is delivered"
     );
     assert!(
@@ -190,7 +195,7 @@ fn test_verdict_refused() {
 #[test]
 fn test_trust_refused() {
     let mut app = connection_lost_app();
-    app.session.prompt = Some(PendingPrompt::trust_ask(
+    app.sessions.current.prompt = Some(PendingPrompt::trust_ask(
         RequestId(3),
         TrustPrompt {
             project_path: "/proj".into(),

@@ -67,19 +67,20 @@ pub fn draw(f: &mut Frame, area: Rect, app: &App) {
 /// — the mode pill and the ask-before-git toggle live on the status bar.
 pub(crate) fn draw_permission_content(f: &mut Frame, area: Rect, app: &App) {
     let tab = app.permission_pane.tab;
+    let permission = &app.sessions.current.capabilities.permission;
     let rules = crate::permission_input::filtered_rules(
         tab,
-        &app.session.capabilities.permission.rules_cache,
+        &permission.rules_cache,
         crate::permission_input::search_query(app),
     );
-    let denials = filtered_denials(&app.session.capabilities.permission.verdict_log_cache);
+    let denials = filtered_denials(&permission.verdict_log_cache);
     // Clamp the cursor against the list the focused tab actually renders —
     // Workspace shows dirs (not rules), Recent shows denials, the rule tabs
     // show rules. Clamping against max(rules, denials) let the Workspace
     // cursor run past the dirs list (highlight vanished) when the denial log
     // was longer than the dirs list.
     let list_len = match tab {
-        PermissionTab::Workspace => app.session.capabilities.permission.dirs_cache.len(),
+        PermissionTab::Workspace => permission.dirs_cache.len(),
         PermissionTab::Recent => denials.len(),
         PermissionTab::Allow | PermissionTab::Ask | PermissionTab::Deny => rules.len(),
     };
@@ -293,12 +294,12 @@ fn permission_denial_list(
 /// tab collects; the Add/Remove keys (a / d) drive the flows owned in
 /// permission_input.
 fn permission_workspace_body(app: &App, cursor: usize) -> Paragraph<'static> {
-    let cwd = if app.session.identity.working_dir.is_empty() {
+    let cwd = if app.sessions.current.identity.working_dir.is_empty() {
         "(unknown)"
     } else {
-        &app.session.identity.working_dir
+        &app.sessions.current.identity.working_dir
     };
-    let dirs = &app.session.capabilities.permission.dirs_cache;
+    let dirs = &app.sessions.current.capabilities.permission.dirs_cache;
     let mut lines: Vec<Line<'static>> = vec![
         Line::from(format!("- {cwd}  (original working directory)"))
             .style(Style::new().fg(Color::White)),
@@ -638,7 +639,7 @@ fn draw_graph(f: &mut Frame, area: Rect, app: &App) {
 
 fn draw_tools(f: &mut Frame, area: Rect, app: &App) {
     let block = titled_block(app, "tools");
-    let tools = &app.session.capabilities.tools;
+    let tools = &app.sessions.current.capabilities.tools;
     if tools.entries.is_empty() {
         render_lines(
             f,

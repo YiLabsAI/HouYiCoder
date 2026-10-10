@@ -42,13 +42,20 @@ fn app_with_two_children(parent_rows: usize) -> App {
     let mut app = crate::composition::app();
     app.screen = crate::state::Screen::Working;
     for i in 0..parent_rows {
-        app.session
+        app.sessions
+            .current
             .transcript
             .push_frame(user_frame(&format!("parent row {i}")));
     }
     app.rebuild_transcript();
-    app.session.transcript.push(subagent_line("c1", 40));
-    app.session.transcript.push(subagent_line("c2", 40));
+    app.sessions
+        .current
+        .transcript
+        .push(subagent_line("c1", 40));
+    app.sessions
+        .current
+        .transcript
+        .push(subagent_line("c2", 40));
     app
 }
 
@@ -201,24 +208,30 @@ fn test_sibling_view_swap() {
 fn test_ctrl_o_expands_child() {
     let mut app = crate::composition::app();
     app.screen = crate::state::Screen::Working;
-    app.session.transcript.push_frame(user_frame("parent row"));
+    app.sessions
+        .current
+        .transcript
+        .push_frame(user_frame("parent row"));
     app.rebuild_transcript();
-    app.session.transcript.push(TranscriptLine::Subagent {
-        child_sid: "c1".into(),
-        subagent_type: "explore".into(),
-        summary: "summary".into(),
-        prompt: "task".into(),
-        folded_transcript: vec![
-            TranscriptLine::ThoughtFor {
-                ms: Some(59),
-                reasoning: Some("CHILDTHINK weighing options".into()),
-                tool_summary: None,
-                turn_id: "f3".into(),
-            },
-            TranscriptLine::Agent("child result".into()),
-        ],
-        color: None,
-    });
+    app.sessions
+        .current
+        .transcript
+        .push(TranscriptLine::Subagent {
+            child_sid: "c1".into(),
+            subagent_type: "explore".into(),
+            summary: "summary".into(),
+            prompt: "task".into(),
+            folded_transcript: vec![
+                TranscriptLine::ThoughtFor {
+                    ms: Some(59),
+                    reasoning: Some("CHILDTHINK weighing options".into()),
+                    tool_summary: None,
+                    turn_id: "f3".into(),
+                },
+                TranscriptLine::Agent("child result".into()),
+            ],
+            color: None,
+        });
     assert!(app.enter_teammate_view_for_sid("c1", false));
     let before = crate::test_harness::render_text(&app, 100, 30);
     assert!(

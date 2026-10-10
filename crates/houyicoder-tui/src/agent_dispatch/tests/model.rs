@@ -52,7 +52,12 @@ fn test_model_result_updates_status() {
         "status.model follows the applied model"
     );
     assert_eq!(app.pane, Pane::Transcript, "the pane closes");
-    let last = app.session.transcript.last().expect("a receipt line");
+    let last = app
+        .sessions
+        .current
+        .transcript
+        .last()
+        .expect("a receipt line");
     assert!(
         matches!(last, TranscriptLine::System(s) if s.contains("qwen3.8-max")),
         "the receipt carries the actual id: {last:?}"
@@ -74,7 +79,12 @@ fn test_receipt_from_apply_result() {
         1,
         apply_result("qwen3.8-max", Some(EffortLevel::High), SpeedMode::Fast),
     ));
-    let last = app.session.transcript.last().expect("a receipt line");
+    let last = app
+        .sessions
+        .current
+        .transcript
+        .last()
+        .expect("a receipt line");
     let TranscriptLine::System(text) = last else {
         panic!("expected a system line, got {last:?}");
     };
@@ -96,19 +106,25 @@ fn test_receipt_names_default_target() {
             result: default_result("qwen3.7-max"),
         },
     });
-    let last = app.session.transcript.last().expect("a receipt line");
+    let last = app
+        .sessions
+        .current
+        .transcript
+        .last()
+        .expect("a receipt line");
     assert!(
         matches!(last, TranscriptLine::System(s) if s.starts_with("Model set to Default (qwen3.7-max)")),
         "Default receipt names the resolved model: {last:?}"
     );
     assert!(
-        !app.session
+        !app.sessions
+            .current
             .transcript
             .iter()
             .any(|l| matches!(l, TranscriptLine::System(s)
             if s.trim() == "model: Default")),
         "no bare model: Default line: {:?}",
-        app.session.transcript
+        app.sessions.current.transcript
     );
 }
 
@@ -123,7 +139,12 @@ fn test_receipt_reports_session_only() {
         session_record: None,
     };
     app.handle_agent_message(model_response(1, result));
-    let last = app.session.transcript.last().expect("a receipt line");
+    let last = app
+        .sessions
+        .current
+        .transcript
+        .last()
+        .expect("a receipt line");
     assert!(
         matches!(last, TranscriptLine::System(s)
             if s.contains("settings not saved: read-only settings")),
@@ -139,7 +160,12 @@ fn test_receipt_reports_boundary() {
     let mut result = apply_result("glm-5.2", None, SpeedMode::Standard);
     result.effective_from = EffectiveFrom::NextRequest;
     app.handle_agent_message(model_response(1, result));
-    let last = app.session.transcript.last().expect("a receipt line");
+    let last = app
+        .sessions
+        .current
+        .transcript
+        .last()
+        .expect("a receipt line");
     assert!(
         matches!(last, TranscriptLine::System(s)
             if s.ends_with("· applies to the next model request")),
@@ -156,7 +182,7 @@ fn test_system_line_renders_notice() {
         text: "set catalog context_window".into(),
     }));
     assert!(
-        app.session.transcript.iter().any(
+        app.sessions.current.transcript.iter().any(
             |l| matches!(l, TranscriptLine::System(s) if s.contains("set catalog context_window"))
         ),
         "system line lands in the transcript"
@@ -320,13 +346,14 @@ fn test_model_pending_blocks_repeat() {
     app.fail_model_pick(req_id, "no such model");
     assert!(!app.model_picker.is_pending(), "the failure settles it");
     assert!(
-        app.session
+        app.sessions
+            .current
             .transcript
             .iter()
             .any(|l| matches!(l, TranscriptLine::System(s)
             if s == "model: no such model")),
         "the reason reaches the transcript: {:?}",
-        app.session.transcript
+        app.sessions.current.transcript
     );
 }
 
@@ -354,7 +381,12 @@ fn test_model_send_failure() {
         "a switch that never shipped is not pending"
     );
     assert_eq!(app.pane, Pane::Model, "the pane stays open for retry");
-    let last = app.session.transcript.last().expect("a line was pushed");
+    let last = app
+        .sessions
+        .current
+        .transcript
+        .last()
+        .expect("a line was pushed");
     match last {
         TranscriptLine::System(text) => {
             assert!(
@@ -408,7 +440,12 @@ fn test_fast_degrades_on_commit() {
         pending_id.0,
         apply_result("plain-model", None, SpeedMode::Standard),
     ));
-    let last = app.session.transcript.last().expect("a receipt line");
+    let last = app
+        .sessions
+        .current
+        .transcript
+        .last()
+        .expect("a receipt line");
     assert!(
         matches!(last, TranscriptLine::System(s)
             if s == "Model set to Plain (plain-model) · Fast mode off"),

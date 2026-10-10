@@ -62,7 +62,7 @@ fn mouse(kind: MouseEventKind, column: u16, row: u16) -> MouseEvent {
 fn test_redrag_stays_char_mode() {
     let mut app = composition::app();
     app.screen = Screen::Working;
-    app.session.transcript = vec![crate::records::TranscriptLine::Agent(
+    app.sessions.current.transcript = vec![crate::records::TranscriptLine::Agent(
         "alpha bravo charlie".into(),
     )]
     .into();
@@ -251,7 +251,7 @@ fn test_click_thoughtfor_expands_one() {
     app.screen = Screen::Working;
     let r1 = "reasoning for turn one".to_string();
     let r2 = "reasoning for turn two".to_string();
-    app.session.transcript = vec![
+    app.sessions.current.transcript = vec![
         TranscriptLine::User("q1".into()),
         TranscriptLine::Agent("a1".into()),
         TranscriptLine::ThoughtFor {
@@ -316,7 +316,7 @@ fn test_click_thoughtfor_none_reasoning() {
     use crate::records::TranscriptLine;
     let mut app = composition::app();
     app.screen = Screen::Working;
-    app.session.transcript = vec![
+    app.sessions.current.transcript = vec![
         TranscriptLine::User("q1".into()),
         TranscriptLine::Agent("a1".into()),
         // No reasoning: renders as "Thought for 3s" with no (ctrl+o) hint.
@@ -376,7 +376,7 @@ fn test_click_thought_no_duration() {
     use crate::records::TranscriptLine;
     let mut app = composition::app();
     app.screen = Screen::Working;
-    app.session.transcript = vec![
+    app.sessions.current.transcript = vec![
         TranscriptLine::User("q1".into()),
         TranscriptLine::Agent("a1".into()),
         TranscriptLine::ThoughtFor {
@@ -474,7 +474,7 @@ fn test_click_thoughtfor_scrolled_off() {
         tool_summary: None,
         turn_id: "t2".into(),
     });
-    app.session.transcript = transcript.into();
+    app.sessions.current.transcript = transcript.into();
     // Small height so the tail viewport shows only t2 (t1 scrolled off top).
     let _out = render_text(&app, 80, 8);
     let rect = app.layout_snapshot.transcript_rect.get();
@@ -520,7 +520,7 @@ fn test_same_reason_thoughts_independent() {
     let mut app = composition::app();
     app.screen = Screen::Working;
     let shared = "the model reasoned the same way twice".to_string();
-    app.session.transcript = vec![
+    app.sessions.current.transcript = vec![
         TranscriptLine::User("q1".into()),
         TranscriptLine::Agent("a1".into()),
         TranscriptLine::ThoughtFor {
@@ -595,7 +595,7 @@ fn app_with_fold_group() -> crate::state::App {
         body: body.to_string(),
         is_diff: false,
     };
-    app.session.transcript = vec![
+    app.sessions.current.transcript = vec![
         TranscriptLine::User("hi".to_string()),
         tcall("c1", "bash", "ls -la", ToolOutcome::Success),
         tresult("c1", "done", ToolOutcome::Success),
@@ -843,7 +843,7 @@ fn test_approval_drag_resets() {
     use houyicoder_protocol::envelope::RequestId;
     let mut app = composition::app();
     app.screen = Screen::Working;
-    app.session.prompt = Some(PendingPrompt::approval_card(
+    app.sessions.current.prompt = Some(PendingPrompt::approval_card(
         RequestId(0),
         Approval {
             tool: "bash".into(),
@@ -896,7 +896,7 @@ fn test_approval_drag_resets() {
 
     // After dismissal the rect resets to zero so clicks route to
     // transcript, not stale approval rows.
-    app.session.prompt = None;
+    app.sessions.current.prompt = None;
     let _out = render_text(&app, 80, 24);
     let stale = app.layout_snapshot.approval_rect.get();
     assert_eq!(

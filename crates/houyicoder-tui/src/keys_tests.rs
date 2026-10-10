@@ -74,7 +74,8 @@ fn test_model_pane_keys() {
         "disconnected Enter keeps the pane open"
     );
     assert!(
-        app.session
+        app.sessions
+            .current
             .transcript
             .iter()
             .any(|l| matches!(l, TranscriptLine::System(s) if s.contains("model: not connected"))),
@@ -222,7 +223,8 @@ fn test_model_pane_tab_focus() {
 #[test]
 fn test_model_open_echoes_once() {
     fn echoes(app: &App) -> usize {
-        app.session
+        app.sessions
+            .current
             .transcript
             .iter()
             .filter(|l| matches!(l, TranscriptLine::User(s) if s == "/model"))
@@ -391,7 +393,7 @@ fn test_skills_pane_nav() {
     use houyicoder_protocol::frontend::skills::SkillEntry;
     let mut app = working_app();
     app.pane = Pane::Skills;
-    app.session.capabilities.skills.entries = vec![
+    app.sessions.current.capabilities.skills.entries = vec![
         SkillEntry {
             name: "alpha".into(),
             description: "a".into(),
@@ -428,7 +430,7 @@ fn test_skills_pane_detail() {
     use houyicoder_protocol::frontend::skills::SkillEntry;
     let mut app = working_app();
     app.pane = Pane::Skills;
-    app.session.capabilities.skills.entries = vec![SkillEntry {
+    app.sessions.current.capabilities.skills.entries = vec![SkillEntry {
         name: "alpha".into(),
         description: "a".into(),
         origin: "user".into(),
@@ -452,7 +454,7 @@ fn test_skills_pane_toggle() {
     use houyicoder_protocol::frontend::skills::SkillEntry;
     let mut app = working_app();
     app.pane = Pane::Skills;
-    app.session.capabilities.skills.entries = vec![SkillEntry {
+    app.sessions.current.capabilities.skills.entries = vec![SkillEntry {
         name: "alpha".into(),
         description: "a".into(),
         origin: "user".into(),
@@ -463,17 +465,27 @@ fn test_skills_pane_toggle() {
     }];
     app.skills_pane.open_unavailable("alpha".into());
     assert!(
-        app.session.capabilities.skills.disabled.is_empty(),
+        app.sessions.current.capabilities.skills.disabled.is_empty(),
         "starts clean"
     );
     handle_working(&mut app, key(KeyCode::Char('t')));
     assert!(
-        app.session.capabilities.skills.disabled.contains("alpha"),
+        app.sessions
+            .current
+            .capabilities
+            .skills
+            .disabled
+            .contains("alpha"),
         "t disables alpha"
     );
     handle_working(&mut app, key(KeyCode::Char('t')));
     assert!(
-        !app.session.capabilities.skills.disabled.contains("alpha"),
+        !app.sessions
+            .current
+            .capabilities
+            .skills
+            .disabled
+            .contains("alpha"),
         "t re-enables alpha"
     );
 }
@@ -484,7 +496,7 @@ fn test_skills_pane_toggle() {
 fn test_skill_picker_opens() {
     use houyicoder_protocol::frontend::skills::SkillEntry;
     let mut app = working_app();
-    app.session.capabilities.skills.entries = vec![SkillEntry {
+    app.sessions.current.capabilities.skills.entries = vec![SkillEntry {
         name: "alpha".into(),
         description: "a".into(),
         origin: "user".into(),
@@ -524,7 +536,7 @@ fn test_skill_picker_blocked() {
 fn test_skill_picker_nav() {
     use houyicoder_protocol::frontend::skills::SkillEntry;
     let mut app = working_app();
-    app.session.capabilities.skills.entries = vec![
+    app.sessions.current.capabilities.skills.entries = vec![
         SkillEntry {
             name: "alpha".into(),
             description: "a".into(),
@@ -556,7 +568,7 @@ fn test_skill_picker_nav() {
 fn test_skill_picker_esc() {
     use houyicoder_protocol::frontend::skills::SkillEntry;
     let mut app = working_app();
-    app.session.capabilities.skills.entries = vec![SkillEntry {
+    app.sessions.current.capabilities.skills.entries = vec![SkillEntry {
         name: "alpha".into(),
         description: "a".into(),
         origin: "user".into(),
@@ -578,7 +590,7 @@ fn test_skill_picker_esc() {
 fn test_skill_picker_enter_submit() {
     use houyicoder_protocol::frontend::skills::SkillEntry;
     let mut app = working_app();
-    app.session.capabilities.skills.entries = vec![SkillEntry {
+    app.sessions.current.capabilities.skills.entries = vec![SkillEntry {
         name: "alpha".into(),
         description: "a".into(),
         origin: "user".into(),
@@ -620,7 +632,7 @@ fn test_skill_picker_enter_empty() {
 fn test_skill_picker_char() {
     use houyicoder_protocol::frontend::skills::SkillEntry;
     let mut app = working_app();
-    app.session.capabilities.skills.entries = vec![SkillEntry {
+    app.sessions.current.capabilities.skills.entries = vec![SkillEntry {
         name: "alpha".into(),
         description: "a".into(),
         origin: "user".into(),
@@ -644,7 +656,7 @@ fn test_skill_picker_char() {
 fn test_skill_picker_backspace_close() {
     use houyicoder_protocol::frontend::skills::SkillEntry;
     let mut app = working_app();
-    app.session.capabilities.skills.entries = vec![SkillEntry {
+    app.sessions.current.capabilities.skills.entries = vec![SkillEntry {
         name: "alpha".into(),
         description: "a".into(),
         origin: "user".into(),
@@ -664,7 +676,7 @@ fn test_skill_picker_backspace_close() {
 fn test_skill_picker_colon_closes() {
     use houyicoder_protocol::frontend::skills::SkillEntry;
     let mut app = working_app();
-    app.session.capabilities.skills.entries = vec![SkillEntry {
+    app.sessions.current.capabilities.skills.entries = vec![SkillEntry {
         name: "alpha".into(),
         description: "a".into(),
         origin: "user".into(),
@@ -685,7 +697,7 @@ fn test_skill_picker_colon_closes() {
 fn test_skill_picker_filter_select() {
     use houyicoder_protocol::frontend::skills::SkillEntry;
     let mut app = working_app();
-    app.session.capabilities.skills.entries = vec![
+    app.sessions.current.capabilities.skills.entries = vec![
         SkillEntry {
             name: "alpha".into(),
             description: "a".into(),
@@ -805,17 +817,18 @@ fn test_login_local_skips_console() {
 fn test_login_lands_clean() {
     // Landing on Working leaves the transcript empty (placeholder hint only).
     let mut app = composition::app();
-    app.session.transcript.reset();
+    app.sessions.current.transcript.reset();
     handle_login(&mut app, key(KeyCode::Char('1')));
     assert_eq!(app.screen, Screen::Working);
-    assert_eq!(app.session.transcript.len(), 0);
+    assert_eq!(app.sessions.current.transcript.len(), 0);
     // landing again on an already-alive transcript does not seed anything
-    let before = app.session.transcript.len();
-    app.session
+    let before = app.sessions.current.transcript.len();
+    app.sessions
+        .current
         .transcript
         .push(TranscriptLine::System("x".into()));
     handle_login(&mut app, key(KeyCode::Char('1')));
-    assert_eq!(app.session.transcript.len(), before + 1);
+    assert_eq!(app.sessions.current.transcript.len(), before + 1);
 }
 
 #[test]
@@ -839,7 +852,8 @@ fn test_palette_select_runs_command() {
     handle_palette(&mut app, key(KeyCode::Enter));
     assert!(!app.palette.open);
     assert!(
-        app.session
+        app.sessions
+            .current
             .transcript
             .iter()
             .any(|l| matches!(l, TranscriptLine::User(s) if s == "/context")),
@@ -847,7 +861,7 @@ fn test_palette_select_runs_command() {
     );
     assert!(
         matches!(
-            app.session.transcript.last(),
+            app.sessions.current.transcript.last(),
             Some(TranscriptLine::ContextGrid(_))
         ),
         "the /context response should follow the echoed command"
@@ -886,14 +900,15 @@ fn test_palette_tui_local_via() {
     handle_palette(&mut app, key(KeyCode::Enter));
     assert!(!app.palette.open);
     assert!(
-        app.session
+        app.sessions
+            .current
             .transcript
             .iter()
             .any(|l| matches!(l, TranscriptLine::User(s) if s == "/debug")),
         "palette select of /debug must echo as a User turn"
     );
     assert!(
-        matches!(app.session.transcript.last(), Some(TranscriptLine::System(s)) if s.contains("debug")),
+        matches!(app.sessions.current.transcript.last(), Some(TranscriptLine::System(s)) if s.contains("debug")),
         "the debug response should follow the echo"
     );
     // A leading slash in the palette query is normalized, not doubled.
@@ -904,7 +919,7 @@ fn test_palette_tui_local_via() {
     }
     handle_palette(&mut app, key(KeyCode::Enter));
     assert!(
-        matches!(app.session.transcript.last(), Some(TranscriptLine::System(s)) if s.contains("debug")),
+        matches!(app.sessions.current.transcript.last(), Some(TranscriptLine::System(s)) if s.contains("debug")),
         "leading slash in palette query must be normalized, not double-slashed"
     );
 }
@@ -932,7 +947,8 @@ fn test_palette_arg_keeps_open() {
         "arg command seeds the query with name + space"
     );
     assert!(
-        app.session
+        app.sessions
+            .current
             .transcript
             .iter()
             .all(|l| !matches!(l, TranscriptLine::User(_))),
@@ -1131,7 +1147,7 @@ fn test_console_reject_writes_org() {
     app.screen = Screen::Console;
     handle_console(&mut app, key(KeyCode::Char('r')));
     assert!(app.workflow.review.findings[app.workflow.review.focus].resolved());
-    assert!(matches!(app.session.transcript.last(),
+    assert!(matches!(app.sessions.current.transcript.last(),
             Some(TranscriptLine::System(s)) if s.contains("org eval")));
 }
 
@@ -1140,7 +1156,7 @@ fn test_approval_enter_clears_popup() {
     // The verdict is transient (a dismissable card, not a transcript row), so
     // Enter must clear the popup without logging a verdict line.
     let mut app = working_app();
-    app.session.prompt = Some(PendingPrompt::approval_card(
+    app.sessions.current.prompt = Some(PendingPrompt::approval_card(
         RequestId(0),
         crate::state::Approval {
             tool: "FsWrite".to_string(),
@@ -1164,7 +1180,7 @@ fn test_approval_enter_clears_popup() {
 
 fn approval_app(selected: usize) -> App {
     let mut app = working_app();
-    app.session.prompt = Some(PendingPrompt::approval_card(
+    app.sessions.current.prompt = Some(PendingPrompt::approval_card(
         RequestId(0),
         crate::state::Approval {
             tool: "bash".to_string(),
@@ -1297,7 +1313,7 @@ fn test_approval_nav_confirm_verdict() {
     assert!(
         app.approval().is_none(),
         "Up+Enter must clear the popup: {:?}",
-        app.session.prompt
+        app.sessions.current.prompt
     );
 }
 
@@ -1417,7 +1433,8 @@ fn test_worktree_e_enter() {
     assert_eq!(app.worktree_level.get(), 1, "Enter opens the detail");
     handle_working(&mut app, key(KeyCode::Char('e')));
     assert!(
-        app.session
+        app.sessions
+            .current
             .transcript
             .iter()
             .any(|l| matches!(l, TranscriptLine::System(s) if s.contains("not connected"))),
@@ -1632,14 +1649,17 @@ fn test_enter_fleet_drills_teammate() {
     let mut app = crate::composition::app();
     app.screen = Screen::Working;
     app.viewport = ViewportMode::Working;
-    app.session.transcript.push(TranscriptLine::Subagent {
-        child_sid: "c1".into(),
-        subagent_type: "explore".into(),
-        summary: "found auth".into(),
-        prompt: String::new(),
-        folded_transcript: Vec::new(),
-        color: None,
-    });
+    app.sessions
+        .current
+        .transcript
+        .push(TranscriptLine::Subagent {
+            child_sid: "c1".into(),
+            subagent_type: "explore".into(),
+            summary: "found auth".into(),
+            prompt: String::new(),
+            folded_transcript: Vec::new(),
+            color: None,
+        });
     app.fleet.entries.push(crate::agent_message::FleetEntry {
         agent_id: "c1".into(),
         subagent_type: "explore".into(),
@@ -1670,20 +1690,26 @@ fn test_enter_fleet_drills_teammate() {
 #[test]
 fn test_ctrl_o_expands_latest() {
     let mut app = working_app();
-    app.session.transcript.push(TranscriptLine::Subagent {
-        child_sid: "c1".into(),
-        subagent_type: "explore".into(),
-        summary: "found auth".into(),
-        prompt: String::new(),
-        folded_transcript: Vec::new(),
-        color: None,
-    });
-    app.session.transcript.push(TranscriptLine::ThoughtFor {
-        ms: Some(19_000),
-        reasoning: Some("a long train of reasoning".into()),
-        tool_summary: None,
-        turn_id: "t1".into(),
-    });
+    app.sessions
+        .current
+        .transcript
+        .push(TranscriptLine::Subagent {
+            child_sid: "c1".into(),
+            subagent_type: "explore".into(),
+            summary: "found auth".into(),
+            prompt: String::new(),
+            folded_transcript: Vec::new(),
+            color: None,
+        });
+    app.sessions
+        .current
+        .transcript
+        .push(TranscriptLine::ThoughtFor {
+            ms: Some(19_000),
+            reasoning: Some("a long train of reasoning".into()),
+            tool_summary: None,
+            turn_id: "t1".into(),
+        });
     assert!(app.selections.transcript.anchor.is_none(), "no cursor");
     handle_ctrl_o(&mut app);
     assert!(
@@ -1709,20 +1735,26 @@ fn test_ctrl_o_expands_latest() {
 #[test]
 fn test_ctrl_o_follows_cursor() {
     let mut app = working_app();
-    app.session.transcript.push(TranscriptLine::ThoughtFor {
-        ms: Some(19_000),
-        reasoning: Some("a long train of reasoning".into()),
-        tool_summary: None,
-        turn_id: "t1".into(),
-    });
-    app.session.transcript.push(TranscriptLine::Subagent {
-        child_sid: "c1".into(),
-        subagent_type: "explore".into(),
-        summary: "found auth".into(),
-        prompt: String::new(),
-        folded_transcript: Vec::new(),
-        color: None,
-    });
+    app.sessions
+        .current
+        .transcript
+        .push(TranscriptLine::ThoughtFor {
+            ms: Some(19_000),
+            reasoning: Some("a long train of reasoning".into()),
+            tool_summary: None,
+            turn_id: "t1".into(),
+        });
+    app.sessions
+        .current
+        .transcript
+        .push(TranscriptLine::Subagent {
+            child_sid: "c1".into(),
+            subagent_type: "explore".into(),
+            summary: "found auth".into(),
+            prompt: String::new(),
+            folded_transcript: Vec::new(),
+            color: None,
+        });
     drop(crate::test_harness::render_text(&app, 80, 24));
     let ri = app
         .layout_snapshot
@@ -1814,8 +1846,8 @@ fn test_agents_enter_follows_list() {
         folded_transcript: vec![TranscriptLine::Agent("reply".into())],
         color: None,
     });
-    let v = app.session.transcript.revision();
-    app.agents.refresh(&app.session.transcript, v);
+    let v = app.sessions.current.transcript.revision();
+    app.agents.refresh(&app.sessions.current.transcript, v);
     app.fleet.entries.push(FleetEntry {
         agent_id: "live".into(),
         subagent_type: "explore".into(),

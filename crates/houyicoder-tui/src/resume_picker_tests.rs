@@ -37,7 +37,7 @@ impl SessionCatalog for StubCatalog {
 
 fn stub_catalog_app() -> crate::state::App {
     let mut app = working();
-    app.persistence.catalog = Some(std::sync::Arc::new(StubCatalog(vec![
+    app.sessions.catalog = Some(std::sync::Arc::new(StubCatalog(vec![
         SessionRow {
             sid_str: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa".into(),
             title: "login flow rework".into(),
@@ -275,7 +275,7 @@ fn test_char_keys_reach_push() {
 #[test]
 fn test_resume_picker_empty_list() {
     let mut app = working();
-    app.persistence.catalog = Some(std::sync::Arc::new(StubCatalog(vec![])));
+    app.sessions.catalog = Some(std::sync::Arc::new(StubCatalog(vec![])));
     app.run_command(SlashCommand::Resume);
     assert!(!app.resume_picker.open, "picker must not open on empty");
     assert!(app.pending_resume_target.is_none(), "no sid on empty");
@@ -343,7 +343,7 @@ fn test_duplicate_title_hides_older() {
 #[test]
 fn test_duplicate_title_renders_once() {
     let mut app = working();
-    app.persistence.catalog = Some(std::sync::Arc::new(SlugCatalog));
+    app.sessions.catalog = Some(std::sync::Arc::new(SlugCatalog));
     app.run_command(SlashCommand::Resume);
     let out = render(&app);
     assert_eq!(

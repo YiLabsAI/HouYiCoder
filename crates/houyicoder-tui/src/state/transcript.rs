@@ -433,7 +433,7 @@ impl App {
         match FrontendRow::from_line(&line) {
             Some(row) => self.raise_frontend_row(row),
             None => {
-                self.session.transcript.push(line);
+                self.sessions.current.transcript.push(line);
                 self.trim_live_transcript();
                 self.bump_transcript_version();
             }
@@ -450,7 +450,8 @@ impl App {
     /// row renders where its frame now sits. Every such append ends here: a
     /// frame the fold has not seen is a row the transcript is missing.
     pub(crate) fn raise_frontend_row(&mut self, row: FrontendRow) {
-        self.session
+        self.sessions
+            .current
             .transcript
             .push_frame(TranscriptFrame::Frontend(row));
         self.rebuild_transcript();
@@ -460,10 +461,13 @@ impl App {
     /// prompt.
     pub fn drop_tentative_echo(&mut self) {
         if matches!(
-            self.session.transcript.frames().last(),
+            self.sessions.current.transcript.frames().last(),
             Some(sf) if matches!(sf.as_ref(), TranscriptFrame::Frontend(FrontendRow::Echo(_)))
         ) {
-            self.session.transcript.with_frames_mut(|log| log.pop());
+            self.sessions
+                .current
+                .transcript
+                .with_frames_mut(|log| log.pop());
             self.rebuild_transcript();
         }
     }
@@ -471,15 +475,21 @@ impl App {
     /// log holds none yet. The row keeps the place its frame holds, so a
     /// refresh updates the grid where it stands instead of stacking another.
     pub fn replace_context_view(&mut self, view: ContextView) {
-        let at = self.session.transcript.frames().iter().rposition(|sf| {
-            matches!(
-                sf.as_ref(),
-                TranscriptFrame::Frontend(FrontendRow::Context(_))
-            )
-        });
+        let at = self
+            .sessions
+            .current
+            .transcript
+            .frames()
+            .iter()
+            .rposition(|sf| {
+                matches!(
+                    sf.as_ref(),
+                    TranscriptFrame::Frontend(FrontendRow::Context(_))
+                )
+            });
         match at {
             Some(at) => {
-                self.session.transcript.with_frames_mut(|log| {
+                self.sessions.current.transcript.with_frames_mut(|log| {
                     if let TranscriptFrame::Frontend(FrontendRow::Context(slot)) =
                         &mut log[at].frame
                     {
@@ -499,7 +509,7 @@ impl App {
     /// unrelated change happens to bump it — the change appears to be lost,
     /// then materializes later at the wrong moment.
     pub fn bump_transcript_version(&self) {
-        self.session.transcript.bump_revision();
+        self.sessions.current.transcript.bump_revision();
     }
     /// Cap the live transcript to the viewable scrollback and shift the turn
     /// boundary to match. Returns the number of lines dropped. A no-op while
@@ -511,7 +521,8 @@ impl App {
     /// drop; the rebuild path bumps once for the whole transcript change
     /// regardless.
     pub(crate) fn trim_live_transcript(&mut self) -> usize {
-        self.session
+        self.sessions
+            .current
             .transcript
             .trim_live(self.whole_scroll().is_following_tail())
     }

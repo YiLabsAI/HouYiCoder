@@ -84,7 +84,7 @@ fn test_list_result_resets_cursor() {
     let mut app = working();
     app.run_command(SlashCommand::Memory);
     app.memory.set_cursor(5);
-    let transcript_len = app.session.transcript.len();
+    let transcript_len = app.sessions.current.transcript.len();
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .expect("clock")
@@ -104,7 +104,7 @@ fn test_list_result_resets_cursor() {
     assert_eq!(app.memory.cursor(), 0, "cursor reset on refresh");
     assert!(app.memory.entries().iter().any(|m| m.topic == "fresh-gate"));
     assert!(render(&app).contains("source: project · age: now"));
-    assert_eq!(app.session.transcript.len(), transcript_len);
+    assert_eq!(app.sessions.current.transcript.len(), transcript_len);
     assert_eq!(app.pane, crate::state::Pane::Memory);
 }
 
@@ -157,7 +157,7 @@ fn test_memory_detail_inline() {
     use houyicoder_protocol::frontend::memory::MemoryDetail;
     let mut app = working();
     app.run_command(SlashCommand::Memory);
-    let transcript_len = app.session.transcript.len();
+    let transcript_len = app.sessions.current.transcript.len();
     let req_id = RequestId(7);
     app.memory.request_detail(req_id, "newest".into());
     app.handle_agent_message(SessionMessage::Response {
@@ -185,7 +185,7 @@ fn test_memory_detail_inline() {
     assert!(detail.contains("detail line 0"));
     assert!(detail.contains("source: feedback · updated:"));
     assert!(detail.contains("Esc to back"));
-    assert_eq!(app.session.transcript.len(), transcript_len);
+    assert_eq!(app.sessions.current.transcript.len(), transcript_len);
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     assert_eq!(app.memory.detail_offset(), Some(1));
     let scrolled = render(&app);
@@ -640,7 +640,7 @@ fn test_dead_driver_toggle_rollback() {
     );
 
     let mut app = working();
-    app.session.connection = Some(session);
+    app.sessions.current.connection = Some(session);
     app.run_command(SlashCommand::Memory);
     app.toggle_memory_setting(MemoryToggleWhich::Auto);
     assert_eq!(
@@ -649,7 +649,7 @@ fn test_dead_driver_toggle_rollback() {
         "the refused flip left no pending mark"
     );
     assert!(
-        app.session.transcript.iter().any(|l| matches!(
+        app.sessions.current.transcript.iter().any(|l| matches!(
             l,
             TranscriptLine::System(s)
                 if s.contains("couldn't toggle auto-memory — connection lost")
@@ -667,7 +667,7 @@ fn test_dead_driver_toggle_rollback() {
         "the refused forget left no pending mark"
     );
     assert!(
-        app.session.transcript.iter().any(|l| matches!(
+        app.sessions.current.transcript.iter().any(|l| matches!(
             l,
             TranscriptLine::System(s) if s.contains("couldn't forget build-gate — connection lost")
         )),
@@ -702,7 +702,7 @@ fn test_toggle_reply_writes_outcome() {
         },
     });
     assert!(
-        app.session.transcript.iter().any(|l| matches!(
+        app.sessions.current.transcript.iter().any(|l| matches!(
             l,
             TranscriptLine::System(s) if s.as_str() == "auto-memory off"
         )),
@@ -723,7 +723,7 @@ fn test_toggle_read_skips_transcript() {
     use houyicoder_protocol::envelope::RequestId;
     let mut app = working();
     app.run_command(SlashCommand::Memory);
-    let before = app.session.transcript.len();
+    let before = app.sessions.current.transcript.len();
     app.handle_agent_message(SessionMessage::Response {
         request: RequestId(99),
         response: ServerResponse::MemoryToggleState {
@@ -738,7 +738,7 @@ fn test_toggle_read_skips_transcript() {
         "the snapshot still applies"
     );
     assert_eq!(
-        app.session.transcript.len(),
+        app.sessions.current.transcript.len(),
         before,
         "a plain state read writes no outcome"
     );
@@ -760,7 +760,7 @@ fn test_forget_reply_writes_outcome() {
         response: ServerResponse::MemoryList { entries: vec![] },
     });
     assert!(
-        app.session.transcript.iter().any(|l| matches!(
+        app.sessions.current.transcript.iter().any(|l| matches!(
             l,
             TranscriptLine::System(s) if s.as_str() == "forgot build-gate"
         )),
@@ -791,7 +791,7 @@ fn test_toggle_failure_names_action() {
         },
     });
     assert!(
-        app.session.transcript.iter().any(|l| matches!(
+        app.sessions.current.transcript.iter().any(|l| matches!(
             l,
             TranscriptLine::System(s) if s.contains("couldn't toggle auto-memory")
                 && s.contains("failed to save settings")
@@ -823,7 +823,7 @@ fn test_forget_failure_names_action() {
         },
     });
     assert!(
-        app.session.transcript.iter().any(|l| matches!(
+        app.sessions.current.transcript.iter().any(|l| matches!(
             l,
             TranscriptLine::System(s) if s.contains("couldn't forget build-gate")
                 && s.contains("permission denied")

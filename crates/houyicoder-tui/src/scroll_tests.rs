@@ -22,7 +22,8 @@ fn working() -> crate::state::App {
 /// reproduce: a row written onto the transcript alone does not survive the
 /// rebuild a later line triggers.
 fn agent_row(app: &mut crate::state::App, text: &str) {
-    app.session
+    app.sessions
+        .current
         .transcript
         .push_frame(TranscriptFrame::Session(SessionUpdate::AgentMessageChunk(
             ContentChunk::new(ContentBlock::Text { text: text.into() }),
@@ -360,7 +361,8 @@ fn test_slash_prefix_needs_boundary() {
         "/searchalot must not open the search pane"
     );
     assert!(
-        app.session
+        app.sessions
+            .current
             .transcript
             .iter()
             .any(|l| matches!(l, TranscriptLine::User(s) if s == "/searchalot")),
@@ -370,7 +372,8 @@ fn test_slash_prefix_needs_boundary() {
     app.input.editor.set("/rewindfoo".to_string());
     app.submit_input();
     assert!(
-        !app.session
+        !app.sessions
+            .current
             .transcript
             .iter()
             .any(|l| matches!(l, TranscriptLine::System(s) if s.contains("unknown stage")),)
@@ -394,7 +397,7 @@ fn test_search_opens_newest_match() {
     for i in 0..60 {
         transcript.push(TranscriptLine::Agent(format!("filler line {i}")));
     }
-    app.session.transcript = transcript.into();
+    app.sessions.current.transcript = transcript.into();
     app.enter_search_view("needle");
     assert!(app.transcript_view.search.active, "in_search set on entry");
     assert!(app.verbose, "verbose set on entry");
@@ -439,7 +442,7 @@ fn test_search_chrome_exit_key() {
     use crate::records::TranscriptLine;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     let mut app = working();
-    app.session.transcript = vec![TranscriptLine::Agent("foo here".into())].into();
+    app.sessions.current.transcript = vec![TranscriptLine::Agent("foo here".into())].into();
     app.enter_search_view("foo");
     let out = render(&app);
     assert!(out.contains("SEARCH"), "chrome shows SEARCH: {out}");
@@ -466,7 +469,7 @@ fn test_n_walks_toward_older() {
         transcript.push(TranscriptLine::Agent(format!("filler {i}")));
     }
     transcript.push(TranscriptLine::Agent("needle newer mention".into()));
-    app.session.transcript = transcript.into();
+    app.sessions.current.transcript = transcript.into();
     app.enter_search_view("needle");
     let out = render(&app);
     assert!(
@@ -513,7 +516,7 @@ fn test_search_current_match_yellow() {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use ratatui::style::Color;
     let mut app = working();
-    app.session.transcript = searchable_transcript().into();
+    app.sessions.current.transcript = searchable_transcript().into();
     app.enter_search_view("needle");
     // Warm the width (jump uses layout_feedback.transcript_width set by a prior draw)
     // then walk to the older, multi-line tool-result match.
@@ -612,7 +615,7 @@ fn test_search_all_informs_user() {
     );
     assert!(app.verbose);
     assert!(
-        app.session.transcript.iter().any(|l| matches!(
+        app.sessions.current.transcript.iter().any(|l| matches!(
             l,
             TranscriptLine::System(s) if s.contains("full-history search is not in the new view yet")
         )),
@@ -636,7 +639,7 @@ fn test_search_input_opens_seeded() {
     use crate::records::TranscriptLine;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     let mut app = working();
-    app.session.transcript = vec![TranscriptLine::Agent("needle match".into())].into();
+    app.sessions.current.transcript = vec![TranscriptLine::Agent("needle match".into())].into();
     app.enter_search_view("needle");
     crate::keys::handle_working(
         &mut app,
@@ -670,7 +673,7 @@ fn test_search_commit_switches_query() {
         transcript.push(TranscriptLine::Agent(format!("filler {i}")));
     }
     transcript.push(TranscriptLine::Agent("other newer".into()));
-    app.session.transcript = transcript.into();
+    app.sessions.current.transcript = transcript.into();
     app.enter_search_view("needle");
     assert!(render(&app).contains("needle older"));
 
@@ -719,7 +722,7 @@ fn test_search_cancel_restores_query() {
     use crate::records::TranscriptLine;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     let mut app = working();
-    app.session.transcript = vec![TranscriptLine::Agent("needle match".into())].into();
+    app.sessions.current.transcript = vec![TranscriptLine::Agent("needle match".into())].into();
     app.enter_search_view("needle");
     crate::keys::handle_working(
         &mut app,
@@ -755,7 +758,7 @@ fn test_search_input_edits_buffer() {
     use crate::records::TranscriptLine;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     let mut app = working();
-    app.session.transcript = vec![TranscriptLine::Agent("needle match".into())].into();
+    app.sessions.current.transcript = vec![TranscriptLine::Agent("needle match".into())].into();
     app.enter_search_view("needle");
     crate::keys::handle_working(
         &mut app,

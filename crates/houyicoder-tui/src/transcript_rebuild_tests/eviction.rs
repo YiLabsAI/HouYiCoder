@@ -90,7 +90,7 @@ fn test_scrollback_survives_frame() {
     app.rebuild_transcript();
     // Scroll away and load older frames until the history boundary hits zero.
     app.whole_scroll_mut().jump_to(0);
-    while app.session.loaded_from_frame.get() > 0 {
+    while app.sessions.current.loaded_from_frame.get() > 0 {
         app.load_older_frames();
         pump_history_read_blocking(&mut app, Duration::from_secs(5));
     }
@@ -180,11 +180,11 @@ fn test_fold_active_tracks_waiting() {
     pump(&mut app, tool_result("w1"));
     assert!(fold_signature(&app)[0].3, "running group is active");
 
-    app.session.run.begin_waiting();
+    app.sessions.current.run.begin_waiting();
     app.refresh_fold_active();
     assert!(!fold_signature(&app)[0].3, "waiting group collapses");
 
-    app.session.run.end_waiting();
+    app.sessions.current.run.end_waiting();
     app.refresh_fold_active();
     assert!(fold_signature(&app)[0].3, "resumed group reopens");
 }
@@ -297,12 +297,22 @@ fn test_verdict_survives_drain() {
         "the rebuild drains the frames below the active turn"
     );
     assert_eq!(
-        app.session.capabilities.permission.verdict_log_cache.len(),
+        app.sessions
+            .current
+            .capabilities
+            .permission
+            .verdict_log_cache
+            .len(),
         1,
         "the drained frame's verdict is in the audit cache"
     );
     assert_eq!(
-        app.session.capabilities.permission.verdict_log_cache[0].call_id,
+        app.sessions
+            .current
+            .capabilities
+            .permission
+            .verdict_log_cache[0]
+            .call_id,
         "c1"
     );
 }
@@ -363,11 +373,11 @@ fn test_scrollback_stops_at_front() {
         "the drain leaves a loadable range below the frame cap: front={base}"
     );
     app.whole_scroll_mut().jump_to(0);
-    app.session.loaded_from_frame.set(base + 1);
+    app.sessions.current.loaded_from_frame.set(base + 1);
     app.load_older_frames();
     pump_history_read_blocking(&mut app, Duration::from_secs(5));
     assert_eq!(
-        app.session.loaded_from_frame.get(),
+        app.sessions.current.loaded_from_frame.get(),
         base,
         "the loaded boundary stops at the resident front"
     );
@@ -432,9 +442,9 @@ fn test_load_boundary_keeps_draining() {
     app.load_older_frames();
     pump_history_read_blocking(&mut app, Duration::from_secs(5));
     assert!(
-        app.session.loaded_from_frame.get() < 100,
+        app.sessions.current.loaded_from_frame.get() < 100,
         "the load reaches below the frame cap: {}",
-        app.session.loaded_from_frame.get()
+        app.sessions.current.loaded_from_frame.get()
     );
     for i in 600..1000 {
         pump(&mut app, user_msg(&format!("{i} {text}")));
@@ -470,7 +480,8 @@ fn test_todo_survives_eviction() {
         "the todo-write frame was drained"
     );
     assert!(
-        app.session
+        app.sessions
+            .current
             .todos
             .items
             .iter()
@@ -479,7 +490,8 @@ fn test_todo_survives_eviction() {
     );
     pump(&mut app, user_msg("tail"));
     assert!(
-        app.session
+        app.sessions
+            .current
             .todos
             .items
             .iter()

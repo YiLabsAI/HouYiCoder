@@ -179,48 +179,52 @@ impl PendingPrompt {
 impl App {
     /// The generic approval card, or None for a question or trust ask.
     pub fn approval(&self) -> Option<&Approval> {
-        self.session.prompt.as_ref().and_then(|p| p.approval())
+        let prompt = &self.sessions.current.prompt;
+        prompt.as_ref().and_then(|p| p.approval())
     }
 
     /// Mutably borrow the generic approval card, or None when not a plain
     /// permission ask.
     pub(crate) fn approval_mut(&mut self) -> Option<&mut Approval> {
-        self.session.prompt.as_mut().and_then(|p| p.approval_mut())
+        let prompt = &mut self.sessions.current.prompt;
+        prompt.as_mut().and_then(|p| p.approval_mut())
     }
 
     /// The interactive question card, or None for a plain approval or trust.
     pub(crate) fn ask_question(&self) -> Option<&AskQuestion> {
-        self.session.prompt.as_ref().and_then(|p| p.question())
+        let prompt = &self.sessions.current.prompt;
+        prompt.as_ref().and_then(|p| p.question())
     }
 
     /// Mutably borrow the interactive question card, or None when not a
     /// question ask.
     pub(crate) fn ask_question_mut(&mut self) -> Option<&mut AskQuestion> {
-        self.session.prompt.as_mut().and_then(|p| p.question_mut())
+        let prompt = &mut self.sessions.current.prompt;
+        prompt.as_mut().and_then(|p| p.question_mut())
     }
 
     /// Take the interactive question card, keeping the request id for a later
     /// resolve.
     pub(crate) fn take_ask_question(&mut self) -> Option<AskQuestion> {
-        self.session.prompt.as_mut().and_then(|p| p.take_question())
+        let prompt = &mut self.sessions.current.prompt;
+        prompt.as_mut().and_then(|p| p.take_question())
     }
 
     /// The startup trust prompt, or None for a permission ask.
     pub(crate) fn pending_trust(&self) -> Option<&TrustPrompt> {
-        self.session.prompt.as_ref().and_then(|p| p.trust())
+        let prompt = &self.sessions.current.prompt;
+        prompt.as_ref().and_then(|p| p.trust())
     }
 
     /// The selected trust action, or Accept for a permission ask.
     pub(crate) fn trust_choice(&self) -> TrustChoice {
-        self.session
-            .prompt
-            .as_ref()
-            .map_or(TrustChoice::Accept, |p| p.choice())
+        let prompt = &self.sessions.current.prompt;
+        prompt.as_ref().map_or(TrustChoice::Accept, |p| p.choice())
     }
 
     /// Replace the selected trust action.
     pub(crate) fn set_trust_choice(&mut self, choice: TrustChoice) {
-        if let Some(p) = self.session.prompt.as_mut() {
+        if let Some(p) = self.sessions.current.prompt.as_mut() {
             p.set_choice(choice);
         }
     }

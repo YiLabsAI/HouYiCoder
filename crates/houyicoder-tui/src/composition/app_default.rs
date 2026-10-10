@@ -24,6 +24,7 @@ use crate::selections::Selections;
 use crate::session::Session;
 use crate::session::identity::SessionIdentity;
 use crate::session::persistence::SessionPersistence;
+use crate::sessions::Sessions;
 use crate::skill_picker_state::SkillPickerState;
 use crate::skills_state::SkillsPaneState;
 use crate::state::{
@@ -61,10 +62,10 @@ pub fn app() -> App {
         agent_directory: None,
         login_mode: None,
         quit: false,
-        session: Session::bare(SessionIdentity {
+        sessions: Sessions::new(Session::bare(SessionIdentity {
             session_id: SessionId::new("test"),
             working_dir: cwd_string(),
-        }),
+        })),
         notifications: NotificationState::default(),
         terminal_focused: true,
         layout_feedback: LayoutFeedback::default(),

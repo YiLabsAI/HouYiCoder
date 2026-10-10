@@ -117,7 +117,7 @@ fn test_nl_note_skips_proposal() {
     handle_working(&mut app, key(KeyCode::Enter));
     assert!(app.workflow.artifact.pending_proposal().is_none());
     assert_eq!(app.workflow.artifact.annotation_count(), 1);
-    assert!(matches!(app.session.transcript.last(),
+    assert!(matches!(app.sessions.current.transcript.last(),
         Some(crate::state::TranscriptLine::System(s)) if s.contains("natural-language")));
 }
 

@@ -169,7 +169,7 @@ impl App {
     pub(crate) fn toggle_latest_memory_notice(&mut self) -> bool {
         let mut ordinal = 0usize;
         let mut latest: Option<String> = None;
-        for line in self.session.transcript.lines().iter() {
+        for line in self.sessions.current.transcript.lines().iter() {
             if crate::fold::is_memory_notice(line) {
                 latest = Some(format!("mg#{ordinal}"));
                 ordinal += 1;
@@ -228,7 +228,7 @@ impl App {
         self.pin_transcript_top();
         if expanding
             && needs_fetch
-            && let Some(s) = self.session.connection.as_ref()
+            && let Some(s) = self.sessions.current.connection.as_ref()
         {
             match s.next_request_id() {
                 Ok(req_id) => {
@@ -255,10 +255,10 @@ impl App {
     pub(crate) fn subagent_target_at_cursor(&self) -> Option<(String, bool)> {
         use crate::fold::{DisplaySlot, display_slots, notice_slot_rows};
         use crate::records::TranscriptLine;
-        let transcript = self.session.transcript.lines();
+        let transcript = self.sessions.current.transcript.lines();
         let slots = display_slots(
             transcript,
-            self.session.transcript.fold_groups(),
+            self.sessions.current.transcript.fold_groups(),
             &self.transcript_view.expanded.fold_groups,
             self.verbose,
         );

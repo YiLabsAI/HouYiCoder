@@ -45,8 +45,8 @@ use crate::resume_picker::SessionPickerState;
 use crate::run_state::{RunProgress, RunState};
 use crate::selection::ClipboardWriter;
 use crate::selections::Selections;
-use crate::session::Session;
 use crate::session::persistence::SessionPersistence;
+use crate::sessions::Sessions;
 use crate::skill_picker_state::SkillPickerState;
 use crate::skills_state::SkillsPaneState;
 use crate::workflow::Workflow;
@@ -164,10 +164,10 @@ pub struct App {
     pub login_mode: Option<LoginMode>,
     pub quit: bool,
     // --- real agent-loop wiring ---
-    /// The presented session: its stable identity and the optional live
-    /// engine connection, held as one value so a swap replaces both and a
-    /// lost connection never drops the identity.
-    pub(crate) session: Session,
+    /// The presented session and the resumable-session catalog, held as one
+    /// value so a swap replaces both and a lost connection never drops the
+    /// identity.
+    pub(crate) sessions: Sessions,
     /// Transient notification toast: one-line auto-expiring hint above the
     /// input box (copy feedback, exit-again prompt). Poll-driven expiry.
     pub notifications: NotificationState,
@@ -259,7 +259,7 @@ impl App {
     /// The conversation lives on the session; App exposes one read handle so
     /// callers do not reach through the session value.
     pub fn transcript(&self) -> &transcript::Transcript {
-        &self.session.transcript
+        &self.sessions.current.transcript
     }
 
     /// The working transcript, mutably borrowed for fixture setup and the
@@ -268,26 +268,26 @@ impl App {
     /// read assertions do instead of threading the session value.
     #[cfg(test)]
     pub(crate) fn transcript_mut(&mut self) -> &mut transcript::Transcript {
-        &mut self.session.transcript
+        &mut self.sessions.current.transcript
     }
 
     /// True while a run is in flight and not paused for approval. Excludes
     /// Waiting (the spinner stops while a card is up).
     pub fn agent_busy(&self) -> bool {
         matches!(
-            self.session.run,
+            self.sessions.current.run,
             RunState::Running(_) | RunState::Cancelling(_)
         )
     }
 
     /// The wall-clock start of the active run, or None when idle.
     pub fn run_started(&self) -> Option<Instant> {
-        self.session.run.started_at()
+        self.sessions.current.run.started_at()
     }
 
     /// True only while the user cancelled and the run is resolving.
     pub fn cancelling(&self) -> bool {
-        self.session.run.is_cancelling()
+        self.sessions.current.run.is_cancelling()
     }
 
     /// Whether the session holds a live engine connection handle, so the
@@ -295,26 +295,26 @@ impl App {
     /// dropped under ConnectionStatus::Lost, so this reports the handle's
     /// presence, not the driver's health.
     pub fn has_connection(&self) -> bool {
-        self.session.connection.is_some()
+        self.sessions.current.connection.is_some()
     }
 
     /// The request id of the active run, or None when idle.
     pub fn active_run_req_id(&self) -> Option<RequestId> {
-        self.session.run.request_id()
+        self.sessions.current.run.request_id()
     }
 
     /// Borrow the streaming progress of the active run, or None when idle.
     /// Render paths read through this; the run-scoped preview does not exist
     /// outside a run.
     pub(crate) fn run_progress(&self) -> Option<&RunProgress> {
-        self.session.run.progress()
+        self.sessions.current.run.progress()
     }
 
     /// Mutably borrow the streaming progress, or None when idle. Write paths
     /// during a run go through this; callers that cannot be idle take it and
     /// expect an active run.
     pub(crate) fn run_progress_mut(&mut self) -> Option<&mut RunProgress> {
-        self.session.run.progress_mut()
+        self.sessions.current.run.progress_mut()
     }
 
     /// Test seam: transition to Running with a specific request id.
@@ -322,12 +322,17 @@ impl App {
     /// machine.
     #[cfg(test)]
     pub fn start_run_for_test(&mut self, req_id: u64) {
-        self.session.run.start(RequestId(req_id), Instant::now());
+        self.sessions
+            .current
+            .run
+            .start(RequestId(req_id), Instant::now());
         // A running agent flips the tail fold group to active; recompute the
         // cache here because no rebuild follows a lines-built transcript.
-        let groups =
-            crate::fold::compute_fold_groups(self.session.transcript.lines(), self.agent_busy());
-        *self.session.transcript.fold_groups_mut() = groups;
+        let groups = crate::fold::compute_fold_groups(
+            self.sessions.current.transcript.lines(),
+            self.agent_busy(),
+        );
+        *self.sessions.current.transcript.fold_groups_mut() = groups;
     }
 }
 
@@ -338,9 +343,9 @@ impl std::fmt::Debug for App {
             .field("stage", &self.workflow.stage)
             .field("pane", &self.pane)
             .field("viewport", &self.viewport)
-            .field("transcript_len", &self.session.transcript.len())
+            .field("transcript_len", &self.sessions.current.transcript.len())
             .field("agent_busy", &self.agent_busy())
-            .field("prompt", &self.session.prompt)
+            .field("prompt", &self.sessions.current.prompt)
             .field("quit", &self.quit)
             .finish()
     }
@@ -377,7 +382,8 @@ mod tests {
         let mut app = test_app();
         assert!(!app.has_connection());
         let (_tx, rx) = std::sync::mpsc::channel::<crate::agent_message::SessionMessage>();
-        app.session.connection = Some(crate::session::SessionConnection::from_receiver(rx));
+        app.sessions.current.connection =
+            Some(crate::session::SessionConnection::from_receiver(rx));
         assert!(app.has_connection());
     }
 

@@ -56,7 +56,8 @@ fn run(app: &mut App, cmd: &str) {
 }
 
 fn last_system(app: &App) -> String {
-    app.session
+    app.sessions
+        .current
         .transcript
         .iter()
         .rev()
@@ -91,10 +92,24 @@ fn test_permission_rule_add_list() {
 /// Pump the driver until the rules cache length changes (the add/del replies
 /// ship a fresh rule set), or the wait times out.
 fn pump_rules(app: &mut App) {
-    let mark = app.session.capabilities.permission.rules_cache.len();
+    let mark = app
+        .sessions
+        .current
+        .capabilities
+        .permission
+        .rules_cache
+        .len();
     for _ in 0..200 {
         app.poll_agent();
-        if app.session.capabilities.permission.rules_cache.len() != mark {
+        if app
+            .sessions
+            .current
+            .capabilities
+            .permission
+            .rules_cache
+            .len()
+            != mark
+        {
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(10));
@@ -123,7 +138,15 @@ fn test_permission_bad_effect_rejected() {
     let mut app = app();
     run(&mut app, "/permissions add bash bogus");
     assert!(last_system(&app).contains("permission:"));
-    assert_eq!(app.session.capabilities.permission.rules_cache.len(), 0);
+    assert_eq!(
+        app.sessions
+            .current
+            .capabilities
+            .permission
+            .rules_cache
+            .len(),
+        0
+    );
 }
 
 #[test]
@@ -132,7 +155,7 @@ fn test_status_bar_renders_mode() {
     // confirm the current mode label lands in the bottom status line.
     let mut app = crate::composition::build_app_for_test(None);
     app.screen = crate::state::Screen::Working;
-    app.session.capabilities.permission.mode_cache =
+    app.sessions.current.capabilities.permission.mode_cache =
         Some(houyicoder_protocol::frontend::permission::PermissionMode::Auto);
     let text = render_text(&app, 100, 28);
     assert!(
@@ -146,7 +169,7 @@ fn test_status_bar_renders_manual() {
     // Manual mode shows the pause-glyph pill in the status bar.
     let mut app = crate::composition::build_app_for_test(None);
     app.screen = crate::state::Screen::Working;
-    app.session.capabilities.permission.mode_cache =
+    app.sessions.current.capabilities.permission.mode_cache =
         Some(houyicoder_protocol::frontend::permission::PermissionMode::Manual);
     let text = render_text(&app, 100, 28);
     assert!(
@@ -159,7 +182,7 @@ fn test_status_bar_renders_manual() {
 fn test_approval_popup_no_placeholder() {
     let mut app = crate::composition::build_app_for_test(None);
     app.screen = crate::state::Screen::Working;
-    app.session.prompt = Some(PendingPrompt::approval_card(
+    app.sessions.current.prompt = Some(PendingPrompt::approval_card(
         RequestId(0),
         crate::state::Approval {
             tool: "bash".into(),
@@ -199,7 +222,7 @@ fn test_approval_r_binds_reject() {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     let mut app = crate::composition::build_app_for_test(None);
     app.screen = crate::state::Screen::Working;
-    app.session.prompt = Some(PendingPrompt::approval_card(
+    app.sessions.current.prompt = Some(PendingPrompt::approval_card(
         RequestId(0),
         crate::state::Approval {
             tool: "bash".into(),
@@ -227,7 +250,7 @@ fn test_entitlement_r_rejects() {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     let mut app = crate::composition::build_app_for_test(None);
     app.screen = crate::state::Screen::Working;
-    app.session.prompt = Some(PendingPrompt::approval_card(
+    app.sessions.current.prompt = Some(PendingPrompt::approval_card(
         RequestId(0),
         entitlement_approval(),
     ));
@@ -265,13 +288,21 @@ fn test_git_toggle_disconnected() {
     // change never reached it.
     let mut app = app();
     assert!(
-        app.session.capabilities.permission.ask_before_git_enabled,
+        app.sessions
+            .current
+            .capabilities
+            .permission
+            .ask_before_git_enabled,
         "default on"
     );
     app.input.editor.set("/permissions git off".to_string());
     app.submit_input();
     assert!(
-        app.session.capabilities.permission.ask_before_git_enabled,
+        app.sessions
+            .current
+            .capabilities
+            .permission
+            .ask_before_git_enabled,
         "disconnected toggle must not flip the cached state"
     );
     assert!(
@@ -294,7 +325,7 @@ fn test_git_show_disconnected() {
         last_system(&app)
     );
     assert!(
-        !app.session.transcript.iter().any(|l| matches!(l, crate::state::TranscriptLine::System(s) if s.contains("ask before git operations:"))),
+        !app.sessions.current.transcript.iter().any(|l| matches!(l, crate::state::TranscriptLine::System(s) if s.contains("ask before git operations:"))),
         "no cached-state line is shown while disconnected"
     );
 }
@@ -321,12 +352,24 @@ fn test_git_ops_updates_cache() {
         request: RequestId(4),
         response: ServerResponse::PermissionAskBeforeGit { enabled: false },
     });
-    assert!(!app.session.capabilities.permission.ask_before_git_enabled);
+    assert!(
+        !app.sessions
+            .current
+            .capabilities
+            .permission
+            .ask_before_git_enabled
+    );
     app.handle_agent_message(SessionMessage::Response {
         request: RequestId(5),
         response: ServerResponse::PermissionAskBeforeGit { enabled: true },
     });
-    assert!(app.session.capabilities.permission.ask_before_git_enabled);
+    assert!(
+        app.sessions
+            .current
+            .capabilities
+            .permission
+            .ask_before_git_enabled
+    );
 }
 
 #[test]
@@ -366,7 +409,8 @@ fn test_open_no_transcript_hint() {
     app.submit_input();
     assert_eq!(app.pane, Pane::Permission);
     let systems: Vec<String> = app
-        .session
+        .sessions
+        .current
         .transcript
         .iter()
         .rev()
@@ -534,7 +578,8 @@ fn test_permission_add_submode_flow() {
     assert!(app.input.editor.is_empty(), "input cleared after submit");
     pump_rules(&mut app);
     let added = app
-        .session
+        .sessions
+        .current
         .capabilities
         .permission
         .rules_cache
@@ -549,7 +594,7 @@ fn test_permission_add_submode_flow() {
     assert!(
         added,
         "rule landed in cache: {:?}",
-        app.session.capabilities.permission.rules_cache
+        app.sessions.current.capabilities.permission.rules_cache
     );
 }
 
@@ -590,7 +635,14 @@ fn test_permission_remove_submode_deletes() {
     app.pane = Pane::Permission;
     run(&mut app, "/permissions add bash allow");
     pump_rules(&mut app);
-    assert!(!app.session.capabilities.permission.rules_cache.is_empty());
+    assert!(
+        !app.sessions
+            .current
+            .capabilities
+            .permission
+            .rules_cache
+            .is_empty()
+    );
     // Cursor sits on the only rule; 'd' enters Remove (No preselected).
     crate::keys::handle_working(&mut app, key_press(crossterm::event::KeyCode::Char('d')));
     assert!(matches!(
@@ -611,9 +663,14 @@ fn test_permission_remove_submode_deletes() {
     );
     pump_rules(&mut app);
     assert!(
-        app.session.capabilities.permission.rules_cache.is_empty(),
+        app.sessions
+            .current
+            .capabilities
+            .permission
+            .rules_cache
+            .is_empty(),
         "rule removed: {:?}",
-        app.session.capabilities.permission.rules_cache
+        app.sessions.current.capabilities.permission.rules_cache
     );
 }
 
@@ -659,7 +716,7 @@ fn test_permission_workspace_remove_flow() {
     let mut app = app();
     app.pane = Pane::Permission;
     app.permission_pane.tab = PermissionTab::Workspace;
-    app.session.capabilities.permission.dirs_cache = vec!["/tmp/extra".into()];
+    app.sessions.current.capabilities.permission.dirs_cache = vec!["/tmp/extra".into()];
     crate::keys::handle_working(&mut app, key_press(crossterm::event::KeyCode::Char('d')));
     assert!(
         matches!(
@@ -676,7 +733,7 @@ fn test_permission_workspace_remove_flow() {
         "RemoveDir Enter clears the sub-mode"
     );
     // Esc path: 'd' then Esc cancels without shipping.
-    app.session.capabilities.permission.dirs_cache = vec!["/tmp/extra".into()];
+    app.sessions.current.capabilities.permission.dirs_cache = vec!["/tmp/extra".into()];
     crate::keys::handle_working(&mut app, key_press(crossterm::event::KeyCode::Char('d')));
     crate::keys::handle_working(&mut app, key_press(crossterm::event::KeyCode::Esc));
     assert_eq!(
@@ -685,7 +742,12 @@ fn test_permission_workspace_remove_flow() {
         "Esc cancels RemoveDir"
     );
     assert!(
-        !app.session.capabilities.permission.dirs_cache.is_empty(),
+        !app.sessions
+            .current
+            .capabilities
+            .permission
+            .dirs_cache
+            .is_empty(),
         "Esc does not remove the dir locally (server is the authority)"
     );
 }
@@ -750,13 +812,21 @@ fn test_git_toggle_connection_lost() {
     // refusal names the lost connection (no fake success).
     let mut app = crate::test_harness::connection_lost_app();
     assert!(
-        app.session.capabilities.permission.ask_before_git_enabled,
+        app.sessions
+            .current
+            .capabilities
+            .permission
+            .ask_before_git_enabled,
         "default on"
     );
     app.input.editor.set("/permissions git off".to_string());
     app.submit_input();
     assert!(
-        app.session.capabilities.permission.ask_before_git_enabled,
+        app.sessions
+            .current
+            .capabilities
+            .permission
+            .ask_before_git_enabled,
         "a failed send must not flip the cached state"
     );
     assert!(

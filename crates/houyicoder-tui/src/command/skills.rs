@@ -14,7 +14,7 @@ impl App {
     /// send that fails, settles the detail with the body unavailable instead
     /// of leaving it loading on a reply that will never come.
     pub(crate) fn open_skill_detail(&mut self) {
-        let ordered = display_order(&self.session.capabilities.skills.entries);
+        let ordered = display_order(&self.sessions.current.capabilities.skills.entries);
         let selected = self
             .skills_pane
             .cursor()
@@ -23,7 +23,7 @@ impl App {
             return;
         };
         let name = entry.name.clone();
-        let Some(session) = self.session.connection.as_ref() else {
+        let Some(session) = self.sessions.current.connection.as_ref() else {
             self.skills_pane.open_unavailable(name);
             return;
         };
@@ -42,7 +42,7 @@ impl App {
     /// Only a skill the user or the model can invoke has a state to flip; a
     /// frontmatter-blocked skill stays blocked until its file changes.
     pub(crate) fn toggle_skill_at_cursor(&mut self) {
-        let ordered = display_order(&self.session.capabilities.skills.entries);
+        let ordered = display_order(&self.sessions.current.capabilities.skills.entries);
         let selected = self
             .skills_pane
             .cursor()
@@ -54,13 +54,15 @@ impl App {
             return;
         }
         if !self
-            .session
+            .sessions
+            .current
             .capabilities
             .skills
             .disabled
             .insert(entry.name.clone())
         {
-            self.session
+            self.sessions
+                .current
                 .capabilities
                 .skills
                 .disabled

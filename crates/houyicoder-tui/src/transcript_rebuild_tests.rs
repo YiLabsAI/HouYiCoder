@@ -67,7 +67,7 @@ fn fresh_app() -> App {
     let mut app = composition::app();
     app.transcript_mut().reset();
     let (_tx, rx) = std::sync::mpsc::channel::<SessionMessage>();
-    app.session.connection = Some(SessionConnection::from_receiver(rx));
+    app.sessions.current.connection = Some(SessionConnection::from_receiver(rx));
     app
 }
 /// Pump the history read on file until it lands or times out. Mirrors what the
@@ -78,7 +78,7 @@ fn fresh_app() -> App {
 /// The question is whether a record is on file, not whether a worker runs: a
 /// read can have finished and left its result waiting for the pump.
 fn pump_history_read_blocking(app: &mut App, timeout: Duration) -> bool {
-    if !app.session.history_reads.holds_pending() {
+    if !app.sessions.current.history_reads.holds_pending() {
         return false;
     }
     let start = Instant::now();
@@ -95,7 +95,7 @@ fn pump_history_read_blocking(app: &mut App, timeout: Duration) -> bool {
 /// exits, so the count right after a landing can still see it on its way out.
 fn wait_for_workers_to_leave(app: &App) {
     let deadline = Instant::now() + Duration::from_secs(5);
-    while app.session.history_reads.running() > 0 && Instant::now() < deadline {
+    while app.sessions.current.history_reads.running() > 0 && Instant::now() < deadline {
         thread::sleep(Duration::from_millis(2));
     }
 }

@@ -34,7 +34,7 @@ fn test_hint_single_line() {
     use unicode_width::UnicodeWidthStr;
     let mut app = working_app();
     let command = "ego-browser nodejs <<'EOF'\nconst task = 7\nEOF";
-    app.session.transcript = vec![
+    app.sessions.current.transcript = vec![
         TranscriptLine::User("run it".into()),
         bash_call(command),
         bash_result(),
@@ -62,7 +62,7 @@ fn test_hint_single_line() {
 fn test_expand_shows_command() {
     let mut app = working_app();
     let command = "ego-browser nodejs <<'EOF'\nconst task = 7\nEOF";
-    app.session.transcript = vec![
+    app.sessions.current.transcript = vec![
         TranscriptLine::User("run it".into()),
         bash_call(command),
         bash_result(),
@@ -91,14 +91,17 @@ fn test_expand_shows_command() {
 #[test]
 fn test_teammate_drill_renders_child() {
     let mut app = working_app();
-    app.session.transcript.push(TranscriptLine::Subagent {
-        child_sid: "c1".into(),
-        subagent_type: "explore".into(),
-        summary: "did stuff".into(),
-        prompt: String::new(),
-        folded_transcript: vec![TranscriptLine::Agent("child marker line".into())],
-        color: None,
-    });
+    app.sessions
+        .current
+        .transcript
+        .push(TranscriptLine::Subagent {
+            child_sid: "c1".into(),
+            subagent_type: "explore".into(),
+            summary: "did stuff".into(),
+            prompt: String::new(),
+            folded_transcript: vec![TranscriptLine::Agent("child marker line".into())],
+            color: None,
+        });
     drop(render_text(&app, 80, 24));
     app.enter_teammate_view_for_sid("c1", false);
     let out = render_text(&app, 80, 24);
@@ -114,17 +117,21 @@ fn test_teammate_drill_renders_child() {
 #[test]
 fn test_exit_teammate_restores_parent() {
     let mut app = working_app();
-    app.session
+    app.sessions
+        .current
         .transcript
         .push(TranscriptLine::User("parent line".into()));
-    app.session.transcript.push(TranscriptLine::Subagent {
-        child_sid: "c1".into(),
-        subagent_type: "explore".into(),
-        summary: "did stuff".into(),
-        prompt: String::new(),
-        folded_transcript: vec![TranscriptLine::Agent("child marker line".into())],
-        color: None,
-    });
+    app.sessions
+        .current
+        .transcript
+        .push(TranscriptLine::Subagent {
+            child_sid: "c1".into(),
+            subagent_type: "explore".into(),
+            summary: "did stuff".into(),
+            prompt: String::new(),
+            folded_transcript: vec![TranscriptLine::Agent("child marker line".into())],
+            color: None,
+        });
     drop(render_text(&app, 80, 24));
     app.enter_teammate_view_for_sid("c1", false);
     drop(render_text(&app, 80, 24));
@@ -151,14 +158,17 @@ fn test_teammate_fill_renders_child() {
     use houyicoder_protocol::frontend::session_update::ContentChunk;
     use houyicoder_protocol::frontend::session_update::SessionUpdate;
     let mut app = working_app();
-    app.session.transcript.push(TranscriptLine::Subagent {
-        child_sid: "c1".into(),
-        subagent_type: "explore".into(),
-        summary: "did stuff".into(),
-        prompt: String::new(),
-        folded_transcript: Vec::new(),
-        color: None,
-    });
+    app.sessions
+        .current
+        .transcript
+        .push(TranscriptLine::Subagent {
+            child_sid: "c1".into(),
+            subagent_type: "explore".into(),
+            summary: "did stuff".into(),
+            prompt: String::new(),
+            folded_transcript: Vec::new(),
+            color: None,
+        });
     drop(render_text(&app, 80, 24));
     // Enter with an empty fold: view opens empty, fetch fires.
     app.enter_teammate_view_for_sid("c1", true);
@@ -219,10 +229,11 @@ fn test_steer_echo_renders() {
 #[test]
 fn test_cache_version_stable_idle() {
     let mut app = working_app();
-    app.session
+    app.sessions
+        .current
         .transcript
         .push(TranscriptLine::User("hello".into()));
-    app.session.transcript.bump_revision();
+    app.sessions.current.transcript.bump_revision();
     let out1 = render_text(&app, 80, 24);
     assert!(
         app.display_rows_cache.version.get() != u64::MAX,
@@ -240,7 +251,8 @@ fn test_cache_version_stable_idle() {
 #[test]
 fn test_spinner_keeps_blank_above() {
     let mut app = working_app();
-    app.session
+    app.sessions
+        .current
         .transcript
         .push(TranscriptLine::User("hello".into()));
     app.start_run_for_test(0);

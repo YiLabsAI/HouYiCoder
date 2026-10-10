@@ -34,7 +34,7 @@ pub(crate) fn draw_content(f: &mut Frame, inner: Rect, app: &App) {
         chunks[0],
     );
     if level == 0 {
-        let total = total_configured(&app.session.capabilities.hooks.entries);
+        let total = total_configured(&app.sessions.current.capabilities.hooks.entries);
         f.render_widget(
             Paragraph::new(format!("{total} hooks configured"))
                 .style(Style::new().fg(Color::DarkGray)),
@@ -61,7 +61,8 @@ pub(crate) fn draw_content(f: &mut Frame, inner: Rect, app: &App) {
 }
 
 fn framework_events(app: &App) -> Vec<&houyicoder_protocol::frontend::hooks::HookEntry> {
-    app.session
+    app.sessions
+        .current
         .capabilities
         .hooks
         .entries
@@ -93,7 +94,7 @@ fn draw_event_list(f: &mut Frame, area: Rect, app: &App) {
     let events = framework_events(app);
     let counts: Vec<usize> = events
         .iter()
-        .map(|e| configured_count(&app.session.capabilities.hooks.entries, &e.name))
+        .map(|e| configured_count(&app.sessions.current.capabilities.hooks.entries, &e.name))
         .collect();
     let mut order: Vec<usize> = (0..events.len()).collect();
     order.sort_by_key(|&i| counts[i] == 0);
@@ -137,14 +138,17 @@ fn draw_event_list(f: &mut Frame, area: Rect, app: &App) {
 
 fn draw_event_detail(f: &mut Frame, area: Rect, app: &App) {
     let mut events = framework_events(app);
-    events.sort_by_key(|e| configured_count(&app.session.capabilities.hooks.entries, &e.name) == 0);
+    events.sort_by_key(|e| {
+        configured_count(&app.sessions.current.capabilities.hooks.entries, &e.name) == 0
+    });
     let sel = app.hooks_pane.sel.get().min(events.len().saturating_sub(1));
     if events.is_empty() {
         return;
     }
     let event = events[sel];
     let registered: Vec<_> = app
-        .session
+        .sessions
+        .current
         .capabilities
         .hooks
         .entries

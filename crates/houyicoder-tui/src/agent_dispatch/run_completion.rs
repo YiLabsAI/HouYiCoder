@@ -22,10 +22,10 @@ impl super::App {
         // before the ActiveRun drops. Dropping it releases the streaming
         // progress, so the preview and tool-runtime state need no manual
         // clear here.
-        let active = self.session.run.finish();
-        self.session.prompt = None;
+        let active = self.sessions.current.run.finish();
+        self.sessions.current.prompt = None;
         self.rebuild_transcript();
-        self.debug_render_done(self.session.transcript.frames());
+        self.debug_render_done(self.sessions.current.transcript.frames());
         let was_final = match result {
             Ok(run) => {
                 self.status.tokens = run.usage.total_tokens as u64;
@@ -33,10 +33,17 @@ impl super::App {
                 let final_outcome = matches!(&run.outcome, RunOutcome::FinalOutput { .. });
                 match run.outcome {
                     RunOutcome::FinalOutput { .. } => {
-                        self.session.run_metrics.cumulative_tokens += run.usage.total_tokens as u64;
-                        self.session.run_metrics.cumulative_steps += run.turns;
-                        if self.session.run_metrics.session_started_at.is_none() {
-                            self.session.run_metrics.session_started_at =
+                        self.sessions.current.run_metrics.cumulative_tokens +=
+                            run.usage.total_tokens as u64;
+                        self.sessions.current.run_metrics.cumulative_steps += run.turns;
+                        if self
+                            .sessions
+                            .current
+                            .run_metrics
+                            .session_started_at
+                            .is_none()
+                        {
+                            self.sessions.current.run_metrics.session_started_at =
                                 active.as_ref().map(|r| r.started_at);
                         }
                     }
@@ -47,11 +54,11 @@ impl super::App {
                         // Restore the submission only when interruption arrived
                         // before real output, preserving any active draft.
                         tracing::debug!(reason, "interrupted");
-                        let restored = match self.session.last_run_input.take() {
+                        let restored = match self.sessions.current.last_run_input.take() {
                             Some(text)
                                 if !had_live_output
                                     && !should_preserve_interrupted_turn(
-                                        self.session.transcript.frames(),
+                                        self.sessions.current.transcript.frames(),
                                     )
                                     && self.input.editor.is_empty() =>
                             {
@@ -90,7 +97,7 @@ impl super::App {
             }
         };
         if !self.agent_busy() {
-            self.session.last_run_input = None;
+            self.sessions.current.last_run_input = None;
         }
         // Only final completion may advance queued input. Other outcomes
         // park pending messages for explicit user action.
@@ -124,7 +131,8 @@ mod tests {
             stop_reason: StopReason::EndTurn,
         }));
         let has_thought = app
-            .session
+            .sessions
+            .current
             .transcript
             .iter()
             .any(|l| matches!(l, TranscriptLine::ThoughtFor { .. }));
@@ -142,16 +150,20 @@ mod tests {
         use houyicoder_protocol::frontend::session_update::{ContentChunk, SessionUpdate};
         use houyicoder_protocol::llm::Usage;
         let mut app = crate::composition::app();
-        app.session.transcript.push_frame(TranscriptFrame::Session(
-            SessionUpdate::UserMessageChunk(ContentChunk::new(ContentBlock::Text {
-                text: "go".into(),
-            })),
-        ));
-        app.session.transcript.push_frame(TranscriptFrame::Session(
-            SessionUpdate::AgentThoughtChunk(ContentChunk::new(ContentBlock::Text {
-                text: "weighing the options".into(),
-            })),
-        ));
+        app.sessions
+            .current
+            .transcript
+            .push_frame(TranscriptFrame::Session(SessionUpdate::UserMessageChunk(
+                ContentChunk::new(ContentBlock::Text { text: "go".into() }),
+            )));
+        app.sessions
+            .current
+            .transcript
+            .push_frame(TranscriptFrame::Session(SessionUpdate::AgentThoughtChunk(
+                ContentChunk::new(ContentBlock::Text {
+                    text: "weighing the options".into(),
+                }),
+            )));
         app.handle_run_completion(Ok(RunResult {
             outcome: RunOutcome::FinalOutput {
                 content: vec![ContentBlock::Text {
@@ -162,7 +174,7 @@ mod tests {
             turns: 1,
             stop_reason: StopReason::EndTurn,
         }));
-        let has_thought = app.session.transcript.iter().any(|l| {
+        let has_thought = app.sessions.current.transcript.iter().any(|l| {
             matches!(
                 l,
                 TranscriptLine::ThoughtFor { reasoning: Some(r), .. }

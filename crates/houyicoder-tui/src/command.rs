@@ -59,9 +59,10 @@ impl App {
             }
             C::Agents => {
                 self.pane = Pane::Agents;
-                let v = self.session.transcript.revision();
-                self.agents.refresh(self.session.transcript.lines(), v);
-                if let Some(s) = self.session.connection.as_ref() {
+                let v = self.sessions.current.transcript.revision();
+                self.agents
+                    .refresh(self.sessions.current.transcript.lines(), v);
+                if let Some(s) = self.sessions.current.connection.as_ref() {
                     match s.next_request_id() {
                         Ok(req_id) => {
                             self.enqueue_refresh(ClientCommand::AgentsQuery { req_id });
@@ -84,7 +85,8 @@ impl App {
                 // it — the ContextResult replaces this grid with fresh data.
                 // No cache yet (first /context on a fresh session): the
                 // server's prospective breakdown fills it on the first reply.
-                if let Some(breakdown) = self.session.capabilities.status.context_cache.clone() {
+                let status = &self.sessions.current.capabilities.status;
+                if let Some(breakdown) = status.context_cache.clone() {
                     let suggestions = crate::composition::suggestions_for(&breakdown);
                     let view = crate::records::ContextView {
                         breakdown,
@@ -92,12 +94,12 @@ impl App {
                         suggestions,
                     };
                     self.push_transcript_line(TranscriptLine::ContextGrid(view));
-                } else if self.session.connection.is_none() {
+                } else if self.sessions.current.connection.is_none() {
                     self.push_transcript_line(TranscriptLine::ContextGrid(
                         composition::context_view(),
                     ));
                 }
-                if let Some(s) = self.session.connection.as_ref() {
+                if let Some(s) = self.sessions.current.connection.as_ref() {
                     match s.next_request_id() {
                         Ok(req_id) => {
                             self.enqueue_refresh(ClientCommand::ContextQuery { req_id });
@@ -114,7 +116,7 @@ impl App {
                 // not a transcript text dump. The stub path renders from
                 // snapshot_or_stub the pane content reads.
                 self.pane = Pane::Status;
-                if let Some(s) = self.session.connection.as_ref() {
+                if let Some(s) = self.sessions.current.connection.as_ref() {
                     match s.next_request_id() {
                         Ok(req_id) => {
                             // Set the pending flag only after the enqueue accepts
@@ -122,8 +124,9 @@ impl App {
                             // flag that waits on a reply that never comes. A
                             // refused enqueue stays quiet: the ConnectionLost
                             // event announces the loss.
+                            let status = &mut self.sessions.current.capabilities.status;
                             if s.enqueue(ClientCommand::StatusQuery { req_id }).is_ok() {
-                                self.session.capabilities.status.pending_status_command = true;
+                                status.mark_command_pending();
                             }
                         }
                         Err(_) => self.note_request_id_exhausted(),
@@ -144,7 +147,7 @@ impl App {
             }
             C::Tools => {
                 self.pane = Pane::Tools;
-                if let Some(s) = self.session.connection.as_ref() {
+                if let Some(s) = self.sessions.current.connection.as_ref() {
                     match s.next_request_id() {
                         Ok(req_id) => {
                             self.enqueue_refresh(ClientCommand::ToolListQuery { req_id });
@@ -155,7 +158,7 @@ impl App {
             }
             C::Skills => {
                 self.pane = Pane::Skills;
-                if let Some(s) = self.session.connection.as_ref() {
+                if let Some(s) = self.sessions.current.connection.as_ref() {
                     match s.next_request_id() {
                         Ok(req_id) => {
                             self.enqueue_refresh(ClientCommand::SkillsQuery { req_id });
@@ -166,7 +169,7 @@ impl App {
             }
             C::Hooks => {
                 self.pane = Pane::Hooks;
-                if let Some(s) = self.session.connection.as_ref() {
+                if let Some(s) = self.sessions.current.connection.as_ref() {
                     match s.next_request_id() {
                         Ok(req_id) => {
                             self.enqueue_refresh(ClientCommand::HooksQuery { req_id });
@@ -178,7 +181,7 @@ impl App {
             C::Memory => {
                 self.pane = Pane::Memory;
                 self.memory.close_detail();
-                if let Some(s) = self.session.connection.as_ref() {
+                if let Some(s) = self.sessions.current.connection.as_ref() {
                     match s.next_request_id() {
                         Ok(req_id) => {
                             self.enqueue_refresh(ClientCommand::MemoryListQuery { req_id });
@@ -186,7 +189,7 @@ impl App {
                         Err(_) => self.note_request_id_exhausted(),
                     }
                 }
-                if let Some(s) = self.session.connection.as_ref() {
+                if let Some(s) = self.sessions.current.connection.as_ref() {
                     match s.next_request_id() {
                         Ok(req_id) => {
                             self.enqueue_refresh(ClientCommand::MemoryToggleStateQuery { req_id });
@@ -208,7 +211,7 @@ impl App {
             }
             C::Compact => self.run_compact(),
             C::Undo => {
-                let Some(s) = self.session.connection.as_ref() else {
+                let Some(s) = self.sessions.current.connection.as_ref() else {
                     self.system_line("undo: not connected");
                     return;
                 };
@@ -243,7 +246,7 @@ impl App {
     /// landed without opening the file.
     pub(crate) fn run_export(&mut self, path: Option<&str>) {
         use crate::view::export_log::write_atomic_0600;
-        if self.session.connection.is_none() {
+        if self.sessions.current.connection.is_none() {
             self.system_line("export: not connected");
             return;
         }
@@ -296,7 +299,8 @@ impl App {
     }
 
     pub(crate) fn snapshot_or_stub(&self) -> StatusSnapshot {
-        let status_cache = self.session.capabilities.status.status_cache.clone();
+        let status = &self.sessions.current.capabilities.status;
+        let status_cache = status.snapshot().cloned();
         status_cache.unwrap_or_else(|| StatusSnapshot {
             model: self.status.model.clone(),
             breaker_state: None,
@@ -316,26 +320,26 @@ impl App {
     /// /clear: archive the transcript, reset the full chain state, and land
     /// back on a fresh working surface (stage Idle, pane Transcript, step idle).
     fn clear_session(&mut self) {
-        self.session.transcript.reset();
+        self.sessions.current.transcript.reset();
         // A read running against the archived history belongs to it: drop the
         // record and move the generation on, so a late result cannot land in
         // the fresh view whose numbers match the old dispatch again.
-        self.session.history_reads.invalidate();
+        self.sessions.current.history_reads.invalidate();
         // The scrollback boundary belongs to the cleared session, so the next
         // one starts at the frame cap instead of an earlier window.
-        self.session.loaded_from_frame.set(usize::MAX);
+        self.sessions.current.loaded_from_frame.set(usize::MAX);
         self.verdict_cursor = 0;
-        let verdict_log = &mut self.session.capabilities.permission.verdict_log_cache;
-        verdict_log.clear();
-        self.session.todos.clear();
+        let permission = &mut self.sessions.current.capabilities.permission;
+        permission.verdict_log_cache.clear();
+        self.sessions.current.todos.clear();
         // Reset the server's cumulative usage tally + audit trajectory so
         // /context reflects the new session only. Fire-and-forget: the host
         // clears its local view in parallel, and a refused enqueue stays
         // quiet because the ConnectionLost event announces the loss.
-        if let Some(s) = self.session.connection.as_ref() {
+        if let Some(s) = self.sessions.current.connection.as_ref() {
             match s.next_request_id() {
                 Ok(req_id) => {
-                    let session_id = self.session.identity.session_id.clone();
+                    let session_id = self.sessions.current.identity.session_id.clone();
                     let _ = s.enqueue(ClientCommand::SessionReset { req_id, session_id });
                 }
                 Err(_) => self.note_request_id_exhausted(),
@@ -526,9 +530,9 @@ impl App {
         // task opens the drafting surface it would open with a runner. No reply
         // follows, because there is nothing to reply with.
         let text = crate::paste::PasteStore::expand(&text, &self.input.pasted);
-        if self.session.connection.is_some() {
+        if self.sessions.current.connection.is_some() {
             let project = crate::history::current_project();
-            let session_id = self.session.identity.session_id.to_string();
+            let session_id = self.sessions.current.identity.session_id.to_string();
             self.input.history.submit(&text, &project, &session_id);
             self.spawn_run(text);
             return;

@@ -87,7 +87,7 @@ impl App {
                 );
             }
             None => {
-                let live = self.session.transcript.lines().to_vec();
+                let live = self.sessions.current.transcript.lines().to_vec();
                 self.transcript_view.search_corpus.enter_fallback(live);
             }
         }
@@ -117,10 +117,10 @@ impl App {
         self.set_window_browsing(false);
         self.exit_history_window();
         self.reset_window_scroll();
-        self.session.index_build.indexing.set(false);
-        self.session.index_build.indexed_bytes.set(0);
-        self.session.index_build.index_total.set(0);
-        self.session.index_build.index_done.set(false);
+        self.sessions.current.index_build.indexing.set(false);
+        self.sessions.current.index_build.indexed_bytes.set(0);
+        self.sessions.current.index_build.index_total.set(0);
+        self.sessions.current.index_build.index_done.set(false);
         self.exit_scroll();
     }
 
@@ -175,7 +175,7 @@ impl App {
         } else if self.transcript_view.search.active {
             self.transcript_view.search_corpus.lines()
         } else {
-            self.session.transcript.lines()
+            self.sessions.current.transcript.lines()
         }
     }
 
@@ -187,7 +187,7 @@ impl App {
         let t: &[crate::records::TranscriptLine] = if self.transcript_view.search.active {
             self.transcript_view.search_corpus.lines()
         } else {
-            self.session.transcript.lines()
+            self.sessions.current.transcript.lines()
         };
         self.transcript_view.search.run(t);
     }
@@ -325,7 +325,8 @@ impl App {
     /// inside the log, which is why that budget is held by the worker.
     fn pending_index_chunks(&self) -> usize {
         usize::from(
-            self.session
+            self.sessions
+                .current
                 .index_build
                 .pending_index_chunk
                 .borrow()
@@ -345,8 +346,8 @@ impl App {
         if !self.window_browsing() {
             return;
         }
-        self.session.index_build.indexing.set(true);
-        self.session.index_build.index_done.set(false);
+        self.sessions.current.index_build.indexing.set(true);
+        self.sessions.current.index_build.index_done.set(false);
         if self.pending_index_chunks() >= INDEX_CHUNK_BUDGET {
             return;
         }
@@ -363,8 +364,8 @@ impl App {
     /// running. That bound is the index build's whole stop contract, because a
     /// worker here reads one chunk and returns rather than walking the log.
     pub fn interrupt_index(&mut self) -> bool {
-        if self.session.index_build.indexing.get() {
-            self.session.index_build.indexing.set(false);
+        if self.sessions.current.index_build.indexing.get() {
+            self.sessions.current.index_build.indexing.set(false);
             true
         } else {
             false
@@ -383,14 +384,14 @@ impl App {
     /// effect at the next chunk boundary rather than partway through a read.
     pub fn pump_index_chunk(&mut self) -> bool {
         let mut moved = self.apply_index_progress();
-        if !self.session.index_build.indexing.get() {
+        if !self.sessions.current.index_build.indexing.get() {
             return moved;
         }
         if self.pending_index_chunks() >= INDEX_CHUNK_BUDGET {
             // A chunk is already running; the next step waits for it.
             return moved;
         }
-        if self.session.connection.is_some() {
+        if self.sessions.current.connection.is_some() {
             self.dispatch_index_chunk();
             return moved;
         }
@@ -417,7 +418,7 @@ impl App {
             self.pending_index_chunks(),
             INDEX_CHUNK_BUDGET
         );
-        if self.session.connection.is_none() {
+        if self.sessions.current.connection.is_none() {
             return;
         }
         let Some(snap) = self.persistence.snapshot.clone() else {
@@ -427,15 +428,20 @@ impl App {
         crate::composition::shared_runtime().spawn_blocking(move || {
             tx.send(snap.index_chunk()).ok();
         });
-        *self.session.index_build.pending_index_chunk.borrow_mut() =
-            Some(PendingIndexChunk::new(rx));
+        *self
+            .sessions
+            .current
+            .index_build
+            .pending_index_chunk
+            .borrow_mut() = Some(PendingIndexChunk::new(rx));
     }
 
     /// Apply a chunk that landed on the worker. Returns true when it moved the
     /// build forward.
     fn apply_index_progress(&mut self) -> bool {
         let polled = self
-            .session
+            .sessions
+            .current
             .index_build
             .pending_index_chunk
             .borrow()
@@ -443,15 +449,25 @@ impl App {
             .map(PendingIndexChunk::poll);
         match polled {
             Some(IndexChunkPoll::Ready(progress)) => {
-                *self.session.index_build.pending_index_chunk.borrow_mut() = None;
+                *self
+                    .sessions
+                    .current
+                    .index_build
+                    .pending_index_chunk
+                    .borrow_mut() = None;
                 self.apply_index_chunk(progress);
                 true
             }
             Some(IndexChunkPoll::Disconnected) => {
                 // The worker died without sending: stop claiming to index, so
                 // a dead task cannot stall the build forever.
-                *self.session.index_build.pending_index_chunk.borrow_mut() = None;
-                self.session.index_build.indexing.set(false);
+                *self
+                    .sessions
+                    .current
+                    .index_build
+                    .pending_index_chunk
+                    .borrow_mut() = None;
+                self.sessions.current.index_build.indexing.set(false);
                 true
             }
             Some(IndexChunkPoll::Pending) | None => false,
@@ -461,17 +477,19 @@ impl App {
     /// Publish a chunk's progress to the cells the chrome reads, and finish the
     /// build when the chunk says it is complete.
     fn apply_index_chunk(&self, progress: crate::transcript::snapshot::IndexProgress) {
-        self.session
+        self.sessions
+            .current
             .index_build
             .indexed_bytes
             .set(progress.indexed_bytes);
-        self.session
+        self.sessions
+            .current
             .index_build
             .index_total
             .set(progress.total_bytes);
         if progress.done {
-            self.session.index_build.index_done.set(true);
-            self.session.index_build.indexing.set(false);
+            self.sessions.current.index_build.index_done.set(true);
+            self.sessions.current.index_build.indexing.set(false);
         }
     }
 }
@@ -493,8 +511,11 @@ mod tests {
     fn test_dispatch_enforces_budget() {
         let mut app = composition::app();
         let (_tx, rx) = mpsc::channel();
-        *app.session.index_build.pending_index_chunk.borrow_mut() =
-            Some(PendingIndexChunk::new(rx));
+        *app.sessions
+            .current
+            .index_build
+            .pending_index_chunk
+            .borrow_mut() = Some(PendingIndexChunk::new(rx));
 
         app.dispatch_index_chunk();
     }

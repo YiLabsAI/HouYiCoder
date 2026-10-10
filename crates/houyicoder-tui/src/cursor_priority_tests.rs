@@ -43,14 +43,15 @@ fn test_reject_records_sticky() {
     // bounced back to Yes each time.
     let mut app = composition::app();
     app.screen = Screen::Working;
-    app.session.prompt = Some(PendingPrompt::approval_card(
+    app.sessions.current.prompt = Some(PendingPrompt::approval_card(
         RequestId(0),
         approval_at("bash", 0),
     ));
     crate::keys::handle_working(&mut app, key(KeyCode::Esc));
     use houyicoder_protocol::acp_wire::PermissionOptionKind;
     assert_eq!(
-        app.session
+        app.sessions
+            .current
             .capabilities
             .permission
             .sticky_choices
@@ -68,14 +69,15 @@ fn test_persist_records_sticky() {
     // allow-always; the next popup preselects index 2.
     let mut app = composition::app();
     app.screen = Screen::Working;
-    app.session.prompt = Some(PendingPrompt::approval_card(
+    app.sessions.current.prompt = Some(PendingPrompt::approval_card(
         RequestId(0),
         approval_at("bash", 2),
     ));
     crate::keys::handle_working(&mut app, key(KeyCode::Enter));
     use houyicoder_protocol::acp_wire::PermissionOptionKind;
     assert_eq!(
-        app.session
+        app.sessions
+            .current
             .capabilities
             .permission
             .sticky_choices
@@ -96,7 +98,7 @@ fn test_auto_focuses_approve() {
     // for the tool, matching the user's minimal-friction intent.
     use houyicoder_protocol::frontend::permission::PermissionMode;
     let mut app = composition::app();
-    app.session.capabilities.permission.mode_cache = Some(PermissionMode::Auto);
+    app.sessions.current.capabilities.permission.mode_cache = Some(PermissionMode::Auto);
     assert_eq!(app.initial_cursor("bash"), 0);
 }
 
@@ -107,8 +109,9 @@ fn test_sticky_beats_auto() {
     use houyicoder_protocol::acp_wire::PermissionOptionKind;
     use houyicoder_protocol::frontend::permission::PermissionMode;
     let mut app = composition::app();
-    app.session.capabilities.permission.mode_cache = Some(PermissionMode::Auto);
-    app.session
+    app.sessions.current.capabilities.permission.mode_cache = Some(PermissionMode::Auto);
+    app.sessions
+        .current
         .capabilities
         .permission
         .sticky_choices

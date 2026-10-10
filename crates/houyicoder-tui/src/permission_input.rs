@@ -105,7 +105,7 @@ fn add_rule_with_destination(
     };
     let label = crate::command::render::permission_effect_label(spec.effect);
     let action = wire_rule.action.clone();
-    let Some(s) = app.session.connection.as_ref() else {
+    let Some(s) = app.sessions.current.connection.as_ref() else {
         app.system_line("permission: not connected");
         return;
     };
@@ -129,7 +129,7 @@ fn add_rule_with_destination(
 /// Remove the rule at the given index into the full rules_cache (the server
 /// sees the unfiltered set, not the tab-filtered view).
 pub(crate) fn remove_rule_at(app: &mut App, index: usize) {
-    let Some(s) = app.session.connection.as_ref() else {
+    let Some(s) = app.sessions.current.connection.as_ref() else {
         app.system_line("permission: not connected");
         return;
     };
@@ -192,12 +192,13 @@ pub(crate) fn filtered_rule_index(app: &App) -> Option<usize> {
     }
     let view = filtered_rules(
         app.permission_pane.tab,
-        &app.session.capabilities.permission.rules_cache,
+        &app.sessions.current.capabilities.permission.rules_cache,
         search_query(app),
     );
     let cursor = app.permission_pane.cursor.min(view.len().saturating_sub(1));
     let target = view.get(cursor).copied()? as *const PermissionRule;
-    app.session
+    app.sessions
+        .current
         .capabilities
         .permission
         .rules_cache
@@ -448,14 +449,22 @@ fn handle_nav_keys(app: &mut App, code: ratatui::crossterm::event::KeyCode) -> b
             // false) so a stray Enter cannot drop a dir. The cursor indexes
             // into dirs_cache; saturating-clamped at render + ship time.
             let idx = app.permission_pane.cursor.min(
-                app.session
+                app.sessions
+                    .current
                     .capabilities
                     .permission
                     .dirs_cache
                     .len()
                     .saturating_sub(1),
             );
-            if !app.session.capabilities.permission.dirs_cache.is_empty() {
+            if !app
+                .sessions
+                .current
+                .capabilities
+                .permission
+                .dirs_cache
+                .is_empty()
+            {
                 app.permission_pane.input = PermissionInput::RemoveDir {
                     idx,
                     confirm: false,
@@ -531,7 +540,7 @@ pub(crate) fn submit_permission_input(app: &mut App, text: String) {
 /// (PermissionDirsResult) refreshes dirs_cache. A None req_id (no
 /// session) surfaces a system line instead of panicking.
 fn submit_add_dir(app: &mut App, path: String) {
-    let Some(s) = app.session.connection.as_ref() else {
+    let Some(s) = app.sessions.current.connection.as_ref() else {
         app.system_line("permission: not connected");
         return;
     };
@@ -551,7 +560,8 @@ fn submit_add_dir(app: &mut App, path: String) {
 /// the sub-mode entered) is a no-op with a system line.
 fn remove_dir_at(app: &mut App, index: usize) {
     let Some(path) = app
-        .session
+        .sessions
+        .current
         .capabilities
         .permission
         .dirs_cache
@@ -561,7 +571,7 @@ fn remove_dir_at(app: &mut App, index: usize) {
         app.system_line("permission: directory no longer present");
         return;
     };
-    let Some(s) = app.session.connection.as_ref() else {
+    let Some(s) = app.sessions.current.connection.as_ref() else {
         app.system_line("permission: not connected");
         return;
     };
@@ -646,7 +656,7 @@ mod tests {
     #[test]
     fn test_remove_dir_ships() {
         let (mut app, events) = connected_app_events();
-        app.session.capabilities.permission.dirs_cache = vec!["/tmp/extra".into()];
+        app.sessions.current.capabilities.permission.dirs_cache = vec!["/tmp/extra".into()];
         remove_dir_at(&mut app, 0);
         let req = wait_for_request(&events, |p| {
             matches!(p, FrontendRequest::PermissionRemoveWorkingDir { .. })

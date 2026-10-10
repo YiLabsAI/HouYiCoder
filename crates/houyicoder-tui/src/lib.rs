@@ -49,6 +49,7 @@ pub mod scroll;
 pub mod selection;
 mod selections;
 pub mod session;
+mod sessions;
 mod skill_picker_state;
 mod skills_state;
 pub mod state;

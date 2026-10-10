@@ -13,14 +13,14 @@ impl App {
     /// render shows the rows. Resets the cursor so it never points past the
     /// new list. No-op when no working directory is set.
     pub fn refresh_worktrees(&mut self) {
-        if self.session.identity.working_dir.is_empty() {
+        if self.sessions.current.identity.working_dir.is_empty() {
             self.worktree_entries.clear();
             self.worktree_list.cursor = 0;
             return;
         }
         let entries = crate::composition::parse_worktrees(
-            Some(&self.session.identity.working_dir),
-            &self.session.identity.working_dir,
+            Some(&self.sessions.current.identity.working_dir),
+            &self.sessions.current.identity.working_dir,
         );
         self.worktree_list.clamp(entries.len());
         self.worktree_entries = entries;
@@ -63,7 +63,7 @@ impl App {
         else {
             return;
         };
-        if self.session.connection.is_none() {
+        if self.sessions.current.connection.is_none() {
             self.system_line("worktree: not connected".to_string());
             return;
         }
@@ -137,7 +137,7 @@ mod tests {
         let mut app = app();
         app.worktree_entries = vec![row("/stale")];
         app.worktree_list.cursor = 0;
-        app.session.identity.working_dir = String::new();
+        app.sessions.current.identity.working_dir = String::new();
         app.refresh_worktrees();
         assert!(app.worktree_entries.is_empty(), "list cleared");
     }
@@ -183,7 +183,7 @@ mod tests {
         // Disconnected: the enter path reports it and enters nothing.
         app.enter_worktree_at_cursor();
         assert!(
-            app.session.transcript
+            app.sessions.current.transcript
                 .iter()
                 .any(|l| matches!(l, crate::records::TranscriptLine::System(s) if s.contains("not connected"))),
             "disconnected enter should report not connected"

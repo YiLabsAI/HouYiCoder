@@ -151,14 +151,14 @@ pub fn build_app(bundle: RunnerBundle) -> App {
     // snapshot lands, so the status bar names what the session runs.
     app.model_picker.snapshot.applied.id = model;
     app.status.sandbox = "mac-seatbelt".to_string();
-    app.session.identity.session_id = session_id;
-    app.session.connection = Some(live_session);
+    app.sessions.current.identity.session_id = session_id;
+    app.sessions.current.connection = Some(live_session);
     app.persistence = SessionPersistence {
         trajectory_log,
         export_log,
         snapshot,
-        catalog: session_catalog,
     };
+    app.sessions.catalog = session_catalog;
     // Push the drained startup warnings as initial system lines BEFORE any run
     // output — synchronous so they land first + do not race with command
     // results (the async-sink path flaked timing tests; this is deterministic).
@@ -260,7 +260,7 @@ impl App {
         // session being entered, so a switch away and back keeps what the
         // user had open. The parked state is taken here too -- build_app
         // rebuilds the whole App.
-        let leaving = self.session.identity.session_id.clone();
+        let leaving = self.sessions.current.identity.session_id.clone();
         let open_keys = self.take_expanded_keys();
         let mut parked = std::mem::take(&mut self.parked_view_states);
         // Drop session-scoped Commands (/clear /rewind /undo) the user typed
@@ -289,7 +289,7 @@ impl App {
             }
         }
         *self = build_app(bundle);
-        self.session.todos.set_replaying_history(true);
+        self.sessions.current.todos.set_replaying_history(true);
         // A swap is always initiated from the working screen (the user is on
         // the transcript when they /resume), so force Working regardless of the
         // bundle's skip_login. This nails the skip_login coupling: a bundle
@@ -300,7 +300,7 @@ impl App {
         self.bump_transcript_version();
         self.input.queue.replace_all(pending);
         parked.park_session(leaving, open_keys);
-        if let Some(keys) = parked.take_session(&self.session.identity.session_id) {
+        if let Some(keys) = parked.take_session(&self.sessions.current.identity.session_id) {
             self.set_expanded_keys(keys);
         }
         // The new session's fleet is unrelated to the old one's children,

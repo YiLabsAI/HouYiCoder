@@ -185,7 +185,7 @@ impl App {
         // driver leaves the item in place rather than orphaning the mirror.
         if let InputItem::Message(input) = &self.input.queue[index] {
             let id = input.id;
-            let session_id = self.session.identity.session_id.clone();
+            let session_id = self.sessions.current.identity.session_id.clone();
             if let Err(e) = self.enqueue(ClientCommand::QueueRemove { session_id, id }) {
                 self.system_line(Self::enqueue_failure_line("queue", e));
                 return None;
@@ -214,7 +214,7 @@ impl App {
         }) else {
             return;
         };
-        let session_id = self.session.identity.session_id.clone();
+        let session_id = self.sessions.current.identity.session_id.clone();
         match self.enqueue(ClientCommand::InjectUser { session_id, input }) {
             Ok(()) => {
                 if let Some(slot) = self.input.queue.first_mut()

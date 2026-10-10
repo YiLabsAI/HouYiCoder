@@ -615,7 +615,7 @@ impl crate::state::App {
                 self.agent_busy(),
             ))
         } else {
-            Cow::Borrowed(self.session.transcript.fold_groups())
+            Cow::Borrowed(self.sessions.current.transcript.fold_groups())
         }
     }
 

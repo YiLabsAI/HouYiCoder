@@ -100,7 +100,12 @@ fn test_kill_child_notif_shape() {
 #[test]
 fn test_request_id_starts_zero() {
     let (app, _events) = connected_app_events();
-    let session = app.session.connection.as_ref().expect("connected session");
+    let session = app
+        .sessions
+        .current
+        .connection
+        .as_ref()
+        .expect("connected session");
     assert_eq!(session.next_request_id().unwrap(), RequestId(0));
     assert_eq!(session.next_request_id().unwrap(), RequestId(1));
 }
@@ -111,7 +116,12 @@ fn test_request_id_starts_zero() {
 #[test]
 fn test_request_id_exhaustion_stable() {
     let (app, _events) = connected_app_events();
-    let session = app.session.connection.as_ref().expect("connected session");
+    let session = app
+        .sessions
+        .current
+        .connection
+        .as_ref()
+        .expect("connected session");
     session.next_req_id.set(u64::MAX - 1);
     assert_eq!(
         session.next_request_id().unwrap(),
@@ -146,8 +156,18 @@ fn test_request_id_exhaustion_stable() {
 fn test_request_id_sequence_independent() {
     let (a, _ea) = connected_app_events();
     let (b, _eb) = connected_app_events();
-    let first = a.session.connection.as_ref().expect("connected session");
-    let second = b.session.connection.as_ref().expect("connected session");
+    let first = a
+        .sessions
+        .current
+        .connection
+        .as_ref()
+        .expect("connected session");
+    let second = b
+        .sessions
+        .current
+        .connection
+        .as_ref()
+        .expect("connected session");
     first.next_req_id.set(7);
     assert_eq!(first.next_request_id().unwrap(), RequestId(7));
     assert_eq!(second.next_request_id().unwrap(), RequestId(0));

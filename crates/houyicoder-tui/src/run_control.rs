@@ -48,7 +48,7 @@ impl App {
     /// leave state waiting on one. Request ids are issued by the connection
     /// before this call.
     pub fn enqueue(&self, cmd: ClientCommand) -> Result<(), EnqueueError> {
-        let connection = self.session.connection.as_ref();
+        let connection = self.sessions.current.connection.as_ref();
         connection
             .ok_or(EnqueueError::NotConnected)
             .and_then(|s| s.enqueue(cmd))
@@ -82,7 +82,7 @@ impl App {
     /// session, so callers read one four-state view instead of folding an
     /// Option over a three-state enum.
     pub fn connection_status(&self) -> ConnectionStatus {
-        let connection = self.session.connection.as_ref();
+        let connection = self.sessions.current.connection.as_ref();
         connection.map_or(ConnectionStatus::Disconnected, |s| s.status().clone())
     }
 
@@ -92,7 +92,7 @@ impl App {
     /// lose it silently; the one-shot flag lets the first round announce and
     /// later rounds stay quiet.
     pub(crate) fn note_request_id_exhausted(&mut self) {
-        let connection = self.session.connection.as_ref();
+        let connection = self.sessions.current.connection.as_ref();
         if connection.is_some_and(|s| s.take_exhaustion_notice()) {
             self.system_line("request ids exhausted");
         }
@@ -148,24 +148,24 @@ impl App {
         // Active or waiting runs park new input locally. A waiting run
         // (approval card up) does not accept a second submit — the card
         // is the gate, not agent_busy.
-        if self.session.run.is_active() {
+        if self.sessions.current.run.is_active() {
             let parked = InputItem::ParkedMessage(input.into());
             self.input.queue.push(parked);
             self.promote_next_pending();
             return true;
         }
-        let Some(s) = self.session.connection.as_ref() else {
+        let Some(s) = self.sessions.current.connection.as_ref() else {
             return false;
         };
         let Ok(req_id) = s.next_request_id() else {
             self.system_line("run: request ids exhausted");
             return false;
         };
-        let session_id = self.session.identity.session_id.clone();
+        let session_id = self.sessions.current.identity.session_id.clone();
         let content = vec![ContentBlock::Text {
             text: input.clone(),
         }];
-        let disabled_skills = self.session.capabilities.skills.disabled.clone();
+        let disabled_skills = self.sessions.current.capabilities.skills.disabled.clone();
         // Send before touching any run state: a dead driver must not leave a
         // fake running turn behind.
         if let Err(e) = self.enqueue(ClientCommand::SendMessage {
@@ -178,15 +178,15 @@ impl App {
             return false;
         }
         // Only errors matching this request terminate the active run.
-        self.session.run.start(req_id, Instant::now());
-        self.session.todos.set_replaying_history(false);
+        self.sessions.current.run.start(req_id, Instant::now());
+        self.sessions.current.todos.set_replaying_history(false);
         // Preserve the submitted input in case interruption restores the turn.
-        self.session.last_run_input = Some(input.clone());
+        self.sessions.current.last_run_input = Some(input.clone());
         // A fresh submission answers the previous turn's interruption, so its
         // notice and restore line leave the log before this turn's lines land:
         // both are rows the frontend raised, and a rebuild renders them again
         // from the log they would still sit in.
-        let transcript = &mut self.session.transcript;
+        let transcript = &mut self.sessions.current.transcript;
         transcript.with_frames_mut(clear_interruption_markers);
         self.rebuild_transcript();
         self.push_transcript_line(TranscriptLine::User(input));
@@ -221,7 +221,7 @@ impl App {
                 // Remove the stale server copy before starting a fresh run; a
                 // refused removal keeps the head queued so the local copy and
                 // the server mirror cannot diverge.
-                let session_id = self.session.identity.session_id.clone();
+                let session_id = self.sessions.current.identity.session_id.clone();
                 if let Err(e) = self.enqueue(ClientCommand::QueueRemove {
                     session_id,
                     id: head.id,
@@ -259,7 +259,7 @@ impl App {
     /// verdict as the matching reverse response. No-op when no request awaits
     /// a decision.
     pub fn resolve_current_approval(&mut self, decision: ApprovalDecision) {
-        let req_id = match self.session.prompt.as_ref() {
+        let req_id = match self.sessions.current.prompt.as_ref() {
             Some(PendingPrompt::Permission { req_id, .. }) => *req_id,
             _ => return,
         };
@@ -269,10 +269,10 @@ impl App {
             self.system_line(Self::enqueue_failure_line("permission", e));
             return;
         }
-        self.session.prompt = None;
+        self.sessions.current.prompt = None;
         // Resume the run without resetting its clock: end_waiting flips
         // Waiting → Running preserving the original started_at.
-        self.session.run.end_waiting();
+        self.sessions.current.run.end_waiting();
         self.refresh_fold_active();
         // Clear stale thinking state before post-resume streaming begins. The
         // run carried its progress through the pause, so these resets clear
@@ -287,7 +287,7 @@ impl App {
     /// Resolve the startup trust verdict. Rejection also exits the local TUI,
     /// but only after the verdict was actually queued.
     pub fn resolve_trust(&mut self, accept: bool) {
-        let req_id = match self.session.prompt.as_ref() {
+        let req_id = match self.sessions.current.prompt.as_ref() {
             Some(PendingPrompt::Trust { req_id, .. }) => *req_id,
             _ => return,
         };
@@ -297,7 +297,7 @@ impl App {
             self.system_line(Self::enqueue_failure_line("trust", e));
             return;
         }
-        self.session.prompt = None;
+        self.sessions.current.prompt = None;
         if !accept {
             self.quit = true;
         }
@@ -312,13 +312,13 @@ impl App {
         // Pause the spinner while the run waits on the human verdict.
         // begin_waiting preserves the run's identity and start time so the
         // verdict can resume without resetting the clock.
-        self.session.run.begin_waiting();
+        self.sessions.current.run.begin_waiting();
         self.refresh_fold_active();
-        self.session.prompt = Some(PendingPrompt::permission(req_id, vec![ask.clone()]));
+        self.sessions.current.prompt = Some(PendingPrompt::permission(req_id, vec![ask.clone()]));
         if tool == "AskUserQuestion"
             && let Some(aq) = AskQuestion::parse(&call_id, &ask.input)
         {
-            if let Some(p) = self.session.prompt.as_mut() {
+            if let Some(p) = self.sessions.current.prompt.as_mut() {
                 p.set_question(Some(aq));
             }
             return;
@@ -343,7 +343,7 @@ impl App {
         if two_option && selected == 2 {
             selected = 0;
         }
-        if let Some(p) = self.session.prompt.as_mut() {
+        if let Some(p) = self.sessions.current.prompt.as_mut() {
             p.set_approval(Some(Approval {
                 tool,
                 args,
@@ -361,7 +361,7 @@ impl App {
     /// Select the initial approval choice. A remembered verdict wins;
     /// automatic mode and the default both select one-time approval.
     fn initial_cursor(&self, tool: &str) -> usize {
-        let permission = &self.session.capabilities.permission;
+        let permission = &self.sessions.current.capabilities.permission;
         if let Some(kind) = permission.sticky_choices.get(tool) {
             return Approval::index_for_kind(*kind);
         }
@@ -374,10 +374,8 @@ impl App {
     /// Whether a reverse request still awaits its verdict. Idle client
     /// requests pause so they cannot compete for response frames.
     pub fn reverse_request_in_flight(&self) -> bool {
-        self.session
-            .prompt
-            .as_ref()
-            .is_some_and(|p| p.is_permission())
+        let prompt = &self.sessions.current.prompt;
+        prompt.as_ref().is_some_and(|p| p.is_permission())
     }
 
     /// Enqueue the status query, then drain startup messages by type until the
@@ -386,7 +384,7 @@ impl App {
     /// and stops once the trust card is raised or the status reply proves the
     /// workspace passed the gate.
     pub fn startup_handshake(&mut self, timeout: Duration) {
-        if let Some(session) = self.session.connection.as_ref() {
+        if let Some(session) = self.sessions.current.connection.as_ref() {
             match session.next_request_id() {
                 Ok(req_id) => {
                     if session
@@ -402,16 +400,14 @@ impl App {
         let deadline = Instant::now() + timeout;
         loop {
             let remaining = deadline.saturating_duration_since(Instant::now());
-            let next = self
-                .session
-                .connection
-                .as_mut()
-                .and_then(|s| s.poll_startup(remaining));
+            let connection = self.sessions.current.connection.as_mut();
+            let next = connection.and_then(|s| s.poll_startup(remaining));
             let Some(message) = next else {
                 break;
             };
             self.handle_agent_message(message);
-            let status_present = self.session.capabilities.status.status_cache.is_some();
+            let status = &self.sessions.current.capabilities.status;
+            let status_present = status.snapshot().is_some();
             if self.pending_trust().is_some() || status_present {
                 break;
             }
@@ -431,7 +427,7 @@ impl App {
             // Poll one owned message off the session so the session borrow
             // ends before the mutable dispatch below. The batch cap returns
             // control to terminal input even when producers remain saturated.
-            let outcome = self.session.connection.as_mut().map(|s| s.poll());
+            let outcome = self.sessions.current.connection.as_mut().map(|s| s.poll());
             match outcome {
                 Some(PollOutcome::Message(SessionMessage::Event(ServerEvent::Frame(frame)))) => {
                     batch.push(frame);
@@ -471,27 +467,24 @@ impl App {
         self.apply_frames(batch);
         // Resolve a bounded number of resume rows per poll.
         if self.resume_picker.open
-            && let Some(catalog) = self.persistence.catalog.as_ref()
+            && let Some(catalog) = self.sessions.catalog.as_ref()
         {
             self.resume_picker.resolve_rows(catalog.as_ref(), 3);
         }
         // Refresh status while idle. Active runs and reverse requests retain
         // exclusive ownership of response frames.
-        const STATUS_POLL_INTERVAL_SECS: u64 = 1;
-        let last_poll = self.session.capabilities.status.last_status_poll;
-        let poll_due = last_poll
-            .map(|t| t.elapsed().as_secs() >= STATUS_POLL_INTERVAL_SECS)
-            .unwrap_or(true);
+        let poll_due = self.sessions.current.capabilities.status.poll_due();
         if !self.agent_busy() && !self.reverse_request_in_flight() && poll_due {
-            self.session.capabilities.status.last_status_poll = Some(Instant::now());
-            if let Some(s) = self.session.connection.as_ref() {
+            self.sessions.current.capabilities.status.mark_poll_sent();
+            if let Some(s) = self.sessions.current.connection.as_ref() {
                 match s.next_request_id() {
                     Ok(req_id) => {
                         if s.enqueue(ClientCommand::StatusQuery { req_id }).is_ok() {
                             // Seed the mode cache once so the status pill renders at
                             // startup. A refused enqueue stays quiet: the
                             // ConnectionLost event announces the loss.
-                            if self.session.capabilities.permission.mode_cache.is_none() {
+                            let permission = &self.sessions.current.capabilities.permission;
+                            if permission.mode_cache.is_none() {
                                 match s.next_request_id() {
                                     Ok(req_id) => {
                                         let _ = s
@@ -521,7 +514,7 @@ impl App {
         tracing::warn!(
             "[done] frames={} transcript={} cap={} total={} follow={} top={} approval={} busy={}",
             frames.len(),
-            self.session.transcript.len(),
+            self.sessions.current.transcript.len(),
             self.whole_scroll().cap.get(),
             total,
             self.whole_scroll().is_following_tail(),
@@ -538,12 +531,12 @@ impl App {
         // refused abort would otherwise wait forever for a completion that
         // never comes.
         if let Err(e) = self.enqueue(ClientCommand::AbortRun {
-            session_id: self.session.identity.session_id.clone(),
+            session_id: self.sessions.current.identity.session_id.clone(),
         }) {
             self.system_line(Self::enqueue_failure_line("run", e));
             return;
         }
-        self.session.run.begin_cancel();
+        self.sessions.current.run.begin_cancel();
     }
 
     /// Recall the queued item at the cursor position into the input box.
@@ -596,7 +589,7 @@ impl App {
         for it in self.input.queue.take_all() {
             match it {
                 InputItem::Message(input) => {
-                    let session_id = self.session.identity.session_id.clone();
+                    let session_id = self.sessions.current.identity.session_id.clone();
                     if self
                         .enqueue(ClientCommand::QueueRemove {
                             session_id,
@@ -622,7 +615,7 @@ impl App {
             return;
         }
         // Explicit recall supersedes automatic interrupted-turn restoration.
-        self.session.last_run_input = None;
+        self.sessions.current.last_run_input = None;
         self.merge_recalled_text(recalled.join("\n"));
     }
 
@@ -645,7 +638,8 @@ impl App {
     /// the user can edit and resend the restored input. The rows the frontend
     /// raised during that turn go with it: they describe work now discarded.
     pub fn rewind_to_last_user_input(&mut self) {
-        let Some(start) = self.session.transcript.frames().iter().rposition(|sf| {
+        let transcript = &self.sessions.current.transcript;
+        let Some(start) = transcript.frames().iter().rposition(|sf| {
             matches!(
                 sf.as_ref(),
                 TranscriptFrame::Session(SessionUpdate::UserMessageChunk(_))
@@ -653,9 +647,9 @@ impl App {
         }) else {
             return;
         };
-        let transcript = &mut self.session.transcript;
+        let transcript = &mut self.sessions.current.transcript;
         transcript.with_frames_mut(|log| log.truncate(start));
-        self.session.todos.set_replaying_history(true);
+        self.sessions.current.todos.set_replaying_history(true);
         self.rebuild_transcript();
     }
 }

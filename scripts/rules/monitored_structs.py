@@ -164,7 +164,10 @@ ACTIVE_OWNERS = {
         # read handle over it, not a field of its own. The chat editor, the
         # prompt-history navigation, the two paste halves, and the queued-input
         # FIFO folded into one Input owner, so a session switch resets them
-        # together rather than as five flat fields.
+        # together rather than as five flat fields. The presented Session then
+        # became one Sessions aggregate field that also holds the
+        # resumable-session catalog, so the two reset together on a swap and
+        # the catalog does not stay detached beside the presented session.
         "fields": 46,
         "mut_app": 44,
     },
@@ -198,6 +201,13 @@ ACTIVE_OWNERS = {
         # state. Twelve fields that formerly sat detached on App now travel
         # as one constructor boundary.
         "fields": 12,
+    },
+    "crates/houyicoder-tui/src/sessions.rs:Sessions": {
+        # The frontend's session holdings: the presented session and the
+        # resumable-session catalog. The catalog moved here from
+        # SessionPersistence because it spans every resumable session while
+        # the presented session is one, so a swap replaces both at once.
+        "fields": 2,
     },
     "crates/houyicoder-tui/src/workflow.rs:Workflow": {
         # The spec-plan-review-verify-artifact lifecycle: the stage machine,
@@ -256,10 +266,11 @@ ACTIVE_OWNERS = {
     },
     "crates/houyicoder-tui/src/session/persistence.rs:SessionPersistence": {
         # The session's injected persistence collaborators: the trajectory
-        # reader, the transcript snapshot reader, the export writer, and the
-        # resumable-session catalog. Four flat App fields folded into one
-        # owner, injected together by the composition root.
-        "fields": 4,
+        # reader, the transcript snapshot reader, and the export writer. Three
+        # flat App fields folded into one owner, injected together by the
+        # composition root. The resumable-session catalog moved to the
+        # Sessions owner beside the presented session.
+        "fields": 3,
     },
     "crates/houyicoder-tui/src/run_metrics.rs:RunMetrics": {
         # The session's cumulative run metrics: the first-run start and the

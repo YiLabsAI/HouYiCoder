@@ -22,7 +22,7 @@ fn working() -> crate::state::App {
 fn connected_working() -> crate::state::App {
     let mut app = working();
     let (_tx, rx) = mpsc::channel::<crate::agent_message::SessionMessage>();
-    app.session.connection = Some(crate::session::SessionConnection::from_receiver(rx));
+    app.sessions.current.connection = Some(crate::session::SessionConnection::from_receiver(rx));
     app
 }
 
@@ -31,16 +31,16 @@ use crate::test_harness::MockSnapshot;
 /// count==render must hold when the search view renders a frozen snapshot
 /// that differs from the live transcript. The accessor routes count + render
 /// through one source (active_transcript); a count path still reading
-/// self.session.transcript would desync by the snapshot/live delta. Asserts visible
+/// self.sessions.current.transcript would desync by the snapshot/live delta. Asserts visible
 /// output (the snapshot content renders, the live content does not), not
 /// internal state. Mutation-verified: reverting each of the six read points
 /// (fold_aware_rows display_slots + line index, transcript renderer
-/// display_slots + line index + focused-range line) to self.session.transcript /
-/// app.session.transcript reddens this test one at a time.
+/// display_slots + line index + focused-range line) to self.sessions.current.transcript /
+/// app.sessions.current.transcript reddens this test one at a time.
 #[test]
 fn test_count_matches_under_snapshot() {
     let mut app = working();
-    app.session.transcript = vec![
+    app.sessions.current.transcript = vec![
         TranscriptLine::User("live alpha".into()),
         TranscriptLine::User("live beta".into()),
     ]
@@ -56,7 +56,7 @@ fn test_count_matches_under_snapshot() {
     app.transcript_view.search.query = "snap".into();
     app.run_search();
     // Focus the LAST match so the focused-range line index reaches the
-    // snapshot's tail; a count path still reading self.session.transcript (2 lines)
+    // snapshot's tail; a count path still reading self.sessions.current.transcript (2 lines)
     // would index out of bounds here.
     app.transcript_view.search.focus = app.transcript_view.search.matches.len().saturating_sub(1);
     app.verbose = true;
@@ -115,9 +115,9 @@ fn test_bound_scrollback_skips_recompute() {
         "eviction must not recompute the snapshot's matches"
     );
     assert!(
-        app.session.transcript.len() <= 4000,
+        app.sessions.current.transcript.len() <= 4000,
         "eviction bounded the live vec (len={})",
-        app.session.transcript.len()
+        app.sessions.current.transcript.len()
     );
 }
 
@@ -750,7 +750,7 @@ fn test_g_completes_full_index() {
     }));
     app.enter_search_view("tail");
     assert!(
-        !app.session.index_build.indexing.get(),
+        !app.sessions.current.index_build.indexing.get(),
         "indexing off before G"
     );
     crate::app::handle_key(
@@ -758,16 +758,19 @@ fn test_g_completes_full_index() {
         KeyEvent::new(KeyCode::Char('G'), KeyModifiers::NONE),
     );
     assert!(
-        app.session.index_build.indexing.get(),
+        app.sessions.current.index_build.indexing.get(),
         "G starts the index build"
     );
     // One render pump completes the build (the mock's index_steps == 1).
     app.pump_index_chunk();
     assert!(
-        !app.session.index_build.indexing.get(),
+        !app.sessions.current.index_build.indexing.get(),
         "index build completed + stopped"
     );
-    assert!(app.session.index_build.index_done.get(), "done flag set");
+    assert!(
+        app.sessions.current.index_build.index_done.get(),
+        "done flag set"
+    );
     let out = render_text(&app, 100, 24);
     // No longer indexing -> the chrome shows byte-%, not "indexing".
     assert!(
@@ -799,12 +802,12 @@ fn test_esc_interrupts_full_index() {
         KeyEvent::new(KeyCode::Char('G'), KeyModifiers::NONE),
     );
     assert!(
-        app.session.index_build.indexing.get(),
+        app.sessions.current.index_build.indexing.get(),
         "G started the build"
     );
     crate::app::handle_key(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     assert!(
-        !app.session.index_build.indexing.get(),
+        !app.sessions.current.index_build.indexing.get(),
         "Esc interrupted the index build"
     );
     assert!(
@@ -858,7 +861,7 @@ fn test_draw_reads_no_index() {
         KeyEvent::new(KeyCode::Char('G'), KeyModifiers::NONE),
     );
     assert!(
-        app.session.index_build.indexing.get(),
+        app.sessions.current.index_build.indexing.get(),
         "G starts the index build"
     );
 
@@ -897,21 +900,24 @@ fn test_index_runs_on_worker() {
         &mut app,
         KeyEvent::new(KeyCode::Char('G'), KeyModifiers::NONE),
     );
-    assert!(app.session.index_build.indexing.get(), "G starts the build");
+    assert!(
+        app.sessions.current.index_build.indexing.get(),
+        "G starts the build"
+    );
 
     let deadline = Instant::now() + Duration::from_secs(5);
     while Instant::now() < deadline {
-        if app.pump_background_reads() && app.session.index_build.index_done.get() {
+        if app.pump_background_reads() && app.sessions.current.index_build.index_done.get() {
             break;
         }
         thread::sleep(Duration::from_millis(5));
     }
     assert!(
-        app.session.index_build.index_done.get(),
+        app.sessions.current.index_build.index_done.get(),
         "the worker's chunk finished the build"
     );
     assert!(
-        !app.session.index_build.indexing.get(),
+        !app.sessions.current.index_build.indexing.get(),
         "and the build stopped"
     );
 }
@@ -940,15 +946,20 @@ fn test_index_worker_death_stops() {
     // A record whose sender is already gone stands in for a dead worker.
     let (tx, rx) = mpsc::channel();
     drop(tx);
-    *app.session.index_build.pending_index_chunk.borrow_mut() = Some(PendingIndexChunk::new(rx));
+    *app.sessions
+        .current
+        .index_build
+        .pending_index_chunk
+        .borrow_mut() = Some(PendingIndexChunk::new(rx));
 
     assert!(app.pump_index_chunk(), "the dead worker is noticed");
     assert!(
-        !app.session.index_build.indexing.get(),
+        !app.sessions.current.index_build.indexing.get(),
         "and the build stops rather than stalling"
     );
     assert!(
-        app.session
+        app.sessions
+            .current
             .index_build
             .pending_index_chunk
             .borrow()
@@ -980,10 +991,17 @@ fn test_index_landing_after_interrupt() {
         &mut app,
         KeyEvent::new(KeyCode::Char('G'), KeyModifiers::NONE),
     );
-    assert!(app.session.index_build.indexing.get(), "G starts the build");
+    assert!(
+        app.sessions.current.index_build.indexing.get(),
+        "G starts the build"
+    );
     // A held sender stands in for the chunk's worker.
     let (tx, rx) = mpsc::channel();
-    *app.session.index_build.pending_index_chunk.borrow_mut() = Some(PendingIndexChunk::new(rx));
+    *app.sessions
+        .current
+        .index_build
+        .pending_index_chunk
+        .borrow_mut() = Some(PendingIndexChunk::new(rx));
 
     assert!(app.interrupt_index(), "the interrupt consumed the Esc");
     tx.send(IndexProgress {
@@ -995,32 +1013,32 @@ fn test_index_landing_after_interrupt() {
 
     assert!(app.pump_index_chunk(), "the landed chunk is noticed");
     assert_eq!(
-        app.session.index_build.indexed_bytes.get(),
+        app.sessions.current.index_build.indexed_bytes.get(),
         512,
         "its progress applied"
     );
     assert!(
-        !app.session.index_build.indexing.get(),
+        !app.sessions.current.index_build.indexing.get(),
         "the interrupted build did not resume on the landing"
     );
 
     // Restart with a connection: the build runs on a worker to completion.
     let (_tx, rx) = mpsc::channel::<crate::agent_message::SessionMessage>();
-    app.session.connection = Some(crate::session::SessionConnection::from_receiver(rx));
+    app.sessions.current.connection = Some(crate::session::SessionConnection::from_receiver(rx));
     app.start_full_index();
     assert!(
-        app.session.index_build.indexing.get(),
+        app.sessions.current.index_build.indexing.get(),
         "G restarts the build"
     );
     let deadline = Instant::now() + Duration::from_secs(5);
     while Instant::now() < deadline {
-        if app.pump_background_reads() && app.session.index_build.index_done.get() {
+        if app.pump_background_reads() && app.sessions.current.index_build.index_done.get() {
             break;
         }
         thread::sleep(Duration::from_millis(5));
     }
     assert!(
-        app.session.index_build.index_done.get(),
+        app.sessions.current.index_build.index_done.get(),
         "the restarted build completed"
     );
 }
@@ -1046,9 +1064,13 @@ fn test_index_restart_waits() {
         index_calls: std::sync::atomic::AtomicU32::new(0),
     }));
     app.enter_search_view("tail");
-    app.session.index_build.indexing.set(true);
+    app.sessions.current.index_build.indexing.set(true);
     let (tx, rx) = mpsc::channel();
-    *app.session.index_build.pending_index_chunk.borrow_mut() = Some(PendingIndexChunk::new(rx));
+    *app.sessions
+        .current
+        .index_build
+        .pending_index_chunk
+        .borrow_mut() = Some(PendingIndexChunk::new(rx));
 
     crate::app::handle_key(
         &mut app,
@@ -1066,7 +1088,7 @@ fn test_index_restart_waits() {
     );
     assert!(app.pump_index_chunk(), "and its progress still lands");
     assert_eq!(
-        app.session.index_build.indexed_bytes.get(),
+        app.sessions.current.index_build.indexed_bytes.get(),
         7,
         "from the chunk that was already running, not a second one"
     );
@@ -1091,9 +1113,13 @@ fn test_index_pump_waits() {
         index_calls: std::sync::atomic::AtomicU32::new(0),
     }));
     app.enter_search_view("tail");
-    app.session.index_build.indexing.set(true);
+    app.sessions.current.index_build.indexing.set(true);
     let (tx, rx) = mpsc::channel();
-    *app.session.index_build.pending_index_chunk.borrow_mut() = Some(PendingIndexChunk::new(rx));
+    *app.sessions
+        .current
+        .index_build
+        .pending_index_chunk
+        .borrow_mut() = Some(PendingIndexChunk::new(rx));
 
     assert!(
         !app.pump_index_chunk(),

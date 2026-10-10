@@ -16,10 +16,11 @@ fn test_second_context_one_grid() {
     app.screen = crate::state::Screen::Working;
     // The cache a first /context filled stands in for that reply: the fast
     // path renders from it without a round trip.
-    app.session.capabilities.status.context_cache = Some(stub_breakdown());
+    app.sessions.current.capabilities.status.context_cache = Some(stub_breakdown());
     app.run_command(SlashCommand::Context);
     let grids = |app: &App| {
-        app.session
+        app.sessions
+            .current
             .transcript
             .iter()
             .filter(|l| matches!(l, TranscriptLine::ContextGrid(_)))
@@ -40,7 +41,7 @@ fn test_second_context_one_grid() {
         1,
         "the reply grid takes the cached one's place"
     );
-    let shows_fresh = app.session.transcript.iter().any(|l| {
+    let shows_fresh = app.sessions.current.transcript.iter().any(|l| {
         matches!(
             l,
             TranscriptLine::ContextGrid(view) if view.breakdown.total_tokens == 4_242
@@ -48,13 +49,15 @@ fn test_second_context_one_grid() {
     });
     assert!(shows_fresh, "the grid shows the numbers the reply carried");
     let grid_at = app
-        .session
+        .sessions
+        .current
         .transcript
         .iter()
         .position(|l| matches!(l, TranscriptLine::ContextGrid(_)))
         .expect("a grid row");
     let line_at = app
-        .session
+        .sessions
+        .current
         .transcript
         .iter()
         .position(|l| matches!(l, TranscriptLine::System(t) if t == "concurrent event"))
@@ -77,13 +80,25 @@ fn test_context_cache_renders_repeat() {
     app.run_command(SlashCommand::Context);
     for _ in 0..1000 {
         app.poll_agent();
-        if app.session.capabilities.status.context_cache.is_some() {
+        if app
+            .sessions
+            .current
+            .capabilities
+            .status
+            .context_cache
+            .is_some()
+        {
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(2));
     }
     assert!(
-        app.session.capabilities.status.context_cache.is_some(),
+        app.sessions
+            .current
+            .capabilities
+            .status
+            .context_cache
+            .is_some(),
         "first /context populates cache"
     );
     // Assert the REAL dispatch output renders (② rendered buffer, not just ①
@@ -110,14 +125,16 @@ fn test_context_cache_renders_repeat() {
         "legend renders from real dispatch:\n{text}"
     );
     let before = app
-        .session
+        .sessions
+        .current
         .transcript
         .iter()
         .filter(|l| matches!(l, TranscriptLine::ContextGrid(_)))
         .count();
     app.run_command(SlashCommand::Context);
     let after = app
-        .session
+        .sessions
+        .current
         .transcript
         .iter()
         .filter(|l| matches!(l, TranscriptLine::ContextGrid(_)))
@@ -137,7 +154,8 @@ fn test_undo_ships_connected() {
     let mut app = app_with_provider(provider, ToolRegistry::new());
     app.run_command(SlashCommand::Undo);
     assert!(
-        app.session
+        app.sessions
+            .current
             .transcript
             .iter()
             .any(|l| matches!(l, TranscriptLine::System(s) if s.contains("undo:"))),
@@ -146,12 +164,14 @@ fn test_undo_ships_connected() {
     for _ in 0..1000 {
         app.poll_agent();
         if app
-            .session
+            .sessions
+            .current
             .transcript
             .iter()
             .any(|l| matches!(l, TranscriptLine::System(s) if s.contains("undo:")))
             && app
-                .session
+                .sessions
+                .current
                 .transcript
                 .iter()
                 .filter(|l| matches!(l, TranscriptLine::System(s) if s.contains("undo:")))
@@ -163,7 +183,8 @@ fn test_undo_ships_connected() {
         std::thread::sleep(std::time::Duration::from_millis(2));
     }
     let undo_lines: Vec<String> = app
-        .session
+        .sessions
+        .current
         .transcript
         .iter()
         .filter_map(|l| match l {

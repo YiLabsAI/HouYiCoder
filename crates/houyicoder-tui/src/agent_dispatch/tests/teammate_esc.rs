@@ -147,7 +147,8 @@ fn test_steer_completed_surfaces_notice() {
         "steering a completed child exits the view"
     );
     assert!(
-        app.session
+        app.sessions
+            .current
             .transcript
             .iter()
             .any(|l| matches!(l, TranscriptLine::System(s) if s.contains("has finished"))),
@@ -155,7 +156,8 @@ fn test_steer_completed_surfaces_notice() {
     );
     // No echo line is appended (the child won't drain it; the view is gone).
     assert!(
-        !app.session
+        !app.sessions
+            .current
             .transcript
             .iter()
             .any(|l| matches!(l, TranscriptLine::User(t) if t == "steer this")),
@@ -168,10 +170,11 @@ fn test_steer_completed_surfaces_notice() {
         child_sid: "c1".into(),
         ..Default::default()
     });
-    app.session.transcript.reset();
+    app.sessions.current.transcript.reset();
     app.spawn_run("steer running".into());
     assert!(
-        !app.session
+        !app.sessions
+            .current
             .transcript
             .iter()
             .any(|l| matches!(l, TranscriptLine::System(s) if s.contains("has finished"))),
@@ -216,7 +219,8 @@ fn test_child_transcript_last_row() {
         },
     });
     let folded: Vec<&[TranscriptLine]> = app
-        .session
+        .sessions
+        .current
         .transcript
         .iter()
         .filter_map(|l| match l {
@@ -264,7 +268,8 @@ fn test_child_transcript_no_row() {
         },
     });
     assert!(
-        app.session
+        app.sessions
+            .current
             .transcript
             .iter()
             .all(|l| !matches!(l, TranscriptLine::Subagent { child_sid, .. } if child_sid == "c1")),
@@ -305,7 +310,8 @@ fn test_child_sid_unique() {
         },
     });
     let child_b = app
-        .session
+        .sessions
+        .current
         .transcript
         .iter()
         .find_map(|l| match l {
@@ -501,7 +507,8 @@ fn test_teammate_submit_steers() {
     app.spawn_run("focus on auth".into());
     assert!(!app.agent_busy(), "steering does not start a parent run");
     assert!(
-        !app.session
+        !app.sessions
+            .current
             .transcript
             .iter()
             .any(|l| matches!(l, TranscriptLine::User(_))),
