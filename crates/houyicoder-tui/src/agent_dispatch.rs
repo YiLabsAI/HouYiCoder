@@ -39,22 +39,18 @@ impl App {
         match msg {
             SessionMessage::Connection(event) => match event {
                 ConnectionEvent::Ready => {
-                    // The Hello handshake succeeded. Ready reflects the
-                    // confirmed handshake, not the connection object existing,
-                    // so a failed Hello leaves the status at Connecting until
-                    // the loss lands. The transition is constrained: a late
+                    // The handshake succeeded. Ready reflects the confirmed
+                    // handshake, not the connection existing; a failed Hello
+                    // stays Connecting until the loss lands, and a late
                     // confirmation cannot revive a lost connection.
                     if let Some(s) = self.sessions.current.connection.as_mut() {
                         s.mark_ready();
                     }
                 }
                 ConnectionEvent::Lost { cause, not_sent } => {
-                    // The driver is gone: no reply can land for anything in
-                    // flight. End the active run if one is live, and sweep
-                    // pending pane marks instead of leaving a mark that
-                    // refuses its switch forever. Server state for in-flight
-                    // mutations is unknown, so no per-action failure line is
-                    // written — one generic connection-loss line covers all.
+                    // The driver is gone: settle the active run and sweep
+                    // pending pane marks. In-flight mutations share one
+                    // generic loss line because their server state is unknown.
                     self.apply_connection_loss(cause, not_sent);
                 }
             },
@@ -86,18 +82,15 @@ impl App {
     ) -> bool {
         let first = match self.sessions.current.connection.as_mut() {
             Some(s) => s.mark_lost(cause.clone()),
-            // No connection exists: nothing was lost twice, so run the sweep
-            // for this observation. A synthetic loss on a session-less App
-            // (tests, the stub path) still clears run and pane state.
+            // No connection: nothing was lost twice, but run the sweep anyway.
+            // A session-less App (tests, the stub path) still clears run and pane state.
             None => true,
         };
         if !first {
             return false;
         }
-        // Distinguish not sent (provably never attempted) from unknown (a
-        // write or flush may have partially delivered). The run's completion
-        // line tells the user which: a not sent run never left the process;
-        // an unknown run may have reached the server with no reply coming.
+        // Distinguish not sent (never attempted) from unknown (a flush may
+        // have partially delivered); the run line tells the user which.
         let run_req = self.active_run_req_id();
         let run_not_sent = run_req.is_some_and(|r| not_sent.contains(&r));
         self.memory.clear_pending();
@@ -108,13 +101,22 @@ impl App {
             cause.as_str()
         };
         if run_req.is_some() {
-            // Settle the active run: the loss is its terminal outcome.
             self.handle_run_completion(Err(run_line.to_string()));
         } else {
-            // No run is in flight, so the loss is a notice only — it must not
-            // touch run-final state or demote queued input, which a prior
-            // settle owns. The line keeps the shape a settled loss would.
-            self.system_line(format!("agent error: {run_line}"));
+            // A pending trust verdict can never reach a dead transport. Clear
+            // it locally (no fake decline), surface project + cause, and
+            // release the exit keys the card was swallowing. Other prompts
+            // return to the field so a later settle still owns them.
+            let prompt = self.sessions.current.prompt.take();
+            if let Some(PendingPrompt::Trust { prompt: tp, .. }) = prompt {
+                self.system_line(format!(
+                    "trust verdict undelivered for {}: {run_line}",
+                    tp.project_path
+                ));
+            } else {
+                self.sessions.current.prompt = prompt;
+                self.system_line(format!("agent error: {run_line}"));
+            }
         }
         true
     }

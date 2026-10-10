@@ -4,9 +4,11 @@ use crate::agent_message::{ServerRequest, SessionMessage};
 use crate::composition;
 use crate::pending_prompt::PendingPrompt;
 use crate::state::{Screen, TrustChoice};
+use crate::test_harness::TransportEvent;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::frontend::trust::TrustPrompt;
+use std::time::Duration;
 
 /// A trust prompt with the given path.
 fn trust_prompt(path: &str) -> TrustPrompt {
@@ -138,4 +140,89 @@ fn test_trust_up_selects_accept() {
     app.set_trust_choice(TrustChoice::Exit);
     crate::app::handle_key(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
     assert_eq!(app.trust_choice(), TrustChoice::Accept);
+}
+
+/// A connection loss while the startup trust card is up invalidates the card
+/// locally rather than leaving it to trap every key against a transport that
+/// can never deliver a verdict. No fake decline verdict is shipped: the host
+/// hears nothing, so the gate is the local frontend's to clear. The project
+/// path and cause reach the transcript so the user sees why the answer never
+/// landed.
+#[test]
+fn test_trust_loss_invalidates() {
+    let (mut app, events) = crate::test_harness::connected_app_with_events();
+    app.sessions.current.prompt = Some(PendingPrompt::trust_ask(
+        RequestId(11),
+        trust_prompt("/secret/proj"),
+    ));
+    app.apply_connection_loss("driver exited".into(), Vec::new());
+
+    assert!(app.pending_trust().is_none(), "loss clears the trust card");
+    assert!(
+        app.sessions.current.prompt.is_none(),
+        "loss clears the prompt"
+    );
+    // No fake verdict: the host never receives a trust reply it never asked
+    // the user for. Drain whatever the driver already shipped and confirm none
+    // carries the verdict.
+    let mut shipped_verdict = false;
+    while let Ok(TransportEvent::Frame(frame)) = events.recv_timeout(Duration::from_millis(50)) {
+        if frame.contains("TrustVerdict") {
+            shipped_verdict = true;
+        }
+    }
+    assert!(!shipped_verdict, "loss ships no fake trust verdict");
+    let rendered = crate::test_harness::render_text(&app, 100, 30);
+    assert!(
+        rendered.contains("/secret/proj"),
+        "transcript surfaces the project path"
+    );
+    assert!(
+        rendered.contains("driver exited"),
+        "transcript surfaces the cause"
+    );
+}
+
+/// After a loss invalidates the trust card, the exit sequence is no longer
+/// swallowed: the first Ctrl+D raises the exit confirmation and the second
+/// quits, because handle_key routes past the dead card to the base surface.
+#[test]
+fn test_loss_unblocks_exit() {
+    let (mut app, _events) = crate::test_harness::connected_app_with_events();
+    app.sessions.current.prompt = Some(PendingPrompt::trust_ask(
+        RequestId(12),
+        trust_prompt("/proj"),
+    ));
+    // While the card is up, Ctrl+D is swallowed by the trust handler.
+    crate::app::handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL),
+    );
+    assert!(!app.quit, "Ctrl+D does not exit while the trust card is up");
+    // The loss invalidates the card.
+    app.apply_connection_loss("driver exited".into(), Vec::new());
+    assert!(app.pending_trust().is_none());
+    // Now the exit sequence reaches the base surface.
+    crate::app::handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL),
+    );
+    assert!(
+        app.notifications
+            .current()
+            .is_some_and(|n| n.key == "exit-confirm"),
+        "first Ctrl+D raises exit confirmation after loss"
+    );
+    assert!(
+        crate::test_harness::render_text(&app, 100, 30).contains("Press Ctrl+D again to exit"),
+        "exit confirmation is visible"
+    );
+    crate::app::handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL),
+    );
+    assert!(
+        app.quit,
+        "second Ctrl+D exits after loss cleared the trust card"
+    );
 }
