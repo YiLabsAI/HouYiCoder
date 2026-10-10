@@ -82,7 +82,8 @@ CRATES = ROOT / "crates"
 _CONSOLE_OK: dict[str, int] = {
     "crates/houyicoder-cli/src/cli_args.rs": 1,
     "crates/houyicoder-cli/src/cleanup.rs": 13,
-    "crates/houyicoder-cli/src/main.rs": 16,
+    "crates/houyicoder-cli/src/composition_root.rs": 1,
+    "crates/houyicoder-cli/src/main.rs": 15,
     "crates/houyicoder-loader/src/main.rs": 2,
     "crates/houyicoder-service/src/uds.rs": 2,
     # The fence helper is a separate binary the daemon spawns with both

@@ -412,6 +412,7 @@ pub fn start_local_server_tracked(
         bus,
         event_sequencer.clone(),
         shared_runtime().handle().clone(),
+        houyicoder_service::CancellationToken::new(),
     );
     // Drain startup warnings synchronously before the runner is shared so the
     // host can push them as initial transcript system lines — no async-sink

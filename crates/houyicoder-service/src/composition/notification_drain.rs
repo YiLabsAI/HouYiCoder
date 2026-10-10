@@ -6,8 +6,9 @@
 //! Each completion carries its child descriptor, so the drain does not depend
 //! on observing the earlier spawn announcement.
 
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
+use houyicoder_async::CancellationToken;
 use houyicoder_async::bus::MessageBus;
 use houyicoder_core::agent::Runner;
 use houyicoder_core::agent::multi_agent::bus_types::{
@@ -44,36 +45,44 @@ fn notification_text(
 
 /// Spawn the injector. Subscribes to the global completion topic; on each
 /// Completed from a background child, enqueues a notification. No-op when
-/// the bus is absent.
-pub fn spawn(bus: Option<Arc<AgentBus>>, runner: Arc<Runner>, runtime: tokio::runtime::Handle) {
-    let Some(bus) = bus else {
-        return;
-    };
+/// the bus is absent. Holds the runner by a weak handle so the task never
+/// keeps a released Runner alive; the cancel token ends the loop at shutdown.
+/// Returns the task handle for the host lifecycle owner to reap.
+pub fn spawn(
+    bus: Option<Arc<AgentBus>>,
+    runner: Weak<Runner>,
+    runtime: tokio::runtime::Handle,
+    cancel: CancellationToken,
+) -> Option<tokio::task::JoinHandle<()>> {
+    let bus = bus?;
     let mut completed_rx = bus.subscribe(global_completed_topic());
-    runtime.spawn(async move {
+    let handle = runtime.spawn(async move {
         loop {
-            match completed_rx.recv().await {
-                Ok(BusMessage::Completed {
-                    child,
-                    status,
-                    summary,
-                }) => {
-                    if child.run_mode == ChildRunMode::Background {
-                        let text = notification_text(
-                            &child.agent_type,
-                            &child.agent_id,
-                            &status,
-                            &summary,
-                        );
-                        runner.enqueue_notification(child.agent_id, text);
+            tokio::select! {
+                biased;
+                _ = cancel.cancelled() => break,
+                recv = completed_rx.recv() => match recv {
+                    Ok(BusMessage::Completed { child, status, summary }) => {
+                        if child.run_mode == ChildRunMode::Background
+                            && let Some(runner) = runner.upgrade()
+                        {
+                            let text = notification_text(
+                                &child.agent_type,
+                                &child.agent_id,
+                                &status,
+                                &summary,
+                            );
+                            runner.enqueue_notification(child.agent_id, text);
+                        }
                     }
-                }
-                Ok(_) => {}
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    Ok(_) => {}
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                },
             }
         }
     });
+    Some(handle)
 }
 
 #[cfg(test)]
@@ -117,8 +126,9 @@ mod tests {
         let runner = bare_runner();
         spawn(
             Some(bus.clone()),
-            Arc::clone(&runner),
+            Arc::downgrade(&runner),
             tokio::runtime::Handle::current(),
+            CancellationToken::new(),
         );
         bus.publish(
             spawned_topic(),
@@ -154,8 +164,9 @@ mod tests {
         let runner = bare_runner();
         spawn(
             Some(bus.clone()),
-            Arc::clone(&runner),
+            Arc::downgrade(&runner),
             tokio::runtime::Handle::current(),
+            CancellationToken::new(),
         );
         bus.publish(
             spawned_topic(),
@@ -188,8 +199,9 @@ mod tests {
         let runner = bare_runner();
         spawn(
             Some(bus.clone()),
-            Arc::clone(&runner),
+            Arc::downgrade(&runner),
             tokio::runtime::Handle::current(),
+            CancellationToken::new(),
         );
         bus.publish(
             spawned_topic(),
@@ -227,8 +239,9 @@ mod tests {
         let runner = bare_runner();
         spawn(
             Some(bus.clone()),
-            Arc::clone(&runner),
+            Arc::downgrade(&runner),
             tokio::runtime::Handle::current(),
+            CancellationToken::new(),
         );
         bus.publish(
             spawned_topic(),
@@ -261,8 +274,9 @@ mod tests {
         let runner = bare_runner();
         spawn(
             Some(bus.clone()),
-            Arc::clone(&runner),
+            Arc::downgrade(&runner),
             tokio::runtime::Handle::current(),
+            CancellationToken::new(),
         );
         for id in ["c5", "c6", "c7"] {
             bus.publish(
@@ -301,8 +315,9 @@ mod tests {
         let runner = bare_runner();
         spawn(
             Some(bus.clone()),
-            Arc::clone(&runner),
+            Arc::downgrade(&runner),
             tokio::runtime::Handle::current(),
+            CancellationToken::new(),
         );
         bus.publish(
             spawned_topic(),
@@ -344,8 +359,9 @@ mod tests {
         let runner = bare_runner();
         spawn(
             Some(bus.clone()),
-            Arc::clone(&runner),
+            Arc::downgrade(&runner),
             tokio::runtime::Handle::current(),
+            CancellationToken::new(),
         );
         bus.publish(
             spawned_topic(),
@@ -380,8 +396,9 @@ mod tests {
         let runner = bare_runner();
         spawn(
             Some(bus.clone()),
-            Arc::clone(&runner),
+            Arc::downgrade(&runner),
             tokio::runtime::Handle::current(),
+            CancellationToken::new(),
         );
         tokio::task::yield_now().await;
         bus.publish(
@@ -404,5 +421,54 @@ mod tests {
             "carries the type from the Completed"
         );
         assert!(snap[0].contains("no spawn seen"), "carries the summary");
+    }
+
+    /// The cancel token ends the drain loop: a host shutdown cancels the
+    /// token, the drain's select branch fires, and the task exits. This is
+    /// the reaping contract the host lifecycle owner relies on so a session
+    /// switch does not leave the old drain looping on the old bus.
+    #[tokio::test]
+    async fn test_cancel_ends_drain() {
+        let bus = Arc::new(AgentBus::new());
+        let runner = bare_runner();
+        let cancel = CancellationToken::new();
+        let handle = spawn(
+            Some(bus.clone()),
+            Arc::downgrade(&runner),
+            tokio::runtime::Handle::current(),
+            cancel.clone(),
+        )
+        .expect("a bus present yields a handle");
+        cancel.cancel();
+        let outcome = tokio::time::timeout(std::time::Duration::from_secs(1), handle).await;
+        assert!(outcome.is_ok(), "cancel ends the drain task");
+        assert!(
+            outcome.unwrap().is_ok(),
+            "the drain task exited without panic"
+        );
+    }
+
+    /// The drain holds the runner by a weak handle, so dropping the last
+    /// strong reference releases the runner even while the drain task is still
+    /// looping on the bus. Before this change the drain held an Arc and a
+    /// released runner stayed alive until process exit.
+    #[tokio::test]
+    async fn test_drain_releases_runner() {
+        let bus = Arc::new(AgentBus::new());
+        let runner = bare_runner();
+        let weak = Arc::downgrade(&runner);
+        let cancel = CancellationToken::new();
+        let _handle = spawn(
+            Some(bus.clone()),
+            Arc::downgrade(&runner),
+            tokio::runtime::Handle::current(),
+            cancel.clone(),
+        );
+        drop(runner);
+        assert!(
+            weak.upgrade().is_none(),
+            "the drain holds only a weak handle so the runner is released"
+        );
+        cancel.cancel();
     }
 }

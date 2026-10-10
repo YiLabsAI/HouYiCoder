@@ -12,22 +12,24 @@ use houyicoder_protocol::frontend::event::FrontendEvent;
 use crate::server::EventSequencer;
 
 /// Subscribe to fleet status changes and submit reliable status events.
+/// Returns the task handle for the host lifecycle owner to reap; the cancel
+/// token ends the loop at shutdown so the relay does not outlive its bus.
 pub fn spawn(
     bus: Option<Arc<AgentBus>>,
     event_sequencer: EventSequencer,
     runtime: tokio::runtime::Handle,
-) {
-    let Some(bus) = bus else {
-        return;
-    };
+    cancel: houyicoder_async::CancellationToken,
+) -> Option<tokio::task::JoinHandle<()>> {
+    let bus = bus?;
     let mut spawned_rx = bus.subscribe(spawned_topic());
     let mut progress_rx = bus.subscribe(global_progress_topic());
     let mut completed_rx = bus.subscribe(global_completed_topic());
-    runtime.spawn(async move {
+    let handle = runtime.spawn(async move {
         let mut children: HashMap<String, (String, Snapshot)> = HashMap::new();
         loop {
             tokio::select! {
                 biased;
+                _ = cancel.cancelled() => break,
                 msg = spawned_rx.recv() => match msg {
                     Ok(BusMessage::Spawned { child }) => {
                         let snap = Snapshot::default();
@@ -66,6 +68,7 @@ pub fn spawn(
             }
         }
     });
+    Some(handle)
 }
 
 #[derive(Default)]
@@ -136,6 +139,7 @@ mod tests {
             Some(bus.clone()),
             sequencer.clone(),
             tokio::runtime::Handle::current(),
+            houyicoder_async::CancellationToken::new(),
         );
         bus.publish(
             spawned_topic(),
@@ -171,5 +175,29 @@ mod tests {
             &frames[0].payload,
             FrontendEvent::AgentStatus { completed: Some(status), .. } if status == "completed"
         ));
+    }
+
+    /// The cancel token ends the relay loop: a host shutdown cancels the
+    /// token, the relay's select branch fires, and the task exits. Pairs
+    /// with the drain's cancel contract so a session switch reaps both.
+    #[tokio::test]
+    async fn test_cancel_ends_relay() {
+        let bus = Arc::new(AgentBus::new());
+        let sequencer = EventSequencer::new();
+        let cancel = houyicoder_async::CancellationToken::new();
+        let handle = spawn(
+            Some(bus.clone()),
+            sequencer,
+            tokio::runtime::Handle::current(),
+            cancel.clone(),
+        )
+        .expect("a bus present yields a handle");
+        cancel.cancel();
+        let outcome = tokio::time::timeout(std::time::Duration::from_secs(1), handle).await;
+        assert!(outcome.is_ok(), "cancel ends the relay task");
+        assert!(
+            outcome.unwrap().is_ok(),
+            "the relay task exited without panic"
+        );
     }
 }

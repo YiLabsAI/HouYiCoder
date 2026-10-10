@@ -14,7 +14,7 @@ pub(super) fn build_bundle_for_resume_sid(
     sid: houyicoder_context::SessionId,
     project: Option<String>,
     provider: houyicoder_service::composition::ResolvedProvider,
-) -> Result<houyicoder_tui::composition::RunnerBundle, Box<dyn std::error::Error>> {
+) -> Result<crate::WiredBundle, Box<dyn std::error::Error>> {
     let resumed = houyicoder_service::composition::build_runner_for_resume_sid(
         sid,
         &houyicoder_service::composition::session_log_root(),
@@ -45,7 +45,7 @@ pub(super) fn build_bundle_for_fork(
     source_sid: houyicoder_context::SessionId,
     project: Option<String>,
     provider: houyicoder_service::composition::ResolvedProvider,
-) -> Result<houyicoder_tui::composition::RunnerBundle, Box<dyn std::error::Error>> {
+) -> Result<crate::WiredBundle, Box<dyn std::error::Error>> {
     let resumed = houyicoder_service::composition::build_runner_for_fork(
         source_sid,
         &houyicoder_service::composition::session_log_root(),

@@ -25,13 +25,10 @@
 use std::sync::Arc;
 use std::sync::mpsc::channel;
 
-use houyicoder_client::{Client, InProcTransport};
-use houyicoder_context::SessionId;
-use houyicoder_core::agent::Runner;
-use houyicoder_service::server::{FrameCarrier, Server};
 use houyicoder_tui::agent_message::SessionMessage;
 
 mod cleanup;
+mod composition_root;
 #[cfg(unix)]
 mod detach;
 mod export_view;
@@ -48,6 +45,9 @@ mod trajectory;
 /// flag/subcommand matrix is unit-testable.
 mod cli_args;
 pub(crate) use cli_args::{CliCommand, parse_args, print_help};
+
+pub(crate) use composition_root::{WiredBundle, assemble_bundle};
+use composition_root::{build_bundle, build_bundle_for_resume};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -117,8 +117,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         CliCommand::Tui { project, model } => {
             let provider = houyicoder_service::composition::resolve_provider(project.as_deref());
-            let bundle = build_bundle(project.clone(), model, provider.clone());
-            run_tui_loop(bundle, project, provider)
+            let (bundle, host) = build_bundle(project.clone(), model, provider.clone());
+            run_tui_loop(bundle, host, project, provider)
         }
         CliCommand::Resume {
             value,
@@ -155,15 +155,15 @@ fn run_resume(
     if path.exists() {
         // Resume-from-export already forks a fresh sid (unique); --fork-session
         // is redundant on this branch.
-        let bundle = build_bundle_for_resume(&path, project.clone(), provider.clone())?;
-        run_tui_loop(bundle, project, provider)
+        let (bundle, host) = build_bundle_for_resume(&path, project.clone(), provider.clone())?;
+        run_tui_loop(bundle, host, project, provider)
     } else if let Some(sid) = houyicoder_context::SessionId::from_display_string(&value) {
-        let bundle = if fork {
+        let (bundle, host) = if fork {
             resume_bundle::build_bundle_for_fork(sid, project.clone(), provider.clone())?
         } else {
             resume_bundle::build_bundle_for_resume_sid(sid, project.clone(), provider.clone())?
         };
-        run_tui_loop(bundle, project, provider)
+        run_tui_loop(bundle, host, project, provider)
     } else {
         eprintln!(
             "resume target is neither an existing file nor a session id: {value} \
@@ -190,12 +190,12 @@ fn run_continue(project: Option<String>, fork: bool) -> Result<(), Box<dyn std::
         std::process::exit(2);
     };
     let provider = houyicoder_service::composition::resolve_provider(project.as_deref());
-    let bundle = if fork {
+    let (bundle, host) = if fork {
         resume_bundle::build_bundle_for_fork(sid, project.clone(), provider.clone())?
     } else {
         resume_bundle::build_bundle_for_resume_sid(sid, project.clone(), provider.clone())?
     };
-    run_tui_loop(bundle, project, provider)
+    run_tui_loop(bundle, host, project, provider)
 }
 
 /// Acquire the per-session exclusive lock, held for the caller's process
@@ -285,10 +285,12 @@ fn run_serve(
     let host = Arc::new(SessionHost::new(SessionLeaseStore::new()));
     let event_sequencer = houyicoder_service::server::EventSequencer::new();
     event_sequencer.install_on(&mut bundle.runner);
-    houyicoder_service::composition::fleet_status_relay::spawn(
+    let relay_cancel = houyicoder_service::CancellationToken::new();
+    let relay_handle = houyicoder_service::composition::fleet_status_relay::spawn(
         bundle.bus.clone(),
         event_sequencer.clone(),
         runtime.handle().clone(),
+        relay_cancel.clone(),
     );
     let gate: Arc<dyn ModeGate> = bundle.gate;
     let session = bundle.session;
@@ -303,6 +305,10 @@ fn run_serve(
         housekeeping::fire_after_bundle(session);
         if let Err(e) = uds::listen_uds(host, session, &socket_path).await {
             eprintln!("uds listener exited: {e}");
+        }
+        relay_cancel.cancel();
+        if let Some(handle) = relay_handle {
+            drop(handle.await);
         }
     });
     Ok(())
@@ -434,34 +440,67 @@ fn run_acp_stdio(
 /// session's lock (single-writer guard) + refuse if a live --serve process
 /// holds it (is_session_live). The event loop swaps sessions in-process when
 /// a resume_builder is wired (the normal path: try_swap_session builds the
-/// new bundle + swap_session swaps in place, no restart). The Some(target)
-/// return is a fallback for when no builder was wired: re-build the bundle
-/// for that target + re-enter. The prior run_with_runner returned, so the old
-/// App + its client dropped + the old inproc server self-terminated on
-/// disconnect — no leak. None means a clean quit.
+/// new bundle + swap_session swaps in place, no restart). The builder reaps
+/// the prior host lifecycle owner before installing the new one so the old
+/// serve, drain, and relay do not outlive the session that ended: the serve
+/// exits when its paired client drops, the drain and relay end on the cancel
+/// token the owner holds. The Some(target) return is the rebuild fallback
+/// for when no builder was wired. None means a clean quit.
 type ResumeFn = Box<
     dyn Fn(&str) -> Result<houyicoder_tui::composition::RunnerBundle, Box<dyn std::error::Error>>,
 >;
 
+/// Build a bundle for a resume target, reaping the prior host only after the
+/// build succeeds. Shared by the in-process resume closure and the rebuild
+/// fallback so neither path leaks the prior serve, drain, and relay tasks or
+/// the Runner they hold. Reaping after the build keeps the prior session's
+/// tasks alive when the target is invalid or the build fails, so a failed
+/// switch strands the user on the live session rather than a dead one.
+fn build_bundle_for_target(
+    target: &str,
+    project: Option<String>,
+    provider: houyicoder_service::composition::ResolvedProvider,
+    host_slot: &houyicoder_service::composition::host_lifecycle::HostSlot,
+) -> Result<houyicoder_tui::composition::RunnerBundle, Box<dyn std::error::Error>> {
+    let path = std::path::PathBuf::from(target);
+    let (bundle, host) = if path.exists() {
+        build_bundle_for_resume(&path, project, provider)?
+    } else if let Some(sid) = houyicoder_context::SessionId::from_display_string(target) {
+        resume_bundle::build_bundle_for_resume_sid(sid, project, provider)?
+    } else {
+        return Err(Box::<dyn std::error::Error>::from(format!(
+            "invalid resume target: {target}"
+        )));
+    };
+    let runtime = houyicoder_tui::composition::shared_runtime();
+    if let Some(old) = host_slot
+        .lock()
+        .expect("host lifecycle slot must not poison")
+        .take()
+    {
+        old.shutdown(runtime.handle());
+    }
+    *host_slot
+        .lock()
+        .expect("host lifecycle slot must not poison") = Some(host);
+    Ok(bundle)
+}
+
 fn run_tui_loop(
-    mut bundle: houyicoder_tui::composition::RunnerBundle,
+    bundle: houyicoder_tui::composition::RunnerBundle,
+    host: houyicoder_service::composition::host_lifecycle::HostLifecycle,
     project: Option<String>,
     provider: houyicoder_service::composition::ResolvedProvider,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let host_slot: houyicoder_service::composition::host_lifecycle::HostSlot =
+        std::sync::Arc::new(std::sync::Mutex::new(Some(host)));
+    let mut bundle = bundle;
     let mut resume_builder: Option<ResumeFn> = {
+        let host_slot = std::sync::Arc::clone(&host_slot);
         let project = project.clone();
         let provider = provider.clone();
         Some(Box::new(move |target: &str| {
-            let path = std::path::PathBuf::from(target);
-            if path.exists() {
-                build_bundle_for_resume(&path, project.clone(), provider.clone())
-            } else if let Some(sid) = houyicoder_context::SessionId::from_display_string(target) {
-                resume_bundle::build_bundle_for_resume_sid(sid, project.clone(), provider.clone())
-            } else {
-                Err(Box::<dyn std::error::Error>::from(format!(
-                    "invalid resume target: {target}"
-                )))
-            }
+            build_bundle_for_target(target, project.clone(), provider.clone(), &host_slot)
         }))
     };
     loop {
@@ -481,298 +520,15 @@ fn run_tui_loop(
         match houyicoder_tui::app::run_with_runner(bundle, resume_builder.take())? {
             None => return Ok(()),
             Some(new_target) => {
-                // The pending target from the picker or /resume <arg> carries
-                // a session id OR an export file path. Dispatch on which: an
-                // existing .json path resumes from an exported transcript
-                // (forks a fresh sid, provenance ResumedFromExport); a valid
-                // sid string resumes a session on disk; anything else is an
-                // error. Mirrors the CLI --resume <value> dispatch.
-                let path = std::path::PathBuf::from(&new_target);
-                if path.exists() {
-                    bundle = build_bundle_for_resume(&path, project.clone(), provider.clone())?;
-                } else if let Some(sid) =
-                    houyicoder_context::SessionId::from_display_string(&new_target)
-                {
-                    bundle = resume_bundle::build_bundle_for_resume_sid(
-                        sid,
-                        project.clone(),
-                        provider.clone(),
-                    )?;
-                } else {
-                    return Err(Box::<dyn std::error::Error>::from(format!(
-                        "invalid resume target from picker: {new_target}"
-                    )));
-                }
+                bundle = build_bundle_for_target(
+                    &new_target,
+                    project.clone(),
+                    provider.clone(),
+                    &host_slot,
+                )?;
             }
         }
     }
-}
-
-/// The composition root: build the runner via the service layer, install its
-/// event handlers, Arc the runner so the server task and the TUI share one, pair an
-/// in-memory server + client around it, spawn the server on the shared
-/// runtime, and return the wired bundle for the TUI. The TUI never constructs
-/// these itself; it stays a presentation layer over the protocol client.
-fn build_bundle(
-    project: Option<String>,
-    model_override: Option<String>,
-    provider: houyicoder_service::composition::ResolvedProvider,
-) -> houyicoder_tui::composition::RunnerBundle {
-    let bundle =
-        houyicoder_service::composition::build_runner(production_runner(project, provider));
-    // --model overrides the settings-seeded active model for a fresh session
-    // (resolution chain: --model flag > settings.json > DEFAULT). A resumed
-    // session restores its own model from the descriptor (higher priority), so
-    // --model is fresh-only (parse_args rejects --model + --resume).
-    if let Some(m) = &model_override {
-        bundle.runner.set_model(m.clone());
-    }
-    let model = model_override.unwrap_or_else(houyicoder_config::resolve_model);
-    assemble_bundle(
-        bundle.runner,
-        bundle.session,
-        model,
-        bundle.gate,
-        bundle.sandbox_session,
-        bundle.append_notify,
-        false,
-        bundle.worktree_controller,
-        bundle.bus,
-    )
-}
-
-/// Resume a session from an exported transcript file (--resume <file> when
-/// the value is an existing path). Seeds the new session's log + trajectory
-/// from the export, restores the export's model, then wires the same TUI
-/// bundle the fresh path uses. The export is a snapshot, so resume forks a
-/// new session id (the source sid is recorded in provenance, not reused).
-fn build_bundle_for_resume(
-    export_path: &std::path::Path,
-    project: Option<String>,
-    provider: houyicoder_service::composition::ResolvedProvider,
-) -> Result<houyicoder_tui::composition::RunnerBundle, Box<dyn std::error::Error>> {
-    let resumed = houyicoder_service::composition::build_runner_for_resume_export(
-        export_path,
-        &houyicoder_service::composition::session_log_root(),
-        project,
-        Some(Arc::new(
-            houyicoder_permission::FileRuleStore::default_paths(),
-        )),
-        provider,
-    )
-    .map_err(|e| {
-        eprintln!("resume failed: {e}");
-        e
-    })?;
-    Ok(assemble_bundle(
-        resumed.assembled.runner,
-        resumed.assembled.session,
-        resumed.model,
-        resumed.assembled.gate,
-        resumed.assembled.sandbox_session,
-        resumed.assembled.append_notify,
-        true,
-        resumed.assembled.worktree_controller,
-        resumed.assembled.bus,
-    ))
-}
-
-/// Shared TUI wiring: install the agent event handlers, pair the in-memory
-/// server and client, build the trajectory view, the export view, and the
-/// session-log snapshot over the SessionLog, and assemble the RunnerBundle
-/// the TUI drives. Both the fresh path (build_bundle) and the resume path
-/// (build_bundle_for_resume) route through here so the wiring cannot drift
-/// between them.
-#[expect(clippy::too_many_arguments, reason = "param grouping deliberate")]
-pub(crate) fn assemble_bundle(
-    runner: Runner,
-    session: SessionId,
-    model: String,
-    gate: Arc<houyicoder_permission::DefaultModeGate>,
-    sandbox_session: Option<Arc<dyn houyicoder_api::sandbox::SandboxSession>>,
-    append_notify: Arc<tokio::sync::Notify>,
-    skip_login: bool,
-    worktree_controller: Option<Arc<houyicoder_core::agent::WorktreeController>>,
-    bus: Option<Arc<houyicoder_core::agent::multi_agent::bus_types::AgentBus>>,
-) -> houyicoder_tui::composition::RunnerBundle {
-    // Grab the SessionLog BEFORE the runner moves into the server task — the
-    // trajectory view reads it for the /trajectory pane, and the session
-    // picker reads other sessions' log heads to derive their titles.
-    let session_log = runner.store();
-    // The descriptor reader for the session picker (lists sessions + reads each
-    // name/cwd/model). Built at the same sid-keyed sessions root the file
-    // backend uses.
-    let descriptor_store: std::sync::Arc<dyn houyicoder_context::SessionDescriptorStore> =
-        houyicoder_service::composition::disk_descriptor_store();
-    // The session-log snapshot loads the durable log into a TranscriptLine
-    // snapshot for the search view (read-whole path under the threshold).
-    // Shares the same SessionLog as the trajectory and export views (an Arc
-    // clone, so each view still takes ownership of its slot).
-    // One reader owns the byte windows and the offset index for this session;
-    // the transcript and the trajectory project what it returns.
-    let history = std::sync::Arc::new(session_history::SessionHistory::new(
-        session_log.clone(),
-        session,
-    ));
-    let snapshot: Option<
-        std::sync::Arc<dyn houyicoder_tui::transcript::snapshot::TranscriptSnapshot>,
-    > = Some(std::sync::Arc::new(
-        session_log_snapshot::SessionLogSnapshot::with_history(history.clone()),
-    ));
-    // One object backs both the /trajectory view + the /export serializer:
-    // both read the same durable event stream.
-    let trajectory = std::sync::Arc::new(trajectory::SessionLogTrajectory::with_history(
-        history,
-        session_log.clone(),
-        session,
-        model.clone(),
-    ));
-    let trajectory_log: Option<
-        std::sync::Arc<dyn houyicoder_tui::view::trajectory_pane::TrajectoryLog>,
-    > = Some(trajectory.clone());
-    let export_log: Option<std::sync::Arc<dyn houyicoder_tui::view::export_log::ExportLog>> =
-        Some(trajectory);
-    let wire_session = houyicoder_protocol::frontend::SessionId(session.to_string());
-    let (tx, rx) = channel::<SessionMessage>();
-    let (_runner, client, startup_warnings) = start_local_server(
-        runner,
-        session,
-        gate,
-        sandbox_session,
-        append_notify,
-        Some(descriptor_store.clone()),
-        worktree_controller,
-        bus,
-    );
-    // The server task owns the runner + the permission gate; the TUI holds
-    // only the protocol client.
-    houyicoder_tui::composition::RunnerBundle {
-        client,
-        agent_tx: tx,
-        agent_rx: rx,
-        session: wire_session,
-        model,
-        trajectory_log,
-        export_log,
-        snapshot,
-        session_catalog: Some(std::sync::Arc::new(
-            session_catalog::DescriptorSessionCatalog::new(
-                session_log,
-                houyicoder_service::composition::session_log_root(),
-            ),
-        )),
-        skip_login,
-        startup_warnings,
-        history_path: houyicoder_config::config_home().join("history.jsonl"),
-    }
-}
-
-/// Pair an in-memory protocol server and client around a runner. The session
-/// event sequencer receives runtime events before the runner is shared, then
-/// becomes the sole ordering authority for durable event frames, model
-/// deltas, and fleet status. The server is the only carrier writer.
-#[expect(clippy::too_many_arguments, reason = "param grouping deliberate")]
-fn start_local_server(
-    mut runner: Runner,
-    session: SessionId,
-    gate: Arc<houyicoder_permission::DefaultModeGate>,
-    sandbox_session: Option<Arc<dyn houyicoder_api::sandbox::SandboxSession>>,
-    append_notify: Arc<tokio::sync::Notify>,
-    descriptor_store: Option<Arc<dyn houyicoder_context::SessionDescriptorStore>>,
-    worktree_controller: Option<Arc<houyicoder_core::agent::WorktreeController>>,
-    bus: Option<Arc<houyicoder_core::agent::multi_agent::bus_types::AgentBus>>,
-) -> (Arc<Runner>, Client, Vec<String>) {
-    let (c2s_tx, c2s_rx) = futures::channel::mpsc::channel(16);
-    let (s2c_tx, s2c_rx) = futures::channel::mpsc::channel(16);
-    let event_sequencer = houyicoder_service::server::EventSequencer::new();
-    event_sequencer.install_on(&mut runner);
-    // The server shares the bus so a child's permission ask (published while
-    // the parent run is parked on the child) reaches the wire-approval flow.
-    let server_bus = bus.clone();
-    // Fleet status relay: bridge bus child status to AgentStatus wire frames so
-    // the TUI footer renders without a direct engine-bus dependency.
-    houyicoder_service::composition::fleet_status_relay::spawn(
-        bus,
-        event_sequencer.clone(),
-        houyicoder_tui::composition::shared_runtime()
-            .handle()
-            .clone(),
-    );
-    // Route worktree security notices through the same user-visible destination.
-    if let Some(controller) = &worktree_controller
-        && let Some(handler) = runner.event_handlers().user_notice_handler()
-    {
-        controller.set_user_notice_handler(handler);
-    }
-    // Drain startup warnings synchronously before the runner is shared so the
-    // host pushes them as initial transcript system lines — no async-sink race.
-    let startup_warnings = runner.drain_startup_warnings();
-    let runner = Arc::new(runner);
-    // Completion notification injector: when a detached (async) child
-    // finishes, enqueue a lower-priority notification into the parent's
-    // mid-turn queue so the parent model learns the child finished on its
-    // next turn boundary. Shares the same bus as the fleet status relay;
-    // no-op without one.
-    houyicoder_service::composition::notification_drain::spawn(
-        server_bus.clone(),
-        Arc::clone(&runner),
-        houyicoder_tui::composition::shared_runtime()
-            .handle()
-            .clone(),
-    );
-    let server_io = FrameCarrier::new(s2c_tx, c2s_rx);
-    // The server takes the composition's gate — the same Arc the GuardedTool
-    // wrappers hold — so wire /mode and /rules writes reach the gate that
-    // actually guards the tools. The TUI holds no gate handle. The sandbox
-    // session is threaded in too so the /permissions Workspace verbs can
-    // extend the fence at runtime (the same Arc the tools' exec path holds).
-    let gate_dyn: Arc<dyn houyicoder_permission::ModeGate> = gate;
-    let mut server =
-        Server::new_with_event_sequencer(runner.clone(), session, gate_dyn, event_sequencer)
-            .with_append_notify(append_notify)
-            .with_bus(server_bus);
-    if let Some(s) = sandbox_session {
-        server = server.with_session(s);
-    }
-    // Gate the run loop on the startup workspace-trust prompt: an
-    // unacknowledged project path asks the TUI client once (the trust card),
-    // persists the answer, then enters the frame loop. None when the cwd
-    // cannot be read — no prompt fires.
-    if let Ok(cwd) = std::env::current_dir() {
-        server = server.with_project_path(cwd);
-    }
-    // Attach the descriptor so /status renders the identity fields (version /
-    // name / cwd / provenance). None on paths without a store (tests).
-    if let Some(store) = descriptor_store {
-        server = server.with_descriptor_store(store);
-    }
-    let server = server;
-    let runtime = houyicoder_tui::composition::shared_runtime();
-    runtime.spawn(async move {
-        let _serve = server.serve(server_io).await;
-    });
-    // Fire background housekeeping (session prune) on the shared runtime.
-    // The 10min delay + spawn_blocking run fire-and-forget; the task dies
-    // with the process. A short session that exits before 10min simply
-    // does not prune this run.
-    runtime.spawn(async move {
-        housekeeping::fire_after_bundle(session);
-    });
-    // Fire-and-forget: ask the provider which model ids it serves and cache
-    // them for catalog existence validation. A no-op for the stub provider;
-    // a /v1/models fetch for the real one. Failure is silent — the old
-    // cache stays, nothing surfaces to the user. Never eprintln here: the
-    // TUI is in alt-screen mode and stderr writes corrupt the rendered
-    // surface (the cursor sits in the input box, so the text lands there).
-    runtime.spawn({
-        let runner_for_refresh = runner.clone();
-        async move {
-            drop(runner_for_refresh.refresh_served_models().await);
-        }
-    });
-    let transport = InProcTransport::from_halves(c2s_tx, s2c_rx);
-    let client = Client::new(Box::new(transport));
-    (runner, client, startup_warnings)
 }
 
 #[cfg(test)]

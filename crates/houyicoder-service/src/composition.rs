@@ -11,6 +11,7 @@
 mod api_key;
 pub(crate) mod catalog_resolver;
 pub mod fleet_status_relay;
+pub mod host_lifecycle;
 pub mod notification_drain;
 use catalog_resolver::SettingsCatalogResolver;
 pub use catalog_resolver::{effort_to_persist, persist_model_pick};

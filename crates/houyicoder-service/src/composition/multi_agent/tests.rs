@@ -727,8 +727,9 @@ async fn test_background_child_notifies_parent() {
     ));
     super::super::notification_drain::spawn(
         Some(bus.clone()),
-        Arc::clone(&parent_runner),
+        Arc::downgrade(&parent_runner),
         tokio::runtime::Handle::current(),
+        CancellationToken::new(),
     );
     let runtime = MultiAgentRuntime::new(MultiAgentDeps {
         registry,
@@ -977,8 +978,9 @@ async fn test_background_failure_notifies_parent() {
     ));
     super::super::notification_drain::spawn(
         Some(bus.clone()),
-        Arc::clone(&parent_runner),
+        Arc::downgrade(&parent_runner),
         tokio::runtime::Handle::current(),
+        CancellationToken::new(),
     );
     let runtime = MultiAgentRuntime::new(MultiAgentDeps {
         registry,
@@ -1320,8 +1322,9 @@ async fn test_background_panic_notifies_parent() {
     ));
     super::super::notification_drain::spawn(
         Some(bus.clone()),
-        Arc::clone(&parent_runner),
+        Arc::downgrade(&parent_runner),
         tokio::runtime::Handle::current(),
+        CancellationToken::new(),
     );
     let runtime = MultiAgentRuntime::new(MultiAgentDeps {
         registry,

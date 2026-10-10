@@ -5,6 +5,10 @@
 
 use super::*;
 
+use houyicoder_service::composition::host_lifecycle::{HostLifecycle, HostSlot};
+use houyicoder_service::composition::resolve_provider;
+use std::sync::Mutex;
+
 // ── parse_args: default + mode flags ──────────────────────────────
 
 #[test]
@@ -266,16 +270,17 @@ fn test_pair_completes_handshake() {
     let bundle = houyicoder_service::composition::build_runner(
         houyicoder_service::composition::BuildRunnerOptions::default(),
     );
-    let (runner_arc, mut client, _startup_warnings) = start_local_server(
-        bundle.runner,
-        bundle.session,
-        bundle.gate,
-        bundle.sandbox_session,
-        bundle.append_notify,
-        None,
-        None,
-        bundle.bus,
-    );
+    let (runner_arc, mut client, _startup_warnings, _host) =
+        crate::composition_root::start_local_server(
+            bundle.runner,
+            bundle.session,
+            bundle.gate,
+            bundle.sandbox_session,
+            bundle.append_notify,
+            None,
+            None,
+            bundle.bus,
+        );
     // The runner Arc is shared: the server task and the caller hold the
     // same allocation.
     assert!(Arc::ptr_eq(&runner_arc, &runner_arc));
@@ -286,4 +291,29 @@ fn test_pair_completes_handshake() {
         .expect("build test runtime");
     let hello = rt.block_on(client.connect());
     assert!(hello.is_ok(), "Hello handshake failed: {hello:?}");
+}
+
+/// A failed switch must leave the prior host alive. build_bundle_for_target
+/// defers reaping until after a successful build, so an invalid target returns
+/// Err without taking the old host out of the slot — the prior session's serve,
+/// drain, and relay keep running instead of being cancelled before the build is
+/// even attempted.
+#[test]
+fn test_bad_target_keeps_host() {
+    let slot: HostSlot = Arc::new(Mutex::new(Some(HostLifecycle::new())));
+    let provider = resolve_provider(None);
+    let err = match build_bundle_for_target("not-a-path-and-not-a-sid", None, provider, &slot) {
+        Err(e) => e,
+        Ok(_) => panic!("an invalid target must error"),
+    };
+    assert!(
+        err.to_string().contains("invalid resume target"),
+        "got: {err}"
+    );
+    assert!(
+        slot.lock()
+            .expect("host lifecycle slot must not poison")
+            .is_some(),
+        "the prior host stays in the slot when the build fails"
+    );
 }
