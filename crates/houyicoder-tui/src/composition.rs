@@ -38,7 +38,6 @@ use houyicoder_core::agent::Runner;
 #[cfg(test)]
 use houyicoder_permission::DefaultModeGate;
 use houyicoder_protocol::frontend::LoginMode;
-use std::cell::{Cell, RefCell};
 use std::sync::Arc;
 #[cfg(test)]
 use std::sync::atomic::AtomicU64;

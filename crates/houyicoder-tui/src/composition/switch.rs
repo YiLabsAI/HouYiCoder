@@ -144,11 +144,10 @@ impl App {
         let carried_last_run_final = self.sessions.current.last_run_final;
 
         // Reset session-local UI caches and pane state explicitly; the new
-        // Session is fresh by construction so only App-side caches need it.
-        // terminal_focused and clipboard are process resources (not reset);
-        // the frame feedback is render-measured (rewritten each draw). verbose
-        // resets below: it is a search-view lifecycle flag, not a process
-        // resource.
+        // Session is fresh by construction so only the frontend-side state
+        // needs it. Ui::reset_for_session_switch owns the field list; the
+        // process-level resources (terminal focus, clipboard) and the
+        // render-measured frame feedback stay.
         self.reset_session_local();
 
         // Commit the new session in one step: no draw or message processing
@@ -224,51 +223,18 @@ impl App {
     }
 
     /// Reset the frontend-side session-local fields a session switch must
-    /// clear so the new session renders as if fresh rather than layered over
-    /// the old one's pane state, caches, or selection. The fields the new
+    /// clear so the new session renders as if fresh. The fields the new
     /// Session owns (run, transcript, prompt, todos, capabilities,
     /// history_reads, index_build, agents, agent_directory) are fresh by
     /// construction in set_current, so this resets only what stays outside
-    /// the new Session: the transcript view state, the render and row caches,
-    /// the pane drill-downs, the selection, the fleet strip, and the verbose
-    /// flag. The process-level resources (terminal_focused, clipboard) and
-    /// the render-measured feedback (frame.feedback, rewritten each draw)
-    /// are intentionally absent: a switch does not impersonate a cleanup of
-    /// terminal focus or the clipboard, and the feedback self-corrects.
-    /// input is handled by the caller at the field level because it mixes
-    /// session-scoped and carry-across fields.
+    /// the new Session: the workflow stub and the Ui session-local state.
+    /// The Ui owner holds its own reset rule (navigation overlays, pane
+    /// states, caches, selection), and the process-level resources (terminal
+    /// focus, clipboard) plus the render-measured frame feedback stay. The
+    /// input and parked view states are carried by the caller at the field
+    /// level because they mix session-scoped and carry-across fields.
     fn reset_session_local(&mut self) {
         self.workflow = app_default::workflow();
-        self.ui.navigation.pane = Pane::Transcript;
-        self.ui.navigation.viewport = ViewportMode::Working;
-        self.ui.navigation.prev_viewport = ViewportMode::Working;
-        self.ui.transcript_view = Default::default();
-        self.ui.verbose = false;
-        self.ui.frame.rows = Default::default();
-        self.ui.frame.rows.version.set(u64::MAX);
-        self.ui.navigation.resume_picker = Default::default();
-        self.ui.navigation.palette = Default::default();
-        self.ui.queue_view = Default::default();
-        self.ui.worktree_list = Default::default();
-        self.ui.worktree_level = Cell::new(0);
-        self.ui.trajectory = Default::default();
-        self.ui.agents_sel = 0;
-        self.ui.notifications = Default::default();
-        self.ui.displayed_tokens = Cell::new(0);
-        self.ui.selection = Default::default();
-        self.ui.frame.layout = Default::default();
-        self.ui.renderer.cache = RefCell::new(Default::default());
-        self.ui.frame.keys = Default::default();
-        self.ui.teammate_view = None;
-        self.ui.fleet = Default::default();
-        self.ui.permission_pane = Default::default();
-        self.ui.skills_pane = Default::default();
-        self.ui.navigation.skill_picker = Default::default();
-        self.ui.hooks_pane = Default::default();
-        self.ui.memory = Default::default();
-        self.ui.model = Default::default();
-        self.ui.navigation.status_tab = Default::default();
-        self.ui.navigation.status_name_edit = None;
-        self.ui.last_title = None;
+        self.ui.reset_for_session_switch();
     }
 }

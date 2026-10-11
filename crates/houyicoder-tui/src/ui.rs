@@ -155,3 +155,40 @@ pub struct Ui {
     /// copy paths.
     pub(crate) frame: PreparedFrame,
 }
+
+impl Ui {
+    /// Reset the session-local fields a switch must clear so the new session
+    /// renders as if fresh rather than layered over the old one's pane state,
+    /// caches, or selection. The navigation overlays, the transcript view, the
+    /// pane states (permission, skills, hooks, memory, model, fleet), the
+    /// trajectory and worktree cursors, the agents cursor, the selection, the
+    /// notifications, the displayed token count, the last title, the render
+    /// cache, and the last frame's measured layout and rows all reset. The
+    /// process-level resources (terminal focus, clipboard) and the
+    /// render-measured frame feedback stay; the input and parked view states
+    /// are carried by the caller at the field level because they mix
+    /// session-scoped and carry-across fields.
+    pub(crate) fn reset_for_session_switch(&mut self) {
+        self.navigation.reset_for_session_switch();
+        self.transcript_view = Default::default();
+        self.verbose = false;
+        self.queue_view = Default::default();
+        self.worktree_list = Default::default();
+        self.worktree_level = Cell::new(0);
+        self.trajectory = Default::default();
+        self.agents_sel = 0;
+        self.notifications = Default::default();
+        self.displayed_tokens = Cell::new(0);
+        self.selection = Default::default();
+        self.teammate_view = None;
+        self.fleet = Default::default();
+        self.permission_pane = Default::default();
+        self.skills_pane = Default::default();
+        self.hooks_pane = Default::default();
+        self.memory = Default::default();
+        self.model = Default::default();
+        self.last_title = None;
+        self.renderer.reset_for_session_switch();
+        self.frame.reset_for_session_switch();
+    }
+}

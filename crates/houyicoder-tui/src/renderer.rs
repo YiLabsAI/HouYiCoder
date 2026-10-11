@@ -30,3 +30,25 @@ pub(crate) struct PreparedFrame {
     pub(crate) rows: DisplayRowsCache,
     pub(crate) keys: LastRowKeys,
 }
+
+impl Renderer {
+    /// Clear the per-line render cache so a line parsed for the old session
+    /// does not ride into the new one at a different width or expansion.
+    pub(crate) fn reset_for_session_switch(&mut self) {
+        self.cache = RefCell::new(Default::default());
+    }
+}
+
+impl PreparedFrame {
+    /// Reset the last draw pass's measured layout, the pre-rendered rows, and
+    /// the per-row keys so the new session renders as if fresh. The rows
+    /// version is stamped to force a first-frame recompute. The feedback
+    /// stays: it is render-measured, rewritten each draw, so a stale value
+    /// self-corrects rather than layering over the new session.
+    pub(crate) fn reset_for_session_switch(&mut self) {
+        self.layout = Default::default();
+        self.rows = Default::default();
+        self.rows.version.set(u64::MAX);
+        self.keys = Default::default();
+    }
+}

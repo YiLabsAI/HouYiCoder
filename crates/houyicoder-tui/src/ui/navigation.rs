@@ -44,3 +44,21 @@ pub struct Navigation {
     /// RenameSession request), Esc cancels.
     pub status_name_edit: Option<InputField>,
 }
+
+impl Navigation {
+    /// Reset the session-local fields a switch must clear: the pane back to
+    /// Transcript, the two viewport modes back to Working, and the overlay
+    /// pickers plus the status-tab edit buffer to their defaults. The screen
+    /// and login mode are applied by the caller (the landing screen and login
+    /// mode come from apply_frontend_startup), so they stay out of the reset.
+    pub(crate) fn reset_for_session_switch(&mut self) {
+        self.pane = Pane::Transcript;
+        self.viewport = ViewportMode::Working;
+        self.prev_viewport = ViewportMode::Working;
+        self.resume_picker = Default::default();
+        self.palette = Default::default();
+        self.skill_picker = Default::default();
+        self.status_tab = Default::default();
+        self.status_name_edit = None;
+    }
+}
