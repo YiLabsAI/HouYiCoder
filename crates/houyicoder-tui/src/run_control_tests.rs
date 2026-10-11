@@ -1096,7 +1096,15 @@ fn test_model_switch_applies() {
     let mut seeded = false;
     for _ in 0..200 {
         app.poll_agent();
-        if !app.model_picker.snapshot.entries.is_empty() {
+        if !app
+            .sessions
+            .current
+            .capabilities
+            .model
+            .catalog
+            .entries
+            .is_empty()
+        {
             seeded = true;
             break;
         }
@@ -1105,7 +1113,7 @@ fn test_model_switch_applies() {
     assert!(seeded, "the ModelInfo reply must land before a commit");
     app.commit_model_pick();
     assert!(
-        app.model_picker.is_pending(),
+        app.sessions.current.capabilities.model.is_pending(),
         "the commit waits for the host's answer before claiming anything"
     );
     // Pump the driver round-trip: the ModelSwitch ships as a ModelSet, the
@@ -1115,7 +1123,7 @@ fn test_model_switch_applies() {
     let mut reached = false;
     for _ in 0..200 {
         app.poll_agent();
-        if !app.model_picker.is_pending() {
+        if !app.sessions.current.capabilities.model.is_pending() {
             reached = true;
             break;
         }

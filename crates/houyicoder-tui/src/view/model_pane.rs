@@ -16,7 +16,9 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthStr;
 
-use crate::state::{App, ModelPickerState, ModelSettingFocus};
+use crate::session::capabilities::model::ModelCapability;
+use crate::state::App;
+use crate::state::model_draft::{ModelDraft, ModelSettingFocus};
 use crate::view::line_wrap::truncate_width;
 use crate::view::navigation::key_hint;
 use houyicoder_protocol::frontend::model::{
@@ -48,14 +50,19 @@ const BLANK_MARKER: &str = "  ";
 /// The mark on the row the host reports as applied.
 const APPLIED_MARK: &str = " \u{2714}";
 
+/// The display name of the Default sentinel. Picking it resolves the default
+/// model, so the row is named for the choice rather than for the resolved id.
+const DEFAULT_LABEL: &str = "Default (recommended)";
+
 /// Render the /model content into the Pane inner rect.
 pub(crate) fn draw_content(f: &mut Frame, inner: Rect, app: &App) {
-    let picker = &app.model_picker;
+    let model = &app.sessions.current.capabilities.model;
+    let draft = &app.ui.model;
     let wide = inner.width >= WIDE_INNER_WIDTH;
     // A model with no fast tier declared drops the Fast Mode row entirely
     // rather than printing an unavailable line the user never configured.
     let fast_shown = !matches!(
-        picker.focused_capabilities().fast,
+        model.capabilities_at(draft.row).fast,
         FastModeAvailability::NotConfigured
     );
     let mut constraints = vec![Constraint::Length(1), Constraint::Min(0)];
@@ -78,29 +85,29 @@ pub(crate) fn draw_content(f: &mut Frame, inner: Rect, app: &App) {
         )])),
         chunks[0],
     );
-    draw_list(f, chunks[1], picker, wide);
+    draw_list(f, chunks[1], model, draft, wide);
     let mut idx = 2;
     if !wide {
-        let detail = focused_detail(picker, chunks[idx].width as usize);
+        let detail = focused_detail(model, draft, chunks[idx].width as usize);
         f.render_widget(Paragraph::new(detail), chunks[idx]);
         idx += 1;
     }
-    f.render_widget(Paragraph::new(effort_line(picker)), chunks[idx]);
+    f.render_widget(Paragraph::new(effort_line(model, draft)), chunks[idx]);
     idx += 1;
     if fast_shown {
-        f.render_widget(Paragraph::new(fast_line(picker)), chunks[idx]);
+        f.render_widget(Paragraph::new(fast_line(model, draft)), chunks[idx]);
         idx += 1;
     }
     f.render_widget(
-        Paragraph::new(footer_line(picker, wide, fast_shown)),
+        Paragraph::new(footer_line(model, wide, fast_shown)),
         chunks[idx],
     );
 }
 
 /// The model list, scrolled by the list state so the title, the detail and
 /// the settings keep their rows however long the catalog is.
-fn draw_list(f: &mut Frame, area: Rect, picker: &ModelPickerState, wide: bool) {
-    if picker.snapshot.entries.is_empty() {
+fn draw_list(f: &mut Frame, area: Rect, model: &ModelCapability, draft: &ModelDraft, wide: bool) {
+    if model.catalog.entries.is_empty() {
         // No rows to pick from; the guidance belongs to the list body, not
         // the footer, so a narrow width cannot truncate the escape hint.
         f.render_widget(
@@ -113,11 +120,11 @@ fn draw_list(f: &mut Frame, area: Rect, picker: &ModelPickerState, wide: bool) {
         return;
     }
     let width = area.width as usize;
-    let items: Vec<ListItem> = (0..picker.rows())
-        .map(|row| ListItem::new(row_line(picker, row, wide, width)))
+    let items: Vec<ListItem> = (0..model.rows())
+        .map(|row| ListItem::new(row_line(model, draft, row, wide, width)))
         .collect();
     let mut state = ListState::default();
-    state.select(Some(picker.draft.row.min(picker.rows().saturating_sub(1))));
+    state.select(Some(draft.row.min(model.rows().saturating_sub(1))));
     let list = List::new(items)
         .style(Style::default().fg(Color::White))
         .highlight_style(
@@ -130,8 +137,14 @@ fn draw_list(f: &mut Frame, area: Rect, picker: &ModelPickerState, wide: bool) {
 
 /// One row: on the wide layout the name column is padded so the ids line up;
 /// on the narrow layout the row is the name alone, cut to the width.
-fn row_line(picker: &ModelPickerState, row: usize, wide: bool, width: usize) -> Line<'static> {
-    let (left, style) = row_left(picker, row);
+fn row_line(
+    model: &ModelCapability,
+    draft: &ModelDraft,
+    row: usize,
+    wide: bool,
+    width: usize,
+) -> Line<'static> {
+    let (left, style) = row_left(model, draft, row);
     if !wide {
         return Line::from(Span::styled(truncate_width(&left, width), style));
     }
@@ -139,7 +152,7 @@ fn row_line(picker: &ModelPickerState, row: usize, wide: bool, width: usize) -> 
     let pad = name_col.saturating_sub(UnicodeWidthStr::width(left.as_str()));
     let pad = pad.max(WIDE_GAP);
     let taken = UnicodeWidthStr::width(left.as_str()) + pad;
-    let right = truncate_width(&row_right(picker, row), width.saturating_sub(taken));
+    let right = truncate_width(&row_right(model, row), width.saturating_sub(taken));
     Line::from(vec![
         Span::styled(format!("{left}{}", " ".repeat(pad)), style),
         Span::styled(right, Style::new().fg(Color::DarkGray)),
@@ -148,23 +161,23 @@ fn row_line(picker: &ModelPickerState, row: usize, wide: bool, width: usize) -> 
 
 /// The left column of a row: the gutter marker, the number, the label and the
 /// applied mark, plus the style the whole column takes.
-fn row_left(picker: &ModelPickerState, row: usize) -> (String, Style) {
-    let marker = if row == picker.draft.row {
+fn row_left(model: &ModelCapability, draft: &ModelDraft, row: usize) -> (String, Style) {
+    let marker = if row == draft.row {
         FOCUS_MARKER
     } else {
         BLANK_MARKER
     };
-    let (label, applied) = match picker.entry_at(row) {
+    let (label, applied) = match model.entry_at(row) {
         Some(entry) => (
             entry.label().to_string(),
-            picker.snapshot.selected
+            model.catalog.selected
                 == ModelChoice::Explicit {
                     id: entry.id.clone(),
                 },
         ),
         None => (
-            crate::state::DEFAULT_LABEL.to_string(),
-            picker.snapshot.selected == ModelChoice::Default,
+            DEFAULT_LABEL.to_string(),
+            model.catalog.selected == ModelChoice::Default,
         ),
     };
     let mark = if applied { APPLIED_MARK } else { "" };
@@ -178,12 +191,12 @@ fn row_left(picker: &ModelPickerState, row: usize) -> (String, Style) {
 
 /// The right column of a wide row: the id the provider sees and the effective
 /// context window.
-fn row_right(picker: &ModelPickerState, row: usize) -> String {
-    let (id, window) = match picker.entry_at(row) {
+fn row_right(model: &ModelCapability, row: usize) -> String {
+    let (id, window) = match model.entry_at(row) {
         Some(entry) => (entry.id.as_str(), entry.capabilities.context_window),
         None => (
-            picker.snapshot.resolved_default.id.as_str(),
-            picker.snapshot.resolved_default.capabilities.context_window,
+            model.catalog.resolved_default.id.as_str(),
+            model.catalog.resolved_default.capabilities.context_window,
         ),
     };
     match context_label(window) {
@@ -196,9 +209,9 @@ fn row_right(picker: &ModelPickerState, row: usize) -> String {
 /// context always, preceded by as much of the description, the output cap and
 /// the window provenance as the width allows. Nothing here belongs to the
 /// applied model, so moving the focus swaps the text in place.
-fn focused_detail(picker: &ModelPickerState, width: usize) -> Line<'static> {
-    let default = &picker.snapshot.resolved_default;
-    let focused = picker.focused();
+fn focused_detail(model: &ModelCapability, draft: &ModelDraft, width: usize) -> Line<'static> {
+    let default = &model.catalog.resolved_default;
+    let focused = model.entry_at(draft.row);
     let (id, max_output, window) = match focused {
         Some(entry) => (
             entry.id.as_str(),
@@ -277,12 +290,12 @@ fn join_segments(prefixes: &[String], tail: &str) -> String {
 /// The Reasoning Effort setting: the level the draft would send, marked as the
 /// chain's default until the user adjusts it. A model that speaks no effort
 /// dialect says so rather than offering levels that would not be sent.
-fn effort_line(picker: &ModelPickerState) -> Line<'static> {
+fn effort_line(model: &ModelCapability, draft: &ModelDraft) -> Line<'static> {
     let label = setting_label(
         "Reasoning Effort:",
-        picker.draft.focus == ModelSettingFocus::Effort,
+        draft.focus == ModelSettingFocus::Effort,
     );
-    let value = if !picker.effort_supported() {
+    let value = if !model.effort_supported_at(draft.row) {
         "unavailable".to_string()
     } else {
         // The marker keys on the value the chain resolves for this row, not on
@@ -291,14 +304,12 @@ fn effort_line(picker: &ModelPickerState) -> Line<'static> {
         // An auto pick (None) is the default state by definition — no pin
         // means follow the chain — so it carries the marker regardless of
         // which concrete level the chain resolves to.
-        let marker = if picker.draft.effort.is_none()
-            || picker.draft.effort == picker.chain_effort(picker.draft.row)
-        {
+        let marker = if draft.effort.is_none() || draft.effort == model.chain_effort(draft.row) {
             " (default)"
         } else {
             ""
         };
-        match picker.draft.effort {
+        match draft.effort {
             Some(level) => format!("{}{marker}", level.label()),
             None => format!("auto{marker}"),
         }
@@ -312,20 +323,20 @@ fn effort_line(picker: &ModelPickerState) -> Line<'static> {
 
 /// The Fast Mode setting: the tier the draft would send, the reason a target
 /// model forces it off, or why the setting cannot be taken at all.
-fn fast_line(picker: &ModelPickerState) -> Line<'static> {
-    let label = setting_label("Fast Mode:", picker.draft.focus == ModelSettingFocus::Fast);
-    let availability = picker.focused_capabilities().fast;
-    let value = if picker.fast_forced_off() {
+fn fast_line(model: &ModelCapability, draft: &ModelDraft) -> Line<'static> {
+    let label = setting_label("Fast Mode:", draft.focus == ModelSettingFocus::Fast);
+    let availability = model.capabilities_at(draft.row).fast;
+    let value = if draft.fast_forced_off(availability.is_available()) {
         "off (required by selected model)".to_string()
     } else if availability.is_available() {
-        picker.draft.speed.label().to_string()
+        draft.speed.label().to_string()
     } else {
         match availability.reason() {
             Some(reason) => format!("unavailable ({reason})"),
             None => "unavailable".to_string(),
         }
     };
-    let style = if picker.draft.focus == ModelSettingFocus::Fast {
+    let style = if draft.focus == ModelSettingFocus::Fast {
         Style::new().fg(Color::White)
     } else {
         Style::new().fg(Color::DarkGray)
@@ -349,14 +360,14 @@ fn setting_label(name: &'static str, focused: bool) -> Span<'static> {
 /// save is in flight instead of promising keys that do nothing. On a narrow
 /// pane only the commit and cancel hints survive the width; those two must
 /// never be the ones truncated away.
-fn footer_line(picker: &ModelPickerState, wide: bool, fast_shown: bool) -> Line<'static> {
-    if picker.is_pending() {
+fn footer_line(model: &ModelCapability, wide: bool, fast_shown: bool) -> Line<'static> {
+    if model.is_pending() {
         return Line::from(Span::styled(
             "saving\u{2026}",
             Style::new().fg(Color::Yellow),
         ));
     }
-    if picker.snapshot.entries.is_empty() {
+    if model.catalog.entries.is_empty() {
         // Short so a narrow width cannot truncate the Esc hint; the
         // configuration guidance lives in the list body above.
         let mut line = Line::from(Span::styled(
@@ -423,8 +434,9 @@ fn source_label(source: ContextWindowSource) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::{Pane, PendingCommit};
-    use crate::test_harness::{model_app, model_caps, model_entry, model_snapshot, render_text};
+    use crate::session::capabilities::model::PendingCommit;
+    use crate::state::Pane;
+    use crate::test_harness::{model_app, model_caps, model_catalog, model_entry, render_text};
     use houyicoder_protocol::envelope::RequestId;
     use houyicoder_protocol::frontend::model::{
         FastModeAvailability, ModelDisplayCapabilities, SpeedMode,
@@ -443,7 +455,7 @@ mod tests {
     /// An App showing /model over the given rows, each advertising the same
     /// window; a terminal width of w leaves the pane an inner width of w-4.
     fn pane_app(rows: &[(&str, &str)]) -> App {
-        let mut app = model_app(model_snapshot(
+        let mut app = model_app(model_catalog(
             rows.iter()
                 .map(|(id, name)| model_entry(id, name, model_caps(true, false)))
                 .collect(),
@@ -471,7 +483,7 @@ mod tests {
     /// the arrows skip it.
     #[test]
     fn test_picker_cooldown_fast() {
-        let mut app = model_app(model_snapshot(vec![model_entry(
+        let mut app = model_app(model_catalog(vec![model_entry(
             "model-one",
             "One",
             ModelDisplayCapabilities {
@@ -488,9 +500,9 @@ mod tests {
             out.contains("unavailable (rate limited until 12:00)"),
             "the cooldown reason renders: {out}"
         );
-        app.model_picker.cycle_setting_focus();
+        app.cycle_model_setting();
         assert_eq!(
-            app.model_picker.draft.focus,
+            app.ui.model.focus,
             ModelSettingFocus::Effort,
             "a cooldown tier is not focusable"
         );
@@ -500,7 +512,7 @@ mod tests {
     /// hint; the configuration guidance lives in the list body.
     #[test]
     fn test_picker_empty_footer_short() {
-        let mut app = model_app(model_snapshot(Vec::new()));
+        let mut app = model_app(model_catalog(Vec::new()));
         app.ui.navigation.pane = Pane::Model;
         let out = render_text(&app, 40, 24);
         assert!(
@@ -642,7 +654,7 @@ mod tests {
     #[test]
     fn test_picker_pending_footer_saving() {
         let mut app = pane_app(&ROWS);
-        app.model_picker.pending_request = Some(PendingCommit {
+        app.sessions.current.capabilities.model.pending = Some(PendingCommit {
             req_id: RequestId(1),
             prior_speed: SpeedMode::Standard,
         });
@@ -661,7 +673,7 @@ mod tests {
     /// the default rather than as an adjustment already made.
     #[test]
     fn test_picker_auto_default_marker() {
-        let mut app = model_app(model_snapshot(vec![model_entry(
+        let mut app = model_app(model_catalog(vec![model_entry(
             "model-one",
             "One",
             model_caps(true, true),
@@ -680,7 +692,7 @@ mod tests {
     fn test_picker_hides_fast_unconfigured() {
         let mut caps = model_caps(true, true);
         caps.fast = FastModeAvailability::NotConfigured;
-        let mut app = model_app(model_snapshot(vec![model_entry("model-one", "One", caps)]));
+        let mut app = model_app(model_catalog(vec![model_entry("model-one", "One", caps)]));
         app.ui.navigation.pane = Pane::Model;
         let wide = render_text(&app, WIDE_INNER_WIDTH + 4, 24);
         assert!(

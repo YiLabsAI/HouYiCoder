@@ -158,7 +158,7 @@ pub fn build_app(bundle: RunnerBundle, startup: FrontendStartup) -> App {
     app.status.model = model.clone();
     // The launch model stands in for the applied model until the host
     // snapshot lands, so the status bar names what the session runs.
-    app.model_picker.snapshot.applied.id = model;
+    app.sessions.current.capabilities.model.catalog.applied.id = model;
     app.status.sandbox = "mac-seatbelt".to_string();
     app.sessions.current.identity.session_id = session_id;
     app.sessions.current.connection = Some(live_session);

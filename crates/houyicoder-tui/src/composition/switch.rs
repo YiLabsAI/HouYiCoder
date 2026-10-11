@@ -166,7 +166,7 @@ impl App {
         self.status.model = model.clone();
         self.status.sandbox = "mac-seatbelt".to_string();
         self.status.last_run_final = carried_last_run_final;
-        self.model_picker.snapshot.applied.id = model;
+        self.sessions.current.capabilities.model.catalog.applied.id = model;
         // A swap is always initiated from the working screen (the user is on
         // the transcript when they /resume), so force Working regardless of
         // the frontend startup policy. The landing screen and login mode
@@ -265,7 +265,7 @@ impl App {
         self.ui.navigation.skill_picker = Default::default();
         self.ui.hooks_pane = Default::default();
         self.ui.memory = Default::default();
-        self.model_picker = Default::default();
+        self.ui.model = Default::default();
         self.ui.navigation.status_tab = Default::default();
         self.ui.navigation.status_name_edit = None;
         self.ui.last_title = None;

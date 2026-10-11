@@ -7,6 +7,8 @@
 //! capability keeps (such as the disabled-skill set), never a connection
 //! handle or a session reader port.
 
+pub(crate) mod model;
+
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
@@ -25,6 +27,7 @@ use houyicoder_protocol::frontend::tools::ToolEntry;
 use crate::agent_message::{FLEET_GRACE, FleetEntry};
 use crate::composition::WorktreeEntry;
 use crate::evidence::MemoryEntry;
+use crate::session::capabilities::model::ModelCapability;
 
 /// The session's permission state as the server reports it: the current mode,
 /// the durable rule list, the allowed-directory list, and the ask-before-git
@@ -422,4 +425,7 @@ pub(crate) struct SessionCapabilities {
     pub(crate) memory: MemoryCapability,
     /// The fleet capability: the live child status snapshots.
     pub(crate) fleet: FleetCapability,
+    /// The model capability: the host-reported catalog with the applied
+    /// model, and the commit awaiting its reply.
+    pub(crate) model: ModelCapability,
 }

@@ -562,7 +562,7 @@ mod tests {
         use houyicoder_protocol::llm::EffortLevel;
         use ratatui::{Terminal, backend::TestBackend};
         let mut app = crate::composition::app();
-        app.model_picker.snapshot.applied = AppliedModel {
+        app.sessions.current.capabilities.model.catalog.applied = AppliedModel {
             id: "qwen3.7-max".into(),
             effort: Some(EffortLevel::High),
             speed: SpeedMode::Standard,
@@ -581,7 +581,13 @@ mod tests {
         assert!(text.contains("qwen3.7-max"), "model id shown: {text}");
 
         // No effort parameter sent -> the whole segment goes.
-        app.model_picker.snapshot.applied.effort = None;
+        app.sessions
+            .current
+            .capabilities
+            .model
+            .catalog
+            .applied
+            .effort = None;
         let backend = TestBackend::new(80, 3);
         let mut term = Terminal::new(backend).unwrap();
         term.draw(|f| draw_agent_status_bar(f, f.area(), &app))
@@ -608,7 +614,7 @@ mod tests {
         use houyicoder_protocol::llm::Usage;
         use ratatui::{Terminal, backend::TestBackend};
         let mut app = crate::composition::app();
-        app.model_picker.snapshot.applied.id = "test-model".into();
+        app.sessions.current.capabilities.model.catalog.applied.id = "test-model".into();
         app.sessions.current.capabilities.status.status_cache = Some(StatusSnapshot {
             model: "test-model".into(),
             breaker_state: None,
@@ -656,7 +662,7 @@ mod tests {
         use houyicoder_protocol::frontend::status::StatusSnapshot;
         use ratatui::{Terminal, backend::TestBackend};
         let mut app = crate::composition::app();
-        app.model_picker.snapshot.applied.id = "test-model".into();
+        app.sessions.current.capabilities.model.catalog.applied.id = "test-model".into();
         for width in [48, 80] {
             let backend = TestBackend::new(width, 3);
             let mut term = Terminal::new(backend).unwrap();

@@ -463,7 +463,7 @@ impl App {
                 self.apply_model_result(request, result);
             }
             ServerResponse::ModelInfo { catalog } => {
-                self.model_picker.refresh_snapshot(catalog);
+                self.refresh_model_catalog(catalog);
             }
             ServerResponse::MemoryList { entries } => {
                 self.apply_memory_list(request, entries);
@@ -495,8 +495,11 @@ impl App {
         if self.active_run_req_id().is_some_and(|r| r == request) {
             self.handle_run_completion(Err(message));
         } else if self
-            .model_picker
-            .pending_request
+            .sessions
+            .current
+            .capabilities
+            .model
+            .pending
             .as_ref()
             .is_some_and(|p| p.req_id == request)
         {

@@ -228,7 +228,15 @@ ACTIVE_OWNERS = {
         # field is gone; the compositions across the two owners (moving
         # the selection, dropping completed children, pacing the repaint)
         # are App methods.
-        "fields": 11,
+        # The model picker split along the same boundary: the catalog the
+        # host reports and the commit awaiting its reply became a model
+        # capability on the session, and the pane's draft (the focused
+        # row, the adjusted level and tier, the setting the arrows take,
+        # the dirty flag) became one Ui field. The flat App field is
+        # gone; the compositions across the two owners (reseeding the
+        # draft from the catalog, refreshing the catalog, resolving the
+        # tier a commit ships) are App methods.
+        "fields": 10,
         "mut_app": 44,
     },
     "crates/houyicoder-tui/src/ui.rs:Ui": {
@@ -238,7 +246,7 @@ ACTIVE_OWNERS = {
         # off screen, the teammate drill, the verbose render flag, the
         # permission, skills, hooks, memory, trajectory, and worktree pane
         # interaction states, the agents pane list cursor, the fleet strip
-        # state, the spinner's displayed token count,
+        # state, the model pane draft, the spinner's displayed token count,
         # the last-written terminal title,
         # the queued-input hit-test geometry,
         # the drag selections, the toast notifications, the clipboard port,
@@ -247,7 +255,7 @@ ACTIVE_OWNERS = {
         # and views read it through App. On-demand pane content (a drilled-in
         # teammate's lines, an opened skill body, a search corpus) lives here
         # as display copies whose loss costs a re-fetch, never a record.
-        "fields": 22,
+        "fields": 23,
     },
     "crates/houyicoder-tui/src/ui/navigation.rs:Navigation": {
         # The user's position in the frontend: the screen, the open pane, the
@@ -329,10 +337,10 @@ ACTIVE_OWNERS = {
     },
     "crates/houyicoder-tui/src/session/capabilities.rs:SessionCapabilities": {
         # The static composition of a session's named capabilities: the
-        # permission, status, hooks, tools, skills, worktree, memory, and
-        # fleet capabilities. The connection, run, and transcript live
-        # beside it, not inside it.
-        "fields": 8,
+        # permission, status, hooks, tools, skills, worktree, memory,
+        # fleet, and model capabilities. The connection, run, and
+        # transcript live beside it, not inside it.
+        "fields": 9,
     },
     "crates/houyicoder-tui/src/session/capabilities.rs:HooksCapability": {
         # The session's registered-hook cache: the rows the /hooks pane
@@ -388,6 +396,26 @@ ACTIVE_OWNERS = {
         # and both switches on); the pane's scope tab, list cursor, search
         # query, and detail drill moved to the Ui owner beside its peers.
         "fields": 4,
+    },
+    "crates/houyicoder-tui/src/session/capabilities/model.rs:ModelCapability": {
+        # The session's model facts: the catalog the host reports with the
+        # applied model, and the commit awaiting its reply. Split from the
+        # one pane state owner: what the session knows stays here and
+        # resets by construction on a switch; the pane's draft moved to
+        # the Ui owner beside its peers.
+        "fields": 2,
+    },
+    "crates/houyicoder-tui/src/state/model_draft.rs:ModelDraft": {
+        # The /model pane's draft: the row the focus sits on, the effort
+        # level and speed tier the user adjusted with the touched flag,
+        # the setting the arrows take, and the dirty flag a landing
+        # catalog respects. The catalog and applied facts the draft
+        # resolves against are the session's model capability; the
+        # compositions across the two owners are App methods so the read
+        # of the facts and the write of the draft cannot drift at
+        # separate call sites. Resets with its pane peers on a session
+        # switch.
+        "fields": 6,
     },
     "crates/houyicoder-tui/src/session/identity.rs:SessionIdentity": {
         # The presented session's identity: the wire routing id and the

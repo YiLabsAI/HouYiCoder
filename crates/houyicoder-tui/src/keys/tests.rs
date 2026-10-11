@@ -4,12 +4,12 @@ use super::palette::handle_palette;
 use super::*;
 use crate::composition;
 use crate::pending_prompt::PendingPrompt;
-use crate::state::ModelSettingFocus;
 use crate::state::Screen;
 use crate::state::TranscriptLine;
 use crate::state::Verdict;
+use crate::state::model_draft::ModelSettingFocus;
 use crate::test_harness::{
-    TransportEvent, connected_app_with_events, model_app, model_caps, model_entry, model_snapshot,
+    TransportEvent, connected_app_with_events, model_app, model_caps, model_catalog, model_entry,
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use houyicoder_protocol::envelope::RequestId;
@@ -55,17 +55,24 @@ fn test_model_pane_keys() {
     let mut app = catalog_app(&[("a", true, true), ("b", true, true), ("c", true, true)]);
     app.ui.navigation.pane = Pane::Model;
     assert_eq!(
-        app.model_picker.draft.row, 1,
+        app.ui.model.row, 1,
         "the draft opens on the session's model"
     );
     handle_input(&mut app, key(KeyCode::Down));
-    assert_eq!(app.model_picker.draft.row, 2, "Down moves the focus");
+    assert_eq!(app.ui.model.row, 2, "Down moves the focus");
     handle_input(&mut app, key(KeyCode::Up));
-    assert_eq!(app.model_picker.draft.row, 1, "Up moves back");
-    let applied = app.model_picker.snapshot.applied.clone();
+    assert_eq!(app.ui.model.row, 1, "Up moves back");
+    let applied = app
+        .sessions
+        .current
+        .capabilities
+        .model
+        .catalog
+        .applied
+        .clone();
     handle_input(&mut app, key(KeyCode::Enter));
     assert_eq!(
-        app.model_picker.snapshot.applied, applied,
+        app.sessions.current.capabilities.model.catalog.applied, applied,
         "disconnected Enter keeps the applied model"
     );
     assert_eq!(
@@ -91,23 +98,23 @@ fn test_model_pane_reseeds_effort() {
     let mut app = catalog_app(&[("qwen3.7-max", true, true), ("deepseek-chat", false, true)]);
     app.ui.navigation.pane = Pane::Model;
     assert_eq!(
-        app.model_picker.draft.effort,
+        app.ui.model.effort,
         Some(EffortLevel::Medium),
         "qwen3 supports effort -> the chain's medium"
     );
     handle_input(&mut app, key(KeyCode::Right));
-    assert_eq!(app.model_picker.draft.effort, Some(EffortLevel::High));
+    assert_eq!(app.ui.model.effort, Some(EffortLevel::High));
     // Down to the model that speaks no effort dialect: no level at all.
     handle_input(&mut app, key(KeyCode::Down));
     assert!(
-        app.model_picker.draft.effort.is_none(),
+        app.ui.model.effort.is_none(),
         "a model without an effort dialect carries no level"
     );
-    assert!(!app.model_picker.draft.effort_touched, "not touched");
+    assert!(!app.ui.model.effort_touched, "not touched");
     // Up back to qwen3: the chain's value again, not the adjusted one.
     handle_input(&mut app, key(KeyCode::Up));
     assert_eq!(
-        app.model_picker.draft.effort,
+        app.ui.model.effort,
         Some(EffortLevel::Medium),
         "back to qwen3 -> the chain's medium"
     );
@@ -120,27 +127,27 @@ fn test_model_pane_adjusts_effort() {
     let mut app = catalog_app(&[("qwen3.7-max", true, true)]);
     app.ui.navigation.pane = Pane::Model;
     handle_input(&mut app, key(KeyCode::Down));
-    assert_eq!(app.model_picker.draft.row, 1);
+    assert_eq!(app.ui.model.row, 1);
     handle_input(&mut app, key(KeyCode::Right));
     assert_eq!(
-        app.model_picker.draft.effort,
+        app.ui.model.effort,
         Some(EffortLevel::High),
         "Right cycles to high"
     );
-    assert!(app.model_picker.draft.effort_touched, "touched flag set");
+    assert!(app.ui.model.effort_touched, "touched flag set");
     handle_input(&mut app, key(KeyCode::Left));
     assert_eq!(
-        app.model_picker.draft.effort,
+        app.ui.model.effort,
         Some(EffortLevel::Medium),
         "Left cycles back to medium"
     );
     handle_input(&mut app, key(KeyCode::Left));
     assert_eq!(
-        app.model_picker.draft.effort,
+        app.ui.model.effort,
         Some(EffortLevel::Low),
         "Left wraps to low"
     );
-    assert!(app.model_picker.draft.dirty, "the draft is modified");
+    assert!(app.ui.model.dirty, "the draft is modified");
 }
 
 /// Auto is a real stop in the cycle, reachable from both directions, so a
@@ -150,22 +157,19 @@ fn test_model_pane_cycles_auto() {
     let mut app = catalog_app(&[("qwen3.7-max", true, true)]);
     app.ui.navigation.pane = Pane::Model;
     assert_eq!(
-        app.model_picker.draft.effort,
+        app.ui.model.effort,
         Some(EffortLevel::Medium),
         "the draft opens on the chain's medium"
     );
     handle_input(&mut app, key(KeyCode::Right));
-    assert_eq!(app.model_picker.draft.effort, Some(EffortLevel::High));
+    assert_eq!(app.ui.model.effort, Some(EffortLevel::High));
     handle_input(&mut app, key(KeyCode::Right));
-    assert_eq!(
-        app.model_picker.draft.effort, None,
-        "Right past high wraps to auto"
-    );
+    assert_eq!(app.ui.model.effort, None, "Right past high wraps to auto");
     handle_input(&mut app, key(KeyCode::Right));
-    assert_eq!(app.model_picker.draft.effort, Some(EffortLevel::Low));
+    assert_eq!(app.ui.model.effort, Some(EffortLevel::Low));
     handle_input(&mut app, key(KeyCode::Left));
     assert_eq!(
-        app.model_picker.draft.effort, None,
+        app.ui.model.effort, None,
         "Left past low wraps back to auto"
     );
 }
@@ -179,13 +183,13 @@ fn test_model_pane_ignores_unsupported() {
     handle_input(&mut app, key(KeyCode::Down));
     handle_input(&mut app, key(KeyCode::Right));
     assert!(
-        app.model_picker.draft.effort.is_none(),
+        app.ui.model.effort.is_none(),
         "no effort on an unsupported model"
     );
-    assert!(!app.model_picker.draft.effort_touched, "not touched");
+    assert!(!app.ui.model.effort_touched, "not touched");
     handle_input(&mut app, key(KeyCode::Tab));
     assert_eq!(
-        app.model_picker.draft.focus,
+        app.ui.model.focus,
         ModelSettingFocus::Effort,
         "neither setting is supported, so the focus stays on effort"
     );
@@ -203,16 +207,16 @@ fn test_model_pane_tab_focus() {
     let mut app = catalog_app(&[("qwen3.7-max", true, true)]);
     app.ui.navigation.pane = Pane::Model;
     handle_input(&mut app, key(KeyCode::Down));
-    assert_eq!(app.model_picker.draft.focus, ModelSettingFocus::Effort);
+    assert_eq!(app.ui.model.focus, ModelSettingFocus::Effort);
     handle_input(&mut app, key(KeyCode::Tab));
     assert_eq!(
-        app.model_picker.draft.focus,
+        app.ui.model.focus,
         ModelSettingFocus::Fast,
         "Tab moves the focus to Fast"
     );
     handle_input(&mut app, key(KeyCode::BackTab));
     assert_eq!(
-        app.model_picker.draft.focus,
+        app.ui.model.focus,
         ModelSettingFocus::Effort,
         "Shift+Tab moves it back"
     );
@@ -254,21 +258,25 @@ fn test_model_open_echoes_once() {
 fn test_model_pane_esc_closes() {
     let mut app = catalog_app(&[("qwen3.7-max", true, true), ("other", true, true)]);
     app.ui.navigation.pane = Pane::Model;
-    let applied = app.model_picker.snapshot.applied.clone();
+    let applied = app
+        .sessions
+        .current
+        .capabilities
+        .model
+        .catalog
+        .applied
+        .clone();
     handle_input(&mut app, key(KeyCode::Down));
     handle_input(&mut app, key(KeyCode::Right));
     handle_input(&mut app, key(KeyCode::Esc));
     assert_eq!(app.ui.navigation.pane, Pane::Transcript);
     assert_eq!(
-        app.model_picker.snapshot.applied, applied,
+        app.sessions.current.capabilities.model.catalog.applied, applied,
         "Esc applies nothing"
     );
+    assert_eq!(app.ui.model.row, 1, "the draft re-seeds on reopen");
     assert_eq!(
-        app.model_picker.draft.row, 1,
-        "the draft re-seeds on reopen"
-    );
-    assert_eq!(
-        app.model_picker.draft.effort,
+        app.ui.model.effort,
         Some(EffortLevel::Medium),
         "the adjusted level is discarded"
     );
@@ -281,7 +289,7 @@ fn test_model_pane_esc_closes() {
 #[test]
 fn test_picker_fast_inline() {
     let (mut app, events) = connected_app_with_events();
-    let mut catalog = model_snapshot(vec![model_entry(
+    let mut catalog = model_catalog(vec![model_entry(
         "glm-5.2",
         "Fable",
         model_caps(true, true),
@@ -289,25 +297,25 @@ fn test_picker_fast_inline() {
     // The chain resolves to a level so the draft opens on it, matching the
     // catalog fixtures: one Right takes focus Medium -> High.
     catalog.effort_level = Some(EffortLevel::Medium);
-    app.model_picker.refresh_snapshot(catalog);
+    app.refresh_model_catalog(catalog);
     app.ui.navigation.pane = Pane::Model;
     // The level is adjusted while the arrows are on Effort, so the commit has
     // all three dimensions to carry.
     handle_input(&mut app, key(KeyCode::Right));
     assert_eq!(
-        app.model_picker.draft.effort,
+        app.ui.model.effort,
         Some(EffortLevel::High),
         "Right adjusts the level the focus starts on"
     );
     handle_input(&mut app, key(KeyCode::Tab));
     assert_eq!(
-        app.model_picker.draft.focus,
+        app.ui.model.focus,
         ModelSettingFocus::Fast,
         "Tab takes the arrows to the Fast setting"
     );
     handle_input(&mut app, key(KeyCode::Right));
     assert_eq!(
-        app.model_picker.effective_speed(),
+        app.effective_model_speed(),
         SpeedMode::Fast,
         "Right turns the tier on"
     );
@@ -318,7 +326,7 @@ fn test_picker_fast_inline() {
     app.ui.input.editor.set("/fast".to_string());
     app.submit_input();
     assert_eq!(
-        app.model_picker.effective_speed(),
+        app.effective_model_speed(),
         SpeedMode::Fast,
         "a typed slash word does not move the tier"
     );
@@ -350,17 +358,23 @@ fn test_picker_fast_refused_off() {
     handle_input(&mut app, key(KeyCode::Tab));
     handle_input(&mut app, key(KeyCode::Right));
     assert_eq!(
-        app.model_picker.effective_speed(),
+        app.effective_model_speed(),
         SpeedMode::Fast,
         "the focused model serves the tier"
     );
     handle_input(&mut app, key(KeyCode::Down));
+    let fast_available = app
+        .sessions
+        .current
+        .capabilities
+        .model
+        .fast_available_at(app.ui.model.row);
     assert!(
-        app.model_picker.fast_forced_off(),
+        app.ui.model.fast_forced_off(fast_available),
         "the new focus cannot serve the tier the draft holds"
     );
     assert_eq!(
-        app.model_picker.effective_speed(),
+        app.effective_model_speed(),
         SpeedMode::Standard,
         "the draft does not ask for a tier this model cannot serve"
     );

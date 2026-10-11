@@ -220,19 +220,19 @@ pub(crate) fn model_entry(
     }
 }
 
-/// A working App whose /model picker holds the given snapshot with the draft
+/// A working App whose /model picker holds the given catalog with the draft
 /// seeded from it, as if the host's query reply had just landed.
 pub(crate) fn model_app(catalog: ModelCatalog) -> App {
     let mut app = working_app();
-    app.model_picker.snapshot = catalog;
-    app.model_picker.reseed();
+    app.sessions.current.capabilities.model.catalog = catalog;
+    app.reseed_model_draft();
     app
 }
 
-/// A /model snapshot over the given rows: the first row is the session's pick
+/// A /model catalog over the given rows: the first row is the session's pick
 /// and the default resolves to the built-in model. Tests that care about
 /// another selection overwrite the fields they assert on.
-pub(crate) fn model_snapshot(entries: Vec<ModelCatalogEntry>) -> ModelCatalog {
+pub(crate) fn model_catalog(entries: Vec<ModelCatalogEntry>) -> ModelCatalog {
     let head = entries.first().map(|entry| entry.id.clone());
     let default_id = houyicoder_config::DEFAULT_MODEL.to_string();
     ModelCatalog {

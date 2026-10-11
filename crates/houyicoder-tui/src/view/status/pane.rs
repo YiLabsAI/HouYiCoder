@@ -160,7 +160,7 @@ fn render_config(app: &App) -> String {
     // applied effort (None = no effort parameter sent, hidden per I8). Both
     // come from the host snapshot, so the tab cannot name a model the session
     // is not running.
-    let applied = &app.model_picker.snapshot.applied;
+    let applied = &app.sessions.current.capabilities.model.catalog.applied;
     s.push_str(&f("Model", &applied.id));
     if let Some(effort) = applied.effort {
         s.push_str(&f("effort", effort.label()));
@@ -197,7 +197,7 @@ mod tests {
     #[test]
     fn test_config_tab_has_knobs() {
         let mut app = crate::test_harness::working_app();
-        app.model_picker.snapshot.applied.id = "qwen3.8-max".into();
+        app.sessions.current.capabilities.model.catalog.applied.id = "qwen3.8-max".into();
         app.status.sandbox = "mac-seatbelt".into();
         let s = render_config(&app);
         assert!(s.contains("qwen3.8-max"), "model: {s}");
@@ -237,13 +237,25 @@ mod tests {
     fn test_config_tab_shows_effort() {
         use houyicoder_protocol::llm::EffortLevel;
         let mut app = crate::test_harness::working_app();
-        app.model_picker.snapshot.applied.id = "qwen3.8-max".into();
-        app.model_picker.snapshot.applied.effort = Some(EffortLevel::High);
+        app.sessions.current.capabilities.model.catalog.applied.id = "qwen3.8-max".into();
+        app.sessions
+            .current
+            .capabilities
+            .model
+            .catalog
+            .applied
+            .effort = Some(EffortLevel::High);
         let s = render_config(&app);
         assert!(s.contains("effort:"), "effort row: {s}");
         assert!(s.contains("high"), "high level: {s}");
         // Effort row hidden when None.
-        app.model_picker.snapshot.applied.effort = None;
+        app.sessions
+            .current
+            .capabilities
+            .model
+            .catalog
+            .applied
+            .effort = None;
         let s = render_config(&app);
         assert!(!s.contains("effort:"), "no effort row when None: {s}");
     }

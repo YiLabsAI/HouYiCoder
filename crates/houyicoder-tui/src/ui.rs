@@ -26,6 +26,7 @@ use crate::records::TeammateView;
 use crate::selection::ClipboardWriter;
 use crate::selections::Selections;
 use crate::skills_state::SkillsPaneState;
+use crate::state::model_draft::ModelDraft;
 use crate::state::transcript::view::TranscriptViewState;
 use crate::state::{ParkedViewStates, QueueViewState, TrajectoryPaneState};
 
@@ -94,6 +95,13 @@ pub struct Ui {
     /// owners are App methods. Resets with its pane peers on a session
     /// switch.
     pub(crate) fleet: FleetStripState,
+    /// The /model pane's draft: the row the focus sits on, the level and
+    /// tier the user adjusted, the setting the arrows take, and the dirty
+    /// flag a landing snapshot respects. The catalog and applied facts the
+    /// draft resolves against are the session's model capability; the
+    /// compositions across the two owners are App methods. Resets with its
+    /// pane peers on a session switch.
+    pub(crate) model: ModelDraft,
     /// The /trajectory pane's drill level, cursor, and selection. One owner
     /// for the pane's position, because the selection and the cursor are kept
     /// consistent by the same transitions.

@@ -27,9 +27,8 @@ use crate::session::identity::SessionIdentity;
 use crate::sessions::Sessions;
 use crate::skill_picker_state::SkillPickerState;
 use crate::skills_state::SkillsPaneState;
-use crate::state::{
-    ModelPickerState, ParkedViewStates, QueueViewState, StatusTab, TrajectoryPaneState,
-};
+use crate::state::model_draft::ModelDraft;
+use crate::state::{ParkedViewStates, QueueViewState, StatusTab, TrajectoryPaneState};
 use crate::ui::{Navigation, Ui};
 use crate::workflow::Workflow;
 
@@ -59,6 +58,7 @@ pub fn app() -> App {
             memory: MemoryPaneState::default(),
             agents_sel: 0,
             fleet: FleetStripState::default(),
+            model: ModelDraft::default(),
             trajectory: TrajectoryPaneState::default(),
             worktree_list: ListPaneState::default(),
             worktree_level: Cell::new(0),
@@ -86,7 +86,6 @@ pub fn app() -> App {
         layout_snapshot: LayoutSnapshot::default(),
         render_cache: RefCell::new(RenderCache::default()),
         last_row_keys: LastRowKeys::default(),
-        model_picker: ModelPickerState::default(),
     }
 }
 

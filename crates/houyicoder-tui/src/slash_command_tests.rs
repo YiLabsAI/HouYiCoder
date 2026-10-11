@@ -7,7 +7,7 @@ use houyicoder_protocol::llm::EffortLevel;
 
 use crate::composition;
 use crate::state::{Pane, Screen, Stage, Verdict};
-use crate::test_harness::{model_caps, model_entry, model_snapshot, render_text};
+use crate::test_harness::{model_caps, model_catalog, model_entry, render_text};
 
 fn working() -> crate::state::App {
     let mut app = composition::app();
@@ -227,12 +227,11 @@ fn test_model_opens_pane() {
         "/model opens the pane"
     );
     // Simulate the ModelInfo reply landing (stub app has no session to fetch).
-    app.model_picker
-        .refresh_snapshot(model_snapshot(vec![model_entry(
-            "glm-5.2",
-            "Fable",
-            model_caps(true, true),
-        )]));
+    app.refresh_model_catalog(model_catalog(vec![model_entry(
+        "glm-5.2",
+        "Fable",
+        model_caps(true, true),
+    )]));
     let out = render(&app);
     // Default sentinel row + the catalog row both render.
     assert!(out.contains("Default"), "Default row missing");
@@ -248,17 +247,17 @@ fn test_default_row_chain_effort() {
     let mut app = working();
     app.run_command(SlashCommand::Model);
     // The catalog lists no qwen3.7-max row; the global fallback is medium.
-    let mut snapshot = model_snapshot(vec![model_entry(
+    let mut catalog = model_catalog(vec![model_entry(
         "glm-5.2",
         "Fable",
         model_caps(true, false),
     )]);
-    snapshot.effort_level = Some(EffortLevel::Medium);
-    app.model_picker.refresh_snapshot(snapshot);
-    app.model_picker.draft.row = 0;
-    app.model_picker.reseed();
+    catalog.effort_level = Some(EffortLevel::Medium);
+    app.refresh_model_catalog(catalog);
+    app.ui.model.row = 0;
+    app.reseed_model_draft();
     assert_eq!(
-        app.model_picker.draft.effort,
+        app.ui.model.effort,
         Some(EffortLevel::Medium),
         "the Default row shows the fallback level the host would send"
     );
@@ -273,12 +272,12 @@ fn test_model_clamps_persisted_effort() {
     app.run_command(SlashCommand::Model);
     let mut entry = model_entry("qwen3.7-max", "Max", model_caps(true, false));
     entry.effort = Some(EffortLevel::XHigh);
-    let mut snapshot = model_snapshot(vec![entry]);
-    snapshot.applied.id = "qwen3.7-max".into();
-    app.model_picker.refresh_snapshot(snapshot);
-    app.model_picker.reseed();
+    let mut catalog = model_catalog(vec![entry]);
+    catalog.applied.id = "qwen3.7-max".into();
+    app.refresh_model_catalog(catalog);
+    app.reseed_model_draft();
     // The chain seed for the focused row clamps XHigh to the model's top.
-    let shown = app.model_picker.draft.effort;
+    let shown = app.ui.model.effort;
     assert_ne!(
         shown,
         Some(EffortLevel::XHigh),

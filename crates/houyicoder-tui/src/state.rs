@@ -14,7 +14,7 @@ pub(crate) mod enums;
 pub(crate) mod history_read;
 pub(crate) mod index_build;
 pub(crate) mod index_read;
-mod model_picker;
+pub(crate) mod model_draft;
 mod parked_view_states;
 mod scroll;
 mod search_view;
@@ -37,9 +37,6 @@ use crate::workflow::Workflow;
 use houyicoder_protocol::envelope::RequestId;
 
 pub(crate) use crate::state::cursors::EventCursor;
-pub use crate::state::model_picker::{
-    DEFAULT_LABEL, ModelDraft, ModelPickerState, ModelSettingFocus, PendingCommit,
-};
 pub(crate) use crate::state::parked_view_states::ParkedViewStates;
 pub use crate::state::trajectory::{
     TrajectoryDrill, TrajectoryPaneState, TrajectorySelection, TrajectoryTurnKey,
@@ -117,8 +114,6 @@ pub struct App {
     /// carries, parallel to the rows. Pub(crate) so the click and Ctrl+O
     /// handlers and the draw pass reach a vector directly.
     pub(crate) last_row_keys: LastRowKeys,
-    /// The /model picker: host snapshot, draft, and the commit in flight.
-    pub model_picker: ModelPickerState,
 }
 
 impl App {

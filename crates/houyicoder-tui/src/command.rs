@@ -281,19 +281,10 @@ impl App {
         self.system_line(msg.to_string());
     }
 
-    /// The runner's live status snapshot, or a stub built from the no-runner
-    /// state (login / console / tests) so /context /status /sandbox still
-    /// render a real-shaped layout with zeroed usage instead of a canned
-    /// string that hides which fields are live.
-    /// The last wire status snapshot cached from the periodic poll, or a
-    /// zeroed stub built from the no-runner state (login / console / tests)
-    /// so /context /status /sandbox still render a real-shaped layout with
-    /// zeroed usage instead of a canned string that hides which fields are
-    /// live.
     /// The model label the status bar shows: the applied model the host
-    /// reported, from the picker's snapshot.
+    /// reported, from the session's model catalog.
     pub(crate) fn status_bar_model(&self) -> &str {
-        &self.model_picker.snapshot.applied.id
+        &self.sessions.current.capabilities.model.catalog.applied.id
     }
 
     /// The last observed status snapshot, or None while disconnected or
@@ -304,6 +295,10 @@ impl App {
         self.sessions.current.capabilities.status.snapshot()
     }
 
+    /// The runner's live status snapshot, or a stub built from the no-runner
+    /// state (login / console / tests) so /context /status /sandbox still
+    /// render a real-shaped layout with zeroed usage instead of a canned
+    /// string that hides which fields are live.
     pub(crate) fn snapshot_or_stub(&self) -> StatusSnapshot {
         let status = &self.sessions.current.capabilities.status;
         let status_cache = status.snapshot().cloned();

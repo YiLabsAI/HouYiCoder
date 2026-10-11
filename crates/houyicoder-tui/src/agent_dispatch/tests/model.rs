@@ -7,9 +7,10 @@ use houyicoder_protocol::llm::EffortLevel;
 use std::time::{Duration, Instant};
 
 use crate::records::TranscriptLine;
-use crate::state::{Pane, PendingCommit, Screen};
+use crate::session::capabilities::model::PendingCommit;
+use crate::state::{Pane, Screen};
 use crate::test_harness::{
-    TransportEvent, connected_app_with_events, model_app, model_caps, model_entry, model_snapshot,
+    TransportEvent, connected_app_with_events, model_app, model_caps, model_catalog, model_entry,
 };
 
 use crate::agent_message::{ServerEvent, ServerResponse, SessionMessage};
@@ -35,7 +36,7 @@ fn model_info_response(req_id: u64, catalog: ModelCatalog) -> SessionMessage {
 fn test_model_result_updates_status() {
     let mut app = crate::composition::app();
     app.ui.navigation.pane = Pane::Model;
-    app.model_picker.pending_request = Some(PendingCommit {
+    app.sessions.current.capabilities.model.pending = Some(PendingCommit {
         req_id: RequestId(1),
         prior_speed: SpeedMode::Standard,
     });
@@ -44,7 +45,7 @@ fn test_model_result_updates_status() {
         apply_result("qwen3.8-max", Some(EffortLevel::High), SpeedMode::Fast),
     ));
     assert_eq!(
-        app.model_picker.snapshot.applied.id, "qwen3.8-max",
+        app.sessions.current.capabilities.model.catalog.applied.id, "qwen3.8-max",
         "the applied model comes from the reply"
     );
     assert_eq!(
@@ -69,12 +70,11 @@ fn test_model_result_updates_status() {
 #[test]
 fn test_receipt_from_apply_result() {
     let mut app = crate::composition::app();
-    app.model_picker
-        .refresh_snapshot(model_snapshot(vec![model_entry(
-            "qwen3.8-max",
-            "Max",
-            model_caps(true, true),
-        )]));
+    app.refresh_model_catalog(model_catalog(vec![model_entry(
+        "qwen3.8-max",
+        "Max",
+        model_caps(true, true),
+    )]));
     app.handle_agent_message(model_response(
         1,
         apply_result("qwen3.8-max", Some(EffortLevel::High), SpeedMode::Fast),
@@ -189,25 +189,31 @@ fn test_system_line_renders_notice() {
     );
 }
 
-/// A ModelInfoResult replaces the snapshot, and a clean draft re-seeds onto
+/// A ModelInfoResult replaces the catalog, and a clean draft re-seeds onto
 /// the selection the host reports.
 #[test]
 fn test_model_info_stashes_catalog() {
     let mut app = crate::composition::app();
     app.ui.navigation.pane = Pane::Model;
-    let mut catalog = model_snapshot(vec![
+    let mut catalog = model_catalog(vec![
         model_entry("a", "A", model_caps(true, false)),
         model_entry("b", "B", model_caps(true, false)),
     ]);
     catalog.selected = ModelChoice::Explicit { id: "b".into() };
     app.handle_agent_message(model_info_response(4, catalog));
     assert_eq!(
-        app.model_picker.snapshot.entries.len(),
+        app.sessions
+            .current
+            .capabilities
+            .model
+            .catalog
+            .entries
+            .len(),
         2,
         "the rows are stashed"
     );
     assert_eq!(
-        app.model_picker.draft.row, 2,
+        app.ui.model.row, 2,
         "the draft sits on the selection the host reports"
     );
 }
@@ -218,38 +224,38 @@ fn test_model_info_stashes_catalog() {
 fn test_model_info_keeps_draft() {
     let mut app = crate::composition::app();
     app.ui.navigation.pane = Pane::Model;
-    app.model_picker.refresh_snapshot(model_snapshot(vec![
+    app.refresh_model_catalog(model_catalog(vec![
         model_entry("a", "A", model_caps(true, false)),
         model_entry("b", "B", model_caps(true, false)),
     ]));
     app.move_model_focus(1);
     assert_eq!(
-        app.model_picker.draft.row, 2,
+        app.ui.model.row, 2,
         "the draft moved onto the second catalog row"
     );
     app.handle_agent_message(model_info_response(
         4,
-        model_snapshot(vec![model_entry("a", "A", model_caps(true, false))]),
+        model_catalog(vec![model_entry("a", "A", model_caps(true, false))]),
     ));
     assert_eq!(
-        app.model_picker.draft.row, 2,
-        "a dirty draft survives the snapshot landing"
+        app.ui.model.row, 2,
+        "a dirty draft survives the catalog landing"
     );
 }
 
-/// A snapshot whose selection is not a catalog row leaves the draft on the
+/// A reply whose selection matches no catalog row leaves the draft on the
 /// Default row rather than pointing at a row that does not exist.
 #[test]
 fn test_missing_selection_falls_back() {
     let mut app = crate::composition::app();
     app.ui.navigation.pane = Pane::Model;
-    let mut catalog = model_snapshot(vec![model_entry("a", "A", model_caps(true, false))]);
+    let mut catalog = model_catalog(vec![model_entry("a", "A", model_caps(true, false))]);
     catalog.selected = ModelChoice::Explicit {
         id: "not-here".into(),
     };
     app.handle_agent_message(model_info_response(4, catalog));
     assert_eq!(
-        app.model_picker.draft.row, 0,
+        app.ui.model.row, 0,
         "an unroutable selection falls back to the Default row"
     );
 }
@@ -278,24 +284,24 @@ fn test_model_pane_swallows_chars() {
 /// the host answers.
 #[test]
 fn test_picker_draft_isolated() {
-    let mut catalog = model_snapshot(vec![
+    let mut catalog = model_catalog(vec![
         model_entry("a", "A", model_caps(true, true)),
         model_entry("b", "B", model_caps(true, true)),
     ]);
     catalog.applied.id = "a".into();
     let mut app = model_app(catalog);
     app.ui.navigation.pane = Pane::Model;
-    let start = app.model_picker.draft.row;
+    let start = app.ui.model.row;
     let status_before = app.status.model.clone();
     app.move_model_focus(1);
     app.adjust_model_setting(true);
     app.cycle_model_setting();
     app.adjust_model_setting(true);
     assert_eq!(
-        app.model_picker.snapshot.applied.id, "a",
+        app.sessions.current.capabilities.model.catalog.applied.id, "a",
         "editing the draft does not move the applied model"
     );
-    assert_ne!(app.model_picker.draft.row, start, "the draft did move");
+    assert_ne!(app.ui.model.row, start, "the draft did move");
     assert_eq!(
         app.status.model, status_before,
         "the status line is untouched until the host answers"
@@ -310,13 +316,16 @@ fn test_model_pending_blocks_repeat() {
     app.open_model_pane();
     // The commit needs the rows the host's query reply carries; seed them as
     // the reply would.
-    app.model_picker.snapshot =
-        model_snapshot(vec![model_entry("a", "A", model_caps(true, false))]);
-    app.model_picker.reseed();
+    app.sessions.current.capabilities.model.catalog =
+        model_catalog(vec![model_entry("a", "A", model_caps(true, false))]);
+    app.reseed_model_draft();
     app.commit_model_pick();
     let req_id = app
-        .model_picker
-        .pending_request
+        .sessions
+        .current
+        .capabilities
+        .model
+        .pending
         .as_ref()
         .expect("the commit is in flight")
         .req_id;
@@ -344,7 +353,10 @@ fn test_model_pending_blocks_repeat() {
     // A refused commit settles without a switch: the draft survives and a
     // retry ships again.
     app.fail_model_pick(req_id, "no such model");
-    assert!(!app.model_picker.is_pending(), "the failure settles it");
+    assert!(
+        !app.sessions.current.capabilities.model.is_pending(),
+        "the failure settles it"
+    );
     assert!(
         app.sessions
             .current
@@ -363,21 +375,27 @@ fn test_model_pending_blocks_repeat() {
 fn test_model_send_failure() {
     use crate::test_harness::connection_lost_app;
     let mut app = connection_lost_app();
-    app.model_picker
-        .refresh_snapshot(model_snapshot(vec![model_entry(
-            "glm-5.2",
-            "Fable",
-            model_caps(true, true),
-        )]));
+    app.refresh_model_catalog(model_catalog(vec![model_entry(
+        "glm-5.2",
+        "Fable",
+        model_caps(true, true),
+    )]));
     app.ui.navigation.pane = Pane::Model;
-    let applied_before = app.model_picker.snapshot.applied.clone();
+    let applied_before = app
+        .sessions
+        .current
+        .capabilities
+        .model
+        .catalog
+        .applied
+        .clone();
     app.commit_model_pick();
     assert_eq!(
-        app.model_picker.snapshot.applied, applied_before,
+        app.sessions.current.capabilities.model.catalog.applied, applied_before,
         "the applied model stays untouched"
     );
     assert!(
-        !app.model_picker.is_pending(),
+        !app.sessions.current.capabilities.model.is_pending(),
         "a switch that never shipped is not pending"
     );
     assert_eq!(
@@ -408,17 +426,23 @@ fn test_model_send_failure() {
 #[test]
 fn test_fast_degrades_on_commit() {
     let (mut app, events) = connected_app_with_events();
-    app.model_picker.refresh_snapshot(model_snapshot(vec![
+    app.refresh_model_catalog(model_catalog(vec![
         model_entry("qwen3.8-max", "Max", model_caps(true, true)),
         model_entry("plain-model", "Plain", model_caps(true, false)),
     ]));
     app.ui.navigation.pane = Pane::Model;
     // The session ran Fast; the focus moves to the row that cannot serve it.
-    app.model_picker.snapshot.applied.speed = SpeedMode::Fast;
-    app.model_picker.draft.speed = SpeedMode::Fast;
-    app.model_picker.draft.row = 2;
+    app.sessions
+        .current
+        .capabilities
+        .model
+        .catalog
+        .applied
+        .speed = SpeedMode::Fast;
+    app.ui.model.speed = SpeedMode::Fast;
+    app.ui.model.row = 2;
     assert_eq!(
-        app.model_picker.effective_speed(),
+        app.effective_model_speed(),
         SpeedMode::Standard,
         "the draft does not ask for a tier this row cannot serve"
     );
@@ -435,8 +459,11 @@ fn test_fast_degrades_on_commit() {
         "the shipped request carries the tier the row can serve: {frame}"
     );
     let pending_id = app
-        .model_picker
-        .pending_request
+        .sessions
+        .current
+        .capabilities
+        .model
+        .pending
         .as_ref()
         .expect("the commit is in flight")
         .req_id;
@@ -467,7 +494,13 @@ fn test_model_result_stashes_effort() {
         apply_result("qwen3.7-max", Some(EffortLevel::High), SpeedMode::Standard),
     ));
     assert_eq!(
-        app.model_picker.snapshot.applied.effort,
+        app.sessions
+            .current
+            .capabilities
+            .model
+            .catalog
+            .applied
+            .effort,
         Some(EffortLevel::High),
         "effort stashed"
     );
@@ -476,7 +509,14 @@ fn test_model_result_stashes_effort() {
         apply_result("deepseek-chat", None, SpeedMode::Standard),
     ));
     assert!(
-        app.model_picker.snapshot.applied.effort.is_none(),
+        app.sessions
+            .current
+            .capabilities
+            .model
+            .catalog
+            .applied
+            .effort
+            .is_none(),
         "None clears the badge"
     );
 }
@@ -489,7 +529,7 @@ fn test_model_result_stashes_effort() {
 fn test_unmatched_result_still_applies() {
     let mut app = crate::composition::app();
     app.ui.navigation.pane = Pane::Model;
-    app.model_picker.pending_request = Some(PendingCommit {
+    app.sessions.current.capabilities.model.pending = Some(PendingCommit {
         req_id: RequestId(2),
         prior_speed: SpeedMode::Standard,
     });
@@ -497,9 +537,12 @@ fn test_unmatched_result_still_applies() {
         1,
         apply_result("qwen3.8-max", None, SpeedMode::Standard),
     ));
-    assert_eq!(app.model_picker.snapshot.applied.id, "qwen3.8-max");
+    assert_eq!(
+        app.sessions.current.capabilities.model.catalog.applied.id,
+        "qwen3.8-max"
+    );
     assert!(
-        app.model_picker.is_pending(),
+        app.sessions.current.capabilities.model.is_pending(),
         "a stale reply leaves the held commit in flight"
     );
     assert_eq!(
@@ -512,7 +555,7 @@ fn test_unmatched_result_still_applies() {
         apply_result("glm-5.2", None, SpeedMode::Standard),
     ));
     assert!(
-        !app.model_picker.is_pending(),
+        !app.sessions.current.capabilities.model.is_pending(),
         "the held commit's own reply settles it"
     );
     assert_eq!(app.ui.navigation.pane, Pane::Transcript);
@@ -524,32 +567,26 @@ fn test_unmatched_result_still_applies() {
 fn test_stale_reply_keeps_draft() {
     let mut app = crate::composition::app();
     app.ui.navigation.pane = Pane::Model;
-    app.model_picker.pending_request = Some(PendingCommit {
+    app.sessions.current.capabilities.model.pending = Some(PendingCommit {
         req_id: RequestId(2),
         prior_speed: SpeedMode::Standard,
     });
-    app.model_picker.draft.row = 1;
-    app.model_picker.draft.dirty = true;
+    app.ui.model.row = 1;
+    app.ui.model.dirty = true;
     app.handle_agent_message(model_response(
         1,
         apply_result("qwen3.8-max", None, SpeedMode::Standard),
     ));
-    assert!(
-        app.model_picker.draft.dirty,
-        "the draft survives the stale reply"
-    );
+    assert!(app.ui.model.dirty, "the draft survives the stale reply");
     assert_eq!(
-        app.model_picker.draft.row, 1,
+        app.ui.model.row, 1,
         "the user's in-progress focus row survives"
     );
     app.handle_agent_message(model_response(
         2,
         apply_result("glm-5.2", None, SpeedMode::Standard),
     ));
-    assert!(
-        !app.model_picker.draft.dirty,
-        "the settling reply reseeds the draft"
-    );
+    assert!(!app.ui.model.dirty, "the settling reply reseeds the draft");
 }
 
 fn apply_result(id: &str, effort: Option<EffortLevel>, speed: SpeedMode) -> ModelApplyResult {
