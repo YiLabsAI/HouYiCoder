@@ -591,10 +591,8 @@ fn run_tui_loop(
             sid: Some(sid_str.clone()),
         }),
     ));
-    // The guard's drop is the single release door for this loop's lease
-    // scope: the normal return, the error return, and a panic unwinding
-    // past the loop all release through it, writers joined before the
-    // lock drops.
+    // The guard's drop releases the scope on every exit path, including a
+    // panic unwinding past the loop.
     let _lease_guard = crate::composition_root::LeaseScopeGuard::new(&host_slot);
     let mut bundle = bundle;
     let mut startup = startup;

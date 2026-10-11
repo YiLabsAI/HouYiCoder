@@ -29,24 +29,19 @@ pub enum TaskOutcome {
     Panicked(JoinError),
 }
 
-/// A per-task record of how shutdown resolved, returned by begin_shutdown so
-/// the caller that drives the future observes every outcome. The report's
-/// existence is the ending confirmation: begin_shutdown joins every tracked
-/// task — cooperatively, by abort, or through its panic — before the future
-/// completes, so holding a report means no task is still running and a
-/// dependent resource may release. How each ending went is a separate
-/// question: a panicked task has also stopped, only abnormally, and a lease
-/// policy that conflates the two facts treats a crashed writer as a clean
-/// stop.
+/// A per-task record of how shutdown resolved, returned by begin_shutdown
+/// so the caller observes every outcome. The report's existence is the
+/// ending confirmation: begin_shutdown joins every tracked task — by
+/// return, abort, or its own panic — before the future completes. How each
+/// ending went is a separate fact, answered by panic_count.
 pub struct ShutdownReport {
     outcomes: Vec<TaskOutcome>,
 }
 
 impl ShutdownReport {
-    /// How many tasks ended by panicking. These tasks have stopped, but not
-    /// orderly: state they were writing may be inconsistent. Zero on a
-    /// clean stop; a positive count is a degraded release the caller must
-    /// report, not a reason to keep holding what the writers held.
+    /// How many tasks ended by panicking. They have stopped, but not
+    /// orderly — state they were writing may be inconsistent. Zero is a
+    /// clean stop.
     pub fn panic_count(&self) -> usize {
         self.outcomes
             .iter()
@@ -258,12 +253,10 @@ mod tests {
     }
 
     /// A task that panics is recorded as Panicked, not Joined, so the owner
-    /// can report the failure instead of treating the void result as success.
-    /// The process-global panic hook stays untouched: tokio captures the
-    /// panic into the JoinError the report reads, and the default hook's
-    /// stderr output is expected noise in a test run. Swapping the hook
-    /// from a panicking thread is not an option — set_hook panics when
-    /// called during unwinding, which would abort the test process.
+    /// reports the failure instead of treating void as success. The global
+    /// panic hook stays untouched: tokio captures the panic into the
+    /// JoinError the report reads, and swapping the hook from a panicking
+    /// thread re-panics during unwinding.
     #[tokio::test]
     async fn test_begin_shutdown_records_panic() {
         let mut host = HostLifecycle::new();

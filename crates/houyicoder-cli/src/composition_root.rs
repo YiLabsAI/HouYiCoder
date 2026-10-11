@@ -148,14 +148,9 @@ pub(crate) fn release_all(host_slot: &HostLeaseSlot) {
     let runtime = shared_runtime();
     let handle = runtime.handle();
     let (current, mut pending) = {
-        // Poison-tolerant on purpose: a panic inside a slot critical section
-        // (a resume-closure install) leaves this mutex poisoned, and cleanup
-        // during the unwind must still join the writers and drop the locks —
-        // a panic here would mask the original unwind. The install site's
-        // expect stays: poison on the normal path is a bug, poison on the
-        // release path is an ordinary consequence of what landed us here.
-        // The scope holds task handles and locks, not half-mutated records;
-        // releasing them after a poisoned holder is safe.
+        // Poison-tolerant on purpose: an unwind that panicked in a slot
+        // critical section must still join the writers and drop the locks.
+        // A panic here would mask the original unwind.
         let mut scope = host_slot
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -174,14 +169,11 @@ pub(crate) fn release_all(host_slot: &HostLeaseSlot) {
     }
 }
 
-/// Unwind backstop for a run loop's lease scope. The run loop creates one
-/// next to the slot it owns; the drop is the single release door, so the
-/// normal return, the error return, and a panic unwinding past the loop all
-/// release through the same path — a crashing run loop cannot drop a live
-/// lease's lock while its writers still run. The shared runtime
-/// lives for the whole process, so block_on inside this drop cannot fail
-/// during unwinding; each release keeps its bounded join budget, so the
-/// backstop delays process death by a bounded drain, not an unbounded one.
+/// Unwind backstop for a run loop's lease scope. The drop is the single
+/// release door — the normal return, the error return, and a panic
+/// unwinding past the loop all go through it — so a crash cannot drop the
+/// lock while its writers still run. The shared runtime outlives any
+/// unwind, so the block_on inside the drop cannot fail.
 pub(crate) struct LeaseScopeGuard {
     slot: HostLeaseSlot,
 }
@@ -495,17 +487,12 @@ mod tests {
     }
 
     /// The lock stays held while a writer the host tracks is still running,
-    /// even after the release task has started. The writer acknowledges the
-    /// cancel token back to the test through a oneshot, so the test knows
-    /// begin_shutdown has run — not by polling or sleeping. A cooperative
-    /// yield then confirms the release task has been polled and entered
-    /// its wait, so the cancel ack alone does not stand in for it. At that
-    /// point the writer is still blocked on its own release gate, so a
-    /// second acquire must report the lock held. Letting the writer finish
-    /// lets the release task join it and drop the lock; only then can a
-    /// second process acquire. A buggy release that drops the lock at task
-    /// entry, before joining, lets the second acquire succeed while the
-    /// writer is still running.
+    /// even after the release task has started. The cancel ack proves
+    /// begin_shutdown ran; a yield then confirms the release task entered
+    /// its wait, so a second acquire must report the lock held. After the
+    /// writer finishes, the release drops the lock and a second acquire
+    /// succeeds — a release that dropped the lock at task entry would let
+    /// that first acquire in early.
     #[cfg(unix)]
     #[test]
     fn test_lock_outlives_writer() {
@@ -542,15 +529,11 @@ mod tests {
             };
             let release = lease.begin_release(runtime.handle());
 
-            // The writer saw the cancel, so begin_shutdown has run. That
-            // proves the cancel was delivered, not that the release task
-            // has begun waiting: the cancel fires before the release task
-            // even exists. One cooperative yield closes the gap — the
-            // current-thread scheduler polls every ready task before
-            // resuming this future, so the release task has entered its
-            // wait by now (and a release that dropped the lock at entry
-            // has already dropped it). Only past this point does the
-            // acquire probe mean anything.
+            // The cancel ack proves begin_shutdown ran, not that the release
+            // task entered its wait — the cancel fires before the task
+            // exists. One yield closes the gap: the current-thread scheduler
+            // polls every ready task before resuming, so the release task
+            // entered its wait by now.
             let _ = seen_rx.await;
             yield_now().await;
             match SessionLock::acquire(&sid_str, &root) {
@@ -575,14 +558,9 @@ mod tests {
     }
 
     /// A panic unwinding past the run loop must not drop the lease while its
-    /// writers still run: the scope guard's drop releases it during the
-    /// unwind, so the writer is cancelled and joined, and the lock drops
-    /// only after — before the panic escapes toward the process boundary. The writer runs on the
-    /// shared runtime, the production shape, and this test thread is a
-    /// plain thread like the production main thread, so the guard's
-    /// block_on drives the release to completion. Without the guard's drop
-    /// the lock would release immediately and the writer's handle would
-    /// detach: the cancel never fires and the done flag never sets.
+    /// writers still run: the guard's drop releases it mid-unwind, so the
+    /// writer is cancelled and joined before the lock drops. Without that
+    /// drop the cancel never fires and the done flag never sets.
     #[cfg(unix)]
     #[test]
     fn test_unwind_releases_lease() {
@@ -607,10 +585,8 @@ mod tests {
             sid: Some(sid_str.clone()),
         })));
 
-        // Controlled unwind: the guard is a local of the panicking closure,
-        // so its drop runs mid-unwind — the shape a real run-loop panic
-        // produces. AssertUnwindSafe is sound here: the guard only releases
-        // what it owns and is not read after the unwind.
+        // Controlled unwind: the guard drops mid-panic, as in a run-loop
+        // panic. AssertUnwindSafe is sound — it only releases what it owns.
         let guard = LeaseScopeGuard::new(&slot);
         let unwind = catch_unwind(AssertUnwindSafe(|| {
             let _held = guard;
@@ -618,9 +594,6 @@ mod tests {
         }));
         assert!(unwind.is_err(), "the run loop panic was captured");
 
-        // The release joined the writer before the guard's drop finished:
-        // the cancel fired and the writer set its done flag on exit, so the
-        // writer did not detach, and the lock is free to acquire in order.
         assert!(done.load(Ordering::SeqCst), "writer joined during unwind");
         let _reacquire = SessionLock::acquire(&sid_str, &root).expect("lock released in order");
         fs::remove_dir_all(&root).ok();
