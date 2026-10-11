@@ -22,7 +22,7 @@ pub fn handle_login(app: &mut App, k: KeyEvent) {
         }
         KeyCode::Char('3') | KeyCode::Char('l') => {
             app.ui.navigation.login_mode = Some(LoginMode::Local);
-            app.status.sandbox = "off (local)".to_string();
+            app.sessions.current.sandbox = "off (local)".to_string();
             land_on_working(app);
         }
         KeyCode::Esc | KeyCode::Char('q') => app.quit = true,

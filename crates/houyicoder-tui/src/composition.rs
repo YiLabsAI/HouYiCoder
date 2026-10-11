@@ -26,7 +26,7 @@ use crate::session::Session;
 use crate::session::SessionConnection;
 use crate::session::identity::SessionIdentity;
 use crate::session::persistence::SessionPersistence;
-use crate::state::{App, Pane, Screen, SpecContext, Stage, StatusStub, ViewportMode};
+use crate::state::{App, Pane, Screen, SpecContext, Stage, ViewportMode};
 use crate::transcript::snapshot::TranscriptSnapshot;
 use crate::view::export_log::ExportLog;
 use crate::view::trajectory_pane::TrajectoryLog;
@@ -155,11 +155,10 @@ pub fn build_app(bundle: RunnerBundle, startup: FrontendStartup) -> App {
     let driver_agent_tx = agent_tx.clone();
     let live_session =
         SessionConnection::spawn(client, driver_agent_tx, agent_rx, &shared_runtime());
-    app.status.model = model.clone();
+    app.sessions.current.sandbox = "mac-seatbelt".to_string();
     // The launch model stands in for the applied model until the host
     // snapshot lands, so the status bar names what the session runs.
     app.sessions.current.capabilities.model.catalog.applied.id = model;
-    app.status.sandbox = "mac-seatbelt".to_string();
     app.sessions.current.identity.session_id = session_id;
     app.sessions.current.connection = Some(live_session);
     app.sessions.persistence = SessionPersistence {
@@ -304,19 +303,6 @@ fn local_test_settings_path() -> std::path::PathBuf {
     static SEQ: AtomicU64 = AtomicU64::new(0);
     let n = SEQ.fetch_add(1, Ordering::Relaxed);
     std::env::temp_dir().join(format!("houyi-settings-{}-{}.json", std::process::id(), n))
-}
-
-fn default_status() -> StatusStub {
-    StatusStub {
-        session_id: "sess-stub".to_string(),
-        model: "model-stub".to_string(),
-        path: "~/workspace/hicoder".to_string(),
-        tokens: 0,
-        capability: "deny-by-default".to_string(),
-        sandbox: "off".to_string(),
-        plan_mode: false,
-        last_run_final: false,
-    }
 }
 
 fn spec_context() -> SpecContext {

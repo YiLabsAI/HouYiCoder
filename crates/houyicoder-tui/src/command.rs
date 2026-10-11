@@ -74,7 +74,7 @@ impl App {
             }
             C::Sandbox => self.system_line(render::render_sandbox(
                 &self.snapshot_or_stub(),
-                &self.status.sandbox,
+                &self.sessions.current.sandbox,
             )),
             C::Permission => self.open_permission_pane(),
             C::Context => {
@@ -303,7 +303,15 @@ impl App {
         let status = &self.sessions.current.capabilities.status;
         let status_cache = status.snapshot().cloned();
         status_cache.unwrap_or_else(|| StatusSnapshot {
-            model: self.status.model.clone(),
+            model: self
+                .sessions
+                .current
+                .capabilities
+                .model
+                .catalog
+                .applied
+                .id
+                .clone(),
             breaker_state: None,
             breaker_reason: None,
             breaker_cool_down_secs: None,

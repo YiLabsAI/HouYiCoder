@@ -53,7 +53,9 @@ fn draw_topbar(f: &mut Frame, area: Rect, app: &App) {
     };
     let text = format!(
         " review console | auth:{} | org:stub | workspace:hicoder | model:{} | sandbox:{} ",
-        mode, app.status.model, app.status.sandbox,
+        mode,
+        app.sessions.current.capabilities.model.catalog.applied.id,
+        app.sessions.current.sandbox,
     );
     f.render_widget(
         Paragraph::new(text).style(Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)),

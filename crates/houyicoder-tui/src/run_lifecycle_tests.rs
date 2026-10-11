@@ -907,11 +907,14 @@ fn test_final_run_survives_loss() {
             }),
         },
     });
-    assert!(app.status.last_run_final, "the Done settled as final");
+    assert!(
+        app.sessions.current.last_run_final,
+        "the Done settled as final"
+    );
     let before = app.sessions.current.transcript.len();
     app.apply_connection_loss("connect failed: no server".into(), Vec::new());
     assert!(
-        app.status.last_run_final,
+        app.sessions.current.last_run_final,
         "a later loss does not un-final the settled run"
     );
     assert_eq!(
@@ -1141,7 +1144,10 @@ fn test_loss_during_waiting_settles() {
         app.sessions.current.prompt.is_none(),
         "the approval prompt clears on settle"
     );
-    assert!(!app.status.last_run_final, "an error settle is not final");
+    assert!(
+        !app.sessions.current.last_run_final,
+        "an error settle is not final"
+    );
 }
 
 // A connection loss during Cancelling settles the same way: the run that

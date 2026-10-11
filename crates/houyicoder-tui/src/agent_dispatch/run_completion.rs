@@ -28,7 +28,6 @@ impl super::App {
         self.debug_render_done(self.sessions.current.transcript.frames());
         let was_final = match result {
             Ok(run) => {
-                self.status.tokens = run.usage.total_tokens as u64;
                 // Compute by reference before the match moves run.outcome.
                 let final_outcome = matches!(&run.outcome, RunOutcome::FinalOutput { .. });
                 match run.outcome {
@@ -101,7 +100,7 @@ impl super::App {
         }
         // Only final completion may advance queued input. Other outcomes
         // park pending messages for explicit user action.
-        self.status.last_run_final = was_final;
+        self.sessions.current.last_run_final = was_final;
         if !was_final {
             self.ui.input.queue.demote_to_parked();
         }

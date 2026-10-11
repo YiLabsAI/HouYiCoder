@@ -49,7 +49,7 @@ fn test_model_result_updates_status() {
         "the applied model comes from the reply"
     );
     assert_eq!(
-        app.status.model, "qwen3.8-max",
+        app.sessions.current.capabilities.model.catalog.applied.id, "qwen3.8-max",
         "status.model follows the applied model"
     );
     assert_eq!(app.ui.navigation.pane, Pane::Transcript, "the pane closes");
@@ -292,7 +292,15 @@ fn test_picker_draft_isolated() {
     let mut app = model_app(catalog);
     app.ui.navigation.pane = Pane::Model;
     let start = app.ui.model.row;
-    let status_before = app.status.model.clone();
+    let status_before = app
+        .sessions
+        .current
+        .capabilities
+        .model
+        .catalog
+        .applied
+        .id
+        .clone();
     app.move_model_focus(1);
     app.adjust_model_setting(true);
     app.cycle_model_setting();
@@ -303,7 +311,7 @@ fn test_picker_draft_isolated() {
     );
     assert_ne!(app.ui.model.row, start, "the draft did move");
     assert_eq!(
-        app.status.model, status_before,
+        app.sessions.current.capabilities.model.catalog.applied.id, status_before,
         "the status line is untouched until the host answers"
     );
 }

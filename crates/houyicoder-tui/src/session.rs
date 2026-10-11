@@ -45,6 +45,11 @@ pub(crate) struct Session {
     /// The live connection, present while connected and None in the bare
     /// or not-yet-connected path.
     pub(crate) connection: Option<SessionConnection>,
+    /// The sandbox the session runs under, as a display label. Client-local:
+    /// the runner does not report it, so the composition root writes it where
+    /// the session is wired ("mac-seatbelt"), the local login writes its own,
+    /// and a bare session is "off".
+    pub(crate) sandbox: String,
     /// The run lifecycle state machine: idle, running, waiting, or
     /// cancelling. The session owns it so a run resolves on the session
     /// that started it rather than on a detached shell field.
@@ -55,6 +60,13 @@ pub(crate) struct Session {
     /// The submitted input of the run that produced no output yet, kept so
     /// an interruption can restore the turn.
     pub(crate) last_run_input: Option<String>,
+    /// Whether the most recent completed run ended FinalOutput (a clean end).
+    /// Gates the queued-message auto-send: a clean end drains FIFO, an
+    /// interrupt or error parks the pending item for explicit re-send. A
+    /// switch carries the pre-switch value because a swap runs at idle after
+    /// a clean end, so the carried value is the true state, not a forged run
+    /// result.
+    pub(crate) last_run_final: bool,
     /// The working transcript: the resident frame window and the lines,
     /// blocks, and fold groups derived from it. The conversation belongs to
     /// the session, so a switch rebuilds it empty instead of carrying the
@@ -107,9 +119,11 @@ impl Session {
         Self {
             identity,
             connection: None,
+            sandbox: "off".to_string(),
             run: RunState::Idle,
             run_metrics: RunMetrics::default(),
             last_run_input: None,
+            last_run_final: false,
             transcript: Transcript::default(),
             prompt: None,
             todos: TodoState::default(),

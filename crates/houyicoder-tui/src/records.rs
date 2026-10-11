@@ -729,25 +729,6 @@ pub struct SpecContext {
     pub clause_focus: usize,
 }
 
-/// Status bar values. All stub.
-#[derive(Debug, Clone)]
-pub struct StatusStub {
-    pub session_id: String,
-    pub model: String,
-    pub path: String,
-    pub tokens: u64,
-    pub capability: String,
-    pub sandbox: String,
-    pub plan_mode: bool,
-    /// Whether the most-recent run ended FinalOutput (a clean end). Read by
-    /// idle_drain to gate the queued-message auto-send: a clean end auto-sends
-    /// the next queued item (the user got their answer, drain FIFO); an
-    /// interrupt/error does NOT auto-send — the queued item stays parked for
-    /// the user to pop to the input box via Esc + edit before re-sending.
-    /// A redirect on interrupt should not auto-fire the pending input.
-    pub last_run_final: bool,
-}
-
 #[cfg(test)]
 #[path = "records_tests.rs"]
 mod records_tests;

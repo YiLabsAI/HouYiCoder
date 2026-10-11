@@ -681,7 +681,7 @@ fn test_batch_keeps_tail() {
     let mut tools = ToolRegistry::new();
     tools.register(Arc::new(EchoTool));
     let mut app = app_with_provider(provider, tools);
-    app.status.last_run_final = true;
+    app.sessions.current.last_run_final = true;
     app.ui.input.queue.push(InputItem::Message("first".into()));
     app.ui
         .input
@@ -751,7 +751,7 @@ fn test_batch_delivers_via_drain() {
     let mut tools = ToolRegistry::new();
     tools.register(Arc::new(EchoTool));
     let mut app = app_with_provider(provider, tools);
-    app.status.last_run_final = true;
+    app.sessions.current.last_run_final = true;
     app.ui.input.queue.push(InputItem::Message("first".into()));
     app.ui
         .input

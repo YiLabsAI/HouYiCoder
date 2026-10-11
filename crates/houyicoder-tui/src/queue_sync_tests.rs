@@ -360,7 +360,7 @@ fn test_orphan_promoted_on_enqueue() {
         .input
         .queue
         .push(InputItem::ParkedMessage("orphan".into()));
-    app.status.last_run_final = false;
+    app.sessions.current.last_run_final = false;
     // User submits a new message -> real-spawn path (agent_busy was false).
     // The test harness has no session, so spawn_run returns early without
     // setting agent_busy; simulate the post-spawn state manually.

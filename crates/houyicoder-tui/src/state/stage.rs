@@ -6,11 +6,6 @@
 use crate::state::{App, Stage, ViewportMode};
 
 impl App {
-    /// Toggle plan mode on or off.
-    pub fn toggle_plan(&mut self) {
-        self.status.plan_mode = !self.status.plan_mode;
-    }
-
     /// Transition to a new stage, pushing the previous one onto the history
     /// stack so /rewind can return to it. Also updates the spec strip step and
     /// syncs the viewport to the new stage (implement and verify fold into

@@ -76,7 +76,6 @@ pub fn app() -> App {
             c.version.set(u64::MAX);
             c
         },
-        status: default_status(),
         quit: false,
         sessions: Sessions::new(Session::bare(SessionIdentity {
             session_id: SessionId::new("test"),

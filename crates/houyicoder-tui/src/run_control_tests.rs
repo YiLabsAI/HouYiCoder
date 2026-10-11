@@ -419,7 +419,7 @@ fn test_handle_final_output_refreshes() {
     app.start_run_for_test(1);
     app.handle_agent_message(msg);
     assert!(!app.agent_busy());
-    assert_eq!(app.status.tokens, 42);
+    assert_eq!(app.sessions.current.run_metrics.cumulative_tokens, 42);
     assert!(app.sessions.current.transcript.iter().any(|l| matches!(
         l,
         TranscriptLine::User(s) if s == "hi"
@@ -1152,7 +1152,15 @@ fn test_model_switch_applies() {
     // The receipt is formatted from the reply, so it names the model the
     // session will actually send: the snapshot's focused row, which the
     // host resolved and applied.
-    let applied_id = app.status.model.clone();
+    let applied_id = app
+        .sessions
+        .current
+        .capabilities
+        .model
+        .catalog
+        .applied
+        .id
+        .clone();
     assert!(
         app.sessions
             .current

@@ -314,7 +314,7 @@ fn test_try_no_builder_quits() {
 fn test_quit_keeps_resume_target() {
     let mut app = test_app();
     enqueue_resume_target(&mut app, "some-sid");
-    app.status.last_run_final = true;
+    app.sessions.current.last_run_final = true;
     let mut dirty = false;
     app.idle_drain(None, &mut dirty);
     assert!(!dirty, "no swap = no dirty");
@@ -392,7 +392,7 @@ fn test_resume_err_keeps_session() {
 #[test]
 fn test_idle_drain_consumes_idle() {
     let mut app = test_app();
-    app.status.last_run_final = true;
+    app.sessions.current.last_run_final = true;
     app.ui.input.queue.push(InputItem::Message("head".into()));
     let mut dirty = false;
     // No resume target + idle + clean end: drain the queued head.
@@ -426,7 +426,7 @@ fn test_idle_drain_noop_busy() {
 #[test]
 fn test_idle_drain_without_final() {
     let mut app = test_app();
-    app.status.last_run_final = false;
+    app.sessions.current.last_run_final = false;
     app.ui
         .input
         .queue
@@ -448,7 +448,7 @@ fn test_idle_drain_without_final() {
 #[test]
 fn test_clean_end_drains_parked() {
     let mut app = test_app();
-    app.status.last_run_final = true;
+    app.sessions.current.last_run_final = true;
     app.ui
         .input
         .queue
@@ -509,7 +509,6 @@ fn test_clears_session_local_state() {
     app.sessions.current.run_metrics.cumulative_tokens = 1234;
     app.sessions.current.run_metrics.cumulative_steps = 7;
     app.ui.displayed_tokens.set(50);
-    app.status.tokens = 999;
     app.sessions.current.prompt = Some(PendingPrompt::approval_card(
         RequestId(0),
         crate::records::Approval::default(),
@@ -540,7 +539,6 @@ fn test_clears_session_local_state() {
         "cumulative_steps cleared"
     );
     assert_eq!(app.ui.displayed_tokens.get(), 0, "displayed_tokens cleared");
-    assert_eq!(app.status.tokens, 0, "status.tokens cleared");
     assert!(app.approval().is_none(), "approval cleared");
     assert!(
         app.ui.selection.transcript.anchor.is_none(),
@@ -717,7 +715,7 @@ fn test_drops_non_resume_commands() {
 #[test]
 fn test_clean_end_drains_messages() {
     let mut app = test_app();
-    app.status.last_run_final = true;
+    app.sessions.current.last_run_final = true;
     app.ui.input.queue.push(InputItem::Message("m1".into()));
     app.ui.input.queue.push(InputItem::Message("m2".into()));
     app.ui.input.queue.push(InputItem::Message("m3".into()));
@@ -743,7 +741,7 @@ fn test_clean_end_drains_messages() {
 #[test]
 fn test_batch_stops_at_command() {
     let mut app = test_app();
-    app.status.last_run_final = true;
+    app.sessions.current.last_run_final = true;
     app.ui.input.queue.push(InputItem::Message("m1".into()));
     app.ui.input.queue.push(InputItem::Message("m2".into()));
     app.ui.input.queue.push(InputItem::Command("/clear".into()));
@@ -1045,20 +1043,20 @@ fn test_swap_resets_verbose() {
 #[test]
 fn test_swap_carries_run_final() {
     let mut app = test_app();
-    app.status.last_run_final = false;
+    app.sessions.current.last_run_final = false;
     app.switch_session(test_bundle().0);
     assert!(
-        !app.status.last_run_final,
+        !app.sessions.current.last_run_final,
         "last_run_final carried from the pre-switch value, not forged true"
     );
     // The true case distinguishes carry from reset-false: a reset would drop
     // it to false, a forge would set it true regardless. Carry keeps the
     // pre-switch value, so true stays true.
     let mut app2 = test_app();
-    app2.status.last_run_final = true;
+    app2.sessions.current.last_run_final = true;
     app2.switch_session(test_bundle().0);
     assert!(
-        app2.status.last_run_final,
+        app2.sessions.current.last_run_final,
         "true carried, not reset to false"
     );
 }
@@ -1071,7 +1069,7 @@ fn test_swap_carries_run_final() {
 #[test]
 fn test_switch_drains_carried_queue() {
     let mut app = test_app();
-    app.status.last_run_final = false;
+    app.sessions.current.last_run_final = false;
     enqueue_resume_target(&mut app, "sid-target");
     app.ui
         .input

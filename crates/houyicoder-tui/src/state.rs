@@ -61,7 +61,7 @@ pub use crate::evidence::{
     AuditEntry, ConsoleTodo, DiffData, Divergence, GraphResult, Hunk, HunkEvidence, MemoryEntry,
     PlanArtifact, ReviewFinding, SpecArtifact, SpecClause, Verdict, VerifyResult, audit_entry,
 };
-pub use crate::records::{Approval, SpecContext, StatusStub, TranscriptLine};
+pub use crate::records::{Approval, SpecContext, TranscriptLine};
 
 pub use crate::state::enums::*;
 
@@ -92,7 +92,6 @@ pub struct App {
     /// them together. Pub(crate) so the draw pass reads and writes a vector
     /// directly, matching the per-vector visible_window slices.
     pub(crate) display_rows_cache: DisplayRowsCache,
-    pub status: StatusStub,
     pub quit: bool,
     // --- real agent-loop wiring ---
     /// The presented session and the resumable-session catalog, held as one

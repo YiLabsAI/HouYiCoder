@@ -236,7 +236,14 @@ ACTIVE_OWNERS = {
         # gone; the compositions across the two owners (reseeding the
         # draft from the catalog, refreshing the catalog, resolving the
         # tier a commit ships) are App methods.
-        "fields": 10,
+        # The status stub then folded into its owners: the three dead
+        # fields (session id, path, capability) deleted, the plan-mode
+        # toggle deleted (no reader), the model and token dupes deleted
+        # (the applied id and the run tally already own them; readers
+        # re-route to the session), and the sandbox label and the
+        # last-run-final gate joined the Session beside the run lifecycle
+        # they describe. The flat App field is gone.
+        "fields": 9,
         "mut_app": 44,
     },
     "crates/houyicoder-tui/src/ui.rs:Ui": {
@@ -294,9 +301,11 @@ ACTIVE_OWNERS = {
         # returned-delegation pane, and the agent directory cache, held as
         # one value so a swap replaces the whole set at once and a lost
         # connection never drops the identity or the already-observed
-        # state. Fourteen fields that formerly sat detached on App now
-        # travel as one constructor boundary.
-        "fields": 14,
+        # state. The sandbox display label and the last-run-final gate then
+        # joined beside the run lifecycle they describe: both are
+        # session-scoped facts, the latter carried by an explicit read
+        # before the switch replaces the session.
+        "fields": 16,
     },
     "crates/houyicoder-tui/src/sessions.rs:Sessions": {
         # The frontend's session holdings: the presented session, the

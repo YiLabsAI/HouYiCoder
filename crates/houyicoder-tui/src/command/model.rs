@@ -188,7 +188,6 @@ impl App {
         if settles || !self.ui.model.dirty {
             self.reseed_model_draft();
         }
-        self.status.model = result.applied.id;
         self.system_line(receipt);
     }
 

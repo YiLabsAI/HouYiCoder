@@ -87,7 +87,10 @@ impl App {
             // queued for the external caller; draining it here would remove +
             // re-dispatch the command, so the guard keeps the target on the
             // queue for the loop-exit drain.
-            if !self.quit && (self.status.last_run_final || switched) && self.drain_pending_head() {
+            if !self.quit
+                && (self.sessions.current.last_run_final || switched)
+                && self.drain_pending_head()
+            {
                 *dirty = true;
             }
         }
@@ -134,6 +137,11 @@ impl App {
             working_dir: cwd_string(),
         });
         new_session.connection = Some(live_session);
+        // Read the pre-switch run outcome before set_current replaces the
+        // session: a swap runs at idle after a clean run end or a
+        // user-initiated picker pick, so the carried value is the true state
+        // rather than a forged run result.
+        let carried_last_run_final = self.sessions.current.last_run_final;
 
         // Reset session-local UI caches and pane state explicitly; the new
         // Session is fresh by construction so only App-side caches need it.
@@ -153,19 +161,12 @@ impl App {
         };
         self.sessions.catalog = session_catalog;
 
-        // Apply the non-session bundle data against App fields. status is
-        // mixed: model and sandbox are session-scoped (re-set from the
-        // bundle), tokens and plan_mode reset to their factory defaults, and
-        // last_run_final is carried from the pre-switch value. A swap runs at
-        // idle after a clean run end or a user-initiated picker pick, so the
-        // carried value is the true state, not a forged run result -- the old
-        // re-set to true is gone, and the idle drain's switched flag carries
-        // the queued item instead.
-        let carried_last_run_final = self.status.last_run_final;
-        self.status = default_status();
-        self.status.model = model.clone();
-        self.status.sandbox = "mac-seatbelt".to_string();
-        self.status.last_run_final = carried_last_run_final;
+        // Apply the session-scoped bundle data against the new session. The
+        // sandbox is re-set to the wired-runner label (a swap always wires a
+        // real runner); the applied model is committed beside it; and the run
+        // outcome is carried from the pre-switch read above.
+        self.sessions.current.sandbox = "mac-seatbelt".to_string();
+        self.sessions.current.last_run_final = carried_last_run_final;
         self.sessions.current.capabilities.model.catalog.applied.id = model;
         // A swap is always initiated from the working screen (the user is on
         // the transcript when they /resume), so force Working regardless of
@@ -233,9 +234,9 @@ impl App {
     /// (terminal_focused, clipboard) and the render-measured feedback
     /// (layout_feedback, rewritten each draw) are intentionally absent: a
     /// switch does not impersonate a cleanup of terminal focus or the
-    /// clipboard, and layout_feedback self-corrects. status and input are
-    /// handled by the caller at the field level because they mix
-    /// session-scoped, run-state, and carry-across fields.
+    /// clipboard, and layout_feedback self-corrects. input is handled by the
+    /// caller at the field level because it mixes session-scoped and
+    /// carry-across fields.
     fn reset_session_local(&mut self) {
         self.workflow = app_default::workflow();
         self.ui.navigation.pane = Pane::Transcript;

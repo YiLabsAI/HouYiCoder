@@ -69,7 +69,7 @@ fn draw_tab_body(f: &mut Frame, tab: StatusTab, area: Rect, app: &App) {
             render_status(
                 &snap,
                 &app.sessions.current.identity.session_id,
-                &app.status.sandbox,
+                &app.sessions.current.sandbox,
                 &app.sessions.current.todos.items,
             )
         }
@@ -166,7 +166,7 @@ fn render_config(app: &App) -> String {
         s.push_str(&f("effort", effort.label()));
     }
     s.push_str(&f("Permission mode", permission_mode_label(mode)));
-    s.push_str(&f("sandbox", &app.status.sandbox));
+    s.push_str(&f("sandbox", &app.sessions.current.sandbox));
     s.push_str(&f("breaker", &render_breaker_line(&snap)));
     s.push_str(&f("auto-memory", on_off(snap.auto_memory)));
     s.push_str(&f("auto-dream", on_off(snap.auto_dream)));
@@ -198,7 +198,7 @@ mod tests {
     fn test_config_tab_has_knobs() {
         let mut app = crate::test_harness::working_app();
         app.sessions.current.capabilities.model.catalog.applied.id = "qwen3.8-max".into();
-        app.status.sandbox = "mac-seatbelt".into();
+        app.sessions.current.sandbox = "mac-seatbelt".into();
         let s = render_config(&app);
         assert!(s.contains("qwen3.8-max"), "model: {s}");
         assert!(s.contains("mac-seatbelt"), "sandbox: {s}");
