@@ -236,7 +236,7 @@ mod tests {
         app.sessions.catalog = Some(Arc::new(TwoRowCatalog));
         app.run_resume(Some("aaaa1111"));
         assert_eq!(queued_target(&app).as_deref(), Some("aaaa1111"));
-        assert!(!app.quit, "in-process swap does not quit");
+        assert!(!app.ui.quit, "in-process swap does not quit");
     }
 
     /// /resume with a title substring matches case-insensitively.
@@ -255,7 +255,7 @@ mod tests {
         app.sessions.catalog = Some(Arc::new(TwoRowCatalog));
         app.run_resume(Some("zzz"));
         assert!(queued_target(&app).is_none());
-        assert!(!app.quit);
+        assert!(!app.ui.quit);
     }
 
     /// A mid-run /resume <sid> defers: it is enqueued as a Command (not
@@ -335,7 +335,7 @@ mod tests {
             Some(arg.as_str()),
             "the export path rides a /resume Command at the head"
         );
-        assert!(!app.quit, "in-process swap does not quit");
+        assert!(!app.ui.quit, "in-process swap does not quit");
         drop(std::fs::remove_dir_all(&dir));
     }
 

@@ -211,7 +211,7 @@ fn test_focus_lost_hides_caret() {
         "caret should be inverted (bg White) when focused"
     );
     assert!(
-        app.layout_feedback.native_cursor_position.get().is_some(),
+        app.ui.frame.feedback.native_cursor_position.get().is_some(),
         "draw publishes the hidden cursor position for input methods"
     );
     // FocusLost event hides the caret.
@@ -528,7 +528,7 @@ fn test_search_current_match_yellow() {
     let mut app = working();
     app.sessions.current.transcript = searchable_transcript().into();
     app.enter_search_view("needle");
-    // Warm the width (jump uses layout_feedback.transcript_width set by a prior draw)
+    // Warm the width (jump reads the width a prior draw measured)
     // then walk to the older, multi-line tool-result match.
     drop(render(&app));
     crate::keys::handle_working(

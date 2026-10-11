@@ -23,6 +23,7 @@ use crate::memory_state::MemoryPaneState;
 use crate::notifications::NotificationState;
 use crate::permission_pane_state::PermissionPaneState;
 use crate::records::TeammateView;
+use crate::renderer::{PreparedFrame, Renderer};
 use crate::selection::ClipboardWriter;
 use crate::selections::Selections;
 use crate::skills_state::SkillsPaneState;
@@ -36,7 +37,8 @@ pub use crate::ui::navigation::Navigation;
 /// input, the transcript and pane view states, the verbose render flag, the
 /// spinner's displayed token count, the last-written terminal title, the
 /// display copies panes fetch on demand, selection, notifications,
-/// clipboard, focus, and the queued-input hit-test geometry.
+/// clipboard, focus, the queued-input hit-test geometry, the quit flag,
+/// and the draw pass's cache and last-frame output.
 pub struct Ui {
     /// Where the user is looking: the screen, the pane, the two viewport
     /// modes, and the overlay pickers.
@@ -138,4 +140,18 @@ pub struct Ui {
     /// The input cursor (invert) gates on this so the caret hides when the
     /// window is unfocused. Defaults true (assume focused at startup).
     pub terminal_focused: bool,
+    /// Whether the user asked to leave the TUI loop (the Exit command, Esc
+    /// or q on a login screen, a declined trust verdict, or a no-builder
+    /// resume). Read back by the event loop as its stop condition; a session
+    /// swap that lands in-process resets it to false.
+    pub quit: bool,
+    /// The reusable per-line render cache. A line parsed at one width or
+    /// expansion is reused across frames and transcript rebuilds; a session
+    /// switch clears it so stale entries never ride into the new session.
+    pub(crate) renderer: Renderer,
+    /// The last draw pass's render output: region rectangles, measured
+    /// feedback, the pre-rendered rows, and the per-row keys. Populated by
+    /// the draw pass and read back by the input, hit-test, selection, and
+    /// copy paths.
+    pub(crate) frame: PreparedFrame,
 }

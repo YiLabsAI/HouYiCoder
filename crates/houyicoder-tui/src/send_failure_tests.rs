@@ -211,7 +211,7 @@ fn test_trust_refused() {
         app.pending_trust().is_some(),
         "the trust prompt stays until the verdict is delivered"
     );
-    assert!(!app.quit, "a refused rejection must not exit the TUI");
+    assert!(!app.ui.quit, "a refused rejection must not exit the TUI");
     assert!(
         last_line(&app).contains("connection lost"),
         "the refusal is visible: {}",

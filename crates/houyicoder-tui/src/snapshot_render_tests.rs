@@ -577,7 +577,7 @@ fn test_window_scrolls_no_drag() {
     app.window_scroll().cap.set(10);
     let live_total_before = app.whole_scroll().total.get();
     let rect = ratatui::layout::Rect::new(0, 0, 80, 24);
-    app.layout_snapshot.transcript_rect.set(rect);
+    app.ui.frame.layout.transcript_rect.set(rect);
     // Wheel up: window_scroll pins (follow_tail -> false), transcript_scroll
     // untouched (the 5 consumers stay on their own path).
     crate::app::handle_mouse(

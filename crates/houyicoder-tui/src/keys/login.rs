@@ -25,7 +25,7 @@ pub fn handle_login(app: &mut App, k: KeyEvent) {
             app.sessions.current.sandbox = "off (local)".to_string();
             land_on_working(app);
         }
-        KeyCode::Esc | KeyCode::Char('q') => app.quit = true,
+        KeyCode::Esc | KeyCode::Char('q') => app.ui.quit = true,
         _ => {}
     }
 }
@@ -65,7 +65,7 @@ pub fn handle_console(app: &mut App, k: KeyEvent) {
                 app.system_line(format!("replay -> {} (stub)", r.hunk_id));
             }
         }
-        KeyCode::Esc | KeyCode::Char('q') => app.quit = true,
+        KeyCode::Esc | KeyCode::Char('q') => app.ui.quit = true,
         _ => {}
     }
 }

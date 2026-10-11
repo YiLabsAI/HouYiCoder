@@ -107,7 +107,7 @@ pub(super) fn draw_input(f: &mut Frame, area: Rect, app: &App) {
         .collect();
     f.render_widget(Paragraph::new(lines), inner);
     let row = (crow as u16).min(inner.height.saturating_sub(1));
-    app.layout_feedback.native_cursor_position.set(Some((
+    app.ui.frame.feedback.native_cursor_position.set(Some((
         inner.x.saturating_add(2).saturating_add(ccol as u16),
         inner.y.saturating_add(row),
     )));

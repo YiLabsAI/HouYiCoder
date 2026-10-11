@@ -243,7 +243,12 @@ ACTIVE_OWNERS = {
         # re-route to the session), and the sandbox label and the
         # last-run-final gate joined the Session beside the run lifecycle
         # they describe. The flat App field is gone.
-        "fields": 9,
+        # The draw pass's five state fields then moved to the Ui: the
+        # per-line render cache behind a Renderer owner, the layout
+        # snapshot, the measured feedback, the pre-rendered rows cache,
+        # and the per-row keys behind one PreparedFrame owner, with the
+        # quit flag beside them. App reaches its three-field shell.
+        "fields": 3,
         "mut_app": 44,
     },
     "crates/houyicoder-tui/src/ui.rs:Ui": {
@@ -262,7 +267,26 @@ ACTIVE_OWNERS = {
         # and views read it through App. On-demand pane content (a drilled-in
         # teammate's lines, an opened skill body, a search corpus) lives here
         # as display copies whose loss costs a re-fetch, never a record.
-        "fields": 23,
+        # The draw pass's state joined here: the quit flag, the per-line
+        # render cache (Renderer), and the last frame's layout, feedback,
+        # rows, and keys (PreparedFrame).
+        "fields": 26,
+    },
+    "crates/houyicoder-tui/src/renderer.rs:Renderer": {
+        # The reusable per-line render cache: a line parsed at one width or
+        # expansion is reused across frames and transcript rebuilds, and a
+        # session switch clears it so stale entries never ride into the new
+        # session. Interior mutability because the draw pass receives an
+        # immutable App.
+        "fields": 1,
+    },
+    "crates/houyicoder-tui/src/renderer.rs:PreparedFrame": {
+        # The last draw pass's render output: the measured region
+        # rectangles, the feedback dimensions, the pre-rendered rows
+        # cache, and the per-row keys the click and Ctrl+O paths resolve
+        # against. Written together by the draw pass and read together by
+        # every hit-test and selection path.
+        "fields": 4,
     },
     "crates/houyicoder-tui/src/ui/navigation.rs:Navigation": {
         # The user's position in the frontend: the screen, the open pane, the

@@ -74,7 +74,9 @@ pub fn draw(f: &mut Frame, app: &App) {
     // Zero the jump-to-bottom label rect at the top of every frame so it can
     // never go stale across screens that don't render a transcript (Login,
     // Console) — draw_transcript re-publishes it while the label is visible.
-    app.layout_snapshot
+    app.ui
+        .frame
+        .layout
         .jump_to_bottom_rect
         .set(Rect::new(0, 0, 0, 0));
     // The fleet strip's click target gets the same stale-rect protection as
@@ -86,7 +88,7 @@ pub fn draw(f: &mut Frame, app: &App) {
     // frame (Working→Scroll left the Working rect live, and a Scroll-mode
     // drag copied Working's text + painted a highlight on a row the status
     // surface no longer owned).
-    app.layout_snapshot.status_rect.set(Rect::new(0, 0, 0, 0));
+    app.ui.frame.layout.status_rect.set(Rect::new(0, 0, 0, 0));
     // The startup workspace-trust banner is the sole pre-chat setup screen
     // while a trust ask is pending — the main view does not mount until the
     // user answers. A top banner, not a centered popup over a live chat.

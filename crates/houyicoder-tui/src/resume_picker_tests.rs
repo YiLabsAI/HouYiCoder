@@ -116,7 +116,7 @@ fn test_resume_name_switches_directly() {
         Some("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
         "pending sid must be the matched row sid"
     );
-    assert!(!app.quit, "in-process swap does not quit");
+    assert!(!app.ui.quit, "in-process swap does not quit");
 }
 
 /// Typing in the open picker narrows the list by sid OR title.
@@ -166,7 +166,7 @@ fn test_keys_navigate_select_close() {
         Some("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
         "Enter resumes the selected row"
     );
-    assert!(!app.quit, "in-process swap does not quit");
+    assert!(!app.ui.quit, "in-process swap does not quit");
     assert!(
         !app.ui.navigation.resume_picker.open,
         "Enter closes the picker"
@@ -230,7 +230,7 @@ fn test_picker_enter_fall_back() {
         "no row matches"
     );
     crate::app::handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-    assert!(!app.quit, "no match must not quit (no resume)");
+    assert!(!app.ui.quit, "no match must not quit (no resume)");
     let out = render(&app);
     assert!(
         out.contains("no session matches"),

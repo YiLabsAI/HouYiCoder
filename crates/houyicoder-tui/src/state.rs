@@ -3,7 +3,7 @@
 //! App is the composition shell; cohesive concerns own their state and
 //! transitions in dedicated types rather than adding parallel fields here.
 
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 use std::fmt;
 use std::time::Instant;
 
@@ -25,11 +25,6 @@ pub mod transcript;
 
 #[cfg(test)]
 use crate::composition::app as test_app;
-use crate::display_rows_cache::DisplayRowsCache;
-use crate::last_row_keys::LastRowKeys;
-use crate::layout_feedback::LayoutFeedback;
-use crate::layout_snapshot::LayoutSnapshot;
-use crate::render_cache::RenderCache;
 use crate::run_state::{RunProgress, RunState};
 use crate::sessions::Sessions;
 use crate::ui::Ui;
@@ -87,32 +82,10 @@ pub struct App {
     /// The spec-plan-review-verify-artifact lifecycle fields, bundled as one
     /// owner toward the final shell.
     pub(crate) workflow: Workflow,
-    /// The pre-rendered display-row cache: the rows, the four per-row key
-    /// vectors, the pre-rendered lines, and the version stamp that guards
-    /// them together. Pub(crate) so the draw pass reads and writes a vector
-    /// directly, matching the per-vector visible_window slices.
-    pub(crate) display_rows_cache: DisplayRowsCache,
-    pub quit: bool,
-    // --- real agent-loop wiring ---
     /// The presented session and the resumable-session catalog, held as one
     /// value so a swap replaces both and a lost connection never drops the
     /// identity.
     pub(crate) sessions: Sessions,
-    /// The renderer layout feedback: the last terminal height and transcript
-    /// pane width the draw pass measured, held in one owner so the count and
-    /// layout paths read the same dims the last render used.
-    pub(crate) layout_feedback: LayoutFeedback,
-    /// The renderer's layout snapshot: per-region rectangles and rendered-row
-    /// caches the draw pass stashes, read back by the input and click paths.
-    pub(crate) layout_snapshot: LayoutSnapshot,
-    /// Per-line render cache (content hash + width + expand key; indices are
-    /// unstable — transcript rebuilds each batch). Count + render share it.
-    pub render_cache: RefCell<RenderCache>,
-    /// The per-row keys of the last emitted visible row set: the call id,
-    /// fold-group key, expanded-group mark, and turn id each visible row
-    /// carries, parallel to the rows. Pub(crate) so the click and Ctrl+O
-    /// handlers and the draw pass reach a vector directly.
-    pub(crate) last_row_keys: LastRowKeys,
 }
 
 impl App {
@@ -245,7 +218,7 @@ impl std::fmt::Debug for App {
             .field("transcript_len", &self.sessions.current.transcript.len())
             .field("agent_busy", &self.agent_busy())
             .field("prompt", &self.sessions.current.prompt)
-            .field("quit", &self.quit)
+            .field("quit", &self.ui.quit)
             .finish()
     }
 }

@@ -302,7 +302,7 @@ impl App {
         }
         self.sessions.current.clear_prompt();
         if !accept {
-            self.quit = true;
+            self.ui.quit = true;
         }
     }
 

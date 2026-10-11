@@ -66,7 +66,7 @@ impl App {
             // No in-process builder: leave the /resume Command queued and
             // quit so the caller reads the target from the queue and
             // rebuilds the session outside this loop.
-            self.quit = true;
+            self.ui.quit = true;
             false
         }
     }
@@ -87,7 +87,7 @@ impl App {
             // queued for the external caller; draining it here would remove +
             // re-dispatch the command, so the guard keeps the target on the
             // queue for the loop-exit drain.
-            if !self.quit
+            if !self.ui.quit
                 && (self.sessions.current.last_run_final || switched)
                 && self.drain_pending_head()
             {
@@ -146,7 +146,7 @@ impl App {
         // Reset session-local UI caches and pane state explicitly; the new
         // Session is fresh by construction so only App-side caches need it.
         // terminal_focused and clipboard are process resources (not reset);
-        // layout_feedback is render-measured (rewritten each draw). verbose
+        // the frame feedback is render-measured (rewritten each draw). verbose
         // resets below: it is a search-view lifecycle flag, not a process
         // resource.
         self.reset_session_local();
@@ -173,7 +173,7 @@ impl App {
         // the frontend startup policy. The landing screen and login mode
         // come from apply_frontend_startup, which the caller runs next.
         self.ui.navigation.screen = Screen::Working;
-        self.quit = false;
+        self.ui.quit = false;
         self.ui.input.editor = Default::default();
         self.ui.input.pasted = Default::default();
         self.ui.input.pending_paste = Default::default();
@@ -223,20 +223,20 @@ impl App {
         self.ui.input.history = HistoryNav::with_path(history_path);
     }
 
-    /// Reset the App-side session-local fields a session switch must clear so
-    /// the new session renders as if fresh rather than layered over the old
-    /// one's pane state, caches, or selection. The fields the new Session owns
-    /// (run, transcript, prompt, todos, capabilities, history_reads,
-    /// index_build, agents, agent_directory) are fresh by construction in
-    /// set_current, so this resets only what stays on App: the transcript view
-    /// state, the render and row caches, the pane drill-downs, the selection,
-    /// the fleet strip, and the verbose flag. The process-level resources
-    /// (terminal_focused, clipboard) and the render-measured feedback
-    /// (layout_feedback, rewritten each draw) are intentionally absent: a
-    /// switch does not impersonate a cleanup of terminal focus or the
-    /// clipboard, and layout_feedback self-corrects. input is handled by the
-    /// caller at the field level because it mixes session-scoped and
-    /// carry-across fields.
+    /// Reset the frontend-side session-local fields a session switch must
+    /// clear so the new session renders as if fresh rather than layered over
+    /// the old one's pane state, caches, or selection. The fields the new
+    /// Session owns (run, transcript, prompt, todos, capabilities,
+    /// history_reads, index_build, agents, agent_directory) are fresh by
+    /// construction in set_current, so this resets only what stays outside
+    /// the new Session: the transcript view state, the render and row caches,
+    /// the pane drill-downs, the selection, the fleet strip, and the verbose
+    /// flag. The process-level resources (terminal_focused, clipboard) and
+    /// the render-measured feedback (frame.feedback, rewritten each draw)
+    /// are intentionally absent: a switch does not impersonate a cleanup of
+    /// terminal focus or the clipboard, and the feedback self-corrects.
+    /// input is handled by the caller at the field level because it mixes
+    /// session-scoped and carry-across fields.
     fn reset_session_local(&mut self) {
         self.workflow = app_default::workflow();
         self.ui.navigation.pane = Pane::Transcript;
@@ -244,8 +244,8 @@ impl App {
         self.ui.navigation.prev_viewport = ViewportMode::Working;
         self.ui.transcript_view = Default::default();
         self.ui.verbose = false;
-        self.display_rows_cache = Default::default();
-        self.display_rows_cache.version.set(u64::MAX);
+        self.ui.frame.rows = Default::default();
+        self.ui.frame.rows.version.set(u64::MAX);
         self.ui.navigation.resume_picker = Default::default();
         self.ui.navigation.palette = Default::default();
         self.ui.queue_view = Default::default();
@@ -256,9 +256,9 @@ impl App {
         self.ui.notifications = Default::default();
         self.ui.displayed_tokens = Cell::new(0);
         self.ui.selection = Default::default();
-        self.layout_snapshot = Default::default();
-        self.render_cache = RefCell::new(Default::default());
-        self.last_row_keys = Default::default();
+        self.ui.frame.layout = Default::default();
+        self.ui.renderer.cache = RefCell::new(Default::default());
+        self.ui.frame.keys = Default::default();
         self.ui.teammate_view = None;
         self.ui.fleet = Default::default();
         self.ui.permission_pane = Default::default();

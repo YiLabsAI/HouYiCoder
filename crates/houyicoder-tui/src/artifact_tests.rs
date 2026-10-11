@@ -384,7 +384,7 @@ fn test_artifact_edit_mode_suppresses() {
     handle_working(&mut app, key(KeyCode::Char('c')));
     assert!(!app.workflow.artifact.mode().is_normal());
     handle_working(&mut app, key(KeyCode::Char('q')));
-    assert!(!app.quit, "q must not quit during an edit");
+    assert!(!app.ui.quit, "q must not quit during an edit");
     assert_eq!(app.ui.input.editor.value(), "q");
     handle_working(&mut app, key(KeyCode::Tab));
     assert_eq!(

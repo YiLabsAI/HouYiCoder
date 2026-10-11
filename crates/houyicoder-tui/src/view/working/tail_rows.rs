@@ -54,7 +54,9 @@ pub(super) fn build_tail_rows(area: Rect, app: &App, has_slots: bool) -> TailRow
     {
         spacer_if_needed(&mut sink);
         let (md_lines, md_plain) = app
-            .render_cache
+            .ui
+            .renderer
+            .cache
             .borrow_mut()
             .live_agent_rows(&p.live_assistant_text, area.width);
         for (md_line, plain) in md_lines.into_iter().zip(md_plain) {

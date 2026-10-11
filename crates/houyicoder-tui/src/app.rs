@@ -55,7 +55,7 @@ pub fn run_with_runner(
     // OSC 9;4 progress sequence, so the escape is written only on transitions.
     let mut reported_busy = false;
 
-    while !app.quit {
+    while !app.ui.quit {
         // Apply startup and streaming messages before drawing so a trust prompt
         // never flashes the screen it is about to replace.
         if app.poll_agent() {
@@ -93,12 +93,12 @@ pub fn run_with_runner(
         if dirty || app.agent_busy() {
             // Load older history before rendering its scroll position.
             app.load_older_frames();
-            app.layout_feedback.native_cursor_position.set(None);
+            app.ui.frame.feedback.native_cursor_position.set(None);
             terminal.draw(|f| {
                 view::draw(f, &app);
                 apply_selection_overlay(f, &app);
             })?;
-            if let Some((x, y)) = app.layout_feedback.native_cursor_position.get() {
+            if let Some((x, y)) = app.ui.frame.feedback.native_cursor_position.get() {
                 execute!(stdout(), MoveTo(x, y), Hide)?;
             }
             dirty = false;
@@ -209,7 +209,7 @@ pub(crate) fn handle_mouse(app: &mut App, m: MouseEvent) {
         MouseEventKind::Down(MouseButton::Left) => {
             // The jump-to-bottom label overlays the transcript, so it owns the
             // first hit-test when visible.
-            let rect = app.layout_snapshot.jump_to_bottom_rect.get();
+            let rect = app.ui.frame.layout.jump_to_bottom_rect.get();
             if rect.width > 0 && rect.height > 0 && in_rect(rect, m.column, m.row) {
                 app.scroll_transcript_follow_tail();
                 return;
@@ -261,19 +261,19 @@ pub(crate) fn handle_mouse(app: &mut App, m: MouseEvent) {
             }
             // Pane content owns selection before the transcript beneath it.
             // Each surface manages its own drag lifecycle.
-            let prect = app.layout_snapshot.pane_rect.get();
+            let prect = app.ui.frame.layout.pane_rect.get();
             if prect.width > 0 && prect.height > 0 && in_rect(prect, m.column, m.row) {
                 PaneSurface { app: &mut *app }.handle_down(m.column, m.row);
                 return;
             }
             // Status chrome owns selection before the transcript beneath it.
-            let srect = app.layout_snapshot.status_rect.get();
+            let srect = app.ui.frame.layout.status_rect.get();
             if srect.width > 0 && srect.height > 0 && in_rect(srect, m.column, m.row) {
                 StatusSurface { app: &mut *app }.handle_down(m.column, m.row);
                 return;
             }
             // Approval cards retain a local copyable selection.
-            let arect = app.layout_snapshot.approval_rect.get();
+            let arect = app.ui.frame.layout.approval_rect.get();
             if arect.width > 0 && arect.height > 0 && in_rect(arect, m.column, m.row) {
                 ApprovalSelection { app: &mut *app }.handle_down(m.column, m.row);
                 return;
@@ -294,7 +294,7 @@ pub(crate) fn handle_mouse(app: &mut App, m: MouseEvent) {
                 }
                 return;
             }
-            let rect = app.layout_snapshot.transcript_rect.get();
+            let rect = app.ui.frame.layout.transcript_rect.get();
             if in_rect(rect, m.column, m.row) {
                 // Byte-window browsing does not share transcript selection
                 // coordinates, so clicks do not start a drag.
@@ -385,40 +385,40 @@ pub(crate) fn apply_selection_overlay(f: &mut Frame, app: &App) {
     let buf = f.buffer_mut();
     let scroll_top = app.active_scroll().top_offset();
     {
-        let rows = app.layout_snapshot.last_transcript_rows.borrow();
+        let rows = app.ui.frame.layout.last_transcript_rows.borrow();
         paint_overlay(
             buf,
-            app.layout_snapshot.transcript_rect.get(),
+            app.ui.frame.layout.transcript_rect.get(),
             &rows,
             &app.ui.selection.transcript,
             scroll_top,
         );
     }
     {
-        let rows = app.layout_snapshot.last_pane_rows.borrow();
+        let rows = app.ui.frame.layout.last_pane_rows.borrow();
         paint_overlay(
             buf,
-            app.layout_snapshot.pane_rect.get(),
+            app.ui.frame.layout.pane_rect.get(),
             &rows,
             &app.ui.selection.pane,
             0,
         );
     }
     {
-        let rows = app.layout_snapshot.last_status_rows.borrow();
+        let rows = app.ui.frame.layout.last_status_rows.borrow();
         paint_overlay(
             buf,
-            app.layout_snapshot.status_rect.get(),
+            app.ui.frame.layout.status_rect.get(),
             &rows,
             &app.ui.selection.status,
             0,
         );
     }
     {
-        let rows = app.layout_snapshot.last_approval_rows.borrow();
+        let rows = app.ui.frame.layout.last_approval_rows.borrow();
         paint_overlay(
             buf,
-            app.layout_snapshot.approval_rect.get(),
+            app.ui.frame.layout.approval_rect.get(),
             &rows,
             &app.ui.selection.approval,
             0,
@@ -461,7 +461,7 @@ pub(crate) fn handle_key(app: &mut App, k: KeyEvent) {
             .current()
             .is_some_and(|n| n.key == "exit-confirm");
         if pending {
-            app.quit = true;
+            app.ui.quit = true;
         } else {
             app.ui.notifications.add(Notification::immediate(
                 "exit-confirm",

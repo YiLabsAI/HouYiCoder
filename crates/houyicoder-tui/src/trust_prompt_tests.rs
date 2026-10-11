@@ -52,7 +52,7 @@ fn test_trust_down_selects_exit() {
     assert_eq!(app.trust_choice(), TrustChoice::Exit);
     crate::app::handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     assert!(app.pending_trust().is_none());
-    assert!(app.quit);
+    assert!(app.ui.quit);
 }
 
 #[test]
@@ -101,7 +101,7 @@ fn test_resolve_trust_decline_clears() {
         app.sessions.current.prompt.is_none(),
         "decline clears the req_id"
     );
-    assert!(app.quit, "decline exits the TUI");
+    assert!(app.ui.quit, "decline exits the TUI");
 }
 
 /// resolve_trust with no ask pending is a no-op (the user pressed the key
@@ -198,7 +198,10 @@ fn test_loss_unblocks_exit() {
         &mut app,
         KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL),
     );
-    assert!(!app.quit, "Ctrl+D does not exit while the trust card is up");
+    assert!(
+        !app.ui.quit,
+        "Ctrl+D does not exit while the trust card is up"
+    );
     // The loss invalidates the card.
     app.apply_connection_loss("driver exited".into(), Vec::new());
     assert!(app.pending_trust().is_none());
@@ -223,7 +226,7 @@ fn test_loss_unblocks_exit() {
         KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL),
     );
     assert!(
-        app.quit,
+        app.ui.quit,
         "second Ctrl+D exits after loss cleared the trust card"
     );
 }

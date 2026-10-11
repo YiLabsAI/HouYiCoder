@@ -571,7 +571,7 @@ fn test_grid_rows_selectable_plain() {
     // the grid glyphs and legend text as real content.
     let app = working_app();
     let _buf = render_buffer(&app, 100, 50);
-    let rows = app.layout_snapshot.last_all_rows.borrow();
+    let rows = app.ui.frame.layout.last_all_rows.borrow();
     let joined: String = rows
         .iter()
         .map(|(_, s)| s.as_str())

@@ -452,7 +452,7 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
                 .ui
                 .input
                 .editor
-                .move_up(app.layout_feedback.terminal_cols.get())
+                .move_up(app.ui.frame.feedback.terminal_cols.get())
                 && !editing
             {
                 let project = crate::history::current_project();
@@ -468,7 +468,7 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
                 .ui
                 .input
                 .editor
-                .move_down(app.layout_feedback.terminal_cols.get())
+                .move_down(app.ui.frame.feedback.terminal_cols.get())
                 && !editing
             {
                 app.ui.input.history.down(&mut app.ui.input.editor);
@@ -478,12 +478,12 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
             .ui
             .input
             .editor
-            .move_line_home(app.layout_feedback.terminal_cols.get()),
+            .move_line_home(app.ui.frame.feedback.terminal_cols.get()),
         KeyCode::End => app
             .ui
             .input
             .editor
-            .move_line_end(app.layout_feedback.terminal_cols.get()),
+            .move_line_end(app.ui.frame.feedback.terminal_cols.get()),
         KeyCode::Char('a') if k.modifiers.contains(KeyModifiers::CONTROL) => {
             app.ui.input.editor.move_home();
         }
@@ -494,7 +494,7 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
             app.ui
                 .input
                 .editor
-                .kill_to_line_start(app.layout_feedback.terminal_cols.get());
+                .kill_to_line_start(app.ui.frame.feedback.terminal_cols.get());
         }
         KeyCode::Backspace if !pane_replaces_input(app.ui.navigation.pane) => {
             app.ui.input.editor.pop()

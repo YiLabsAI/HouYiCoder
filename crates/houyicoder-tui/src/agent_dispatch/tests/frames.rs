@@ -740,10 +740,12 @@ fn test_notice_click_toggles_fold() {
             scope: MemoryChangeScope::Auto,
         }],
     }));
-    // Render to publish last_row_keys.fold_keys, what a click resolves against.
+    // Render to publish the visible fold keys, what a click resolves against.
     let _rendered = render_text(&app, 100, 24);
     let ri = app
-        .last_row_keys
+        .ui
+        .frame
+        .keys
         .fold_keys
         .borrow()
         .iter()
@@ -787,7 +789,9 @@ fn test_thought_keep_affordance() {
     );
     let _rendered = render_text(&app, 100, 24);
     let ri = app
-        .last_row_keys
+        .ui
+        .frame
+        .keys
         .turn_ids
         .borrow()
         .iter()
@@ -850,7 +854,7 @@ fn test_notice_rows_fit_pane() {
         &[("alpha", MemoryOperation::Created)],
     );
     let _out = render_text(&app, 24, 40);
-    let rows = app.layout_snapshot.last_all_rows.borrow();
+    let rows = app.ui.frame.layout.last_all_rows.borrow();
     assert!(!rows.is_empty(), "the notice publishes rows");
     for (_, row) in rows.iter() {
         assert_eq!(
@@ -928,7 +932,9 @@ fn test_notice_walk_matches_render() {
         });
     let _out = render_text(&app, 24, 40);
     let head_row = app
-        .layout_snapshot
+        .ui
+        .frame
+        .layout
         .last_all_rows
         .borrow()
         .iter()

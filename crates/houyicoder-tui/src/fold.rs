@@ -633,7 +633,7 @@ impl crate::state::App {
             &self.ui.transcript_view.expanded.fold_groups,
             self.ui.verbose,
         );
-        let width = self.layout_feedback.transcript_width.get();
+        let width = self.ui.frame.feedback.transcript_width.get();
         let mut total = 0;
         let mut first = true;
         for slot in &slots {

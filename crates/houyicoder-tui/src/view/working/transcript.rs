@@ -77,21 +77,21 @@ pub(super) fn draw_transcript(f: &mut Frame, area: Rect, app: &App) {
         v
     };
 
-    if app.display_rows_cache.version.get() != slots_version {
+    if app.ui.frame.rows.version.get() != slots_version {
         let (rows, callids, fold_keys, expanded_group, turn_ids, pre_rendered) =
             build_slots_rows(area, app);
-        *app.display_rows_cache.rows.borrow_mut() = rows;
-        *app.display_rows_cache.callids.borrow_mut() = callids;
-        *app.display_rows_cache.fold_keys.borrow_mut() = fold_keys;
-        *app.display_rows_cache.expanded_group.borrow_mut() = expanded_group;
-        *app.display_rows_cache.turn_ids.borrow_mut() = turn_ids;
-        *app.display_rows_cache.pre_rendered.borrow_mut() = pre_rendered;
-        app.display_rows_cache.version.set(slots_version);
+        *app.ui.frame.rows.rows.borrow_mut() = rows;
+        *app.ui.frame.rows.callids.borrow_mut() = callids;
+        *app.ui.frame.rows.fold_keys.borrow_mut() = fold_keys;
+        *app.ui.frame.rows.expanded_group.borrow_mut() = expanded_group;
+        *app.ui.frame.rows.turn_ids.borrow_mut() = turn_ids;
+        *app.ui.frame.rows.pre_rendered.borrow_mut() = pre_rendered;
+        app.ui.frame.rows.version.set(slots_version);
     }
 
     // Every frame: combine cached slots rows + fresh live rows (live text,
     // spinner, todos). Live rows are cheap (a few rows at most).
-    let total_slots = app.display_rows_cache.rows.borrow().len();
+    let total_slots = app.ui.frame.rows.rows.borrow().len();
     let live = build_tail_rows(area, app, total_slots > 0);
 
     let cap = area.height as usize;
@@ -103,27 +103,27 @@ pub(super) fn draw_transcript(f: &mut Frame, area: Rect, app: &App) {
     // Slice the visible window [top, top+cap) over (slots ++ live) WITHOUT
     // cloning the full slots cache — only the viewport rows are cloned.
     let visible: Vec<(u8, String, Option<ToolOutcome>)> = {
-        let cache = app.display_rows_cache.rows.borrow();
+        let cache = app.ui.frame.rows.rows.borrow();
         visible_window(&cache, &live.rows, total_slots, top, cap)
     };
     let visible_callids: Vec<Option<String>> = {
-        let cache = app.display_rows_cache.callids.borrow();
+        let cache = app.ui.frame.rows.callids.borrow();
         visible_window(&cache, &live.callids, total_slots, top, cap)
     };
     let visible_fold_keys: Vec<Option<String>> = {
-        let cache = app.display_rows_cache.fold_keys.borrow();
+        let cache = app.ui.frame.rows.fold_keys.borrow();
         visible_window(&cache, &live.fold_keys, total_slots, top, cap)
     };
     let visible_expanded_group: Vec<Option<String>> = {
-        let cache = app.display_rows_cache.expanded_group.borrow();
+        let cache = app.ui.frame.rows.expanded_group.borrow();
         visible_window(&cache, &live.expanded_group, total_slots, top, cap)
     };
     let visible_turn_ids: Vec<Option<RowId>> = {
-        let cache = app.display_rows_cache.turn_ids.borrow();
+        let cache = app.ui.frame.rows.turn_ids.borrow();
         visible_window(&cache, &live.turn_ids, total_slots, top, cap)
     };
     let visible_pre: Vec<Option<Line<'static>>> = {
-        let cache = app.display_rows_cache.pre_rendered.borrow();
+        let cache = app.ui.frame.rows.pre_rendered.borrow();
         visible_window(&cache, &live.pre_rendered, total_slots, top, cap)
     };
     // The six parallel arrays are built by independent visible_window calls
@@ -138,24 +138,24 @@ pub(super) fn draw_transcript(f: &mut Frame, area: Rect, app: &App) {
     debug_assert_eq!(visible.len(), visible_pre.len());
     // Stash the full row set (slots + live) for selection/copy.
     {
-        let cache = app.display_rows_cache.rows.borrow();
+        let cache = app.ui.frame.rows.rows.borrow();
         let mut all: Vec<(u8, String)> = cache.iter().map(|(t, s, _)| (*t, s.clone())).collect();
         all.extend(live.all_rows);
-        *app.layout_snapshot.last_all_rows.borrow_mut() = all;
+        *app.ui.frame.layout.last_all_rows.borrow_mut() = all;
     }
     let inner = area;
     // Stash rect + visible rows + callid table for mouse/copy/Ctrl+O.
-    app.layout_snapshot.transcript_rect.set(inner);
+    app.ui.frame.layout.transcript_rect.set(inner);
     // Stash the transcript pane width so the count path (line_display_rows,
     // called from scroll handlers outside the draw borrow) soft-wraps to the
     // SAME width the render path just used — count == render rows.
-    app.layout_feedback.transcript_width.set(inner.width);
-    *app.layout_snapshot.last_transcript_rows.borrow_mut() =
+    app.ui.frame.feedback.transcript_width.set(inner.width);
+    *app.ui.frame.layout.last_transcript_rows.borrow_mut() =
         visible.iter().map(|(t, s, _)| (*t, s.clone())).collect();
-    *app.last_row_keys.callids.borrow_mut() = visible_callids;
-    *app.last_row_keys.fold_keys.borrow_mut() = visible_fold_keys;
-    *app.last_row_keys.expanded_group.borrow_mut() = visible_expanded_group;
-    *app.last_row_keys.turn_ids.borrow_mut() = visible_turn_ids;
+    *app.ui.frame.keys.callids.borrow_mut() = visible_callids;
+    *app.ui.frame.keys.fold_keys.borrow_mut() = visible_fold_keys;
+    *app.ui.frame.keys.expanded_group.borrow_mut() = visible_expanded_group;
+    *app.ui.frame.keys.turn_ids.borrow_mut() = visible_turn_ids;
     f.render_widget(Block::default().borders(Borders::NONE), area);
 
     let q = if app.ui.transcript_view.search.active {
@@ -186,7 +186,7 @@ pub(super) fn draw_transcript(f: &mut Frame, area: Rect, app: &App) {
     };
     let user_bg = Style::new().bg(Color::Indexed(238));
     let dim = Style::new().fg(Color::DarkGray);
-    let exp_grp = app.last_row_keys.expanded_group.borrow();
+    let exp_grp = app.ui.frame.keys.expanded_group.borrow();
     let exp_groups = &app.ui.transcript_view.expanded.fold_groups;
     let subagents = &app.ui.transcript_view.expanded.subagents;
     let spin_elapsed = app.run_started().map(|t| t.elapsed()).unwrap_or_default();
@@ -316,9 +316,11 @@ pub(super) fn draw_transcript(f: &mut Frame, area: Rect, app: &App) {
             ))),
             rect,
         );
-        app.layout_snapshot.jump_to_bottom_rect.set(rect);
+        app.ui.frame.layout.jump_to_bottom_rect.set(rect);
     } else {
-        app.layout_snapshot
+        app.ui
+            .frame
+            .layout
             .jump_to_bottom_rect
             .set(Rect::new(0, 0, 0, 0));
     }
@@ -418,7 +420,9 @@ pub(crate) fn push_line_rows(
         let results = &app.ui.transcript_view.expanded.results;
         let expanded = results.contains(call_id.as_str()) || app.ui.verbose;
         for (tag, text, oc, cid, word) in app
-            .render_cache
+            .ui
+            .renderer
+            .cache
             .borrow_mut()
             .tool_rows(&body, call_id, outcome, expanded, is_diff, width)
         {
@@ -470,7 +474,7 @@ pub(crate) fn push_line_rows(
         return true;
     }
     if let TranscriptLine::Agent(text) = line {
-        let (md_lines, md_plain) = app.render_cache.borrow_mut().agent_rows(text, width);
+        let (md_lines, md_plain) = app.ui.renderer.cache.borrow_mut().agent_rows(text, width);
         let mut first = true;
         for (md_line, plain) in md_lines.into_iter().zip(md_plain) {
             let tag = if first {
@@ -514,14 +518,14 @@ pub(crate) fn push_line_rows(
         if let Some(r) = reasoning
             && expanded
         {
-            for rline in app.render_cache.borrow_mut().thought_rows(r, width) {
+            for rline in app.ui.renderer.cache.borrow_mut().thought_rows(r, width) {
                 sink.push(Row::new(SYSTEM, rline).group(grp_key.clone()));
             }
         }
         return true;
     }
     if let TranscriptLine::User(text) = line {
-        for row in app.render_cache.borrow_mut().user_rows(text, width) {
+        for row in app.ui.renderer.cache.borrow_mut().user_rows(text, width) {
             sink.push(Row::new(tag, row).outcome(outcome).group(grp_key.clone()));
         }
         return true;
@@ -683,7 +687,7 @@ fn visible_window<T: Clone>(
     cap: usize,
 ) -> Vec<T> {
     // The real invariant the cross-array asserts at the call site cannot
-    // check: total_slots is display_rows_cache.rows.len() (passed in) and is used
+    // check: total_slots is the cached rows length (passed in) and is used
     // to bound the slice on ALL six arrays. If a cache length drifts so
     // slots.len() != total_slots, slots[slot_start..slot_end] OOB-panics
     // before the call-site asserts run. Catch it here, with a message, in

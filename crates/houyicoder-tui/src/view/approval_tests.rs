@@ -381,7 +381,7 @@ fn test_read_card_compact() {
         assert_eq!(pair[1], pair[0] + 1, "card rows must be adjacent:\n{out}");
     }
     assert_eq!(
-        app.layout_snapshot.approval_rect.get().height,
+        app.ui.frame.layout.approval_rect.get().height,
         8,
         "separator plus seven content rows"
     );
@@ -427,7 +427,7 @@ fn test_long_command_wraps() {
     );
     assert!(out.contains("1. Yes"), "options missing: {out}");
     assert!(
-        app.layout_snapshot.approval_rect.get().height > 8,
+        app.ui.frame.layout.approval_rect.get().height > 8,
         "wrapped command must increase card height"
     );
 

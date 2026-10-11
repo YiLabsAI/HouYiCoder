@@ -45,9 +45,9 @@ fn last_system(app: &App) -> &str {
 fn test_status_bar_click_drags() {
     let mut app = working_app();
     drop(crate::test_harness::render_text(&app, 80, 24));
-    let srect = app.layout_snapshot.status_rect.get();
+    let srect = app.ui.frame.layout.status_rect.get();
     assert!(srect.height > 0, "status rect published by the draw pass");
-    let rows = app.layout_snapshot.last_status_rows.borrow();
+    let rows = app.ui.frame.layout.last_status_rows.borrow();
     assert!(
         !rows.is_empty(),
         "status rows captured from the frame buffer"
@@ -88,7 +88,9 @@ fn test_status_rows_refresh() {
     use crate::state::ViewportMode;
     use crate::test_harness::render_text;
     let collect = |app: &App| -> String {
-        app.layout_snapshot
+        app.ui
+            .frame
+            .layout
             .last_status_rows
             .borrow()
             .iter()
@@ -119,7 +121,7 @@ fn test_status_rows_refresh() {
         "Scroll status rows must carry the SCROLL tag (stale rows = bug): {scroll_rows}"
     );
     assert!(
-        app.layout_snapshot.status_rect.get().height > 0,
+        app.ui.frame.layout.status_rect.get().height > 0,
         "Scroll re-publishes a status rect, not a stale zero"
     );
 
@@ -137,7 +139,7 @@ fn test_status_rows_refresh() {
         "Focus status rows hold the progress text: {focus_rows}"
     );
     assert!(
-        app.layout_snapshot.status_rect.get().height > 0,
+        app.ui.frame.layout.status_rect.get().height > 0,
         "Focus re-publishes a status rect"
     );
 }
@@ -157,7 +159,7 @@ fn test_status_rect_zeroed_offscreen() {
     let mut app = working_app();
     drop(render_text(&app, 80, 24));
     assert!(
-        app.layout_snapshot.status_rect.get().height > 0,
+        app.ui.frame.layout.status_rect.get().height > 0,
         "Working publishes a status rect"
     );
     // Switch to a screen that draws no status bar. view::draw zeroes
@@ -166,7 +168,7 @@ fn test_status_rect_zeroed_offscreen() {
     app.ui.navigation.screen = Screen::Console;
     drop(render_text(&app, 80, 24));
     assert_eq!(
-        app.layout_snapshot.status_rect.get().height,
+        app.ui.frame.layout.status_rect.get().height,
         0,
         "Console must not keep a stale Working status rect"
     );
@@ -256,7 +258,7 @@ fn test_clear_resets_session() {
 fn test_slash_exit_quits() {
     let mut app = working_app();
     app.run_command(SlashCommand::Exit);
-    assert!(app.quit);
+    assert!(app.ui.quit);
 }
 
 #[test]
@@ -266,7 +268,10 @@ fn test_ctrl_c_idle_noop() {
         &mut app,
         KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
     );
-    assert!(!app.quit, "ctrl+C idle must not quit (interrupt, not exit)");
+    assert!(
+        !app.ui.quit,
+        "ctrl+C idle must not quit (interrupt, not exit)"
+    );
 }
 
 #[test]
@@ -274,7 +279,7 @@ fn test_ctrl_d_twice_quits() {
     let mut app = working_app();
     let d = KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL);
     handle_key(&mut app, d);
-    assert!(!app.quit, "a single ctrl+D must not quit");
+    assert!(!app.ui.quit, "a single ctrl+D must not quit");
     assert!(
         app.ui
             .notifications
@@ -283,14 +288,14 @@ fn test_ctrl_d_twice_quits() {
         "the first ctrl+D shows the exit-confirm toast"
     );
     handle_key(&mut app, d);
-    assert!(app.quit, "a second ctrl+D within the window quits");
+    assert!(app.ui.quit, "a second ctrl+D within the window quits");
 }
 
 #[test]
 fn test_q_empty_no_quit() {
     let mut app = working_app();
     crate::keys::handle_working(&mut app, key(KeyCode::Char('q')));
-    assert!(!app.quit, "q with empty input must not quit (it types)");
+    assert!(!app.ui.quit, "q with empty input must not quit (it types)");
     assert_eq!(app.ui.input.editor.value(), "q");
 }
 

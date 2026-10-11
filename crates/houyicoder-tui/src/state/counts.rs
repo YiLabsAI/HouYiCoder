@@ -26,7 +26,7 @@ impl App {
         line: &TranscriptLine,
         full_tool_call: bool,
     ) -> usize {
-        let w = self.layout_feedback.transcript_width.get();
+        let w = self.ui.frame.feedback.transcript_width.get();
         match line {
             TranscriptLine::Agent(text) => self.agent_text_rows(text),
             TranscriptLine::ThoughtFor {
@@ -37,7 +37,7 @@ impl App {
                     && (self.ui.transcript_view.expanded.thinking.contains(turn_id)
                         || self.ui.verbose)
                 {
-                    n += self.render_cache.borrow_mut().thought_row_count(r, w);
+                    n += self.ui.renderer.cache.borrow_mut().thought_row_count(r, w);
                 }
                 n
             }
@@ -51,7 +51,7 @@ impl App {
                 is_diff,
                 outcome,
                 ..
-            } if name == "result" => self.render_cache.borrow_mut().tool_row_count(
+            } if name == "result" => self.ui.renderer.cache.borrow_mut().tool_row_count(
                 body,
                 call_id,
                 Some(*outcome),
@@ -89,7 +89,9 @@ impl App {
                 n
             }
             // count==render: a user prompt wraps + caps like the render path.
-            TranscriptLine::User(text) => self.render_cache.borrow_mut().user_row_count(text, w),
+            TranscriptLine::User(text) => {
+                self.ui.renderer.cache.borrow_mut().user_row_count(text, w)
+            }
             TranscriptLine::Tool { name, .. } if name != "result" => line
                 .tool_call_rows(w, full_tool_call)
                 .map_or(1, |rows| rows.len()),
@@ -134,7 +136,7 @@ impl App {
             return 0;
         }
         let mut n = 0;
-        let w = self.layout_feedback.transcript_width.get();
+        let w = self.ui.frame.feedback.transcript_width.get();
         // No live thinking block during the turn (the live ∴ Thinking block
         // was removed; live reasoning does not echo
         // as a block). The thinking indicator is the spinner row.
@@ -149,7 +151,9 @@ impl App {
             // the single-slot live cache (not the LRU) — streaming text grows
             // every delta, so the LRU would never hit + pollute.
             n += self
-                .render_cache
+                .ui
+                .renderer
+                .cache
                 .borrow_mut()
                 .live_agent_row_count(&p.live_assistant_text, w);
         }
@@ -171,9 +175,11 @@ impl App {
     }
 
     fn agent_text_rows(&self, text: &str) -> usize {
-        self.render_cache
+        self.ui
+            .renderer
+            .cache
             .borrow_mut()
-            .agent_row_count(text, self.layout_feedback.transcript_width.get())
+            .agent_row_count(text, self.ui.frame.feedback.transcript_width.get())
     }
 
     /// Walk the active transcript in FLAT order (no fold slots), summing

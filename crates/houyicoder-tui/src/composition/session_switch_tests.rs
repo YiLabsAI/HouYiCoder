@@ -281,7 +281,7 @@ fn test_try_noop_without_target() {
     let mut dirty = false;
     app.try_switch_session(None, &mut dirty);
     assert!(!dirty, "no target = no-op");
-    assert!(!app.quit, "no target = no-op");
+    assert!(!app.ui.quit, "no target = no-op");
 }
 
 /// The old busy put-back branch is gone: the event loop's idle guard
@@ -298,7 +298,7 @@ fn test_try_no_builder_quits() {
     let mut dirty = false;
     app.try_switch_session(None, &mut dirty);
     assert!(!dirty, "no builder = no swap");
-    assert!(app.quit, "no builder = fallback quit");
+    assert!(app.ui.quit, "no builder = fallback quit");
     assert_eq!(
         queued_target(&app).as_deref(),
         Some("some-sid"),
@@ -318,7 +318,7 @@ fn test_quit_keeps_resume_target() {
     let mut dirty = false;
     app.idle_drain(None, &mut dirty);
     assert!(!dirty, "no swap = no dirty");
-    assert!(app.quit, "no builder sets quit");
+    assert!(app.ui.quit, "no builder sets quit");
     assert_eq!(
         queued_target(&app).as_deref(),
         Some("some-sid"),
@@ -340,7 +340,7 @@ fn test_same_session_noop() {
         Box::new(|_| panic!("builder must not run for a same-session no-op"));
     app.try_switch_session(Some(&*builder), &mut dirty);
     assert!(dirty, "the no-op system line flags dirty");
-    assert!(!app.quit, "same-session is a no-op, not a quit");
+    assert!(!app.ui.quit, "same-session is a no-op, not a quit");
     assert!(
         queued_target(&app).is_none(),
         "target consumed on no-op (no retry-every-frame storm)"
@@ -369,7 +369,7 @@ fn test_resume_err_keeps_session() {
     app.try_switch_session(Some(&*builder), &mut dirty);
     assert!(dirty, "the error system line flags dirty");
     assert!(
-        !app.quit,
+        !app.ui.quit,
         "a builder error is not a quit (unlike no builder)"
     );
     assert!(
@@ -515,11 +515,15 @@ fn test_clears_session_local_state() {
     ));
     app.ui.selection.transcript.anchor = Some((0, 5));
     app.ui.selection.transcript.is_dragging = true;
-    app.layout_snapshot
+    app.ui
+        .frame
+        .layout
         .last_all_rows
         .borrow_mut()
         .push((0, "stale row".into()));
-    app.last_row_keys
+    app.ui
+        .frame
+        .keys
         .callids
         .borrow_mut()
         .push(Some("stale-call".into()));
@@ -549,12 +553,12 @@ fn test_clears_session_local_state() {
         "selection drag cleared"
     );
     assert!(
-        app.layout_snapshot.last_all_rows.borrow().is_empty(),
+        app.ui.frame.layout.last_all_rows.borrow().is_empty(),
         "last_all_rows cleared"
     );
     assert!(
-        app.last_row_keys.callids.borrow().is_empty(),
-        "last_row_keys.callids cleared"
+        app.ui.frame.keys.callids.borrow().is_empty(),
+        "visible call ids cleared"
     );
 }
 

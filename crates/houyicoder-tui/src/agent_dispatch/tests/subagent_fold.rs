@@ -211,7 +211,7 @@ fn test_click_subagent_head_expands() {
             color: None,
         });
     let _out = crate::test_harness::render_text(&app, 80, 24);
-    let rect = app.layout_snapshot.transcript_rect.get();
+    let rect = app.ui.frame.layout.transcript_rect.get();
     assert!(
         !app.ui.transcript_view.expanded.subagents.contains("c1"),
         "starts collapsed"
@@ -228,7 +228,7 @@ fn test_click_subagent_head_expands() {
     );
     // Toggle symmetry: a second click on the (still-head) row collapses.
     let _out = crate::test_harness::render_text(&app, 80, 24);
-    let rect = app.layout_snapshot.transcript_rect.get();
+    let rect = app.ui.frame.layout.transcript_rect.get();
     {
         let mut surface = TranscriptSurface { app: &mut app };
         surface.handle_down(rect.x, rect.y);
@@ -292,7 +292,9 @@ fn test_subagent_toggle_stale_key() {
         });
     // Forge a stale stash: row 0 carries a child id the transcript no longer
     // holds (a post-rebuild drift the resolver must tolerate).
-    app.last_row_keys
+    app.ui
+        .frame
+        .keys
         .fold_keys
         .borrow_mut()
         .push(Some("ghost".into()));

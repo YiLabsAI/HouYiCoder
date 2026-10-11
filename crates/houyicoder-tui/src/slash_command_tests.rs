@@ -401,7 +401,7 @@ fn test_login_console_exit_commands() {
     assert_eq!(app.ui.navigation.screen, Screen::Console);
     app.ui.navigation.screen = Screen::Working;
     app.run_command(SlashCommand::Exit);
-    assert!(app.quit, "/exit should quit");
+    assert!(app.ui.quit, "/exit should quit");
 }
 
 /// /trajectory renders the audit log: one row per event with kind / ts /

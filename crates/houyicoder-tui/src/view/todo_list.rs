@@ -209,7 +209,7 @@ pub fn render_rows(app: &App) -> Vec<(String, Line<'static>)> {
         h.clone(),
         Line::from(Span::styled(h, Style::default().fg(Color::DarkGray))),
     )];
-    let term_rows = app.layout_feedback.terminal_rows.get();
+    let term_rows = app.ui.frame.feedback.terminal_rows.get();
     let body = if app.sessions.current.todos.expanded {
         render_expanded(todos, term_rows)
     } else {

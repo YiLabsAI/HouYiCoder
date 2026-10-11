@@ -2,23 +2,19 @@
 
 use super::*;
 
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 use std::sync::Arc;
 
 use houyicoder_protocol::frontend::SessionId;
 
-use crate::display_rows_cache::DisplayRowsCache;
 use crate::fleet::strip_state::FleetStripState;
 use crate::hooks_state::HooksPaneState;
 use crate::input::Input;
-use crate::last_row_keys::LastRowKeys;
-use crate::layout_feedback::LayoutFeedback;
-use crate::layout_snapshot::LayoutSnapshot;
 use crate::list_pane_state::ListPaneState;
 use crate::memory_state::MemoryPaneState;
 use crate::notifications::NotificationState;
 use crate::permission_pane_state::PermissionPaneState;
-use crate::render_cache::RenderCache;
+use crate::renderer::{PreparedFrame, Renderer};
 use crate::resume_picker::SessionPickerState;
 use crate::selection::SystemClipboard;
 use crate::selections::Selections;
@@ -69,22 +65,19 @@ pub fn app() -> App {
             notifications: NotificationState::default(),
             clipboard: Arc::new(SystemClipboard),
             terminal_focused: true,
+            quit: false,
+            renderer: Renderer::default(),
+            frame: {
+                let f = PreparedFrame::default();
+                f.rows.version.set(u64::MAX);
+                f
+            },
         },
         workflow: workflow(),
-        display_rows_cache: {
-            let c = DisplayRowsCache::default();
-            c.version.set(u64::MAX);
-            c
-        },
-        quit: false,
         sessions: Sessions::new(Session::bare(SessionIdentity {
             session_id: SessionId::new("test"),
             working_dir: cwd_string(),
         })),
-        layout_feedback: LayoutFeedback::default(),
-        layout_snapshot: LayoutSnapshot::default(),
-        render_cache: RefCell::new(RenderCache::default()),
-        last_row_keys: LastRowKeys::default(),
     }
 }
 

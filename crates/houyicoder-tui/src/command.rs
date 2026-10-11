@@ -39,7 +39,7 @@ impl App {
     pub(crate) fn run_command(&mut self, cmd: SlashCommand) {
         use SlashCommand as C;
         match cmd {
-            C::Exit => self.quit = true,
+            C::Exit => self.ui.quit = true,
             C::Login => self.ui.navigation.screen = Screen::Login,
             C::Console => self.ui.navigation.screen = Screen::Console,
             C::Clear => self.clear_session(),

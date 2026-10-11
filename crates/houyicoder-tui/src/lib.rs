@@ -39,6 +39,7 @@ mod permission_pane_state;
 pub mod records;
 pub mod redaction;
 pub mod render_cache;
+mod renderer;
 pub mod result_body;
 pub mod resume_picker;
 pub mod review_queue;

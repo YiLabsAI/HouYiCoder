@@ -1408,7 +1408,7 @@ fn test_esc_keeps_input() {
     let mut app = working_app();
     app.ui.input.editor.set("draft".into());
     handle_working(&mut app, key(KeyCode::Esc));
-    assert!(!app.quit, "idle Esc must not quit");
+    assert!(!app.ui.quit, "idle Esc must not quit");
     let text = app.ui.input.editor.value();
     assert_eq!(text, "draft", "Ctrl+U owns input clearing");
 }
@@ -1860,7 +1860,9 @@ fn test_ctrl_o_follows_cursor() {
         });
     drop(crate::test_harness::render_text(&app, 80, 24));
     let ri = app
-        .layout_snapshot
+        .ui
+        .frame
+        .layout
         .last_transcript_rows
         .borrow()
         .iter()

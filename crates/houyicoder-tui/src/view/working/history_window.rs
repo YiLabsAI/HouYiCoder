@@ -49,7 +49,7 @@ pub(super) fn draw_history_window(f: &mut Frame, area: Rect, app: &App) {
     // the window (selection past the visible edge, viewport scrolled between
     // draw and copy). These stashes are the rendered-row cache, not
     // TranscriptScroll -- distinct from the five total consumers.
-    *app.layout_snapshot.last_all_rows.borrow_mut() =
+    *app.ui.frame.layout.last_all_rows.borrow_mut() =
         rows.iter().map(|(t, s, _)| (*t, s.clone())).collect();
     let visible: Vec<(u8, String, Option<ToolOutcome>)> =
         rows.into_iter().skip(top).take(cap).collect();
@@ -64,16 +64,16 @@ pub(super) fn draw_history_window(f: &mut Frame, area: Rect, app: &App) {
         pre_rendered.into_iter().skip(top).take(cap).collect();
 
     let inner = area;
-    app.layout_snapshot.transcript_rect.set(inner);
+    app.ui.frame.layout.transcript_rect.set(inner);
     // The count path (history_row_of_line) soft-wraps to the same width the
     // render path just used -- count == render holds for the window too.
-    app.layout_feedback.transcript_width.set(inner.width);
-    *app.layout_snapshot.last_transcript_rows.borrow_mut() =
+    app.ui.frame.feedback.transcript_width.set(inner.width);
+    *app.ui.frame.layout.last_transcript_rows.borrow_mut() =
         visible.iter().map(|(t, s, _)| (*t, s.clone())).collect();
-    *app.last_row_keys.callids.borrow_mut() = visible_callids;
-    *app.last_row_keys.fold_keys.borrow_mut() = visible_fold_keys;
-    *app.last_row_keys.expanded_group.borrow_mut() = visible_expanded_group;
-    *app.last_row_keys.turn_ids.borrow_mut() = visible_turn_ids;
+    *app.ui.frame.keys.callids.borrow_mut() = visible_callids;
+    *app.ui.frame.keys.fold_keys.borrow_mut() = visible_fold_keys;
+    *app.ui.frame.keys.expanded_group.borrow_mut() = visible_expanded_group;
+    *app.ui.frame.keys.turn_ids.borrow_mut() = visible_turn_ids;
     f.render_widget(Block::default().borders(Borders::NONE), area);
 
     let q = if app.ui.transcript_view.search.active {
