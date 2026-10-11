@@ -40,11 +40,10 @@ impl Renderer {
 }
 
 impl PreparedFrame {
-    /// Reset the last draw pass's measured layout, the pre-rendered rows, and
-    /// the per-row keys so the new session renders as if fresh. The rows
-    /// version is stamped to force a first-frame recompute. The feedback
-    /// stays: it is render-measured, rewritten each draw, so a stale value
-    /// self-corrects rather than layering over the new session.
+    /// Drop the last draw pass so the new session recomputes the first
+    /// frame rather than reusing stale measurements. Feedback stays — it
+    /// is rewritten each draw, so a stale value self-corrects rather than
+    /// layering over the new session.
     pub(crate) fn reset_for_session_switch(&mut self) {
         self.layout = Default::default();
         self.rows = Default::default();

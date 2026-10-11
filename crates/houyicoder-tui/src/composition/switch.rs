@@ -143,11 +143,8 @@ impl App {
         // rather than a forged run result.
         let carried_last_run_final = self.sessions.current.last_run_final;
 
-        // Reset session-local UI caches and pane state explicitly; the new
-        // Session is fresh by construction so only the frontend-side state
-        // needs it. Ui::reset_for_session_switch owns the field list; the
-        // process-level resources (terminal focus, clipboard) and the
-        // render-measured frame feedback stay.
+        // The new Session is fresh by construction, so reset only the
+        // frontend-side state; process-level resources carry over.
         self.reset_session_local();
 
         // Commit the new session in one step: no draw or message processing
