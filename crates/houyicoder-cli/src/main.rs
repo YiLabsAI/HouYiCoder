@@ -591,6 +591,11 @@ fn run_tui_loop(
             sid: Some(sid_str.clone()),
         }),
     ));
+    // The guard's drop is the single release door for this loop's lease
+    // scope: the normal return, the error return, and a panic unwinding
+    // past the loop all release through it, writers joined before the
+    // lock drops.
+    let _lease_guard = crate::composition_root::LeaseScopeGuard::new(&host_slot);
     let mut bundle = bundle;
     let mut startup = startup;
     let mut resume_builder: Option<ResumeFn> = {
@@ -601,7 +606,7 @@ fn run_tui_loop(
             build_bundle_for_target(target, project.clone(), provider.clone(), &host_slot)
         }))
     };
-    let outcome = loop {
+    loop {
         match houyicoder_tui::app::run_with_runner(bundle, startup, resume_builder.take()) {
             Ok(None) => break Ok(()),
             Ok(Some(new_target)) => {
@@ -620,9 +625,7 @@ fn run_tui_loop(
             }
             Err(e) => break Err(Box::new(e)),
         }
-    };
-    crate::composition_root::release_all(&host_slot);
-    outcome
+    }
 }
 
 #[cfg(test)]

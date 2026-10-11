@@ -30,21 +30,28 @@ pub enum TaskOutcome {
 }
 
 /// A per-task record of how shutdown resolved, returned by begin_shutdown so
-/// the caller that drives the future observes every outcome. A release owner
-/// holds the lock until this future completes, so the report is produced
-/// after the writers have actually stopped, not when the cancel is called.
+/// the caller that drives the future observes every outcome. The report's
+/// existence is the ending confirmation: begin_shutdown joins every tracked
+/// task — cooperatively, by abort, or through its panic — before the future
+/// completes, so holding a report means no task is still running and a
+/// dependent resource may release. How each ending went is a separate
+/// question: a panicked task has also stopped, only abnormally, and a lease
+/// policy that conflates the two facts treats a crashed writer as a clean
+/// stop.
 pub struct ShutdownReport {
     outcomes: Vec<TaskOutcome>,
 }
 
 impl ShutdownReport {
-    /// True when no task panicked. Joined and Aborted both count as stopped:
-    /// the owner's concern is that no writer is still running and no panic
-    /// was lost, not whether a cooperative cancel or a forced abort ended it.
-    pub fn all_stopped(&self) -> bool {
+    /// How many tasks ended by panicking. These tasks have stopped, but not
+    /// orderly: state they were writing may be inconsistent. Zero on a
+    /// clean stop; a positive count is a degraded release the caller must
+    /// report, not a reason to keep holding what the writers held.
+    pub fn panic_count(&self) -> usize {
         self.outcomes
             .iter()
-            .all(|o| !matches!(o, TaskOutcome::Panicked(_)))
+            .filter(|outcome| matches!(outcome, TaskOutcome::Panicked(_)))
+            .count()
     }
 
     /// Trace every non-clean outcome at warn level so a writer panic or a
@@ -138,33 +145,9 @@ impl HostLifecycle {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::panic::PanicHookInfo;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
     use tokio::sync::oneshot::channel;
-
-    /// Restore the panic hook on drop, including during unwinding, so a
-    /// suppressed hook never leaks past the test even if the body panics.
-    /// The gate runs cargo test (threads share one process), so a leaked
-    /// silent hook would swallow a concurrent test's panic output.
-    type PanicHook = Box<dyn Fn(&PanicHookInfo<'_>) + Sync + Send + 'static>;
-    struct PanicHookGuard {
-        prev: Option<PanicHook>,
-    }
-    impl Drop for PanicHookGuard {
-        fn drop(&mut self) {
-            if let Some(prev) = self.prev.take() {
-                std::panic::set_hook(prev);
-            }
-        }
-    }
-    fn suppress_panic_hook() -> PanicHookGuard {
-        let guard = PanicHookGuard {
-            prev: Some(std::panic::take_hook()),
-        };
-        std::panic::set_hook(Box::new(|_| {}));
-        guard
-    }
 
     /// A task that exits when its token cancels, used to stand in for the
     /// drain and relay without pulling their engine collaborators in.
@@ -188,7 +171,7 @@ mod tests {
         host.track(token_task(host.cancel_token(), Arc::clone(&done)));
         let report = host.begin_shutdown().await;
         assert!(done.load(Ordering::SeqCst), "cancel reached the task");
-        assert!(report.all_stopped(), "no task panicked");
+        assert_eq!(report.panic_count(), 0, "no task panicked");
     }
 
     /// Repeated shutdown + install cycles (the in-process resume shape) each
@@ -203,7 +186,7 @@ mod tests {
             host.track(token_task(host.cancel_token(), Arc::clone(&done)));
             let report = host.begin_shutdown().await;
             assert!(done.load(Ordering::SeqCst), "each switch reaps its task");
-            assert!(report.all_stopped(), "no task panicked");
+            assert_eq!(report.panic_count(), 0, "no task panicked");
         }
     }
 
@@ -276,18 +259,19 @@ mod tests {
 
     /// A task that panics is recorded as Panicked, not Joined, so the owner
     /// can report the failure instead of treating the void result as success.
+    /// The process-global panic hook stays untouched: tokio captures the
+    /// panic into the JoinError the report reads, and the default hook's
+    /// stderr output is expected noise in a test run. Swapping the hook
+    /// from a panicking thread is not an option — set_hook panics when
+    /// called during unwinding, which would abort the test process.
     #[tokio::test]
     async fn test_begin_shutdown_records_panic() {
-        // Suppress the panic's stderr output without changing how tokio
-        // captures it: the JoinError is what the report reads, not the hook.
-        // The guard restores on drop even if this body panics.
-        let _hook = suppress_panic_hook();
         let mut host = HostLifecycle::new();
         host.track(tokio::spawn(async move {
             panic!("writer failed");
         }));
         let report = host.begin_shutdown().await;
-        assert!(!report.all_stopped(), "a panicked task is not stopped");
+        assert_eq!(report.panic_count(), 1, "panic counted as abnormal");
         assert!(
             matches!(report.outcomes()[0], TaskOutcome::Panicked(_)),
             "panic recorded, not swallowed"
