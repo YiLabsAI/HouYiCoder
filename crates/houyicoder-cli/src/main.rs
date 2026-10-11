@@ -30,7 +30,9 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::mpsc::channel;
 
+use houyicoder_service::composition::session_log_root;
 use houyicoder_tui::agent_message::SessionMessage;
+use houyicoder_tui::composition::shared_runtime;
 
 mod cleanup;
 mod composition_root;
@@ -142,7 +144,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
 /// Dispatch --resume <value>. The value is an existing file path (resume from
 /// an exported transcript) or a session id (resume a session on disk). --fork-
-/// session (fork=true) mints a new sid seeded from the source instead of
+/// session (fork=true) creates a new sid seeded from the source instead of
 /// continuing the source itself.
 fn run_resume(value: String, project: Option<String>, fork: bool) -> Result<(), Box<dyn Error>> {
     // Reap crashed-session pid markers before resolving the value, so a sid
@@ -177,14 +179,14 @@ fn run_resume(value: String, project: Option<String>, fork: bool) -> Result<(), 
 }
 
 /// --continue: resolve the most-recently-active session on disk and resume
-/// it (no sid needed). --fork-session mints a new sid seeded from that
+/// it (no sid needed). --fork-session creates a new sid seeded from that
 /// session instead of continuing it. Errors if no session exists on disk.
 fn run_continue(project: Option<String>, fork: bool) -> Result<(), Box<dyn Error>> {
     #[cfg(unix)]
     {
         let _ = detach::cleanup_stale();
     }
-    let sessions_root = houyicoder_service::composition::session_log_root();
+    let sessions_root = session_log_root();
     let Some(sid) = houyicoder_service::composition::latest_session_sid(&sessions_root) else {
         let cwd = houyicoder_service::composition::workspace_cwd(None);
         eprintln!(
@@ -206,14 +208,12 @@ fn run_continue(project: Option<String>, fork: bool) -> Result<(), Box<dyn Error
 /// guard. A failure prints to the console (the legitimate pre-TUI sink) and
 /// propagates so the process exits instead of starting a second writer.
 fn acquire_resume_lock(sid_str: &str) -> Result<SessionLock, Box<dyn Error>> {
-    Ok(SessionLock::acquire(
-        sid_str,
-        &houyicoder_service::composition::session_log_root(),
+    Ok(
+        SessionLock::acquire(sid_str, &session_log_root()).map_err(|e| {
+            eprintln!("resume failed: {e}; fork a new session instead (--fork-session, coming)");
+            Box::new(e)
+        })?,
     )
-    .map_err(|e| {
-        eprintln!("resume failed: {e}; fork a new session instead (--fork-session, coming)");
-        Box::new(e)
-    })?)
 }
 
 /// The runner wiring every binary entry shares: the disk persistence
@@ -347,12 +347,12 @@ fn run_attach(socket: String, session_id: String) -> Result<(), Box<dyn Error>> 
 
 /// The ACP stdio entry. Builds the runner through the same composition root
 /// the TUI path uses (real provider config, tools, sandbox, memory), then
-/// drives the ACP server over stdin + stdout. The session id is pre-minted
-/// and printed to stderr so a stock client prompts against it — the server
-/// is single-session-bound at construction, so the id the client sees from
-/// session/new must match the one the runner drives. Binding the runner to
-/// the id session/new mints (instead of pre-minting here) is a later cut;
-/// this first cut keeps the simpler pre-mint path the example established.
+/// drives the ACP server over stdin + stdout. The session id is assigned up
+/// front and printed to stderr so a stock client prompts against it — the
+/// server is single-session-bound at construction, so the id the client sees
+/// from session/new must match the one the runner drives. Binding the runner
+/// to the id session/new assigns (instead of assigning it here) is a later
+/// cut; this first cut keeps the simpler pre-assign path the example set.
 fn run_acp_stdio(
     project: Option<String>,
     model_override: Option<String>,
@@ -468,7 +468,7 @@ type ResumeFn = Box<
 /// because that sid already exists and another process may hold it. The
 /// export path forks a fresh, unique sid inside the build, so its lock is
 /// acquired after the build for the lease going forward (the new sid is
-/// uncontended the moment it is minted). A failed build drops the new lock
+/// uncontended the moment it is created). A failed build drops the new lock
 /// and leaves the prior lease in the slot, so a failed switch strands the
 /// user on the live session rather than a dead one.
 fn build_bundle_for_target(
@@ -483,20 +483,34 @@ fn build_bundle_for_target(
     ),
     Box<dyn Error>,
 > {
-    let sessions_root = houyicoder_service::composition::session_log_root();
+    let sessions_root = session_log_root();
     let path = PathBuf::from(target);
     let (bundle, startup, host, lock) = if path.exists() {
         let (bundle, startup, host) = build_bundle_for_resume(&path, project, provider)?;
         let new_sid = bundle.session.0.clone();
-        // The build spawned the serve, drain, relay, and refresh tasks on the
+        // The build started the serve, drain, relay, and refresh tasks on the
         // shared runtime. If the lock fails (rare for a fresh sid, but a disk
-        // error or permissions can), shut the new host down before propagating
-        // so those tasks are cancelled instead of leaking on the shared runtime
-        // for the process lifetime, holding Arcs to the runner.
+        // error or permissions can), the new host must still close so those
+        // tasks do not hold the runner's Arc for the process lifetime. The
+        // failure is not necessarily a process exit — the error returns to the
+        // TUI and the user stays on the live session — so the failed host's
+        // release is tracked in the scope, not fire-and-forgot: exit joins it
+        // through release_all along with everything else.
         let lock = match SessionLock::acquire(&new_sid, &sessions_root) {
             Ok(l) => l,
             Err(e) => {
-                host.shutdown(houyicoder_tui::composition::shared_runtime().handle());
+                let runtime = shared_runtime();
+                let handle = runtime.handle();
+                let shutdown = host.begin_shutdown();
+                let release = handle.spawn(async move {
+                    let report = shutdown.await;
+                    report.trace_failures("export-path host");
+                    report
+                });
+                host_slot
+                    .lock()
+                    .expect("host lifecycle slot must not poison")
+                    .track_release(release);
                 return Err(Box::new(e));
             }
         };
@@ -510,6 +524,7 @@ fn build_bundle_for_target(
         if let Some(current) = host_slot
             .lock()
             .expect("host lifecycle slot must not poison")
+            .current
             .as_ref()
             .and_then(|lease| lease.sid.as_deref())
             && houyicoder_context::SessionId::from_display_string(current).is_some_and(|c| c == sid)
@@ -534,26 +549,18 @@ fn build_bundle_for_target(
             "invalid resume target: {target}"
         )));
     };
-    let runtime = houyicoder_tui::composition::shared_runtime();
-    if let Some(old) = host_slot
+    let runtime = shared_runtime();
+    let handle = runtime.handle();
+    // Install the new lease: the old lease releases into a tracked task whose
+    // handle stays in the scope's pending list, so a switch-then-exit joins it
+    // instead of abandoning the old writers. The old lock outlives the old
+    // writers because begin_release joins them before dropping it; the new
+    // lease holds a different sid's lock, so the two coexist briefly without
+    // contention.
+    host_slot
         .lock()
         .expect("host lifecycle slot must not poison")
-        .take()
-    {
-        // The old lease releases on the shared runtime: the task joins the
-        // old writers and drops the old lock only after they finish, so a
-        // second process resuming the old sid mid-flush cannot interleave.
-        // The handle is dropped unread — the new lease holds a different
-        // sid's lock, so the two coexist briefly without contention.
-        old.begin_release(runtime.handle());
-    }
-    *host_slot
-        .lock()
-        .expect("host lifecycle slot must not poison") = Some(crate::composition_root::HostLease {
-        host,
-        lock: Some(lock),
-        sid: Some(bundle.session.0.clone()),
-    });
+        .install(host, lock, bundle.session.0.clone(), handle);
     Ok((bundle, startup))
 }
 
@@ -577,12 +584,13 @@ fn run_tui_loop(
         }
     }
     let lock = acquire_resume_lock(&sid_str)?;
-    let host_slot: crate::composition_root::HostLeaseSlot =
-        Arc::new(Mutex::new(Some(crate::composition_root::HostLease {
+    let host_slot: crate::composition_root::HostLeaseSlot = Arc::new(Mutex::new(
+        crate::composition_root::HostLeaseScope::with_current(crate::composition_root::HostLease {
             host,
             lock: Some(lock),
             sid: Some(sid_str.clone()),
-        })));
+        }),
+    ));
     let mut bundle = bundle;
     let mut startup = startup;
     let mut resume_builder: Option<ResumeFn> = {
@@ -613,7 +621,7 @@ fn run_tui_loop(
             Err(e) => break Err(Box::new(e)),
         }
     };
-    crate::composition_root::release_current_lease(&host_slot);
+    crate::composition_root::release_all(&host_slot);
     outcome
 }
 

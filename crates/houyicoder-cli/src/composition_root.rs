@@ -11,11 +11,13 @@ use std::sync::mpsc::channel;
 use houyicoder_client::{Client, InProcTransport};
 use houyicoder_context::SessionId;
 use houyicoder_core::agent::Runner;
-use houyicoder_service::composition::host_lifecycle::HostLifecycle;
+use houyicoder_service::composition::host_lifecycle::{HostLifecycle, ShutdownReport};
 use houyicoder_service::composition::session_log_root;
 use houyicoder_service::server::{FrameCarrier, Server};
 use houyicoder_tui::agent_message::SessionMessage;
 use houyicoder_tui::composition::{FrontendStartup, RunnerBundle, shared_runtime};
+use tokio::runtime::Handle;
+use tokio::task::JoinHandle;
 
 use crate::housekeeping;
 use crate::session_catalog;
@@ -58,50 +60,110 @@ impl HostLease {
     }
 
     /// Move the lock into a release task that joins every host task to
-    /// completion before dropping the lock. A writer that ignores the
-    /// cancel token and exits only on its own gate keeps the lock held
-    /// until it finishes; a second process cannot acquire until the join
-    /// completes and the lock drops. The caller observes completion through
-    /// the returned handle — dropping the handle does not cancel the task,
-    /// but the owner must await it or retain the lease, since aborting the
-    /// release task (via the handle) drops the lock early.
-    pub(crate) fn begin_release(
-        self,
-        handle: &tokio::runtime::Handle,
-    ) -> tokio::task::JoinHandle<()> {
-        let host = self.host;
+    /// completion before dropping the lock. The cancel is signalled before
+    /// the task exists: begin_shutdown fires the token synchronously at the
+    /// call, so by the time the runtime polls the release task every writer
+    /// has already been told to stop. A writer that ignores the token and
+    /// exits only on its own gate keeps the lock held until it finishes; a
+    /// second process cannot acquire until the join completes and the lock
+    /// drops. The task returns the shutdown report so a panicked writer is
+    /// reported, not swallowed. The owner must retain or await the returned
+    /// handle — aborting the release task (via the handle) drops the lock
+    /// early.
+    pub(crate) fn begin_release(self, handle: &Handle) -> JoinHandle<ShutdownReport> {
+        let shutdown = self.host.begin_shutdown();
         let lock = self.lock;
         handle.spawn(async move {
-            host.begin_shutdown().await;
+            let report = shutdown.await;
             drop(lock);
+            report
         })
     }
 }
 
-/// The slot a run loop holds one host lease in. A switch takes the old
-/// lease out, releases it, and stores the new one under the mutex.
-pub(crate) type HostLeaseSlot = Arc<Mutex<Option<HostLease>>>;
+/// The owner that tracks the current lease and every release task a session
+/// switch started but has not yet confirmed finished. A switch does not drop
+/// the old lease's release handle — it moves the handle into pending, so exit
+/// joins each one in turn instead of relying on process teardown to clean up
+/// writers that were still flushing when the next session took over. The lock
+/// for every lease stays held until its own writers finish; only then does
+/// the release drop it.
+#[derive(Default)]
+pub(crate) struct HostLeaseScope {
+    pub(crate) current: Option<HostLease>,
+    pending: Vec<JoinHandle<ShutdownReport>>,
+}
 
-/// Take the current lease from the slot and release it on the shared
-/// runtime: join the host's writers, then drop the lock. Blocks the caller
-/// up to the shutdown budget so a writer finishing its last write keeps
-/// the lock until it is done — the process does not drop the lock early or
-/// abandon a mid-flush writer. Called from the run loop's exit path on
-/// both normal and error returns, which runs on the main thread, not a
-/// runtime worker — Handle::block_on panics from inside a worker.
-pub(crate) fn release_current_lease(host_slot: &HostLeaseSlot) {
-    let Some(lease) = host_slot
-        .lock()
-        .expect("host lifecycle slot must not poison")
-        .take()
-    else {
-        return;
-    };
+impl HostLeaseScope {
+    pub(crate) fn with_current(lease: HostLease) -> Self {
+        Self {
+            current: Some(lease),
+            pending: Vec::new(),
+        }
+    }
+
+    /// Release the current lease into a tracked release task and store the
+    /// new lease. The old lease's release handle is retained in pending, not
+    /// dropped, so a rapid switch-then-exit cannot abandon a writer that is
+    /// still joining.
+    pub(crate) fn install(
+        &mut self,
+        host: HostLifecycle,
+        lock: SessionLock,
+        sid: String,
+        handle: &Handle,
+    ) {
+        if let Some(old) = self.current.take() {
+            self.pending.push(old.begin_release(handle));
+        }
+        self.current = Some(HostLease {
+            host,
+            lock: Some(lock),
+            sid: Some(sid),
+        });
+    }
+
+    /// Track a release task that has no lease: a build that spawned its host
+    /// tasks but failed before acquiring a lock. Exit joins it through
+    /// release_all so the failed host's tasks do not outlive the process on
+    /// the shared runtime, holding the runner's Arc until they drain.
+    pub(crate) fn track_release(&mut self, handle: JoinHandle<ShutdownReport>) {
+        self.pending.push(handle);
+    }
+}
+
+/// The slot a run loop holds the lease scope in. Shared with the resume
+/// closure so a switch can install the new lease under the mutex.
+pub(crate) type HostLeaseSlot = Arc<Mutex<HostLeaseScope>>;
+
+/// Release the current lease and join every release task the owner holds —
+/// the current session's and every prior switch's. The lock for each lease
+/// stays held until its own writers finish; only then does the release drop
+/// it. Each release task gets the per-task shutdown budget to join its
+/// writers, so the total wait is the sum across releases still draining, not
+/// a single ceiling — a switch that stacked several still-draining releases
+/// joins them in turn. Called from the run loop's exit path on both normal
+/// and error returns, which runs on the main thread, not a runtime worker —
+/// Handle::block_on panics from inside a worker.
+pub(crate) fn release_all(host_slot: &HostLeaseSlot) {
     let runtime = shared_runtime();
     let handle = runtime.handle();
-    let release = lease.begin_release(handle);
-    if let Err(e) = handle.block_on(release) {
-        tracing::warn!("host lease release task did not finish cleanly: {e}");
+    let (current, mut pending) = {
+        let mut scope = host_slot
+            .lock()
+            .expect("host lifecycle slot must not poison");
+        let current = scope.current.take();
+        let pending = std::mem::take(&mut scope.pending);
+        (current, pending)
+    };
+    if let Some(lease) = current {
+        pending.push(lease.begin_release(handle));
+    }
+    for release in pending {
+        match handle.block_on(release) {
+            Ok(report) => report.trace_failures("host lease release"),
+            Err(e) => tracing::warn!("host lease release task did not finish: {e}"),
+        }
     }
 }
 
@@ -397,11 +459,16 @@ mod tests {
         p
     }
 
-    /// The exclusive lock must outlive every tracked task the host owns. A
-    /// writer that ignores the cancel token and exits only on its own gate
-    /// keeps the lock held until it finishes; a second process cannot
-    /// acquire while that writer runs, and can acquire only after the
-    /// release task joins the writer and drops the lock.
+    /// The lock stays held while a writer the host tracks is still running,
+    /// even after the release task has started. The writer acknowledges the
+    /// cancel token back to the test through a oneshot, so the test knows
+    /// begin_shutdown has run — not by polling or sleeping. At that point
+    /// the writer is still blocked on its own release gate, so a second
+    /// acquire must report the lock held. Letting the writer finish lets the
+    /// release task join it and drop the lock; only then can a second process
+    /// acquire. A buggy release that drops the lock before joining would let
+    /// the second acquire succeed while the writer is still running.
+    #[cfg(unix)]
     #[test]
     fn test_lock_outlives_writer() {
         let runtime = Builder::new_current_thread()
@@ -415,11 +482,18 @@ mod tests {
             let lock = SessionLock::acquire(&sid_str, &root).expect("first acquire");
 
             let mut host = HostLifecycle::new();
-            let (gate_tx, gate_rx) = channel::<()>();
+            let cancel = host.cancel_token();
+            let (seen_tx, seen_rx) = channel::<()>();
+            let (release_tx, release_rx) = channel::<()>();
             let done = Arc::new(AtomicBool::new(false));
             let done_c = Arc::clone(&done);
             host.track(tokio::spawn(async move {
-                let _ = gate_rx.await;
+                // Stand in for a drain writer: acknowledge the cancel so the
+                // test knows begin_shutdown ran, then wait on a second gate so
+                // the writer stays alive until the test lets it finish.
+                let _ = cancel.cancelled().await;
+                let _ = seen_tx.send(());
+                let _ = release_rx.await;
                 done_c.store(true, Ordering::SeqCst);
             }));
 
@@ -430,14 +504,20 @@ mod tests {
             };
             let release = lease.begin_release(runtime.handle());
 
+            // The writer saw the cancel, so begin_shutdown has run; the writer
+            // is still blocked on its release gate. The lock must be held.
+            let _ = seen_rx.await;
             match SessionLock::acquire(&sid_str, &root) {
                 Err(LockError::HeldByOther(_)) => {}
                 Ok(_) => panic!("lock released while writer still running"),
                 Err(LockError::Io(e)) => panic!("unexpected io error: {e}"),
             }
 
-            drop(gate_tx);
-            release.await.expect("release task");
+            // Let the writer finish; the release task joins it and drops the
+            // lock only after. A second acquire must now succeed.
+            drop(release_tx);
+            let report = release.await.expect("release task");
+            assert!(report.all_stopped(), "no writer panicked");
 
             let _reacquire = SessionLock::acquire(&sid_str, &root).expect("acquire after release");
             assert!(
