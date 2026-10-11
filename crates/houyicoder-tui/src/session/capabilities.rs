@@ -22,6 +22,7 @@ use houyicoder_protocol::frontend::skills::SkillEntry;
 use houyicoder_protocol::frontend::status::StatusSnapshot;
 use houyicoder_protocol::frontend::tools::ToolEntry;
 
+use crate::agent_message::{FLEET_GRACE, FleetEntry};
 use crate::composition::WorktreeEntry;
 use crate::evidence::MemoryEntry;
 
@@ -174,6 +175,45 @@ pub(crate) struct SkillsCapability {
 pub(crate) struct WorktreeCapability {
     /// The worktree rows in listing order.
     pub(crate) entries: Vec<WorktreeEntry>,
+}
+
+/// The session's fleet facts: one live status snapshot per spawned child,
+/// pushed by the host's status relay and updated in place as later snapshots
+/// arrive. A completed child drops once its grace window elapses so finished
+/// rows do not linger; the footer strip's selection and per-frame drawing
+/// facts are interaction state and live on the Ui owner. A switch resets the
+/// snapshots by construction: the new session's children are unrelated to the
+/// old one's, and a child id can repeat across sessions.
+#[derive(Debug, Default)]
+pub(crate) struct FleetCapability {
+    /// The child snapshots in first-observed order.
+    pub(crate) entries: Vec<FleetEntry>,
+}
+
+impl FleetCapability {
+    /// Whether any child is still running (no completed status). Drives the
+    /// elapsed-counter repaint: only a live child has a counter to update.
+    pub(crate) fn any_running(&self) -> bool {
+        self.entries.iter().any(|e| e.completed.is_none())
+    }
+
+    /// Drop completed entries whose grace window has elapsed. Running
+    /// children (no completed_at) always stay. Returns true when at least
+    /// one entry dropped so the caller marks the view dirty.
+    ///
+    /// retain_viewed pins the child the user is drilled into (teammate
+    /// view): its entry stays past the grace window so the footer does not
+    /// drop the row the user is reading. The result lives in the transcript
+    /// fold-group regardless; this only holds the terse done row. Callers
+    /// pass None once the user exits the view.
+    pub(crate) fn drop_completed(&mut self, retain_viewed: Option<&str>) -> bool {
+        let before = self.entries.len();
+        self.entries.retain(|e| {
+            e.completed_at.is_none_or(|t| t.elapsed() < FLEET_GRACE)
+                || e.agent_id == retain_viewed.unwrap_or("")
+        });
+        self.entries.len() != before
+    }
 }
 
 /// An in-flight pane mutation, keyed by the request id its reply will carry.
@@ -380,4 +420,6 @@ pub(crate) struct SessionCapabilities {
     /// The memory capability: the entry cache, the toggle states, the
     /// change-notice dedupe set, and the pending pane mutations.
     pub(crate) memory: MemoryCapability,
+    /// The fleet capability: the live child status snapshots.
+    pub(crate) fleet: FleetCapability,
 }

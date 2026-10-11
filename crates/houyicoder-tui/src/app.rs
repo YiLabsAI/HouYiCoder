@@ -71,14 +71,11 @@ pub fn run_with_runner(
         // Idle frames render only on state changes. Busy frames keep the
         // spinner live without toggling terminal cursor visibility.
         app.idle_drain(resume_builder.as_deref(), &mut dirty);
-        // Completed child rows drop after their grace period. The child
-        // currently open in teammate view remains pinned.
-        let retain_viewed = app.ui.teammate_view.as_ref().map(|v| v.child_sid.as_str());
-        if app.fleet.drop_completed(retain_viewed) {
+        if app.drop_completed_fleet() {
             dirty = true;
         }
         let now = Instant::now();
-        if app.fleet.tick_elapsed(now) {
+        if app.tick_fleet_elapsed(now) {
             dirty = true;
         }
         if app.ui.notifications.tick(now) {
@@ -282,12 +279,15 @@ pub(crate) fn handle_mouse(app: &mut App, m: MouseEvent) {
                 return;
             }
             // Fleet hit-testing returns an action before mutating App.
-            let frect = app.fleet.rect.get();
+            let frect = app.ui.fleet.rect.get();
             if frect.width > 0 && frect.height > 0 && in_rect(frect, m.column, m.row) {
-                let route = click_route(&app.fleet, frect.height, (m.row - frect.y) as usize);
+                let entries = &app.sessions.current.capabilities.fleet.entries;
+                let selected = app.ui.fleet.selected;
+                let route =
+                    click_route(entries, selected, frect.height, (m.row - frect.y) as usize);
                 match route {
                     FleetClick::OpenAgentsPane => app.run_command(SlashCommand::Agents),
-                    FleetClick::Select(i) => app.fleet.selected = Some(i),
+                    FleetClick::Select(i) => app.ui.fleet.selected = Some(i),
                     FleetClick::Drill(sid) => {
                         app.enter_teammate_view_for_sid(&sid, true);
                     }
@@ -481,12 +481,8 @@ pub(crate) fn handle_key(app: &mut App, k: KeyEvent) {
         && app.ui.input.editor.is_empty()
         && app.ui.teammate_view.is_none()
     {
-        let running = app
-            .fleet
-            .entries
-            .iter()
-            .filter(|e| e.completed.is_none())
-            .count();
+        let entries = &app.sessions.current.capabilities.fleet.entries;
+        let running = entries.iter().filter(|e| e.completed.is_none()).count();
         if k.code == KeyCode::Char('K') && running > 0 {
             let pending = app
                 .ui
@@ -515,8 +511,8 @@ pub(crate) fn handle_key(app: &mut App, k: KeyEvent) {
         }
         if k.code == KeyCode::Char('k')
             && running > 0
-            && let Some(i) = app.fleet.selected
-            && let Some(e) = app.fleet.entries.get(i).filter(|e| e.completed.is_none())
+            && let Some(i) = app.ui.fleet.selected
+            && let Some(e) = entries.get(i).filter(|e| e.completed.is_none())
         {
             if let Err(e) = app.enqueue(ClientCommand::KillChild {
                 child_sid: e.agent_id.clone(),

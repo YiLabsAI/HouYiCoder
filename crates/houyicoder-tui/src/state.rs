@@ -23,7 +23,6 @@ mod teammate_view;
 mod trajectory;
 pub mod transcript;
 
-use crate::agent_message::FleetState;
 #[cfg(test)]
 use crate::composition::app as test_app;
 use crate::display_rows_cache::DisplayRowsCache;
@@ -118,8 +117,6 @@ pub struct App {
     /// carries, parallel to the rows. Pub(crate) so the click and Ctrl+O
     /// handlers and the draw pass reach a vector directly.
     pub(crate) last_row_keys: LastRowKeys,
-    /// Footer fleet state: the child snapshots + the Shift-arrow selection.
-    pub fleet: FleetState,
     /// The /model picker: host snapshot, draft, and the commit in flight.
     pub model_picker: ModelPickerState,
 }

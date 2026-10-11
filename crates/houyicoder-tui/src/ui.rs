@@ -15,6 +15,7 @@ mod navigation;
 use std::cell::Cell;
 use std::sync::Arc;
 
+use crate::fleet::strip_state::FleetStripState;
 use crate::hooks_state::HooksPaneState;
 use crate::input::Input;
 use crate::list_pane_state::ListPaneState;
@@ -86,6 +87,13 @@ pub struct Ui {
     /// pane interaction state, kept within the rows by every rebuild, step,
     /// and read, and reset on a session switch.
     pub agents_sel: usize,
+    /// The footer fleet strip's interaction and per-frame drawing facts: the
+    /// highlighted child row, the rows and rect the last draw granted, and
+    /// the elapsed counters' repaint pacing. The child snapshots these index
+    /// are the session's fleet capability; the compositions across the two
+    /// owners are App methods. Resets with its pane peers on a session
+    /// switch.
+    pub(crate) fleet: FleetStripState,
     /// The /trajectory pane's drill level, cursor, and selection. One owner
     /// for the pane's position, because the selection and the cursor are kept
     /// consistent by the same transitions.

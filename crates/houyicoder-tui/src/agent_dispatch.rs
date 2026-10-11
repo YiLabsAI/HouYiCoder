@@ -300,12 +300,8 @@ impl App {
         {
             self.exit_teammate_view();
         }
-        if let Some(entry) = self
-            .fleet
-            .entries
-            .iter_mut()
-            .find(|e| e.agent_id == agent_id)
-        {
+        let entries = &mut self.sessions.current.capabilities.fleet.entries;
+        if let Some(entry) = entries.iter_mut().find(|e| e.agent_id == agent_id) {
             entry.turn = turn;
             entry.tokens = tokens;
             entry.tool_uses = tool_uses;
@@ -318,7 +314,7 @@ impl App {
             }
             entry.completed = completed;
         } else {
-            self.fleet.entries.push(FleetEntry {
+            entries.push(FleetEntry {
                 agent_id: agent_id.clone(),
                 subagent_type,
                 turn,

@@ -221,7 +221,14 @@ ACTIVE_OWNERS = {
         # flat App field is gone; the compositions across the two owners
         # (filtering, selection, refresh, the connection-death sweep) are
         # App methods.
-        "fields": 12,
+        # The footer fleet split along the same boundary: the child
+        # snapshots the host pushes became a fleet capability on the
+        # session, and the strip's selection, granted height, click rect,
+        # and elapsed-repaint pacing became one Ui field. The flat App
+        # field is gone; the compositions across the two owners (moving
+        # the selection, dropping completed children, pacing the repaint)
+        # are App methods.
+        "fields": 11,
         "mut_app": 44,
     },
     "crates/houyicoder-tui/src/ui.rs:Ui": {
@@ -230,8 +237,9 @@ ACTIVE_OWNERS = {
         # (Input), the transcript view state and the states parked for views
         # off screen, the teammate drill, the verbose render flag, the
         # permission, skills, hooks, memory, trajectory, and worktree pane
-        # interaction states, the agents pane list cursor, the spinner's
-        # displayed token count, the last-written terminal title,
+        # interaction states, the agents pane list cursor, the fleet strip
+        # state, the spinner's displayed token count,
+        # the last-written terminal title,
         # the queued-input hit-test geometry,
         # the drag selections, the toast notifications, the clipboard port,
         # and the terminal-focus flag. Holds no connection handles and no
@@ -239,7 +247,7 @@ ACTIVE_OWNERS = {
         # and views read it through App. On-demand pane content (a drilled-in
         # teammate's lines, an opened skill body, a search corpus) lives here
         # as display copies whose loss costs a re-fetch, never a record.
-        "fields": 21,
+        "fields": 22,
     },
     "crates/houyicoder-tui/src/ui/navigation.rs:Navigation": {
         # The user's position in the frontend: the screen, the open pane, the
@@ -321,10 +329,10 @@ ACTIVE_OWNERS = {
     },
     "crates/houyicoder-tui/src/session/capabilities.rs:SessionCapabilities": {
         # The static composition of a session's named capabilities: the
-        # permission, status, hooks, tools, skills, worktree, and memory
-        # capabilities. The connection, run, and transcript live beside it,
-        # not inside it.
-        "fields": 7,
+        # permission, status, hooks, tools, skills, worktree, memory, and
+        # fleet capabilities. The connection, run, and transcript live
+        # beside it, not inside it.
+        "fields": 8,
     },
     "crates/houyicoder-tui/src/session/capabilities.rs:HooksCapability": {
         # The session's registered-hook cache: the rows the /hooks pane
@@ -350,6 +358,26 @@ ACTIVE_OWNERS = {
         # working directory. One capability value so a session switch resets
         # the rows by construction instead of a manual App reset.
         "fields": 1,
+    },
+    "crates/houyicoder-tui/src/session/capabilities.rs:FleetCapability": {
+        # The session's live fleet record: the child snapshots the host
+        # pushes, in first-observed order, with the grace-window drop of a
+        # completed child. Split from the one footer-strip owner: what the
+        # session knows stays here and resets by construction on a switch;
+        # the strip's selection, granted height, click rect, and repaint
+        # pacing moved to the Ui owner beside its peers.
+        "fields": 1,
+    },
+    "crates/houyicoder-tui/src/fleet/strip_state.rs:FleetStripState": {
+        # The footer fleet strip's interaction and drawing facts: the
+        # selected row, the height the layout granted, the click rect the
+        # mouse handler tests, and the one-second elapsed-repaint pacing.
+        # The child snapshots themselves are the session's fleet
+        # capability; the compositions across the two owners are App
+        # methods so the read of the facts and the write of the strip
+        # cannot drift at separate call sites. Resets with its pane peers
+        # on a session switch.
+        "fields": 4,
     },
     "crates/houyicoder-tui/src/session/capabilities.rs:MemoryCapability": {
         # The session's memory record: the server-refreshed entry list, the

@@ -283,20 +283,25 @@ fn test_ctrl_o_expands_child() {
 fn test_search_ignores_fleet_click() {
     let mut app = app_with_two_children(5);
     for sid in ["c1", "c2"] {
-        app.fleet.entries.push(FleetEntry {
-            agent_id: sid.into(),
-            subagent_type: "explore".into(),
-            turn: 1,
-            tokens: 10,
-            tool_uses: 0,
-            last_activity: None,
-            completed: None,
-            completed_at: None,
-            started_at: None,
-        });
+        app.sessions
+            .current
+            .capabilities
+            .fleet
+            .entries
+            .push(FleetEntry {
+                agent_id: sid.into(),
+                subagent_type: "explore".into(),
+                turn: 1,
+                tokens: 10,
+                tool_uses: 0,
+                last_activity: None,
+                completed: None,
+                completed_at: None,
+                started_at: None,
+            });
     }
     let _working = crate::test_harness::render_text(&app, 80, 24);
-    let strip = app.fleet.rect.get();
+    let strip = app.ui.fleet.rect.get();
     assert!(
         strip.width > 0 && strip.height > 0,
         "the strip is a click target while working: {strip:?}"
@@ -304,7 +309,7 @@ fn test_search_ignores_fleet_click() {
 
     app.enter_search_view("row");
     let _search = crate::test_harness::render_text(&app, 80, 24);
-    let cleared = app.fleet.rect.get();
+    let cleared = app.ui.fleet.rect.get();
     assert!(
         cleared.width == 0 && cleared.height == 0,
         "the search frame clears the strip's click target: {cleared:?}"

@@ -173,12 +173,8 @@ fn draw_agent_status_bar(f: &mut Frame, area: Rect, app: &App) {
 /// the one row that never degrades, which is why the count lives here and
 /// not only in the strip.
 fn agents_hint(app: &App) -> Option<String> {
-    let n = app
-        .fleet
-        .entries
-        .iter()
-        .filter(|e| e.completed.is_none())
-        .count();
+    let entries = &app.sessions.current.capabilities.fleet.entries;
+    let n = entries.iter().filter(|e| e.completed.is_none()).count();
     if n == 0 {
         return None;
     }
@@ -187,7 +183,7 @@ fn agents_hint(app: &App) -> Option<String> {
     } else {
         format!("{n} agents")
     };
-    Some(match app.fleet.granted.get() {
+    Some(match app.ui.fleet.granted.get() {
         0 => format!("{label} · /agents"),
         1 if n > 1 => format!("{label} · /agents to manage"),
         _ => format!("{label} · shift+\u{2191}\u{2193} · enter"),
@@ -449,19 +445,21 @@ mod tests {
     fn fleet_app(n: usize, granted: u16) -> crate::state::App {
         let mut app = crate::composition::app();
         for i in 0..n {
-            app.fleet.entries.push(crate::agent_message::FleetEntry {
-                agent_id: format!("c{i}"),
-                subagent_type: "explore".into(),
-                turn: 1,
-                tokens: 10,
-                tool_uses: 0,
-                last_activity: None,
-                completed: None,
-                completed_at: None,
-                started_at: None,
-            });
+            app.sessions.current.capabilities.fleet.entries.push(
+                crate::agent_message::FleetEntry {
+                    agent_id: format!("c{i}"),
+                    subagent_type: "explore".into(),
+                    turn: 1,
+                    tokens: 10,
+                    tool_uses: 0,
+                    last_activity: None,
+                    completed: None,
+                    completed_at: None,
+                    started_at: None,
+                },
+            );
         }
-        app.fleet.granted.set(granted);
+        app.ui.fleet.granted.set(granted);
         app
     }
 
@@ -505,7 +503,7 @@ mod tests {
             completed_at: Some(std::time::Instant::now()),
             started_at: None,
         };
-        app.fleet.entries.push(done);
+        app.sessions.current.capabilities.fleet.entries.push(done);
         let hint = agents_hint(&app).unwrap();
         assert!(hint.contains("2 agents"), "completed excluded: {hint}");
         assert!(!hint.contains("3 agent"), "no false live count: {hint}");

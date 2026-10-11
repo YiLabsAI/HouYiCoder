@@ -229,7 +229,7 @@ impl App {
     /// index_build, agents, agent_directory) are fresh by construction in
     /// set_current, so this resets only what stays on App: the transcript view
     /// state, the render and row caches, the pane drill-downs, the selection,
-    /// the fleet, and the verbose flag. The process-level resources
+    /// the fleet strip, and the verbose flag. The process-level resources
     /// (terminal_focused, clipboard) and the render-measured feedback
     /// (layout_feedback, rewritten each draw) are intentionally absent: a
     /// switch does not impersonate a cleanup of terminal focus or the
@@ -259,7 +259,7 @@ impl App {
         self.render_cache = RefCell::new(Default::default());
         self.last_row_keys = Default::default();
         self.ui.teammate_view = None;
-        self.fleet = Default::default();
+        self.ui.fleet = Default::default();
         self.ui.permission_pane = Default::default();
         self.ui.skills_pane = Default::default();
         self.ui.navigation.skill_picker = Default::default();

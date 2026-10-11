@@ -60,9 +60,10 @@ pub fn handle_working(app: &mut App, k: KeyEvent) {
         app.exit_teammate_view();
         return;
     }
-    // Shift+Up/Down move the footer-pill fleet selection before input
+    // Shift+Up/Down move the footer-strip fleet selection before input
     // handling so it works even while the input box has focus.
-    if fleet::fleet_shift_selected(&mut app.fleet, app.ui.navigation.viewport, k) {
+    let fleet_len = app.sessions.current.capabilities.fleet.entries.len();
+    if fleet::fleet_shift_selected(&mut app.ui.fleet, fleet_len, app.ui.navigation.viewport, k) {
         return;
     }
     // Status-name edit: a focused input mode on the /status Status tab. Takes

@@ -16,6 +16,7 @@ pub mod console_state;
 
 mod display_rows_cache;
 pub mod evidence;
+mod fleet;
 pub mod fold;
 pub mod git_op;
 pub mod history;

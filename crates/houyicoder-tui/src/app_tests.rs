@@ -414,18 +414,23 @@ fn test_login_sso_via_dispatch() {
 /// A fleet with one running child, selected, for the kill tests.
 fn running_fleet_app() -> App {
     let mut app = working_app();
-    app.fleet.entries.push(crate::agent_message::FleetEntry {
-        agent_id: "c1".into(),
-        subagent_type: "explore".into(),
-        turn: 1,
-        tokens: 50,
-        tool_uses: 0,
-        last_activity: None,
-        completed: None,
-        completed_at: None,
-        started_at: None,
-    });
-    app.fleet.selected = Some(0);
+    app.sessions
+        .current
+        .capabilities
+        .fleet
+        .entries
+        .push(crate::agent_message::FleetEntry {
+            agent_id: "c1".into(),
+            subagent_type: "explore".into(),
+            turn: 1,
+            tokens: 50,
+            tool_uses: 0,
+            last_activity: None,
+            completed: None,
+            completed_at: None,
+            started_at: None,
+        });
+    app.ui.fleet.selected = Some(0);
     app
 }
 
@@ -475,7 +480,7 @@ fn test_single_kill_selected() {
 #[test]
 fn test_single_kill_without_selection() {
     let mut app = running_fleet_app();
-    app.fleet.selected = None;
+    app.ui.fleet.selected = None;
     handle_key(&mut app, key(KeyCode::Char('k')));
     assert!(
         !app.ui.input.editor.is_empty(),

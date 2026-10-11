@@ -1033,20 +1033,25 @@ fn test_fleet_click_selects() {
     let mut app = composition::app();
     app.ui.navigation.screen = Screen::Working;
     for i in 0..2 {
-        app.fleet.entries.push(FleetEntry {
-            agent_id: format!("c{i}"),
-            subagent_type: "explore".into(),
-            turn: 1,
-            tokens: 10,
-            tool_uses: 0,
-            last_activity: None,
-            completed: None,
-            completed_at: None,
-            started_at: None,
-        });
+        app.sessions
+            .current
+            .capabilities
+            .fleet
+            .entries
+            .push(FleetEntry {
+                agent_id: format!("c{i}"),
+                subagent_type: "explore".into(),
+                turn: 1,
+                tokens: 10,
+                tool_uses: 0,
+                last_activity: None,
+                completed: None,
+                completed_at: None,
+                started_at: None,
+            });
     }
     drop(crate::test_harness::render_text(&app, 80, 24));
-    let rect = app.fleet.rect.get();
+    let rect = app.ui.fleet.rect.get();
     assert!(rect.height >= 2, "the strip is drawn: {rect:?}");
     let click = |app: &mut crate::state::App, y: u16| {
         crate::app::handle_mouse(
@@ -1060,7 +1065,11 @@ fn test_fleet_click_selects() {
         );
     };
     click(&mut app, rect.y + 1);
-    assert_eq!(app.fleet.selected, Some(1), "first click selects the row");
+    assert_eq!(
+        app.ui.fleet.selected,
+        Some(1),
+        "first click selects the row"
+    );
     assert!(
         app.ui.teammate_view.is_none(),
         "one click does not drill in"

@@ -219,13 +219,11 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
         }
         KeyCode::Up if app.ui.navigation.pane == Pane::Memory => app.move_memory_cursor(-1),
         KeyCode::Down if app.ui.navigation.pane == Pane::Memory => app.move_memory_cursor(1),
-        KeyCode::Up if app.ui.navigation.pane == Pane::Agents && !app.fleet.entries.is_empty() => {
-            app.fleet.move_selection(-1);
+        KeyCode::Up if app.ui.navigation.pane == Pane::Agents && !fleet_empty(app) => {
+            app.move_fleet_selection(-1);
         }
-        KeyCode::Down
-            if app.ui.navigation.pane == Pane::Agents && !app.fleet.entries.is_empty() =>
-        {
-            app.fleet.move_selection(1);
+        KeyCode::Down if app.ui.navigation.pane == Pane::Agents && !fleet_empty(app) => {
+            app.move_fleet_selection(1);
         }
         // Fleet dropped: the pane lists this session's returned delegations,
         // and the same arrows walk them.
@@ -239,7 +237,7 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
         KeyCode::Enter
             if app.ui.navigation.pane == Pane::Agents && app.ui.input.editor.is_empty() =>
         {
-            if app.fleet.entries.is_empty() {
+            if fleet_empty(app) {
                 let rows = &app.sessions.current.agents.rows;
                 let cur = app.ui.agents_sel.min(rows.len().saturating_sub(1));
                 if let Some(row) = rows.get(cur) {
@@ -522,6 +520,14 @@ pub(super) fn cycle_pane(app: &mut App) {
         .map(|i| (i + 1) % Pane::PRIMARY.len())
         .unwrap_or(0);
     app.ui.navigation.pane = Pane::PRIMARY[next];
+}
+
+/// Whether the session has no live fleet entries. The /agents pane's key
+/// arms branch on it: the pane renders the fleet list while entries exist
+/// and the returned delegations otherwise, so the arrows and Enter follow
+/// the same list the render shows.
+fn fleet_empty(app: &App) -> bool {
+    app.sessions.current.capabilities.fleet.entries.is_empty()
 }
 
 #[cfg(test)]

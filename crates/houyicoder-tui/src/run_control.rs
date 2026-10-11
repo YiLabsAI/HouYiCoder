@@ -110,6 +110,9 @@ impl App {
             .filter(|_| !input.is_empty())
             .map(|v| {
                 let completed = self
+                    .sessions
+                    .current
+                    .capabilities
                     .fleet
                     .entries
                     .iter()

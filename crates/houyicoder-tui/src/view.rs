@@ -79,7 +79,7 @@ pub fn draw(f: &mut Frame, app: &App) {
         .set(Rect::new(0, 0, 0, 0));
     // The fleet strip's click target gets the same stale-rect protection as
     // the label and the status bar below.
-    app.fleet.rect.set(Rect::new(0, 0, 0, 0));
+    app.ui.fleet.rect.set(Rect::new(0, 0, 0, 0));
     // Same protection for the status bar selection surface: a viewport that
     // draws a status bar re-publishes its rect + rows; one that does not
     // leaves this zeroed so a drag cannot target a stale bar from the last

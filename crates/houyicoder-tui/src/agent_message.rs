@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 use crate::transcript::{SequencedFrame, TranscriptFrame};
 
 /// One row in the agent status footer: a spawned child's latest snapshot.
+#[derive(Debug)]
 pub struct FleetEntry {
     pub agent_id: String,
     pub subagent_type: String,
@@ -94,92 +95,12 @@ impl PaneAgents {
     }
 }
 
-/// The footer fleet state: the child snapshots plus the Shift-arrow
-/// selection index. Grouped so the pill reads one field and the
-/// struct-fields ratchet counts the pair as one App field, not two.
-#[derive(Default)]
-pub struct FleetState {
-    pub entries: Vec<FleetEntry>,
-    pub selected: Option<usize>,
-    /// Rows the footer budget granted this frame, published by the draw pass.
-    /// The status-bar hint reads it to advertise the affordance the strip can
-    /// actually honor: per-row selection while rows are visible, the pane
-    /// when the strip is a summary or gone.
-    pub granted: std::cell::Cell<u16>,
-    /// Where the strip was drawn this frame, for the mouse router. Zero when
-    /// not drawn, so a stale rect cannot swallow clicks.
-    pub rect: std::cell::Cell<ratatui::layout::Rect>,
-    /// When the pill last re-rendered for the elapsed counters. The poll
-    /// loop ticks this at most once per second when running children exist.
-    pub last_elapsed_tick: Option<Instant>,
-}
-
-impl FleetState {
-    /// Move the selection by a signed delta (clamped, no wrap). Used by
-    /// the /agents pane Up/Down navigation — the working-screen footer
-    /// uses Shift+arrows via fleet_shift_selected instead.
-    pub fn move_selection(&mut self, delta: i32) {
-        if self.entries.is_empty() {
-            return;
-        }
-        let len = self.entries.len();
-        let base = self.selected.unwrap_or(0) as i32;
-        self.selected = Some((base + delta).clamp(0, (len - 1) as i32) as usize);
-    }
-}
-
 /// How long a completed child stays in the footer before dropping. The
 /// grace window lets the user see the result landed (a terse done row),
 /// then the pill leaves so the input box rises back under the transcript.
 /// The result itself stays in the transcript fold-group; only the footer
 /// pill drops.
 pub const FLEET_GRACE: Duration = Duration::from_secs(5);
-
-impl FleetState {
-    /// Drop completed entries whose grace window has elapsed. Running
-    /// children (no completed_at) always stay. Returns true when at least
-    /// one entry dropped so the caller marks the view dirty. The selection
-    /// index is clamped back into the new bounds (a dropped selected row
-    /// clears selection rather than pointing past the end).
-    ///
-    /// retain_viewed pins the child the user is drilled into (teammate
-    /// view): its pill stays past the grace window so the footer does not
-    /// drop the row the user is reading. The result lives in the transcript
-    /// fold-group regardless; this only holds the terse done row. Drops
-    /// once the user exits the view (caller passes None).
-    pub fn drop_completed(&mut self, retain_viewed: Option<&str>) -> bool {
-        let before = self.entries.len();
-        self.entries.retain(|e| {
-            e.completed_at.is_none_or(|t| t.elapsed() < FLEET_GRACE)
-                || e.agent_id == retain_viewed.unwrap_or("")
-        });
-        let dropped = self.entries.len() != before;
-        let len = self.entries.len();
-        match self.selected {
-            Some(s) if s >= len => self.selected = (len > 0).then(|| len - 1),
-            _ => {}
-        }
-        dropped
-    }
-
-    /// Tick the live elapsed counters: return true when the pill should
-    /// re-render (at most once per second while running children exist).
-    /// Resets when no children run so the next spawn ticks immediately.
-    pub fn tick_elapsed(&mut self, now: Instant) -> bool {
-        let any_running = self.entries.iter().any(|e| e.completed.is_none());
-        if !any_running {
-            self.last_elapsed_tick = None;
-            return false;
-        }
-        match self.last_elapsed_tick {
-            Some(last) if now.duration_since(last) < Duration::from_secs(1) => false,
-            _ => {
-                self.last_elapsed_tick = Some(now);
-                true
-            }
-        }
-    }
-}
 
 /// One message shipped from the client-driver task back to the TUI event
 /// loop, classified by protocol direction. The four directions follow the

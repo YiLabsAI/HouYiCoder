@@ -81,23 +81,28 @@ fn test_agents_enter_follows_list() {
         color: None,
     });
     app.sessions.current.refresh_agents();
-    app.fleet.entries.push(FleetEntry {
-        agent_id: "live".into(),
-        subagent_type: "explore".into(),
-        turn: 1,
-        tokens: 10,
-        tool_uses: 0,
-        last_activity: None,
-        completed: None,
-        completed_at: None,
-        started_at: None,
-    });
+    app.sessions
+        .current
+        .capabilities
+        .fleet
+        .entries
+        .push(FleetEntry {
+            agent_id: "live".into(),
+            subagent_type: "explore".into(),
+            turn: 1,
+            tokens: 10,
+            tool_uses: 0,
+            last_activity: None,
+            completed: None,
+            completed_at: None,
+            started_at: None,
+        });
     handle_working(&mut app, key(KeyCode::Enter));
     assert!(
         app.ui.teammate_view.is_none(),
         "an unselected live fleet opens nothing, not the off-screen delegation"
     );
-    app.fleet.selected = Some(0);
+    app.ui.fleet.selected = Some(0);
     handle_working(&mut app, key(KeyCode::Enter));
     assert_eq!(
         app.ui.teammate_view.as_ref().map(|v| v.child_sid.as_str()),

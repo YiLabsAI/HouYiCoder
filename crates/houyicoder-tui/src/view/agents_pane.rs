@@ -31,10 +31,10 @@ pub(super) fn draw_agents(f: &mut Frame, area: Rect, app: &App) {
 /// directory the query fetched, or a placeholder while the reply is in
 /// flight.
 pub(crate) fn draw_content(f: &mut Frame, area: Rect, app: &App) {
-    if !app.fleet.entries.is_empty() {
-        let items: Vec<ListItem> = app
-            .fleet
-            .entries
+    let entries = &app.sessions.current.capabilities.fleet.entries;
+    if !entries.is_empty() {
+        let selected = app.ui.fleet.selected;
+        let items: Vec<ListItem> = entries
             .iter()
             .enumerate()
             .map(|(i, e)| {
@@ -46,7 +46,7 @@ pub(crate) fn draw_content(f: &mut Frame, area: Rect, app: &App) {
                     "{} · {} · {} tok · turn {}",
                     e.subagent_type, status, e.tokens, e.turn,
                 );
-                if app.fleet.selected == Some(i) {
+                if selected == Some(i) {
                     ListItem::new(format!("▶ {row}"))
                 } else {
                     ListItem::new(format!("  {row}"))
@@ -141,17 +141,22 @@ mod tests {
     fn test_fleet_row_precedes_directory() {
         let mut app = composition::app();
         app.sessions.current.agent_directory = Some("## Available agents".into());
-        app.fleet.entries.push(FleetEntry {
-            agent_id: "c1".into(),
-            subagent_type: "explore".into(),
-            turn: 1,
-            tokens: 50,
-            tool_uses: 0,
-            last_activity: None,
-            completed: None,
-            completed_at: None,
-            started_at: None,
-        });
+        app.sessions
+            .current
+            .capabilities
+            .fleet
+            .entries
+            .push(FleetEntry {
+                agent_id: "c1".into(),
+                subagent_type: "explore".into(),
+                turn: 1,
+                tokens: 50,
+                tool_uses: 0,
+                last_activity: None,
+                completed: None,
+                completed_at: None,
+                started_at: None,
+            });
         let content = render(&app, 40, 3);
         assert!(
             content.contains("explore"),

@@ -203,17 +203,22 @@ fn test_steer_echo_renders() {
     use crate::records::TeammateView;
     let mut app = working_app();
     crate::test_harness::attach_connection(&mut app);
-    app.fleet.entries.push(FleetEntry {
-        agent_id: "c1".into(),
-        subagent_type: "explore".into(),
-        turn: 1,
-        tokens: 50,
-        tool_uses: 0,
-        last_activity: None,
-        completed: None,
-        completed_at: None,
-        started_at: None,
-    });
+    app.sessions
+        .current
+        .capabilities
+        .fleet
+        .entries
+        .push(FleetEntry {
+            agent_id: "c1".into(),
+            subagent_type: "explore".into(),
+            turn: 1,
+            tokens: 50,
+            tool_uses: 0,
+            last_activity: None,
+            completed: None,
+            completed_at: None,
+            started_at: None,
+        });
     app.ui.teammate_view = Some(TeammateView {
         child_sid: "c1".into(),
         ..Default::default()

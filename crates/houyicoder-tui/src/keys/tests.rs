@@ -1579,17 +1579,22 @@ fn fleet_app(n: usize) -> App {
     app.ui.navigation.screen = Screen::Working;
     app.ui.navigation.viewport = ViewportMode::Working;
     for i in 0..n {
-        app.fleet.entries.push(crate::agent_message::FleetEntry {
-            agent_id: format!("child-{i}"),
-            subagent_type: "explore".into(),
-            turn: 1,
-            tokens: 10,
-            tool_uses: 0,
-            last_activity: None,
-            completed: None,
-            completed_at: None,
-            started_at: None,
-        });
+        app.sessions
+            .current
+            .capabilities
+            .fleet
+            .entries
+            .push(crate::agent_message::FleetEntry {
+                agent_id: format!("child-{i}"),
+                subagent_type: "explore".into(),
+                turn: 1,
+                tokens: 10,
+                tool_uses: 0,
+                last_activity: None,
+                completed: None,
+                completed_at: None,
+                started_at: None,
+            });
     }
     app
 }
@@ -1599,22 +1604,22 @@ fn fleet_app(n: usize) -> App {
 #[test]
 fn test_shift_arrow_moves_fleet() {
     let mut app = fleet_app(3);
-    assert!(app.fleet.selected.is_none());
+    assert!(app.ui.fleet.selected.is_none());
     handle_working(&mut app, shift_key(KeyCode::Down));
     assert_eq!(
-        app.fleet.selected,
+        app.ui.fleet.selected,
         Some(0),
         "first press snaps to the top row"
     );
     handle_working(&mut app, shift_key(KeyCode::Down));
-    assert_eq!(app.fleet.selected, Some(1));
+    assert_eq!(app.ui.fleet.selected, Some(1));
     handle_working(&mut app, shift_key(KeyCode::Up));
-    assert_eq!(app.fleet.selected, Some(0));
+    assert_eq!(app.ui.fleet.selected, Some(0));
     handle_working(&mut app, shift_key(KeyCode::Up));
-    assert_eq!(app.fleet.selected, Some(0), "clamps at top, no wrap");
+    assert_eq!(app.ui.fleet.selected, Some(0), "clamps at top, no wrap");
     // A Shift+non-arrow key is not consumed: selection stays put.
     handle_working(&mut app, shift_key(KeyCode::Char('x')));
-    assert_eq!(app.fleet.selected, Some(0));
+    assert_eq!(app.ui.fleet.selected, Some(0));
 }
 
 /// Shift+Up/Down exits a drilled-in teammate view back to the fleet,
@@ -1644,7 +1649,9 @@ fn test_shift_arrow_exits_teammate() {
         "Shift+Up also exits the teammate view"
     );
     assert!(
-        app.fleet.entries[0].completed.is_none(),
+        app.sessions.current.capabilities.fleet.entries[0]
+            .completed
+            .is_none(),
         "the child keeps running after the view exits"
     );
 }
@@ -1733,18 +1740,23 @@ fn test_enter_fleet_drills_teammate() {
             folded_transcript: Vec::new(),
             color: None,
         });
-    app.fleet.entries.push(crate::agent_message::FleetEntry {
-        agent_id: "c1".into(),
-        subagent_type: "explore".into(),
-        turn: 1,
-        tokens: 10,
-        tool_uses: 0,
-        last_activity: None,
-        completed: None,
-        completed_at: None,
-        started_at: None,
-    });
-    app.fleet.selected = Some(0);
+    app.sessions
+        .current
+        .capabilities
+        .fleet
+        .entries
+        .push(crate::agent_message::FleetEntry {
+            agent_id: "c1".into(),
+            subagent_type: "explore".into(),
+            turn: 1,
+            tokens: 10,
+            tool_uses: 0,
+            last_activity: None,
+            completed: None,
+            completed_at: None,
+            started_at: None,
+        });
+    app.ui.fleet.selected = Some(0);
     handle_working(&mut app, key(KeyCode::Enter));
     assert!(
         app.ui.teammate_view.is_some(),

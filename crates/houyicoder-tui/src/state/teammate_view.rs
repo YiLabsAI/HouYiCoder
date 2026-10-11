@@ -13,7 +13,13 @@ impl App {
     /// view-enter fallback, the Esc abort check, and the empty-frames
     /// placeholder so the three never drift apart on the find shape.
     pub(crate) fn fleet_entry(&self, sid: &str) -> Option<&crate::agent_message::FleetEntry> {
-        self.fleet.entries.iter().find(|e| e.agent_id == sid)
+        self.sessions
+            .current
+            .capabilities
+            .fleet
+            .entries
+            .iter()
+            .find(|e| e.agent_id == sid)
     }
 
     /// Enter the teammate view for the Subagent line at the cursor, or the

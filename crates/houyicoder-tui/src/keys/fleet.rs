@@ -1,33 +1,37 @@
-//! Footer-pill fleet selection keys: Shift+Up/Down move the highlighted
-//! row. The dispatcher takes &mut FleetState (not &mut App) so it does not
-//! add a God-struct broad-access point. Plain arrows fall through to input
-//! cursor-edit.
+//! Footer-strip fleet selection keys: Shift+Up/Down move the highlighted
+//! row. The dispatcher takes the strip state and the live entry count (not
+//! &mut App) so it does not add a God-struct broad-access point. Plain
+//! arrows fall through to input cursor-edit.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::agent_message::FleetState;
+use crate::fleet::strip_state::FleetStripState;
 use crate::state::{App, ViewportMode};
 
 /// The selected child's session id, if a fleet row is highlighted. Resolves
-/// Enter-on-fleet: the pill selection takes priority over the cursor's
+/// Enter-on-fleet: the strip selection takes priority over the cursor's
 /// Subagent line when both could drill in.
 pub(super) fn selected_fleet_sid(app: &App) -> Option<String> {
-    app.fleet
-        .selected
-        .and_then(|i| app.fleet.entries.get(i).map(|e| e.agent_id.clone()))
+    app.ui.fleet.selected.and_then(|i| {
+        app.sessions
+            .current
+            .capabilities
+            .fleet
+            .entries
+            .get(i)
+            .map(|e| e.agent_id.clone())
+    })
 }
 
 /// Shift+Up/Down move the fleet selection. Returns true when the key was
 /// consumed so handle_working returns early.
 pub(super) fn fleet_shift_selected(
-    fleet: &mut FleetState,
+    strip: &mut FleetStripState,
+    len: usize,
     viewport: ViewportMode,
     k: KeyEvent,
 ) -> bool {
-    if viewport != ViewportMode::Working
-        || fleet.entries.is_empty()
-        || !k.modifiers.contains(KeyModifiers::SHIFT)
-    {
+    if viewport != ViewportMode::Working || len == 0 || !k.modifiers.contains(KeyModifiers::SHIFT) {
         return false;
     }
     let delta = match k.code {
@@ -35,7 +39,7 @@ pub(super) fn fleet_shift_selected(
         KeyCode::Down => 1,
         _ => return false,
     };
-    fleet.selected = Some(next_selection(fleet.selected, fleet.entries.len(), delta));
+    strip.selected = Some(next_selection(strip.selected, len, delta));
     true
 }
 

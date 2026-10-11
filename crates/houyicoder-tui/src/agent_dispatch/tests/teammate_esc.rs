@@ -15,17 +15,22 @@ fn test_abort_viewed_child_turn() {
         child_sid: "c1".into(),
         ..Default::default()
     });
-    app.fleet.entries.push(FleetEntry {
-        agent_id: "c1".into(),
-        subagent_type: "explore".into(),
-        turn: 2,
-        tokens: 100,
-        tool_uses: 0,
-        last_activity: None,
-        completed: None,
-        completed_at: None,
-        started_at: None,
-    });
+    app.sessions
+        .current
+        .capabilities
+        .fleet
+        .entries
+        .push(FleetEntry {
+            agent_id: "c1".into(),
+            subagent_type: "explore".into(),
+            turn: 2,
+            tokens: 100,
+            tool_uses: 0,
+            last_activity: None,
+            completed: None,
+            completed_at: None,
+            started_at: None,
+        });
     app.abort_viewed_child_turn();
     assert!(
         app.ui.teammate_view.is_some(),
@@ -35,7 +40,7 @@ fn test_abort_viewed_child_turn() {
         app.ui.notifications.current().is_none(),
         "a running child sends a cancel, not the exit-hint toast"
     );
-    app.fleet.entries[0].completed = Some("completed".into());
+    app.sessions.current.capabilities.fleet.entries[0].completed = Some("completed".into());
     app.abort_viewed_child_turn();
     assert!(
         app.ui.teammate_view.is_some(),
@@ -129,17 +134,22 @@ fn test_steer_completed_surfaces_notice() {
         child_sid: "c1".into(),
         ..Default::default()
     });
-    app.fleet.entries.push(FleetEntry {
-        agent_id: "c1".into(),
-        subagent_type: "explore".into(),
-        turn: 3,
-        tokens: 100,
-        tool_uses: 1,
-        last_activity: None,
-        completed: Some("completed".into()),
-        completed_at: None,
-        started_at: None,
-    });
+    app.sessions
+        .current
+        .capabilities
+        .fleet
+        .entries
+        .push(FleetEntry {
+            agent_id: "c1".into(),
+            subagent_type: "explore".into(),
+            turn: 3,
+            tokens: 100,
+            tool_uses: 1,
+            last_activity: None,
+            completed: Some("completed".into()),
+            completed_at: None,
+            started_at: None,
+        });
     app.spawn_run("steer this".into());
     // The completed child's inbox is closed, so the steer exits the teammate
     // view + surfaces a notice in the PARENT transcript (visible at the tail)
@@ -167,7 +177,7 @@ fn test_steer_completed_surfaces_notice() {
     );
     // A running child still steers (echo appended, no notice). The completed
     // steer above exited the view, so re-enter it for the running case.
-    app.fleet.entries[0].completed = None;
+    app.sessions.current.capabilities.fleet.entries[0].completed = None;
     app.ui.teammate_view = Some(TeammateView {
         child_sid: "c1".into(),
         ..Default::default()
@@ -251,17 +261,22 @@ fn test_child_transcript_last_row() {
 fn test_child_transcript_no_row() {
     use crate::records::TranscriptLine;
     let mut app = crate::composition::app();
-    app.fleet.entries.push(crate::agent_message::FleetEntry {
-        agent_id: "c1".into(),
-        subagent_type: "explore".into(),
-        turn: 1,
-        tokens: 50,
-        tool_uses: 0,
-        last_activity: None,
-        completed: None,
-        completed_at: None,
-        started_at: None,
-    });
+    app.sessions
+        .current
+        .capabilities
+        .fleet
+        .entries
+        .push(crate::agent_message::FleetEntry {
+            agent_id: "c1".into(),
+            subagent_type: "explore".into(),
+            turn: 1,
+            tokens: 50,
+            tool_uses: 0,
+            last_activity: None,
+            completed: None,
+            completed_at: None,
+            started_at: None,
+        });
     app.handle_agent_message(SessionMessage::Response {
         request: RequestId(21),
         response: ServerResponse::ChildTranscript {
@@ -340,17 +355,22 @@ fn test_child_sid_unique() {
 fn test_view_fleet_type_fallback() {
     use crate::agent_message::FleetEntry;
     let mut app = crate::composition::app();
-    app.fleet.entries.push(FleetEntry {
-        agent_id: "c1".into(),
-        subagent_type: "explore".into(),
-        turn: 1,
-        tokens: 50,
-        tool_uses: 0,
-        last_activity: None,
-        completed: None,
-        completed_at: None,
-        started_at: None,
-    });
+    app.sessions
+        .current
+        .capabilities
+        .fleet
+        .entries
+        .push(FleetEntry {
+            agent_id: "c1".into(),
+            subagent_type: "explore".into(),
+            turn: 1,
+            tokens: 50,
+            tool_uses: 0,
+            last_activity: None,
+            completed: None,
+            completed_at: None,
+            started_at: None,
+        });
     app.enter_teammate_view_for_sid("c1", true);
     let view = app
         .ui
@@ -386,17 +406,22 @@ fn test_view_fold_row_wins() {
         folded_transcript: Vec::new(),
         color: Some("blue".into()),
     });
-    app.fleet.entries.push(FleetEntry {
-        agent_id: "c1".into(),
-        subagent_type: "explore".into(),
-        turn: 2,
-        tokens: 100,
-        tool_uses: 0,
-        last_activity: None,
-        completed: Some("completed".into()),
-        completed_at: None,
-        started_at: None,
-    });
+    app.sessions
+        .current
+        .capabilities
+        .fleet
+        .entries
+        .push(FleetEntry {
+            agent_id: "c1".into(),
+            subagent_type: "explore".into(),
+            turn: 2,
+            tokens: 100,
+            tool_uses: 0,
+            last_activity: None,
+            completed: Some("completed".into()),
+            completed_at: None,
+            started_at: None,
+        });
     app.enter_teammate_view_for_sid("c1", true);
     let view = app.ui.teammate_view.as_ref().expect("view opens");
     assert_eq!(
@@ -424,17 +449,22 @@ fn test_running_child_starting() {
         child_sid: "c1".into(),
         ..Default::default()
     });
-    app.fleet.entries.push(FleetEntry {
-        agent_id: "c1".into(),
-        subagent_type: "explore".into(),
-        turn: 0,
-        tokens: 0,
-        tool_uses: 0,
-        last_activity: None,
-        completed: None,
-        completed_at: None,
-        started_at: None,
-    });
+    app.sessions
+        .current
+        .capabilities
+        .fleet
+        .entries
+        .push(FleetEntry {
+            agent_id: "c1".into(),
+            subagent_type: "explore".into(),
+            turn: 0,
+            tokens: 0,
+            tool_uses: 0,
+            last_activity: None,
+            completed: None,
+            completed_at: None,
+            started_at: None,
+        });
     app.handle_agent_message(SessionMessage::Response {
         request: RequestId(23),
         response: ServerResponse::ChildTranscript {
@@ -469,17 +499,22 @@ fn test_completed_child_unavailable() {
         child_sid: "c1".into(),
         ..Default::default()
     });
-    app.fleet.entries.push(FleetEntry {
-        agent_id: "c1".into(),
-        subagent_type: "explore".into(),
-        turn: 3,
-        tokens: 100,
-        tool_uses: 1,
-        last_activity: None,
-        completed: Some("completed".into()),
-        completed_at: None,
-        started_at: None,
-    });
+    app.sessions
+        .current
+        .capabilities
+        .fleet
+        .entries
+        .push(FleetEntry {
+            agent_id: "c1".into(),
+            subagent_type: "explore".into(),
+            turn: 3,
+            tokens: 100,
+            tool_uses: 1,
+            last_activity: None,
+            completed: Some("completed".into()),
+            completed_at: None,
+            started_at: None,
+        });
     app.handle_agent_message(SessionMessage::Response {
         request: RequestId(24),
         response: ServerResponse::ChildTranscript {

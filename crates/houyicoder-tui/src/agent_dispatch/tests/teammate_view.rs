@@ -341,10 +341,17 @@ fn test_agent_status_updates_fleet() {
         last_activity: Some("grep".into()),
         completed: None,
     }));
-    assert_eq!(app.fleet.entries.len(), 1);
-    assert_eq!(app.fleet.entries[0].agent_id, "c1");
-    assert_eq!(app.fleet.entries[0].turn, 1);
-    assert!(app.fleet.entries[0].completed.is_none());
+    assert_eq!(app.sessions.current.capabilities.fleet.entries.len(), 1);
+    assert_eq!(
+        app.sessions.current.capabilities.fleet.entries[0].agent_id,
+        "c1"
+    );
+    assert_eq!(app.sessions.current.capabilities.fleet.entries[0].turn, 1);
+    assert!(
+        app.sessions.current.capabilities.fleet.entries[0]
+            .completed
+            .is_none()
+    );
 
     app.handle_agent_message(SessionMessage::Event(ServerEvent::AgentStatus {
         agent_id: "c1".into(),
@@ -355,9 +362,18 @@ fn test_agent_status_updates_fleet() {
         last_activity: Some("edit".into()),
         completed: Some("completed".into()),
     }));
-    assert_eq!(app.fleet.entries.len(), 1, "same agent updates in place");
-    assert_eq!(app.fleet.entries[0].turn, 3);
-    assert_eq!(app.fleet.entries[0].completed.as_deref(), Some("completed"));
+    assert_eq!(
+        app.sessions.current.capabilities.fleet.entries.len(),
+        1,
+        "same agent updates in place"
+    );
+    assert_eq!(app.sessions.current.capabilities.fleet.entries[0].turn, 3);
+    assert_eq!(
+        app.sessions.current.capabilities.fleet.entries[0]
+            .completed
+            .as_deref(),
+        Some("completed")
+    );
 }
 
 /// A status for the child in the teammate view auto-exits the view on an

@@ -8,6 +8,7 @@ use std::sync::Arc;
 use houyicoder_protocol::frontend::SessionId;
 
 use crate::display_rows_cache::DisplayRowsCache;
+use crate::fleet::strip_state::FleetStripState;
 use crate::hooks_state::HooksPaneState;
 use crate::input::Input;
 use crate::last_row_keys::LastRowKeys;
@@ -57,6 +58,7 @@ pub fn app() -> App {
             hooks_pane: HooksPaneState::default(),
             memory: MemoryPaneState::default(),
             agents_sel: 0,
+            fleet: FleetStripState::default(),
             trajectory: TrajectoryPaneState::default(),
             worktree_list: ListPaneState::default(),
             worktree_level: Cell::new(0),
@@ -84,7 +86,6 @@ pub fn app() -> App {
         layout_snapshot: LayoutSnapshot::default(),
         render_cache: RefCell::new(RenderCache::default()),
         last_row_keys: LastRowKeys::default(),
-        fleet: Default::default(),
         model_picker: ModelPickerState::default(),
     }
 }

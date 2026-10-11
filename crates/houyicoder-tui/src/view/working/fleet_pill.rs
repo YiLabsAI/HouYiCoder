@@ -1,7 +1,7 @@
 //! Footer fleet pill: one row per spawned child, shown only while the
 //! fleet is non-empty. Each row carries the child's hollow-circle glyph,
 //! its type, a verb inferred from the last tool, and cumulative tokens.
-//! Shift-arrow moves App.fleet_selected; the selected row gets a prefix
+//! Shift-arrow moves the strip's selection; the selected row gets a prefix
 //! and Enter drills into its teammate view. The pill caps at three rows
 //! and scrolls toward the selection when the fleet is longer.
 
@@ -15,7 +15,7 @@ use ratatui::{
     widgets::Paragraph,
 };
 
-use crate::agent_message::{FleetEntry, FleetState};
+use crate::agent_message::FleetEntry;
 use crate::state::App;
 
 /// Max child rows the pill ever shows. A longer fleet scrolls within the
@@ -26,18 +26,16 @@ const MAX_VISIBLE: usize = 3;
 /// within the pill instead of pushing the transcript off-screen. Zero when
 /// the fleet is empty. The shared footer budget decides what it gets.
 pub fn want(app: &App) -> u16 {
-    app.fleet
-        .entries
-        .len()
-        .min(MAX_VISIBLE)
-        .min(u16::MAX as usize) as u16
+    let entries = &app.sessions.current.capabilities.fleet.entries;
+    entries.len().min(MAX_VISIBLE).min(u16::MAX as usize) as u16
 }
 
 /// Draw the pill into the granted area. One row for a multi-child fleet is
 /// the collapsed form: a single row of per-child detail would name one child
 /// and silently omit the rest, so it becomes a count instead.
 pub fn draw(f: &mut Frame, area: Rect, app: &App) {
-    let lines = if area.height == 1 && app.fleet.entries.len() > 1 {
+    let entries = &app.sessions.current.capabilities.fleet.entries;
+    let lines = if area.height == 1 && entries.len() > 1 {
         vec![summary_line(app)]
     } else {
         build_lines(app, area.height as usize)
@@ -47,13 +45,9 @@ pub fn draw(f: &mut Frame, area: Rect, app: &App) {
 
 /// The collapsed form: how many children are live and how many just landed.
 fn summary_line(app: &App) -> Line<'static> {
-    let done = app
-        .fleet
-        .entries
-        .iter()
-        .filter(|e| e.completed.is_some())
-        .count();
-    let running = app.fleet.entries.len() - done;
+    let entries = &app.sessions.current.capabilities.fleet.entries;
+    let done = entries.iter().filter(|e| e.completed.is_some()).count();
+    let running = entries.len() - done;
     let mut text = format!("  {running} running");
     if done > 0 {
         text.push_str(&format!(" \u{00b7} {done} done"));
@@ -72,19 +66,26 @@ pub enum FleetClick {
 }
 
 /// Pure routing of a click at the strip's given row. Kept free of App so
-/// the decision is testable without one; the mouse handler applies it.
-pub fn click_route(fleet: &FleetState, granted: u16, row: usize) -> FleetClick {
-    let n = fleet.entries.len();
+/// the decision is testable without one; the mouse handler applies it. The
+/// entries are the session's fleet facts and the selection is the strip's
+/// interaction state, so the caller passes both.
+pub fn click_route(
+    entries: &[FleetEntry],
+    selected: Option<usize>,
+    granted: u16,
+    row: usize,
+) -> FleetClick {
+    let n = entries.len();
     let g = granted as usize;
     if g == 1 && n > 1 {
         return FleetClick::OpenAgentsPane;
     }
     let visible = visible_rows(n, g);
-    let idx = window_start_idx(fleet.selected, n, visible) + row;
-    let Some(entry) = fleet.entries.get(idx) else {
+    let idx = window_start_idx(selected, n, visible) + row;
+    let Some(entry) = entries.get(idx) else {
         return FleetClick::OpenAgentsPane;
     };
-    if fleet.selected == Some(idx) {
+    if selected == Some(idx) {
         FleetClick::Drill(entry.agent_id.clone())
     } else {
         FleetClick::Select(idx)
@@ -115,19 +116,21 @@ fn visible_rows(len: usize, granted: usize) -> usize {
 /// the strip spends every row it gets on a child rather than on an
 /// overflow indicator (see visible_rows for why that line is dropped).
 fn build_lines(app: &App, granted: usize) -> Vec<Line<'_>> {
-    let len = app.fleet.entries.len();
+    let entries = &app.sessions.current.capabilities.fleet.entries;
+    let selected = app.ui.fleet.selected;
+    let len = entries.len();
     if len == 0 || granted == 0 {
         return Vec::new();
     }
     let visible = visible_rows(len, granted);
-    let start = window_start_idx(app.fleet.selected, len, visible);
+    let start = window_start_idx(selected, len, visible);
     let end = (start + visible).min(len);
-    app.fleet.entries[start..end]
+    entries[start..end]
         .iter()
         .enumerate()
         .map(|(i, entry)| {
             let abs_idx = start + i;
-            build_row(entry, abs_idx == app.fleet.selected.unwrap_or(usize::MAX))
+            build_row(entry, abs_idx == selected.unwrap_or(usize::MAX))
         })
         .collect()
 }
@@ -216,6 +219,7 @@ fn format_elapsed(d: Duration) -> String {
 mod tests {
     use super::*;
     use crate::composition;
+    use crate::session::Session;
 
     fn entry(id: &str, kind: &str, turn: u32, tokens: u64, tool: &str) -> FleetEntry {
         FleetEntry {
@@ -229,6 +233,11 @@ mod tests {
             completed_at: None,
             started_at: None,
         }
+    }
+
+    /// The session's fleet entries, for test setup.
+    fn entries_mut(session: &mut Session) -> &mut Vec<FleetEntry> {
+        &mut session.capabilities.fleet.entries
     }
 
     /// A grep tool reads as "searching", not the raw tool name.
@@ -254,12 +263,16 @@ mod tests {
     fn test_want_caps_at_three() {
         let mut app = composition::app();
         assert_eq!(want(&app), 0);
-        app.fleet.entries.push(entry("a", "explore", 1, 10, "grep"));
+        entries_mut(&mut app.sessions.current).push(entry("a", "explore", 1, 10, "grep"));
         assert_eq!(want(&app), 1);
         for i in 0..5 {
-            app.fleet
-                .entries
-                .push(entry(&format!("b{i}"), "plan", 1, 10, "read"));
+            entries_mut(&mut app.sessions.current).push(entry(
+                &format!("b{i}"),
+                "plan",
+                1,
+                10,
+                "read",
+            ));
         }
         assert_eq!(want(&app), 3);
     }
@@ -271,12 +284,12 @@ mod tests {
     #[test]
     fn test_one_row_counts() {
         let mut app = composition::app();
-        app.fleet.entries.push(entry("a", "explore", 1, 10, "grep"));
-        app.fleet.entries.push(entry("b", "plan", 1, 10, "read"));
+        entries_mut(&mut app.sessions.current).push(entry("a", "explore", 1, 10, "grep"));
+        entries_mut(&mut app.sessions.current).push(entry("b", "plan", 1, 10, "read"));
         let mut done = entry("c", "verify", 1, 10, "test");
         done.completed = Some("completed".into());
         done.completed_at = Some(std::time::Instant::now());
-        app.fleet.entries.push(done);
+        entries_mut(&mut app.sessions.current).push(done);
         let line = summary_line(&app);
         let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
         assert!(
@@ -300,9 +313,13 @@ mod tests {
     fn test_window_follows_selection() {
         let mut app = composition::app();
         for (i, kind) in ["t0", "t1", "t2", "t3", "t4"].iter().enumerate() {
-            app.fleet
-                .entries
-                .push(entry(&format!("a{i}"), kind, 1, 10, "grep"));
+            entries_mut(&mut app.sessions.current).push(entry(
+                &format!("a{i}"),
+                kind,
+                1,
+                10,
+                "grep",
+            ));
         }
         let text = |app: &App| -> Vec<String> {
             build_lines(app, 3)
@@ -322,7 +339,7 @@ mod tests {
             "no +N row: {head:?}"
         );
 
-        app.fleet.selected = Some(4);
+        app.ui.fleet.selected = Some(4);
         let tail = text(&app);
         assert_eq!(tail.len(), 3);
         assert!(
@@ -336,7 +353,7 @@ mod tests {
             "no +N at tail: {tail:?}"
         );
 
-        app.fleet.selected = Some(0);
+        app.ui.fleet.selected = Some(0);
         let back = text(&app);
         assert!(back[0].contains("t0"), "head window restored: {}", back[0]);
     }
@@ -346,8 +363,8 @@ mod tests {
     #[test]
     fn test_window_fits_granted() {
         let mut app = composition::app();
-        app.fleet.entries.push(entry("a", "explore", 1, 10, "grep"));
-        app.fleet.entries.push(entry("b", "plan", 1, 10, "read"));
+        entries_mut(&mut app.sessions.current).push(entry("a", "explore", 1, 10, "grep"));
+        entries_mut(&mut app.sessions.current).push(entry("b", "plan", 1, 10, "read"));
         let lines = build_lines(&app, 3);
         assert_eq!(lines.len(), 2, "two children fill two of three rows");
     }
@@ -358,23 +375,19 @@ mod tests {
     /// rather than ignoring the click outright.
     #[test]
     fn test_click_route() {
-        let fleet = |selected: Option<usize>| FleetState {
-            entries: vec![
-                entry("a", "explore", 1, 10, "grep"),
-                entry("b", "plan", 1, 10, "read"),
-            ],
-            selected,
-            ..Default::default()
-        };
-        match click_route(&fleet(None), 2, 1) {
+        let entries = vec![
+            entry("a", "explore", 1, 10, "grep"),
+            entry("b", "plan", 1, 10, "read"),
+        ];
+        match click_route(&entries, None, 2, 1) {
             FleetClick::Select(1) => {}
             other => panic!("unselected row selects: {other:?}"),
         }
-        match click_route(&fleet(Some(1)), 2, 1) {
+        match click_route(&entries, Some(1), 2, 1) {
             FleetClick::Drill(sid) => assert_eq!(sid, "b"),
             other => panic!("the selected row drills in: {other:?}"),
         }
-        match click_route(&fleet(Some(0)), 1, 0) {
+        match click_route(&entries, Some(0), 1, 0) {
             FleetClick::OpenAgentsPane => {}
             other => panic!("summary row opens the pane: {other:?}"),
         }
@@ -411,9 +424,9 @@ mod tests {
     /// entry leaves the footer (the result stays in the transcript fold).
     #[test]
     fn test_grace_drops_expired() {
-        use crate::agent_message::FleetState;
+        use crate::session::capabilities::FleetCapability;
         use std::time::{Duration, Instant};
-        let mut fleet = FleetState::default();
+        let mut fleet = FleetCapability::default();
         fleet.entries.push(FleetEntry {
             agent_id: "c1".into(),
             subagent_type: "explore".into(),
@@ -434,9 +447,9 @@ mod tests {
     /// leaves once the grace window elapses.
     #[test]
     fn test_grace_keeps_recent() {
-        use crate::agent_message::FleetState;
+        use crate::session::capabilities::FleetCapability;
         use std::time::Instant;
-        let mut fleet = FleetState::default();
+        let mut fleet = FleetCapability::default();
         fleet.entries.push(entry("a", "explore", 1, 10, "grep"));
         fleet.entries.push(FleetEntry {
             agent_id: "b".into(),
@@ -454,13 +467,16 @@ mod tests {
     }
 
     /// A selection pointing at a dropped row clamps back into bounds rather
-    /// than indexing past the end of the surviving entries.
+    /// than indexing past the end of the surviving entries. Exercised through
+    /// the App composition so the capability's retain and the strip's clamp
+    /// cannot drift at separate call sites: the second phase selects the tail
+    /// row and drops it, which only lands on the survivor when the clamp runs
+    /// inside the seam.
     #[test]
     fn test_drop_clamps_selected() {
-        use crate::agent_message::FleetState;
         use std::time::{Duration, Instant};
-        let mut fleet = FleetState::default();
-        fleet.entries.push(FleetEntry {
+        let mut app = composition::app();
+        entries_mut(&mut app.sessions.current).push(FleetEntry {
             agent_id: "c1".into(),
             subagent_type: "explore".into(),
             turn: 1,
@@ -471,10 +487,33 @@ mod tests {
             completed_at: Instant::now().checked_sub(Duration::from_secs(6)),
             started_at: None,
         });
-        fleet.entries.push(entry("c2", "plan", 1, 10, "read"));
-        fleet.selected = Some(0);
-        assert!(fleet.drop_completed(None), "first entry dropped");
-        assert_eq!(fleet.selected, Some(0), "selection clamped to the survivor");
+        entries_mut(&mut app.sessions.current).push(entry("c2", "plan", 1, 10, "read"));
+        app.ui.fleet.selected = Some(0);
+        assert!(app.drop_completed_fleet(), "first entry dropped");
+        assert_eq!(
+            app.ui.fleet.selected,
+            Some(0),
+            "selection clamped to the survivor"
+        );
+
+        entries_mut(&mut app.sessions.current).push(FleetEntry {
+            agent_id: "c3".into(),
+            subagent_type: "verify".into(),
+            turn: 1,
+            tokens: 10,
+            tool_uses: 0,
+            last_activity: None,
+            completed: Some("completed".into()),
+            completed_at: Instant::now().checked_sub(Duration::from_secs(6)),
+            started_at: None,
+        });
+        app.ui.fleet.selected = Some(1);
+        assert!(app.drop_completed_fleet(), "expired tail dropped");
+        assert_eq!(
+            app.ui.fleet.selected,
+            Some(0),
+            "a selection past the survivor clamps back"
+        );
     }
 
     /// retain_viewed pins the child the user is drilled into: even past the
@@ -483,9 +522,9 @@ mod tests {
     /// child the user is not viewing still drops on schedule.
     #[test]
     fn test_grace_pins_viewed_child() {
-        use crate::agent_message::FleetState;
+        use crate::session::capabilities::FleetCapability;
         use std::time::{Duration, Instant};
-        let mut fleet = FleetState::default();
+        let mut fleet = FleetCapability::default();
         fleet.entries.push(FleetEntry {
             agent_id: "c1".into(),
             subagent_type: "explore".into(),
@@ -516,30 +555,35 @@ mod tests {
         assert_eq!(fleet.entries[0].agent_id, "c1");
     }
 
-    /// tick_elapsed dirties at most once per second while running children
-    /// exist; returns false when idle and resets so the next spawn ticks
-    /// immediately.
+    /// tick_fleet_elapsed dirties at most once per second while running
+    /// children exist; returns false when idle and resets so the next spawn
+    /// ticks immediately. Exercised through the App composition so the
+    /// capability's running check and the strip's pacing cannot drift at
+    /// separate call sites.
     #[test]
     fn test_tick_elapsed() {
         use std::time::{Duration, Instant};
-        let mut fleet = FleetState::default();
+        let mut app = composition::app();
         let now = Instant::now();
-        assert!(!fleet.tick_elapsed(now), "no running children");
-        fleet.entries.push(entry("a", "explore", 1, 10, "grep"));
-        assert!(fleet.tick_elapsed(now), "first tick after spawn");
-        assert!(!fleet.tick_elapsed(now), "same instant does not re-tick");
+        assert!(!app.tick_fleet_elapsed(now), "no running children");
+        entries_mut(&mut app.sessions.current).push(entry("a", "explore", 1, 10, "grep"));
+        assert!(app.tick_fleet_elapsed(now), "first tick after spawn");
         assert!(
-            fleet.tick_elapsed(now + Duration::from_secs(1)),
+            !app.tick_fleet_elapsed(now),
+            "same instant does not re-tick"
+        );
+        assert!(
+            app.tick_fleet_elapsed(now + Duration::from_secs(1)),
             "1s later re-ticks"
         );
-        fleet.entries[0].completed = Some("done".into());
+        entries_mut(&mut app.sessions.current)[0].completed = Some("done".into());
         assert!(
-            !fleet.tick_elapsed(now + Duration::from_secs(2)),
+            !app.tick_fleet_elapsed(now + Duration::from_secs(2)),
             "no running children after completion"
         );
-        fleet.entries[0].completed = None;
+        entries_mut(&mut app.sessions.current)[0].completed = None;
         assert!(
-            fleet.tick_elapsed(now + Duration::from_millis(100)),
+            app.tick_fleet_elapsed(now + Duration::from_millis(100)),
             "reset ticks immediately on next spawn"
         );
     }
