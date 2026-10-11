@@ -540,7 +540,12 @@ fn build_bundle_for_target(
         .expect("host lifecycle slot must not poison")
         .take()
     {
-        old.shutdown(runtime.handle());
+        // The old lease releases on the shared runtime: the task joins the
+        // old writers and drops the old lock only after they finish, so a
+        // second process resuming the old sid mid-flush cannot interleave.
+        // The handle is dropped unread — the new lease holds a different
+        // sid's lock, so the two coexist briefly without contention.
+        old.begin_release(runtime.handle());
     }
     *host_slot
         .lock()
@@ -588,21 +593,28 @@ fn run_tui_loop(
             build_bundle_for_target(target, project.clone(), provider.clone(), &host_slot)
         }))
     };
-    loop {
-        match houyicoder_tui::app::run_with_runner(bundle, startup, resume_builder.take())? {
-            None => return Ok(()),
-            Some(new_target) => {
-                let (new_bundle, new_startup) = build_bundle_for_target(
+    let outcome = loop {
+        match houyicoder_tui::app::run_with_runner(bundle, startup, resume_builder.take()) {
+            Ok(None) => break Ok(()),
+            Ok(Some(new_target)) => {
+                match build_bundle_for_target(
                     &new_target,
                     project.clone(),
                     provider.clone(),
                     &host_slot,
-                )?;
-                bundle = new_bundle;
-                startup = new_startup;
+                ) {
+                    Ok((nb, ns)) => {
+                        bundle = nb;
+                        startup = ns;
+                    }
+                    Err(e) => break Err(e),
+                }
             }
+            Err(e) => break Err(Box::new(e)),
         }
-    }
+    };
+    crate::composition_root::release_current_lease(&host_slot);
+    outcome
 }
 
 #[cfg(test)]

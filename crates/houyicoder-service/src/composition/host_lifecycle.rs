@@ -4,8 +4,16 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use houyicoder_async::CancellationToken;
+use tokio::time::timeout;
 
+/// The production budget a stuck task gets before the reaper aborts it.
+#[cfg(not(test))]
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Under test the budget shrinks so the abort path runs in milliseconds,
+/// not the full production wait.
+#[cfg(test)]
+const SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(20);
 
 /// Owns the cancel token and join handles for the serve, drain, and relay
 /// tasks a self-built local host spawns. Built at the composition root and
@@ -43,14 +51,30 @@ impl HostLifecycle {
         let tasks = self.tasks;
         handle.spawn(async move {
             for mut task in tasks {
-                if tokio::time::timeout(SHUTDOWN_TIMEOUT, &mut task)
-                    .await
-                    .is_err()
-                {
+                if timeout(SHUTDOWN_TIMEOUT, &mut task).await.is_err() {
                     task.abort();
                 }
             }
         });
+    }
+
+    /// Cancel the token and return a future that joins every tracked task
+    /// with a bounded wait. The caller observes completion: a task that
+    /// times out is aborted and then awaited so the abort is confirmed,
+    /// not fire-and-forget. No detached reaper is started — the caller
+    /// drives the future, so the lock owner can hold the guard until
+    /// every writer has actually stopped.
+    pub fn begin_shutdown(self) -> impl std::future::Future<Output = ()> + Send {
+        self.cancel.cancel();
+        let tasks = self.tasks;
+        async move {
+            for mut task in tasks {
+                if timeout(SHUTDOWN_TIMEOUT, &mut task).await.is_err() {
+                    task.abort();
+                    drop(task.await);
+                }
+            }
+        }
     }
 }
 
@@ -116,5 +140,62 @@ mod tests {
             }
             assert!(done.load(Ordering::SeqCst), "each switch reaps its task");
         }
+    }
+
+    /// begin_shutdown joins a task that exits on its own gate, so the future
+    /// completes only after the task actually finishes — not when the cancel
+    /// is called. A caller that treats the cancel as completion would return
+    /// before done is set; awaiting begin_shutdown must see done true.
+    #[tokio::test]
+    async fn test_begin_shutdown_joins() {
+        let mut host = HostLifecycle::new();
+        let (gate_tx, gate_rx) = tokio::sync::oneshot::channel::<()>();
+        let done = Arc::new(AtomicBool::new(false));
+        let done_c = Arc::clone(&done);
+        host.track(tokio::spawn(async move {
+            let _ = gate_rx.await;
+            done_c.store(true, Ordering::SeqCst);
+        }));
+        let shutdown = host.begin_shutdown();
+        drop(gate_tx);
+        shutdown.await;
+        assert!(
+            done.load(Ordering::SeqCst),
+            "begin_shutdown awaited the task"
+        );
+    }
+
+    /// A task that ignores the cancel token and blocks forever cannot exit on
+    /// its own. begin_shutdown must abort it after the bounded wait and then
+    /// await the abort so the caller observes actual completion — the cancel
+    /// call or a detached Drop is not join evidence. A guard dropped when the
+    /// task's future is cancelled records that the abort actually happened.
+    #[tokio::test]
+    async fn test_begin_shutdown_aborts() {
+        struct AbortMark {
+            flag: Arc<AtomicBool>,
+        }
+        impl Drop for AbortMark {
+            fn drop(&mut self) {
+                self.flag.store(true, Ordering::SeqCst);
+            }
+        }
+
+        let mut host = HostLifecycle::new();
+        let aborted = Arc::new(AtomicBool::new(false));
+        let mark = AbortMark {
+            flag: Arc::clone(&aborted),
+        };
+        host.track(tokio::spawn(async move {
+            let _mark = mark;
+            std::future::pending::<()>().await;
+        }));
+
+        host.begin_shutdown().await;
+
+        assert!(
+            aborted.load(Ordering::SeqCst),
+            "stuck task was aborted, not abandoned"
+        );
     }
 }

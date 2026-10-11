@@ -32,15 +32,15 @@ use crate::trajectory;
 /// carries frontend startup state.
 pub(crate) type WiredBundle = (RunnerBundle, FrontendStartup, HostLifecycle);
 
-/// A host lifecycle owner paired with the session's exclusive lock. The
-/// lock lives as long as the host: shutting the host down drops the lock
-/// in the same step, so a writer never outlives its lease and a lease
-/// never outlives its writer. A switch reaps the old lease (cancel + reap
-/// its tasks, drop its lock) only after the new bundle builds, so a
-/// failed switch strands the user on the live session with its lease
+/// A host lifecycle owner holding the session's exclusive lock. The
+/// lock outlives every writer the host owns: releasing the lease joins
+/// the host's tasks to completion and drops the lock only after, so a
+/// second process cannot acquire while a writer is still flushing. A
+/// switch releases the old lease after the new bundle builds, so a
+/// failed switch leaves the user on the live session with its lease
 /// intact. The sid is the canonical display string the lock was acquired
-/// for, so a same-session resume can be recognized as a no-op before
-/// re-acquiring a lock this process already holds.
+/// for, so a same-session resume is a no-op before re-acquiring a lock
+/// this process already holds.
 pub(crate) struct HostLease {
     pub(crate) host: HostLifecycle,
     pub(crate) lock: Option<SessionLock>,
@@ -57,22 +57,53 @@ impl HostLease {
         }
     }
 
-    /// Cancel the host's tasks, reap them on the shared runtime, and drop
-    /// the lock. The handle is the shared process runtime the tasks were
-    /// spawned on. The host shutdown cancels the token and spawns a
-    /// detached reaper for the serve, drain, and relay tasks; the lock
-    /// drops right after the reaper is spawned, not after it finishes, so a
-    /// second process may acquire the flock while the old reaper is still
-    /// draining its last write.
-    pub(crate) fn shutdown(self, handle: &tokio::runtime::Handle) {
-        self.host.shutdown(handle);
-        drop(self.lock);
+    /// Move the lock into a release task that joins every host task to
+    /// completion before dropping the lock. A writer that ignores the
+    /// cancel token and exits only on its own gate keeps the lock held
+    /// until it finishes; a second process cannot acquire until the join
+    /// completes and the lock drops. The caller observes completion through
+    /// the returned handle — dropping the handle does not cancel the task,
+    /// but the owner must await it or retain the lease, since aborting the
+    /// release task (via the handle) drops the lock early.
+    pub(crate) fn begin_release(
+        self,
+        handle: &tokio::runtime::Handle,
+    ) -> tokio::task::JoinHandle<()> {
+        let host = self.host;
+        let lock = self.lock;
+        handle.spawn(async move {
+            host.begin_shutdown().await;
+            drop(lock);
+        })
     }
 }
 
 /// The slot a run loop holds one host lease in. A switch takes the old
-/// lease out, shuts it down, and stores the new one under the mutex.
+/// lease out, releases it, and stores the new one under the mutex.
 pub(crate) type HostLeaseSlot = Arc<Mutex<Option<HostLease>>>;
+
+/// Take the current lease from the slot and release it on the shared
+/// runtime: join the host's writers, then drop the lock. Blocks the caller
+/// up to the shutdown budget so a writer finishing its last write keeps
+/// the lock until it is done — the process does not drop the lock early or
+/// abandon a mid-flush writer. Called from the run loop's exit path on
+/// both normal and error returns, which runs on the main thread, not a
+/// runtime worker — Handle::block_on panics from inside a worker.
+pub(crate) fn release_current_lease(host_slot: &HostLeaseSlot) {
+    let Some(lease) = host_slot
+        .lock()
+        .expect("host lifecycle slot must not poison")
+        .take()
+    else {
+        return;
+    };
+    let runtime = shared_runtime();
+    let handle = runtime.handle();
+    let release = lease.begin_release(handle);
+    if let Err(e) = handle.block_on(release) {
+        tracing::warn!("host lease release task did not finish cleanly: {e}");
+    }
+}
 
 /// The composition root: build the runner via the service layer, install its
 /// event handlers, Arc the runner so the server task and the TUI share one, pair an
@@ -342,4 +373,78 @@ pub(crate) fn start_local_server(
     let transport = InProcTransport::from_halves(c2s_tx, s2c_rx);
     let client = Client::new(Box::new(transport));
     (runner, client, startup_warnings, host)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::session_lock::{LockError, SessionLock};
+    use houyicoder_context::SessionId;
+    use std::env;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::process;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use tokio::runtime::Builder;
+    use tokio::sync::oneshot::channel;
+
+    fn temp_root() -> PathBuf {
+        static SEQ: AtomicU64 = AtomicU64::new(0);
+        let n = SEQ.fetch_add(1, Ordering::Relaxed);
+        let p = env::temp_dir().join(format!("host-lease-{}-{n}", process::id()));
+        fs::create_dir_all(&p).expect("temp root");
+        p
+    }
+
+    /// The exclusive lock must outlive every tracked task the host owns. A
+    /// writer that ignores the cancel token and exits only on its own gate
+    /// keeps the lock held until it finishes; a second process cannot
+    /// acquire while that writer runs, and can acquire only after the
+    /// release task joins the writer and drops the lock.
+    #[test]
+    fn test_lock_outlives_writer() {
+        let runtime = Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime");
+        runtime.block_on(async {
+            let root = temp_root();
+            let sid = SessionId::new();
+            let sid_str = sid.to_string();
+            let lock = SessionLock::acquire(&sid_str, &root).expect("first acquire");
+
+            let mut host = HostLifecycle::new();
+            let (gate_tx, gate_rx) = channel::<()>();
+            let done = Arc::new(AtomicBool::new(false));
+            let done_c = Arc::clone(&done);
+            host.track(tokio::spawn(async move {
+                let _ = gate_rx.await;
+                done_c.store(true, Ordering::SeqCst);
+            }));
+
+            let lease = HostLease {
+                host,
+                lock: Some(lock),
+                sid: Some(sid_str.clone()),
+            };
+            let release = lease.begin_release(runtime.handle());
+
+            match SessionLock::acquire(&sid_str, &root) {
+                Err(LockError::HeldByOther(_)) => {}
+                Ok(_) => panic!("lock released while writer still running"),
+                Err(LockError::Io(e)) => panic!("unexpected io error: {e}"),
+            }
+
+            drop(gate_tx);
+            release.await.expect("release task");
+
+            let _reacquire = SessionLock::acquire(&sid_str, &root).expect("acquire after release");
+            assert!(
+                done.load(Ordering::SeqCst),
+                "writer finished before lock drop"
+            );
+            fs::remove_dir_all(&root).ok();
+        });
+    }
 }
