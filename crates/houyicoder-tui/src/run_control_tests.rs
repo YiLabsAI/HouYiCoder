@@ -940,13 +940,21 @@ fn test_forget_ships_queries_connected() {
     });
     app.forget_memory_at_cursor();
     assert_eq!(
-        app.memory.pending_forget_keys(),
+        app.sessions
+            .current
+            .capabilities
+            .memory
+            .pending_forget_keys(),
         vec!["proj-gate".to_string()],
         "pane d-action ships the forget query"
     );
     app.forget_memory_at_cursor();
     assert_eq!(
-        app.memory.pending_forget_keys(),
+        app.sessions
+            .current
+            .capabilities
+            .memory
+            .pending_forget_keys(),
         vec!["proj-gate".to_string()],
         "a repeat d-press on the same row ships nothing new"
     );
@@ -962,13 +970,21 @@ fn test_forget_ships_queries_connected() {
     // command form has no row to read a scope from).
     app.run_tui_local_command("memory forget build-gate");
     assert_eq!(
-        app.memory.pending_forget_keys(),
+        app.sessions
+            .current
+            .capabilities
+            .memory
+            .pending_forget_keys(),
         vec!["build-gate".to_string(), "proj-gate".to_string()],
         "command form ships the forget query"
     );
     app.run_tui_local_command("memory forget build-gate");
     assert_eq!(
-        app.memory.pending_forget_keys(),
+        app.sessions
+            .current
+            .capabilities
+            .memory
+            .pending_forget_keys(),
         vec!["build-gate".to_string(), "proj-gate".to_string()],
         "a repeat command forget of the same key ships nothing new"
     );
@@ -987,19 +1003,38 @@ fn test_toggle_repeat_press_dropped() {
     app.run_command(SlashCommand::Memory);
     app.run_tui_local_command("memory toggle auto");
     assert!(
-        app.memory.toggle_pending(MemoryToggleWhich::Auto),
+        app.sessions
+            .current
+            .capabilities
+            .memory
+            .toggle_pending(MemoryToggleWhich::Auto),
         "first press registers the flip"
     );
-    assert_eq!(app.memory.pending_toggle_count(), 1);
+    assert_eq!(
+        app.sessions
+            .current
+            .capabilities
+            .memory
+            .pending_toggle_count(),
+        1
+    );
     app.run_tui_local_command("memory toggle auto");
     assert_eq!(
-        app.memory.pending_toggle_count(),
+        app.sessions
+            .current
+            .capabilities
+            .memory
+            .pending_toggle_count(),
         1,
         "a repeat press on the flipping switch ships nothing"
     );
     app.run_tui_local_command("memory toggle dream");
     assert_eq!(
-        app.memory.pending_toggle_count(),
+        app.sessions
+            .current
+            .capabilities
+            .memory
+            .pending_toggle_count(),
         2,
         "the other switch stays operable mid-flip"
     );

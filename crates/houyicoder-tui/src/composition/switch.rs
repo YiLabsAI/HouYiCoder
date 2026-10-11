@@ -247,7 +247,6 @@ impl App {
         self.display_rows_cache.version.set(u64::MAX);
         self.ui.navigation.resume_picker = Default::default();
         self.ui.navigation.palette = Default::default();
-        self.memory = MemoryPaneState::new(memory_entries());
         self.ui.queue_view = Default::default();
         self.ui.worktree_list = Default::default();
         self.ui.worktree_level = Cell::new(0);
@@ -265,6 +264,7 @@ impl App {
         self.ui.skills_pane = Default::default();
         self.ui.navigation.skill_picker = Default::default();
         self.ui.hooks_pane = Default::default();
+        self.ui.memory = Default::default();
         self.model_picker = Default::default();
         self.ui.navigation.status_tab = Default::default();
         self.ui.navigation.status_name_edit = None;

@@ -40,17 +40,17 @@ fn test_memory_cursor_moves() {
     );
     // Up back to row 0.
     app.move_memory_cursor(-1);
-    assert_eq!(app.memory.cursor(), 0, "cursor returns to 0");
+    assert_eq!(app.ui.memory.cursor(), 0, "cursor returns to 0");
     // Clamp: past the last row stays at the last.
     app.move_memory_cursor(100);
     assert_eq!(
-        app.memory.cursor(),
+        app.ui.memory.cursor(),
         2,
         "cursor clamps to last row under All (3 entries)"
     );
     // Scope cycle resets the cursor to 0 (the filtered list changed).
     app.cycle_memory_scope();
-    assert_eq!(app.memory.cursor(), 0, "scope cycle resets cursor");
+    assert_eq!(app.ui.memory.cursor(), 0, "scope cycle resets cursor");
 }
 
 /// Forget actions report the disconnected state.
@@ -83,7 +83,7 @@ fn test_list_result_resets_cursor() {
     use houyicoder_protocol::frontend::memory::MemorySummaryEntry;
     let mut app = working();
     app.run_command(SlashCommand::Memory);
-    app.memory.set_cursor(5);
+    app.ui.memory.set_cursor(5);
     let transcript_len = app.sessions.current.transcript.len();
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -101,8 +101,16 @@ fn test_list_result_resets_cursor() {
             }],
         },
     });
-    assert_eq!(app.memory.cursor(), 0, "cursor reset on refresh");
-    assert!(app.memory.entries().iter().any(|m| m.topic == "fresh-gate"));
+    assert_eq!(app.ui.memory.cursor(), 0, "cursor reset on refresh");
+    assert!(
+        app.sessions
+            .current
+            .capabilities
+            .memory
+            .entries
+            .iter()
+            .any(|m| m.topic == "fresh-gate")
+    );
     assert!(render(&app).contains("source: project · age: now"));
     assert_eq!(app.sessions.current.transcript.len(), transcript_len);
     assert_eq!(app.ui.navigation.pane, crate::state::Pane::Memory);
@@ -114,18 +122,21 @@ fn test_memory_pane_keys_route() {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     let mut app = working();
     app.run_command(SlashCommand::Memory);
-    assert_eq!(app.memory.cursor(), 0);
+    assert_eq!(app.ui.memory.cursor(), 0);
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-    assert_eq!(app.memory.cursor(), 1, "Down moves cursor");
+    assert_eq!(app.ui.memory.cursor(), 1, "Down moves cursor");
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
-    assert_eq!(app.memory.cursor(), 0, "Up moves cursor back");
+    assert_eq!(app.ui.memory.cursor(), 0, "Up moves cursor back");
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
     assert_eq!(
-        app.memory.scope(),
+        app.ui.memory.scope(),
         crate::state::enums::MemoryScopeTab::User
     );
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
-    assert_eq!(app.memory.scope(), crate::state::enums::MemoryScopeTab::All);
+    assert_eq!(
+        app.ui.memory.scope(),
+        crate::state::enums::MemoryScopeTab::All
+    );
     crate::keys::handle_working(
         &mut app,
         KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
@@ -159,7 +170,7 @@ fn test_memory_detail_inline() {
     app.run_command(SlashCommand::Memory);
     let transcript_len = app.sessions.current.transcript.len();
     let req_id = RequestId(7);
-    app.memory.request_detail(req_id, "newest".into());
+    app.ui.memory.request_detail(req_id, "newest".into());
     app.handle_agent_message(SessionMessage::Response {
         request: req_id,
         response: ServerResponse::MemoryShow {
@@ -187,7 +198,7 @@ fn test_memory_detail_inline() {
     assert!(detail.contains("Esc to back"));
     assert_eq!(app.sessions.current.transcript.len(), transcript_len);
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-    assert_eq!(app.memory.detail_offset(), Some(1));
+    assert_eq!(app.ui.memory.detail_offset(), Some(1));
     let scrolled = render(&app);
     assert!(
         scrolled.contains("source: feedback · updated:"),
@@ -203,12 +214,12 @@ fn test_memory_detail_inline() {
             KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE),
         );
     }
-    let bottom = app.memory.detail_offset().expect("detail open");
+    let bottom = app.ui.memory.detail_offset().expect("detail open");
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-    assert_eq!(app.memory.detail_offset(), Some(bottom));
+    assert_eq!(app.ui.memory.detail_offset(), Some(bottom));
 
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-    assert!(app.memory.detail().is_none());
+    assert!(app.ui.memory.detail().is_none());
     assert_eq!(app.ui.navigation.pane, crate::state::Pane::Memory);
 }
 
@@ -219,8 +230,8 @@ fn test_stale_detail_ignored() {
     use houyicoder_protocol::frontend::memory::MemoryDetail;
     let mut app = working();
     app.ui.navigation.pane = Pane::Memory;
-    app.memory.request_detail(RequestId(1), "old".into());
-    app.memory.request_detail(RequestId(2), "new".into());
+    app.ui.memory.request_detail(RequestId(1), "old".into());
+    app.ui.memory.request_detail(RequestId(2), "new".into());
     app.handle_agent_message(SessionMessage::Response {
         request: RequestId(1),
         response: ServerResponse::MemoryShow {
@@ -233,7 +244,7 @@ fn test_stale_detail_ignored() {
             }),
         },
     });
-    assert_eq!(app.memory.pending_key(), Some("new"));
+    assert_eq!(app.ui.memory.pending_key(), Some("new"));
     assert!(!render(&app).contains("stale"));
 }
 
@@ -292,10 +303,14 @@ fn test_memory_pane_renders_rows() {
     // Both switches default on: the status row renders filled glyphs.
     assert!(on.contains("● auto-memory"), "on renders ●:\n{on}");
     assert!(on.contains("● auto-dream"), "on renders ●:\n{on}");
-    app.memory.set_toggles(ToggleState {
-        auto_memory: false,
-        auto_dream: false,
-    });
+    app.sessions
+        .current
+        .capabilities
+        .memory
+        .set_toggles(ToggleState {
+            auto_memory: false,
+            auto_dream: false,
+        });
     let off = render(&app);
     assert!(off.contains("○ auto-memory"), "off renders ○:\n{off}");
     assert!(off.contains("○ auto-dream"), "off renders ○:\n{off}");
@@ -340,10 +355,14 @@ fn test_header_status_row_styles() {
         );
     }
 
-    app.memory.set_toggles(ToggleState {
-        auto_memory: false,
-        auto_dream: false,
-    });
+    app.sessions
+        .current
+        .capabilities
+        .memory
+        .set_toggles(ToggleState {
+            auto_memory: false,
+            auto_dream: false,
+        });
     let buf = crate::test_harness::render_buffer(&app, 100, 28);
     for needle in ["○ auto-memory", "auto-memory"] {
         let st = style_at(&buf, needle);
@@ -354,7 +373,10 @@ fn test_header_status_row_styles() {
         );
     }
 
-    app.memory
+    app.sessions
+        .current
+        .capabilities
+        .memory
         .begin_toggle(RequestId(1), MemoryToggleWhich::Dream);
     let buf = crate::test_harness::render_buffer(&app, 100, 28);
     let st = style_at(&buf, "◌ auto-dream");
@@ -392,7 +414,8 @@ fn test_memory_toggle_bad_arg() {
 #[test]
 fn test_memory_pane_empty_state() {
     let mut app = working();
-    app.memory.clear_entries();
+    app.sessions.current.capabilities.memory.entries.clear();
+    app.ui.memory.set_cursor(0);
     app.run_command(SlashCommand::Memory);
     let out = render(&app);
     assert!(out.contains("0 memories"), "zero count missing:\n{out}");
@@ -462,16 +485,25 @@ fn test_pending_blocks_repeat_toggle() {
     let mut app = working();
     app.run_command(SlashCommand::Memory);
     assert!(
-        app.memory
+        app.sessions
+            .current
+            .capabilities
+            .memory
             .begin_toggle(RequestId(1), MemoryToggleWhich::Auto)
     );
     assert!(
-        !app.memory
+        !app.sessions
+            .current
+            .capabilities
+            .memory
             .begin_toggle(RequestId(2), MemoryToggleWhich::Auto),
         "a repeat press on the flipping switch is dropped"
     );
     assert!(
-        app.memory
+        app.sessions
+            .current
+            .capabilities
+            .memory
             .begin_toggle(RequestId(3), MemoryToggleWhich::Dream),
         "the other switch stays operable"
     );
@@ -486,17 +518,35 @@ fn test_pending_blocks_repeat_toggle() {
 fn test_forget_pending_blocks_repeat() {
     use houyicoder_protocol::envelope::RequestId;
     let mut app = working();
-    assert!(app.memory.begin_forget(RequestId(1), "gate".into()));
     assert!(
-        !app.memory.begin_forget(RequestId(2), "gate".into()),
+        app.sessions
+            .current
+            .capabilities
+            .memory
+            .begin_forget(RequestId(1), "gate".into())
+    );
+    assert!(
+        !app.sessions
+            .current
+            .capabilities
+            .memory
+            .begin_forget(RequestId(2), "gate".into()),
         "a repeat forget of the same key is dropped"
     );
     assert!(
-        app.memory.begin_forget(RequestId(3), "other".into()),
+        app.sessions
+            .current
+            .capabilities
+            .memory
+            .begin_forget(RequestId(3), "other".into()),
         "a different key stays operable"
     );
     assert_eq!(
-        app.memory.pending_forget_keys(),
+        app.sessions
+            .current
+            .capabilities
+            .memory
+            .pending_forget_keys(),
         vec!["gate".to_string(), "other".to_string()]
     );
 }
@@ -511,10 +561,13 @@ fn test_connection_loss_clears_pending() {
     use houyicoder_protocol::frontend::memory::{MemoryDetail, MemoryToggleWhich};
     let mut app = working();
     app.run_command(SlashCommand::Memory);
-    app.memory
+    app.sessions
+        .current
+        .capabilities
+        .memory
         .begin_toggle(RequestId(1), MemoryToggleWhich::Auto);
-    app.memory.request_detail(RequestId(2), "settled".into());
-    app.memory.apply_detail(
+    app.ui.memory.request_detail(RequestId(2), "settled".into());
+    app.ui.memory.apply_detail(
         RequestId(2),
         Some(MemoryDetail {
             key: "settled".into(),
@@ -528,9 +581,17 @@ fn test_connection_loss_clears_pending() {
         cause: "connection lost".into(),
         not_sent: Vec::new(),
     }));
-    assert_eq!(app.memory.pending_toggle_count(), 0, "toggle mark swept");
+    assert_eq!(
+        app.sessions
+            .current
+            .capabilities
+            .memory
+            .pending_toggle_count(),
+        0,
+        "toggle mark swept"
+    );
     assert!(
-        app.memory.detail().is_some(),
+        app.ui.memory.detail().is_some(),
         "an open detail is settled state and survives"
     );
     assert!(
@@ -548,12 +609,12 @@ fn test_connection_loss_sweeps_detail() {
     use houyicoder_protocol::envelope::RequestId;
     let mut app = working();
     app.run_command(SlashCommand::Memory);
-    app.memory.request_detail(RequestId(2), "loading".into());
+    app.ui.memory.request_detail(RequestId(2), "loading".into());
     app.handle_agent_message(SessionMessage::Connection(ConnectionEvent::Lost {
         cause: "connection lost".into(),
         not_sent: Vec::new(),
     }));
-    assert!(app.memory.detail().is_none(), "loading detail swept");
+    assert!(app.ui.memory.detail().is_none(), "loading detail swept");
 }
 
 /// An ordinary run failure keeps in-flight pane marks: the driver is still
@@ -566,7 +627,10 @@ fn test_run_error_keeps_pending() {
     use houyicoder_protocol::frontend::run::RunError;
     let mut app = working();
     app.run_command(SlashCommand::Memory);
-    app.memory
+    app.sessions
+        .current
+        .capabilities
+        .memory
         .begin_toggle(RequestId(1), MemoryToggleWhich::Auto);
     app.handle_agent_message(SessionMessage::Response {
         request: RequestId(3),
@@ -578,7 +642,11 @@ fn test_run_error_keeps_pending() {
         },
     });
     assert!(
-        app.memory.toggle_pending(MemoryToggleWhich::Auto),
+        app.sessions
+            .current
+            .capabilities
+            .memory
+            .toggle_pending(MemoryToggleWhich::Auto),
         "the pending flip survives a run failure"
     );
 }
@@ -644,7 +712,11 @@ fn test_dead_driver_toggle_rollback() {
     app.run_command(SlashCommand::Memory);
     app.toggle_memory_setting(MemoryToggleWhich::Auto);
     assert_eq!(
-        app.memory.pending_toggle_count(),
+        app.sessions
+            .current
+            .capabilities
+            .memory
+            .pending_toggle_count(),
         0,
         "the refused flip left no pending mark"
     );
@@ -659,11 +731,23 @@ fn test_dead_driver_toggle_rollback() {
     // The switch stays operable: a repeat press is refused the same way
     // instead of being swallowed by a stuck pending mark.
     app.toggle_memory_setting(MemoryToggleWhich::Auto);
-    assert_eq!(app.memory.pending_toggle_count(), 0);
+    assert_eq!(
+        app.sessions
+            .current
+            .capabilities
+            .memory
+            .pending_toggle_count(),
+        0
+    );
     // Symmetry: the cursor actions roll back the same way.
     app.forget_memory_at_cursor();
     assert!(
-        app.memory.pending_forget_keys().is_empty(),
+        app.sessions
+            .current
+            .capabilities
+            .memory
+            .pending_forget_keys()
+            .is_empty(),
         "the refused forget left no pending mark"
     );
     assert!(
@@ -675,7 +759,7 @@ fn test_dead_driver_toggle_rollback() {
     );
     app.show_memory_at_cursor();
     assert!(
-        app.memory.detail().is_none(),
+        app.ui.memory.detail().is_none(),
         "the refused show left no loading detail"
     );
 }
@@ -690,7 +774,10 @@ fn test_toggle_reply_writes_outcome() {
     use houyicoder_protocol::frontend::memory::MemoryToggleWhich;
     let mut app = working();
     app.run_command(SlashCommand::Memory);
-    app.memory
+    app.sessions
+        .current
+        .capabilities
+        .memory
         .begin_toggle(RequestId(7), MemoryToggleWhich::Auto);
     app.handle_agent_message(SessionMessage::Response {
         request: RequestId(7),
@@ -734,7 +821,12 @@ fn test_toggle_read_skips_transcript() {
         },
     });
     assert!(
-        !app.memory.toggles().auto_memory,
+        !app.sessions
+            .current
+            .capabilities
+            .memory
+            .toggles()
+            .auto_memory,
         "the snapshot still applies"
     );
     assert_eq!(
@@ -753,7 +845,10 @@ fn test_forget_reply_writes_outcome() {
     use houyicoder_protocol::envelope::RequestId;
     let mut app = working();
     app.run_command(SlashCommand::Memory);
-    app.memory
+    app.sessions
+        .current
+        .capabilities
+        .memory
         .begin_forget(RequestId(8), "build-gate".to_string());
     app.handle_agent_message(SessionMessage::Response {
         request: RequestId(8),
@@ -767,7 +862,12 @@ fn test_forget_reply_writes_outcome() {
         "the confirmed forget writes one outcome"
     );
     assert!(
-        app.memory.pending_forget_keys().is_empty(),
+        app.sessions
+            .current
+            .capabilities
+            .memory
+            .pending_forget_keys()
+            .is_empty(),
         "the pending action cleared"
     );
 }
@@ -782,7 +882,10 @@ fn test_toggle_failure_names_action() {
     use houyicoder_protocol::frontend::memory::MemoryToggleWhich;
     let mut app = working();
     app.run_command(SlashCommand::Memory);
-    app.memory
+    app.sessions
+        .current
+        .capabilities
+        .memory
         .begin_toggle(RequestId(9), MemoryToggleWhich::Auto);
     app.handle_agent_message(SessionMessage::Response {
         request: RequestId(9),
@@ -814,7 +917,10 @@ fn test_forget_failure_names_action() {
     use houyicoder_protocol::envelope::RequestId;
     let mut app = working();
     app.run_command(SlashCommand::Memory);
-    app.memory
+    app.sessions
+        .current
+        .capabilities
+        .memory
         .begin_forget(RequestId(10), "build-gate".to_string());
     app.handle_agent_message(SessionMessage::Response {
         request: RequestId(10),

@@ -55,6 +55,7 @@ pub fn app() -> App {
             permission_pane: PermissionPaneState::default(),
             skills_pane: SkillsPaneState::default(),
             hooks_pane: HooksPaneState::default(),
+            memory: MemoryPaneState::default(),
             agents_sel: 0,
             trajectory: TrajectoryPaneState::default(),
             worktree_list: ListPaneState::default(),
@@ -74,7 +75,6 @@ pub fn app() -> App {
             c
         },
         status: default_status(),
-        memory: MemoryPaneState::new(memory_entries()),
         quit: false,
         sessions: Sessions::new(Session::bare(SessionIdentity {
             session_id: SessionId::new("test"),

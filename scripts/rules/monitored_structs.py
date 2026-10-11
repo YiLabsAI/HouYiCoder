@@ -213,7 +213,15 @@ ACTIVE_OWNERS = {
         # returned-delegation rows stay the session's record, while the
         # cursor became a Ui pane field beside its peers, fulfilling the
         # note that had parked it on Session.
-        "fields": 13,
+        # The memory pane split along the same boundary: the session gained
+        # a memory capability (the entry cache, the toggle states, the
+        # change-notice dedupe set, and the pending mutations), and the
+        # pane's scope tab, list cursor, search query, and detail drill
+        # became one Ui field beside the skills and hooks pane states. The
+        # flat App field is gone; the compositions across the two owners
+        # (filtering, selection, refresh, the connection-death sweep) are
+        # App methods.
+        "fields": 12,
         "mut_app": 44,
     },
     "crates/houyicoder-tui/src/ui.rs:Ui": {
@@ -221,7 +229,7 @@ ACTIVE_OWNERS = {
         # is looking (Navigation), what the user has typed but not sent
         # (Input), the transcript view state and the states parked for views
         # off screen, the teammate drill, the verbose render flag, the
-        # permission, skills, hooks, trajectory, and worktree pane
+        # permission, skills, hooks, memory, trajectory, and worktree pane
         # interaction states, the agents pane list cursor, the spinner's
         # displayed token count, the last-written terminal title,
         # the queued-input hit-test geometry,
@@ -231,7 +239,7 @@ ACTIVE_OWNERS = {
         # and views read it through App. On-demand pane content (a drilled-in
         # teammate's lines, an opened skill body, a search corpus) lives here
         # as display copies whose loss costs a re-fetch, never a record.
-        "fields": 20,
+        "fields": 21,
     },
     "crates/houyicoder-tui/src/ui/navigation.rs:Navigation": {
         # The user's position in the frontend: the screen, the open pane, the
@@ -313,9 +321,10 @@ ACTIVE_OWNERS = {
     },
     "crates/houyicoder-tui/src/session/capabilities.rs:SessionCapabilities": {
         # The static composition of a session's named capabilities: the
-        # permission, status, hooks, tools, skills, and worktree capabilities.
-        # The connection, run, and transcript live beside it, not inside it.
-        "fields": 6,
+        # permission, status, hooks, tools, skills, worktree, and memory
+        # capabilities. The connection, run, and transcript live beside it,
+        # not inside it.
+        "fields": 7,
     },
     "crates/houyicoder-tui/src/session/capabilities.rs:HooksCapability": {
         # The session's registered-hook cache: the rows the /hooks pane
@@ -341,6 +350,16 @@ ACTIVE_OWNERS = {
         # working directory. One capability value so a session switch resets
         # the rows by construction instead of a manual App reset.
         "fields": 1,
+    },
+    "crates/houyicoder-tui/src/session/capabilities.rs:MemoryCapability": {
+        # The session's memory record: the server-refreshed entry list, the
+        # two toggle states, the change-notice dedupe set, and the pending
+        # pane mutations keyed by request id. Split from the one pane state
+        # owner: what the session knows stays here and resets by
+        # construction on a switch (the default seeds the bootstrap entries
+        # and both switches on); the pane's scope tab, list cursor, search
+        # query, and detail drill moved to the Ui owner beside its peers.
+        "fields": 4,
     },
     "crates/houyicoder-tui/src/session/identity.rs:SessionIdentity": {
         # The presented session's identity: the wire routing id and the

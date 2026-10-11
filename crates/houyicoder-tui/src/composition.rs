@@ -16,10 +16,9 @@ use crate::agent_message::SessionMessage;
 use crate::artifact::{ArtifactSession, StubProposer};
 use crate::console_state::ConsoleState;
 use crate::evidence::{
-    AuditEntry, ConsoleTodo, DiffData, Divergence, GraphResult, Hunk, HunkEvidence, MemoryEntry,
-    PlanArtifact, ReviewFinding, SpecArtifact, SpecClause, Verdict, VerifyResult, audit_entry,
+    AuditEntry, ConsoleTodo, DiffData, Divergence, GraphResult, Hunk, HunkEvidence, PlanArtifact,
+    ReviewFinding, SpecArtifact, SpecClause, Verdict, VerifyResult, audit_entry,
 };
-use crate::memory_state::MemoryPaneState;
 use crate::palette::PaletteState;
 use crate::resume_picker::SessionCatalog;
 use crate::review_queue::ReviewQueue;
@@ -506,32 +505,6 @@ fn graph_result() -> GraphResult {
             "tests/lib_test.rs".to_string(),
         ],
     }
-}
-
-fn memory_entries() -> Vec<MemoryEntry> {
-    vec![
-        MemoryEntry {
-            topic: "build-gate".to_string(),
-            summary: "make check must stay green before commit (placeholder)".to_string(),
-            scope: "project".to_string(),
-            source: "project".to_string(),
-            mtime_secs: 0,
-        },
-        MemoryEntry {
-            topic: "comment-style".to_string(),
-            summary: "no CJK, no backtick identifiers in .rs comments (placeholder)".to_string(),
-            scope: "user".to_string(),
-            source: "feedback".to_string(),
-            mtime_secs: 0,
-        },
-        MemoryEntry {
-            topic: "spec-driven".to_string(),
-            summary: "every change cites a spec clause and a test id (placeholder)".to_string(),
-            scope: "auto".to_string(),
-            source: "reference".to_string(),
-            mtime_secs: 0,
-        },
-    ]
 }
 
 fn console_todos() -> Vec<ConsoleTodo> {

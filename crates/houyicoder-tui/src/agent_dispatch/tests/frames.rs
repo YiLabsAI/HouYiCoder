@@ -336,8 +336,24 @@ fn test_toggle_state_applies_view() {
             },
         },
     });
-    assert!(!app.memory.toggles().auto_memory, "auto-memory applied");
-    assert!(app.memory.toggles().auto_dream, "auto-dream applied");
+    assert!(
+        !app.sessions
+            .current
+            .capabilities
+            .memory
+            .toggles()
+            .auto_memory,
+        "auto-memory applied"
+    );
+    assert!(
+        app.sessions
+            .current
+            .capabilities
+            .memory
+            .toggles()
+            .auto_dream,
+        "auto-dream applied"
+    );
     assert_eq!(app.ui.navigation.pane, Pane::Memory, "pane stays open");
     // Dismissed (pane moved away): the snapshot still applies, but the
     // pane is NOT yanked back to Memory.
@@ -353,7 +369,12 @@ fn test_toggle_state_applies_view() {
         },
     });
     assert!(
-        !app.memory.toggles().auto_memory,
+        !app.sessions
+            .current
+            .capabilities
+            .memory
+            .toggles()
+            .auto_memory,
         "auto-memory applied on dismissal"
     );
     assert_eq!(
@@ -389,7 +410,13 @@ fn test_memory_list_respects_dismissal() {
         "pane stays open on active refresh"
     );
     assert!(
-        app.memory.entries().iter().any(|e| e.topic == "build-gate"),
+        app.sessions
+            .current
+            .capabilities
+            .memory
+            .entries
+            .iter()
+            .any(|e| e.topic == "build-gate"),
         "list entry populated"
     );
     // Dismissed (pane moved away): the data still lands, but the pane is
@@ -414,7 +441,13 @@ fn test_memory_list_respects_dismissal() {
         "late list does not yank back a dismissed pane"
     );
     assert!(
-        app.memory.entries().iter().any(|e| e.topic == "build-gate"),
+        app.sessions
+            .current
+            .capabilities
+            .memory
+            .entries
+            .iter()
+            .any(|e| e.topic == "build-gate"),
         "list data still lands on dismissal"
     );
 }

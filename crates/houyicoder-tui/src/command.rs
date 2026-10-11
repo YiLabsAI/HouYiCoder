@@ -178,7 +178,7 @@ impl App {
             }
             C::Memory => {
                 self.ui.navigation.pane = Pane::Memory;
-                self.memory.close_detail();
+                self.ui.memory.close_detail();
                 if let Some(s) = self.sessions.current.connection.as_ref() {
                     match s.next_request_id() {
                         Ok(req_id) => {

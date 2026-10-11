@@ -68,10 +68,10 @@ pub(crate) struct Session {
     /// visibility.
     pub(crate) todos: TodoState,
     /// The session's named capabilities: the server-reported permission,
-    /// status, hook, tool, and skill caches plus the client-local state each
-    /// capability keeps. They travel together as one session value and reset
-    /// on a switch, so a new session starts with an empty cache instead of
-    /// inheriting the previous session's server view.
+    /// status, hook, tool, skill, and memory caches plus the client-local
+    /// state each capability keeps. They travel together as one session value
+    /// and reset on a switch, so a new session starts with an empty cache
+    /// instead of inheriting the previous session's server view.
     pub(crate) capabilities: SessionCapabilities,
     /// The background reads of the working transcript and the history
     /// generation each was dispatched against. Beside the transcript, not

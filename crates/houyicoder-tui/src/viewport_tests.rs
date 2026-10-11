@@ -407,14 +407,17 @@ fn test_esc_closes_memory_pane() {
     // With a non-empty text filter, Esc clears the filter (not the pane).
     let mut app = working();
     app.run_command(SlashCommand::Memory);
-    app.memory.set_search("alpha");
+    app.ui.memory.set_search("alpha");
     keys::handle_working(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     assert_eq!(
         app.ui.navigation.pane,
         Pane::Memory,
         "Esc clears the filter, not the pane"
     );
-    assert!(!app.memory.searching(), "Esc should clear the text filter");
+    assert!(
+        !app.ui.memory.searching(),
+        "Esc should clear the text filter"
+    );
 }
 
 /// Esc closes the memory pane even while a run is in flight. The abort-run
@@ -556,8 +559,8 @@ fn test_memory_pane_scroll() {
             mtime_secs: 0,
         })
         .collect();
-    app.memory.set_entries(entries);
-    app.memory.set_cursor(19);
+    app.set_memory_entries(entries);
+    app.ui.memory.set_cursor(19);
     let out = render(&app);
     assert!(
         out.contains("topic-19"),

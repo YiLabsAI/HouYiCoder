@@ -18,6 +18,7 @@ use std::sync::Arc;
 use crate::hooks_state::HooksPaneState;
 use crate::input::Input;
 use crate::list_pane_state::ListPaneState;
+use crate::memory_state::MemoryPaneState;
 use crate::notifications::NotificationState;
 use crate::permission_pane_state::PermissionPaneState;
 use crate::records::TeammateView;
@@ -74,6 +75,12 @@ pub struct Ui {
     /// key handler and render path step a field directly; the level and the
     /// selection move together on enter and return.
     pub(crate) hooks_pane: HooksPaneState,
+    /// The /memory pane's interaction state: the scope tab, the list cursor
+    /// and search query, and the detail drill-down. The entry list and the
+    /// toggle states these index are the session's memory capability; the
+    /// compositions across the two owners are App methods. Resets with its
+    /// pane peers on a session switch.
+    pub(crate) memory: MemoryPaneState,
     /// The /agents pane's list cursor: which returned-delegation row the
     /// marker highlights. The rows are the session's record; the cursor is
     /// pane interaction state, kept within the rows by every rebuild, step,

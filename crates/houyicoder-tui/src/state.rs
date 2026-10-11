@@ -30,7 +30,6 @@ use crate::display_rows_cache::DisplayRowsCache;
 use crate::last_row_keys::LastRowKeys;
 use crate::layout_feedback::LayoutFeedback;
 use crate::layout_snapshot::LayoutSnapshot;
-use crate::memory_state::MemoryPaneState;
 use crate::render_cache::RenderCache;
 use crate::run_state::{RunProgress, RunState};
 use crate::sessions::Sessions;
@@ -98,7 +97,6 @@ pub struct App {
     /// directly, matching the per-vector visible_window slices.
     pub(crate) display_rows_cache: DisplayRowsCache,
     pub status: StatusStub,
-    pub(crate) memory: MemoryPaneState,
     pub quit: bool,
     // --- real agent-loop wiring ---
     /// The presented session and the resumable-session catalog, held as one

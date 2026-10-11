@@ -92,7 +92,7 @@ impl App {
         // have partially delivered); the run line tells the user which.
         let run_req = self.active_run_req_id();
         let run_not_sent = run_req.is_some_and(|r| not_sent.contains(&r));
-        self.memory.clear_pending();
+        self.clear_memory_pending();
         self.ui.skills_pane.clear_pending();
         let run_line = if run_not_sent {
             "run not sent — connection failed before the request reached the transport"
@@ -505,7 +505,13 @@ impl App {
             .is_some_and(|p| p.req_id == request)
         {
             self.fail_model_pick(request, &message);
-        } else if let Some(action) = self.memory.take_action(request) {
+        } else if let Some(action) = self
+            .sessions
+            .current
+            .capabilities
+            .memory
+            .take_action(request)
+        {
             // A failed pane mutation keeps the action context, so the
             // outcome says what did not happen instead of a bare error.
             // The pending mark clears and the header keeps the old

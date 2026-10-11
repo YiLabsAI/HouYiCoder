@@ -18,6 +18,7 @@ use ratatui::{
 use unicode_width::UnicodeWidthStr;
 
 use crate::memory_state::{MemoryDetailState, MemoryPaneState, toggle_label};
+use crate::session::capabilities::MemoryCapability;
 use crate::state::enums::MemoryScopeTab;
 use crate::state::{App, MemoryEntry};
 use crate::view::line_wrap::{max_scroll_offset, truncate_width, wrap_styled_line};
@@ -25,21 +26,21 @@ use crate::view::navigation::{key_hint, tab_header};
 
 /// Render the memory list or the selected memory detail.
 pub(super) fn draw_content(f: &mut Frame, area: Rect, app: &App) {
-    match app.memory.detail() {
+    match app.ui.memory.detail() {
         Some(MemoryDetailState::Loading { key, .. }) => {
             draw_loading(f, area, key);
             return;
         }
         Some(MemoryDetailState::Open { entry, offset, .. }) => {
-            draw_detail(f, area, &app.memory, entry, offset.get());
+            draw_detail(f, area, &app.ui.memory, entry, offset.get());
             return;
         }
         None => {}
     }
-    let tab = app.memory.scope();
-    let filtered = app.memory.filtered();
+    let tab = app.ui.memory.scope();
+    let filtered = app.memory_filtered();
     let n = filtered.len();
-    let cursor = app.memory.cursor().min(n.saturating_sub(1));
+    let cursor = app.ui.memory.cursor().min(n.saturating_sub(1));
     let header_rows: Vec<Line> = memory_header(app, tab, n)
         .into_iter()
         .flat_map(|line| wrap_styled_line(line, area.width as usize))
@@ -180,22 +181,25 @@ fn memory_header(app: &App, tab: MemoryScopeTab, n: usize) -> Vec<Line<'static>>
     tabs.spans
         .extend(key_hint(&[("Tab/Left/Right", "switch scope")]).spans);
     let mut lines = vec![tabs];
-    if app.memory.searching() {
+    if app.ui.memory.searching() {
         lines.push(
             Line::from(format!(
                 "  {}",
-                crate::list_pane_state::search_hint_line(app.memory.search_query())
+                crate::list_pane_state::search_hint_line(app.ui.memory.search_query())
             ))
             .style(Style::new().fg(Color::DarkGray)),
         );
     }
-    lines.push(memory_status_line(&app.memory, n));
+    lines.push(memory_status_line(
+        &app.sessions.current.capabilities.memory,
+        n,
+    ));
     lines
 }
 
 /// Count, ordering, and switch state share one status row beneath the tabs.
 /// On is ● (Cyan, bold), off is ○ (dim), pending is ◌ (Cyan).
-fn memory_status_line(memory: &MemoryPaneState, count: usize) -> Line<'static> {
+fn memory_status_line(memory: &MemoryCapability, count: usize) -> Line<'static> {
     let switches = [MemoryToggleWhich::Auto, MemoryToggleWhich::Dream];
     let noun = if count == 1 { "memory" } else { "memories" };
     let mut spans = vec![Span::styled(

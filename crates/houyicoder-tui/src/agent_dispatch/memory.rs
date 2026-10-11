@@ -11,7 +11,8 @@ use houyicoder_protocol::frontend::memory::{
 
 use crate::agent_message::ClientCommand;
 use crate::command::render::{memory_entries_from_wire, render_memory_entry};
-use crate::memory_state::{MemoryAction, toggle_label};
+use crate::memory_state::toggle_label;
+use crate::session::capabilities::MemoryAction;
 use crate::state::{App, Pane};
 
 impl App {
@@ -23,8 +24,13 @@ impl App {
         req_id: RequestId,
         entries: Vec<MemorySummaryEntry>,
     ) {
-        let forgot = self.memory.take_forget(req_id);
-        self.memory.set_entries(memory_entries_from_wire(&entries));
+        let forgot = self
+            .sessions
+            .current
+            .capabilities
+            .memory
+            .take_forget(req_id);
+        self.set_memory_entries(memory_entries_from_wire(&entries));
         if let Some(key) = forgot {
             self.system_line(format!("forgot {key}"));
         }
@@ -33,15 +39,16 @@ impl App {
     /// Apply a memory-detail reply: into the pane when the pane asked and the
     /// request is still pending, otherwise rendered as one transcript line.
     pub(super) fn apply_memory_show(&mut self, req_id: RequestId, entry: Option<MemoryDetail>) {
-        if self.ui.navigation.pane == Pane::Memory && self.memory.is_pending(req_id) {
+        if self.ui.navigation.pane == Pane::Memory && self.ui.memory.is_pending(req_id) {
             let missing = entry.is_none();
-            self.memory.apply_detail(req_id, entry);
+            self.ui.memory.apply_detail(req_id, entry);
             if missing {
                 self.system_line("memory: no such key");
             }
-        } else if self.ui.navigation.pane != Pane::Memory && self.memory.pending_key().is_some() {
-            self.memory.close_detail();
-        } else if self.memory.pending_key().is_none() {
+        } else if self.ui.navigation.pane != Pane::Memory && self.ui.memory.pending_key().is_some()
+        {
+            self.ui.memory.close_detail();
+        } else if self.ui.memory.pending_key().is_none() {
             match entry {
                 Some(entry) => self.system_line(render_memory_entry(&entry)),
                 None => self.system_line("memory: no such key"),
@@ -53,7 +60,12 @@ impl App {
     /// same shape; only the req_id a pending toggle was registered under
     /// writes the outcome line.
     pub(super) fn apply_memory_toggles(&mut self, req_id: RequestId, state: ToggleState) {
-        let toggled = self.memory.take_toggle(req_id);
+        let toggled = self
+            .sessions
+            .current
+            .capabilities
+            .memory
+            .take_toggle(req_id);
         let outcome = toggled.map(|which| {
             let on = match which {
                 MemoryToggleWhich::Auto => state.auto_memory,
@@ -61,7 +73,7 @@ impl App {
             };
             format!("{} {}", toggle_label(which), if on { "on" } else { "off" })
         });
-        self.memory.set_toggles(state);
+        self.sessions.current.capabilities.memory.set_toggles(state);
         if let Some(line) = outcome {
             self.system_line(line);
         }
@@ -83,7 +95,13 @@ impl App {
         _causality: MemoryChangeCausality,
         changes: &[MemoryChange],
     ) {
-        if !self.memory.register_change(id) {
+        if !self
+            .sessions
+            .current
+            .capabilities
+            .memory
+            .register_change(id)
+        {
             return;
         }
         let count = changes.len();

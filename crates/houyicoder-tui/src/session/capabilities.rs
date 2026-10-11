@@ -11,8 +11,10 @@ use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use houyicoder_protocol::acp_wire::PermissionOptionKind;
+use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::frontend::context::ContextBreakdown;
 use houyicoder_protocol::frontend::hooks::HookEntry;
+use houyicoder_protocol::frontend::memory::{MemoryChangeId, MemoryToggleWhich, ToggleState};
 use houyicoder_protocol::frontend::permission::{
     PermissionDecisionEntry, PermissionMode, PermissionRule,
 };
@@ -21,6 +23,7 @@ use houyicoder_protocol::frontend::status::StatusSnapshot;
 use houyicoder_protocol::frontend::tools::ToolEntry;
 
 use crate::composition::WorktreeEntry;
+use crate::evidence::MemoryEntry;
 
 /// The session's permission state as the server reports it: the current mode,
 /// the durable rule list, the allowed-directory list, and the ask-before-git
@@ -173,6 +176,188 @@ pub(crate) struct WorktreeCapability {
     pub(crate) entries: Vec<WorktreeEntry>,
 }
 
+/// An in-flight pane mutation, keyed by the request id its reply will carry.
+/// Reads (list refresh, toggle-state fetch) never register an action, so only
+/// a mutation's reply writes a transcript outcome.
+#[derive(Debug)]
+pub(crate) enum MemoryAction {
+    Toggle { which: MemoryToggleWhich },
+    Forget { key: String },
+}
+
+/// The session's memory record: the entry list the server refreshes, the two
+/// background-service switches as the server reports them, the change-notice
+/// dedupe set, and the in-flight pane mutations keyed by request id. The
+/// pane's scope tab, list cursor, search query, and open detail are
+/// interaction state and live on the Ui owner beside their peers; this
+/// capability holds what the session knows. A switch resets it by
+/// construction: the default seeds the bootstrap entries and both switches
+/// on, the state a fresh session's pane renders before the first reply.
+#[derive(Debug)]
+pub(crate) struct MemoryCapability {
+    /// The memory rows in server order (newest first). Bootstrap placeholder
+    /// rows until the first list reply replaces them.
+    pub(crate) entries: Vec<MemoryEntry>,
+    toggles: ToggleState,
+    seen_changes: HashSet<MemoryChangeId>,
+    actions: HashMap<RequestId, MemoryAction>,
+}
+
+impl Default for MemoryCapability {
+    fn default() -> Self {
+        Self {
+            entries: bootstrap_entries(),
+            toggles: ToggleState {
+                auto_memory: true,
+                auto_dream: true,
+            },
+            seen_changes: HashSet::new(),
+            actions: HashMap::new(),
+        }
+    }
+}
+
+/// The bootstrap rows a fresh session's pane shows before the first server
+/// list reply lands: one placeholder per storage scope, so the pane is never
+/// an empty mystery while the query is in flight.
+fn bootstrap_entries() -> Vec<MemoryEntry> {
+    vec![
+        MemoryEntry {
+            topic: "build-gate".to_string(),
+            summary: "make check must stay green before commit (placeholder)".to_string(),
+            scope: "project".to_string(),
+            source: "project".to_string(),
+            mtime_secs: 0,
+        },
+        MemoryEntry {
+            topic: "comment-style".to_string(),
+            summary: "no CJK, no backtick identifiers in .rs comments (placeholder)".to_string(),
+            scope: "user".to_string(),
+            source: "feedback".to_string(),
+            mtime_secs: 0,
+        },
+        MemoryEntry {
+            topic: "spec-driven".to_string(),
+            summary: "every change cites a spec clause and a test id (placeholder)".to_string(),
+            scope: "auto".to_string(),
+            source: "reference".to_string(),
+            mtime_secs: 0,
+        },
+    ]
+}
+
+impl MemoryCapability {
+    pub(crate) fn toggles(&self) -> &ToggleState {
+        &self.toggles
+    }
+
+    pub(crate) fn set_toggles(&mut self, toggles: ToggleState) {
+        self.toggles = toggles;
+    }
+
+    /// Whether one switch has a flip in flight (the header's pending mark).
+    pub(crate) fn toggle_pending(&self, which: MemoryToggleWhich) -> bool {
+        self.actions.values().any(
+            |action| matches!(action, MemoryAction::Toggle { which: pending } if *pending == which),
+        )
+    }
+
+    /// Record an in-flight toggle flip. Returns false when the same switch
+    /// already has one pending, so a repeat press is dropped instead of
+    /// racing on→off→on; the other switch stays operable.
+    pub(crate) fn begin_toggle(&mut self, req_id: RequestId, which: MemoryToggleWhich) -> bool {
+        if self.toggle_pending(which) {
+            return false;
+        }
+        self.actions.insert(req_id, MemoryAction::Toggle { which });
+        true
+    }
+
+    /// Record an in-flight forget; the matching list reply writes the
+    /// outcome. Returns false when the same key already has one pending, so
+    /// a repeat d-press on a row ships a single delete.
+    pub(crate) fn begin_forget(&mut self, req_id: RequestId, key: String) -> bool {
+        let in_flight = self.actions.values().any(
+            |action| matches!(action, MemoryAction::Forget { key: pending } if *pending == key),
+        );
+        if in_flight {
+            return false;
+        }
+        self.actions.insert(req_id, MemoryAction::Forget { key });
+        true
+    }
+
+    /// Claim the action a reply's req_id belongs to, clearing it. None for
+    /// plain reads and refreshes — they write no transcript.
+    pub(crate) fn take_action(&mut self, req_id: RequestId) -> Option<MemoryAction> {
+        self.actions.remove(&req_id)
+    }
+
+    /// Claim an in-flight toggle flip. None when the id belongs to a forget,
+    /// a plain read, or was already claimed — the other action's pending
+    /// mark survives a mismatched claim.
+    pub(crate) fn take_toggle(&mut self, req_id: RequestId) -> Option<MemoryToggleWhich> {
+        match self.actions.get(&req_id) {
+            Some(MemoryAction::Toggle { which }) => {
+                let which = *which;
+                self.actions.remove(&req_id);
+                Some(which)
+            }
+            _ => None,
+        }
+    }
+
+    /// Claim an in-flight forget. None when the id belongs to a toggle, a
+    /// plain read, or was already claimed — the other action's pending mark
+    /// survives a mismatched claim.
+    pub(crate) fn take_forget(&mut self, req_id: RequestId) -> Option<String> {
+        match self.actions.get(&req_id) {
+            Some(MemoryAction::Forget { key }) => {
+                let key = key.clone();
+                self.actions.remove(&req_id);
+                Some(key)
+            }
+            _ => None,
+        }
+    }
+
+    /// Drop every in-flight mutation mark. Called when the connection dies —
+    /// no reply can ever resolve them, and a sticky pending mark would refuse
+    /// its switch forever. The pane's loading detail is swept beside this by
+    /// the Ui-side half of the same cleanup.
+    pub(crate) fn clear_actions(&mut self) {
+        self.actions.clear();
+    }
+
+    /// The keys with a forget in flight, sorted for deterministic assertions.
+    #[cfg(test)]
+    pub(crate) fn pending_forget_keys(&self) -> Vec<String> {
+        let mut keys: Vec<String> = self
+            .actions
+            .values()
+            .filter_map(|action| match action {
+                MemoryAction::Forget { key } => Some(key.clone()),
+                MemoryAction::Toggle { .. } => None,
+            })
+            .collect();
+        keys.sort();
+        keys
+    }
+
+    /// How many switches have a flip in flight, for repeat-press assertions.
+    #[cfg(test)]
+    pub(crate) fn pending_toggle_count(&self) -> usize {
+        self.actions
+            .values()
+            .filter(|action| matches!(action, MemoryAction::Toggle { .. }))
+            .count()
+    }
+
+    pub(crate) fn register_change(&mut self, id: &MemoryChangeId) -> bool {
+        self.seen_changes.insert(id.clone())
+    }
+}
+
 /// The static composition of a session's named capabilities: the
 /// server-reported caches plus the client-local session state each capability
 /// keeps (such as the disabled-skill set). The connection, run, and transcript
@@ -192,4 +377,7 @@ pub(crate) struct SessionCapabilities {
     pub(crate) skills: SkillsCapability,
     /// The worktree capability: the linked-worktree listing cache.
     pub(crate) worktree: WorktreeCapability,
+    /// The memory capability: the entry cache, the toggle states, the
+    /// change-notice dedupe set, and the pending pane mutations.
+    pub(crate) memory: MemoryCapability,
 }

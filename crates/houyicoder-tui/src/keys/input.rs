@@ -135,15 +135,15 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
         handle_ask_question(app, k);
         return;
     }
-    if app.ui.navigation.pane == Pane::Memory && app.memory.detail().is_some() {
+    if app.ui.navigation.pane == Pane::Memory && app.ui.memory.detail().is_some() {
         match k.code {
             KeyCode::Esc => {
-                app.memory.close_detail();
+                app.ui.memory.close_detail();
             }
-            KeyCode::Up => app.memory.scroll_detail(-1),
-            KeyCode::Down => app.memory.scroll_detail(1),
-            KeyCode::PageUp => app.memory.scroll_detail(-10),
-            KeyCode::PageDown => app.memory.scroll_detail(10),
+            KeyCode::Up => app.ui.memory.scroll_detail(-1),
+            KeyCode::Down => app.ui.memory.scroll_detail(1),
+            KeyCode::PageUp => app.ui.memory.scroll_detail(-10),
+            KeyCode::PageDown => app.ui.memory.scroll_detail(10),
             _ => {}
         }
         return;
@@ -276,8 +276,8 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
         {
             app.show_memory_at_cursor()
         }
-        KeyCode::Esc if app.ui.navigation.pane == Pane::Memory && app.memory.searching() => {
-            app.memory.clear_search();
+        KeyCode::Esc if app.ui.navigation.pane == Pane::Memory && app.ui.memory.searching() => {
+            app.ui.memory.clear_search();
         }
         KeyCode::Esc if app.ui.navigation.pane == Pane::Memory => {
             app.ui.navigation.pane = Pane::Transcript;

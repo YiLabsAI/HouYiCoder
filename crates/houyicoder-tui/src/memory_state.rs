@@ -1,16 +1,16 @@
-//! State and transitions for the memory browser.
+//! Interaction state for the memory browser pane.
 //!
-//! The owner keeps list selection, filtering, toggle state, detail requests,
-//! notice identity, and bounded detail scrolling consistent across command,
-//! key, wire, and view boundaries.
+//! The owner keeps the scope tab, the list cursor and search query, and the
+//! bounded detail scrolling consistent across command, key, and view
+//! boundaries. The session's entry list, toggle states, change-notice
+//! identity, and in-flight mutations live on the memory capability; the state
+//! here is what the user is looking at, not what the session knows, and the
+//! compositions across the two owners are App methods.
 
 use std::cell::Cell;
-use std::collections::{HashMap, HashSet};
 
 use houyicoder_protocol::envelope::RequestId;
-use houyicoder_protocol::frontend::memory::{
-    MemoryChangeId, MemoryDetail, MemoryToggleWhich, ToggleState,
-};
+use houyicoder_protocol::frontend::memory::{MemoryDetail, MemoryToggleWhich};
 
 use crate::evidence::MemoryEntry;
 use crate::list_pane_state::ListPaneState;
@@ -25,14 +25,6 @@ pub(crate) fn toggle_label(which: MemoryToggleWhich) -> &'static str {
     }
 }
 
-/// An in-flight pane mutation, keyed by the request id its reply will carry.
-/// Reads (list refresh, toggle-state fetch) never register an action, so only
-/// a mutation's reply writes a transcript outcome.
-pub(crate) enum MemoryAction {
-    Toggle { which: MemoryToggleWhich },
-    Forget { key: String },
-}
-
 pub(crate) enum MemoryDetailState {
     Loading {
         request_id: RequestId,
@@ -45,159 +37,29 @@ pub(crate) enum MemoryDetailState {
     },
 }
 
+/// The /memory pane's interaction state: the scope tab filter, the list
+/// cursor and search query, and the detail drill-down (a loading request or
+/// an open body with its scroll position). The rows these index are the
+/// session's memory capability; a session switch resets this value with its
+/// pane peers.
+#[derive(Default)]
 pub(crate) struct MemoryPaneState {
-    entries: Vec<MemoryEntry>,
-    toggles: ToggleState,
     scope: MemoryScopeTab,
     list: ListPaneState,
     detail: Option<MemoryDetailState>,
-    seen_changes: HashSet<MemoryChangeId>,
-    actions: HashMap<RequestId, MemoryAction>,
 }
 
 impl MemoryPaneState {
-    pub(crate) fn new(entries: Vec<MemoryEntry>) -> Self {
-        Self {
-            entries,
-            toggles: ToggleState {
-                auto_memory: true,
-                auto_dream: true,
-            },
-            scope: MemoryScopeTab::All,
-            list: ListPaneState::default(),
-            detail: None,
-            seen_changes: HashSet::new(),
-            actions: HashMap::new(),
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn clear_entries(&mut self) {
-        self.entries.clear();
-        self.list.cursor = 0;
-    }
-
-    #[cfg(test)]
-    pub(crate) fn entries(&self) -> &[MemoryEntry] {
-        &self.entries
-    }
-
-    pub(crate) fn toggles(&self) -> &ToggleState {
-        &self.toggles
-    }
-
-    pub(crate) fn set_toggles(&mut self, toggles: ToggleState) {
-        self.toggles = toggles;
-    }
-
-    /// Whether one switch has a flip in flight (the header's pending mark).
-    pub(crate) fn toggle_pending(&self, which: MemoryToggleWhich) -> bool {
-        self.actions.values().any(
-            |action| matches!(action, MemoryAction::Toggle { which: pending } if *pending == which),
-        )
-    }
-
-    /// Record an in-flight toggle flip. Returns false when the same switch
-    /// already has one pending, so a repeat press is dropped instead of
-    /// racing on→off→on; the other switch stays operable.
-    pub(crate) fn begin_toggle(&mut self, req_id: RequestId, which: MemoryToggleWhich) -> bool {
-        if self.toggle_pending(which) {
-            return false;
-        }
-        self.actions.insert(req_id, MemoryAction::Toggle { which });
-        true
-    }
-
-    /// Record an in-flight forget; the matching list reply writes the
-    /// outcome. Returns false when the same key already has one pending, so
-    /// a repeat d-press on a row ships a single delete.
-    pub(crate) fn begin_forget(&mut self, req_id: RequestId, key: String) -> bool {
-        let in_flight = self.actions.values().any(
-            |action| matches!(action, MemoryAction::Forget { key: pending } if *pending == key),
-        );
-        if in_flight {
-            return false;
-        }
-        self.actions.insert(req_id, MemoryAction::Forget { key });
-        true
-    }
-
-    /// Claim the action a reply's req_id belongs to, clearing it. None for
-    /// plain reads and refreshes — they write no transcript.
-    pub(crate) fn take_action(&mut self, req_id: RequestId) -> Option<MemoryAction> {
-        self.actions.remove(&req_id)
-    }
-
-    /// Claim an in-flight toggle flip. None when the id belongs to a forget,
-    /// a plain read, or was already claimed — the other action's pending
-    /// mark survives a mismatched claim.
-    pub(crate) fn take_toggle(&mut self, req_id: RequestId) -> Option<MemoryToggleWhich> {
-        match self.actions.get(&req_id) {
-            Some(MemoryAction::Toggle { which }) => {
-                let which = *which;
-                self.actions.remove(&req_id);
-                Some(which)
-            }
-            _ => None,
-        }
-    }
-
-    /// Claim an in-flight forget. None when the id belongs to a toggle, a
-    /// plain read, or was already claimed — the other action's pending mark
-    /// survives a mismatched claim.
-    pub(crate) fn take_forget(&mut self, req_id: RequestId) -> Option<String> {
-        match self.actions.get(&req_id) {
-            Some(MemoryAction::Forget { key }) => {
-                let key = key.clone();
-                self.actions.remove(&req_id);
-                Some(key)
-            }
-            _ => None,
-        }
-    }
-
-    /// Drop every in-flight mark: pending actions and a detail still
-    /// loading. Called when the connection dies — no reply can ever resolve
-    /// them, and a sticky pending mark would refuse the switch forever. An
-    /// open detail is settled state, not a pending one, and survives.
-    pub(crate) fn clear_pending(&mut self) {
-        self.actions.clear();
-        if matches!(self.detail, Some(MemoryDetailState::Loading { .. })) {
-            self.detail = None;
-        }
-    }
-
-    /// The keys with a forget in flight, sorted for deterministic assertions.
-    #[cfg(test)]
-    pub(crate) fn pending_forget_keys(&self) -> Vec<String> {
-        let mut keys: Vec<String> = self
-            .actions
-            .values()
-            .filter_map(|action| match action {
-                MemoryAction::Forget { key } => Some(key.clone()),
-                MemoryAction::Toggle { .. } => None,
-            })
-            .collect();
-        keys.sort();
-        keys
-    }
-
-    /// How many switches have a flip in flight, for repeat-press assertions.
-    #[cfg(test)]
-    pub(crate) fn pending_toggle_count(&self) -> usize {
-        self.actions
-            .values()
-            .filter(|action| matches!(action, MemoryAction::Toggle { .. }))
-            .count()
-    }
-
     pub(crate) fn scope(&self) -> MemoryScopeTab {
         self.scope
     }
 
-    pub(crate) fn filtered(&self) -> Vec<&MemoryEntry> {
+    /// The rows the pane shows: the session's entries narrowed by the scope
+    /// tab and the search query. The entries are borrowed from the capability
+    /// so the caller composes the two owners.
+    pub(crate) fn filtered<'a>(&self, entries: &'a [MemoryEntry]) -> Vec<&'a MemoryEntry> {
         let needle = self.list.query.to_ascii_lowercase();
-        self.entries
+        entries
             .iter()
             .filter(|memory| {
                 self.scope == MemoryScopeTab::All || memory.scope == self.scope.label()
@@ -210,31 +72,18 @@ impl MemoryPaneState {
             .collect()
     }
 
-    pub(crate) fn set_entries(&mut self, entries: Vec<MemoryEntry>) {
-        self.entries = entries;
-        self.list.cursor = 0;
-    }
-
-    pub(crate) fn register_change(&mut self, id: &MemoryChangeId) -> bool {
-        self.seen_changes.insert(id.clone())
-    }
-
     pub(crate) fn cursor(&self) -> usize {
         self.list.cursor
     }
 
-    #[cfg(test)]
     pub(crate) fn set_cursor(&mut self, cursor: usize) {
         self.list.cursor = cursor;
     }
 
-    pub(crate) fn move_cursor(&mut self, delta: i32) {
-        let len = self.filtered().len();
+    /// Move the cursor by a signed delta within the filtered row count the
+    /// caller composed from both owners.
+    pub(crate) fn move_cursor(&mut self, delta: i32, len: usize) {
         self.list.move_cursor(delta, len);
-    }
-
-    pub(crate) fn selected(&self) -> Option<&MemoryEntry> {
-        self.filtered().get(self.list.cursor).copied()
     }
 
     pub(crate) fn next_scope(&mut self) {
@@ -349,6 +198,15 @@ impl MemoryPaneState {
         match self.detail.as_ref() {
             Some(MemoryDetailState::Loading { key, .. }) => Some(key),
             _ => None,
+        }
+    }
+
+    /// Drop a detail still loading; an open detail is settled state, not a
+    /// pending one, and survives. The Ui-side half of the connection-death
+    /// cleanup, sweeping the pane beside the capability's pending mutations.
+    pub(crate) fn drop_loading_detail(&mut self) {
+        if matches!(self.detail, Some(MemoryDetailState::Loading { .. })) {
+            self.detail = None;
         }
     }
 }
