@@ -365,7 +365,7 @@ impl App {
         self.workflow.spec_ctx.step = Stage::Idle.label().to_string();
         self.ui.navigation.pane = Pane::Transcript;
         self.reset_chain_state();
-        self.sync_viewport_to_stage();
+        self.ui.sync_viewport_to_stage(Stage::Idle);
     }
 
     /// /rewind: pop the last stage transition, land on the matching pane, and

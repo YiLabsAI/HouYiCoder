@@ -1,7 +1,8 @@
-//! Guided-workflow stage and viewport state on App: stage transitions, the
-//! viewport sync that follows them, and the plan-mode toggle. Split from App
-//! so the workflow state machine is one cohesive unit rather than scattered
-//! App methods.
+//! Guided-workflow stage state on App: stage transitions, the plan-mode
+//! toggle, and the two manual viewport exits (Scroll and Focus). The
+//! stage-to-viewport auto-sync lives on Ui, where the viewport and overlays
+//! are owned. Split from App so the workflow state machine is one cohesive
+//! unit rather than scattered App methods.
 
 use crate::state::{App, Stage, ViewportMode};
 
@@ -14,20 +15,7 @@ impl App {
         self.workflow.stage_history.push(self.workflow.stage);
         self.workflow.stage = stage;
         self.workflow.spec_ctx.step = stage.label().to_string();
-        self.sync_viewport_to_stage();
-    }
-
-    /// Auto-set the viewport from the current stage. Implement and verify fold
-    /// into Focus; idle, design, and done unfold to Working. Also closes any
-    /// open palette or search when leaving Working so the inline-only layout
-    /// cells do not linger.
-    pub fn sync_viewport_to_stage(&mut self) {
-        let next = ViewportMode::for_stage(self.workflow.stage);
-        if next != ViewportMode::Working {
-            self.ui.navigation.palette.close();
-            self.ui.transcript_view.search.close();
-        }
-        self.ui.navigation.viewport = next;
+        self.ui.sync_viewport_to_stage(stage);
     }
 
     /// Leave Scroll mode and restore the prior viewport. Only switches the
@@ -53,7 +41,7 @@ impl App {
         let prev = self.workflow.stage_history.pop().expect("non-empty");
         self.workflow.stage = prev;
         self.workflow.spec_ctx.step = prev.label().to_string();
-        self.sync_viewport_to_stage();
+        self.ui.sync_viewport_to_stage(prev);
         Some(prev)
     }
 }

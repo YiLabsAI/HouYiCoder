@@ -29,7 +29,7 @@ use crate::selections::Selections;
 use crate::skills_state::SkillsPaneState;
 use crate::state::model_draft::ModelDraft;
 use crate::state::transcript::view::TranscriptViewState;
-use crate::state::{ParkedViewStates, QueueViewState, TrajectoryPaneState};
+use crate::state::{ParkedViewStates, QueueViewState, Stage, TrajectoryPaneState, ViewportMode};
 
 pub use crate::ui::navigation::Navigation;
 
@@ -157,6 +157,20 @@ pub struct Ui {
 }
 
 impl Ui {
+    /// Sync the viewport and overlays to a stage: implement and verify fold
+    /// into Focus (closing the palette and transcript search first), the rest
+    /// unfold to Working. Owned here because the fold closes both the
+    /// navigation palette and the transcript search, preserving the close
+    /// before the viewport assigns.
+    pub(crate) fn sync_viewport_to_stage(&mut self, stage: Stage) {
+        let next = ViewportMode::for_stage(stage);
+        if next != ViewportMode::Working {
+            self.navigation.palette.close();
+            self.transcript_view.search.close();
+        }
+        self.navigation.viewport = next;
+    }
+
     /// Reset the session-local fields a switch must clear so the new session
     /// renders as if fresh rather than layered over the old one's pane state,
     /// caches, or selection. The navigation overlays, the transcript view, the
