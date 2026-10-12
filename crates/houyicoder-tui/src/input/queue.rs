@@ -4,7 +4,7 @@
 
 use std::ops::Index;
 
-use houyicoder_protocol::frontend::QueuedInput;
+use houyicoder_protocol::frontend::{PendingInputId, QueuedInput};
 
 use crate::run_control::ClientCommand;
 use crate::state::App;
@@ -142,8 +142,29 @@ impl InputQueue {
         self.items.first()
     }
 
-    pub(crate) fn first_mut(&mut self) -> Option<&mut InputItem> {
-        self.items.first_mut()
+    /// The live runner-copy identity held at the given index, when the item
+    /// is a Message that mirrors to the runner. None for a parked item (no
+    /// runner copy), a Command (never mirrored), or an out-of-range index.
+    /// The remove paths read this before dropping the local copy so the
+    /// QueueRemove is sent only for an item that actually holds a mirror.
+    pub(crate) fn live_copy_at(&self, index: usize) -> Option<PendingInputId> {
+        match self.items.get(index) {
+            Some(InputItem::Message(input)) => Some(input.id),
+            _ => None,
+        }
+    }
+
+    /// Mark the head as holding a runner copy once its InjectUser was
+    /// accepted, so the slot's variant tracks the enqueue outcome rather than
+    /// jumping to Message ahead of it. No-op when the head is not a parked
+    /// message.
+    pub(crate) fn confirm_head_promoted(&mut self) {
+        let Some(slot) = self.items.first_mut() else {
+            return;
+        };
+        if let InputItem::ParkedMessage(input) = slot {
+            *slot = InputItem::Message(input.clone());
+        }
     }
 
     pub(crate) fn iter(&self) -> std::slice::Iter<'_, InputItem> {
@@ -302,8 +323,7 @@ impl App {
         }
         // Enqueue the server removal before touching the local copy: a closed
         // driver leaves the item in place rather than orphaning the mirror.
-        if let InputItem::Message(input) = &self.ui.input.queue[index] {
-            let id = input.id;
+        if let Some(id) = self.ui.input.queue.live_copy_at(index) {
             let session_id = self.sessions.current.identity.session_id.clone();
             if let Err(e) = self.enqueue(ClientCommand::QueueRemove { session_id, id }) {
                 self.system_line(Self::enqueue_failure_line("queue", e));
@@ -335,14 +355,7 @@ impl App {
         };
         let session_id = self.sessions.current.identity.session_id.clone();
         match self.enqueue(ClientCommand::InjectUser { session_id, input }) {
-            Ok(()) => {
-                if let Some(slot) = self.ui.input.queue.first_mut()
-                    && let InputItem::ParkedMessage(input) = slot
-                {
-                    let input = input.clone();
-                    *slot = InputItem::Message(input);
-                }
-            }
+            Ok(()) => self.ui.input.queue.confirm_head_promoted(),
             Err(e) => {
                 self.system_line(Self::enqueue_failure_line("queue", e));
             }
@@ -691,6 +704,51 @@ mod tests {
             q.selected_index(),
             Some(0),
             "the old session's selection does not carry"
+        );
+    }
+
+    #[test]
+    fn test_live_copy_only_message() {
+        let mut q = InputQueue::default();
+        let live = QueuedInput::new("live");
+        let parked = QueuedInput::new("parked");
+        q.push(InputItem::Message(live.clone()));
+        q.push(InputItem::Command("/cmd".into()));
+        q.push(InputItem::ParkedMessage(parked));
+        assert_eq!(
+            q.live_copy_at(0),
+            Some(live.id),
+            "a live message holds its runner id"
+        );
+        assert_eq!(q.live_copy_at(1), None, "a command holds no runner copy");
+        assert_eq!(
+            q.live_copy_at(2),
+            None,
+            "a parked message holds no runner copy"
+        );
+        assert_eq!(
+            q.live_copy_at(3),
+            None,
+            "an out-of-range index holds nothing"
+        );
+    }
+
+    #[test]
+    fn test_confirm_head_promotes_parked() {
+        let mut q = InputQueue::default();
+        q.push(InputItem::ParkedMessage("held".into()));
+        q.confirm_head_promoted();
+        assert!(
+            matches!(q[0], InputItem::Message(_)),
+            "a parked head becomes a live message"
+        );
+
+        let mut command_head = InputQueue::default();
+        command_head.push(InputItem::Command("/a".into()));
+        command_head.confirm_head_promoted();
+        assert!(
+            matches!(command_head[0], InputItem::Command(_)),
+            "a command head is not promoted"
         );
     }
 }

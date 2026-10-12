@@ -5,6 +5,8 @@
 //! approval state machine and artifact closed-loop actions live in
 //! approval.rs (second impl block).
 
+use std::time::Instant;
+
 use houyicoder_protocol::frontend::SlashCommand;
 use houyicoder_protocol::frontend::status::StatusSnapshot;
 
@@ -440,26 +442,16 @@ impl App {
         }
     }
 
-    /// Drain the pending paste accumulator when the last chunk arrived at
-    /// least 50ms ago, ingesting it into the paste side table and routing the
-    /// placeholder token to the active input surface. Returns true when a
-    /// paste was ingested. Returns false when nothing is pending or the gap
-    /// has not elapsed; in the latter case the accumulator is restored for
-    /// the next check.
+    /// Ask the input owner whether the pending paste has elapsed its 50ms gap.
+    /// Input owns the accumulator (buffer plus last-chunk time) and its group
+    /// consumption; App keeps only the token routing (palette query vs input
+    /// box), so a produced token is applied through apply_paste_token. Returns
+    /// whether a paste was ingested.
     pub(crate) fn flush_pending_paste(&mut self) -> bool {
-        let (Some(buf), Some(last)) = (
-            self.ui.input.pending_paste.buffer.take(),
-            self.ui.input.pending_paste.last.take(),
-        ) else {
-            return false;
-        };
-        if last.elapsed().as_millis() >= 50 {
-            let token = self.ui.input.pasted.ingest(&buf);
+        if let Some(token) = self.ui.input.drain_pending_paste(Instant::now()) {
             self.apply_paste_token(&token);
             true
         } else {
-            self.ui.input.pending_paste.buffer = Some(buf);
-            self.ui.input.pending_paste.last = Some(last);
             false
         }
     }

@@ -252,7 +252,7 @@ pub(crate) fn handle_mouse(app: &mut App, m: MouseEvent) {
                     let Some(item) = app.remove_pending_at(idx) else {
                         return;
                     };
-                    app.merge_recalled_text(item.display().to_string());
+                    app.ui.input.merge_recalled_text(item.display().to_string());
                 } else {
                     app.ui.navigation.pane = Pane::Queue;
                     app.ui.input.queue.select_first();

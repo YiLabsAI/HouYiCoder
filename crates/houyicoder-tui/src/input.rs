@@ -13,6 +13,9 @@
 
 pub(crate) mod queue;
 
+use std::path::PathBuf;
+use std::time::Instant;
+
 use crate::history::HistoryNav;
 use crate::input::queue::InputQueue;
 use crate::paste::{PasteStore, PendingPaste};
@@ -378,9 +381,65 @@ pub(crate) struct Input {
     pub(crate) queue: InputQueue,
 }
 
+impl Input {
+    /// Merge recalled text before the current draft, leaving the cursor at the
+    /// draft boundary so editing continues without losing the draft. An empty
+    /// draft becomes the recalled text with the cursor at its end.
+    pub(crate) fn merge_recalled_text(&mut self, recalled: String) {
+        if self.editor.is_empty() {
+            self.editor.set(recalled);
+        } else {
+            let draft = self.editor.value().to_string();
+            let merged = format!("{recalled}\n{draft}");
+            let draft_start = recalled.len() + 1; // past the recalled text + newline
+            self.editor.set(merged);
+            self.editor.move_to(draft_start);
+        }
+    }
+
+    /// Clear the composer fields a session switch must reset: the editor, the
+    /// paste side table, and the pending-paste accumulator. The queue carries
+    /// across by its own transfer rule, and the prompt history is rewired by
+    /// the frontend startup policy, so neither is reset here.
+    pub(crate) fn reset_composer_for_session_switch(&mut self) {
+        self.editor = Default::default();
+        self.pasted = Default::default();
+        self.pending_paste = Default::default();
+    }
+
+    /// Wire the prompt-history file for this session.
+    pub(crate) fn apply_history_path(&mut self, path: PathBuf) {
+        self.history = HistoryNav::with_path(path);
+    }
+
+    /// Drain the pending-paste accumulator once the gap since the last chunk
+    /// reached 50ms, ingesting the chunk into the paste side table and
+    /// returning the token to route. None when nothing is pending or the gap
+    /// has not elapsed (the accumulator is restored in that case). now is
+    /// injected so the decision is deterministic under test.
+    pub(crate) fn drain_pending_paste(&mut self, now: Instant) -> Option<String> {
+        let (Some(buf), Some(last)) = (
+            self.pending_paste.buffer.take(),
+            self.pending_paste.last.take(),
+        ) else {
+            return None;
+        };
+        if now.duration_since(last).as_millis() >= 50 {
+            Some(self.pasted.ingest(&buf))
+        } else {
+            self.pending_paste.buffer = Some(buf);
+            self.pending_paste.last = Some(last);
+            None
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use crate::input::queue::InputItem;
+    use std::time::{Duration, Instant};
 
     #[test]
     fn test_push_pop_clear() {
@@ -511,5 +570,118 @@ mod tests {
         assert_eq!(f.cursor_position(5).0, 2);
         f.move_up(5);
         assert_eq!(f.cursor_position(5).0, 1);
+    }
+
+    #[test]
+    fn test_recall_empty_draft() {
+        let mut input = Input::default();
+        input.merge_recalled_text("recalled".to_string());
+        assert_eq!(
+            input.editor.value(),
+            "recalled",
+            "recalled text becomes the draft"
+        );
+        assert_eq!(
+            input.editor.cursor(),
+            "recalled".len(),
+            "cursor rests at the end"
+        );
+    }
+
+    #[test]
+    fn test_recall_before_draft() {
+        let mut input = Input::default();
+        input.editor.set("line one\nline two".to_string());
+        input.merge_recalled_text("recalled".to_string());
+        assert_eq!(
+            input.editor.value(),
+            "recalled\nline one\nline two",
+            "recalled text precedes the existing draft"
+        );
+        assert_eq!(
+            input.editor.cursor(),
+            "recalled\n".len(),
+            "the cursor sits at the draft boundary, not the end"
+        );
+    }
+
+    #[test]
+    fn test_recall_cjk_boundary() {
+        let mut input = Input::default();
+        input.editor.set("你好世界".to_string());
+        input.merge_recalled_text("recalled".to_string());
+        assert_eq!(
+            input.editor.cursor(),
+            "recalled\n".len(),
+            "the cursor lands on the CJK char boundary after the newline"
+        );
+        input.editor.move_right();
+        input.editor.move_right();
+        assert_eq!(
+            input.editor.cursor(),
+            "recalled\n你好".len(),
+            "wide chars advance the cursor by their full byte length"
+        );
+    }
+
+    #[test]
+    fn test_reset_composer_keeps_queue() {
+        let mut input = Input::default();
+        input.editor.set("draft".to_string());
+        input.pasted.ingest(&"z".repeat(900));
+        input.pending_paste.buffer = Some("chunk".to_string());
+        input
+            .queue
+            .push(InputItem::Command("/resume sid".to_string()));
+        input.reset_composer_for_session_switch();
+        assert!(input.editor.is_empty(), "the editor clears");
+        assert!(input.pasted.is_empty(), "the paste side table clears");
+        assert!(
+            input.pending_paste.buffer.is_none(),
+            "the accumulator clears"
+        );
+        assert_eq!(
+            input.queue.len(),
+            1,
+            "the queue carries across, not reset here"
+        );
+    }
+
+    #[test]
+    fn test_pending_paste_flushes() {
+        let mut input = Input::default();
+        input.pending_paste.buffer = Some("chunk".to_string());
+        let last = Instant::now();
+        input.pending_paste.last = Some(last);
+        let token = input.drain_pending_paste(last + Duration::from_millis(50));
+        assert_eq!(
+            token.as_deref(),
+            Some("chunk"),
+            "a small chunk is ingested inline"
+        );
+        assert!(
+            input.pending_paste.buffer.is_none(),
+            "the buffer is consumed"
+        );
+        assert!(
+            input.pending_paste.last.is_none(),
+            "the timestamp is consumed"
+        );
+    }
+
+    #[test]
+    fn test_pending_paste_holds() {
+        let mut input = Input::default();
+        input.pending_paste.buffer = Some("chunk".to_string());
+        let last = Instant::now();
+        input.pending_paste.last = Some(last);
+        let token = input.drain_pending_paste(last + Duration::from_millis(49));
+        assert!(token.is_none(), "a short gap yields no token");
+        assert_eq!(
+            input.pending_paste.buffer.as_deref(),
+            Some("chunk"),
+            "the buffer stays for the next check"
+        );
+        assert!(input.pending_paste.last.is_some(), "the timestamp stays");
     }
 }

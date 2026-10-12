@@ -6,7 +6,6 @@
 
 use super::*;
 
-use crate::history::HistoryNav;
 use crate::input::queue::resume_command_target;
 
 impl App {
@@ -170,9 +169,7 @@ impl App {
         // come from apply_frontend_startup, which the caller runs next.
         self.ui.navigation.screen = Screen::Working;
         self.ui.quit = false;
-        self.ui.input.editor = Default::default();
-        self.ui.input.pasted = Default::default();
-        self.ui.input.pending_paste = Default::default();
+        self.ui.input.reset_composer_for_session_switch();
 
         self.sessions.current.todos.set_replaying_history(true);
         self.bump_transcript_version();
@@ -216,7 +213,7 @@ impl App {
         for w in startup_warnings {
             self.system_line(w);
         }
-        self.ui.input.history = HistoryNav::with_path(history_path);
+        self.ui.input.apply_history_path(history_path);
     }
 
     /// Reset the frontend-side session-local fields a session switch must

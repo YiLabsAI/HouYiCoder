@@ -555,7 +555,9 @@ impl App {
         let Some(item) = self.remove_pending_at(idx) else {
             return;
         };
-        self.merge_recalled_text(item.display().to_string());
+        self.ui
+            .input
+            .merge_recalled_text(item.display().to_string());
     }
 
     /// Delete the queued item at the cursor position without recalling it.
@@ -609,21 +611,7 @@ impl App {
         }
         // Explicit recall supersedes automatic interrupted-turn restoration.
         self.sessions.current.last_run_input = None;
-        self.merge_recalled_text(recalled.join("\n"));
-    }
-
-    /// Insert recalled text before the current draft. The cursor remains at
-    /// the draft boundary so editing can continue without losing input.
-    pub(crate) fn merge_recalled_text(&mut self, text: String) {
-        let draft = self.ui.input.editor.value().to_string();
-        if draft.is_empty() {
-            self.ui.input.editor.set(text);
-        } else {
-            let merged = format!("{text}\n{draft}");
-            let draft_start = text.len() + 1; // past the text + newline
-            self.ui.input.editor.set(merged);
-            self.ui.input.editor.move_to(draft_start);
-        }
+        self.ui.input.merge_recalled_text(recalled.join("\n"));
     }
 
     /// Remove the latest submitted turn from the frame log and rebuild the
