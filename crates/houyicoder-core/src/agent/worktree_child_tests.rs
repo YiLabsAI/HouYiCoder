@@ -2,6 +2,7 @@
 //! harness (make_repo, wired, wired_err); the helpers are pub(crate).
 
 use houyicoder_api::hook_fire::HookFire;
+use houyicoder_async::CancellationToken;
 use houyicoder_context::{HookEventKind, HookFirePayload, SessionEvent, SessionId};
 use houyicoder_memory::InMemoryBackend;
 use houyicoder_session::SessionStore;
@@ -87,7 +88,7 @@ async fn test_spawn_child_worktree_isolation() {
         isolation: IsolationMode::Worktree,
         worktree_controller: Some(controller.clone()),
         run_mode: ChildRunMode::Foreground,
-        parent_cancel: None,
+        child_cancel: CancellationToken::new(),
         bus: None,
     };
     let handle = spawn_child(req).await.expect("spawn");
@@ -135,7 +136,7 @@ async fn test_spawn_child_fence_fail() {
         isolation: IsolationMode::Worktree,
         worktree_controller: Some(controller),
         run_mode: ChildRunMode::Foreground,
-        parent_cancel: None,
+        child_cancel: CancellationToken::new(),
         bus: None,
     };
     match spawn_child(req).await {

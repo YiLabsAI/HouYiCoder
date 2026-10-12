@@ -39,7 +39,19 @@ fn runtime_with(
     bus: Option<Arc<AgentBus>>,
     tools: ToolRegistry,
 ) -> (MultiAgentRuntime, Arc<SessionStore>, SessionId) {
-    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    runtime_with_backend(Box::new(InMemoryBackend::new()), provider, bus, tools)
+}
+
+/// Build a runtime over a chosen backend, provider, bus, and tool set, so a
+/// test that needs a custom store (a blocking or failing one) reuses the same
+/// wiring instead of re-declaring it.
+fn runtime_with_backend(
+    backend: Box<dyn ContextBackend>,
+    provider: Arc<dyn ModelProvider>,
+    bus: Option<Arc<AgentBus>>,
+    tools: ToolRegistry,
+) -> (MultiAgentRuntime, Arc<SessionStore>, SessionId) {
+    let store = Arc::new(SessionStore::new(backend));
     let registry: Arc<dyn AgentRegistry> = Arc::new(BuiltInRegistry::from_agents(built_in_all()));
     let config = RunnerConfig::default();
     let runtime = MultiAgentRuntime::new(MultiAgentDeps {
@@ -139,14 +151,13 @@ async fn test_provenance_precedes_child_run() {
     drop(call);
 }
 
-/// The background path lands the same boundary: the caller writes the child's
-/// provenance before the detached driver is spawned, so the child already
-/// reads as a sub-agent when the spawn call returns. A reader that counts or
-/// lists the user's sessions therefore never waits on that child's run to
-/// learn whose it is.
+/// The background path lands the same boundary: the driver writes the child's
+/// provenance before its run, so a running child already reads as a sub-agent.
+/// The write also precedes the caller's ready signal, so the caller learns the
+/// child id only after the provenance is durable and never waits on the run.
 #[tokio::test]
 async fn test_background_boundary_writes_provenance() {
-    let (provider, mut entered) = StallForeverProvider::new();
+    let (provider, entered) = StallForeverProvider::new();
     let descriptors = Arc::new(InMemoryDescriptorStore::new());
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let registry: Arc<dyn AgentRegistry> = Arc::new(BuiltInRegistry::from_agents(built_in_all()));
@@ -174,13 +185,12 @@ async fn test_background_boundary_writes_provenance() {
         .expect("a background spawn launches");
     let child_sid =
         SessionId::from_display_string(&outcome.child_session_id).expect("child sid parses");
-    // The read has to land before the child runs, said out loud rather than
-    // resting on the runtime not having polled the detached driver yet: the
-    // latch is quiet exactly while the child has not reached its model call.
-    assert!(
-        entered.try_recv().is_err(),
-        "the child reached its model call before the provenance was read"
-    );
+    // The child stalls in its first model call once its run starts; the stamp
+    // ran before that run, so the read below lands while the child is parked
+    // there, not on a timer.
+    entered
+        .await
+        .expect("the child entered its first model call");
     let provenance = descriptors.read_descriptor(child_sid).map(|d| d.provenance);
     let names_parent = matches!(
         &provenance,
@@ -1935,6 +1945,8 @@ async fn test_return_usage_covers_subtree() {
     assert_eq!(usage.cache_read_input_tokens, 10);
 }
 
+#[cfg(test)]
+mod admission_credential;
 #[cfg(test)]
 mod join_children;
 #[cfg(test)]

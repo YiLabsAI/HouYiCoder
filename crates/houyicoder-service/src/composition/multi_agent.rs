@@ -6,7 +6,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Mutex, PoisonError, Weak};
 
 use houyicoder_api::hook_fire::HookFire;
 use houyicoder_api::provider::ModelProvider;
@@ -28,7 +28,7 @@ use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::worktree_controller::WorktreeController;
 use houyicoder_core::agent::{RunOutcome, RunResult, Runner, ToolRegistry};
 use std::time::Duration;
-use tokio::sync::oneshot::Receiver;
+use tokio::sync::oneshot::{Receiver, Sender, channel};
 use tokio::task::AbortHandle;
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
@@ -111,16 +111,37 @@ struct ChildEntry {
     cancel: CancellationToken,
 }
 
-/// How the shutdown join waits on one driver. A background driver's handle
+/// How the shutdown join observes one driver. A background driver's handle
 /// is owned solely by the registry. A foreground driver's handle stays with
-/// the caller (it awaits the child's outcome), so the registry holds the
-/// abort handle and a completion signal instead.
+/// the caller (it awaits the child's outcome), so the registry holds only
+/// the abort handle; the completion signal lives on the slot, shared by both
+/// modes.
 pub(super) enum DriverEntry {
     Background(JoinHandle<()>),
-    Foreground {
-        abort: AbortHandle,
-        done: Receiver<()>,
-    },
+    Foreground { abort: AbortHandle },
+}
+
+/// One admitted driver's shutdown credential: the child's lifecycle cancel
+/// token (the exact token stored on the child handle) plus the completion
+/// signal the join waits on. The entry only exists once attached; before
+/// that the close and done pair already covers the child, so a shutdown
+/// landing between admission and attach still cancels it and waits for its
+/// driver to end.
+struct DriverSlot {
+    close: CancellationToken,
+    done: Receiver<()>,
+    entry: Option<DriverEntry>,
+}
+
+/// What reserve hands back to the caller: the reserved key, the close token
+/// to pass to spawn as the child's cancel, and the completion Sender to move
+/// into the driver task. done_tx spends only the caller's consecutive
+/// synchronous statements before entering the driver, so a cancelled caller
+/// never drops it.
+struct Reservation {
+    key: u64,
+    close: CancellationToken,
+    done_tx: Sender<()>,
 }
 
 /// The driver registry with its closing gate. Keys are reserved before the
@@ -130,21 +151,50 @@ pub(super) enum DriverEntry {
 struct DriverRegistry {
     closing: bool,
     next_key: u64,
-    drivers: HashMap<u64, DriverEntry>,
+    drivers: HashMap<u64, DriverSlot>,
     /// The drivers the close step drained, waiting for the join to take.
-    draining: Vec<(u64, DriverEntry)>,
+    draining: Vec<(u64, DriverSlot)>,
 }
 
 impl DriverRegistry {
-    /// Reserve a key for a driver about to be spawned. None once the gate
-    /// is closed: a shutdown in progress refuses new children at the door.
-    fn reserve_key(&mut self) -> Option<u64> {
+    /// Reserve a driver's admission credential before its first side effect.
+    /// Creates the completion channel so close and done are both live from
+    /// this moment, before the child exists. None once the gate is closed: a
+    /// shutdown in progress refuses new children at the door.
+    fn reserve(&mut self, close: CancellationToken) -> Option<Reservation> {
         if self.closing {
             return None;
         }
         let key = self.next_key;
         self.next_key += 1;
-        Some(key)
+        let (done_tx, done) = channel::<()>();
+        self.drivers.insert(
+            key,
+            DriverSlot {
+                close: close.clone(),
+                done,
+                entry: None,
+            },
+        );
+        Some(Reservation {
+            key,
+            close,
+            done_tx,
+        })
+    }
+
+    /// Attach a spawned driver under its reserved key. Err hands the entry
+    /// back once the slot is gone (a shutdown drained it): the caller must
+    /// then join the driver itself. The slot's presence is the whole answer,
+    /// so this no longer reads closing separately.
+    fn attach(&mut self, key: u64, entry: DriverEntry) -> Result<(), DriverEntry> {
+        match self.drivers.get_mut(&key) {
+            Some(slot) => {
+                slot.entry = Some(entry);
+                Ok(())
+            }
+            None => Err(entry),
+        }
     }
 
     /// The driver finished; drop its entry so a later join waits only for
@@ -157,15 +207,19 @@ impl DriverRegistry {
     /// where they wait for take_drained. The caller holds this lock across
     /// the children cancel pass, which is what makes a registration racing
     /// the shutdown see either a cancelled token or a closed gate — never
-    /// neither.
+    /// neither. The drain fills only when empty, so a repeated close cannot
+    /// discard a prior drain the join has not taken yet; the single-close
+    /// consumer stays the boundary.
     fn close_and_drain_into(&mut self) {
         self.closing = true;
-        self.draining = std::mem::take(&mut self.drivers).into_iter().collect();
+        if self.draining.is_empty() {
+            self.draining = std::mem::take(&mut self.drivers).into_iter().collect();
+        }
     }
 
     /// Take the drivers the close step drained. Empty when the gate never
     /// closed (an empty registry at shutdown) or after a prior take.
-    fn take_drained(&mut self) -> Vec<(u64, DriverEntry)> {
+    fn take_drained(&mut self) -> Vec<(u64, DriverSlot)> {
         std::mem::take(&mut self.draining).into_iter().collect()
     }
 }
@@ -218,30 +272,22 @@ impl MultiAgentRuntime {
         }
     }
 
-    /// Reserve a registry key for a driver about to be spawned. None once
-    /// shutdown has closed the gate: the spawn is refused instead of
-    /// creating a child the join would miss.
-    pub(super) fn reserve_driver_key(&self) -> Option<u64> {
+    /// Reserve a driver's admission credential before its first side effect.
+    /// None once shutdown has closed the gate: the spawn is refused instead
+    /// of creating a child the join would miss. A poisoned lock fails the
+    /// reserve, which the caller reads as a refusal before any child exists.
+    fn reserve_driver(&self, close: CancellationToken) -> Option<Reservation> {
         self.child_drivers
             .lock()
             .ok()
-            .and_then(|mut g| g.reserve_key())
+            .and_then(|mut g| g.reserve(close))
     }
 
-    /// Attach a spawned driver under its reserved key. Err returns the entry
-    /// once the gate is closed (the drain already took the map): the caller
-    /// must join the driver itself rather than leaving it outside the
-    /// shutdown join. The one attach path for both run modes — the registry
-    /// alone owns the closing check.
-    pub(super) fn attach_driver(&self, key: u64, entry: DriverEntry) -> Result<(), DriverEntry> {
-        let Ok(mut g) = self.child_drivers.lock() else {
-            return Err(entry);
-        };
-        if g.closing {
-            return Err(entry);
-        }
-        g.drivers.insert(key, entry);
-        Ok(())
+    /// Whether shutdown has closed the gate. A cheap read the foreground path
+    /// takes before queueing for a concurrency slot; a poisoned lock reads as
+    /// true (fail closed), and the later reserve still refuses atomically.
+    fn is_shutting_down(&self) -> bool {
+        self.child_drivers.lock().map(|g| g.closing).unwrap_or(true)
     }
 
     /// Replace the concurrency gate. Production uses the default gate from
@@ -321,7 +367,7 @@ impl SpawnHandle for MultiAgentRuntime {
         };
         if args.run_in_background {
             Box::pin(spawn_exec::run_background_spawn(
-                this, parent_sid, depth, cancel, hook_fire, trigger, args,
+                this, parent_sid, depth, hook_fire, trigger, args,
             ))
         } else {
             Box::pin(spawn_exec::run_foreground_spawn(
@@ -413,30 +459,28 @@ impl SpawnHandle for MultiAgentRuntime {
         let children = Arc::clone(&self.children);
         let drivers = Arc::clone(&self.child_drivers);
         Box::pin(async move {
-            // Cancel the children's lifecycle tokens while holding the
-            // drivers lock, then close the gate and drain. The lock order
-            // makes the race safe: a child registered before this pass is
-            // cancelled here; a spawn arriving after finds the gate closed
-            // and finalizes its own child inline. The token is
-            // level-triggered, so a run that has not started yet still
-            // observes the cancel.
-            let gate = drivers.lock();
-            let live: Vec<Arc<Runner>> = match (gate, children.lock()) {
-                (Ok(mut gate), Ok(kids)) => {
-                    for entry in kids.values() {
-                        entry.cancel.cancel();
-                    }
-                    gate.close_and_drain_into();
-                    kids.values().filter_map(|e| e.runner.upgrade()).collect()
+            // Cancel the children's lifecycle tokens and the drivers' close
+            // tokens, then close the gate and drain, all under the two locks.
+            // The guards must not live across the awaits below: a mutex guard
+            // is not Send, so the inner scope drops both before the first
+            // yield. The lock order (drivers then children) and the absence of
+            // an await under either lock keep a registration racing the
+            // shutdown seeing either a cancelled token or a closed gate, never
+            // neither. A poisoned lock still holds a consistent map (the
+            // entries are independently owned, and the writes under it are
+            // single infallible map operations), so it is recovered and fully
+            // enumerated rather than read as an empty close.
+            let live: Vec<Arc<Runner>> = {
+                let mut gate = drivers.lock().unwrap_or_else(PoisonError::into_inner);
+                let kids = children.lock().unwrap_or_else(PoisonError::into_inner);
+                for entry in kids.values() {
+                    entry.cancel.cancel();
                 }
-                _ => {
-                    // A poisoned registry lock cannot prove the child set is
-                    // empty; treat it as a degraded stop, not a clean one.
-                    tracing::error!(
-                        "child registry lock poisoned at shutdown; child stop is degraded"
-                    );
-                    Vec::new()
+                for slot in gate.drivers.values() {
+                    slot.close.cancel();
                 }
+                gate.close_and_drain_into();
+                kids.values().filter_map(|e| e.runner.upgrade()).collect()
             };
             for runner in &live {
                 runner.abort();
@@ -446,37 +490,10 @@ impl SpawnHandle for MultiAgentRuntime {
             // registered before the close.
             let pending = drivers
                 .lock()
-                .map(|mut g| g.take_drained())
-                .unwrap_or_default();
-            // Wait: join each driver with a bounded budget, aborting as the
-            // backstop so the join confirms an actual stop rather than
-            // resolving while a finalize tail is still flushing.
-            for (_, entry) in pending {
-                let stopped = match entry {
-                    DriverEntry::Background(mut handle) => {
-                        match timeout(CHILD_JOIN_TIMEOUT, &mut handle).await {
-                            Ok(outcome) => outcome,
-                            Err(_) => {
-                                handle.abort();
-                                handle.await
-                            }
-                        }
-                    }
-                    DriverEntry::Foreground { abort, done } => {
-                        match timeout(CHILD_JOIN_TIMEOUT, done).await {
-                            Ok(_) => Ok(()),
-                            Err(_) => {
-                                abort.abort();
-                                Ok(())
-                            }
-                        }
-                    }
-                };
-                if let Err(err) = stopped
-                    && err.is_panic()
-                {
-                    tracing::warn!("child driver panicked during shutdown: {err}");
-                }
+                .unwrap_or_else(PoisonError::into_inner)
+                .take_drained();
+            for (_, slot) in pending {
+                join_driver(slot, CHILD_JOIN_TIMEOUT).await;
             }
         })
     }
@@ -518,12 +535,48 @@ impl SpawnHandle for MultiAgentRuntime {
         };
         if args.run_in_background {
             Box::pin(spawn_exec::run_background_spawn(
-                this, parent_sid, 0, None, None, trigger, args,
+                this, parent_sid, 0, None, trigger, args,
             ))
         } else {
             Box::pin(spawn_exec::run_foreground_spawn(
                 this, parent_sid, 0, None, None, trigger, args,
             ))
+        }
+    }
+}
+
+/// Join one drained driver with a bounded budget. The budget is per driver,
+/// generous for a real finalize tail, with an abort backstop so a wedged
+/// driver cannot hold the shutdown lock forever. Background keeps the full
+/// result match so a normal end, a panic, an abort, and a timeout stay four
+/// distinct outcomes and the panic is announced; foreground confirms its done
+/// signal closed rather than treating the abort as the stop; an un-attached
+/// slot waits on done alone (its driver ends when its task ends).
+async fn join_driver(slot: DriverSlot, budget: Duration) {
+    match slot.entry {
+        Some(DriverEntry::Background(mut handle)) => {
+            let stopped = match timeout(budget, &mut handle).await {
+                Ok(outcome) => outcome,
+                Err(_) => {
+                    handle.abort();
+                    handle.await
+                }
+            };
+            if let Err(err) = stopped
+                && err.is_panic()
+            {
+                tracing::warn!("child driver panicked during shutdown: {err}");
+            }
+        }
+        Some(DriverEntry::Foreground { abort }) => {
+            let mut done = slot.done;
+            if timeout(budget, &mut done).await.is_err() {
+                abort.abort();
+                let _ = done.await;
+            }
+        }
+        None => {
+            let _ = slot.done.await;
         }
     }
 }

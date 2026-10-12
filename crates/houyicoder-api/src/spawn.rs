@@ -140,6 +140,10 @@ pub enum SpawnFailure {
     /// child would finish outside the shutdown join, so the spawn is refused
     /// rather than creating a delegation the release would not wait for.
     ShuttingDown,
+    /// The background child's driver ended before it finished constructing the
+    /// child, outside a shutdown — an internal failure (a construction panic),
+    /// surfaced as a failed start rather than a false "host is shutting down".
+    ConstructionFailed,
 }
 
 /// The spawn port a tool calls through its ToolCtx. The engine (the runner

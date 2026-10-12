@@ -133,41 +133,6 @@ fn test_background_output_reaches_parent() {
     );
 }
 
-/// A background spawn followed by a foreground spawn in one run: the
-/// background child detaches, the foreground child blocks the parent to
-/// completion, then the background notification drains later. Proves the
-/// two spawn modes coexist.
-#[test]
-#[ignore]
-fn test_mixed_modes_preserve_order() {
-    let script = r#"[
-        [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"background","description":"background","run_in_background":true}},{"type":"Text","text":"after background"}],
-        [{"type":"Text","text":"foreground child result"}],
-        [{"type":"Text","text":"ok"}],
-        [{"type":"Text","text":"ok"}],
-        [{"type":"Text","text":"ok"}],
-        [{"type":"Text","text":"ok"}],
-        [{"type":"Text","text":"ok"}]
-    ]"#;
-    let mut s = pty_session_scripted(script);
-    assert!(s.wait_for("let's build", RENDER_TIMEOUT));
-    s.send_str("mixed");
-    s.send_str("\r");
-    // The background spawn returns immediately; the parent continues.
-    assert!(
-        s.wait_for_compact("afterbackground", RENDER_TIMEOUT * 2),
-        "parent should continue past the background spawn:\n{}",
-        s.output()
-    );
-    // The foreground child (turn 1) blocks the parent to completion + its
-    // result fold renders.
-    assert!(
-        s.wait_for_compact("foregroundchildresult", RENDER_TIMEOUT * 3),
-        "foreground child result should render:\n{}",
-        s.output()
-    );
-}
-
 // ---- batch 5: agents pane + slash + misc ----
 
 /// The background spawn result surfaces a "launched in the background"

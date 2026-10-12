@@ -129,3 +129,41 @@ async fn test_join_children_survives_panic() {
         "the panicked child's finalize tail still records its return before the join resolves"
     );
 }
+
+/// A poisoned children lock still yields a full enumeration rather than an
+/// empty close: the join recovers the lock, cancels every registered child,
+/// and brings the parked child to a terminal before it returns. Reading a
+/// poisoned lock as "no children" would skip the abort, leave the child
+/// parked, and never write the return boundary.
+#[tokio::test]
+async fn test_join_children_survives_poisoned() {
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let provider = Arc::new(HangProvider {
+        entered: Arc::clone(&entered),
+    });
+    let (runtime, store, parent_sid) = runtime_with(provider, None, ToolRegistry::new());
+    let ctx = ToolCtx::new("c1").with_session(parent_sid);
+    let mut args = SpawnArgs::new("explore", "task", "task");
+    args.run_in_background = true;
+    runtime
+        .spawn(&ctx, args)
+        .await
+        .expect("background spawn launches");
+    // The child is registered and parked in its model call; poison the
+    // children lock so the join must recover it instead of reading an empty
+    // close.
+    entered.notified().await;
+    let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _guard = runtime.children.lock().expect("children lock");
+        panic!("poison the children lock");
+    }));
+    assert!(poisoned.is_err(), "the children lock is poisoned");
+    runtime.join_children().await;
+    let events = store.trajectory_snapshot(parent_sid);
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e.event, SessionEvent::SubagentReturn { .. })),
+        "the poisoned-lock join still enumerated and finalized the parked child"
+    );
+}

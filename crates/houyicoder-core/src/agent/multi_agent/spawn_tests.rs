@@ -39,7 +39,7 @@ fn req_at_depth(
         isolation: IsolationMode::None,
         worktree_controller: None,
         run_mode: ChildRunMode::Foreground,
-        parent_cancel: None,
+        child_cancel: CancellationToken::new(),
         bus: None,
     }
 }
@@ -195,42 +195,24 @@ async fn test_spawn_depth_under_cap() {
     );
 }
 
-/// A foreground child shares the parent's cancel token (a linked clone), so
-/// cancelling the parent cancels the child -- an ESC on the parent must
-/// propagate to a blocking foreground child.
+/// spawn_child stores the caller-supplied cancel token on the handle
+/// verbatim, so firing the supplied token cancels the handle. Linkage
+/// (a foreground child sharing the parent token vs a background child getting
+/// a fresh one) is the service layer's policy, chosen before spawn, not the
+/// core's.
 #[tokio::test]
-async fn test_foreground_child_links_cancel() {
+async fn test_spawn_uses_passed_cancel() {
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let parent_sid = SessionId::new();
     let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("ok"));
-    let parent = CancellationToken::new();
+    let token = CancellationToken::new();
     let mut req = req_at_depth(parent_sid, store, provider, 0);
-    req.parent_cancel = Some(parent.clone());
+    req.child_cancel = token.clone();
     let handle = spawn_child(req).await.expect("spawn");
-    parent.cancel();
+    token.cancel();
     assert!(
         handle.cancel.is_cancelled(),
-        "foreground child's cancel must be linked to the parent's"
-    );
-}
-
-/// A background child gets a fresh unlinked cancel token, so cancelling the
-/// parent does not propagate -- background children run on and are killed
-/// explicitly via the runtime's kill path, not by a parent ESC.
-#[tokio::test]
-async fn test_background_child_unlinks_cancel() {
-    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
-    let parent_sid = SessionId::new();
-    let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("ok"));
-    let parent = CancellationToken::new();
-    let mut req = req_at_depth(parent_sid, store, provider, 0);
-    req.run_mode = ChildRunMode::Background;
-    req.parent_cancel = Some(parent.clone());
-    let handle = spawn_child(req).await.expect("spawn");
-    parent.cancel();
-    assert!(
-        !handle.cancel.is_cancelled(),
-        "background child's cancel must stay independent of the parent's"
+        "the child's cancel is the caller-supplied token verbatim"
     );
 }
 

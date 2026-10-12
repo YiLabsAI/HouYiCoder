@@ -78,10 +78,13 @@ pub struct SpawnRequest {
     pub worktree_controller: Option<Arc<WorktreeController>>,
     /// Whether the child blocks the parent or continues independently.
     pub run_mode: ChildRunMode,
-    /// The parent's cancel token, shared by a foreground child so a parent
-    /// abort cancels the child too. Ignored for a background child, which gets a fresh
-    /// unlinked token so the parent's ESC does not propagate.
-    pub parent_cancel: Option<CancellationToken>,
+    /// The child's lifecycle cancel token, minted by the caller before spawn
+    /// and stored on the child handle verbatim. A foreground caller passes a
+    /// linked clone of the parent token (a parent abort reaches the child); a
+    /// background caller passes a fresh unlinked token. The caller owns the
+    /// link decision so the same token also lives in the shutdown admission
+    /// credential.
+    pub child_cancel: CancellationToken,
     /// The shared in-process bus used for child status and steering.
     pub bus: Option<Arc<super::bus_types::AgentBus>>,
 }
@@ -128,16 +131,11 @@ pub async fn spawn_child(req: SpawnRequest) -> Result<ChildHandle, SpawnError> {
     }
 
     let child_sid = SessionId::new();
-    // A foreground child shares the parent's cancel token (a linked clone), so a
-    // parent abort cancels the child; an background child gets a fresh unlinked
-    // token, so the parent's ESC does not propagate -- the caller cancels an
-    // background child through its own handle. A foreground spawn with no parent token
-    // degrades to an unlinked child token (still cancellable via the handle,
-    // just not parent-linked).
-    let cancel = match req.run_mode {
-        ChildRunMode::Background => CancellationToken::new(),
-        ChildRunMode::Foreground => req.parent_cancel.clone().unwrap_or_default(),
-    };
+    // The child's lifecycle cancel token is supplied by the caller, so the
+    // token on the handle is the exact one the caller holds in its shutdown
+    // admission credential. Foreground linkage vs background independence is
+    // the caller's policy, chosen before spawn, not derived here.
+    let cancel = req.child_cancel.clone();
 
     // Per-child worktree + fence. Fail-closed: a missing controller or a
     // fence failure rejects the spawn rather than degrading to no isolation,

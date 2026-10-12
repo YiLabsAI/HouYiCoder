@@ -209,6 +209,9 @@ fn spawn_failure_msg(f: SpawnFailure) -> String {
         SpawnFailure::ShuttingDown => {
             "agent: spawn rejected: the session host is shutting down".into()
         }
+        SpawnFailure::ConstructionFailed => {
+            "agent: spawn rejected: the child failed to start".into()
+        }
     }
 }
 
