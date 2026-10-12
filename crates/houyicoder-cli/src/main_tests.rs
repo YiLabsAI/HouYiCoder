@@ -6,6 +6,7 @@
 use super::*;
 
 use crate::composition_root::{HostLease, HostLeaseScope, HostLeaseSlot};
+use crate::session_lock::SessionLock;
 use houyicoder_service::composition::host_lifecycle::HostLifecycle;
 use houyicoder_service::composition::resolve_provider;
 use std::sync::Mutex;
@@ -440,4 +441,83 @@ fn test_held_target_keeps_host() {
             .is_some(),
         "the prior lease stays when the target is held"
     );
+}
+
+// ── existing-sid admission before build ───────────────────────────
+
+/// An existing-sid resume refuses a sid whose lock another process holds,
+/// before the build is reached. The friendly held refusal returns, not the
+/// "no session log" the builder would emit for a sid with no on-disk log.
+#[cfg(unix)]
+#[test]
+fn test_resume_refuses_held() {
+    let root = temp_root();
+    let sid = houyicoder_context::SessionId::new();
+    let sid_str = sid.to_string();
+    let first = SessionLock::acquire(&sid_str, &root).expect("first acquire holds");
+    let err = match admit_existing_sid(&sid, &root) {
+        Ok(_) => panic!("a held sid must refuse, not admit"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string().contains("held by another"),
+        "friendly held refusal, got: {err}"
+    );
+    drop(first);
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// A resume entry for an existing sid that is live elsewhere refuses before
+/// any build: the friendly live refusal returns, not the "no session log" the
+/// builder would emit for a sid that has no disk log. The order is the point —
+/// the build must not run, so the live check must fire first.
+#[cfg(unix)]
+#[test]
+fn test_resume_refuses_live() {
+    struct LiveSessionGuard {
+        sid: String,
+    }
+    impl Drop for LiveSessionGuard {
+        fn drop(&mut self) {
+            std::fs::remove_file(crate::detach::session_socket(&self.sid)).ok();
+            std::fs::remove_file(crate::detach::sessions_dir().join(format!("{}.pid", self.sid)))
+                .ok();
+        }
+    }
+    let target_sid = houyicoder_context::SessionId::new();
+    let target_str = target_sid.to_string();
+    let _guard = LiveSessionGuard {
+        sid: target_str.clone(),
+    };
+    std::fs::write(crate::detach::session_socket(&target_str), b"").expect("write test socket");
+    std::fs::write(
+        crate::detach::sessions_dir().join(format!("{target_str}.pid")),
+        std::process::id().to_string(),
+    )
+    .expect("write live pidfile");
+    assert!(
+        crate::detach::is_session_live(&target_str),
+        "the staged pidfile makes the target held by this process"
+    );
+    let provider = resolve_provider(None);
+    let err = match build_lease_for_existing_sid(target_sid, None, provider) {
+        Err(e) => e,
+        Ok(_) => panic!("a live target must refuse, not build"),
+    };
+    assert!(
+        err.to_string().contains("is live in another process"),
+        "the live check fired before the build, got: {err}"
+    );
+}
+
+/// A per-test temp directory so the held-lock admission does not touch the
+/// global sessions root.
+#[cfg(unix)]
+fn temp_root() -> std::path::PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let n = SEQ.fetch_add(1, Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!("admit-{}-{n}", std::process::id()));
+    std::fs::create_dir_all(&path).expect("temp root");
+    path
 }

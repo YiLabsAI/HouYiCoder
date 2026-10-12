@@ -24,13 +24,13 @@
 
 use std::env;
 use std::error::Error;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::exit;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::mpsc::channel;
 
-use houyicoder_core::agent::Runner;
+use houyicoder_service::composition::host_lifecycle::HostLifecycle;
 use houyicoder_service::composition::session_log_root;
 use houyicoder_tui::agent_message::SessionMessage;
 use houyicoder_tui::composition::{FrontendStartup, RunnerBundle, shared_runtime};
@@ -54,10 +54,12 @@ mod trajectory;
 mod cli_args;
 pub(crate) use cli_args::{CliCommand, parse_args, print_help};
 
+use composition_root::{HostLease, build_bundle, build_bundle_for_resume};
 pub(crate) use composition_root::{WiredBundle, assemble_bundle};
-use composition_root::{build_bundle, build_bundle_for_resume};
+use houyicoder_context::SessionId;
+use houyicoder_core::agent::Runner;
 use houyicoder_service::composition::ResolvedProvider;
-use session_lock::SessionLock;
+use session_lock::{LockError, SessionLock};
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<String> = env::args().skip(1).collect();
@@ -127,9 +129,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         CliCommand::Tui { project, model } => {
             let provider = houyicoder_service::composition::resolve_provider(project.as_deref());
-            let (bundle, startup, host, children) =
+            let (bundle, startup, host, runner) =
                 build_bundle(project.clone(), model, provider.clone());
-            run_tui_loop(bundle, startup, host, Some(children), project, provider)
+            let (bundle, startup, lease) =
+                acquire_fresh_lease(bundle, startup, host, Some(runner))?;
+            run_tui_loop(bundle, startup, lease, project, provider)
         }
         CliCommand::Resume {
             value,
@@ -162,16 +166,19 @@ fn run_resume(value: String, project: Option<String>, fork: bool) -> Result<(), 
     if path.exists() {
         // Resume-from-export already forks a fresh sid (unique); --fork-session
         // is redundant on this branch.
-        let (bundle, startup, host, children) =
+        let (bundle, startup, host, runner) =
             build_bundle_for_resume(&path, project.clone(), provider.clone())?;
-        run_tui_loop(bundle, startup, host, Some(children), project, provider)
+        let (bundle, startup, lease) = acquire_fresh_lease(bundle, startup, host, Some(runner))?;
+        run_tui_loop(bundle, startup, lease, project, provider)
     } else if let Some(sid) = houyicoder_context::SessionId::from_display_string(&value) {
-        let (bundle, startup, host, children) = if fork {
-            resume_bundle::build_bundle_for_fork(sid, project.clone(), provider.clone())?
+        let (bundle, startup, lease) = if fork {
+            let (bundle, startup, host, runner) =
+                resume_bundle::build_bundle_for_fork(sid, project.clone(), provider.clone())?;
+            acquire_fresh_lease(bundle, startup, host, Some(runner))?
         } else {
-            resume_bundle::build_bundle_for_resume_sid(sid, project.clone(), provider.clone())?
+            build_lease_for_existing_sid(sid, project.clone(), provider.clone())?
         };
-        run_tui_loop(bundle, startup, host, Some(children), project, provider)
+        run_tui_loop(bundle, startup, lease, project, provider)
     } else {
         eprintln!(
             "resume target is neither an existing file nor a session id: {value} \
@@ -198,25 +205,75 @@ fn run_continue(project: Option<String>, fork: bool) -> Result<(), Box<dyn Error
         exit(2);
     };
     let provider = houyicoder_service::composition::resolve_provider(project.as_deref());
-    let (bundle, startup, host, children) = if fork {
-        resume_bundle::build_bundle_for_fork(sid, project.clone(), provider.clone())?
+    let (bundle, startup, lease) = if fork {
+        let (bundle, startup, host, runner) =
+            resume_bundle::build_bundle_for_fork(sid, project.clone(), provider.clone())?;
+        acquire_fresh_lease(bundle, startup, host, Some(runner))?
     } else {
-        resume_bundle::build_bundle_for_resume_sid(sid, project.clone(), provider.clone())?
+        build_lease_for_existing_sid(sid, project.clone(), provider.clone())?
     };
-    run_tui_loop(bundle, startup, host, Some(children), project, provider)
+    run_tui_loop(bundle, startup, lease, project, provider)
 }
 
-/// Acquire the per-session exclusive lock at startup, before the alternate
-/// screen is up. Unix holds a real flock; a non-unix build acquires a no-op
-/// guard. A failure prints to the console (the legitimate pre-TUI sink) and
-/// propagates so the process exits instead of starting a second writer.
-fn acquire_resume_lock(sid_str: &str) -> Result<SessionLock, Box<dyn Error>> {
-    Ok(
-        SessionLock::acquire(sid_str, &session_log_root()).map_err(|e| {
-            eprintln!("resume failed: {e}; fork a new session instead (--fork-session, coming)");
-            Box::new(e)
-        })?,
-    )
+/// Refuse a session id that is live elsewhere or already locked before any
+/// writer or host for it is built. Returns the held lock on success. Every
+/// existing-sid entry passes through this ahead of its build, so a held
+/// session is refused before a writer or a host task is constructed. The live
+/// check precedes the lock, so a live detached process gets the friendlier
+/// refusal.
+fn admit_existing_sid(
+    sid: &SessionId,
+    sessions_root: &Path,
+) -> Result<SessionLock, Box<dyn Error>> {
+    let sid_str = sid.to_string();
+    #[cfg(unix)]
+    if detach::is_session_live(&sid_str) {
+        return Err(Box::<dyn Error>::from(format!(
+            "session {sid_str} is live in another process; attach to it \
+             (houyi attach) or fork (--fork-session)"
+        )));
+    }
+    match SessionLock::acquire(&sid_str, sessions_root) {
+        Ok(lock) => Ok(lock),
+        // A held lock is the same refusal as a live process: the user can
+        // attach or fork, so present that guidance instead of a raw enum.
+        Err(LockError::HeldByOther(_)) => Err(Box::<dyn Error>::from(format!(
+            "session {sid_str} is held by another live process; attach to it \
+             (houyi attach) or fork (--fork-session)"
+        ))),
+        Err(e) => Err(Box::new(e)),
+    }
+}
+
+/// Acquire the lock for a freshly-built bundle and return its lease. Called
+/// after the build for a new sid (fresh / export / fork), which cannot
+/// contend: the sid did not exist before the build created it.
+fn acquire_fresh_lease(
+    bundle: RunnerBundle,
+    startup: FrontendStartup,
+    host: HostLifecycle,
+    children: Option<Arc<Runner>>,
+) -> Result<(RunnerBundle, FrontendStartup, HostLease), Box<dyn Error>> {
+    let sid_str = bundle.session.0.clone();
+    let lock = SessionLock::acquire(&sid_str, &session_log_root())?;
+    let lease = HostLease::holding(host, lock, sid_str, children);
+    Ok((bundle, startup, lease))
+}
+
+/// Build the lease for an existing session id. Admission (live check + lock)
+/// runs before the build, so a held or live session is refused without
+/// constructing a writer or starting a host for it.
+fn build_lease_for_existing_sid(
+    sid: SessionId,
+    project: Option<String>,
+    provider: ResolvedProvider,
+) -> Result<(RunnerBundle, FrontendStartup, HostLease), Box<dyn Error>> {
+    let lock = admit_existing_sid(&sid, &session_log_root())?;
+    let (bundle, startup, host, runner) =
+        resume_bundle::build_bundle_for_resume_sid(sid, project, provider)?;
+    let sid_str = bundle.session.0.clone();
+    let lease = HostLease::holding(host, lock, sid_str, Some(runner));
+    Ok((bundle, startup, lease))
 }
 
 /// The runner wiring every binary entry shares: the disk persistence
@@ -224,7 +281,7 @@ fn acquire_resume_lock(sid_str: &str) -> Result<SessionLock, Box<dyn Error>> {
 /// entry cannot drift onto a different store configuration by accident.
 fn production_runner(
     project: Option<String>,
-    provider: houyicoder_service::composition::ResolvedProvider,
+    provider: ResolvedProvider,
 ) -> houyicoder_service::composition::BuildRunnerOptions {
     let mut options = houyicoder_service::composition::BuildRunnerOptions::disk(
         project,
@@ -438,27 +495,17 @@ fn run_acp_stdio(
     Ok(())
 }
 
-/// The TUI run loop. Before each run_with_runner call, acquire the bundle
-/// session's lock (single-writer guard) + refuse if a live --serve process
-/// holds it (is_session_live). The event loop swaps sessions in-process when
-/// a resume_builder is wired (the normal path: try_swap_session builds the
-/// new bundle + swap_session swaps in place, no restart). The builder reaps
-/// the prior host lifecycle owner before installing the new one so the old
-/// serve, drain, and relay do not outlive the session that ended: the serve
-/// exits when its paired client drops, the drain and relay end on the cancel
-/// token the owner holds. The Some(target) return is the rebuild fallback
-/// for when no builder was wired. None means a clean quit.
-type ResumeFn = Box<
-    dyn Fn(
-        &str,
-    ) -> Result<
-        (
-            houyicoder_tui::composition::RunnerBundle,
-            houyicoder_tui::composition::FrontendStartup,
-        ),
-        Box<dyn Error>,
-    >,
->;
+/// The TUI run loop. It starts from a lease the entry already admitted (the
+/// lock is held before the loop begins), so it never acquires a lock. The
+/// event loop swaps sessions in-process when a resume_builder is wired (the
+/// normal path: try_swap_session builds the new bundle + swap_session swaps
+/// in place, no restart). The builder reaps the prior host lifecycle owner
+/// before installing the new one so the old serve, drain, and relay do not
+/// outlive the session that ended: the serve exits when its paired client
+/// drops, the drain and relay end on the cancel token the owner holds. The
+/// Some(target) return is the rebuild fallback for when no builder was
+/// wired. None means a clean quit.
+type ResumeFn = Box<dyn Fn(&str) -> Result<(RunnerBundle, FrontendStartup), Box<dyn Error>>>;
 
 /// Build a bundle for a resume target, acquiring the target's exclusive
 /// lock before constructing any writer that could write its session dir, and
@@ -477,18 +524,12 @@ type ResumeFn = Box<
 fn build_bundle_for_target(
     target: &str,
     project: Option<String>,
-    provider: houyicoder_service::composition::ResolvedProvider,
+    provider: ResolvedProvider,
     host_slot: &crate::composition_root::HostLeaseSlot,
-) -> Result<
-    (
-        houyicoder_tui::composition::RunnerBundle,
-        houyicoder_tui::composition::FrontendStartup,
-    ),
-    Box<dyn Error>,
-> {
+) -> Result<(RunnerBundle, FrontendStartup), Box<dyn Error>> {
     let sessions_root = session_log_root();
     let path = PathBuf::from(target);
-    let (bundle, startup, host, children, lock) = if path.exists() {
+    let (bundle, startup, host, runner, lock) = if path.exists() {
         let (bundle, startup, host, runner) = build_bundle_for_resume(&path, project, provider)?;
         let new_sid = bundle.session.0.clone();
         // The build started the serve, drain, relay, and refresh tasks on the
@@ -518,7 +559,7 @@ fn build_bundle_for_target(
                 return Err(Box::new(e));
             }
         };
-        (bundle, startup, host, Some(runner), lock)
+        (bundle, startup, host, runner, lock)
     } else if let Some(sid) = houyicoder_context::SessionId::from_display_string(target) {
         let sid_str = sid.to_string();
         // Canonical same-session no-op: the live lease already holds this
@@ -537,17 +578,10 @@ fn build_bundle_for_target(
                 "already on session {sid_str}"
             )));
         }
-        #[cfg(unix)]
-        if detach::is_session_live(&sid_str) {
-            return Err(Box::<dyn Error>::from(format!(
-                "session {sid_str} is live in another process; attach to it \
-                 (houyi attach) or fork (--fork-session)"
-            )));
-        }
-        let lock = SessionLock::acquire(&sid_str, &sessions_root)?;
+        let lock = admit_existing_sid(&sid, &sessions_root)?;
         let (bundle, startup, host, runner) =
             resume_bundle::build_bundle_for_resume_sid(sid, project, provider)?;
-        (bundle, startup, host, Some(runner), lock)
+        (bundle, startup, host, runner, lock)
     } else {
         return Err(Box::<dyn Error>::from(format!(
             "invalid resume target: {target}"
@@ -564,32 +598,21 @@ fn build_bundle_for_target(
     host_slot
         .lock()
         .expect("host lifecycle slot must not poison")
-        .install(host, lock, bundle.session.0.clone(), children, handle);
+        .install(host, lock, bundle.session.0.clone(), Some(runner), handle);
     Ok((bundle, startup))
 }
 
 fn run_tui_loop(
     bundle: RunnerBundle,
     startup: FrontendStartup,
-    host: houyicoder_service::composition::host_lifecycle::HostLifecycle,
-    children: Option<Arc<Runner>>,
+    lease: HostLease,
     project: Option<String>,
     provider: ResolvedProvider,
 ) -> Result<(), Box<dyn Error>> {
-    let sid_str = bundle.session.0.clone();
     #[cfg(unix)]
     {
         let _ = detach::cleanup_stale();
-        if detach::is_session_live(&sid_str) {
-            eprintln!(
-                "session {sid_str} is live in another process; \
-                 attach to it (houyi attach) or fork (--fork-session, coming)"
-            );
-            exit(2);
-        }
     }
-    let lock = acquire_resume_lock(&sid_str)?;
-    let lease = crate::composition_root::HostLease::holding(host, lock, sid_str.clone(), children);
     let host_slot: crate::composition_root::HostLeaseSlot = Arc::new(Mutex::new(
         crate::composition_root::HostLeaseScope::with_current(lease),
     ));
