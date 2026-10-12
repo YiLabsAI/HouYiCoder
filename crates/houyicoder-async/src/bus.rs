@@ -82,6 +82,18 @@ impl<T: Clone + Send + Sync + 'static> InProcBus<T> {
             .or_insert_with(|| broadcast::channel(BROADCAST_CAPACITY).0)
             .clone()
     }
+
+    /// How many live receivers hold a subscription to a topic; a topic
+    /// nobody ever subscribed reports zero. The count is the observable
+    /// footprint of a consumer: a consumer that ends drops its receiver,
+    /// so a count falling to zero shows the consumer stopped without
+    /// naming the task or its join order. Inherent rather than a trait
+    /// method because it reads the in-process channel table; transports
+    /// that broker remotely would answer it differently.
+    pub fn receiver_count(&self, topic: &str) -> usize {
+        let read = self.topics.read().unwrap_or_else(|e| e.into_inner());
+        read.get(topic).map_or(0, |tx| tx.receiver_count())
+    }
 }
 
 impl<T: Clone + Send + Sync + 'static> Default for InProcBus<T> {
@@ -163,6 +175,22 @@ mod tests {
         bus.publish("fanout", 7);
         assert_eq!(rx1.try_recv().unwrap(), 7);
         assert_eq!(rx2.try_recv().unwrap(), 7);
+    }
+
+    /// The receiver count follows subscription liveness: each subscribe
+    /// adds one receiver, each drop removes one, and a topic nobody ever
+    /// subscribed reports zero.
+    #[test]
+    fn test_receiver_count_liveness() {
+        let bus = InProcBus::<u32>::new();
+        assert_eq!(bus.receiver_count("topic"), 0);
+        let rx1 = bus.subscribe("topic");
+        let rx2 = bus.subscribe("topic");
+        assert_eq!(bus.receiver_count("topic"), 2);
+        drop(rx1);
+        assert_eq!(bus.receiver_count("topic"), 1);
+        drop(rx2);
+        assert_eq!(bus.receiver_count("topic"), 0);
     }
 
     /// Registering an inbox twice for the same agent replaces the sender,
