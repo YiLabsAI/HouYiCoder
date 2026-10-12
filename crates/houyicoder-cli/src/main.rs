@@ -30,9 +30,10 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::mpsc::channel;
 
+use houyicoder_core::agent::Runner;
 use houyicoder_service::composition::session_log_root;
 use houyicoder_tui::agent_message::SessionMessage;
-use houyicoder_tui::composition::shared_runtime;
+use houyicoder_tui::composition::{FrontendStartup, RunnerBundle, shared_runtime};
 
 mod cleanup;
 mod composition_root;
@@ -55,6 +56,7 @@ pub(crate) use cli_args::{CliCommand, parse_args, print_help};
 
 pub(crate) use composition_root::{WiredBundle, assemble_bundle};
 use composition_root::{build_bundle, build_bundle_for_resume};
+use houyicoder_service::composition::ResolvedProvider;
 use session_lock::SessionLock;
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -125,8 +127,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         CliCommand::Tui { project, model } => {
             let provider = houyicoder_service::composition::resolve_provider(project.as_deref());
-            let (bundle, startup, host) = build_bundle(project.clone(), model, provider.clone());
-            run_tui_loop(bundle, startup, host, project, provider)
+            let (bundle, startup, host, children) =
+                build_bundle(project.clone(), model, provider.clone());
+            run_tui_loop(bundle, startup, host, Some(children), project, provider)
         }
         CliCommand::Resume {
             value,
@@ -159,16 +162,16 @@ fn run_resume(value: String, project: Option<String>, fork: bool) -> Result<(), 
     if path.exists() {
         // Resume-from-export already forks a fresh sid (unique); --fork-session
         // is redundant on this branch.
-        let (bundle, startup, host) =
+        let (bundle, startup, host, children) =
             build_bundle_for_resume(&path, project.clone(), provider.clone())?;
-        run_tui_loop(bundle, startup, host, project, provider)
+        run_tui_loop(bundle, startup, host, Some(children), project, provider)
     } else if let Some(sid) = houyicoder_context::SessionId::from_display_string(&value) {
-        let (bundle, startup, host) = if fork {
+        let (bundle, startup, host, children) = if fork {
             resume_bundle::build_bundle_for_fork(sid, project.clone(), provider.clone())?
         } else {
             resume_bundle::build_bundle_for_resume_sid(sid, project.clone(), provider.clone())?
         };
-        run_tui_loop(bundle, startup, host, project, provider)
+        run_tui_loop(bundle, startup, host, Some(children), project, provider)
     } else {
         eprintln!(
             "resume target is neither an existing file nor a session id: {value} \
@@ -195,12 +198,12 @@ fn run_continue(project: Option<String>, fork: bool) -> Result<(), Box<dyn Error
         exit(2);
     };
     let provider = houyicoder_service::composition::resolve_provider(project.as_deref());
-    let (bundle, startup, host) = if fork {
+    let (bundle, startup, host, children) = if fork {
         resume_bundle::build_bundle_for_fork(sid, project.clone(), provider.clone())?
     } else {
         resume_bundle::build_bundle_for_resume_sid(sid, project.clone(), provider.clone())?
     };
-    run_tui_loop(bundle, startup, host, project, provider)
+    run_tui_loop(bundle, startup, host, Some(children), project, provider)
 }
 
 /// Acquire the per-session exclusive lock at startup, before the alternate
@@ -485,8 +488,8 @@ fn build_bundle_for_target(
 > {
     let sessions_root = session_log_root();
     let path = PathBuf::from(target);
-    let (bundle, startup, host, lock) = if path.exists() {
-        let (bundle, startup, host) = build_bundle_for_resume(&path, project, provider)?;
+    let (bundle, startup, host, children, lock) = if path.exists() {
+        let (bundle, startup, host, runner) = build_bundle_for_resume(&path, project, provider)?;
         let new_sid = bundle.session.0.clone();
         // The build started the serve, drain, relay, and refresh tasks on the
         // shared runtime. If the lock fails (rare for a fresh sid, but a disk
@@ -504,6 +507,7 @@ fn build_bundle_for_target(
                 let shutdown = host.begin_shutdown();
                 let release = handle.spawn(async move {
                     let report = shutdown.await;
+                    runner.join_children().await;
                     report.trace_failures("export-path host");
                     report
                 });
@@ -514,7 +518,7 @@ fn build_bundle_for_target(
                 return Err(Box::new(e));
             }
         };
-        (bundle, startup, host, lock)
+        (bundle, startup, host, Some(runner), lock)
     } else if let Some(sid) = houyicoder_context::SessionId::from_display_string(target) {
         let sid_str = sid.to_string();
         // Canonical same-session no-op: the live lease already holds this
@@ -541,9 +545,9 @@ fn build_bundle_for_target(
             )));
         }
         let lock = SessionLock::acquire(&sid_str, &sessions_root)?;
-        let (bundle, startup, host) =
+        let (bundle, startup, host, runner) =
             resume_bundle::build_bundle_for_resume_sid(sid, project, provider)?;
-        (bundle, startup, host, lock)
+        (bundle, startup, host, Some(runner), lock)
     } else {
         return Err(Box::<dyn Error>::from(format!(
             "invalid resume target: {target}"
@@ -560,16 +564,17 @@ fn build_bundle_for_target(
     host_slot
         .lock()
         .expect("host lifecycle slot must not poison")
-        .install(host, lock, bundle.session.0.clone(), handle);
+        .install(host, lock, bundle.session.0.clone(), children, handle);
     Ok((bundle, startup))
 }
 
 fn run_tui_loop(
-    bundle: houyicoder_tui::composition::RunnerBundle,
-    startup: houyicoder_tui::composition::FrontendStartup,
+    bundle: RunnerBundle,
+    startup: FrontendStartup,
     host: houyicoder_service::composition::host_lifecycle::HostLifecycle,
+    children: Option<Arc<Runner>>,
     project: Option<String>,
-    provider: houyicoder_service::composition::ResolvedProvider,
+    provider: ResolvedProvider,
 ) -> Result<(), Box<dyn Error>> {
     let sid_str = bundle.session.0.clone();
     #[cfg(unix)]
@@ -584,12 +589,9 @@ fn run_tui_loop(
         }
     }
     let lock = acquire_resume_lock(&sid_str)?;
+    let lease = crate::composition_root::HostLease::holding(host, lock, sid_str.clone(), children);
     let host_slot: crate::composition_root::HostLeaseSlot = Arc::new(Mutex::new(
-        crate::composition_root::HostLeaseScope::with_current(crate::composition_root::HostLease {
-            host,
-            lock: Some(lock),
-            sid: Some(sid_str.clone()),
-        }),
+        crate::composition_root::HostLeaseScope::with_current(lease),
     ));
     // The guard's drop releases the scope on every exit path, including a
     // panic unwinding past the loop.

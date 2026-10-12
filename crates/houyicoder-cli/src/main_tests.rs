@@ -334,6 +334,7 @@ fn test_same_session_noop() {
         host: HostLifecycle::new(),
         lock: None,
         sid: Some(sid_str.clone()),
+        children: None,
     })));
     let provider = resolve_provider(None);
     let err = match build_bundle_for_target(&sid_str, None, provider, &slot) {
@@ -364,6 +365,7 @@ fn test_cross_spelling_noop() {
         host: HostLifecycle::new(),
         lock: None,
         sid: Some(ulid_form),
+        children: None,
     })));
     let provider = resolve_provider(None);
     let err = match build_bundle_for_target(&uuid_form, None, provider, &slot) {
@@ -420,6 +422,7 @@ fn test_held_target_keeps_host() {
         host: HostLifecycle::new(),
         lock: None,
         sid: Some(houyicoder_context::SessionId::new().to_string()),
+        children: None,
     })));
     let provider = resolve_provider(None);
     let err = match build_bundle_for_target(&target_str, None, provider, &slot) {

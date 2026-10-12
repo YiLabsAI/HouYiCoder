@@ -136,6 +136,10 @@ pub enum SpawnFailure {
     /// Distinct from BudgetExceeded (an economic refusal): this is a
     /// scheduling refusal, not a token-budget refusal.
     ConcurrencySaturated,
+    /// The host is shutting down and its completion gate has closed: the
+    /// child would finish outside the shutdown join, so the spawn is refused
+    /// rather than creating a delegation the release would not wait for.
+    ShuttingDown,
 }
 
 /// The spawn port a tool calls through its ToolCtx. The engine (the runner
@@ -201,6 +205,17 @@ pub trait SpawnHandle: Send + Sync {
     /// overrides it. Returns the count of live children killed.
     fn kill_all_children(&self) -> usize {
         0
+    }
+
+    /// Cancel every live child and join each detached background driver to
+    /// completion, resolving only after every child has run its finalize
+    /// tail (the SubagentReturn boundary and any worktree cleanup) into the
+    /// parent log. A stop request is not completion: the host calls this
+    /// before it releases the session write lock so a child driver still
+    /// flushing cannot race the lock drop. The default resolves immediately
+    /// (no multi-agent runtime wired).
+    fn join_children(&self) -> PFut<'_, ()> {
+        Box::pin(async {})
     }
 
     /// First-party spawn: a service/hook-layer caller spawns a child without
@@ -271,6 +286,14 @@ mod tests {
             matches!(outcome, Err(SpawnFailure::Recursive)),
             "default spawn_system refuses, got {outcome:?}"
         );
+    }
+
+    /// The default join_children resolves immediately: a handle with no
+    /// multi-agent runtime wired has no children to stop or drivers to join.
+    #[tokio::test]
+    async fn test_join_children_default_resolves() {
+        let handle: Box<dyn SpawnHandle> = Box::new(NoSpawn);
+        handle.join_children().await;
     }
 
     #[test]

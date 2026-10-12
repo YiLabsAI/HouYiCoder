@@ -2,7 +2,7 @@
 
 use std::any::Any;
 use std::panic::AssertUnwindSafe;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use futures::FutureExt;
 use houyicoder_api::agent_event::{EventHandler, RunCompletionStatus, RunLifecycleEvent};
@@ -15,16 +15,28 @@ use houyicoder_core::agent::Runner;
 use houyicoder_core::agent::multi_agent::bus_types::{
     AgentBus, ChildDescriptor, ChildRunMode, completed_topic,
 };
-use houyicoder_core::agent::multi_agent::child_prompt::child_system_prompt;
 use houyicoder_core::agent::multi_agent::concurrency_gate::AcquireResult;
-use houyicoder_core::agent::multi_agent::registry::{IsolationMode, PromptSource, ResolveCtx};
+use houyicoder_core::agent::multi_agent::registry::{IsolationMode, ResolveCtx};
+use houyicoder_core::agent::multi_agent::spawn::TriggerSource;
 use houyicoder_core::agent::multi_agent::status_publisher::ChildStatusPublisher;
 use houyicoder_core::agent::multi_agent::{SpawnRequest, aggregate_subagent_usage, spawn_child};
-use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::worktree_controller::WorktreeController;
 use houyicoder_protocol::llm::Usage;
+use tokio::sync::OwnedSemaphorePermit;
+use tokio::sync::oneshot::{Sender, channel};
+use tokio::task::JoinHandle;
 
-use super::MultiAgentRuntime;
+use super::announce_spawn;
+use super::fire_subagent_start;
+use super::stamp_spawned_by;
+use super::{DriverEntry, DriverRegistry, MultiAgentRuntime};
+use houyicoder_async::CancellationToken;
+use houyicoder_core::agent::multi_agent::SpawnError;
+use houyicoder_core::agent::multi_agent::child_prompt::child_system_prompt;
+use houyicoder_core::agent::multi_agent::registry::AgentDefinition;
+use houyicoder_core::agent::multi_agent::registry::AgentError;
+use houyicoder_core::agent::multi_agent::registry::PromptSource;
+use houyicoder_core::agent::runner_config::RunnerConfig;
 
 #[expect(
     clippy::too_many_arguments,
@@ -211,13 +223,13 @@ pub(super) async fn run_background_spawn(
     depth: u32,
     cancel: Option<houyicoder_async::CancellationToken>,
     hook_fire: Option<Arc<dyn HookFire>>,
-    trigger: super::TriggerSource,
+    trigger: TriggerSource,
     args: SpawnArgs,
 ) -> Result<SpawnOutcome, SpawnFailure> {
     let def = this
         .registry
         .resolve(&args.subagent_type, &ResolveCtx::default())
-        .map_err(super::map_registry_err)?;
+        .map_err(map_registry_err)?;
     let isolation = match args.isolation.as_str() {
         "worktree" => IsolationMode::Worktree,
         _ => IsolationMode::None,
@@ -227,37 +239,18 @@ pub(super) async fn run_background_spawn(
         AcquireResult::Acquired(p) => p,
         AcquireResult::Rejected => return Err(SpawnFailure::ConcurrencySaturated),
     };
-    let base_prompt = match &def.system_prompt {
-        PromptSource::Owned(p) => p.clone(),
-        PromptSource::InheritParent => this.config.instructions.clone(),
-    };
-    let child_config = RunnerConfig {
-        instructions: child_system_prompt(
-            &base_prompt,
-            &this.cwd,
-            &this.config.model,
-            def.omit_project_context,
-        ),
-        ..this.config.clone()
-    };
-    let req = SpawnRequest {
+    let req = child_spawn_request(
+        &this,
         parent_sid,
-        parent_store: this.store.clone(),
-        provider: this.provider.clone(),
-        tools: this.tools.narrow(&def.disallowed_tools),
-        config: child_config,
-        subagent_type: args.subagent_type.clone(),
-        prompt: args.prompt.clone(),
-        prompt_summary: args.prompt_summary.clone(),
+        &args,
         trigger,
         depth,
         isolation,
-        worktree_controller: this.worktree_controller.clone(),
-        run_mode: ChildRunMode::Background,
-        parent_cancel: cancel,
-        bus: this.bus.clone(),
-    };
-    let handle = spawn_child(req).await.map_err(super::map_spawn_err)?;
+        cancel,
+        ChildRunMode::Background,
+        &def,
+    );
+    let handle = spawn_child(req).await.map_err(map_spawn_err)?;
     let child_sid = handle.session;
     let child_str = child_sid.to_string();
     // Same boundary as the foreground path: the child's delegation record
@@ -277,16 +270,118 @@ pub(super) async fn run_background_spawn(
     );
     // Register the child's live runner so a per-turn abort (the viewed-child
     // Esc path) can reach its turn-cancel token while the async driver runs.
-    this.register_child(&child_str, &handle.runner);
+    // The lifecycle token is registered alongside so a shutdown stop reaches
+    // a child whose run has not started.
+    this.register_child(&child_str, &handle.runner, handle.cancel.clone());
     super::announce_spawn(this.bus.as_ref(), child.clone());
     let task = args.prompt.clone();
     let store = this.store.clone();
     let bus = this.bus.clone();
     let worktree_controller = this.worktree_controller.clone();
-    let hook_fire_f = hook_fire;
-    let parent_sid_f = parent_sid;
-    let child_str_stamp = child_str.clone();
-    let subagent_type_f = args.subagent_type.clone();
+    // Reserve the registry key before spawning: a shutdown that closed the
+    // gate between here and the spawn would otherwise miss this driver, so
+    // the spawn refuses instead. The key travels into the driver so it can
+    // remove its own entry.
+    let Some(driver_key) = this.reserve_driver_key() else {
+        // The gate closed while this spawn was between admission and the
+        // driver. No SubagentReturn will be written for the already-recorded
+        // spawn boundary by the host join; stop the child now and drive its
+        // finalize inline so the boundary still closes within this call.
+        handle.cancel.cancel();
+        let _outcome = finalize_child(
+            handle,
+            store,
+            bus,
+            worktree_controller,
+            parent_sid,
+            child_sid,
+            child,
+            hook_fire,
+            task,
+        )
+        .await;
+        return Ok(SpawnOutcome::background_started(child_str));
+    };
+    let drivers = Arc::clone(&this.child_drivers);
+    let driver_for_attach = Arc::clone(&this.child_drivers);
+    let driver = background_driver(
+        permit,
+        handle,
+        store,
+        bus,
+        worktree_controller,
+        parent_sid,
+        child_sid,
+        child,
+        hook_fire,
+        task,
+        drivers,
+        driver_key,
+        args.subagent_type,
+        child_str.clone(),
+    )
+    .await;
+    // Attach under the reserved key. Refused means the gate closed between
+    // the reserve and here: the shutdown's drain already took the map, and
+    // its stop signal fired under the same lock hold that closed the gate
+    // (the join cancels every registered child's token inside the gate's
+    // critical section), so this child's token is cancelled. The driver is
+    // on its way to a terminal, but it sits outside the shutdown join —
+    // await it here so the SubagentReturn lands before this spawn returns
+    // rather than past the caller's lock release.
+    if let Err(super::DriverEntry::Background(handle)) = attach_driver(
+        driver_for_attach,
+        driver_key,
+        super::DriverEntry::Background(driver),
+    ) && let Err(err) = handle.await
+        && err.is_panic()
+    {
+        tracing::warn!("background child driver panicked at gate refusal: {err}");
+    }
+    Ok(SpawnOutcome::background_started(child_str))
+}
+
+/// The one attach path for both run modes: insert under the reserved key
+/// unless the gate closed. Err hands the entry back so the caller joins the
+/// driver itself instead of leaving it outside the shutdown join.
+fn attach_driver(
+    drivers: Arc<Mutex<DriverRegistry>>,
+    key: u64,
+    entry: DriverEntry,
+) -> Result<(), DriverEntry> {
+    let Ok(mut g) = drivers.lock() else {
+        return Err(entry);
+    };
+    if g.closing {
+        return Err(entry);
+    }
+    g.drivers.insert(key, entry);
+    Ok(())
+}
+
+/// The detached background driver: fire the Start hook, drive the child to
+/// its finalize tail, then remove the registry entry. The permit rides the
+/// driver so the concurrency slot frees when the child completes.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "carries the child handle + parent deps + the registry identity the driver owns"
+)]
+async fn background_driver(
+    permit: OwnedSemaphorePermit,
+    handle: super::ChildHandle,
+    store: Arc<dyn SessionLog>,
+    bus: Option<Arc<AgentBus>>,
+    worktree_controller: Option<Arc<WorktreeController>>,
+    parent_sid: SessionId,
+    child_sid: SessionId,
+    child: ChildDescriptor,
+    hook_fire: Option<Arc<dyn HookFire>>,
+    task: String,
+    drivers: Arc<Mutex<DriverRegistry>>,
+    driver_key: u64,
+    subagent_type: String,
+    child_str: String,
+) -> JoinHandle<()> {
     tokio::spawn(async move {
         // The permit releases here (end of the driver) so the slot frees when
         // the child completes — the async run cannot outlive the cap. The
@@ -297,25 +392,242 @@ pub(super) async fn run_background_spawn(
         // driver, not in the caller, because a caller dropped at that wait
         // (Esc mid-turn) would leave the child announced and registered with
         // nothing driving it to a terminal.
-        super::fire_subagent_start(
-            hook_fire_f.as_ref(),
-            parent_sid_f,
-            &child_str_stamp,
-            &subagent_type_f,
-        )
-        .await;
+        super::fire_subagent_start(hook_fire.as_ref(), parent_sid, &child_str, &subagent_type)
+            .await;
         let _outcome = finalize_child(
             handle,
             store,
             bus,
             worktree_controller,
-            parent_sid_f,
+            parent_sid,
             child_sid,
             child,
-            hook_fire_f,
+            hook_fire,
             task,
         )
         .await;
-    });
-    Ok(SpawnOutcome::background_started(child_str))
+        // The child is finalized; drop its driver entry so a later shutdown
+        // join waits only for children still running.
+        if let Ok(mut g) = drivers.lock() {
+            g.remove(driver_key);
+        }
+    })
+}
+pub(super) async fn run_foreground_spawn(
+    this: MultiAgentRuntime,
+    parent_sid: SessionId,
+    depth: u32,
+    cancel: Option<houyicoder_async::CancellationToken>,
+    hook_fire: Option<Arc<dyn HookFire>>,
+    trigger: TriggerSource,
+    args: SpawnArgs,
+) -> Result<SpawnOutcome, SpawnFailure> {
+    let def = this
+        .registry
+        .resolve(&args.subagent_type, &ResolveCtx::default())
+        .map_err(map_registry_err)?;
+    // Admission: a shutdown in progress refuses the spawn outright, before
+    // the concurrency slot or any child is created. The key reserves the
+    // driver's registry place; the entry attaches after the spawn.
+    let driver_key = match this.reserve_driver_key() {
+        Some(k) => k,
+        None => return Err(SpawnFailure::ShuttingDown),
+    };
+    let isolation = match args.isolation.as_str() {
+        "worktree" => IsolationMode::Worktree,
+        _ => IsolationMode::None,
+    };
+    // Concurrency cap: a resolved (valid type, known isolation) spawn
+    // acquires a running slot before any side effect. Saturation rejects with
+    // backpressure so the model re-queues next turn; a queued spawn waits here
+    // for a slot rather than refusing the user's request. The driver below
+    // carries the slot, so it releases when the child ends rather than when
+    // this call returns — a stop releases the slot when the child finishes
+    // winding down.
+    let slot = match this.gate.acquire().await {
+        AcquireResult::Acquired(p) => p,
+        AcquireResult::Rejected => return Err(SpawnFailure::ConcurrencySaturated),
+    };
+    // The slot wait can queue for a while; a shutdown that closed the gate
+    // while this call waited must still refuse, or the child would be created
+    // after the drain with no join covering it. Re-check through the same
+    // reserve the entry path uses: a closed gate reports None, and the
+    // reserved key stays reserved-then-abandoned (an empty registry slot,
+    // never attached, harmless to the join).
+    if this.reserve_driver_key().is_none() {
+        return Err(SpawnFailure::ShuttingDown);
+    }
+    let req = child_spawn_request(
+        &this,
+        parent_sid,
+        &args,
+        trigger,
+        depth,
+        isolation,
+        cancel,
+        ChildRunMode::Foreground,
+        &def,
+    );
+    // The completion signal lets the shutdown join observe the driver's end
+    // without taking the JoinHandle the spawn call itself awaits; the abort
+    // handle is the backstop for a driver that outlives the join budget.
+    let (done_tx, done_rx) = channel::<()>();
+    let task = req.prompt.clone();
+    let drivers = Arc::clone(&this.child_drivers);
+    let driver = foreground_driver(this, req, slot, hook_fire, parent_sid, done_tx, task);
+    // Attach the driver's completion entry under the reserved key through the
+    // one shared attach path. Refused means the gate closed while the child
+    // ran: the shutdown join has already drained, so this driver is the spawn
+    // call's own to await (the driver.await below), which it does on every
+    // path anyway.
+    let entry = DriverEntry::Foreground {
+        abort: driver.abort_handle(),
+        done: done_rx,
+    };
+    if let Err(refused) = attach_driver(drivers, driver_key, entry) {
+        drop(refused);
+    }
+    match driver.await {
+        Ok(outcome) => outcome,
+        // A panic inside the driver would otherwise reach the model as an
+        // ordinary refusal, so surface it as the panic it is.
+        Err(join) => std::panic::resume_unwind(join.into_panic()),
+    }
+}
+
+/// The foreground child's driver task: the child runs on it, but the spawn
+/// call awaits the handle, so the driver is registered for the shutdown join
+/// through its completion signal rather than the handle itself. The driver
+/// owns the running slot and the child's bookkeeping, so a stop reaches the
+/// child as an interrupt it can finish from rather than as a dropped future;
+/// a child parked in work that never reads its cancel token holds the slot
+/// and the row until that work returns.
+fn foreground_driver(
+    this: MultiAgentRuntime,
+    req: SpawnRequest,
+    slot: OwnedSemaphorePermit,
+    hook_fire: Option<Arc<dyn HookFire>>,
+    parent_sid: SessionId,
+    done_tx: Sender<()>,
+    task: String,
+) -> JoinHandle<Result<SpawnOutcome, SpawnFailure>> {
+    let subagent_type = req.subagent_type.clone();
+    tokio::spawn(async move {
+        // The completion signal fires when this driver ends, however it ends:
+        // the guard rides the whole task, so the shutdown join's wait on it
+        // observes the finalize tail too.
+        let _done = done_tx;
+        let _slot = slot;
+        let handle = spawn_child(req).await.map_err(map_spawn_err)?;
+        let child_sid = handle.session;
+        let child_str = child_sid.to_string();
+        // The child's provenance lands at the boundary, before its run: the
+        // delegation record it opens with is its first durable append, so
+        // nothing that counts or lists the user's sessions can read a running
+        // child as one of theirs.
+        stamp_spawned_by(
+            &this.descriptor_store,
+            child_sid,
+            parent_sid,
+            &subagent_type,
+            &child_str,
+        );
+        let child = ChildDescriptor::new(
+            child_str.clone(),
+            subagent_type.clone(),
+            ChildRunMode::Foreground,
+        );
+        // Register the live runner for a per-turn abort (moot for sync — the
+        // parent blocks on the tool call + cannot be viewing the child mid-run
+        // — but the registry is shared so the async path's contract holds
+        // uniformly). The lifecycle token is registered alongside so a
+        // shutdown stop reaches a child whose run has not started.
+        this.register_child(&child_str, &handle.runner, handle.cancel.clone());
+        announce_spawn(this.bus.as_ref(), child.clone());
+        // SubagentStart fires at the durable spawn boundary (child session
+        // exists, SubagentSpawn recorded, run not started); pairs with the
+        // later SubagentStop across the SubagentSpawn-to-Return span.
+        fire_subagent_start(hook_fire.as_ref(), parent_sid, &child_str, &subagent_type).await;
+        let (status, summary, usage) = finalize_child(
+            handle,
+            this.store.clone(),
+            this.bus.clone(),
+            this.worktree_controller.clone(),
+            parent_sid,
+            child_sid,
+            child,
+            hook_fire,
+            task,
+        )
+        .await;
+        Ok(SpawnOutcome::foreground(child_str, status, summary, usage))
+    })
+}
+
+fn map_registry_err(error: AgentError) -> SpawnFailure {
+    match error {
+        AgentError::NotFound { .. } => SpawnFailure::UnknownAgent,
+        AgentError::PermissionDenied { .. } => SpawnFailure::CapabilityDenied,
+    }
+}
+
+/// Build the child's spawn request from the resolved definition: the child
+/// prompt, the narrowed tools, and the parent's shared components. One
+/// builder for both run modes so the foreground and background paths cannot
+/// drift apart on what a child carries.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the spawn request has this many independent parts; bundling them would duplicate SpawnRequest"
+)]
+fn child_spawn_request(
+    this: &MultiAgentRuntime,
+    parent_sid: SessionId,
+    args: &SpawnArgs,
+    trigger: TriggerSource,
+    depth: u32,
+    isolation: IsolationMode,
+    cancel: Option<CancellationToken>,
+    run_mode: ChildRunMode,
+    def: &AgentDefinition,
+) -> SpawnRequest {
+    let base_prompt = match &def.system_prompt {
+        PromptSource::Owned(p) => p.clone(),
+        PromptSource::InheritParent => this.config.instructions.clone(),
+    };
+    let child_config = RunnerConfig {
+        instructions: child_system_prompt(
+            &base_prompt,
+            &this.cwd,
+            &this.config.model,
+            def.omit_project_context,
+        ),
+        ..this.config.clone()
+    };
+    SpawnRequest {
+        parent_sid,
+        parent_store: this.store.clone(),
+        provider: this.provider.clone(),
+        tools: this.tools.narrow(&def.disallowed_tools),
+        config: child_config,
+        subagent_type: args.subagent_type.clone(),
+        prompt: args.prompt.clone(),
+        prompt_summary: args.prompt_summary.clone(),
+        trigger,
+        depth,
+        isolation,
+        worktree_controller: this.worktree_controller.clone(),
+        run_mode,
+        parent_cancel: cancel,
+        bus: this.bus.clone(),
+    }
+}
+
+fn map_spawn_err(e: SpawnError) -> SpawnFailure {
+    match e {
+        SpawnError::BudgetExceeded => SpawnFailure::BudgetExceeded,
+        SpawnError::CapabilityDenied => SpawnFailure::CapabilityDenied,
+        SpawnError::SpawnRecursive => SpawnFailure::Recursive,
+        SpawnError::BoundaryWriteFailed => SpawnFailure::BoundaryWriteFailed,
+        SpawnError::WorktreeFenceNarrowFail => SpawnFailure::FenceFail,
+    }
 }

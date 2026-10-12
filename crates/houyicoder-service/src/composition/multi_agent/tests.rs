@@ -7,6 +7,7 @@ use houyicoder_context::{
     CheckpointId, CheckpointManifest, ContextBackend, ContextError, EventId, SessionEvent,
     SessionId, SessionLogEntry,
 };
+use houyicoder_core::agent::multi_agent::bus_types::ChildRunMode;
 use houyicoder_core::agent::multi_agent::bus_types::{
     BusMessage, ChildStatus, global_completed_topic, permission_request_topic,
     permission_response_topic, spawned_topic,
@@ -1402,7 +1403,7 @@ fn test_cancel_child_turn_registry() {
         ToolRegistry::new(),
         RunnerConfig::default(),
     ));
-    runtime.register_child("c1", &runner);
+    runtime.register_child("c1", &runner, CancellationToken::new());
     assert!(
         runtime.cancel_child_turn("c1"),
         "a registered live child upgrades and returns true"
@@ -1429,7 +1430,7 @@ fn test_kill_child_registry() {
         ToolRegistry::new(),
         RunnerConfig::default(),
     ));
-    runtime.register_child("c1", &runner);
+    runtime.register_child("c1", &runner, CancellationToken::new());
     assert!(
         runtime.kill_child("c1"),
         "a registered live child upgrades + abort fires → true"
@@ -1458,8 +1459,8 @@ fn test_kill_all_children_registry() {
         RunnerConfig::default(),
     ));
     let r2 = Arc::new(r1.clone());
-    runtime.register_child("c1", &r1);
-    runtime.register_child("c2", &r2);
+    runtime.register_child("c1", &r1, CancellationToken::new());
+    runtime.register_child("c2", &r2, CancellationToken::new());
     let killed = runtime.kill_all_children();
     assert_eq!(killed, 2, "two live children aborted + counted");
     // A second sweep re-aborts already-cancelled tokens (idempotent) while
@@ -1933,3 +1934,8 @@ async fn test_return_usage_covers_subtree() {
     assert_eq!(usage.output_tokens, 4);
     assert_eq!(usage.cache_read_input_tokens, 10);
 }
+
+#[cfg(test)]
+mod join_children;
+#[cfg(test)]
+mod shutdown_gate;

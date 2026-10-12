@@ -206,6 +206,9 @@ fn spawn_failure_msg(f: SpawnFailure) -> String {
         SpawnFailure::ConcurrencySaturated => {
             "agent: spawn rejected: concurrent-spawn cap saturated, retry next turn".into()
         }
+        SpawnFailure::ShuttingDown => {
+            "agent: spawn rejected: the session host is shutting down".into()
+        }
     }
 }
 

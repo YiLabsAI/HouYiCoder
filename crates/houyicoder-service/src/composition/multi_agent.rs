@@ -4,35 +4,47 @@
 //! a terminal state, records the SubagentReturn boundary, and returns the
 //! result the tool maps into its tool_result.
 
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, Weak};
 
 use houyicoder_api::hook_fire::HookFire;
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_api::session::SessionLog;
 use houyicoder_api::spawn::{SpawnArgs, SpawnFailure, SpawnHandle, SpawnOutcome};
 use houyicoder_api::tool::ToolCtx;
+use houyicoder_async::CancellationToken;
 use houyicoder_async::PFut;
 use houyicoder_context::{
     DescriptorUpdate, HookEventKind, HookFirePayload, SessionDescriptor, SessionDescriptorStore,
     SessionId, SessionProvenance,
 };
-use houyicoder_core::agent::multi_agent::bus_types::{AgentBus, ChildDescriptor, ChildRunMode};
-use houyicoder_core::agent::multi_agent::child_prompt::child_system_prompt;
-use houyicoder_core::agent::multi_agent::concurrency_gate::{AcquireResult, ConcurrencyGate};
-use houyicoder_core::agent::multi_agent::registry::{
-    AgentError, AgentRegistry, IsolationMode, PromptSource, ResolveCtx,
-};
+use houyicoder_core::agent::multi_agent::bus_types::{AgentBus, ChildDescriptor};
+use houyicoder_core::agent::multi_agent::concurrency_gate::ConcurrencyGate;
+use houyicoder_core::agent::multi_agent::record_subagent_return;
+use houyicoder_core::agent::multi_agent::registry::AgentRegistry;
 use houyicoder_core::agent::multi_agent::spawn::{ChildHandle, TriggerSource};
-use houyicoder_core::agent::multi_agent::{
-    SpawnError, SpawnRequest, record_subagent_return, spawn_child,
-};
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::worktree_controller::WorktreeController;
 use houyicoder_core::agent::{RunOutcome, RunResult, Runner, ToolRegistry};
+use std::time::Duration;
+use tokio::sync::oneshot::Receiver;
+use tokio::task::AbortHandle;
+use tokio::task::JoinHandle;
+use tokio::time::timeout;
 
 mod drive;
 mod spawn_exec;
+
+/// Per-driver budget the shutdown join gives a child's finalize tail before
+/// aborting it. Generous for real cleanup work (worktree removal, boundary
+/// writes) so a healthy tail finishes inside it; the abort backstop keeps a
+/// wedged driver from holding the lock forever. Under test the budget
+/// shrinks so the backstop path is exercisable in milliseconds.
+#[cfg(not(test))]
+const CHILD_JOIN_TIMEOUT: Duration = Duration::from_secs(30);
+#[cfg(test)]
+const CHILD_JOIN_TIMEOUT: Duration = Duration::from_millis(200);
 
 /// The parent components a child runner is built from: one bundle shared by
 /// the composition root, the runtime constructor, and the spawn path, instead
@@ -76,9 +88,86 @@ pub struct MultiAgentRuntime {
     /// without holding the Arc (the async driver moves the Arc into its
     /// task; a Weak upgrades only while the child is still running). Stale
     /// entries (child completed + dropped) are pruned on a failed upgrade.
-    children: Arc<std::sync::Mutex<std::collections::HashMap<String, std::sync::Weak<Runner>>>>,
+    children: Arc<Mutex<HashMap<String, ChildEntry>>>,
+    /// The detached driver tasks (background and foreground), plus the
+    /// closing gate. The gate and the registry share one lock so a shutdown
+    /// that closes the gate and drains the drivers is atomic against a spawn
+    /// registering a driver: registration either lands before the drain (the
+    /// driver is joined) or is refused (the caller joins it inline), never
+    /// silently after.
+    child_drivers: Arc<Mutex<DriverRegistry>>,
     /// Descriptor store for stamping SpawnedBy provenance on child sessions.
     descriptor_store: Option<Arc<dyn SessionDescriptorStore>>,
+}
+
+/// One live child: its runner (Weak, so a finished child drops the entry's
+/// reach) and its lifecycle cancel token. The token is level-triggered and
+/// exists from the spawn boundary, before the run's first poll mints the
+/// turn token — so a shutdown stop issued while the driver has not started
+/// the run still reaches the child instead of firing at a runner with no
+/// token to cancel.
+struct ChildEntry {
+    runner: Weak<Runner>,
+    cancel: CancellationToken,
+}
+
+/// How the shutdown join waits on one driver. A background driver's handle
+/// is owned solely by the registry. A foreground driver's handle stays with
+/// the caller (it awaits the child's outcome), so the registry holds the
+/// abort handle and a completion signal instead.
+pub(super) enum DriverEntry {
+    Background(JoinHandle<()>),
+    Foreground {
+        abort: AbortHandle,
+        done: Receiver<()>,
+    },
+}
+
+/// The driver registry with its closing gate. Keys are reserved before the
+/// driver task is built (the task needs its key to remove itself) and
+/// attached after; both steps refuse once the gate is closed.
+#[derive(Default)]
+struct DriverRegistry {
+    closing: bool,
+    next_key: u64,
+    drivers: HashMap<u64, DriverEntry>,
+    /// The drivers the close step drained, waiting for the join to take.
+    draining: Vec<(u64, DriverEntry)>,
+}
+
+impl DriverRegistry {
+    /// Reserve a key for a driver about to be spawned. None once the gate
+    /// is closed: a shutdown in progress refuses new children at the door.
+    fn reserve_key(&mut self) -> Option<u64> {
+        if self.closing {
+            return None;
+        }
+        let key = self.next_key;
+        self.next_key += 1;
+        Some(key)
+    }
+
+    /// The driver finished; drop its entry so a later join waits only for
+    /// still-running drivers.
+    fn remove(&mut self, key: u64) {
+        self.drivers.remove(&key);
+    }
+
+    /// Close the gate and drain the registered drivers into the taken state,
+    /// where they wait for take_drained. The caller holds this lock across
+    /// the children cancel pass, which is what makes a registration racing
+    /// the shutdown see either a cancelled token or a closed gate — never
+    /// neither.
+    fn close_and_drain_into(&mut self) {
+        self.closing = true;
+        self.draining = std::mem::take(&mut self.drivers).into_iter().collect();
+    }
+
+    /// Take the drivers the close step drained. Empty when the gate never
+    /// closed (an empty registry at shutdown) or after a prior take.
+    fn take_drained(&mut self) -> Vec<(u64, DriverEntry)> {
+        std::mem::take(&mut self.draining).into_iter().collect()
+    }
 }
 
 impl MultiAgentRuntime {
@@ -98,22 +187,61 @@ impl MultiAgentRuntime {
                 ConcurrencyGate::DEFAULT_CAP,
                 ConcurrencyGate::DEFAULT_QUEUE_CAP,
             )),
-            children: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            children: Arc::new(Mutex::new(HashMap::new())),
+            child_drivers: Arc::new(Mutex::new(DriverRegistry::default())),
             descriptor_store: deps.descriptor_store,
         }
     }
 
     /// Register a live child runner so a later per-turn abort can reach it.
-    /// The Weak drops to nothing when the child's Arc is released (the async
-    /// driver task ends); cancel_child_turn prunes the entry it queries. To
-    /// keep a long-lived parent's registry from accumulating stale Weaks for
-    /// completed children that were never Esc'd, sweep dead entries on each
-    /// register (amortized: one sweep per spawn, not per poll).
-    pub(super) fn register_child(&self, child_id: &str, runner: &Arc<Runner>) {
+    /// The entry's runner Weak drops to nothing when the child's Arc is
+    /// released (the driver task ends); cancel_child_turn prunes the entry
+    /// it queries. To keep a long-lived parent's registry from accumulating
+    /// stale entries for completed children that were never Esc'd, sweep
+    /// dead entries on each register (amortized: one sweep per spawn, not
+    /// per poll).
+    pub(super) fn register_child(
+        &self,
+        child_id: &str,
+        runner: &Arc<Runner>,
+        cancel: CancellationToken,
+    ) {
         if let Ok(mut g) = self.children.lock() {
-            g.retain(|_, weak| weak.upgrade().is_some());
-            g.insert(child_id.to_string(), Arc::downgrade(runner));
+            g.retain(|_, entry| entry.runner.upgrade().is_some());
+            g.insert(
+                child_id.to_string(),
+                ChildEntry {
+                    runner: Arc::downgrade(runner),
+                    cancel,
+                },
+            );
         }
+    }
+
+    /// Reserve a registry key for a driver about to be spawned. None once
+    /// shutdown has closed the gate: the spawn is refused instead of
+    /// creating a child the join would miss.
+    pub(super) fn reserve_driver_key(&self) -> Option<u64> {
+        self.child_drivers
+            .lock()
+            .ok()
+            .and_then(|mut g| g.reserve_key())
+    }
+
+    /// Attach a spawned driver under its reserved key. Err returns the entry
+    /// once the gate is closed (the drain already took the map): the caller
+    /// must join the driver itself rather than leaving it outside the
+    /// shutdown join. The one attach path for both run modes — the registry
+    /// alone owns the closing check.
+    pub(super) fn attach_driver(&self, key: u64, entry: DriverEntry) -> Result<(), DriverEntry> {
+        let Ok(mut g) = self.child_drivers.lock() else {
+            return Err(entry);
+        };
+        if g.closing {
+            return Err(entry);
+        }
+        g.drivers.insert(key, entry);
+        Ok(())
     }
 
     /// Replace the concurrency gate. Production uses the default gate from
@@ -142,7 +270,7 @@ pub(super) fn built_in_registry() -> Arc<dyn AgentRegistry> {
 pub(super) fn wire_agent_directory(
     runner: &houyicoder_core::agent::Runner,
     registry: &dyn AgentRegistry,
-    denied: &std::collections::HashSet<String>,
+    denied: &HashSet<String>,
 ) {
     if let Some(dir) =
         houyicoder_core::agent::multi_agent::registry::agent_directory_section(registry, denied)
@@ -185,6 +313,7 @@ impl SpawnHandle for MultiAgentRuntime {
             bus: self.bus.clone(),
             gate: Arc::clone(&self.gate),
             children: Arc::clone(&self.children),
+            child_drivers: Arc::clone(&self.child_drivers),
             descriptor_store: self.descriptor_store.clone(),
         };
         let trigger = TriggerSource::ModelTool {
@@ -195,7 +324,7 @@ impl SpawnHandle for MultiAgentRuntime {
                 this, parent_sid, depth, cancel, hook_fire, trigger, args,
             ))
         } else {
-            Box::pin(run_foreground_spawn(
+            Box::pin(spawn_exec::run_foreground_spawn(
                 this, parent_sid, depth, cancel, hook_fire, trigger, args,
             ))
         }
@@ -203,7 +332,7 @@ impl SpawnHandle for MultiAgentRuntime {
 
     /// Route a steering text into a running child's inbox via the shared bus.
     /// The child registered its inbox at spawn; send_inbox errors when the
-    /// child is gone (completed + unregistered) or no bus is wired.
+    /// child is gone (completed + unregistered) or no bus is attached.
     fn send_to_child_inbox(&self, child_id: &str, text: String) -> Result<(), String> {
         use houyicoder_async::bus::MessageBus;
         use houyicoder_core::agent::multi_agent::bus_types::BusMessage;
@@ -215,7 +344,7 @@ impl SpawnHandle for MultiAgentRuntime {
 
     /// Abort the viewed child's current turn via its live runner handle. The
     /// child's turn-cancel token is set per turn by the drive loop and
-    /// cleared when the turn ends, so this only cancels an in-flight model
+    /// cleared when the turn ends, so this only cancels a running model
     /// call; the run continues (next turn, fresh token). A stale Weak (the
     /// child completed and dropped) is pruned so the registry does not leak
     /// across a long-lived parent.
@@ -224,10 +353,10 @@ impl SpawnHandle for MultiAgentRuntime {
             Ok(g) => g,
             Err(_) => return false,
         };
-        let Some(weak) = registry.get(child_id).cloned() else {
+        let Some(entry) = registry.get(child_id) else {
             return false;
         };
-        match weak.upgrade() {
+        match entry.runner.upgrade() {
             Some(runner) => {
                 runner.cancel_turn();
                 true
@@ -250,10 +379,10 @@ impl SpawnHandle for MultiAgentRuntime {
             Ok(g) => g,
             Err(_) => return false,
         };
-        let Some(weak) = registry.get(child_id).cloned() else {
+        let Some(entry) = registry.get(child_id) else {
             return false;
         };
-        match weak.upgrade() {
+        match entry.runner.upgrade() {
             Some(runner) => {
                 runner.abort();
                 true
@@ -271,13 +400,85 @@ impl SpawnHandle for MultiAgentRuntime {
             Err(_) => return 0,
         };
         let mut killed = 0;
-        for weak in registry.values() {
-            if let Some(runner) = weak.upgrade() {
+        for entry in registry.values() {
+            if let Some(runner) = entry.runner.upgrade() {
                 runner.abort();
                 killed += 1;
             }
         }
         killed
+    }
+
+    fn join_children(&self) -> PFut<'_, ()> {
+        let children = Arc::clone(&self.children);
+        let drivers = Arc::clone(&self.child_drivers);
+        Box::pin(async move {
+            // Cancel the children's lifecycle tokens while holding the
+            // drivers lock, then close the gate and drain. The lock order
+            // makes the race safe: a child registered before this pass is
+            // cancelled here; a spawn arriving after finds the gate closed
+            // and finalizes its own child inline. The token is
+            // level-triggered, so a run that has not started yet still
+            // observes the cancel.
+            let gate = drivers.lock();
+            let live: Vec<Arc<Runner>> = match (gate, children.lock()) {
+                (Ok(mut gate), Ok(kids)) => {
+                    for entry in kids.values() {
+                        entry.cancel.cancel();
+                    }
+                    gate.close_and_drain_into();
+                    kids.values().filter_map(|e| e.runner.upgrade()).collect()
+                }
+                _ => {
+                    // A poisoned registry lock cannot prove the child set is
+                    // empty; treat it as a degraded stop, not a clean one.
+                    tracing::error!(
+                        "child registry lock poisoned at shutdown; child stop is degraded"
+                    );
+                    Vec::new()
+                }
+            };
+            for runner in &live {
+                runner.abort();
+            }
+            // Take the drained drivers. The gate was closed above inside the
+            // lock; the drain ran with it, so these are exactly the drivers
+            // registered before the close.
+            let pending = drivers
+                .lock()
+                .map(|mut g| g.take_drained())
+                .unwrap_or_default();
+            // Wait: join each driver with a bounded budget, aborting as the
+            // backstop so the join confirms an actual stop rather than
+            // resolving while a finalize tail is still flushing.
+            for (_, entry) in pending {
+                let stopped = match entry {
+                    DriverEntry::Background(mut handle) => {
+                        match timeout(CHILD_JOIN_TIMEOUT, &mut handle).await {
+                            Ok(outcome) => outcome,
+                            Err(_) => {
+                                handle.abort();
+                                handle.await
+                            }
+                        }
+                    }
+                    DriverEntry::Foreground { abort, done } => {
+                        match timeout(CHILD_JOIN_TIMEOUT, done).await {
+                            Ok(_) => Ok(()),
+                            Err(_) => {
+                                abort.abort();
+                                Ok(())
+                            }
+                        }
+                    }
+                };
+                if let Err(err) = stopped
+                    && err.is_panic()
+                {
+                    tracing::warn!("child driver panicked during shutdown: {err}");
+                }
+            }
+        })
     }
 
     /// First-party spawn from a service/hook caller: same spawn pipeline as
@@ -309,6 +510,7 @@ impl SpawnHandle for MultiAgentRuntime {
             bus: self.bus.clone(),
             gate: Arc::clone(&self.gate),
             children: Arc::clone(&self.children),
+            child_drivers: Arc::clone(&self.child_drivers),
             descriptor_store: self.descriptor_store.clone(),
         };
         let trigger = TriggerSource::System {
@@ -319,7 +521,7 @@ impl SpawnHandle for MultiAgentRuntime {
                 this, parent_sid, 0, None, None, trigger, args,
             ))
         } else {
-            Box::pin(run_foreground_spawn(
+            Box::pin(spawn_exec::run_foreground_spawn(
                 this, parent_sid, 0, None, None, trigger, args,
             ))
         }
@@ -327,7 +529,7 @@ impl SpawnHandle for MultiAgentRuntime {
 }
 
 /// Announce a child before its first status event can be published.
-fn announce_spawn(bus: Option<&Arc<AgentBus>>, child: ChildDescriptor) {
+pub(super) fn announce_spawn(bus: Option<&Arc<AgentBus>>, child: ChildDescriptor) {
     use houyicoder_async::bus::MessageBus;
     use houyicoder_core::agent::multi_agent::bus_types::{BusMessage, spawned_topic};
     if let Some(bus) = bus {
@@ -347,7 +549,7 @@ fn close_child_inbox(bus: Option<&Arc<AgentBus>>, child_id: &str) {
 /// Fire SubagentStart at the durable spawn boundary. No-op when no hook-fire
 /// seam is wired (no registry). The signal lands in the parent log so replay
 /// pairs it with the SubagentSpawn / SubagentReturn boundaries.
-async fn fire_subagent_start(
+pub(super) async fn fire_subagent_start(
     hook_fire: Option<&Arc<dyn HookFire>>,
     parent_sid: SessionId,
     child_str: &str,
@@ -392,152 +594,13 @@ async fn fire_subagent_stop(
     }
 }
 
-async fn run_foreground_spawn(
-    this: MultiAgentRuntime,
-    parent_sid: SessionId,
-    depth: u32,
-    cancel: Option<houyicoder_async::CancellationToken>,
-    hook_fire: Option<Arc<dyn HookFire>>,
-    trigger: TriggerSource,
-    args: SpawnArgs,
-) -> Result<SpawnOutcome, SpawnFailure> {
-    let def = this
-        .registry
-        .resolve(&args.subagent_type, &ResolveCtx::default())
-        .map_err(map_registry_err)?;
-    let isolation = match args.isolation.as_str() {
-        "worktree" => IsolationMode::Worktree,
-        _ => IsolationMode::None,
-    };
-    // Concurrency cap: a resolved (valid type, known isolation) spawn
-    // acquires a running slot before any side effect. Saturation rejects with
-    // backpressure so the model re-queues next turn; a queued spawn waits here
-    // for a slot rather than refusing the user's request. The driver below
-    // carries the slot, so it releases when the child ends rather than when
-    // this call returns — a stop releases the slot when the child finishes
-    // winding down.
-    let slot = match this.gate.acquire().await {
-        AcquireResult::Acquired(p) => p,
-        AcquireResult::Rejected => return Err(SpawnFailure::ConcurrencySaturated),
-    };
-    let base_prompt = match &def.system_prompt {
-        PromptSource::Owned(p) => p.clone(),
-        PromptSource::InheritParent => this.config.instructions.clone(),
-    };
-    let child_config = RunnerConfig {
-        instructions: child_system_prompt(
-            &base_prompt,
-            &this.cwd,
-            &this.config.model,
-            def.omit_project_context,
-        ),
-        ..this.config.clone()
-    };
-    let req = SpawnRequest {
-        parent_sid,
-        parent_store: this.store.clone(),
-        provider: this.provider.clone(),
-        tools: this.tools.narrow(&def.disallowed_tools),
-        config: child_config,
-        subagent_type: args.subagent_type.clone(),
-        prompt: args.prompt.clone(),
-        prompt_summary: args.prompt_summary.clone(),
-        trigger,
-        depth,
-        isolation,
-        worktree_controller: this.worktree_controller.clone(),
-        run_mode: ChildRunMode::Foreground,
-        parent_cancel: cancel,
-        bus: this.bus.clone(),
-    };
-    // The child runs on a driver task this call awaits but does not own: the
-    // dispatcher races the call against the run token and drops it on a stop,
-    // and a child abandoned between its durable spawn boundary and its
-    // terminal status leaves the fleet a row that never clears and the parent
-    // log a spawn boundary nothing closes. The driver owns the running slot
-    // and the child's bookkeeping, so a stop reaches the child as an
-    // interrupt it can finish from rather than as a dropped future. A child
-    // parked in work that never reads its cancel token holds the slot and the
-    // row until that work returns.
-    let subagent_type = req.subagent_type.clone();
-    let task = req.prompt.clone();
-    let driver = tokio::spawn(async move {
-        let _slot = slot;
-        let handle = spawn_child(req).await.map_err(map_spawn_err)?;
-        let child_sid = handle.session;
-        let child_str = child_sid.to_string();
-        // The child's provenance lands at the boundary, before its run: the
-        // delegation record it opens with is its first durable append, so
-        // nothing that counts or lists the user's sessions can read a running
-        // child as one of theirs.
-        stamp_spawned_by(
-            &this.descriptor_store,
-            child_sid,
-            parent_sid,
-            &subagent_type,
-            &child_str,
-        );
-        let child = ChildDescriptor::new(
-            child_str.clone(),
-            subagent_type.clone(),
-            ChildRunMode::Foreground,
-        );
-        // Register the live runner for a per-turn abort (moot for sync — the
-        // parent blocks on the tool call + cannot be viewing the child mid-run
-        // — but the registry is shared so the async path's contract holds
-        // uniformly).
-        this.register_child(&child_str, &handle.runner);
-        announce_spawn(this.bus.as_ref(), child.clone());
-        // SubagentStart fires at the durable spawn boundary (child session
-        // exists, SubagentSpawn recorded, run not started); pairs with the
-        // later SubagentStop across the SubagentSpawn-to-Return span.
-        fire_subagent_start(hook_fire.as_ref(), parent_sid, &child_str, &subagent_type).await;
-        let (status, summary, usage) = spawn_exec::finalize_child(
-            handle,
-            this.store.clone(),
-            this.bus.clone(),
-            this.worktree_controller.clone(),
-            parent_sid,
-            child_sid,
-            child,
-            hook_fire,
-            task,
-        )
-        .await;
-        Ok(SpawnOutcome::foreground(child_str, status, summary, usage))
-    });
-    match driver.await {
-        Ok(outcome) => outcome,
-        // A panic inside the driver would otherwise reach the model as an
-        // ordinary refusal, so surface it as the panic it is.
-        Err(join) => std::panic::resume_unwind(join.into_panic()),
-    }
-}
-
-fn map_registry_err(error: AgentError) -> SpawnFailure {
-    match error {
-        AgentError::NotFound { .. } => SpawnFailure::UnknownAgent,
-        AgentError::PermissionDenied { .. } => SpawnFailure::CapabilityDenied,
-    }
-}
-
-fn map_spawn_err(e: SpawnError) -> SpawnFailure {
-    match e {
-        SpawnError::BudgetExceeded => SpawnFailure::BudgetExceeded,
-        SpawnError::CapabilityDenied => SpawnFailure::CapabilityDenied,
-        SpawnError::SpawnRecursive => SpawnFailure::Recursive,
-        SpawnError::BoundaryWriteFailed => SpawnFailure::BoundaryWriteFailed,
-        SpawnError::WorktreeFenceNarrowFail => SpawnFailure::FenceFail,
-    }
-}
-
 /// Stamp SpawnedBy provenance on a child session's descriptor. Called at the
 /// spawn boundary, before the child runs, so a live child is never read as one
 /// of the user's own sessions. The delegation record the child opens with is
 /// its first durable append, which materializes the descriptor on a store that
 /// materializes one, so the update normally edits a file already there.
 /// Best-effort: a stamp failure logs and continues (the child still ran).
-fn stamp_spawned_by(
+pub(super) fn stamp_spawned_by(
     descriptor_store: &Option<Arc<dyn SessionDescriptorStore>>,
     child_sid: SessionId,
     parent_sid: SessionId,

@@ -1400,6 +1400,7 @@ version = "0.1.0"
 dependencies = [
  "futures",
  "houyicoder-api",
+ "houyicoder-async",
  "houyicoder-client",
  "houyicoder-config",
  "houyicoder-context",

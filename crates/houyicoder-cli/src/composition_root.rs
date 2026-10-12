@@ -32,7 +32,7 @@ use crate::trajectory;
 /// reap the prior host before installing the new one. The frontend policy
 /// travels alongside the bundle rather than inside it so a Session never
 /// carries frontend startup state.
-pub(crate) type WiredBundle = (RunnerBundle, FrontendStartup, HostLifecycle);
+pub(crate) type WiredBundle = (RunnerBundle, FrontendStartup, HostLifecycle, Arc<Runner>);
 
 /// A host lifecycle owner holding the session's exclusive lock. The
 /// lock outlives every writer the host owns: releasing the lease joins
@@ -47,6 +47,11 @@ pub(crate) struct HostLease {
     pub(crate) host: HostLifecycle,
     pub(crate) lock: Option<SessionLock>,
     pub(crate) sid: Option<String>,
+    /// The runner whose children the release must join before dropping the
+    /// lock. The serve task's abortability makes it unfit to own child
+    /// completion; the release task — the lock owner — is. None for hosts
+    /// with no spawn port attached.
+    pub(crate) children: Option<Arc<Runner>>,
 }
 
 impl HostLease {
@@ -56,6 +61,24 @@ impl HostLease {
             host,
             lock: None,
             sid: None,
+            children: None,
+        }
+    }
+
+    /// A lease already holding a session's exclusive lock. Production entries
+    /// build this after admitting (existing sid) or sealing (fresh sid) the
+    /// lock, so the lock outlives the lease's writers.
+    pub(crate) fn holding(
+        host: HostLifecycle,
+        lock: SessionLock,
+        sid: String,
+        children: Option<Arc<Runner>>,
+    ) -> Self {
+        Self {
+            host,
+            lock: Some(lock),
+            sid: Some(sid),
+            children,
         }
     }
 
@@ -70,11 +93,21 @@ impl HostLease {
     /// reported, not swallowed. The owner must retain or await the returned
     /// handle — aborting the release task (via the handle) drops the lock
     /// early.
+    ///
+    /// Child completion runs here too, after the tracked tasks join and
+    /// before the lock drops: this task — the lock owner — is the one place
+    /// the child-join cannot be detached from, where a serve-task abort
+    /// cannot orphan it. The runner clone keeps the spawn handle alive for
+    /// the join.
     pub(crate) fn begin_release(self, handle: &Handle) -> JoinHandle<ShutdownReport> {
         let shutdown = self.host.begin_shutdown();
         let lock = self.lock;
+        let children = self.children;
         handle.spawn(async move {
             let report = shutdown.await;
+            if let Some(runner) = children {
+                runner.join_children().await;
+            }
             drop(lock);
             report
         })
@@ -111,6 +144,7 @@ impl HostLeaseScope {
         host: HostLifecycle,
         lock: SessionLock,
         sid: String,
+        children: Option<Arc<Runner>>,
         handle: &Handle,
     ) {
         if let Some(old) = self.current.take() {
@@ -120,6 +154,7 @@ impl HostLeaseScope {
             host,
             lock: Some(lock),
             sid: Some(sid),
+            children,
         });
     }
 
@@ -311,7 +346,7 @@ pub(crate) fn assemble_bundle(
     let export_log: Option<Arc<dyn houyicoder_tui::view::export_log::ExportLog>> = Some(trajectory);
     let wire_session = houyicoder_protocol::frontend::SessionId(session.to_string());
     let (tx, rx) = channel::<SessionMessage>();
-    let (_runner, client, startup_warnings, host) = start_local_server(
+    let (runner, client, startup_warnings, host) = start_local_server(
         runner,
         session,
         gate,
@@ -344,6 +379,7 @@ pub(crate) fn assemble_bundle(
             history_path: houyicoder_config::config_home().join("history.jsonl"),
         },
         host,
+        runner,
     )
 }
 
@@ -431,6 +467,11 @@ pub(crate) fn start_local_server(
     }
     let server = server;
     let runtime = shared_runtime();
+    // The serve task is pure serve: it returns when its client drops, and
+    // the host's shutdown budget may abort it — so it must not be the owner
+    // of child completion. A join placed in its tail would be dropped with
+    // the aborted future, detaching the child JoinHandles exactly when the
+    // lock is about to release.
     let serve_handle = runtime.spawn(async move {
         let _serve = server.serve(server_io).await;
     });
@@ -448,7 +489,7 @@ pub(crate) fn start_local_server(
     // surfaces to the user. Never eprintln here: the TUI is in alt-screen
     // mode and stderr writes corrupt the rendered surface (the cursor sits in
     // the input box, so the text lands there). Tracked by the host so a
-    // session switch aborts an in-flight fetch and releases the runner it
+    // session switch aborts a running fetch and releases the runner it
     // holds a strong arc to, instead of letting it outlive the session.
     let refresh_handle = runtime.spawn({
         let runner_for_refresh = runner.clone();
@@ -463,139 +504,5 @@ pub(crate) fn start_local_server(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::session_lock::{LockError, SessionLock};
-    use houyicoder_context::SessionId;
-    use std::env;
-    use std::fs;
-    use std::panic::{AssertUnwindSafe, catch_unwind};
-    use std::path::PathBuf;
-    use std::process;
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-    use tokio::runtime::Builder;
-    use tokio::sync::oneshot::channel;
-    use tokio::task::yield_now;
-
-    fn temp_root() -> PathBuf {
-        static SEQ: AtomicU64 = AtomicU64::new(0);
-        let n = SEQ.fetch_add(1, Ordering::Relaxed);
-        let p = env::temp_dir().join(format!("host-lease-{}-{n}", process::id()));
-        fs::create_dir_all(&p).expect("temp root");
-        p
-    }
-
-    /// The lock stays held while a writer the host tracks is still running,
-    /// even after the release task has started. The cancel ack proves
-    /// begin_shutdown ran; a yield then confirms the release task entered
-    /// its wait, so a second acquire must report the lock held. After the
-    /// writer finishes, the release drops the lock and a second acquire
-    /// succeeds — a release that dropped the lock at task entry would let
-    /// that first acquire in early.
-    #[cfg(unix)]
-    #[test]
-    fn test_lock_outlives_writer() {
-        let runtime = Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("test runtime");
-        runtime.block_on(async {
-            let root = temp_root();
-            let sid = SessionId::new();
-            let sid_str = sid.to_string();
-            let lock = SessionLock::acquire(&sid_str, &root).expect("first acquire");
-
-            let mut host = HostLifecycle::new();
-            let cancel = host.cancel_token();
-            let (seen_tx, seen_rx) = channel::<()>();
-            let (release_tx, release_rx) = channel::<()>();
-            let done = Arc::new(AtomicBool::new(false));
-            let done_c = Arc::clone(&done);
-            host.track(tokio::spawn(async move {
-                // Stand in for a drain writer: acknowledge the cancel so the
-                // test knows begin_shutdown ran, then wait on a second gate so
-                // the writer stays alive until the test lets it finish.
-                let _ = cancel.cancelled().await;
-                let _ = seen_tx.send(());
-                let _ = release_rx.await;
-                done_c.store(true, Ordering::SeqCst);
-            }));
-
-            let lease = HostLease {
-                host,
-                lock: Some(lock),
-                sid: Some(sid_str.clone()),
-            };
-            let release = lease.begin_release(runtime.handle());
-
-            // The cancel ack proves begin_shutdown ran, not that the release
-            // task entered its wait — the cancel fires before the task
-            // exists. One yield closes the gap: the current-thread scheduler
-            // polls every ready task before resuming, so the release task
-            // entered its wait by now.
-            let _ = seen_rx.await;
-            yield_now().await;
-            match SessionLock::acquire(&sid_str, &root) {
-                Err(LockError::HeldByOther(_)) => {}
-                Ok(_) => panic!("lock released while writer still running"),
-                Err(LockError::Io(e)) => panic!("unexpected io error: {e}"),
-            }
-
-            // Let the writer finish; the release task joins it and drops the
-            // lock only after. A second acquire must now succeed.
-            drop(release_tx);
-            let report = release.await.expect("release task");
-            assert_eq!(report.panic_count(), 0, "no writer panicked");
-
-            let _reacquire = SessionLock::acquire(&sid_str, &root).expect("acquire after release");
-            assert!(
-                done.load(Ordering::SeqCst),
-                "writer finished before lock drop"
-            );
-            fs::remove_dir_all(&root).ok();
-        });
-    }
-
-    /// A panic unwinding past the run loop must not drop the lease while its
-    /// writers still run: the guard's drop releases it mid-unwind, so the
-    /// writer is cancelled and joined before the lock drops. Without that
-    /// drop the cancel never fires and the done flag never sets.
-    #[cfg(unix)]
-    #[test]
-    fn test_unwind_releases_lease() {
-        let root = temp_root();
-        let sid = SessionId::new();
-        let sid_str = sid.to_string();
-        let lock = SessionLock::acquire(&sid_str, &root).expect("first acquire");
-
-        let mut host = HostLifecycle::new();
-        let cancel = host.cancel_token();
-        let done = Arc::new(AtomicBool::new(false));
-        let done_c = Arc::clone(&done);
-        let handle = shared_runtime().handle().clone();
-        host.track(handle.spawn(async move {
-            let _ = cancel.cancelled().await;
-            done_c.store(true, Ordering::SeqCst);
-        }));
-
-        let slot: HostLeaseSlot = Arc::new(Mutex::new(HostLeaseScope::with_current(HostLease {
-            host,
-            lock: Some(lock),
-            sid: Some(sid_str.clone()),
-        })));
-
-        // Controlled unwind: the guard drops mid-panic, as in a run-loop
-        // panic. AssertUnwindSafe is sound — it only releases what it owns.
-        let guard = LeaseScopeGuard::new(&slot);
-        let unwind = catch_unwind(AssertUnwindSafe(|| {
-            let _held = guard;
-            panic!("run loop failed");
-        }));
-        assert!(unwind.is_err(), "the run loop panic was captured");
-
-        assert!(done.load(Ordering::SeqCst), "writer joined during unwind");
-        let _reacquire = SessionLock::acquire(&sid_str, &root).expect("lock released in order");
-        fs::remove_dir_all(&root).ok();
-    }
-}
+#[path = "composition_root_tests.rs"]
+mod tests;
