@@ -126,7 +126,6 @@ fn test_trust_ask_not_permission() {
     assert!(p.approval_mut().is_none());
     assert!(p.question().is_none());
     assert!(p.question_mut().is_none());
-    assert!(p.take_question().is_none());
 }
 
 /// Up on the trust screen reselects Accept.

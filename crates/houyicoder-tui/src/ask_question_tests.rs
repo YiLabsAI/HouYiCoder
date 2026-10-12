@@ -734,3 +734,20 @@ fn test_question_enter_submits() {
     crate::app::handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     assert!(app.ask_question().is_none(), "Enter takes the card");
 }
+
+/// Esc on a disconnected question card clears the whole prompt, so no empty
+/// permission lingers to trap the run in Waiting.
+#[test]
+fn test_question_esc_clears_disconnected() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let mut app = crate::composition::app();
+    app.ui.navigation.screen = crate::state::Screen::Working;
+    let aq = AskQuestion::parse("c1", &single_input()).expect("parse");
+    app.sessions.current.prompt = Some(PendingPrompt::question_card(RequestId(0), aq));
+    crate::app::handle_key(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(
+        app.sessions.current.prompt.is_none(),
+        "Esc clears the prompt"
+    );
+}

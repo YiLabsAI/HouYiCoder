@@ -127,15 +127,6 @@ impl PendingPrompt {
         }
     }
 
-    /// Take the interactive question card, keeping the request id so a later
-    /// resolve can still ship the verdict against it.
-    pub fn take_question(&mut self) -> Option<AskQuestion> {
-        match self {
-            Self::Permission { question, .. } => question.take().map(|b| *b),
-            Self::Trust { .. } => None,
-        }
-    }
-
     /// Replace the generic approval card, or do nothing on a non-permission
     /// ask.
     pub fn set_approval(&mut self, card: Option<Approval>) {
@@ -201,13 +192,6 @@ impl App {
     pub(crate) fn ask_question_mut(&mut self) -> Option<&mut AskQuestion> {
         let prompt = &mut self.sessions.current.prompt;
         prompt.as_mut().and_then(|p| p.question_mut())
-    }
-
-    /// Take the interactive question card, keeping the request id for a later
-    /// resolve.
-    pub(crate) fn take_ask_question(&mut self) -> Option<AskQuestion> {
-        let prompt = &mut self.sessions.current.prompt;
-        prompt.as_mut().and_then(|p| p.take_question())
     }
 
     /// The startup trust prompt, or None for a permission ask.

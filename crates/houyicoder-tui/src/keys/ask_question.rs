@@ -223,9 +223,10 @@ fn advance_ask_question(app: &mut App) {
 
 /// Submit the AskUserQuestion card: build the wire decision with the answer-
 /// populated input and ship it as the reverse response so the server resumes
-/// the turn with the human's answers injected.
+/// the turn with the human's answers injected. The card is read, not taken, so
+/// a failed enqueue still holds the question and its answers for a retry.
 fn submit_ask_question(app: &mut App) {
-    let Some(aq) = app.take_ask_question() else {
+    let Some(aq) = app.ask_question() else {
         return;
     };
     let call_id = aq.call_id.clone();
@@ -237,6 +238,8 @@ fn submit_ask_question(app: &mut App) {
             updated_input: Some(updated_input),
             scope: "once".to_string(),
         });
+    } else {
+        app.sessions.current.clear_prompt();
     }
 }
 
@@ -244,7 +247,7 @@ fn submit_ask_question(app: &mut App) {
 /// reject) so the tool formats the declined-to-answer text. The declined flag
 /// rides on the original input as updated_input.
 fn cancel_ask_question(app: &mut App) {
-    let Some(aq) = app.take_ask_question() else {
+    let Some(aq) = app.ask_question() else {
         return;
     };
     let call_id = aq.call_id.clone();
@@ -259,5 +262,7 @@ fn cancel_ask_question(app: &mut App) {
             updated_input: Some(input),
             scope: "once".to_string(),
         });
+    } else {
+        app.sessions.current.clear_prompt();
     }
 }

@@ -194,6 +194,58 @@ fn test_verdict_refused() {
     );
 }
 
+/// A refused question verdict keeps the question card: the server is still
+/// waiting, so the answer must not vanish when its verdict cannot ship.
+#[test]
+fn test_question_verdict_refused() {
+    use crate::ask_question_tests::single_input;
+    use crate::records::AskQuestion;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let mut app = connection_lost_app();
+    app.ui.navigation.screen = crate::state::Screen::Working;
+    let aq = AskQuestion::parse("c1", &single_input()).expect("parse question");
+    app.sessions.current.prompt = Some(PendingPrompt::question_card(RequestId(7), aq));
+    crate::app::handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(
+        app.ask_question().is_some(),
+        "the question card stays until the verdict is delivered"
+    );
+    assert!(
+        app.sessions.current.prompt.as_ref().map(|p| p.req_id()) == Some(RequestId(7)),
+        "the request id stays until the verdict is delivered"
+    );
+    assert!(
+        last_line(&app).contains("connection lost"),
+        "the refusal is visible: {}",
+        last_line(&app)
+    );
+}
+
+/// A refused question cancel keeps the question card: declining is still a
+/// verdict, so it must not vanish the card when that verdict cannot ship.
+#[test]
+fn test_question_cancel_refused() {
+    use crate::ask_question_tests::single_input;
+    use crate::records::AskQuestion;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let mut app = connection_lost_app();
+    app.ui.navigation.screen = crate::state::Screen::Working;
+    let aq = AskQuestion::parse("c1", &single_input()).expect("parse question");
+    app.sessions.current.prompt = Some(PendingPrompt::question_card(RequestId(7), aq));
+    crate::app::handle_key(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(
+        app.ask_question().is_some(),
+        "the question card stays until the decline verdict is delivered"
+    );
+    assert!(
+        last_line(&app).contains("connection lost"),
+        "the refusal is visible: {}",
+        last_line(&app)
+    );
+}
+
 /// A refused trust verdict keeps the prompt; the local exit only happens
 /// after the rejection was actually delivered.
 #[test]
