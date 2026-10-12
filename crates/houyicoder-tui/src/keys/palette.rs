@@ -23,9 +23,10 @@ pub(super) fn handle_palette(app: &mut App, k: KeyEvent) {
                 // typing; our popup stays open and guides the argument. Argless
                 // commands auto-run on select.
                 if cmd.takes_arg() {
-                    app.ui.navigation.palette.query =
-                        format!("{} ", cmd.name().trim_start_matches('/'));
-                    app.ui.navigation.palette.sel = 0;
+                    app.ui
+                        .navigation
+                        .palette
+                        .seed_query(cmd.name().trim_start_matches('/'));
                 } else {
                     app.close_palette();
                     app.ui.input.editor.set(cmd.name().to_string());

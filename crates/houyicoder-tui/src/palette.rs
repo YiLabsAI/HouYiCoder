@@ -99,6 +99,14 @@ impl PaletteState {
         self.sel = 0;
     }
 
+    /// Seed the query with an arg-taking command's name plus a trailing space,
+    /// and reset the selection, so the popup stays open while the user types
+    /// the argument after the name.
+    pub fn seed_query(&mut self, name: &str) {
+        self.query = format!("{name} ");
+        self.sel = 0;
+    }
+
     /// Open the palette with an empty filter at the first command.
     pub fn open(&mut self) {
         self.open = true;
@@ -184,6 +192,16 @@ mod tests {
         assert!(p.open);
         assert!(p.query.is_empty());
         assert_eq!(p.sel, 0);
+    }
+
+    #[test]
+    fn test_seed_query_for_argument() {
+        let mut p = PaletteState::default();
+        p.open();
+        p.seed_query("permissions");
+        assert_eq!(p.query, "permissions ", "the name plus a trailing space");
+        assert_eq!(p.sel, 0, "the selection resets to the top");
+        assert!(p.open, "the popup stays open for the argument");
     }
 
     #[test]
