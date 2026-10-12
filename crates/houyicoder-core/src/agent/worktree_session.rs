@@ -303,6 +303,21 @@ pub fn remove_worktree(repo_root: &Path, slug: &str) -> Result<(), WorktreeError
     Ok(())
 }
 
+/// Remove a linked worktree + delete its branch, conservatively, for the
+/// child auto-reclaim path where the caller has only proven the tree clean
+/// rather than obtained an explicit discard. No --force and every git result
+/// checked: a worktree remove failure returns before the branch is touched, so
+/// a tree that survives its remove never loses its branch; branch -d (not -D)
+/// refuses to delete work that is not merged.
+pub fn remove_clean_worktree(repo_root: &Path, slug: &str) -> Result<(), WorktreeError> {
+    let repo_root = canonicalize(repo_root)?;
+    let path = worktree_path_for(&repo_root, slug);
+    let branch = worktree_branch_name(slug);
+    run_git(&repo_root, &["worktree", "remove", &path.to_string_lossy()])?;
+    run_git(&repo_root, &["branch", "-d", &branch])?;
+    Ok(())
+}
+
 /// The current branch name of the repo (the branch a worktree session would
 /// branch off + return to). None when HEAD is detached or git fails.
 pub fn current_branch(repo_root: &Path) -> Option<String> {
@@ -320,6 +335,46 @@ pub fn rev_parse(repo_root: &Path, ref_name: &str) -> Option<String> {
 #[expect(clippy::disallowed_methods, reason = "infra spawn, not model-driven")]
 mod tests {
     use super::*;
+    use std::env::temp_dir;
+    use std::fs;
+    use std::process::id;
+
+    /// A throwaway git repo with one commit, so a remove test runs its body
+    /// deterministically instead of skipping outside a live work tree.
+    fn make_repo(tag: &str) -> PathBuf {
+        let dir = temp_dir().join(format!("houyi-wts-{tag}-{}", id()));
+        drop(fs::remove_dir_all(&dir));
+        fs::create_dir_all(&dir).expect("repo dir");
+        drop(
+            Command::new("git")
+                .arg("-C")
+                .arg(&dir)
+                .args(["init", "-q"])
+                .status(),
+        );
+        drop(
+            Command::new("git")
+                .arg("-C")
+                .arg(&dir)
+                .args(["config", "user.email", "t@x"])
+                .status(),
+        );
+        drop(
+            Command::new("git")
+                .arg("-C")
+                .arg(&dir)
+                .args(["config", "user.name", "t"])
+                .status(),
+        );
+        drop(
+            Command::new("git")
+                .arg("-C")
+                .arg(&dir)
+                .args(["commit", "--allow-empty", "-m", "init", "-q"])
+                .status(),
+        );
+        dir
+    }
 
     #[test]
     fn test_validates_legal_slugs() {
@@ -430,6 +485,39 @@ mod tests {
     #[test]
     fn test_count_changes_without_baseline() {
         assert!(count_worktree_changes(Path::new("/nonexistent"), None).is_none());
+    }
+
+    /// The conservative remove deletes both the tree dir and its branch after
+    /// a clean create: no --force needed, and branch -d accepts a branch that
+    /// has no unmerged work.
+    #[test]
+    fn test_remove_clean_removes_tree() {
+        let repo = make_repo("removes-tree");
+        let slug = "clean-remove";
+        let created = get_or_create_worktree(&repo, slug).expect("create");
+        assert!(created.worktree_path.exists(), "tree created");
+        remove_clean_worktree(&repo, slug).expect("clean remove");
+        assert!(!created.worktree_path.exists(), "tree dir removed");
+        let branch = worktree_branch_name(slug);
+        assert!(
+            run_git(&repo, &["rev-parse", "--verify", &branch]).is_err(),
+            "branch deleted with the tree"
+        );
+        drop(fs::remove_dir_all(&repo));
+    }
+
+    /// A conservative remove of a tree that does not exist fails on its first
+    /// git step, so the branch delete is never reached.
+    #[test]
+    fn test_remove_clean_fails_missing() {
+        let repo = make_repo("fails-missing");
+        let err =
+            remove_clean_worktree(&repo, "no-such-clean-tree").expect_err("missing tree fails");
+        assert!(
+            matches!(err, WorktreeError::Git { .. }),
+            "git failure: {err:?}"
+        );
+        drop(fs::remove_dir_all(&repo));
     }
 
     fn cleanup_worktree(repo_root: &Path, slug: &str) -> Result<(), WorktreeError> {

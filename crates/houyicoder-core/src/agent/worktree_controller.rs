@@ -19,6 +19,7 @@
 //! the record lands now (resume consumption is a separate, deferred task);
 //! never silent on the cwd + fence switch.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
@@ -70,11 +71,15 @@ pub struct ExitOutcome {
 /// the worktree when the child left no changes or preserves it for the
 /// caller to continue on the branch when it did. Not Clone -- the guard
 /// is single-owner.
+///
+/// The guard's own Drop restores the wide fence when the handle is dropped
+/// without a cleanup_child call (a force-aborted child). The controller keeps
+/// a separate reclaim record per child so that abandoned tree is removed at
+/// shutdown instead of leaking.
 pub struct ChildWorktree {
     pub worktree_path: PathBuf,
     pub worktree_branch: String,
     slug: String,
-    head_commit: String,
     pub fence_guard: houyicoder_api::sandbox::WorktreeFenceGuard,
 }
 
@@ -91,6 +96,23 @@ pub enum ChildCleanup {
         worktree_path: PathBuf,
         worktree_branch: String,
     },
+}
+
+/// The record a per-child worktree leaves with the controller so an
+/// abandoned child still gets its tree reclaimed at shutdown. enter_for_child
+/// inserts one before its first await; cleanup_child removes the matching
+/// entry only after the reclaim finishes, so an abort mid-reclaim leaves it
+/// for reclaim_abandoned (which drains whatever remains) to re-claim. This is
+/// how a force-aborted child, dropped before its finalize cleanup tail, still
+/// loses its clean tree instead of leaking it. The fence guard itself travels
+/// on the child handle, not here.
+#[derive(Clone)]
+struct WorktreeReclaimRecord {
+    repo_root: PathBuf,
+    worktree_path: PathBuf,
+    worktree_branch: String,
+    slug: String,
+    head_commit: String,
 }
 
 pub struct WorktreeController {
@@ -124,6 +146,12 @@ pub struct WorktreeController {
     /// attaches the runner's hook-fire handle once it exists. None when no
     /// hooks are wired; fire is a no-op then.
     hook_fire: Mutex<Option<Arc<dyn HookFire>>>,
+    /// Per-child worktrees not yet reclaimed, by slug. Populated at
+    /// enter_for_child, removed by cleanup_child, and drained by
+    /// reclaim_abandoned at shutdown. The record is the shutdown owner's
+    /// handle on a tree whose child vanished before cleanup: Drop restores the
+    /// fence, this map keeps the blocking reclaim reachable off the worker.
+    pending_reclaims: Mutex<HashMap<String, WorktreeReclaimRecord>>,
 }
 
 impl WorktreeController {
@@ -149,6 +177,7 @@ impl WorktreeController {
             original_main_ref: Mutex::new(None),
             user_notice: Mutex::new(None),
             hook_fire: Mutex::new(None),
+            pending_reclaims: Mutex::new(HashMap::new()),
         }
     }
 
@@ -305,43 +334,163 @@ impl WorktreeController {
             .map_err(|e| WorktreeError::Git {
                 stderr: format!("narrow_to_worktree: {e}"),
             })?;
+        // Register before the hook-fire await so an abort during that await
+        // still leaves the tree in the reclaim map for the shutdown sweep. A
+        // resumed tree carries a prior child's output; a diff against its
+        // current tip would read that work as "no new changes" and let reclaim
+        // delete it. Register only a freshly created tree for auto-reclaim: a
+        // resumed one is the caller's to keep (an explicit exit removes it),
+        // so it never enters the shutdown sweep.
+        if !created.existed {
+            self.pending_reclaims.lock().expect("reclaims lock").insert(
+                slug.clone(),
+                WorktreeReclaimRecord {
+                    repo_root: self.repo_root.clone(),
+                    worktree_path: created.worktree_path.clone(),
+                    worktree_branch: created.worktree_branch.clone(),
+                    slug: slug.clone(),
+                    head_commit: created.head_commit.clone().unwrap_or_default(),
+                },
+            );
+        }
         self.fire_worktree_event(HookEventKind::WorktreeCreate, created.worktree_path.clone())
             .await;
         Ok(ChildWorktree {
             worktree_path: created.worktree_path,
             worktree_branch: created.worktree_branch,
             slug,
-            head_commit: created.head_commit.unwrap_or_default(),
             fence_guard: guard,
         })
     }
 
     /// Clean up a per-child worktree at terminal state: restore the wide
-    /// fence, then auto-remove the worktree when the child left no changes or
-    /// preserve it (with path + branch) when it did. A dirty worktree is kept
-    /// so the caller can continue on the branch; a clean one is deleted. The
-    /// diff check is fail-closed: a git failure preserves the worktree rather
-    /// than risking destroying real work.
-    pub async fn cleanup_child(&self, cw: ChildWorktree) -> Result<ChildCleanup, WorktreeError> {
-        let path = cw.worktree_path.clone();
-        let branch = cw.worktree_branch.clone();
-        let slug = cw.slug.clone();
-        let head = cw.head_commit.clone();
-        // Drop the guard -- restores the wide fence (Drop is the fallback;
-        // the explicit drop runs it now, before the git remove).
-        drop(cw);
-        if worktree_session::has_worktree_changes(&path, &head) {
-            return Ok(ChildCleanup::Kept {
-                worktree_path: path,
-                worktree_branch: branch,
-            });
+    /// fence, then remove the tree when the child left no changes or preserve
+    /// it (with path + branch) when it did. Infallible: an abandoned tree is a
+    /// cleanup outcome the caller observes, not an error to propagate at
+    /// finalize. The fence restore happens here (the child handle carries the
+    /// guard); the controller then runs the same conservative reclaim as the
+    /// shutdown sweep, removing its reclaim record only after that reclaim
+    /// finishes (an abort mid-reclaim leaves the record for the sweep). A
+    /// normal cleanup and an abandoned-child reclaim share one removal path.
+    pub async fn cleanup_child(&self, cw: ChildWorktree) -> ChildCleanup {
+        let ChildWorktree {
+            worktree_path,
+            worktree_branch,
+            slug,
+            fence_guard,
+        } = cw;
+        if let Err(e) = fence_guard.restore() {
+            tracing::warn!("child worktree fence restore failed: {e}");
         }
-        worktree_session::remove_worktree(&self.repo_root, &slug)?;
-        self.fire_worktree_event(HookEventKind::WorktreeRemove, path.clone())
-            .await;
-        Ok(ChildCleanup::Removed {
-            worktree_path: path,
+        let recovery = self
+            .pending_reclaims
+            .lock()
+            .expect("reclaims lock")
+            .get(&slug)
+            .cloned();
+        let outcome = match recovery {
+            // The record stays in the map through the reclaim so an abort
+            // during the blocking git leaves it for the shutdown sweep; it is
+            // removed only once the reclaim has actually finished.
+            Some(recovery) => {
+                let outcome = self.reclaim_child(recovery).await;
+                self.pending_reclaims
+                    .lock()
+                    .expect("reclaims lock")
+                    .remove(&slug);
+                outcome
+            }
+            // No reclaim record: the entry was already drained by a shutdown
+            // sweep. Report the tree kept so the caller does not delete it a
+            // second time.
+            None => ChildCleanup::Kept {
+                worktree_path,
+                worktree_branch,
+            },
+        };
+        // The normal path fires WorktreeRemove only when the removal actually
+        // succeeded; the shutdown sweep removes without firing (see
+        // reclaim_abandoned) so an aborted child's silent recovery never
+        // over-reports a lifecycle event.
+        if let ChildCleanup::Removed { worktree_path } = &outcome {
+            self.fire_worktree_event(HookEventKind::WorktreeRemove, worktree_path.clone())
+                .await;
+        }
+        outcome
+    }
+
+    /// Reclaim one worktree record: prove the tree clean on the blocking pool
+    /// (sync git never runs on the async worker), then remove it
+    /// conservatively. A tree that still holds changes, or whose remove fails,
+    /// is kept and reported; only a proven-clean tree whose conservative
+    /// remove succeeds reports Removed. The hook is the caller's to fire: the
+    /// normal cleanup path fires WorktreeRemove, the shutdown sweep does not.
+    async fn reclaim_child(&self, recovery: WorktreeReclaimRecord) -> ChildCleanup {
+        let WorktreeReclaimRecord {
+            repo_root,
+            worktree_path,
+            worktree_branch,
+            slug,
+            head_commit,
+        } = recovery;
+        let dirty = tokio::task::spawn_blocking({
+            let tree = worktree_path.clone();
+            move || worktree_session::has_worktree_changes(&tree, &head_commit)
         })
+        .await
+        .unwrap_or(true);
+        if dirty {
+            return ChildCleanup::Kept {
+                worktree_path,
+                worktree_branch,
+            };
+        }
+        let removed = tokio::task::spawn_blocking({
+            let slug = slug.clone();
+            move || worktree_session::remove_clean_worktree(&repo_root, &slug)
+        })
+        .await;
+        match removed {
+            Ok(Ok(())) => ChildCleanup::Removed { worktree_path },
+            // Fail-closed keep with a visible diagnosis: the caller learns the
+            // tree survives and why, rather than the sweep silently leaking it.
+            Ok(Err(e)) => {
+                tracing::warn!("abandoned child worktree reclaim failed to remove {slug}: {e}");
+                ChildCleanup::Kept {
+                    worktree_path,
+                    worktree_branch,
+                }
+            }
+            Err(e) => {
+                tracing::warn!("abandoned child worktree reclaim task failed for {slug}: {e}");
+                ChildCleanup::Kept {
+                    worktree_path,
+                    worktree_branch,
+                }
+            }
+        }
+    }
+
+    /// Reclaim every per-child worktree still recorded — a child force-aborted
+    /// before its finalize cleanup tail, whose entry cleanup_child never
+    /// removed. Called by the shutdown owner after all child drivers have
+    /// joined and before the parent lease is released, so the blocking reclaim
+    /// is observed to completion rather than left to a Drop that would run
+    /// sync git on the worker. Unlike cleanup_child, this sweep removes a
+    /// clean tree without firing WorktreeRemove: the abort already left the
+    /// child's lifecycle event unbalanced, and the silent recovery does not
+    /// manufacture a removal event for it.
+    pub async fn reclaim_abandoned(&self) {
+        let leftover: Vec<WorktreeReclaimRecord> = self
+            .pending_reclaims
+            .lock()
+            .expect("reclaims lock")
+            .drain()
+            .map(|(_, recovery)| recovery)
+            .collect();
+        for recovery in leftover {
+            self.reclaim_child(recovery).await;
+        }
     }
 
     /// Exit the worktree session (ExitWorktree tool body). keep preserves the
@@ -515,5 +664,6 @@ impl WorktreeController {
 mod tests;
 
 #[cfg(test)]
+#[expect(clippy::disallowed_methods, reason = "infra spawn, not model-driven")]
 #[path = "worktree_child_tests.rs"]
 mod child_tests;

@@ -110,7 +110,7 @@ pub(super) async fn finalize_child(
     // what it really spent instead of zeroes. See child_subtree_usage.
     let usage = child_subtree_usage(&handle.runner, &child_log);
     if let (Some(cw), Some(ctrl)) = (handle.worktree, worktree_controller.as_ref()) {
-        drop(ctrl.cleanup_child(cw).await);
+        ctrl.cleanup_child(cw).await;
     }
     super::close_child_inbox(bus.as_ref(), &child_str);
     super::fire_subagent_stop(

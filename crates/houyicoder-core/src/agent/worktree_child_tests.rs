@@ -6,6 +6,8 @@ use houyicoder_async::CancellationToken;
 use houyicoder_context::{HookEventKind, HookFirePayload, SessionEvent, SessionId};
 use houyicoder_memory::InMemoryBackend;
 use houyicoder_session::SessionStore;
+use std::path::PathBuf;
+use std::process::Command;
 use std::sync::{Arc, Mutex};
 
 use crate::agent::ToolRegistry;
@@ -162,7 +164,7 @@ async fn test_cleanup_clean_worktree_removed() {
         .await
         .expect("enter");
     let path = cw.worktree_path.clone();
-    let outcome = controller.cleanup_child(cw).await.expect("cleanup");
+    let outcome = controller.cleanup_child(cw).await;
     match outcome {
         ChildCleanup::Removed { worktree_path } => assert_eq!(worktree_path, path),
         ChildCleanup::Kept { .. } => panic!("clean worktree must be removed, not kept"),
@@ -184,7 +186,7 @@ async fn test_cleanup_dirty_worktree_kept() {
         .expect("enter");
     std::fs::write(cw.worktree_path.join("uncommitted.txt"), "dirty").expect("write");
     let path = cw.worktree_path.clone();
-    let outcome = controller.cleanup_child(cw).await.expect("cleanup");
+    let outcome = controller.cleanup_child(cw).await;
     match outcome {
         ChildCleanup::Kept {
             worktree_path,
@@ -196,6 +198,210 @@ async fn test_cleanup_dirty_worktree_kept() {
         ChildCleanup::Removed { .. } => panic!("dirty worktree must be kept, not removed"),
     }
     assert!(path.exists(), "dirty worktree dir preserved");
+    std::fs::remove_dir_all(&repo).ok();
+}
+
+/// reclaim_abandoned removes a clean per-child worktree that was never
+/// cleaned up (a force-aborted child dropped its driver future before its
+/// finalize cleanup tail), so the shutdown owner recycles the abandoned tree
+/// instead of leaking its dir + branch.
+#[tokio::test]
+async fn test_reclaim_removes_clean_worktree() {
+    let repo = make_repo(22);
+    let (controller, _store, _cwd) = wired(&repo, 0);
+    let cw = controller
+        .enter_for_child("agent-abandoned".into())
+        .await
+        .expect("enter");
+    let path = cw.worktree_path.clone();
+    assert!(path.exists(), "worktree dir created");
+    assert!(path.join(".git").exists(), "worktree is a linked checkout");
+    drop(cw);
+    // The drop restored the fence only; the tree is still on disk until the
+    // shutdown owner reclaims it.
+    assert!(path.exists(), "drop leaves the worktree for reclaim");
+    controller.reclaim_abandoned().await;
+    assert!(!path.exists(), "abandoned clean worktree removed");
+    std::fs::remove_dir_all(&repo).ok();
+}
+
+/// reclaim_abandoned preserves a dirty per-child worktree (uncommitted
+/// changes) the same way cleanup_child does: an aborted child that produced
+/// work does not have that work destroyed by the shutdown sweep.
+#[tokio::test]
+async fn test_reclaim_keeps_dirty_worktree() {
+    let repo = make_repo(23);
+    let (controller, _store, _cwd) = wired(&repo, 0);
+    let cw = controller
+        .enter_for_child("agent-abandon-dirty".into())
+        .await
+        .expect("enter");
+    std::fs::write(cw.worktree_path.join("uncommitted.txt"), "dirty").expect("write");
+    let path = cw.worktree_path.clone();
+    drop(cw);
+    controller.reclaim_abandoned().await;
+    assert!(path.exists(), "dirty abandoned worktree preserved");
+    std::fs::remove_dir_all(&repo).ok();
+}
+
+/// The shutdown sweep removes an abandoned clean worktree without firing
+/// WorktreeRemove, unlike the normal cleanup path: an aborted child's silent
+/// recovery is physical-only, so the lone event is the WorktreeCreate its
+/// enter fired.
+#[tokio::test]
+async fn test_reclaim_skips_remove_hook() {
+    let repo = make_repo(28);
+    let (controller, _store, _cwd) = wired(&repo, 0);
+    let events = Arc::new(Mutex::new(Vec::new()));
+    controller.set_hook_fire(Some(Arc::new(RecordingHookFire {
+        events: events.clone(),
+    }) as Arc<dyn HookFire>));
+    let cw = controller
+        .enter_for_child("agent-abandon-clean".into())
+        .await
+        .expect("enter");
+    let path = cw.worktree_path.clone();
+    drop(cw);
+    controller.reclaim_abandoned().await;
+    assert!(!path.exists(), "abandoned clean worktree removed");
+    let fired = events.lock().expect("events lock").clone();
+    assert!(
+        fired.contains(&HookEventKind::WorktreeCreate),
+        "enter fired WorktreeCreate: {fired:?}"
+    );
+    assert!(
+        !fired.contains(&HookEventKind::WorktreeRemove),
+        "sweep does not fire WorktreeRemove: {fired:?}"
+    );
+    std::fs::remove_dir_all(&repo).ok();
+}
+
+/// cleanup_child removes the reclaim record, so a later shutdown sweep finds
+/// nothing to re-delete: a normal cleanup produces exactly one removal and one
+/// WorktreeRemove, never a double delete or a second event.
+#[tokio::test]
+async fn test_cleanup_removes_worktree_once() {
+    let repo = make_repo(24);
+    let (controller, _store, _cwd) = wired(&repo, 0);
+    let events = Arc::new(Mutex::new(Vec::new()));
+    controller.set_hook_fire(Some(Arc::new(RecordingHookFire {
+        events: events.clone(),
+    }) as Arc<dyn HookFire>));
+    let cw = controller
+        .enter_for_child("agent-once".into())
+        .await
+        .expect("enter");
+    let path = cw.worktree_path.clone();
+    let outcome = controller.cleanup_child(cw).await;
+    assert!(
+        matches!(outcome, ChildCleanup::Removed { .. }),
+        "clean worktree removed"
+    );
+    controller.reclaim_abandoned().await;
+    let fired = events.lock().expect("events lock").clone();
+    assert_eq!(
+        fired
+            .iter()
+            .filter(|e| **e == HookEventKind::WorktreeRemove)
+            .count(),
+        1,
+        "one WorktreeRemove fires: {fired:?}"
+    );
+    assert!(!path.exists(), "worktree removed exactly once");
+    std::fs::remove_dir_all(&repo).ok();
+}
+
+/// cleanup_child on a committed worktree (new commits beyond the parent tip)
+/// preserves it: a child's committed output is real work, never auto-deleted.
+#[tokio::test]
+async fn test_cleanup_committed_worktree_kept() {
+    let repo = make_repo(25);
+    let (controller, _store, _cwd) = wired(&repo, 0);
+    let cw = controller
+        .enter_for_child("agent-committed".into())
+        .await
+        .expect("enter");
+    drop(
+        Command::new("git")
+            .arg("-C")
+            .arg(&cw.worktree_path)
+            .args(["commit", "--allow-empty", "-m", "child-wip", "-q"])
+            .status(),
+    );
+    let path = cw.worktree_path.clone();
+    let outcome = controller.cleanup_child(cw).await;
+    match outcome {
+        ChildCleanup::Kept {
+            worktree_path,
+            worktree_branch,
+        } => {
+            assert_eq!(worktree_path, path);
+            assert!(!worktree_branch.is_empty(), "branch reported back");
+        }
+        ChildCleanup::Removed { .. } => panic!("committed worktree must be kept, not removed"),
+    }
+    assert!(path.exists(), "committed worktree dir preserved");
+    std::fs::remove_dir_all(&repo).ok();
+}
+
+/// A worktree whose state cannot be verified (the checkout is gone before
+/// cleanup) is kept, not treated as clean: the fail-closed change check errs
+/// toward preserving, and the fence still restores without a panic.
+#[tokio::test]
+async fn test_cleanup_missing_worktree_kept() {
+    let repo = make_repo(26);
+    let (controller, _store, _cwd) = wired(&repo, 0);
+    let cw = controller
+        .enter_for_child("agent-gone".into())
+        .await
+        .expect("enter");
+    let path = cw.worktree_path.clone();
+    std::fs::remove_dir_all(&path).expect("remove checkout");
+    let outcome = controller.cleanup_child(cw).await;
+    assert!(
+        matches!(outcome, ChildCleanup::Kept { .. }),
+        "unverifiable worktree kept"
+    );
+    std::fs::remove_dir_all(&repo).ok();
+}
+
+/// Resuming an existing child worktree (the same slug re-entered) never treats
+/// the prior child's output as "no new changes" and deletes it: a resumed tree
+/// is not registered for auto-reclaim, so it is always kept.
+#[tokio::test]
+async fn test_cleanup_reused_worktree_kept() {
+    let repo = make_repo(27);
+    let (controller, _store, _cwd) = wired(&repo, 0);
+    // Create the tree through the user-facing enter (outside the per-child
+    // reclaim map), then commit output that advances its tip.
+    let entered = controller
+        .enter(Some("agent-reuse".into()))
+        .await
+        .expect("enter");
+    let path = PathBuf::from(&entered.worktree_path);
+    drop(
+        Command::new("git")
+            .arg("-C")
+            .arg(&path)
+            .args(["commit", "--allow-empty", "-m", "prior-output", "-q"])
+            .status(),
+    );
+    controller
+        .exit(ExitAction::Keep, false)
+        .await
+        .expect("exit keep");
+    // The same slug now resolves to the existing tree; its committed work must
+    // read as preserved, not as a clean tree safe to delete.
+    let resumed = controller
+        .enter_for_child("agent-reuse".into())
+        .await
+        .expect("resume");
+    let outcome = controller.cleanup_child(resumed).await;
+    assert!(
+        matches!(outcome, ChildCleanup::Kept { .. }),
+        "reused worktree kept"
+    );
+    assert!(path.exists(), "prior output preserved");
     std::fs::remove_dir_all(&repo).ok();
 }
 
@@ -251,7 +457,7 @@ async fn test_cleanup_removed_fires_remove() {
         .enter_for_child("agent-clean".into())
         .await
         .expect("enter");
-    let outcome = controller.cleanup_child(cw).await.expect("cleanup");
+    let outcome = controller.cleanup_child(cw).await;
     assert!(
         matches!(outcome, ChildCleanup::Removed { .. }),
         "clean worktree removed"

@@ -1951,3 +1951,5 @@ mod admission_credential;
 mod join_children;
 #[cfg(test)]
 mod shutdown_gate;
+#[cfg(test)]
+mod worktree_reclaim;

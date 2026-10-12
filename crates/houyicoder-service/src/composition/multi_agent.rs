@@ -458,6 +458,7 @@ impl SpawnHandle for MultiAgentRuntime {
     fn join_children(&self) -> PFut<'_, ()> {
         let children = Arc::clone(&self.children);
         let drivers = Arc::clone(&self.child_drivers);
+        let worktree_controller = self.worktree_controller.clone();
         Box::pin(async move {
             // Cancel the children's lifecycle tokens and the drivers' close
             // tokens, then close the gate and drain, all under the two locks.
@@ -494,6 +495,15 @@ impl SpawnHandle for MultiAgentRuntime {
                 .take_drained();
             for (_, slot) in pending {
                 join_driver(slot, CHILD_JOIN_TIMEOUT).await;
+            }
+            // A child force-aborted before its finalize cleanup tail dropped
+            // its driver future and skipped cleanup_child, so its per-child
+            // worktree is only reachable through the controller's reclaim map.
+            // All drivers are joined by this point (no child still running);
+            // reclaim every tree left behind so a clean tree is removed before
+            // the parent lease releases, rather than leaking its dir + branch.
+            if let Some(ctrl) = &worktree_controller {
+                ctrl.reclaim_abandoned().await;
             }
         })
     }
