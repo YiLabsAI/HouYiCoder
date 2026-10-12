@@ -20,9 +20,13 @@
 //! never silent on the cwd + fence switch.
 
 use std::collections::HashMap;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
+
+use tokio::sync::Notify;
+use tokio::task::spawn_blocking;
 
 use houyicoder_api::agent_event::{EventHandler, UserNoticeEvent};
 use houyicoder_api::hook_fire::HookFire;
@@ -102,10 +106,8 @@ pub enum ChildCleanup {
 /// abandoned child still gets its tree reclaimed at shutdown. enter_for_child
 /// inserts one before its first await; cleanup_child removes the matching
 /// entry only after the reclaim finishes, so an abort mid-reclaim leaves it
-/// for reclaim_abandoned (which drains whatever remains) to re-claim. This is
-/// how a force-aborted child, dropped before its finalize cleanup tail, still
-/// loses its clean tree instead of leaking it. The fence guard itself travels
-/// on the child handle, not here.
+/// for reclaim_abandoned to observe. The fence guard itself travels on the
+/// child handle, not here.
 #[derive(Clone)]
 struct WorktreeReclaimRecord {
     repo_root: PathBuf,
@@ -113,6 +115,132 @@ struct WorktreeReclaimRecord {
     worktree_branch: String,
     slug: String,
     head_commit: String,
+}
+
+/// A launch-once completion cell for one per-child reclaim. The blocking Git
+/// reclaim writes its outcome here exactly once; any awaiter (the normal
+/// cleanup path or the shutdown sweep) reads it. The cell is shared via Arc,
+/// so an aborted awaiter does not take the result with it: the spawn_blocking
+/// task is detached on launch (its JoinHandle is dropped), runs to completion
+/// regardless of which caller started waiting, and lands the outcome in the
+/// cell. A second awaiter (the shutdown sweep arriving after the cleanup
+/// awaiter was aborted) sees the same outcome without relaunching Git or
+/// re-checking the directory.
+///
+/// Awaiters are sequential, not concurrent: reclaim_abandoned runs only after
+/// every child driver has joined, so no live cleanup awaiter is parked on the
+/// cell when the sweep arrives. notify_one (which stashes one permit when no
+/// waiter is registered) is therefore enough: a set that lands before the
+/// awaiter registers is not lost, and there is never a second concurrent
+/// awaiter to miss a wake.
+struct ReclaimCompletion {
+    /// Held only for the instant of reading or writing the Option; never
+    /// across an await. The blocking task writes; awaiters read and clone.
+    outcome: Mutex<Option<ChildCleanup>>,
+    notify: Notify,
+}
+
+impl ReclaimCompletion {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            outcome: Mutex::new(None),
+            notify: Notify::new(),
+        })
+    }
+
+    /// Write the outcome and wake one awaiter. Called exactly once, from the
+    /// detached blocking reclaim task.
+    fn set(&self, outcome: ChildCleanup) {
+        if let Ok(mut guard) = self.outcome.lock() {
+            *guard = Some(outcome);
+        }
+        self.notify.notify_one();
+    }
+
+    /// Return the outcome once the blocking reclaim has landed it. The
+    /// check-then-wait loop tolerates a set that arrived before registration
+    /// (the stashed permit wakes the parked awaiter; the next loop iteration
+    /// reads the cell) and a set that arrives while parked (the wake fires).
+    async fn await_outcome(&self) -> ChildCleanup {
+        loop {
+            {
+                let guard = self.outcome.lock().expect("completion lock");
+                if let Some(outcome) = guard.as_ref() {
+                    return outcome.clone();
+                }
+            }
+            self.notify.notified().await;
+        }
+    }
+}
+
+/// One entry in the reclaim map: the recovery record plus the launch-once
+/// completion cell. launched is the no-duplicate-reclaim guard, mutated only
+/// under the map lock. A slot whose child was force-aborted before any cleanup
+/// keeps launched false until the shutdown sweep launches it; a slot whose
+/// cleanup was aborted mid-reclaim keeps launched true so the sweep awaits the
+/// already-running task instead of starting a second one.
+struct ReclaimSlot {
+    record: WorktreeReclaimRecord,
+    completion: Arc<ReclaimCompletion>,
+    launched: bool,
+}
+
+/// The conservative reclaim body (sync): prove the tree clean, then remove it.
+/// A tree that still holds changes, or whose remove fails, is kept; only a
+/// proven-clean tree whose conservative remove succeeds reports Removed. Runs
+/// inside spawn_blocking so sync Git never touches the async worker. A panic
+/// here is caught by the caller's catch_unwind and degrades to a fail-closed
+/// Kept so the awaiter never hangs.
+fn run_conservative_reclaim(recovery: &WorktreeReclaimRecord) -> ChildCleanup {
+    let dirty =
+        worktree_session::has_worktree_changes(&recovery.worktree_path, &recovery.head_commit);
+    if dirty {
+        return ChildCleanup::Kept {
+            worktree_path: recovery.worktree_path.clone(),
+            worktree_branch: recovery.worktree_branch.clone(),
+        };
+    }
+    match worktree_session::remove_clean_worktree(&recovery.repo_root, &recovery.slug) {
+        Ok(()) => ChildCleanup::Removed {
+            worktree_path: recovery.worktree_path.clone(),
+        },
+        Err(e) => {
+            tracing::warn!(
+                "child worktree reclaim failed to remove {}: {e}",
+                recovery.slug
+            );
+            ChildCleanup::Kept {
+                worktree_path: recovery.worktree_path.clone(),
+                worktree_branch: recovery.worktree_branch.clone(),
+            }
+        }
+    }
+}
+
+/// Launch the blocking reclaim for one slot, if it has not been launched
+/// already. The launched guard (mutated under the map lock) is the single
+/// authority: a second caller arriving while the first task is still running
+/// finds launched true and skips the launch, then awaits the same completion.
+/// The JoinHandle is dropped on launch; the blocking pool runs the task to
+/// completion detached, and the outcome lands in the cell whether or not any
+/// awaiter survives. A panic in the reclaim body is caught and degrades to a
+/// fail-closed Kept so the awaiter never hangs.
+fn launch_reclaim(slot: &mut ReclaimSlot) {
+    if slot.launched {
+        return;
+    }
+    slot.launched = true;
+    let completion = Arc::clone(&slot.completion);
+    let record = slot.record.clone();
+    spawn_blocking(move || {
+        let outcome = catch_unwind(AssertUnwindSafe(|| run_conservative_reclaim(&record)))
+            .unwrap_or_else(|_| ChildCleanup::Kept {
+                worktree_path: record.worktree_path.clone(),
+                worktree_branch: record.worktree_branch.clone(),
+            });
+        completion.set(outcome);
+    });
 }
 
 pub struct WorktreeController {
@@ -147,11 +275,13 @@ pub struct WorktreeController {
     /// hooks are wired; fire is a no-op then.
     hook_fire: Mutex<Option<Arc<dyn HookFire>>>,
     /// Per-child worktrees not yet reclaimed, by slug. Populated at
-    /// enter_for_child, removed by cleanup_child, and drained by
-    /// reclaim_abandoned at shutdown. The record is the shutdown owner's
-    /// handle on a tree whose child vanished before cleanup: Drop restores the
-    /// fence, this map keeps the blocking reclaim reachable off the worker.
-    pending_reclaims: Mutex<HashMap<String, WorktreeReclaimRecord>>,
+    /// enter_for_child, removed by cleanup_child once its reclaim is observed,
+    /// and swept by reclaim_abandoned at shutdown. Each slot holds the
+    /// recovery record plus a launch-once completion cell, so an aborted
+    /// cleanup leaves both the record and the launched task's completion
+    /// reachable: Drop restores the fence, this map keeps the blocking reclaim
+    /// observable to completion off the worker.
+    pending_reclaims: Mutex<HashMap<String, ReclaimSlot>>,
 }
 
 impl WorktreeController {
@@ -344,12 +474,16 @@ impl WorktreeController {
         if !created.existed {
             self.pending_reclaims.lock().expect("reclaims lock").insert(
                 slug.clone(),
-                WorktreeReclaimRecord {
-                    repo_root: self.repo_root.clone(),
-                    worktree_path: created.worktree_path.clone(),
-                    worktree_branch: created.worktree_branch.clone(),
-                    slug: slug.clone(),
-                    head_commit: created.head_commit.clone().unwrap_or_default(),
+                ReclaimSlot {
+                    record: WorktreeReclaimRecord {
+                        repo_root: self.repo_root.clone(),
+                        worktree_path: created.worktree_path.clone(),
+                        worktree_branch: created.worktree_branch.clone(),
+                        slug: slug.clone(),
+                        head_commit: created.head_commit.clone().unwrap_or_default(),
+                    },
+                    completion: ReclaimCompletion::new(),
+                    launched: false,
                 },
             );
         }
@@ -382,32 +516,38 @@ impl WorktreeController {
         if let Err(e) = fence_guard.restore() {
             tracing::warn!("child worktree fence restore failed: {e}");
         }
-        let recovery = self
-            .pending_reclaims
+        // Launch the blocking reclaim if it has not been launched already, then
+        // await the shared completion. The slot stays in the map through the
+        // await so an abort mid-reclaim leaves the launched task's completion
+        // reachable for the shutdown sweep; the slot is removed only once the
+        // outcome is observed.
+        let outcome = {
+            let completion = match self
+                .pending_reclaims
+                .lock()
+                .expect("reclaims lock")
+                .get_mut(&slug)
+            {
+                Some(slot) => {
+                    launch_reclaim(slot);
+                    Arc::clone(&slot.completion)
+                }
+                // No reclaim record: the entry was already swept by a shutdown
+                // sweep. Report the tree kept so the caller does not delete it
+                // a second time.
+                None => {
+                    return ChildCleanup::Kept {
+                        worktree_path,
+                        worktree_branch,
+                    };
+                }
+            };
+            completion.await_outcome().await
+        };
+        self.pending_reclaims
             .lock()
             .expect("reclaims lock")
-            .get(&slug)
-            .cloned();
-        let outcome = match recovery {
-            // The record stays in the map through the reclaim so an abort
-            // during the blocking git leaves it for the shutdown sweep; it is
-            // removed only once the reclaim has actually finished.
-            Some(recovery) => {
-                let outcome = self.reclaim_child(recovery).await;
-                self.pending_reclaims
-                    .lock()
-                    .expect("reclaims lock")
-                    .remove(&slug);
-                outcome
-            }
-            // No reclaim record: the entry was already drained by a shutdown
-            // sweep. Report the tree kept so the caller does not delete it a
-            // second time.
-            None => ChildCleanup::Kept {
-                worktree_path,
-                worktree_branch,
-            },
-        };
+            .remove(&slug);
         // The normal path fires WorktreeRemove only when the removal actually
         // succeeded; the shutdown sweep removes without firing (see
         // reclaim_abandoned) so an aborted child's silent recovery never
@@ -419,78 +559,41 @@ impl WorktreeController {
         outcome
     }
 
-    /// Reclaim one worktree record: prove the tree clean on the blocking pool
-    /// (sync git never runs on the async worker), then remove it
-    /// conservatively. A tree that still holds changes, or whose remove fails,
-    /// is kept and reported; only a proven-clean tree whose conservative
-    /// remove succeeds reports Removed. The hook is the caller's to fire: the
-    /// normal cleanup path fires WorktreeRemove, the shutdown sweep does not.
-    async fn reclaim_child(&self, recovery: WorktreeReclaimRecord) -> ChildCleanup {
-        let WorktreeReclaimRecord {
-            repo_root,
-            worktree_path,
-            worktree_branch,
-            slug,
-            head_commit,
-        } = recovery;
-        let dirty = tokio::task::spawn_blocking({
-            let tree = worktree_path.clone();
-            move || worktree_session::has_worktree_changes(&tree, &head_commit)
-        })
-        .await
-        .unwrap_or(true);
-        if dirty {
-            return ChildCleanup::Kept {
-                worktree_path,
-                worktree_branch,
-            };
-        }
-        let removed = tokio::task::spawn_blocking({
-            let slug = slug.clone();
-            move || worktree_session::remove_clean_worktree(&repo_root, &slug)
-        })
-        .await;
-        match removed {
-            Ok(Ok(())) => ChildCleanup::Removed { worktree_path },
-            // Fail-closed keep with a visible diagnosis: the caller learns the
-            // tree survives and why, rather than the sweep silently leaking it.
-            Ok(Err(e)) => {
-                tracing::warn!("abandoned child worktree reclaim failed to remove {slug}: {e}");
-                ChildCleanup::Kept {
-                    worktree_path,
-                    worktree_branch,
-                }
-            }
-            Err(e) => {
-                tracing::warn!("abandoned child worktree reclaim task failed for {slug}: {e}");
-                ChildCleanup::Kept {
-                    worktree_path,
-                    worktree_branch,
-                }
-            }
-        }
-    }
-
-    /// Reclaim every per-child worktree still recorded — a child force-aborted
-    /// before its finalize cleanup tail, whose entry cleanup_child never
-    /// removed. Called by the shutdown owner after all child drivers have
+    /// Reclaim every per-child worktree still recorded (a child force-aborted
+    /// before its finalize cleanup tail, whose slot cleanup_child never
+    /// removed). Called by the shutdown owner after all child drivers have
     /// joined and before the parent lease is released, so the blocking reclaim
     /// is observed to completion rather than left to a Drop that would run
-    /// sync git on the worker. Unlike cleanup_child, this sweep removes a
-    /// clean tree without firing WorktreeRemove: the abort already left the
-    /// child's lifecycle event unbalanced, and the silent recovery does not
-    /// manufacture a removal event for it.
+    /// sync Git on the worker.
+    ///
+    /// A slot whose cleanup was aborted mid-reclaim is already launched; the
+    /// sweep awaits that launched task's completion rather than relaunching Git, so
+    /// a blocked branch deletion (a Git ref lock held by another process) is
+    /// waited out, not raced by a second directory re-check. A slot whose
+    /// child never reached cleanup is launched here for the first time. The
+    /// sweep removes a clean tree without firing WorktreeRemove: the abort
+    /// already left the child's lifecycle event unbalanced, and the silent
+    /// recovery does not manufacture a removal event for it.
     pub async fn reclaim_abandoned(&self) {
-        let leftover: Vec<WorktreeReclaimRecord> = self
+        // Launch every not-yet-launched reclaim, collecting each completion.
+        // The slots stay in the map through the await (a late cleanup_child
+        // for the same slug would await the same completion rather than find
+        // the slot drained); the map is cleared only once every outcome is
+        // observed.
+        let completions: Vec<Arc<ReclaimCompletion>> = self
             .pending_reclaims
             .lock()
             .expect("reclaims lock")
-            .drain()
-            .map(|(_, recovery)| recovery)
+            .values_mut()
+            .map(|slot| {
+                launch_reclaim(slot);
+                Arc::clone(&slot.completion)
+            })
             .collect();
-        for recovery in leftover {
-            self.reclaim_child(recovery).await;
+        for completion in completions {
+            completion.await_outcome().await;
         }
+        self.pending_reclaims.lock().expect("reclaims lock").clear();
     }
 
     /// Exit the worktree session (ExitWorktree tool body). keep preserves the

@@ -8,7 +8,10 @@ use houyicoder_memory::InMemoryBackend;
 use houyicoder_session::SessionStore;
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::Duration;
+use tokio::task::spawn_blocking;
+use tokio::time::timeout;
 
 use crate::agent::ToolRegistry;
 use crate::agent::multi_agent::bus_types::ChildRunMode;
@@ -19,6 +22,7 @@ use crate::provider::test_support::FakeProvider;
 
 use super::ChildCleanup;
 use super::ExitAction;
+use super::run_conservative_reclaim;
 use super::tests::{make_repo, wired, wired_err};
 
 /// enter_for_child creates a worktree + returns a guard, without entering a
@@ -498,6 +502,93 @@ async fn test_toolpath_fires_create_remove() {
     assert!(
         fired.contains(&HookEventKind::WorktreeRemove),
         "exit Remove fires WorktreeRemove: {fired:?}"
+    );
+    std::fs::remove_dir_all(&repo).ok();
+}
+
+/// reclaim_abandoned awaits an already-launched reclaim instead of relaunching
+/// Git. Models the Git ref-lock counterexample: a child's cleanup launched the
+/// conservative reclaim (worktree remove + branch delete) and was then aborted
+/// mid-await, leaving the blocking Git task still running with the branch ref
+/// locked by another process. The shutdown sweep must wait on that original
+/// task, not start a fresh directory re-check that returns before the branch
+/// delete completes.
+#[tokio::test]
+async fn test_reclaim_awaits_launched_task() {
+    let repo = make_repo(50);
+    let (controller, _store, _cwd) = wired(&repo, 0);
+    let cw = controller
+        .enter_for_child("agent-launched-reclaim".into())
+        .await
+        .expect("enter");
+    let path = cw.worktree_path.clone();
+    drop(cw);
+
+    // Simulate a launched reclaim that is parked (a Git ref lock held by
+    // another process). Mark the slot launched and post the blocking task
+    // that holds the completion: it parks on the latch, then runs the real
+    // conservative reclaim, then sets the outcome. This is the blocking task
+    // cleanup_child would have launched, with the awaiter already aborted.
+    // The handle is kept only so the failure path can observe the task to
+    // completion before asserting.
+    let latch = Arc::new((Mutex::new(false), Condvar::new()));
+    let latch_for_task = latch.clone();
+    let task = {
+        let mut map = controller.pending_reclaims.lock().expect("reclaims lock");
+        let slot = map
+            .get_mut("agent-launched-reclaim")
+            .expect("reclaim record present");
+        assert!(!slot.launched, "fresh slot not yet launched");
+        slot.launched = true;
+        let completion = Arc::clone(&slot.completion);
+        let record = slot.record.clone();
+        spawn_blocking(move || {
+            // Park until released, modeling a blocked branch delete while the
+            // awaiter was aborted.
+            {
+                let (lock, cvar) = &*latch_for_task;
+                let mut guard = lock.lock().expect("latch lock");
+                while !*guard {
+                    guard = cvar.wait(guard).expect("latch wait");
+                }
+            }
+            let outcome = run_conservative_reclaim(&record);
+            completion.set(outcome);
+        })
+    };
+
+    // The sweep must await the launched completion, not relaunch Git. A short
+    // timeout must not complete: the task is still parked. The old
+    // drain-and-relaunch path ran a fresh check that returned before this
+    // task finished. Record the verdict instead of failing in place: the
+    // latch release and the task observation below must run on every path,
+    // or a failure would leave the task parked and runtime shutdown would
+    // wait on it, turning a red test into a hang.
+    let reclaim = controller.reclaim_abandoned();
+    tokio::pin!(reclaim);
+    let returned_early = timeout(Duration::from_millis(200), &mut reclaim)
+        .await
+        .is_ok();
+
+    // Release the latch; the launched reclaim runs and lands the outcome.
+    {
+        let (lock, cvar) = &*latch;
+        let mut guard = lock.lock().expect("latch lock");
+        *guard = true;
+        cvar.notify_one();
+    }
+    task.await.expect("planted task completes");
+
+    assert!(
+        !returned_early,
+        "reclaim_abandoned returned before the launched task; it relaunches instead of awaiting the launched completion"
+    );
+
+    // The sweep observes the outcome and returns.
+    (&mut reclaim).await;
+    assert!(
+        !path.exists(),
+        "launched task removed the tree, observed by the sweep"
     );
     std::fs::remove_dir_all(&repo).ok();
 }
