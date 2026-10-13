@@ -183,7 +183,12 @@ impl RebuildWatch {
 
     /// Call before the frame: whether this frame will rebuild.
     fn before_frame(&mut self, app: &App, width: u16) {
-        if !app.ui.frame.rows.holds(&SlotsKey::for_frame(app, width)) {
+        if !app
+            .ui
+            .renderer
+            .slots
+            .holds(&SlotsKey::for_frame(app, width))
+        {
             self.count += 1;
         }
     }

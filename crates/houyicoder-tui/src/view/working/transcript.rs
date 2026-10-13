@@ -33,8 +33,11 @@ fn ensure_cached_slots(area: Rect, app: &App) {
     // appended after the slots and rebuilt every frame, so they are not part
     // of it.
     let key = SlotsKey::for_frame(app, area.width);
-    if !app.ui.frame.rows.holds(&key) {
-        app.ui.frame.rows.replace(key, build_slots_rows(area, app));
+    if !app.ui.renderer.slots.holds(&key) {
+        app.ui
+            .renderer
+            .slots
+            .replace(key, build_slots_rows(area, app));
     }
 }
 
@@ -43,7 +46,7 @@ pub(super) fn draw_transcript(f: &mut Frame, area: Rect, app: &App) {
 
     // Every frame: combine cached slots rows + fresh live rows (live text,
     // spinner, todos). Live rows are cheap (a few rows at most).
-    let total_slots = app.ui.frame.rows.with(|c| c.len());
+    let total_slots = app.ui.renderer.slots.with(|c| c.len());
     let live = build_tail_rows(area, app, total_slots > 0);
 
     let cap = area.height as usize;
@@ -54,10 +57,10 @@ pub(super) fn draw_transcript(f: &mut Frame, area: Rect, app: &App) {
 
     // One traversal over (slots ++ live) slices the six arrays by the same
     // bounds, so the visible window stays in step by construction.
-    let visible = app.ui.frame.rows.with(|c| c.visible(&live, top, cap));
+    let visible = app.ui.renderer.slots.with(|c| c.visible(&live, top, cap));
     // Stash the full row set (slots + live) for selection/copy.
     {
-        let mut all = app.ui.frame.rows.with(|c| c.text_rows());
+        let mut all = app.ui.renderer.slots.with(|c| c.text_rows());
         all.extend(live.text_rows());
         *app.ui.frame.layout.last_all_rows.borrow_mut() = all;
     }
@@ -340,7 +343,7 @@ pub(crate) fn push_line_rows(
         for (tag, text, oc, cid, word) in app
             .ui
             .renderer
-            .cache
+            .lines
             .borrow_mut()
             .tool_rows(&body, call_id, outcome, expanded, is_diff, width)
         {
@@ -392,7 +395,7 @@ pub(crate) fn push_line_rows(
         return true;
     }
     if let TranscriptLine::Agent(text) = line {
-        let (md_lines, md_plain) = app.ui.renderer.cache.borrow_mut().agent_rows(text, width);
+        let (md_lines, md_plain) = app.ui.renderer.lines.borrow_mut().agent_rows(text, width);
         let mut first = true;
         for (md_line, plain) in md_lines.into_iter().zip(md_plain) {
             let tag = if first {
@@ -436,14 +439,14 @@ pub(crate) fn push_line_rows(
         if let Some(r) = reasoning
             && expanded
         {
-            for rline in app.ui.renderer.cache.borrow_mut().thought_rows(r, width) {
+            for rline in app.ui.renderer.lines.borrow_mut().thought_rows(r, width) {
                 sink.push(Row::new(SYSTEM, rline).group(grp_key.clone()));
             }
         }
         return true;
     }
     if let TranscriptLine::User(text) = line {
-        for row in app.ui.renderer.cache.borrow_mut().user_rows(text, width) {
+        for row in app.ui.renderer.lines.borrow_mut().user_rows(text, width) {
             sink.push(Row::new(tag, row).outcome(outcome).group(grp_key.clone()));
         }
         return true;

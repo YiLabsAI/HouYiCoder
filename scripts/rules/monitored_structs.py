@@ -29,12 +29,19 @@ ACTIVE_OWNERS = {
         "fields": 26,
     },
     "crates/houyicoder-tui/src/renderer.rs:Renderer": {
-        # The reusable per-line render cache; a session switch clears it so an entry parsed for the old session never rides into the new one.
-        "fields": 1,
+        # The draw pass's reusable caches: the per-line parse cache and the
+        # transcript's pre-rendered slot rows. Both outlive a frame and are
+        # cleared together on a session switch, so nothing parsed or
+        # pre-rendered for the old session rides into the new one.
+        "fields": 2,
     },
     "crates/houyicoder-tui/src/renderer.rs:PreparedFrame": {
-        # The last draw pass's measured regions, feedback dims, cached rows, and per-row keys, written together and read together.
-        "fields": 4,
+        # The last successfully drawn frame: the measured region rectangles,
+        # the feedback dimensions the count and layout paths read back, and
+        # the per-row keys the click and Ctrl+O paths resolve against. The
+        # draw writes into a staged frame and this is replaced only when the
+        # draw reports success, so a reader never acts on a half-written one.
+        "fields": 3,
     },
     "crates/houyicoder-tui/src/ui/navigation.rs:Navigation": {
         # Where the user is looking: screen, pane, viewport modes, login mode, status sub-tab, name buffer, and the overlays.

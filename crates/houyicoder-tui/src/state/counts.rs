@@ -37,7 +37,7 @@ impl App {
                     && (self.ui.transcript_view.expanded.thinking.contains(turn_id)
                         || self.ui.verbose)
                 {
-                    n += self.ui.renderer.cache.borrow_mut().thought_row_count(r, w);
+                    n += self.ui.renderer.lines.borrow_mut().thought_row_count(r, w);
                 }
                 n
             }
@@ -51,7 +51,7 @@ impl App {
                 is_diff,
                 outcome,
                 ..
-            } if name == "result" => self.ui.renderer.cache.borrow_mut().tool_row_count(
+            } if name == "result" => self.ui.renderer.lines.borrow_mut().tool_row_count(
                 body,
                 call_id,
                 Some(*outcome),
@@ -90,7 +90,7 @@ impl App {
             }
             // count==render: a user prompt wraps + caps like the render path.
             TranscriptLine::User(text) => {
-                self.ui.renderer.cache.borrow_mut().user_row_count(text, w)
+                self.ui.renderer.lines.borrow_mut().user_row_count(text, w)
             }
             TranscriptLine::Tool { name, .. } if name != "result" => line
                 .tool_call_rows(w, full_tool_call)
@@ -153,7 +153,7 @@ impl App {
             n += self
                 .ui
                 .renderer
-                .cache
+                .lines
                 .borrow_mut()
                 .live_agent_row_count(&p.live_assistant_text, w);
         }
@@ -177,7 +177,7 @@ impl App {
     fn agent_text_rows(&self, text: &str) -> usize {
         self.ui
             .renderer
-            .cache
+            .lines
             .borrow_mut()
             .agent_row_count(text, self.ui.frame.feedback.transcript_width.get())
     }

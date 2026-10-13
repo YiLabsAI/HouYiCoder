@@ -92,11 +92,20 @@ pub fn run_with_runner(
         if dirty || app.agent_busy() {
             // Load older history before rendering its scroll position.
             app.load_older_frames();
-            app.ui.frame.feedback.native_cursor_position.set(None);
-            terminal.draw(|f| {
+            // Stage the frame: the draw writes into a fresh value, and the
+            // last published frame is held aside until the draw reports
+            // success.
+            // The staged frame starts empty, so the parked cursor position
+            // needs no reset here.
+            let published = app.ui.stage_frame();
+            let drawn = terminal.draw(|f| {
                 view::draw(f, &app);
                 apply_selection_overlay(f, &app);
-            })?;
+            });
+            // A failed draw puts the last published frame back before the
+            // error unwinds to the terminal guard, so nothing reads a
+            // half-written one.
+            app.ui.settle_frame(published, drawn)?;
             if let Some((x, y)) = app.ui.frame.feedback.native_cursor_position.get() {
                 execute!(stdout(), MoveTo(x, y), Hide)?;
             }

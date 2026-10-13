@@ -243,7 +243,7 @@ fn test_cache_version_stable_idle() {
     app.sessions.current.transcript.bump_revision();
     let out1 = render_text(&app, 80, 24);
     assert!(
-        app.ui.frame.rows.holds(&SlotsKey::for_frame(&app, 80)),
+        app.ui.renderer.slots.holds(&SlotsKey::for_frame(&app, 80)),
         "the first render should build the cache"
     );
     let out2 = render_text(&app, 80, 24);

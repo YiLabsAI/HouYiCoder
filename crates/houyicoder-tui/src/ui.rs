@@ -13,6 +13,8 @@
 mod navigation;
 
 use std::cell::Cell;
+use std::io;
+use std::mem;
 use std::sync::Arc;
 
 use crate::fleet::strip_state::FleetStripState;
@@ -38,7 +40,7 @@ pub use crate::ui::navigation::Navigation;
 /// spinner's displayed token count, the last-written terminal title, the
 /// display copies panes fetch on demand, selection, notifications,
 /// clipboard, focus, the queued-input hit-test geometry, the quit flag,
-/// and the draw pass's cache and last-frame output.
+/// and the draw pass's caches and last-frame output.
 pub struct Ui {
     /// Where the user is looking: the screen, the pane, the two viewport
     /// modes, and the overlay pickers.
@@ -145,14 +147,16 @@ pub struct Ui {
     /// resume). Read back by the event loop as its stop condition; a session
     /// swap that lands in-process resets it to false.
     pub quit: bool,
-    /// The reusable per-line render cache. A line parsed at one width or
-    /// expansion is reused across frames and transcript rebuilds; a session
-    /// switch clears it so stale entries never ride into the new session.
+    /// The draw pass's reusable caches: the per-line parse cache and the
+    /// transcript's pre-rendered slot rows. A line or a slot row built at one
+    /// width or expansion is reused across frames and transcript rebuilds; a
+    /// session switch clears both so stale entries never ride into the new
+    /// session.
     pub(crate) renderer: Renderer,
-    /// The last draw pass's render output: region rectangles, measured
-    /// feedback, the pre-rendered rows, and the per-row keys. Populated by
-    /// the draw pass and read back by the input, hit-test, selection, and
-    /// copy paths.
+    /// The last successfully drawn frame: region rectangles, measured
+    /// feedback, and the per-row keys. The draw writes into a staged frame
+    /// and this one is replaced only when the draw reports success, so a
+    /// reader never acts on a half-written frame.
     pub(crate) frame: PreparedFrame,
 }
 
@@ -177,7 +181,7 @@ impl Ui {
     /// pane states (permission, skills, hooks, memory, model, fleet), the
     /// trajectory and worktree cursors, the agents cursor, the selection, the
     /// notifications, the displayed token count, the last title, the render
-    /// cache, and the last frame's measured layout and rows all reset. The
+    /// caches, and the last frame's measured layout all reset. The
     /// process-level resources (terminal focus, clipboard) and the
     /// render-measured frame feedback stay; the input and parked view states
     /// are carried by the caller at the field level because they mix
@@ -205,4 +209,29 @@ impl Ui {
         self.renderer.reset_for_session_switch();
         self.frame.reset_for_session_switch();
     }
+
+    /// Take the last published frame aside so the draw writes into a fresh
+    /// one. The caller hands the returned value back to settle_frame once the
+    /// draw reports its outcome. The caches the draw reuses live on the
+    /// renderer, so staging a frame does not drop them.
+    pub(crate) fn stage_frame(&mut self) -> PreparedFrame {
+        mem::take(&mut self.frame)
+    }
+
+    /// Publish the frame the draw just wrote, or put the last published one
+    /// back when the draw failed. Either way the Ui holds a frame a reader
+    /// may act on: a failed draw never leaves a half-written one in place.
+    pub(crate) fn settle_frame<T>(
+        &mut self,
+        published: PreparedFrame,
+        drawn: io::Result<T>,
+    ) -> io::Result<T> {
+        if drawn.is_err() {
+            self.frame = published;
+        }
+        drawn
+    }
 }
+
+#[cfg(test)]
+mod tests;

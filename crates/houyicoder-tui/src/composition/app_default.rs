@@ -67,11 +67,7 @@ pub fn app() -> App {
             terminal_focused: true,
             quit: false,
             renderer: Renderer::default(),
-            frame: {
-                let f = PreparedFrame::default();
-                f.rows.reset();
-                f
-            },
+            frame: PreparedFrame::default(),
         },
         workflow: workflow(),
         sessions: Sessions::new(Session::bare(SessionIdentity {
