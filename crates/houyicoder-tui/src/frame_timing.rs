@@ -340,11 +340,7 @@ fn test_frame_timing_benchmark() {
         // Even frames expand a group, the next odd frame collapses the same
         // one, so the expanded set truly toggles instead of only growing.
         let call_id = format!("call-{}", 6 + ((i / 2) % 200));
-        if i.is_multiple_of(2) {
-            app.ui.transcript_view.expanded.results.insert(call_id);
-        } else {
-            app.ui.transcript_view.expanded.results.remove(&call_id);
-        }
+        app.ui.transcript_view.toggle_result(call_id);
         app.sessions.current.transcript.bump_revision();
         durations.push(render(&app, (80, 24)));
         watch.after_frame(&app);

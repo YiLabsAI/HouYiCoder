@@ -330,6 +330,47 @@ impl TranscriptSearch {
         self.focus = 0;
         self.input.clear();
     }
+
+    /// Open the search view over a query: the enter transaction's query
+    /// half. The corpus, window, and scroll half lives with the caller,
+    /// which owns those facts; this method owns only the query state.
+    pub fn begin(&mut self, query: &str) {
+        self.active = true;
+        self.query = query.to_string();
+    }
+
+    /// Enter the in-view slash re-search bar, seeded with the current query.
+    pub fn begin_input(&mut self) {
+        self.input.set(self.query.clone());
+        self.input_mode = true;
+    }
+
+    /// Commit the slash bar: the buffer becomes the stored query, the bar
+    /// closes. The caller runs the match scan from the stored query so the
+    /// corpus slice stays under its ownership.
+    pub fn commit_input(&mut self) {
+        self.query = self.input.value().to_string();
+        self.input.clear();
+        self.input_mode = false;
+    }
+
+    /// Cancel the slash bar: discard the buffer, keep the prior query and
+    /// matches untouched.
+    pub fn cancel_input(&mut self) {
+        self.input.clear();
+        self.input_mode = false;
+    }
+
+    /// Focus the newest match (the find-the-most-recent-discussion intent
+    /// both the view entry and the slash-bar commit share). True when a
+    /// match exists to focus.
+    pub fn focus_newest(&mut self) -> bool {
+        if self.matches.is_empty() {
+            return false;
+        }
+        self.focus = self.matches.len() - 1;
+        true
+    }
 }
 
 #[cfg(test)]

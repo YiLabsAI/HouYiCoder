@@ -74,11 +74,7 @@ impl App {
                 })
             });
         if let Some(id) = target {
-            // remove returns true if it was present; insert only when it was
-            // not, giving a clean toggle in one pass.
-            if !self.ui.transcript_view.expanded.results.remove(&id) {
-                self.ui.transcript_view.expanded.results.insert(id);
-            }
+            self.ui.transcript_view.toggle_result(id);
         }
     }
 
@@ -92,9 +88,7 @@ impl App {
         let Some(key) = key else {
             return false;
         };
-        if !self.ui.transcript_view.expanded.fold_groups.remove(&key) {
-            self.ui.transcript_view.expanded.fold_groups.insert(key);
-        }
+        self.ui.transcript_view.toggle_fold(key);
         true
     }
 
@@ -178,9 +172,7 @@ impl App {
         let Some(key) = latest else {
             return false;
         };
-        if !self.ui.transcript_view.expanded.fold_groups.remove(&key) {
-            self.ui.transcript_view.expanded.fold_groups.insert(key);
-        }
+        self.ui.transcript_view.toggle_fold(key);
         true
     }
 
@@ -218,13 +210,13 @@ impl App {
     /// transcript fetch. The fetch lands asynchronously and fills
     /// folded_transcript in place; a re-expand reuses the cached rows.
     fn apply_subagent_toggle(&mut self, child_sid: String, needs_fetch: bool) {
-        let subagents = &mut self.ui.transcript_view.expanded.subagents;
-        let expanding = !subagents.contains(&child_sid);
-        if expanding {
-            subagents.insert(child_sid.clone());
-        } else {
-            subagents.remove(&child_sid);
-        }
+        let expanding = !self
+            .ui
+            .transcript_view
+            .expanded
+            .subagents
+            .contains(&child_sid);
+        self.ui.transcript_view.toggle_subagent(child_sid.clone());
         self.pin_transcript_top();
         if expanding
             && needs_fetch
@@ -357,9 +349,7 @@ impl App {
         let Some(turn_id) = target else {
             return false;
         };
-        if !self.ui.transcript_view.expanded.thinking.remove(&turn_id) {
-            self.ui.transcript_view.expanded.thinking.insert(turn_id);
-        }
+        self.ui.transcript_view.toggle_thinking(turn_id);
         self.pin_transcript_top();
         true
     }
@@ -399,10 +389,7 @@ impl App {
         if !has_reasoning {
             return false;
         }
-        let thinking = &mut self.ui.transcript_view.expanded.thinking;
-        if !thinking.remove(&turn_id) {
-            thinking.insert(turn_id.clone());
-        }
+        self.ui.transcript_view.toggle_thinking(turn_id);
         self.pin_transcript_top();
         true
     }
@@ -411,11 +398,8 @@ impl App {
     /// the click handler, which knows the row from the mouse y coordinate).
     /// No-op when the row is not a fold row.
     pub(crate) fn toggle_fold_at_row(&mut self, ri: usize) {
-        let key = self.ui.frame.keys.fold_key_at(ri);
-        if let Some(key) = key
-            && !self.ui.transcript_view.expanded.fold_groups.remove(&key)
-        {
-            self.ui.transcript_view.expanded.fold_groups.insert(key);
+        if let Some(key) = self.ui.frame.keys.fold_key_at(ri) {
+            self.ui.transcript_view.toggle_fold(key);
         }
     }
 
@@ -436,11 +420,11 @@ impl App {
             .frame
             .keys
             .expanded_group_at(ri)
-            .filter(|k| self.ui.transcript_view.expanded.fold_groups.contains(k));
+            .filter(|k| self.ui.transcript_view.fold_is_open(k));
         let Some(key) = key else {
             return false;
         };
-        self.ui.transcript_view.expanded.fold_groups.remove(&key);
+        self.ui.transcript_view.close_fold(&key);
         self.ui.selection.transcript.clear();
         true
     }

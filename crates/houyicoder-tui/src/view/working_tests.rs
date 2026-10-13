@@ -222,7 +222,7 @@ fn test_fold_collapse_expand_toggle() {
     );
 
     // --- Click on summary row toggles to expanded (same as Ctrl+O) ---
-    app.ui.transcript_view.expanded.fold_groups.clear();
+    drop(app.ui.transcript_view.take_expanded());
     render_text(&app, 80, 24);
     let fold_ri = app
         .ui
@@ -935,11 +935,7 @@ fn test_child_rows_hide_handles() {
             ],
             color: None,
         });
-    app.ui
-        .transcript_view
-        .expanded
-        .subagents
-        .insert("c1".into());
+    app.ui.transcript_view.toggle_subagent("c1".into());
     let out = render_text(&app, 80, 24);
     assert!(out.contains("child answer"), "child rows render: {out}");
     assert_eq!(
@@ -997,11 +993,7 @@ fn test_expanded_subagent_shaded() {
             .bg
     };
     assert_ne!(head_bg(&buf), Some(shade), "collapsed head is not shaded");
-    app.ui
-        .transcript_view
-        .expanded
-        .subagents
-        .insert("c1".into());
+    app.ui.transcript_view.toggle_subagent("c1".into());
     let buf = render_buffer(&app, 80, 24);
     assert_eq!(
         head_bg(&buf),

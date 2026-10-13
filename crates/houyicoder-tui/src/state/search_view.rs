@@ -92,28 +92,22 @@ impl App {
                 self.ui.transcript_view.search_corpus.enter_fallback(live);
             }
         }
-        self.ui.transcript_view.search.active = true;
-        self.ui.transcript_view.search.query = query.to_string();
+        self.ui.transcript_view.search.begin(query);
         self.run_search();
         // Newest first: matches are in transcript order (oldest->newest), so
         // the newest is the last index. Opening there matches the "find the
         // most recent discussion of X" intent.
-        if !self.ui.transcript_view.search.matches.is_empty() {
-            self.ui.transcript_view.search.focus = self.ui.transcript_view.search.matches.len() - 1;
+        if self.ui.transcript_view.search.focus_newest() {
             self.jump_to_focused_match();
         }
+        self.ui.transcript_view.search_opened();
     }
 
     /// Leave the search view: clear verbose + in_search + the query, then
     /// restore the viewport active before scrolling.
     pub fn exit_search_view(&mut self) {
         self.ui.verbose = false;
-        self.ui.transcript_view.search.active = false;
-        self.ui.transcript_view.search.input_mode = false;
-        self.ui.transcript_view.search.query.clear();
-        self.ui.transcript_view.search.matches.clear();
-        self.ui.transcript_view.search.input.clear();
-        self.ui.transcript_view.search.focus = 0;
+        self.ui.transcript_view.search.close();
         self.ui.transcript_view.search_corpus.exit();
         self.set_window_browsing(false);
         self.exit_history_window();
@@ -123,6 +117,7 @@ impl App {
         self.sessions.current.index_build.index_total.set(0);
         self.sessions.current.index_build.index_done.set(false);
         self.exit_scroll();
+        self.ui.transcript_view.search_closed();
     }
 
     /// Enter the in-view slash re-search input bar. Seeds the buffer with
@@ -131,12 +126,7 @@ impl App {
     /// commits, so Esc cancel is a trivial no-op restore -- no snapshot
     /// to save and roll back.
     pub fn enter_search_input(&mut self) {
-        self.ui
-            .transcript_view
-            .search
-            .input
-            .set(self.ui.transcript_view.search.query.clone());
-        self.ui.transcript_view.search.input_mode = true;
+        self.ui.transcript_view.search.begin_input();
     }
 
     /// Commit the in-view slash bar: the buffer becomes the new query,
@@ -145,13 +135,9 @@ impl App {
     /// viewport jumps to it. An empty buffer yields no matches (chrome
     /// shows no-match); the view stays open so the user can retry.
     pub fn commit_search_input(&mut self) {
-        self.ui.transcript_view.search.query =
-            self.ui.transcript_view.search.input.value().to_string();
-        self.ui.transcript_view.search.input.clear();
-        self.ui.transcript_view.search.input_mode = false;
+        self.ui.transcript_view.search.commit_input();
         self.run_search();
-        if !self.ui.transcript_view.search.matches.is_empty() {
-            self.ui.transcript_view.search.focus = self.ui.transcript_view.search.matches.len() - 1;
+        if self.ui.transcript_view.search.focus_newest() {
             self.jump_to_focused_match();
         }
     }
@@ -160,8 +146,7 @@ impl App {
     /// query and matches untouched. The view stays in search mode at its
     /// prior position.
     pub fn cancel_search_input(&mut self) {
-        self.ui.transcript_view.search.input.clear();
-        self.ui.transcript_view.search.input_mode = false;
+        self.ui.transcript_view.search.cancel_input();
     }
 
     /// The transcript the view currently renders + counts against: the

@@ -57,11 +57,7 @@ fn test_transcript_diff_gutter_gap() {
     ]
     .into();
     // Expand so the full diff (not the collapsed head) is on screen.
-    app.ui
-        .transcript_view
-        .expanded
-        .results
-        .insert("c1".to_string());
+    app.ui.transcript_view.toggle_result("c1".to_string());
     let out = render_text(&app, 100, 32);
     println!("--- transcript diff render ---\n{out}\n--- end ---");
     assert!(
@@ -101,11 +97,7 @@ fn test_transcript_diff_bg_fill() {
         is_diff: true,
     }]
     .into();
-    app.ui
-        .transcript_view
-        .expanded
-        .results
-        .insert("c1".to_string());
+    app.ui.transcript_view.toggle_result("c1".to_string());
     let buf = render_buffer(&app, 100, 20);
     // Find the add row (the one whose text contains "let a = ONE;").
     let mut add_y = None;
@@ -155,11 +147,7 @@ fn test_transcript_diff_word_highlight() {
         is_diff: true,
     }]
     .into();
-    app.ui
-        .transcript_view
-        .expanded
-        .results
-        .insert("c1".to_string());
+    app.ui.transcript_view.toggle_result("c1".to_string());
     let buf = render_buffer(&app, 100, 20);
     let dump = crate::test_harness::dump_buffer(&buf);
     println!("--- word-diff render ---\n{dump}\n--- end ---");
@@ -221,11 +209,7 @@ fn test_transcript_diff_wraps() {
         is_diff: true,
     }]
     .into();
-    app.ui
-        .transcript_view
-        .expanded
-        .results
-        .insert("c1".to_string());
+    app.ui.transcript_view.toggle_result("c1".to_string());
     // A narrow pane forces the long added line to wrap to multiple rows.
     let buf = render_buffer(&app, 30, 14);
     let dump = crate::test_harness::dump_buffer(&buf);
@@ -619,7 +603,7 @@ fn test_thought_expand_wraps_narrow() {
         },
     ]
     .into();
-    app.ui.transcript_view.expanded.thinking.insert("t1".into());
+    app.ui.transcript_view.toggle_thinking("t1".into());
     let out = render_text(&app, 30, 24);
     let count = app.transcript_display_rows();
     let rendered = app.whole_scroll().total.get();
@@ -685,21 +669,9 @@ fn test_expanded_results_callid_collide() {
     .into();
     // Expand both fold groups so the result rows are visible (not hidden behind
     // a collapsed summary), then expand result 1's BODY via the results set.
-    app.ui
-        .transcript_view
-        .expanded
-        .fold_groups
-        .insert("c1#0".to_string());
-    app.ui
-        .transcript_view
-        .expanded
-        .fold_groups
-        .insert("c1#1".to_string());
-    app.ui
-        .transcript_view
-        .expanded
-        .results
-        .insert("c1".to_string());
+    app.ui.transcript_view.toggle_fold("c1#0".to_string());
+    app.ui.transcript_view.toggle_fold("c1#1".to_string());
+    app.ui.transcript_view.toggle_result("c1".to_string());
     let out = render_text(&app, 80, 24);
     // BUG: result 2 (same call_id) renders EXPANDED, so its tail shows.
     assert!(

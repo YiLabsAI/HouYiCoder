@@ -815,12 +815,12 @@ fn test_swap_restores_open_keys() {
     let mut app = build_app(first, first_startup);
     app.sessions.current.transcript = folded_transcript().into();
     {
-        let sets = &mut app.ui.transcript_view.expanded;
-        sets.results.insert("call-1".into());
-        sets.fold_groups.insert("call-1#0".into());
-        sets.thinking.insert("1".into());
-        sets.thinking.insert(RowId::local(9));
-        sets.subagents.insert("child-1".into());
+        let view = &mut app.ui.transcript_view;
+        view.toggle_result("call-1".into());
+        view.toggle_fold("call-1#0".into());
+        view.toggle_thinking("1".into());
+        view.toggle_thinking(RowId::local(9));
+        view.toggle_subagent("child-1".into());
     }
     assert!(
         group_body_visible(&app),
@@ -855,9 +855,9 @@ fn test_swap_restores_open_keys() {
         "the entered session starts collapsed, so the check below tells the sets apart"
     );
     {
-        let sets = &mut app.ui.transcript_view.expanded;
-        sets.fold_groups.insert("call-1#0".into());
-        sets.results.insert("second-only".into());
+        let view = &mut app.ui.transcript_view;
+        view.toggle_fold("call-1#0".into());
+        view.toggle_result("second-only".into());
     }
     assert!(group_body_visible(&app));
 

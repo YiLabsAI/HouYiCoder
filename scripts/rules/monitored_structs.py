@@ -556,10 +556,12 @@ ACTIVE_OWNERS = {
         # The transcript view's own state, one value per view: the whole-vec
         # scroll, the search window's scroll, the window flag, the search
         # corpus, the byte-window (history window), the four expansion sets
-        # bundled as one value, the search query state, and the unseen-since
-        # cursor. The dispatch (which scroll is live) is a method here, so
-        # callers cannot re-derive it from the flag.
-        "fields": 8,
+        # bundled as one value, the search query state, the unseen-since
+        # cursor, and the presentation revision the owner bumps on every
+        # visible-view change the transcript revision cannot carry. The
+        # dispatch (which scroll is live) is a method here, so callers
+        # cannot re-derive it from the flag.
+        "fields": 9,
     },
     "crates/houyicoder-tui/src/state/transcript.rs:Transcript": {
         # The transcript facts: frame log, resident budget counters, derived

@@ -352,7 +352,7 @@ fn test_subagent_cursor_targeting() {
         !app.ui.transcript_view.expanded.subagents.contains("c2"),
         "the second line is not expanded when the cursor targets the first"
     );
-    app.ui.transcript_view.expanded.subagents.clear();
+    drop(app.ui.transcript_view.take_expanded());
     app.ui.selection.transcript.anchor = None;
     assert!(
         !app.toggle_subagent_expand(),

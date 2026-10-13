@@ -66,7 +66,7 @@ fn app_with_two_children(parent_rows: usize) -> App {
 fn test_child_expansion_isolation() {
     let mut app = app_with_two_children(5);
     assert!(app.enter_teammate_view_for_sid("c1", false));
-    app.ui.transcript_view.expanded.thinking.insert("1".into());
+    app.ui.transcript_view.toggle_thinking("1".into());
     app.exit_teammate_view();
 
     assert!(app.enter_teammate_view_for_sid("c2", false));
@@ -82,11 +82,7 @@ fn test_child_expansion_isolation() {
 #[test]
 fn test_parent_expansion_survives() {
     let mut app = app_with_two_children(5);
-    app.ui
-        .transcript_view
-        .expanded
-        .results
-        .insert("call-p".into());
+    app.ui.transcript_view.toggle_result("call-p".into());
 
     assert!(app.enter_teammate_view_for_sid("c1", false));
     assert!(
@@ -171,14 +167,10 @@ fn test_child_blocks_search() {
 #[test]
 fn test_sibling_view_swap() {
     let mut app = app_with_two_children(5);
-    app.ui
-        .transcript_view
-        .expanded
-        .results
-        .insert("parent-key".into());
+    app.ui.transcript_view.toggle_result("parent-key".into());
 
     assert!(app.enter_teammate_view_for_sid("c1", false));
-    app.ui.transcript_view.expanded.thinking.insert("a1".into());
+    app.ui.transcript_view.toggle_thinking("a1".into());
     assert!(app.enter_teammate_view_for_sid("c2", false));
     assert_eq!(
         app.ui

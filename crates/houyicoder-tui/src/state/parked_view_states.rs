@@ -6,6 +6,7 @@
 //! the parent's sets wait in a single held slot while a child view is open.
 
 use std::collections::HashSet;
+use std::hash::Hash;
 
 use houyicoder_protocol::frontend::SessionId;
 
@@ -28,6 +29,37 @@ impl ExpandedKeys {
             && self.fold_groups.is_empty()
             && self.thinking.is_empty()
             && self.subagents.is_empty()
+    }
+
+    /// Toggle one tool-result key. Returns true when the call changed a set,
+    /// so the caller can tell a real toggle from a no-op.
+    pub(crate) fn toggle_result(&mut self, key: String) -> bool {
+        toggle_set(&mut self.results, key)
+    }
+
+    /// Toggle one fold-group key. Returns true when the call changed a set.
+    pub(crate) fn toggle_fold(&mut self, key: String) -> bool {
+        toggle_set(&mut self.fold_groups, key)
+    }
+
+    /// Toggle one thinking-turn key. Returns true when the call changed a set.
+    pub(crate) fn toggle_thinking(&mut self, key: RowId) -> bool {
+        toggle_set(&mut self.thinking, key)
+    }
+
+    /// Toggle one delegation key. Returns true when the call changed a set.
+    pub(crate) fn toggle_subagent(&mut self, key: String) -> bool {
+        toggle_set(&mut self.subagents, key)
+    }
+}
+
+/// Remove-else-insert: present leaves, absent joins. True when the value
+/// moved, false only when the set already held the expected end state.
+fn toggle_set<T: Hash + Eq>(set: &mut HashSet<T>, key: T) -> bool {
+    if set.remove(&key) {
+        true
+    } else {
+        set.insert(key)
     }
 }
 
@@ -141,13 +173,13 @@ impl ParkedViewStates {
 impl App {
     /// Take the visible view's expansion sets as one value, leaving it empty.
     pub(crate) fn take_expanded_keys(&mut self) -> ExpandedKeys {
-        std::mem::take(&mut self.ui.transcript_view.expanded)
+        self.ui.transcript_view.take_expanded()
     }
 
     /// Install a view's expansion sets as the visible ones, replacing the
     /// current value whole.
     pub(crate) fn set_expanded_keys(&mut self, keys: ExpandedKeys) {
-        self.ui.transcript_view.expanded = keys;
+        self.ui.transcript_view.swap_expanded(keys);
     }
 }
 

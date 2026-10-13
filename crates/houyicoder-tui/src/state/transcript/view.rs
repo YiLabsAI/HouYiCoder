@@ -15,6 +15,7 @@
 //! method instead of a comment.
 
 use crate::records::TranscriptLine;
+use crate::row_id::RowId;
 use crate::scroll::{TranscriptScroll, TranscriptSearch};
 use crate::state::App;
 use crate::state::cursors::EventCursor;
@@ -66,9 +67,110 @@ pub(crate) struct TranscriptViewState {
     /// alongside the scroll object, and a forwarding method would borrow the
     /// whole owner where the field is enough.
     pub(crate) unseen_since: Option<EventCursor>,
+    /// Bumped on every visible-view change the renderer cannot see through
+    /// the transcript revision alone: a fold or expansion toggle, a search
+    /// view entering or leaving, a window switch, a parked view restore.
+    /// The count is the input the render cache key reads; a future cache
+    /// skips recompute only when this and every other key field hold.
+    presentation_revision: u32,
 }
 
 impl TranscriptViewState {
+    /// The visible view's presentation revision: bumped on every change the
+    /// renderer must observe beyond the transcript revision. Callers pass
+    /// this to the render cache identity; nothing else reads it.
+    pub(crate) fn presentation_revision(&self) -> u32 {
+        self.presentation_revision
+    }
+
+    /// Bump the presentation revision. Only this owner's own transition
+    /// methods call it; every effective toggle, enter, exit, and restore
+    /// goes through one of those, which is the single-writer rule this
+    /// field exists to carry.
+    fn bump_presentation(&mut self) {
+        self.presentation_revision = self.presentation_revision.wrapping_add(1);
+    }
+
+    /// Toggle one tool-result expansion key, bumping the presentation
+    /// revision only when the set actually moved.
+    pub(crate) fn toggle_result(&mut self, key: String) {
+        if self.expanded.toggle_result(key) {
+            self.bump_presentation();
+        }
+    }
+
+    /// Toggle one fold-group expansion key. See toggle_result.
+    pub(crate) fn toggle_fold(&mut self, key: String) {
+        if self.expanded.toggle_fold(key) {
+            self.bump_presentation();
+        }
+    }
+
+    /// Toggle one thinking-turn expansion key. See toggle_result.
+    pub(crate) fn toggle_thinking(&mut self, key: RowId) {
+        if self.expanded.toggle_thinking(key) {
+            self.bump_presentation();
+        }
+    }
+
+    /// Toggle one delegation expansion key. See toggle_result.
+    pub(crate) fn toggle_subagent(&mut self, key: String) {
+        if self.expanded.toggle_subagent(key) {
+            self.bump_presentation();
+        }
+    }
+
+    /// Close one fold group outright (a click inside an expanded block
+    /// collapses it, never expands). Returns true when the key was open.
+    pub(crate) fn close_fold(&mut self, key: &str) -> bool {
+        if self.expanded.fold_groups.remove(key) {
+            self.bump_presentation();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Whether a fold group is open. A read for the click paths that pick
+    /// their target from the rendered rows before asking for the change.
+    pub(crate) fn fold_is_open(&self, key: &str) -> bool {
+        self.expanded.fold_groups.contains(key)
+    }
+
+    /// Swap the whole expanded value (a park or restore) and bump when the
+    /// visible view's open rows changed.
+    pub(crate) fn swap_expanded(&mut self, keys: ExpandedKeys) {
+        let changed = !keys_eq(&keys, &self.expanded);
+        self.expanded = keys;
+        if changed {
+            self.bump_presentation();
+        }
+    }
+
+    /// Take the expanded value whole, leaving the visible view with nothing
+    /// open; a park of the leaving view's sets. Bumps only when something
+    /// was open.
+    pub(crate) fn take_expanded(&mut self) -> ExpandedKeys {
+        let taken = std::mem::take(&mut self.expanded);
+        if !taken_is_empty(&taken) {
+            self.bump_presentation();
+        }
+        taken
+    }
+
+    /// The search view opened over the loaded corpus (the under-threshold
+    /// and fallback paths; the window path bumps through
+    /// enter_history_window). One bump for the whole visible-view change.
+    pub(crate) fn search_opened(&mut self) {
+        self.bump_presentation();
+    }
+
+    /// The search view closed (the exit transaction's owner half; the
+    /// window exit bumps through exit_history_window). One bump.
+    pub(crate) fn search_closed(&mut self) {
+        self.bump_presentation();
+    }
+
     /// The scroll object that currently holds the reader's position: the
     /// window's while byte-window mode is on, the whole-vec transcript's
     /// otherwise. Exactly one is live, and this is the flag's only read --
@@ -166,6 +268,7 @@ impl TranscriptViewState {
         self.history_window.anchor = anchor;
         self.history_window.end = end;
         self.history_window.skipped = skipped;
+        self.bump_presentation();
     }
 
     /// Replace the window for a navigation step; the frozen size stays.
@@ -181,7 +284,23 @@ impl TranscriptViewState {
         self.history_window.end = 0;
         self.history_window.frozen_file_size = 0;
         self.history_window.skipped = 0;
+        self.bump_presentation();
     }
+}
+
+/// Set-equality the swap path uses: two views holding the same open rows
+/// must not pretend the presentation changed.
+fn keys_eq(a: &ExpandedKeys, b: &ExpandedKeys) -> bool {
+    a.results == b.results
+        && a.fold_groups == b.fold_groups
+        && a.thinking == b.thinking
+        && a.subagents == b.subagents
+}
+
+/// The park path's empty check; ExpandedKeys keeps its own is_empty private
+/// because no other module should branch on the whole value's emptiness.
+fn taken_is_empty(keys: &ExpandedKeys) -> bool {
+    keys_eq(keys, &ExpandedKeys::default())
 }
 
 /// The frozen lines the search view renders and counts against, plus the
@@ -392,5 +511,74 @@ impl App {
     /// Exit: clear the window and the frozen boundary.
     pub(crate) fn exit_history_window(&mut self) {
         self.ui.transcript_view.exit_history_window();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every effective toggle bumps the presentation revision once; a toggle
+    /// that lands where the set already was (close_fold on a closed group)
+    /// does not. The revision is the render cache's input, so a missed bump
+    /// is a stale frame and a false bump is a wasted recompute.
+    #[test]
+    fn test_toggle_bumps_presentation() {
+        let mut view = TranscriptViewState::default();
+        let before = view.presentation_revision();
+        view.toggle_fold("group-a".into());
+        assert_eq!(view.presentation_revision(), before + 1, "a fold opens");
+        view.toggle_fold("group-a".into());
+        assert_eq!(
+            view.presentation_revision(),
+            before + 2,
+            "the same fold closes"
+        );
+        view.close_fold("group-b");
+        assert_eq!(
+            view.presentation_revision(),
+            before + 2,
+            "closing a closed group is not a presentation change"
+        );
+        assert!(!view.fold_is_open("group-a"), "the toggle closed it");
+    }
+
+    /// A park or restore bumps only when the visible open rows actually
+    /// changed: restoring the same sets a view parked must not read as a
+    /// new presentation, or the cache recomputes a frame that did not move.
+    #[test]
+    fn test_swap_bumps_on_change() {
+        let mut view = TranscriptViewState::default();
+        view.toggle_result("call-1".into());
+        let parked = view.take_expanded();
+        let after_park = view.presentation_revision();
+
+        view.swap_expanded(parked);
+        assert_eq!(
+            view.presentation_revision(),
+            after_park + 1,
+            "restoring open rows is a visible change from the empty state"
+        );
+
+        let same = ExpandedKeys {
+            results: ["call-1".to_string()].into_iter().collect(),
+            ..Default::default()
+        };
+        view.swap_expanded(same);
+        assert_eq!(
+            view.presentation_revision(),
+            after_park + 1,
+            "identical sets are not a presentation change"
+        );
+
+        view.swap_expanded(ExpandedKeys::default());
+        let back_to_empty = view.presentation_revision();
+        let empty = view.take_expanded();
+        assert!(empty.results.is_empty());
+        assert_eq!(
+            view.presentation_revision(),
+            back_to_empty,
+            "parking nothing open is not a presentation change"
+        );
     }
 }

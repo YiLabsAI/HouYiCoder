@@ -49,11 +49,7 @@ fn test_subagent_renders_expanded() {
             folded_transcript: Vec::new(),
             color: None,
         });
-    app.ui
-        .transcript_view
-        .expanded
-        .subagents
-        .insert("child-1".into());
+    app.ui.transcript_view.toggle_subagent("child-1".into());
     let out = crate::test_harness::render_text(&app, 80, 24);
     assert!(
         out.contains("ctrl+o to collapse"),
@@ -85,11 +81,7 @@ fn test_subagent_expanded_renders_child() {
             folded_transcript: vec![TranscriptLine::Agent("child reply: auth is here".into())],
             color: None,
         });
-    app.ui
-        .transcript_view
-        .expanded
-        .subagents
-        .insert("child-1".into());
+    app.ui.transcript_view.toggle_subagent("child-1".into());
     let out = crate::test_harness::render_text(&app, 80, 24);
     assert!(
         out.contains("child reply: auth is here"),
@@ -156,11 +148,7 @@ fn test_child_transcript_fills() {
             folded_transcript: Vec::new(),
             color: None,
         });
-    app.ui
-        .transcript_view
-        .expanded
-        .subagents
-        .insert("child-1".into());
+    app.ui.transcript_view.toggle_subagent("child-1".into());
     app.handle_agent_message(SessionMessage::Response {
         request: RequestId(16),
         response: ServerResponse::ChildTranscript {
@@ -265,11 +253,7 @@ fn test_child_fetch_repaints() {
             folded_transcript: Vec::new(),
             color: None,
         });
-    app.ui
-        .transcript_view
-        .expanded
-        .subagents
-        .insert("child-1".into());
+    app.ui.transcript_view.toggle_subagent("child-1".into());
     let out = crate::test_harness::render_text(&app, 80, 24);
     assert!(
         out.contains("not yet loaded"),
@@ -388,11 +372,7 @@ fn test_subagent_expand_stable_index() {
         TranscriptLine::Agent(_)
     ));
     // Expand the Subagent — the transcript Vec does not change.
-    app.ui
-        .transcript_view
-        .expanded
-        .subagents
-        .insert("child-1".into());
+    app.ui.transcript_view.toggle_subagent("child-1".into());
     assert!(matches!(
         app.sessions.current.transcript[0],
         TranscriptLine::User(_)
@@ -406,7 +386,7 @@ fn test_subagent_expand_stable_index() {
         TranscriptLine::Agent(_)
     ));
     // Collapse — still stable.
-    app.ui.transcript_view.expanded.subagents.remove("child-1");
+    app.ui.transcript_view.toggle_subagent("child-1".into());
     assert!(matches!(
         app.sessions.current.transcript[0],
         TranscriptLine::User(_)

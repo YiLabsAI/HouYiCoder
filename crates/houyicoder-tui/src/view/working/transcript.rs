@@ -3,9 +3,7 @@
 //! Builds selectable rows for user, agent, tool, diff, delegation, and
 //! checklist content, then applies scrolling, search, and expansion state.
 
-use std::collections::{HashMap, HashSet};
-use std::fmt::Display;
-use std::hash::Hash;
+use std::collections::HashMap;
 
 use ratatui::{
     Frame,
@@ -45,22 +43,14 @@ pub(super) fn draw_transcript(f: &mut Frame, area: Rect, app: &App) {
         let mut v = app.sessions.current.transcript.revision();
         v = v.wrapping_mul(31).wrapping_add(app.agent_busy() as u64);
         v = v.wrapping_mul(31).wrapping_add(app.ui.verbose as u64);
-        v = v.wrapping_mul(31).wrapping_add(set_content_hash(
-            &app.ui.transcript_view.expanded.fold_groups,
-        ));
+        // Presentation revision covers every visible-view change the
+        // transcript revision cannot carry: the four expansion sets, a
+        // search view entering or leaving, and a window switch. The owner
+        // bumps it on each effective change, so the cache rebuilds with the
+        // sets without hashing each one here.
         v = v
             .wrapping_mul(31)
-            .wrapping_add(set_content_hash(&app.ui.transcript_view.expanded.thinking));
-        v = v
-            .wrapping_mul(31)
-            .wrapping_add(set_content_hash(&app.ui.transcript_view.expanded.results));
-        // Subagent expansion changes the row set like the other three expand
-        // states: the head hint flips and child rows insert below it. Leaving
-        // it out made each toggle a no-op until an unrelated input bumped the
-        // version, reading as a broken toggle then a block appearing later.
-        v = v
-            .wrapping_mul(31)
-            .wrapping_add(set_content_hash(&app.ui.transcript_view.expanded.subagents));
+            .wrapping_add(app.ui.transcript_view.presentation_revision() as u64);
         // bash_progress hash: same as the expand sets above, the chip suffix
         // is baked into the slot text, so the cache rebuilds on a content
         // change (a tick, ~1/sec during a bash run).
@@ -644,18 +634,6 @@ pub(crate) fn refresh_wide_cells(f: &mut Frame, area: Rect) {
 fn str_hash(s: &str) -> u64 {
     s.bytes()
         .fold(0u64, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u64))
-}
-
-/// Order-independent content hash of a key set: XOR each element's stable byte
-/// hash so the result does not depend on iteration order. This replaces the
-/// .len() proxy, which collided on same-length different-content sets;
-/// XOR-of-hashes is content-aware and the residual collision negligible for
-/// small sets plus the next transcript_version bump. Keys hash by display
-/// form, which is unique per identity.
-fn set_content_hash<T: Eq + Hash + Display>(set: &HashSet<T>) -> u64 {
-    set.iter()
-        .map(|k| str_hash(&k.to_string()))
-        .fold(0, |acc, h| acc ^ h)
 }
 
 /// Order-independent content hash of the live bash-progress map: XOR each
