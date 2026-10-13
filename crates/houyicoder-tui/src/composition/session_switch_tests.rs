@@ -524,9 +524,8 @@ fn test_clears_session_local_state() {
     app.ui
         .frame
         .keys
-        .callids
         .borrow_mut()
-        .push(Some("stale-call".into()));
+        .push_callid_for_test(Some("stale-call".into()));
     // Sanity: the residue is there before the swap.
     assert!(!app.sessions.current.todos.items.is_empty());
     assert!(app.ui.selection.transcript.anchor.is_some());
@@ -557,7 +556,7 @@ fn test_clears_session_local_state() {
         "last_all_rows cleared"
     );
     assert!(
-        app.ui.frame.keys.callids.borrow().is_empty(),
+        app.ui.frame.keys.borrow().is_empty(),
         "visible call ids cleared"
     );
 }

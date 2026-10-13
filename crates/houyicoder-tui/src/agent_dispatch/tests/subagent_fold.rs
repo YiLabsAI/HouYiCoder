@@ -295,9 +295,8 @@ fn test_subagent_toggle_stale_key() {
     app.ui
         .frame
         .keys
-        .fold_keys
         .borrow_mut()
-        .push(Some("ghost".into()));
+        .push_fold_key_for_test(Some("ghost".into()));
     assert!(
         app.toggle_subagent_expand_at_row(0),
         "stale row still toggles (treats the ghost as a delegation)"

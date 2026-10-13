@@ -6,8 +6,8 @@
 
 use crate::fold::notice_lines;
 use crate::records::TranscriptLine;
+use crate::rows::row_set::{Row, RowSet};
 use crate::state::App;
-use crate::view::working::row_buffer::{Row, RowBuffer};
 
 /// Render one memory-change notice block into the row buffer. The rows come
 /// from the fold layer's notice_lines, which the fold-aware count also walks,
@@ -20,7 +20,7 @@ pub(super) fn push_notice_rows(
     key: &str,
     expanded: bool,
     width: u16,
-    sink: &mut RowBuffer,
+    sink: &mut RowSet,
 ) {
     if !sink.is_empty() {
         sink.push(Row::spacer());

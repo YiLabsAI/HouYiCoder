@@ -13,10 +13,9 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph},
 };
 
-use super::row_buffer::{Row, RowBuffer, RowParts};
 use super::tail_rows::build_tail_rows;
-use crate::records::{ToolOutcome, TranscriptLine};
-use crate::row_id::RowId;
+use crate::records::TranscriptLine;
+use crate::rows::row_set::{Row, RowSet};
 use crate::selection::{
     TAG_DIFF_ADD, TAG_DIFF_CTX, TAG_DIFF_DEL, TAG_DIFF_HUNK, TAG_FOLD, TAG_SPINNER, TAG_SYSTEM,
     TAG_USER,
@@ -62,16 +61,11 @@ fn ensure_cached_slots(area: Rect, app: &App) {
         v
     };
 
-    if app.ui.frame.rows.version.get() != slots_version {
-        let (rows, callids, fold_keys, expanded_group, turn_ids, pre_rendered) =
-            build_slots_rows(area, app);
-        *app.ui.frame.rows.rows.borrow_mut() = rows;
-        *app.ui.frame.rows.callids.borrow_mut() = callids;
-        *app.ui.frame.rows.fold_keys.borrow_mut() = fold_keys;
-        *app.ui.frame.rows.expanded_group.borrow_mut() = expanded_group;
-        *app.ui.frame.rows.turn_ids.borrow_mut() = turn_ids;
-        *app.ui.frame.rows.pre_rendered.borrow_mut() = pre_rendered;
-        app.ui.frame.rows.version.set(slots_version);
+    if app.ui.frame.rows.version() != slots_version {
+        app.ui
+            .frame
+            .rows
+            .replace(slots_version, build_slots_rows(area, app));
     }
 }
 
@@ -80,56 +74,22 @@ pub(super) fn draw_transcript(f: &mut Frame, area: Rect, app: &App) {
 
     // Every frame: combine cached slots rows + fresh live rows (live text,
     // spinner, todos). Live rows are cheap (a few rows at most).
-    let total_slots = app.ui.frame.rows.rows.borrow().len();
+    let total_slots = app.ui.frame.rows.with(|c| c.len());
     let live = build_tail_rows(area, app, total_slots > 0);
 
     let cap = area.height as usize;
     app.active_scroll().cap.set(cap);
-    let total = total_slots + live.rows.len();
+    let total = total_slots + live.len();
     app.active_scroll().total.set(total);
     let top = app.active_scroll().top_offset();
 
-    // Slice the visible window [top, top+cap) over (slots ++ live) WITHOUT
-    // cloning the full slots cache — only the viewport rows are cloned.
-    let visible: Vec<(u8, String, Option<ToolOutcome>)> = {
-        let cache = app.ui.frame.rows.rows.borrow();
-        visible_window(&cache, &live.rows, total_slots, top, cap)
-    };
-    let visible_callids: Vec<Option<String>> = {
-        let cache = app.ui.frame.rows.callids.borrow();
-        visible_window(&cache, &live.callids, total_slots, top, cap)
-    };
-    let visible_fold_keys: Vec<Option<String>> = {
-        let cache = app.ui.frame.rows.fold_keys.borrow();
-        visible_window(&cache, &live.fold_keys, total_slots, top, cap)
-    };
-    let visible_expanded_group: Vec<Option<String>> = {
-        let cache = app.ui.frame.rows.expanded_group.borrow();
-        visible_window(&cache, &live.expanded_group, total_slots, top, cap)
-    };
-    let visible_turn_ids: Vec<Option<RowId>> = {
-        let cache = app.ui.frame.rows.turn_ids.borrow();
-        visible_window(&cache, &live.turn_ids, total_slots, top, cap)
-    };
-    let visible_pre: Vec<Option<Line<'static>>> = {
-        let cache = app.ui.frame.rows.pre_rendered.borrow();
-        visible_window(&cache, &live.pre_rendered, total_slots, top, cap)
-    };
-    // The six parallel arrays are built by independent visible_window calls
-    // over caches that are length-aligned by construction. A future edit that
-    // desyncs them (a cache rebuilt with a different count) would make the
-    // per-row zip + the selection/copy row-index paths drift or panic. Assert
-    // the invariant at the seam -- all six must be length-equal.
-    debug_assert_eq!(visible.len(), visible_callids.len());
-    debug_assert_eq!(visible.len(), visible_fold_keys.len());
-    debug_assert_eq!(visible.len(), visible_expanded_group.len());
-    debug_assert_eq!(visible.len(), visible_turn_ids.len());
-    debug_assert_eq!(visible.len(), visible_pre.len());
+    // One traversal over (slots ++ live) slices the six arrays by the same
+    // bounds, so the visible window stays in step by construction.
+    let visible = app.ui.frame.rows.with(|c| c.visible(&live, top, cap));
     // Stash the full row set (slots + live) for selection/copy.
     {
-        let cache = app.ui.frame.rows.rows.borrow();
-        let mut all: Vec<(u8, String)> = cache.iter().map(|(t, s, _)| (*t, s.clone())).collect();
-        all.extend(live.all_rows);
+        let mut all = app.ui.frame.rows.with(|c| c.text_rows());
+        all.extend(live.text_rows());
         *app.ui.frame.layout.last_all_rows.borrow_mut() = all;
     }
     let inner = area;
@@ -139,15 +99,11 @@ pub(super) fn draw_transcript(f: &mut Frame, area: Rect, app: &App) {
     // called from scroll handlers outside the draw borrow) soft-wraps to the
     // SAME width the render path just used — count == render rows.
     app.ui.frame.feedback.transcript_width.set(inner.width);
-    *app.ui.frame.layout.last_transcript_rows.borrow_mut() =
-        visible.iter().map(|(t, s, _)| (*t, s.clone())).collect();
-    *app.ui.frame.keys.callids.borrow_mut() = visible_callids;
-    *app.ui.frame.keys.fold_keys.borrow_mut() = visible_fold_keys;
-    *app.ui.frame.keys.expanded_group.borrow_mut() = visible_expanded_group;
-    *app.ui.frame.keys.turn_ids.borrow_mut() = visible_turn_ids;
+    *app.ui.frame.layout.last_transcript_rows.borrow_mut() = visible.text_rows();
+    app.ui.frame.keys.borrow_mut().replace(&visible);
     f.render_widget(Block::default().borders(Borders::NONE), area);
 
-    render_transcript_lines(f, inner, app, &visible, visible_pre);
+    render_transcript_lines(f, inner, app, &visible);
     draw_jump_to_bottom(f, inner, app);
 }
 
@@ -167,13 +123,7 @@ fn compute_spinner_params(app: &App) -> (std::time::Duration, f32, bool) {
     (spin_elapsed, spin_intensity, tool_active)
 }
 
-fn render_transcript_lines(
-    f: &mut Frame,
-    inner: Rect,
-    app: &App,
-    visible: &[(u8, String, Option<ToolOutcome>)],
-    visible_pre: Vec<Option<Line<'static>>>,
-) {
+fn render_transcript_lines(f: &mut Frame, inner: Rect, app: &App, visible: &RowSet) {
     let top = app.active_scroll().top_offset();
     let q = if app.ui.transcript_view.search_active() {
         app.ui
@@ -203,13 +153,15 @@ fn render_transcript_lines(
     };
     let user_bg = Style::new().bg(Color::Indexed(238));
     let dim = Style::new().fg(Color::DarkGray);
-    let exp_grp = app.ui.frame.keys.expanded_group.borrow();
+    let keys = app.ui.frame.keys.borrow();
+    let exp_grp = keys.expanded_group();
     let exp_groups = &app.ui.transcript_view.expanded.fold_groups;
     let subagents = &app.ui.transcript_view.expanded.subagents;
     let (spin_elapsed, spin_intensity, tool_active) = compute_spinner_params(app);
     let lines: Vec<Line> = visible
+        .rows()
         .iter()
-        .zip(visible_pre)
+        .zip(visible.pre_rendered())
         .enumerate()
         .map(|(idx, ((tag, r, o), pre))| {
             // current when this screen row falls inside the focused match's
@@ -231,7 +183,7 @@ fn render_transcript_lines(
             match pre {
                 Some(line) => {
                     let base = if q.is_empty() {
-                        line
+                        line.clone()
                     } else {
                         highlighted_line(r, q, is_current)
                     };
@@ -380,7 +332,7 @@ pub(crate) fn push_line_rows(
     grp: Option<&str>,
     width: u16,
     app: &App,
-    sink: &mut RowBuffer,
+    sink: &mut RowSet,
 ) -> bool {
     use crate::records::TranscriptLine;
     const PLAIN: u8 = crate::selection::TAG_PLAIN;
@@ -661,44 +613,6 @@ fn bash_progress_hash(map: &HashMap<String, crate::state::BashProgress>) -> u64 
         .fold(0u64, |acc, h| acc ^ h)
 }
 
-/// Build the visible window over slots-then-live without cloning the full
-/// slots cache — only the rows the viewport shows are cloned. A
-/// virtual scroll: process only what the viewport shows, not the
-/// whole transcript. live is already small (streaming text + spinner +
-/// todos); the slots cache is what grows unbounded, so the slice-before-clone
-/// matters there.
-fn visible_window<T: Clone>(
-    slots: &[T],
-    live: &[T],
-    total_slots: usize,
-    top: usize,
-    cap: usize,
-) -> Vec<T> {
-    // The real invariant the cross-array asserts at the call site cannot
-    // check: total_slots is the cached rows length (passed in) and is used
-    // to bound the slice on ALL six arrays. If a cache length drifts so
-    // slots.len() != total_slots, slots[slot_start..slot_end] OOB-panics
-    // before the call-site asserts run. Catch it here, with a message, in
-    // debug builds -- the slice is the failure surface, not the zip after.
-    debug_assert_eq!(
-        slots.len(),
-        total_slots,
-        "total_slots must match this array's length (cache desync)"
-    );
-    let total = total_slots + live.len();
-    let end = top.saturating_add(cap).min(total);
-    if top >= end {
-        return Vec::new();
-    }
-    let slot_start = top.min(total_slots);
-    let slot_end = end.min(total_slots);
-    let live_start = top.saturating_sub(total_slots);
-    let live_end = end.saturating_sub(total_slots);
-    let mut out: Vec<T> = slots[slot_start..slot_end].to_vec();
-    out.extend(live[live_start..live_end].iter().cloned());
-    out
-}
-
 fn fold_hint_row(hint: &str, width: u16) -> String {
     const PREFIX: &str = "  \u{23bf}  ";
     let avail = (width as usize).saturating_sub(5);
@@ -715,10 +629,10 @@ fn fold_hint_row(hint: &str, width: u16) -> String {
     )
 }
 
-fn build_slots_rows(area: Rect, app: &App) -> RowParts {
+fn build_slots_rows(area: Rect, app: &App) -> RowSet {
     const FOLD: u8 = crate::selection::TAG_FOLD;
 
-    let mut sink = RowBuffer::default();
+    let mut sink = RowSet::default();
 
     let groups = app.active_fold_groups();
     let fold_groups = &app.ui.transcript_view.expanded.fold_groups;
@@ -767,7 +681,7 @@ fn build_slots_rows(area: Rect, app: &App) -> RowParts {
         }
     }
 
-    sink.into_parts()
+    sink
 }
 
 #[cfg(test)]

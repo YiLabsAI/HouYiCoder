@@ -3,8 +3,8 @@
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 
-use super::row_buffer::{Row, RowBuffer};
 use crate::records::TranscriptLine;
+use crate::rows::row_set::{Row, RowSet};
 use crate::state::App;
 use crate::toggle_hint::ToggleHint;
 use crate::view::badge_color;
@@ -32,7 +32,7 @@ pub(crate) fn push_delegation_rows(
     grp: Option<&str>,
     width: u16,
     app: &App,
-    sink: &mut RowBuffer,
+    sink: &mut RowSet,
 ) {
     const SYSTEM: u8 = crate::selection::TAG_SYSTEM;
     let Delegation {

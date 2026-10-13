@@ -722,15 +722,13 @@ fn test_notice_click_toggles_fold() {
     }));
     // Render to publish the visible fold keys, what a click resolves against.
     let _rendered = render_text(&app, 100, 24);
-    let ri = app
-        .ui
-        .frame
-        .keys
-        .fold_keys
-        .borrow()
-        .iter()
-        .position(|k| k.as_deref() == Some("mg#0"))
-        .expect("the notice row carries its fold key");
+    let ri = {
+        let keys = app.ui.frame.keys.borrow();
+        keys.fold_keys()
+            .iter()
+            .position(|k| k.as_deref() == Some("mg#0"))
+            .expect("the notice row carries its fold key")
+    };
     assert!(
         !app.ui.transcript_view.expanded.fold_groups.contains("mg#0"),
         "the notice starts collapsed"
@@ -768,15 +766,13 @@ fn test_thought_keep_affordance() {
         "a reasoning thought advertises its expand affordance: {out}"
     );
     let _rendered = render_text(&app, 100, 24);
-    let ri = app
-        .ui
-        .frame
-        .keys
-        .turn_ids
-        .borrow()
-        .iter()
-        .position(|t| t.as_ref() == Some(&RowId::from("t1")))
-        .expect("the thought row publishes its turn id");
+    let ri = {
+        let keys = app.ui.frame.keys.borrow();
+        keys.turn_ids()
+            .iter()
+            .position(|t| t.as_ref() == Some(&RowId::from("t1")))
+            .expect("the thought row publishes its turn id")
+    };
     app.toggle_thinking_expand_at_row(ri);
     assert!(
         app.ui

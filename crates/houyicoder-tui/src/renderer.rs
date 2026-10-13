@@ -3,11 +3,11 @@
 
 use std::cell::RefCell;
 
-use crate::display_rows_cache::DisplayRowsCache;
-use crate::last_row_keys::LastRowKeys;
 use crate::layout_feedback::LayoutFeedback;
 use crate::layout_snapshot::LayoutSnapshot;
 use crate::render_cache::RenderCache;
+use crate::rows::display_rows_cache::DisplayRowsCache;
+use crate::rows::last_row_keys::LastRowKeys;
 
 /// The reusable per-line render cache. A line parsed at one width or
 /// expansion is reused across frames and transcript rebuilds; a session
@@ -28,7 +28,10 @@ pub(crate) struct PreparedFrame {
     pub(crate) layout: LayoutSnapshot,
     pub(crate) feedback: LayoutFeedback,
     pub(crate) rows: DisplayRowsCache,
-    pub(crate) keys: LastRowKeys,
+    /// Behind one borrow: the draw pass replaces the whole key set from the
+    /// row set it just sliced, so a reader never combines keys from one frame
+    /// with rows from another.
+    pub(crate) keys: RefCell<LastRowKeys>,
 }
 
 impl Renderer {
@@ -46,8 +49,7 @@ impl PreparedFrame {
     /// layering over the new session.
     pub(crate) fn reset_for_session_switch(&mut self) {
         self.layout = Default::default();
-        self.rows = Default::default();
-        self.rows.version.set(u64::MAX);
+        self.rows.reset();
         self.keys = Default::default();
     }
 }

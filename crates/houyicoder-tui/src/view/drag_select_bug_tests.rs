@@ -656,8 +656,8 @@ fn expand_first_group(app: &mut crate::state::App) -> String {
         .ui
         .frame
         .keys
-        .fold_keys
         .borrow()
+        .fold_keys()
         .iter()
         .position(|k| k.is_some())
         .expect("a fold summary row exists");
@@ -803,8 +803,8 @@ fn test_drag_fold_summary_copies() {
         .ui
         .frame
         .keys
-        .fold_keys
         .borrow()
+        .fold_keys()
         .iter()
         .position(|k| k.is_some())
         .expect("a fold summary row exists");
@@ -847,8 +847,8 @@ fn test_expanded_block_paints_gray() {
         .ui
         .frame
         .keys
-        .fold_keys
         .borrow()
+        .fold_keys()
         .iter()
         .position(|k| k.is_some())
         .expect("collapsed summary row exists");

@@ -69,7 +69,7 @@ pub fn app() -> App {
             renderer: Renderer::default(),
             frame: {
                 let f = PreparedFrame::default();
-                f.rows.version.set(u64::MAX);
+                f.rows.reset();
                 f
             },
         },

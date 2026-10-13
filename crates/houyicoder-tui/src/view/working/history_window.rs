@@ -14,8 +14,10 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
 };
 
-use crate::records::ToolOutcome;
-use crate::row_id::RowId;
+use crate::rows::row_set::RowSet;
+use crate::selection::{
+    TAG_DIFF_ADD, TAG_DIFF_CTX, TAG_DIFF_DEL, TAG_DIFF_HUNK, TAG_SYSTEM, TAG_USER,
+};
 use crate::state::App;
 use crate::view::markers::{diff_row, styled_row};
 use crate::view::working::transcript::{
@@ -27,53 +29,33 @@ use crate::view::working::transcript::{
 pub(super) fn draw_history_window(f: &mut Frame, area: Rect, app: &App) {
     // The index build advances on the loop, not here: a chunk reads the log.
     // This path only renders the progress cells the loop published.
-    const USER: u8 = crate::selection::TAG_USER;
-    const SYSTEM: u8 = crate::selection::TAG_SYSTEM;
-    const DIFF_ADD: u8 = crate::selection::TAG_DIFF_ADD;
-    const DIFF_DEL: u8 = crate::selection::TAG_DIFF_DEL;
-    const DIFF_HUNK: u8 = crate::selection::TAG_DIFF_HUNK;
-    const DIFF_CTX: u8 = crate::selection::TAG_DIFF_CTX;
-    let mut sink = super::row_buffer::RowBuffer::default();
+    let mut sink = RowSet::default();
     // No slot layer: each line is its own row set. grp is None -- the window
     // has no fold groups, so the enclosing group stays None throughout.
     for line in app.active_transcript() {
         push_line_rows(line, None, area.width, app, &mut sink);
     }
-    let (rows, row_callids, fold_keys, expanded_group, turn_ids, pre_rendered) = sink.into_parts();
     let cap = area.height as usize;
     app.window_scroll().cap.set(cap);
-    let total = rows.len();
+    let total = sink.len();
     app.window_scroll().total.set(total);
     let top = app.window_scroll().top_offset();
     // Stash the full + visible row sets so copy can extract selected text from
     // the window (selection past the visible edge, viewport scrolled between
     // draw and copy). These stashes are the rendered-row cache, not
     // TranscriptScroll -- distinct from the five total consumers.
-    *app.ui.frame.layout.last_all_rows.borrow_mut() =
-        rows.iter().map(|(t, s, _)| (*t, s.clone())).collect();
-    let visible: Vec<(u8, String, Option<ToolOutcome>)> =
-        rows.into_iter().skip(top).take(cap).collect();
-    let visible_callids: Vec<Option<String>> =
-        row_callids.into_iter().skip(top).take(cap).collect();
-    let visible_fold_keys: Vec<Option<String>> =
-        fold_keys.into_iter().skip(top).take(cap).collect();
-    let visible_expanded_group: Vec<Option<String>> =
-        expanded_group.into_iter().skip(top).take(cap).collect();
-    let visible_turn_ids: Vec<Option<RowId>> = turn_ids.into_iter().skip(top).take(cap).collect();
-    let visible_pre: Vec<Option<Line<'static>>> =
-        pre_rendered.into_iter().skip(top).take(cap).collect();
+    *app.ui.frame.layout.last_all_rows.borrow_mut() = sink.text_rows();
+    // One traversal slices the rows and the metadata by the same bounds, so
+    // the visible window cannot give a row its neighbour's keys.
+    let visible = sink.slice(top, cap);
 
     let inner = area;
     app.ui.frame.layout.transcript_rect.set(inner);
     // The count path (history_row_of_line) soft-wraps to the same width the
     // render path just used -- count == render holds for the window too.
     app.ui.frame.feedback.transcript_width.set(inner.width);
-    *app.ui.frame.layout.last_transcript_rows.borrow_mut() =
-        visible.iter().map(|(t, s, _)| (*t, s.clone())).collect();
-    *app.ui.frame.keys.callids.borrow_mut() = visible_callids;
-    *app.ui.frame.keys.fold_keys.borrow_mut() = visible_fold_keys;
-    *app.ui.frame.keys.expanded_group.borrow_mut() = visible_expanded_group;
-    *app.ui.frame.keys.turn_ids.borrow_mut() = visible_turn_ids;
+    *app.ui.frame.layout.last_transcript_rows.borrow_mut() = visible.text_rows();
+    app.ui.frame.keys.borrow_mut().replace(&visible);
     f.render_widget(Block::default().borders(Borders::NONE), area);
 
     let q = if app.ui.transcript_view.search_active() {
@@ -100,8 +82,9 @@ pub(super) fn draw_history_window(f: &mut Frame, area: Rect, app: &App) {
     };
     let dim = Style::new().fg(Color::DarkGray);
     let lines: Vec<Line> = visible
+        .rows()
         .iter()
-        .zip(visible_pre)
+        .zip(visible.pre_rendered())
         .enumerate()
         .map(|(idx, ((tag, r, _), pre))| {
             let row = top + idx;
@@ -111,15 +94,15 @@ pub(super) fn draw_history_window(f: &mut Frame, area: Rect, app: &App) {
             match pre {
                 Some(line) => {
                     if q.is_empty() {
-                        line
+                        line.clone()
                     } else {
                         highlighted_line(r, &q, is_current)
                     }
                 }
                 None => match *tag {
-                    USER => user_row(r, &q, is_current, inner.width),
-                    SYSTEM => highlighted_line(r, &q, is_current).style(dim),
-                    DIFF_ADD | DIFF_DEL | DIFF_HUNK | DIFF_CTX => {
+                    TAG_USER => user_row(r, &q, is_current, inner.width),
+                    TAG_SYSTEM => highlighted_line(r, &q, is_current).style(dim),
+                    TAG_DIFF_ADD | TAG_DIFF_DEL | TAG_DIFF_HUNK | TAG_DIFF_CTX => {
                         diff_row(r, *tag, inner.width, None)
                     }
                     _ => {

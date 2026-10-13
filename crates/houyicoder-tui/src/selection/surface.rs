@@ -338,26 +338,9 @@ impl Surface for TranscriptSurface<'_> {
                     .get(ri)
                     .map(|(t, _)| *t)
                     .unwrap_or(selection::TAG_PLAIN);
-                let fold_key = self
-                    .app
-                    .ui
-                    .frame
-                    .keys
-                    .fold_keys
-                    .borrow()
-                    .get(ri)
-                    .cloned()
-                    .flatten();
-                let turn_id = self
-                    .app
-                    .ui
-                    .frame
-                    .keys
-                    .turn_ids
-                    .borrow()
-                    .get(ri)
-                    .cloned()
-                    .flatten();
+                let keys = self.app.ui.frame.keys.borrow();
+                let fold_key = keys.fold_key_at(ri);
+                let turn_id = keys.turn_id_at(ri);
                 Some((ri, tag, fold_key, turn_id))
             })();
             if let Some((ri, tag, fold_key, turn_id)) = target {

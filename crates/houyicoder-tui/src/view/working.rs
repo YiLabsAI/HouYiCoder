@@ -28,7 +28,6 @@ pub(crate) mod fleet_pill;
 mod footer_budget;
 mod history_window;
 mod notice_rows;
-mod row_buffer;
 mod tail_rows;
 mod transcript;
 

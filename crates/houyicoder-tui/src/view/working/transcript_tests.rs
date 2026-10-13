@@ -242,7 +242,7 @@ fn test_cache_version_stable_idle() {
     app.sessions.current.transcript.bump_revision();
     let out1 = render_text(&app, 80, 24);
     assert!(
-        app.ui.frame.rows.version.get() != u64::MAX,
+        app.ui.frame.rows.version() != u64::MAX,
         "version should be set after first render"
     );
     let out2 = render_text(&app, 80, 24);
@@ -302,13 +302,9 @@ fn test_view_hides_tail() {
         false,
     );
     assert!(
-        live.rows.is_empty(),
+        live.is_empty(),
         "live rows must be empty in teammate view, got {} rows: {:?}",
-        live.rows.len(),
-        live.rows
-    );
-    assert!(
-        live.all_rows.is_empty(),
-        "all_rows must be empty too (stash for selection/copy)"
+        live.len(),
+        live.rows()
     );
 }

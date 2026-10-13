@@ -480,20 +480,31 @@ ACTIVE_OWNERS = {
         # into one owner, reset on search-view exit.
         "fields": 5,
     },
-    "crates/houyicoder-tui/src/last_row_keys.rs:LastRowKeys": {
+    "crates/houyicoder-tui/src/rows/last_row_keys.rs:LastRowKeys": {
         # The four per-row key vectors of the last emitted visible row set:
         # the call id, fold-group key, expanded-group mark, and turn id each
         # visible row carries, parallel arrays the click handler and the draw
         # pass read by visible-row index. One owner so the four are written and
-        # read as one set, never drifted out of sync.
+        # read as one set, never drifted out of sync. All four are taken from
+        # one row set in a single replace, which is what makes the drift
+        # unrepresentable rather than merely avoided.
         "fields": 4,
     },
-    "crates/houyicoder-tui/src/display_rows_cache.rs:DisplayRowsCache": {
-        # The pre-rendered display-row set the draw pass caches by version:
-        # the rows, the version stamp, the four per-row key vectors, and the
-        # pre-rendered lines. One owner because the six are recomputed in
-        # lockstep when the version is stale and sliced in lockstep every
-        # frame, so no vector drifts to a length the others do not share.
+    "crates/houyicoder-tui/src/rows/display_rows_cache.rs:DisplayRowsCache": {
+        # The cached slot rows and the version they were built at. Two fields
+        # because the rows and the metadata they carry are one RowSet: the
+        # cache replaces the whole set and stamps the version in one call, so
+        # a reader cannot pair one build's rows with another's version.
+        "fields": 2,
+    },
+    "crates/houyicoder-tui/src/rows/row_set.rs:RowSet": {
+        # The rows of one drawn surface and the metadata each row carries: the
+        # text and tag, the call id, the fold-group key, the expanded-group
+        # mark, the turn id, and the pre-rendered line, plus the delegation
+        # nesting flag the builder sets. One owner because the text and the
+        # metadata have to travel together -- a row that arrives without its
+        # keys makes a later click act on the row beside the one it points at.
+        # The only writers are push and the batch replace on the caches.
         "fields": 7,
     },
     "crates/houyicoder-tui/src/permission_pane_state.rs:PermissionPaneState": {

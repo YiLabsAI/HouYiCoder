@@ -174,8 +174,8 @@ fn test_fold_collapse_expand_toggle() {
         .ui
         .frame
         .keys
-        .fold_keys
         .borrow()
+        .fold_keys()
         .iter()
         .position(|k| k.is_some())
         .expect("a fold row should exist");
@@ -228,8 +228,8 @@ fn test_fold_collapse_expand_toggle() {
         .ui
         .frame
         .keys
-        .fold_keys
         .borrow()
+        .fold_keys()
         .iter()
         .position(|k| k.is_some())
         .expect("a fold row should exist");
@@ -264,8 +264,8 @@ fn test_fold_collapse_expand_toggle() {
         .ui
         .frame
         .keys
-        .fold_keys
         .borrow()
+        .fold_keys()
         .iter()
         .position(|k| k.is_some())
         .expect("a fold row should exist");
@@ -489,13 +489,13 @@ fn test_fold_expand_one_only() {
         .ui
         .frame
         .keys
-        .fold_keys
         .borrow()
+        .fold_keys()
         .iter()
         .position(|k| k.is_some())
         .expect("a fold row should exist");
     assert_eq!(
-        app.ui.frame.keys.fold_keys.borrow()[fold_ri].as_deref(),
+        app.ui.frame.keys.borrow().fold_keys()[fold_ri].as_deref(),
         Some("c1#0"),
         "first fold row should be group A (key c1#0)"
     );
@@ -947,12 +947,12 @@ fn test_child_rows_hide_handles() {
         app.ui
             .frame
             .keys
-            .turn_ids
             .borrow()
+            .turn_ids()
             .iter()
             .all(|t| t.is_none()),
         "no child row publishes a reasoning handle: {:?}",
-        app.ui.frame.keys.turn_ids.borrow()
+        app.ui.frame.keys.borrow().turn_ids()
     );
 }
 

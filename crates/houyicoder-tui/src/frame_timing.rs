@@ -179,13 +179,13 @@ struct RebuildWatch {
 impl RebuildWatch {
     fn new(app: &App) -> Self {
         Self {
-            prev: app.ui.frame.rows.version.get(),
+            prev: app.ui.frame.rows.version(),
             count: 0,
         }
     }
 
     fn after_frame(&mut self, app: &App) {
-        let v = app.ui.frame.rows.version.get();
+        let v = app.ui.frame.rows.version();
         if v != self.prev {
             self.count += 1;
             self.prev = v;

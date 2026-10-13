@@ -3,23 +3,9 @@
 //! every draw.
 
 use ratatui::layout::Rect;
-use ratatui::text::Line;
 
-use super::row_buffer::{Row, RowBuffer};
-use crate::records::ToolOutcome;
-use crate::row_id::RowId;
+use crate::rows::row_set::{Row, RowSet};
 use crate::state::App;
-
-#[derive(Default)]
-pub(super) struct TailRows {
-    pub rows: Vec<(u8, String, Option<ToolOutcome>)>,
-    pub callids: Vec<Option<String>>,
-    pub fold_keys: Vec<Option<String>>,
-    pub expanded_group: Vec<Option<String>>,
-    pub turn_ids: Vec<Option<RowId>>,
-    pub pre_rendered: Vec<Option<Line<'static>>>,
-    pub all_rows: Vec<(u8, String)>,
-}
 
 /// Build the per-frame live rows: the streaming assistant text (when active),
 /// the spinner (when a run is in flight), and the session checklist. Each
@@ -27,14 +13,14 @@ pub(super) struct TailRows {
 /// slots cache or a prior live section) so sections do not run together. The
 /// has_slots flag threads whether the cached slots are non-empty so the first
 /// spacer guard works before any live row exists.
-pub(super) fn build_tail_rows(area: Rect, app: &App, has_slots: bool) -> TailRows {
+pub(super) fn build_tail_rows(area: Rect, app: &App, has_slots: bool) -> RowSet {
     const PLAIN: u8 = crate::selection::TAG_PLAIN;
     const SPINNER: u8 = crate::selection::TAG_SPINNER;
 
-    let mut sink = RowBuffer::default();
+    let mut sink = RowSet::default();
     // Each section is preceded by a spacer when anything sits above it,
     // whether that is the slots cache or an earlier live section.
-    let spacer_if_needed = |sink: &mut RowBuffer| {
+    let spacer_if_needed = |sink: &mut RowSet| {
         if has_slots || !sink.is_empty() {
             sink.push(Row::spacer());
         }
@@ -45,7 +31,7 @@ pub(super) fn build_tail_rows(area: Rect, app: &App, has_slots: bool) -> TailRow
     // transcript renders alone — the parent is not talking to the user
     // while they are viewing a child.
     if app.ui.teammate_view.is_some() {
-        return TailRows::default();
+        return RowSet::default();
     }
 
     if let Some(p) = app.run_progress()
@@ -80,15 +66,5 @@ pub(super) fn build_tail_rows(area: Rect, app: &App, has_slots: bool) -> TailRow
         }
     }
 
-    let all_rows = sink.text_rows();
-    let (rows, callids, fold_keys, expanded_group, turn_ids, pre_rendered) = sink.into_parts();
-    TailRows {
-        rows,
-        callids,
-        fold_keys,
-        expanded_group,
-        turn_ids,
-        pre_rendered,
-        all_rows,
-    }
+    sink
 }

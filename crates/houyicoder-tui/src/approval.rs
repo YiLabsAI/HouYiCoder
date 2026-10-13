@@ -62,7 +62,7 @@ impl App {
         let lines = self.transcript().lines();
         let target = self
             .anchor_visible_row()
-            .and_then(|ri| self.ui.frame.keys.callid_at(ri))
+            .and_then(|ri| self.ui.frame.keys.borrow().callid_at(ri))
             .or_else(|| {
                 lines.iter().rev().find_map(|l| match l {
                     crate::records::TranscriptLine::Tool { name, call_id, .. }
@@ -84,7 +84,7 @@ impl App {
     pub(crate) fn toggle_focused_fold_expand(&mut self) -> bool {
         let key = self
             .anchor_visible_row()
-            .and_then(|ri| self.ui.frame.keys.fold_key_at(ri));
+            .and_then(|ri| self.ui.frame.keys.borrow().fold_key_at(ri));
         let Some(key) = key else {
             return false;
         };
@@ -182,7 +182,7 @@ impl App {
     /// no cursor walk, no fallback. Returns true when the row was a
     /// delegation head.
     pub(crate) fn toggle_subagent_expand_at_row(&mut self, ri: usize) -> bool {
-        let Some(child_sid) = self.ui.frame.keys.fold_key_at(ri) else {
+        let Some(child_sid) = self.ui.frame.keys.borrow().fold_key_at(ri) else {
             return false;
         };
         // The row stash carries only the fold key, not the loaded flag, so
@@ -368,7 +368,7 @@ impl App {
         // of the viewport the two counts diverged (the visible count skipped
         // off-screen rows, the full count did not), so clicking a visible
         // row toggled an off-screen turn ("point at bottom, expand at top").
-        let turn_id = self.ui.frame.keys.turn_id_at(ri);
+        let turn_id = self.ui.frame.keys.borrow().turn_id_at(ri);
         let Some(turn_id) = turn_id else {
             return false;
         };
@@ -398,7 +398,7 @@ impl App {
     /// the click handler, which knows the row from the mouse y coordinate).
     /// No-op when the row is not a fold row.
     pub(crate) fn toggle_fold_at_row(&mut self, ri: usize) {
-        if let Some(key) = self.ui.frame.keys.fold_key_at(ri) {
+        if let Some(key) = self.ui.frame.keys.borrow().fold_key_at(ri) {
             self.ui.transcript_view.toggle_fold(key);
         }
     }
@@ -419,6 +419,7 @@ impl App {
             .ui
             .frame
             .keys
+            .borrow()
             .expanded_group_at(ri)
             .filter(|k| self.ui.transcript_view.fold_is_open(k));
         let Some(key) = key else {
