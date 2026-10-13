@@ -293,7 +293,7 @@ fn test_search_ignores_fleet_click() {
             });
     }
     let _working = crate::test_harness::render_text(&app, 80, 24);
-    let strip = app.ui.fleet.rect.get();
+    let strip = app.ui.frame.layout.fleet_rect.get();
     assert!(
         strip.width > 0 && strip.height > 0,
         "the strip is a click target while working: {strip:?}"
@@ -301,7 +301,7 @@ fn test_search_ignores_fleet_click() {
 
     app.enter_search_view("row");
     let _search = crate::test_harness::render_text(&app, 80, 24);
-    let cleared = app.ui.fleet.rect.get();
+    let cleared = app.ui.frame.layout.fleet_rect.get();
     assert!(
         cleared.width == 0 && cleared.height == 0,
         "the search frame clears the strip's click target: {cleared:?}"

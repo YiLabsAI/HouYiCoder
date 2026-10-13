@@ -1053,7 +1053,7 @@ fn test_fleet_click_selects() {
             });
     }
     drop(crate::test_harness::render_text(&app, 80, 24));
-    let rect = app.ui.fleet.rect.get();
+    let rect = app.ui.frame.layout.fleet_rect.get();
     assert!(rect.height >= 2, "the strip is drawn: {rect:?}");
     let click = |app: &mut crate::state::App, y: u16| {
         crate::app::handle_mouse(

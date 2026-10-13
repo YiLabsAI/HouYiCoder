@@ -98,13 +98,9 @@ pub fn draw_status_bar(f: &mut Frame, area: Rect, app: &App) {
 }
 
 /// The agent-chat status bar: model · context% · mode · breaker(when Open).
-/// One line, dim base. Reads the live runner snapshot (the same seam /context
-/// uses), so context% is the real current-window footprint, not a stale
-/// per-run token count; the sandbox static string + the drag-to-select hint
-/// are dropped (the latter was clutter; selection is discoverable by trying
-/// it). The mode label is colored by autonomy (plan=blue / default=green /
-/// acceptEdits=yellow / auto=orange / bypass=red, high-autonomy states add a
-/// warning mark) so the current permission surface is always visible.
+/// One line, dim base. Reads the live runner snapshot, so context% is the
+/// current-window footprint rather than a per-run tally. The mode label is
+/// colored by autonomy; a high-autonomy mode adds a warning mark.
 fn draw_agent_status_bar(f: &mut Frame, area: Rect, app: &App) {
     // Liveness (thinking/idle/approval) is carried by the spinner row at the
     // transcript tail and the input-border shimmer — not duplicated here.
@@ -127,17 +123,10 @@ fn draw_agent_status_bar(f: &mut Frame, area: Rect, app: &App) {
             left.push(Span::styled(" · ", dim));
             left.push(Span::styled("breaker Open", Style::new().fg(Color::Red)));
         }
-        // Token in/out + cache ratio lived here once; dropped as noise. The
-        // status bar carries model + mode + context gauge only. Token
-        // totals + cache hit rate stay in the /context view and the
-        // /trajectory pane, where they carry detail, not the bar.
-        // Right-aligned context gauge (persistent — a right-side
-        // footprint read). The figure is the assembled context, the same
-        // measurement the context pane renders, so the two surfaces cannot
-        // disagree. Before a turn has assembled one the gauge stays hidden
-        // rather than showing a zero that would read as an empty window. Colored by
-        // load; above 90% (the red zone) the label appends a /compact hint so
-        // the user knows the action to free space.
+        // Right-aligned context gauge: the assembled context, the same
+        // measurement the context pane renders, so the two cannot disagree.
+        // Hidden until a turn assembles one (a zero would read as an empty
+        // window); above 90% the label appends the /compact hint.
         if snap.context_window > 0
             && let Some(used) = snap.context_used_tokens
         {
@@ -185,7 +174,7 @@ fn agents_hint(app: &App) -> Option<String> {
     } else {
         format!("{n} agents")
     };
-    Some(match app.ui.fleet.granted.get() {
+    Some(match app.ui.frame.layout.fleet_granted.get() {
         0 => format!("{label} · /agents"),
         1 if n > 1 => format!("{label} · /agents to manage"),
         _ => format!("{label} · shift+\u{2191}\u{2193} · enter"),
@@ -278,18 +267,12 @@ fn focus_action_hint(app: &App) -> String {
     }
 }
 
-/// The Scroll-mode overlay status bar: the current line position in the
-/// transcript, plus search and tail hints. Replaces the normal status bar
-/// while the user is reading history. One line, Cyan + BOLD. It opens with a
-/// SCROLL tag so the mode is unambiguous at a glance.
-///
-/// In the search view's in-view slash re-search bar (search.input_mode), the
-/// same row becomes a less-style input bar: slash + the editable buffer with
-/// an inverse cursor cell + commit/cancel hints. No match count is shown
-/// while editing -- the bar is a snapshot (decision 5), the re-scan runs on
-/// Enter, so a count would be the stale prior-query figure. Swapping the bar
-/// into the same row keeps the ScrollBox height stable (no layout shift),
-/// like a transcript search bar.
+/// The Scroll-mode overlay status bar: the current line position plus
+/// search and tail hints, opening with a SCROLL tag. In the search view's
+/// in-view slash bar the same row becomes a less-style input bar: slash, the
+/// editable buffer with an inverse cursor, and commit/cancel hints. No match
+/// count while editing -- the re-scan runs on Enter, so a count would be the
+/// prior query's.
 pub fn draw_scroll_status(f: &mut Frame, area: Rect, app: &App) {
     let top = app.active_scroll().top_offset();
     let total = app.active_scroll().total.get();
@@ -437,6 +420,17 @@ pub fn is_focus(app: &App) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use houyicoder_protocol::frontend::model::AppliedModel;
+    use houyicoder_protocol::frontend::model::SpeedMode;
+    use houyicoder_protocol::frontend::status::StatusSnapshot;
+    use houyicoder_protocol::llm::EffortLevel;
+    use ratatui::{Terminal, backend::TestBackend};
+
+    use houyicoder_protocol::llm::Usage;
+
+    use crate::agent_message::FleetEntry;
+    use crate::state::Screen;
+    use crate::test_harness::{connected_app, render_text};
 
     #[test]
     fn test_tiny_mark_two_spans() {
@@ -446,8 +440,12 @@ mod tests {
     fn fleet_app(n: usize, granted: u16) -> crate::state::App {
         let mut app = crate::composition::app();
         for i in 0..n {
-            app.sessions.current.capabilities.fleet.entries.push(
-                crate::agent_message::FleetEntry {
+            app.sessions
+                .current
+                .capabilities
+                .fleet
+                .entries
+                .push(FleetEntry {
                     agent_id: format!("c{i}"),
                     subagent_type: "explore".into(),
                     turn: 1,
@@ -457,10 +455,9 @@ mod tests {
                     completed: None,
                     completed_at: None,
                     started_at: None,
-                },
-            );
+                });
         }
-        app.ui.fleet.granted.set(granted);
+        app.ui.frame.layout.fleet_granted.set(granted);
         app
     }
 
@@ -485,6 +482,43 @@ mod tests {
             "3 agents · /agents to manage"
         );
         assert_eq!(agents_hint(&fleet_app(3, 0)).unwrap(), "3 agents · /agents");
+    }
+
+    /// The draw publishes the footer budget's grant, so the hint describes
+    /// the strip the frame actually rendered. The ladder above pokes the
+    /// value directly, which cannot catch a draw that stopped writing it.
+    #[test]
+    fn test_hint_follows_drawn_grant() {
+        // Seeded with the strip dropped; only the draw can raise it. The
+        // hint needs the connected agent bar, so this is the connected
+        // working screen rather than the bare fixture.
+        let mut app = connected_app();
+        app.ui.navigation.screen = Screen::Working;
+        for i in 0..2 {
+            app.sessions
+                .current
+                .capabilities
+                .fleet
+                .entries
+                .push(FleetEntry {
+                    agent_id: format!("c{i}"),
+                    subagent_type: "explore".into(),
+                    turn: 1,
+                    tokens: 10,
+                    tool_uses: 0,
+                    last_activity: None,
+                    completed: None,
+                    completed_at: None,
+                    started_at: None,
+                });
+        }
+        app.ui.frame.layout.fleet_granted.set(0);
+
+        let out = render_text(&app, 80, 24);
+        assert!(
+            out.contains("2 agents \u{b7} shift+"),
+            "two live children on drawn rows advertise the per-row keys:\n{out}"
+        );
     }
 
     /// A completed child still in the grace window is excluded from the
@@ -558,10 +592,6 @@ mod tests {
     /// Config status tab, not duplicated on the bar.
     #[test]
     fn test_bar_shows_model_id() {
-        use houyicoder_protocol::frontend::model::AppliedModel;
-        use houyicoder_protocol::frontend::model::SpeedMode;
-        use houyicoder_protocol::llm::EffortLevel;
-        use ratatui::{Terminal, backend::TestBackend};
         let mut app = crate::composition::app();
         app.sessions.current.capabilities.model.catalog.applied = AppliedModel {
             id: "qwen3.7-max".into(),
@@ -611,9 +641,6 @@ mod tests {
         // /trajectory already carry. This exercises the post-run snapshot
         // the pre-run render test never reaches, so the noise path stays
         // guarded against re-introduction.
-        use houyicoder_protocol::frontend::status::StatusSnapshot;
-        use houyicoder_protocol::llm::Usage;
-        use ratatui::{Terminal, backend::TestBackend};
         let mut app = crate::composition::app();
         app.sessions.current.capabilities.model.catalog.applied.id = "test-model".into();
         app.sessions.current.capabilities.status.status_cache = Some(StatusSnapshot {
@@ -660,8 +687,6 @@ mod tests {
         // Before a turn has assembled a context there is no occupancy to
         // report. The gauge stays hidden rather than claiming the window is
         // a known amount full.
-        use houyicoder_protocol::frontend::status::StatusSnapshot;
-        use ratatui::{Terminal, backend::TestBackend};
         let mut app = crate::composition::app();
         app.sessions.current.capabilities.model.catalog.applied.id = "test-model".into();
         for width in [48, 80] {

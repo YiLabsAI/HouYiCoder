@@ -2,14 +2,12 @@
 //!
 //! The child snapshots the selection indexes are the session's fleet
 //! capability; this state owns what the strip does with them on screen: the
-//! highlighted row, what the last draw granted and where it landed, and the
-//! repaint pacing of the live elapsed counters. The compositions across the
-//! two owners are App methods.
+//! highlighted row and the repaint pacing of the live elapsed counters. The
+//! geometry a draw produced (where the strip landed, how many rows the footer
+//! budget granted it) is that frame's, so it lives in the published frame's
+//! layout snapshot. The compositions across the two owners are App methods.
 
-use std::cell::Cell;
 use std::time::{Duration, Instant};
-
-use ratatui::layout::Rect;
 
 #[derive(Default)]
 pub(crate) struct FleetStripState {
@@ -17,14 +15,6 @@ pub(crate) struct FleetStripState {
     /// user has moved one. Doubles as the /agents pane cursor while live
     /// children exist, since the pane renders the same rows.
     pub(crate) selected: Option<usize>,
-    /// Rows the footer budget granted this frame, published by the draw pass.
-    /// The status-bar hint reads it to advertise the affordance the strip can
-    /// actually honor: per-row selection while rows are visible, the pane
-    /// when the strip is a summary or gone.
-    pub(crate) granted: Cell<u16>,
-    /// Where the strip was drawn this frame, for the mouse router. Zero when
-    /// not drawn, so a stale rect cannot swallow clicks.
-    pub(crate) rect: Cell<Rect>,
     /// When the strip last re-rendered for the elapsed counters. The poll
     /// loop ticks this at most once per second when running children exist.
     last_elapsed_tick: Option<Instant>,

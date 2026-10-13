@@ -195,7 +195,7 @@ pub(crate) fn handle_mouse(app: &mut App, m: MouseEvent) {
             // Footer queue strip: click a previewed item to recall it into
             // the input box, or click the +N / summary row to open the queue
             // pane (non-destructive — does not recall all items).
-            let qrect = app.ui.queue_view.strip_rect.get();
+            let qrect = app.ui.frame.layout.queue_rect.get();
             if qrect.width > 0 && qrect.height > 0 && in_rect(qrect, m.column, m.row) {
                 let n = app
                     .ui
@@ -257,7 +257,7 @@ pub(crate) fn handle_mouse(app: &mut App, m: MouseEvent) {
                 return;
             }
             // Fleet hit-testing returns an action before mutating App.
-            let frect = app.ui.fleet.rect.get();
+            let frect = app.ui.frame.layout.fleet_rect.get();
             if frect.width > 0 && frect.height > 0 && in_rect(frect, m.column, m.row) {
                 let entries = &app.sessions.current.capabilities.fleet.entries;
                 let selected = app.ui.fleet.selected;

@@ -26,7 +26,7 @@ ACTIVE_OWNERS = {
     },
     "crates/houyicoder-tui/src/ui.rs:Ui": {
         # The frontend's presentation and interaction state, including the draw pass's quit flag, renderer, and prepared frame.
-        "fields": 26,
+        "fields": 25,
     },
     "crates/houyicoder-tui/src/renderer.rs:Renderer": {
         # The draw pass's reusable caches: the per-line parse cache and the
@@ -100,8 +100,10 @@ ACTIVE_OWNERS = {
         "fields": 1,
     },
     "crates/houyicoder-tui/src/fleet/strip_state.rs:FleetStripState": {
-        # The footer fleet strip's selection, granted height, click rect, and elapsed-repaint pacing.
-        "fields": 4,
+        # The footer fleet strip's selection and the repaint pacing of its live
+        # elapsed counters. The geometry one draw produced lives in that
+        # frame's layout snapshot, not here.
+        "fields": 2,
     },
     "crates/houyicoder-tui/src/session/capabilities.rs:MemoryCapability": {
         # The memory entry cache, the two toggle states, the notice dedupe set, and the pending mutations.
@@ -171,8 +173,12 @@ ACTIVE_OWNERS = {
         "fields": 4,
     },
     "crates/houyicoder-tui/src/layout_snapshot.rs:LayoutSnapshot": {
-        # The per-region rects and rendered-row caches the draw pass stashes for the hit-test paths.
-        "fields": 10,
+        # The geometry one draw produced: each content region's rectangle
+        # beside the rows it rendered, the jump-to-bottom label, the two
+        # footer strips' click rects, and the height the footer budget
+        # granted the fleet strip. The input and click paths read the rects
+        # and rows; the status-bar hint reads the granted height.
+        "fields": 13,
     },
     "crates/houyicoder-tui/src/selections.rs:Selections": {
         # The four per-region drag selections, each in its own coordinate space.

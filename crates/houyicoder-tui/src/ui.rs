@@ -31,7 +31,7 @@ use crate::selections::Selections;
 use crate::skills_state::SkillsPaneState;
 use crate::state::model_draft::ModelDraft;
 use crate::state::transcript::view::TranscriptViewState;
-use crate::state::{ParkedViewStates, QueueViewState, Stage, TrajectoryPaneState, ViewportMode};
+use crate::state::{ParkedViewStates, Stage, TrajectoryPaneState, ViewportMode};
 
 pub use crate::ui::navigation::Navigation;
 
@@ -39,8 +39,8 @@ pub use crate::ui::navigation::Navigation;
 /// input, the transcript and pane view states, the verbose render flag, the
 /// spinner's displayed token count, the last-written terminal title, the
 /// display copies panes fetch on demand, selection, notifications,
-/// clipboard, focus, the queued-input hit-test geometry, the quit flag,
-/// and the draw pass's caches and last-frame output.
+/// clipboard, focus, the quit flag, and the draw pass's caches and
+/// last-frame output.
 pub struct Ui {
     /// Where the user is looking: the screen, the pane, the two viewport
     /// modes, and the overlay pickers.
@@ -92,11 +92,12 @@ pub struct Ui {
     /// pane interaction state, kept within the rows by every rebuild, step,
     /// and read, and reset on a session switch.
     pub agents_sel: usize,
-    /// The footer fleet strip's interaction and per-frame drawing facts: the
-    /// highlighted child row, the rows and rect the last draw granted, and
-    /// the elapsed counters' repaint pacing. The child snapshots these index
-    /// are the session's fleet capability; the compositions across the two
-    /// owners are App methods. Resets with its pane peers on a session
+    /// The footer fleet strip's interaction state: the highlighted child row
+    /// and the elapsed counters' repaint pacing. The child snapshots this
+    /// index and the geometry a draw produced are the session's fleet
+    /// capability and that frame's layout snapshot respectively; the
+    /// compositions across the owners are App methods. Resets with its pane
+    /// peers on a session
     /// switch.
     pub(crate) fleet: FleetStripState,
     /// The /model pane's draft: the row the focus sits on, the level and
@@ -121,10 +122,6 @@ pub struct Ui {
     /// title only when it differs from this, and a session switch resets it
     /// to None so the next session's title always lands.
     pub last_title: Option<String>,
-    /// Selection and hit-test state for the queued-input interface. The
-    /// queue's own cursor lives on the InputQueue; this holds only the
-    /// last-rendered strip rectangle the pointer handler reads back.
-    pub queue_view: QueueViewState,
     /// The four per-region drag selections: the transcript's main selection
     /// and the status, pane, and approval selections, each in its own
     /// coordinate space so a drag on one region never collides with another.
@@ -190,7 +187,6 @@ impl Ui {
         self.navigation.reset_for_session_switch();
         self.transcript_view = Default::default();
         self.verbose = false;
-        self.queue_view = Default::default();
         self.worktree_list = Default::default();
         self.worktree_level = Cell::new(0);
         self.trajectory = Default::default();

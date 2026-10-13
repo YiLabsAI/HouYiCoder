@@ -4,6 +4,7 @@
 
 use crate::input::queue::InputItem;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use ratatui::layout::Rect;
 use ratatui::style::Color;
 
 use crate::composition;
@@ -261,9 +262,9 @@ fn test_click_footer_recalls_item() {
         .input
         .queue
         .push(InputItem::Message("second task".into()));
-    // Render so queue_view.strip_rect is stashed.
+    // Render so the queue strip's rect is stashed in the published frame.
     render_buffer(&app, 100, 28);
-    let qrect = app.ui.queue_view.strip_rect.get();
+    let qrect = app.ui.frame.layout.queue_rect.get();
     assert!(qrect.height > 0, "queue strip rendered with a rect");
     // Click the first item row (row 0 inside the strip).
     let click = mouse_at(qrect.x + 2, qrect.y);
@@ -295,7 +296,7 @@ fn test_click_second_row_recalls() {
         .queue
         .push(InputItem::Message("second task".into()));
     render_buffer(&app, 100, 28);
-    let qrect = app.ui.queue_view.strip_rect.get();
+    let qrect = app.ui.frame.layout.queue_rect.get();
     assert!(qrect.height >= 2, "two-item queue gets two rows");
     let click = mouse_at(qrect.x + 2, qrect.y + 1);
     crate::app::handle_mouse(&mut app, click);
@@ -419,7 +420,7 @@ fn test_click_more_opens_queue() {
     app.ui.input.queue.push(InputItem::Message("d".into()));
     app.ui.input.queue.move_cursor(1);
     render_buffer(&app, 100, 28);
-    let qrect = app.ui.queue_view.strip_rect.get();
+    let qrect = app.ui.frame.layout.queue_rect.get();
     assert!(qrect.height >= 2, "strip has the head row + a +N row");
     let more_row = qrect.y + 1;
     let click = mouse_at(qrect.x + 2, more_row);
@@ -456,7 +457,7 @@ fn test_collapsed_strip_opens_queue() {
     app.ui.input.queue.push(InputItem::Message("gamma".into()));
     app.ui.input.queue.move_cursor(2);
     render_buffer(&app, 100, 16);
-    let qrect = app.ui.queue_view.strip_rect.get();
+    let qrect = app.ui.frame.layout.queue_rect.get();
     assert_eq!(
         qrect.height, 1,
         "a tight window leaves the strip its summary row"
@@ -618,7 +619,7 @@ fn test_strip_recall_promotes_next() {
         .queue
         .push(InputItem::ParkedMessage("second".into()));
     render_buffer(&app, 100, 28);
-    let qrect = app.ui.queue_view.strip_rect.get();
+    let qrect = app.ui.frame.layout.queue_rect.get();
 
     crate::app::handle_mouse(&mut app, mouse_at(qrect.x + 2, qrect.y));
 
@@ -704,5 +705,32 @@ fn test_queue_pane_nav() {
     assert!(
         text.contains("❯ alpha"),
         "the highlight follows the selection up: {text}"
+    );
+}
+
+/// A frame that does not draw the queued-input strip publishes no rect, so
+/// the pointer cannot recall an item through a rectangle no longer on
+/// screen. The strip tests above all draw it, which cannot catch a rect left
+/// over from the previous frame.
+#[test]
+fn test_queue_rect_zeroed_undrawn() {
+    let mut app = working_session();
+    app.ui
+        .input
+        .queue
+        .push(InputItem::Message("first task".into()));
+    render_buffer(&app, 100, 28);
+    assert!(
+        app.ui.frame.layout.queue_rect.get().height > 0,
+        "the strip rendered with a rect"
+    );
+
+    // The console screen draws no footer at all.
+    app.ui.navigation.screen = Screen::Console;
+    render_buffer(&app, 100, 28);
+    assert_eq!(
+        app.ui.frame.layout.queue_rect.get(),
+        Rect::new(0, 0, 0, 0),
+        "an undrawn strip publishes no click target"
     );
 }

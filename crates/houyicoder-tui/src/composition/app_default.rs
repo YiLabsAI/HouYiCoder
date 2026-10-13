@@ -24,7 +24,7 @@ use crate::sessions::Sessions;
 use crate::skill_picker_state::SkillPickerState;
 use crate::skills_state::SkillsPaneState;
 use crate::state::model_draft::ModelDraft;
-use crate::state::{ParkedViewStates, QueueViewState, StatusTab, TrajectoryPaneState};
+use crate::state::{ParkedViewStates, StatusTab, TrajectoryPaneState};
 use crate::ui::{Navigation, Ui};
 use crate::workflow::Workflow;
 
@@ -60,7 +60,6 @@ pub fn app() -> App {
             worktree_level: Cell::new(0),
             displayed_tokens: Cell::new(0),
             last_title: None,
-            queue_view: QueueViewState::default(),
             selection: Selections::default(),
             notifications: NotificationState::default(),
             clipboard: Arc::new(SystemClipboard),

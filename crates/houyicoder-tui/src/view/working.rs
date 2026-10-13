@@ -89,7 +89,7 @@ fn draw_working(f: &mut Frame, app: &App) {
     // sum cannot starve the transcript.
     let queue_want = queue_overlay::strip_want(app);
     let footer = footer_budget::allocate(total_h, input_h, queue_want, fleet_strip::want(app));
-    app.ui.fleet.granted.set(footer.fleet);
+    app.ui.frame.layout.fleet_granted.set(footer.fleet);
     let layout = build_working_layout(app, f.area().width, input_h, footer.queue, footer.fleet);
     let outer = Layout::default()
         .direction(Direction::Vertical)
@@ -123,7 +123,7 @@ fn draw_working(f: &mut Frame, app: &App) {
         }
     }
     if let Some(i) = layout.slots.fleet {
-        app.ui.fleet.rect.set(outer[i]);
+        app.ui.frame.layout.fleet_rect.set(outer[i]);
         fleet_strip::draw(f, outer[i], app);
     }
     if !pane_hides_input {

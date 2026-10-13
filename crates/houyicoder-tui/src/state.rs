@@ -3,7 +3,6 @@
 //! App is the composition shell; cohesive concerns own their state and
 //! transitions in dedicated types rather than adding parallel fields here.
 
-use std::cell::Cell;
 use std::fmt;
 use std::time::Instant;
 
@@ -36,7 +35,6 @@ pub(crate) use crate::state::parked_view_states::ParkedViewStates;
 pub use crate::state::trajectory::{
     TrajectoryDrill, TrajectoryPaneState, TrajectorySelection, TrajectoryTurnKey,
 };
-use ratatui::layout::Rect;
 
 /// Live progress for one long-running tool call (bash): elapsed seconds +
 /// the running stdout line count (None when the backend does not stream
@@ -59,16 +57,6 @@ pub use crate::evidence::{
 pub use crate::records::{Approval, SpecContext, TranscriptLine};
 
 pub use crate::state::enums::*;
-
-/// Hit-test geometry for the queued-input interface. The selection cursor
-/// lives on the InputQueue itself (its boundary owns both the items and the
-/// index into them); this struct only carries the last-rendered footer strip
-/// rectangle the pointer handler reads back.
-#[derive(Default)]
-pub struct QueueViewState {
-    /// Last-rendered queued-input footer strip rectangle.
-    pub strip_rect: Cell<Rect>,
-}
 
 #[derive(Default, Debug)]
 pub(crate) struct CurrentTurnBoundary {
