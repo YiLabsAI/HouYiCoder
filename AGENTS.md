@@ -358,8 +358,14 @@ Choosing the delivery destination is a design decision, not a matter of taste:
 
 ### Layout policy
 - Tests live under each crate's tests/ or inline #[cfg(test)] modules.
-- One source module → one peer test file (foo.rs → tests/foo.rs or
-  inline mod foo_tests).
+- One source module → one peer test file, in the directory form:
+  foo.rs + foo/tests.rs, declared as `#[cfg(test)] mod tests;`. No
+  attribute is needed because a mod declared in foo.rs resolves to
+  foo/tests.rs, and the test path mirrors the source path. A flat
+  sibling foo_tests.rs is the legacy form: reaching it takes an explicit
+  `#[path = "foo_tests.rs"]`, which is the module system being fought on
+  every module it covers, and the path no longer says which module the
+  test belongs to. Convert a module when you touch it; do not add one.
 - Tests with no single source peer (cross-module behavior paths, e.g. a
   gate's decision logic spanning many validators) use a `tests/` directory
   module under the host source file (`gate.rs` + `gate/tests/{domain}.rs`),
@@ -373,10 +379,13 @@ Choosing the delivery destination is a design decision, not a matter of taste:
   stutter -- X_sub::item repeats the X concept twice) and the file tree
   shows the subsystem. The 2018 form (X.rs + X/) is preferred over mod.rs.
   Enforced by check_rust_naming.py rule 8; the baseline of pre-existing
-  flat prefixes ratchets down as each pair converts. _tests.rs peers and
-  tests/ integration binaries are exempt (foo.rs + foo_tests.rs is the
-  one-source-one-peer-test convention, and each tests/*.rs is its own
-  binary, not a module).
+  flat prefixes ratchets down as each pair converts. Each tests/*.rs under
+  a crate's tests/ is exempt: it is its own binary, not a module.
+- The flat test peer has its own rule (9) and its own ratchet, counted as
+  the number of `#[path = "..._tests.rs"]` declarations under crates/*/src:
+  the count may only fall, so a new flat pair fails the gate. Lower
+  _FLAT_TEST_PEER_BASELINE in the same commit that converts a pair.
+  Guarded by scripts/test_flat_test_peer.py.
 
 ### Mock the bottom (unit tests)
 - Unit tests NEVER hit real external calls: no real LLM/provider HTTP, no

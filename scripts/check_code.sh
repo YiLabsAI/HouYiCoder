@@ -102,6 +102,7 @@ SCRIPT_TESTS=(
   test_commit_msg_check.py
   test_cov_lcov.py
   test_flat_prefix.py
+  test_flat_test_peer.py
   test_diff_cov.py
   test_stderr_gate.py
   test_comment_block_length.py

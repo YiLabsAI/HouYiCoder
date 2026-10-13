@@ -43,10 +43,10 @@ Checks .rs files (pass files as args; no args = all crates/**/*.rs):
    repeats the X concept twice) and lets the file tree show the subsystem.
    The pair is matched by longest existing parent stem (so markdown_memory_io.rs
    is a child of markdown_memory.rs, not of a nonexistent markdown.rs), and
-   both _tests.rs peers are excluded: foo.rs + foo_tests.rs is the repo's
-   one-source-one-peer-test convention, and a parent ending in _tests is a
-   test-file family, not a source hierarchy. Integration tests (tests/) are
-   excluded entirely -- each .rs there is its own binary, not a module.
+   both _tests.rs peers are excluded here -- the flat test peer has its own
+   rule (9) and its own count ratchet, because it is the test layout question,
+   not a source hierarchy. Integration tests (tests/) are excluded entirely --
+   each .rs there is its own binary, not a module.
 
    Pre-existing pairs are grandfathered in _FLAT_PREFIX_BASELINE so the gate
    ratchets rather than red-ing the whole repo at once: a NEW flat prefix not
@@ -117,6 +117,46 @@ _FLAT_PREFIX_BASELINE: frozenset[str] = frozenset({
 _FILE_QUALIFIER_RE = re.compile(r"(?:_extra|_part\d|_misc)[_.]|^tests_|_tests_")
 _FILE_QUALIFIER_BASELINE: frozenset[str] = frozenset({
 })
+
+# Flat test peers (rule 9), counted rather than listed: a module whose tests
+# sit in a sibling X_tests.rs instead of X/tests.rs. The flat form has to
+# escape the module system -- a mod declared in X.rs resolves to X/tests.rs,
+# so reaching a sibling X_tests.rs takes an explicit #[path = "..._tests.rs"]
+# -- which is why the ratchet counts those declarations. The standard is the
+# directory form (X.rs + X/tests.rs, declared as #[cfg(test)] mod tests;).
+# Convert a module when you touch it: the count only ever ratchets down, so
+# lower this number in the same commit that converts a pair.
+_FLAT_TEST_PEER_BASELINE = 132
+_FLAT_TEST_PEER_PATH_RE = re.compile(r'#\[path\s*=\s*"[^"]*_tests\.rs"\]')
+
+
+def _check_flat_test_peer(
+    errors: list[str],
+    root: Path = Path("crates"),
+    baseline: int = _FLAT_TEST_PEER_BASELINE,
+) -> None:
+    """Flag a flat test peer added on top of the existing backlog. The flat
+    form is X.rs + X_tests.rs, which needs #[path = "..._tests.rs"] because a
+    mod declared in X.rs resolves to X/tests.rs; the directory form needs no
+    attribute and mirrors the source path, so it is the standard. Pre-existing
+    peers are grandfathered by count so the gate could land before the
+    migration; adding one raises the count and fails."""
+    detected: list[str] = []
+    for p in sorted(root.rglob("*.rs")):
+        if "/target/" in str(p) or "/tests/" in str(p):
+            continue
+        for lineno, line in enumerate(p.read_text().splitlines(), 1):
+            if _FLAT_TEST_PEER_PATH_RE.search(line):
+                detected.append(f"{p.as_posix()}:{lineno}")
+    if len(detected) > baseline:
+        errors.append(
+            f"flat test peers: {len(detected)} (baseline {baseline}). A new "
+            f"X.rs + X_tests.rs pair reached the module system through "
+            f"#[path]; use the directory form X.rs + X/tests.rs with "
+            f"#[cfg(test)] mod tests; instead. If a pair was converted in "
+            f"this commit, lower _FLAT_TEST_PEER_BASELINE by one. Detected: "
+            + ", ".join(detected)
+        )
 
 
 def _check_file_qualifiers(errors: list[str], root: Path = Path("crates")) -> None:
@@ -411,6 +451,7 @@ def main(paths: list[str]) -> int:
         _scan(p, errors, warns)
     _check_flat_prefix(errors)
     _check_file_qualifiers(errors)
+    _check_flat_test_peer(errors)
     _check_naming(errors)
     for w in warns:
         print(f"warn: {w}", file=sys.stderr)
