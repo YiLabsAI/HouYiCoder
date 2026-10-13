@@ -2,19 +2,16 @@
 //! Screen-specific behavior remains in the view and key modules.
 
 use crossterm::{
-    cursor::{Hide, MoveTo, SetCursorStyle, Show},
+    cursor::{Hide, MoveTo},
     event::{
-        self, DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
-        EnableFocusChange, Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent,
-        MouseEventKind,
+        self, Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
     },
     execute,
-    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use ratatui::{Frame, Terminal, backend::CrosstermBackend, layout::Rect};
 use std::cmp;
 use std::error::Error;
-use std::io::{self, Write, stdout};
+use std::io::{self, stdout};
 use std::time::{Duration, Instant};
 
 use houyicoder_protocol::frontend::SlashCommand;
@@ -29,7 +26,9 @@ use crate::selection::surface::{
     edge_scroll_if_at_edge, paint_overlay,
 };
 use crate::state::{App, Pane, Screen, ViewportMode};
-use crate::terminal_title::restore;
+use crate::terminal_guard::{
+    CrosstermModes, TerminalGuard, assert_mouse_modes, set_terminal_progress,
+};
 use crate::view;
 use crate::view::working::fleet_pill::{FleetClick, click_route};
 
@@ -42,10 +41,10 @@ pub fn run_with_runner(
     startup: FrontendStartup,
     resume_builder: Option<ResumeBuilder>,
 ) -> io::Result<Option<String>> {
-    enable_raw_mode()?;
-    execute!(stdout(), EnterAlternateScreen, EnableBracketedPaste, Hide)?;
-    execute!(stdout(), EnableFocusChange)?;
-    assert_mouse_modes()?;
+    // The guard owns every terminal mode change below, so an early error
+    // return or a panic unwinding past this loop restores the console
+    // instead of leaving it on the alternate screen in raw mode.
+    let mut guard = TerminalGuard::acquire(CrosstermModes)?;
     let backend = CrosstermBackend::new(stdout());
     let mut terminal = Terminal::new(backend)?;
     let mut app = build_app(bundle, startup);
@@ -115,33 +114,14 @@ pub fn run_with_runner(
         }
     }
 
-    // Clear terminal progress and title state before leaving.
-    if reported_busy {
-        set_terminal_progress(false)?;
-    }
-    restore();
-    disable_raw_mode()?;
-    execute!(
-        stdout(),
-        LeaveAlternateScreen,
-        DisableMouseCapture,
-        DisableBracketedPaste,
-        DisableFocusChange,
-        Show,
-        SetCursorStyle::DefaultUserShape
-    )?;
+    // Restore the terminal modes the guard owns. The tab title and the
+    // progress indicator are restored inside the guard's teardown, so this is
+    // the one teardown step the loop has to drive explicitly.
+    guard.release();
     // In-process resume consumes the /resume Command during the swap. A
     // command survives only when the caller must rebuild the session outside
     // this loop (no in-process builder), so hand its target up.
     Ok(app.ui.input.queue.drain_resume_target())
-}
-
-/// Enable SGR mouse reporting for clicks, drag, hover, and wheel events.
-/// Reasserting these idempotent modes recovers from terminal state resets.
-fn assert_mouse_modes() -> io::Result<()> {
-    let mut out = stdout();
-    out.write_all(b"\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h")?;
-    out.flush()
 }
 
 /// Apply one terminal event and report whether the view changed.
@@ -187,17 +167,6 @@ pub(crate) fn handle_event(app: &mut App, event: Event) -> io::Result<bool> {
             Ok(true)
         }
     }
-}
-
-/// Publish indeterminate or cleared progress through OSC 9;4.
-fn set_terminal_progress(busy: bool) -> io::Result<()> {
-    let mut out = stdout();
-    if busy {
-        out.write_all(b"\x1b]9;4;3;0\x1b\\")?;
-    } else {
-        out.write_all(b"\x1b]9;4;0;0\x1b\\")?;
-    }
-    out.flush()
 }
 
 /// Route wheel, click, and drag gestures to the active in-app surface.

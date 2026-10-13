@@ -55,6 +55,7 @@ mod sessions;
 mod skill_picker_state;
 mod skills_state;
 pub mod state;
+mod terminal_guard;
 pub mod terminal_title;
 pub mod todo_view;
 mod toggle_hint;

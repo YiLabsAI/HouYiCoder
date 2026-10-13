@@ -3,14 +3,17 @@
 //! reaches app private items the same way the inline mod tests did.
 use super::*;
 use crate::agent_message::{ConnectionEvent, SessionMessage};
-use crate::session::{ConnectionStatus, PollOutcome, SessionConnection};
-use crate::state::{Pane, Stage, TranscriptLine, ViewportMode};
+use crate::session::{ConnectionStatus, EnqueueError, PollOutcome, SessionConnection};
+use crate::state::{Pane, Screen, Stage, TranscriptLine, ViewportMode};
 use crate::test_harness::{
-    FailedHandshakeTransport, connected_app_events, connection_lost_app, wait_for_request,
+    FailedHandshakeTransport, connected_app_events, connection_lost_app, render_text,
+    wait_for_request,
 };
 use crate::todo_view::{TodoStatus, TodoView};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use houyicoder_protocol::frontend::{FrontendRequest, LoginMode, SlashCommand};
+use houyicoder_protocol::envelope::RequestId;
+use houyicoder_protocol::frontend::memory::MemoryToggleWhich;
+use houyicoder_protocol::frontend::{FrontendRequest, LoginMode, SessionId, SlashCommand};
 
 fn key(code: KeyCode) -> KeyEvent {
     KeyEvent::new(code, KeyModifiers::NONE)
@@ -85,8 +88,6 @@ fn test_status_bar_click_drags() {
 /// each viewport re-publishes via stash_status_rows.
 #[test]
 fn test_status_rows_refresh() {
-    use crate::state::ViewportMode;
-    use crate::test_harness::render_text;
     let collect = |app: &App| -> String {
         app.ui
             .frame
@@ -153,9 +154,6 @@ fn test_status_rows_refresh() {
 /// the stale Working rect Rect{0,23,80,1}.
 #[test]
 fn test_status_rect_zeroed_offscreen() {
-    use crate::state::Screen;
-    use crate::test_harness::render_text;
-
     let mut app = working_app();
     drop(render_text(&app, 80, 24));
     assert!(
@@ -171,6 +169,70 @@ fn test_status_rect_zeroed_offscreen() {
         app.ui.frame.layout.status_rect.get().height,
         0,
         "Console must not keep a stale Working status rect"
+    );
+}
+
+/// The transcript rect is the click target for drag-select. A screen that
+/// draws no transcript must not keep the last Working frame's rect, or a
+/// click lands on content the screen does not show. The rect is the
+/// discriminator: before the frame-top reset, Console kept the Working
+/// geometry and the click below started a transcript drag.
+#[test]
+fn test_transcript_rect_zeroed_offscreen() {
+    let mut app = working_app();
+    for i in 0..30 {
+        app.system_line(format!("a transcript row {i}"));
+    }
+    drop(render_text(&app, 80, 24));
+    let rect = app.ui.frame.layout.transcript_rect.get();
+    assert!(rect.height > 0, "Working publishes a transcript rect");
+
+    app.ui.navigation.screen = Screen::Console;
+    drop(render_text(&app, 80, 24));
+    assert_eq!(
+        app.ui.frame.layout.transcript_rect.get().height,
+        0,
+        "Console must not keep a stale Working transcript rect"
+    );
+
+    handle_mouse(
+        &mut app,
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: rect.x + 1,
+            row: rect.y + 1,
+            modifiers: KeyModifiers::NONE,
+        },
+    );
+    assert!(
+        !app.ui.selection.transcript.is_dragging,
+        "a click at the old transcript coordinates must not start a drag on Console"
+    );
+}
+
+/// The viewport variants publish different chrome, so a region a variant does
+/// not draw has to be cleared by the same reset. Focus mode on the diff pane
+/// renders no transcript, and used to inherit the Working frame's transcript
+/// rect, so a click in the diff could start a transcript drag.
+#[test]
+fn test_stale_region_per_viewport() {
+    let mut app = working_app();
+    for i in 0..30 {
+        app.system_line(format!("a transcript row {i}"));
+    }
+    drop(render_text(&app, 80, 24));
+    assert!(
+        app.ui.frame.layout.transcript_rect.get().height > 0,
+        "Working publishes a transcript rect"
+    );
+
+    app.ui.navigation.viewport = ViewportMode::Focus;
+    app.ui.navigation.pane = Pane::Diff;
+    drop(render_text(&app, 80, 24));
+    assert_eq!(
+        app.ui.frame.layout.transcript_rect.get().height,
+        0,
+        "Focus on the diff pane draws no transcript rect"
     );
 }
 
@@ -533,7 +595,6 @@ fn test_clear_ships_session_reset() {
 /// distinct (#68).
 #[test]
 fn test_exhausted_commands_report() {
-    use houyicoder_protocol::frontend::memory::MemoryToggleWhich;
     let (mut app, _events) = connected_app_events();
     app.sessions
         .current
@@ -622,9 +683,6 @@ fn test_exhausted_clear_no_repeat() {
 /// caller distinguishes a missing session from a stopped driver.
 #[test]
 fn test_enqueue_not_connected() {
-    use crate::run_control::ClientCommand;
-    use crate::session::EnqueueError;
-    use houyicoder_protocol::frontend::SessionId;
     let app = working_app();
     let err = app
         .enqueue(ClientCommand::AbortRun {
@@ -638,10 +696,6 @@ fn test_enqueue_not_connected() {
 /// its command receiver has closed: the command never left this process.
 #[test]
 fn test_enqueue_closed() {
-    use crate::run_control::ClientCommand;
-    use crate::session::EnqueueError;
-    use crate::test_harness::connection_lost_app;
-    use houyicoder_protocol::envelope::RequestId;
     let app = connection_lost_app();
     let err = app
         .enqueue(ClientCommand::StatusQuery {
@@ -655,9 +709,6 @@ fn test_enqueue_closed() {
 /// transport delivery or server execution from that result.
 #[test]
 fn test_enqueue_ok_local_queue() {
-    use crate::run_control::ClientCommand;
-    use crate::test_harness::connected_app_events;
-    use houyicoder_protocol::envelope::RequestId;
     let (app, _events) = connected_app_events();
     assert!(
         app.enqueue(ClientCommand::StatusQuery {
@@ -672,8 +723,6 @@ fn test_enqueue_ok_local_queue() {
 /// the not-connected and connection-lost states never fold together.
 #[test]
 fn test_enqueue_failure_line() {
-    use crate::session::EnqueueError;
-    use crate::state::App;
     assert_eq!(
         App::enqueue_failure_line("run", EnqueueError::NotConnected),
         "run: not connected"
@@ -690,7 +739,6 @@ fn test_enqueue_failure_line() {
 /// failure is settled at its call site (#68).
 #[test]
 fn test_closed_commands_report_loss() {
-    use houyicoder_protocol::frontend::memory::MemoryToggleWhich;
     let mut app = connection_lost_app();
 
     // User commands surface a per-command line, never a silent drop.

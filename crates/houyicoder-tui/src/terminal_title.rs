@@ -48,8 +48,8 @@ pub(crate) fn sync(snap: &StatusSnapshot, last: &mut Option<String>) {
 }
 
 /// Restore the default tab title on teardown so the session name does not
-/// outlive the app in the terminal chrome (pairs with set_terminal_progress(false)
-/// in app.rs teardown).
+/// outlive the app in the terminal chrome. Called beside the progress clear
+/// by the terminal guard's host-chrome restore.
 pub(crate) fn restore() {
     set_title(DEFAULT_TITLE);
 }

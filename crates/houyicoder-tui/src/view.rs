@@ -71,24 +71,7 @@ pub(crate) fn badge_color(name: &str) -> Option<Color> {
 /// The approval card is likewise inline at the transcript tail (see
 /// working::draw_transcript), not a floating popup.
 pub fn draw(f: &mut Frame, app: &App) {
-    // Zero the jump-to-bottom label rect at the top of every frame so it can
-    // never go stale across screens that don't render a transcript (Login,
-    // Console) — draw_transcript re-publishes it while the label is visible.
-    app.ui
-        .frame
-        .layout
-        .jump_to_bottom_rect
-        .set(Rect::new(0, 0, 0, 0));
-    // The fleet strip's click target gets the same stale-rect protection as
-    // the label and the status bar below.
-    app.ui.fleet.rect.set(Rect::new(0, 0, 0, 0));
-    // Same protection for the status bar selection surface: a viewport that
-    // draws a status bar re-publishes its rect + rows; one that does not
-    // leaves this zeroed so a drag cannot target a stale bar from the last
-    // frame (Working→Scroll left the Working rect live, and a Scroll-mode
-    // drag copied Working's text + painted a highlight on a row the status
-    // surface no longer owned).
-    app.ui.frame.layout.status_rect.set(Rect::new(0, 0, 0, 0));
+    reset_click_regions(app);
     // The startup workspace-trust banner is the sole pre-chat setup screen
     // while a trust ask is pending — the main view does not mount until the
     // user answers. A top banner, not a centered popup over a live chat.
@@ -101,6 +84,30 @@ pub fn draw(f: &mut Frame, app: &App) {
         Screen::Console => console::draw(f, app),
         Screen::Working => working::draw(f, app),
     }
+}
+
+/// Zero every click-target rectangle at the top of a frame. Each region
+/// republishes its rect while it draws, so a region this frame does not draw
+/// keeps the zero and cannot be reached through the previous frame's
+/// geometry. The rule lives here rather than beside each region because the
+/// frames that skip a region are not in one place: the login, console, and
+/// trust screens draw no transcript at all, a fullscreen pane such as the
+/// artifact view draws none either, and the viewport variants differ in
+/// which chrome they publish. Left stale, a rect from the last frame routes
+/// a click or drag at content that is no longer on screen.
+///
+/// Called by the top-level draw and again by each working-mode variant, so a
+/// caller that reaches a variant directly gets the same guarantee.
+pub(crate) fn reset_click_regions(app: &App) {
+    let zero = Rect::new(0, 0, 0, 0);
+    let layout = &app.ui.frame.layout;
+    layout.transcript_rect.set(zero);
+    layout.jump_to_bottom_rect.set(zero);
+    layout.pane_rect.set(zero);
+    layout.status_rect.set(zero);
+    layout.approval_rect.set(zero);
+    app.ui.fleet.rect.set(zero);
+    app.ui.queue_view.strip_rect.set(zero);
 }
 
 #[cfg(test)]

@@ -63,9 +63,7 @@ fn pane_hides_status(app: &App) -> bool {
 /// the 1-line status bar, and the input box pinned to the bottom. No progress
 /// header or pane-tab strip; the status bar carries the progress bar.
 fn draw_working(f: &mut Frame, app: &App) {
-    app.ui.queue_view.strip_rect.set(Rect::new(0, 0, 0, 0));
-    app.ui.frame.layout.pane_rect.set(Rect::new(0, 0, 0, 0));
-    app.ui.frame.layout.approval_rect.set(Rect::new(0, 0, 0, 0));
+    super::reset_click_regions(app);
     app.ui.frame.feedback.terminal_rows.set(f.area().height);
     // Wrap columns for the input content: terminal width minus the top/bottom
     // border (2) and the "❯ " prompt (2). Fed back with the rest of the
@@ -93,7 +91,6 @@ fn draw_working(f: &mut Frame, app: &App) {
     let queue_want = queue_overlay::strip_want(app);
     let footer = footer_budget::allocate(total_h, input_h, queue_want, fleet_pill::want(app));
     app.ui.fleet.granted.set(footer.fleet);
-    app.ui.fleet.rect.set(Rect::new(0, 0, 0, 0));
     let layout = build_working_layout(app, f.area().width, input_h, footer.queue, footer.fleet);
     let outer = Layout::default()
         .direction(Direction::Vertical)
@@ -284,9 +281,7 @@ fn build_working_layout(
 /// draw_diff_full and focus_titled_block). The status bar carries the
 /// actionable keys (a/r/i) plus the progress bar.
 fn draw_focus(f: &mut Frame, app: &App) {
-    app.ui.queue_view.strip_rect.set(Rect::new(0, 0, 0, 0));
-    app.ui.frame.layout.pane_rect.set(Rect::new(0, 0, 0, 0));
-    app.ui.frame.layout.approval_rect.set(Rect::new(0, 0, 0, 0));
+    super::reset_click_regions(app);
     app.ui.frame.feedback.terminal_rows.set(f.area().height);
     let total_h = f.area().height;
     let queue_h = footer_budget::allocate(total_h, 0, queue_overlay::strip_want(app), 0).queue;
@@ -315,9 +310,7 @@ fn draw_focus(f: &mut Frame, app: &App) {
 /// reading, with a 1-line overlay status bar showing the line position plus
 /// search/tail hints.
 fn draw_scroll(f: &mut Frame, app: &App) {
-    app.ui.queue_view.strip_rect.set(Rect::new(0, 0, 0, 0));
-    app.ui.frame.layout.pane_rect.set(Rect::new(0, 0, 0, 0));
-    app.ui.frame.layout.approval_rect.set(Rect::new(0, 0, 0, 0));
+    super::reset_click_regions(app);
     app.ui.frame.feedback.terminal_rows.set(f.area().height);
     let total_h = f.area().height;
     let queue_h = footer_budget::allocate(total_h, 0, queue_overlay::strip_want(app), 0).queue;
