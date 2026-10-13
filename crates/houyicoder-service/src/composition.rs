@@ -132,12 +132,10 @@ pub struct ResolvedProvider {
     pub warnings: Vec<houyicoder_config::ConfigWarning>,
 }
 
-#[cfg(test)]
 impl ResolvedProvider {
-    /// A stub for a test that assembles a runner without driving a turn. Kept
-    /// test-only: a production caller must resolve from settings, so a missing
-    /// key surfaces as stub mode with its warning instead of a silent fake.
-    pub(crate) fn stub() -> Self {
+    /// A stub provider that returns canned text without making external
+    /// requests, used by callers that assemble a runner under test.
+    pub fn stub() -> Self {
         Self {
             provider: Arc::new(FakeProvider::text("stub")),
             warnings: Vec::new(),

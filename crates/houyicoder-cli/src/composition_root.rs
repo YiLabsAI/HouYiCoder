@@ -4,27 +4,40 @@
 //! tasks. Sits between the CLI entry dispatch and the TUI run loop so the
 //! fresh and resume paths share one wiring and cannot drift.
 
-use std::sync::Arc;
-use std::sync::Mutex;
+use std::error::Error;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::channel;
+use std::sync::{Arc, Mutex};
 
+use houyicoder_api::sandbox::SandboxSession;
 use houyicoder_client::{Client, InProcTransport};
-use houyicoder_context::SessionId;
-use houyicoder_core::agent::Runner;
+use houyicoder_config::{config_home, resolve_model};
+use houyicoder_context::{SessionDescriptorStore, SessionId};
+use houyicoder_core::agent::multi_agent::bus_types::AgentBus;
+use houyicoder_core::agent::{Runner, WorktreeController};
+use houyicoder_permission::{DefaultModeGate, FileRuleStore, ModeGate};
+use houyicoder_protocol::frontend::SessionId as WireSessionId;
 use houyicoder_service::composition::host_lifecycle::{HostLifecycle, ShutdownReport};
-use houyicoder_service::composition::session_log_root;
-use houyicoder_service::server::{FrameCarrier, Server};
+use houyicoder_service::composition::{
+    ResolvedProvider, build_runner, build_runner_for_resume_export, disk_descriptor_store,
+    fleet_status_relay, notification_drain, session_log_root,
+};
+use houyicoder_service::server::{EventSequencer, FrameCarrier, Server};
 use houyicoder_tui::agent_message::SessionMessage;
 use houyicoder_tui::composition::{FrontendStartup, RunnerBundle, shared_runtime};
+use houyicoder_tui::transcript::snapshot::TranscriptSnapshot;
+use houyicoder_tui::view::export_log::ExportLog;
+use houyicoder_tui::view::trajectory_pane::TrajectoryLog;
 use tokio::runtime::Handle;
+use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 
 use crate::housekeeping;
-use crate::session_catalog;
-use crate::session_history;
+use crate::session_catalog::DescriptorSessionCatalog;
+use crate::session_history::SessionHistory;
 use crate::session_lock::SessionLock;
-use crate::session_log_snapshot;
-use crate::trajectory;
+use crate::session_log_snapshot::SessionLogSnapshot;
+use crate::trajectory::SessionLogTrajectory;
 
 /// A wired TUI bundle, the frontend startup policy the TUI applies to its Ui
 /// and Input owners, and the host lifecycle owner for the session's background
@@ -235,10 +248,9 @@ impl Drop for LeaseScopeGuard {
 pub(crate) fn build_bundle(
     project: Option<String>,
     model_override: Option<String>,
-    provider: houyicoder_service::composition::ResolvedProvider,
+    provider: ResolvedProvider,
 ) -> WiredBundle {
-    let bundle =
-        houyicoder_service::composition::build_runner(crate::production_runner(project, provider));
+    let bundle = build_runner(crate::production_runner(project, provider));
     // --model overrides the settings-seeded active model for a fresh session
     // (resolution chain: --model flag > settings.json > DEFAULT). A resumed
     // session restores its own model from the descriptor (higher priority), so
@@ -246,7 +258,7 @@ pub(crate) fn build_bundle(
     if let Some(m) = &model_override {
         bundle.runner.set_model(m.clone());
     }
-    let model = model_override.unwrap_or_else(houyicoder_config::resolve_model);
+    let model = model_override.unwrap_or_else(resolve_model);
     assemble_bundle(
         bundle.runner,
         bundle.session,
@@ -266,17 +278,15 @@ pub(crate) fn build_bundle(
 /// bundle the fresh path uses. The export is a snapshot, so resume forks a
 /// new session id (the source sid is recorded in provenance, not reused).
 pub(crate) fn build_bundle_for_resume(
-    export_path: &std::path::Path,
+    export_path: &Path,
     project: Option<String>,
-    provider: houyicoder_service::composition::ResolvedProvider,
-) -> Result<WiredBundle, Box<dyn std::error::Error>> {
-    let resumed = houyicoder_service::composition::build_runner_for_resume_export(
+    provider: ResolvedProvider,
+) -> Result<WiredBundle, Box<dyn Error>> {
+    let resumed = build_runner_for_resume_export(
         export_path,
         &session_log_root(),
         project,
-        Some(Arc::new(
-            houyicoder_permission::FileRuleStore::default_paths(),
-        )),
+        Some(Arc::new(FileRuleStore::default_paths())),
         provider,
     )?;
     Ok(assemble_bundle(
@@ -303,12 +313,12 @@ pub(crate) fn assemble_bundle(
     runner: Runner,
     session: SessionId,
     model: String,
-    gate: Arc<houyicoder_permission::DefaultModeGate>,
-    sandbox_session: Option<Arc<dyn houyicoder_api::sandbox::SandboxSession>>,
-    append_notify: Arc<tokio::sync::Notify>,
+    gate: Arc<DefaultModeGate>,
+    sandbox_session: Option<Arc<dyn SandboxSession>>,
+    append_notify: Arc<Notify>,
     skip_login: bool,
-    worktree_controller: Option<Arc<houyicoder_core::agent::WorktreeController>>,
-    bus: Option<Arc<houyicoder_core::agent::multi_agent::bus_types::AgentBus>>,
+    worktree_controller: Option<Arc<WorktreeController>>,
+    bus: Option<Arc<AgentBus>>,
 ) -> WiredBundle {
     // Grab the SessionLog BEFORE the runner moves into the server task — the
     // trajectory view reads it for the /trajectory pane, and the session
@@ -317,34 +327,27 @@ pub(crate) fn assemble_bundle(
     // The descriptor reader for the session picker (lists sessions + reads each
     // name/cwd/model). Built at the same sid-keyed sessions root the file
     // backend uses.
-    let descriptor_store: Arc<dyn houyicoder_context::SessionDescriptorStore> =
-        houyicoder_service::composition::disk_descriptor_store();
+    let descriptor_store: Arc<dyn SessionDescriptorStore> = disk_descriptor_store();
     // The session-log snapshot loads the durable log into a TranscriptLine
     // snapshot for the search view (read-whole path under the threshold).
     // Shares the same SessionLog as the trajectory and export views (an Arc
     // clone, so each view still takes ownership of its slot).
     // One reader owns the byte windows and the offset index for this session;
     // the transcript and the trajectory project what it returns.
-    let history = Arc::new(session_history::SessionHistory::new(
-        session_log.clone(),
-        session,
-    ));
-    let snapshot: Option<Arc<dyn houyicoder_tui::transcript::snapshot::TranscriptSnapshot>> =
-        Some(Arc::new(
-            session_log_snapshot::SessionLogSnapshot::with_history(history.clone()),
-        ));
+    let history = Arc::new(SessionHistory::new(session_log.clone(), session));
+    let snapshot: Option<Arc<dyn TranscriptSnapshot>> =
+        Some(Arc::new(SessionLogSnapshot::with_history(history.clone())));
     // One object backs both the /trajectory view + the /export serializer:
     // both read the same durable event stream.
-    let trajectory = Arc::new(trajectory::SessionLogTrajectory::with_history(
+    let trajectory = Arc::new(SessionLogTrajectory::with_history(
         history,
         session_log.clone(),
         session,
         model.clone(),
     ));
-    let trajectory_log: Option<Arc<dyn houyicoder_tui::view::trajectory_pane::TrajectoryLog>> =
-        Some(trajectory.clone());
-    let export_log: Option<Arc<dyn houyicoder_tui::view::export_log::ExportLog>> = Some(trajectory);
-    let wire_session = houyicoder_protocol::frontend::SessionId(session.to_string());
+    let trajectory_log: Option<Arc<dyn TrajectoryLog>> = Some(trajectory.clone());
+    let export_log: Option<Arc<dyn ExportLog>> = Some(trajectory);
+    let wire_session = WireSessionId(session.to_string());
     let (tx, rx) = channel::<SessionMessage>();
     let (runner, client, startup_warnings, host) = start_local_server(
         runner,
@@ -355,6 +358,7 @@ pub(crate) fn assemble_bundle(
         Some(descriptor_store.clone()),
         worktree_controller,
         bus,
+        None,
     );
     // The server task owns the runner + the permission gate; the TUI holds
     // only the protocol client.
@@ -368,7 +372,7 @@ pub(crate) fn assemble_bundle(
             trajectory_log,
             export_log,
             snapshot,
-            session_catalog: Some(Arc::new(session_catalog::DescriptorSessionCatalog::new(
+            session_catalog: Some(Arc::new(DescriptorSessionCatalog::new(
                 session_log,
                 session_log_root(),
             ))),
@@ -376,7 +380,7 @@ pub(crate) fn assemble_bundle(
         FrontendStartup {
             skip_login,
             startup_warnings,
-            history_path: houyicoder_config::config_home().join("history.jsonl"),
+            history_path: config_home().join("history.jsonl"),
         },
         host,
         runner,
@@ -391,24 +395,25 @@ pub(crate) fn assemble_bundle(
 pub(crate) fn start_local_server(
     mut runner: Runner,
     session: SessionId,
-    gate: Arc<houyicoder_permission::DefaultModeGate>,
-    sandbox_session: Option<Arc<dyn houyicoder_api::sandbox::SandboxSession>>,
-    append_notify: Arc<tokio::sync::Notify>,
-    descriptor_store: Option<Arc<dyn houyicoder_context::SessionDescriptorStore>>,
-    worktree_controller: Option<Arc<houyicoder_core::agent::WorktreeController>>,
-    bus: Option<Arc<houyicoder_core::agent::multi_agent::bus_types::AgentBus>>,
+    gate: Arc<DefaultModeGate>,
+    sandbox_session: Option<Arc<dyn SandboxSession>>,
+    append_notify: Arc<Notify>,
+    descriptor_store: Option<Arc<dyn SessionDescriptorStore>>,
+    worktree_controller: Option<Arc<WorktreeController>>,
+    bus: Option<Arc<AgentBus>>,
+    settings_path: Option<PathBuf>,
 ) -> (Arc<Runner>, Client, Vec<String>, HostLifecycle) {
     let mut host = HostLifecycle::new();
     let (c2s_tx, c2s_rx) = futures::channel::mpsc::channel(16);
     let (s2c_tx, s2c_rx) = futures::channel::mpsc::channel(16);
-    let event_sequencer = houyicoder_service::server::EventSequencer::new();
+    let event_sequencer = EventSequencer::new();
     event_sequencer.install_on(&mut runner);
     // The server shares the bus so a child's permission ask (published while
     // the parent run is parked on the child) reaches the wire-approval flow.
     let server_bus = bus.clone();
     // Fleet status relay: bridge bus child status to AgentStatus wire frames so
     // the TUI footer renders without a direct engine-bus dependency.
-    if let Some(handle) = houyicoder_service::composition::fleet_status_relay::spawn(
+    if let Some(handle) = fleet_status_relay::spawn(
         bus,
         event_sequencer.clone(),
         shared_runtime().handle().clone(),
@@ -431,7 +436,7 @@ pub(crate) fn start_local_server(
     // mid-turn queue so the parent model learns the child finished on its
     // next turn boundary. Shares the same bus as the fleet status relay;
     // no-op without one.
-    if let Some(handle) = houyicoder_service::composition::notification_drain::spawn(
+    if let Some(handle) = notification_drain::spawn(
         server_bus.clone(),
         Arc::downgrade(&runner),
         shared_runtime().handle().clone(),
@@ -445,7 +450,7 @@ pub(crate) fn start_local_server(
     // actually guards the tools. The TUI holds no gate handle. The sandbox
     // session is threaded in too so the /permissions Workspace verbs can
     // extend the fence at runtime (the same Arc the tools' exec path holds).
-    let gate_dyn: Arc<dyn houyicoder_permission::ModeGate> = gate;
+    let gate_dyn: Arc<dyn ModeGate> = gate;
     let mut server =
         Server::new_with_event_sequencer(runner.clone(), session, gate_dyn, event_sequencer)
             .with_append_notify(append_notify)
@@ -464,6 +469,9 @@ pub(crate) fn start_local_server(
     // name / cwd / provenance). None on paths without a store (tests).
     if let Some(store) = descriptor_store {
         server = server.with_descriptor_store(store);
+    }
+    if let Some(sp) = settings_path {
+        server = server.with_settings_path(sp);
     }
     let server = server;
     let runtime = shared_runtime();

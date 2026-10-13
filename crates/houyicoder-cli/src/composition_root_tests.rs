@@ -5,20 +5,24 @@
 use super::*;
 use crate::session_lock::{LockError, SessionLock};
 use houyicoder_api::agent_event::{EventHandler, RunCompletionStatus, RunLifecycleEvent};
-use houyicoder_api::spawn::{SpawnArgs, SpawnFailure, SpawnHandle, SpawnOutcome};
+use houyicoder_api::spawn::SpawnArgs;
 use houyicoder_api::tool::ToolCtx;
 use houyicoder_async::PFut;
 use houyicoder_async::bus::MessageBus;
-use houyicoder_context::SessionId;
+use houyicoder_context::{
+    CheckpointId, CheckpointManifest, ContextBackend, ContextError, EventId, SessionEvent,
+    SessionId, SessionLogEntry,
+};
 use houyicoder_core::agent::multi_agent::bus_types::{
     AgentBus, BusMessage, ChildDescriptor, ChildRunMode, global_completed_topic,
     global_progress_topic, spawned_topic,
 };
 use houyicoder_core::agent::multi_agent::status_publisher::ChildStatusPublisher;
+use houyicoder_memory::InMemoryBackend;
 use houyicoder_protocol::envelope::{ClientResponsePayload, ServerFrame, ServerRequestPayload};
 use houyicoder_protocol::frontend::event::FrontendEvent;
 use houyicoder_protocol::frontend::trust::TrustAccept;
-use houyicoder_service::composition::{BuildRunnerOptions, build_runner};
+use houyicoder_service::composition::{BuildRunnerOptions, ResolvedProvider, build_runner};
 use std::env;
 use std::fs;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -28,8 +32,11 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 use tokio::runtime::{Builder, Runtime};
+use tokio::spawn;
+use tokio::sync::Notify;
 use tokio::sync::oneshot::channel;
 use tokio::task::yield_now;
+use tokio::time::{sleep, timeout};
 
 fn temp_root() -> PathBuf {
     static SEQ: AtomicU64 = AtomicU64::new(0);
@@ -39,37 +46,67 @@ fn temp_root() -> PathBuf {
     p
 }
 
-/// A spawn handle whose join_children waits on a test gate, standing in
-/// for a child driver still finalizing. The release task must hold the
-/// session lock until this join resolves.
-struct GatedJoin {
-    entered: Arc<tokio::sync::Notify>,
-    release: Arc<tokio::sync::Notify>,
+/// A backend that parks when SubagentReturn is appended to the parent session
+/// log, standing in for a child driver inside its finalize tail.
+struct LatchingBackend {
+    inner: Arc<InMemoryBackend>,
+    entered: Arc<Notify>,
+    release: Arc<Notify>,
 }
 
-impl SpawnHandle for GatedJoin {
-    fn spawn(
+impl ContextBackend for LatchingBackend {
+    fn append(&self, event: SessionLogEntry) -> PFut<'_, Result<EventId, ContextError>> {
+        if matches!(event.event, SessionEvent::SubagentReturn { .. }) {
+            self.entered.notify_one();
+            let release = self.release.clone();
+            let inner = Arc::clone(&self.inner);
+            return Box::pin(async move {
+                release.notified().await;
+                inner.append(event).await
+            });
+        }
+        self.inner.append(event)
+    }
+
+    fn read_range(
         &self,
-        _ctx: &ToolCtx,
-        _args: SpawnArgs,
-    ) -> PFut<'_, Result<SpawnOutcome, SpawnFailure>> {
-        Box::pin(async { Err(SpawnFailure::Recursive) })
+        session: SessionId,
+        from: Option<EventId>,
+        to: Option<EventId>,
+    ) -> PFut<'_, Result<Vec<SessionLogEntry>, ContextError>> {
+        self.inner.read_range(session, from, to)
     }
 
-    fn join_children(&self) -> PFut<'_, ()> {
-        self.entered.notify_one();
-        let release = self.release.clone();
-        Box::pin(async move {
-            release.notified().await;
-        })
+    fn replay(&self, session: SessionId) -> PFut<'_, Result<Vec<SessionLogEntry>, ContextError>> {
+        self.inner.replay(session)
+    }
+
+    fn write_checkpoint(
+        &self,
+        manifest: CheckpointManifest,
+    ) -> PFut<'_, Result<CheckpointId, ContextError>> {
+        self.inner.write_checkpoint(manifest)
+    }
+
+    fn read_checkpoint(
+        &self,
+        id: CheckpointId,
+    ) -> PFut<'_, Result<CheckpointManifest, ContextError>> {
+        self.inner.read_checkpoint(id)
+    }
+
+    fn list_checkpoints(
+        &self,
+        session: SessionId,
+    ) -> PFut<'_, Result<Vec<CheckpointId>, ContextError>> {
+        self.inner.list_checkpoints(session)
     }
 }
 
-/// The release task joins the lease's children before dropping the lock:
-/// while a child's join is still pending (the gated stand-in), a second
-/// acquire reports the lock held; only after the join resolves does the
-/// unlock happen. A release that dropped the lock after only the host
-/// tasks — or at task entry — would let the first acquire in early.
+/// The release task joins real children before dropping the lock: while a child
+/// driver is still inside its finalize tail appending SubagentReturn to the
+/// parent session log, a second acquire reports the lock held; only after the
+/// child finishes and the return event lands does the unlock happen.
 #[cfg(unix)]
 #[test]
 fn test_release_joins_children_first() {
@@ -79,36 +116,88 @@ fn test_release_joins_children_first() {
         .expect("test runtime");
     runtime.block_on(async {
         let root = temp_root();
-        let sid_str = SessionId::new().to_string();
+        let entered = Arc::new(Notify::new());
+        let release_gate = Arc::new(Notify::new());
+        let backend = Box::new(LatchingBackend {
+            inner: Arc::new(InMemoryBackend::new()),
+            entered: Arc::clone(&entered),
+            release: Arc::clone(&release_gate),
+        });
+
+        let mut options = BuildRunnerOptions::default();
+        options.backend = Some(backend);
+        options.provider = Some(ResolvedProvider::stub());
+        let bundle = build_runner(options);
+        let sid_str = bundle.session.to_string();
         let lock = SessionLock::acquire(&sid_str, &root).expect("first acquire");
 
-        let mut host = HostLifecycle::new();
-        host.track(tokio::spawn(async {}));
-        let entered = Arc::new(tokio::sync::Notify::new());
-        let release_gate = Arc::new(tokio::sync::Notify::new());
-        let runner = build_runner(BuildRunnerOptions::default())
-            .runner
-            .with_spawn_handle(Arc::new(GatedJoin {
-                entered: Arc::clone(&entered),
-                release: Arc::clone(&release_gate),
-            }));
-        let runner = Arc::new(runner);
-        let lease = HostLease::holding(host, lock, sid_str.clone(), Some(runner));
+        let (runner, client, _warnings, host) = start_local_server(
+            bundle.runner,
+            bundle.session,
+            bundle.gate,
+            bundle.sandbox_session,
+            bundle.append_notify,
+            None,
+            None,
+            bundle.bus,
+            Some(root.join("settings.json")),
+        );
+
+        let parent_sid = bundle.session;
+        let spawn_handle = runner.spawn_handle().expect("real spawn handle attached");
+        let ctx = ToolCtx::new("probe-parent").with_session(parent_sid);
+        let mut args = SpawnArgs::new("explore", "probe-task", "probe-task");
+        args.run_in_background = true;
+        let outcome = spawn_handle
+            .spawn(&ctx, args)
+            .await
+            .expect("spawn background child");
+        assert!(
+            outcome.status.is_none(),
+            "background child has no status yet"
+        );
+        assert!(!outcome.child_session_id.is_empty(), "child id assigned");
+
+        drop(client);
+        let lease = HostLease::holding(host, lock, sid_str.clone(), Some(Arc::clone(&runner)));
         let release = lease.begin_release(runtime.handle());
-        // Wait until the release task reached the child join: the lock
-        // must still be held there, before the gate opens.
+
+        // Wait until the child reaches its finalize tail and parks on
+        // SubagentReturn append.
         entered.notified().await;
-        tokio::task::yield_now().await;
+        yield_now().await;
         match SessionLock::acquire(&sid_str, &root) {
             Err(LockError::HeldByOther(_)) => {}
-            Ok(_) => panic!("lock released while the child join was pending"),
+            Ok(_) => panic!("lock released while the child finalize tail was pending"),
             Err(LockError::Io(e)) => panic!("unexpected io error: {e}"),
         }
+
+        // The SubagentReturn event is not committed yet while the latch holds.
+        let events_during = runner.store().trajectory_snapshot(parent_sid);
+        assert!(
+            !events_during
+                .iter()
+                .any(|e| matches!(e.event, SessionEvent::SubagentReturn { .. })),
+            "return event landed before latch release"
+        );
+
+        // Open the latch so the child driver completes its finalize tail.
         release_gate.notify_one();
         let report = release.await.expect("release task");
         assert_eq!(report.panic_count(), 0, "no writer panicked");
+
         let _reacquire =
-            SessionLock::acquire(&sid_str, &root).expect("lock released only after the child join");
+            SessionLock::acquire(&sid_str, &root).expect("lock released only after child finished");
+
+        let events_after = runner.store().trajectory_snapshot(parent_sid);
+        assert!(
+            events_after
+                .iter()
+                .any(|e| matches!(e.event, SessionEvent::SubagentReturn { .. })),
+            "the finalize tail landed before the release resolved"
+        );
+
+        drop(runner);
         fs::remove_dir_all(&root).ok();
     });
 }
@@ -139,7 +228,7 @@ fn test_lock_outlives_writer() {
         let (release_tx, release_rx) = channel::<()>();
         let done = Arc::new(AtomicBool::new(false));
         let done_c = Arc::clone(&done);
-        host.track(tokio::spawn(async move {
+        host.track(spawn(async move {
             // Stand in for a drain writer: acknowledge the cancel so the
             // test knows begin_shutdown ran, then wait on a second gate so
             // the writer stays alive until the test lets it finish.
@@ -244,7 +333,10 @@ fn start_host(
     SessionLock,
     Arc<AgentBus>,
 ) {
-    let bundle = build_runner(BuildRunnerOptions::default());
+    let settings_path = root.join("settings.json");
+    let mut options = BuildRunnerOptions::default();
+    options.provider = Some(ResolvedProvider::stub());
+    let bundle = build_runner(options);
     let sid = bundle.session.to_string();
     let bus = bundle.bus.clone().expect("the real assembly carries a bus");
     let (runner, client, _warnings, host) = start_local_server(
@@ -256,6 +348,7 @@ fn start_host(
         None,
         None,
         bundle.bus,
+        Some(settings_path),
     );
     let weak = Arc::downgrade(&runner);
     let lock = SessionLock::acquire(&sid, root).expect("acquire session lock");
@@ -300,7 +393,7 @@ async fn read_probe_status(
     want: impl Fn(u32, u64, Option<&str>, Option<&str>) -> bool,
 ) {
     loop {
-        let frame = tokio::time::timeout(Duration::from_secs(5), client.next_frame())
+        let frame = timeout(Duration::from_secs(5), client.next_frame())
             .await
             .expect("probe status frame timed out")
             .expect("frame read");
@@ -359,7 +452,7 @@ async fn await_probe_notification(runner: &Runner, marker: &str) {
             Instant::now() < deadline,
             "the drain never delivered {marker}"
         );
-        tokio::time::sleep(Duration::from_millis(1)).await;
+        sleep(Duration::from_millis(1)).await;
     }
 }
 

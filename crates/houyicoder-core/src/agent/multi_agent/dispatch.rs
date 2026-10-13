@@ -28,7 +28,7 @@ impl Runner {
     }
 
     /// The spawn port dispatches carry, if one is attached.
-    pub(crate) fn spawn_handle(&self) -> Option<&Arc<dyn SpawnHandle>> {
+    pub fn spawn_handle(&self) -> Option<&Arc<dyn SpawnHandle>> {
         self.spawn_handle.as_ref()
     }
 
