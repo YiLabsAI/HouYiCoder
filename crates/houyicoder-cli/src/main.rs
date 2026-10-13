@@ -36,11 +36,13 @@ use houyicoder_tui::agent_message::SessionMessage;
 use houyicoder_tui::composition::{FrontendStartup, RunnerBundle, shared_runtime};
 
 mod cleanup;
-mod composition_root;
+mod cli_args;
+mod composition;
 #[cfg(unix)]
 mod detach;
 mod export_view;
 mod housekeeping;
+mod local_host;
 mod resume_bundle;
 mod session_catalog;
 mod session_history;
@@ -48,14 +50,10 @@ mod session_lock;
 mod session_log_snapshot;
 mod trajectory;
 
-/// Parsed CLI invocation. Each variant maps to one entry path the binary
-/// dispatches on. Parsing is pure (no I/O, no process exit) so the full
-/// flag/subcommand matrix is unit-testable.
-mod cli_args;
 pub(crate) use cli_args::{CliCommand, parse_args, print_help};
+pub(crate) use composition::{WiredBundle, assemble_bundle, build_bundle, build_bundle_for_resume};
+pub(crate) use local_host::{HostLease, HostLeaseScope, HostLeaseSlot, LeaseScopeGuard};
 
-use composition_root::{HostLease, build_bundle, build_bundle_for_resume};
-pub(crate) use composition_root::{WiredBundle, assemble_bundle};
 use houyicoder_context::SessionId;
 use houyicoder_core::agent::Runner;
 use houyicoder_service::composition::ResolvedProvider;
@@ -271,16 +269,7 @@ fn acquire_fresh_lease_at(
         Ok(l) => l,
         Err(e) => {
             let runtime = shared_runtime();
-            let handle = runtime.handle();
-            let shutdown = host.begin_shutdown();
-            let release = handle.spawn(async move {
-                let report = shutdown.await;
-                if let Some(r) = children {
-                    r.join_children().await;
-                }
-                report.trace_failures("fresh-lease host");
-                report
-            });
+            let release = HostLease::unlocked(host, children).begin_release(runtime.handle());
             match runtime.block_on(release) {
                 Ok(report) => report.trace_failures("fresh-lease release"),
                 Err(err) => tracing::warn!("fresh-lease release task did not finish: {err}"),
@@ -557,7 +546,7 @@ fn build_bundle_for_target(
     target: &str,
     project: Option<String>,
     provider: ResolvedProvider,
-    host_slot: &crate::composition_root::HostLeaseSlot,
+    host_slot: &HostLeaseSlot,
 ) -> Result<(RunnerBundle, FrontendStartup), Box<dyn Error>> {
     let sessions_root = session_log_root();
     let path = PathBuf::from(target);
@@ -576,14 +565,8 @@ fn build_bundle_for_target(
             Ok(l) => l,
             Err(e) => {
                 let runtime = shared_runtime();
-                let handle = runtime.handle();
-                let shutdown = host.begin_shutdown();
-                let release = handle.spawn(async move {
-                    let report = shutdown.await;
-                    runner.join_children().await;
-                    report.trace_failures("export-path host");
-                    report
-                });
+                let release =
+                    HostLease::unlocked(host, Some(runner)).begin_release(runtime.handle());
                 host_slot
                     .lock()
                     .expect("host lifecycle slot must not poison")
@@ -592,7 +575,7 @@ fn build_bundle_for_target(
             }
         };
         (bundle, startup, host, runner, lock)
-    } else if let Some(sid) = houyicoder_context::SessionId::from_display_string(target) {
+    } else if let Some(sid) = SessionId::from_display_string(target) {
         let sid_str = sid.to_string();
         // Canonical same-session no-op: the live lease already holds this
         // sid's lock, so acquiring again reports it held by this process
@@ -601,10 +584,8 @@ fn build_bundle_for_target(
         if let Some(current) = host_slot
             .lock()
             .expect("host lifecycle slot must not poison")
-            .current
-            .as_ref()
-            .and_then(|lease| lease.sid.as_deref())
-            && houyicoder_context::SessionId::from_display_string(current).is_some_and(|c| c == sid)
+            .current_sid()
+            && SessionId::from_display_string(current).is_some_and(|c| c == sid)
         {
             return Err(Box::<dyn Error>::from(format!(
                 "already on session {sid_str}"
@@ -627,10 +608,11 @@ fn build_bundle_for_target(
     // writers because begin_release joins them before dropping it; the new
     // lease holds a different sid's lock, so the two coexist briefly without
     // contention.
+    let lease = HostLease::holding(host, lock, bundle.session.0.clone(), Some(runner));
     host_slot
         .lock()
         .expect("host lifecycle slot must not poison")
-        .install(host, lock, bundle.session.0.clone(), Some(runner), handle);
+        .install(lease, handle);
     Ok((bundle, startup))
 }
 
@@ -645,12 +627,10 @@ fn run_tui_loop(
     {
         let _ = detach::cleanup_stale();
     }
-    let host_slot: crate::composition_root::HostLeaseSlot = Arc::new(Mutex::new(
-        crate::composition_root::HostLeaseScope::with_current(lease),
-    ));
+    let host_slot: HostLeaseSlot = Arc::new(Mutex::new(HostLeaseScope::with_current(lease)));
     // The guard's drop releases the scope on every exit path, including a
     // panic unwinding past the loop.
-    let _lease_guard = crate::composition_root::LeaseScopeGuard::new(&host_slot);
+    let _lease_guard = LeaseScopeGuard::new(&host_slot);
     let mut bundle = bundle;
     let mut startup = startup;
     let mut resume_builder: Option<ResumeFn> = {

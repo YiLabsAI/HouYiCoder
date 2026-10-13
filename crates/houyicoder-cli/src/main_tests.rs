@@ -24,8 +24,9 @@ use houyicoder_service::composition::{
 use houyicoder_tui::composition::{FrontendStartup, RunnerBundle, shared_runtime};
 use tokio::runtime::Builder;
 
-use crate::composition_root::{HostLease, HostLeaseScope, HostLeaseSlot, start_local_server};
+use crate::composition::start_local_server;
 use crate::detach::{is_session_live, session_socket, sessions_dir};
+use crate::local_host::{HostLease, HostLeaseScope, HostLeaseSlot};
 use crate::session_lock::{LockError, SessionLock};
 
 // ── parse_args: default + mode flags ──────────────────────────────
@@ -340,8 +341,7 @@ fn test_bad_target_keeps_host() {
     assert!(
         slot.lock()
             .expect("host lifecycle slot must not poison")
-            .current
-            .is_some(),
+            .has_current(),
         "the prior host stays in the slot when the build fails"
     );
 }
@@ -354,12 +354,9 @@ fn test_bad_target_keeps_host() {
 fn test_same_session_noop() {
     let sid = SessionId::new();
     let sid_str = sid.to_string();
-    let slot: HostLeaseSlot = Arc::new(Mutex::new(HostLeaseScope::with_current(HostLease {
-        host: HostLifecycle::new(),
-        lock: None,
-        sid: Some(sid_str.clone()),
-        children: None,
-    })));
+    let slot: HostLeaseSlot = Arc::new(Mutex::new(HostLeaseScope::with_current(
+        HostLease::for_test(HostLifecycle::new(), None, Some(sid_str.clone())),
+    )));
     let provider = resolve_provider(None);
     let err = match build_bundle_for_target(&sid_str, None, provider, &slot) {
         Err(e) => e,
@@ -369,8 +366,7 @@ fn test_same_session_noop() {
     assert!(
         slot.lock()
             .expect("host lifecycle slot must not poison")
-            .current
-            .is_some(),
+            .has_current(),
         "the prior lease stays in the slot on a same-session no-op"
     );
 }
@@ -385,12 +381,9 @@ fn test_cross_spelling_noop() {
     let sid = SessionId::new();
     let uuid_form = sid.to_string();
     let ulid_form = sid.ulid_name();
-    let slot: HostLeaseSlot = Arc::new(Mutex::new(HostLeaseScope::with_current(HostLease {
-        host: HostLifecycle::new(),
-        lock: None,
-        sid: Some(ulid_form),
-        children: None,
-    })));
+    let slot: HostLeaseSlot = Arc::new(Mutex::new(HostLeaseScope::with_current(
+        HostLease::for_test(HostLifecycle::new(), None, Some(ulid_form)),
+    )));
     let provider = resolve_provider(None);
     let err = match build_bundle_for_target(&uuid_form, None, provider, &slot) {
         Err(e) => e,
@@ -441,12 +434,13 @@ fn test_held_target_keeps_host() {
         "the staged pidfile makes the target held by this process"
     );
     // The prior lease holds a different sid so the same-session no-op does not fire.
-    let slot: HostLeaseSlot = Arc::new(Mutex::new(HostLeaseScope::with_current(HostLease {
-        host: HostLifecycle::new(),
-        lock: None,
-        sid: Some(SessionId::new().to_string()),
-        children: None,
-    })));
+    let slot: HostLeaseSlot = Arc::new(Mutex::new(HostLeaseScope::with_current(
+        HostLease::for_test(
+            HostLifecycle::new(),
+            None,
+            Some(SessionId::new().to_string()),
+        ),
+    )));
     let provider = resolve_provider(None);
     let err = match build_bundle_for_target(&target_str, None, provider, &slot) {
         Err(e) => e,
@@ -459,8 +453,7 @@ fn test_held_target_keeps_host() {
     assert!(
         slot.lock()
             .expect("host lifecycle slot must not poison")
-            .current
-            .is_some(),
+            .has_current(),
         "the prior lease stays when the target is held"
     );
 }
