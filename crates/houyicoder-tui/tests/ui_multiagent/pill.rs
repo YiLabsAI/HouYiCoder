@@ -298,13 +298,24 @@ fn test_pill_enter_running_child() {
         [{"type":"Text","text":"ok"}],
         [{"type":"Text","text":"ok"}]
     ]"#;
-    let mut s = pty_session_scripted(script);
+    let mut s = common::pty_session_slow_scripted(2000, script);
     assert!(s.wait_for("let's build", RENDER_TIMEOUT));
     s.send_str("find the auth module");
     s.send_str("\r");
+    // The standing screen, not the byte stream: a streamed line is written
+    // cell by cell, so the accumulated bytes never hold the whole phrase.
     assert!(
-        s.wait_for_plain("delegated background", RENDER_TIMEOUT * 2),
+        s.wait_for_screen("delegated background", RENDER_TIMEOUT * 2),
         "parent should continue past a background delegation:\n{}",
+        s.output()
+    );
+    // The running row's hollow circle is the latch: the drill has to land
+    // while the child is still running, because a done child takes the other
+    // path. The stub's per-call delay holds that window open for the length
+    // of the child's turn.
+    assert!(
+        s.wait_for_screen("◯", RENDER_TIMEOUT * 2),
+        "the running child should show its pill row before the drill:\n{}",
         s.output()
     );
     // Clear so the post-drill frame is what we assert on, then select the
@@ -313,13 +324,16 @@ fn test_pill_enter_running_child() {
     s.send_key(&Key::ShiftDown);
     s.send_str("\r");
     assert!(
-        s.wait_for_plain("Viewing", RENDER_TIMEOUT),
+        s.wait_for_screen("Viewing", RENDER_TIMEOUT * 2),
         "pill drill should open the teammate view on the running child:\n{}",
         s.output()
     );
+    // The standing screen, not the accumulated stream: the stream still holds
+    // the frame drawn between the pill selection and the drill, so it reports
+    // the parent rows even after the child view replaced them.
     assert!(
-        !s.output_plain().contains("delegated background"),
+        !s.screen().contents().contains("delegated background"),
         "parent transcript must not render inside the child view:\n{}",
-        s.output()
+        s.screen().contents()
     );
 }
