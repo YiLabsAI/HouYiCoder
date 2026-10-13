@@ -5,11 +5,28 @@
 
 use super::*;
 
-use crate::composition_root::{HostLease, HostLeaseScope, HostLeaseSlot};
-use crate::session_lock::SessionLock;
-use houyicoder_service::composition::host_lifecycle::HostLifecycle;
-use houyicoder_service::composition::resolve_provider;
+use std::env::temp_dir;
+use std::fs::{create_dir_all, remove_dir_all, remove_file, write};
+use std::path::PathBuf;
+use std::process::id as process_id;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::mpsc::channel as std_channel;
+
+use futures::channel::mpsc::channel as async_channel;
+use houyicoder_client::{Client, InProcTransport};
+use houyicoder_context::SessionId;
+use houyicoder_protocol::frontend::SessionId as WireSessionId;
+use houyicoder_service::composition::host_lifecycle::HostLifecycle;
+use houyicoder_service::composition::{
+    BuildRunnerOptions, ResolvedProvider, build_runner, resolve_provider,
+};
+use houyicoder_tui::composition::{FrontendStartup, RunnerBundle, shared_runtime};
+use tokio::runtime::Builder;
+
+use crate::composition_root::{HostLease, HostLeaseScope, HostLeaseSlot, start_local_server};
+use crate::detach::{is_session_live, session_socket, sessions_dir};
+use crate::session_lock::{LockError, SessionLock};
 
 // ── parse_args: default + mode flags ──────────────────────────────
 
@@ -269,31 +286,36 @@ fn test_parse_project_then_acp() {
 /// the wiring path the TUI takes on startup is exercised end-to-end.
 #[test]
 fn test_pair_completes_handshake() {
-    let bundle = houyicoder_service::composition::build_runner(
-        houyicoder_service::composition::BuildRunnerOptions::default(),
+    let root = temp_root();
+    let mut options = BuildRunnerOptions::default();
+    options.provider = Some(ResolvedProvider::stub());
+    let bundle = build_runner(options);
+    let (runner_arc, mut client, _startup_warnings, host) = start_local_server(
+        bundle.runner,
+        bundle.session,
+        bundle.gate,
+        bundle.sandbox_session,
+        bundle.append_notify,
+        None,
+        None,
+        bundle.bus,
+        Some(root.join("settings.json")),
     );
-    let (runner_arc, mut client, _startup_warnings, _host) =
-        crate::composition_root::start_local_server(
-            bundle.runner,
-            bundle.session,
-            bundle.gate,
-            bundle.sandbox_session,
-            bundle.append_notify,
-            None,
-            None,
-            bundle.bus,
-            None,
-        );
     // The runner Arc is shared: the server task and the caller hold the
     // same allocation.
     assert!(Arc::ptr_eq(&runner_arc, &runner_arc));
     // The client handshake must succeed against the spawned server.
-    let rt = tokio::runtime::Builder::new_current_thread()
+    let rt = Builder::new_current_thread()
         .enable_all()
         .build()
         .expect("build test runtime");
     let hello = rt.block_on(client.connect());
     assert!(hello.is_ok(), "Hello handshake failed: {hello:?}");
+    drop(client);
+    drop(runner_arc);
+    let report = rt.block_on(host.begin_shutdown());
+    assert_eq!(report.panic_count(), 0, "host shut down cleanly");
+    remove_dir_all(&root).ok();
 }
 
 /// A failed switch must leave the prior host alive. build_bundle_for_target
@@ -330,7 +352,7 @@ fn test_bad_target_keeps_host() {
 /// fires before lock acquisition, so the prior lease stays in the slot.
 #[test]
 fn test_same_session_noop() {
-    let sid = houyicoder_context::SessionId::new();
+    let sid = SessionId::new();
     let sid_str = sid.to_string();
     let slot: HostLeaseSlot = Arc::new(Mutex::new(HostLeaseScope::with_current(HostLease {
         host: HostLifecycle::new(),
@@ -360,7 +382,7 @@ fn test_same_session_noop() {
 /// miss this and reach the lock as a false contention error.
 #[test]
 fn test_cross_spelling_noop() {
-    let sid = houyicoder_context::SessionId::new();
+    let sid = SessionId::new();
     let uuid_form = sid.to_string();
     let ulid_form = sid.ulid_name();
     let slot: HostLeaseSlot = Arc::new(Mutex::new(HostLeaseScope::with_current(HostLease {
@@ -397,33 +419,32 @@ fn test_held_target_keeps_host() {
     }
     impl Drop for LiveSessionGuard {
         fn drop(&mut self) {
-            std::fs::remove_file(crate::detach::session_socket(&self.sid)).ok();
-            std::fs::remove_file(crate::detach::sessions_dir().join(format!("{}.pid", self.sid)))
-                .ok();
+            remove_file(session_socket(&self.sid)).ok();
+            remove_file(sessions_dir().join(format!("{}.pid", self.sid))).ok();
         }
     }
-    let target_sid = houyicoder_context::SessionId::new();
+    let target_sid = SessionId::new();
     let target_str = target_sid.to_string();
     // Stage a live pidfile + socket so is_session_live reports the target held
     // by the current process (which is alive by definition).
     let _guard = LiveSessionGuard {
         sid: target_str.clone(),
     };
-    std::fs::write(crate::detach::session_socket(&target_str), b"").expect("write test socket");
-    std::fs::write(
-        crate::detach::sessions_dir().join(format!("{target_str}.pid")),
-        std::process::id().to_string(),
+    write(session_socket(&target_str), b"").expect("write test socket");
+    write(
+        sessions_dir().join(format!("{target_str}.pid")),
+        process_id().to_string(),
     )
     .expect("write live pidfile");
     assert!(
-        crate::detach::is_session_live(&target_str),
+        is_session_live(&target_str),
         "the staged pidfile makes the target held by this process"
     );
     // The prior lease holds a different sid so the same-session no-op does not fire.
     let slot: HostLeaseSlot = Arc::new(Mutex::new(HostLeaseScope::with_current(HostLease {
         host: HostLifecycle::new(),
         lock: None,
-        sid: Some(houyicoder_context::SessionId::new().to_string()),
+        sid: Some(SessionId::new().to_string()),
         children: None,
     })));
     let provider = resolve_provider(None);
@@ -453,7 +474,7 @@ fn test_held_target_keeps_host() {
 #[test]
 fn test_resume_refuses_held() {
     let root = temp_root();
-    let sid = houyicoder_context::SessionId::new();
+    let sid = SessionId::new();
     let sid_str = sid.to_string();
     let first = SessionLock::acquire(&sid_str, &root).expect("first acquire holds");
     let err = match admit_existing_sid(&sid, &root) {
@@ -465,7 +486,7 @@ fn test_resume_refuses_held() {
         "friendly held refusal, got: {err}"
     );
     drop(first);
-    std::fs::remove_dir_all(&root).ok();
+    remove_dir_all(&root).ok();
 }
 
 /// A resume entry for an existing sid that is live elsewhere refuses before
@@ -480,24 +501,23 @@ fn test_resume_refuses_live() {
     }
     impl Drop for LiveSessionGuard {
         fn drop(&mut self) {
-            std::fs::remove_file(crate::detach::session_socket(&self.sid)).ok();
-            std::fs::remove_file(crate::detach::sessions_dir().join(format!("{}.pid", self.sid)))
-                .ok();
+            remove_file(session_socket(&self.sid)).ok();
+            remove_file(sessions_dir().join(format!("{}.pid", self.sid))).ok();
         }
     }
-    let target_sid = houyicoder_context::SessionId::new();
+    let target_sid = SessionId::new();
     let target_str = target_sid.to_string();
     let _guard = LiveSessionGuard {
         sid: target_str.clone(),
     };
-    std::fs::write(crate::detach::session_socket(&target_str), b"").expect("write test socket");
-    std::fs::write(
-        crate::detach::sessions_dir().join(format!("{target_str}.pid")),
-        std::process::id().to_string(),
+    write(session_socket(&target_str), b"").expect("write test socket");
+    write(
+        sessions_dir().join(format!("{target_str}.pid")),
+        process_id().to_string(),
     )
     .expect("write live pidfile");
     assert!(
-        crate::detach::is_session_live(&target_str),
+        is_session_live(&target_str),
         "the staged pidfile makes the target held by this process"
     );
     let provider = resolve_provider(None);
@@ -511,14 +531,70 @@ fn test_resume_refuses_live() {
     );
 }
 
+/// When lock acquisition for a freshly built bundle fails, the host tasks
+/// already started on the shared runtime must be joined and reclaimed
+/// before acquire_fresh_lease returns the error, rather than leaking.
+#[cfg(unix)]
+#[test]
+fn test_fresh_lock_failure_reclaims() {
+    let root = temp_root();
+    let sid = SessionId::new();
+    let sid_str = sid.to_string();
+    let _held = SessionLock::acquire(&sid_str, &root).expect("pre-acquire lock");
+
+    let done = Arc::new(AtomicBool::new(false));
+    let done_c = Arc::clone(&done);
+    let mut host = HostLifecycle::new();
+    let cancel = host.cancel_token();
+    host.track(shared_runtime().handle().spawn(async move {
+        let _ = cancel.cancelled().await;
+        done_c.store(true, Ordering::SeqCst);
+    }));
+
+    let (tx, rx) = std_channel();
+    let (c2s_tx, _) = async_channel(1);
+    let (_, s2c_rx) = async_channel(1);
+    let bundle = RunnerBundle {
+        client: Client::new(Box::new(InProcTransport::from_halves(c2s_tx, s2c_rx))),
+        agent_tx: tx,
+        agent_rx: rx,
+        session: WireSessionId(sid_str.clone()),
+        model: "stub".into(),
+        trajectory_log: None,
+        export_log: None,
+        snapshot: None,
+        session_catalog: None,
+    };
+    let startup = FrontendStartup {
+        skip_login: true,
+        startup_warnings: Vec::new(),
+        history_path: root.join("history.jsonl"),
+    };
+
+    let err = match acquire_fresh_lease_at(bundle, startup, host, None, &root) {
+        Ok(_) => panic!("held lock must cause acquire_fresh_lease to fail"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string().contains("held by other")
+            || err.to_string().contains("already held")
+            || err.is::<LockError>(),
+        "error must be from lock, got: {err}"
+    );
+    assert!(
+        done.load(Ordering::SeqCst),
+        "host tasks must be cancelled and joined when lock acquisition fails"
+    );
+    remove_dir_all(&root).ok();
+}
+
 /// A per-test temp directory so the held-lock admission does not touch the
 /// global sessions root.
 #[cfg(unix)]
-fn temp_root() -> std::path::PathBuf {
-    use std::sync::atomic::{AtomicU64, Ordering};
+fn temp_root() -> PathBuf {
     static SEQ: AtomicU64 = AtomicU64::new(0);
     let n = SEQ.fetch_add(1, Ordering::Relaxed);
-    let path = std::env::temp_dir().join(format!("admit-{}-{n}", std::process::id()));
-    std::fs::create_dir_all(&path).expect("temp root");
+    let path = temp_dir().join(format!("admit-{}-{n}", process_id()));
+    create_dir_all(&path).expect("temp root");
     path
 }

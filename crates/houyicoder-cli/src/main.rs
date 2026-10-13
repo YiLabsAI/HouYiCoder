@@ -247,15 +247,47 @@ fn admit_existing_sid(
 
 /// Acquire the lock for a freshly-built bundle and return its lease. Called
 /// after the build for a new sid (fresh / export / fork), which cannot
-/// contend: the sid did not exist before the build created it.
+/// contend: the sid did not exist before the build created it. If lock
+/// acquisition fails, the host tasks and any children already started
+/// by the build must be joined and reclaimed so they do not leak.
 fn acquire_fresh_lease(
     bundle: RunnerBundle,
     startup: FrontendStartup,
     host: HostLifecycle,
     children: Option<Arc<Runner>>,
 ) -> Result<(RunnerBundle, FrontendStartup, HostLease), Box<dyn Error>> {
+    acquire_fresh_lease_at(bundle, startup, host, children, &session_log_root())
+}
+
+fn acquire_fresh_lease_at(
+    bundle: RunnerBundle,
+    startup: FrontendStartup,
+    host: HostLifecycle,
+    children: Option<Arc<Runner>>,
+    sessions_root: &Path,
+) -> Result<(RunnerBundle, FrontendStartup, HostLease), Box<dyn Error>> {
     let sid_str = bundle.session.0.clone();
-    let lock = SessionLock::acquire(&sid_str, &session_log_root())?;
+    let lock = match SessionLock::acquire(&sid_str, sessions_root) {
+        Ok(l) => l,
+        Err(e) => {
+            let runtime = shared_runtime();
+            let handle = runtime.handle();
+            let shutdown = host.begin_shutdown();
+            let release = handle.spawn(async move {
+                let report = shutdown.await;
+                if let Some(r) = children {
+                    r.join_children().await;
+                }
+                report.trace_failures("fresh-lease host");
+                report
+            });
+            match runtime.block_on(release) {
+                Ok(report) => report.trace_failures("fresh-lease release"),
+                Err(err) => tracing::warn!("fresh-lease release task did not finish: {err}"),
+            }
+            return Err(Box::new(e));
+        }
+    };
     let lease = HostLease::holding(host, lock, sid_str, children);
     Ok((bundle, startup, lease))
 }
