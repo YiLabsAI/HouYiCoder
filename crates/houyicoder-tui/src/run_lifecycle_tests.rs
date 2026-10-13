@@ -833,8 +833,8 @@ fn test_ask_preserves_progress() {
     }));
     app.run_progress_mut()
         .expect("active run")
-        .running_tools
-        .insert("c1".into());
+        .tools
+        .begin("c1".into());
 
     app.raise_agent_approval(approval_ask("c2"), RequestId(1));
     app.resolve_current_approval(ApprovalDecision {
@@ -850,7 +850,7 @@ fn test_ask_preserves_progress() {
     let p = app.run_progress().expect("active run");
     assert_eq!(p.live_assistant_text, "firstsecond");
     assert!(
-        p.running_tools.contains("c1"),
+        p.tools.is_running("c1"),
         "the tracked tool survives the approval pause"
     );
 }

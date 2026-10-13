@@ -61,8 +61,8 @@ pub(crate) struct TranscriptViewState {
     /// Bumped on every visible-view change the renderer cannot see through
     /// the transcript revision alone: a fold or expansion toggle, a search
     /// view entering or leaving, a window switch, a parked view restore.
-    /// The count is the input the render cache key reads; a future cache
-    /// skips recompute only when this and every other key field hold.
+    /// The count is the input the render cache key reads; the cache skips
+    /// recompute only when this and every other key field hold.
     presentation_revision: u32,
 }
 

@@ -21,8 +21,8 @@ use crate::keys;
 use crate::notifications::{NotifKind, Notification, copy_toast};
 use crate::run_control::ClientCommand;
 use crate::selection::get_clipboard_path;
-use crate::selection::surface::{
-    ApprovalSelection, PaneSurface, StatusSurface, Surface, TranscriptSurface, clear_stale_click,
+use crate::selection::region::{
+    ApprovalSelection, PaneRegion, Region, StatusRegion, TranscriptRegion, clear_stale_click,
     edge_scroll_if_at_edge, paint_overlay,
 };
 use crate::state::{App, Pane, Screen, ViewportMode};
@@ -30,7 +30,7 @@ use crate::terminal_guard::{
     CrosstermModes, TerminalGuard, assert_mouse_modes, set_terminal_progress,
 };
 use crate::view;
-use crate::view::working::fleet_pill::{FleetClick, click_route};
+use crate::view::working::fleet_strip::{FleetClick, click_route};
 
 /// Run the alternate-screen TUI and restore terminal state on exit.
 /// Mouse input belongs to in-app scrolling and selection while active.
@@ -232,13 +232,13 @@ pub(crate) fn handle_mouse(app: &mut App, m: MouseEvent) {
             // Each surface manages its own drag lifecycle.
             let prect = app.ui.frame.layout.pane_rect.get();
             if prect.width > 0 && prect.height > 0 && in_rect(prect, m.column, m.row) {
-                PaneSurface { app: &mut *app }.handle_down(m.column, m.row);
+                PaneRegion { app: &mut *app }.handle_down(m.column, m.row);
                 return;
             }
             // Status chrome owns selection before the transcript beneath it.
             let srect = app.ui.frame.layout.status_rect.get();
             if srect.width > 0 && srect.height > 0 && in_rect(srect, m.column, m.row) {
-                StatusSurface { app: &mut *app }.handle_down(m.column, m.row);
+                StatusRegion { app: &mut *app }.handle_down(m.column, m.row);
                 return;
             }
             // Approval cards retain a local copyable selection.
@@ -268,7 +268,7 @@ pub(crate) fn handle_mouse(app: &mut App, m: MouseEvent) {
                 // Byte-window browsing does not share transcript selection
                 // coordinates, so clicks do not start a drag.
                 if !app.window_browsing() {
-                    TranscriptSurface { app: &mut *app }.handle_down(m.column, m.row);
+                    TranscriptRegion { app: &mut *app }.handle_down(m.column, m.row);
                 }
             } else {
                 app.ui.selection.transcript.clear();
@@ -279,38 +279,38 @@ pub(crate) fn handle_mouse(app: &mut App, m: MouseEvent) {
         }
         MouseEventKind::Drag(MouseButton::Left) => {
             if app.ui.selection.pane.is_dragging {
-                PaneSurface { app: &mut *app }.handle_drag(m.column, m.row);
+                PaneRegion { app: &mut *app }.handle_drag(m.column, m.row);
             } else if app.ui.selection.status.is_dragging {
-                StatusSurface { app: &mut *app }.handle_drag(m.column, m.row);
+                StatusRegion { app: &mut *app }.handle_drag(m.column, m.row);
             } else if app.ui.selection.approval.is_dragging {
                 ApprovalSelection { app: &mut *app }.handle_drag(m.column, m.row);
             } else if app.ui.selection.transcript.is_dragging {
-                TranscriptSurface { app: &mut *app }.handle_drag(m.column, m.row);
+                TranscriptRegion { app: &mut *app }.handle_drag(m.column, m.row);
             }
         }
         MouseEventKind::Moved => {
             // Motion without a pressed button closes any drag whose release
             // was lost. Multiple surfaces may still carry stale drag state.
             if app.ui.selection.pane.is_dragging {
-                PaneSurface { app: &mut *app }.handle_moved();
+                PaneRegion { app: &mut *app }.handle_moved();
             }
             if app.ui.selection.status.is_dragging {
-                StatusSurface { app: &mut *app }.handle_moved();
+                StatusRegion { app: &mut *app }.handle_moved();
             }
             if app.ui.selection.approval.is_dragging {
                 ApprovalSelection { app: &mut *app }.handle_moved();
             }
             if app.ui.selection.transcript.is_dragging {
-                TranscriptSurface { app: &mut *app }.handle_moved();
+                TranscriptRegion { app: &mut *app }.handle_moved();
             }
         }
         MouseEventKind::Up(MouseButton::Left) => {
             if app.ui.selection.pane.is_dragging {
-                PaneSurface { app: &mut *app }.handle_up();
+                PaneRegion { app: &mut *app }.handle_up();
                 return;
             }
             if app.ui.selection.status.is_dragging {
-                StatusSurface { app: &mut *app }.handle_up();
+                StatusRegion { app: &mut *app }.handle_up();
                 return;
             }
             if app.ui.selection.approval.is_dragging {
@@ -318,7 +318,7 @@ pub(crate) fn handle_mouse(app: &mut App, m: MouseEvent) {
                 return;
             }
             if app.ui.selection.transcript.is_dragging {
-                TranscriptSurface { app: &mut *app }.handle_up();
+                TranscriptRegion { app: &mut *app }.handle_up();
             }
         }
         MouseEventKind::ScrollUp => {
@@ -405,7 +405,7 @@ pub(crate) fn handle_key(app: &mut App, k: KeyEvent) {
     // otherwise no-op. It never quits -- the panic key is not an exit.
     if k.modifiers.contains(KeyModifiers::CONTROL) && k.code == KeyCode::Char('c') {
         if app.ui.selection.transcript.has_selection() {
-            let copied = TranscriptSurface { app: &mut *app }.copy_current();
+            let copied = TranscriptRegion { app: &mut *app }.copy_current();
             if let Some(text) = copied {
                 let path = get_clipboard_path();
                 app.ui.notifications.add(copy_toast(&text, path));

@@ -16,7 +16,7 @@ use houyicoder_core::agent::multi_agent::bus_types::{
 };
 
 /// Lowercase label for a child's terminal status, mirrored from the fleet
-/// projector so the footer pill and the notification text agree.
+/// projector so the footer strip and the notification text agree.
 fn status_str(status: &ChildStatus) -> &'static str {
     match status {
         ChildStatus::Completed => "completed",

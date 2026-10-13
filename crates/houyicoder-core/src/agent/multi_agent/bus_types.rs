@@ -117,7 +117,7 @@ pub fn progress_topic(agent_id: &str) -> String {
 /// so a watcher subscribed before any child spawns cannot lose the terminal
 /// event: a per-child subscribe that lands after the child already completed
 /// would miss the one-shot Completed entirely (broadcast does not replay
-/// history), leaving the parent notification lost and the footer pill stuck
+/// history), leaving the parent notification lost and the footer strip stuck
 /// on running.
 pub fn completed_topic(agent_id: &str) -> String {
     format!("task.{agent_id}.completed")

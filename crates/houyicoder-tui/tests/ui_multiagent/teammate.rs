@@ -15,7 +15,7 @@ fn test_multi_expand_teammate() {
     assert!(s.wait_for("let's build", RENDER_TIMEOUT));
     s.send_str("find auth");
     s.send_str("\r");
-    // Wait for the fold-group hint, not "explore" (the footer pill renders
+    // Wait for the fold-group hint, not "explore" (the footer strip renders
     // "explore: ..." at spawn + would match before the child completes).
     assert!(
         s.wait_for_plain("ctrl+o", RENDER_TIMEOUT * 2),

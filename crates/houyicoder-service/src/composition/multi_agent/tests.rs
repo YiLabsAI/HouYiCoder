@@ -1314,7 +1314,7 @@ async fn test_foreground_panic_reaches_terminal() {
 
 /// A panic inside a background child's run reaches the parent the same way a
 /// run that fails on its own does: the completion notification lands, so the
-/// footer pill clears instead of sitting on running forever.
+/// footer strip clears instead of sitting on running forever.
 #[tokio::test]
 async fn test_background_panic_notifies_parent() {
     use houyicoder_core::agent::multi_agent::bus_types::AgentBus;

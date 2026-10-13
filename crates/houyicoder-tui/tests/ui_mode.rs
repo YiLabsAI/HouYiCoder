@@ -6,8 +6,8 @@
 //! Mode switching is Shift+Tab only — the canonical mechanism. There is no
 //! /mode or /mode-log slash command (those were self-invention; the switch
 //! audit belongs to the trajectory
-//! observability surface, recorded there later). The status-bar pill shows
-//! the current mode. These tests cover the pill render + the real carrier
+//! observability surface, recorded there later). The status-bar label shows
+//! the current mode. These tests cover the label render + the real carrier
 //! round-trip for the cycle, INCLUDING the dynamic mid-run switch (the
 //! mid-run switch lets you cycle mode while a run is
 //! in flight; a gate that blocked BackTab while agent_busy would regress it).
@@ -16,15 +16,15 @@
 
 use crate::common::{Key, RENDER_TIMEOUT, pty_session, pty_session_slow};
 
-/// At session start the status pill renders the default mode (Auto). Proves
-/// the status bar + the mode pill render through the real repaint path.
+/// At session start the status label renders the default mode (Auto). Proves
+/// the status bar + the mode label render through the real repaint path.
 #[test]
 #[ignore]
-fn test_default_mode_pill_renders() {
+fn test_default_mode_label_renders() {
     let mut s = pty_session();
     assert!(
         s.wait_for("auto mode on", RENDER_TIMEOUT),
-        "default auto pill should render:\n{}",
+        "default auto label should render:\n{}",
         s.output()
     );
 }
@@ -32,7 +32,7 @@ fn test_default_mode_pill_renders() {
 /// Shift+Tab cycles the mode through the REAL carrier round-trip: tab_cycle
 /// ships a PermissionCycleModeQuery (no optimistic local update), the server
 /// cycles + replies with PermissionMode, the response lands in mode_cache,
-/// and the pill re-renders. A pill flip here proves the wire round-trip
+/// and the label re-renders. A label flip here proves the wire round-trip
 /// actually updates TUI state — the stronger carrier test for mode switching,
 /// which the unit layer cannot reach.
 #[test]
@@ -41,7 +41,7 @@ fn test_shift_tab_cycles_mode() {
     let mut s = pty_session();
     assert!(
         s.wait_for("auto mode on", RENDER_TIMEOUT),
-        "default auto pill should render:\n{}",
+        "default auto label should render:\n{}",
         s.output()
     );
     s.send_key(&Key::Backtab);
@@ -60,10 +60,10 @@ fn test_shift_tab_cycles_mode() {
 
 /// DYNAMIC mode switch: Shift+Tab cycles the mode WHILE a run is in flight
 /// (agent_busy). Mid-run cycling is allowed; a gate on
-/// agent_busy would block BackTab + the pill would not flip. The stub
+/// agent_busy would block BackTab + the label would not flip. The stub
 /// streams with an inter-chunk delay (HOUYICODER_TEST_STUB_DELAY_MS) so the run stays
 /// in-flight long enough for the mid-run Shift+Tab to land. If the cycle is
-/// blocked while busy, the pill stays on auto and this test fails — the
+/// blocked while busy, the label stays on auto and this test fails — the
 /// regression guard for the dynamic-switch alignment.
 #[test]
 #[ignore]
@@ -71,7 +71,7 @@ fn test_shift_tab_cycles_run() {
     let mut s = pty_session_slow(50);
     assert!(
         s.wait_for("auto mode on", RENDER_TIMEOUT),
-        "default auto pill should render:\n{}",
+        "default auto label should render:\n{}",
         s.output()
     );
     // Start a run (agent_busy flips true synchronously on Enter). The stub's

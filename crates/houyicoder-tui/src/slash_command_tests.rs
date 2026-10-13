@@ -49,9 +49,9 @@ fn test_palette_inline_filters() {
 #[test]
 fn test_tab_cycle_connected() {
     // Connected Shift+Tab ships a PermissionCycleMode wire verb and must NOT
-    // push a system line — the status-bar pill is the single source of mode
+    // push a system line — the status-bar label is the single source of mode
     // truth, so the chat surface stays clean (the cycle itself lands
-    // server-side; the pill flips when the PermissionMode reply arrives).
+    // server-side; the label flips when the PermissionMode reply arrives).
     let mut app = crate::test_harness::connected_app();
     let before = app.sessions.current.transcript.len();
     app.tab_cycle_mode();

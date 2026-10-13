@@ -30,12 +30,12 @@ pub struct FleetEntry {
     /// Drives the footer auto-background: a completed row stays terse for a
     /// short grace window so the user sees the result landed, then drops
     /// from the footer so the input box rises back under the transcript. The
-    /// result stays in the transcript fold-group; only the footer pill leaves.
+    /// result stays in the transcript fold-group; only the footer strip leaves.
     pub completed_at: Option<Instant>,
     /// When the child was first observed by the TUI (the FleetEntry was
     /// created from an AgentStatus). Always Some in production; None only in
     /// tests that do not exercise the elapsed counter. Drives the live
-    /// elapsed in the pill: build_row renders started_at.elapsed().
+    /// elapsed in the strip: build_row renders started_at.elapsed().
     pub started_at: Option<Instant>,
 }
 
@@ -97,9 +97,9 @@ impl PaneAgents {
 
 /// How long a completed child stays in the footer before dropping. The
 /// grace window lets the user see the result landed (a terse done row),
-/// then the pill leaves so the input box rises back under the transcript.
+/// then the strip leaves so the input box rises back under the transcript.
 /// The result itself stays in the transcript fold-group; only the footer
-/// pill drops.
+/// strip drops.
 pub const FLEET_GRACE: Duration = Duration::from_secs(5);
 
 /// One message shipped from the client-driver task back to the TUI event
@@ -581,9 +581,9 @@ pub enum ClientCommand {
     },
     /// Kill every live background child at once (the 'K' two-press fleet
     /// kill-all path). Each killed child's completion publishes and drops
-    /// its pill row. Fire-and-forget; a no-op when no children are live.
+    /// its strip row. Fire-and-forget; a no-op when no children are live.
     KillAllChildren,
-    /// Kill a single selected child (the 'k' on a selected pill path).
+    /// Kill a single selected child (the 'k' on a selected strip path).
     /// Cancels the child's lifecycle token so its drive loop returns
     /// terminal. Fire-and-forget; a no-op when the child is no longer live.
     KillChild {

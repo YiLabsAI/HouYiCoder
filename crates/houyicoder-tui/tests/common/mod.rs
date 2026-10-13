@@ -451,7 +451,7 @@ pub enum Key {
     /// Home / End — the jump-to-first / jump-to-last keys a list pane uses.
     Home,
     End,
-    /// Shift+Up / Shift+Down — the fleet-pill row selection keys. Crossterm
+    /// Shift+Up / Shift+Down — the fleet-strip row selection keys. Crossterm
     /// emits these as CSI sequences with the Shift modifier byte (2).
     ShiftUp,
     ShiftDown,

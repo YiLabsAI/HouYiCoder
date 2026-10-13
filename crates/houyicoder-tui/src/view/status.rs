@@ -14,6 +14,8 @@ use ratatui::{
     widgets::Paragraph,
 };
 
+use houyicoder_protocol::frontend::permission::PermissionMode;
+
 use crate::state::{App, Stage, ViewportMode};
 use crate::view::logo;
 
@@ -78,7 +80,7 @@ fn stage_is_done(current: Stage, target: Stage) -> bool {
 /// progress bar + stage hint so existing tests render the same surface.
 pub fn draw_status_bar(f: &mut Frame, area: Rect, app: &App) {
     // Approval pending: the modal popup (view::approval) is the sole approval
-    // surface; the status bar keeps showing the normal agent bar (mode pill +
+    // surface; the status bar keeps showing the normal agent bar (mode label +
     // model + tokens) underneath, so the two no longer duplicate the request.
     if app.sessions.current.connection.is_some() {
         draw_agent_status_bar(f, area, app);
@@ -100,7 +102,7 @@ pub fn draw_status_bar(f: &mut Frame, area: Rect, app: &App) {
 /// uses), so context% is the real current-window footprint, not a stale
 /// per-run token count; the sandbox static string + the drag-to-select hint
 /// are dropped (the latter was clutter; selection is discoverable by trying
-/// it). The mode pill is colored by autonomy (plan=blue / default=green /
+/// it). The mode label is colored by autonomy (plan=blue / default=green /
 /// acceptEdits=yellow / auto=orange / bypass=red, high-autonomy states add a
 /// warning mark) so the current permission surface is always visible.
 fn draw_agent_status_bar(f: &mut Frame, area: Rect, app: &App) {
@@ -108,7 +110,7 @@ fn draw_agent_status_bar(f: &mut Frame, area: Rect, app: &App) {
     // transcript tail and the input-border shimmer — not duplicated here.
     let dim = Style::new().fg(Color::DarkGray);
     let mode = app.current_mode();
-    let (mode_label, mode_style) = mode_pill(mode);
+    let (mode_label, mode_style) = mode_label(mode);
     let mut left: Vec<Span<'static>> = vec![
         Span::raw(" "),
         Span::styled(app.status_bar_model().to_string(), dim),
@@ -215,15 +217,14 @@ fn context_gauge_label(pct: f64) -> String {
     }
 }
 
-/// The mode pill text and color for the status bar. Two modes: Manual shows
+/// The mode label text and color for the status bar. Two modes: Manual shows
 /// the pause glyph, Auto the double-play glyph; both always show (the default
-/// Auto shows the auto pill from session start). An unknown wire variant
+/// Auto shows the auto label from session start). An unknown wire variant
 /// renders as manual (fail-safe).
-fn mode_pill(mode: houyicoder_protocol::frontend::permission::PermissionMode) -> (String, Style) {
-    use houyicoder_protocol::frontend::permission::PermissionMode as M;
+fn mode_label(mode: PermissionMode) -> (String, Style) {
     let (symbol, label, color) = match mode {
-        M::Manual => ("\u{23f8} ", "manual", Color::Blue),
-        M::Auto => ("\u{23f5}\u{23f5} ", "auto", Color::Indexed(208)),
+        PermissionMode::Manual => ("\u{23f8} ", "manual", Color::Blue),
+        PermissionMode::Auto => ("\u{23f5}\u{23f5} ", "auto", Color::Indexed(208)),
         // non_exhaustive: unknown wire variant fails safe to manual.
         _ => ("\u{23f8} ", "manual", Color::Blue),
     };

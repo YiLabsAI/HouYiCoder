@@ -10,8 +10,8 @@ use crate::state::BashProgress;
 use crate::state::enums::LiveBlock;
 
 /// Streaming progress for one in-flight run. Lives with the run, so the
-/// transient preview and tool-runtime state are dropped when the run
-/// finishes rather than outliving it.
+/// transient preview and the tool runtime are dropped when the run finishes
+/// rather than outliving it.
 #[derive(Debug, Default)]
 pub struct RunProgress {
     pub(crate) live_assistant_text: String,
@@ -20,8 +20,82 @@ pub struct RunProgress {
     pub(crate) live_block: LiveBlock,
     pub(crate) thinking_started_at: Option<Instant>,
     pub(crate) last_delta_at: Option<Instant>,
-    pub(crate) running_tools: HashSet<String>,
-    pub(crate) bash_progress: HashMap<String, BashProgress>,
+    /// The per-call tool runtime: which calls are running and the bash
+    /// ticker with the revision the slot cache keys on.
+    pub(crate) tools: ToolRuntime,
+}
+
+/// The per-call tool runtime of one run: which calls are running, and for
+/// the bash ones the elapsed and line count the chip shows.
+///
+/// One owner because the ticker and its revision have to move together. The
+/// elapsed and line count are baked into the cached slot text, so a tick that
+/// stored its value without moving the revision would leave the previous chip
+/// on screen; and a tick only counts for a call the run still tracks, so an
+/// out-of-order frame cannot resurrect a finished chip.
+#[derive(Debug, Default)]
+pub(crate) struct ToolRuntime {
+    running: HashSet<String>,
+    bash: HashMap<String, BashProgress>,
+    revision: u64,
+}
+
+impl ToolRuntime {
+    /// Whether any call is running. The spinner reads it to exempt a
+    /// running tool from the stall gradient: a tool produces no token deltas
+    /// but is not stuck.
+    pub(crate) fn any_running(&self) -> bool {
+        !self.running.is_empty()
+    }
+
+    /// Whether one call is running, for a test that has to name the call
+    /// it tracked.
+    #[cfg(test)]
+    pub(crate) fn is_running(&self, call_id: &str) -> bool {
+        self.running.contains(call_id)
+    }
+
+    /// Mark a call as running.
+    pub(crate) fn begin(&mut self, call_id: String) {
+        self.running.insert(call_id);
+    }
+
+    /// Drop a call and its ticker when its result lands. Returns whether the
+    /// call was running, so the caller can tell a real completion from a
+    /// duplicate result frame.
+    pub(crate) fn finish(&mut self, call_id: &str) -> bool {
+        let was_running = self.running.remove(call_id);
+        if self.bash.remove(call_id).is_some() {
+            self.revision = self.revision.wrapping_add(1);
+        }
+        was_running
+    }
+
+    /// Record a tick for a call that is still running. A tick for a call the
+    /// run no longer tracks is dropped rather than stored.
+    pub(crate) fn note_tick(&mut self, call_id: String, elapsed_secs: u64, lines: Option<u64>) {
+        if !self.running.contains(&call_id) {
+            return;
+        }
+        self.bash.insert(
+            call_id,
+            BashProgress {
+                elapsed_secs,
+                lines,
+            },
+        );
+        self.revision = self.revision.wrapping_add(1);
+    }
+
+    /// The ticker entry for one call, or None when it has none.
+    pub(crate) fn tick(&self, call_id: &str) -> Option<&BashProgress> {
+        self.bash.get(call_id)
+    }
+
+    /// The revision of the ticker, for the slot cache identity.
+    pub(crate) fn revision(&self) -> u64 {
+        self.revision
+    }
 }
 
 /// One in-flight run: the request id the server correlates, the wall-clock
@@ -157,3 +231,6 @@ impl RunState {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

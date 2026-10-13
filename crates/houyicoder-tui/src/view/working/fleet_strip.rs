@@ -1,8 +1,8 @@
-//! Footer fleet pill: one row per spawned child, shown only while the
+//! Footer fleet strip: one row per spawned child, shown only while the
 //! fleet is non-empty. Each row carries the child's hollow-circle glyph,
 //! its type, a verb inferred from the last tool, and cumulative tokens.
 //! Shift-arrow moves the strip's selection; the selected row gets a prefix
-//! and Enter drills into its teammate view. The pill caps at three rows
+//! and Enter drills into its teammate view. The strip caps at three rows
 //! and scrolls toward the selection when the fleet is longer.
 
 use std::time::Duration;
@@ -18,19 +18,19 @@ use ratatui::{
 use crate::agent_message::FleetEntry;
 use crate::state::App;
 
-/// Max child rows the pill ever shows. A longer fleet scrolls within the
-/// pill so the transcript is never pushed off-screen.
+/// Max child rows the strip ever shows. A longer fleet scrolls within the
+/// strip so the transcript is never pushed off-screen.
 const MAX_VISIBLE: usize = 3;
 
-/// Rows the pill would like: one per child, capped so a large fleet scrolls
-/// within the pill instead of pushing the transcript off-screen. Zero when
+/// Rows the strip would like: one per child, capped so a large fleet scrolls
+/// within the strip instead of pushing the transcript off-screen. Zero when
 /// the fleet is empty. The shared footer budget decides what it gets.
 pub fn want(app: &App) -> u16 {
     let entries = &app.sessions.current.capabilities.fleet.entries;
     entries.len().min(MAX_VISIBLE).min(u16::MAX as usize) as u16
 }
 
-/// Draw the pill into the granted area. One row for a multi-child fleet is
+/// Draw the strip into the granted area. One row for a multi-child fleet is
 /// the collapsed form: a single row of per-child detail would name one child
 /// and silently omit the rest, so it becomes a count instead.
 pub fn draw(f: &mut Frame, area: Rect, app: &App) {
@@ -111,7 +111,7 @@ fn visible_rows(len: usize, granted: usize) -> usize {
     granted.min(len)
 }
 
-/// Build the sliding window of pill rows, capped by the granted height.
+/// Build the sliding window of strip rows, capped by the granted height.
 /// The window follows the selection so the highlighted row stays on screen;
 /// the strip spends every row it gets on a child rather than on an
 /// overflow indicator (see visible_rows for why that line is dropped).
@@ -135,7 +135,7 @@ fn build_lines(app: &App, granted: usize) -> Vec<Line<'_>> {
         .collect()
 }
 
-/// One pill row. Completed children dim and go terse — the live verb drops,
+/// One strip row. Completed children dim and go terse — the live verb drops,
 /// leaving the type + a done marker + the token total — so a finished
 /// delegation reads "explore · done · 1.2k tok" instead of echoing the stale
 /// last verb. The running child keeps the verb and turn counter so the user
@@ -172,7 +172,7 @@ fn build_row(entry: &FleetEntry, selected: bool) -> Line<'_> {
 }
 
 /// Infer a one-word status verb from the child's last tool name. The bus
-/// carries the tool name verbatim; the pill humanizes it so the row reads
+/// carries the tool name verbatim; the strip humanizes it so the row reads
 /// "explore: searching" rather than "explore: grep".
 fn verb_for(tool: Option<&str>) -> &'static str {
     match tool {
@@ -443,7 +443,7 @@ mod tests {
     }
 
     /// drop_completed keeps a running child (no completed_at) and a
-    /// recently completed one (inside the grace window). The pill only
+    /// recently completed one (inside the grace window). The strip only
     /// leaves once the grace window elapses.
     #[test]
     fn test_grace_keeps_recent() {

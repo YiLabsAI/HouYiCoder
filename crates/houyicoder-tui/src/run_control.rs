@@ -487,7 +487,7 @@ impl App {
                 match s.next_request_id() {
                     Ok(req_id) => {
                         if s.enqueue(ClientCommand::StatusQuery { req_id }).is_ok() {
-                            // Seed the mode cache once so the status pill renders at
+                            // Seed the mode cache once so the status label renders at
                             // startup. A refused enqueue stays quiet: the
                             // ConnectionLost event announces the loss.
                             let permission = &self.sessions.current.capabilities.permission;

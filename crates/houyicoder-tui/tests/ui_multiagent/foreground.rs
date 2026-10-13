@@ -21,7 +21,7 @@ fn test_foreground_delegation_completes() {
     s.send_str("find the auth module");
     s.send_str("\r");
     // Wait for the fold-group expand hint, which only renders once the child
-    // completes — NOT "explore"/"explore:", which the footer pill renders at
+    // completes — NOT "explore"/"explore:", which the footer strip renders at
     // spawn ("explore: thinking") and would match prematurely.
     assert!(
         s.wait_for_plain("ctrl+o", RENDER_TIMEOUT * 2),
@@ -84,7 +84,7 @@ fn test_multi_large_child_summary() {
     s.send_str("find auth");
     s.send_str("\r");
     // The fold-group summary line appears after the child completes. Wait
-    // for the child's content text, not "explore:" — the footer pill renders
+    // for the child's content text, not "explore:" — the footer strip renders
     // "explore: thinking" at spawn + would match before completion. The
     // summary one-liner carries the first ~80 chars of the child text. The
     // check is whitespace-agnostic: under parallel PTY load, ratatui's

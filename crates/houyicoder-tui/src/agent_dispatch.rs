@@ -24,8 +24,8 @@ use crate::command::render::{render_permission_rules_wire, render_trajectory_wir
 use crate::composition::suggestions_for;
 use crate::pending_prompt::PendingPrompt;
 use crate::records::{ContextDrillDown, ContextView, TranscriptLine};
+use crate::state::App;
 use crate::state::enums::LiveBlock;
-use crate::state::{App, BashProgress};
 use crate::terminal_title::sync as sync_terminal_title;
 use crate::transcript::frame_payload::chunk_text;
 use crate::transcript::{SequencedFrame, TranscriptFrame, transcript_from_frames};
@@ -209,19 +209,11 @@ impl App {
             } => {
                 // A long-running tool ticks elapsed (+ optional stdout line
                 // count when the backend streams). The chip render reads
-                // this map + running_tools to append (Ns) / (Ns · M lines)
+                // this ticker + the running set to append (Ns) / (Ns · M lines)
                 // after 2s. Only meaningful while the call is in flight;
                 // finish_tool clears it when the result lands.
-                if let Some(p) = self.run_progress_mut()
-                    && p.running_tools.contains(&call_id)
-                {
-                    p.bash_progress.insert(
-                        call_id,
-                        BashProgress {
-                            elapsed_secs,
-                            lines,
-                        },
-                    );
+                if let Some(p) = self.run_progress_mut() {
+                    p.tools.note_tick(call_id, elapsed_secs, lines);
                 }
             }
             ServerEvent::QueuedInputCommitted { inputs } => {
@@ -678,7 +670,7 @@ impl App {
                 }
                 _ => {
                     if let Some(p) = self.run_progress_mut() {
-                        p.running_tools.insert(call.tool_call_id.0.clone());
+                        p.tools.begin(call.tool_call_id.0.clone());
                         // A tool is now running: the active streaming block is no
                         // longer reasoning, so the spinner verb must read Working
                         // (not stay Thinking from the last reasoning delta).
@@ -703,13 +695,10 @@ impl App {
     /// and without a fresh grace period the spinner would snap red the moment
     /// the tool-runtime stall exemption lifts.
     fn finish_tool(&mut self, call_id: &str) {
-        if let Some(p) = self.run_progress_mut() {
-            if p.running_tools.remove(call_id) {
-                p.last_delta_at = Some(Instant::now());
-            }
-            // Drop the elapsed ticker for this call — the authoritative result
-            // frame has landed, the chip no longer shows (Ns).
-            p.bash_progress.remove(call_id);
+        if let Some(p) = self.run_progress_mut()
+            && p.tools.finish(call_id)
+        {
+            p.last_delta_at = Some(Instant::now());
         }
     }
 }

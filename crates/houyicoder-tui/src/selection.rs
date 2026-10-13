@@ -763,6 +763,6 @@ fn word_bounds_at(row: &str, col: usize, max_w: usize) -> (usize, usize) {
 }
 
 mod linux;
-pub mod surface;
+pub mod region;
 #[cfg(test)]
 mod tests;

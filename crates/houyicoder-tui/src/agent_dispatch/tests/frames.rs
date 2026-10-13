@@ -123,17 +123,12 @@ fn test_tool_frames_track_set() {
     )));
     assert!(
         app.run_progress()
-            .is_some_and(|p| p.running_tools.contains("call_1"))
+            .is_some_and(|p| p.tools.is_running("call_1"))
     );
     app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(
         tool_done_frame("call_1").into(),
     )));
-    assert!(
-        app.run_progress()
-            .expect("active run")
-            .running_tools
-            .is_empty()
-    );
+    assert!(!app.run_progress().expect("active run").tools.any_running());
 }
 
 /// A frame applied from the event stream keeps in the resident log the
@@ -169,10 +164,7 @@ fn test_done_clears_running_tools() {
         tool_call_frame("call_1", "bash", ToolCallStatus::InProgress).into(),
     )));
     app.handle_agent_message(done_msg());
-    assert!(
-        app.run_progress()
-            .is_none_or(|p| p.running_tools.is_empty())
-    );
+    assert!(app.run_progress().is_none_or(|p| !p.tools.any_running()));
 }
 
 /// A streaming delta racing the Done reply lands after finish drops the run,

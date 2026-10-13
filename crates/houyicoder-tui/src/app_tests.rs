@@ -56,7 +56,7 @@ fn test_status_bar_click_drags() {
         "status rows captured from the frame buffer"
     );
     drop(rows);
-    // A left-down inside the status bar routes to StatusSurface, not the
+    // A left-down inside the status bar routes to StatusRegion, not the
     // transcript surface.
     handle_mouse(
         &mut app,
@@ -541,7 +541,7 @@ fn test_single_kill_selected() {
 }
 
 /// A single-kill keypress with running children but no selection falls
-/// through to typing — the key must not be swallowed when no valid pill is
+/// through to typing — the key must not be swallowed when no valid strip is
 /// selected. This is the boundary the swallow bug hit (return outside the
 /// selection check).
 #[test]

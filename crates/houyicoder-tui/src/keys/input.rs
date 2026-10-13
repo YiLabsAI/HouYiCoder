@@ -410,7 +410,7 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
         // via the generic Char(c) arm below. Free-form @skill:name typing
         // works because the next char closes the picker and appends.
         KeyCode::Enter if !pane_replaces_input(app.ui.navigation.pane) => {
-            // Empty-input Enter drills into a teammate view: the pill
+            // Empty-input Enter drills into a teammate view: the strip
             // selection takes priority, then the Subagent line at cursor.
             if app.ui.input.editor.is_empty() && app.ui.teammate_view.is_none() {
                 if let Some(sid) = fleet::selected_fleet_sid(app) {

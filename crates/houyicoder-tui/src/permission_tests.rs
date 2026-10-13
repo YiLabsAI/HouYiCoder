@@ -151,7 +151,7 @@ fn test_permission_bad_effect_rejected() {
 
 #[test]
 fn test_status_bar_renders_mode() {
-    // A connected app shows the mode pill in the agent status bar. Render and
+    // A connected app shows the mode label in the agent status bar. Render and
     // confirm the current mode label lands in the bottom status line.
     let mut app = crate::composition::build_app_for_test(None);
     app.ui.navigation.screen = crate::state::Screen::Working;
@@ -160,13 +160,13 @@ fn test_status_bar_renders_mode() {
     let text = render_text(&app, 100, 28);
     assert!(
         text.contains("auto mode on"),
-        "status bar should show the mode pill, got:\n{text}"
+        "status bar should show the mode label, got:\n{text}"
     );
 }
 
 #[test]
 fn test_status_bar_renders_manual() {
-    // Manual mode shows the pause-glyph pill in the status bar.
+    // Manual mode shows the pause-glyph label in the status bar.
     let mut app = crate::composition::build_app_for_test(None);
     app.ui.navigation.screen = crate::state::Screen::Working;
     app.sessions.current.capabilities.permission.mode_cache =
@@ -174,7 +174,7 @@ fn test_status_bar_renders_manual() {
     let text = render_text(&app, 100, 28);
     assert!(
         text.contains("manual mode on"),
-        "status bar should show the manual pill, got:\n{text}"
+        "status bar should show the manual label, got:\n{text}"
     );
 }
 

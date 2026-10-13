@@ -1063,7 +1063,7 @@ mod compact_tests;
 mod resume_progressive_tests;
 
 /// The idle poll seeds mode_cache on the first tick (mode_cache starts None)
-/// so the status-bar pill renders from session start. Exercises the idle
+/// so the status-bar label renders from session start. Exercises the idle
 /// branch + the request_permission_mode send without asserting on the wire.
 #[test]
 fn test_idle_seeds_mode_query() {

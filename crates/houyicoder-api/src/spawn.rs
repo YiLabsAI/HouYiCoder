@@ -204,7 +204,7 @@ pub trait SpawnHandle: Send + Sync {
 
     /// Kill every live background child at once: cancel each lifecycle
     /// token so the drive loops return Interrupted (terminal). The fleet
-    /// pill drops each as its completion publishes. The default returns 0
+    /// strip drops each as its completion publishes. The default returns 0
     /// (no multi-agent runtime wired); a runtime with a child registry
     /// overrides it. Returns the count of live children killed.
     fn kill_all_children(&self) -> usize {

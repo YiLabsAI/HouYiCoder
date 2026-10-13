@@ -24,7 +24,7 @@ use crate::view::{
 };
 
 mod delegation_rows;
-pub(crate) mod fleet_pill;
+pub(crate) mod fleet_strip;
 mod footer_budget;
 mod history_window;
 mod notice_rows;
@@ -51,7 +51,7 @@ fn pane_hides_input(app: &App) -> bool {
 
 /// Whether the open command pane retracts the status bar. Broader than
 /// pane_hides_input: /permissions keeps its input box but still hides the
-/// status row. Caveat: the mode pill + ask-before-git toggle live on the
+/// status row. Caveat: the mode label + ask-before-git toggle live on the
 /// status bar, so hiding drops two permission-relevant reads (follow-up:
 /// move them into the pane).
 fn pane_hides_status(app: &App) -> bool {
@@ -88,7 +88,7 @@ fn draw_working(f: &mut Frame, app: &App) {
     // Both pinned strips draw from one budget, in priority order, so their
     // sum cannot starve the transcript.
     let queue_want = queue_overlay::strip_want(app);
-    let footer = footer_budget::allocate(total_h, input_h, queue_want, fleet_pill::want(app));
+    let footer = footer_budget::allocate(total_h, input_h, queue_want, fleet_strip::want(app));
     app.ui.fleet.granted.set(footer.fleet);
     let layout = build_working_layout(app, f.area().width, input_h, footer.queue, footer.fleet);
     let outer = Layout::default()
@@ -124,7 +124,7 @@ fn draw_working(f: &mut Frame, app: &App) {
     }
     if let Some(i) = layout.slots.fleet {
         app.ui.fleet.rect.set(outer[i]);
-        fleet_pill::draw(f, outer[i], app);
+        fleet_strip::draw(f, outer[i], app);
     }
     if !pane_hides_input {
         input_bar::draw_input(f, outer[layout.input_idx], app);
@@ -392,7 +392,7 @@ fn draw_main(f: &mut Frame, area: Rect, app: &App) {
     // /permissions /search /memory): transcript tail above, the worktree list
     // in the lower band. The worktree-list surface has no
     // equivalent command elsewhere, so this pane is the in-TUI manager. Selection +
-    // copy come free via the shared PaneSurface (the mouse router keys on
+    // copy come free via the shared PaneRegion (the mouse router keys on
     // the pane rect, which draw_command_pane stashes).
     if matches!(app.ui.navigation.pane, Pane::Worktree) {
         draw_worktree_pane(f, area, app);

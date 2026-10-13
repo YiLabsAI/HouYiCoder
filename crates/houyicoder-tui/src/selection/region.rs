@@ -1,13 +1,13 @@
-//! In-app selection surfaces: the transcript and the slash-command panes
+//! In-app selection regions: the transcript and the slash-command panes
 //! (/permissions /search /memory) each render text the user can drag-select
-//! and copy. Rather than duplicate the mouse glue per surface, a Surface
-//! trait owns the per-surface geometry + policy and default-methods the shared
-//! gesture mechanics. A new pure-selection surface (a future artifact or
+//! and copy. Rather than duplicate the mouse glue per region, a Region
+//! trait owns the per-region geometry + policy and default-methods the shared
+//! gesture mechanics. A new pure-selection region (a future artifact or
 //! approval-args pane) is one impl with zero gesture code — it implements
 //! parts (where its rect/rows live), to_content, and is_dragging, and
 //! inherits the down/drag/up/moved defaults.
 //!
-//! The single parts accessor is load-bearing: a surface cannot expose
+//! The single parts accessor is load-bearing: a region cannot expose
 //! sel(&mut self) and rows(&self) separately because the default methods
 //! would then hold &mut self and &self at once. parts(&mut self) borrows
 //! the disjoint Ui fields (the selection, the frame's row cache and rect,
@@ -153,13 +153,13 @@ pub(crate) fn pane_mouse_to_content(rect: Rect, x: u16, y: u16) -> (u16, usize) 
     (col, row)
 }
 
-// ---- the Surface trait + default mechanics --------------------------------
+// ---- the Region trait + default mechanics --------------------------------
 
 /// A one-shot borrow of a surface's disjoint fields: the mutable Selection,
 /// its row stash (a RefCell guard), its screen rect, and the clipboard writer.
-/// Returned by Surface::parts so a default trait method can drive the shared
+/// Returned by Region::parts so a default trait method can drive the shared
 /// free functions without holding &mut self and &self at once.
-pub struct SurfaceParts<'a> {
+pub struct RegionParts<'a> {
     pub sel: &'a mut Selection,
     pub rows: Ref<'a, Vec<(u8, String)>>,
     pub rect: Rect,
@@ -173,9 +173,9 @@ pub struct SurfaceParts<'a> {
 /// overrides only what it genuinely does differently (the transcript adds
 /// fold/thinking click intercepts, edge auto-scroll, and a clean-click
 /// collapse guard; a pure-selection pane overrides nothing).
-pub trait Surface {
+pub trait Region {
     /// One-shot borrow of the disjoint fields the default mechanics need.
-    fn parts(&mut self) -> SurfaceParts<'_>;
+    fn parts(&mut self) -> RegionParts<'_>;
     /// Map a screen cell to this surface's content space. &self only; call
     /// before parts so the shared borrow does not overlap the parts borrow.
     fn to_content(&self, x: u16, y: u16) -> (u16, usize);
@@ -228,7 +228,7 @@ pub trait Surface {
 /// Shared down body: lost-release recovery (direct finish_release), then
 /// on_click, set the cursor, apply the click. Used by the trait default and
 /// by surfaces that prepend their own click intercepts (the transcript).
-fn down_body<S: Surface + ?Sized>(s: &mut S, x: u16, y: u16) {
+fn down_body<S: Region + ?Sized>(s: &mut S, x: u16, y: u16) {
     let persist = s.persist();
     let was_dragging = s.is_dragging();
     let (col, cr) = s.to_content(x, y);
@@ -245,7 +245,7 @@ fn down_body<S: Surface + ?Sized>(s: &mut S, x: u16, y: u16) {
 /// extend the selection. Used by the trait default and by surfaces that
 /// prepend edge auto-scroll (the transcript, which re-maps to content after
 /// the scroll).
-fn drag_body<S: Surface + ?Sized>(s: &mut S, x: u16, y: u16) {
+fn drag_body<S: Region + ?Sized>(s: &mut S, x: u16, y: u16) {
     if !s.is_dragging() {
         return;
     }
@@ -261,14 +261,14 @@ fn drag_body<S: Surface + ?Sized>(s: &mut S, x: u16, y: u16) {
 /// click interaction (fold toggle, thinking-toggle, clean-click collapse) and
 /// edge auto-scroll. Overrides the three gesture methods to layer those on the
 /// shared mechanics; persist is true so the highlight survives a copy.
-pub struct TranscriptSurface<'a> {
+pub struct TranscriptRegion<'a> {
     pub app: &'a mut App,
 }
 
-impl Surface for TranscriptSurface<'_> {
-    fn parts(&mut self) -> SurfaceParts<'_> {
+impl Region for TranscriptRegion<'_> {
+    fn parts(&mut self) -> RegionParts<'_> {
         let rows = self.app.ui.frame.layout.last_all_rows.borrow();
-        SurfaceParts {
+        RegionParts {
             sel: &mut self.app.ui.selection.transcript,
             rows,
             rect: self.app.ui.frame.layout.transcript_rect.get(),
@@ -395,14 +395,14 @@ impl Surface for TranscriptSurface<'_> {
 /// scroll), pure selection. Implements only parts, to_content, and
 /// is_dragging — all gesture mechanics come from the trait defaults. A
 /// future artifact or approval-args pane is a peer of this.
-pub struct PaneSurface<'a> {
+pub struct PaneRegion<'a> {
     pub app: &'a mut App,
 }
 
-impl Surface for PaneSurface<'_> {
-    fn parts(&mut self) -> SurfaceParts<'_> {
+impl Region for PaneRegion<'_> {
+    fn parts(&mut self) -> RegionParts<'_> {
         let rows = self.app.ui.frame.layout.last_pane_rows.borrow();
-        SurfaceParts {
+        RegionParts {
             sel: &mut self.app.ui.selection.pane,
             rows,
             rect: self.app.ui.frame.layout.pane_rect.get(),
@@ -420,16 +420,16 @@ impl Surface for PaneSurface<'_> {
 /// The approval card selection handler: screen-space (no independent
 /// scroll), pure selection — the card is a transient layout slot, so it
 /// uses persist=false (the card rebuilds each frame; a stale highlight
-/// would not track the rows). Mirrors PaneSurface; the only difference is
+/// would not track the rows). Mirrors PaneRegion; the only difference is
 /// which rect/rows/selection it binds.
 pub struct ApprovalSelection<'a> {
     pub app: &'a mut App,
 }
 
-impl Surface for ApprovalSelection<'_> {
-    fn parts(&mut self) -> SurfaceParts<'_> {
+impl Region for ApprovalSelection<'_> {
+    fn parts(&mut self) -> RegionParts<'_> {
         let rows = self.app.ui.frame.layout.last_approval_rows.borrow();
-        SurfaceParts {
+        RegionParts {
             sel: &mut self.app.ui.selection.approval,
             rows,
             rect: self.app.ui.frame.layout.approval_rect.get(),
@@ -451,14 +451,14 @@ impl Surface for ApprovalSelection<'_> {
 /// read back from the frame buffer (see stash_status_rows) so the copyable
 /// text is exactly what the bar drew. The highlight clears on release
 /// (persist = false) because the bar rebuilds each frame.
-pub struct StatusSurface<'a> {
+pub struct StatusRegion<'a> {
     pub app: &'a mut App,
 }
 
-impl Surface for StatusSurface<'_> {
-    fn parts(&mut self) -> SurfaceParts<'_> {
+impl Region for StatusRegion<'_> {
+    fn parts(&mut self) -> RegionParts<'_> {
         let rows = self.app.ui.frame.layout.last_status_rows.borrow();
-        SurfaceParts {
+        RegionParts {
             sel: &mut self.app.ui.selection.status,
             rows,
             rect: self.app.ui.frame.layout.status_rect.get(),
@@ -569,5 +569,4 @@ pub(crate) fn edge_scroll_if_at_edge(app: &mut App) -> bool {
 }
 
 #[cfg(test)]
-#[path = "surface_tests.rs"]
 mod tests;

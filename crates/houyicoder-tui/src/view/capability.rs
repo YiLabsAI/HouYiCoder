@@ -64,7 +64,7 @@ pub fn draw(f: &mut Frame, area: Rect, app: &App) {
 /// numbered rule list with a cyan cursor, and a dim footer. The frame (the
 /// ─ Divider + cleared region) is drawn by the Pane primitive in
 /// draw_permission_pane; this fills the padded inner rect. Rule surface only
-/// — the mode pill and the ask-before-git toggle live on the status bar.
+/// — the mode label and the ask-before-git toggle live on the status bar.
 pub(crate) fn draw_permission_content(f: &mut Frame, area: Rect, app: &App) {
     let tab = app.ui.permission_pane.tab;
     let permission = &app.sessions.current.capabilities.permission;

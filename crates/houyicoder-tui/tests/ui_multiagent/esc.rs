@@ -100,7 +100,7 @@ fn test_esc_idle_noop() {
     );
 }
 
-// ---- batch 3: fleet pill (footer) ----
+// ---- batch 3: fleet strip (footer) ----
 
 /// A slash opens the parent command palette (the command list), proving the
 /// palette is reachable from the working screen + lists entries.
@@ -184,13 +184,13 @@ fn test_esc_interrupt_clears_busy() {
     );
 }
 
-/// Esc while a foreground child runs ends the child too, so its pill row
+/// Esc while a foreground child runs ends the child too, so its strip row
 /// reaches a terminal state and the grace window then clears it: a stopped
 /// delegation stops reporting itself as running. The stub delay holds the
 /// child's model call open so the Esc lands inside it.
 #[test]
 #[ignore]
-fn test_esc_clears_child_pill() {
+fn test_esc_clears_child_strip() {
     let script = r#"[
         [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth"}}],
         [{"type":"Text","text":"auth in src/auth"}],
@@ -202,7 +202,7 @@ fn test_esc_clears_child_pill() {
     s.send_str("\r");
     assert!(
         s.wait_for_compact("explore:", RENDER_TIMEOUT * 2),
-        "the child should render its running pill row:\n{}",
+        "the child should render its running strip row:\n{}",
         s.output()
     );
     s.send_key(&Key::Esc);
@@ -215,7 +215,7 @@ fn test_esc_clears_child_pill() {
     // window clears it.
     assert!(
         s.wait_for_compact("explore·done", RENDER_TIMEOUT * 2),
-        "the stopped child should render a terminal pill row:\n{}",
+        "the stopped child should render a terminal strip row:\n{}",
         s.output()
     );
     std::thread::sleep(FLEET_GRACE);
@@ -224,7 +224,7 @@ fn test_esc_clears_child_pill() {
     std::thread::sleep(Duration::from_millis(300));
     assert!(
         !s.output_compact().contains("explore·done"),
-        "the stopped child's pill row should clear after the grace window:\n{}",
+        "the stopped child's strip row should clear after the grace window:\n{}",
         s.output()
     );
 }

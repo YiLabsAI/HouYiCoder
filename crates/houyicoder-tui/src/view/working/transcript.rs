@@ -3,8 +3,6 @@
 //! Builds selectable rows for user, agent, tool, diff, delegation, and
 //! checklist content, then applies scrolling, search, and expansion state.
 
-use std::collections::HashMap;
-
 use ratatui::{
     Frame,
     layout::Rect,
@@ -16,6 +14,7 @@ use ratatui::{
 use super::tail_rows::build_tail_rows;
 use crate::records::TranscriptLine;
 use crate::rows::row_set::{Row, RowSet};
+use crate::rows::slots_key::SlotsKey;
 use crate::selection::{
     TAG_DIFF_ADD, TAG_DIFF_CTX, TAG_DIFF_DEL, TAG_DIFF_HUNK, TAG_FOLD, TAG_SPINNER, TAG_SYSTEM,
     TAG_USER,
@@ -28,44 +27,14 @@ use crate::view::markers::{diff_row, styled_row};
 use crate::view::spinner::{spinner_line, stall_intensity, stall_intensity_reasoning};
 
 fn ensure_cached_slots(area: Rect, app: &App) {
-    // Slots version: only inputs that affect the cached slot text. Live text /
-    // spinner / todos are appended after slots + recomputed every frame (the
-    // live cache). bash_progress is baked into the slot text (the elapsed/line
-    // chip suffix), so it is in the version hash + rebuilds on a tick, not via
-    // the old every-frame agent_busy bypass.
-    let slots_version = {
-        let mut v = app.sessions.current.transcript.revision();
-        v = v.wrapping_mul(31).wrapping_add(app.agent_busy() as u64);
-        v = v.wrapping_mul(31).wrapping_add(app.ui.verbose as u64);
-        // Presentation revision covers every visible-view change the
-        // transcript revision cannot carry: the four expansion sets, a
-        // search view entering or leaving, and a window switch. The owner
-        // bumps it on each effective change, so the cache rebuilds with the
-        // sets without hashing each one here.
-        v = v
-            .wrapping_mul(31)
-            .wrapping_add(app.ui.transcript_view.presentation_revision() as u64);
-        // bash_progress hash: same as the expand sets above, the chip suffix
-        // is baked into the slot text, so the cache rebuilds on a content
-        // change (a tick, ~1/sec during a bash run).
-        let bp = app
-            .run_progress()
-            .map_or(0, |p| bash_progress_hash(&p.bash_progress));
-        v = v.wrapping_mul(31).wrapping_add(bp);
-        // area.width: the slot text is word-wrapped at the pane width
-        // (build_slots_rows). A terminal resize changes the width but bumps
-        // no other version input -- without this, the cache holds the old
-        // wide lines, and a narrower viewport truncates their tails (content
-        // vanishes until something else bumps the version).
-        v = v.wrapping_mul(31).wrapping_add(area.width as u64);
-        v
-    };
-
-    if app.ui.frame.rows.version() != slots_version {
-        app.ui
-            .frame
-            .rows
-            .replace(slots_version, build_slots_rows(area, app));
+    // The slot rows depend on the source and its revisions, the wrap width,
+    // the mode flags, and the bash ticker. SlotsKey names those inputs and
+    // compares them one by one; the live text, spinner, and todos are
+    // appended after the slots and rebuilt every frame, so they are not part
+    // of it.
+    let key = SlotsKey::for_frame(app, area.width);
+    if !app.ui.frame.rows.holds(&key) {
+        app.ui.frame.rows.replace(key, build_slots_rows(area, app));
     }
 }
 
@@ -110,7 +79,7 @@ pub(super) fn draw_transcript(f: &mut Frame, area: Rect, app: &App) {
 fn compute_spinner_params(app: &App) -> (std::time::Duration, f32, bool) {
     let spin_elapsed = app.run_started().map(|t| t.elapsed()).unwrap_or_default();
     let prog = app.run_progress();
-    let tool_active = prog.is_some_and(|p| !p.running_tools.is_empty());
+    let tool_active = prog.is_some_and(|p| p.tools.any_running());
     let reasoning_active = prog.is_some_and(|p| p.live_block == LiveBlock::Thinking);
     let last_delta = prog.and_then(|p| p.last_delta_at);
     let spin_intensity = if tool_active {
@@ -294,10 +263,7 @@ fn rendered_tool_rows(
     let TranscriptLine::Tool { call_id, .. } = line else {
         return Some(rows);
     };
-    let Some(prog) = app
-        .run_progress()
-        .and_then(|p| p.bash_progress.get(call_id))
-    else {
+    let Some(prog) = app.run_progress().and_then(|p| p.tools.tick(call_id)) else {
         return Some(rows);
     };
     if prog.elapsed_secs < 2 {
@@ -590,27 +556,6 @@ pub(crate) fn refresh_wide_cells(f: &mut Frame, area: Rect) {
             }
         }
     }
-}
-
-/// A key's stable byte hash, shared by the content hashes below.
-fn str_hash(s: &str) -> u64 {
-    s.bytes()
-        .fold(0u64, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u64))
-}
-
-/// Order-independent content hash of the live bash-progress map: XOR each
-/// entry's (call_id, elapsed_secs, lines) so the slots-version key catches a
-/// bash chip's elapsed/line-count tick (the suffix push_line_rows bakes into
-/// the cached slot text). elapsed_secs is second-granularity, so this changes
-/// ~once/sec during a bash run -- the cache rebuilds on a tick, not every
-/// frame (the old || agent_busy bypass).
-fn bash_progress_hash(map: &HashMap<String, crate::state::BashProgress>) -> u64 {
-    map.iter()
-        .map(|(k, p)| {
-            let lines = p.lines.map_or(0, |n| n.wrapping_add(1));
-            str_hash(k) ^ (p.elapsed_secs.wrapping_mul(31).wrapping_add(lines))
-        })
-        .fold(0u64, |acc, h| acc ^ h)
 }
 
 fn fold_hint_row(hint: &str, width: u16) -> String {

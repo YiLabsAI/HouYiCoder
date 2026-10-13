@@ -44,33 +44,21 @@ fn test_bash_chip_shows_elapsed() {
     app.start_run_for_test(0);
     app.run_progress_mut()
         .expect("active run")
-        .running_tools
-        .insert("c1".into());
+        .tools
+        .begin("c1".into());
     // <2s: no suffix (fast commands stay clean).
     app.run_progress_mut()
         .expect("active run")
-        .bash_progress
-        .insert(
-            "c1".into(),
-            BashProgress {
-                elapsed_secs: 1,
-                lines: None,
-            },
-        );
+        .tools
+        .note_tick("c1".into(), 1, None);
     let out = render_text(&app, 80, 24);
     assert!(out.contains("Bash(npm install)"), "chip present: {out}");
     assert!(!out.contains("1s)"), "under-2s no suffix: {out}");
     // >=2s, no streaming (lines None): (Ns) suffix lands.
     app.run_progress_mut()
         .expect("active run")
-        .bash_progress
-        .insert(
-            "c1".into(),
-            BashProgress {
-                elapsed_secs: 12,
-                lines: None,
-            },
-        );
+        .tools
+        .note_tick("c1".into(), 12, None);
     let out = render_text(&app, 80, 24);
     assert!(out.contains("(12s)"), "elapsed suffix on chip: {out}");
     assert!(
@@ -80,14 +68,8 @@ fn test_bash_chip_shows_elapsed() {
     // lines Some (streaming): (Ns · M lines) lands.
     app.run_progress_mut()
         .expect("active run")
-        .bash_progress
-        .insert(
-            "c1".into(),
-            BashProgress {
-                elapsed_secs: 12,
-                lines: Some(14),
-            },
-        );
+        .tools
+        .note_tick("c1".into(), 12, Some(14));
     let out = render_text(&app, 80, 24);
     assert!(
         out.contains("(12s · 14 lines)"),
@@ -112,7 +94,7 @@ fn tool_done_frame(id: &str) -> TranscriptFrame {
     )))
 }
 
-/// A ToolProgress tick lands in bash_progress only while the call is in the
+/// A ToolProgress tick lands in the ticker only while the call is in the
 /// running set; the chip reads this to render (Ns) / (Ns · M lines). Pins
 /// the dispatch side of the bash-progress channel.
 #[test]
@@ -129,8 +111,9 @@ fn test_tool_records_while_running() {
     assert!(
         app.run_progress()
             .expect("active run")
-            .bash_progress
-            .is_empty(),
+            .tools
+            .tick("call_1")
+            .is_none(),
         "tick before the call is tracked is dropped"
     );
     // Running: the tick lands (elapsed + optional lines).
@@ -143,10 +126,7 @@ fn test_tool_records_while_running() {
         lines: Some(14),
     }));
     assert_eq!(
-        app.run_progress()
-            .expect("active run")
-            .bash_progress
-            .get("call_1"),
+        app.run_progress().expect("active run").tools.tick("call_1"),
         Some(&BashProgress {
             elapsed_secs: 5,
             lines: Some(14)
@@ -157,9 +137,10 @@ fn test_tool_records_while_running() {
         tool_done_frame("call_1").into(),
     )));
     assert!(
-        !app.run_progress()
+        app.run_progress()
             .expect("active run")
-            .bash_progress
-            .contains_key("call_1")
+            .tools
+            .tick("call_1")
+            .is_none()
     );
 }

@@ -196,7 +196,7 @@ fn test_subagent_collapse_keeps_folded() {
 #[test]
 fn test_click_subagent_head_expands() {
     use crate::records::TranscriptLine;
-    use crate::selection::surface::{Surface, TranscriptSurface};
+    use crate::selection::region::{Region, TranscriptRegion};
     let mut app = crate::composition::app();
     app.ui.navigation.screen = crate::state::Screen::Working;
     app.sessions
@@ -217,9 +217,9 @@ fn test_click_subagent_head_expands() {
         "starts collapsed"
     );
     {
-        let mut surface = TranscriptSurface { app: &mut app };
-        surface.handle_down(rect.x, rect.y);
-        surface.handle_up();
+        let mut region = TranscriptRegion { app: &mut app };
+        region.handle_down(rect.x, rect.y);
+        region.handle_up();
     }
     assert!(
         app.ui.transcript_view.expanded.subagents.contains("c1"),
@@ -230,9 +230,9 @@ fn test_click_subagent_head_expands() {
     let _out = crate::test_harness::render_text(&app, 80, 24);
     let rect = app.ui.frame.layout.transcript_rect.get();
     {
-        let mut surface = TranscriptSurface { app: &mut app };
-        surface.handle_down(rect.x, rect.y);
-        surface.handle_up();
+        let mut region = TranscriptRegion { app: &mut app };
+        region.handle_down(rect.x, rect.y);
+        region.handle_up();
     }
     assert!(
         !app.ui.transcript_view.expanded.subagents.contains("c1"),

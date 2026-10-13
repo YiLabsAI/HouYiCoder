@@ -2,17 +2,17 @@ use std::thread;
 
 use super::*;
 
-/// Teammate-view pill + stay journey: when the user drills into a
-/// completed child's transcript, the footer pill renders alongside (the
+/// Teammate-view strip + stay journey: when the user drills into a
+/// completed child's transcript, the footer strip renders alongside (the
 /// row the user is reading), and the view stays on normal completion — the
-/// user exits with Esc, not an auto-dismiss. The pill-pin past the grace
+/// user exits with Esc, not an auto-dismiss. The strip-pin past the grace
 /// window (the row does not drop while the child is being viewed) is
 /// pinned at the unit level (test_grace_pins_viewed_child); this journey
 /// covers the end-to-end rendering + the stay-on-complete contract. Slow,
 /// ignored by default.
 #[test]
 #[ignore]
-fn test_teammate_pill_pins_view() {
+fn test_teammate_strip_pins_view() {
     let script = r#"[
         [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth"}}],
         [{"type":"Text","text":"auth is in src/auth"}],
@@ -23,14 +23,14 @@ fn test_teammate_pill_pins_view() {
     s.send_str("find auth");
     s.send_str("\r");
     // The fold-group hint lands once the child completes — not the running
-    // pill text, which renders at spawn and would match before completion.
+    // strip text, which renders at spawn and would match before completion.
     assert!(
         s.wait_for_plain("ctrl+o", RENDER_TIMEOUT * 2),
         "Subagent fold-group should appear after delegation:\n{}",
         s.output()
     );
     // Enter the teammate view on the just-completed child. The first full
-    // render of the view carries the banner + the pill row (the child's
+    // render of the view carries the banner + the strip row (the child's
     // terse done row), so the token marker is present alongside the banner.
     s.send_str("\r");
     assert!(
@@ -40,7 +40,7 @@ fn test_teammate_pill_pins_view() {
     );
     assert!(
         s.output_plain().contains("tok"),
-        "pill should render alongside the viewed child's transcript:\n{}",
+        "strip should render alongside the viewed child's transcript:\n{}",
         s.output()
     );
     // The view stays on normal completion — no auto-dismiss fires for a
@@ -65,12 +65,12 @@ fn test_teammate_pill_pins_view() {
     );
 }
 
-/// After a foreground delegation completes, the footer pill renders the
+/// After a foreground delegation completes, the footer strip renders the
 /// child's done row (the type + a done marker + the token total). Proves
-/// the pill surfaces the terminal state, not just the running state.
+/// the strip surfaces the terminal state, not just the running state.
 #[test]
 #[ignore]
-fn test_pill_done_after_completion() {
+fn test_strip_done_after_completion() {
     let script = r#"[
         [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth"}}],
         [{"type":"Text","text":"auth in src/auth"}],
@@ -87,17 +87,17 @@ fn test_pill_done_after_completion() {
     );
     assert!(
         s.output_compact().contains("explore·done"),
-        "pill should show the done row after completion:\n{}",
+        "strip should show the done row after completion:\n{}",
         s.output()
     );
 }
 
-/// Two foreground delegations in one run leave two footer pill rows, each
-/// carrying its own type + done marker. Proves the pill tracks multiple
+/// Two foreground delegations in one run leave two footer strip rows, each
+/// carrying its own type + done marker. Proves the strip tracks multiple
 /// children (not last-writer-wins) and each row is typed by its delegation.
 #[test]
 #[ignore]
-fn test_pill_two_children_rows() {
+fn test_strip_two_children_rows() {
     let script = r#"[
         [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"first","description":"first"}},
          {"type":"ToolCall","id":"toolu_2","name":"agent","input":{"subagent_type":"plan","prompt":"second","description":"second"}}],
@@ -117,18 +117,18 @@ fn test_pill_two_children_rows() {
     let pc = s.output_compact();
     assert!(
         pc.contains("explore·done") && pc.contains("plan·done"),
-        "both child pill rows should render with their own type:\n{}",
+        "both child strip rows should render with their own type:\n{}",
         s.output()
     );
 }
 
-/// While a foreground child is in-flight, the footer pill renders the
+/// While a foreground child is in-flight, the footer strip renders the
 /// running row (the type + a live verb), distinct from the done row. Proves
-/// the pill tracks the running state before completion. Uses the stub
+/// the strip tracks the running state before completion. Uses the stub
 /// delay so the in-flight window is wide enough to catch.
 #[test]
 #[ignore]
-fn test_pill_running_verb_inflight() {
+fn test_strip_running_verb_inflight() {
     let script = r#"[
         [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth"}}],
         [{"type":"Text","text":"auth in src/auth"}],
@@ -138,27 +138,27 @@ fn test_pill_running_verb_inflight() {
     assert!(s.wait_for("let's build", RENDER_TIMEOUT));
     s.send_str("find auth");
     s.send_str("\r");
-    // While the child is in-flight (2s delay), the pill shows the running
+    // While the child is in-flight (2s delay), the strip shows the running
     // row's hollow circle before the done row replaces it. The type + verb
     // text is not a latch: the fold-group head renders it at completion too.
     assert!(
         s.wait_for_compact("◯", RENDER_TIMEOUT * 2),
-        "pill should render the running row while the child is in-flight:\n{}",
+        "strip should render the running row while the child is in-flight:\n{}",
         s.output()
     );
     assert!(
         !s.output_compact().contains("explore·done"),
-        "pill should not show done before the child completes:\n{}",
+        "strip should not show done before the child completes:\n{}",
         s.output()
     );
 }
 
-/// Shift+Down on the footer pill moves the selection onto a child row; Enter
+/// Shift+Down on the footer strip moves the selection onto a child row; Enter
 /// then opens that child's teammate view. Proves the fleet-selection drill-in
 /// path (distinct from the transcript-line Enter path).
 #[test]
 #[ignore]
-fn test_pill_shift_enter_teammate() {
+fn test_strip_shift_enter_teammate() {
     let script = r#"[
         [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth"}}],
         [{"type":"Text","text":"auth in src/auth"}],
@@ -180,12 +180,12 @@ fn test_pill_shift_enter_teammate() {
 
 // ---- batch 4: background delegation ----
 
-/// The running pill shows the live-progress glyph (a hollow circle),
-/// distinct from the done row's check mark. Proves the pill distinguishes
+/// The running strip shows the live-progress glyph (a hollow circle),
+/// distinct from the done row's check mark. Proves the strip distinguishes
 /// in-flight from completed at the glyph level.
 #[test]
 #[ignore]
-fn test_pill_running_glyph() {
+fn test_strip_running_glyph() {
     let script = r#"[
         [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth"}}],
         [{"type":"Text","text":"auth in src/auth"}],
@@ -197,18 +197,18 @@ fn test_pill_running_glyph() {
     s.send_str("\r");
     assert!(
         s.wait_for_compact("◯", RENDER_TIMEOUT * 2),
-        "running pill should show the hollow-circle glyph:\n{}",
+        "running strip should show the hollow-circle glyph:\n{}",
         s.output()
     );
 }
 
-/// The pill transitions from the running row to the done row as a
+/// The strip transitions from the running row to the done row as a
 /// foreground child completes: the running verb appears first, then the
-/// done marker replaces it. Proves the pill reflects the live state change
+/// done marker replaces it. Proves the strip reflects the live state change
 /// at completion.
 #[test]
 #[ignore]
-fn test_pill_running_to_done() {
+fn test_strip_running_to_done() {
     let script = r#"[
         [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth"}}],
         [{"type":"Text","text":"auth in src/auth"}],
@@ -226,18 +226,18 @@ fn test_pill_running_to_done() {
     assert!(s.wait_for_compact("◯", RENDER_TIMEOUT * 2));
     assert!(
         s.wait_for_compact("explore·done", RENDER_TIMEOUT * 3),
-        "pill should transition to the done row after completion:\n{}",
+        "strip should transition to the done row after completion:\n{}",
         s.output()
     );
 }
 
 // ---- batch 6: banner, palette, edge, unicode ----
 
-/// The completed pill row shows the check-mark glyph, distinct from the
+/// The completed strip row shows the check-mark glyph, distinct from the
 /// running row's hollow circle. Proves the terminal-state glyph lands.
 #[test]
 #[ignore]
-fn test_pill_completed_check_glyph() {
+fn test_strip_completed_check_glyph() {
     let script = r#"[
         [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth"}}],
         [{"type":"Text","text":"auth in src/auth"}],
@@ -249,17 +249,17 @@ fn test_pill_completed_check_glyph() {
     s.send_str("\r");
     assert!(
         s.wait_for_compact("✓explore", RENDER_TIMEOUT * 2),
-        "completed pill should show the check glyph + type:\n{}",
+        "completed strip should show the check glyph + type:\n{}",
         s.output()
     );
 }
 
-/// Shift+Up/Down on the footer pill moves the selection without crashing;
+/// Shift+Up/Down on the footer strip moves the selection without crashing;
 /// Enter on the selection opens the teammate view. Proves the fleet
 /// selection keys are wired both directions.
 #[test]
 #[ignore]
-fn test_pill_shift_arrows_enter() {
+fn test_strip_shift_arrows_enter() {
     let script = r#"[
         [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth"}}],
         [{"type":"Text","text":"auth in src/auth"}],
@@ -280,16 +280,16 @@ fn test_pill_shift_arrows_enter() {
     );
 }
 
-/// Enter a teammate view on a RUNNING child via the footer pill (Shift+Down
-/// selects the pill row, empty-input Enter drills). This is the
-/// click-pill-on-running-child path that the cache-stale bug hit: a running
+/// Enter a teammate view on a RUNNING child via the footer strip (Shift+Down
+/// selects the strip row, empty-input Enter drills). This is the
+/// click-strip-on-running-child path that the cache-stale bug hit: a running
 /// child has no fold anchor row, so the view opens empty and fills on fetch.
 /// The unit test pins the fill-bump logic; this journey pins the real-binary
 /// key path + that the parent transcript does not bleed through. Slow,
 /// ignored by default.
 #[test]
 #[ignore]
-fn test_pill_enter_running_child() {
+fn test_strip_enter_running_child() {
     let script = r#"[
         [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth","run_in_background":true}},{"type":"Text","text":"delegated background, continuing"}],
         [{"type":"Text","text":"ok"}],
@@ -315,21 +315,21 @@ fn test_pill_enter_running_child() {
     // of the child's turn.
     assert!(
         s.wait_for_screen("◯", RENDER_TIMEOUT * 2),
-        "the running child should show its pill row before the drill:\n{}",
+        "the running child should show its strip row before the drill:\n{}",
         s.output()
     );
     // Clear so the post-drill frame is what we assert on, then select the
-    // pill + drill.
+    // strip + drill.
     s.clear_output();
     s.send_key(&Key::ShiftDown);
     s.send_str("\r");
     assert!(
         s.wait_for_screen("Viewing", RENDER_TIMEOUT * 2),
-        "pill drill should open the teammate view on the running child:\n{}",
+        "strip drill should open the teammate view on the running child:\n{}",
         s.output()
     );
     // The standing screen, not the accumulated stream: the stream still holds
-    // the frame drawn between the pill selection and the drill, so it reports
+    // the frame drawn between the strip selection and the drill, so it reports
     // the parent rows even after the child view replaced them.
     assert!(
         !s.screen().contents().contains("delegated background"),

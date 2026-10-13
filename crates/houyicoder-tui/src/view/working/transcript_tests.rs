@@ -1,4 +1,5 @@
 use crate::records::TranscriptLine;
+use crate::rows::slots_key::SlotsKey;
 use crate::test_harness::render_text;
 use crate::test_harness::working_app;
 use houyicoder_protocol::envelope::RequestId;
@@ -242,8 +243,8 @@ fn test_cache_version_stable_idle() {
     app.sessions.current.transcript.bump_revision();
     let out1 = render_text(&app, 80, 24);
     assert!(
-        app.ui.frame.rows.version() != u64::MAX,
-        "version should be set after first render"
+        app.ui.frame.rows.holds(&SlotsKey::for_frame(&app, 80)),
+        "the first render should build the cache"
     );
     let out2 = render_text(&app, 80, 24);
     assert_eq!(out1, out2, "second render should match (cache hit)");

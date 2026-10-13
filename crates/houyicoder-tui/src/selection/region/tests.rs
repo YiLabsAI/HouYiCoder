@@ -4,7 +4,7 @@
 
 use crate::composition;
 use crate::selection::Selection;
-use crate::selection::surface::{clear_stale_click, edge_scroll_if_at_edge};
+use crate::selection::region::{clear_stale_click, edge_scroll_if_at_edge};
 
 fn sel_with(anchor: (u16, usize), focus: (u16, usize)) -> Selection {
     Selection {

@@ -113,8 +113,8 @@ impl App {
     /// destructive-command guardrail (rm / sudo / redirect) still fires in auto
     /// mode, so cycling into auto never silently allows a destructive call.
     pub fn tab_cycle_mode(&mut self) {
-        // Shift+Tab cycles the mode; the status-bar pill reflects it on the
-        // next render, so no system line is pushed -- the footer pill is the
+        // Shift+Tab cycles the mode; the status-bar label reflects it on the
+        // next render, so no system line is pushed -- the status-bar label is the
         // single source of mode truth. The server is the authority; it cycles
         // + responds with the new mode, which lands in mode_cache.
         let Some(s) = self.sessions.current.connection.as_ref() else {

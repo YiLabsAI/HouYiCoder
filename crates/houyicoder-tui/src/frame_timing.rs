@@ -8,6 +8,7 @@ use ratatui::{Terminal, backend::TestBackend};
 
 use crate::composition::app as default_app;
 use crate::records::{TeammateView, ToolOutcome, TranscriptLine};
+use crate::rows::slots_key::SlotsKey;
 use crate::state::{App, Screen};
 use crate::view::draw;
 
@@ -168,27 +169,22 @@ fn record(
     std::fs::write(run_dir.join(format!("{stem}.csv")), row).expect("write summary");
 }
 
-/// Counts frames that rebuilt the transcript row cache. The version cell
-/// holds a content hash, not a counter, so rebuilds are observed as hash
-/// changes between frames.
+/// Counts frames that rebuilt the transcript row cache. The cache rebuilds
+/// exactly when it does not already hold the key the frame will build, so the
+/// count is read from the cache rather than from a counter beside it.
 struct RebuildWatch {
-    prev: u64,
     count: u64,
 }
 
 impl RebuildWatch {
-    fn new(app: &App) -> Self {
-        Self {
-            prev: app.ui.frame.rows.version(),
-            count: 0,
-        }
+    fn new() -> Self {
+        Self { count: 0 }
     }
 
-    fn after_frame(&mut self, app: &App) {
-        let v = app.ui.frame.rows.version();
-        if v != self.prev {
+    /// Call before the frame: whether this frame will rebuild.
+    fn before_frame(&mut self, app: &App, width: u16) {
+        if !app.ui.frame.rows.holds(&SlotsKey::for_frame(app, width)) {
             self.count += 1;
-            self.prev = v;
         }
     }
 }
@@ -229,10 +225,10 @@ fn test_frame_timing_benchmark() {
             for _ in 0..WARMUP {
                 render(&app, area);
             }
-            let mut watch = RebuildWatch::new(&app);
+            let mut watch = RebuildWatch::new();
             for _ in 0..SAMPLES {
+                watch.before_frame(&app, area.0);
                 durations.push(render(&app, area));
-                watch.after_frame(&app);
             }
             record(&run_dir, "idle", area, scale, &durations, watch.count);
 
@@ -245,7 +241,7 @@ fn test_frame_timing_benchmark() {
                 app.sessions.current.transcript.bump_revision();
                 let mut lcg = Lcg(0xFEED + rate as u64);
                 render(&app, area);
-                let mut watch = RebuildWatch::new(&app);
+                let mut watch = RebuildWatch::new();
                 let mut durations = Vec::with_capacity(100);
                 for i in 0..100 {
                     for t in 0..per_frame {
@@ -259,8 +255,8 @@ fn test_frame_timing_benchmark() {
                             )));
                     }
                     app.sessions.current.transcript.bump_revision();
+                    watch.before_frame(&app, area.0);
                     durations.push(render(&app, area));
-                    watch.after_frame(&app);
                 }
                 record(
                     &run_dir,
@@ -283,10 +279,10 @@ fn test_frame_timing_benchmark() {
             for _ in 0..WARMUP.min(10) {
                 render(&app, area);
             }
-            let mut watch = RebuildWatch::new(&app);
+            let mut watch = RebuildWatch::new();
             for _ in 0..100 {
+                watch.before_frame(&app, area.0);
                 durations.push(render(&app, area));
-                watch.after_frame(&app);
             }
             record(&run_dir, "search", area, scale, &durations, watch.count);
         }
@@ -304,9 +300,9 @@ fn test_frame_timing_benchmark() {
             app.ui.navigation.screen = Screen::Working;
             app.sessions.current.transcript = lines.clone().into();
             app.sessions.current.transcript.bump_revision();
-            let mut watch = RebuildWatch::new(&app);
+            let mut watch = RebuildWatch::new();
+            watch.before_frame(&app, 80);
             render(&app, (80, 24));
-            watch.after_frame(&app);
             rebuilds += watch.count;
             durations.push(start.elapsed());
         }
@@ -322,18 +318,18 @@ fn test_frame_timing_benchmark() {
     app.sessions.current.transcript = lines.clone().into();
     app.sessions.current.transcript.bump_revision();
     render(&app, (80, 24));
-    let mut watch = RebuildWatch::new(&app);
+    let mut watch = RebuildWatch::new();
     let mut durations = Vec::with_capacity(150);
     for i in 0..150 {
         let area = SIZES[i % SIZES.len()];
         app.sessions.current.transcript.bump_revision();
+        watch.before_frame(&app, area.0);
         durations.push(render(&app, area));
-        watch.after_frame(&app);
     }
     record(&run_dir, "resize", (80, 24), 1000, &durations, watch.count);
 
     // Fold: toggling an expanded tool-result group between frames.
-    let mut watch = RebuildWatch::new(&app);
+    let mut watch = RebuildWatch::new();
     let mut durations = Vec::with_capacity(100);
     for i in 0..100usize {
         // Even frames expand a group, the next odd frame collapses the same
@@ -341,8 +337,8 @@ fn test_frame_timing_benchmark() {
         let call_id = format!("call-{}", 6 + ((i / 2) % 200));
         app.ui.transcript_view.toggle_result(call_id);
         app.sessions.current.transcript.bump_revision();
+        watch.before_frame(&app, 80);
         durations.push(render(&app, (80, 24)));
-        watch.after_frame(&app);
     }
     record(&run_dir, "fold", (80, 24), 1000, &durations, watch.count);
 
@@ -357,11 +353,11 @@ fn test_frame_timing_benchmark() {
     app.sessions.current.transcript = synth_lines(1000, 0xC0FFEE).into();
     app.sessions.current.transcript.bump_revision();
     render(&app, (80, 24));
-    let mut watch = RebuildWatch::new(&app);
+    let mut watch = RebuildWatch::new();
     let mut durations = Vec::with_capacity(100);
     for _ in 0..100 {
+        watch.before_frame(&app, 80);
         durations.push(render(&app, (80, 24)));
-        watch.after_frame(&app);
     }
     record(
         &run_dir,

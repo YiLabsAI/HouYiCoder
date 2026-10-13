@@ -38,7 +38,7 @@ use crate::session::capabilities::model::ModelCapability;
 #[derive(Debug)]
 pub(crate) struct PermissionCapability {
     /// The permission mode cache. Seeded on the first idle poll so the status
-    /// bar pill renders from session start, then replaced by the
+    /// bar label renders from session start, then replaced by the
     /// PermissionMode / PermissionCycleMode replies. None until seeded.
     pub(crate) mode_cache: Option<PermissionMode>,
     /// Durable rule cache, refreshed by PermissionRulesResult.

@@ -52,7 +52,7 @@ fn pane_row(app: &crate::state::App, needle: &str) -> (usize, u16) {
 }
 
 /// A Down → Drag → Up over a /memory entry row writes that row's text to the
-/// clipboard. Pins the whole pane selection surface: PaneSurface::parts +
+/// clipboard. Pins the whole pane selection surface: PaneRegion::parts +
 /// handle_down/drag/up + extract_text + the copy path, and that the pane row
 /// stash (not the transcript stash) is the source.
 #[test]

@@ -1722,13 +1722,13 @@ fn test_teammate_esc_pane_first() {
     assert!(!app.cancelling(), "child not interrupted");
 }
 
-/// Rendering a populated fleet paints one pill row per child, each carrying
+/// Rendering a populated fleet paints one strip row per child, each carrying
 /// the type + the verb inferred from its last tool.
 #[test]
-fn test_fleet_pill_renders_rows() {
+fn test_fleet_strip_renders_rows() {
     let app = fleet_app(2);
     let text = crate::test_harness::render_text(&app, 80, 24);
-    assert!(text.contains("explore"), "pill shows the child type");
+    assert!(text.contains("explore"), "strip shows the child type");
     assert!(
         text.contains("searching") || text.contains("thinking"),
         "verb rendered"
