@@ -166,7 +166,7 @@ impl Ui {
         let next = ViewportMode::for_stage(stage);
         if next != ViewportMode::Working {
             self.navigation.palette.close();
-            self.transcript_view.search.close();
+            self.transcript_view.exit_search_if_active();
         }
         self.navigation.viewport = next;
     }

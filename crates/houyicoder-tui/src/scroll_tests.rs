@@ -5,14 +5,23 @@
 
 #![cfg(test)]
 
-use crate::composition;
-use crate::state::Screen;
-use crate::test_harness::{render_buffer, render_text};
-use crate::transcript::TranscriptFrame;
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
+use houyicoder_protocol::frontend::SlashCommand;
 use houyicoder_protocol::frontend::run::ContentBlock;
 use houyicoder_protocol::frontend::session_update::{ContentChunk, SessionUpdate};
+use ratatui::style::Color;
 
-fn working() -> crate::state::App {
+use crate::app::handle_event;
+use crate::composition;
+use crate::records::{ToolOutcome, TranscriptLine};
+use crate::state::{App, Screen, ViewportMode};
+use crate::test_harness::{render_buffer, render_text};
+use crate::transcript::TranscriptFrame;
+
+fn working() -> App {
     let mut app = composition::app();
     app.ui.navigation.screen = Screen::Working;
     app
@@ -21,7 +30,7 @@ fn working() -> crate::state::App {
 /// Deliver one agent text frame and rebuild, so the row is one the log can
 /// reproduce: a row written onto the transcript alone does not survive the
 /// rebuild a later line triggers.
-fn agent_row(app: &mut crate::state::App, text: &str) {
+fn agent_row(app: &mut App, text: &str) {
     app.sessions
         .current
         .transcript
@@ -57,8 +66,7 @@ fn test_scrollback_keeps_top_row() {
 /// the tail. Every search-view test should build on this so it does not
 /// regress to single-line short-body minimal cases that hide the multi-row
 /// highlight + jump behavior.
-fn searchable_transcript() -> Vec<crate::records::TranscriptLine> {
-    use crate::records::{ToolOutcome, TranscriptLine};
+fn searchable_transcript() -> Vec<TranscriptLine> {
     let mut body = String::new();
     for i in 0..8 {
         body.push_str(&format!("body line {i}\n"));
@@ -134,7 +142,6 @@ fn test_page_down_after_up() {
 /// reasoning summary and a delegation) go through the same pin.
 #[test]
 fn test_thinking_expand_pins() {
-    use crate::records::TranscriptLine;
     let mut app = working();
     for _ in 0..40 {
         app.system_line("a long line of transcript history");
@@ -166,7 +173,6 @@ fn test_thinking_expand_pins() {
 
 #[test]
 fn test_subagent_expand_pins() {
-    use crate::records::TranscriptLine;
     let mut app = working();
     for _ in 0..40 {
         app.system_line("a long line of transcript history");
@@ -194,8 +200,6 @@ fn test_subagent_expand_pins() {
 /// refocus while the native cursor remains hidden.
 #[test]
 fn test_focus_lost_hides_caret() {
-    use crossterm::event::Event;
-    use ratatui::style::Color;
     let mut app = working();
     app.ui.input.editor.set("abc".to_string());
     let has_white = |buf: &ratatui::buffer::Buffer| {
@@ -235,8 +239,7 @@ fn test_focus_lost_hides_caret() {
 /// arms.
 #[test]
 fn test_handle_event_dispatches_each() {
-    use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
-    let mk = |ev: Event| crate::app::handle_event(&mut working(), ev).unwrap();
+    let mk = |ev: Event| handle_event(&mut working(), ev).unwrap();
     assert!(mk(Event::Key(KeyEvent::new(
         KeyCode::Char('a'),
         KeyModifiers::NONE
@@ -272,15 +275,14 @@ fn test_agent_output_no_yank() {
     );
 }
 
-fn context_app() -> crate::state::App {
-    use houyicoder_protocol::frontend::SlashCommand;
+fn context_app() -> App {
     let mut app = working();
-    app.push_transcript_line(crate::records::TranscriptLine::User("/context".into()));
+    app.push_transcript_line(TranscriptLine::User("/context".into()));
     app.run_command(SlashCommand::Context);
     app
 }
 
-fn fill_transcript(app: &mut crate::state::App, n: usize) {
+fn fill_transcript(app: &mut App, n: usize) {
     app.push_transcript_line(crate::records::TranscriptLine::User("hi".into()));
     app.push_transcript_line(crate::records::TranscriptLine::Agent("hello back".into()));
     for _ in 0..n {
@@ -355,12 +357,11 @@ fn test_context_grid_pgup_working() {
 
 #[test]
 fn test_slash_prefix_needs_boundary() {
-    use crate::state::TranscriptLine;
     let mut app = working();
     app.ui.input.editor.set("/searchalot".to_string());
     app.submit_input();
     assert!(
-        !app.ui.transcript_view.search.active,
+        !app.ui.transcript_view.search_active(),
         "/searchalot must not open the search pane"
     );
     assert!(
@@ -393,8 +394,6 @@ fn test_slash_prefix_needs_boundary() {
 // query word) is asserted because the query appears in the chrome.
 #[test]
 fn test_search_opens_newest_match() {
-    use crate::records::TranscriptLine;
-    use crate::state::ViewportMode;
     let mut app = working();
     let mut transcript = vec![TranscriptLine::Agent("needle in history".into())];
     for i in 0..60 {
@@ -403,7 +402,7 @@ fn test_search_opens_newest_match() {
     app.sessions.current.transcript = transcript.into();
     app.enter_search_view("needle");
     assert!(
-        app.ui.transcript_view.search.active,
+        app.ui.transcript_view.search_active(),
         "in_search set on entry"
     );
     assert!(app.ui.verbose, "verbose set on entry");
@@ -412,11 +411,12 @@ fn test_search_opens_newest_match() {
         ViewportMode::Scroll,
         "enters Scroll mode"
     );
-    let matches = &app.ui.transcript_view.search.matches;
+    let matches = app.ui.transcript_view.search_matches();
     assert_eq!(matches.len(), 1, "one needle match");
     assert_eq!(*matches.last().unwrap(), 0, "match is the first line");
     assert_eq!(
-        matches[app.ui.transcript_view.search.focus], 0,
+        matches[app.ui.transcript_view.search_focus()],
+        0,
         "focus = newest (only) match"
     );
     // The match line must be ON SCREEN on entry, not just pointed at. The
@@ -429,7 +429,7 @@ fn test_search_opens_newest_match() {
     );
     app.exit_search_view();
     assert!(
-        !app.ui.transcript_view.search.active,
+        !app.ui.transcript_view.search_active(),
         "in_search cleared on exit"
     );
     assert!(!app.ui.verbose, "verbose cleared on exit");
@@ -439,7 +439,7 @@ fn test_search_opens_newest_match() {
         "viewport restored on exit"
     );
     assert!(
-        app.ui.transcript_view.search.query.is_empty(),
+        app.ui.transcript_view.search_query().is_empty(),
         "query cleared on exit"
     );
 }
@@ -449,8 +449,6 @@ fn test_search_opens_newest_match() {
 // branch + the handle_scroll in_search exit arm.
 #[test]
 fn test_search_chrome_exit_key() {
-    use crate::records::TranscriptLine;
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     let mut app = working();
     app.sessions.current.transcript = vec![TranscriptLine::Agent("foo here".into())].into();
     app.enter_search_view("foo");
@@ -459,7 +457,7 @@ fn test_search_chrome_exit_key() {
     assert!(out.contains("foo"), "query in chrome: {out}");
     crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     assert!(
-        !app.ui.transcript_view.search.active,
+        !app.ui.transcript_view.search_active(),
         "Esc exits the search view"
     );
     assert!(!app.ui.verbose, "Esc clears verbose");
@@ -471,8 +469,6 @@ fn test_search_chrome_exit_key() {
 // screen never scrolled to the match.
 #[test]
 fn test_n_walks_toward_older() {
-    use crate::records::TranscriptLine;
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     let mut app = working();
     let mut transcript = vec![TranscriptLine::Agent("needle older mention".into())];
     for i in 0..60 {
@@ -522,9 +518,6 @@ fn test_n_walks_toward_older() {
 // point.
 #[test]
 fn test_search_current_match_yellow() {
-    use crate::test_harness::render_buffer;
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-    use ratatui::style::Color;
     let mut app = working();
     app.sessions.current.transcript = searchable_transcript().into();
     app.enter_search_view("needle");
@@ -557,8 +550,6 @@ fn test_search_current_match_yellow() {
 // Excludes this test file so the pats literals do not self-match.
 #[test]
 fn test_legacy_search_definitions_gone() {
-    use std::fs;
-    use std::path::{Path, PathBuf};
     let pats = [
         "struct DiskHit",
         "trait SearchLog",
@@ -615,12 +606,11 @@ fn test_legacy_search_definitions_gone() {
 // is searched.
 #[test]
 fn test_search_all_informs_user() {
-    use crate::records::TranscriptLine;
     let mut app = working();
     agent_row(&mut app, "needle in window");
     app.run_tui_local_command("search --all needle");
     assert!(
-        app.ui.transcript_view.search.active,
+        app.ui.transcript_view.search_active(),
         "--all still enters the search view"
     );
     assert!(app.ui.verbose);
@@ -632,7 +622,7 @@ fn test_search_all_informs_user() {
         "must inform the user full-history is unavailable"
     );
     assert_eq!(
-        app.ui.transcript_view.search.matches.len(),
+        app.ui.transcript_view.search_matches_len(),
         1,
         "still searches the in-memory window"
     );
@@ -646,8 +636,6 @@ fn test_search_all_informs_user() {
 // would pass even if the bar never rendered.
 #[test]
 fn test_search_input_opens_seeded() {
-    use crate::records::TranscriptLine;
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     let mut app = working();
     app.sessions.current.transcript = vec![TranscriptLine::Agent("needle match".into())].into();
     app.enter_search_view("needle");
@@ -675,8 +663,6 @@ fn test_search_input_opens_seeded() {
 // the switch is observable.
 #[test]
 fn test_search_commit_switches_query() {
-    use crate::records::TranscriptLine;
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     let mut app = working();
     let mut transcript = vec![TranscriptLine::Agent("needle older".into())];
     for i in 0..60 {
@@ -729,8 +715,6 @@ fn test_search_commit_switches_query() {
 // and n=older would be absent.
 #[test]
 fn test_search_cancel_restores_query() {
-    use crate::records::TranscriptLine;
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     let mut app = working();
     app.sessions.current.transcript = vec![TranscriptLine::Agent("needle match".into())].into();
     app.enter_search_view("needle");
@@ -765,8 +749,6 @@ fn test_search_cancel_restores_query() {
 // returning.
 #[test]
 fn test_search_input_edits_buffer() {
-    use crate::records::TranscriptLine;
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     let mut app = working();
     app.sessions.current.transcript = vec![TranscriptLine::Agent("needle match".into())].into();
     app.enter_search_view("needle");

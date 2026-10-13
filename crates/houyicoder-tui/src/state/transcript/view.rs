@@ -41,26 +41,17 @@ pub(crate) struct TranscriptViewState {
     /// threshold). Renders flat through a separate path; see window_scroll.
     window_mode: bool,
     /// The frozen lines the search view renders and counts against, plus the
-    /// load metadata that explains them. Pub(crate) rather than private like
-    /// the scroll objects: the search's run path holds the corpus slice while
-    /// it mutates the query state, a disjoint field borrow a method call
-    /// cannot express.
-    pub(crate) search_corpus: SearchCorpus,
+    /// load metadata that explains them.
+    search_corpus: SearchCorpus,
     /// The byte-window the search view browses when the log is over the
     /// threshold: the loaded window's byte range, the frozen file size that
     /// bounds further reads, and the per-window corrupt-line skip count.
     history_window: HistoryWindow,
-    /// The four open-row sets the visible view owns. Pub(crate) so the
-    /// toggle and render paths reach a set directly; the whole value
-    /// swaps on a view park or restore, which is the contract the flat
-    /// fields could only carry as a comment.
+    /// The four open-row sets the visible view owns.
     pub(crate) expanded: ExpandedKeys,
     /// The search query state: whether the search view is open, the query, the
-    /// match indices and focus, and the in-view slash bar buffer. Pub(crate)
-    /// for the same reason as the corpus: the search's run path holds the
-    /// corpus slice while it mutates this query state, a disjoint field
-    /// borrow a method call on the owner cannot express.
-    pub(crate) search: TranscriptSearch,
+    /// match indices and focus, and the in-view slash bar buffer.
+    search: TranscriptSearch,
     /// The event cursor the reader scrolled away from the tail at, so new
     /// content appended since is "unseen". None while following the tail.
     /// Pub(crate): the scroll commands write it and the trim path reads it
@@ -76,6 +67,242 @@ pub(crate) struct TranscriptViewState {
 }
 
 impl TranscriptViewState {
+    /// True while the search view is active.
+    pub(crate) fn search_active(&self) -> bool {
+        self.search.active
+    }
+
+    /// True while the in-view slash bar is open for typing a new query.
+    pub(crate) fn search_input_mode(&self) -> bool {
+        self.search.input_mode
+    }
+
+    /// The current search query string.
+    pub(crate) fn search_query(&self) -> &str {
+        &self.search.query
+    }
+
+    /// The matching line indices in transcript order (oldest first).
+    #[cfg(test)]
+    pub(crate) fn search_matches(&self) -> &[usize] {
+        &self.search.matches
+    }
+
+    /// The number of matches in the active search.
+    pub(crate) fn search_matches_len(&self) -> usize {
+        self.search.matches.len()
+    }
+
+    /// The focused match index (into search_matches).
+    pub(crate) fn search_focus(&self) -> usize {
+        self.search.focus
+    }
+
+    /// The absolute line index of the focused match, if any match exists.
+    pub(crate) fn search_focused_line(&self) -> Option<usize> {
+        self.search.focused_line()
+    }
+
+    /// The current text in the in-view slash bar buffer.
+    pub(crate) fn search_input_value(&self) -> &str {
+        self.search.input.value()
+    }
+
+    /// The cursor position in the in-view slash bar buffer.
+    pub(crate) fn search_input_cursor(&self) -> usize {
+        self.search.input.cursor()
+    }
+
+    /// The frozen lines the search view renders and counts against.
+    pub(crate) fn search_corpus_lines(&self) -> &[TranscriptLine] {
+        self.search_corpus.lines()
+    }
+
+    /// True when the snapshot source declined the whole log.
+    pub(crate) fn search_corpus_truncated(&self) -> bool {
+        self.search_corpus.truncated()
+    }
+
+    /// The raw log byte size frozen at search enter.
+    pub(crate) fn search_corpus_log_bytes(&self) -> u64 {
+        self.search_corpus.log_bytes()
+    }
+
+    /// Corrupt log lines skipped at search enter.
+    pub(crate) fn search_corpus_skipped(&self) -> usize {
+        self.search_corpus.skipped()
+    }
+
+    /// Enter the search view in byte-window mode over a large log.
+    pub(crate) fn enter_search_over_window(
+        &mut self,
+        lines: Vec<TranscriptLine>,
+        log_bytes: u64,
+        skipped: usize,
+        anchor: u64,
+        end: u64,
+        query: &str,
+    ) {
+        self.search_corpus
+            .enter_over_window(lines, log_bytes, skipped);
+        self.window_mode = true;
+        self.enter_history_window(log_bytes, anchor, end, skipped);
+        self.reset_window_scroll();
+        self.search.begin(query);
+        self.run_search_on_corpus();
+        self.search_opened();
+    }
+
+    /// Enter the search view over a snapshot under the size threshold.
+    pub(crate) fn enter_search_under(
+        &mut self,
+        lines: Vec<TranscriptLine>,
+        truncated: bool,
+        skipped: usize,
+        query: &str,
+    ) {
+        self.search_corpus.enter_under(lines, truncated, skipped);
+        self.window_mode = false;
+        self.search.begin(query);
+        self.run_search_on_corpus();
+        self.search_opened();
+    }
+
+    /// Enter the search view using a clone of the live transcript.
+    pub(crate) fn enter_search_fallback(&mut self, live: Vec<TranscriptLine>, query: &str) {
+        self.search_corpus.enter_fallback(live);
+        self.window_mode = false;
+        self.search.begin(query);
+        self.run_search_on_corpus();
+        self.search_opened();
+    }
+
+    /// Leave the search view: close search, exit corpus and history window,
+    /// and bump the presentation revision.
+    pub(crate) fn exit_search(&mut self) {
+        self.search.close();
+        self.search_corpus.exit();
+        self.window_mode = false;
+        self.exit_history_window();
+        self.reset_window_scroll();
+        self.search_closed();
+    }
+
+    /// Exit the search view if it was active.
+    pub(crate) fn exit_search_if_active(&mut self) {
+        if self.search.active {
+            self.exit_search();
+        }
+    }
+
+    /// Open the in-view slash bar for editing the search query.
+    pub(crate) fn begin_search_input(&mut self) {
+        self.search.begin_input();
+    }
+
+    /// Commit the in-view slash bar: buffer becomes the query, and search
+    /// re-runs against the owned corpus.
+    pub(crate) fn commit_search_input(&mut self) {
+        self.search.commit_input();
+        self.run_search_on_corpus();
+    }
+
+    /// Cancel the in-view slash bar without changing query or matches.
+    pub(crate) fn cancel_search_input(&mut self) {
+        self.search.cancel_input();
+    }
+
+    /// Run the search query against the owned frozen corpus.
+    pub(crate) fn run_search_on_corpus(&mut self) {
+        let lines = self.search_corpus.lines();
+        self.search.run(lines);
+    }
+
+    /// Run the search query against live transcript lines.
+    pub(crate) fn run_search_on_lines(&mut self, lines: &[TranscriptLine]) {
+        self.search.run(lines);
+    }
+
+    /// Advance the focused match to the next match.
+    pub(crate) fn search_next(&mut self) {
+        self.search.next();
+    }
+
+    /// Step the focused match back to the previous match.
+    pub(crate) fn search_prev(&mut self) {
+        self.search.prev();
+    }
+
+    /// Focus the newest (last) match. Returns true if at least one match exists.
+    pub(crate) fn search_focus_newest(&mut self) -> bool {
+        self.search.focus_newest()
+    }
+
+    /// Focus the first match (for forward window navigation).
+    pub(crate) fn search_focus_first(&mut self) {
+        if !self.search.matches.is_empty() {
+            self.search.focus = 0;
+        }
+    }
+
+    /// Focus the last match (for reverse window navigation).
+    pub(crate) fn search_focus_last(&mut self) {
+        if !self.search.matches.is_empty() {
+            self.search.focus = self.search.matches.len() - 1;
+        }
+    }
+
+    /// Dispatch editing key codes to the in-view search bar input buffer.
+    pub(crate) fn handle_search_input_key(&mut self, code: crossterm::event::KeyCode) {
+        use crossterm::event::KeyCode;
+        match code {
+            KeyCode::Backspace => self.search.input.backspace(),
+            KeyCode::Delete => self.search.input.delete(),
+            KeyCode::Left => self.search.input.move_left(),
+            KeyCode::Right => self.search.input.move_right(),
+            KeyCode::Home => self.search.input.move_home(),
+            KeyCode::End => self.search.input.move_end(),
+            KeyCode::Char(c) => self.search.input.push(c),
+            _ => {}
+        }
+    }
+
+    /// Replace the window corpus lines and update navigation bounds.
+    pub(crate) fn replace_search_window(
+        &mut self,
+        lines: Vec<TranscriptLine>,
+        anchor: u64,
+        end: u64,
+        skipped: usize,
+    ) {
+        self.search_corpus.replace_lines(lines);
+        self.replace_history_window(anchor, end, skipped);
+        self.reset_window_scroll();
+        self.run_search_on_corpus();
+    }
+
+    /// Replace the frozen corpus lines and bump the presentation revision.
+    #[cfg(any(test, feature = "bench"))]
+    pub(crate) fn replace_corpus_lines(&mut self, lines: Vec<TranscriptLine>) {
+        self.search_corpus.replace_lines(lines);
+        self.bump_presentation();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_search_state_for_test(
+        &mut self,
+        active: bool,
+        query: &str,
+        matches: Vec<usize>,
+        focus: usize,
+    ) {
+        self.search.active = active;
+        self.search.query = query.into();
+        self.search.matches = matches;
+        self.search.focus = focus;
+        self.bump_presentation();
+    }
+
     /// The visible view's presentation revision: bumped on every change the
     /// renderer must observe beyond the transcript revision. Callers pass
     /// this to the render cache identity; nothing else reads it.
@@ -198,12 +425,6 @@ impl TranscriptViewState {
     /// genuinely branch, not a second way to pick a scroll.
     pub(crate) fn window_browsing(&self) -> bool {
         self.window_mode
-    }
-
-    /// Enter or leave byte-window browsing. The search view's enter and
-    /// exit transactions are the only writers.
-    pub(crate) fn set_window_browsing(&mut self, on: bool) {
-        self.window_mode = on;
     }
 
     /// The whole-vec transcript's scroll, regardless of which mode is on.
@@ -458,16 +679,6 @@ impl App {
         self.ui.transcript_view.window_browsing()
     }
 
-    /// Enter or leave byte-window browsing.
-    pub(crate) fn set_window_browsing(&mut self, on: bool) {
-        self.ui.transcript_view.set_window_browsing(on);
-    }
-
-    /// Reset the within-window scroll for a fresh window load.
-    pub(crate) fn reset_window_scroll(&mut self) {
-        self.ui.transcript_view.reset_window_scroll();
-    }
-
     /// Byte offset where the loaded window starts.
     pub(crate) fn window_anchor(&self) -> u64 {
         self.ui.transcript_view.window_anchor()
@@ -487,98 +698,7 @@ impl App {
     pub(crate) fn window_skipped(&self) -> usize {
         self.ui.transcript_view.window_skipped()
     }
-
-    /// Enter byte-window mode: freeze the file size and load the first window.
-    pub(crate) fn enter_history_window(
-        &mut self,
-        frozen: u64,
-        anchor: u64,
-        end: u64,
-        skipped: usize,
-    ) {
-        self.ui
-            .transcript_view
-            .enter_history_window(frozen, anchor, end, skipped);
-    }
-
-    /// Replace the window for a navigation step; the frozen size stays.
-    pub(crate) fn replace_history_window(&mut self, anchor: u64, end: u64, skipped: usize) {
-        self.ui
-            .transcript_view
-            .replace_history_window(anchor, end, skipped);
-    }
-
-    /// Exit: clear the window and the frozen boundary.
-    pub(crate) fn exit_history_window(&mut self) {
-        self.ui.transcript_view.exit_history_window();
-    }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Every effective toggle bumps the presentation revision once; a toggle
-    /// that lands where the set already was (close_fold on a closed group)
-    /// does not. The revision is the render cache's input, so a missed bump
-    /// is a stale frame and a false bump is a wasted recompute.
-    #[test]
-    fn test_toggle_bumps_presentation() {
-        let mut view = TranscriptViewState::default();
-        let before = view.presentation_revision();
-        view.toggle_fold("group-a".into());
-        assert_eq!(view.presentation_revision(), before + 1, "a fold opens");
-        view.toggle_fold("group-a".into());
-        assert_eq!(
-            view.presentation_revision(),
-            before + 2,
-            "the same fold closes"
-        );
-        view.close_fold("group-b");
-        assert_eq!(
-            view.presentation_revision(),
-            before + 2,
-            "closing a closed group is not a presentation change"
-        );
-        assert!(!view.fold_is_open("group-a"), "the toggle closed it");
-    }
-
-    /// A park or restore bumps only when the visible open rows actually
-    /// changed: restoring the same sets a view parked must not read as a
-    /// new presentation, or the cache recomputes a frame that did not move.
-    #[test]
-    fn test_swap_bumps_on_change() {
-        let mut view = TranscriptViewState::default();
-        view.toggle_result("call-1".into());
-        let parked = view.take_expanded();
-        let after_park = view.presentation_revision();
-
-        view.swap_expanded(parked);
-        assert_eq!(
-            view.presentation_revision(),
-            after_park + 1,
-            "restoring open rows is a visible change from the empty state"
-        );
-
-        let same = ExpandedKeys {
-            results: ["call-1".to_string()].into_iter().collect(),
-            ..Default::default()
-        };
-        view.swap_expanded(same);
-        assert_eq!(
-            view.presentation_revision(),
-            after_park + 1,
-            "identical sets are not a presentation change"
-        );
-
-        view.swap_expanded(ExpandedKeys::default());
-        let back_to_empty = view.presentation_revision();
-        let empty = view.take_expanded();
-        assert!(empty.results.is_empty());
-        assert_eq!(
-            view.presentation_revision(),
-            back_to_empty,
-            "parking nothing open is not a presentation change"
-        );
-    }
-}
+mod tests;

@@ -15,25 +15,20 @@ use ratatui::{
 
 use super::row_buffer::{Row, RowBuffer, RowParts};
 use super::tail_rows::build_tail_rows;
-use crate::records::ToolOutcome;
+use crate::records::{ToolOutcome, TranscriptLine};
 use crate::row_id::RowId;
+use crate::selection::{
+    TAG_DIFF_ADD, TAG_DIFF_CTX, TAG_DIFF_DEL, TAG_DIFF_HUNK, TAG_FOLD, TAG_SPINNER, TAG_SYSTEM,
+    TAG_USER,
+};
+use crate::state::enums::LiveBlock;
 use crate::state::{App, ViewportMode};
 use crate::toggle_hint::ToggleHint;
 use crate::view::context_view;
 use crate::view::markers::{diff_row, styled_row};
 use crate::view::spinner::{spinner_line, stall_intensity, stall_intensity_reasoning};
 
-#[expect(clippy::too_many_lines, reason = "long by design, kept whole")]
-pub(super) fn draw_transcript(f: &mut Frame, area: Rect, app: &App) {
-    const USER: u8 = crate::selection::TAG_USER;
-    const SYSTEM: u8 = crate::selection::TAG_SYSTEM;
-    const SPINNER: u8 = crate::selection::TAG_SPINNER;
-    const DIFF_ADD: u8 = crate::selection::TAG_DIFF_ADD;
-    const DIFF_DEL: u8 = crate::selection::TAG_DIFF_DEL;
-    const DIFF_HUNK: u8 = crate::selection::TAG_DIFF_HUNK;
-    const DIFF_CTX: u8 = crate::selection::TAG_DIFF_CTX;
-    const FOLD: u8 = crate::selection::TAG_FOLD;
-
+fn ensure_cached_slots(area: Rect, app: &App) {
     // Slots version: only inputs that affect the cached slot text. Live text /
     // spinner / todos are appended after slots + recomputed every frame (the
     // live cache). bash_progress is baked into the slot text (the elapsed/line
@@ -78,6 +73,10 @@ pub(super) fn draw_transcript(f: &mut Frame, area: Rect, app: &App) {
         *app.ui.frame.rows.pre_rendered.borrow_mut() = pre_rendered;
         app.ui.frame.rows.version.set(slots_version);
     }
+}
+
+pub(super) fn draw_transcript(f: &mut Frame, area: Rect, app: &App) {
+    ensure_cached_slots(area, app);
 
     // Every frame: combine cached slots rows + fresh live rows (live text,
     // spinner, todos). Live rows are cheap (a few rows at most).
@@ -148,16 +147,44 @@ pub(super) fn draw_transcript(f: &mut Frame, area: Rect, app: &App) {
     *app.ui.frame.keys.turn_ids.borrow_mut() = visible_turn_ids;
     f.render_widget(Block::default().borders(Borders::NONE), area);
 
-    let q = if app.ui.transcript_view.search.active {
+    render_transcript_lines(f, inner, app, &visible, visible_pre);
+    draw_jump_to_bottom(f, inner, app);
+}
+
+fn compute_spinner_params(app: &App) -> (std::time::Duration, f32, bool) {
+    let spin_elapsed = app.run_started().map(|t| t.elapsed()).unwrap_or_default();
+    let prog = app.run_progress();
+    let tool_active = prog.is_some_and(|p| !p.running_tools.is_empty());
+    let reasoning_active = prog.is_some_and(|p| p.live_block == LiveBlock::Thinking);
+    let last_delta = prog.and_then(|p| p.last_delta_at);
+    let spin_intensity = if tool_active {
+        0.0
+    } else if reasoning_active {
+        stall_intensity_reasoning(last_delta)
+    } else {
+        stall_intensity(last_delta)
+    };
+    (spin_elapsed, spin_intensity, tool_active)
+}
+
+fn render_transcript_lines(
+    f: &mut Frame,
+    inner: Rect,
+    app: &App,
+    visible: &[(u8, String, Option<ToolOutcome>)],
+    visible_pre: Vec<Option<Line<'static>>>,
+) {
+    let top = app.active_scroll().top_offset();
+    let q = if app.ui.transcript_view.search_active() {
         app.ui
             .transcript_view
-            .search
-            .query
+            .search_query()
             .trim()
             .to_ascii_lowercase()
     } else {
         String::new()
     };
+    let q = q.as_str();
     // The focused match's transcript line spans multiple screen rows in
     // verbose mode (a tool-result body expands to many rows, and the query
     // may sit mid-body). Mark the WHOLE range [start, start+rows) current so
@@ -165,8 +192,8 @@ pub(super) fn draw_transcript(f: &mut Frame, area: Rect, app: &App) {
     // focused line (it no-ops current=true on rows with no query, so non-query
     // rows in the range stay plain). search.matches keys on transcript line,
     // so all in-line occurrences are the same match.
-    let focused_range = if app.ui.transcript_view.search.active && !q.is_empty() {
-        app.ui.transcript_view.search.focused_line().map(|i| {
+    let focused_range = if app.ui.transcript_view.search_active() && !q.is_empty() {
+        app.ui.transcript_view.search_focused_line().map(|i| {
             let start = app.transcript_row_of_line(i);
             let rows = app.line_display_rows(&app.active_transcript()[i]);
             start..start + rows
@@ -179,26 +206,7 @@ pub(super) fn draw_transcript(f: &mut Frame, area: Rect, app: &App) {
     let exp_grp = app.ui.frame.keys.expanded_group.borrow();
     let exp_groups = &app.ui.transcript_view.expanded.fold_groups;
     let subagents = &app.ui.transcript_view.expanded.subagents;
-    let spin_elapsed = app.run_started().map(|t| t.elapsed()).unwrap_or_default();
-    // A running tool produces no token deltas but is not a stall: exempt it
-    // from the stall gradient; its presence drives the breathing pulse.
-    let prog = app.run_progress();
-    let tool_active = prog.is_some_and(|p| !p.running_tools.is_empty());
-    // Reasoning (LiveBlock::Thinking) also has a sparse token cadence —
-    // thinking tokens arrive slowly even when the model is hard at work, so
-    // the default 3s stall threshold would flag healthy long thinking as
-    // stuck and turn the glyph red. Use the reasoning threshold (10s) so a
-    // 30s think stays calm; a true hang still trips once it exceeds it.
-    let reasoning_active =
-        prog.is_some_and(|p| p.live_block == crate::state::enums::LiveBlock::Thinking);
-    let last_delta = prog.and_then(|p| p.last_delta_at);
-    let spin_intensity = if tool_active {
-        0.0
-    } else if reasoning_active {
-        stall_intensity_reasoning(last_delta)
-    } else {
-        stall_intensity(last_delta)
-    };
+    let (spin_elapsed, spin_intensity, tool_active) = compute_spinner_params(app);
     let lines: Vec<Line> = visible
         .iter()
         .zip(visible_pre)
@@ -225,7 +233,7 @@ pub(super) fn draw_transcript(f: &mut Frame, area: Rect, app: &App) {
                     let base = if q.is_empty() {
                         line
                     } else {
-                        highlighted_line(r, &q, is_current)
+                        highlighted_line(r, q, is_current)
                     };
                     // Patch, not replace: a pre-styled line's spans carry the
                     // badge color and markdown styling.
@@ -236,26 +244,26 @@ pub(super) fn draw_transcript(f: &mut Frame, area: Rect, app: &App) {
                     }
                 }
                 None => match *tag {
-                    SPINNER => spinner_line(r, spin_elapsed, spin_intensity, tool_active),
-                    USER => user_row(r, &q, is_current, inner.width),
-                    SYSTEM => highlighted_line(r, &q, is_current).style(if in_expanded {
+                    TAG_SPINNER => spinner_line(r, spin_elapsed, spin_intensity, tool_active),
+                    TAG_USER => user_row(r, q, is_current, inner.width),
+                    TAG_SYSTEM => highlighted_line(r, q, is_current).style(if in_expanded {
                         user_bg
                     } else {
                         dim
                     }),
-                    FOLD => highlighted_line(r, &q, is_current).style(if in_expanded {
+                    TAG_FOLD => highlighted_line(r, q, is_current).style(if in_expanded {
                         user_bg
                     } else {
                         dim
                     }),
-                    DIFF_ADD | DIFF_DEL | DIFF_HUNK | DIFF_CTX => {
+                    TAG_DIFF_ADD | TAG_DIFF_DEL | TAG_DIFF_HUNK | TAG_DIFF_CTX => {
                         diff_row(r, *tag, inner.width, None)
                     }
                     _ => {
                         let base = if q.is_empty() {
-                            styled_row(r, *o).unwrap_or_else(|| highlighted_line(r, &q, is_current))
+                            styled_row(r, *o).unwrap_or_else(|| highlighted_line(r, q, is_current))
                         } else {
-                            highlighted_line(r, &q, is_current)
+                            highlighted_line(r, q, is_current)
                         };
                         if in_expanded {
                             base.style(user_bg)
@@ -272,7 +280,9 @@ pub(super) fn draw_transcript(f: &mut Frame, area: Rect, app: &App) {
         inner,
     );
     refresh_wide_cells(f, inner);
+}
 
+fn draw_jump_to_bottom(f: &mut Frame, inner: Rect, app: &App) {
     // Jump-to-bottom label: a bright centered overlay on the transcript's
     // bottom row while the user is scrolled back, showing the agent turns
     // that landed since the scroll-away snapshot. Clicking it returns to the
@@ -282,7 +292,7 @@ pub(super) fn draw_transcript(f: &mut Frame, area: Rect, app: &App) {
     // label falls through to the transcript surface and starts a drag-select.
     let label_visible = app.ui.navigation.viewport != ViewportMode::Scroll
         && !app.active_scroll().is_following_tail()
-        && !app.ui.transcript_view.search.active;
+        && !app.ui.transcript_view.search_active();
     if label_visible {
         let new = app.new_turn_count();
         let label = if new.count > 0 {
@@ -329,7 +339,7 @@ fn rendered_tool_rows(
     // Live bash-elapsed suffix: a long-running bash call shows (Ns) on its
     // chip after 2s so a stalled-looking command is distinguishable from a
     // stuck one. When the backend streams stdout, lines Some -> (Ns . M lines).
-    let crate::records::TranscriptLine::Tool { call_id, .. } = line else {
+    let TranscriptLine::Tool { call_id, .. } = line else {
         return Some(rows);
     };
     let Some(prog) = app

@@ -76,11 +76,10 @@ pub(super) fn draw_history_window(f: &mut Frame, area: Rect, app: &App) {
     *app.ui.frame.keys.turn_ids.borrow_mut() = visible_turn_ids;
     f.render_widget(Block::default().borders(Borders::NONE), area);
 
-    let q = if app.ui.transcript_view.search.active {
+    let q = if app.ui.transcript_view.search_active() {
         app.ui
             .transcript_view
-            .search
-            .query
+            .search_query()
             .trim()
             .to_ascii_lowercase()
     } else {
@@ -90,8 +89,8 @@ pub(super) fn draw_history_window(f: &mut Frame, area: Rect, app: &App) {
     // body expands). Mark [start, start+rows) current so highlighted_line
     // paints yellow on every query occurrence in the focused line. Flat row
     // math (history_row_of_line + line_display_rows), not the fold path.
-    let focused_range = if app.ui.transcript_view.search.active && !q.is_empty() {
-        app.ui.transcript_view.search.focused_line().map(|i| {
+    let focused_range = if app.ui.transcript_view.search_active() && !q.is_empty() {
+        app.ui.transcript_view.search_focused_line().map(|i| {
             let start = app.history_row_of_line(i);
             let rows = app.line_display_rows(&app.active_transcript()[i]);
             start..start + rows

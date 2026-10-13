@@ -609,7 +609,7 @@ impl crate::state::App {
     /// search view fold a transcript the cache was not built over, so they
     /// compute groups on demand.
     pub(crate) fn active_fold_groups(&self) -> Cow<'_, [FoldGroup]> {
-        if self.ui.teammate_view.is_some() || self.ui.transcript_view.search.active {
+        if self.ui.teammate_view.is_some() || self.ui.transcript_view.search_active() {
             Cow::Owned(compute_fold_groups(
                 self.active_transcript(),
                 self.agent_busy(),

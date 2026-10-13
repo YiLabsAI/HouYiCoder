@@ -17,10 +17,11 @@ use crate::state::App;
 
 /// Render the inline Ctrl+F search bar (one line below the input box).
 pub(super) fn draw_inline_search(f: &mut Frame, area: Rect, app: &App) {
-    let n = app.ui.transcript_view.search.matches.len();
+    let n = app.ui.transcript_view.search_matches_len();
     let text = format!(
         " search: {} | {} match(es) | Enter=next Up/Down=prev Esc=close ",
-        app.ui.transcript_view.search.query, n,
+        app.ui.transcript_view.search_query(),
+        n,
     );
     f.render_widget(
         Paragraph::new(text).style(Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)),

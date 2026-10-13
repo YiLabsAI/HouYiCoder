@@ -3,30 +3,39 @@
 //! vec must not recompute the snapshot's matches. Split from
 //! render_invariant_tests so both stay under the size gate.
 
-use crate::records::TranscriptLine;
-use crate::state::index_read::PendingIndexChunk;
-use crate::test_harness::render_text;
-use crate::transcript::snapshot::{IndexProgress, TranscriptSnapshot, WindowLoad};
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use std::sync::Arc;
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::mpsc::channel;
 use std::thread;
 use std::time::{Duration, Instant};
 
-fn working() -> crate::state::App {
-    crate::test_harness::working_app()
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use ratatui::layout::Rect;
+
+use crate::agent_message::SessionMessage;
+use crate::app::{handle_key, handle_mouse};
+use crate::brief::tool_call_brief;
+use crate::records::{ToolOutcome, TranscriptLine};
+use crate::session::SessionConnection;
+use crate::state::App;
+use crate::state::index_read::PendingIndexChunk;
+use crate::test_harness::{MockSnapshot, render_text, working_app};
+use crate::transcript::snapshot::{
+    IndexProgress, NoTranscriptSnapshot, TranscriptSnapshot, WindowLoad,
+};
+
+fn working() -> App {
+    working_app()
 }
 
 /// A working App whose session holds a receiver-backed connection, so the
 /// index build dispatches on a worker rather than reading inline.
-fn connected_working() -> crate::state::App {
+fn connected_working() -> App {
     let mut app = working();
-    let (_tx, rx) = mpsc::channel::<crate::agent_message::SessionMessage>();
-    app.sessions.current.connection = Some(crate::session::SessionConnection::from_receiver(rx));
+    let (_tx, rx) = channel::<SessionMessage>();
+    app.sessions.current.connection = Some(SessionConnection::from_receiver(rx));
     app
 }
-
-use crate::test_harness::MockSnapshot;
 
 /// count==render must hold when the search view renders a frozen snapshot
 /// that differs from the live transcript. The accessor routes count + render
@@ -45,26 +54,21 @@ fn test_count_matches_under_snapshot() {
         TranscriptLine::User("live beta".into()),
     ]
     .into();
-    app.ui.transcript_view.search_corpus.replace_lines(vec![
+    app.ui.transcript_view.replace_corpus_lines(vec![
         TranscriptLine::User("snap one".into()),
         TranscriptLine::User("snap two".into()),
         TranscriptLine::User("snap three".into()),
         TranscriptLine::User("snap four".into()),
         TranscriptLine::User("snap five".into()),
     ]);
-    app.ui.transcript_view.search.active = true;
-    app.ui.transcript_view.search.query = "snap".into();
+    app.ui
+        .transcript_view
+        .set_search_state_for_test(true, "snap", vec![], 0);
     app.run_search();
     // Focus the LAST match so the focused-range line index reaches the
     // snapshot's tail; a count path still reading self.sessions.current.transcript (2 lines)
     // would index out of bounds here.
-    app.ui.transcript_view.search.focus = app
-        .ui
-        .transcript_view
-        .search
-        .matches
-        .len()
-        .saturating_sub(1);
+    app.ui.transcript_view.search_focus_last();
     app.ui.verbose = true;
     // Pre-render: transcript_display_rows falls back to fold_aware_rows
     // (the Cell is 0 before any render), so this exercises the count path
@@ -102,14 +106,15 @@ fn test_count_matches_under_snapshot() {
 #[test]
 fn test_bound_scrollback_skips_recompute() {
     let mut app = working();
-    app.ui.transcript_view.search_corpus.replace_lines(vec![
+    app.ui.transcript_view.replace_corpus_lines(vec![
         TranscriptLine::User("snap match".into()),
         TranscriptLine::User("snap other".into()),
     ]);
-    app.ui.transcript_view.search.active = true;
-    app.ui.transcript_view.search.query = "match".into();
+    app.ui
+        .transcript_view
+        .set_search_state_for_test(true, "match", vec![], 0);
     app.run_search();
-    let matches_before = app.ui.transcript_view.search.matches.clone();
+    let matches_before = app.ui.transcript_view.search_matches().to_vec();
     // Push past the 4000-row cap on the LIVE transcript to trigger eviction
     // while the search view is open. bound_scrollback must NOT recompute
     // search.matches against the drained live vec.
@@ -117,7 +122,8 @@ fn test_bound_scrollback_skips_recompute() {
         app.push_transcript_line(TranscriptLine::User(format!("live drain {i}")));
     }
     assert_eq!(
-        app.ui.transcript_view.search.matches, matches_before,
+        app.ui.transcript_view.search_matches(),
+        matches_before.as_slice(),
         "eviction must not recompute the snapshot's matches"
     );
     assert!(
@@ -147,12 +153,12 @@ fn test_uncapped_finds_old_match() {
         window_start: 0,
         windows: Vec::new(),
         index_steps: 0,
-        index_calls: std::sync::atomic::AtomicU32::new(0),
+        index_calls: AtomicU32::new(0),
     }));
     app.enter_search_view("needle");
     assert_eq!(
-        app.ui.transcript_view.search.matches,
-        vec![5000],
+        app.ui.transcript_view.search_matches(),
+        &[5000],
         "the snapshot must find the match beyond the 4000-row cap"
     );
     let out = render_text(&app, 80, 50);
@@ -161,7 +167,7 @@ fn test_uncapped_finds_old_match() {
         "the deep match must render:\n{out}"
     );
     assert!(
-        !app.ui.transcript_view.search_corpus.truncated(),
+        !app.ui.transcript_view.search_corpus_truncated(),
         "a small log must not degrade"
     );
 }
@@ -179,7 +185,7 @@ fn test_search_finds_synthesized_name() {
                 tool: "edit".into(),
                 status: String::new(),
                 invocation: "src/lib.rs".into(),
-                outcome: crate::records::ToolOutcome::Success,
+                outcome: ToolOutcome::Success,
                 call_id: "c1".into(),
                 body: String::new(),
                 is_diff: false,
@@ -193,11 +199,11 @@ fn test_search_finds_synthesized_name() {
         window_start: 0,
         windows: Vec::new(),
         index_steps: 0,
-        index_calls: std::sync::atomic::AtomicU32::new(0),
+        index_calls: AtomicU32::new(0),
     }));
     app.enter_search_view("Update");
     assert!(
-        !app.ui.transcript_view.search.matches.is_empty(),
+        !app.ui.transcript_view.search_matches().is_empty(),
         "search must find the synthesized Update chip name: search reads the rendered rows"
     );
 }
@@ -223,7 +229,7 @@ fn test_large_log_opens_mode() {
         window_start: 19 * 1024 * 1024,
         windows: Vec::new(),
         index_steps: 0,
-        index_calls: std::sync::atomic::AtomicU32::new(0),
+        index_calls: AtomicU32::new(0),
     }));
     app.enter_search_view("needle");
     assert!(
@@ -231,7 +237,7 @@ fn test_large_log_opens_mode() {
         "over-threshold opens byte-window mode"
     );
     assert!(
-        !app.ui.transcript_view.search_corpus.truncated(),
+        !app.ui.transcript_view.search_corpus_truncated(),
         "window mode is the real path, not a degrade"
     );
     assert_eq!(
@@ -242,7 +248,7 @@ fn test_large_log_opens_mode() {
     assert_eq!(app.window_anchor(), 19 * 1024 * 1024);
     assert_eq!(app.window_end(), total, "tail window reaches EOF");
     assert!(
-        app.ui.transcript_view.search.matches.len() == 1,
+        app.ui.transcript_view.search_matches_len() == 1,
         "search found the tail needle in the window"
     );
     let out = render_text(&app, 100, 24);
@@ -272,11 +278,11 @@ fn test_skipped_lines_in_chrome() {
         window_start: 0,
         windows: Vec::new(),
         index_steps: 0,
-        index_calls: std::sync::atomic::AtomicU32::new(0),
+        index_calls: AtomicU32::new(0),
     }));
     app.enter_search_view("needle");
     assert_eq!(
-        app.ui.transcript_view.search_corpus.skipped(),
+        app.ui.transcript_view.search_corpus_skipped(),
         2,
         "skip count carried from the load"
     );
@@ -306,24 +312,24 @@ fn test_exit_clears_snapshot() {
         window_start: 0,
         windows: Vec::new(),
         index_steps: 0,
-        index_calls: std::sync::atomic::AtomicU32::new(0),
+        index_calls: AtomicU32::new(0),
     }));
     app.enter_search_view("snap");
     assert!(
-        !app.ui.transcript_view.search_corpus.lines().is_empty(),
+        !app.ui.transcript_view.search_corpus_lines().is_empty(),
         "snapshot loaded on enter"
     );
     app.exit_search_view();
     assert!(
-        app.ui.transcript_view.search_corpus.lines().is_empty(),
+        app.ui.transcript_view.search_corpus_lines().is_empty(),
         "exit frees the snapshot vec"
     );
     assert!(
-        !app.ui.transcript_view.search_corpus.truncated(),
+        !app.ui.transcript_view.search_corpus_truncated(),
         "truncated flag cleared"
     );
     assert_eq!(
-        app.ui.transcript_view.search_corpus.skipped(),
+        app.ui.transcript_view.search_corpus_skipped(),
         0,
         "skipped count cleared"
     );
@@ -334,7 +340,7 @@ fn test_exit_clears_snapshot() {
 /// can route an implementation into the windowed path.
 #[test]
 fn test_no_snapshot_answers_empty() {
-    let source = crate::transcript::snapshot::NoTranscriptSnapshot;
+    let source = NoTranscriptSnapshot;
     assert_eq!(source.log_size(), 0);
     assert!(source.load(1024).lines.is_empty(), "load is empty");
     assert!(source.window(0, 1024).lines.is_empty(), "window is empty");
@@ -392,12 +398,9 @@ fn test_flat_count_matches_render() {
         TranscriptLine::Tool {
             name: "bash".into(),
             tool: "bash".into(),
-            status: crate::brief::tool_call_brief(
-                "bash",
-                &serde_json::json!({"command": "echo hi"}),
-            ),
+            status: tool_call_brief("bash", &serde_json::json!({"command": "echo hi"})),
             invocation: "echo hi".into(),
-            outcome: crate::records::ToolOutcome::Success,
+            outcome: ToolOutcome::Success,
             call_id: "c1".into(),
             body: String::new(),
             is_diff: false,
@@ -407,7 +410,7 @@ fn test_flat_count_matches_render() {
             tool: "bash".into(),
             status: String::new(),
             invocation: String::new(),
-            outcome: crate::records::ToolOutcome::Success,
+            outcome: ToolOutcome::Success,
             call_id: "c1".into(),
             body: "hi\nthere".into(),
             is_diff: false,
@@ -430,7 +433,7 @@ fn test_flat_count_matches_render() {
         window_start: 19 * 1024 * 1024,
         windows: Vec::new(),
         index_steps: 0,
-        index_calls: std::sync::atomic::AtomicU32::new(0),
+        index_calls: AtomicU32::new(0),
     }));
     app.enter_search_view("answer");
     assert!(app.window_browsing(), "test setup: window mode active");
@@ -475,7 +478,7 @@ fn test_exit_clears_window_state() {
         window_start: 19 * 1024 * 1024,
         windows: Vec::new(),
         index_steps: 0,
-        index_calls: std::sync::atomic::AtomicU32::new(0),
+        index_calls: AtomicU32::new(0),
     }));
     app.enter_search_view("tail");
     assert!(app.window_browsing(), "window mode entered");
@@ -483,7 +486,7 @@ fn test_exit_clears_window_state() {
     app.exit_search_view();
     assert!(!app.window_browsing(), "exit clears window mode");
     assert!(
-        app.ui.transcript_view.search_corpus.lines().is_empty(),
+        app.ui.transcript_view.search_corpus_lines().is_empty(),
         "exit frees the window vec"
     );
     assert_eq!(app.frozen_file_size(), 0, "frozen boundary cleared");
@@ -507,7 +510,7 @@ fn test_window_keys_scroll_window() {
         window_start: 19 * 1024 * 1024,
         windows: Vec::new(),
         index_steps: 0,
-        index_calls: std::sync::atomic::AtomicU32::new(0),
+        index_calls: AtomicU32::new(0),
     }));
     app.enter_search_view("tail");
     assert!(app.window_browsing());
@@ -519,7 +522,7 @@ fn test_window_keys_scroll_window() {
     // enter_search_view jumps to the focused match -> follow_tail false.
     assert!(!app.window_scroll().is_following_tail());
     // G follows the tail (the bottom of the window).
-    crate::app::handle_key(
+    handle_key(
         &mut app,
         KeyEvent::new(KeyCode::Char('G'), KeyModifiers::NONE),
     );
@@ -528,7 +531,7 @@ fn test_window_keys_scroll_window() {
         "G follows the window tail"
     );
     // g jumps to the top.
-    crate::app::handle_key(
+    handle_key(
         &mut app,
         KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE),
     );
@@ -538,13 +541,13 @@ fn test_window_keys_scroll_window() {
     );
     assert_eq!(app.window_scroll().top_offset(), 0, "g at the top");
     // PageUp from the top is a no-op (already at 0); PageDown moves down.
-    crate::app::handle_key(&mut app, KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE));
+    handle_key(&mut app, KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE));
     assert_eq!(
         app.window_scroll().top_offset(),
         0,
         "PageUp at top is a no-op"
     );
-    crate::app::handle_key(
+    handle_key(
         &mut app,
         KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE),
     );
@@ -570,17 +573,17 @@ fn test_window_scrolls_no_drag() {
         window_start: 19 * 1024 * 1024,
         windows: Vec::new(),
         index_steps: 0,
-        index_calls: std::sync::atomic::AtomicU32::new(0),
+        index_calls: AtomicU32::new(0),
     }));
     app.enter_search_view("tail");
     app.window_scroll().total.set(100);
     app.window_scroll().cap.set(10);
     let live_total_before = app.whole_scroll().total.get();
-    let rect = ratatui::layout::Rect::new(0, 0, 80, 24);
+    let rect = Rect::new(0, 0, 80, 24);
     app.ui.frame.layout.transcript_rect.set(rect);
     // Wheel up: window_scroll pins (follow_tail -> false), transcript_scroll
     // untouched (the 5 consumers stay on their own path).
-    crate::app::handle_mouse(
+    handle_mouse(
         &mut app,
         MouseEvent {
             kind: MouseEventKind::ScrollUp,
@@ -599,7 +602,7 @@ fn test_window_scrolls_no_drag() {
         "wheel in window mode does not touch transcript_scroll"
     );
     // A left-button Down in the window does not start a transcript drag.
-    crate::app::handle_mouse(
+    handle_mouse(
         &mut app,
         MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
@@ -655,13 +658,13 @@ fn test_walks_older_across_windows() {
         window_start: 0,
         windows,
         index_steps: 0,
-        index_calls: std::sync::atomic::AtomicU32::new(0),
+        index_calls: AtomicU32::new(0),
     }));
     app.enter_search_view("needle");
     assert_eq!(app.window_anchor(), 200, "opens at the tail window");
     // n: tail window's match is the only one -> load the prior window. The
     // middle window has no match -> scan continues to the oldest window.
-    crate::app::handle_key(
+    handle_key(
         &mut app,
         KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE),
     );
@@ -715,16 +718,16 @@ fn test_walks_newer_across_windows() {
         window_start: 0,
         windows,
         index_steps: 0,
-        index_calls: std::sync::atomic::AtomicU32::new(0),
+        index_calls: AtomicU32::new(0),
     }));
     app.enter_search_view("needle");
     // Walk to the oldest first (n), then N back to the newest.
-    crate::app::handle_key(
+    handle_key(
         &mut app,
         KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE),
     );
     assert_eq!(app.window_anchor(), 0, "n reached the oldest window");
-    crate::app::handle_key(
+    handle_key(
         &mut app,
         KeyEvent::new(KeyCode::Char('N'), KeyModifiers::NONE),
     );
@@ -752,14 +755,14 @@ fn test_g_completes_full_index() {
         window_start: 0,
         windows: Vec::new(),
         index_steps: 1, // completes in one chunk
-        index_calls: std::sync::atomic::AtomicU32::new(0),
+        index_calls: AtomicU32::new(0),
     }));
     app.enter_search_view("tail");
     assert!(
         !app.sessions.current.index_build.indexing.get(),
         "indexing off before G"
     );
-    crate::app::handle_key(
+    handle_key(
         &mut app,
         KeyEvent::new(KeyCode::Char('G'), KeyModifiers::NONE),
     );
@@ -800,10 +803,10 @@ fn test_esc_interrupts_full_index() {
         window_start: 0,
         windows: Vec::new(),
         index_steps: 99, // never completes in the test -> Esc must interrupt
-        index_calls: std::sync::atomic::AtomicU32::new(0),
+        index_calls: AtomicU32::new(0),
     }));
     app.enter_search_view("tail");
-    crate::app::handle_key(
+    handle_key(
         &mut app,
         KeyEvent::new(KeyCode::Char('G'), KeyModifiers::NONE),
     );
@@ -811,13 +814,13 @@ fn test_esc_interrupts_full_index() {
         app.sessions.current.index_build.indexing.get(),
         "G started the build"
     );
-    crate::app::handle_key(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    handle_key(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     assert!(
         !app.sessions.current.index_build.indexing.get(),
         "Esc interrupted the index build"
     );
     assert!(
-        app.ui.transcript_view.search.active,
+        app.ui.transcript_view.search_active(),
         "Esc during indexing stays in the view (does not exit)"
     );
 }
@@ -828,7 +831,7 @@ fn test_esc_interrupts_full_index() {
 /// byte.
 #[test]
 fn test_mock_has_no_index() {
-    let mock = crate::test_harness::MockSnapshot {
+    let mock = MockSnapshot {
         lines: Vec::new(),
         log_bytes: 4096,
         truncated: false,
@@ -837,7 +840,7 @@ fn test_mock_has_no_index() {
         window_start: 0,
         windows: Vec::new(),
         index_steps: 1,
-        index_calls: std::sync::atomic::AtomicU32::new(0),
+        index_calls: AtomicU32::new(0),
     };
     assert!(mock.byte_at(0).is_none(), "the mock names no event offset",);
     assert!(mock.event_count().is_none(), "and no event count");
@@ -858,11 +861,11 @@ fn test_draw_reads_no_index() {
         window_start: 0,
         windows: Vec::new(),
         index_steps: 3,
-        index_calls: std::sync::atomic::AtomicU32::new(0),
+        index_calls: AtomicU32::new(0),
     });
     app.sessions.persistence.snapshot = Some(source.clone());
     app.enter_search_view("tail");
-    crate::app::handle_key(
+    handle_key(
         &mut app,
         KeyEvent::new(KeyCode::Char('G'), KeyModifiers::NONE),
     );
@@ -871,14 +874,10 @@ fn test_draw_reads_no_index() {
         "G starts the index build"
     );
 
-    let calls_before = source
-        .index_calls
-        .load(std::sync::atomic::Ordering::Relaxed);
+    let calls_before = source.index_calls.load(Ordering::Relaxed);
     let drawn = render_text(&app, 100, 24);
     assert!(!drawn.is_empty(), "the frame drew");
-    let calls_after = source
-        .index_calls
-        .load(std::sync::atomic::Ordering::Relaxed);
+    let calls_after = source.index_calls.load(Ordering::Relaxed);
     assert_eq!(
         calls_after, calls_before,
         "a draw reads no index chunk: {calls_before} then {calls_after}"
@@ -899,10 +898,10 @@ fn test_index_runs_on_worker() {
         window_start: 0,
         windows: Vec::new(),
         index_steps: 1,
-        index_calls: std::sync::atomic::AtomicU32::new(0),
+        index_calls: AtomicU32::new(0),
     }));
     app.enter_search_view("tail");
-    crate::app::handle_key(
+    handle_key(
         &mut app,
         KeyEvent::new(KeyCode::Char('G'), KeyModifiers::NONE),
     );
@@ -942,15 +941,15 @@ fn test_index_worker_death_stops() {
         window_start: 0,
         windows: Vec::new(),
         index_steps: 1,
-        index_calls: std::sync::atomic::AtomicU32::new(0),
+        index_calls: AtomicU32::new(0),
     }));
     app.enter_search_view("tail");
-    crate::app::handle_key(
+    handle_key(
         &mut app,
         KeyEvent::new(KeyCode::Char('G'), KeyModifiers::NONE),
     );
     // A record whose sender is already gone stands in for a dead worker.
-    let (tx, rx) = mpsc::channel();
+    let (tx, rx) = channel();
     drop(tx);
     *app.sessions
         .current
@@ -990,10 +989,10 @@ fn test_index_landing_after_interrupt() {
         window_start: 0,
         windows: Vec::new(),
         index_steps: 1,
-        index_calls: std::sync::atomic::AtomicU32::new(0),
+        index_calls: AtomicU32::new(0),
     }));
     app.enter_search_view("tail");
-    crate::app::handle_key(
+    handle_key(
         &mut app,
         KeyEvent::new(KeyCode::Char('G'), KeyModifiers::NONE),
     );
@@ -1002,7 +1001,7 @@ fn test_index_landing_after_interrupt() {
         "G starts the build"
     );
     // A held sender stands in for the chunk's worker.
-    let (tx, rx) = mpsc::channel();
+    let (tx, rx) = channel();
     *app.sessions
         .current
         .index_build
@@ -1029,8 +1028,8 @@ fn test_index_landing_after_interrupt() {
     );
 
     // Restart with a connection: the build runs on a worker to completion.
-    let (_tx, rx) = mpsc::channel::<crate::agent_message::SessionMessage>();
-    app.sessions.current.connection = Some(crate::session::SessionConnection::from_receiver(rx));
+    let (_tx, rx) = channel::<SessionMessage>();
+    app.sessions.current.connection = Some(SessionConnection::from_receiver(rx));
     app.start_full_index();
     assert!(
         app.sessions.current.index_build.indexing.get(),
@@ -1067,18 +1066,18 @@ fn test_index_restart_waits() {
         window_start: 0,
         windows: Vec::new(),
         index_steps: 1,
-        index_calls: std::sync::atomic::AtomicU32::new(0),
+        index_calls: AtomicU32::new(0),
     }));
     app.enter_search_view("tail");
     app.sessions.current.index_build.indexing.set(true);
-    let (tx, rx) = mpsc::channel();
+    let (tx, rx) = channel();
     *app.sessions
         .current
         .index_build
         .pending_index_chunk
         .borrow_mut() = Some(PendingIndexChunk::new(rx));
 
-    crate::app::handle_key(
+    handle_key(
         &mut app,
         KeyEvent::new(KeyCode::Char('G'), KeyModifiers::NONE),
     );
@@ -1116,11 +1115,11 @@ fn test_index_pump_waits() {
         window_start: 0,
         windows: Vec::new(),
         index_steps: 1,
-        index_calls: std::sync::atomic::AtomicU32::new(0),
+        index_calls: AtomicU32::new(0),
     }));
     app.enter_search_view("tail");
     app.sessions.current.index_build.indexing.set(true);
-    let (tx, rx) = mpsc::channel();
+    let (tx, rx) = channel();
     *app.sessions
         .current
         .index_build

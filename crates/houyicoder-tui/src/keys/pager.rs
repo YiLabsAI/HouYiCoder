@@ -13,11 +13,11 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crate::state::App;
 
 pub(super) fn handle_scroll(app: &mut App, k: KeyEvent) {
-    if app.ui.transcript_view.search.input_mode {
+    if app.ui.transcript_view.search_input_mode() {
         handle_search_input(app, k);
         return;
     }
-    if app.ui.transcript_view.search.active {
+    if app.ui.transcript_view.search_active() {
         handle_search_view(app, k);
         return;
     }
@@ -59,7 +59,7 @@ fn handle_search_view(app: &mut App, k: KeyEvent) {
             if app.window_browsing() {
                 app.window_search_older();
             } else {
-                app.ui.transcript_view.search.prev();
+                app.ui.transcript_view.search_prev();
                 app.jump_to_focused_match();
             }
         }
@@ -67,7 +67,7 @@ fn handle_search_view(app: &mut App, k: KeyEvent) {
             if app.window_browsing() {
                 app.window_search_newer();
             } else {
-                app.ui.transcript_view.search.next();
+                app.ui.transcript_view.search_next();
                 app.jump_to_focused_match();
             }
         }
@@ -120,13 +120,6 @@ fn handle_search_input(app: &mut App, k: KeyEvent) {
     match k.code {
         KeyCode::Enter => app.commit_search_input(),
         KeyCode::Esc => app.cancel_search_input(),
-        KeyCode::Backspace => app.ui.transcript_view.search.input.backspace(),
-        KeyCode::Delete => app.ui.transcript_view.search.input.delete(),
-        KeyCode::Left => app.ui.transcript_view.search.input.move_left(),
-        KeyCode::Right => app.ui.transcript_view.search.input.move_right(),
-        KeyCode::Home => app.ui.transcript_view.search.input.move_home(),
-        KeyCode::End => app.ui.transcript_view.search.input.move_end(),
-        KeyCode::Char(c) => app.ui.transcript_view.search.input.push(c),
-        _ => {}
+        code => app.ui.transcript_view.handle_search_input_key(code),
     }
 }

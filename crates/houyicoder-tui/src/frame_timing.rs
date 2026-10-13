@@ -6,8 +6,10 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use ratatui::{Terminal, backend::TestBackend};
 
-use crate::records::{ToolOutcome, TranscriptLine};
-use crate::state::App;
+use crate::composition::app as default_app;
+use crate::records::{TeammateView, ToolOutcome, TranscriptLine};
+use crate::state::{App, Screen};
+use crate::view::draw;
 
 const SIZES: &[(u16, u16)] = &[(40, 16), (80, 24), (160, 48)];
 const SCALES: &[usize] = &[100, 1000, 10000];
@@ -124,7 +126,7 @@ fn render(app: &App, area: (u16, u16)) -> Duration {
     let backend = TestBackend::new(area.0, area.1);
     let mut term = Terminal::new(backend).expect("backend");
     let start = Instant::now();
-    crate::view::draw(&mut term.get_frame(), app);
+    draw(&mut term.get_frame(), app);
     start.elapsed()
 }
 
@@ -218,8 +220,8 @@ fn test_frame_timing_benchmark() {
         let lines = synth_lines(scale, 0xC0FFEE);
         for &area in SIZES {
             // Idle: redraw the same history; the cache should not rebuild.
-            let mut app = crate::composition::app();
-            app.ui.navigation.screen = crate::state::Screen::Working;
+            let mut app = default_app();
+            app.ui.navigation.screen = Screen::Working;
             app.sessions.current.transcript = lines.clone().into();
             app.sessions.current.transcript.bump_revision();
             render(&app, area);
@@ -237,8 +239,8 @@ fn test_frame_timing_benchmark() {
             // Streaming at realistic token rates.
             for rate in [100usize, 500, 2000] {
                 let per_frame = (rate / 60).max(1);
-                let mut app = crate::composition::app();
-                app.ui.navigation.screen = crate::state::Screen::Working;
+                let mut app = default_app();
+                app.ui.navigation.screen = Screen::Working;
                 app.sessions.current.transcript = lines.clone().into();
                 app.sessions.current.transcript.bump_revision();
                 let mut lcg = Lcg(0xFEED + rate as u64);
@@ -271,13 +273,10 @@ fn test_frame_timing_benchmark() {
             }
 
             // Search: a frozen snapshot view.
-            let mut app = crate::composition::app();
-            app.ui.navigation.screen = crate::state::Screen::Working;
+            let mut app = default_app();
+            app.ui.navigation.screen = Screen::Working;
             app.sessions.current.transcript = lines.clone().into();
-            app.ui
-                .transcript_view
-                .search_corpus
-                .replace_lines(lines.clone());
+            app.ui.transcript_view.replace_corpus_lines(lines.clone());
             app.sessions.current.transcript.bump_revision();
             render(&app, area);
             let mut durations = Vec::with_capacity(100);
@@ -301,8 +300,8 @@ fn test_frame_timing_benchmark() {
         let mut rebuilds = 0u64;
         for _ in 0..20 {
             let start = Instant::now();
-            let mut app = crate::composition::app();
-            app.ui.navigation.screen = crate::state::Screen::Working;
+            let mut app = default_app();
+            app.ui.navigation.screen = Screen::Working;
             app.sessions.current.transcript = lines.clone().into();
             app.sessions.current.transcript.bump_revision();
             let mut watch = RebuildWatch::new(&app);
@@ -318,8 +317,8 @@ fn test_frame_timing_benchmark() {
     // invalidates on its own; the version bump keeps the loop uniform with
     // the streaming scenarios.
     let lines = synth_lines(1000, 0x5EED);
-    let mut app = crate::composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    let mut app = default_app();
+    app.ui.navigation.screen = Screen::Working;
     app.sessions.current.transcript = lines.clone().into();
     app.sessions.current.transcript.bump_revision();
     render(&app, (80, 24));
@@ -348,9 +347,9 @@ fn test_frame_timing_benchmark() {
     record(&run_dir, "fold", (80, 24), 1000, &durations, watch.count);
 
     // Parent/child: a teammate view with its own child transcript.
-    let mut app = crate::composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
-    app.ui.teammate_view = Some(crate::records::TeammateView {
+    let mut app = default_app();
+    app.ui.navigation.screen = Screen::Working;
+    app.ui.teammate_view = Some(TeammateView {
         child_sid: "c1".into(),
         ..Default::default()
     });
