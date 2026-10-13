@@ -61,6 +61,71 @@ fn test_drag_copies_agent_line() {
     assert_eq!(got[0], "hello world", "full line copied: {got:?}");
 }
 
+/// Drag-select an agent line containing wide glyphs, release. The clipboard
+/// holds the exact logical characters the user selected: each wide glyph comes
+/// back as one character (not the pair of continuation cells the buffer holds
+/// for it) and the agent badge is stripped. This holds the copy path to the
+/// published row store, the same rows the draw produced, not a recompute.
+#[test]
+fn test_drag_copies_cjk_line() {
+    use crate::composition;
+    use crate::records::TranscriptLine;
+    use crate::selection::RecordingClipboard;
+    use crate::state::Screen;
+    use crate::test_harness::render_text;
+    use std::sync::{Arc, Mutex};
+
+    let mut app = composition::app();
+    app.ui.navigation.screen = Screen::Working;
+    app.sessions.current.transcript =
+        vec![TranscriptLine::Agent("中文宽字符测试 tail".into())].into();
+    let captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    app.ui.clipboard = Arc::new(RecordingClipboard {
+        captured: captured.clone(),
+    });
+    let _out = render_text(&app, 80, 24);
+    let rect = app.ui.frame.layout.transcript_rect.get();
+    let agent_ri = app
+        .ui
+        .frame
+        .layout
+        .last_all_rows
+        .borrow()
+        .iter()
+        .position(|(_, s)| s.contains("中文宽字符测试"))
+        .expect("cjk line in last_all_rows");
+    let top = app.whole_scroll().top_offset();
+    let agent_y = rect.y + (agent_ri.saturating_sub(top)) as u16;
+    // A drag endpoint far past the text clamps to the width of the widest
+    // selected cell, matching a drag that reaches the pane edge.
+    let line_end = rect.x + 200;
+    for ev in [
+        MouseEventKind::Down(MouseButton::Left),
+        MouseEventKind::Drag(MouseButton::Left),
+        MouseEventKind::Up(MouseButton::Left),
+    ] {
+        crate::app::handle_mouse(
+            &mut app,
+            MouseEvent {
+                kind: ev,
+                column: if matches!(ev, MouseEventKind::Down(_)) {
+                    rect.x
+                } else {
+                    line_end
+                },
+                row: agent_y,
+                modifiers: KeyModifiers::NONE,
+            },
+        );
+    }
+    let got = captured.lock().expect("captured").clone();
+    assert_eq!(got.len(), 1, "one copy on mouse-up: {got:?}");
+    assert_eq!(
+        got[0], "中文宽字符测试 tail",
+        "wide glyphs copy as exact characters: {got:?}"
+    );
+}
+
 /// Select only the second line of a multi-line reply, release, Ctrl+C. Only
 /// the second line is copied (a SoftBreak splits the reply into rows so the
 /// second line is independently selectable).
