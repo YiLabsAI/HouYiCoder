@@ -5,10 +5,11 @@
 use super::*;
 use crate::session_lock::{LockError, SessionLock};
 use houyicoder_api::agent_event::{EventHandler, RunCompletionStatus, RunLifecycleEvent};
+use houyicoder_api::provider::ModelProvider;
 use houyicoder_api::spawn::SpawnArgs;
 use houyicoder_api::tool::ToolCtx;
-use houyicoder_async::PFut;
 use houyicoder_async::bus::MessageBus;
+use houyicoder_async::{PFut, PStream};
 use houyicoder_context::{
     CheckpointId, CheckpointManifest, ContextBackend, ContextError, EventId, SessionEvent,
     SessionId, SessionLogEntry,
@@ -22,6 +23,10 @@ use houyicoder_memory::InMemoryBackend;
 use houyicoder_protocol::envelope::{ClientResponsePayload, ServerFrame, ServerRequestPayload};
 use houyicoder_protocol::frontend::event::FrontendEvent;
 use houyicoder_protocol::frontend::trust::TrustAccept;
+use houyicoder_protocol::llm::{
+    CompletionRequest, CompletionResponse, LlmEvent, ModelCapabilities, OutputItem, ProviderError,
+    Usage,
+};
 use houyicoder_service::composition::{BuildRunnerOptions, ResolvedProvider, build_runner};
 use std::env;
 use std::fs;
@@ -198,6 +203,182 @@ fn test_release_joins_children_first() {
         );
 
         drop(runner);
+        fs::remove_dir_all(&root).ok();
+    });
+}
+
+#[cfg(unix)]
+fn make_test_repo(tag: &str) -> PathBuf {
+    let dir = env::temp_dir().join(format!("houyi-lease-wt-{}-{tag}", process::id()));
+    drop(fs::remove_dir_all(&dir));
+    fs::create_dir_all(&dir).expect("repo dir");
+    #[expect(clippy::disallowed_methods, reason = "test scaffolding git init")]
+    {
+        drop(
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(&dir)
+                .args(["init", "-q"])
+                .status(),
+        );
+        drop(
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(&dir)
+                .args(["config", "user.email", "t@x"])
+                .status(),
+        );
+        drop(
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(&dir)
+                .args(["config", "user.name", "t"])
+                .status(),
+        );
+        drop(
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(&dir)
+                .args(["commit", "--allow-empty", "-m", "init", "-q"])
+                .status(),
+        );
+    }
+    dir
+}
+
+struct GateProvider {
+    entered: Arc<Notify>,
+    release: Arc<Notify>,
+}
+
+impl ModelProvider for GateProvider {
+    fn complete(
+        &self,
+        _req: CompletionRequest,
+    ) -> PFut<'_, Result<CompletionResponse, ProviderError>> {
+        self.entered.notify_one();
+        let release = self.release.clone();
+        Box::pin(async move {
+            release.notified().await;
+            Ok(CompletionResponse {
+                output: vec![OutputItem::Text {
+                    text: "done".to_string(),
+                }],
+                usage: Usage::default(),
+                model: "stub".to_string(),
+            })
+        })
+    }
+
+    fn stream(&self, _req: CompletionRequest) -> PStream<'_, Result<LlmEvent, ProviderError>> {
+        self.entered.notify_one();
+        let release = self.release.clone();
+        Box::pin(futures::stream::once(async move {
+            release.notified().await;
+            Err(ProviderError::Network)
+        }))
+    }
+
+    fn capabilities(&self) -> ModelCapabilities {
+        ModelCapabilities::default()
+    }
+}
+
+/// The release task holds the session lock until a child's worktree cleanup
+/// is complete: while the child is still running in its worktree, a second
+/// acquire reports the lock held; only after cleanup removes the worktree and
+/// the finalize tail completes does the unlock happen.
+#[cfg(unix)]
+#[test]
+fn test_release_waits_worktree_cleanup() {
+    let runtime = Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("test runtime");
+    runtime.block_on(async {
+        let repo = make_test_repo("1");
+        let root = temp_root();
+        let entered = Arc::new(Notify::new());
+        let release_gate = Arc::new(Notify::new());
+        let provider = Arc::new(GateProvider {
+            entered: Arc::clone(&entered),
+            release: Arc::clone(&release_gate),
+        });
+
+        let mut options = BuildRunnerOptions::default();
+        options.project = Some(repo.to_string_lossy().to_string());
+        options.provider = Some(ResolvedProvider {
+            provider,
+            warnings: Vec::new(),
+        });
+        let bundle = build_runner(options);
+        let sid_str = bundle.session.to_string();
+        let lock = SessionLock::acquire(&sid_str, &root).expect("first acquire");
+
+        let (runner, client, _warnings, host) = start_local_server(
+            bundle.runner,
+            bundle.session,
+            bundle.gate,
+            bundle.sandbox_session,
+            bundle.append_notify,
+            None,
+            bundle.worktree_controller,
+            bundle.bus,
+            Some(root.join("settings.json")),
+        );
+
+        let parent_sid = bundle.session;
+        let spawn_handle = runner.spawn_handle().expect("real spawn handle attached");
+        let ctx = ToolCtx::new("probe-parent").with_session(parent_sid);
+        let mut args = SpawnArgs::new("explore", "probe-task", "probe-task");
+        args.isolation = "worktree".to_string();
+        args.run_in_background = true;
+        let outcome = spawn_handle
+            .spawn(&ctx, args)
+            .await
+            .expect("spawn background child");
+        assert!(outcome.status.is_none());
+        assert!(!outcome.child_session_id.is_empty());
+
+        let worktrees_dir = repo.join(".houyicoder").join("worktrees");
+        // Wait until the child is actively executing inside its worktree.
+        entered.notified().await;
+
+        // While running, the worktree exists on disk.
+        assert_eq!(
+            fs::read_dir(&worktrees_dir).map(|d| d.count()).unwrap_or(0),
+            1,
+            "child worktree exists on disk during child execution"
+        );
+
+        drop(client);
+        let lease = HostLease::holding(host, lock, sid_str.clone(), Some(Arc::clone(&runner)));
+        let release = lease.begin_release(runtime.handle());
+
+        yield_now().await;
+        match SessionLock::acquire(&sid_str, &root) {
+            Err(LockError::HeldByOther(_)) => {}
+            Ok(_) => panic!("lock released while child worktree was still present"),
+            Err(LockError::Io(e)) => panic!("unexpected io error: {e}"),
+        }
+
+        // Release the child so it completes and cleans up the worktree.
+        release_gate.notify_one();
+        let report = release.await.expect("release task");
+        assert_eq!(report.panic_count(), 0, "no writer panicked");
+
+        let _reacquire =
+            SessionLock::acquire(&sid_str, &root).expect("lock released only after cleanup");
+
+        // The worktree directory must be cleaned up and empty.
+        assert_eq!(
+            fs::read_dir(&worktrees_dir).map(|d| d.count()).unwrap_or(0),
+            0,
+            "child worktree was reclaimed before lock was released"
+        );
+
+        drop(runner);
+        fs::remove_dir_all(&repo).ok();
         fs::remove_dir_all(&root).ok();
     });
 }
