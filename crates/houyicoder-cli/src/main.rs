@@ -289,7 +289,16 @@ fn build_lease_for_existing_sid(
     project: Option<String>,
     provider: ResolvedProvider,
 ) -> Result<(RunnerBundle, FrontendStartup, HostLease), Box<dyn Error>> {
-    let lock = admit_existing_sid(&sid, &session_log_root())?;
+    build_lease_for_existing_sid_at(sid, project, provider, &session_log_root())
+}
+
+fn build_lease_for_existing_sid_at(
+    sid: SessionId,
+    project: Option<String>,
+    provider: ResolvedProvider,
+    sessions_root: &Path,
+) -> Result<(RunnerBundle, FrontendStartup, HostLease), Box<dyn Error>> {
+    let lock = admit_existing_sid(&sid, sessions_root)?;
     let (bundle, startup, host, runner) =
         resume_bundle::build_bundle_for_resume_sid(sid, project, provider)?;
     let sid_str = bundle.session.0.clone();

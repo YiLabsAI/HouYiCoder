@@ -6,12 +6,18 @@
 use super::*;
 
 use std::env::temp_dir;
-use std::fs::{create_dir_all, remove_dir_all, remove_file, write};
-use std::path::PathBuf;
-use std::process::id as process_id;
+use std::env::{current_exe, var};
+use std::fs::{create_dir_all, read_dir, remove_dir_all, remove_file, write};
+use std::io::BufRead;
+use std::io::BufReader;
+use std::path::{Path, PathBuf};
+use std::process::Stdio;
+use std::process::{Command, id as process_id};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::channel as std_channel;
+use std::thread;
+use std::time::Duration;
 
 use futures::channel::mpsc::channel as async_channel;
 use houyicoder_client::{Client, InProcTransport};
@@ -590,4 +596,141 @@ fn temp_root() -> PathBuf {
     let path = temp_dir().join(format!("admit-{}-{n}", process_id()));
     create_dir_all(&path).expect("temp root");
     path
+}
+
+/// The helper a spawned child runs when the test binary re-executes itself
+/// with the lock-holder marker set: it acquires the session lock, prints the
+/// marker once held, and parks until the parent releases it via the temp
+/// file's removal. The marker on stdout is the effect latch — the parent
+/// waits for it before asserting its own acquire fails.
+#[cfg(unix)]
+fn lock_holder_entry() {
+    let spec = var("HOUYI_TEST_LOCK_SPEC").unwrap_or_default();
+    let Some((sid, rest)) = spec.split_once('|') else {
+        return;
+    };
+    let Some((root, release_path)) = rest.split_once('|') else {
+        return;
+    };
+    let _lock = match SessionLock::acquire(sid, Path::new(root)) {
+        Ok(lock) => {
+            println!("HOUYI_TEST_LOCK_HELD");
+            lock
+        }
+        Err(e) => {
+            eprintln!("holder acquire failed: {e}");
+            return;
+        }
+    };
+    // Park until the parent removes the release file; its absence is the
+    // signal to drop the lock and exit.
+    while Path::new(release_path).exists() {
+        thread::sleep(Duration::from_millis(10));
+    }
+    drop(_lock);
+}
+
+/// Re-execute this test binary in a real second OS process that holds the
+/// session lock, then assert this process's acquire fails with the held
+/// refusal. flock's exclusion is per process, so a same-process double
+/// acquire does not exercise the real guarantee.
+#[cfg(unix)]
+#[test]
+fn test_second_process_refused() {
+    if var("HOUYI_TEST_LOCK_SPEC").is_ok() {
+        lock_holder_entry();
+        return;
+    }
+    let root = temp_root();
+    let sid = SessionId::new();
+    let sid_str = sid.to_string();
+    let release_path = root.join(format!("release-{}", process_id()));
+    write(&release_path, b"").expect("release marker");
+
+    let spec = format!("{sid_str}|{}|{}", root.display(), release_path.display());
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "test fixture spawn, not model-driven"
+    )]
+    let mut child = Command::new(current_exe().expect("test binary path"))
+        .env("HOUYI_TEST_LOCK_SPEC", spec)
+        .arg("tests::test_second_process_refused")
+        .arg("--exact")
+        .arg("--nocapture")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn holder process");
+    // Read the child's stdout until the held marker: the holder parks after
+    // printing it, so waiting for its exit would deadlock against the
+    // release-file handshake. The marker is the effect latch.
+    let mut held = false;
+    let mut child_err = String::new();
+    {
+        let stdout = child.stdout.take().expect("piped stdout");
+        let reader = BufReader::new(stdout);
+        for line in reader.lines() {
+            let line = line.expect("stdout line");
+            if line.contains("HOUYI_TEST_LOCK_HELD") {
+                held = true;
+                break;
+            }
+        }
+        if !held && let Some(mut stderr_pipe) = child.stderr.take() {
+            use std::io::Read;
+            drop(stderr_pipe.read_to_string(&mut child_err));
+        }
+    }
+    assert!(
+        held,
+        "the child must hold the lock before the parent asserts; stderr: {child_err}"
+    );
+    match SessionLock::acquire(&sid_str, &root) {
+        Err(LockError::HeldByOther(_)) => {}
+        Ok(_) => panic!(
+            "a second OS process holding the lock must refuse; child alive: {:?}, lock file: {:?}",
+            child.try_wait().map(|s| s.is_none()),
+            root.join(&sid_str).join("session.lock")
+        ),
+        Err(LockError::Io(e)) => panic!("unexpected io error: {e}"),
+    }
+    remove_file(&release_path).ok();
+    drop(child.wait());
+    remove_dir_all(&root).ok();
+}
+
+/// A held sid must be refused before any writer construction: the session
+/// directory holds nothing but the lock file, and the refusal names the
+/// holder. A reorder that built first would leave a log or descriptor file
+/// behind, so the directory contents pin the zero-construction order.
+#[cfg(unix)]
+#[test]
+fn test_held_refusal_builds_nothing() {
+    let root = temp_root();
+    let sid = SessionId::new();
+    let sid_str = sid.to_string();
+    let _held = SessionLock::acquire(&sid_str, &root).expect("pre-acquire holds");
+
+    let err = match build_lease_for_existing_sid_at(sid, None, ResolvedProvider::stub(), &root) {
+        Ok(_) => panic!("a held sid must refuse, not build"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string().contains("held by another"),
+        "the refusal names the holder, got: {err}"
+    );
+    // The only artifact admitted into the session dir is the lock file
+    // itself; a build that ran before or despite the refusal would leave a
+    // session log or descriptor behind.
+    let sid_dir = root.join(&sid_str);
+    let entries: Vec<String> = read_dir(&sid_dir)
+        .expect("session dir exists")
+        .map(|e| e.expect("entry").file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(
+        entries,
+        vec!["session.lock".to_string()],
+        "no writer artifact may exist for a refused sid"
+    );
+    remove_dir_all(&root).ok();
 }
