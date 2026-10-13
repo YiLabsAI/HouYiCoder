@@ -15,6 +15,7 @@ use houyicoder_context::{
     SessionId, SessionLogEntry,
 };
 use houyicoder_core::agent::ToolRegistry;
+use houyicoder_core::agent::multi_agent::concurrency_gate::ConcurrencyGate;
 use houyicoder_memory::InMemoryBackend;
 use houyicoder_protocol::llm::{
     CompletionRequest, CompletionResponse, LlmEvent, ModelCapabilities, OutputItem, ProviderError,
@@ -22,6 +23,8 @@ use houyicoder_protocol::llm::{
 };
 use houyicoder_provider::FakeProvider;
 use tokio::sync::Notify;
+use tokio::task::yield_now;
+use tokio::time::timeout;
 
 use super::{runtime_with, runtime_with_backend};
 
@@ -74,8 +77,8 @@ impl ModelProvider for GateProvider {
 /// hold when it looked.
 #[tokio::test]
 async fn test_shutdown_races_spawn_registration() {
-    let entered = Arc::new(tokio::sync::Notify::new());
-    let release = Arc::new(tokio::sync::Notify::new());
+    let entered = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
     let provider = Arc::new(GateProvider {
         entered: Arc::clone(&entered),
         release: Arc::clone(&release),
@@ -112,8 +115,8 @@ async fn test_shutdown_races_spawn_registration() {
 /// pre-start stop is unreachable.
 #[tokio::test]
 async fn test_shutdown_stops_unstarted_child() {
-    let entered = Arc::new(tokio::sync::Notify::new());
-    let release = Arc::new(tokio::sync::Notify::new());
+    let entered = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
     let provider = Arc::new(GateProvider {
         entered: Arc::clone(&entered),
         release: Arc::clone(&release),
@@ -150,8 +153,8 @@ async fn test_shutdown_stops_unstarted_child() {
 /// finishes inside it.
 #[tokio::test]
 async fn test_shutdown_waits_finalize() {
-    let entered = Arc::new(tokio::sync::Notify::new());
-    let release = Arc::new(tokio::sync::Notify::new());
+    let entered = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
     let provider = Arc::new(GateProvider {
         entered: Arc::clone(&entered),
         release: Arc::clone(&release),
@@ -374,7 +377,7 @@ async fn test_shutdown_covers_construction() {
             if closed {
                 break;
             }
-            tokio::task::yield_now().await;
+            yield_now().await;
         }
     };
     tokio::time::timeout(Duration::from_secs(1), gate_closed)
@@ -451,6 +454,60 @@ async fn test_caller_cancel_spares_child() {
             .any(|e| matches!(e.event, SessionEvent::SubagentReturn { .. })),
         "the child outlived its cancelled caller and still recorded its return"
     );
+}
+
+/// A spawn waiting for a concurrency slot when the shutdown closes the gate
+/// is refused with ShuttingDown once the running child frees its slot —
+/// never built after the drain.
+#[tokio::test]
+async fn test_shutdown_refuses_queued_spawn() {
+    let entered = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let provider = Arc::new(GateProvider {
+        entered: Arc::clone(&entered),
+        release: Arc::clone(&release),
+    });
+    let (runtime, _store, parent_sid) = runtime_with(provider, None, ToolRegistry::new());
+    let gate = Arc::new(ConcurrencyGate::new(1, 1));
+    let runtime = runtime.with_gate(Arc::clone(&gate));
+    let runtime = Arc::new(runtime);
+
+    let first_args = {
+        let ctx = ToolCtx::new("c1").with_session(parent_sid);
+        let mut args = SpawnArgs::new("explore", "task", "task");
+        args.run_in_background = true;
+        let runtime = Arc::clone(&runtime);
+        tokio::spawn(async move { runtime.spawn(&ctx, args).await })
+    };
+    entered.notified().await;
+
+    let second_args = {
+        let ctx = ToolCtx::new("c1").with_session(parent_sid);
+        let args = SpawnArgs::new("explore", "second", "second");
+        let runtime = Arc::clone(&runtime);
+        tokio::spawn(async move { runtime.spawn(&ctx, args).await })
+    };
+    let gate_depth = async {
+        loop {
+            if gate.queued_count() == 1 {
+                break;
+            }
+            yield_now().await;
+        }
+    };
+    timeout(Duration::from_secs(1), gate_depth)
+        .await
+        .expect("the second spawn queued for the slot");
+
+    runtime.join_children().await;
+
+    let call = second_args.await.expect("the queued spawn's task ends");
+    assert!(
+        matches!(call, Err(SpawnFailure::ShuttingDown)),
+        "the queued creation is refused with the honest shutdown verdict, got {call:?}"
+    );
+    drop(first_args.await);
+    drop(release);
 }
 
 /// A construction panic — the child's opening delegation write unwinds before

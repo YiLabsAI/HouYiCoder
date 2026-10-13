@@ -22,6 +22,7 @@ use houyicoder_core::agent::worktree_controller::WorktreeController;
 use houyicoder_memory::{InMemoryBackend, InMemoryDescriptorStore};
 use houyicoder_provider::FakeProvider;
 use houyicoder_session::SessionStore;
+use tokio::sync::Notify;
 
 use super::super::{MultiAgentDeps, MultiAgentRuntime};
 use super::BlockingStartHook;
@@ -131,8 +132,8 @@ async fn test_join_reclaims_abandoned_worktree() {
         descriptor_store: Some(Arc::new(InMemoryDescriptorStore::new())),
     });
     let hook = Arc::new(BlockingStartHook {
-        entered: tokio::sync::Notify::new(),
-        release: tokio::sync::Notify::new(),
+        entered: Notify::new(),
+        release: Notify::new(),
     });
     let parent_sid = SessionId::new();
     let ctx = ToolCtx::new("c1")

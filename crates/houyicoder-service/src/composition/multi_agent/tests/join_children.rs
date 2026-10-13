@@ -4,15 +4,18 @@
 
 use std::sync::Arc;
 
+use houyicoder_api::hook_fire::HookFire;
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_api::spawn::{SpawnArgs, SpawnHandle};
 use houyicoder_api::tool::ToolCtx;
 use houyicoder_async::{PFut, PStream};
-use houyicoder_context::SessionEvent;
+use houyicoder_context::{HookEventKind, HookFirePayload, SessionEvent};
 use houyicoder_core::agent::ToolRegistry;
 use houyicoder_protocol::llm::{
     CompletionRequest, CompletionResponse, LlmEvent, ModelCapabilities, ProviderError,
 };
+use houyicoder_provider::FakeProvider;
+use tokio::sync::Notify;
 
 use super::runtime_with;
 
@@ -128,6 +131,66 @@ async fn test_join_children_survives_panic() {
             .any(|e| matches!(e.event, SessionEvent::SubagentReturn { .. })),
         "the panicked child's finalize tail still records its return before the join resolves"
     );
+}
+
+/// A Stop hook that never returns cannot wedge the shutdown: the join's
+/// budget expires, the driver is aborted, and no return boundary is written
+/// for the aborted child.
+#[tokio::test]
+async fn test_shutdown_aborts_slow_hook() {
+    let stop_entered = Arc::new(Notify::new());
+    let (runtime, store, parent_sid) = runtime_with(
+        Arc::new(FakeProvider::text("done")),
+        None,
+        ToolRegistry::new(),
+    );
+    let runtime = Arc::new(runtime);
+    let stop_gate = Arc::new(Notify::new());
+    struct StopHook {
+        stop_entered: Arc<Notify>,
+        park: Arc<Notify>,
+    }
+    impl HookFire for StopHook {
+        fn fire(&self, event: HookEventKind, _payload: HookFirePayload) -> PFut<'_, ()> {
+            let stop_entered = self.stop_entered.clone();
+            let park = self.park.clone();
+            Box::pin(async move {
+                if event == HookEventKind::SubagentStop {
+                    stop_entered.notify_one();
+                    park.notified().await;
+                }
+            })
+        }
+    }
+    let ctx = ToolCtx::new("c1")
+        .with_session(parent_sid)
+        .with_hook_fire(Arc::new(StopHook {
+            stop_entered: Arc::clone(&stop_entered),
+            park: Arc::clone(&stop_gate),
+        }) as Arc<dyn HookFire>);
+    let mut args = SpawnArgs::new("explore", "task", "task");
+    args.run_in_background = true;
+    let spawn_call = {
+        let runtime = Arc::clone(&runtime);
+        let ctx = ctx.clone();
+        tokio::spawn(async move { runtime.spawn(&ctx, args).await })
+    };
+    stop_entered.notified().await;
+
+    runtime.join_children().await;
+
+    let events = store.trajectory_snapshot(parent_sid);
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e.event, SessionEvent::SubagentReturn { .. })),
+        "an aborted slow-hook driver fabricates no return boundary"
+    );
+    drop(spawn_call.await);
+    // The stop hook park is still held by nothing: releasing it (or dropping
+    // the Notify) lets any late waiter finish, so the test runtime does not
+    // wait on it at teardown.
+    drop(stop_gate);
 }
 
 /// A poisoned children lock still yields a full enumeration rather than an
