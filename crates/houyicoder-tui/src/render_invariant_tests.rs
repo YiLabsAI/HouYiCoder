@@ -784,3 +784,75 @@ fn test_long_para_hang_indent() {
         assert!(row.starts_with("  "), "continuation at col 2: {:?}", row);
     }
 }
+
+// The count path walks the fold structure to derive a total independently
+// of the draw, which publishes its own total. The two must agree, or a
+// scroll step clamps to rows that are not on screen. Run across the
+// supported sizes with wide glyphs so the wrap, fold, and wide-cell
+// branches all land.
+#[test]
+fn test_count_matches_render() {
+    let mut app = working();
+    let cmd = (0..5)
+        .map(|i| format!("echo line{i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let body = (0..6)
+        .map(|i| format!("match_{i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let long_agent = "a wide agent answer that has to soft-wrap onto several rows at a narrow pane width and still be counted the same way the render emits it";
+    let reasoning = "reasoning that also wraps onto several rows when the pane is narrow";
+    app.sessions.current.transcript = vec![
+        TranscriptLine::User("go".into()),
+        TranscriptLine::Agent(long_agent.into()),
+        TranscriptLine::User("中文宽字符测试界面".into()),
+        TranscriptLine::ThoughtFor {
+            ms: Some(3_000),
+            reasoning: Some(reasoning.into()),
+            tool_summary: None,
+            turn_id: "t1".into(),
+        },
+        TranscriptLine::Tool {
+            name: "bash".into(),
+            tool: "bash".into(),
+            status: crate::brief::tool_call_brief(
+                "bash",
+                &serde_json::json!({ "command": cmd.clone() }),
+            ),
+            invocation: cmd,
+            outcome: ToolOutcome::Success,
+            call_id: "c1".into(),
+            body: String::new(),
+            is_diff: false,
+        },
+        TranscriptLine::Tool {
+            name: "result".into(),
+            tool: "bash".into(),
+            status: String::new(),
+            invocation: String::new(),
+            outcome: ToolOutcome::Success,
+            call_id: "c1".into(),
+            body,
+            is_diff: false,
+        },
+        TranscriptLine::Agent("done".into()),
+    ]
+    .into();
+    for (w, h) in [(40u16, 16u16), (80, 24), (160, 48)] {
+        let out = render_text(&app, w, h);
+        let walked = app.fold_aware_rows(None);
+        let published = app.whole_scroll().total.get();
+        assert_eq!(
+            walked, published,
+            "count==render at {w}x{h}: walk={walked} published={published}\n{out}"
+        );
+        // A wide glyph occupies two cells, so the buffer dump shows it beside
+        // its empty continuation cell; assert the glyph itself lands rather
+        // than the exact text.
+        assert!(
+            out.contains('中'),
+            "wide glyphs must render at {w}x{h}:\n{out}"
+        );
+    }
+}
