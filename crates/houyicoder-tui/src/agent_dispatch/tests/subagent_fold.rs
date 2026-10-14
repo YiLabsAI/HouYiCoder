@@ -4,10 +4,13 @@ use crate::records::TranscriptLine;
 use crate::selection::region::{Region, TranscriptRegion};
 use crate::state::Screen;
 use crate::test_harness::render_text;
+use houyicoder_protocol::acpx::AcpxMethod;
+use houyicoder_protocol::acpx::AcpxNotification;
 use houyicoder_protocol::envelope::ChildTranscriptFrame;
 use houyicoder_protocol::frontend::run::ContentBlock;
 use houyicoder_protocol::frontend::session_update::ContentChunk;
 use houyicoder_protocol::frontend::session_update::SessionUpdate;
+use serde_json::Value;
 
 /// A ChildTranscriptResult reply populates the matching Subagent line's
 /// folded_transcript through the same fold as the parent flow
@@ -404,10 +407,8 @@ fn test_child_frame_converts() {
         ),
         "session frame converts: {frame:?}"
     );
-    let wire_acpx = ChildTranscriptFrame::Acpx(houyicoder_protocol::acpx::AcpxNotification::new(
-        houyicoder_protocol::acpx::AcpxMethod::ToolProgress,
-        serde_json::Value::Null,
-    ));
+    let wire_acpx =
+        ChildTranscriptFrame::Acpx(AcpxNotification::new(AcpxMethod::ToolProgress, Value::Null));
     let acpx: TranscriptFrame = wire_acpx.into();
     assert!(
         matches!(acpx, TranscriptFrame::Acpx(_)),

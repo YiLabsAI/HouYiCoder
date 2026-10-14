@@ -36,6 +36,7 @@ mod transcript_rebuild;
 
 pub use crate::agent_message::ClientCommand;
 use crate::agent_message::{ServerEvent, SessionMessage};
+use std::env::var;
 
 impl App {
     /// Enqueue a command over the session's command channel. Ok means the
@@ -512,7 +513,7 @@ impl App {
     /// transcript lengths are the parent's, and a child view on screen would
     /// otherwise mix parent state with a child-derived top.
     pub(crate) fn debug_render_done<F: AsRef<TranscriptFrame>>(&self, frames: &[F]) {
-        if std::env::var("HICODER_DEBUG_RENDER").is_err() {
+        if var("HICODER_DEBUG_RENDER").is_err() {
             return;
         }
         let total = self.whole_scroll().total.get();

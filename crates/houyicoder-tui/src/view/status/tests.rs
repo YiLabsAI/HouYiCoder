@@ -7,15 +7,17 @@ use ratatui::{Terminal, backend::TestBackend};
 
 use crate::agent_message::FleetEntry;
 use crate::composition::app;
+use crate::state::App;
 use crate::state::Screen;
 use crate::test_harness::{connected_app, render_text};
+use std::time::Instant;
 
 #[test]
 fn test_tiny_mark_two_spans() {
     assert_eq!(logo::tiny().len(), 2);
 }
 
-fn fleet_app(n: usize, granted: u16) -> crate::state::App {
+fn fleet_app(n: usize, granted: u16) -> App {
     let mut app = app();
     for i in 0..n {
         app.sessions
@@ -105,7 +107,7 @@ fn test_hint_follows_drawn_grant() {
 #[test]
 fn test_agents_hint_excludes_completed() {
     let mut app = fleet_app(2, 2);
-    let done = crate::agent_message::FleetEntry {
+    let done = FleetEntry {
         agent_id: "done".into(),
         subagent_type: "explore".into(),
         turn: 1,
@@ -113,7 +115,7 @@ fn test_agents_hint_excludes_completed() {
         tool_uses: 0,
         last_activity: None,
         completed: Some("completed".into()),
-        completed_at: Some(std::time::Instant::now()),
+        completed_at: Some(Instant::now()),
         started_at: None,
     };
     app.sessions.current.capabilities.fleet.entries.push(done);

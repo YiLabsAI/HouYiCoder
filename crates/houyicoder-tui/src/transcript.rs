@@ -30,10 +30,14 @@ use crate::result_body::{
 use tool_updates::{PendingUpdate, ToolRegistry, collect_tool_updates};
 use turn_fold::{RowNames, TurnFold};
 
+use crate::brief::tool_user_facing_name;
+use crate::records::subagent_line;
 use houyicoder_protocol::acpx::AcpxMethod;
 use houyicoder_protocol::envelope::ChildTranscriptFrame as C;
 use houyicoder_protocol::envelope::ChildTranscriptFrame;
+use houyicoder_protocol::tool::tool_invocation;
 use serde_json::Value;
+use std::mem::take;
 pub use turn_fold::bounds_turn_in;
 pub(crate) use turn_fold::is_user_frame;
 
@@ -508,10 +512,10 @@ impl<'a, F: AsRef<TranscriptFrame>> LineBuilder<'a, F> {
                 .unwrap_or(ToolOutcome::Running);
             let input = tc.raw_input.as_ref().cloned().unwrap_or(Value::Null);
             self.out.push(TranscriptLine::Tool {
-                name: crate::brief::tool_user_facing_name(&tc.title, &input).to_string(),
+                name: tool_user_facing_name(&tc.title, &input).to_string(),
                 tool: tc.title.clone(),
                 status: tool_call_brief(&tc.title, &input),
-                invocation: houyicoder_protocol::tool::tool_invocation(&tc.title, &input),
+                invocation: tool_invocation(&tc.title, &input),
                 outcome,
                 call_id: id.clone(),
                 body: String::new(),
@@ -519,7 +523,7 @@ impl<'a, F: AsRef<TranscriptFrame>> LineBuilder<'a, F> {
             });
         }
         if let Some((_, Some(output))) = upd {
-            if let Some(sub) = crate::records::subagent_line(&output, tc.raw_input.as_ref()) {
+            if let Some(sub) = subagent_line(&output, tc.raw_input.as_ref()) {
                 self.out.push(sub);
             } else {
                 self.out.push(tool_result_line(
@@ -543,7 +547,7 @@ impl<'a, F: AsRef<TranscriptFrame>> LineBuilder<'a, F> {
     /// call_id so multiple late results for one call stack in arrival order
     /// without detaching an edit's diff from its call.
     fn finish(&mut self) {
-        for (id, tool_name, output) in std::mem::take(&mut self.late_results) {
+        for (id, tool_name, output) in take(&mut self.late_results) {
             let mut insert_at: Option<usize> = None;
             for (i, line) in self.out.iter().enumerate() {
                 if let TranscriptLine::Tool { name, call_id, .. } = line

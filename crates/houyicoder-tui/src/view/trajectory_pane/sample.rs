@@ -3,6 +3,7 @@
 //! Provides a static demonstration view when running without a live
 //! session log reader attached.
 
+use super::TrajectoryViewState;
 use super::*;
 
 pub(crate) fn sample_trajectory() -> TrajectoryView {
@@ -66,7 +67,7 @@ pub(crate) fn sample_trajectory() -> TrajectoryView {
         success: true,
     };
     TrajectoryView {
-        state: super::TrajectoryViewState::Ready,
+        state: TrajectoryViewState::Ready,
         skipped_records: 0,
         models_used: 2,
         tool_calls: 4,

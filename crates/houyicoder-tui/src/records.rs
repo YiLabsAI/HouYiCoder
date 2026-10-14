@@ -299,7 +299,7 @@ impl ToolOutcome {
         // One failure rule, shared through the tool protocol: the trajectory
         // header counts failures by the same definition, so a chip cannot
         // disagree with the header about one result.
-        if houyicoder_protocol::tool::tool_result_failed(output, tool_name, call_input) {
+        if tool_result_failed(output, tool_name, call_input) {
             Self::Error
         } else {
             Self::Success
@@ -614,7 +614,7 @@ pub struct Approval {
     pub call_id: String,
     /// The verdict options the server offered (N-option). Empty when the
     /// server deferred; the card falls back to its built-in 3-option set.
-    pub options: Vec<houyicoder_protocol::acp_wire::PermissionOption>,
+    pub options: Vec<PermissionOption>,
 }
 
 /// The number of visible options in the approval prompt.
@@ -651,7 +651,7 @@ impl Approval {
         if self.two_option_card() {
             2
         } else {
-            crate::records::APPROVAL_OPTIONS
+            APPROVAL_OPTIONS
         }
     }
 
@@ -708,10 +708,12 @@ pub use crate::ask_question_model::{AskQuestion, OTHER_LABEL, QuestionCard, Ques
 use crate::brief::fold_summary;
 use crate::view::line_wrap::truncate_width;
 use crate::view::line_wrap::wrap_plain_block;
+use houyicoder_protocol::acp_wire::PermissionOption;
 use houyicoder_protocol::acp_wire::PermissionOptionKind as K;
 use houyicoder_protocol::acp_wire::PermissionOptionKind;
 use houyicoder_protocol::frontend::permission::AskSource;
 use houyicoder_protocol::frontend::run::DelegationSource;
+use houyicoder_protocol::tool::tool_result_failed;
 use serde_json::Value;
 use unicode_width::UnicodeWidthStr;
 /// Spec context strip data: the current spec, step, and clause list.

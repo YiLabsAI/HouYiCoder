@@ -3,6 +3,8 @@
 //! App is the composition shell; cohesive concerns own their state and
 //! transitions in dedicated types rather than adding parallel fields here.
 
+#[cfg(test)]
+use crate::fold::compute_fold_groups;
 use std::fmt;
 use std::time::Instant;
 
@@ -40,6 +42,7 @@ pub(crate) use crate::state::parked_view_states::ParkedViewStates;
 pub use crate::state::trajectory::{
     TrajectoryDrill, TrajectoryPaneState, TrajectorySelection, TrajectoryTurnKey,
 };
+use std::fmt::Debug;
 
 /// Live progress for one long-running tool call (bash): elapsed seconds +
 /// the running stdout line count (None when the backend does not stream
@@ -181,15 +184,13 @@ impl App {
             .start(RequestId(req_id), Instant::now());
         // A running agent flips the tail fold group to active; recompute the
         // cache here because no rebuild follows a lines-built transcript.
-        let groups = crate::fold::compute_fold_groups(
-            self.sessions.current.transcript.lines(),
-            self.agent_busy(),
-        );
+        let groups =
+            compute_fold_groups(self.sessions.current.transcript.lines(), self.agent_busy());
         *self.sessions.current.transcript.fold_groups_mut() = groups;
     }
 }
 
-impl std::fmt::Debug for App {
+impl Debug for App {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("App")
             .field("screen", &self.ui.navigation.screen)

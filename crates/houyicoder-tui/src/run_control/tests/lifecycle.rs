@@ -15,6 +15,9 @@ use crate::state::Screen;
 use crate::test_harness::{attach_connection, dump_buffer, render_buffer, render_text};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use futures::StreamExt;
+use futures::stream::iter;
+use futures::stream::pending;
+use houyicoder_permission::PermissionMode;
 use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::frontend::run::{ApprovalDecision, ApprovalRequest, StopReason};
 use houyicoder_protocol::llm::CompletionRequest;
@@ -458,8 +461,8 @@ impl ModelProvider for HangingProvider {
         &self,
         _req: CompletionRequest,
     ) -> houyicoder_async::PStream<'_, Result<LlmEvent, ProviderError>> {
-        let prefix = futures::stream::iter(self.events.clone().into_iter().map(Ok));
-        let tail = futures::stream::pending();
+        let prefix = iter(self.events.clone().into_iter().map(Ok));
+        let tail = pending();
         Box::pin(prefix.chain(tail))
     }
 }
@@ -482,13 +485,7 @@ fn test_esc_aborts_busy_run() {
     assert!(streaming, "run should stream a delta before abort");
     assert!(app.agent_busy(), "run should still be in flight");
     // Press Esc on the working surface — must call abort_run.
-    handle_working(
-        &mut app,
-        crossterm::event::KeyEvent::new(
-            crossterm::event::KeyCode::Esc,
-            crossterm::event::KeyModifiers::NONE,
-        ),
-    );
+    handle_working(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     // The cancel token fired; the drive loop returns Interrupted. Poll until
     // the Done message arrives and busy clears.
     let settled = pump_until(&mut app, 200, |a| !a.agent_busy());
@@ -734,10 +731,7 @@ fn test_guarded_tool_auto_asks() {
     // Auto still asks for a tool that declares it needs approval: boom ->
     // Ask -> the runner pauses with an Interruption and the popup shows (the
     // recoverable invariant, not a blanket skip, governs destructive ops).
-    let (mut app, boom) = app_with_guarded_tool(
-        houyicoder_permission::PermissionMode::Auto,
-        boom_call_then_reply(),
-    );
+    let (mut app, boom) = app_with_guarded_tool(PermissionMode::Auto, boom_call_then_reply());
     app.spawn_run("go".into());
     let raised = pump_until(&mut app, 200, |a| a.approval().is_some());
     assert!(raised, "Auto should raise an approval popup");

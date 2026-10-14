@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 use crate::agent_message::ServerEvent;
 use crate::agent_message::SessionMessage;
 use crate::composition;
+use crate::fold::compute_fold_groups;
 use crate::records::{ContextSuggestion, SuggestionSeverity, TranscriptLine};
 use crate::session::SessionConnection;
 use crate::state::transcript::DiskFront;
@@ -123,7 +124,7 @@ fn fold_signature(app: &App) -> Vec<(usize, usize, String, bool)> {
         .collect()
 }
 fn recompute_fold_signature(app: &App) -> Vec<(usize, usize, String, bool)> {
-    crate::fold::compute_fold_groups(app.transcript().lines(), app.agent_busy())
+    compute_fold_groups(app.transcript().lines(), app.agent_busy())
         .iter()
         .map(|g| (g.start, g.end, g.key.clone(), g.active))
         .collect()

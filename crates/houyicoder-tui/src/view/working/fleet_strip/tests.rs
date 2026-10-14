@@ -65,7 +65,7 @@ fn test_one_row_counts() {
     entries_mut(&mut app.sessions.current).push(entry("b", "plan", 1, 10, "read"));
     let mut done = entry("c", "verify", 1, 10, "test");
     done.completed = Some("completed".into());
-    done.completed_at = Some(std::time::Instant::now());
+    done.completed_at = Some(Instant::now());
     entries_mut(&mut app.sessions.current).push(done);
     let line = summary_line(&app);
     let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();

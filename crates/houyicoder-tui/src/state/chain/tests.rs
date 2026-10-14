@@ -7,6 +7,7 @@
 use houyicoder_protocol::frontend::SlashCommand;
 
 use crate::composition;
+use crate::composition::failing_checks;
 use crate::evidence::Divergence;
 use crate::records::TranscriptLine;
 use crate::state::App;
@@ -137,7 +138,7 @@ fn test_verify_fail_rework() {
     // Simulate a failed verification directly because the dispatcher has no
     // dedicated test hook. The rework transition is the behavior under test.
     app.workflow.verify_result.passed = false;
-    app.workflow.verify_result.checks = crate::composition::failing_checks();
+    app.workflow.verify_result.checks = failing_checks();
     assert!(!app.workflow.verify_result.passed);
     // Approval cannot complete while verification is failing.
     app.approve_in_pane();

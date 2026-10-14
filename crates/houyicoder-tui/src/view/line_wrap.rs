@@ -14,6 +14,9 @@
 
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
+use std::borrow::Cow;
+use std::collections::HashSet;
+use std::mem::take;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
@@ -110,7 +113,7 @@ pub fn wrap_plain_block(
 ) -> Vec<String> {
     const HEAD: usize = 2_500;
     const TAIL: usize = 2_500;
-    let display: std::borrow::Cow<str> = match cap {
+    let display: Cow<str> = match cap {
         Some(max) if text.chars().count() > max => {
             let chars: Vec<char> = text.chars().collect();
             let head: String = chars[..HEAD].iter().collect();
@@ -210,7 +213,7 @@ struct WrapCell {
 }
 
 fn wrap_cells(text: &str, cells: Vec<WrapCell>, avail: usize) -> Vec<Vec<WrapCell>> {
-    let breaks: std::collections::HashSet<usize> = unicode_linebreak::linebreaks(text)
+    let breaks: HashSet<usize> = unicode_linebreak::linebreaks(text)
         .map(|(offset, _)| offset)
         .collect();
     let mut rows = Vec::new();
@@ -272,10 +275,7 @@ fn rebuild_spans(row: Vec<WrapCell>) -> Line<'static> {
     for cell in row {
         if acc_style != Some(cell.style) {
             if !acc.is_empty() {
-                spans.push(Span::styled(
-                    std::mem::take(&mut acc),
-                    acc_style.unwrap_or_default(),
-                ));
+                spans.push(Span::styled(take(&mut acc), acc_style.unwrap_or_default()));
             }
             acc_style = Some(cell.style);
         }

@@ -31,6 +31,7 @@ use houyicoder_protocol::frontend::tools::ToolEntry;
 use houyicoder_protocol::frontend::trajectory::RedundantCallEntry;
 use houyicoder_protocol::frontend::trajectory::TrajectoryEntry;
 use houyicoder_protocol::frontend::trust::TrustPrompt;
+use std::collections::HashSet;
 
 /// One row in the agent status footer: a spawned child's latest snapshot.
 #[derive(Debug)]
@@ -357,7 +358,7 @@ pub enum ClientCommand {
         req_id: RequestId,
         session_id: FrontendSessionId,
         content: Vec<ContentBlock>,
-        disabled_skills: std::collections::HashSet<String>,
+        disabled_skills: HashSet<String>,
     },
     /// Answer a pending reverse permission ask with the human verdict.
     Verdict {

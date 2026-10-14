@@ -1,4 +1,5 @@
 use super::*;
+use crate::fold::compute_fold_groups;
 use crate::scroll::VIEWABLE_SCROLLBACK_CAP;
 
 /// The rows a scroll back to the resident front reads from the session log:
@@ -441,7 +442,7 @@ fn test_rows_leave_on_drain() {
         .map(|g| (g.start, g.end))
         .collect();
     let fresh: Vec<(usize, usize)> =
-        crate::fold::compute_fold_groups(app.transcript().lines(), app.agent_busy())
+        compute_fold_groups(app.transcript().lines(), app.agent_busy())
             .iter()
             .map(|g| (g.start, g.end))
             .collect();

@@ -11,6 +11,8 @@
 //! machine-readable record of what happened, distinct from the
 //! human-readable .txt export (different use, not a superiority claim).
 
+use std::fs::OpenOptions;
+use std::fs::rename;
 use std::io;
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
@@ -62,7 +64,7 @@ pub fn write_atomic_0600(path: &Path, bytes: &[u8]) -> io::Result<()> {
         let mut f = {
             #[cfg(unix)]
             {
-                std::fs::OpenOptions::new()
+                OpenOptions::new()
                     .create(true)
                     .write(true)
                     .truncate(true)
@@ -71,13 +73,13 @@ pub fn write_atomic_0600(path: &Path, bytes: &[u8]) -> io::Result<()> {
             }
             #[cfg(not(unix))]
             {
-                std::fs::File::create(&tmp)?
+                File::create(&tmp)?
             }
         };
         f.write_all(bytes)?;
         f.sync_all()?;
     }
-    std::fs::rename(&tmp, path)?;
+    rename(&tmp, path)?;
     Ok(())
 }
 

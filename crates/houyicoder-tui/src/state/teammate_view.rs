@@ -4,15 +4,19 @@
 
 use super::App;
 use super::parked_view_states::ChildViewState;
+use crate::agent_message::FleetEntry;
+use crate::notifications::NotifKind;
+use crate::notifications::Notification;
 use crate::records::{TeammateView, TranscriptLine};
 use crate::run_control::ClientCommand;
 use houyicoder_protocol::frontend::SessionId;
+use std::time::Duration;
 
 impl App {
     /// Look up a child's live fleet entry by session id. Shared by the
     /// view-enter fallback, the Esc abort check, and the empty-frames
     /// placeholder so the three never drift apart on the find shape.
-    pub(crate) fn fleet_entry(&self, sid: &str) -> Option<&crate::agent_message::FleetEntry> {
+    pub(crate) fn fleet_entry(&self, sid: &str) -> Option<&FleetEntry> {
         self.sessions
             .current
             .capabilities
@@ -178,16 +182,14 @@ impl App {
             // Idle: Esc is a no-op on the run, so teach the exit gesture
             // instead of leaving the press silent. The banner advertises
             // shift+↑↓, but a misguessed Esc is the moment to remind.
-            self.ui
-                .notifications
-                .add(crate::notifications::Notification::immediate(
-                    "teammate-exit-hint",
-                    crate::notifications::NotifKind::Text {
-                        text: "shift+↑↓ to exit".to_string(),
-                        color: None,
-                    },
-                    std::time::Duration::from_millis(2000),
-                ));
+            self.ui.notifications.add(Notification::immediate(
+                "teammate-exit-hint",
+                NotifKind::Text {
+                    text: "shift+↑↓ to exit".to_string(),
+                    color: None,
+                },
+                Duration::from_millis(2000),
+            ));
         }
     }
 }

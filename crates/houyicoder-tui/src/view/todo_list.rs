@@ -20,6 +20,7 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 use crate::state::App;
+use crate::todo_view::RECENT_COMPLETION_TTL;
 use crate::todo_view::{TodoStatus, TodoView};
 use ratatui::{
     style::{Color, Modifier, Style},
@@ -70,7 +71,7 @@ fn visible_collapsed<'a>(
         t.status == TodoStatus::Completed
             && completion_at
                 .get(&t.content)
-                .is_some_and(|ts| now.duration_since(*ts) < crate::todo_view::RECENT_COMPLETION_TTL)
+                .is_some_and(|ts| now.duration_since(*ts) < RECENT_COMPLETION_TTL)
     });
     for done in recent_done {
         if visible.len() >= max {

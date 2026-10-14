@@ -8,6 +8,7 @@
 
 use crate::view::line_wrap::wrap_styled_line;
 use pulldown_cmark::Alignment;
+use pulldown_cmark::CodeBlockKind;
 use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -188,9 +189,7 @@ pub fn render_agent_text(
                     // unknown language falls back to plain code (the
                     // soft-blue path).
                     let lang = match kind {
-                        pulldown_cmark::CodeBlockKind::Fenced(ref s) => {
-                            s.split(' ').next().unwrap_or("").trim()
-                        }
+                        CodeBlockKind::Fenced(ref s) => s.split(' ').next().unwrap_or("").trim(),
                         _ => "",
                     };
                     code_highlighter = make_code_highlighter(lang);

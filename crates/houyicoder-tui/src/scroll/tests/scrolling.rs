@@ -18,6 +18,7 @@ use crate::records::{ToolOutcome, TranscriptLine};
 use crate::state::{App, Screen, ViewportMode};
 use crate::test_harness::{render_buffer, render_text};
 use crate::transcript::TranscriptFrame;
+use ratatui::buffer::Buffer;
 
 fn working() -> App {
     let mut app = composition::app();
@@ -38,7 +39,7 @@ fn agent_row(app: &mut App, text: &str) {
     app.rebuild_transcript();
 }
 
-fn render(app: &crate::state::App) -> String {
+fn render(app: &App) -> String {
     render_text(app, 100, 28)
 }
 
@@ -200,7 +201,7 @@ fn test_subagent_expand_pins() {
 fn test_focus_lost_hides_caret() {
     let mut app = working();
     app.ui.input.editor.set("abc".to_string());
-    let has_white = |buf: &ratatui::buffer::Buffer| {
+    let has_white = |buf: &Buffer| {
         (0..buf.area().height).any(|y| {
             (0..buf.area().width)
                 .any(|x| buf.cell((x, y)).unwrap().style().bg == Some(Color::White))

@@ -16,6 +16,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use houyicoder_protocol::frontend::run::ApprovalDecision;
 
 use crate::state::App;
+use serde_json::Value;
 
 /// Dispatch a key for the AskUserQuestion card.
 pub(super) fn handle_ask_question(app: &mut App, k: KeyEvent) {
@@ -252,7 +253,7 @@ fn cancel_ask_question(app: &mut App) {
     };
     let call_id = aq.call_id.clone();
     let mut input = aq.original_input.clone();
-    if let serde_json::Value::Object(ref mut obj) = input {
+    if let Value::Object(ref mut obj) = input {
         obj.insert("declined".into(), serde_json::json!(true));
     }
     if app.sessions.current.connection.is_some() {

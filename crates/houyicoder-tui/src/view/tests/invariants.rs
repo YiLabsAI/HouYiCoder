@@ -15,6 +15,7 @@ use crate::evidence::Verdict;
 use crate::keys;
 use crate::markdown::render_agent_text;
 use crate::records::{ToolOutcome, TranscriptLine};
+use crate::state::App;
 use crate::state::{Pane, Screen, Stage, ViewportMode};
 use crate::test_harness::dump_buffer;
 use crate::test_harness::render_buffer;
@@ -22,7 +23,7 @@ use crate::test_harness::render_text;
 use houyicoder_core::agent::unified_diff;
 use ratatui::style::Color;
 
-fn working() -> crate::state::App {
+fn working() -> App {
     let mut app = composition::app();
     app.ui.navigation.screen = Screen::Working;
     app

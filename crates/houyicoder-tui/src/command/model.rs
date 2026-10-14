@@ -6,6 +6,7 @@
 //! every operation spanning both is one method here: the read of the facts
 //! and the write of the draft cannot drift apart at separate call sites.
 
+use crate::model_receipt::receipt_line;
 use crate::run_control::ClientCommand;
 use crate::session::ConnectionStatus;
 use crate::session::capabilities::model::PendingCommit;
@@ -175,8 +176,7 @@ impl App {
             result.applied.speed
         };
         let fast_available = cap.capabilities_for(&result.applied.id).fast.is_available();
-        let receipt =
-            crate::model_receipt::receipt_line(&result, &label, prior_speed, fast_available);
+        let receipt = receipt_line(&result, &label, prior_speed, fast_available);
         if settles {
             self.sessions.current.capabilities.model.pending = None;
             self.ui.navigation.pane = Pane::Transcript;

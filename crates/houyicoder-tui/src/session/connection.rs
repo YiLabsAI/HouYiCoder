@@ -2,6 +2,8 @@
 //! SessionConnection owns the channels and driver task; App owns transcript
 //! state.
 
+#[cfg(test)]
+use crate::composition::shared_runtime;
 use std::cell::Cell;
 use std::fmt;
 use std::sync::mpsc;
@@ -22,6 +24,8 @@ pub(crate) use driver::{
     cancel_child_turn_notification, drive_client, inject_child_notification, inject_notification,
     kill_all_notification, kill_child_notification, queue_remove_notification,
 };
+use tokio::runtime::Runtime;
+use tokio::task::JoinHandle;
 
 /// The connection's request-identifier sequence is exhausted. Returned once
 /// the counter reaches u64::MAX and refused from then on: the counter does
@@ -102,7 +106,7 @@ pub struct SessionConnection {
     next_req_id: Cell<u64>,
     exhaustion_reported: Cell<bool>,
     status: ConnectionStatus,
-    driver: tokio::task::JoinHandle<()>,
+    driver: JoinHandle<()>,
 }
 
 impl Drop for SessionConnection {
@@ -121,7 +125,7 @@ impl SessionConnection {
         client: houyicoder_client::Client,
         agent_tx: mpsc::Sender<SessionMessage>,
         agent_rx: mpsc::Receiver<SessionMessage>,
-        runtime: &tokio::runtime::Runtime,
+        runtime: &Runtime,
     ) -> Self {
         let (cmd_tx, cmd_rx) = unbounded_channel::<ClientCommand>();
         let driver = runtime.spawn(driver::drive_client(client, cmd_rx, agent_tx));
@@ -142,8 +146,7 @@ impl SessionConnection {
     #[cfg(test)]
     pub(crate) fn from_receiver(agent_rx: mpsc::Receiver<SessionMessage>) -> Self {
         let (cmd_tx, mut cmd_rx) = unbounded_channel::<ClientCommand>();
-        let driver = crate::composition::shared_runtime()
-            .spawn(async move { while cmd_rx.recv().await.is_some() {} });
+        let driver = shared_runtime().spawn(async move { while cmd_rx.recv().await.is_some() {} });
         Self {
             cmd_tx,
             agent_rx,

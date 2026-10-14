@@ -17,6 +17,8 @@ use houyicoder_core::agent::ApprovalDecision;
 use houyicoder_core::agent::AskUserQuestionTool;
 use houyicoder_protocol::envelope::RequestId;
 use serde_json::Value;
+use std::future::Future;
+use tokio::runtime::Runtime;
 
 /// Build a minimal single-select question input.
 pub(crate) fn single_input() -> Value {
@@ -374,9 +376,9 @@ fn test_render_card_separator() {
 /// depends on tokio for its agent-loop runtime).
 fn block_on<F>(fut: F) -> F::Output
 where
-    F: std::future::Future,
+    F: Future,
 {
-    tokio::runtime::Runtime::new().expect("rt").block_on(fut)
+    Runtime::new().expect("rt").block_on(fut)
 }
 
 #[test]

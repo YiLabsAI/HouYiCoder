@@ -20,6 +20,9 @@ use std::sync::{Arc, mpsc};
 use crate::records::TranscriptLine;
 use crate::state::transcript::DiskFront;
 use mpsc::TryRecvError;
+use std::fmt::Debug;
+use std::fmt::Formatter;
+use std::fmt::Result;
 
 /// History reads running at once.
 ///
@@ -132,8 +135,8 @@ pub(crate) struct PendingHistoryRead {
     rx: mpsc::Receiver<HistoryReadOutcome>,
 }
 
-impl std::fmt::Debug for PendingHistoryRead {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Debug for PendingHistoryRead {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         f.debug_struct("PendingHistoryRead")
             .field("epoch", &self.epoch)
             .field("dispatch_front", &self.dispatch_front)

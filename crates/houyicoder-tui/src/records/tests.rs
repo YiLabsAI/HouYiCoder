@@ -4,6 +4,8 @@
 use crate::records::subagent_line;
 use crate::records::{ToolOutcome, TranscriptLine};
 use crate::toggle_hint::ToggleHint;
+use serde_json::Value;
+use unicode_width::UnicodeWidthStr;
 
 // A non-zero exit is not always an error. grep exits 1 when no matches are
 // found; diff exits 1 when files differ. Both are the command succeeding at
@@ -99,7 +101,7 @@ fn test_error_key_still_error() {
     // semantic-success rule only applies to bash).
     let out = serde_json::json!({"error": "permission denied"});
     assert_eq!(
-        ToolOutcome::from_output_with(&out, "read", &serde_json::Value::Null),
+        ToolOutcome::from_output_with(&out, "read", &Value::Null),
         ToolOutcome::Error
     );
 }
@@ -238,7 +240,7 @@ fn test_tool_chip_ellipsis() {
         "closing delimiter missing: {:?}",
         rows
     );
-    assert!(unicode_width::UnicodeWidthStr::width(rows[0].as_str()) <= 24);
+    assert!(UnicodeWidthStr::width(rows[0].as_str()) <= 24);
 }
 
 #[test]

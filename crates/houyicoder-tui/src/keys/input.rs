@@ -19,6 +19,7 @@ use super::pane_predicates::{
 };
 use super::trajectory;
 use super::worktree_pane;
+use crate::history::current_project;
 
 /// Lines moved per PageUp/PageDown in the artifact pane. Fixed rather than
 /// view-height-aware to keep the page handler out of the render loop.
@@ -455,7 +456,7 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
                 .move_up(app.ui.frame.feedback.terminal_cols.get())
                 && !editing
             {
-                let project = crate::history::current_project();
+                let project = current_project();
                 let session_key = app.sessions.current.identity.session_id.to_string();
                 app.ui
                     .input

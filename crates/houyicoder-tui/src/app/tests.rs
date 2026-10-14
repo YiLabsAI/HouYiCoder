@@ -1,8 +1,11 @@
 //! The app module's own tests. A child of app, so use super::* reaches the
 //! private items the inline test module reached before.
 use super::*;
+use crate::agent_message::FleetEntry;
 use crate::agent_message::{ConnectionEvent, SessionMessage};
 use crate::composition::app;
+use crate::composition::shared_runtime;
+use crate::keys::handle_working;
 use crate::records::TranscriptLine;
 use crate::session::{ConnectionStatus, EnqueueError, PollOutcome, SessionConnection};
 use crate::state::{Pane, Screen, Stage, ViewportMode};
@@ -12,10 +15,12 @@ use crate::test_harness::{
 };
 use crate::todo_view::{TodoStatus, TodoView};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use houyicoder_client::Client;
 use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::frontend::memory::MemoryToggleWhich;
 use houyicoder_protocol::frontend::{FrontendRequest, LoginMode, SessionId, SlashCommand};
 use std::sync::mpsc::channel;
+use std::thread::sleep;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -51,7 +56,7 @@ fn last_system(app: &App) -> &str {
 #[test]
 fn test_status_bar_click_drags() {
     let mut app = working_app();
-    drop(crate::test_harness::render_text(&app, 80, 24));
+    drop(render_text(&app, 80, 24));
     let srect = app.ui.frame.layout.status_rect.get();
     assert!(srect.height > 0, "status rect published by the draw pass");
     let rows = app.ui.frame.layout.last_status_rows.borrow();
@@ -360,7 +365,7 @@ fn test_ctrl_d_twice_quits() {
 #[test]
 fn test_q_empty_no_quit() {
     let mut app = working_app();
-    crate::keys::handle_working(&mut app, key(KeyCode::Char('q')));
+    handle_working(&mut app, key(KeyCode::Char('q')));
     assert!(!app.ui.quit, "q with empty input must not quit (it types)");
     assert_eq!(app.ui.input.editor.value(), "q");
 }
@@ -490,7 +495,7 @@ fn running_fleet_app() -> App {
         .capabilities
         .fleet
         .entries
-        .push(crate::agent_message::FleetEntry {
+        .push(FleetEntry {
             agent_id: "c1".into(),
             subagent_type: "explore".into(),
             turn: 1,
@@ -1004,8 +1009,8 @@ fn test_poll_closed_distinct() {
 #[test]
 fn test_closed_settles_loss() {
     let mut app = {
-        let runtime = crate::composition::shared_runtime();
-        let client = houyicoder_client::Client::new(Box::new(FailedHandshakeTransport));
+        let runtime = shared_runtime();
+        let client = Client::new(Box::new(FailedHandshakeTransport));
         let (agent_tx, agent_rx) = channel();
         let session = SessionConnection::spawn(client, agent_tx, agent_rx, &runtime);
         let mut a = working_app();
@@ -1042,7 +1047,7 @@ fn test_closed_settles_loss() {
             first_changed = true;
             break;
         }
-        std::thread::sleep(Duration::from_millis(1));
+        sleep(Duration::from_millis(1));
     }
     assert!(
         first_changed,

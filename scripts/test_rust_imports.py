@@ -97,8 +97,12 @@ def test_module_type_variant_repeated_is_caught():
     assert repeated_deep_paths(MOD_TYPE_VARIANT_TWICE) == {"mpsc::TryRecvError": 2}
 
 
-def test_a_path_used_once_is_allowed():
-    assert repeated_deep_paths(PATH_ONCE) == {}
+def test_a_deep_path_used_once_is_a_finding():
+    assert repeated_deep_paths(PATH_ONCE) == {"crate::state::Screen": 1}
+
+
+def test_a_name_the_file_defines_is_left_qualified():
+    assert repeated_deep_paths(PATH_ONCE + "fn Screen() {}\n") == {}
 
 
 def test_a_four_segment_deep_path_is_caught_even_once():

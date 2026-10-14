@@ -8,7 +8,7 @@ use crate::test_harness::{render_text, working_app};
 /// requests the hook list when a runner is connected.
 #[test]
 fn test_hooks_opens_pane_connected() {
-    let mut app = crate::composition::build_app_for_test(None);
+    let mut app = build_app_for_test(None);
     app.run_command(SlashCommand::Hooks);
     assert_eq!(app.ui.navigation.pane, Pane::Hooks, "/hooks opens the pane");
 }
@@ -127,6 +127,7 @@ fn test_hooks_pane_list_detail() {
 }
 
 use crate::agent_message::{ServerResponse, SessionMessage};
+use crate::composition::build_app_for_test;
 use crate::keys::handle_working;
 use crate::state::Pane;
 /// /hooks pane navigation keys: level-0 Esc exits to the transcript, Up/Down

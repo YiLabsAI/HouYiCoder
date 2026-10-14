@@ -1,12 +1,15 @@
 use super::super::*;
 use crate::agent_message::ConnectionEvent;
 use crate::fold::DisplaySlot;
+use crate::fold::display_slots;
 use crate::input::queue::InputItem;
 use crate::input::queue::resume_command_target;
 use crate::pending_prompt::PendingPrompt;
+use crate::records::Approval;
 use crate::records::ToolOutcome;
 use crate::records::TranscriptLine;
 use crate::row_id::RowId;
+use crate::state::Pane;
 use crate::state::history_read::HistoryReadOutcome;
 use crate::state::transcript::DiskFront;
 use crate::todo_view::{TodoStatus, TodoView};
@@ -20,7 +23,9 @@ use houyicoder_service::composition::BuildRunnerOptions;
 use houyicoder_service::composition::build_runner;
 use std::env::temp_dir;
 use std::sync::atomic::Ordering;
+use std::thread::sleep;
 use std::time::Duration;
+use tokio::task::JoinHandle;
 
 /// The resolved target carried by a queued /resume Command at the head.
 fn queued_target(app: &App) -> Option<String> {
@@ -82,7 +87,7 @@ fn test_app() -> App {
 
 /// Like test_bundle but returns the server task's JoinHandle so a test can
 /// assert the serve loop exited after the session is torn down.
-fn test_bundle_tracked() -> ((RunnerBundle, FrontendStartup), tokio::task::JoinHandle<()>) {
+fn test_bundle_tracked() -> ((RunnerBundle, FrontendStartup), JoinHandle<()>) {
     let bundle = build_runner(BuildRunnerOptions::default());
     let runner = bundle.runner;
     let session = bundle.session;
@@ -182,11 +187,7 @@ fn test_switch_session_resets_view() {
     );
     assert!(!app.agent_busy(), "agent_busy cleared");
     assert!(app.whole_scroll().is_following_tail(), "scroll reset");
-    assert_eq!(
-        app.ui.navigation.pane,
-        crate::state::Pane::Transcript,
-        "pane reset"
-    );
+    assert_eq!(app.ui.navigation.pane, Pane::Transcript, "pane reset");
 }
 
 /// A pending history read was dispatched against the old session's log. The
@@ -513,7 +514,7 @@ fn test_clears_session_local_state() {
     app.ui.displayed_tokens.set(50);
     app.sessions.current.prompt = Some(PendingPrompt::approval_card(
         RequestId(0),
-        crate::records::Approval::default(),
+        Approval::default(),
     ));
     app.ui.selection.transcript.anchor = Some((0, 5));
     app.ui.selection.transcript.is_dragging = true;
@@ -630,7 +631,7 @@ fn test_tears_down_old_server() {
     // The teardown chain is async on the shared runtime; poll for completion.
     let mut tries = 0;
     while !old_serve.is_finished() && tries < 200 {
-        std::thread::sleep(Duration::from_millis(10));
+        sleep(Duration::from_millis(10));
         tries += 1;
     }
     assert!(
@@ -790,7 +791,7 @@ fn folded_transcript() -> Vec<TranscriptLine> {
 /// renders a summary header plus its lines; a collapsed one renders the
 /// summary alone.
 fn group_body_visible(app: &App) -> bool {
-    crate::fold::display_slots(
+    display_slots(
         app.sessions.current.transcript.lines(),
         app.sessions.current.transcript.fold_groups(),
         &app.ui.transcript_view.expanded.fold_groups,

@@ -18,12 +18,15 @@ use ratatui::{
 use unicode_width::UnicodeWidthStr;
 
 use crate::evidence::MemoryEntry;
+use crate::list_pane_state::search_hint_line;
 use crate::memory_state::{MemoryDetailState, MemoryPaneState, toggle_label};
 use crate::session::capabilities::MemoryCapability;
 use crate::state::App;
 use crate::state::enums::MemoryScopeTab;
 use crate::view::line_wrap::{max_scroll_offset, truncate_width, wrap_styled_line};
 use crate::view::navigation::{key_hint, tab_header};
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 /// Render the memory list or the selected memory detail.
 pub(super) fn draw_content(f: &mut Frame, area: Rect, app: &App) {
@@ -186,7 +189,7 @@ fn memory_header(app: &App, tab: MemoryScopeTab, n: usize) -> Vec<Line<'static>>
         lines.push(
             Line::from(format!(
                 "  {}",
-                crate::list_pane_state::search_hint_line(app.ui.memory.search_query())
+                search_hint_line(app.ui.memory.search_query())
             ))
             .style(Style::new().fg(Color::DarkGray)),
         );
@@ -282,8 +285,8 @@ fn age_label(mtime_secs: u64) -> String {
     if mtime_secs == 0 {
         return "unknown".to_string();
     }
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs())
         .unwrap_or(mtime_secs);
     let age = now.saturating_sub(mtime_secs);

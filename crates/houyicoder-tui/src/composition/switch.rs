@@ -7,6 +7,7 @@
 use super::*;
 
 use crate::input::queue::resume_command_target;
+use std::mem::take;
 
 impl App {
     /// Try to consume a queued /resume Command at the head and swap the
@@ -110,7 +111,7 @@ impl App {
         let dropped = self.ui.input.queue.transfer_across_sessions();
         let leaving = self.sessions.current.identity.session_id.clone();
         let open_keys = self.take_expanded_keys();
-        let mut parked = std::mem::take(&mut self.ui.parked_view_states);
+        let mut parked = take(&mut self.ui.parked_view_states);
         // Deconstruct the bundle: the session-construction half (client,
         // channels, id) builds the new Session; the host resources
         // (trajectory, export, snapshot, catalog) are applied to Sessions.

@@ -17,6 +17,7 @@ use std::fs;
 use std::{fmt, io};
 
 use houyicoder_protocol::frontend::Verdict;
+use std::error::Error;
 
 /// Errors raised by the artifact domain. Hand-rolled (no thiserror dep) to
 /// match the workspace per-crate error convention.
@@ -37,7 +38,7 @@ impl fmt::Display for TuiError {
     }
 }
 
-impl std::error::Error for TuiError {}
+impl Error for TuiError {}
 
 impl From<io::Error> for TuiError {
     fn from(_: io::Error) -> Self {

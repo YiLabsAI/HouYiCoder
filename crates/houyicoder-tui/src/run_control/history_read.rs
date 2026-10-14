@@ -11,13 +11,14 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::records::TranscriptLine;
+use crate::scroll::WINDOW_MAX_BYTES;
 use crate::state::history_read::{HistoryReadOutcome, HistoryReadResult};
 use crate::transcript::snapshot::TranscriptSnapshot;
 use std::sync::mpsc::Sender;
 
 /// Byte budget of one older-row read from the session log, and of each window
 /// the first read walks back through.
-const LOG_WINDOW_BYTES: u64 = crate::scroll::WINDOW_MAX_BYTES;
+const LOG_WINDOW_BYTES: u64 = WINDOW_MAX_BYTES;
 /// How much log the first read walks back through before it gives up. The row
 /// the visible transcript starts at sits behind the resident window, and the
 /// log bytes that row sits behind are at least the bytes the resident rows

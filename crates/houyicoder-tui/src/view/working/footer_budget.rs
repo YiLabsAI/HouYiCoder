@@ -4,6 +4,8 @@
 //! against one strip at a time while their sum could still starve the
 //! conversation. Allocation happens once, for all of them, in priority order.
 
+use std::cmp::max;
+
 /// Rows granted to each pinned strip. A strip given one row renders its
 /// one-line summary; zero means it is not drawn at all.
 #[derive(Debug, PartialEq, Eq)]
@@ -15,7 +17,7 @@ pub(super) struct FooterRows {
 /// Rows the transcript keeps whatever the footer wants: ten rows, or half the
 /// window on anything taller than twenty.
 fn transcript_floor(total_h: u16) -> u16 {
-    std::cmp::max(10, total_h / 2)
+    max(10, total_h / 2)
 }
 
 /// Split the rows left over from the input box and the status bar between the

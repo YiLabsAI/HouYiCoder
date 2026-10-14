@@ -8,6 +8,9 @@ use houyicoder_protocol::frontend::{PendingInputId, QueuedInput};
 
 use crate::run_control::ClientCommand;
 use crate::state::App;
+use houyicoder_protocol::frontend::SlashCommand;
+use std::mem::take;
+use std::slice::Iter;
 
 /// One item awaiting commitment or local command execution.
 #[derive(Debug, Clone)]
@@ -173,7 +176,7 @@ impl InputQueue {
         }
     }
 
-    pub(crate) fn iter(&self) -> std::slice::Iter<'_, InputItem> {
+    pub(crate) fn iter(&self) -> Iter<'_, InputItem> {
         self.items.iter()
     }
 
@@ -198,7 +201,7 @@ impl InputQueue {
     /// to the start.
     pub(crate) fn take_all(&mut self) -> Vec<InputItem> {
         self.cursor = 0;
-        std::mem::take(&mut self.items)
+        take(&mut self.items)
     }
 
     /// Replace the queue contents, clamping the cursor to the new length so a
@@ -381,7 +384,7 @@ impl App {
         if self.run_tui_local_command(stripped.trim()) {
             return true;
         }
-        if let Some(cmd) = houyicoder_protocol::frontend::SlashCommand::parse(text) {
+        if let Some(cmd) = SlashCommand::parse(text) {
             self.run_command(cmd);
             return true;
         }

@@ -4,6 +4,8 @@ use crate::keys::handle_ctrl_o;
 use crate::records::TranscriptLine;
 use crate::state::Screen;
 use crate::test_harness::render_text;
+use crate::todo_view::TodoStatus;
+use crate::todo_view::TodoView;
 
 /// A Subagent delegation line renders inline in the parent flow (no context
 /// switch): collapsed shows the subagent type + summary + an expand hint.
@@ -308,15 +310,11 @@ fn test_ctrl_o_fallthrough() {
 fn test_ctrl_o_todo_expand() {
     let mut app = app();
     app.ui.navigation.screen = Screen::Working;
-    app.sessions
-        .current
-        .todos
-        .items
-        .push(crate::todo_view::TodoView {
-            content: "do the thing".into(),
-            status: crate::todo_view::TodoStatus::Pending,
-            active_form: None,
-        });
+    app.sessions.current.todos.items.push(TodoView {
+        content: "do the thing".into(),
+        status: TodoStatus::Pending,
+        active_form: None,
+    });
     assert!(!app.sessions.current.todos.expanded);
     handle_ctrl_o(&mut app);
     assert!(

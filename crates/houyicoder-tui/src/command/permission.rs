@@ -5,6 +5,8 @@
 
 use houyicoder_protocol::frontend::permission::PermissionMode;
 
+use super::render::permission_effect_label;
+use super::render::render_permission_view;
 use crate::permission_input::{add_rule_from_command, remove_rule_at};
 use crate::run_control::ClientCommand;
 use crate::state::{App, Pane};
@@ -49,7 +51,7 @@ impl App {
             s.push_str(&format!(
                 "\n  [{i}] {} {}",
                 r.action,
-                super::render::permission_effect_label(r.effect)
+                permission_effect_label(r.effect)
             ));
         }
         self.system_line(s);
@@ -64,7 +66,7 @@ impl App {
             .capabilities
             .permission
             .ask_before_git_enabled;
-        self.system_line(super::render::render_permission_view(
+        self.system_line(render_permission_view(
             mode,
             &self.sessions.current.capabilities.permission.rules_cache,
             &self

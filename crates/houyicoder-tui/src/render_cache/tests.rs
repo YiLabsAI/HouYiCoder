@@ -1,4 +1,5 @@
 use super::RenderCache;
+use crate::markdown::render_agent_text;
 use crate::view::markers::result_body_rows;
 
 /// The cache is transparent: a cached agent render matches the direct
@@ -9,8 +10,7 @@ fn test_agent_cache_round_trips() {
     let width = 12;
     let mut cache = RenderCache::default();
     let (cached_lines, cached_plain) = cache.agent_rows(text, width);
-    let (direct_lines, direct_plain) =
-        crate::markdown::render_agent_text("●", text, width as usize);
+    let (direct_lines, direct_plain) = render_agent_text("●", text, width as usize);
     assert_eq!(cached_lines.len(), direct_lines.len());
     assert_eq!(cached_plain, direct_plain);
     assert_eq!(cache.agent_row_count(text, width), cached_lines.len());

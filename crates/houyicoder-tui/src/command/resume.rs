@@ -3,6 +3,7 @@
 
 use crate::input::queue::InputItem;
 use crate::state::{App, Pane};
+use std::path::Path;
 
 impl App {
     /// /resume [arg]: with no arg, open the session picker. With an arg:
@@ -96,7 +97,7 @@ impl App {
 /// paths (./x.json) and absolute paths (/tmp/x.json) both work as long as
 /// the file exists.
 fn is_export_file_path(arg: &str) -> bool {
-    let p = std::path::Path::new(arg);
+    let p = Path::new(arg);
     p.is_file() && arg.ends_with(".json")
 }
 

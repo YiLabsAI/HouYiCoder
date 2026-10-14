@@ -6,6 +6,7 @@
 use serde_json::Value;
 
 use crate::brief::{edit_diff_summary, result_summary, value_brief};
+use houyicoder_protocol::tool::simple_command_word;
 
 /// Build the Write tool result body: the "Wrote N lines to {path}" chip
 /// followed by the full written content. The content is pulled from the
@@ -221,7 +222,7 @@ pub(crate) fn command_is_silent_success(call_input: Option<&Value>, output: &Val
     let Some(command) = input.get("command").and_then(|c| c.as_str()) else {
         return false;
     };
-    let Some(word) = houyicoder_protocol::tool::simple_command_word(command) else {
+    let Some(word) = simple_command_word(command) else {
         return false;
     };
     SILENT_SUCCESS_COMMANDS.contains(&word)

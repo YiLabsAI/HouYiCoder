@@ -3,12 +3,14 @@
 #![cfg(test)]
 
 use crate::composition;
+use crate::state::App;
 use crate::state::Screen;
 use crate::state::enums::LiveBlock;
+use crate::test_harness::render_buffer;
 use crate::test_harness::render_text;
 use ratatui::style::Color;
 
-fn working() -> crate::state::App {
+fn working() -> App {
     let mut app = composition::app();
     app.ui.navigation.screen = Screen::Working;
     app
@@ -81,7 +83,7 @@ fn test_busy_border_stays_plain() {
             app.start_run_for_test(0);
         }
 
-        let buf = crate::test_harness::render_buffer(&app, 80, 16);
+        let buf = render_buffer(&app, 80, 16);
         for y in 0..16 {
             for x in 0..80 {
                 let cell = buf.cell((x, y)).expect("cell");

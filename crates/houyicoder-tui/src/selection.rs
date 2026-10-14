@@ -10,7 +10,12 @@ use std::time::Instant;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use ratatui::layout::Rect;
 use std::env::var_os;
+use std::io::Error;
 use std::io::Result;
+use std::io::stdout;
+#[cfg(test)]
+use std::sync::{Arc, Mutex};
+use std::thread::spawn;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
@@ -459,7 +464,7 @@ impl ClipboardWriter for SystemClipboard {
 /// Test-only clipboard that records every write so adversarial selection
 /// tests can assert the exact copied text without touching the OS clipboard.
 pub struct RecordingClipboard {
-    pub captured: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    pub captured: Arc<Mutex<Vec<String>>>,
 }
 #[cfg(test)]
 impl ClipboardWriter for RecordingClipboard {
@@ -485,7 +490,7 @@ pub fn write_clipboard(text: &str) {
     // clipboard, not the local one.
     if var_os("SSH_CONNECTION").is_none() {
         let owned = text.to_string();
-        std::thread::spawn(move || copy_native(&owned));
+        spawn(move || copy_native(&owned));
     }
     // tmux fast path: load-buffer reaches the outer terminal via the
     // multiplexer own clipboard bridge (-w, dropped for iTerm2). On
@@ -606,14 +611,14 @@ fn run_native(bin: &str, args: &[&str], text: &str) -> Result<()> {
     if status.success() {
         Ok(())
     } else {
-        Err(std::io::Error::other("non-zero exit"))
+        Err(Error::other("non-zero exit"))
     }
 }
 
 /// Write a byte sequence to stdout (locked, flushed). OSC 52 is a
 /// fire-and-forget emit; a write failure is silent.
 fn emit_raw(seq: &str) -> Result<()> {
-    let mut out = std::io::stdout().lock();
+    let mut out = stdout().lock();
     out.write_all(seq.as_bytes())?;
     out.flush()
 }

@@ -4,10 +4,11 @@
 
 use crate::composition;
 use crate::records::TranscriptLine;
+use crate::state::App;
 use crate::state::Screen;
 use std::time::{Duration, Instant};
 
-fn working() -> crate::state::App {
+fn working() -> App {
     let mut app = composition::app();
     app.ui.navigation.screen = Screen::Working;
     app

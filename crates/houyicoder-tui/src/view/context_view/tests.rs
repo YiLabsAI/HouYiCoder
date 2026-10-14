@@ -2,15 +2,18 @@
 
 use super::*;
 use crate::composition;
+use crate::composition::suggestions_for;
 use crate::records::ContextDrillDown;
 use crate::records::TranscriptLine;
 use crate::records::{ContextFileEntry, ContextSkillEntry, ContextView};
+use crate::selection::is_non_selectable;
 use crate::state::App;
 use crate::state::Screen;
 use crate::test_harness::render_buffer;
 use houyicoder_protocol::frontend::SlashCommand;
 use houyicoder_protocol::frontend::context::stub_breakdown;
 use houyicoder_protocol::frontend::context::{CategoryBreakdown, ContextBreakdown, GridCell};
+use ratatui::buffer::Buffer;
 
 fn working_app() -> App {
     let mut app = composition::app();
@@ -46,7 +49,7 @@ fn working_app_with_drill() -> App {
     app
 }
 
-fn dump(buf: &ratatui::buffer::Buffer) -> String {
+fn dump(buf: &Buffer) -> String {
     let area = buf.area();
     let mut rows: Vec<String> = Vec::with_capacity(area.height as usize);
     for y in 0..area.height {
@@ -393,7 +396,7 @@ fn full_context_breakdown() -> ContextBreakdown {
 #[test]
 fn test_real_data_renders_suggestions() {
     let bd = full_context_breakdown();
-    let suggestions = crate::composition::suggestions_for(&bd);
+    let suggestions = suggestions_for(&bd);
     assert!(
         !suggestions.is_empty(),
         "suggestions fire on a near-capacity breakdown"
@@ -490,7 +493,7 @@ fn test_grid_variant_pushed_inline() {
         .current
         .transcript
         .iter()
-        .any(|l| matches!(l, crate::records::TranscriptLine::ContextGrid(_)));
+        .any(|l| matches!(l, TranscriptLine::ContextGrid(_)));
     assert!(has_grid, "transcript missing ContextGrid line");
 }
 
@@ -578,8 +581,7 @@ fn test_grid_rows_selectable_plain() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
-        rows.iter()
-            .all(|(t, _)| !crate::selection::is_non_selectable(*t)),
+        rows.iter().all(|(t, _)| !is_non_selectable(*t)),
         "no /context row may be a non-selectable widget row"
     );
     assert!(

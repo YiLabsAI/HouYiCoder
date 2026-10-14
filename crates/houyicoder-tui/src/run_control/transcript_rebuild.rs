@@ -9,9 +9,12 @@ use std::sync::mpsc;
 
 use super::history_read::{OVERLAP_FRONT_ROWS, ReadJob};
 use super::{MAX_REBUILD_FRAMES, PREPEND_BATCH};
+use crate::composition::shared_runtime;
+use crate::fold::last_turn_boundary;
 use crate::fold::{compute_fold_groups, fold_groups_in};
 use crate::records::TranscriptLine;
 use crate::row_id::RowId;
+use crate::scroll::VIEWABLE_SCROLLBACK_CAP;
 use crate::state::App;
 use crate::state::history_read::{HistoryReadOutcome, HistoryReadPoll, PendingHistoryRead};
 use crate::state::transcript::DiskFront;
@@ -25,12 +28,13 @@ use houyicoder_protocol::frontend::permission::PermissionDecisionEntry;
 use houyicoder_protocol::frontend::session_update::SessionUpdate;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::mem::take;
 
 /// Rows the view holds from the session log before it stops reading older
 /// ones: the same bound the viewable transcript keeps. The bound is checked
 /// before a read rather than after, so one read can pass it, and by however
 /// many rows a window of the log byte budget holds, which no row count limits.
-const LOG_ROW_BUDGET: usize = crate::scroll::VIEWABLE_SCROLLBACK_CAP;
+const LOG_ROW_BUDGET: usize = VIEWABLE_SCROLLBACK_CAP;
 
 impl App {
     /// Rebuild the transcript from the frame log. Each turn is one block whose
@@ -245,7 +249,7 @@ impl App {
     fn update_fold_cache(&mut self, prefix_line_count: usize, prefix_reused: bool) {
         let agent_busy = self.agent_busy();
         let groups = if prefix_reused {
-            let mut groups = std::mem::take(self.sessions.current.transcript.fold_groups_mut());
+            let mut groups = take(self.sessions.current.transcript.fold_groups_mut());
             // A group that sits before the current turn boundary is in a
             // completed turn and never active. Count its calls per id first
             // so the tail continues each ordinal instead of reusing a key
@@ -275,7 +279,7 @@ impl App {
     /// stale until the next rebuild. Rare, so the full boundary scan is fine.
     pub(crate) fn refresh_fold_active(&mut self) {
         let agent_busy = self.agent_busy();
-        let threshold = crate::fold::last_turn_boundary(self.sessions.current.transcript.lines());
+        let threshold = last_turn_boundary(self.sessions.current.transcript.lines());
         for g in self.sessions.current.transcript.fold_groups_mut() {
             g.active = agent_busy && g.start >= threshold;
         }
@@ -471,7 +475,7 @@ impl App {
         // stops the worker but cannot take the slot back from it.
         let history_reads = &mut self.sessions.current.history_reads;
         let lease = history_reads.dispatch(dispatch_front, dispatch_disk_front, rx);
-        crate::composition::shared_runtime().spawn_blocking(move || {
+        shared_runtime().spawn_blocking(move || {
             job.run_and_send(tx, lease.stop());
         });
     }

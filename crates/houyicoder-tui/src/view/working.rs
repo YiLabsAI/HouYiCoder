@@ -16,11 +16,15 @@ use ratatui::{
     style::Color,
 };
 
+use super::approval::card_height as approval_card_height;
+use super::teammate_view::draw_banner;
+use crate::keys::pane_replaces_input;
 use crate::selection::TAG_PLAIN;
 use crate::state::{App, Pane, ViewportMode};
 use crate::view::agents_pane::AGENTS_PANE_HEIGHT;
 use crate::view::agents_pane::draw_content;
 use crate::view::pane::render;
+use crate::view::status::pane::{STATUS_PANE_HEIGHT, draw_content as status_draw_content};
 use crate::view::{
     artifact, capability, hooks_pane, input_bar, memory_pane, model_pane, palette, queue_overlay,
     queue_pane, resume_picker, skill_picker, skills_pane, status, toast, trajectory_pane,
@@ -50,7 +54,7 @@ pub fn draw(f: &mut Frame, app: &App) {
 /// Whether the open command pane retracts the input box. /permissions is
 /// excluded — its Add/Remove sub-mode types rule specs into the input box.
 fn pane_hides_input(app: &App) -> bool {
-    crate::keys::pane_replaces_input(app.ui.navigation.pane)
+    pane_replaces_input(app.ui.navigation.pane)
 }
 
 /// Whether the open command pane retracts the status bar. Broader than
@@ -100,7 +104,7 @@ fn draw_working(f: &mut Frame, app: &App) {
         .constraints(layout.constraints)
         .split(f.area());
     if let Some(i) = layout.slots.banner {
-        super::teammate_view::draw_banner(f, app, outer[i]);
+        draw_banner(f, app, outer[i]);
     }
     draw_main(f, outer[layout.transcript_idx], app);
     if !pane_hides_input {
@@ -222,7 +226,7 @@ fn build_working_layout(
     let transcript_idx = constraints.len() - 1;
     let approval_h = app
         .approval()
-        .map(|approval| super::approval::card_height(approval, width))
+        .map(|approval| approval_card_height(approval, width))
         .unwrap_or(0);
     let ask_h = if let Some(aq) = app.ask_question() {
         aq.card_height()
@@ -649,13 +653,7 @@ const TRAJECTORY_PANE_HEIGHT: u16 = 20;
 /// A live pane (not a transcript dump): Esc dismisses, and the field set
 /// stays visible while the cache refreshes.
 fn draw_status_pane(f: &mut Frame, area: Rect, app: &App) {
-    draw_command_pane(
-        f,
-        area,
-        app,
-        status::pane::STATUS_PANE_HEIGHT,
-        status::pane::draw_content,
-    );
+    draw_command_pane(f, area, app, STATUS_PANE_HEIGHT, status_draw_content);
 }
 
 /// Render the /resume picker pane: transcript tail above, the filtered

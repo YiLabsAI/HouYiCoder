@@ -18,6 +18,7 @@ use crate::records::Approval;
 use super::line_wrap::wrap_line;
 use crate::state::App;
 use houyicoder_protocol::frontend::permission::AskSource;
+use std::rc::Rc;
 
 /// Render the approval prompt inline at the transcript tail. A thin
 /// horizontal rule at the top replaces the heavy double border; the card
@@ -103,12 +104,7 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
 /// third option slot entirely; a three-option card keeps it. No fixed gap
 /// rows — widgets carry their own visual separation. Reason is Min(1) so
 /// it grows only when a containment note is present.
-fn split_card(
-    area: Rect,
-    two_option: bool,
-    args_height: u16,
-    reason_height: u16,
-) -> std::rc::Rc<[Rect]> {
+fn split_card(area: Rect, two_option: bool, args_height: u16, reason_height: u16) -> Rc<[Rect]> {
     let constraints = if two_option {
         vec![
             Constraint::Length(1),

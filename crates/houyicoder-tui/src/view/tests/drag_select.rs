@@ -7,6 +7,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent,
 use ratatui::style::Color;
 use std::sync::{Arc, Mutex};
 
+use crate::app::handle_key;
 use crate::app::handle_mouse;
 use crate::composition;
 use crate::pending_prompt::PendingPrompt;
@@ -70,10 +71,8 @@ fn mouse(kind: MouseEventKind, column: u16, row: u16) -> MouseEvent {
 fn test_redrag_stays_char_mode() {
     let mut app = composition::app();
     app.ui.navigation.screen = Screen::Working;
-    app.sessions.current.transcript = vec![crate::records::TranscriptLine::Agent(
-        "alpha bravo charlie".into(),
-    )]
-    .into();
+    app.sessions.current.transcript =
+        vec![TranscriptLine::Agent("alpha bravo charlie".into())].into();
     let captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     app.ui.clipboard = Arc::new(RecordingClipboard {
         captured: captured.clone(),
@@ -234,7 +233,7 @@ fn test_copy_tracks_shifted_content() {
     app.system_line("fresh tail line A");
     app.system_line("fresh tail line B");
     let _out = render_text(&app, 80, 24);
-    crate::app::handle_key(
+    handle_key(
         &mut app,
         KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
     );

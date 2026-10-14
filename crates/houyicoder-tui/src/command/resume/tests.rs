@@ -2,11 +2,19 @@ use super::*;
 use crate::composition::app;
 use crate::input::queue::InputItem;
 use crate::input::queue::resume_command_target;
+use crate::records::TranscriptLine;
 use crate::resume_picker::SessionCatalog;
 use crate::resume_picker::SessionRow;
+use crate::state::Pane;
 use crate::state::Screen;
 use crate::test_harness::connected_app;
+use std::env::temp_dir;
+use std::fs::create_dir_all;
+use std::fs::remove_dir_all;
+use std::fs::write;
 use std::sync::Arc;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 /// The resolved target carried by a queued /resume Command at the head.
 fn queued_target(app: &App) -> Option<String> {
@@ -26,7 +34,7 @@ fn last_line(app: &App) -> Option<String> {
         .iter()
         .rev()
         .find_map(|l| match l {
-            crate::records::TranscriptLine::System(s) => Some(s.clone()),
+            TranscriptLine::System(s) => Some(s.clone()),
             _ => None,
         })
 }
@@ -111,7 +119,7 @@ fn test_opens_pane_with_rows() {
     app.run_resume(None);
     assert!(app.ui.navigation.resume_picker.open);
     assert_eq!(app.ui.navigation.resume_picker.rows.len(), 2);
-    assert_eq!(app.ui.navigation.pane, crate::state::Pane::Resume);
+    assert_eq!(app.ui.navigation.pane, Pane::Resume);
 }
 
 /// /resume with a sid arg matches a row by sid and enqueues the switch.
@@ -201,16 +209,16 @@ fn test_missing_json_not_export() {
 /// session in-process (or hands the target up on loop exit).
 #[test]
 fn test_export_path_enqueues_resume() {
-    let dir = std::env::temp_dir().join(format!(
+    let dir = temp_dir().join(format!(
         "houyi-resume-export-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0)
     ));
-    std::fs::create_dir_all(&dir).expect("temp dir");
+    create_dir_all(&dir).expect("temp dir");
     let path = dir.join("transcript.json");
-    std::fs::write(&path, "[]").expect("write export file");
+    write(&path, "[]").expect("write export file");
     let mut app = connected_app();
     app.sessions.catalog = Some(Arc::new(EmptyCatalog));
     let arg = path.to_str().expect("utf8 path").to_string();
@@ -221,7 +229,7 @@ fn test_export_path_enqueues_resume() {
         "the export path rides a /resume Command at the head"
     );
     assert!(!app.ui.quit, "in-process swap does not quit");
-    drop(std::fs::remove_dir_all(&dir));
+    drop(remove_dir_all(&dir));
 }
 
 /// A catalog of named sessions, so resolve_detail leaves every title as

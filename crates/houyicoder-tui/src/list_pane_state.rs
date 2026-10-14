@@ -4,6 +4,9 @@
 //! per-pane cursor field and the copy-pasted move/clamp logic that was
 //! duplicated across three panes before this extraction.
 
+use std::env::var;
+use std::path::Path;
+
 /// Cursor position + search query for a list pane. The pane filters its
 /// entries against the query, then clamps the cursor to the filtered length
 /// before render. Esc clears the query.
@@ -48,7 +51,7 @@ impl ListPaneState {
 /// root -> ~/wt/, system temp dirs -> <tmp>/. Then if still too long,
 /// left-truncate with the ellipsis.
 pub fn truncate_path(path: &str, max: usize) -> String {
-    let home = std::env::var("HOME").unwrap_or_default();
+    let home = var("HOME").unwrap_or_default();
     truncate_path_with_home(path, max, &home)
 }
 
@@ -76,7 +79,7 @@ pub fn truncate_path_with_home(path: &str, max: usize, home: &str) -> String {
             format!("~{rest}")
         }
     } else if path.starts_with("/private/var/folders/") || path.starts_with("/var/folders/") {
-        let basename = std::path::Path::new(path)
+        let basename = Path::new(path)
             .file_name()
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_else(|| path.to_string());

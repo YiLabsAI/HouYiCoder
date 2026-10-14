@@ -1,5 +1,6 @@
 use super::*;
 use std::env::temp_dir;
+use std::fs::metadata;
 use std::fs::read;
 use std::fs::remove_file;
 use std::os::unix::fs::PermissionsExt;
@@ -15,10 +16,7 @@ fn test_write_round_trips_bytes() {
     assert_eq!(read, payload);
     #[cfg(unix)]
     {
-        let mode = std::fs::metadata(&path)
-            .expect("metadata")
-            .permissions()
-            .mode();
+        let mode = metadata(&path).expect("metadata").permissions().mode();
         assert_eq!(
             mode & 0o777,
             0o600,

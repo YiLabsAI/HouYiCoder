@@ -4,6 +4,7 @@ use crate::records::TranscriptLine;
 use crate::state::Screen;
 use crate::test_harness::render_text;
 use crate::test_harness::{render_buffer, working_app};
+use ratatui::style::Color;
 
 #[test]
 fn test_banner_shows_type() {
@@ -113,7 +114,7 @@ fn test_banner_carries_badge_color() {
     let hit = buf
         .content()
         .iter()
-        .any(|c| c.fg == ratatui::style::Color::Red && c.symbol() == "@");
+        .any(|c| c.fg == Color::Red && c.symbol() == "@");
     assert!(
         hit,
         "the @verify name carries the red badge color, got buffer with no red @ cell"

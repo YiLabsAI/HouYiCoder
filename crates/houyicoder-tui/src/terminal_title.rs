@@ -10,6 +10,7 @@
 use houyicoder_protocol::frontend::status::StatusSnapshot;
 use std::borrow::Cow;
 use std::io::Write;
+use std::io::stdout;
 
 /// The tab title when no session name is set (the bare app name; a clearer
 /// signal than a blank title). Also the restore-on-teardown title.
@@ -64,7 +65,7 @@ pub(crate) fn set_title(title: &str) {
     // ESC ] 0 ; <title> BEL. BEL (0x07) over ST for broader parser support
     // (OSC 52 makes the same call in selection.rs).
     let seq = format!("\x1b]0;{clean}\x07");
-    let mut out = std::io::stdout();
+    let mut out = stdout();
     let _r = out.write_all(seq.as_bytes());
     let _r = out.flush();
 }

@@ -10,6 +10,7 @@ use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use crate::agent_message::FleetEntry;
 use crate::app::handle_mouse;
 use crate::composition::app;
+use crate::keys::handle_ctrl_o;
 use crate::records::TranscriptLine;
 use crate::state::App;
 use crate::state::Screen;
@@ -255,7 +256,7 @@ fn test_ctrl_o_expands_child() {
         !before.contains("CHILDTHINK"),
         "the row starts collapsed:\n{before}"
     );
-    crate::keys::handle_ctrl_o(&mut app);
+    handle_ctrl_o(&mut app);
     assert!(
         app.ui
             .transcript_view

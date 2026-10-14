@@ -16,9 +16,14 @@ use ratatui::{
 };
 
 use crate::resume_picker::SessionRow;
+use crate::resume_picker::format_size;
+use crate::resume_picker::relative_time;
 use crate::state::App;
 use crate::view::line_wrap::truncate_width;
 use crate::view::navigation::key_hint;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
+use unicode_width::UnicodeWidthStr;
 
 /// Maximum rows the list shows before scrolling. Keeps the pane small so it
 /// never covers the whole working surface (the design ~10 visible).
@@ -55,8 +60,8 @@ pub fn draw_content(f: &mut Frame, inner: Rect, app: &App) {
             chunks[1],
         );
     } else {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
         let items: Vec<ListItem> = filtered
@@ -100,11 +105,11 @@ fn format_row(row: &SessionRow, now: u64, width: u16) -> ListItem<'static> {
 }
 
 fn format_line(row: &SessionRow, now: u64, width: u16) -> Line<'static> {
-    let time = crate::resume_picker::relative_time(row.last_active, now);
-    let size = crate::resume_picker::format_size(row.log_size);
+    let time = relative_time(row.last_active, now);
+    let size = format_size(row.log_size);
     let budget = title_budget(width);
     let title = truncate_width(&row.title, budget);
-    let pad = budget.saturating_sub(unicode_width::UnicodeWidthStr::width(title.as_str()));
+    let pad = budget.saturating_sub(UnicodeWidthStr::width(title.as_str()));
     let cwd = truncate_width(&row.cwd_basename, 24);
     Line::from(vec![
         Span::styled(format!("{time:>4}"), Style::new().fg(Color::DarkGray)),

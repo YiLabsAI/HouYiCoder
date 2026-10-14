@@ -18,6 +18,7 @@ use crate::records::TranscriptLine;
 use crate::state::App;
 use crate::state::Screen;
 use crate::test_harness::attach_connection;
+use crate::test_harness::connected_app_events;
 use houyicoder_protocol::frontend::QueuedInput;
 
 fn working() -> App {
@@ -30,7 +31,7 @@ fn working() -> App {
 /// before swapping a parked slot to Message, so a no-session app refuses the
 /// promotion and the slot stays parked.
 fn working_session() -> App {
-    let (app, _events) = crate::test_harness::connected_app_events();
+    let (app, _events) = connected_app_events();
     app
 }
 

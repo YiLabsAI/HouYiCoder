@@ -7,6 +7,8 @@
 use houyicoder_protocol::frontend::SlashCommand;
 
 use crate::composition;
+use crate::state::App;
+use crate::state::Screen;
 use crate::test_harness::render_text;
 use crate::todo_view::{TodoStatus, TodoView};
 use std::time::Duration;
@@ -26,9 +28,9 @@ fn seeded_todos(items: &[(&str, TodoStatus)]) -> Vec<TodoView> {
         .collect()
 }
 
-fn working_app() -> crate::state::App {
+fn working_app() -> App {
     let mut app = composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app
 }
 

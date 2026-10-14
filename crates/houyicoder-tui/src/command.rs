@@ -13,11 +13,15 @@ use houyicoder_protocol::frontend::status::StatusSnapshot;
 
 use crate::artifact::ArtifactSession;
 use crate::composition;
+use crate::history::current_project;
 use crate::input::queue::{InputItem, is_state_changing};
+use crate::paste::PasteStore;
+use crate::permission_input::submit_permission_input;
 use crate::records::{ContextDrillDown, ContextView, TranscriptLine};
 use crate::run_control::ClientCommand;
 use crate::state::{App, Pane, Screen, Stage, pane_for_stage};
 use crate::view::export_log::write_atomic_0600;
+use houyicoder_protocol::llm::Usage;
 use std::path::PathBuf;
 
 mod debug;
@@ -303,7 +307,7 @@ impl App {
             breaker_state: None,
             breaker_reason: None,
             breaker_cool_down_secs: None,
-            cumulative_usage: houyicoder_protocol::llm::Usage::default(),
+            cumulative_usage: Usage::default(),
             last_input_tokens: 0,
             context_window: 0,
             tool_calls: 0,
@@ -459,7 +463,7 @@ impl App {
         if self.ui.navigation.pane == Pane::Permission && self.ui.permission_pane.input.is_active()
         {
             let text = self.ui.input.editor.take();
-            crate::permission_input::submit_permission_input(self, text);
+            submit_permission_input(self, text);
             return;
         }
         // A fresh submission means the user re-engaged the conversation: jump
@@ -516,9 +520,9 @@ impl App {
         // will follow this submission: the frontend raises the row, and the typed
         // task opens the drafting surface it would open with a runner. No reply
         // follows, because there is nothing to reply with.
-        let text = crate::paste::PasteStore::expand(&text, &self.ui.input.pasted);
+        let text = PasteStore::expand(&text, &self.ui.input.pasted);
         if self.sessions.current.connection.is_some() {
-            let project = crate::history::current_project();
+            let project = current_project();
             let session_id = self.sessions.current.identity.session_id.to_string();
             self.ui.input.history.submit(&text, &project, &session_id);
             self.spawn_run(text);

@@ -5,6 +5,8 @@
 use ratatui::layout::Rect;
 
 use crate::rows::row_set::{Row, RowSet};
+use crate::selection::TAG_PLAIN;
+use crate::selection::TAG_SPINNER;
 use crate::state::App;
 use crate::view::spinner::spinner_row_text;
 use crate::view::todo_list::render_rows;
@@ -16,8 +18,8 @@ use crate::view::todo_list::render_rows;
 /// has_slots flag threads whether the cached slots are non-empty so the first
 /// spacer guard works before any live row exists.
 pub(super) fn build_tail_rows(area: Rect, app: &App, has_slots: bool) -> RowSet {
-    const PLAIN: u8 = crate::selection::TAG_PLAIN;
-    const SPINNER: u8 = crate::selection::TAG_SPINNER;
+    const PLAIN: u8 = TAG_PLAIN;
+    const SPINNER: u8 = TAG_SPINNER;
 
     let mut sink = RowSet::default();
     // Each section is preceded by a spacer when anything sits above it,

@@ -1,5 +1,7 @@
 use super::*;
 use crate::command::render::render_trajectory_wire;
+use crate::transcript::TranscriptFrame;
+use crate::transcript::transcript_from_frames;
 use houyicoder_protocol::acpx::{AcpxMethod, AcpxNotification};
 use houyicoder_protocol::frontend::memory::MemoryDetail;
 use houyicoder_protocol::frontend::memory::MemorySummaryEntry;
@@ -140,18 +142,16 @@ fn test_verdict_skipped_on_surface() {
     // onto the interaction surface — transcript_from_frames skips the
     // acpx/context/permissions_decision notification. The user sees
     // verdicts only via /permissions view (which filters the trajectory).
-    let frames = vec![crate::transcript::TranscriptFrame::Acpx(
-        AcpxNotification::new(
-            AcpxMethod::ContextPermissionDecision,
-            serde_json::json!({
-                "call_id": "c1",
-                "tool": "bash",
-                "verdict": "approved",
-                "scope": "once",
-            }),
-        ),
-    )];
-    let lines = crate::transcript::transcript_from_frames(&frames, 0..frames.len(), false);
+    let frames = vec![TranscriptFrame::Acpx(AcpxNotification::new(
+        AcpxMethod::ContextPermissionDecision,
+        serde_json::json!({
+            "call_id": "c1",
+            "tool": "bash",
+            "verdict": "approved",
+            "scope": "once",
+        }),
+    ))];
+    let lines = transcript_from_frames(&frames, 0..frames.len(), false);
     assert!(
         lines.is_empty(),
         "verdict must not appear on the interaction surface"

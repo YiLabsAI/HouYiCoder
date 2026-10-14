@@ -7,15 +7,16 @@ use crate::transcript::TranscriptFrame;
 use houyicoder_protocol::frontend::session_update::SessionUpdate;
 use houyicoder_protocol::frontend::session_update::ToolCallStatus;
 use houyicoder_protocol::frontend::session_update::ToolCallUpdate;
+use serde_json::Value;
 use std::collections::HashMap;
 
 /// A resolved tool update awaiting pairing with its call: the call id, the
 /// outcome the result row colors by, and the raw output the body reads.
-pub(super) type PendingUpdate = (String, Option<ToolOutcome>, Option<serde_json::Value>);
+pub(super) type PendingUpdate = (String, Option<ToolOutcome>, Option<Value>);
 
 /// The title and raw input a ToolCall frame carries, keyed by call id so an
 /// orphan result can still name its tool. First-write is fine for orphans.
-pub(super) type ToolRegistry = HashMap<String, (String, Option<serde_json::Value>)>;
+pub(super) type ToolRegistry = HashMap<String, (String, Option<Value>)>;
 
 /// Resolve each tool call's outcome + output from its matching ToolCallUpdate
 /// (by tool_call_id) so the call chip colors by outcome and the result row
@@ -69,10 +70,7 @@ fn push_update(updates: &mut Vec<PendingUpdate>, tools: &mut ToolRegistry, upd: 
     // 1 is not an error). The tools map is populated by the ToolCall frame,
     // which arrives before its update, so the entry is present here.
     let (tool_name, call_input) = tools.get(&id).cloned().unwrap_or_default();
-    let outcome = ToolOutcome::from_output_with(
-        out,
-        &tool_name,
-        call_input.as_ref().unwrap_or(&serde_json::Value::Null),
-    );
+    let outcome =
+        ToolOutcome::from_output_with(out, &tool_name, call_input.as_ref().unwrap_or(&Value::Null));
     updates.push((id, Some(outcome), Some(out.clone())));
 }

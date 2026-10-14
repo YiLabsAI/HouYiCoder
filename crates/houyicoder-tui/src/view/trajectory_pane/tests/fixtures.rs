@@ -5,6 +5,7 @@
 //! answered here once instead of in every test that builds one.
 
 use super::super::*;
+use crate::state::App;
 
 /// A turn row with the given number and prompt, and nothing measured. A test
 /// sets the fields it is about on the value it gets back.
@@ -123,6 +124,6 @@ pub(super) fn lines_text(lines: &[Line<'static>]) -> String {
 
 /// The turn number the pane is on, for a test that is about the number rather
 /// than about the history it was read in.
-pub(super) fn selected_number(app: &crate::state::App) -> Option<usize> {
+pub(super) fn selected_number(app: &App) -> Option<usize> {
     app.ui.trajectory.selection().map(|s| s.number)
 }

@@ -517,6 +517,7 @@ pub(crate) fn is_memory_notice(line: &TranscriptLine) -> bool {
 /// The memory-change notice block: the rows it renders to, walked by both the
 /// renderer and the fold-aware count.
 mod notice;
+use crate::state::App;
 pub(crate) use notice::{notice_lines, notice_slot_rows};
 
 /// Build the visible slot list from the transcript, precomputed fold groups,
@@ -583,7 +584,7 @@ pub(crate) fn display_slots(
 
 // Fold-aware display-row counting: the same display_slots walk the render path
 // takes, so the count and the rendered rows cannot diverge.
-impl crate::state::App {
+impl App {
     /// Total display rows the transcript renders to: a line may span several
     /// rows, a blank spacer precedes each message but the first, and a
     /// collapsed group contributes its summary row instead of its lines.

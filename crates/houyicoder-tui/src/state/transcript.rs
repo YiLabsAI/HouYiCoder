@@ -12,9 +12,11 @@ use std::cell::Cell;
 
 use crate::fold::{FoldGroup, compute_fold_groups};
 use crate::records::{ContextView, TranscriptLine};
+use crate::scroll::bound_scrollback;
 use crate::state::transcript::blocks::TranscriptBlocks;
 use crate::state::{App, CurrentTurnBoundary};
 use crate::transcript::{FrontendRow, SequencedFrame, TranscriptFrame};
+use std::slice::Iter;
 
 #[derive(Debug)]
 pub struct Transcript {
@@ -251,7 +253,7 @@ impl Transcript {
         self.lines.is_empty()
     }
 
-    pub fn iter(&self) -> std::slice::Iter<'_, TranscriptLine> {
+    pub fn iter(&self) -> Iter<'_, TranscriptLine> {
         self.lines.iter()
     }
 
@@ -419,7 +421,7 @@ impl Transcript {
             return 0;
         }
         let released = self.clear_disk_rows();
-        let dropped = crate::scroll::bound_scrollback(&mut self.lines);
+        let dropped = bound_scrollback(&mut self.lines);
         self.current_turn.line_index = self.current_turn.line_index.saturating_sub(dropped);
         if dropped > 0 {
             self.shift_fold_groups_down(dropped);

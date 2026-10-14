@@ -11,8 +11,10 @@ use crate::app::handle_mouse;
 use crate::composition;
 use crate::keys::handle_working;
 use crate::state::App;
+use crate::state::ViewportMode;
 use crate::state::{Pane, Screen, Stage};
 use crate::test_harness::attach_connection;
+use crate::test_harness::connected_app_events;
 use crate::test_harness::{render_buffer, render_text};
 
 fn working() -> App {
@@ -25,7 +27,7 @@ fn working() -> App {
 /// local queue (recall + promote path enqueues before mutating the local
 /// copy, so a no-session app refuses the removal).
 fn working_session() -> App {
-    let (app, _events) = crate::test_harness::connected_app_events();
+    let (app, _events) = connected_app_events();
     app
 }
 
@@ -245,7 +247,7 @@ fn test_queue_strip_in_focus() {
     app.ui.input.queue.push(InputItem::Message("task b".into()));
     app.workflow.stage = Stage::Implementing;
     app.ui.navigation.pane = Pane::Diff;
-    app.ui.navigation.viewport = crate::state::ViewportMode::Focus;
+    app.ui.navigation.viewport = ViewportMode::Focus;
     let out = render(&app);
     assert!(
         out.contains("→ next"),
@@ -431,7 +433,7 @@ fn test_click_more_opens_queue() {
     handle_mouse(&mut app, click);
     assert_eq!(
         app.ui.navigation.pane,
-        crate::state::Pane::Queue,
+        Pane::Queue,
         "+N row opens the queue pane"
     );
     assert_eq!(

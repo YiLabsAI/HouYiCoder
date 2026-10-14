@@ -14,7 +14,9 @@ use ratatui::{
     text::{Line, Span},
 };
 
+use crate::records::ContextFileEntry;
 use crate::records::ContextSkillEntry;
+use crate::records::ContextSuggestion;
 use crate::records::{ContextView, SuggestionSeverity};
 use houyicoder_protocol::frontend::context::{ContextBreakdown, GridCell};
 
@@ -254,7 +256,7 @@ fn legend_rows(bd: &ContextBreakdown, pct: f64) -> Vec<Vec<Span<'static>>> {
 
 /// The Memory files drill-down rows: a bold header plus dim suffix, then one
 /// tree-glyph row per file (path + tokens). Empty when there are no files.
-fn memory_rows(files: &[crate::records::ContextFileEntry]) -> Vec<Vec<Span<'static>>> {
+fn memory_rows(files: &[ContextFileEntry]) -> Vec<Vec<Span<'static>>> {
     if files.is_empty() {
         return Vec::new();
     }
@@ -314,7 +316,7 @@ fn skills_rows(skills: &[ContextSkillEntry]) -> Vec<Vec<Span<'static>>> {
 /// The Suggestions rows: a bold header, then per suggestion a title row
 /// (warning/info glyph + bold title + optional dim savings) and an indented
 /// dim detail row. Empty when there are no suggestions.
-fn suggestions_rows(suggestions: &[crate::records::ContextSuggestion]) -> Vec<Vec<Span<'static>>> {
+fn suggestions_rows(suggestions: &[ContextSuggestion]) -> Vec<Vec<Span<'static>>> {
     if suggestions.is_empty() {
         return Vec::new();
     }

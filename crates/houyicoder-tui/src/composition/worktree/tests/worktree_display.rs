@@ -1,6 +1,7 @@
 use super::super::parse_worktrees;
 use std::env::temp_dir;
 use std::fs::canonicalize;
+use std::fs::create_dir_all;
 use std::fs::remove_dir_all;
 use std::process::Command;
 use std::process::id;
@@ -8,7 +9,7 @@ use std::process::id;
 fn make_repo(tag: u64) -> String {
     let dir = temp_dir().join(format!("houyi-wt-display-{}-{tag}", id()));
     drop(remove_dir_all(&dir));
-    std::fs::create_dir_all(&dir).expect("mkdir");
+    create_dir_all(&dir).expect("mkdir");
     drop(
         Command::new("git")
             .arg("-C")

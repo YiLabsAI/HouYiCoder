@@ -1,10 +1,12 @@
 use super::*;
+use crate::resume_picker::SessionRow;
+use unicode_width::UnicodeWidthStr;
 
 /// A row renders the time, the title, and the cwd basename, and never the
 /// sid (the design density decision).
 #[test]
 fn test_format_row_layout() {
-    let row = crate::resume_picker::SessionRow {
+    let row = SessionRow {
         sid_str: "secret-sid".into(),
         title: "login flow".into(),
         cwd_basename: "app".into(),
@@ -31,7 +33,7 @@ fn test_truncate_appends_ellipsis() {
     let out = truncate_width(s, 5);
     assert!(out.ends_with('\u{2026}'));
     assert!(
-        unicode_width::UnicodeWidthStr::width(out.as_str()) <= 5,
+        UnicodeWidthStr::width(out.as_str()) <= 5,
         "width overflow: {out}"
     );
 }

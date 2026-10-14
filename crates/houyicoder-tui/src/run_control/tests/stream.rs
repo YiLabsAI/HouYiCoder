@@ -3,12 +3,15 @@ use super::*;
 use crate::agent_message::ServerResponse;
 use crate::input::queue::InputItem;
 use crate::keys::handle_working;
+use crate::records::INTERRUPTED_NOTICE;
 use crate::row_id::RowId;
 use crate::state::Screen;
 use crate::test_harness::attach_connection;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
+use houyicoder_protocol::extension::ToolError;
+use houyicoder_protocol::frontend::QueuedInput;
 use houyicoder_protocol::frontend::run::StopReason;
 use std::thread::sleep;
 use std::time::Duration;
@@ -372,7 +375,7 @@ fn test_commit_blocks_restore() {
         user_msg("origin").into(),
     )));
     app.sessions.current.last_run_input = Some("origin".into());
-    let committed = houyicoder_protocol::frontend::QueuedInput::new("follow-up");
+    let committed = QueuedInput::new("follow-up");
     app.ui
         .input
         .queue
@@ -528,7 +531,7 @@ fn test_interrupted_renders_child_gutter() {
         !rendered.starts_with('✻'),
         "interrupt must not render as a top-level system notice"
     );
-    assert_eq!(rendered, crate::records::INTERRUPTED_NOTICE);
+    assert_eq!(rendered, INTERRUPTED_NOTICE);
 }
 
 /// A second interrupted turn must not stack a second Interrupted row: the
@@ -646,10 +649,7 @@ impl Tool for EchoTool {
         &self,
         _ctx: ToolCtx,
         input: serde_json::Value,
-    ) -> houyicoder_async::PFut<
-        '_,
-        Result<serde_json::Value, houyicoder_protocol::extension::ToolError>,
-    > {
+    ) -> houyicoder_async::PFut<'_, Result<serde_json::Value, ToolError>> {
         Box::pin(async move { Ok(input) })
     }
 }

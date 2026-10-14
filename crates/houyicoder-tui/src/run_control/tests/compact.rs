@@ -3,6 +3,8 @@ use crate::agent_message::ServerResponse;
 use houyicoder_protocol::frontend::SlashCommand;
 use houyicoder_protocol::frontend::compact::CompactReply;
 use houyicoder_protocol::frontend::context::stub_breakdown;
+use std::thread::sleep;
+use std::time::Duration;
 
 /// A ContextResult lands as a ContextGrid transcript line (the inline grid),
 /// not a flat system string. Guards the /context handler regression where the
@@ -114,7 +116,7 @@ fn test_compact_dispatch_round_trip() {
         }) {
             break;
         }
-        std::thread::sleep(std::time::Duration::from_millis(10));
+        sleep(Duration::from_millis(10));
     }
     assert!(
         app.sessions.current.transcript

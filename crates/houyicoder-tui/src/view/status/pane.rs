@@ -93,7 +93,7 @@ fn draw_tab_body(f: &mut Frame, tab: StatusTab, area: Rect, app: &App) {
             // Editing: replace the row with the editable caret line + a hint.
             Some(field) => lines[idx] = name_edit_line(field),
             // Browsing: append a dim "e to rename" hint to the static row.
-            None => lines[idx] = name_hint_line(std::mem::take(&mut lines[idx])),
+            None => lines[idx] = name_hint_line(take(&mut lines[idx])),
         }
     }
     f.render_widget(Paragraph::new(lines), area);
@@ -112,7 +112,7 @@ fn name_hint_line(mut row: Line<'static>) -> Line<'static> {
 /// The editable session-name row: the label + the buffer with an inverted
 /// caret at the cursor (a grapheme under the cursor, or a trailing space
 /// block when the cursor is past the end). Matches the input-bar caret style.
-fn name_edit_line(field: &crate::input::InputField) -> Line<'static> {
+fn name_edit_line(field: &InputField) -> Line<'static> {
     // Label matches render::field's "{:<22}" so the caret row does not jump
     // left/right against the static rows when editing starts/stops.
     let label: Span<'static> = Span::raw(format!("{:<22}", "Session name:"));
@@ -171,6 +171,8 @@ fn render_config(app: &App) -> String {
 }
 
 use super::usage::render_usage;
+use crate::input::InputField;
+use std::mem::take;
 
 #[cfg(test)]
 mod tests;

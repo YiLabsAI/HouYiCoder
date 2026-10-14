@@ -21,6 +21,7 @@ use crate::view::line_wrap::max_scroll_offset;
 use crate::view::navigation::key_hint;
 use crate::view::relative_time::now_epoch_secs;
 use crate::view::relative_time::relative_time;
+use std::collections::HashSet;
 
 pub(crate) const SKILLS_PANE_HEIGHT: u16 = 16;
 
@@ -349,7 +350,7 @@ fn usage_line(entry: Option<&SkillEntry>) -> Line<'static> {
 fn grouped_lines(
     ordered: &[&SkillEntry],
     cursor: usize,
-    disabled: &std::collections::HashSet<String>,
+    disabled: &HashSet<String>,
 ) -> Vec<Line<'static>> {
     let mut lines: Vec<Line> = Vec::new();
     let mut prev_origin: &str = "";

@@ -7,6 +7,7 @@
 //! coupling ratchet is unaffected.
 
 use crate::composition;
+use crate::fold::compute_fold_groups;
 use crate::state::App;
 use crate::transcript::{SequencedFrame, TranscriptFrame};
 
@@ -54,8 +55,7 @@ pub fn resident_frame_front(app: &App) -> usize {
 /// measures the fold work now confined to the rebuild instead of repeated per
 /// draw; the bench keeps it as the comparable fold-cost metric.
 pub fn recompute_fold_group_count(app: &App) -> usize {
-    crate::fold::compute_fold_groups(app.sessions.current.transcript.lines(), app.agent_busy())
-        .len()
+    compute_fold_groups(app.sessions.current.transcript.lines(), app.agent_busy()).len()
 }
 
 /// The fold groups the draw path reads: the cache the rebuild maintains.

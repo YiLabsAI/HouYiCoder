@@ -8,16 +8,22 @@ mod formatting;
 mod selection;
 mod timeline;
 
+use super::sample::sample_detail;
 use super::*;
 use crate::composition::app;
 use crate::keys::handle_working;
 use crate::state::Pane;
+use crate::state::Screen;
+use crate::test_harness::render_text;
 use crate::view::working;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use fixtures::{detail_of_all, record_of, turn, view};
 use houyicoder_protocol::frontend::SlashCommand;
 use ratatui::layout::Rect;
+use ratatui::text::Line;
 use ratatui::{Terminal, backend::TestBackend};
+use std::env::temp_dir;
+use std::fs::write;
 use std::sync::{Arc, Mutex};
 
 #[test]
@@ -29,7 +35,7 @@ fn test_sample_has_turns_events() {
         _ => panic!("a turn row"),
     };
     assert!(
-        !super::sample::sample_detail(&key).records.is_empty(),
+        !sample_detail(&key).records.is_empty(),
         "the demonstration turn has records to drill into"
     );
 }
@@ -334,10 +340,10 @@ fn test_level2_renders_record_detail() {
 #[test]
 fn test_trajectory_bar_invariants_mock() {
     let mut app = app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app.ui.navigation.pane = Pane::Trajectory;
     app.ui.trajectory.set_level(1);
-    let out = crate::test_harness::render_text(&app, 100, 40);
+    let out = render_text(&app, 100, 40);
     assert!(
         out.contains('█'),
         "unicode block bar must render at the turn-detail level:\n{out}"
@@ -350,8 +356,8 @@ fn test_trajectory_bar_invariants_mock() {
         out.contains("cargo test"),
         "the mock's tool-call content must render:\n{out}"
     );
-    let path = std::env::temp_dir().join("houyi-trajectory-capture.txt");
-    std::fs::write(&path, &out).unwrap();
+    let path = temp_dir().join("houyi-trajectory-capture.txt");
+    write(&path, &out).unwrap();
 }
 
 /// Secrets in tool I/O must NOT render on the trajectory pane (a human-facing
@@ -638,13 +644,7 @@ fn test_enter_trajectory_clamps_tail() {
     let len = app.ui.trajectory.list_len();
     assert!(app.ui.trajectory.cursor() < len);
     // Enter drills into Level 1 without displaying "no row data"
-    handle_working(
-        &mut app,
-        crossterm::event::KeyEvent::new(
-            crossterm::event::KeyCode::Enter,
-            crossterm::event::KeyModifiers::NONE,
-        ),
-    );
+    handle_working(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     assert_eq!(app.ui.trajectory.level(), 1);
 }
 
@@ -1042,7 +1042,7 @@ fn test_turn_list_glyph_aligns() {
     // The token column is found by the cell that carries the in/out counts,
     // not by a glyph that may be reworded: a probe that no longer matches
     // would silently make this assertion vacuous.
-    let col_of_tokens = |line: &ratatui::text::Line<'static>| -> usize {
+    let col_of_tokens = |line: &Line<'static>| -> usize {
         let mut col = 0usize;
         for span in &line.spans {
             if span.content.contains(" in ") {

@@ -17,7 +17,11 @@ use ratatui::{
     widgets::{Block, BorderType, Borders, Paragraph, Wrap},
 };
 
+use super::agents_pane::draw_agents;
 use crate::evidence::Verdict;
+use crate::permission_input::filtered_rules;
+use crate::permission_input::permission_prompt;
+use crate::permission_input::search_query;
 use crate::state::{App, Pane, PermissionInput, PermissionTab, Stage};
 use crate::view::components;
 use crate::view::navigation::{key_hint, tab_header};
@@ -35,7 +39,7 @@ pub fn draw(f: &mut Frame, area: Rect, app: &App) {
         Pane::Review => draw_review(f, area, app),
         Pane::Verify => draw_verify(f, area, app),
         Pane::Graph => draw_graph(f, area, app),
-        Pane::Agents => super::agents_pane::draw_agents(f, area, app),
+        Pane::Agents => draw_agents(f, area, app),
         Pane::Tools => draw_tools(f, area, app),
         Pane::Artifact => artifact_draw(f, area, app),
         // The interactive rule manager. draw_main intercepts Pane::Permission
@@ -71,11 +75,7 @@ pub fn draw(f: &mut Frame, area: Rect, app: &App) {
 pub(crate) fn draw_permission_content(f: &mut Frame, area: Rect, app: &App) {
     let tab = app.ui.permission_pane.tab;
     let permission = &app.sessions.current.capabilities.permission;
-    let rules = crate::permission_input::filtered_rules(
-        tab,
-        &permission.rules_cache,
-        crate::permission_input::search_query(app),
-    );
+    let rules = filtered_rules(tab, &permission.rules_cache, search_query(app));
     let denials = filtered_denials(&permission.verdict_log_cache);
     // Clamp the cursor against the list the focused tab actually renders —
     // Workspace shows dirs (not rules), Recent shows denials, the rule tabs
@@ -92,7 +92,7 @@ pub(crate) fn draw_permission_content(f: &mut Frame, area: Rect, app: &App) {
         .permission_pane
         .cursor
         .min(list_len.saturating_sub(1));
-    let prompt = crate::permission_input::permission_prompt(app);
+    let prompt = permission_prompt(app);
 
     // tab header (1) + per-tab description (1) + SearchBox on rule tabs (3) +
     // Add/Remove prompt (1 when active; Search has no prompt — the SearchBox

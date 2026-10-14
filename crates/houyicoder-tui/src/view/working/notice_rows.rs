@@ -7,6 +7,7 @@
 use crate::fold::notice_lines;
 use crate::records::TranscriptLine;
 use crate::rows::row_set::{Row, RowSet};
+use crate::selection::TAG_FOLD;
 use crate::state::App;
 
 /// Render one memory-change notice block into the row buffer. The rows come
@@ -30,7 +31,7 @@ pub(super) fn push_notice_rows(
     };
     for row in notice_lines(text, expanded, width as usize) {
         sink.push(
-            Row::new(crate::selection::TAG_FOLD, row)
+            Row::new(TAG_FOLD, row)
                 .fold_key(Some(key.to_string()))
                 .group(Some(key.to_string())),
         );

@@ -4,7 +4,11 @@
 //! model-invoked, so the pane composes the instruction and the model calls
 //! the tool. The remove path still hits the approval gate.
 
+use crate::composition::WorktreeEntry;
+use crate::composition::parse_worktrees;
+use crate::list_pane_state::filter_by_query;
 use crate::state::App;
+use std::path::Path;
 
 impl App {
     /// Refresh the worktree list from git worktree list --porcelain against
@@ -18,7 +22,7 @@ impl App {
             self.ui.worktree_list.cursor = 0;
             return;
         }
-        let entries = crate::composition::parse_worktrees(
+        let entries = parse_worktrees(
             Some(&self.sessions.current.identity.working_dir),
             &self.sessions.current.identity.working_dir,
         );
@@ -37,10 +41,10 @@ impl App {
             self.ui.worktree_list.move_cursor(delta, entries.len());
             return;
         }
-        let filtered = crate::list_pane_state::filter_by_query(
+        let filtered = filter_by_query(
             entries,
             &self.ui.worktree_list.query,
-            |e: &crate::composition::WorktreeEntry| vec![&e.path, &e.branch],
+            |e: &WorktreeEntry| vec![&e.path, &e.branch],
         );
         if filtered.is_empty() {
             return;
@@ -64,7 +68,7 @@ impl App {
             self.system_line("worktree: not connected".to_string());
             return;
         }
-        let slug = std::path::Path::new(&entry.path)
+        let slug = Path::new(&entry.path)
             .file_name()
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_else(|| entry.path.clone());

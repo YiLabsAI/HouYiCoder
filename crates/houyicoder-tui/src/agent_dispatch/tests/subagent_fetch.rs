@@ -11,7 +11,10 @@ use crate::records::TranscriptLine;
 use houyicoder_provider::FakeProvider;
 
 use crate::run_control::tests::app_with_provider;
+use crate::state::Screen;
 use crate::test_harness::{connected_app_events, wait_for_request};
+use std::thread::sleep;
+use std::time::Duration;
 
 /// A first expand of an unloaded Subagent line fires the fetch over the wire.
 /// For a sid the store has no log for, the server returns an empty frame list
@@ -22,7 +25,7 @@ use crate::test_harness::{connected_app_events, wait_for_request};
 fn test_expand_fires_child_fetch() {
     let provider = Arc::new(FakeProvider::new(vec![]));
     let mut app = app_with_provider(provider, ToolRegistry::new());
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app.sessions
         .current
         .transcript
@@ -55,7 +58,7 @@ fn test_expand_fires_child_fetch() {
             filled = true;
             break;
         }
-        std::thread::sleep(std::time::Duration::from_millis(2));
+        sleep(Duration::from_millis(2));
     }
     assert!(filled, "fetch round-trip populated the fold-group");
     match &app.sessions.current.transcript.lines()[0] {

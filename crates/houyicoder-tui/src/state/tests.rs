@@ -1,4 +1,6 @@
 use super::*;
+use crate::agent_message::SessionMessage;
+use crate::session::SessionConnection;
 use std::sync::mpsc::channel;
 #[test]
 fn test_palette_nav_no_panic() {
@@ -27,8 +29,8 @@ fn test_app_debug_format() {
 fn test_has_connection_reports_presence() {
     let mut app = test_app();
     assert!(!app.has_connection());
-    let (_tx, rx) = channel::<crate::agent_message::SessionMessage>();
-    app.sessions.current.connection = Some(crate::session::SessionConnection::from_receiver(rx));
+    let (_tx, rx) = channel::<SessionMessage>();
+    app.sessions.current.connection = Some(SessionConnection::from_receiver(rx));
     assert!(app.has_connection());
 }
 

@@ -14,6 +14,7 @@ use unicode_width::UnicodeWidthStr;
 use super::line_wrap::truncate_width;
 use crate::input::queue::InputItem;
 use crate::state::App;
+use std::cmp::min;
 
 /// Rows the ambient queued-input strip would like, capped at two: the head
 /// item plus, on overflow, a "+N more" summary row. Zero when the queue is
@@ -31,7 +32,7 @@ pub(super) fn strip_want(app: &App) -> u16 {
     if n == 0 {
         return 0;
     }
-    std::cmp::min(n, 2) as u16
+    min(n, 2) as u16
 }
 
 fn preview_text(text: &str, width: usize) -> String {

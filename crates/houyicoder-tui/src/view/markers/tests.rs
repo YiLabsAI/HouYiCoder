@@ -1,6 +1,7 @@
 use super::*;
 use crate::records::ToolOutcome;
 use crate::selection::diff_gutter_skip;
+use unicode_width::UnicodeWidthStr;
 
 #[test]
 fn test_row_call_styled() {
@@ -396,7 +397,7 @@ fn test_diff_wrap_budget_matches() {
     let add_row = &rows[2].1;
     assert_eq!(add_row.as_str(), format!("+ 1 {content}"));
     // Display width of the rendered row must not exceed the pane width.
-    let w = unicode_width::UnicodeWidthStr::width(add_row.as_str());
+    let w = UnicodeWidthStr::width(add_row.as_str());
     assert!(w <= 40, "row overflowed the pane: {w} > 40 ({add_row:?})");
 }
 

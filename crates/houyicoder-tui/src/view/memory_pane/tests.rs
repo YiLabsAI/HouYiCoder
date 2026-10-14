@@ -23,14 +23,20 @@ use crate::composition;
 use crate::keys::handle_working;
 use crate::records::TranscriptLine;
 use crate::session::SessionConnection;
+use crate::state::Screen;
 use crate::state::enums::MemoryScopeTab;
 use crate::state::{App, Pane};
 use crate::test_harness::{connected_app_events, render_buffer, render_text, wait_for_request};
 use crate::view::line_wrap::max_scroll_offset;
+use houyicoder_client::Client;
+use ratatui::text::Line;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
+use tokio::runtime::Builder;
 
 fn working() -> App {
     let mut app = composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app
 }
 
@@ -101,8 +107,8 @@ fn test_list_result_resets_cursor() {
     app.run_command(SlashCommand::Memory);
     app.ui.memory.set_cursor(5);
     let transcript_len = app.sessions.current.transcript.len();
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
         .expect("clock")
         .as_secs();
     app.handle_agent_message(SessionMessage::Response {
@@ -165,7 +171,7 @@ fn test_memory_pane_keys_route() {
 
 #[test]
 fn test_detail_soft_wrap_max() {
-    let body = vec![ratatui::text::Line::from("x".repeat(25))];
+    let body = vec![Line::from("x".repeat(25))];
     assert_eq!(max_scroll_offset(&body, 10, 2), 1);
 }
 
@@ -658,12 +664,12 @@ fn test_dead_driver_toggle_rollback() {
         }
     }
 
-    let runtime = tokio::runtime::Builder::new_multi_thread()
+    let runtime = Builder::new_multi_thread()
         .worker_threads(1)
         .enable_all()
         .build()
         .expect("runtime");
-    let client = houyicoder_client::Client::new(Box::new(FailOnConnect));
+    let client = Client::new(Box::new(FailOnConnect));
     let (agent_tx, agent_rx) = channel::<SessionMessage>();
     let mut session = SessionConnection::spawn(client, agent_tx, agent_rx, &runtime);
     // Synchronization point: the driver drops the command receiver before

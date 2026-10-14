@@ -18,9 +18,11 @@ use houyicoder_protocol::handshake::Hello;
 
 use super::*;
 use crate::agent_message::{ConnectionEvent, ServerEvent, ServerRequest, ServerResponse};
+use crate::composition::shared_runtime;
 use crate::test_harness::connected_app_events;
 use crate::transcript::SequencedFrame;
 use houyicoder_protocol::acpx::{AcpxMethod, AcpxNotification};
+use houyicoder_protocol::frontend::PendingInputId;
 use houyicoder_protocol::frontend::QueuedInput;
 use houyicoder_protocol::frontend::SessionId;
 use houyicoder_protocol::frontend::compact::CompactReply;
@@ -58,7 +60,7 @@ fn sid() -> SessionId {
 /// silently no-ops.
 #[test]
 fn test_inject_shape() {
-    let input = houyicoder_protocol::frontend::QueuedInput::new("also check the logs");
+    let input = QueuedInput::new("also check the logs");
     let n = inject_notification(&sid(), &input);
     assert_eq!(n.method, "session/inject");
     let p = n.params.expect("params present");
@@ -69,7 +71,7 @@ fn test_inject_shape() {
 /// The queue_remove notification carries the exact queue identity.
 #[test]
 fn test_remove_shape() {
-    let id = houyicoder_protocol::frontend::PendingInputId(42);
+    let id = PendingInputId(42);
     let n = queue_remove_notification(&sid(), id);
     assert_eq!(n.method, "session/queue_remove");
     let p = n.params.expect("params present");
@@ -1337,8 +1339,8 @@ async fn test_drop_reclaims_driver() {
             Box::pin(pending())
         }
     }
-    let runtime = crate::composition::shared_runtime();
-    let client = houyicoder_client::Client::new(Box::new(StuckTransport));
+    let runtime = shared_runtime();
+    let client = Client::new(Box::new(StuckTransport));
     let (cmd_tx, cmd_rx) = unbounded_channel::<ClientCommand>();
     let (agent_tx, _agent_rx) = channel::<SessionMessage>();
     let handle = runtime.spawn(drive_client(client, cmd_rx, agent_tx));

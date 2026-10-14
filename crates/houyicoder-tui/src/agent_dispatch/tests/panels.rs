@@ -5,6 +5,7 @@ use crate::skills_state::SkillDetail;
 use crate::state::Pane;
 use crate::state::Screen;
 use crate::test_harness::connected_app_with_events;
+use crate::test_harness::connection_lost_app;
 use crate::test_harness::render_text;
 use houyicoder_protocol::frontend::skills::SkillEntry;
 use houyicoder_protocol::frontend::tools::ToolEntry;
@@ -129,7 +130,7 @@ fn test_open_detail_without_session() {
 /// pane never waits on a reply that cannot arrive.
 #[test]
 fn test_lost_send_settles_detail() {
-    let mut app = crate::test_harness::connection_lost_app();
+    let mut app = connection_lost_app();
     app.ui.navigation.pane = Pane::Skills;
     app.sessions.current.capabilities.skills.entries = vec![skill_entry("alpha")];
     app.open_skill_detail();

@@ -1,7 +1,8 @@
 //! Linux clipboard probe and cache.
 
 #[cfg(target_os = "linux")]
-use std::sync::Mutex;
+#[cfg(test)]
+use std::env::var_os;
 
 #[cfg(target_os = "linux")]
 use super::run_native;
@@ -23,8 +24,7 @@ pub(super) fn linux_clipboard_tool(text: &str) -> Option<&'static str> {
             None => {}
         }
     }
-    let winner = if std::env::var_os("WAYLAND_DISPLAY").is_some()
-        && run_native("wl-copy", &[], text).is_ok()
+    let winner = if var_os("WAYLAND_DISPLAY").is_some() && run_native("wl-copy", &[], text).is_ok()
     {
         Some("wl-copy")
     } else if run_native("xclip", &["-selection", "clipboard"], text).is_ok() {

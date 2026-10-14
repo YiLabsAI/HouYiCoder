@@ -14,6 +14,7 @@ use crate::view::draw;
 use std::env::consts::ARCH;
 use std::env::consts::OS;
 use std::env::var;
+use std::fs::create_dir_all;
 use std::fs::write;
 use std::path::Path;
 
@@ -204,7 +205,7 @@ impl RebuildWatch {
 fn test_frame_timing_benchmark() {
     let sha = git_sha();
     let run_dir = Path::new("target/measurements/tui").join(run_id());
-    std::fs::create_dir_all(&run_dir).expect("measurements dir");
+    create_dir_all(&run_dir).expect("measurements dir");
     let profile = if cfg!(debug_assertions) {
         "debug"
     } else {

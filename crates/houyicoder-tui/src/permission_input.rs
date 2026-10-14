@@ -14,6 +14,7 @@ use crate::run_control::ClientCommand;
 use crate::state::{App, Pane, PermissionInput, PermissionTab};
 use ratatui::crossterm::event::KeyCode;
 use ratatui::crossterm::event::KeyEvent;
+use std::ptr::eq;
 
 /// A parsed rule spec: action + optional content tier + effect. The wire
 /// rule is built from this so the Add sub-mode and the /permission add
@@ -209,7 +210,7 @@ pub(crate) fn filtered_rule_index(app: &App) -> Option<usize> {
         .permission
         .rules_cache
         .iter()
-        .position(|r| std::ptr::eq(r, target))
+        .position(|r| eq(r, target))
 }
 
 /// The display text for a rule's content tier (matches the render path).

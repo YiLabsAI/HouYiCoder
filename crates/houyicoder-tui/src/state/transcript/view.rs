@@ -21,6 +21,7 @@ use crate::state::App;
 use crate::state::cursors::EventCursor;
 use crate::state::parked_view_states::ExpandedKeys;
 use crossterm::event::KeyCode;
+use std::mem::take;
 
 /// The transcript view state the view on screen holds: where the reader is,
 /// what they have expanded, and whether a search view is open over it.
@@ -378,7 +379,7 @@ impl TranscriptViewState {
     /// open; a park of the leaving view's sets. Bumps only when something
     /// was open.
     pub(crate) fn take_expanded(&mut self) -> ExpandedKeys {
-        let taken = std::mem::take(&mut self.expanded);
+        let taken = take(&mut self.expanded);
         if !taken_is_empty(&taken) {
             self.bump_presentation();
         }

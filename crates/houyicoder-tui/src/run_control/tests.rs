@@ -13,7 +13,10 @@ use crate::pending_prompt::PendingPrompt;
 use crate::records::TranscriptLine;
 use crate::session::SessionConnection;
 use crate::state::Pane;
+use crate::state::Screen;
 use crate::state::enums::LiveBlock;
+use crate::test_harness::attach_connection;
+use crate::test_harness::render_text;
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_api::tool::{Tool, ToolCtx};
 use houyicoder_core::SessionId;
@@ -21,11 +24,14 @@ use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::{Runner, ToolRegistry};
 use houyicoder_memory::InMemoryBackend;
 use houyicoder_permission::DefaultModeGate;
+use houyicoder_permission::GuardedTool;
 use houyicoder_permission::PermissionMode;
 use houyicoder_protocol::acpx::{AcpxMethod, AcpxNotification};
-use houyicoder_protocol::envelope::{DurableEventId, EventSeq, RequestId};
+use houyicoder_protocol::envelope::RequestId;
+use houyicoder_protocol::envelope::{DurableEventId, EventSeq};
 use houyicoder_protocol::extension::ENTITLEMENT_TOOL;
 use houyicoder_protocol::extension::ToolError;
+use houyicoder_protocol::frontend::SessionId as WireSessionId;
 use houyicoder_protocol::frontend::SlashCommand;
 use houyicoder_protocol::frontend::memory::MemorySummaryEntry;
 use houyicoder_protocol::frontend::memory::MemoryToggleWhich;
@@ -39,12 +45,14 @@ use houyicoder_protocol::llm::Usage;
 use houyicoder_protocol::llm::{CompletionResponse, OutputItem};
 use houyicoder_provider::FakeProvider;
 use houyicoder_session::SessionStore;
+use std::env::temp_dir;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::mpsc;
 use std::thread::sleep;
 use std::time::Duration;
 use std::time::Instant;
+use tokio::sync::Notify;
 fn user_msg(text: &str) -> TranscriptFrame {
     TranscriptFrame::Session(SessionUpdate::UserMessageChunk(ContentChunk::new(
         ContentBlock::Text { text: text.into() },
@@ -73,13 +81,13 @@ pub(crate) fn app_with_provider_and_tx(
     // the store never wakes the server's mid-run drain, so every event
     // (frames + QueuedInputCommitted) would land only post-resolve and a mid-run
     // chain test would see the whole run as one end-of-run batch.
-    let append_notify = Arc::new(tokio::sync::Notify::new());
+    let append_notify = Arc::new(Notify::new());
     let store = Arc::new(
         SessionStore::new(Box::new(InMemoryBackend::new()))
             .with_append_notify(append_notify.clone()),
     );
     let session = SessionId::new();
-    let wire_session = houyicoder_protocol::frontend::SessionId(session.to_string());
+    let wire_session = WireSessionId(session.to_string());
     let runner = Runner::new(
         store,
         provider,
@@ -111,7 +119,7 @@ pub(crate) fn app_with_provider_and_tx(
         composition::FrontendStartup {
             skip_login: false,
             startup_warnings,
-            history_path: std::env::temp_dir().join("houyi-history-rc-test.jsonl"),
+            history_path: temp_dir().join("houyi-history-rc-test.jsonl"),
         },
     );
     (app, tx)
@@ -194,10 +202,7 @@ fn app_with_guarded_tool(
     let boom = BoomTool::new();
     let gate: Arc<dyn houyicoder_permission::ModeGate> = Arc::new(DefaultModeGate::with_mode(mode));
     let mut tools = ToolRegistry::new();
-    tools.register(Arc::new(houyicoder_permission::GuardedTool::new(
-        boom.clone(),
-        gate,
-    )));
+    tools.register(Arc::new(GuardedTool::new(boom.clone(), gate)));
     let provider = Arc::new(FakeProvider::new(responses));
     (app_with_provider(provider, tools), boom)
 }
@@ -497,7 +502,7 @@ fn test_entitlement_ask_two_option() {
 #[test]
 fn test_approval_ask_carries_delegation() {
     let mut app = composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     let ask = ApprovalRequest {
         call_id: "c1".into(),
         tool_name: "bash".into(),
@@ -517,7 +522,7 @@ fn test_approval_ask_carries_delegation() {
     let d = a.delegation.as_ref().expect("delegation carried");
     assert_eq!(d.child_id, "child-1");
     assert_eq!(d.subagent_type, "explore");
-    let out = crate::test_harness::render_text(&app, 80, 24);
+    let out = render_text(&app, 80, 24);
     assert!(
         out.contains("explore"),
         "card header prefixes the child agent type: {out}"
@@ -714,12 +719,12 @@ fn test_resume_after_approval() {
 #[test]
 fn test_resolve_clears_thinking_window() {
     let mut app = composition::app();
-    crate::test_harness::attach_connection(&mut app);
+    attach_connection(&mut app);
     app.start_run_for_test(1);
     app.sessions.current.prompt = Some(PendingPrompt::permission(RequestId(1), Vec::new()));
     {
         let p = app.run_progress_mut().expect("active run");
-        p.thinking_started_at = Some(std::time::Instant::now());
+        p.thinking_started_at = Some(Instant::now());
         p.live_block = LiveBlock::Thinking;
     }
     app.resolve_current_approval(ApprovalDecision {
@@ -1180,7 +1185,7 @@ fn test_startup_handshake_drains_trust() {
     );
     assert_eq!(
         app.sessions.current.prompt.as_ref().map(|p| p.req_id()),
-        Some(houyicoder_protocol::envelope::RequestId(7))
+        Some(RequestId(7))
     );
 }
 

@@ -4,6 +4,7 @@
 //! shell one-liners so the row stays one-glance. Kept here so records.rs
 //! stays under the file-size gate.
 
+use houyicoder_protocol::tool::tool_invocation;
 use serde_json::Value;
 
 /// Truncate a JSON value to a short status string for the transcript. Tool
@@ -39,9 +40,7 @@ pub(crate) fn tool_call_brief(tool: &str, input: &Value) -> String {
     match tool {
         "bash" | "read" | "write" | "edit" | "multiedit" | "grep" | "glob" | "save_memory"
         | "delete_memory" | "promote_memory" | "demote_memory" | "show_memory"
-        | "search_memory" => {
-            truncate_call_arg(&houyicoder_protocol::tool::tool_invocation(tool, input))
-        }
+        | "search_memory" => truncate_call_arg(&tool_invocation(tool, input)),
         "agent" => {
             let st = input
                 .get("subagent_type")

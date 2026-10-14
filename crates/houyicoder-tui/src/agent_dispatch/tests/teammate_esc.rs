@@ -5,6 +5,8 @@ use crate::agent_message::FleetEntry;
 use crate::composition::app;
 use crate::records::TeammateView;
 use crate::records::TranscriptLine;
+use crate::state::Screen;
+use crate::test_harness::attach_connection;
 use crate::transcript::TranscriptFrame;
 use houyicoder_protocol::frontend::ContentBlock;
 use houyicoder_protocol::frontend::session_update::{ContentChunk, SessionUpdate};
@@ -128,7 +130,7 @@ fn test_teammate_echo_preserved() {
 #[test]
 fn test_steer_completed_surfaces_notice() {
     let mut app = app();
-    crate::test_harness::attach_connection(&mut app);
+    attach_connection(&mut app);
     app.ui.teammate_view = Some(TeammateView {
         child_sid: "c1".into(),
         ..Default::default()
@@ -525,7 +527,7 @@ fn test_completed_child_unavailable() {
 #[test]
 fn test_teammate_submit_steers() {
     let mut app = app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app.ui.teammate_view = Some(TeammateView {
         child_sid: "c1".into(),
         ..Default::default()

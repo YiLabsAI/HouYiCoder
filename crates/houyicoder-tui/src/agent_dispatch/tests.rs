@@ -18,6 +18,7 @@ use houyicoder_protocol::frontend::session_update::{
     SessionUpdate, ToolCall, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
 };
 use houyicoder_protocol::frontend::skills::SkillEntry;
+use houyicoder_protocol::llm::Usage;
 
 #[path = "tests/frames.rs"]
 mod frames;
@@ -73,7 +74,7 @@ fn done_msg_for(req: &RequestId) -> SessionMessage {
                 outcome: RunOutcome::FinalOutput {
                     content: vec![ContentBlock::Text { text: "ok".into() }],
                 },
-                usage: houyicoder_protocol::llm::Usage::default(),
+                usage: Usage::default(),
                 turns: 1,
                 stop_reason: StopReason::EndTurn,
             }),

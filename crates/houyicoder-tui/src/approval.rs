@@ -6,6 +6,7 @@
 
 use crate::artifact::{ArtifactMode, ChangeProposer};
 use crate::evidence::{Divergence, Verdict};
+use crate::fold::is_memory_notice;
 use crate::fold::{DisplaySlot, display_slots, notice_slot_rows};
 use crate::records::TranscriptLine;
 use crate::run_control::ClientCommand;
@@ -165,7 +166,7 @@ impl App {
         let mut ordinal = 0usize;
         let mut latest: Option<String> = None;
         for line in self.sessions.current.transcript.lines().iter() {
-            if crate::fold::is_memory_notice(line) {
+            if is_memory_notice(line) {
                 latest = Some(format!("mg#{ordinal}"));
                 ordinal += 1;
             }

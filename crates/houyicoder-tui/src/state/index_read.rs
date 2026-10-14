@@ -8,6 +8,9 @@
 //! history read uses.
 
 use crate::transcript::snapshot::IndexProgress;
+use std::fmt::Debug;
+use std::fmt::Formatter;
+use std::fmt::Result;
 use std::sync::mpsc::Receiver;
 use std::sync::mpsc::TryRecvError;
 
@@ -29,8 +32,8 @@ pub struct PendingIndexChunk {
     rx: Receiver<IndexProgress>,
 }
 
-impl std::fmt::Debug for PendingIndexChunk {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Debug for PendingIndexChunk {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         f.debug_struct("PendingIndexChunk").finish_non_exhaustive()
     }
 }

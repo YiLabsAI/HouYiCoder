@@ -6,9 +6,11 @@
 #![allow(clippy::disallowed_methods)]
 
 use std::fs::canonicalize;
+use std::fs::metadata;
 use std::mem::take;
 use std::process::Command;
 use std::process::Stdio;
+use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
 /// One linked worktree row. path is the working tree, head is the short HEAD
@@ -104,12 +106,12 @@ pub fn parse_worktrees(repo_root: Option<&str>, working_dir: &str) -> Vec<Worktr
     // dirty flag drives the ! marker. Both are cheap (one stat + one git
     // status --porcelain per worktree). Git status on the main repo may
     // be slow if the index is large, but it runs on pane-open only.
-    let now = std::time::SystemTime::now()
+    let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
     for e in &mut entries {
-        e.last_modified = std::fs::metadata(&e.path)
+        e.last_modified = metadata(&e.path)
             .and_then(|m| m.modified())
             .ok()
             .and_then(|t| t.duration_since(UNIX_EPOCH).ok())

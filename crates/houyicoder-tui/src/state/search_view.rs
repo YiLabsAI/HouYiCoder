@@ -8,9 +8,12 @@ use std::time::Duration;
 
 use super::App;
 use super::index_read::{INDEX_CHUNK_BUDGET, IndexChunkPoll, PendingIndexChunk};
+use crate::composition::shared_runtime;
 use crate::notifications::{NotifKind, Notification};
+use crate::records::TranscriptLine;
 use crate::scroll::SEARCH_LOG_THRESHOLD;
 use crate::scroll::WINDOW_MAX_BYTES;
+use crate::state::ViewportMode;
 use crate::transcript::snapshot::IndexProgress;
 use crate::transcript::snapshot::{SnapshotLoad, WindowLoad};
 use std::sync::mpsc::channel;
@@ -20,7 +23,7 @@ impl App {
     /// to it. Triggered by PgUp.
     pub fn enter_scroll(&mut self) {
         self.ui.navigation.prev_viewport = self.ui.navigation.viewport;
-        self.ui.navigation.viewport = crate::state::ViewportMode::Scroll;
+        self.ui.navigation.viewport = ViewportMode::Scroll;
     }
 
     /// Enter the full-screen search view: Scroll mode with verbose render and
@@ -151,7 +154,7 @@ impl App {
     /// without a synced pair -- the third time this bug class would have
     /// bitten (the first two were the verbose-count desync + the live/disk
     /// split), and the accessor is the structural fix.
-    pub fn active_transcript(&self) -> &[crate::records::TranscriptLine] {
+    pub fn active_transcript(&self) -> &[TranscriptLine] {
         if let Some(tv) = &self.ui.teammate_view {
             &tv.transcript
         } else if self.ui.transcript_view.search_active() {
@@ -409,7 +412,7 @@ impl App {
             return;
         };
         let (tx, rx) = channel();
-        crate::composition::shared_runtime().spawn_blocking(move || {
+        shared_runtime().spawn_blocking(move || {
             tx.send(snap.index_chunk()).ok();
         });
         *self

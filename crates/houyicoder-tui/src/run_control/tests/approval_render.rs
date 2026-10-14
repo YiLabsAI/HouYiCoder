@@ -5,8 +5,13 @@
 
 use super::*;
 use crate::records::TranscriptLine;
+use crate::state::Screen;
 use crate::test_harness::render_text;
 use houyicoder_api::tool::ToolCtx;
+use houyicoder_permission::DefaultModeGate;
+use houyicoder_permission::GuardedTool;
+use houyicoder_permission::PermissionMode;
+use houyicoder_protocol::extension::ToolError;
 use houyicoder_protocol::frontend::permission::PermissionEffect;
 use houyicoder_protocol::frontend::permission::PermissionRule;
 use houyicoder_protocol::frontend::run::ApprovalDecision;
@@ -46,10 +51,7 @@ impl Tool for MultiBoom {
         &self,
         _ctx: ToolCtx,
         _input: serde_json::Value,
-    ) -> houyicoder_async::PFut<
-        '_,
-        Result<serde_json::Value, houyicoder_protocol::extension::ToolError>,
-    > {
+    ) -> houyicoder_async::PFut<'_, Result<serde_json::Value, ToolError>> {
         *self.ran.lock().expect("multiboom mutex") = true;
         // 55 lines so the result body collapses (head + hint), matching the
         // long-stdout shape that surfaced the duplicate-render bug.
@@ -70,17 +72,13 @@ impl Tool for MultiBoom {
 /// Wire a MultiBoom in a GuardedTool under the given mode, with the shared
 /// handle to inspect whether execute ran.
 fn app_with_multiline_guarded_tool(
-    mode: houyicoder_permission::PermissionMode,
+    mode: PermissionMode,
     responses: Vec<CompletionResponse>,
 ) -> (App, Arc<MultiBoom>) {
     let boom = MultiBoom::new();
-    let gate: Arc<dyn houyicoder_permission::ModeGate> =
-        Arc::new(houyicoder_permission::DefaultModeGate::with_mode(mode));
+    let gate: Arc<dyn houyicoder_permission::ModeGate> = Arc::new(DefaultModeGate::with_mode(mode));
     let mut tools = ToolRegistry::new();
-    tools.register(Arc::new(houyicoder_permission::GuardedTool::new(
-        boom.clone(),
-        gate,
-    )));
+    tools.register(Arc::new(GuardedTool::new(boom.clone(), gate)));
     let provider = Arc::new(FakeProvider::new(responses));
     (app_with_provider(provider, tools), boom)
 }
@@ -116,11 +114,9 @@ fn multiline_call_then_reply() -> Vec<CompletionResponse> {
 /// artifact (the diff renderer leaving stale cells), not a logic bug.
 #[test]
 fn test_option3_no_duplicate_result() {
-    let (mut app, boom) = app_with_multiline_guarded_tool(
-        houyicoder_permission::PermissionMode::Manual,
-        multiline_call_then_reply(),
-    );
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    let (mut app, boom) =
+        app_with_multiline_guarded_tool(PermissionMode::Manual, multiline_call_then_reply());
+    app.ui.navigation.screen = Screen::Working;
     app.spawn_run("go".into());
     let mut raised = false;
     for _ in 0..200 {

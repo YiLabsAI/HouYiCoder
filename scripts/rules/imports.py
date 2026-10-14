@@ -177,17 +177,38 @@ def deep_path_violations(text):
 
 
 def repeated_deep_paths(text):
-    """Map each unimported deep path to its occurrence count when it violates:
-    - any chain with >= 3 module levels (4+ segments, e.g.
-      houyicoder_protocol::frontend::permission::PermissionMode) even once;
-    - any chain with >= 2 module levels (3+ segments, e.g.
-      crate::state::Screen or std::sync::Arc) used twice or more.
+    """Map each unimported deep path to its occurrence count when it violates.
+
+    A path with two or more module segments before the final item
+    (crate::state::Screen, std::time::UNIX_EPOCH, crate::app::handle_key)
+    belongs in the import block even when it appears once: the qualified
+    spelling repeats a module the reader already has in scope, and a single
+    occurrence is exactly how the next one starts. Two segments
+    (SessionEvent::Variant, mpsc::TryRecvError) are a type or module
+    qualifier, not a deep path.
+
+    A name the file defines itself, or one two different chains end in, is
+    left qualified: an import would collide or pick the wrong type, and the
+    rules reserve a qualified path for exactly that case.
     """
     counts = {}
     for _, key in deep_path_violations(text):
         counts[key] = counts.get(key, 0) + 1
+    by_name = {}
+    for chain in counts:
+        by_name.setdefault(chain.rsplit("::", 1)[-1], set()).add(chain)
+    defined = set()
+    for line in text.splitlines():
+        m = re.match(
+            r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?"
+            r"(?:fn|struct|enum|trait|union|const|static|type)\s+([A-Za-z0-9_]+)",
+            line,
+        )
+        if m:
+            defined.add(m.group(1))
     return {
-        path: n
-        for path, n in counts.items()
-        if n >= 2 or len(path.split("::")) >= 4
+        chain: n
+        for chain, n in counts.items()
+        if len(by_name[chain.rsplit("::", 1)[-1]]) == 1
+        and chain.rsplit("::", 1)[-1] not in defined
     }

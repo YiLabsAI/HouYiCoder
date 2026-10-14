@@ -41,7 +41,7 @@ pub fn handle_working(app: &mut App, k: KeyEvent) {
     // /permission pane: nav and sub-mode entry keys live in the pane's own
     // handler. In a typed sub-mode (add / remove / search) the key falls
     // through so the user can type the spec and Enter to submit.
-    if crate::permission_input::handle_permission_key(app, k) {
+    if handle_permission_key(app, k) {
         return;
     }
     if k.modifiers.contains(KeyModifiers::CONTROL) && k.code == KeyCode::Char('o') {
@@ -229,6 +229,7 @@ mod pager;
 
 /// Approval prompt and cursor-navigation keys live in keys::approval.
 mod approval;
+use crate::permission_input::handle_permission_key;
 #[cfg(test)]
 pub(crate) use approval::approval_scope;
 

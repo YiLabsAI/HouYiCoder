@@ -6,6 +6,9 @@
 //! The span labels come in two steps on purpose: the turn and event rows print
 //! tenths of a second, and a one-line summary row reads at whole seconds.
 
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
+
 /// A measured span as the status pane's latency rows print it: milliseconds
 /// below a second, tenths at or above one.
 pub(crate) fn span_label(ms: u64) -> String {
@@ -100,8 +103,8 @@ pub(crate) fn format_span_secs(secs: u64) -> String {
 /// Read the current epoch seconds from SystemTime. Centralized so both
 /// callers (worktree_pane, skills_pane) share the same clock-read path.
 pub(crate) fn now_epoch_secs() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
 }

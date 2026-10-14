@@ -1,4 +1,6 @@
 use super::*;
+use std::env::temp_dir;
+use std::fs::remove_file;
 
 #[test]
 fn test_session_annotate_appends_annotation() {
@@ -195,7 +197,7 @@ fn test_session_delete_applied_shrinks() {
 
 #[test]
 fn test_session_save_round_trip() {
-    let dir = std::env::temp_dir();
+    let dir = temp_dir();
     let path = dir.join("houyicoder_artifact_test.md");
     let mut s = ArtifactSession::from_lines(&["a", "b", "c"]);
     s.set_pending(Some(ProposedChange {
@@ -210,7 +212,7 @@ fn test_session_save_round_trip() {
     s.save(path.to_str().unwrap()).expect("save writes");
     let reloaded = ArtifactSession::load(path.to_str().unwrap()).expect("load reads");
     assert_eq!(reloaded.current_lines(), vec!["Z", "b", "c"]);
-    drop(std::fs::remove_file(path));
+    drop(remove_file(path));
 }
 
 #[test]

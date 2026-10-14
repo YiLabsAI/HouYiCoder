@@ -9,6 +9,7 @@
 //! single-select question auto-submits on selection and hides the nav bar
 //! and submit tab entirely.
 
+use serde_json::Map;
 use serde_json::Value;
 
 /// One question card parsed from the model's AskUserQuestion tool call. The
@@ -232,7 +233,7 @@ impl AskQuestion {
     /// multi-select, comma-joined labels; for Other, the typed text replaces
     /// the label. Empty when nothing was selected (the tool handles this).
     pub fn build_answers(&self) -> Value {
-        let mut answers = serde_json::Map::new();
+        let mut answers = Map::new();
         for (qi, q) in self.questions.iter().enumerate() {
             let labels: Vec<String> = self.selections[qi]
                 .iter()

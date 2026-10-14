@@ -7,12 +7,15 @@
 
 use std::sync::Arc;
 
+use crate::composition::app;
 use crate::records::TranscriptLine;
 use crate::state::App;
 use crate::test_harness::connected_app;
 use crate::view::export_log::{ExportLog, ExportPayload};
 use std::env::temp_dir;
 use std::fs::create_dir_all;
+use std::fs::metadata;
+use std::fs::read_to_string;
 use std::fs::remove_dir;
 use std::fs::remove_file;
 use std::os::unix::fs::PermissionsExt;
@@ -71,11 +74,11 @@ fn test_export_writes_file_reports() {
         "expected 'export: wrote', got: {line}"
     );
     assert!(target.exists(), "the file must land on disk");
-    let body = std::fs::read_to_string(&target).unwrap();
+    let body = read_to_string(&target).unwrap();
     assert!(body.contains("hello"), "the serialized JSON is in the file");
     #[cfg(unix)]
     {
-        let mode = std::fs::metadata(&target).unwrap().permissions().mode();
+        let mode = metadata(&target).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600, "export file is 0o600");
     }
     remove_file(&target).ok();
@@ -84,7 +87,7 @@ fn test_export_writes_file_reports() {
 
 #[test]
 fn test_export_disconnected() {
-    let mut app = crate::composition::app();
+    let mut app = app();
     // session stays None (the default) — the disconnected branch.
     app.run_export(None);
     let line = last_system_line(&app).expect("a system line lands");

@@ -20,8 +20,10 @@ use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthStr;
 
 mod diff_plan;
+use crate::selection::diff_gutter_skip;
 use crate::view::line_wrap::wrap_line;
 use diff_plan::{DiffKind, PlanKind, PlanRow, plan_diff_body};
+use std::mem::take;
 
 /// One planned display row: the selection tag, the row text (gutter + content
 /// for stable width + copy), the per-row outcome (Some only on the summary),
@@ -142,7 +144,7 @@ fn bold_digit_spans(text: &str, base: Style) -> Vec<Span<'static>> {
         if is_digit != in_digits {
             if !acc.is_empty() {
                 let style = if in_digits { bold } else { base };
-                spans.push(Span::styled(std::mem::take(&mut acc), style));
+                spans.push(Span::styled(take(&mut acc), style));
             }
             in_digits = is_digit;
         }
@@ -425,7 +427,7 @@ pub(crate) fn diff_row(
         TAG_DIFF_HUNK => dim,
         _ => dim,
     };
-    let content_start = crate::selection::diff_gutter_skip(row).min(row.len());
+    let content_start = diff_gutter_skip(row).min(row.len());
     let mut spans: Vec<Span<'static>> = Vec::new();
     // The marker + line-number gutter (before the content) inherits the row
     // background so the tint starts at col 0; its foreground is the row's

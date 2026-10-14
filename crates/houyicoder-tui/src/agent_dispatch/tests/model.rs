@@ -15,6 +15,7 @@ use crate::test_harness::{
 
 use crate::agent_message::{ServerEvent, ServerResponse, SessionMessage};
 use crate::composition::app;
+use crate::keys::handle_working;
 use crate::test_harness::connection_lost_app;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -270,7 +271,7 @@ fn test_model_pane_swallows_chars() {
     let mut app = app();
     app.ui.navigation.screen = Screen::Working;
     app.ui.navigation.pane = Pane::Model;
-    crate::keys::handle_working(
+    handle_working(
         &mut app,
         KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
     );

@@ -18,10 +18,14 @@ use crate::records::{Approval, ToolOutcome, TranscriptLine};
 use crate::selection::RecordingClipboard;
 use crate::selection::is_non_selectable;
 use crate::selection::{Selection, extract_text};
+use crate::state::App;
 use crate::state::Screen;
 use crate::test_harness::{render_buffer, render_text};
 use crate::todo_view::{TodoStatus, TodoView};
 use crate::view::draw;
+use ratatui::buffer::Buffer;
+use std::collections::HashSet;
+use unicode_width::UnicodeWidthStr;
 
 /// Regression: when an approval card is pending, prior transcript content
 /// (a /context grid block and a user "hi" line near the tail) must stay
@@ -813,7 +817,7 @@ fn test_distinct_keys_callid_reuse() {
     assert_eq!(groups[0].key, "c1#0");
     assert_eq!(groups[1].key, "c1#1");
     // Expanding only the first group leaves the second collapsed.
-    let mut expanded = std::collections::HashSet::new();
+    let mut expanded = HashSet::new();
     expanded.insert(groups[0].key.clone());
     let slots = display_slots(&t, &groups, &expanded, false);
     let summaries: Vec<_> = slots
@@ -931,7 +935,7 @@ fn test_expanded_subagent_shaded() {
         });
     // Collapsed: the head is ordinary transcript, no block background.
     let buf = render_buffer(&app, 80, 24);
-    let head_bg = |buf: &ratatui::buffer::Buffer| {
+    let head_bg = |buf: &Buffer| {
         buf.content()
             .iter()
             .find(|c| c.symbol() == "\u{23bf}")
@@ -995,10 +999,10 @@ fn test_fleet_click_selects() {
                 started_at: None,
             });
     }
-    drop(crate::test_harness::render_text(&app, 80, 24));
+    drop(render_text(&app, 80, 24));
     let rect = app.ui.frame.layout.fleet_rect.get();
     assert!(rect.height >= 2, "the strip is drawn: {rect:?}");
-    let click = |app: &mut crate::state::App, y: u16| {
+    let click = |app: &mut App, y: u16| {
         handle_mouse(
             app,
             MouseEvent {
@@ -1043,7 +1047,7 @@ fn test_user_background_band() {
             let continuation = *x > area.x
                 && buf
                     .cell((*x - 1, user_y))
-                    .is_some_and(|cell| unicode_width::UnicodeWidthStr::width(cell.symbol()) > 1);
+                    .is_some_and(|cell| UnicodeWidthStr::width(cell.symbol()) > 1);
             !continuation
                 && buf
                     .cell((*x, user_y))
@@ -1093,7 +1097,7 @@ fn test_user_background_clears() {
             .backend()
             .buffer()
             .cell((x, user_y))
-            .is_some_and(|cell| cell.style().bg != Some(ratatui::style::Color::Indexed(238)))
+            .is_some_and(|cell| cell.style().bg != Some(Color::Indexed(238)))
     }));
 }
 

@@ -3,6 +3,7 @@
 //! each draw from the run-start Instant so the animation needs no mutable
 //! tick state.
 
+use crate::state::App;
 use crate::state::enums::LiveBlock;
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
@@ -22,7 +23,7 @@ const SPINNER_FRAMES: [&str; 12] = ["·", "✢", "✳", "✶", "✻", "✽", "�
 /// the width-gated suffix. The token count is a chars/4 estimate that lerps
 /// toward the actual value ~25% of the gap per draw so the meter climbs
 /// smoothly instead of jumping.
-pub fn spinner_row_text(app: &crate::state::App, elapsed: Duration, width: u16) -> String {
+pub fn spinner_row_text(app: &App, elapsed: Duration, width: u16) -> String {
     let frame = (elapsed.as_millis() / 120) % 12;
     let glyph = SPINNER_FRAMES[frame as usize];
     let prog = app.run_progress();

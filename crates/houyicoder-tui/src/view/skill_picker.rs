@@ -16,6 +16,7 @@ use crate::state::App;
 use crate::view::line_wrap::truncate_width;
 use crate::view::skills_pane::display_order;
 use houyicoder_protocol::frontend::skills::SkillEntry;
+use unicode_width::UnicodeWidthStr;
 
 /// The filtered skill list. The input text after @ is the filter query;
 /// skills whose name matches (case-insensitive substring) are kept.
@@ -107,7 +108,7 @@ fn format_one(s: &SkillEntry, inner_width: u16) -> Line<'static> {
     } else {
         Color::DarkGray
     };
-    let name_w = unicode_width::UnicodeWidthStr::width(s.name.as_str());
+    let name_w = UnicodeWidthStr::width(s.name.as_str());
     // glyph + space + name + separator(2) + highlight symbol(2)
     let reserved = 1 + 1 + name_w + 2 + 2;
     let desc_max = (inner_width as usize).saturating_sub(reserved);

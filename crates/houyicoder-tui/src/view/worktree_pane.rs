@@ -18,6 +18,7 @@ use crate::state::App;
 use crate::view::navigation::key_hint;
 use crate::view::relative_time::now_epoch_secs;
 use crate::view::relative_time::relative_time;
+use std::path::Path;
 
 /// Max width for the path column. Long paths are left-truncated (tail kept)
 /// so the identifying segment stays visible. Fixed width so the column
@@ -112,7 +113,7 @@ pub(super) fn draw_content(f: &mut Frame, area: Rect, app: &App) {
 /// them; the design's display-only round). 'e' in this view opens the
 /// worktree; Esc returns to the list.
 fn draw_detail(f: &mut Frame, area: Rect, e: &WorktreeEntry) {
-    let slug = std::path::Path::new(&e.path)
+    let slug = Path::new(&e.path)
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| e.path.clone());

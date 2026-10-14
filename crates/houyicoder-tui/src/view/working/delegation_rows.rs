@@ -3,8 +3,11 @@
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 
+use super::transcript::push_line_rows;
 use crate::records::TranscriptLine;
 use crate::rows::row_set::{Row, RowSet};
+use crate::selection::TAG_PLAIN;
+use crate::selection::TAG_SYSTEM;
 use crate::state::App;
 use crate::toggle_hint::ToggleHint;
 use crate::view::badge_color;
@@ -34,7 +37,7 @@ pub(crate) fn push_delegation_rows(
     app: &App,
     sink: &mut RowSet,
 ) {
-    const SYSTEM: u8 = crate::selection::TAG_SYSTEM;
+    const SYSTEM: u8 = TAG_SYSTEM;
     let Delegation {
         child_sid,
         subagent_type,
@@ -71,7 +74,7 @@ pub(crate) fn push_delegation_rows(
         grp_key.clone()
     };
     sink.push(
-        Row::new(crate::selection::TAG_PLAIN, head.clone())
+        Row::new(TAG_PLAIN, head.clone())
             .fold_key(fold_key)
             .group(enclosing.clone())
             .pre(Some(head_line(subagent_type, summary, &hint, color))),
@@ -85,7 +88,7 @@ pub(crate) fn push_delegation_rows(
     }
     sink.within_subagent(|sink| {
         for child in folded_transcript {
-            super::transcript::push_line_rows(child, Some(child_sid), width, app, sink);
+            push_line_rows(child, Some(child_sid), width, app, sink);
         }
     });
 }

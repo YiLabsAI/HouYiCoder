@@ -11,15 +11,17 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph},
 };
 
+use super::delegation_rows::{Delegation, push_delegation_rows};
 use super::notice_rows::push_notice_rows;
 use super::tail_rows::build_tail_rows;
 use crate::fold::DisplaySlot;
+use crate::fold::{display_slots, render_summary};
 use crate::records::TranscriptLine;
 use crate::rows::row_set::{Row, RowSet};
 use crate::rows::slots_key::SlotsKey;
 use crate::selection::{
-    TAG_DIFF_ADD, TAG_DIFF_CTX, TAG_DIFF_DEL, TAG_DIFF_HUNK, TAG_FOLD, TAG_SPINNER, TAG_SYSTEM,
-    TAG_USER,
+    TAG_AGENT_FIRST, TAG_DIFF_ADD, TAG_DIFF_CTX, TAG_DIFF_DEL, TAG_DIFF_HUNK, TAG_FOLD, TAG_PLAIN,
+    TAG_SPINNER, TAG_SYSTEM, TAG_USER,
 };
 use crate::state::enums::LiveBlock;
 use crate::state::{App, ViewportMode};
@@ -29,6 +31,8 @@ use crate::view::line_wrap::truncate_width;
 use crate::view::line_wrap::wrap_line;
 use crate::view::markers::{diff_row, styled_row};
 use crate::view::spinner::{spinner_line, stall_intensity, stall_intensity_reasoning};
+use ratatui::buffer::CellDiffOption;
+use std::time::Duration;
 use unicode_width::UnicodeWidthStr;
 
 fn ensure_cached_slots(area: Rect, app: &App) {
@@ -84,7 +88,7 @@ pub(super) fn draw_transcript(f: &mut Frame, area: Rect, app: &App) {
     draw_jump_to_bottom(f, inner, app);
 }
 
-fn compute_spinner_params(app: &App) -> (std::time::Duration, f32, bool) {
+fn compute_spinner_params(app: &App) -> (Duration, f32, bool) {
     let spin_elapsed = app.run_started().map(|t| t.elapsed()).unwrap_or_default();
     let prog = app.run_progress();
     let tool_active = prog.is_some_and(|p| p.tools.any_running());
@@ -308,13 +312,13 @@ pub(crate) fn push_line_rows(
     app: &App,
     sink: &mut RowSet,
 ) -> bool {
-    const PLAIN: u8 = crate::selection::TAG_PLAIN;
-    const USER: u8 = crate::selection::TAG_USER;
-    const SYSTEM: u8 = crate::selection::TAG_SYSTEM;
-    const DIFF_ADD: u8 = crate::selection::TAG_DIFF_ADD;
-    const DIFF_DEL: u8 = crate::selection::TAG_DIFF_DEL;
-    const DIFF_HUNK: u8 = crate::selection::TAG_DIFF_HUNK;
-    const DIFF_CTX: u8 = crate::selection::TAG_DIFF_CTX;
+    const PLAIN: u8 = TAG_PLAIN;
+    const USER: u8 = TAG_USER;
+    const SYSTEM: u8 = TAG_SYSTEM;
+    const DIFF_ADD: u8 = TAG_DIFF_ADD;
+    const DIFF_DEL: u8 = TAG_DIFF_DEL;
+    const DIFF_HUNK: u8 = TAG_DIFF_HUNK;
+    const DIFF_CTX: u8 = TAG_DIFF_CTX;
     // Thinking is not rendered as a row (folded into the thought-for line
     // below the answer); its content stays for /search. line_display_rows
     // also returns 0 so the count stays in sync.
@@ -388,25 +392,21 @@ pub(crate) fn push_line_rows(
         color,
     } = line
     {
-        let delegation = super::delegation_rows::Delegation {
+        let delegation = Delegation {
             child_sid,
             subagent_type,
             summary,
             folded_transcript,
             color: color.as_deref(),
         };
-        super::delegation_rows::push_delegation_rows(&delegation, grp, width, app, sink);
+        push_delegation_rows(&delegation, grp, width, app, sink);
         return true;
     }
     if let TranscriptLine::Agent(text) = line {
         let (md_lines, md_plain) = app.ui.renderer.lines.borrow_mut().agent_rows(text, width);
         let mut first = true;
         for (md_line, plain) in md_lines.into_iter().zip(md_plain) {
-            let tag = if first {
-                crate::selection::TAG_AGENT_FIRST
-            } else {
-                PLAIN
-            };
+            let tag = if first { TAG_AGENT_FIRST } else { PLAIN };
             sink.push(
                 Row::new(tag, plain)
                     .group(grp_key.clone())
@@ -559,7 +559,7 @@ pub(crate) fn refresh_wide_cells(f: &mut Frame, area: Rect) {
             };
             let width = UnicodeWidthStr::width(cell.symbol());
             if width > 1 || (cell.symbol() == " " && !previous_is_wide) {
-                cell.set_diff_option(ratatui::buffer::CellDiffOption::AlwaysUpdate);
+                cell.set_diff_option(CellDiffOption::AlwaysUpdate);
             }
         }
     }
@@ -579,13 +579,13 @@ fn fold_hint_row(hint: &str, width: u16) -> String {
 }
 
 fn build_slots_rows(area: Rect, app: &App) -> RowSet {
-    const FOLD: u8 = crate::selection::TAG_FOLD;
+    const FOLD: u8 = TAG_FOLD;
 
     let mut sink = RowSet::default();
 
     let groups = app.active_fold_groups();
     let fold_groups = &app.ui.transcript_view.expanded.fold_groups;
-    let slots = crate::fold::display_slots(
+    let slots = display_slots(
         app.active_transcript(),
         groups.as_ref(),
         fold_groups,
@@ -602,7 +602,7 @@ fn build_slots_rows(area: Rect, app: &App) -> RowSet {
                 // the expanded region and not the collapsed handle.
                 let enclosing = fold_groups.contains(&g.key).then(|| g.key.clone());
                 let toggle = ToggleHint::for_group(g.active, enclosing.is_some());
-                let sr = crate::fold::render_summary(&g.stats, &g.git_ops, g.active, toggle);
+                let sr = render_summary(&g.stats, &g.git_ops, g.active, toggle);
                 sink.push(
                     Row::new(FOLD, sr.plain)
                         .fold_key(Some(g.key.clone()))

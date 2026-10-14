@@ -2,6 +2,7 @@ use super::super::handle_working;
 use crate::input::InputField;
 use crate::state::enums::StatusTab;
 use crate::state::{App, Pane, Screen, ViewportMode};
+use crate::test_harness::working_app;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 fn key(code: KeyCode) -> KeyEvent {
@@ -11,7 +12,7 @@ fn key(code: KeyCode) -> KeyEvent {
 /// A working app parked on the /status Status tab with an empty input box,
 /// the state the e key opens the editor from.
 fn status_tab_app() -> App {
-    let mut app = crate::test_harness::working_app();
+    let mut app = working_app();
     app.ui.navigation.screen = Screen::Working;
     app.ui.navigation.viewport = ViewportMode::Working;
     app.ui.navigation.pane = Pane::Status;

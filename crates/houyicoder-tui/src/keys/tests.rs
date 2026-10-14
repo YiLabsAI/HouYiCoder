@@ -4,6 +4,7 @@ use super::palette::handle_palette;
 use super::*;
 use crate::agent_message::FleetEntry;
 use crate::composition;
+use crate::composition::app;
 use crate::evidence::Verdict;
 use crate::input::queue::InputItem;
 use crate::pending_prompt::PendingPrompt;
@@ -1716,7 +1717,7 @@ fn test_fleet_strip_renders_rows() {
 /// teammate view via the agent id, not the transcript cursor.
 #[test]
 fn test_enter_fleet_drills_teammate() {
-    let mut app = crate::composition::app();
+    let mut app = app();
     app.ui.navigation.screen = Screen::Working;
     app.ui.navigation.viewport = ViewportMode::Working;
     app.sessions

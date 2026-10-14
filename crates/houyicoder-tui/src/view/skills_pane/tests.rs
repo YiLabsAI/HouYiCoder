@@ -5,11 +5,14 @@ use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::frontend::skills::{SkillEntry, SkillUsage};
 
 use crate::composition;
+use crate::keys::handle_working;
+use crate::state::App;
 use crate::state::{Pane, Screen};
+use crate::test_harness::render_text;
 use crossterm::event::KeyEvent;
 
-fn render(app: &crate::state::App, w: u16, h: u16) -> String {
-    crate::test_harness::render_text(app, w, h)
+fn render(app: &App, w: u16, h: u16) -> String {
+    render_text(app, w, h)
 }
 
 fn key(code: KeyCode) -> KeyEvent {
@@ -99,7 +102,7 @@ fn test_detail_body_scrolls() {
     let top = render(&app, 80, 24);
     assert!(top.contains("body line 0"), "body renders: {top}");
     assert!(top.contains("invoked 2"), "usage pinned: {top}");
-    crate::keys::handle_working(&mut app, key(KeyCode::PageDown));
+    handle_working(&mut app, key(KeyCode::PageDown));
     let scrolled = render(&app, 80, 24);
     assert!(
         !scrolled.contains("body line 0") && scrolled.contains("body line 10"),

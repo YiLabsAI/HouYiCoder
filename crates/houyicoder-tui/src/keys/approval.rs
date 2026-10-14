@@ -7,6 +7,7 @@ use crossterm::event::{KeyCode, KeyEvent};
 use crate::records::APPROVAL_OPTIONS;
 use crate::records::Approval;
 use crate::state::App;
+use houyicoder_protocol::acp_wire::PermissionOptionKind;
 use houyicoder_protocol::frontend::run::ApprovalDecision;
 
 /// Display order of the three built-in approval options, the canonical
@@ -155,10 +156,7 @@ pub(super) fn handle_approval(app: &mut App, k: KeyEvent) {
                 .capabilities
                 .permission
                 .sticky_choices
-                .insert(
-                    tool,
-                    houyicoder_protocol::acp_wire::PermissionOptionKind::RejectOnce,
-                );
+                .insert(tool, PermissionOptionKind::RejectOnce);
             if app.sessions.current.connection.is_some() {
                 app.resolve_current_approval(ApprovalDecision {
                     call_id,

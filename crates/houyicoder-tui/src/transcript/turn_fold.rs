@@ -19,6 +19,8 @@ use super::frame_payload::chunk_text;
 use super::tool_renders_chip;
 use crate::records::TranscriptLine;
 use crate::row_id::RowId;
+use std::cmp::Reverse;
+use std::mem::take;
 
 /// The duration a run-completion record carries. A record without a readable
 /// one closes the turn with no duration rather than a claimed zero.
@@ -308,7 +310,7 @@ impl<'a, F: AsRef<TranscriptFrame>> TurnFold<'a, F> {
         if self.reasoning.is_empty() && self.calls == 0 {
             return None;
         }
-        let reasoning = (!self.reasoning.is_empty()).then(|| std::mem::take(&mut self.reasoning));
+        let reasoning = (!self.reasoning.is_empty()).then(|| take(&mut self.reasoning));
         Some(TranscriptLine::ThoughtFor {
             ms,
             reasoning,
@@ -355,8 +357,7 @@ impl<'a, F: AsRef<TranscriptFrame>> TurnFold<'a, F> {
         if self.calls == 0 {
             return None;
         }
-        self.tools
-            .sort_by_key(|(_, count)| std::cmp::Reverse(*count));
+        self.tools.sort_by_key(|(_, count)| Reverse(*count));
         if let [(tool, count)] = self.tools.as_slice() {
             return Some(format!("ran {count} {tool}"));
         }

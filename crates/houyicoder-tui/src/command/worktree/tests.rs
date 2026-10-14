@@ -1,4 +1,5 @@
 use crate::composition::{WorktreeEntry, app};
+use crate::records::TranscriptLine;
 
 fn row(path: &str) -> WorktreeEntry {
     WorktreeEntry {
@@ -107,9 +108,11 @@ fn test_enter_no_carrier() {
     // Disconnected: the enter path reports it and enters nothing.
     app.enter_worktree_at_cursor();
     assert!(
-        app.sessions.current.transcript
+        app.sessions
+            .current
+            .transcript
             .iter()
-            .any(|l| matches!(l, crate::records::TranscriptLine::System(s) if s.contains("not connected"))),
+            .any(|l| matches!(l, TranscriptLine::System(s) if s.contains("not connected"))),
         "disconnected enter should report not connected"
     );
 }

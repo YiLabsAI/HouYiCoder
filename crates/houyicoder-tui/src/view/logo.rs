@@ -9,11 +9,12 @@ use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
 };
+use std::env::var;
 
 /// True when the terminal should avoid unicode box-drawing / symbol chars.
 /// Set via the HOUYI_ASCII_FALLBACK env var (1 or true).
 pub fn ascii_fallback() -> bool {
-    match std::env::var("HOUYI_ASCII_FALLBACK") {
+    match var("HOUYI_ASCII_FALLBACK") {
         Ok(v) => v == "1" || v.eq_ignore_ascii_case("true"),
         Err(_) => false,
     }

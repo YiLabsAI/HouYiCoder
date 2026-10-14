@@ -10,6 +10,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::input::InputField;
 use serde::{Deserialize, Serialize};
+use std::env::current_dir;
+use std::fs::OpenOptions;
+use std::fs::create_dir_all;
+use std::fs::read_to_string;
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::PathBuf;
@@ -17,7 +21,7 @@ use std::path::PathBuf;
 const MAX_ENTRIES: usize = 100;
 
 fn project_root() -> String {
-    std::env::current_dir()
+    current_dir()
         .ok()
         .and_then(|p| p.to_str().map(str::to_string))
         .unwrap_or_default()
@@ -58,9 +62,9 @@ pub fn add(display: &str, project: &str, session: &str, path: &Path) -> u64 {
         }
     };
     if let Some(parent) = path.parent() {
-        let _created = std::fs::create_dir_all(parent);
+        let _created = create_dir_all(parent);
     }
-    let mut opts = std::fs::OpenOptions::new();
+    let mut opts = OpenOptions::new();
     opts.append(true).create(true);
     #[cfg(unix)]
     {
@@ -76,7 +80,7 @@ pub fn add(display: &str, project: &str, session: &str, path: &Path) -> u64 {
 /// current session first. Aborted-submit timestamps in the skip-set drop.
 /// Capped at MAX_ENTRIES.
 pub fn read(project: &str, session: &str, skip: &HashSet<u64>, path: &Path) -> Vec<String> {
-    let Ok(content) = std::fs::read_to_string(path) else {
+    let Ok(content) = read_to_string(path) else {
         return Vec::new();
     };
     let mut this_session: Vec<String> = Vec::new();

@@ -1,4 +1,5 @@
 use super::*;
+use crate::composition::app;
 
 #[test]
 fn test_verdict_style_colors() {
@@ -31,7 +32,7 @@ fn test_signoff_row_buttons() {
 
 #[test]
 fn test_consensus_line_verdicts() {
-    let findings = crate::composition::app().workflow.review.findings.clone();
+    let findings = app().workflow.review.findings.clone();
     let line = consensus_line(&findings);
     let joined: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
     // three lenses with check/cross marks, a weighted verdict, and a tally

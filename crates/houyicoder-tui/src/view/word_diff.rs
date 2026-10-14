@@ -6,6 +6,7 @@
 //! produces the line-level unified diff the renderer parses).
 
 use similar::ChangeTag;
+use similar::TextDiff;
 
 /// One part of a word-level diff (a run of words all added, all removed, or
 /// unchanged). A diff-part shape so the renderer can
@@ -25,7 +26,7 @@ pub struct WordDiffPart {
 /// bars. The change-ratio threshold that gates whether to USE this (a
 /// 0.4 change-threshold) lives in the renderer, not here.
 pub fn word_diff(old: &str, new: &str) -> Vec<WordDiffPart> {
-    let diff = similar::TextDiff::from_unicode_words(old, new);
+    let diff = TextDiff::from_unicode_words(old, new);
     diff.ops()
         .iter()
         .flat_map(|op| diff.iter_inline_changes(op))
