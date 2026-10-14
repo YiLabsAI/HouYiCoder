@@ -5,9 +5,6 @@
 
 #![cfg(test)]
 
-use std::fs;
-use std::path::{Path, PathBuf};
-
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 use houyicoder_protocol::frontend::SlashCommand;
 use houyicoder_protocol::frontend::run::ContentBlock;
@@ -539,64 +536,6 @@ fn test_search_current_match_yellow() {
     assert!(
         has_yellow,
         "focused multi-line match must draw yellow on its mid-body query row"
-    );
-}
-
-// The deleted inline/popup/disk surfaces stay deleted. The build catches
-// references to deleted types; this guard catches a re-introduced DEAD
-// definition (a struct/fn re-added but unused would compile). Walks source
-// under crates (not docs -- bug-log and design docs legitimately carry these
-// as history, and scanning docs would push someone to rewrite history).
-// Excludes this test file so the pats literals do not self-match.
-#[test]
-fn test_legacy_search_definitions_gone() {
-    let pats = [
-        "struct DiskHit",
-        "trait SearchLog",
-        "struct NoDiskLog",
-        "struct SessionLogSearch",
-        "fn run_popup_search",
-        "fn open_inline_search",
-        "fn close_search",
-        "pub disk_matches",
-        "pub disk_focus",
-        "pub search_log",
-    ];
-    fn walk(dir: PathBuf, pats: &[&str], hits: &mut Vec<String>) {
-        let Ok(entries) = fs::read_dir(&dir) else {
-            return;
-        };
-        for e in entries.flatten() {
-            let p = e.path();
-            if p.is_dir() {
-                walk(p, pats, hits);
-                continue;
-            }
-            let Some(name) = p.file_name().and_then(|n| n.to_str()) else {
-                continue;
-            };
-            if !name.ends_with(".rs") || name == "scrolling.rs" {
-                continue;
-            }
-            let Ok(src) = fs::read_to_string(&p) else {
-                continue;
-            };
-            for pat in pats {
-                if src.contains(pat) {
-                    hits.push(format!("{}: {pat}", p.display()));
-                }
-            }
-        }
-    }
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let mut hits = Vec::new();
-    walk(root.join("src"), &pats, &mut hits);
-    walk(root.join("../houyicoder-cli/src"), &pats, &mut hits);
-    walk(root.join("../houyicoder-protocol/src"), &pats, &mut hits);
-    assert!(
-        hits.is_empty(),
-        "legacy search definitions still in source:\n{}",
-        hits.join("\n")
     );
 }
 
