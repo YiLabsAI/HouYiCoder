@@ -5,6 +5,9 @@
 //! record, and the parse error).
 
 use serde_json::Value;
+use std::error::Error;
+use std::fmt::Display;
+use std::fmt::Formatter;
 
 /// The agent permission modes. Two modes — Manual asks before any tool that
 /// declares it needs approval (read-only tools still auto-allow); Auto allows
@@ -87,10 +90,10 @@ pub struct ModeChange {
 #[derive(Debug)]
 pub struct ModeError(pub String);
 
-impl std::fmt::Display for ModeError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for ModeError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
     }
 }
 
-impl std::error::Error for ModeError {}
+impl Error for ModeError {}

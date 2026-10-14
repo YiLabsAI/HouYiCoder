@@ -18,11 +18,11 @@ import subprocess
 import sys
 from pathlib import Path
 
-# Errors per target, as a ratchet. Linux is clean; the two windows errors are
-# the pre-existing `std::os::unix` imports, awaiting a cfg gate of their own.
+# Errors per target, as a ratchet. Both are clean: the pre-existing unix imports
+# that used to break windows now carry their gate.
 _TARGET_BASELINE = {
     "x86_64-unknown-linux-gnu": 0,
-    "x86_64-pc-windows-msvc": 2,
+    "x86_64-pc-windows-msvc": 0,
 }
 # A rustc diagnostic carries a code (error[E0425]). A build script that cannot
 # run for the target says "failed to run custom build command" and is a
@@ -68,23 +68,25 @@ def gated_crates(root: Path) -> list[str]:
 
 
 def error_count(crate: str, target: str, root: Path) -> int | None:
-    """rustc diagnostics from a library-only check of one crate, or None when
-    the target cannot be built here at all (a dependency's build script needs
-    a linker the toolchain does not have).
+    """rustc diagnostics from a library and test check of one crate, or None
+    when the target cannot be built here at all (a dependency's build script
+    needs a linker the toolchain does not have).
 
-    Libraries only: a bin or a test target needs a linker for the target,
-    which is not what this check is about, and a cfg-gated module in a
-    library is where this class of break lives.
+    Both targets are compiled: a cfg-gated break lives in a library as often
+    as in a test module, and a test-only one is invisible to `--lib`.
     """
-    out = subprocess.run(
-        ["cargo", "check", "-p", crate, "--lib", "--target", target],
-        capture_output=True,
-        text=True,
-        cwd=root,
-    )
-    if _BUILD_SCRIPT_RE.search(out.stderr) and not _ERROR_RE.search(out.stderr):
-        return None
-    return len(_ERROR_RE.findall(out.stderr))
+    total = 0
+    for scope in (["--lib"], ["--tests"]):
+        out = subprocess.run(
+            ["cargo", "check", "-p", crate, *scope, "--target", target],
+            capture_output=True,
+            text=True,
+            cwd=root,
+        )
+        if _BUILD_SCRIPT_RE.search(out.stderr) and not _ERROR_RE.search(out.stderr):
+            return None
+        total += len(_ERROR_RE.findall(out.stderr))
+    return total
 
 
 def check(root: Path = Path(".")) -> int:

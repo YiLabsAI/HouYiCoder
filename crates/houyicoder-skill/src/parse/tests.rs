@@ -1,5 +1,3 @@
-//! Tests for this module.
-
 use super::*;
 use crate::definition::{SkillFamily, SkillProvenance};
 use serde_yaml::Mapping;

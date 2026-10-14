@@ -1,7 +1,12 @@
 use super::*;
+use crate::consent::InMemoryConsentStore;
+use crate::consent::args_key;
 use crate::decision::{Decision, Outcome};
 use crate::rule::{Effect, RuleContent};
 use serde_json::Value;
+use std::sync::Arc;
+use std::thread::sleep;
+use std::time::Duration;
 
 fn edit_req(path: &str) -> ToolRequest<'_> {
     let v: &'static Value = Box::leak(serde_json::json!({"path": path}).into());
@@ -205,7 +210,6 @@ fn test_destructive_consent_under_allow() {
     // call: the user recorded consent for this exact rm command, so the
     // destructive gate lets it through under an Allow rule. A different rm
     // command (not the consented exact one) still asks.
-    use crate::consent::{InMemoryConsentStore, args_key};
     let cs = Arc::new(InMemoryConsentStore::non_expiring());
     let v: &'static Value = Box::leak(serde_json::json!({"command": "rm -rf /tmp/x"}).into());
     cs.record("bash", &args_key(Some(v)));
@@ -285,8 +289,6 @@ fn test_destructive_redirect_asks() {
 
 #[test]
 fn test_destructive_consent_overrides_rm() {
-    use crate::consent::{InMemoryConsentStore, args_key};
-    use std::sync::Arc;
     let cs = Arc::new(InMemoryConsentStore::non_expiring());
     let g = DefaultModeGate::with_mode(PermissionMode::Auto).with_consent(cs);
     let v = serde_json::json!({"command": "rm -rf /tmp/foo"});
@@ -408,8 +410,6 @@ fn test_auto_allows_fs_exec() {
 
 #[test]
 fn test_consent_upgrades_ask() {
-    use crate::consent::InMemoryConsentStore;
-    use std::sync::Arc;
     let cs = Arc::new(InMemoryConsentStore::non_expiring());
     let g = DefaultModeGate::with_mode(PermissionMode::Manual).with_consent(cs);
     assert!(matches!(
@@ -425,8 +425,6 @@ fn test_consent_upgrades_ask() {
 
 #[test]
 fn test_consent_upgrades_rule_ask() {
-    use crate::consent::InMemoryConsentStore;
-    use std::sync::Arc;
     let cs = Arc::new(InMemoryConsentStore::non_expiring());
     let g = DefaultModeGate::new().with_consent(cs);
     g.add_rule(Rule::new("bash", Effect::Ask).unwrap());
@@ -443,8 +441,6 @@ fn test_consent_upgrades_rule_ask() {
 
 #[test]
 fn test_consent_no_override_deny() {
-    use crate::consent::InMemoryConsentStore;
-    use std::sync::Arc;
     let cs = Arc::new(InMemoryConsentStore::non_expiring());
     let g = DefaultModeGate::new().with_consent(cs);
     g.add_rule(Rule::new("bash", Effect::Deny).unwrap());
@@ -457,8 +453,6 @@ fn test_consent_no_override_deny() {
 
 #[test]
 fn test_consent_keys_by_args() {
-    use crate::consent::{InMemoryConsentStore, args_key};
-    use std::sync::Arc;
     let cs = Arc::new(InMemoryConsentStore::non_expiring());
     let g = DefaultModeGate::with_mode(PermissionMode::Manual).with_consent(cs);
     let v = serde_json::json!({"path": "/tmp/a"});
@@ -485,9 +479,6 @@ fn test_consent_keys_by_args() {
 
 #[test]
 fn test_expired_consent_asks() {
-    use crate::consent::InMemoryConsentStore;
-    use std::sync::Arc;
-    use std::time::Duration;
     let cs = Arc::new(InMemoryConsentStore::new(Duration::from_millis(20)));
     let g = DefaultModeGate::with_mode(PermissionMode::Manual).with_consent(cs);
     g.consent().unwrap().record("bash", "");
@@ -495,7 +486,7 @@ fn test_expired_consent_asks() {
         g.decide(&req("bash", true, false, true)).outcome(),
         Outcome::Allow
     ));
-    std::thread::sleep(Duration::from_millis(30));
+    sleep(Duration::from_millis(30));
     assert!(matches!(
         g.decide(&req("bash", true, false, true)).outcome(),
         Outcome::Ask
@@ -609,8 +600,6 @@ fn test_compound_unsafe_escalates_allow() {
 #[test]
 fn test_compound_unsafe_consent_overrides() {
     // Stored consent for the exact call upgrades the compound-safety Ask.
-    use crate::consent::{InMemoryConsentStore, args_key};
-    use std::sync::Arc;
     let cs = Arc::new(InMemoryConsentStore::non_expiring());
     let g = DefaultModeGate::with_mode(PermissionMode::Auto).with_consent(cs);
     let v = serde_json::json!({"command": "ls && echo hi > /tmp/x"});
@@ -629,8 +618,6 @@ fn test_compound_unsafe_consent_overrides() {
 #[test]
 fn test_consent_cannot_override_safety() {
     // Consent cannot upgrade a protected-path safety Ask.
-    use crate::consent::{InMemoryConsentStore, args_key};
-    use std::sync::Arc;
     let cs = Arc::new(InMemoryConsentStore::non_expiring());
     let g = DefaultModeGate::with_mode(PermissionMode::Auto).with_consent(cs);
     let v = serde_json::json!({"command": "rm -rf .git/"});

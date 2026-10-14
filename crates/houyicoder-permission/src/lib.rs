@@ -33,8 +33,7 @@ mod store;
 mod wire;
 
 #[cfg(test)]
-#[path = "decide_bench_tests.rs"]
-mod decide_bench_tests;
+mod tests;
 
 pub use compound::{compound_safe, is_attestable, split_compound};
 pub use consent::{ConsentStore, InMemoryConsentStore, args_key};

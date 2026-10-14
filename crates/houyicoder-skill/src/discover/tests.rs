@@ -1,5 +1,3 @@
-//! Tests for this module.
-
 use super::*;
 use std::env::temp_dir;
 use std::fs;

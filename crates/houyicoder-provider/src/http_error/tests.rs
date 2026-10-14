@@ -1,5 +1,3 @@
-//! Tests for this module.
-
 use super::*;
 use reqwest::header::HeaderMap;
 

@@ -1,6 +1,10 @@
 use super::*;
+use crate::Scope;
 use crate::decision::Outcome;
 use crate::rule::Effect;
+use crate::rule::Rule;
+use crate::rule::RuleContent;
+use std::sync::Arc;
 
 #[test]
 fn test_git_ops_asks_default() {
@@ -48,8 +52,6 @@ fn test_git_session_consent_skips() {
     // for that subcommand this session; other git history ops still Ask. The
     // consent is command-level (prefix), not exact-args, so a different commit
     // message still matches.
-    use crate::Scope;
-    use crate::rule::{Rule, RuleContent};
     let g = DefaultModeGate::with_mode(PermissionMode::Auto);
     g.add_rule(
         Rule::with_content(
@@ -86,7 +88,6 @@ fn test_git_wrapped_interpreter_asks() {
 fn test_git_allow_rule_skips() {
     // An explicit durable Allow rule for git commit shadows the builtin ask
     // (last-match wins); a different git op without a matching rule still Asks.
-    use crate::rule::RuleContent;
     let g = DefaultModeGate::with_mode(PermissionMode::Auto);
     g.add_rule(
         Rule::with_content(
@@ -111,9 +112,6 @@ fn test_consent_via_trait_arc() {
     // The server adds a session-scope allow rule through Arc<dyn ModeGate>;
     // verify the trait dispatch reaches the real rule set, not the no-op
     // default.
-    use crate::Scope;
-    use crate::rule::{Rule, RuleContent};
-    use std::sync::Arc;
     let g: Arc<dyn ModeGate> = Arc::new(DefaultModeGate::with_mode(PermissionMode::Auto));
     g.add_rule(
         Rule::with_content(

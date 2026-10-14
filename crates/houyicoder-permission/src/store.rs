@@ -27,6 +27,15 @@ use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 
 use crate::rule::Rule;
+use std::env::current_dir;
+use std::env::var_os;
+use std::error::Error;
+use std::fmt::Display;
+use std::fmt::Formatter;
+use std::fs::create_dir_all;
+use std::fs::read;
+use std::fs::rename;
+use std::fs::write;
 
 /// The persistence scopes, ordered by ascending authority breadth. User is
 /// the broadest (one home file shared across projects); Local is the
@@ -85,8 +94,8 @@ pub enum StoreError {
     Encode,
 }
 
-impl std::fmt::Display for StoreError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for StoreError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Io => f.write_str("rule store I/O failure"),
             Self::Decode => f.write_str("rule store decode failure"),
@@ -95,7 +104,7 @@ impl std::fmt::Display for StoreError {
     }
 }
 
-impl std::error::Error for StoreError {}
+impl Error for StoreError {}
 
 /// The persistence seam for durable rules. Object-safe so the gate holds a
 /// single shared dispatcher. The in-memory fast path skips this entirely; an
@@ -210,7 +219,7 @@ impl FileRuleStore {
         // Resolve Project + Local to absolute paths so a worktree cwd change
         // (worktree enter/exit) does not silently redirect the store to a
         // different dot directory and lose authorizations.
-        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let cwd = current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let project = cwd.join(".houyicoder").join("permissions.json");
         let local = cwd.join(".houyicoder").join("permissions.local.json");
         Self::new(user, project, local)
@@ -250,14 +259,14 @@ impl FileRuleStore {
     ) -> Result<(), StoreError> {
         let path = self.path_for(scope);
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|_| StoreError::Io)?;
+            create_dir_all(parent).map_err(|_| StoreError::Io)?;
         }
         let tmp = path.with_extension("json.tmp");
         let mut persisted = env.clone();
         persisted.version = 2;
         let bytes = serde_json::to_vec(&persisted).map_err(|_| StoreError::Encode)?;
-        std::fs::write(&tmp, bytes).map_err(|_| StoreError::Io)?;
-        std::fs::rename(&tmp, path).map_err(|_| StoreError::Io)?;
+        write(&tmp, bytes).map_err(|_| StoreError::Io)?;
+        rename(&tmp, path).map_err(|_| StoreError::Io)?;
         Ok(())
     }
 
@@ -266,7 +275,7 @@ impl FileRuleStore {
         if !path.exists() {
             return PermissionsFile::empty();
         }
-        let bytes = match std::fs::read(path) {
+        let bytes = match read(path) {
             Ok(b) => b,
             Err(_) => return PermissionsFile::empty(),
         };
@@ -483,11 +492,10 @@ impl RuleStore for FileRuleStore {
 /// still has a writable path; the project scope is the authoritative one in
 /// that case anyway.
 fn home_dir() -> PathBuf {
-    std::env::var_os("HOME")
+    var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
 #[cfg(test)]
-#[path = "store_tests.rs"]
 mod tests;

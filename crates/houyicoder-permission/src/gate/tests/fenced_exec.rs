@@ -1,12 +1,15 @@
 use super::*;
+use crate::Scope;
+use crate::decision::AllowReason;
+use crate::decision::Decision;
 use crate::decision::Outcome;
+use crate::rule::{Effect, Rule, RuleContent};
+use houyicoder_api::sandbox::{Containment, Coverage, SideEffect};
+use std::path::PathBuf;
+use std::sync::Arc;
 
 #[test]
 fn test_fenced_exec_auto_allows() {
-    use crate::decision::{AllowReason, Decision};
-    use houyicoder_api::sandbox::{Containment, Coverage, SideEffect};
-    use std::path::PathBuf;
-
     struct StubFence;
     impl Containment for StubFence {
         fn coverage(&self) -> Coverage {
@@ -37,9 +40,6 @@ fn test_fenced_exec_auto_allows() {
 
 #[test]
 fn test_auto_allow_off_asks() {
-    use houyicoder_api::sandbox::{Containment, Coverage, SideEffect};
-    use std::path::PathBuf;
-
     struct StubFence;
     impl Containment for StubFence {
         fn coverage(&self) -> Coverage {
@@ -67,10 +67,6 @@ fn test_auto_allow_off_asks() {
 
 #[test]
 fn test_auto_allow_defaults_off() {
-    use houyicoder_api::sandbox::{Containment, Coverage, SideEffect};
-    use std::path::PathBuf;
-    use std::sync::Arc;
-
     struct StubFence;
     impl Containment for StubFence {
         fn coverage(&self) -> Coverage {
@@ -99,8 +95,6 @@ fn test_auto_allow_defaults_off() {
 
 #[test]
 fn test_unfenced_exec_still_asks() {
-    use houyicoder_api::sandbox::{Containment, Coverage, SideEffect};
-
     struct StubUnfenced;
     impl Containment for StubUnfenced {
         fn coverage(&self) -> Coverage {
@@ -125,9 +119,6 @@ fn test_unfenced_exec_still_asks() {
 
 #[test]
 fn test_write_tools_no_fence() {
-    use houyicoder_api::sandbox::{Containment, Coverage, SideEffect};
-    use std::path::PathBuf;
-
     struct StubFence;
     impl Containment for StubFence {
         fn coverage(&self) -> Coverage {
@@ -152,10 +143,7 @@ fn test_write_tools_no_fence() {
     };
     let d = g.decide(&edit_req);
     assert!(
-        !matches!(
-            d,
-            crate::decision::Decision::Allow(crate::decision::AllowReason::Containment(_))
-        ),
+        !matches!(d, Decision::Allow(AllowReason::Containment(_))),
         "write tool should not get fence credit"
     );
 }
@@ -172,11 +160,6 @@ fn test_fenced_never_relaxes_immune() {
     // silently changes an immune verdict. (The mode-default relaxation is
     // pinned separately by fenced_exec_auto_allows.) Relaxation is pinned
     // explicitly ON so this test locks the mechanism, not the default.
-    use crate::Scope;
-    use crate::rule::{Effect, Rule, RuleContent};
-    use houyicoder_api::sandbox::{Containment, Coverage, SideEffect};
-    use std::path::PathBuf;
-    use std::sync::Arc;
 
     struct StubFence;
     impl Containment for StubFence {

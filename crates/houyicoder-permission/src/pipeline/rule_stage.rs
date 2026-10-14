@@ -10,6 +10,7 @@
 use crate::decision::{AllowReason, AskReason, AskSource, Decision, DenyReason, DenySource};
 use crate::mode::ToolRequest;
 use crate::pipeline::{GateCtx, Immunity, Stage, Validator, consent_allows};
+use crate::rule::Effect;
 
 /// A deny rule the user configured. Wins outright; no consent override.
 pub struct RuleDenyValidator;
@@ -28,7 +29,6 @@ impl Validator for RuleDenyValidator {
         false
     }
     fn check(&self, _req: &ToolRequest<'_>, ctx: &GateCtx<'_>) -> Option<Decision> {
-        use crate::rule::Effect;
         if ctx.effect == Some(Effect::Deny) {
             Some(Decision::Deny(DenyReason {
                 source: DenySource::UserRule,
@@ -62,7 +62,6 @@ impl Validator for RuleAskValidator {
         true
     }
     fn check(&self, req: &ToolRequest<'_>, ctx: &GateCtx<'_>) -> Option<Decision> {
-        use crate::rule::Effect;
         if ctx.effect != Some(Effect::Ask) {
             return None;
         }
@@ -97,7 +96,6 @@ impl Validator for RuleAllowValidator {
         false
     }
     fn check(&self, _req: &ToolRequest<'_>, ctx: &GateCtx<'_>) -> Option<Decision> {
-        use crate::rule::Effect;
         if ctx.effect == Some(Effect::Allow) {
             Some(Decision::Allow(AllowReason::UserRule))
         } else {

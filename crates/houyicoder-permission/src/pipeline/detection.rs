@@ -8,8 +8,10 @@ use houyicoder_api::sandbox::{BoundaryAccess, Containment, boundary_grants_for};
 use std::sync::Arc;
 
 use crate::compound::compound_safe;
+use crate::compound::is_readonly_compound;
 use crate::decision::{AskReason, AskSource, Decision};
 use crate::git_discard::should_ask_before_git;
+use crate::heredoc::strip_quoted_heredoc_bodies;
 use crate::mode::ToolRequest;
 use crate::pipeline::{GateCtx, Immunity, Stage, Validator, consent_allows};
 use crate::rule::Effect;
@@ -30,7 +32,7 @@ fn should_ask_destructive(tool_name: &str, content: &str) -> bool {
     // Strip quoted heredoc bodies first: a cat <<'EOF' body is literal text,
     // so a rm line inside it must not trip the scan. Unquoted heredoc bodies
     // stay (bash expands them, so a real command could hide there).
-    let scan = crate::heredoc::strip_quoted_heredoc_bodies(scan);
+    let scan = strip_quoted_heredoc_bodies(scan);
     let lower_content = scan.to_ascii_lowercase();
     for word in lower_content.split(|c: char| !c.is_alphanumeric()) {
         // kill/pkill are intentionally absent: signaling is not a filesystem
@@ -324,7 +326,7 @@ impl Validator for CompoundCommandValidator {
         if refs.is_empty() {
             return None;
         }
-        if compound_safe(&refs) || crate::compound::is_readonly_compound(&refs) {
+        if compound_safe(&refs) || is_readonly_compound(&refs) {
             return None;
         }
         if consent_allows(req, ctx) {

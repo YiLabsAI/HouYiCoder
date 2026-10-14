@@ -18,12 +18,26 @@ use std::sync::{Arc, Mutex};
 use crate::compound::split_compound;
 use crate::consent::ConsentStore;
 use crate::decision::{AllowReason, AskReason, AskSource, Decision};
+use crate::git_discard::should_ask_before_git;
+use crate::metrics::DecisionBucket;
+use crate::metrics::DecisionCounter;
+use crate::metrics::decision_labels;
+use crate::metrics::outcome_label;
 use crate::mode::{ModeChange, ModeError, PermissionMode, ToolRequest};
+use crate::pipeline::mode_default::MODE_DEFAULT;
+use crate::pipeline::post_transform::post_transform;
 use crate::pipeline::{GateCtx, Pipeline};
+use crate::rule::builtin_rule_id;
+use crate::rule::builtin_rules;
 use crate::rule::{Rule, evaluate, input_content};
 use crate::side_effect::side_effect_for;
+use crate::store::RuleStore;
+use crate::store::Scope;
 use houyicoder_api::sandbox::Containment;
 use houyicoder_api::sandbox::SideEffect;
+use std::collections::HashSet;
+use std::path::Path;
+use tracing::field::Empty;
 
 /// The single entry point for mode state. Implementors hold the current mode,
 /// the rule set, and the switch history. GuardedTool holds an Arc<dyn ModeGate>
@@ -42,9 +56,9 @@ pub trait ModeGate: Send + Sync {
     /// marked "always") to the durable store at the given scope, so the fence
     /// rehydrates it on restart. Default no-op (no store / a test gate). The
     /// fence's additional_dirs is updated separately by the caller.
-    fn add_directory(&self, _dir: &std::path::Path, _scope: crate::store::Scope) {}
+    fn add_directory(&self, _dir: &Path, _scope: Scope) {}
     /// Persist a read-only directory authorization.
-    fn add_read_directory(&self, _dir: &std::path::Path, _scope: crate::store::Scope) {}
+    fn add_read_directory(&self, _dir: &Path, _scope: Scope) {}
     /// Remove a rule by index. Returns true if the index was in range.
     fn remove_rule(&self, index: usize) -> bool;
     /// Enable or disable the git-checkpoint builtin rules (git commit / rebase
@@ -58,7 +72,7 @@ pub trait ModeGate: Send + Sync {
     /// source, validator), for the inspect / status surface and the harvest
     /// sprint's prompt-rate baseline. The default returns empty for gates
     /// that do not count.
-    fn decision_metrics(&self) -> Vec<crate::metrics::DecisionBucket> {
+    fn decision_metrics(&self) -> Vec<DecisionBucket> {
         Vec::new()
     }
 }
@@ -70,8 +84,8 @@ pub struct DefaultModeGate {
     mode: Mutex<PermissionMode>,
     rules: Mutex<Vec<Rule>>,
     history: Mutex<Vec<ModeChange>>,
-    consent: Option<Arc<dyn crate::consent::ConsentStore>>,
-    store: Option<Arc<dyn crate::store::RuleStore>>,
+    consent: Option<Arc<dyn ConsentStore>>,
+    store: Option<Arc<dyn RuleStore>>,
     /// The ordered validator registry. Built once at construction and never
     /// mutated, so the gate can share it across decide calls without a lock.
     /// The validators are stateless: every per-call input they need is packed
@@ -94,18 +108,18 @@ pub struct DefaultModeGate {
     /// The in-process decision counter, bucketed by (outcome, source,
     /// validator). Feeds the harvest sprint's prompt-rate baseline and the
     /// inspect / status surface; no external metrics backend.
-    metrics: crate::metrics::DecisionCounter,
+    metrics: DecisionCounter,
     /// The ids of builtin rules the user disabled (e.g. via the /permission
     /// git toggle). A disabled builtin rule is not seeded into the rule set,
     /// so the call it gated falls through to the rest of the ladder.
-    disabled_builtins: std::sync::Mutex<std::collections::HashSet<String>>,
+    disabled_builtins: Mutex<HashSet<String>>,
 }
 
 impl DefaultModeGate {
     pub fn new() -> Self {
         Self {
             mode: Mutex::new(PermissionMode::Auto),
-            rules: Mutex::new(crate::rule::builtin_rules()),
+            rules: Mutex::new(builtin_rules()),
             history: Mutex::new(Vec::new()),
             consent: None,
             store: None,
@@ -113,15 +127,15 @@ impl DefaultModeGate {
             headless: AtomicBool::new(false),
             containment: None,
             auto_allow_fenced_exec: AtomicBool::new(false),
-            metrics: crate::metrics::DecisionCounter::new(),
-            disabled_builtins: std::sync::Mutex::new(std::collections::HashSet::new()),
+            metrics: DecisionCounter::new(),
+            disabled_builtins: Mutex::new(HashSet::new()),
         }
     }
 
     pub fn with_mode(mode: PermissionMode) -> Self {
         Self {
             mode: Mutex::new(mode),
-            rules: Mutex::new(crate::rule::builtin_rules()),
+            rules: Mutex::new(builtin_rules()),
             history: Mutex::new(Vec::new()),
             consent: None,
             store: None,
@@ -129,8 +143,8 @@ impl DefaultModeGate {
             headless: AtomicBool::new(false),
             containment: None,
             auto_allow_fenced_exec: AtomicBool::new(false),
-            metrics: crate::metrics::DecisionCounter::new(),
-            disabled_builtins: std::sync::Mutex::new(std::collections::HashSet::new()),
+            metrics: DecisionCounter::new(),
+            disabled_builtins: Mutex::new(HashSet::new()),
         }
     }
 
@@ -149,8 +163,8 @@ impl DefaultModeGate {
             headless: AtomicBool::new(false),
             containment: None,
             auto_allow_fenced_exec: AtomicBool::new(false),
-            metrics: crate::metrics::DecisionCounter::new(),
-            disabled_builtins: std::sync::Mutex::new(std::collections::HashSet::new()),
+            metrics: DecisionCounter::new(),
+            disabled_builtins: Mutex::new(HashSet::new()),
         }
     }
 
@@ -169,7 +183,7 @@ impl DefaultModeGate {
     /// Subsequent add_rule calls persist every effect (allow/deny/ask) to
     /// the rule's chosen scope; remove_rule deletes from that scope too, so
     /// a deleted rule does not re-hydrate on restart.
-    pub fn with_store(mut self, store: Arc<dyn crate::store::RuleStore>) -> Self {
+    pub fn with_store(mut self, store: Arc<dyn RuleStore>) -> Self {
         let persisted = store.load();
         if !persisted.is_empty() {
             self.rules
@@ -267,22 +281,22 @@ impl ModeGate for DefaultModeGate {
         // only when the operator raises the level to debug or below.
         let span = tracing::debug_span!(
             "permission_decide",
-            outcome = tracing::field::Empty,
-            source = tracing::field::Empty,
-            validator = tracing::field::Empty,
+            outcome = Empty,
+            source = Empty,
+            validator = Empty,
         );
         let _enter = span.enter();
         let raw = self.decide_inner(req);
         let auto = self.auto_allow_fenced_exec.load(Ordering::Relaxed);
-        let decision = crate::pipeline::post_transform::post_transform(
+        let decision = post_transform(
             raw,
             self.headless.load(Ordering::Relaxed),
             self.containment.as_deref(),
             auto,
             req,
         );
-        span.record("outcome", crate::metrics::outcome_label(&decision));
-        let labels = crate::metrics::decision_labels(&decision);
+        span.record("outcome", outcome_label(&decision));
+        let labels = decision_labels(&decision);
         span.record("source", labels.source);
         span.record("validator", labels.validator);
         self.metrics.inc(&decision);
@@ -368,7 +382,7 @@ impl ModeGate for DefaultModeGate {
         }
     }
 
-    fn add_directory(&self, dir: &std::path::Path, scope: crate::store::Scope) {
+    fn add_directory(&self, dir: &Path, scope: Scope) {
         if scope.is_writable()
             && let Some(store) = &self.store
             && let Err(error) = store.add_directory(dir, scope)
@@ -380,7 +394,7 @@ impl ModeGate for DefaultModeGate {
         }
     }
 
-    fn add_read_directory(&self, dir: &std::path::Path, scope: crate::store::Scope) {
+    fn add_read_directory(&self, dir: &Path, scope: Scope) {
         if scope.is_writable()
             && let Some(store) = &self.store
             && let Err(error) = store.add_read_directory(dir, scope)
@@ -439,10 +453,7 @@ impl ModeGate for DefaultModeGate {
         // then re-seed the rule set: drop the old builtins and prepend the
         // non-disabled ones so they stay ahead of persisted rules (last-match
         // wins, deny wins — a user allow rule still shadows the builtin ask).
-        let ids: Vec<String> = crate::rule::builtin_rules()
-            .iter()
-            .filter_map(crate::rule::builtin_rule_id)
-            .collect();
+        let ids: Vec<String> = builtin_rules().iter().filter_map(builtin_rule_id).collect();
         let mut disabled = self
             .disabled_builtins
             .lock()
@@ -462,16 +473,16 @@ impl ModeGate for DefaultModeGate {
         let kept: Vec<Rule> = rules
             .iter()
             .filter(|r| {
-                crate::rule::builtin_rule_id(r)
+                builtin_rule_id(r)
                     .map(|id| !disabled_snapshot.contains(&id))
                     .unwrap_or(true)
             })
             .cloned()
             .collect();
-        let mut seeded: Vec<Rule> = crate::rule::builtin_rules()
+        let mut seeded: Vec<Rule> = builtin_rules()
             .into_iter()
             .filter(|r| {
-                crate::rule::builtin_rule_id(r)
+                builtin_rule_id(r)
                     .map(|id| !disabled_snapshot.contains(&id))
                     .unwrap_or(true)
             })
@@ -485,15 +496,12 @@ impl ModeGate for DefaultModeGate {
             .disabled_builtins
             .lock()
             .expect("disabled_builtins mutex");
-        let ids: Vec<String> = crate::rule::builtin_rules()
-            .iter()
-            .filter_map(crate::rule::builtin_rule_id)
-            .collect();
+        let ids: Vec<String> = builtin_rules().iter().filter_map(builtin_rule_id).collect();
         // Enabled when none of the git-checkpoint ids are disabled.
         !ids.iter().any(|id| disabled.contains(id))
     }
 
-    fn decision_metrics(&self) -> Vec<crate::metrics::DecisionBucket> {
+    fn decision_metrics(&self) -> Vec<DecisionBucket> {
         self.metrics.snapshot()
     }
 }
@@ -503,7 +511,7 @@ impl ModeGate for DefaultModeGate {
 /// The service boundary uses this to route a session-scope approval to the
 /// gate's session consent rather than a persistent allow rule.
 pub fn classify_git_op(tool_name: &str, content: &str) -> Option<&'static str> {
-    crate::git_discard::should_ask_before_git(tool_name, content)
+    should_ask_before_git(tool_name, content)
 }
 
 /// A per-mode strategy that decides Allow / Ask / Deny for a tool request when
@@ -568,7 +576,7 @@ impl ModePolicy for AutoPolicy {
 fn mode_ask_reason(detail: &str) -> AskReason {
     AskReason {
         source: AskSource::ToolNative,
-        validator: crate::pipeline::mode_default::MODE_DEFAULT,
+        validator: MODE_DEFAULT,
         detail: detail.into(),
         containment_note: None,
     }

@@ -26,6 +26,7 @@ use crate::mode::ToolRequest;
 use crate::pipeline::{GateCtx, Immunity, Stage, Validator};
 use crate::rule::input_content;
 use crate::safety::{marker_hit, safety_check};
+use std::fs::canonicalize;
 
 /// Tools whose input names a single file the host process writes directly.
 /// These bypass the kernel fence, so the resolved-path pass is what protects
@@ -73,7 +74,7 @@ impl ProtectedPathValidator {
         }
         let root = self.containment.as_ref()?.boundary_root()?;
         let candidate = root.join(&supplied);
-        let resolved = std::fs::canonicalize(candidate.parent()?).ok()?;
+        let resolved = canonicalize(candidate.parent()?).ok()?;
         let named = resolved.join(candidate.file_name()?);
         Some(named.to_string_lossy().into_owned())
     }
@@ -115,5 +116,4 @@ impl Validator for ProtectedPathValidator {
 }
 
 #[cfg(test)]
-#[path = "safety_stage_tests.rs"]
 mod tests;

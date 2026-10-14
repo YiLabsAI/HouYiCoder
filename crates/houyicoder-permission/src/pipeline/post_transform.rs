@@ -1,3 +1,4 @@
+use crate::decision::FenceProof;
 use crate::decision::{AllowReason, AskReason, Decision, DenyReason, DenySource};
 use crate::mode::ToolRequest;
 use crate::pipeline::detection::NETWORK_EGRESS;
@@ -85,7 +86,7 @@ pub fn post_transform(
             && ask.validator == MODE_DEFAULT
         {
             let coverage = c.coverage();
-            if let Some(proof) = crate::decision::FenceProof::new(&coverage, se) {
+            if let Some(proof) = FenceProof::new(&coverage, se) {
                 return Decision::Allow(AllowReason::Containment(proof));
             }
         }

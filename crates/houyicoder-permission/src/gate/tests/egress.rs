@@ -1,5 +1,9 @@
 use super::*;
 use crate::decision::Outcome;
+use crate::decision::{AskReason, Decision};
+use houyicoder_api::sandbox::{Containment, Coverage, SideEffect};
+use std::path::PathBuf;
+use std::sync::Arc;
 
 #[test]
 fn test_egress_detects_all_channels() {
@@ -95,10 +99,6 @@ fn test_ask_carries_fence_note() {
     // Egress is immune to the fenced-exec relaxation, so the note appears in
     // the default config (auto_allow on) -- the fence is not an authority over
     // egress consent.
-    use crate::decision::{AskReason, Decision};
-    use houyicoder_api::sandbox::{Containment, Coverage, SideEffect};
-    use std::path::PathBuf;
-    use std::sync::Arc;
 
     struct StubBlockingFence;
     impl Containment for StubBlockingFence {

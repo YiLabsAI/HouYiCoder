@@ -28,6 +28,9 @@ use crate::consent::{ConsentStore, args_key};
 use crate::decision::Decision;
 use crate::mode::{PermissionMode, ToolRequest};
 use crate::rule::{Effect, Rule};
+use detection::PathBoundsValidator;
+use houyicoder_api::sandbox::Containment;
+use safety_stage::ProtectedPathValidator;
 use std::sync::Arc;
 
 /// The position of a validator in the ladder. The discriminant is the order:
@@ -143,12 +146,12 @@ impl Pipeline {
         // old Allow-then-Ask arm order inside Stage::RuleAllow.
         let validators: Vec<Box<dyn Validator>> = vec![
             Box::new(rule_stage::RuleDenyValidator),
-            Box::new(safety_stage::ProtectedPathValidator::new(None)),
+            Box::new(ProtectedPathValidator::new(None)),
             Box::new(detection::DestructiveCommandValidator),
             Box::new(detection::GitCheckpointValidator),
             Box::new(detection::NetworkEgressValidator),
             Box::new(detection::CompoundCommandValidator),
-            Box::new(detection::PathBoundsValidator::new(None)),
+            Box::new(PathBoundsValidator::new(None)),
             Box::new(rule_stage::RuleAllowValidator),
             Box::new(rule_stage::RuleAskValidator),
             Box::new(consent_stage::StoredConsentValidator),
@@ -170,18 +173,16 @@ impl Pipeline {
     /// resolve a write target, so a symlink cannot spell its way around the
     /// markers; that stage keeps its supplied-string check either way, so a
     /// ladder built without a fence loses no coverage.
-    pub fn with_containment(containment: Arc<dyn houyicoder_api::sandbox::Containment>) -> Self {
+    pub fn with_containment(containment: Arc<dyn Containment>) -> Self {
         let mut p = Self::standard();
         p.validators
             .retain(|v| v.name() != "path-bounds" && v.name() != "protected_path");
         p.validators
-            .push(Box::new(detection::PathBoundsValidator::new(Some(
-                Arc::clone(&containment),
-            ))));
+            .push(Box::new(PathBoundsValidator::new(Some(Arc::clone(
+                &containment,
+            )))));
         p.validators
-            .push(Box::new(safety_stage::ProtectedPathValidator::new(Some(
-                containment,
-            ))));
+            .push(Box::new(ProtectedPathValidator::new(Some(containment))));
         p.validators.sort_by_key(|v| v.stage());
         p
     }
@@ -217,32 +218,4 @@ impl Pipeline {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The standard ladder is non-empty and sorted by stage. The exact
-    /// membership and order are pinned by the spec-matching invariant test in
-    /// the gate test suite; this only guards the trivial invariants here.
-    #[test]
-    fn test_standard_ladder_is_sorted() {
-        let p = Pipeline::standard();
-        let info = p.describe();
-        assert!(!info.is_empty());
-        let stages: Vec<Stage> = info.iter().map(|v| v.stage).collect();
-        let mut sorted = stages.clone();
-        sorted.sort();
-        assert_eq!(stages, sorted);
-    }
-
-    /// The stage order is total: every stage compares, and the ladder sorts by
-    /// it. Pins the discriminant order so a reorder is caught.
-    #[test]
-    fn test_stage_order_total() {
-        assert!(Stage::RuleDeny < Stage::UserAsk);
-        assert!(Stage::UserAsk < Stage::SystemSafety);
-        assert!(Stage::SystemSafety < Stage::Detection);
-        assert!(Stage::Detection < Stage::RuleAllow);
-        assert!(Stage::RuleAllow < Stage::Consent);
-        assert!(Stage::Consent < Stage::ModeDefault);
-    }
-}
+mod tests;

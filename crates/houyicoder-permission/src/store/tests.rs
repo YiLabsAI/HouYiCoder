@@ -12,6 +12,8 @@ use crate::gate::{DefaultModeGate, ModeGate};
 use crate::mode::ToolRequest;
 use crate::rule::{Effect, Rule, RuleContent};
 use crate::store::{RuleStore, Scope, StoreError};
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 fn tmp_store(dir: &Path, name: &str) -> FileRuleStore {
     let root = dir.join(name);
@@ -442,8 +444,8 @@ fn tempdir() -> PathBuf {
     let dir = env::temp_dir().join(format!(
         "houyicoder-permission-{}-{}",
         process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos()
     ));

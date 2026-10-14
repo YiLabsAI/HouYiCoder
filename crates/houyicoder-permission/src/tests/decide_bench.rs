@@ -10,6 +10,7 @@ use std::time::Instant;
 use crate::decision::Outcome;
 use crate::gate::{DefaultModeGate, ModeGate};
 use crate::mode::{PermissionMode, ToolRequest};
+use std::hint::black_box;
 
 /// Run decide N times against a gate, return sorted latencies in nanoseconds
 /// so the caller can read any percentile.
@@ -20,14 +21,14 @@ fn decide_latencies(
     n: usize,
 ) -> Vec<u64> {
     for _ in 0..warmup {
-        std::hint::black_box(gate.decide(req));
+        black_box(gate.decide(req));
     }
     let mut out = Vec::with_capacity(n);
     for _ in 0..n {
         let t = Instant::now();
         let d = gate.decide(req);
         out.push(t.elapsed().as_nanos() as u64);
-        std::hint::black_box(d);
+        black_box(d);
     }
     out.sort_unstable();
     out

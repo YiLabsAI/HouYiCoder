@@ -1,5 +1,3 @@
-//! Tests for this module.
-
 use super::*;
 use futures::StreamExt;
 use houyicoder_protocol::llm::{CompletionRequest, InputItem, ModelSettings, ToolDef};

@@ -1,5 +1,3 @@
-//! Tests for this module.
-
 use crate::openai_compat::OpenAiCompatibleProvider;
 use crate::served_models::write_cache;
 use std::env::temp_dir;

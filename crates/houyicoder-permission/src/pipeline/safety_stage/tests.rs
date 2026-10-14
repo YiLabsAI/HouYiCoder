@@ -6,12 +6,20 @@
 //! through the process directly, so the kernel fence never sees the call and
 //! cannot refuse it the way it refuses the same write from a shell command.
 
+#[cfg(unix)]
+use crate::Decision;
 use crate::decision::Outcome;
 use crate::mode::{PermissionMode, ToolRequest};
 use crate::{DefaultModeGate, ModeGate};
 use houyicoder_api::sandbox::{Containment, Coverage, SideEffect};
 use serde_json::Value;
+use std::env::temp_dir;
+use std::fs::create_dir_all;
+use std::fs::remove_dir_all;
+#[cfg(unix)]
+use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
+use std::process::id;
 use std::sync::Arc;
 
 /// A fence view that reports one workspace root and no extra dirs. Only the
@@ -48,13 +56,12 @@ struct Workspace(PathBuf);
 
 impl Workspace {
     fn new(tag: u32) -> Self {
-        let root =
-            std::env::temp_dir().join(format!("houyi-protected-{}-{}", std::process::id(), tag));
-        std::fs::create_dir_all(root.join(".git/hooks")).expect("git hooks dir");
-        std::fs::create_dir_all(root.join("src")).expect("src dir");
+        let root = temp_dir().join(format!("houyi-protected-{}-{}", id(), tag));
+        create_dir_all(root.join(".git/hooks")).expect("git hooks dir");
+        create_dir_all(root.join("src")).expect("src dir");
         let root = dunce::canonicalize(&root).expect("canonical workspace");
         #[cfg(unix)]
-        std::os::unix::fs::symlink(root.join(".git"), root.join("gitlink")).expect("symlink");
+        symlink(root.join(".git"), root.join("gitlink")).expect("symlink");
         Self(root)
     }
 
@@ -66,7 +73,7 @@ impl Workspace {
 
 impl Drop for Workspace {
     fn drop(&mut self) {
-        std::fs::remove_dir_all(&self.0).ok();
+        remove_dir_all(&self.0).ok();
     }
 }
 
@@ -78,7 +85,6 @@ impl Drop for Workspace {
 #[test]
 #[cfg(unix)]
 fn test_symlinked_git_dir_asks() {
-    use crate::Decision;
     let ws = Workspace::new(line!());
     let d = ws.gate().decide(&write_req("gitlink/hooks/pre-commit"));
     assert_eq!(

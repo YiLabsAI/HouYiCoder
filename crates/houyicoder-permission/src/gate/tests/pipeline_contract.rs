@@ -11,6 +11,13 @@ use std::sync::Arc;
 use std::thread;
 
 use super::bash_req;
+use crate::rule::Effect;
+use crate::rule::Rule;
+use std::env::temp_dir;
+use std::fs::create_dir_all;
+use std::fs::remove_dir_all;
+use std::fs::write;
+use std::process::id;
 
 /// The ladder is sorted by Stage with no inversions. Pins the discriminant
 /// order so reordering the registry is caught here, not just at the call site.
@@ -101,8 +108,8 @@ fn test_immune_stages_ignore_mode() {
     let req = bash_req("ls -la");
     let manual = DefaultModeGate::with_mode(PermissionMode::Manual);
     let auto = DefaultModeGate::with_mode(PermissionMode::Auto);
-    manual.add_rule(crate::rule::Rule::new("bash", crate::rule::Effect::Deny).unwrap());
-    auto.add_rule(crate::rule::Rule::new("bash", crate::rule::Effect::Deny).unwrap());
+    manual.add_rule(Rule::new("bash", Effect::Deny).unwrap());
+    auto.add_rule(Rule::new("bash", Effect::Deny).unwrap());
     assert_eq!(
         manual.decide(&req).outcome(),
         auto.decide(&req).outcome(),
@@ -203,13 +210,13 @@ fn test_outside_edit_asks_path() {
         }
     }
 
-    let base = std::env::temp_dir().join(format!("gate-edit-{}", std::process::id()));
+    let base = temp_dir().join(format!("gate-edit-{}", id()));
     let root = base.join("root");
     let outside = base.join("outside");
-    std::fs::create_dir_all(&root).unwrap();
-    std::fs::create_dir_all(&outside).unwrap();
+    create_dir_all(&root).unwrap();
+    create_dir_all(&outside).unwrap();
     let settings = outside.join("settings.json");
-    std::fs::write(&settings, b"{}").unwrap();
+    write(&settings, b"{}").unwrap();
     let gate = DefaultModeGate::new_without_builtins()
         .with_containment(Arc::new(BoundsFence(dunce::canonicalize(&root).unwrap())));
     let input = serde_json::json!({"path": settings.to_string_lossy()});
@@ -228,7 +235,7 @@ fn test_outside_edit_asks_path() {
                 && reason.detail.contains("always persists")),
         "outside edit must disclose the directory grant: {decision:?}"
     );
-    std::fs::remove_dir_all(base).ok();
+    remove_dir_all(base).ok();
 }
 
 /// A grep/glob path or pattern that canonicalizes outside the workspace +
@@ -239,10 +246,10 @@ fn test_outside_edit_asks_path() {
 /// "only ask, never judge" discipline (the network-posture precedent).
 #[test]
 fn test_outside_asks_inside_defers() {
-    let root = std::env::temp_dir().join(format!("gate-bounds-root-{}", std::process::id()));
-    std::fs::create_dir_all(&root).expect("mkdir root");
-    let outside = std::env::temp_dir().join(format!("gate-bounds-out-{}", std::process::id()));
-    std::fs::create_dir_all(&outside).expect("mkdir outside");
+    let root = temp_dir().join(format!("gate-bounds-root-{}", id()));
+    create_dir_all(&root).expect("mkdir root");
+    let outside = temp_dir().join(format!("gate-bounds-out-{}", id()));
+    create_dir_all(&outside).expect("mkdir outside");
     let croot = dunce::canonicalize(&root).unwrap();
     let coutside = dunce::canonicalize(&outside).unwrap();
 
@@ -320,7 +327,7 @@ fn test_outside_asks_inside_defers() {
 
     // grep path inside root → not Ask (defers to the pipeline).
     let inside = root.join("a.txt");
-    std::fs::write(&inside, b"x").ok();
+    write(&inside, b"x").ok();
     let v = serde_json::json!({"path": inside.to_string_lossy()});
     let req = ToolRequest {
         tool_name: "grep",
@@ -354,8 +361,8 @@ fn test_outside_asks_inside_defers() {
         "no containment → gate does not ask (confine_path is the backstop): {d2:?}"
     );
 
-    std::fs::remove_dir_all(&root).ok();
-    std::fs::remove_dir_all(&outside).ok();
+    remove_dir_all(&root).ok();
+    remove_dir_all(&outside).ok();
 }
 
 /// A write targeting a file that does not exist yet outside the workspace
@@ -364,11 +371,11 @@ fn test_outside_asks_inside_defers() {
 /// what the target is.
 #[test]
 fn test_outside_new_file_asks() {
-    let base = std::env::temp_dir().join(format!("gate-newfile-{}", std::process::id()));
+    let base = temp_dir().join(format!("gate-newfile-{}", id()));
     let root = base.join("root");
     let outside = base.join("outside");
-    std::fs::create_dir_all(&root).expect("mkdir root");
-    std::fs::create_dir_all(&outside).expect("mkdir outside");
+    create_dir_all(&root).expect("mkdir root");
+    create_dir_all(&outside).expect("mkdir outside");
     let croot = dunce::canonicalize(&root).unwrap();
 
     struct BoundsFence {
@@ -443,8 +450,8 @@ fn test_outside_new_file_asks() {
         "in-workspace new file does not ask: {d:?}"
     );
 
-    std::fs::remove_dir_all(&root).ok();
-    std::fs::remove_dir_all(&outside).ok();
+    remove_dir_all(&root).ok();
+    remove_dir_all(&outside).ok();
 }
 
 /// A blanket "allow bash" rule must not suppress the protected-path ask for a
@@ -457,7 +464,7 @@ fn test_outside_new_file_asks() {
 #[test]
 fn test_skill_ask_survives_allow() {
     let g = DefaultModeGate::with_mode(PermissionMode::Auto);
-    g.add_rule(crate::rule::Rule::new("bash", crate::rule::Effect::Allow).expect("allow rule"));
+    g.add_rule(Rule::new("bash", Effect::Allow).expect("allow rule"));
     for cmd in [
         "python /srv/repo/.houyicoder/skills/deploy/scripts/deploy.py",
         "bash /home/u/.claude/skills/deploy/scripts/run.sh",
