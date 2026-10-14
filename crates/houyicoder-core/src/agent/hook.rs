@@ -765,5 +765,4 @@ pub fn combine_verdicts(
 }
 
 #[cfg(test)]
-#[path = "hook_tests.rs"]
 mod tests;

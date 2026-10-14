@@ -753,5 +753,4 @@ impl DreamRunner {
 }
 
 #[cfg(test)]
-#[path = "auto_dream_tests.rs"]
-mod auto_dream_tests;
+mod tests;

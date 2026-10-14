@@ -57,5 +57,4 @@ pub use worktree_exit::ExitWorktreeTool;
 pub use write::WriteTool;
 
 #[cfg(test)]
-#[path = "tools/file_tools_tests.rs"]
 mod tests;

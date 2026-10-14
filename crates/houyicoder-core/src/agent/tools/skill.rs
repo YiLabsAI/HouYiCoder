@@ -276,5 +276,4 @@ fn skill_error_to_tool_error(e: SkillError) -> ToolError {
 }
 
 #[cfg(test)]
-#[path = "skill_tests.rs"]
 mod tests;

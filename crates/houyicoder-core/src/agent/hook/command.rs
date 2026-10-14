@@ -473,9 +473,4 @@ pub fn parse_event(s: &str) -> Option<HookEvent> {
 }
 
 #[cfg(test)]
-#[path = "exit_code_tests.rs"]
-mod exit_code_tests;
-
-#[cfg(test)]
-#[path = "command_tests.rs"]
-mod command_tests;
+mod tests;

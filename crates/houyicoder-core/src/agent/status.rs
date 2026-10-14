@@ -510,9 +510,4 @@ fn breaker_label(state: BreakerState) -> &'static str {
 }
 
 #[cfg(test)]
-#[path = "status_tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "status_override_tests.rs"]
-mod status_override_tests;

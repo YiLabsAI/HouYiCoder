@@ -598,5 +598,4 @@ pub fn stub_breakdown() -> ContextBreakdown {
 }
 
 #[cfg(test)]
-#[path = "context_tests.rs"]
 mod tests;

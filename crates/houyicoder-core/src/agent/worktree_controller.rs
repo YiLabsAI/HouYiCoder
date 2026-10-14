@@ -765,10 +765,4 @@ impl WorktreeController {
 
 #[cfg(test)]
 #[expect(clippy::disallowed_methods, reason = "infra spawn, not model-driven")]
-#[path = "worktree_controller_tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[expect(clippy::disallowed_methods, reason = "infra spawn, not model-driven")]
-#[path = "worktree_child_tests.rs"]
-mod child_tests;

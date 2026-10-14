@@ -781,8 +781,7 @@ fn apply_limit<T: Clone>(items: Vec<T>, limit: usize, offset: usize) -> (Vec<T>,
     (sliced, was_truncated)
 }
 
-#[cfg(test)]
-#[path = "grep_tests.rs"]
-mod tests;
-
 mod subprocess;
+
+#[cfg(test)]
+mod tests;

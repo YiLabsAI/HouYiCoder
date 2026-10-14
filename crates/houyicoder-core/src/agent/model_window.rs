@@ -410,5 +410,4 @@ pub fn fill_omitted_usage(usage: &mut Usage, estimated_input_tokens: u32) {
 }
 
 #[cfg(test)]
-#[path = "model_window_tests.rs"]
 mod tests;

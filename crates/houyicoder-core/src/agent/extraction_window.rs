@@ -94,5 +94,5 @@ fn is_model_visible(event: &SessionEvent) -> bool {
 }
 
 #[cfg(test)]
-#[path = "extraction_window_tests.rs"]
+#[path = "extraction_window/tests.rs"]
 mod tests;

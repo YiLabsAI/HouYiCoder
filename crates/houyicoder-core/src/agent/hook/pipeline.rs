@@ -498,13 +498,4 @@ fn hook_feedback_json(reason: &str) -> Value {
 }
 
 #[cfg(test)]
-#[path = "fire_tests.rs"]
-mod fire_tests;
-
-#[cfg(test)]
-#[path = "fire_seam_tests.rs"]
-mod fire_seam_tests;
-
-#[cfg(test)]
-#[path = "hook_signal_tests.rs"]
-mod hook_signal_tests;
+mod tests;

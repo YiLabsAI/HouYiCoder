@@ -105,5 +105,4 @@ impl Runner {
 }
 
 #[cfg(test)]
-#[path = "timing_tests.rs"]
 mod tests;

@@ -223,5 +223,4 @@ fn surfaced_memory_scan(
 }
 
 #[cfg(test)]
-#[path = "recall_tests.rs"]
-mod recall_tests;
+mod tests;

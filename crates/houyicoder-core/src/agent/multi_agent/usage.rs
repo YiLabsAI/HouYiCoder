@@ -8,5 +8,4 @@
 pub use houyicoder_api::session::{SubagentUsage, aggregate_subagent_usage};
 
 #[cfg(test)]
-#[path = "usage_tests.rs"]
 mod tests;

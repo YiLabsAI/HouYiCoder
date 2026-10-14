@@ -219,5 +219,4 @@ impl Runner {
 }
 
 #[cfg(test)]
-#[path = "slash_tests.rs"]
 mod tests;

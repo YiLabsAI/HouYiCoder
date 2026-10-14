@@ -307,5 +307,4 @@ fn unavailable_marker(hash_str: &str, reason: &str) -> serde_json::Value {
 }
 
 #[cfg(test)]
-#[path = "retention_tests.rs"]
 mod tests;

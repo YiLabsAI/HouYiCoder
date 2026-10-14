@@ -781,5 +781,4 @@ fn assemble_instructions(assembled_system: &str, configured: &str) -> String {
 }
 
 #[cfg(test)]
-#[path = "assemble_instructions_tests.rs"]
-mod assemble_instructions_tests;
+mod tests;

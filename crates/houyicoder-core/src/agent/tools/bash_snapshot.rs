@@ -94,5 +94,4 @@ pub(crate) fn prepare_with_probe(
 }
 
 #[cfg(test)]
-#[path = "bash_snapshot_tests.rs"]
 mod tests;

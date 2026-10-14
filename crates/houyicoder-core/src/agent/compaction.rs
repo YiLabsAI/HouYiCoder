@@ -370,9 +370,4 @@ fn estimate_selected_transcript(
 }
 
 #[cfg(test)]
-#[path = "compaction_hook_tests.rs"]
-mod compaction_hook_tests;
-
-#[cfg(test)]
-#[path = "suppression_tests.rs"]
-mod suppression_tests;
+mod tests;

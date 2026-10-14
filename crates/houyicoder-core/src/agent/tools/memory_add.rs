@@ -476,5 +476,4 @@ fn map_memory_error(e: MemoryError) -> ToolError {
 }
 
 #[cfg(test)]
-#[path = "memory_add_tests.rs"]
 mod tests;

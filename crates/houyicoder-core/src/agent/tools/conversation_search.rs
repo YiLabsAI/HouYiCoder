@@ -415,5 +415,4 @@ fn format_stats(
 }
 
 #[cfg(test)]
-#[path = "conversation_search_tests.rs"]
 mod tests;

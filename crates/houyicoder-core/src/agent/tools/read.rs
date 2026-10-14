@@ -105,5 +105,4 @@ fn validate_read_max_bytes(max: usize) -> Result<(), ToolError> {
 }
 
 #[cfg(test)]
-#[path = "read_tests.rs"]
 mod tests;

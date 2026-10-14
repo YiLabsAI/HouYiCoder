@@ -431,5 +431,4 @@ fn estimate_event_tokens(event: &SessionLogEntry, tokenizer: &Tokenizer) -> usiz
 }
 
 #[cfg(test)]
-#[path = "manifest_tests.rs"]
 mod tests;

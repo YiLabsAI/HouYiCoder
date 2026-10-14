@@ -353,5 +353,4 @@ fn narrow_by_source(verdict: HookVerdict, source: HookSource, name: &str) -> Hoo
 }
 
 #[cfg(test)]
-#[path = "skill_hooks_tests.rs"]
 mod tests;

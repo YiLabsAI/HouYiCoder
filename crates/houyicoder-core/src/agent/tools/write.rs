@@ -124,5 +124,4 @@ fn should_skip_unchanged_write(
 }
 
 #[cfg(test)]
-#[path = "write_tests.rs"]
 mod tests;

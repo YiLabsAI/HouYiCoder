@@ -23,10 +23,6 @@
 //! pathological failure storms.
 
 pub mod evolution;
-#[cfg(test)]
-#[path = "observability_tests.rs"]
-mod tests;
-
 use std::collections::HashMap;
 use std::time::Instant;
 
@@ -730,3 +726,6 @@ pub(crate) fn truncate_str(s: &str, cap: usize) -> String {
     t.push_str(&format!(" (+{extra} chars)"));
     t
 }
+
+#[cfg(test)]
+mod tests;

@@ -620,5 +620,4 @@ fn is_pruned(path: &Path, workspace_root: &Path, store_root: &Path) -> bool {
 }
 
 #[cfg(test)]
-#[path = "snapshot_tests.rs"]
 mod tests;

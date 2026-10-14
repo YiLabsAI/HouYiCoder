@@ -286,5 +286,4 @@ pub async fn record_subagent_return(
 }
 
 #[cfg(test)]
-#[path = "spawn_tests.rs"]
 mod tests;

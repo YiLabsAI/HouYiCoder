@@ -378,5 +378,4 @@ fn primary_saved_in(tail: &[SessionLogEntry]) -> bool {
 }
 
 #[cfg(test)]
-#[path = "extractor_tests.rs"]
-mod extractor_tests;
+mod tests;

@@ -94,5 +94,4 @@ pub async fn apply_edit(
 }
 
 #[cfg(test)]
-#[path = "file_edit_tests.rs"]
 mod tests;
