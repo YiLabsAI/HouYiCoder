@@ -254,8 +254,11 @@ fn legend_rows(bd: &ContextBreakdown, pct: f64) -> Vec<Vec<Span<'static>>> {
     rows
 }
 
-/// The Memory files drill-down rows: a bold header plus dim suffix, then one
-/// tree-glyph row per file (path + tokens). Empty when there are no files.
+/// The project memory file rows: a bold header plus dim suffix, then one
+/// tree-glyph row per file (path + tokens). These are the files the index
+/// reads (CLAUDE.md and friends), which is a different quantity from the
+/// grid's Memory category: that one counts recalled memory entries carried
+/// in the message stream. Empty when no project memory file was found.
 fn memory_rows(files: &[ContextFileEntry]) -> Vec<Vec<Span<'static>>> {
     if files.is_empty() {
         return Vec::new();

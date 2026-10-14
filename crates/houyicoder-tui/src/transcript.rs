@@ -73,8 +73,10 @@ pub enum TranscriptFrame {
 pub enum FrontendRow {
     /// A system line: command feedback, a notice, a warning, a failure.
     System(String),
-    /// A /context breakdown rendered inline as conversation content.
-    Context(ContextView),
+    /// A /context breakdown rendered inline as conversation content. Boxed:
+    /// the view is far larger than any other row, and every row is cloned on
+    /// a rebuild.
+    Context(Box<ContextView>),
     /// The abort notice, welded under the message the abort cut off.
     Interrupted,
     /// The notice that the interrupted submission went back to the input box.
@@ -94,7 +96,7 @@ impl FrontendRow {
     pub(crate) fn from_line(line: &TranscriptLine) -> Option<Self> {
         match line {
             TranscriptLine::System(text) => Some(Self::System(text.clone())),
-            TranscriptLine::ContextGrid(view) => Some(Self::Context(view.clone())),
+            TranscriptLine::ContextGrid(view) => Some(Self::Context(Box::new(view.clone()))),
             TranscriptLine::Interrupted => Some(Self::Interrupted),
             TranscriptLine::User(text) => Some(Self::Echo(text.clone())),
             _ => None,
@@ -105,7 +107,7 @@ impl FrontendRow {
     fn line(&self) -> TranscriptLine {
         match self {
             Self::System(text) => TranscriptLine::System(text.clone()),
-            Self::Context(view) => TranscriptLine::ContextGrid(view.clone()),
+            Self::Context(view) => TranscriptLine::ContextGrid((**view).clone()),
             Self::Interrupted => TranscriptLine::Interrupted,
             Self::InputRestored => TranscriptLine::System("input restored".into()),
             Self::Echo(text) => TranscriptLine::User(text.clone()),

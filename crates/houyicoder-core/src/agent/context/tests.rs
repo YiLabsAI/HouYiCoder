@@ -759,3 +759,43 @@ fn test_agent_directory_round_trip() {
         Some("## Available agents\n\n- explore: fast"),
     );
 }
+
+/// The prospective path must measure the REAL tool definitions and memory
+/// index, not an empty list: a /context before the first turn has to report
+/// the same tools section the first turn will send, or the pane shows zero
+/// and the next turn contradicts it.
+#[test]
+fn test_prospective_measures_real_tools() {
+    let cb = ContextBuilder::new();
+    let tool_defs = vec![ToolDef {
+        name: "bash".to_string(),
+        description: "Run a shell command in the workspace.".to_string(),
+        input_schema: serde_json::json!({"type": "object"}),
+    }];
+    let with_tools = cb.build_prospective(&tool_defs, None);
+    let tools = with_tools
+        .measurement
+        .sections
+        .iter()
+        .find(|s| s.kind == SectionKind::Tools)
+        .expect("tools section present when definitions are supplied");
+    assert!(
+        tools.tokens > 0,
+        "the tools section must measure the real definitions"
+    );
+    assert_eq!(tools.items, vec!["bash".to_string()]);
+
+    let without = cb.build_prospective(&[], None);
+    assert!(
+        without
+            .measurement
+            .sections
+            .iter()
+            .all(|s| s.kind != SectionKind::Tools),
+        "no tools section when no definitions are supplied"
+    );
+    assert!(
+        cb.last_measurement().is_none(),
+        "the prospective build must not populate the turn cache"
+    );
+}

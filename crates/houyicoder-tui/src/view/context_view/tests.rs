@@ -13,6 +13,9 @@ use crate::test_harness::render_buffer;
 use houyicoder_protocol::frontend::SlashCommand;
 use houyicoder_protocol::frontend::context::stub_breakdown;
 use houyicoder_protocol::frontend::context::{CategoryBreakdown, ContextBreakdown, GridCell};
+use houyicoder_protocol::frontend::context::{
+    ContextFileEntry as WireFileEntry, ContextSkillEntry as WireSkillEntry,
+};
 use ratatui::buffer::Buffer;
 
 fn working_app() -> App {
@@ -107,6 +110,8 @@ fn base_breakdown() -> ContextBreakdown {
             fullness: 1.0,
         }]],
         cache_breakpoint: None,
+        memory_files: Vec::new(),
+        skills: Vec::new(),
         compact_summary: None,
         cache_prefix_tokens: None,
         cache_hit_rate: None,
@@ -114,9 +119,10 @@ fn base_breakdown() -> ContextBreakdown {
 }
 
 fn rows_text(bd: ContextBreakdown) -> String {
+    let drill = ContextDrillDown::from_breakdown(&bd);
     let view = ContextView {
         breakdown: bd,
-        drill: ContextDrillDown::default(),
+        drill,
         suggestions: vec![],
     };
     render_as_rows(&view)
@@ -264,6 +270,8 @@ fn test_legend_renders_reserved_row() {
             fullness: 1.0,
         }]],
         cache_breakpoint: None,
+        memory_files: Vec::new(),
+        skills: Vec::new(),
         compact_summary: None,
         cache_prefix_tokens: None,
         cache_hit_rate: None,
@@ -383,6 +391,8 @@ fn full_context_breakdown() -> ContextBreakdown {
             fullness: 1.0,
         }]],
         cache_breakpoint: None,
+        memory_files: Vec::new(),
+        skills: Vec::new(),
         compact_summary: None,
         cache_prefix_tokens: None,
         cache_hit_rate: None,
@@ -603,3 +613,31 @@ fn test_empty_grid_renders_row() {
 }
 
 mod command;
+
+/// The drill-down rows must come from the wire breakdown, not from a default
+/// empty drill: the analyzer measures the memory files and skills, so a
+/// breakdown that carries them has to render their rows.
+#[test]
+fn test_drill_reads_the_wire() {
+    let mut bd = base_breakdown();
+    bd.memory_files = vec![WireFileEntry {
+        path: "~/.houyicoder/memory/MEMORY.md".to_string(),
+        tokens: 6_600,
+    }];
+    bd.skills = vec![WireSkillEntry {
+        source: "Built-in".to_string(),
+        name: "design-review".to_string(),
+        tokens: 360,
+    }];
+    let drill = ContextDrillDown::from_breakdown(&bd);
+    assert_eq!(drill.memory_files.len(), 1, "memory rows read off the wire");
+    assert_eq!(drill.memory_files[0].path, "~/.houyicoder/memory/MEMORY.md");
+    assert_eq!(drill.skills.len(), 1, "skill rows read off the wire");
+    assert_eq!(drill.skills[0].source, "Built-in");
+
+    let text = rows_text(bd);
+    assert!(
+        text.contains("MEMORY.md") && text.contains("design-review"),
+        "the wire rows render in the drill-down: {text}"
+    );
+}

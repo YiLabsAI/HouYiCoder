@@ -14,15 +14,42 @@ use crate::view::relative_time::turn_span_label;
 
 /// Drill-down rows under the /context grid: per-file memory and per-skill
 /// footprints. These drill-down rows list in two sections below the grid;
-/// the stub path carries canned entries so the layout is faithful before
-/// the real analyzer is wired.
+/// the analyzer supplies them over the wire, so the renderer never invents
+/// rows from a pane cache of its own.
 #[derive(Debug, Clone, Default)]
 pub struct ContextDrillDown {
     pub memory_files: Vec<ContextFileEntry>,
     pub skills: Vec<ContextSkillEntry>,
 }
 
-/// One memory-file row: display path + token count.
+impl ContextDrillDown {
+    /// Read the drill-down rows the breakdown carries. The analyzer measures
+    /// them, so the frontend renders exactly what the wire reported.
+    pub fn from_breakdown(breakdown: &ContextBreakdown) -> Self {
+        Self {
+            memory_files: breakdown
+                .memory_files
+                .iter()
+                .map(|f| ContextFileEntry {
+                    path: f.path.clone(),
+                    tokens: f.tokens,
+                })
+                .collect(),
+            skills: breakdown
+                .skills
+                .iter()
+                .map(|s| ContextSkillEntry {
+                    source: s.source.clone(),
+                    name: s.name.clone(),
+                    tokens: s.tokens,
+                })
+                .collect(),
+        }
+    }
+}
+
+/// One project memory-file row: display path + token count. The file the
+/// index reads, not a recalled entry (see the grid's Memory category).
 #[derive(Debug, Clone)]
 pub struct ContextFileEntry {
     pub path: String,

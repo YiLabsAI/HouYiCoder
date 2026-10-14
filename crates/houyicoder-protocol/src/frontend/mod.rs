@@ -29,7 +29,10 @@ use crate::frontend::debug::DebugLevel;
 use crate::frontend::model::SpeedMode;
 use crate::llm::EffortLevel;
 pub use compact::CompactReply;
-pub use context::{CategoryBreakdown, ContextBreakdown, GridCell, build_grid, stub_breakdown};
+pub use context::{
+    CategoryBreakdown, ContextBreakdown, ContextFileEntry, ContextSkillEntry, GridCell, build_grid,
+    stub_breakdown,
+};
 pub use event::FrontendEvent;
 pub use evidence::{
     AuditEntry, Divergence, Hunk, HunkEvidence, ReviewFinding, SpecClause, audit_entry,

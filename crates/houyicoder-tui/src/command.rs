@@ -147,9 +147,10 @@ impl App {
                 let status = &self.sessions.current.capabilities.status;
                 if let Some(breakdown) = status.context_cache.clone() {
                     let suggestions = composition::suggestions_for(&breakdown);
+                    let drill = ContextDrillDown::from_breakdown(&breakdown);
                     let view = ContextView {
                         breakdown,
-                        drill: ContextDrillDown::default(),
+                        drill,
                         suggestions,
                     };
                     self.push_transcript_line(TranscriptLine::ContextGrid(view));

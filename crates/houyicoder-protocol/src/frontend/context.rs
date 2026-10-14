@@ -40,6 +40,30 @@ pub struct GridCell {
     pub fullness: f32,
 }
 
+/// One memory-file row in the /context drill-down, wire form: the file the
+/// memory index loaded and the tokens it costs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextFileEntry {
+    /// Display path of the memory file the index read.
+    pub path: String,
+    /// Tokens that file occupies in the window.
+    pub tokens: u32,
+}
+
+/// One skill row in the /context drill-down, wire form: where the skill came
+/// from, its name, and the tokens its frontmatter costs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextSkillEntry {
+    /// Discovery origin group (Built-in / Project / User).
+    pub source: String,
+    /// The skill name.
+    pub name: String,
+    /// Tokens the skill's listing entry costs.
+    pub tokens: u32,
+}
+
 /// The data the context visualization renders, wire form. The grid is a
 /// 2-D vec of cells whose proportions reflect each category's token share
 /// of the window; cache_breakpoint is a flat cell index separating cached
@@ -59,6 +83,17 @@ pub struct ContextBreakdown {
     pub grid: Vec<Vec<GridCell>>,
     /// Flat cell index of the cache breakpoint (cached prefix before it).
     pub cache_breakpoint: Option<usize>,
+    /// The project memory files the index reads (CLAUDE.md and friends), for
+    /// the drill-down. This is not the grid's Memory category, which counts
+    /// recalled entries carried in the message stream. Empty before the first
+    /// measurement; the frontend renders the rows the analyzer supplies rather
+    /// than synthesizing them from a pane cache.
+    #[serde(default)]
+    pub memory_files: Vec<ContextFileEntry>,
+    /// The skills the registry exposes, for the drill-down. Empty when no
+    /// skill registry is configured.
+    #[serde(default)]
+    pub skills: Vec<ContextSkillEntry>,
     /// When a compaction has run, a human-readable summary of what was folded
     /// (e.g. "2 compacts · 8 turns → 3.2k summary · recoverable via /search").
     /// None before the first compaction. Surfaces the lossless/recoverable
@@ -227,6 +262,8 @@ pub fn stub_breakdown() -> ContextBreakdown {
         categories: cats,
         grid,
         cache_breakpoint: None,
+        memory_files: Vec::new(),
+        skills: Vec::new(),
         compact_summary: None,
         cache_prefix_tokens: None,
         cache_hit_rate: None,

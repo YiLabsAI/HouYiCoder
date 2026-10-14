@@ -23,6 +23,7 @@ use houyicoder_protocol::acp_wire::{
 use houyicoder_protocol::acpx::{AcpxMethod, AcpxNotification};
 use houyicoder_protocol::frontend::context::{
     CategoryBreakdown as ProtocolCategoryBreakdown, ContextBreakdown as ProtocolContextBreakdown,
+    ContextFileEntry as ProtocolContextFileEntry, ContextSkillEntry as ProtocolContextSkillEntry,
     GridCell as ProtocolGridCell,
 };
 use houyicoder_protocol::frontend::permission::AskReason;
@@ -235,6 +236,23 @@ pub(crate) fn map_context_breakdown(
             .collect(),
         grid,
         cache_breakpoint,
+        memory_files: bd
+            .memory_files
+            .iter()
+            .map(|f| ProtocolContextFileEntry {
+                path: f.path.clone(),
+                tokens: f.tokens,
+            })
+            .collect(),
+        skills: bd
+            .skills
+            .iter()
+            .map(|s| ProtocolContextSkillEntry {
+                source: s.source.clone(),
+                name: s.name.clone(),
+                tokens: s.tokens,
+            })
+            .collect(),
         compact_summary: bd.compact_summary.clone(),
         cache_prefix_tokens: bd.cache_prefix_tokens,
         cache_hit_rate: bd.cache_hit_rate,

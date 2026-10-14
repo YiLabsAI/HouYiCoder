@@ -70,6 +70,8 @@ fn fixture() -> ContextBreakdown {
         categories,
         grid,
         cache_breakpoint: Some(2),
+        memory_files: Vec::new(),
+        skills: Vec::new(),
         compact_summary: None,
         cache_prefix_tokens: None,
         cache_hit_rate: None,

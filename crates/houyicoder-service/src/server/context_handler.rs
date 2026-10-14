@@ -24,6 +24,12 @@ impl Server {
             .last_measurement()
             .unwrap_or_else(|| self.runner.prospective_measurement());
         let mut bd = measurement.breakdown(&snap.model, snap.context_window);
+        // The drill-down rows come from the analyzer, measured with the same
+        // tokenizer as the sections above, so the frontend renders what the
+        // wire reports instead of synthesizing rows from a pane cache.
+        let (memory_files, skills) = self.runner.context_drill();
+        bd.memory_files = memory_files;
+        bd.skills = skills;
         bd.compact_summary = self.runner.compact_summary(self.session).await;
         let summary_tokens = self.runner.compact_summary_tokens(self.session).await;
         if summary_tokens > 0 {

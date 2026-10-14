@@ -515,12 +515,12 @@ impl App {
                     if let TranscriptFrame::Frontend(FrontendRow::Context(slot)) =
                         &mut log[at].frame
                     {
-                        *slot = view;
+                        **slot = view;
                     }
                 });
                 self.rebuild_after_frame_edit();
             }
-            None => self.raise_frontend_row(FrontendRow::Context(view)),
+            None => self.raise_frontend_row(FrontendRow::Context(Box::new(view))),
         }
     }
     /// Invalidate the render pass's cached row set by bumping the transcript

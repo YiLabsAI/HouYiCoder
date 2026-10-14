@@ -439,6 +439,14 @@ fn find_memory_files(cwd: &Path) -> Option<(Vec<PathBuf>, String)> {
     }
 }
 
+/// The project memory files the index loads, for the /context drill-down.
+/// Same walk as find_memory_files, exposing the paths without the content.
+pub fn memory_file_paths(cwd: &Path) -> Vec<PathBuf> {
+    find_memory_files(cwd)
+        .map(|(paths, _)| paths)
+        .unwrap_or_default()
+}
+
 /// Locate the nearest project memory file path (for tests and diagnostics):
 /// the primary name among those found in the nearest directory holding any.
 #[cfg(test)]

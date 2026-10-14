@@ -36,9 +36,10 @@ pub fn failing_checks() -> Vec<String> {
 pub fn context_view() -> ContextView {
     let breakdown = stub_breakdown();
     let suggestions = super::suggestions_for(&breakdown);
+    let drill = ContextDrillDown::from_breakdown(&breakdown);
     ContextView {
         breakdown,
-        drill: ContextDrillDown::default(),
+        drill,
         suggestions,
     }
 }

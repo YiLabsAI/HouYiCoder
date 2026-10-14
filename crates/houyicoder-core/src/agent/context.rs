@@ -116,6 +116,8 @@ impl ContextMeasurement {
             categories,
             grid,
             cache_breakpoint: None,
+            memory_files: Vec::new(),
+            skills: Vec::new(),
             compact_summary: None,
             cache_prefix_tokens: None,
             cache_hit_rate: None,
@@ -273,10 +275,22 @@ impl ContextBuilder {
     }
 
     /// Bare assembly: no checkpoint selection, no tool measurement, no
-    /// memory index. Does not cache. Used by prospective_measurement and
-    /// tests.
+    /// memory index. Does not cache. Used by tests.
     pub fn build(&self, events: &[SessionLogEntry]) -> AssembledContext {
         self.assemble(events, None, None, &[], None)
+    }
+
+    /// Prospective assembly: what the first turn would measure, with the real
+    /// tool definitions and the memory index the turn path passes, so a
+    /// /context before any turn reports the same system prompt and tools the
+    /// first turn will send. Does not cache: last_measurement stays None
+    /// until a turn actually runs.
+    pub fn build_prospective(
+        &self,
+        tool_defs: &[ToolDef],
+        memory_index: Option<&str>,
+    ) -> AssembledContext {
+        self.assemble(&[], None, None, tool_defs, memory_index)
     }
 
     /// The turn path: select events per the checkpoint manifest, assemble,
@@ -591,6 +605,8 @@ pub fn stub_breakdown() -> ContextBreakdown {
         categories: cats,
         grid,
         cache_breakpoint: None,
+        memory_files: Vec::new(),
+        skills: Vec::new(),
         compact_summary: None,
         cache_prefix_tokens: None,
         cache_hit_rate: None,

@@ -525,9 +525,10 @@ impl App {
     fn apply_context_breakdown(&mut self, breakdown: ContextBreakdown) {
         self.sessions.current.capabilities.status.context_cache = Some(breakdown.clone());
         let suggestions = suggestions_for(&breakdown);
+        let drill = ContextDrillDown::from_breakdown(&breakdown);
         let view = ContextView {
             breakdown,
-            drill: ContextDrillDown::default(),
+            drill,
             suggestions,
         };
         // Replace the view the newest grid renders, so a refresh updates the

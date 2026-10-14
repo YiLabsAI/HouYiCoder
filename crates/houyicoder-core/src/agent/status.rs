@@ -17,6 +17,7 @@ use houyicoder_resilience::BreakerState;
 
 use super::memory::MemoryGateState;
 use super::model_window::resolve_capabilities;
+use super::prompt::memory_file_paths;
 use crate::agent::ContextMeasurement;
 use crate::agent::Runner;
 use crate::agent::append::new_event;
@@ -29,7 +30,10 @@ use crate::snapshot::UndoOutcome;
 use crate::snapshot::UndoStack;
 use houyicoder_api::skill::SkillSnapshot;
 use houyicoder_context::SessionEvent;
+use houyicoder_protocol::frontend::context::{ContextFileEntry, ContextSkillEntry};
+use std::fs::read_to_string;
 use std::mem::take;
+use std::path::PathBuf;
 use std::time::Duration;
 
 /// A point-in-time view of the runner's live state for the host to render.
@@ -420,11 +424,53 @@ impl Runner {
     }
 
     /// A prospective measurement — what the context would measure on the
-    /// first turn (system prompt + tools, messages = 0). Used when
-    /// last_measurement() is None so /context is never empty on a fresh
-    /// session.
+    /// first turn: the system prompt, the real tool definitions, and the
+    /// memory index, with messages = 0. Used when last_measurement() is None
+    /// so /context is never empty on a fresh session, and never shows a
+    /// tools section of zero that the first turn then contradicts.
     pub fn prospective_measurement(&self) -> ContextMeasurement {
-        self.context_builder.build(&[]).measurement
+        let memory_index = self.format_memory_index();
+        self.context_builder
+            .build_prospective(self.tools.tool_defs().as_slice(), memory_index.as_deref())
+            .measurement
+    }
+
+    /// The /context drill-down rows: the project memory files the index
+    /// reads (CLAUDE.md and friends, which is a different quantity from the
+    /// grid's recalled-memory category) and the skills the registry exposes,
+    /// each with the tokens it costs. The frontend renders these rows as
+    /// reported; it does not synthesize them from a pane cache, which may be
+    /// empty or hold placeholders.
+    pub fn context_drill(&self) -> (Vec<ContextFileEntry>, Vec<ContextSkillEntry>) {
+        let tokenizer = self.context_builder.tokenizer();
+        let cwd = self.cwd();
+        let files = memory_file_paths(&cwd)
+            .into_iter()
+            .map(|path| ContextFileEntry {
+                path: path.to_string_lossy().into_owned(),
+                tokens: read_to_string(&path)
+                    .map(|text| tokenizer.count(&text))
+                    .unwrap_or(0),
+            })
+            .collect();
+        let skills = self
+            .skills_snapshot()
+            .into_iter()
+            .map(|s| {
+                let listing = format!("{}: {}", s.descriptor.name, s.descriptor.description);
+                ContextSkillEntry {
+                    source: s.origin,
+                    name: s.descriptor.name,
+                    tokens: tokenizer.count(&listing),
+                }
+            })
+            .collect();
+        (files, skills)
+    }
+
+    /// The directory the context builder reads for project memory files.
+    fn cwd(&self) -> PathBuf {
+        self.cwd_handle().read().expect("cwd lock").clone()
     }
 
     /// Install recovery state for destructive operations.
