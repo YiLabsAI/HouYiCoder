@@ -18,15 +18,19 @@ import re
 # A qualified path with at least two separators, e.g. crate::state::App or
 # std::time::Duration::from_secs. One separator (fmt::Display) is allowed.
 _DEEP_PATH = re.compile(
-    r"\b([A-Za-z_][A-Za-z0-9_]*::[A-Za-z_][A-Za-z0-9_]*::[A-Za-z_][A-Za-z0-9_:]*)"
+    r"\b([A-Za-z_][A-Za-z0-9_]*::[A-Za-z_][A-Za-z0-9_]*::[A-Za-z_][A-Za-z0-9_]*"
+    r"(?:::[A-Za-z_][A-Za-z0-9_]*)*)"
 )
-_USE = re.compile(r"\buse\b")
+_USE_HEAD = re.compile(r"^(?:pub(?:\([^)]*\))?\s+)?use\b")
 # A fn declaration in any of the forms this workspace uses: visibility
 # modifiers (pub, pub(crate), pub(super), pub(in path)), qualifiers (async,
 # unsafe, const, extern "C"), and a body that may open lines after the name.
 _FN_HEAD = re.compile(r"^(?:pub(?:\([^)]*\))?\s+)*(?:(?:async|unsafe|const|extern\s+\"[^\"]*\")\s+)*fn\b")
 # A char literal closes within a few characters; a lifetime like 'a does not.
 _CHAR_LITERAL = re.compile(r"'(?:\\.|[^\\'])'")
+# The first segment of a path that an import can bring in. Anything else is
+# already relative to an import in scope.
+_ROOTS = {"crate", "std", "core", "alloc", "self", "super", "tokio", "ratatui", "crossterm"}
 
 
 def _strip_line(line):
@@ -63,21 +67,37 @@ def _strip_line(line):
     return "".join(out)
 
 
-def _fn_depths(text):
-    """Yield (lineno, raw_line, inside_fn) for every line.
+def _lines(text):
+    """Yield (lineno, raw_line, inside_fn, inside_use) for every line.
 
     inside_fn is true when the innermost open block was opened by a fn
     declaration, including a declaration whose brace lands on a later line.
-    Strings, char literals and trailing comments are removed before braces
-    are counted, and a lifetime is not mistaken for a char literal.
+    inside_use is true for every line of a use statement, including the
+    continuation lines of a grouped import, so those lines are never read
+    as code. Strings, char literals and trailing comments are removed
+    before braces are counted, and a lifetime is not mistaken for a char
+    literal.
     """
     stack = []
     pending_fn = False
+    in_use = False
+    use_depth = 0
     for lineno, raw in enumerate(text.splitlines(), 1):
         line = _strip_line(raw)
         stripped = line.strip()
+        if in_use:
+            use_depth += line.count("{") - line.count("}")
+            if use_depth <= 0 and stripped.endswith(";"):
+                in_use = False
+            yield lineno, raw, "fn" in stack, True
+            continue
+        starts_use = bool(_USE_HEAD.match(stripped))
+        if starts_use:
+            use_depth = line.count("{") - line.count("}")
+            in_use = use_depth > 0 or not stripped.endswith(";")
+            yield lineno, raw, "fn" in stack, True
+            continue
         if pending_fn and "{" in line:
-            # The body of a multi-line signature opens here.
             stack.append("fn")
             pending_fn = False
         if _FN_HEAD.match(stripped):
@@ -89,7 +109,7 @@ def _fn_depths(text):
             for _ in range(line.count("{")):
                 stack.append("other")
         in_fn = "fn" in stack
-        yield lineno, raw, in_fn
+        yield lineno, raw, in_fn, False
         for _ in range(min(line.count("}"), len(stack))):
             stack.pop()
 
@@ -98,30 +118,34 @@ def inline_use_violations(text):
     """Yield (lineno, stripped_line) for a use statement inside a function.
 
     A one-line body (fn f() { use x; }) counts: the use sits after the
-    opening brace on the same line.
+    opening brace on the same line, so the line is not a plain import.
     """
-    for lineno, raw, in_fn in _fn_depths(text):
+    for lineno, raw, in_fn, in_use in _lines(text):
         code = _strip_line(raw)
-        if not _USE.search(code):
-            continue
-        stripped = raw.strip()
-        if in_fn:
-            # The whole line is inside a body, or a body opened on this line
-            # and the use follows the brace.
-            if _FN_HEAD.match(code.strip()) and "{" not in code:
+        stripped = code.strip()
+        if in_use:
+            if not _USE_HEAD.match(stripped):
                 continue
-            yield lineno, stripped
+            if in_fn:
+                yield lineno, raw.strip()
+            continue
+        if _FN_HEAD.match(stripped) and re.search(r"\{\s*use\b", code):
+            yield lineno, raw.strip()
 
 
 def _importable(path):
-    """The part of a qualified path an import would bring in.
+    """The part of a qualified path an import would bring in, or None.
 
     A trailing variant or associated item is not part of the import: the
     reader imports the type and writes Screen::Focus at the call site, so
-    the two spellings of one type group together. A path with no uppercase
-    segment after the crate root is a function or constant, imported whole.
+    the two spellings of one type group together. A path whose first
+    segment is not a crate root is already relative to an import in scope
+    (mpsc::TryRecvError inside a module that imported mpsc), so it is not
+    a finding and has nothing to import.
     """
     segments = path.split("::")
+    if segments[0] not in _ROOTS and not segments[0].startswith("houyicoder_"):
+        return None
     for i, segment in enumerate(segments):
         if segment[:1].isupper():
             return "::".join(segments[: i + 1])
@@ -135,12 +159,15 @@ def repeated_deep_paths(text):
     repeated in fields, signatures or bodies instead of imported once.
     """
     counts = {}
-    for _, raw, _ in _fn_depths(text):
+    for _, raw, _, in_use in _lines(text):
+        if in_use:
+            continue
         code = _strip_line(raw)
         stripped = code.strip()
-        if not stripped or stripped.startswith("//") or re.match(r"^(?:pub\s+)?use\b", stripped):
+        if not stripped or stripped.startswith("//"):
             continue
         for path in _DEEP_PATH.findall(code):
             key = _importable(path)
-            counts[key] = counts.get(key, 0) + 1
+            if key is not None:
+                counts[key] = counts.get(key, 0) + 1
     return {path: n for path, n in counts.items() if n >= 2}
