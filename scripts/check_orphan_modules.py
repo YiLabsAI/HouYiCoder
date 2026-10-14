@@ -108,16 +108,9 @@ def orphans(crate_src: Path) -> list[Path]:
     return found
 
 
-# Pre-existing orphans, as paths relative to the repo root. Three stub files
-# in houyicoder-sandbox are declared by nothing and never compile; the count
-# may only fall, so a new orphan fails and deleting one lowers the baseline.
-_BASELINE = frozenset(
-    {
-        "crates/houyicoder-sandbox/src/capability.rs",
-        "crates/houyicoder-sandbox/src/egress.rs",
-        "crates/houyicoder-sandbox/src/env.rs",
-    }
-)
+# Pre-existing orphans, as paths relative to the repo root. Empty: the three
+# stub files that were here were deleted, and a new orphan fails the gate.
+_BASELINE: frozenset[str] = frozenset()
 
 
 def check(root: Path = Path("crates")) -> list[Path]:
