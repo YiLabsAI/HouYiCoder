@@ -6,7 +6,7 @@
 //! cursor and the buffer, and the render path reads the tab, cursor, input, and
 //! buffer as one set to lay the list and the prompt out.
 
-use crate::state::enums::{PermissionInput, PermissionTab};
+use crate::state::enums::{CyclicTab, PermissionInput, PermissionTab};
 
 /// The permission pane state. Fields are pub(crate) so the key handler and the
 /// render path reach a field directly; the whole value is what a tab switch or
@@ -27,6 +27,21 @@ pub(crate) struct PermissionPaneState {
     /// The pane-local search buffer. Decoupled from the main input so a search
     /// filter never eats a slash command's leading slash.
     pub(crate) search: String,
+}
+
+impl PermissionPaneState {
+    /// Switch to the next tab. The cursor goes back to the top: a row index
+    /// into the old tab's list means nothing in the new one.
+    pub(crate) fn next_tab(&mut self) {
+        self.tab = self.tab.next();
+        self.cursor = 0;
+    }
+
+    /// Switch to the previous tab, with the same cursor reset.
+    pub(crate) fn prev_tab(&mut self) {
+        self.tab = self.tab.prev();
+        self.cursor = 0;
+    }
 }
 
 impl Default for PermissionPaneState {

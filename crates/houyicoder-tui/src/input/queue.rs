@@ -24,12 +24,18 @@ pub enum InputItem {
 }
 
 impl PartialEq for InputItem {
+    /// Same kind and same payload. Every pair is listed rather than ending in
+    /// a catch-all: a catch-all would let a new variant inherit "never equal",
+    /// so a queue comparison would answer false for an item against itself.
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Message(a), Self::Message(b))
             | (Self::ParkedMessage(a), Self::ParkedMessage(b)) => a.text == b.text,
             (Self::Command(a), Self::Command(b)) => a == b,
-            _ => false,
+            (
+                Self::Message(_) | Self::ParkedMessage(_) | Self::Command(_),
+                Self::Message(_) | Self::ParkedMessage(_) | Self::Command(_),
+            ) => false,
         }
     }
 }

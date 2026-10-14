@@ -10,7 +10,6 @@ use houyicoder_protocol::frontend::permission::{
 };
 
 use crate::run_control::ClientCommand;
-use crate::state::enums::CyclicTab;
 use crate::state::{App, Pane, PermissionInput, PermissionTab};
 
 /// A parsed rule spec: action + optional content tier + effect. The wire
@@ -406,13 +405,11 @@ fn handle_nav_keys(app: &mut App, code: ratatui::crossterm::event::KeyCode) -> b
     );
     match code {
         KeyCode::Left => {
-            app.ui.permission_pane.tab = app.ui.permission_pane.tab.prev();
-            app.ui.permission_pane.cursor = 0;
+            app.ui.permission_pane.prev_tab();
             true
         }
         KeyCode::Right | KeyCode::Tab => {
-            app.ui.permission_pane.tab = app.ui.permission_pane.tab.next();
-            app.ui.permission_pane.cursor = 0;
+            app.ui.permission_pane.next_tab();
             true
         }
         KeyCode::Up => {
