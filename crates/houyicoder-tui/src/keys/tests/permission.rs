@@ -20,8 +20,11 @@ use crate::composition::build_app_for_test;
 use crate::keys::{approval_scope, handle_working};
 use crate::pending_prompt::PendingPrompt;
 use crate::records::{Approval, TranscriptLine};
+use crate::state::PermissionTab;
 use crate::state::{App, Pane, PermissionInput, Screen};
 use crate::test_harness::{connection_lost_app, render_text};
+use houyicoder_protocol::frontend::SlashCommand;
+use houyicoder_protocol::frontend::permission::RuleDestination;
 
 fn app() -> App {
     let mut app = composition::app();
@@ -226,7 +229,6 @@ fn test_approval_r_binds_reject() {
     // (approve) — else r+Enter silently approves. The internal index
     // is fixed: 0=Yes, 1=No, 2=Yes-don't-ask. No is always 1
     // regardless of card layout.
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     let mut app = build_app_for_test(None);
     app.ui.navigation.screen = Screen::Working;
     app.sessions.current.prompt = Some(PendingPrompt::approval_card(
@@ -254,7 +256,6 @@ fn test_approval_r_binds_reject() {
 /// On a two-option entitlement card, 'r' must select No (index 1).
 #[test]
 fn test_entitlement_r_rejects() {
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     let mut app = build_app_for_test(None);
     app.ui.navigation.screen = Screen::Working;
     app.sessions.current.prompt = Some(PendingPrompt::approval_card(
@@ -385,7 +386,6 @@ fn test_git_ops_updates_cache() {
 fn test_permission_pane_esc_exits() {
     // Bare /permissions opens the interactive pane; Esc exits back to the
     // transcript.
-    use crate::state::Pane;
     let mut app = app();
     app.ui.input.editor.set("/permissions".to_string());
     app.submit_input();
@@ -416,7 +416,6 @@ fn test_open_no_transcript_hint() {
     // Opening the pane is a view switch, not a turn that needs an in-stream
     // acknowledgment. The pane owns its own footer hint, so /permissions must
     // not echo a "rule manager ..." system line into the transcript.
-    use crate::state::Pane;
     let mut app = app();
     app.ui.input.editor.set("/permissions".to_string());
     app.submit_input();
@@ -443,7 +442,6 @@ fn test_open_no_transcript_hint() {
 fn test_permission_pane_renders_tabs() {
     // The pane shows the five tab labels with the active one bracketed, plus the
     // footer hint. Active tab defaults to Allow.
-    use crate::state::PermissionTab;
     let mut app = app();
     app.ui.navigation.pane = Pane::Permission;
     let text = render_text(&app, 120, 24);
@@ -467,7 +465,6 @@ fn test_permission_pane_renders_tabs() {
 fn test_pane_tab_cycle_wraps() {
     // Right cycles Allow -> Ask -> Deny -> Workspace -> Recently denied -> Allow.
     // Tab order is denials-first, workspace-last.
-    use crate::state::PermissionTab;
     let mut app = app();
     app.ui.navigation.pane = Pane::Permission;
     let key = |code: KeyCode| KeyEvent {
@@ -557,7 +554,6 @@ fn key_press(code: KeyCode) -> KeyEvent {
 fn test_permission_add_submode_flow() {
     // a enters Add, typing fills the input, Enter parses + ships the rule,
     // sub-mode clears. (In connected mode the pane does not render; asserts state.)
-    use crate::state::PermissionInput;
     let mut app = build_app_for_test(None);
     app.ui.navigation.screen = Screen::Working;
     app.ui.navigation.pane = Pane::Permission;
@@ -570,7 +566,6 @@ fn test_permission_add_submode_flow() {
     handle_working(&mut app, key_press(KeyCode::Enter));
     // Enter on the spec advances to the destination pick (default project),
     // not a ship — the Add flow is two steps now.
-    use houyicoder_protocol::frontend::permission::RuleDestination;
     assert!(
         matches!(
             app.ui.permission_pane.input,
@@ -608,7 +603,6 @@ fn test_permission_add_submode_flow() {
 #[test]
 fn test_permission_add_prompt_renders() {
     // Stub app (no runner) renders the pane; the Add sub-mode shows its prompt.
-    use crate::state::PermissionInput;
     let mut app = app();
     app.ui.navigation.pane = Pane::Permission;
     app.ui.permission_pane.input = PermissionInput::Add;
@@ -636,7 +630,6 @@ fn test_permission_remove_submode_deletes() {
     // 'd' on a focused rule enters Remove (No preselected); Right moves to
     // Yes, Enter ships the removal. Covers the Remove confirm + the ptr-eq
     // index resolution.
-    use crate::state::PermissionInput;
     let mut app = build_app_for_test(None);
     app.ui.navigation.screen = Screen::Working;
     app.ui.navigation.pane = Pane::Permission;
@@ -686,7 +679,6 @@ fn test_permission_workspace_add_flow() {
     // 'a' on the Workspace tab enters AddDir; typing fills the input box;
     // Enter ships the path (the system line confirms the ship). Uses the
     // connected app so typed chars route to the input box like the rule Add flow.
-    use crate::state::{PermissionInput, PermissionTab};
     let mut app = build_app_for_test(None);
     app.ui.navigation.screen = Screen::Working;
     app.ui.navigation.pane = Pane::Permission;
@@ -719,7 +711,6 @@ fn test_permission_workspace_remove_flow() {
     // 'd' on a Workspace cursor dir enters RemoveDir (No preselected); Right
     // moves to Yes; Enter ships the removal. Stub app → no request id → system
     // line; the sub-mode clears. Covers the Remove directory confirm flow.
-    use crate::state::{PermissionInput, PermissionTab};
     let mut app = app();
     app.ui.navigation.pane = Pane::Permission;
     app.ui.permission_pane.tab = PermissionTab::Workspace;
@@ -763,7 +754,6 @@ fn test_permission_workspace_remove_flow() {
 fn test_permission_add_bad_effect() {
     // A bad effect surfaces the parse error as a system line, not a crash,
     // and leaves the sub-mode.
-    use crate::state::PermissionInput;
     let mut app = build_app_for_test(None);
     app.ui.navigation.screen = Screen::Working;
     app.ui.navigation.pane = Pane::Permission;
@@ -781,7 +771,6 @@ fn test_permission_add_bad_effect() {
 fn test_permission_palette_opens_pane() {
     // /permissions is a palette command (SlashCommand::Permission), and
     // running it opens the interactive pane.
-    use houyicoder_protocol::frontend::SlashCommand;
     assert!(
         SlashCommand::ALL.contains(&SlashCommand::Permission),
         "Permission is in the palette"

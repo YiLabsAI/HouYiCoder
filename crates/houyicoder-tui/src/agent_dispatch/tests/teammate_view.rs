@@ -1,4 +1,12 @@
 use super::*;
+use crate::agent_message::{ServerEvent, SessionMessage};
+use crate::composition::app;
+use crate::records::TeammateView;
+use crate::records::ToolOutcome;
+use crate::records::TranscriptLine;
+use houyicoder_protocol::frontend::run::ContentBlock;
+use houyicoder_protocol::frontend::session_update::ContentChunk;
+use houyicoder_protocol::frontend::session_update::SessionUpdate;
 
 /// Enter on a Subagent line opens the teammate view targeting the line at
 /// the cursor, not the last one. The view carries the subagent_type +
@@ -6,8 +14,7 @@ use super::*;
 /// that opens the wrong child fails here.
 #[test]
 fn test_enter_teammate_targets_cursor() {
-    use crate::records::TranscriptLine;
-    let mut app = crate::composition::app();
+    let mut app = app();
     app.sessions
         .current
         .transcript
@@ -57,8 +64,7 @@ fn test_enter_teammate_targets_cursor() {
 /// Esc clears the teammate view, returning active_transcript to the parent.
 #[test]
 fn test_exit_teammate_clears_view() {
-    use crate::records::TranscriptLine;
-    let mut app = crate::composition::app();
+    let mut app = app();
     app.sessions
         .current
         .transcript
@@ -92,11 +98,7 @@ fn test_exit_teammate_clears_view() {
 /// the child view renders through the main pipeline.
 #[test]
 fn test_teammate_view_fill_isomorphic() {
-    use crate::records::TranscriptLine;
-    use houyicoder_protocol::frontend::run::ContentBlock;
-    use houyicoder_protocol::frontend::session_update::ContentChunk;
-    use houyicoder_protocol::frontend::session_update::SessionUpdate;
-    let mut app = crate::composition::app();
+    let mut app = app();
     app.sessions
         .current
         .transcript
@@ -164,11 +166,7 @@ fn test_teammate_view_fill_isomorphic() {
 /// view's transcript. Pins the child_sid match guard.
 #[test]
 fn test_other_child_keeps_view() {
-    use crate::records::TranscriptLine;
-    use houyicoder_protocol::frontend::run::ContentBlock;
-    use houyicoder_protocol::frontend::session_update::ContentChunk;
-    use houyicoder_protocol::frontend::session_update::SessionUpdate;
-    let mut app = crate::composition::app();
+    let mut app = app();
     app.sessions
         .current
         .transcript
@@ -219,8 +217,7 @@ fn test_other_child_keeps_view() {
 /// view, so the caller falls through to submit. Pins the no-target guard.
 #[test]
 fn test_enter_teammate_no_target() {
-    use crate::records::TranscriptLine;
-    let mut app = crate::composition::app();
+    let mut app = app();
     app.sessions
         .current
         .transcript
@@ -235,8 +232,7 @@ fn test_enter_teammate_no_target() {
 /// tail still drills into the latest delegation.
 #[test]
 fn test_cursor_past_tail_fallback() {
-    use crate::records::TranscriptLine;
-    let mut app = crate::composition::app();
+    let mut app = app();
     app.sessions
         .current
         .transcript
@@ -264,8 +260,7 @@ fn test_cursor_past_tail_fallback() {
 /// fallback last.
 #[test]
 fn test_cursor_after_fold_group() {
-    use crate::records::{ToolOutcome, TranscriptLine};
-    let mut app = crate::composition::app();
+    let mut app = app();
     // Two tool calls form a collapsed Summary slot before the Subagents.
     app.sessions.current.transcript.push(TranscriptLine::Tool {
         name: "bash".into(),
@@ -331,7 +326,7 @@ fn test_cursor_after_fold_group() {
 /// same agent updates it in place rather than appending.
 #[test]
 fn test_agent_status_updates_fleet() {
-    let mut app = crate::composition::app();
+    let mut app = app();
     app.handle_agent_message(SessionMessage::Event(ServerEvent::AgentStatus {
         agent_id: "c1".into(),
         subagent_type: "explore".into(),
@@ -382,9 +377,7 @@ fn test_agent_status_updates_fleet() {
 /// different child never touches the view.
 #[test]
 fn test_teammate_view_auto_exit() {
-    use crate::agent_message::{ServerEvent, SessionMessage};
-    use crate::records::TeammateView;
-    let mut app = crate::composition::app();
+    let mut app = app();
     app.ui.teammate_view = Some(TeammateView {
         child_sid: "c1".into(),
         ..Default::default()
@@ -454,9 +447,7 @@ fn test_teammate_view_auto_exit() {
 /// child does not touch the viewed child's turn.
 #[test]
 fn test_teammate_live_refetch() {
-    use crate::agent_message::{ServerEvent, SessionMessage};
-    use crate::records::TeammateView;
-    let mut app = crate::composition::app();
+    let mut app = app();
     app.ui.teammate_view = Some(TeammateView {
         child_sid: "c1".into(),
         ..Default::default()

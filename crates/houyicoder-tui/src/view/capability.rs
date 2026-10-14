@@ -8,6 +8,7 @@
 //! click-jump stub) plus inline approve/reject affordances. The right column
 //! is the patch.
 
+use crate::view::artifact::draw as artifact_draw;
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
@@ -36,7 +37,7 @@ pub fn draw(f: &mut Frame, area: Rect, app: &App) {
         Pane::Graph => draw_graph(f, area, app),
         Pane::Agents => super::agents_pane::draw_agents(f, area, app),
         Pane::Tools => draw_tools(f, area, app),
-        Pane::Artifact => crate::view::artifact::draw(f, area, app),
+        Pane::Artifact => artifact_draw(f, area, app),
         // The interactive rule manager. draw_main intercepts Pane::Permission
         // and wraps this in the Pane frame (─ + cleared region); this arm
         // fills the content only, for any direct caller that already holds the

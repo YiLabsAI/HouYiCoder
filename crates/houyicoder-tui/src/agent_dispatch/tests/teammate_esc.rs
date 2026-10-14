@@ -1,6 +1,13 @@
 //! Teammate interruption, optimistic echo, and steering behavior.
 
 use super::*;
+use crate::agent_message::FleetEntry;
+use crate::composition::app;
+use crate::records::TeammateView;
+use crate::records::TranscriptLine;
+use crate::transcript::TranscriptFrame;
+use houyicoder_protocol::frontend::ContentBlock;
+use houyicoder_protocol::frontend::session_update::{ContentChunk, SessionUpdate};
 /// Esc on a viewed child only interrupts its current turn; it never exits
 /// the view. A running child gets a per-turn cancel and the view stays; an
 /// idle child is a no-op on the run that pops a toast reminding the exit
@@ -8,9 +15,7 @@ use super::*;
 /// state — tested at the key layer.
 #[test]
 fn test_abort_viewed_child_turn() {
-    use crate::agent_message::FleetEntry;
-    use crate::records::TeammateView;
-    let mut app = crate::composition::app();
+    let mut app = app();
     app.ui.teammate_view = Some(TeammateView {
         child_sid: "c1".into(),
         ..Default::default()
@@ -63,11 +68,7 @@ fn test_abort_viewed_child_turn() {
 /// transcript, the echo clears.
 #[test]
 fn test_teammate_echo_preserved() {
-    use crate::records::{TeammateView, TranscriptLine};
-    use crate::transcript::TranscriptFrame;
-    use houyicoder_protocol::frontend::ContentBlock;
-    use houyicoder_protocol::frontend::session_update::{ContentChunk, SessionUpdate};
-    let mut app = crate::composition::app();
+    let mut app = app();
     app.ui.teammate_view = Some(TeammateView {
         child_sid: "c1".into(),
         pending_echo: Some("steer this".into()),
@@ -126,9 +127,7 @@ fn test_teammate_echo_preserved() {
 /// normally.
 #[test]
 fn test_steer_completed_surfaces_notice() {
-    use crate::agent_message::FleetEntry;
-    use crate::records::{TeammateView, TranscriptLine};
-    let mut app = crate::composition::app();
+    let mut app = app();
     crate::test_harness::attach_connection(&mut app);
     app.ui.teammate_view = Some(TeammateView {
         child_sid: "c1".into(),
@@ -211,8 +210,7 @@ fn test_steer_completed_surfaces_notice() {
 /// session id, unique per spawn, so normal flow cannot produce it.
 #[test]
 fn test_child_transcript_last_row() {
-    use crate::records::TranscriptLine;
-    let mut app = crate::composition::app();
+    let mut app = app();
     for _ in 0..2 {
         app.push_transcript_line(TranscriptLine::Subagent {
             child_sid: "c1".into(),
@@ -259,14 +257,13 @@ fn test_child_transcript_last_row() {
 /// no view set.)
 #[test]
 fn test_child_transcript_no_row() {
-    use crate::records::TranscriptLine;
-    let mut app = crate::composition::app();
+    let mut app = app();
     app.sessions
         .current
         .capabilities
         .fleet
         .entries
-        .push(crate::agent_message::FleetEntry {
+        .push(FleetEntry {
             agent_id: "c1".into(),
             subagent_type: "explore".into(),
             turn: 1,
@@ -301,8 +298,7 @@ fn test_child_transcript_no_row() {
 /// failure to address.
 #[test]
 fn test_child_sid_unique() {
-    use crate::records::TranscriptLine;
-    let mut app = crate::composition::app();
+    let mut app = app();
     app.push_transcript_line(TranscriptLine::Subagent {
         child_sid: "child-A".into(),
         subagent_type: "explore".into(),
@@ -353,8 +349,7 @@ fn test_child_sid_unique() {
 /// stays None (only the result sets it).
 #[test]
 fn test_view_fleet_type_fallback() {
-    use crate::agent_message::FleetEntry;
-    let mut app = crate::composition::app();
+    let mut app = app();
     app.sessions
         .current
         .capabilities
@@ -395,9 +390,7 @@ fn test_view_fleet_type_fallback() {
 /// must not overwrite its subagent_type. The guard checks is_empty first.
 #[test]
 fn test_view_fold_row_wins() {
-    use crate::agent_message::FleetEntry;
-    use crate::records::TranscriptLine;
-    let mut app = crate::composition::app();
+    let mut app = app();
     app.push_transcript_line(TranscriptLine::Subagent {
         child_sid: "c1".into(),
         subagent_type: "plan".into(),
@@ -442,9 +435,7 @@ fn test_view_fold_row_wins() {
 /// agent list to tell the two apart.
 #[test]
 fn test_running_child_starting() {
-    use crate::agent_message::FleetEntry;
-    use crate::records::{TeammateView, TranscriptLine};
-    let mut app = crate::composition::app();
+    let mut app = app();
     app.ui.teammate_view = Some(TeammateView {
         child_sid: "c1".into(),
         ..Default::default()
@@ -492,9 +483,7 @@ fn test_running_child_starting() {
 /// log should exist), so it stays "unavailable" — not relabeled "starting".
 #[test]
 fn test_completed_child_unavailable() {
-    use crate::agent_message::FleetEntry;
-    use crate::records::{TeammateView, TranscriptLine};
-    let mut app = crate::composition::app();
+    let mut app = app();
     app.ui.teammate_view = Some(TeammateView {
         child_sid: "c1".into(),
         ..Default::default()
@@ -535,8 +524,7 @@ fn test_completed_child_unavailable() {
 /// than starting a parent turn or queuing input on the parent.
 #[test]
 fn test_teammate_submit_steers() {
-    use crate::records::{TeammateView, TranscriptLine};
-    let mut app = crate::composition::app();
+    let mut app = app();
     app.ui.navigation.screen = crate::state::Screen::Working;
     app.ui.teammate_view = Some(TeammateView {
         child_sid: "c1".into(),

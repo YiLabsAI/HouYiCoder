@@ -9,8 +9,15 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, 
 
 use crate::composition;
 use crate::keys::handle_working;
+use crate::state::PermissionInput;
 use crate::state::{App, Pane, PermissionTab, Screen};
 use crate::test_harness::{render_buffer, render_text};
+use houyicoder_protocol::frontend::permission::PermissionDecisionEntry;
+use houyicoder_protocol::frontend::permission::RuleDestination;
+use houyicoder_protocol::frontend::permission::{
+    PermissionEffect, PermissionRule, PermissionRuleContent,
+};
+use ratatui::style::{Color, Modifier, Style};
 
 fn app() -> App {
     let mut app = composition::app();
@@ -32,9 +39,6 @@ fn key_press(code: KeyCode) -> KeyEvent {
 fn test_permission_tab_filters_rules() {
     // Each rule tab shows only its own effect's rules; Recently-denied shows
     // denials. Labels render in the canonical form (e.g. "Bash(npm:*)").
-    use houyicoder_protocol::frontend::permission::{
-        PermissionEffect, PermissionRule, PermissionRuleContent,
-    };
     let rule = |action: &str, effect: PermissionEffect, content: Option<&str>| PermissionRule {
         action: action.to_string(),
         content: content.map(|v| PermissionRuleContent::Prefix {
@@ -86,9 +90,6 @@ fn test_permission_tab_filters_rules() {
 fn test_permission_cursor_recent_tab() {
     // Up/Down move the cursor; the Recently-denied tab renders the denial log;
     // Exact + Glob content arms render.
-    use houyicoder_protocol::frontend::permission::{
-        PermissionDecisionEntry, PermissionEffect, PermissionRule, PermissionRuleContent,
-    };
     let mut app = app();
     app.ui.navigation.pane = Pane::Permission;
     app.sessions.current.capabilities.permission.rules_cache = vec![
@@ -180,10 +181,6 @@ fn test_permission_search_submode_filters() {
     // 's' enters Search; typing filters the current tab live (the query lives
     // in the re-purposed input box, mirrored by the SearchBox); Enter ends
     // search; Esc clears the query.
-    use crate::state::{PermissionInput, PermissionTab};
-    use houyicoder_protocol::frontend::permission::{
-        PermissionEffect, PermissionRule, PermissionRuleContent,
-    };
     let mut app = app();
     app.ui.navigation.pane = Pane::Permission;
     app.sessions.current.capabilities.permission.rules_cache = vec![
@@ -250,8 +247,6 @@ fn test_permission_workspace_cursor_clamps() {
     // past the dirs (the highlight vanished). It must clamp against the dirs
     // list on the Workspace tab. Asserted via cell style: the cyan+bold row
     // lands on a dir, not beyond.
-    use crate::state::PermissionTab;
-    use ratatui::style::{Color, Modifier, Style};
     let mut app = app();
     app.ui.navigation.pane = Pane::Permission;
     app.ui.permission_pane.tab = PermissionTab::Workspace;
@@ -259,7 +254,6 @@ fn test_permission_workspace_cursor_clamps() {
     app.sessions.current.capabilities.permission.dirs_cache =
         vec!["/tmp/a".into(), "/tmp/b".into()];
     // A denial log longer than the dirs list — the trap condition.
-    use houyicoder_protocol::frontend::permission::PermissionDecisionEntry;
     app.sessions
         .current
         .capabilities
@@ -307,7 +301,6 @@ fn test_permission_workspace_cursor_clamps() {
 fn test_permission_workspace_lists_dirs() {
     // The Workspace tab shows the original cwd (non-deletable) plus one row
     // per runtime-added directory; the empty state names what the tab holds.
-    use crate::state::PermissionTab;
     let mut app = app();
     app.ui.navigation.pane = Pane::Permission;
     app.ui.permission_pane.tab = PermissionTab::Workspace;
@@ -344,8 +337,6 @@ fn test_workspace_nav_two_dirs() {
     // via a partial cell-style match (fg == Cyan + BOLD) — ratatui composes
     // bg(Reset)/underline_color(Reset) into the stored style, so a full
     // Style == comparison would never match.
-    use crate::state::PermissionTab;
-    use ratatui::style::{Color, Modifier, Style};
     let is_cyan_bold =
         |st: &Style| st.fg == Some(Color::Cyan) && st.add_modifier.contains(Modifier::BOLD);
     let mut app = app();
@@ -394,8 +385,6 @@ fn test_destination_arrows_match_direction() {
     // AddDestination.destination field after each arrow), not the render —
     // ratatui's incremental diff does not always re-emit the changed bracket
     // bytes, so a render-buffer assertion would be a false negative.
-    use crate::state::PermissionInput;
-    use houyicoder_protocol::frontend::permission::{PermissionEffect, RuleDestination};
     let mut app = app();
     app.ui.navigation.pane = Pane::Permission;
     app.ui.permission_pane.input = PermissionInput::AddDestination {

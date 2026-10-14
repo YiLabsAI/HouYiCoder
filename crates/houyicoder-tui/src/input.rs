@@ -13,6 +13,7 @@
 
 pub(crate) mod queue;
 
+use std::mem::take;
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -125,7 +126,7 @@ impl InputField {
 
     /// Take ownership of the text, leaving an empty field.
     pub fn take(&mut self) -> String {
-        let t = std::mem::take(&mut self.text);
+        let t = take(&mut self.text);
         self.cursor = 0;
         t
     }
@@ -281,7 +282,7 @@ impl InputField {
                     let gw = UnicodeWidthStr::width(g);
                     if !line.is_empty() && w + gw > columns {
                         out.push(WrappedLine {
-                            text: std::mem::take(&mut line),
+                            text: take(&mut line),
                             start_offset: line_off,
                         });
                         line_off = offset + g_rel;

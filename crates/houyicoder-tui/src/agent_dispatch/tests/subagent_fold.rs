@@ -1,4 +1,13 @@
 use super::*;
+use crate::composition::app;
+use crate::records::TranscriptLine;
+use crate::selection::region::{Region, TranscriptRegion};
+use crate::state::Screen;
+use crate::test_harness::render_text;
+use houyicoder_protocol::envelope::ChildTranscriptFrame;
+use houyicoder_protocol::frontend::run::ContentBlock;
+use houyicoder_protocol::frontend::session_update::ContentChunk;
+use houyicoder_protocol::frontend::session_update::SessionUpdate;
 
 /// A ChildTranscriptResult reply populates the matching Subagent line's
 /// folded_transcript through the same fold as the parent flow
@@ -7,10 +16,7 @@ use super::*;
 /// or the transcript_from_frames fold fails here.
 #[test]
 fn test_child_transcript_fills_folded() {
-    use crate::records::TranscriptLine;
-    use houyicoder_protocol::frontend::run::ContentBlock;
-    use houyicoder_protocol::frontend::session_update::ContentChunk;
-    let mut app = crate::composition::app();
+    let mut app = app();
     app.sessions
         .current
         .transcript
@@ -59,8 +65,7 @@ fn test_child_transcript_fills_folded() {
 /// Pins the empty-case guard.
 #[test]
 fn test_child_transcript_empty_unavailable() {
-    use crate::records::TranscriptLine;
-    let mut app = crate::composition::app();
+    let mut app = app();
     app.sessions
         .current
         .transcript
@@ -99,10 +104,7 @@ fn test_child_transcript_empty_unavailable() {
 /// position stability so an expanded fold does not yank trailing content.
 #[test]
 fn test_child_transcript_preserves_position() {
-    use crate::records::TranscriptLine;
-    use houyicoder_protocol::frontend::run::ContentBlock;
-    use houyicoder_protocol::frontend::session_update::ContentChunk;
-    let mut app = crate::composition::app();
+    let mut app = app();
     app.sessions
         .current
         .transcript
@@ -161,8 +163,7 @@ fn test_child_transcript_preserves_position() {
 /// semantics (the fetch is first-expand-only).
 #[test]
 fn test_subagent_collapse_keeps_folded() {
-    use crate::records::TranscriptLine;
-    let mut app = crate::composition::app();
+    let mut app = app();
     app.sessions
         .current
         .transcript
@@ -201,10 +202,8 @@ fn test_subagent_collapse_keeps_folded() {
 /// the head to a plain selectable row fails here.
 #[test]
 fn test_click_subagent_head_expands() {
-    use crate::records::TranscriptLine;
-    use crate::selection::region::{Region, TranscriptRegion};
-    let mut app = crate::composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    let mut app = app();
+    app.ui.navigation.screen = Screen::Working;
     app.sessions
         .current
         .transcript
@@ -216,7 +215,7 @@ fn test_click_subagent_head_expands() {
             folded_transcript: Vec::new(),
             color: None,
         });
-    let _out = crate::test_harness::render_text(&app, 80, 24);
+    let _out = render_text(&app, 80, 24);
     let rect = app.ui.frame.layout.transcript_rect.get();
     assert!(
         !app.ui.transcript_view.expanded.subagents.contains("c1"),
@@ -243,7 +242,7 @@ fn test_click_subagent_head_expands() {
         app.ui.transcript_view.expanded.subagents
     );
     // Toggle symmetry: a second click on the (still-head) row collapses.
-    let _out = crate::test_harness::render_text(&app, 80, 24);
+    let _out = render_text(&app, 80, 24);
     let rect = app.ui.frame.layout.transcript_rect.get();
     // The gesture names the effect and the apply layer performs it. This
     // drives both halves so the assertion covers the toggle the leaf decided,
@@ -271,9 +270,8 @@ fn test_click_subagent_head_expands() {
 /// misfiring on a None fold key. Pins the None branch of the row resolver.
 #[test]
 fn test_subagent_toggle_no_key() {
-    use crate::records::TranscriptLine;
-    let mut app = crate::composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    let mut app = app();
+    app.ui.navigation.screen = Screen::Working;
     app.sessions
         .current
         .transcript
@@ -302,9 +300,8 @@ fn test_subagent_toggle_no_key() {
 /// cannot silently skip a needed fetch.
 #[test]
 fn test_subagent_toggle_stale_key() {
-    use crate::records::TranscriptLine;
-    let mut app = crate::composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    let mut app = app();
+    app.ui.navigation.screen = Screen::Working;
     app.sessions
         .current
         .transcript
@@ -340,8 +337,7 @@ fn test_subagent_toggle_stale_key() {
 /// caller's decision, and the tail-most rule then picks the later line.
 #[test]
 fn test_subagent_cursor_targeting() {
-    use crate::records::TranscriptLine;
-    let mut app = crate::composition::app();
+    let mut app = app();
     app.sessions
         .current
         .transcript
@@ -395,9 +391,6 @@ fn test_subagent_cursor_targeting() {
 /// pipeline as the parent flow. Pins the From impl at the driver boundary.
 #[test]
 fn test_child_frame_converts() {
-    use houyicoder_protocol::envelope::ChildTranscriptFrame;
-    use houyicoder_protocol::frontend::run::ContentBlock;
-    use houyicoder_protocol::frontend::session_update::{ContentChunk, SessionUpdate};
     let wire = ChildTranscriptFrame::Session(SessionUpdate::AgentMessageChunk(ContentChunk::new(
         ContentBlock::Text {
             text: "child reply".into(),
@@ -429,9 +422,6 @@ fn test_child_frame_converts() {
 /// violates.
 #[test]
 fn test_subagent_folded_survives_rebuild() {
-    use crate::records::TranscriptLine;
-    use houyicoder_protocol::frontend::run::ContentBlock;
-    use houyicoder_protocol::frontend::session_update::ContentChunk;
     let call = TranscriptFrame::Session(SessionUpdate::ToolCall(
         ToolCall::new("ag1", "agent")
             .status(ToolCallStatus::Completed)
@@ -442,7 +432,7 @@ fn test_subagent_folded_survives_rebuild() {
         ToolCallUpdateFields::new()
             .raw_output(serde_json::json!({"agentId": "c1", "content": "found auth"})),
     )));
-    let mut app = crate::composition::app();
+    let mut app = app();
     app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(call.into())));
     app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(result.into())));
     assert!(

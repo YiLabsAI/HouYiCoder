@@ -20,11 +20,15 @@ use ratatui::{Terminal, backend::TestBackend, buffer::Buffer};
 
 use crate::agent_message::{ConnectionEvent, SessionMessage};
 use crate::app::apply_selection_overlay;
+use crate::composition::shared_runtime;
 use crate::records::TranscriptLine;
 use crate::session::SessionConnection;
 use crate::state::{App, Screen};
 use crate::transcript::snapshot::{IndexProgress, SnapshotLoad, TranscriptSnapshot, WindowLoad};
 use crate::view::draw;
+use houyicoder_protocol::envelope::ClientFrame;
+use std::sync::mpsc::channel;
+use std::time::Instant;
 
 /// Render the app to a TestBackend terminal of the given size and return the
 /// buffer content as plain text (one line per row, trailing spaces trimmed).
@@ -314,8 +318,6 @@ pub(crate) fn wait_for_request(
     events: &Receiver<TransportEvent>,
     want: impl Fn(&houyicoder_protocol::frontend::FrontendRequest) -> bool,
 ) -> houyicoder_protocol::envelope::RequestEnvelope {
-    use houyicoder_protocol::envelope::ClientFrame;
-    use std::time::{Duration, Instant};
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
@@ -336,7 +338,7 @@ pub(crate) fn wait_for_request(
 /// Build an App with an active negotiated test session, plus the transport
 /// events it records, so tests can assert on the frames it shipped.
 pub(crate) fn connected_app_with_events() -> (App, Receiver<TransportEvent>) {
-    let runtime = crate::composition::shared_runtime();
+    let runtime = shared_runtime();
     let (events_tx, events_rx) = mpsc::channel();
     let client = Client::new(Box::new(RecordingTransport::new(events_tx)));
     let (agent_tx, agent_rx) = mpsc::channel::<SessionMessage>();
@@ -372,10 +374,10 @@ impl Transport for FailedHandshakeTransport {
 /// its own state (catalog, queues, cards) must now take its connected
 /// branch.
 pub(crate) fn attach_connection(app: &mut App) {
-    let runtime = crate::composition::shared_runtime();
+    let runtime = shared_runtime();
     let (events_tx, _events_rx) = mpsc::channel();
     let client = Client::new(Box::new(RecordingTransport::new(events_tx)));
-    let (agent_tx, agent_rx) = std::sync::mpsc::channel::<crate::agent_message::SessionMessage>();
+    let (agent_tx, agent_rx) = channel::<crate::agent_message::SessionMessage>();
     let session = SessionConnection::spawn(client, agent_tx, agent_rx, &runtime);
     app.sessions.current.connection = Some(session);
 }
@@ -385,7 +387,7 @@ pub(crate) fn attach_connection(app: &mut App) {
 /// arrived. Send attempts are refused deterministically, so tests can drive
 /// the send-failure branches without racing the scheduler.
 pub(crate) fn connection_lost_app() -> App {
-    let runtime = crate::composition::shared_runtime();
+    let runtime = shared_runtime();
     let client = Client::new(Box::new(FailedHandshakeTransport));
     let (agent_tx, agent_rx) = mpsc::channel::<SessionMessage>();
     let mut session = SessionConnection::spawn(client, agent_tx, agent_rx, &runtime);

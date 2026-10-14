@@ -5,12 +5,21 @@
 
 use serde_json::json;
 
+use crate::app::handle_key;
+use crate::composition::app;
 use crate::pending_prompt::PendingPrompt;
 use crate::records::{AskQuestion, QuestionCard};
+use crate::state::Screen;
+use crate::test_harness::render_text;
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use houyicoder_api::tool::{Tool, ToolCtx};
+use houyicoder_core::agent::ApprovalDecision;
+use houyicoder_core::agent::AskUserQuestionTool;
 use houyicoder_protocol::envelope::RequestId;
+use serde_json::Value;
 
 /// Build a minimal single-select question input.
-pub(crate) fn single_input() -> serde_json::Value {
+pub(crate) fn single_input() -> Value {
     json!({
         "questions": [{
             "question": "Which library?",
@@ -25,7 +34,7 @@ pub(crate) fn single_input() -> serde_json::Value {
 }
 
 /// Build a minimal multi-select question input.
-pub(crate) fn multi_input() -> serde_json::Value {
+pub(crate) fn multi_input() -> Value {
     json!({
         "questions": [{
             "question": "Which features?",
@@ -41,7 +50,7 @@ pub(crate) fn multi_input() -> serde_json::Value {
 }
 
 /// Build a two-question input.
-pub(crate) fn two_question_input() -> serde_json::Value {
+pub(crate) fn two_question_input() -> Value {
     json!({
         "questions": [
             {"question": "q1", "header": "h1", "options": [{"label":"a","description":"x"},{"label":"b","description":"y"}], "multiSelect": false},
@@ -240,7 +249,6 @@ fn test_updated_input_preserves_questions() {
 
 #[test]
 fn test_decision_approve_with_input() {
-    use houyicoder_core::agent::ApprovalDecision;
     let mut aq = AskQuestion::parse("c1", &single_input()).expect("parse");
     aq.selections[0] = vec![0];
     let call_id = aq.call_id.clone();
@@ -253,7 +261,6 @@ fn test_decision_approve_with_input() {
 
 #[test]
 fn test_decision_reject() {
-    use houyicoder_core::agent::ApprovalDecision;
     let decision = ApprovalDecision::reject("c1");
     assert!(!decision.approved);
     assert!(decision.updated_input.is_none());
@@ -263,11 +270,11 @@ fn test_decision_reject() {
 
 #[test]
 fn test_render_card_question_options() {
-    let mut app = crate::composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    let mut app = app();
+    app.ui.navigation.screen = Screen::Working;
     let aq = AskQuestion::parse("c1", &single_input()).expect("parse");
     app.sessions.current.prompt = Some(PendingPrompt::question_card(RequestId(0), aq));
-    let out = crate::test_harness::render_text(&app, 80, 24);
+    let out = render_text(&app, 80, 24);
     assert!(
         out.contains("Which library?"),
         "question text missing:\n{out}"
@@ -283,12 +290,12 @@ fn test_render_card_question_options() {
 
 #[test]
 fn test_render_card_cursor_marker() {
-    let mut app = crate::composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    let mut app = app();
+    app.ui.navigation.screen = Screen::Working;
     let mut aq = AskQuestion::parse("c1", &single_input()).expect("parse");
     aq.cursors[0] = 1; // focus on "time"
     app.sessions.current.prompt = Some(PendingPrompt::question_card(RequestId(0), aq));
-    let out = crate::test_harness::render_text(&app, 80, 24);
+    let out = render_text(&app, 80, 24);
     assert!(out.contains('>'), "cursor marker missing:\n{out}");
     let lines: Vec<&str> = out.lines().collect();
     let chrono_line = lines.iter().find(|l| l.contains("chrono")).expect("chrono");
@@ -299,11 +306,11 @@ fn test_render_card_cursor_marker() {
 
 #[test]
 fn test_render_card_multi_hint() {
-    let mut app = crate::composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    let mut app = app();
+    app.ui.navigation.screen = Screen::Working;
     let aq = AskQuestion::parse("c1", &multi_input()).expect("parse");
     app.sessions.current.prompt = Some(PendingPrompt::question_card(RequestId(0), aq));
-    let out = crate::test_harness::render_text(&app, 80, 24);
+    let out = render_text(&app, 80, 24);
     assert!(out.contains("toggle"), "multi-select hint missing:\n{out}");
     // Multi-select Other placeholder has no trailing period (single does).
     assert!(
@@ -318,11 +325,11 @@ fn test_render_card_multi_hint() {
 
 #[test]
 fn test_render_card_single_hint() {
-    let mut app = crate::composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    let mut app = app();
+    app.ui.navigation.screen = Screen::Working;
     let aq = AskQuestion::parse("c1", &single_input()).expect("parse");
     app.sessions.current.prompt = Some(PendingPrompt::question_card(RequestId(0), aq));
-    let out = crate::test_harness::render_text(&app, 80, 24);
+    let out = render_text(&app, 80, 24);
     assert!(
         out.contains("enter select"),
         "single-select hint missing:\n{out}"
@@ -331,33 +338,33 @@ fn test_render_card_single_hint() {
 
 #[test]
 fn test_render_card_esc_hint() {
-    let mut app = crate::composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    let mut app = app();
+    app.ui.navigation.screen = Screen::Working;
     let aq = AskQuestion::parse("c1", &single_input()).expect("parse");
     app.sessions.current.prompt = Some(PendingPrompt::question_card(RequestId(0), aq));
-    let out = crate::test_harness::render_text(&app, 80, 24);
+    let out = render_text(&app, 80, 24);
     assert!(out.contains("esc cancel"), "esc hint missing:\n{out}");
 }
 
 #[test]
 fn test_render_card_selected_checkbox() {
-    let mut app = crate::composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    let mut app = app();
+    app.ui.navigation.screen = Screen::Working;
     let mut aq = AskQuestion::parse("c1", &single_input()).expect("parse");
     aq.selections[0] = vec![0]; // select chrono
     app.sessions.current.prompt = Some(PendingPrompt::question_card(RequestId(0), aq));
-    let out = crate::test_harness::render_text(&app, 80, 24);
+    let out = render_text(&app, 80, 24);
     assert!(out.contains("[x]"), "checked box missing:\n{out}");
     assert!(out.contains("[ ]"), "unchecked box missing:\n{out}");
 }
 
 #[test]
 fn test_render_card_separator() {
-    let mut app = crate::composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    let mut app = app();
+    app.ui.navigation.screen = Screen::Working;
     let aq = AskQuestion::parse("c1", &single_input()).expect("parse");
     app.sessions.current.prompt = Some(PendingPrompt::question_card(RequestId(0), aq));
-    let out = crate::test_harness::render_text(&app, 80, 24);
+    let out = render_text(&app, 80, 24);
     assert!(out.contains('-'), "separator line missing:\n{out}");
 }
 
@@ -374,9 +381,6 @@ where
 
 #[test]
 fn test_single_select_through_tool() {
-    use houyicoder_api::tool::{Tool, ToolCtx};
-    use houyicoder_core::agent::AskUserQuestionTool;
-
     let input = single_input();
     let mut aq = AskQuestion::parse("c1", &input).expect("parse");
     aq.selections[0] = vec![0]; // chrono
@@ -395,9 +399,6 @@ fn test_single_select_through_tool() {
 
 #[test]
 fn test_multi_select_through_tool() {
-    use houyicoder_api::tool::{Tool, ToolCtx};
-    use houyicoder_core::agent::AskUserQuestionTool;
-
     let input = multi_input();
     let mut aq = AskQuestion::parse("c1", &input).expect("parse");
     aq.selections[0] = vec![0, 2]; // auth, search
@@ -411,9 +412,6 @@ fn test_multi_select_through_tool() {
 
 #[test]
 fn test_other_text_through_tool() {
-    use houyicoder_api::tool::{Tool, ToolCtx};
-    use houyicoder_core::agent::AskUserQuestionTool;
-
     let input = single_input();
     let mut aq = AskQuestion::parse("c1", &input).expect("parse");
     let other_idx = aq.questions[0].options.len();
@@ -429,7 +427,6 @@ fn test_other_text_through_tool() {
 
 #[test]
 fn test_reject_decision_no_input() {
-    use houyicoder_core::agent::ApprovalDecision;
     let decision = ApprovalDecision::reject("c1");
     assert!(!decision.approved);
     assert!(decision.updated_input.is_none());
@@ -471,9 +468,6 @@ fn test_question_card_with_preview() {
 
 #[test]
 fn test_multi_submit_via_tool() {
-    use houyicoder_api::tool::{Tool, ToolCtx};
-    use houyicoder_core::agent::AskUserQuestionTool;
-
     let input = multi_input();
     let mut aq = AskQuestion::parse("c1", &input).expect("parse");
     // Simulate toggling auth and search, then submitting via the submit view.
@@ -623,7 +617,7 @@ fn test_other_advances_multi_q() {
 fn test_cancel_declined_input() {
     let aq = AskQuestion::parse("c1", &single_input()).expect("parse");
     let mut input = aq.original_input.clone();
-    if let serde_json::Value::Object(ref mut obj) = input {
+    if let Value::Object(ref mut obj) = input {
         obj.insert("declined".into(), serde_json::json!(true));
     }
     assert!(input["declined"].as_bool().unwrap());
@@ -633,12 +627,9 @@ fn test_cancel_declined_input() {
 
 #[test]
 fn test_cancel_via_tool() {
-    use houyicoder_api::tool::{Tool, ToolCtx};
-    use houyicoder_core::agent::AskUserQuestionTool;
-
     let aq = AskQuestion::parse("c1", &single_input()).expect("parse");
     let mut input = aq.original_input.clone();
-    if let serde_json::Value::Object(ref mut obj) = input {
+    if let Value::Object(ref mut obj) = input {
         obj.insert("declined".into(), serde_json::json!(true));
     }
     let tool = AskUserQuestionTool::new();
@@ -658,14 +649,14 @@ fn test_cancel_via_tool() {
 
 #[test]
 fn test_render_submit_title() {
-    let mut app = crate::composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    let mut app = app();
+    app.ui.navigation.screen = Screen::Working;
     let mut aq = AskQuestion::parse("c1", &two_question_input()).expect("parse");
     aq.selections[0] = vec![0];
     aq.selections[1] = vec![1];
     aq.current = aq.questions.len(); // submit view
     app.sessions.current.prompt = Some(PendingPrompt::question_card(RequestId(0), aq));
-    let out = crate::test_harness::render_text(&app, 80, 24);
+    let out = render_text(&app, 80, 24);
     assert!(
         out.contains("Review your answers"),
         "submit view title missing:\n{out}"
@@ -674,14 +665,14 @@ fn test_render_submit_title() {
 
 #[test]
 fn test_render_submit_answers() {
-    let mut app = crate::composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    let mut app = app();
+    app.ui.navigation.screen = Screen::Working;
     let mut aq = AskQuestion::parse("c1", &two_question_input()).expect("parse");
     aq.selections[0] = vec![0]; // a
     aq.selections[1] = vec![1]; // d
     aq.current = aq.questions.len();
     app.sessions.current.prompt = Some(PendingPrompt::question_card(RequestId(0), aq));
-    let out = crate::test_harness::render_text(&app, 80, 24);
+    let out = render_text(&app, 80, 24);
     assert!(out.contains("q1"), "question 1 missing:\n{out}");
     assert!(out.contains("-> a"), "answer 1 missing:\n{out}");
     assert!(out.contains("q2"), "question 2 missing:\n{out}");
@@ -690,14 +681,14 @@ fn test_render_submit_answers() {
 
 #[test]
 fn test_render_submit_warning() {
-    let mut app = crate::composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    let mut app = app();
+    app.ui.navigation.screen = Screen::Working;
     let mut aq = AskQuestion::parse("c1", &two_question_input()).expect("parse");
     aq.selections[0] = vec![0]; // only Q1 answered
     aq.selections[1] = vec![]; // Q2 unanswered
     aq.current = aq.questions.len();
     app.sessions.current.prompt = Some(PendingPrompt::question_card(RequestId(0), aq));
-    let out = crate::test_harness::render_text(&app, 80, 24);
+    let out = render_text(&app, 80, 24);
     assert!(
         out.contains("not answered all questions"),
         "warning missing:\n{out}"
@@ -706,14 +697,14 @@ fn test_render_submit_warning() {
 
 #[test]
 fn test_render_submit_cancel_opts() {
-    let mut app = crate::composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    let mut app = app();
+    app.ui.navigation.screen = Screen::Working;
     let mut aq = AskQuestion::parse("c1", &two_question_input()).expect("parse");
     aq.selections[0] = vec![0];
     aq.selections[1] = vec![1];
     aq.current = aq.questions.len();
     app.sessions.current.prompt = Some(PendingPrompt::question_card(RequestId(0), aq));
-    let out = crate::test_harness::render_text(&app, 80, 24);
+    let out = render_text(&app, 80, 24);
     assert!(
         out.contains("Submit answers"),
         "submit option missing:\n{out}"
@@ -725,13 +716,11 @@ fn test_render_submit_cancel_opts() {
 /// auto-submits, taking the card off the prompt.
 #[test]
 fn test_question_enter_submits() {
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-
-    let mut app = crate::composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    let mut app = app();
+    app.ui.navigation.screen = Screen::Working;
     let aq = AskQuestion::parse("c1", &single_input()).expect("parse");
     app.sessions.current.prompt = Some(PendingPrompt::question_card(RequestId(0), aq));
-    crate::app::handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     assert!(app.ask_question().is_none(), "Enter takes the card");
 }
 
@@ -739,13 +728,11 @@ fn test_question_enter_submits() {
 /// permission lingers to trap the run in Waiting.
 #[test]
 fn test_question_esc_clears_disconnected() {
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-
-    let mut app = crate::composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    let mut app = app();
+    app.ui.navigation.screen = Screen::Working;
     let aq = AskQuestion::parse("c1", &single_input()).expect("parse");
     app.sessions.current.prompt = Some(PendingPrompt::question_card(RequestId(0), aq));
-    crate::app::handle_key(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    handle_key(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     assert!(
         app.sessions.current.prompt.is_none(),
         "Esc clears the prompt"

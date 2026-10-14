@@ -4,13 +4,17 @@
 
 use houyicoder_protocol::frontend::SlashCommand;
 
+use crate::app::handle_key;
 use crate::input::queue::InputItem;
 use crate::input::queue::resume_command_target;
 use crate::resume_picker::{SessionCatalog, SessionPickerState, SessionRow};
+use crate::state::App;
 use crate::test_harness::render_text;
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use std::sync::Arc;
 
 /// The resolved target carried by a queued /resume Command at the head.
-fn queued_target(app: &crate::state::App) -> Option<String> {
+fn queued_target(app: &App) -> Option<String> {
     app.ui
         .input
         .queue
@@ -19,13 +23,13 @@ fn queued_target(app: &crate::state::App) -> Option<String> {
         .map(str::to_string)
 }
 
-fn working() -> crate::state::App {
+fn working() -> App {
     // Picker flows drive run_resume, which needs a live session (the
     // disconnected branch refuses before the catalog logic).
     crate::test_harness::connected_app()
 }
 
-fn render(app: &crate::state::App) -> String {
+fn render(app: &App) -> String {
     render_text(app, 100, 28)
 }
 
@@ -46,9 +50,9 @@ impl SessionCatalog for StubCatalog {
     fn resolve_detail(&self, _row: &mut SessionRow) {}
 }
 
-fn stub_catalog_app() -> crate::state::App {
+fn stub_catalog_app() -> App {
     let mut app = working();
-    app.sessions.catalog = Some(std::sync::Arc::new(StubCatalog(vec![
+    app.sessions.catalog = Some(Arc::new(StubCatalog(vec![
         SessionRow {
             sid_str: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa".into(),
             title: "login flow rework".into(),
@@ -146,21 +150,20 @@ fn test_resume_picker_filters_query() {
 /// methods) is covered.
 #[test]
 fn test_keys_navigate_select_close() {
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     let mut app = stub_catalog_app();
     app.run_command(SlashCommand::Resume);
     assert!(app.ui.navigation.resume_picker.open);
-    crate::app::handle_key(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    handle_key(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     assert_eq!(
         app.ui.navigation.resume_picker.sel, 1,
         "Down moves to row 1"
     );
-    crate::app::handle_key(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+    handle_key(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
     assert_eq!(
         app.ui.navigation.resume_picker.sel, 0,
         "Up wraps back to row 0"
     );
-    crate::app::handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     assert_eq!(
         queued_target(&app).as_deref(),
         Some("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
@@ -173,7 +176,7 @@ fn test_keys_navigate_select_close() {
     );
     drop(app.ui.input.queue.take_all());
     app.run_command(SlashCommand::Resume);
-    crate::app::handle_key(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    handle_key(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     assert!(
         !app.ui.navigation.resume_picker.open,
         "Esc closes the picker"
@@ -185,12 +188,11 @@ fn test_keys_navigate_select_close() {
 /// pops the last char.
 #[test]
 fn test_picker_backspace_pops_closes() {
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     let mut app = stub_catalog_app();
     app.run_command(SlashCommand::Resume);
     // Type then backspace: pops the char.
     app.ui.navigation.resume_picker.push('s');
-    crate::app::handle_key(
+    handle_key(
         &mut app,
         KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
     );
@@ -203,7 +205,7 @@ fn test_picker_backspace_pops_closes() {
         "backspace pops the char"
     );
     // Backspace on empty query closes.
-    crate::app::handle_key(
+    handle_key(
         &mut app,
         KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
     );
@@ -218,7 +220,6 @@ fn test_picker_backspace_pops_closes() {
 /// silent no-op. Covers the Enter fall-back branch.
 #[test]
 fn test_picker_enter_fall_back() {
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     let mut app = stub_catalog_app();
     app.run_command(SlashCommand::Resume);
     // Type a query matching neither row's sid nor title.
@@ -229,7 +230,7 @@ fn test_picker_enter_fall_back() {
         app.ui.navigation.resume_picker.selected().is_none(),
         "no row matches"
     );
-    crate::app::handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     assert!(!app.ui.quit, "no match must not quit (no resume)");
     let out = render(&app);
     assert!(
@@ -242,12 +243,11 @@ fn test_picker_enter_fall_back() {
 /// the queued-input FIFO instead of swapping now (a swap would fight the run).
 #[test]
 fn test_busy_defers_selection() {
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     let mut app = stub_catalog_app();
     app.run_command(SlashCommand::Resume);
     app.start_run_for_test(1);
     let sid_before = app.sessions.current.identity.session_id.0.clone();
-    crate::app::handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     assert_eq!(
         app.sessions.current.identity.session_id.0, sid_before,
         "busy Enter must not swap now"
@@ -265,7 +265,6 @@ fn test_busy_defers_selection() {
 /// switch by query onto the queue. Covers the no-match defer branch.
 #[test]
 fn test_busy_defers_query() {
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     let mut app = stub_catalog_app();
     app.run_command(SlashCommand::Resume);
     for c in "zzz-no-match".chars() {
@@ -273,7 +272,7 @@ fn test_busy_defers_query() {
     }
     app.start_run_for_test(1);
     let sid_before = app.sessions.current.identity.session_id.0.clone();
-    crate::app::handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     assert_eq!(
         app.sessions.current.identity.session_id.0, sid_before,
         "busy Enter must not swap now"
@@ -291,10 +290,9 @@ fn test_busy_defers_query() {
 /// the key dispatch's Char arm is exercised.
 #[test]
 fn test_char_keys_reach_push() {
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     let mut app = stub_catalog_app();
     app.run_command(SlashCommand::Resume);
-    crate::app::handle_key(
+    handle_key(
         &mut app,
         KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
     );
@@ -303,7 +301,7 @@ fn test_char_keys_reach_push() {
         "Char pushes to the query"
     );
     // A non-graphic char (e.g. newline) is ignored (the _ arm).
-    crate::app::handle_key(
+    handle_key(
         &mut app,
         KeyEvent::new(KeyCode::Char('\n'), KeyModifiers::NONE),
     );
@@ -319,7 +317,7 @@ fn test_char_keys_reach_push() {
 #[test]
 fn test_resume_picker_empty_list() {
     let mut app = working();
-    app.sessions.catalog = Some(std::sync::Arc::new(StubCatalog(vec![])));
+    app.sessions.catalog = Some(Arc::new(StubCatalog(vec![])));
     app.run_command(SlashCommand::Resume);
     assert!(
         !app.ui.navigation.resume_picker.open,
@@ -390,7 +388,7 @@ fn test_duplicate_title_hides_older() {
 #[test]
 fn test_duplicate_title_renders_once() {
     let mut app = working();
-    app.sessions.catalog = Some(std::sync::Arc::new(SlugCatalog));
+    app.sessions.catalog = Some(Arc::new(SlugCatalog));
     app.run_command(SlashCommand::Resume);
     let out = render(&app);
     assert_eq!(
