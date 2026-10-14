@@ -7,8 +7,33 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::acpx::AcpxNotification;
+use crate::error::ProtocolError;
 use crate::frontend::FrontendEvent;
+use crate::frontend::FrontendRequest;
+use crate::frontend::SessionId;
+use crate::frontend::compact::CompactReply;
+use crate::frontend::context::ContextBreakdown;
+use crate::frontend::debug::DebugState;
+use crate::frontend::hooks::HookEntry;
+use crate::frontend::memory::MemoryDetail;
+use crate::frontend::memory::MemorySummaryEntry;
+use crate::frontend::memory::ToggleState;
 use crate::frontend::model::ModelApplyResult;
+use crate::frontend::model::ModelCatalog;
+use crate::frontend::permission::PermissionMode;
+use crate::frontend::permission::PermissionRule;
+use crate::frontend::run::ApprovalDecision;
+use crate::frontend::run::ApprovalRequest;
+use crate::frontend::run::RunError;
+use crate::frontend::run::RunResult;
+use crate::frontend::session_update::SessionUpdate;
+use crate::frontend::skills::SkillEntry;
+use crate::frontend::status::StatusSnapshot;
+use crate::frontend::tools::ToolEntry;
+use crate::frontend::trajectory::TrajectoryResponse;
+use crate::frontend::trust::TrustAccept;
+use crate::frontend::trust::TrustPrompt;
 
 /// A caller-minted request id. Unique within a session; the response echoes it
 /// so the caller pairs reply to request.
@@ -39,11 +64,11 @@ pub struct DurableEventId(pub String);
 #[non_exhaustive]
 pub struct RequestEnvelope {
     pub req_id: RequestId,
-    pub payload: crate::frontend::FrontendRequest,
+    pub payload: FrontendRequest,
 }
 
 impl RequestEnvelope {
-    pub fn new(req_id: RequestId, payload: crate::frontend::FrontendRequest) -> Self {
+    pub fn new(req_id: RequestId, payload: FrontendRequest) -> Self {
         Self { req_id, payload }
     }
 }
@@ -117,11 +142,11 @@ impl EventEnvelope {
 pub enum ChildTranscriptFrame {
     /// A session/update chunk the child produced (user prompt echo, assistant
     /// message, tool call, tool-call update). The base turn stream.
-    Session(crate::frontend::session_update::SessionUpdate),
+    Session(SessionUpdate),
     /// An acpx/* extension notification the child produced (compaction
     /// boundary, summary), carried so the child transcript is isomorphic to
     /// the parent's, not a stripped subset.
-    Acpx(crate::acpx::AcpxNotification),
+    Acpx(AcpxNotification),
 }
 
 /// The payload of a response to a request. Responses sit on the req_id axis
@@ -140,17 +165,17 @@ pub enum ResponsePayload {
     /// A run completed. The outcome (final output / interruption / handoff /
     /// interrupted / verify-failed) carries the same shape the engine
     /// produced, mapped to the wire form at the service boundary.
-    RunOk(crate::frontend::run::RunResult),
+    RunOk(RunResult),
     /// A run failed before producing an outcome (provider exhausted, context
     /// error, max turns). The category plus display string lets the frontend
     /// surface an error line.
-    RunErr(crate::frontend::run::RunError),
+    RunErr(RunError),
     /// A request that needs no payloaded reply (the effect landed; events on
     /// the seq stream carry any follow-on state).
     Ack,
     /// A status snapshot the frontend requested (/status). Carries the wire
     /// form so the TUI renders without importing the engine crate.
-    Status(crate::frontend::status::StatusSnapshot),
+    Status(StatusSnapshot),
     /// The session's turn-event trajectory (/trajectory), mapped to the
     /// wire session/update form so the TUI renders the trajectory without
     /// importing the engine or context crate. Kinds with no base-protocol
@@ -158,21 +183,21 @@ pub enum ResponsePayload {
     /// stream separately and are not in this first cut. The redundant
     /// field carries the flagged same-input re-issues (self-evolution
     /// reward signal) for a "redundant calls" section in the pane.
-    Trajectory(crate::frontend::trajectory::TrajectoryResponse),
+    Trajectory(TrajectoryResponse),
     /// A context-window breakdown (/context), mapped to the wire form so
     /// the TUI renders the token-budget visualization without importing the
     /// engine or context crate.
-    Context(crate::frontend::context::ContextBreakdown),
+    Context(ContextBreakdown),
     /// A manual /compact result: whether progress was made, the folded event
     /// count, the persisted manifest id, and pre/post token estimates. The
     /// TUI renders a one-line outcome so the user knows the window shrank.
-    Compact(crate::frontend::compact::CompactReply),
+    Compact(CompactReply),
     /// The current permission mode (/mode), mapped to the wire form so the
     /// TUI renders the mode label without importing the permission crate.
-    PermissionMode(crate::frontend::permission::PermissionMode),
+    PermissionMode(PermissionMode),
     /// The durable permission rule set (/rules), mapped to the wire form so
     /// the TUI renders the rule list without importing the permission crate.
-    PermissionRules(Vec<crate::frontend::permission::PermissionRule>),
+    PermissionRules(Vec<PermissionRule>),
     /// The directories the user added to the sandbox workspace at runtime
     /// (/permissions Workspace tab), canonicalized. The list is the source of
     /// truth the TUI renders against; it refreshes on every add/remove so no
@@ -183,15 +208,15 @@ pub enum ResponsePayload {
     PermissionAskBeforeGit(bool),
     /// The registered tool list (/tools), so the TUI renders the capability
     /// inventory without importing the engine registry.
-    Tools(Vec<crate::frontend::tools::ToolEntry>),
+    Tools(Vec<ToolEntry>),
     /// The /agents reply: the formatted agent directory string
     /// (registered sub-agent types, minus denied, sorted).
     Agents(String),
     /// The /hooks reply: the registered hooks (read-only visibility).
-    Hooks(Vec<crate::frontend::hooks::HookEntry>),
+    Hooks(Vec<HookEntry>),
     /// The /skills reply: the discovered skills (name, description,
     /// source, body token estimate).
-    Skills(Vec<crate::frontend::skills::SkillEntry>),
+    Skills(Vec<SkillEntry>),
     /// The /skills detail reply: the body text of one skill as prepared
     /// for injection (frontmatter stripped, base-dir header, substituted
     /// variables, resource manifest), or None when the skill is no longer
@@ -210,21 +235,21 @@ pub enum ResponsePayload {
     /// applied model, the Default resolution, the global effort fallback and
     /// the catalog rows in written order, so the host renders the pane
     /// without importing the config crate.
-    ModelInfo(crate::frontend::model::ModelCatalog),
+    ModelInfo(ModelCatalog),
     /// The /memory list reply: every stored memory as a frontmatter-only
     /// summary (no body), so the TUI renders the index without importing the
     /// engine or context crate.
-    MemoryList(Vec<crate::frontend::memory::MemorySummaryEntry>),
+    MemoryList(Vec<MemorySummaryEntry>),
     /// The /memory <key> reply: the full body of one memory, or None when the
     /// key is absent or no provider is wired.
-    MemoryShow(Option<crate::frontend::memory::MemoryDetail>),
+    MemoryShow(Option<MemoryDetail>),
     /// The /memory toggle reply: both toggles after a read or a flip, so the
     /// pane renders on/off rows without importing the config crate.
-    ToggleState(crate::frontend::memory::ToggleState),
+    ToggleState(ToggleState),
     /// The /debug reply: whether the diagnostic sink is now recording and
     /// the file path it writes to, so the host can surface both in a system
     /// line without guessing where to look.
-    Debug(crate::frontend::debug::DebugState),
+    Debug(DebugState),
     /// The on-demand child transcript (expanding a Subagent fold-group): the
     /// child session's turn events mapped to the same session/update +
     /// acpx frame stream the parent accumulates, so the TUI renders the
@@ -233,11 +258,11 @@ pub enum ResponsePayload {
     /// child_sid echoes the request so the stateless driver can route the
     /// reply to the Subagent line without a req_id-to-sid map.
     ChildTranscript {
-        child_sid: crate::frontend::SessionId,
+        child_sid: SessionId,
         frames: Vec<ChildTranscriptFrame>,
     },
     /// The request itself was invalid for the current state or capability.
-    Error(crate::error::ProtocolError),
+    Error(ProtocolError),
 }
 
 /// A response envelope: the caller's req_id echoed back plus the response
@@ -274,14 +299,14 @@ impl ResponseEnvelope {
 pub enum ServerRequestPayload {
     /// A tool needs a human verdict before the run proceeds. The turn stays
     /// live; the client answers with a permission decision on the same req_id.
-    Permission(crate::frontend::run::ApprovalRequest),
+    Permission(ApprovalRequest),
     /// A one-time workspace-trust ask fired at startup before the run loop
     /// when the project source is not yet acknowledged. Distinct from
     /// Permission: trust is a property of the folder, not of an individual
     /// tool call, so it asks once and persists the answer. The client
     /// replies with a TrustAccept on the same req_id; a decline ends the
     /// session.
-    TrustPrompt(crate::frontend::trust::TrustPrompt),
+    TrustPrompt(TrustPrompt),
 }
 
 /// A reverse request the server sends to the client. The req_id is server-
@@ -311,11 +336,11 @@ impl ServerRequestEnvelope {
 pub enum ClientResponsePayload {
     /// The human verdict on a permission ask, plus an optional edited input
     /// the engine re-feeds to the tool on resume.
-    Permission(crate::frontend::run::ApprovalDecision),
+    Permission(ApprovalDecision),
     /// The client answer to a startup TrustPrompt: accepted persists the
     /// project path as trusted in user-level settings; declined ends the
     /// session.
-    TrustAccept(crate::frontend::trust::TrustAccept),
+    TrustAccept(TrustAccept),
 }
 
 /// A reverse-response envelope the client sends to answer a server reverse
@@ -363,389 +388,4 @@ pub enum ClientFrame {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::frontend::model::{
-        AppliedModel, ContextWindow, ContextWindowSource, EffectiveFrom, EffortCapability,
-        FastModeAvailability, ModelCatalog, ModelCatalogEntry, ModelChoice,
-        ModelDisplayCapabilities, PersistenceOutcome, ResolvedModel, SpeedMode,
-    };
-    use crate::frontend::run::{ApprovalDecision, ApprovalRequest};
-    use crate::llm::EffortLevel;
-    use serde_json::Value;
-
-    fn sample_ask() -> ApprovalRequest {
-        ApprovalRequest {
-            call_id: "toolu_1".into(),
-            tool_name: "bash".into(),
-            input: Value::Null,
-            options: Vec::new(),
-            reason: None,
-            delegation: None,
-        }
-    }
-
-    fn sample_decision() -> ApprovalDecision {
-        ApprovalDecision {
-            call_id: "toolu_1".into(),
-            approved: true,
-            updated_input: None,
-            scope: "once".into(),
-        }
-    }
-
-    #[test]
-    fn test_request_envelope_round_trips() {
-        // FrontendRequest::Console is a unit variant; safe to construct.
-        let e = RequestEnvelope::new(RequestId(7), crate::frontend::FrontendRequest::Console);
-        let json = serde_json::to_string(&e).expect("serialize");
-        let back: RequestEnvelope = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(back.req_id, RequestId(7));
-    }
-
-    #[test]
-    fn test_event_seq_orders_monotonically() {
-        assert!(EventSeq(1) < EventSeq(2));
-        assert!(EventSeq(2) > EventSeq(1));
-    }
-
-    fn sample_id() -> DurableEventId {
-        DurableEventId("01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string())
-    }
-
-    #[test]
-    fn test_envelope_carries_identity() {
-        // The identity survives a round-trip and is visible in the
-        // serialized form, so a consumer can stamp row identity from it.
-        let envelope = EventEnvelope::durable(
-            EventSeq(3),
-            FrontendEvent::SystemLine {
-                text: "delivered".into(),
-            },
-            sample_id(),
-        );
-        let json = serde_json::to_string(&envelope).expect("serialize");
-        assert!(
-            json.contains("\"event_id\""),
-            "a durable envelope serializes its identity: {json}"
-        );
-        let back: EventEnvelope = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(back.event_id, Some(sample_id()));
-        assert_eq!(back.seq, EventSeq(3));
-    }
-
-    #[test]
-    fn test_envelope_omits_identity() {
-        // A runtime push with no log entry serializes without the key, and
-        // the identity-free form — what a host that predates the field
-        // sends — decodes to None rather than failing.
-        let envelope = EventEnvelope::new(
-            EventSeq(1),
-            FrontendEvent::SystemLine {
-                text: "runtime".into(),
-            },
-        );
-        let json = serde_json::to_string(&envelope).expect("serialize");
-        assert!(
-            !json.contains("event_id"),
-            "an absent identity leaves no key: {json}"
-        );
-        let back: EventEnvelope = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(back.event_id, None);
-    }
-
-    #[test]
-    fn test_legacy_consumer_ignores_identity() {
-        // New host, old frontend: the envelope carries no deny-unknown
-        // configuration, so a consumer whose shape predates the field
-        // decodes the new form and every field it knows still lands.
-        #[derive(Deserialize)]
-        struct LegacyEnvelope {
-            seq: EventSeq,
-            payload: FrontendEvent,
-        }
-        let envelope = EventEnvelope::durable(
-            EventSeq(7),
-            FrontendEvent::SystemLine {
-                text: "line".into(),
-            },
-            sample_id(),
-        );
-        let json = serde_json::to_string(&envelope).expect("serialize");
-        let legacy: LegacyEnvelope =
-            serde_json::from_str(&json).expect("a peer that predates the field ignores it");
-        assert_eq!(legacy.seq, EventSeq(7));
-        assert!(matches!(legacy.payload, FrontendEvent::SystemLine { .. }));
-    }
-
-    #[test]
-    fn test_resume_encodes_none_some() {
-        let none_json = serde_json::to_string(&ResumeFrom::from_start()).unwrap();
-        let some_json = serde_json::to_string(&ResumeFrom::after(EventSeq(3))).unwrap();
-        assert!(
-            none_json.contains("null"),
-            "from_start serializes null: {none_json}"
-        );
-        assert!(
-            some_json.contains("3"),
-            "after encodes the seq: {some_json}"
-        );
-    }
-
-    #[test]
-    fn test_server_request_round_trips() {
-        // A reverse permission ask carries an ApprovalRequest; the req_id
-        // is server-minted and the client echoes it in the reply.
-        let ask = ServerRequestEnvelope::new(
-            RequestId(11),
-            ServerRequestPayload::Permission(sample_ask()),
-        );
-        let json = serde_json::to_string(&ask).expect("serialize");
-        let back: ServerRequestEnvelope = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(back.req_id, RequestId(11));
-        assert!(json.contains("\"permission\""));
-    }
-
-    #[test]
-    fn test_trust_prompt_envelope() {
-        // A startup workspace-trust ask tags as trust_prompt (distinct from
-        // the per-action permission tag), so a client dispatches it to a
-        // trust card, not a permission card.
-        let ask = ServerRequestEnvelope::new(
-            RequestId(42),
-            ServerRequestPayload::TrustPrompt(crate::frontend::trust::TrustPrompt {
-                project_path: "/proj".into(),
-                risks: vec![crate::frontend::trust::TrustRisk {
-                    kind: "skill_bash".into(),
-                    name: "commit".into(),
-                }],
-            }),
-        );
-        let json = serde_json::to_string(&ask).expect("serialize");
-        let back: ServerRequestEnvelope = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(back.req_id, RequestId(42));
-        assert!(
-            json.contains("\"trust_prompt\""),
-            "wire tag must be trust_prompt: {json}"
-        );
-    }
-
-    #[test]
-    fn test_trust_accept_envelope() {
-        let reply = ClientResponseEnvelope::new(
-            RequestId(42),
-            ClientResponsePayload::TrustAccept(crate::frontend::trust::TrustAccept {
-                accepted: true,
-            }),
-        );
-        let json = serde_json::to_string(&reply).expect("serialize");
-        let back: ClientResponseEnvelope = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(back.req_id, RequestId(42));
-        assert!(
-            json.contains("\"trust_accept\""),
-            "wire tag must be trust_accept: {json}"
-        );
-    }
-
-    #[test]
-    fn test_frame_tags_request_response() {
-        let req = ClientFrame::Request(RequestEnvelope::new(
-            RequestId(1),
-            crate::frontend::FrontendRequest::Console,
-        ));
-        let res = ClientFrame::Response(ClientResponseEnvelope::new(
-            RequestId(2),
-            ClientResponsePayload::Permission(sample_decision()),
-        ));
-        let req_json = serde_json::to_string(&req).unwrap();
-        let res_json = serde_json::to_string(&res).unwrap();
-        assert!(req_json.contains("\"request\""));
-        assert!(res_json.contains("\"response\""));
-    }
-
-    #[test]
-    fn test_server_frame_tags_request() {
-        let req = ServerFrame::Request(ServerRequestEnvelope::new(
-            RequestId(5),
-            ServerRequestPayload::Permission(sample_ask()),
-        ));
-        let json = serde_json::to_string(&req).unwrap();
-        assert!(json.contains("\"request\""));
-        assert!(json.contains("\"permission\""));
-    }
-
-    #[test]
-    fn test_model_set_roundtrips_field() {
-        // The /model select request: model None = Default sentinel, effort
-        // None = auto, effort_toggled records whether the picker touched
-        // effort, speed carries the Fast tier (None = leave it untouched).
-        // Every field survives a wire round-trip, verified by re-serializing
-        // the deserialized envelope and comparing byte for byte.
-        let req = RequestEnvelope::new(
-            RequestId(9),
-            crate::frontend::FrontendRequest::ModelSet {
-                model: None,
-                effort: Some(EffortLevel::High),
-                effort_toggled: true,
-                speed: Some(SpeedMode::Fast),
-            },
-        );
-        let json = serde_json::to_string(&req).expect("serialize");
-        assert!(
-            json.contains(r#""model":null"#),
-            "Default sentinel => null: {json}"
-        );
-        assert!(
-            json.contains(r#""effort":"high""#),
-            "effort encodes lowercase: {json}"
-        );
-        assert!(
-            json.contains(r#""effort_toggled":true"#),
-            "toggled flag: {json}"
-        );
-        assert!(json.contains(r#""speed":"fast""#), "speed tier: {json}");
-        let back: RequestEnvelope = serde_json::from_str(&json).expect("deserialize");
-        let json2 = serde_json::to_string(&back).expect("reserialize");
-        assert_eq!(json, json2, "round-trip preserves every field");
-    }
-
-    #[test]
-    fn test_model_set_speed_optional() {
-        // A host that predates Fast mode sends no speed field; the request
-        // still decodes with speed None, which leaves the tier untouched.
-        let legacy = r#"{"req_id":9,"payload":{"ModelSet":{"model":"glm-5.2","effort":null,"effort_toggled":false}}}"#;
-        let back: RequestEnvelope = serde_json::from_str(legacy).expect("deserialize");
-        match back.payload {
-            crate::frontend::FrontendRequest::ModelSet { speed, .. } => {
-                assert!(speed.is_none(), "absent speed leaves the tier untouched");
-            }
-            other => panic!("expected ModelSet, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn test_model_result_roundtrips() {
-        // The reply: the host resolves the sentinel to a real id and reports
-        // the effort it will actually send. effort None is honest when the
-        // host is not sending an effort parameter.
-        let reply = ResponseEnvelope::new(
-            RequestId(9),
-            ResponsePayload::ModelResult(ModelApplyResult {
-                selected: ModelChoice::Default,
-                applied: AppliedModel {
-                    id: "qwen3.7-max".into(),
-                    effort: None,
-                    speed: SpeedMode::Standard,
-                },
-                effective_from: EffectiveFrom::Immediate,
-                persistence: PersistenceOutcome::Saved,
-            }),
-        );
-        let json = serde_json::to_string(&reply).expect("serialize");
-        let back: ResponseEnvelope = serde_json::from_str(&json).expect("deserialize");
-        let json2 = serde_json::to_string(&back).expect("reserialize");
-        assert_eq!(json, json2, "ModelApplyResult round-trips byte for byte");
-        assert!(json.contains(r#""type":"model_result""#));
-        assert!(json.contains(r#""effort":null"#));
-        assert!(json.contains("qwen3.7-max"));
-    }
-
-    #[test]
-    fn test_model_result_defaults_apply() {
-        // Optional facts (effort, speed) default rather than failing the
-        // decode; persistence does not — a payload without it fails closed
-        // instead of reading an unknown outcome as Saved.
-        let legacy = r#"{"req_id":9,"payload":{"type":"model_result","data":{"selected":{"mode":"default"},"applied":{"id":"glm-5.2"},"effective_from":"immediate"}}}"#;
-        let err = serde_json::from_str::<ResponseEnvelope>(legacy)
-            .expect_err("a payload without persistence must not decode");
-        assert!(
-            err.to_string().contains("persistence"),
-            "the decode names the missing field: {err}"
-        );
-        let with_persistence = r#"{"req_id":9,"payload":{"type":"model_result","data":{"selected":{"mode":"default"},"applied":{"id":"glm-5.2"},"effective_from":"immediate","persistence":{"outcome":"saved"}}}}"#;
-        let back: ResponseEnvelope = serde_json::from_str(with_persistence).expect("deserialize");
-        match back.payload {
-            ResponsePayload::ModelResult(result) => {
-                assert_eq!(result.applied.id, "glm-5.2");
-                assert_eq!(result.applied.effort, None, "effort defaults to auto");
-                assert_eq!(result.applied.speed, SpeedMode::Standard);
-                assert_eq!(result.persistence, PersistenceOutcome::Saved);
-            }
-            other => panic!("expected ModelResult, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn test_model_info_catalog_roundtrips() {
-        // The /model pane catalog snapshot survives a wire round-trip: the
-        // selection, applied model, Default resolution, effort fallback and
-        // catalog entries (with display_name + description + effort +
-        // capabilities) all preserve.
-        let reply = ResponseEnvelope::new(
-            RequestId(11),
-            ResponsePayload::ModelInfo(ModelCatalog {
-                selected: ModelChoice::Explicit {
-                    id: "qwen3.7-max".into(),
-                },
-                applied: AppliedModel {
-                    id: "qwen3.7-max".into(),
-                    effort: Some(EffortLevel::High),
-                    speed: SpeedMode::Fast,
-                },
-                resolved_default: ResolvedModel {
-                    id: "qwen3.7-max".into(),
-                    capabilities: Default::default(),
-                },
-                effort_level: Some(EffortLevel::High),
-                entries: vec![ModelCatalogEntry {
-                    id: "qwen3.7-max".into(),
-                    display_name: Some("Max".into()),
-                    description: Some("most capable".into()),
-                    effort: Some(EffortLevel::Medium),
-                    capabilities: ModelDisplayCapabilities {
-                        context_window: Some(ContextWindow {
-                            tokens: 1_000_000,
-                            source: ContextWindowSource::ModelSuffix,
-                        }),
-                        max_output_tokens: Some(32_768),
-                        effort: EffortCapability::Supported {
-                            levels: vec![EffortLevel::Low, EffortLevel::Medium, EffortLevel::High],
-                        },
-                        fast: FastModeAvailability::Available,
-                    },
-                }],
-            }),
-        );
-        let json = serde_json::to_string(&reply).expect("serialize");
-        let back: ResponseEnvelope = serde_json::from_str(&json).expect("deserialize");
-        match back.payload {
-            ResponsePayload::ModelInfo(catalog) => {
-                assert_eq!(
-                    catalog.selected,
-                    ModelChoice::Explicit {
-                        id: "qwen3.7-max".into()
-                    }
-                );
-                assert_eq!(catalog.applied.id, "qwen3.7-max");
-                assert_eq!(catalog.applied.speed, SpeedMode::Fast);
-                assert_eq!(catalog.resolved_default.id, "qwen3.7-max");
-                assert_eq!(catalog.effort_level, Some(EffortLevel::High));
-                assert_eq!(catalog.entries.len(), 1);
-                assert_eq!(catalog.entries[0].display_name.as_deref(), Some("Max"));
-                assert_eq!(catalog.entries[0].effort, Some(EffortLevel::Medium));
-                assert_eq!(
-                    catalog.entries[0].capabilities.context_window,
-                    Some(ContextWindow {
-                        tokens: 1_000_000,
-                        source: ContextWindowSource::ModelSuffix,
-                    })
-                );
-                assert_eq!(
-                    catalog.entries[0].capabilities.max_output_tokens,
-                    Some(32_768)
-                );
-            }
-            other => panic!("expected ModelInfo, got {other:?}"),
-        }
-    }
-}
+mod tests;

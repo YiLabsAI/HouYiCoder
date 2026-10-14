@@ -5,6 +5,8 @@
 use serde::{Deserialize, Serialize};
 
 use super::Meta;
+use crate::frontend::run::ContentBlock;
+use crate::frontend::run::StopReason;
 
 /// A prompt request: the client drives one turn with a list of content
 /// blocks. The adapter forwards the text blocks to the engine run and
@@ -15,7 +17,7 @@ use super::Meta;
 #[serde(rename_all = "camelCase")]
 pub struct PromptRequest {
     pub session_id: String,
-    pub prompt: Vec<crate::frontend::run::ContentBlock>,
+    pub prompt: Vec<ContentBlock>,
     #[serde(default, skip_serializing_if = "Option::is_none", rename = "_meta")]
     pub meta: Option<Meta>,
 }
@@ -25,7 +27,7 @@ pub struct PromptRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PromptResponse {
-    pub stop_reason: crate::frontend::run::StopReason,
+    pub stop_reason: StopReason,
     #[serde(default, skip_serializing_if = "Option::is_none", rename = "_meta")]
     pub meta: Option<Meta>,
 }

@@ -8,6 +8,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::Meta;
+use crate::frontend::session_update::ToolCallUpdate;
 
 /// The kind of a permission option a client may pick: allow/reject, once or
 /// always. The agent presents the set; the client picks one (or the ask is
@@ -71,7 +72,7 @@ pub enum RequestPermissionOutcome {
 #[serde(rename_all = "camelCase")]
 pub struct RequestPermissionRequest {
     pub session_id: String,
-    pub tool_call: crate::frontend::session_update::ToolCallUpdate,
+    pub tool_call: ToolCallUpdate,
     #[serde(default)]
     pub options: Vec<PermissionOption>,
     #[serde(default, skip_serializing_if = "Option::is_none", rename = "_meta")]
