@@ -624,5 +624,4 @@ fn parse_response(json: &Value, model: &str) -> Result<CompletionResponse, Provi
 }
 
 #[cfg(test)]
-#[path = "openai_compat_tests.rs"]
 mod tests;

@@ -157,5 +157,4 @@ impl StreamDecoder {
 }
 
 #[cfg(test)]
-#[path = "stream_decoder_tests.rs"]
 mod tests;
