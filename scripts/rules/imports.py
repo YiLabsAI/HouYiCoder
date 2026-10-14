@@ -197,6 +197,7 @@ def deep_path_violations(text):
 def _imported_chains_by_name(text):
     """Map each bare name imported by a use statement to the full paths it imports."""
     by_name = {}
+    globs = set()
     lines = text.splitlines()
     i = 0
     while i < len(lines):
@@ -241,9 +242,16 @@ def _imported_chains_by_name(text):
                 else:
                     leaf = body.rsplit("::", 1)[-1].strip()
                     by_name.setdefault(leaf, set()).add(body)
+            elif body.endswith("::*"):
+                # A glob already brings every name of that module into scope,
+                # so a chain whose parent module the glob covers is written
+                # with the glob's own path, not re-imported.
+                globs.add(body.removesuffix("::*"))
             i = j + 1
         else:
             i += 1
+    for g in globs:
+        by_name.setdefault(f"<glob {g}>", set()).add(g)
     return by_name
 
 
@@ -279,9 +287,17 @@ def repeated_deep_paths(text):
         )
         if m:
             defined.add(m.group(1))
+    # A local binding or parameter of the same name shadows the free function
+    # the chain names, so importing it would change what the call resolves to.
+    for m in re.finditer(r"\b(?:let\s+(?:mut\s+)?|fn\s+\w+\([^)]*\b)([a-z_][a-z0-9_]*)\b", text):
+        defined.add(m.group(1))
+    globs = {v for k, vs in by_name.items() if k.startswith("<glob ") for v in vs}
     return {
         chain: n
         for chain, n in counts.items()
         if len(by_name[chain.rsplit("::", 1)[-1]]) == 1
         and chain.rsplit("::", 1)[-1] not in defined
+        and not any(
+            chain.rsplit("::", 1)[0].endswith(g.rsplit("::", 1)[-1]) for g in globs
+        )
     }

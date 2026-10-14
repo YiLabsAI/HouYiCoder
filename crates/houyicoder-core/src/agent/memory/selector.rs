@@ -13,7 +13,10 @@ use std::time::Duration;
 
 use houyicoder_api::memory::{MemoryProvider, MemoryReranker, RerankOutcome};
 use houyicoder_context::{MemoryEntry, MemoryRankHit, SessionId};
+use std::mem::take;
 use tokio::task::JoinHandle;
+use tokio::time::sleep;
+use tokio::time::timeout;
 
 /// Maximum keys one recall selection injects.
 pub(crate) const RECALL_SELECT_CAP: usize = 5;
@@ -165,9 +168,9 @@ pub(crate) async fn rerank_with_timeout(
     query: String,
     candidates: Vec<MemoryRankHit>,
     limit: usize,
-    timeout: Duration,
+    budget: Duration,
 ) -> RerankOutcome {
-    match tokio::time::timeout(timeout, reranker.rerank(&query, &candidates, limit)).await {
+    match timeout(budget, reranker.rerank(&query, &candidates, limit)).await {
         Ok(outcome) => outcome,
         Err(_) => RerankOutcome::Timeout,
     }
@@ -278,12 +281,11 @@ impl RecallTasks {
     /// run where no recall for the same session can interleave, such as a
     /// turn join or shutdown.
     pub(crate) async fn drain(&self, timeout: Duration) {
-        let tracked: Vec<TrackedRecall> =
-            std::mem::take(&mut *self.running.lock().expect("recall tasks"));
+        let tracked: Vec<TrackedRecall> = take(&mut *self.running.lock().expect("recall tasks"));
         if tracked.is_empty() {
             return;
         }
-        let mut deadline = Box::pin(tokio::time::sleep(timeout));
+        let mut deadline = Box::pin(sleep(timeout));
         for entry in tracked {
             tokio::select! {
                 _ = entry.handle => {}

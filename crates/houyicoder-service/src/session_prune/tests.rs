@@ -23,6 +23,8 @@ use houyicoder_context::{
 use std::env::temp_dir;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
+#[cfg(windows)]
+use std::os::windows::fs::OpenOptionsExt;
 use std::process::id;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -53,7 +55,6 @@ fn age(path: &Path, secs_ago: u64) {
     opts.read(true);
     #[cfg(windows)]
     {
-        use std::os::windows::fs::OpenOptionsExt;
         // FILE_FLAG_BACKUP_SEMANTICS, the flag that permits a directory
         // handle. Spelled as its literal value because the constant lives
         // in a windows binding crate this workspace does not depend on.

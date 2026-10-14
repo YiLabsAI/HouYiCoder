@@ -43,6 +43,7 @@ use std::fs::create_dir_all;
 use std::fs::remove_dir;
 use std::fs::remove_dir_all;
 use std::fs::remove_file;
+use std::fs::write;
 use std::net::TcpListener;
 #[cfg(unix)]
 use std::os::unix::net::UnixListener;
@@ -345,7 +346,7 @@ fn test_allows_skill_dir_read() {
     let f = Fence::new("skillread");
     let dir = f.workspace.join(".houyicoder/skills/commit");
     create_dir_all(&dir).expect("create skill dir");
-    std::fs::write(dir.join("reference.md"), "skill reference content").expect("seed reference");
+    write(dir.join("reference.md"), "skill reference content").expect("seed reference");
     let read = f.probe("read-ref", "cat .houyicoder/skills/commit/reference.md");
     assert!(
         read.allowed(),
@@ -392,7 +393,7 @@ fn test_denies_ecosystem_skill_read() {
     for family in [".claude/skills", ".agents/skills"] {
         let dir = f.workspace.join(family).join("commit");
         create_dir_all(&dir).expect("create skill dir");
-        std::fs::write(dir.join("reference.md"), "x").expect("seed reference");
+        write(dir.join("reference.md"), "x").expect("seed reference");
         let read = f.probe(
             "read-eco-skill",
             &format!("cat {family}/commit/reference.md"),

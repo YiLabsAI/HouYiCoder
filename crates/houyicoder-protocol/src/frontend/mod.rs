@@ -24,6 +24,10 @@ pub mod tools;
 pub mod trajectory;
 pub mod trust;
 pub mod verdict;
+
+use crate::frontend::debug::DebugLevel;
+use crate::frontend::model::SpeedMode;
+use crate::llm::EffortLevel;
 pub use compact::*;
 pub use context::*;
 pub use event::FrontendEvent;
@@ -32,6 +36,9 @@ pub use memory::*;
 pub use permission::*;
 pub use queue::{PendingInputId, QueuedInput};
 pub use run::*;
+use std::collections::HashSet;
+use std::fmt::Display;
+use std::fmt::Formatter;
 pub use trajectory::TrajectoryEntry;
 pub use trust::*;
 pub use verdict::Verdict;
@@ -51,8 +58,8 @@ impl SessionId {
     }
 }
 
-impl std::fmt::Display for SessionId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for SessionId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.0)
     }
 }
@@ -493,10 +500,10 @@ pub enum FrontendRequest {
     /// applies the model and effort.
     ModelSet {
         model: Option<String>,
-        effort: Option<crate::llm::EffortLevel>,
+        effort: Option<EffortLevel>,
         effort_toggled: bool,
         #[serde(default)]
-        speed: Option<crate::frontend::model::SpeedMode>,
+        speed: Option<SpeedMode>,
     },
     /// Rename the current session: persist the display name to the session
     /// descriptor (name + name_source=User). An empty name clears back to Auto
@@ -515,7 +522,7 @@ pub enum FrontendRequest {
         session_id: SessionId,
         content: Vec<crate::frontend::run::ContentBlock>,
         #[serde(default)]
-        disabled_skills: std::collections::HashSet<String>,
+        disabled_skills: HashSet<String>,
     },
     /// Abort the in-flight run. The service cancels the loop, flushes partial
     /// text, and the next outcome returns Interrupted. Fire-and-forget; the
@@ -627,7 +634,7 @@ pub enum FrontendRequest {
     /// on or off together. The response carries the resulting state (enabled
     /// + path) so the host can surface where the file is without guessing.
     DebugSet {
-        level: crate::frontend::debug::DebugLevel,
+        level: DebugLevel,
     },
 }
 

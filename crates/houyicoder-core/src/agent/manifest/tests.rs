@@ -1,5 +1,6 @@
 use super::*;
 use crate::agent::context::Tokenizer;
+use SessionEvent::*;
 use houyicoder_context::CheckpointId;
 use houyicoder_context::PermissionVerdict;
 use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
@@ -348,7 +349,6 @@ fn test_estimate_counts_each_kind() {
         prev_hash: None,
         event: kind,
     };
-    use SessionEvent::*;
     assert!(
         estimate_event_tokens(
             &mk(ToolCall {

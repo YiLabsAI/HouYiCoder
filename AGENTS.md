@@ -230,8 +230,10 @@ the ones whose fix is not obvious from the message alone.
 - Put domain-type imports at module scope. A qualified path with two or more
   module segments (crate::state::Screen, std::time::UNIX_EPOCH) is imported
   once and written bare at the call site, whether it appears once or many
-  times. A name the file defines itself, or one that two chains share, stays
-  qualified: an import would collide or pick the wrong type.
+  times. A qualified path stays qualified when an import would collide or
+  pick the wrong item: a name the file defines itself, a local binding or
+  parameter of that name, one that two chains share, one the prelude already
+  provides, and one a glob import in the same file already brings in.
 - Do not enforce a mechanical `::` depth limit or create vague aliases; both
   hide rather than clarify ownership.
 

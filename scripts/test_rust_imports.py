@@ -115,6 +115,16 @@ def test_a_name_already_imported_from_another_chain_is_left_qualified():
     assert repeated_deep_paths(imported_and_other) == {}
 
 
+def test_a_chain_a_glob_already_covers_is_left_qualified():
+    globbed = "pub use run::*;\nfn a() { let _ = crate::frontend::run::Widget::new(); }\n"
+    assert repeated_deep_paths(globbed) == {}
+
+
+def test_a_local_binding_of_the_same_name_keeps_the_chain_qualified():
+    shadowed = "fn a() { let id = 7; let _ = std::process::id(); let _ = id; }\n"
+    assert repeated_deep_paths(shadowed) == {}
+
+
 def test_a_prelude_name_is_left_qualified():
     # Importing std::fmt::Result would hide the prelude Result<T, E> the
     # signatures use, so the qualified spelling is correct here.

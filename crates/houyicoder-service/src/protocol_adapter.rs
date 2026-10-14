@@ -11,6 +11,7 @@ pub(crate) mod skills;
 mod trajectory_row;
 use trajectory_row::{event_name, hex_short};
 
+use AcpxMethod::*;
 use houyicoder_context::SessionEvent;
 use houyicoder_core::agent::StatusSnapshot;
 use houyicoder_permission::PermissionMode as M;
@@ -501,7 +502,6 @@ pub fn map_session_update(kind: &SessionEvent) -> Option<SessionUpdate> {
 /// Shared with the live push and with any reader that maps a durable log
 /// off-line, so both see the same frames for the same event.
 pub fn map_acpx_notification(kind: &SessionEvent) -> Option<AcpxNotification> {
-    use AcpxMethod::*;
     Some(match kind {
         // Delivered into the running turn: the message chunk rides the
         // session/update stream and this mark rides immediately after it, so
