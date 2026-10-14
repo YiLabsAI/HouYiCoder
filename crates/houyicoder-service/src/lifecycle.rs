@@ -30,6 +30,9 @@ use houyicoder_protocol::frontend::run::ApprovalDecision;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
+use std::error::Error;
+use std::fmt::Display;
+use std::fmt::Formatter;
 use std::fs::create_dir_all;
 use std::fs::read;
 #[cfg(test)]
@@ -147,8 +150,8 @@ pub enum LifecycleError {
     Io,
 }
 
-impl std::fmt::Display for LifecycleError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for LifecycleError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::NotFound => f.write_str("session not found"),
             Self::InvalidTransition(msg) => write!(f, "invalid lifecycle transition: {msg}"),
@@ -158,7 +161,7 @@ impl std::fmt::Display for LifecycleError {
     }
 }
 
-impl std::error::Error for LifecycleError {}
+impl Error for LifecycleError {}
 
 /// The session lifecycle contract. Object-safe (PFut) so the composition root
 /// holds a single dispatcher and the runtime swaps behind it. This file lands

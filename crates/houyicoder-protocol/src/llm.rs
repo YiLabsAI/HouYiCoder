@@ -14,6 +14,9 @@
 
 use crate::cache_policy::CacheBreakpoint;
 use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fmt::Display;
+use std::fmt::Formatter;
 use std::time::Duration;
 
 /// Token usage for one model call. Inclusive totals plus a non-overlapping
@@ -419,8 +422,8 @@ impl ProviderError {
     }
 }
 
-impl std::fmt::Display for ProviderError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for ProviderError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Network => write!(f, "provider network error"),
             Self::RateLimit { retry_after_ms } => {
@@ -441,7 +444,7 @@ impl std::fmt::Display for ProviderError {
     }
 }
 
-impl std::error::Error for ProviderError {}
+impl Error for ProviderError {}
 
 #[cfg(test)]
 mod tests;

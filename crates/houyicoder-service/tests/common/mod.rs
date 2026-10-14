@@ -22,11 +22,14 @@ use houyicoder_context::SessionId;
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::{Runner, ToolRegistry};
 use houyicoder_memory::InMemoryBackend;
+use houyicoder_protocol::envelope::ServerFrame;
 use houyicoder_protocol::framing::encode;
 use houyicoder_protocol::handshake::Hello;
 use houyicoder_provider::FakeProvider;
 use houyicoder_service::server::FrameCarrier;
 use houyicoder_session::SessionStore;
+use std::time::Duration;
+use tokio::time::timeout;
 
 /// A minimal runner over a stub provider so a run completes in one turn (or
 /// never drives the runner, for permission verbs that do not).
@@ -61,9 +64,7 @@ pub async fn recv_line(rx: &mut mpsc::Receiver<String>) -> String {
 }
 
 /// Decode the next server frame (post-handshake) as a typed ServerFrame.
-pub async fn recv_frame(
-    rx: &mut mpsc::Receiver<String>,
-) -> houyicoder_protocol::envelope::ServerFrame {
+pub async fn recv_frame(rx: &mut mpsc::Receiver<String>) -> ServerFrame {
     serde_json::from_str(&recv_line(rx).await).expect("frame decodes as a server frame")
 }
 
@@ -71,11 +72,8 @@ pub async fn recv_frame(
 /// server never ships the expected frame, but the channel stays open — the
 /// same shape as a session-mismatch hang) fails as a clear assertion
 /// instead of a CI timeout. Panics with the hang cause on timeout.
-pub async fn recv_frame_within(
-    rx: &mut mpsc::Receiver<String>,
-    dur: std::time::Duration,
-) -> houyicoder_protocol::envelope::ServerFrame {
-    match tokio::time::timeout(dur, recv_frame(rx)).await {
+pub async fn recv_frame_within(rx: &mut mpsc::Receiver<String>, dur: Duration) -> ServerFrame {
+    match timeout(dur, recv_frame(rx)).await {
         Ok(frame) => frame,
         Err(_) => panic!(
             "timed out after {:?} waiting for a server frame; the server hung \

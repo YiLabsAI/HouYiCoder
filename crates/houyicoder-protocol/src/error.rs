@@ -7,6 +7,9 @@
 
 use crate::framing::FrameError;
 use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fmt::Display;
+use std::fmt::Formatter;
 
 /// A closed set of protocol error categories. Each names a distinct failure
 /// class the frontend can branch on (retry vs surface vs re-auth). Variants
@@ -69,13 +72,13 @@ impl From<FrameError> for ProtocolError {
     }
 }
 
-impl std::fmt::Display for ProtocolError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for ProtocolError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.message)
     }
 }
 
-impl std::error::Error for ProtocolError {}
+impl Error for ProtocolError {}
 
 #[cfg(test)]
 mod tests;

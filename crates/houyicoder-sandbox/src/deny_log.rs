@@ -7,6 +7,10 @@
 //! shapes, and strips the Apple deny-list so only authorizable services
 //! surface. On non-macOS hosts the reader returns empty.
 
+use houyicoder_api::skill::grant::is_denied;
+#[cfg(target_os = "macos")]
+use std::process::Command;
+
 /// A mach service name is alphanumeric plus dot, dash, underscore — the
 /// same charset the seatbelt profile renderer accepts when emitting an
 /// allow mach-lookup line. The unified log sometimes appends a metadata
@@ -87,10 +91,7 @@ fn extract_launchd_denial(line: &str) -> Option<String> {
 /// non-deny-listed services survive — these are candidates the caller
 /// may surface to the user for authorization.
 pub fn authorizable_services(discovered: Vec<String>) -> Vec<String> {
-    discovered
-        .into_iter()
-        .filter(|s| !houyicoder_api::skill::grant::is_denied(s))
-        .collect()
+    discovered.into_iter().filter(|s| !is_denied(s)).collect()
 }
 
 /// Read denied mach-lookup services from the macOS unified log within a
@@ -147,7 +148,7 @@ fn read_deny_log(_window_secs: u64) -> String {
 #[cfg(target_os = "macos")]
 fn run_query(cmd: &str, args: &[String]) -> String {
     #[expect(clippy::disallowed_methods, reason = "infra query, not model-driven")]
-    match std::process::Command::new(cmd).args(args).output() {
+    match Command::new(cmd).args(args).output() {
         Ok(o) => String::from_utf8_lossy(&o.stdout).into_owned(),
         Err(e) => {
             tracing::warn!("sandbox deny-log query failed: {e}");

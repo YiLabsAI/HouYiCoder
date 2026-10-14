@@ -16,6 +16,21 @@ use houyicoder_protocol::extension::ToolError;
 
 use super::bash_snapshot;
 use crate::agent::fallback::FallbackToolOutcome;
+use crate::snapshot::SnapshotStore;
+use crate::snapshot::UndoStack;
+use crate::snapshot::is_destructive_command;
+use std::fs::File;
+use std::fs::create_dir_all;
+use std::io::Write;
+use std::path::PathBuf;
+use std::sync::atomic::AtomicI64;
+use std::sync::atomic::Ordering;
+use std::time::Duration;
+use std::time::Instant;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
+use tokio::task::spawn_blocking;
+use tokio::time::sleep;
 
 /// After a failed sandboxed command, scan the session's deny log for
 /// authorizable mach-service candidates so the caller can surface or
@@ -34,7 +49,7 @@ async fn discover_authorizable_if_failed(
     if success || !looks_like_sandbox_denial(stderr) {
         Vec::new()
     } else {
-        tokio::task::spawn_blocking(move || session.discover_authorizable())
+        spawn_blocking(move || session.discover_authorizable())
             .await
             .unwrap_or_default()
     }
@@ -49,8 +64,8 @@ fn looks_like_sandbox_denial(stderr: &str) -> bool {
 /// commands snapshot the workspace before executing so /undo can revert.
 pub struct BashTool {
     session: Arc<dyn SandboxSession>,
-    undo_stack: Option<Arc<Mutex<crate::snapshot::UndoStack>>>,
-    snapshot_store: Option<Arc<crate::snapshot::SnapshotStore>>,
+    undo_stack: Option<Arc<Mutex<UndoStack>>>,
+    snapshot_store: Option<Arc<SnapshotStore>>,
     active_skill: Option<Arc<Mutex<Option<String>>>>,
 }
 
@@ -67,8 +82,8 @@ impl BashTool {
     /// Wire the undo hook: snapshot before destructive exec, push to undo stack.
     pub fn with_undo(
         session: Arc<dyn SandboxSession>,
-        undo_stack: Arc<Mutex<crate::snapshot::UndoStack>>,
-        snapshot_store: Arc<crate::snapshot::SnapshotStore>,
+        undo_stack: Arc<Mutex<UndoStack>>,
+        snapshot_store: Arc<SnapshotStore>,
     ) -> Self {
         Self {
             session,
@@ -140,7 +155,7 @@ impl Tool for BashTool {
             // a process stderr the TUI never shows. See bash_snapshot::prepare.
             let mut notice: Option<String> = None;
             if let (Some(store), Some(stack)) = (&snapshot_store, &undo_stack)
-                && crate::snapshot::is_destructive_command(cmd)
+                && is_destructive_command(cmd)
             {
                 notice = bash_snapshot::prepare(store, stack, &*session)?;
             }
@@ -156,8 +171,8 @@ impl Tool for BashTool {
             // sink and skip it (no tokio time driver needed). The tick arm
             // never completes on its own (infinite loop), so the unreachable
             // is a guard, not a path.
-            let lines_counter = std::sync::Arc::new(std::sync::atomic::AtomicI64::new(-1));
-            let exec = session.exec_streaming(cmd, std::sync::Arc::clone(&lines_counter));
+            let lines_counter = Arc::new(AtomicI64::new(-1));
+            let exec = session.exec_streaming(cmd, Arc::clone(&lines_counter));
             // Cancel arm: an Esc aborts the run and must not wait out a
             // long command. Dropping the exec future triggers the sandbox's
             // RAII kill (process-group killpg on macOS; kill_on_drop on
@@ -175,11 +190,11 @@ impl Tool for BashTool {
                         return Ok(FallbackToolOutcome::Interrupted.to_json());
                     }
                     _ = async {
-                        let start = std::time::Instant::now();
+                        let start = Instant::now();
                         loop {
-                            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                            sleep(Duration::from_secs(1)).await;
                             if let Some(p) = &progress {
-                                let lines = lines_counter.load(std::sync::atomic::Ordering::Relaxed);
+                                let lines = lines_counter.load(Ordering::Relaxed);
                                 let lines_opt = if lines >= 0 {
                                     Some(lines as u64)
                                 } else {
@@ -306,20 +321,15 @@ fn bound_bash_output(stdout: String, stderr: String, spill_dir: &Path) -> (Strin
 
 /// Write the full stdout + stderr to a workspace file, stderr lines prefixed so
 /// the spill is self-describing. Returns the spill path for the marker.
-fn spill_bash_output(
-    stdout: &str,
-    stderr: &str,
-    spill_dir: &Path,
-) -> std::io::Result<std::path::PathBuf> {
-    use std::io::Write;
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
+fn spill_bash_output(stdout: &str, stderr: &str, spill_dir: &Path) -> std::io::Result<PathBuf> {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     let dir = spill_dir.join(".houyicoder").join("bash-output");
-    std::fs::create_dir_all(&dir)?;
+    create_dir_all(&dir)?;
     let path = dir.join(format!("houyi-bash-{nanos}.log"));
-    let mut f = std::fs::File::create(&path)?;
+    let mut f = File::create(&path)?;
     f.write_all(stdout.as_bytes())?;
     if !stderr.is_empty() {
         for line in stderr.split('\n') {

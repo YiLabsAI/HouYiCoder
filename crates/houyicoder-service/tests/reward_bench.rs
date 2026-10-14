@@ -2,7 +2,19 @@
 //! runs paired queries with reward enabled and disabled, then prints comparable
 //! tool, error, redundancy, and memory metrics. Requires a real provider.
 
+use houyicoder_context::SessionEvent;
 use houyicoder_context::SessionId;
+use houyicoder_core::agent::Runner;
+use houyicoder_service::composition::BuildRunnerOptions;
+use houyicoder_service::composition::build_runner;
+use std::env::temp_dir;
+use std::env::var;
+use std::fs::create_dir_all;
+use std::fs::remove_dir_all;
+use std::fs::write;
+use std::path::Path;
+use std::process::id;
+use std::time::Duration;
 
 struct QueryMetrics {
     redundant: usize,
@@ -12,11 +24,7 @@ struct QueryMetrics {
     memory_keys: usize,
 }
 
-async fn run_query(
-    runner: &houyicoder_core::agent::Runner,
-    session: SessionId,
-    prompt: &str,
-) -> QueryMetrics {
+async fn run_query(runner: &Runner, session: SessionId, prompt: &str) -> QueryMetrics {
     let _run = runner.run(session, prompt.to_string()).await;
     let snap = runner.status_snapshot();
     let memory_keys = runner
@@ -31,9 +39,7 @@ async fn run_query(
             .trajectory_snapshot(session)
             .iter()
             .filter_map(|ev| match &ev.event {
-                houyicoder_context::SessionEvent::MemoryRecall { keys, .. } => {
-                    Some(keys.len() as u32)
-                }
+                SessionEvent::MemoryRecall { keys, .. } => Some(keys.len() as u32),
                 _ => None,
             })
             .sum(),
@@ -43,7 +49,7 @@ async fn run_query(
 
 /// Count memory entries whose origin is dream — the ones only the dream
 /// fork could have written (extractor writes land as origin=extractor).
-fn dream_count(runner: &houyicoder_core::agent::Runner) -> usize {
+fn dream_count(runner: &Runner) -> usize {
     runner
         .format_memory_index()
         .map(|s| s.lines().filter(|l| l.contains("/dream]")).count())
@@ -54,38 +60,38 @@ fn dream_count(runner: &houyicoder_core::agent::Runner) -> usize {
 /// file fails. query 1 re-runs each test binary to check for flakiness
 /// (blind retries), producing retry_after_error >= 2 to clear the
 /// reward-dream gate.
-fn write_fail_project(repo: &std::path::Path) {
-    std::fs::create_dir_all(repo.join("src")).expect("mkdir src");
-    std::fs::create_dir_all(repo.join("tests")).expect("mkdir tests");
-    std::fs::write(
+fn write_fail_project(repo: &Path) {
+    create_dir_all(repo.join("src")).expect("mkdir src");
+    create_dir_all(repo.join("tests")).expect("mkdir tests");
+    write(
         repo.join("Cargo.toml"),
         "[package]\nname = \"smoke_proj\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\npath = \"src/lib.rs\"\n",
     )
     .expect("manifest");
-    std::fs::write(
+    write(
         repo.join("src").join("lib.rs"),
         "pub fn add(a: i32, b: i32) -> i32 { a - b }\n",
     )
     .expect("lib");
     let test_body = "use smoke_proj::add;\n#[test] fn checks() { assert_eq!(add(2, 3), 5); }\n";
-    std::fs::write(repo.join("tests").join("a.rs"), test_body).expect("a");
-    std::fs::write(repo.join("tests").join("b.rs"), test_body).expect("b");
-    std::fs::write(repo.join("tests").join("c.rs"), test_body).expect("c");
+    write(repo.join("tests").join("a.rs"), test_body).expect("a");
+    write(repo.join("tests").join("b.rs"), test_body).expect("b");
+    write(repo.join("tests").join("c.rs"), test_body).expect("c");
 }
 
 async fn run_pair() -> (QueryMetrics, bool, QueryMetrics) {
-    let root = std::env::temp_dir().join(format!("houyi-verify-{}", std::process::id()));
-    let _prev = std::fs::remove_dir_all(&root);
+    let root = temp_dir().join(format!("houyi-verify-{}", id()));
+    let _prev = remove_dir_all(&root);
     // The memory slug is derived from the repo dir name (git_canonical_slug
     // falls back to the canonical dir name for a non-git dir). A PID-unique
     // name makes the slug test-specific: a real project named "repo" is not
     // nuked, and a prior run's dream lessons do not leak (different PID).
-    let repo_name = format!("smoke-{}", std::process::id());
+    let repo_name = format!("smoke-{}", id());
     let repo = root.join(&repo_name);
     write_fail_project(&repo);
-    let mut options = houyicoder_service::composition::BuildRunnerOptions::default();
+    let mut options = BuildRunnerOptions::default();
     options.project = Some(repo.to_string_lossy().into_owned());
-    let bundle = houyicoder_service::composition::build_runner(options);
+    let bundle = build_runner(options);
     let runner = bundle.runner;
     let session1 = bundle.session;
     let baseline_dream = dream_count(&runner);
@@ -95,8 +101,8 @@ async fn run_pair() -> (QueryMetrics, bool, QueryMetrics) {
     // lesson to land — origin distinguishes dream from extractor writes.
     // Await the dream's JoinHandle directly (event-driven, no sleep poll).
     // Skip when reward is off (the dream will not fire).
-    if std::env::var("HOUYICODER_REWARD_OFF").is_err() {
-        runner.join_dreams(std::time::Duration::from_secs(90)).await;
+    if var("HOUYICODER_REWARD_OFF").is_err() {
+        runner.join_dreams(Duration::from_secs(90)).await;
     }
     let dream_wrote = dream_count(&runner) > baseline_dream;
     let session2 = SessionId::new();
@@ -115,15 +121,15 @@ async fn run_pair() -> (QueryMetrics, bool, QueryMetrics) {
     // Clean up the memory dir the runner wrote under HOME. The slug is the
     // repo dir name, so this targets only this run's memory — not a real
     // project's.
-    if let Ok(home) = std::env::var("HOME") {
-        let mem = std::path::Path::new(&home)
+    if let Ok(home) = var("HOME") {
+        let mem = Path::new(&home)
             .join(".houyicoder")
             .join("projects")
             .join(&repo_name)
             .join("memory");
-        let _mem = std::fs::remove_dir_all(&mem);
+        let _mem = remove_dir_all(&mem);
     }
-    let _cleanup = std::fs::remove_dir_all(&root);
+    let _cleanup = remove_dir_all(&root);
     (fail_metrics, dream_wrote, recall_metrics)
 }
 

@@ -17,15 +17,21 @@ use notify::RecommendedWatcher as PlatformWatcher;
 use notify::{RecursiveMode, Watcher};
 
 use super::skill::SkillRegistryImpl;
+use houyicoder_skill::lifecycle::watch_roots;
+use mpsc::TryRecvError;
+use notify::Config;
+use std::fs::metadata;
+use std::sync::Arc;
+use thread::Builder;
 
 /// Maximum idle wait between scheduler checks.
 const LOOP_POLL: Duration = Duration::from_millis(100);
 
 /// Collaborators retained by the reload thread.
 struct ReloadDeps {
-    registry: std::sync::Arc<SkillRegistryImpl>,
-    activator: std::sync::Arc<dyn ConditionalSkillActivator>,
-    registrar: std::sync::Arc<SkillHookRegistrar>,
+    registry: Arc<SkillRegistryImpl>,
+    activator: Arc<dyn ConditionalSkillActivator>,
+    registrar: Arc<SkillHookRegistrar>,
     cwd: Option<PathBuf>,
     home: Option<PathBuf>,
 }
@@ -58,13 +64,13 @@ impl SkillReloadGuard for SkillReloader {}
 impl SkillReloader {
     /// Start reloading existing skill roots. Returns None when no roots exist.
     pub fn start(
-        registry: std::sync::Arc<SkillRegistryImpl>,
-        activator: std::sync::Arc<dyn ConditionalSkillActivator>,
-        registrar: std::sync::Arc<SkillHookRegistrar>,
+        registry: Arc<SkillRegistryImpl>,
+        activator: Arc<dyn ConditionalSkillActivator>,
+        registrar: Arc<SkillHookRegistrar>,
         cwd: Option<PathBuf>,
         home: Option<PathBuf>,
-    ) -> Option<std::sync::Arc<dyn SkillReloadGuard>> {
-        let roots = houyicoder_skill::lifecycle::watch_roots(cwd.as_deref(), home.as_deref());
+    ) -> Option<Arc<dyn SkillReloadGuard>> {
+        let roots = watch_roots(cwd.as_deref(), home.as_deref());
         if roots.is_empty() {
             tracing::info!("no skill watch roots; hot-reload inert this session");
             return None;
@@ -77,7 +83,7 @@ impl SkillReloader {
             cwd,
             home,
         };
-        let thread = match thread::Builder::new()
+        let thread = match Builder::new()
             .name("skill-hot-reload".into())
             .spawn(move || start_watcher(roots, shutdown_rx, deps))
         {
@@ -87,10 +93,10 @@ impl SkillReloader {
                 return None;
             }
         };
-        Some(std::sync::Arc::new(Self {
+        Some(Arc::new(Self {
             _thread: Some(thread),
             shutdown: Some(shutdown_tx),
-        }) as std::sync::Arc<dyn SkillReloadGuard>)
+        }) as Arc<dyn SkillReloadGuard>)
     }
 }
 
@@ -105,7 +111,7 @@ impl Drop for SkillReloader {
 
 fn start_watcher(roots: Vec<(PathBuf, WatchDepth)>, shutdown_rx: Receiver<()>, deps: ReloadDeps) {
     let (event_tx, event_rx) = mpsc::channel::<Vec<PathBuf>>();
-    let config = notify::Config::default().with_poll_interval(Duration::from_millis(500));
+    let config = Config::default().with_poll_interval(Duration::from_millis(500));
     let mut watcher = match PlatformWatcher::new(
         move |res: Result<notify::Event, _>| {
             if let Ok(event) = res {
@@ -146,7 +152,7 @@ fn run_loop(
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => return,
         }
-        if !matches!(shutdown_rx.try_recv(), Err(mpsc::TryRecvError::Empty)) {
+        if !matches!(shutdown_rx.try_recv(), Err(TryRecvError::Empty)) {
             return;
         }
         let now = Instant::now();
@@ -227,7 +233,7 @@ fn files_settled(paths: &[PathBuf], shutdown_rx: &Receiver<()>) -> Option<bool> 
 }
 
 fn file_size(path: &Path) -> Option<u64> {
-    std::fs::metadata(path).ok().map(|m| m.len())
+    metadata(path).ok().map(|m| m.len())
 }
 
 #[cfg(test)]

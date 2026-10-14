@@ -12,6 +12,7 @@ use houyicoder_context::{ExecConfig, ExecResult, SandboxError};
 use std::env::temp_dir;
 use std::fs::create_dir_all;
 use std::fs::remove_dir_all;
+use std::io::Error;
 use std::panic::AssertUnwindSafe;
 use std::panic::catch_unwind;
 use std::path::{Path, PathBuf};
@@ -138,9 +139,8 @@ fn test_prepare_decline_returns_notice() {
         root: ws.clone(),
         extra: vec![],
     };
-    let decline = |_s: &SnapshotStore| -> std::io::Result<()> {
-        Err(std::io::Error::other("probe-decline-reason"))
-    };
+    let decline =
+        |_s: &SnapshotStore| -> std::io::Result<()> { Err(Error::other("probe-decline-reason")) };
     let result = prepare_with_probe(&store, &stack, &session, decline);
     let notice = result.expect("decline proceeds with a notice");
     assert!(notice.is_some(), "decline carries a notice");

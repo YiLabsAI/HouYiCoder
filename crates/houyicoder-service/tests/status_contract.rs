@@ -56,11 +56,7 @@ fn pair() -> (FrameCarrier, mpsc::Sender<String>, mpsc::Receiver<String>) {
 async fn test_request_returns_status_snapshot() {
     let (runner, session) = stub_runner();
     let (server_io, mut client_tx, mut client_rx) = pair();
-    let server = Server::new(
-        runner,
-        session,
-        std::sync::Arc::new(houyicoder_permission::DefaultModeGate::new()),
-    );
+    let server = Server::new(runner, session, Arc::new(DefaultModeGate::new()));
     let handle = tokio::spawn(async move { server.serve(server_io).await });
 
     send(&mut client_tx, &Hello::local()).await;
@@ -99,7 +95,7 @@ async fn test_request_returns_status_snapshot() {
 }
 
 async fn send(tx: &mut mpsc::Sender<String>, msg: &impl serde::Serialize) {
-    let mut f = houyicoder_protocol::framing::encode(msg).expect("encode");
+    let mut f = encode(msg).expect("encode");
     if !f.ends_with('\n') {
         f.push('\n');
     }
@@ -118,6 +114,8 @@ async fn recv(rx: &mut mpsc::Receiver<String>) -> String {
 // of the payload tag assertion above; the tag string mirrors the variant).
 #[allow(unused_imports)]
 use ResponsePayload as _Resp;
+use houyicoder_permission::DefaultModeGate;
+use houyicoder_protocol::framing::encode;
 
 /// A fresh session (no turn run, so no durable append and no descriptor on
 /// disk) still carries the running build version in the StatusSnapshot
@@ -130,11 +128,7 @@ use ResponsePayload as _Resp;
 async fn test_status_carries_build_version() {
     let (runner, session) = stub_runner();
     let (server_io, mut client_tx, mut client_rx) = pair();
-    let server = Server::new(
-        runner,
-        session,
-        std::sync::Arc::new(houyicoder_permission::DefaultModeGate::new()),
-    );
+    let server = Server::new(runner, session, Arc::new(DefaultModeGate::new()));
     let handle = tokio::spawn(async move { server.serve(server_io).await });
 
     send(&mut client_tx, &Hello::local()).await;

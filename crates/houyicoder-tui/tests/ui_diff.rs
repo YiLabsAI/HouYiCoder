@@ -16,9 +16,16 @@
 #![allow(clippy::unwrap_in_result)]
 
 use crate::common::{Key, RENDER_TIMEOUT, pty_session_in_repo};
+use std::env::temp_dir;
+use std::fs::create_dir_all;
+use std::fs::remove_dir_all;
+use std::fs::remove_file;
+use std::fs::write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::process::id;
 use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 /// Seed a throwaway git repo the binary can run in (a workspace manifest so
 /// resolve_project_workspace pins the dir). PTY tests that submit a run
@@ -26,10 +33,10 @@ use std::time::SystemTime;
 /// root's project state can delay stub delivery past the render timeout.
 #[allow(clippy::disallowed_methods)]
 fn make_temp_repo(slug: u64) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("houyi-diff-repo-{}-{slug}", std::process::id()));
-    drop(std::fs::remove_dir_all(&dir));
-    std::fs::create_dir_all(&dir).expect("mkdir repo");
-    std::fs::write(dir.join("Cargo.toml"), "[workspace]\nmembers = []\n").expect("write manifest");
+    let dir = temp_dir().join(format!("houyi-diff-repo-{}-{slug}", id()));
+    drop(remove_dir_all(&dir));
+    create_dir_all(&dir).expect("mkdir repo");
+    write(dir.join("Cargo.toml"), "[workspace]\nmembers = []\n").expect("write manifest");
     for args in [
         &["init", "-q"][..],
         &["config", "user.email", "t@x"][..],
@@ -61,17 +68,17 @@ struct Fixture {
 impl Fixture {
     fn new(repo: &Path) -> Self {
         let dir = repo.join("target");
-        std::fs::create_dir_all(&dir).expect("mkdir target");
+        create_dir_all(&dir).expect("mkdir target");
         let name = format!(
             "houyi-pty-diff-{}-{}.txt",
-            std::process::id(),
+            id(),
             SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
+                .duration_since(UNIX_EPOCH)
                 .map(|d| d.as_nanos())
                 .unwrap_or(0)
         );
         let abs = dir.join(&name);
-        std::fs::write(&abs, "fn foo() {\n    let a = 1;\n}\n").expect("write fixture");
+        write(&abs, "fn foo() {\n    let a = 1;\n}\n").expect("write fixture");
         Self {
             abs,
             repo: repo.to_path_buf(),
@@ -90,7 +97,7 @@ impl Fixture {
 
 impl Drop for Fixture {
     fn drop(&mut self) {
-        let _cleanup = std::fs::remove_file(&self.abs);
+        let _cleanup = remove_file(&self.abs);
     }
 }
 

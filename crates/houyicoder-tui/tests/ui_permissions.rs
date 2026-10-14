@@ -15,6 +15,16 @@ use crate::common::{
     Key, RENDER_TIMEOUT, fresh_temp_dir, open_permissions, pty_session, pty_session_in_dir,
     pty_session_scripted, tab_to_workspace,
 };
+use std::env::temp_dir;
+use std::fs::remove_dir;
+use std::fs::remove_dir_all;
+use std::fs::remove_file;
+use std::fs::write;
+use std::process::id;
+use std::thread::sleep;
+use std::time::Duration;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 #[test]
 #[ignore]
@@ -63,15 +73,15 @@ fn test_add_dir_path_errors() {
     s.send_key(&Key::Char('a'));
     assert!(s.wait_for("add directory:", RENDER_TIMEOUT));
     // A real file, not a directory.
-    let file = std::env::temp_dir().join(format!(
+    let file = temp_dir().join(format!(
         "houyi-ui-file-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+        id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0)
     ));
-    std::fs::write(&file, b"x").expect("write file");
+    write(&file, b"x").expect("write file");
     s.send_str(&file.to_string_lossy());
     s.send_key(&Key::Enter);
     // The rejection message must reach the screen (whatever path it takes).
@@ -82,7 +92,7 @@ fn test_add_dir_path_errors() {
         "bad-path rejection should surface on the screen:\n{}",
         s.output()
     );
-    drop(std::fs::remove_file(&file));
+    drop(remove_file(&file));
 }
 
 #[test]
@@ -130,7 +140,7 @@ fn test_esc_exits_pane() {
     s.assert_contains("[Allow]");
     s.clear_output();
     s.send_key(&Key::Esc);
-    std::thread::sleep(std::time::Duration::from_millis(200));
+    sleep(Duration::from_millis(200));
     assert!(
         !s.output().contains("[Allow]"),
         "Esc should leave the pane (tab header gone):\n{}",
@@ -183,7 +193,7 @@ fn test_workspace_remove_dir() {
         "Workspace should re-render empty after removal:\n{}",
         s.output()
     );
-    drop(std::fs::remove_dir(&dir));
+    drop(remove_dir(&dir));
 }
 
 /// #37 real scenario: grant a workspace dir via /permissions, then have the
@@ -202,7 +212,7 @@ fn test_add_dir_read_auto() {
     // confine would deny the read; with the grant, resolve() allows it.
     let dir = fresh_temp_dir("addread");
     let file = dir.join("note.txt");
-    std::fs::write(&file, "hello from added dir").expect("write fixture");
+    write(&file, "hello from added dir").expect("write fixture");
     let abs = file.to_string_lossy().into_owned();
     let script = r#"[
   [{"type":"ToolCall","id":"c1","name":"read","input":{"path":"__PATH__"}}],
@@ -229,7 +239,7 @@ fn test_add_dir_read_auto() {
     // Leave the pane, then start the run. The script's read ToolCall fires
     // AFTER the grant is in place, so additional_dirs holds the dir.
     s.send_key(&Key::Esc);
-    std::thread::sleep(std::time::Duration::from_millis(200));
+    sleep(Duration::from_millis(200));
     s.send_str("read the note");
     s.send_key(&Key::Enter);
     // The read RAN + completed (fold.rs collapses the read call+result into
@@ -260,5 +270,5 @@ fn test_add_dir_read_auto() {
         "the run should end after the read:\n{}",
         s.output()
     );
-    drop(std::fs::remove_dir_all(&dir));
+    drop(remove_dir_all(&dir));
 }

@@ -15,7 +15,9 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use houyicoder_api::session::SessionLog;
 use houyicoder_api::skill::SkillRegistry;
+use houyicoder_context::{CheckpointId, CheckpointManifest, Disposition, TurnGroup};
 use houyicoder_context::{SessionEvent, SessionId};
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::{Runner, SkillTool, ToolRegistry};
@@ -24,12 +26,17 @@ use houyicoder_protocol::llm::OutputItem;
 use houyicoder_provider::FakeProvider;
 use houyicoder_service::composition::SkillRegistryImpl;
 use houyicoder_session::SessionStore;
+use std::env::temp_dir;
+use std::fs::create_dir_all;
+use std::fs::remove_dir_all;
+use std::fs::write;
+use std::process::id;
 
 /// Write a SKILL.md fixture the discoverer picks up, with the given body.
 fn write_skill(dir: &Path, name: &str, body: &str) {
     let skill_dir = dir.join(".houyicoder").join("skills").join(name);
-    std::fs::create_dir_all(&skill_dir).unwrap();
-    std::fs::write(
+    create_dir_all(&skill_dir).unwrap();
+    write(
         skill_dir.join("SKILL.md"),
         format!("---\nname: {name}\ndescription: {name} skill\n---\n{body}\n"),
     )
@@ -43,12 +50,11 @@ fn write_skill(dir: &Path, name: &str, body: &str) {
 /// then prepare_body then inject with real files, not stubs.
 #[tokio::test]
 async fn test_run_slash_real_body() {
-    let tmp = std::env::temp_dir().join(format!("skill-slash-{}", std::process::id()));
+    let tmp = temp_dir().join(format!("skill-slash-{}", id()));
     write_skill(&tmp, "commit", "run git status\nstage changes\n");
     let reg: Arc<dyn SkillRegistry> =
         Arc::new(SkillRegistryImpl::discover_with_home(Some(&tmp), None));
-    let store: Arc<dyn houyicoder_api::session::SessionLog> =
-        Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let store: Arc<dyn SessionLog> = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let runner = Runner::new(
         store.clone(),
         Arc::new(FakeProvider::text("done")),
@@ -104,7 +110,7 @@ async fn test_run_slash_real_body() {
     // user source) is untrusted, so the mapping frames its body as
     // data — the fail-closed trust determination the slash path carries.
     assert!(untrusted, "project-local skill body is untrusted");
-    drop(std::fs::remove_dir_all(&tmp));
+    drop(remove_dir_all(&tmp));
 }
 
 /// The model-invoke path. A provider emits a Skill tool call, the agent
@@ -116,7 +122,7 @@ async fn test_run_slash_real_body() {
 /// same real body.
 #[tokio::test]
 async fn test_run_model_skill_tool() {
-    let tmp = std::env::temp_dir().join(format!("skill-model-{}", std::process::id()));
+    let tmp = temp_dir().join(format!("skill-model-{}", id()));
     write_skill(&tmp, "commit", "run git status\nstage changes\n");
     let reg: Arc<dyn SkillRegistry> =
         Arc::new(SkillRegistryImpl::discover_with_home(Some(&tmp), None));
@@ -133,8 +139,7 @@ async fn test_run_model_skill_tool() {
             text: "done".into(),
         }],
     ]);
-    let store: Arc<dyn houyicoder_api::session::SessionLog> =
-        Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let store: Arc<dyn SessionLog> = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let runner = Runner::new(
         store.clone(),
         Arc::new(provider),
@@ -180,7 +185,7 @@ async fn test_run_model_skill_tool() {
         tr.to_string().contains("unverified data"),
         "framing note in the ToolResult: {tr}"
     );
-    drop(std::fs::remove_dir_all(&tmp));
+    drop(remove_dir_all(&tmp));
 }
 
 /// A skill body past the large-output isolate threshold lands as a
@@ -190,7 +195,7 @@ async fn test_run_model_skill_tool() {
 /// isolation applies to skill bodies (not just bash/grep output).
 #[tokio::test]
 async fn test_run_large_body_compacts() {
-    let tmp = std::env::temp_dir().join(format!("skill-large-{}", std::process::id()));
+    let tmp = temp_dir().join(format!("skill-large-{}", id()));
     // Body past ISOLATE_LARGE_OUTPUT_BYTES (8192) once the base-dir header
     // + JSON envelope are added.
     let large_body = "x".repeat(9_000);
@@ -209,8 +214,7 @@ async fn test_run_large_body_compacts() {
             text: "done".into(),
         }],
     ]);
-    let store: Arc<dyn houyicoder_api::session::SessionLog> =
-        Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let store: Arc<dyn SessionLog> = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let runner = Runner::new(
         store.clone(),
         Arc::new(provider),
@@ -259,7 +263,7 @@ async fn test_run_large_body_compacts() {
         !tr.to_string().contains(&"x".repeat(1_000)),
         "raw large body (9000 chars) not in the ToolResult, only the preview: {tr}"
     );
-    drop(std::fs::remove_dir_all(&tmp));
+    drop(remove_dir_all(&tmp));
 }
 
 /// A compaction that folds the listing out of the assembled context triggers a
@@ -270,14 +274,11 @@ async fn test_run_large_body_compacts() {
 /// with a real manifest, not just the dedup unit test.
 #[tokio::test]
 async fn test_compact_reinjects_listing() {
-    use houyicoder_context::{CheckpointId, CheckpointManifest, Disposition, TurnGroup};
-
-    let tmp = std::env::temp_dir().join(format!("skill-compact-{}", std::process::id()));
+    let tmp = temp_dir().join(format!("skill-compact-{}", id()));
     write_skill(&tmp, "commit", "run git status");
     let reg: Arc<dyn SkillRegistry> =
         Arc::new(SkillRegistryImpl::discover_with_home(Some(&tmp), None));
-    let store: Arc<dyn houyicoder_api::session::SessionLog> =
-        Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let store: Arc<dyn SessionLog> = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let runner = Runner::new(
         store.clone(),
         Arc::new(FakeProvider::text("ok")),
@@ -340,5 +341,5 @@ async fn test_compact_reinjects_listing() {
         listing_count >= 2,
         "listing re-injected after compact folded the first: found {listing_count}"
     );
-    drop(std::fs::remove_dir_all(&tmp));
+    drop(remove_dir_all(&tmp));
 }

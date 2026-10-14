@@ -1,6 +1,7 @@
 //! Tests for this module.
 
 use super::*;
+use futures::stream::iter;
 use houyicoder_async::PStream;
 use houyicoder_context::{MemoryScope, MemorySource};
 use houyicoder_protocol::llm::{LlmEvent, ModelCapabilities, ProviderError, Usage};
@@ -32,7 +33,7 @@ impl ModelProvider for ReplyProvider {
         Box::pin(async move { Ok(resp) })
     }
     fn stream(&self, _req: CompletionRequest) -> PStream<'_, Result<LlmEvent, ProviderError>> {
-        Box::pin(futures::stream::iter(Vec::new()))
+        Box::pin(iter(Vec::new()))
     }
     fn capabilities(&self) -> ModelCapabilities {
         ModelCapabilities::default()
@@ -128,7 +129,7 @@ async fn test_rerank_error_is_unavailable() {
             Box::pin(async { Err(ProviderError::Unknown("no route".into())) })
         }
         fn stream(&self, _req: CompletionRequest) -> PStream<'_, Result<LlmEvent, ProviderError>> {
-            Box::pin(futures::stream::iter(Vec::new()))
+            Box::pin(iter(Vec::new()))
         }
         fn capabilities(&self) -> ModelCapabilities {
             ModelCapabilities::default()
@@ -155,7 +156,7 @@ async fn test_rerank_skips_empty_list() {
             panic!("an empty candidate list must not reach the model")
         }
         fn stream(&self, _req: CompletionRequest) -> PStream<'_, Result<LlmEvent, ProviderError>> {
-            Box::pin(futures::stream::iter(Vec::new()))
+            Box::pin(iter(Vec::new()))
         }
         fn capabilities(&self) -> ModelCapabilities {
             ModelCapabilities::default()

@@ -19,6 +19,11 @@ mod std_launcher;
 use houyicoder_async::PFut;
 use std::path::PathBuf;
 
+use std::error::Error;
+use std::fmt::Display;
+use std::fmt::Formatter;
+use std::io::Read;
+use std::io::Write;
 pub use std_launcher::StdProcessLauncher;
 
 /// Per-stream stdio disposition for a spawn. Inherit passes the parent stdio
@@ -254,8 +259,8 @@ pub enum SpawnError {
     BreakerOpen(String),
 }
 
-impl std::fmt::Display for SpawnError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for SpawnError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Io(msg) => write!(f, "spawn I/O failure: {msg}"),
             Self::DeniedByPolicy(msg) => write!(f, "spawn denied by policy: {msg}"),
@@ -265,7 +270,7 @@ impl std::fmt::Display for SpawnError {
     }
 }
 
-impl std::error::Error for SpawnError {}
+impl Error for SpawnError {}
 
 /// Live stdio pipe handles handed back to the caller when a spawn request is
 /// marked interactive. Each handle is present only when the corresponding
@@ -275,11 +280,11 @@ impl std::error::Error for SpawnError {}
 /// in a runtime-blocking task.
 pub struct StdioPipes {
     /// The child's stdin, present when the request piped stdin.
-    pub stdin: Option<Box<dyn std::io::Write + Send>>,
+    pub stdin: Option<Box<dyn Write + Send>>,
     /// The child's stdout, present when the request piped stdout.
-    pub stdout: Option<Box<dyn std::io::Read + Send>>,
+    pub stdout: Option<Box<dyn Read + Send>>,
     /// The child's stderr, present when the request piped stderr.
-    pub stderr: Option<Box<dyn std::io::Read + Send>>,
+    pub stderr: Option<Box<dyn Read + Send>>,
 }
 
 /// A handle to a spawned process. The launcher returns it from a synchronous

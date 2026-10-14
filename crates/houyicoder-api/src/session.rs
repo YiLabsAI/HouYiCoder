@@ -13,6 +13,7 @@ use houyicoder_context::{
     SessionEvent, SessionId, SessionLogEntry,
 };
 use houyicoder_protocol::llm::Usage;
+use std::path::PathBuf;
 
 /// The delegated usage a session's children reported in durable returns.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -298,7 +299,7 @@ pub trait SessionLog: Send + Sync {
     /// writer about the root. None on a backend that is not disk-backed -
     /// an in-memory build carries no cross-session history and must not
     /// read the real home.
-    fn session_log_root(&self) -> Option<std::path::PathBuf> {
+    fn session_log_root(&self) -> Option<PathBuf> {
         None
     }
 }

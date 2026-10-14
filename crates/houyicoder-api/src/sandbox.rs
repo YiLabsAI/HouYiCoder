@@ -236,6 +236,11 @@ pub use boundary::{
     BoundaryAccess, BoundaryGrant, boundary_grants_for, boundary_path_uses_parent,
     is_within_bounds, normalize_tool_path, path_args_for_boundary,
 };
+use std::fs::create_dir_all;
+use std::fs::read;
+use std::fs::read_dir;
+use std::fs::write;
+use std::sync::atomic::AtomicI64;
 
 /// The kernel fence status after session construction. The composition root
 /// checks this once to surface a user-visible notice when the fence did not
@@ -341,7 +346,7 @@ pub trait SandboxSession: Send + Sync {
     fn exec_streaming(
         &self,
         command: &str,
-        _lines: std::sync::Arc<std::sync::atomic::AtomicI64>,
+        _lines: Arc<AtomicI64>,
     ) -> PFut<'_, Result<ExecResult, SandboxError>> {
         self.exec(command)
     }
@@ -370,7 +375,7 @@ pub trait SandboxSession: Send + Sync {
         };
         Box::pin(async move {
             self.audit_unfenced("read");
-            let bytes = std::fs::read(&resolved)?;
+            let bytes = read(&resolved)?;
             if bytes.len() > max_bytes {
                 Ok(bytes[..max_bytes].to_vec())
             } else {
@@ -390,9 +395,9 @@ pub trait SandboxSession: Send + Sync {
         Box::pin(async move {
             self.audit_unfenced("write");
             if let Some(parent) = resolved.parent() {
-                std::fs::create_dir_all(parent)?;
+                create_dir_all(parent)?;
             }
-            std::fs::write(&resolved, content)?;
+            write(&resolved, content)?;
             Ok(())
         })
     }
@@ -406,7 +411,7 @@ pub trait SandboxSession: Send + Sync {
         Box::pin(async move {
             self.audit_unfenced("list");
             let mut entries = Vec::new();
-            for entry in std::fs::read_dir(&resolved)? {
+            for entry in read_dir(&resolved)? {
                 let entry = entry?;
                 entries.push(DirEntry {
                     name: entry.file_name().to_string_lossy().into_owned(),

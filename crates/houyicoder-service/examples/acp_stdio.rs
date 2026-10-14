@@ -23,8 +23,11 @@ use houyicoder_service::acp_serve::AcpIo;
 use houyicoder_service::acp_server::AcpServer;
 use houyicoder_service::lifecycle::SessionLeaseStore;
 use houyicoder_session::SessionStore;
+use std::io::stdin;
+use std::io::stdout;
 use std::io::{BufRead, Write};
 use std::sync::Arc;
+use std::thread::spawn;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
@@ -67,8 +70,8 @@ async fn main() {
     // Bridge stdin -> client_tx (inbound frames to the server). A dedicated
     // thread does blocking read_line (tokio stdin has an event-loop blocking
     // pitfall); EOF/err drops the sender so the server sees a clean close.
-    std::thread::spawn(move || {
-        let stdin = std::io::stdin();
+    spawn(move || {
+        let stdin = stdin();
         let mut tx = client_tx;
         for line in stdin.lock().lines() {
             match line {
@@ -91,7 +94,7 @@ async fn main() {
     let mut out_rx = client_rx;
     let drain = tokio::spawn(async move {
         while let Some(frame) = out_rx.next().await {
-            let mut out = std::io::stdout();
+            let mut out = stdout();
             drop(out.write_all(frame.as_bytes()));
             drop(out.write_all(b"\n"));
             drop(out.flush());

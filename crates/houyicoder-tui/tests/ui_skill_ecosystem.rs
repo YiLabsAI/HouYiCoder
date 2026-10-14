@@ -5,6 +5,8 @@
 use crate::common::{
     self, Key, RENDER_TIMEOUT, fresh_temp_dir, pty_session_with_home, run_skill_command,
 };
+use std::fs::create_dir_all;
+use std::fs::write;
 
 /// Build a PTY session with a temp HOME (containing a .claude/skills/
 /// ecosystem skill) and a temp workspace (containing a native skill).
@@ -12,15 +14,15 @@ fn ecosystem_session() -> common::PtySession {
     let home = fresh_temp_dir("eco-home");
     let repo = fresh_temp_dir("eco-repo");
     let eco_dir = home.join(".claude").join("skills").join("mock-eco");
-    std::fs::create_dir_all(&eco_dir).unwrap();
-    std::fs::write(
+    create_dir_all(&eco_dir).unwrap();
+    write(
         eco_dir.join("SKILL.md"),
         "---\nname: mock-eco\ndescription: an ecosystem skill\n---\neco body\n",
     )
     .unwrap();
     let native_dir = home.join(".houyicoder").join("skills").join("mock-native");
-    std::fs::create_dir_all(&native_dir).unwrap();
-    std::fs::write(
+    create_dir_all(&native_dir).unwrap();
+    write(
         native_dir.join("SKILL.md"),
         "---\nname: mock-native\ndescription: a native skill\n---\nnative body\n",
     )
@@ -76,11 +78,11 @@ fn long_description_session() -> common::PtySession {
     let home = fresh_temp_dir("wrap-home");
     let repo = fresh_temp_dir("wrap-repo");
     let dir = home.join(".houyicoder").join("skills").join("mock-long");
-    std::fs::create_dir_all(&dir).unwrap();
+    create_dir_all(&dir).unwrap();
     // Long enough that an unwrapped row clips the tail at any harness width,
     // so the assertion cannot pass on a clipped row.
     let filler = "wrap ".repeat(usize::from(common::COLS));
-    std::fs::write(
+    write(
         dir.join("SKILL.md"),
         format!("---\nname: mock-long\ndescription: {filler}zzwrap-tail\n---\nlong body\n"),
     )

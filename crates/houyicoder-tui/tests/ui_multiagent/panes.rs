@@ -1,4 +1,12 @@
 use super::*;
+use crossterm::event::KeyCode;
+use crossterm::event::KeyEvent;
+use crossterm::event::KeyModifiers;
+use houyicoder_tui::composition::app;
+use houyicoder_tui::keys::handle_working;
+use houyicoder_tui::records::TranscriptLine;
+use houyicoder_tui::state::Pane;
+use houyicoder_tui::state::Screen;
 
 /// A delegation in the transcript must not swallow Ctrl+O for the blocks
 /// that follow it. The delegation runs first, then the parent answers with
@@ -214,10 +222,9 @@ fn test_foreground_parent_after_fold() {
 /// tense) drops it. Selectable, Enter opens the delegation's view.
 #[test]
 fn test_agents_pane_lists_returned() {
-    use houyicoder_tui::records::TranscriptLine;
-    let mut app = houyicoder_tui::composition::app();
-    app.ui.navigation.screen = houyicoder_tui::state::Screen::Working;
-    app.ui.navigation.pane = houyicoder_tui::state::Pane::Agents;
+    let mut app = app();
+    app.ui.navigation.screen = Screen::Working;
+    app.ui.navigation.pane = Pane::Agents;
     app.push_transcript_line(TranscriptLine::Subagent {
         child_sid: "c1".into(),
         subagent_type: "explore".into(),
@@ -234,13 +241,7 @@ fn test_agents_pane_lists_returned() {
     );
     assert!(app.agents().rows[0].loaded, "loaded fold detected");
     // Enter on the selected row opens that delegation's view.
-    houyicoder_tui::keys::handle_working(
-        &mut app,
-        crossterm::event::KeyEvent::new(
-            crossterm::event::KeyCode::Enter,
-            crossterm::event::KeyModifiers::NONE,
-        ),
-    );
+    handle_working(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     let view = app.ui.teammate_view.as_ref().expect("view opened");
     assert_eq!(view.child_sid, "c1");
     assert!(
@@ -252,10 +253,9 @@ fn test_agents_pane_lists_returned() {
 /// returned-delegation list; an empty list leaves it put.
 #[test]
 fn test_agents_pane_cursor_walks() {
-    use houyicoder_tui::records::TranscriptLine;
-    let mut app = houyicoder_tui::composition::app();
-    app.ui.navigation.screen = houyicoder_tui::state::Screen::Working;
-    app.ui.navigation.pane = houyicoder_tui::state::Pane::Agents;
+    let mut app = app();
+    app.ui.navigation.screen = Screen::Working;
+    app.ui.navigation.pane = Pane::Agents;
     for (sid, summary) in [("c1", "first"), ("c2", "second")] {
         app.push_transcript_line(TranscriptLine::Subagent {
             child_sid: sid.into(),

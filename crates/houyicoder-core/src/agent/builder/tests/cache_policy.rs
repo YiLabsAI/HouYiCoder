@@ -1,17 +1,21 @@
 //! Tests for this module.
 
 use super::super::*;
+use crate::agent::ToolRegistry;
+use crate::agent::runner_config::RunnerConfig;
+use crate::provider::test_support::FakeProvider;
 use houyicoder_api::cache_policy::{AutoCachePolicy, CachePolicy, NoCachePolicy};
 use houyicoder_api::cost_model::AnthropicCostModel;
+use houyicoder_memory::InMemoryBackend;
+use houyicoder_session::SessionStore;
+use std::sync::Arc;
 
 fn runner() -> Runner {
     Runner::new(
-        std::sync::Arc::new(houyicoder_session::SessionStore::new(Box::new(
-            houyicoder_memory::InMemoryBackend::new(),
-        ))),
-        std::sync::Arc::new(crate::provider::test_support::FakeProvider::text("x")),
-        crate::agent::ToolRegistry::new(),
-        crate::agent::runner_config::RunnerConfig::default(),
+        Arc::new(SessionStore::new(Box::new(InMemoryBackend::new()))),
+        Arc::new(FakeProvider::text("x")),
+        ToolRegistry::new(),
+        RunnerConfig::default(),
     )
 }
 
@@ -25,10 +29,10 @@ fn test_default_runner_uses_policy() {
 fn test_with_cache_policy_overrides() {
     // with_cache_policy swaps the default Auto for NoCachePolicy. Covers
     // the setter (otherwise dead in the default-Auto path).
-    let r = runner().with_cache_policy(std::sync::Arc::new(NoCachePolicy));
+    let r = runner().with_cache_policy(Arc::new(NoCachePolicy));
     assert_eq!(r.cache_policy.policy(), CachePolicy::None);
     // Auto round-trips too.
-    let r2 = runner().with_cache_policy(std::sync::Arc::new(AutoCachePolicy));
+    let r2 = runner().with_cache_policy(Arc::new(AutoCachePolicy));
     assert_eq!(r2.cache_policy.policy(), CachePolicy::Auto);
 }
 
@@ -36,7 +40,7 @@ fn test_with_cache_policy_overrides() {
 fn test_with_cost_model_overrides() {
     // with_cost_model swaps the default Anthropic rates. Covers the
     // setter (otherwise dead in the default-cost path).
-    let r = runner().with_cost_model(std::sync::Arc::new(AnthropicCostModel));
+    let r = runner().with_cost_model(Arc::new(AnthropicCostModel));
     let cost = r.cost_model.cost();
     assert!(
         (cost.cache_read - 0.1).abs() < 1e-9,

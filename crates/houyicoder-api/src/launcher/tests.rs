@@ -1,6 +1,8 @@
 //! Tests for this module.
 
 use super::*;
+use std::path::Path;
+use std::time::Duration;
 
 /// The trait must support runtime dispatch.
 #[test]
@@ -65,7 +67,7 @@ fn test_spawn_request_builder() {
         .piped_output();
     assert_eq!(req.program, "make");
     assert_eq!(req.args, vec!["check"]);
-    assert_eq!(req.workspace.as_deref(), Some(std::path::Path::new("/tmp")));
+    assert_eq!(req.workspace.as_deref(), Some(Path::new("/tmp")));
     assert_eq!(req.stdio.stdout, StdioMode::Piped);
 }
 
@@ -84,6 +86,6 @@ fn test_fence_wall_timeout_millis() {
         wall_timeout_ms: 500,
         ..FenceConfig::default()
     };
-    let d = std::time::Duration::from_millis(f.wall_timeout_ms);
+    let d = Duration::from_millis(f.wall_timeout_ms);
     assert_eq!(d.as_millis(), 500);
 }

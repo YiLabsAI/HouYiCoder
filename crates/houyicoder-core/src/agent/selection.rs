@@ -8,6 +8,7 @@
 //! manifest-application seam.
 
 use houyicoder_context::{ContextBackend, Disposition, EventId, SessionEvent, SessionLogEntry};
+use std::collections::HashMap;
 
 /// Apply a CheckpointManifest to an event log, producing the filtered event
 /// sequence for the assembled context. This is the Select stage's plan-application
@@ -39,8 +40,6 @@ pub fn apply_manifest(
     manifest: &houyicoder_context::CheckpointManifest,
     _backend: Option<&dyn ContextBackend>,
 ) -> Vec<SessionLogEntry> {
-    use std::collections::HashMap;
-
     // Flatten the per-turn-group plan into an event id to disposition lookup.
     // The group is the atomic unit; every event in a group shares its
     // disposition, so a flat lookup preserves the integral fate.

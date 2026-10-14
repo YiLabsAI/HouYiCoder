@@ -22,6 +22,18 @@
 
 #![cfg(feature = "acp-cross-decode")]
 
+use acp::ContentBlock;
+use acp::ContentChunk;
+use acp::Cost;
+use acp::ImageContent;
+use acp::SessionUpdate;
+use acp::TextContent;
+use acp::ToolCall;
+use acp::ToolCallId;
+use acp::ToolCallStatus;
+use acp::ToolCallUpdate;
+use acp::ToolCallUpdateFields;
+use acp::UsageUpdate;
 use agent_client_protocol::schema::v1 as acp;
 use houyicoder_protocol::frontend::run::ContentBlock as OurContentBlock;
 use houyicoder_protocol::frontend::session_update::{
@@ -38,14 +50,14 @@ use serde_json::Value;
 /// Serialize an ACP value, decode into our mirror, and return the parsed
 /// ours-side value. Panics on any serde failure — the two shapes must be
 /// compatible.
-fn acp_to_ours(acp_val: &acp::SessionUpdate) -> OurSessionUpdate {
+fn acp_to_ours(acp_val: &SessionUpdate) -> OurSessionUpdate {
     let json = serde_json::to_string(acp_val).expect("ACP serialize");
     serde_json::from_str(&json).expect("decode into ours")
 }
 
 /// Serialize one of our values, decode into the ACP type, and return the
 /// parsed ACP value. Panics on any serde failure.
-fn ours_to_acp(ours: &OurSessionUpdate) -> acp::SessionUpdate {
+fn ours_to_acp(ours: &OurSessionUpdate) -> SessionUpdate {
     let json = serde_json::to_string(ours).expect("ours serialize");
     serde_json::from_str(&json).expect("decode into ACP")
 }
@@ -56,9 +68,9 @@ fn ours_to_acp(ours: &OurSessionUpdate) -> acp::SessionUpdate {
 
 #[test]
 fn test_acp_ours_agent_text() {
-    let acp_val = acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new(
-        acp::ContentBlock::Text(acp::TextContent::new("hello")),
-    ));
+    let acp_val = SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text(
+        TextContent::new("hello"),
+    )));
     let ours = acp_to_ours(&acp_val);
     match &ours {
         OurSessionUpdate::AgentMessageChunk(chunk) => match &chunk.content {
@@ -76,8 +88,8 @@ fn test_ours_acp_agent_text() {
     }));
     let acp_val = ours_to_acp(&ours);
     match acp_val {
-        acp::SessionUpdate::AgentMessageChunk(chunk) => match chunk.content {
-            acp::ContentBlock::Text(tc) => assert_eq!(tc.text, "hello"),
+        SessionUpdate::AgentMessageChunk(chunk) => match chunk.content {
+            ContentBlock::Text(tc) => assert_eq!(tc.text, "hello"),
             _ => panic!("expected text content block"),
         },
         _ => panic!("expected AgentMessageChunk"),
@@ -96,9 +108,9 @@ fn test_ours_acp_agent_text() {
 fn test_acp_ours_agent_image() {
     // ACP ImageContent emits data + mimeType (camelCase). Our mirror must
     // decode mimeType into mime_type; this regressed before the field rename.
-    let acp_val = acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new(
-        acp::ContentBlock::Image(acp::ImageContent::new("b64", "image/png")),
-    ));
+    let acp_val = SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Image(
+        ImageContent::new("b64", "image/png"),
+    )));
     let ours = acp_to_ours(&acp_val);
     match &ours {
         OurSessionUpdate::AgentMessageChunk(chunk) => match &chunk.content {
@@ -120,8 +132,8 @@ fn test_ours_acp_agent_image() {
     }));
     let acp_val = ours_to_acp(&ours);
     match acp_val {
-        acp::SessionUpdate::AgentMessageChunk(chunk) => match chunk.content {
-            acp::ContentBlock::Image(img) => {
+        SessionUpdate::AgentMessageChunk(chunk) => match chunk.content {
+            ContentBlock::Image(img) => {
                 assert_eq!(img.data, "b64");
                 assert_eq!(img.mime_type, "image/png");
             }
@@ -133,9 +145,9 @@ fn test_ours_acp_agent_image() {
 
 #[test]
 fn test_acp_ours_user_text() {
-    let acp_val = acp::SessionUpdate::UserMessageChunk(acp::ContentChunk::new(
-        acp::ContentBlock::Text(acp::TextContent::new("user says")),
-    ));
+    let acp_val = SessionUpdate::UserMessageChunk(ContentChunk::new(ContentBlock::Text(
+        TextContent::new("user says"),
+    )));
     let ours = acp_to_ours(&acp_val);
     match &ours {
         OurSessionUpdate::UserMessageChunk(chunk) => match &chunk.content {
@@ -153,8 +165,8 @@ fn test_ours_acp_thought_text() {
     }));
     let acp_val = ours_to_acp(&ours);
     match acp_val {
-        acp::SessionUpdate::AgentThoughtChunk(chunk) => match chunk.content {
-            acp::ContentBlock::Text(tc) => assert_eq!(tc.text, "thinking"),
+        SessionUpdate::AgentThoughtChunk(chunk) => match chunk.content {
+            ContentBlock::Text(tc) => assert_eq!(tc.text, "thinking"),
             _ => panic!("expected text content block"),
         },
         _ => panic!("expected AgentThoughtChunk"),
@@ -167,10 +179,10 @@ fn test_ours_acp_thought_text() {
 
 #[test]
 fn test_acp_ours_tool_call() {
-    let acp_val = acp::SessionUpdate::ToolCall(
-        acp::ToolCall::new(acp::ToolCallId::new("toolu_1"), "bash")
+    let acp_val = SessionUpdate::ToolCall(
+        ToolCall::new(ToolCallId::new("toolu_1"), "bash")
             .raw_input(serde_json::json!("ls"))
-            .status(acp::ToolCallStatus::InProgress),
+            .status(ToolCallStatus::InProgress),
     );
     let ours = acp_to_ours(&acp_val);
     match &ours {
@@ -193,10 +205,10 @@ fn test_ours_acp_tool_call() {
     );
     let acp_val = ours_to_acp(&ours);
     match acp_val {
-        acp::SessionUpdate::ToolCall(tc) => {
+        SessionUpdate::ToolCall(tc) => {
             assert_eq!(tc.tool_call_id.0.as_ref(), "toolu_1", "tool_call_id");
             assert_eq!(tc.title, "bash", "title");
-            assert_eq!(tc.status, acp::ToolCallStatus::InProgress, "status");
+            assert_eq!(tc.status, ToolCallStatus::InProgress, "status");
             assert_eq!(tc.raw_input, Some(serde_json::json!("ls")), "raw_input");
         }
         _ => panic!("expected ToolCall"),
@@ -209,10 +221,10 @@ fn test_ours_acp_tool_call() {
 
 #[test]
 fn test_acp_ours_tool_update() {
-    let acp_val = acp::SessionUpdate::ToolCallUpdate(acp::ToolCallUpdate::new(
-        acp::ToolCallId::new("toolu_1"),
-        acp::ToolCallUpdateFields::new()
-            .status(acp::ToolCallStatus::Completed)
+    let acp_val = SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+        ToolCallId::new("toolu_1"),
+        ToolCallUpdateFields::new()
+            .status(ToolCallStatus::Completed)
             .raw_output(serde_json::json!("ok")),
     ));
     let ours = acp_to_ours(&acp_val);
@@ -250,13 +262,9 @@ fn test_ours_acp_tool_update() {
     ));
     let acp_val = ours_to_acp(&ours);
     match acp_val {
-        acp::SessionUpdate::ToolCallUpdate(upd) => {
+        SessionUpdate::ToolCallUpdate(upd) => {
             assert_eq!(upd.tool_call_id.0.as_ref(), "toolu_1", "tool_call_id");
-            assert_eq!(
-                upd.fields.status,
-                Some(acp::ToolCallStatus::Completed),
-                "status"
-            );
+            assert_eq!(upd.fields.status, Some(ToolCallStatus::Completed), "status");
             assert_eq!(
                 upd.fields.raw_output,
                 Some(serde_json::json!("ok")),
@@ -275,9 +283,8 @@ fn test_ours_acp_tool_update() {
 fn test_ignores_acp_message_id() {
     // ACP ContentChunk carries an optional message_id field. Our mirror omits
     // it; serde must ignore the extra key so decode parity holds.
-    let acp_val = acp::SessionUpdate::AgentMessageChunk(
-        acp::ContentChunk::new(acp::ContentBlock::Text(acp::TextContent::new("chunk")))
-            .message_id("msg-uuid-1"),
+    let acp_val = SessionUpdate::AgentMessageChunk(
+        ContentChunk::new(ContentBlock::Text(TextContent::new("chunk"))).message_id("msg-uuid-1"),
     );
     let json = serde_json::to_string(&acp_val).expect("ACP serialize");
     assert!(
@@ -325,7 +332,7 @@ fn test_ignores_acp_meta_annotations() {
 
 #[test]
 fn test_acp_ours_usage_update() {
-    let acp_val = acp::SessionUpdate::UsageUpdate(acp::UsageUpdate::new(1200, 200_000));
+    let acp_val = SessionUpdate::UsageUpdate(UsageUpdate::new(1200, 200_000));
     let ours = acp_to_ours(&acp_val);
     match &ours {
         OurSessionUpdate::UsageUpdate(usage) => {
@@ -340,9 +347,8 @@ fn test_acp_ours_usage_update() {
 fn test_ignores_acp_usage_cost() {
     // A peer may attach a monetary cost; our mirror stays token-based and
     // must decode the update while ignoring the cost object.
-    let acp_val = acp::SessionUpdate::UsageUpdate(
-        acp::UsageUpdate::new(1200, 200_000).cost(acp::Cost::new(0.03, "USD")),
-    );
+    let acp_val =
+        SessionUpdate::UsageUpdate(UsageUpdate::new(1200, 200_000).cost(Cost::new(0.03, "USD")));
     let json = serde_json::to_string(&acp_val).expect("ACP serialize");
     assert!(json.contains(r#""cost""#), "ACP must emit cost: {json}");
     let ours: OurSessionUpdate = serde_json::from_str(&json).expect("decode ignores cost");
@@ -364,7 +370,7 @@ fn test_ours_acp_usage_update() {
     });
     let acp_val = ours_to_acp(&ours);
     match acp_val {
-        acp::SessionUpdate::UsageUpdate(usage) => {
+        SessionUpdate::UsageUpdate(usage) => {
             assert_eq!(usage.used, 1200, "used");
             assert_eq!(usage.size, 200_000, "size");
             assert!(usage.cost.is_none(), "ours never emits cost");

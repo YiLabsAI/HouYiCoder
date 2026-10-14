@@ -12,6 +12,14 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::common::{Key, pty_session_with_home};
+use std::env::temp_dir;
+use std::fs::create_dir_all;
+use std::fs::read_to_string;
+use std::fs::remove_dir_all;
+use std::fs::write;
+use std::path::Path;
+use std::process::Command;
+use std::process::id;
 
 /// Looks up a mach service no profile allows, then exits 1 with a
 /// denial-signature stderr so the bash discovery gate fires.
@@ -35,24 +43,18 @@ const SERVICE: &str = "com.houyi.test.entitlement";
 const ENTITLEMENT_TIMEOUT: Duration = Duration::from_secs(20);
 
 fn make_temp_repo(slug: u64) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "houyi-entitlement-repo-{}-{slug}",
-        std::process::id()
-    ));
-    drop(std::fs::remove_dir_all(&dir));
-    std::fs::create_dir_all(&dir).expect("mkdir repo");
+    let dir = temp_dir().join(format!("houyi-entitlement-repo-{}-{slug}", id()));
+    drop(remove_dir_all(&dir));
+    create_dir_all(&dir).expect("mkdir repo");
     dir
 }
 
 fn make_temp_home(slug: u64) -> PathBuf {
-    let home = std::env::temp_dir().join(format!(
-        "houyi-entitlement-home-{}-{slug}",
-        std::process::id()
-    ));
-    drop(std::fs::remove_dir_all(&home));
+    let home = temp_dir().join(format!("houyi-entitlement-home-{}-{slug}", id()));
+    drop(remove_dir_all(&home));
     let skill_dir = home.join(".agents").join("skills").join("test-grant");
-    std::fs::create_dir_all(&skill_dir).expect("mkdir skill");
-    std::fs::write(
+    create_dir_all(&skill_dir).expect("mkdir skill");
+    write(
         skill_dir.join("SKILL.md"),
         "---\nname: test-grant\ndescription: Provoke a mach-lookup denial.\n---\nRun the helper.",
     )
@@ -62,11 +64,11 @@ fn make_temp_home(slug: u64) -> PathBuf {
 
 /// Compile the helper into the repo dir. None when no C compiler (skip).
 #[allow(clippy::disallowed_methods)]
-fn compile_helper(repo: &std::path::Path) -> Option<PathBuf> {
+fn compile_helper(repo: &Path) -> Option<PathBuf> {
     let src = repo.join("machlookup.c");
     let bin = repo.join("machlookup");
-    std::fs::write(&src, HELPER_C).ok()?;
-    let out = std::process::Command::new("clang")
+    write(&src, HELPER_C).ok()?;
+    let out = Command::new("clang")
         .arg("-o")
         .arg(&bin)
         .arg(&src)
@@ -78,7 +80,7 @@ fn compile_helper(repo: &std::path::Path) -> Option<PathBuf> {
     Some(bin)
 }
 
-fn entitlement_script(helper: &std::path::Path) -> String {
+fn entitlement_script(helper: &Path) -> String {
     format!(
         r#"[
   [{{"type":"ToolCall","id":"c1","name":"skill","input":{{"skill":"test-grant"}}}}],
@@ -167,7 +169,7 @@ fn test_entitlement_yes_grants() {
         s.output_plain()
     );
     let grants_path = home.join(".houyicoder").join("skill-grants.json");
-    let grants = std::fs::read_to_string(&grants_path).unwrap_or_else(|e| {
+    let grants = read_to_string(&grants_path).unwrap_or_else(|e| {
         panic!(
             "grant store should exist after Yes ({e}): {}",
             grants_path.display()
@@ -177,8 +179,8 @@ fn test_entitlement_yes_grants() {
         grants.contains("test-grant") && grants.contains(SERVICE),
         "the grant store must carry the authorized service:\n{grants}"
     );
-    drop(std::fs::remove_dir_all(&repo));
-    drop(std::fs::remove_dir_all(&home));
+    drop(remove_dir_all(&repo));
+    drop(remove_dir_all(&home));
 }
 
 /// The decline half: No leaves the grant store untouched and the run ends.
@@ -207,11 +209,11 @@ fn test_entitlement_no_declines() {
         s.output_plain()
     );
     let grants_path = home.join(".houyicoder").join("skill-grants.json");
-    let written = std::fs::read_to_string(&grants_path).unwrap_or_default();
+    let written = read_to_string(&grants_path).unwrap_or_default();
     assert!(
         !written.contains(SERVICE),
         "No must not authorize the service:\n{written}"
     );
-    drop(std::fs::remove_dir_all(&repo));
-    drop(std::fs::remove_dir_all(&home));
+    drop(remove_dir_all(&repo));
+    drop(remove_dir_all(&home));
 }

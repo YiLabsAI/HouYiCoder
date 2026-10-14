@@ -15,6 +15,7 @@ use houyicoder_context::SessionId;
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::{Runner, ToolRegistry};
 use houyicoder_memory::InMemoryBackend;
+use houyicoder_permission::DefaultModeGate;
 use houyicoder_protocol::envelope::{ClientFrame, RequestEnvelope, RequestId};
 use houyicoder_protocol::framing::encode;
 use houyicoder_protocol::frontend::run::ContentBlock;
@@ -78,11 +79,7 @@ async fn test_returns_session_updates() {
     let (runner, session) = stub_runner();
     let session_str = session.to_string();
     let (server_io, mut client_tx, mut client_rx) = pair();
-    let server = Server::new(
-        runner,
-        session,
-        std::sync::Arc::new(houyicoder_permission::DefaultModeGate::new()),
-    );
+    let server = Server::new(runner, session, Arc::new(DefaultModeGate::new()));
     let handle = tokio::spawn(async move { server.serve(server_io).await });
 
     send(&mut client_tx, &Hello::local()).await;

@@ -2,6 +2,7 @@
 
 use super::*;
 use std::io::Cursor;
+use std::io::Error;
 use std::sync::mpsc;
 
 /// Build a request line and prove the envelope has the id, method, and
@@ -149,7 +150,7 @@ impl Write for ChannelSink {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         self.tx
             .send(buf.to_vec())
-            .map_err(|e| std::io::Error::other(e.to_string()))?;
+            .map_err(|e| Error::other(e.to_string()))?;
         Ok(buf.len())
     }
     fn flush(&mut self) -> std::io::Result<()> {

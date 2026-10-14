@@ -18,6 +18,25 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::common::{pair, recv_frame, recv_hello, send_frame};
+use futures::channel::mpsc::Receiver;
+use futures::channel::mpsc::Sender;
+use houyicoder_api::memory::MemoryProvider;
+use houyicoder_context::{MemoryEntry, MemorySource};
+use houyicoder_memory::MarkdownMemoryProvider;
+use houyicoder_permission::DefaultModeGate;
+use houyicoder_protocol::frontend::memory::MemorySummaryEntry;
+use std::env::temp_dir;
+#[cfg(unix)]
+use std::fs::Permissions;
+use std::fs::create_dir_all;
+use std::fs::remove_dir_all;
+use std::fs::remove_file;
+#[cfg(unix)]
+use std::fs::set_permissions;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+use std::path::PathBuf;
+use std::process::id;
 
 fn stub_runner() -> (Arc<Runner>, SessionId) {
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
@@ -38,15 +57,12 @@ fn stub_runner() -> (Arc<Runner>, SessionId) {
 }
 
 /// Build a runner with one stored memory.
-fn runner_with_memory(key: &str, body: &str) -> (Arc<Runner>, SessionId, std::path::PathBuf) {
-    use houyicoder_context::{MemoryEntry, MemorySource};
-    use houyicoder_memory::MarkdownMemoryProvider;
+fn runner_with_memory(key: &str, body: &str) -> (Arc<Runner>, SessionId, PathBuf) {
     static SEQ: AtomicU64 = AtomicU64::new(0);
     let n = SEQ.fetch_add(1, Ordering::Relaxed);
-    let root = std::env::temp_dir().join(format!("houyi-forget-test-{}-{n}", std::process::id()));
-    std::fs::create_dir_all(&root).expect("create temp root");
-    let memory: Arc<dyn houyicoder_api::memory::MemoryProvider> =
-        Arc::new(MarkdownMemoryProvider::new(root.clone()));
+    let root = temp_dir().join(format!("houyi-forget-test-{}-{n}", id()));
+    create_dir_all(&root).expect("create temp root");
+    let memory: Arc<dyn MemoryProvider> = Arc::new(MarkdownMemoryProvider::new(root.clone()));
     memory
         .add(MemoryEntry::new(key, body, MemorySource::Project))
         .expect("seed memory");
@@ -76,17 +92,14 @@ fn runner_with_memory(key: &str, body: &str) -> (Arc<Runner>, SessionId, std::pa
 }
 
 /// Return an isolated settings path.
-fn temp_settings_path() -> std::path::PathBuf {
+fn temp_settings_path() -> PathBuf {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    std::env::temp_dir().join(format!("houyi-toggle-test-{}-{n}.json", std::process::id()))
+    temp_dir().join(format!("houyi-toggle-test-{}-{n}.json", id()))
 }
 
 /// Receive the requested toggle state.
-async fn recv_toggle(
-    resp_id: RequestId,
-    rx: &mut futures::channel::mpsc::Receiver<String>,
-) -> ResponsePayload {
+async fn recv_toggle(resp_id: RequestId, rx: &mut Receiver<String>) -> ResponsePayload {
     for _ in 0..16 {
         if let ServerFrame::Response(resp) = recv_frame(rx).await {
             assert_eq!(resp.req_id, resp_id, "response pairs to the request");
@@ -96,10 +109,7 @@ async fn recv_toggle(
     panic!("no ToggleState response for {resp_id:?}");
 }
 
-async fn handshake(
-    tx: &mut futures::channel::mpsc::Sender<String>,
-    rx: &mut futures::channel::mpsc::Receiver<String>,
-) {
+async fn handshake(tx: &mut Sender<String>, rx: &mut Receiver<String>) {
     send_frame(tx, &Hello::local()).await;
     let _ = recv_hello(rx).await;
 }
@@ -109,12 +119,8 @@ async fn test_toggle_read_flip_roundtrip() {
     let (runner, session) = stub_runner();
     let settings = temp_settings_path();
     let (server_io, mut client_tx, mut client_rx) = pair();
-    let server = Server::new(
-        runner.clone(),
-        session,
-        std::sync::Arc::new(houyicoder_permission::DefaultModeGate::new()),
-    )
-    .with_settings_path(settings.clone());
+    let server = Server::new(runner.clone(), session, Arc::new(DefaultModeGate::new()))
+        .with_settings_path(settings.clone());
     let handle = tokio::spawn(async move { server.serve(server_io).await });
 
     handshake(&mut client_tx, &mut client_rx).await;
@@ -153,7 +159,7 @@ async fn test_toggle_read_flip_roundtrip() {
 
     drop(client_tx);
     drop(handle.await);
-    drop(std::fs::remove_file(&settings));
+    drop(remove_file(&settings));
 }
 
 #[tokio::test]
@@ -161,12 +167,8 @@ async fn test_dream_leaves_auto_memory() {
     let (runner, session) = stub_runner();
     let settings = temp_settings_path();
     let (server_io, mut client_tx, mut client_rx) = pair();
-    let server = Server::new(
-        runner,
-        session,
-        std::sync::Arc::new(houyicoder_permission::DefaultModeGate::new()),
-    )
-    .with_settings_path(settings.clone());
+    let server = Server::new(runner, session, Arc::new(DefaultModeGate::new()))
+        .with_settings_path(settings.clone());
     let handle = tokio::spawn(async move { server.serve(server_io).await });
 
     handshake(&mut client_tx, &mut client_rx).await;
@@ -188,14 +190,11 @@ async fn test_dream_leaves_auto_memory() {
 
     drop(client_tx);
     drop(handle.await);
-    drop(std::fs::remove_file(&settings));
+    drop(remove_file(&settings));
 }
 
 /// Receive the requested memory list.
-async fn recv_list(
-    resp_id: RequestId,
-    rx: &mut futures::channel::mpsc::Receiver<String>,
-) -> Vec<houyicoder_protocol::frontend::memory::MemorySummaryEntry> {
+async fn recv_list(resp_id: RequestId, rx: &mut Receiver<String>) -> Vec<MemorySummaryEntry> {
     for _ in 0..16 {
         let frame = recv_frame(rx).await;
         let ServerFrame::Response(resp) = frame else {
@@ -216,12 +215,8 @@ async fn recv_list(
 async fn test_forget_archives_and_refreshes() {
     let (runner, session, root) = runner_with_memory("build-gate", "make check green");
     let (server_io, mut client_tx, mut client_rx) = pair();
-    let server = Server::new(
-        runner.clone(),
-        session,
-        std::sync::Arc::new(houyicoder_permission::DefaultModeGate::new()),
-    )
-    .with_settings_path(temp_settings_path());
+    let server = Server::new(runner.clone(), session, Arc::new(DefaultModeGate::new()))
+        .with_settings_path(temp_settings_path());
     let handle = tokio::spawn(async move { server.serve(server_io).await });
     handshake(&mut client_tx, &mut client_rx).await;
 
@@ -248,15 +243,12 @@ async fn test_forget_archives_and_refreshes() {
 
     drop(client_tx);
     drop(handle.await);
-    drop(std::fs::remove_dir_all(&root));
+    drop(remove_dir_all(&root));
 }
 
 /// Receive the requested error message.
 #[cfg(unix)]
-async fn recv_error(
-    resp_id: RequestId,
-    rx: &mut futures::channel::mpsc::Receiver<String>,
-) -> String {
+async fn recv_error(resp_id: RequestId, rx: &mut Receiver<String>) -> String {
     for _ in 0..16 {
         let frame = recv_frame(rx).await;
         let ServerFrame::Response(resp) = frame else {
@@ -276,18 +268,13 @@ async fn recv_error(
 #[cfg(unix)]
 #[tokio::test]
 async fn test_forget_surfaces_io_failure() {
-    use std::os::unix::fs::PermissionsExt;
     let (runner, session, root) = runner_with_memory("io-gate", "make check green");
     // Make the root read-only so the topic delete fails with Io (deleting a
     // file needs write permission on the directory, not the file).
-    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o555)).expect("set read-only");
+    set_permissions(&root, Permissions::from_mode(0o555)).expect("set read-only");
     let (server_io, mut client_tx, mut client_rx) = pair();
-    let server = Server::new(
-        runner.clone(),
-        session,
-        std::sync::Arc::new(houyicoder_permission::DefaultModeGate::new()),
-    )
-    .with_settings_path(temp_settings_path());
+    let server = Server::new(runner.clone(), session, Arc::new(DefaultModeGate::new()))
+        .with_settings_path(temp_settings_path());
     let handle = tokio::spawn(async move { server.serve(server_io).await });
     handshake(&mut client_tx, &mut client_rx).await;
     let forget_req = RequestEnvelope::new(
@@ -305,6 +292,6 @@ async fn test_forget_surfaces_io_failure() {
     );
     drop(client_tx);
     drop(handle.await);
-    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).ok();
-    drop(std::fs::remove_dir_all(&root));
+    set_permissions(&root, Permissions::from_mode(0o755)).ok();
+    drop(remove_dir_all(&root));
 }

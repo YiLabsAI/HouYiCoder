@@ -22,6 +22,7 @@
 
 use std::fs::create_dir_all;
 use std::fs::remove_file;
+use std::io::Error;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::process::Stdio;
@@ -123,11 +124,11 @@ impl ShellSnapshot {
         let out = match out {
             Ok(o) => o,
             Err(e) => {
-                return Err(std::io::Error::other(format!("snapshot spawn failed: {e}")));
+                return Err(Error::other(format!("snapshot spawn failed: {e}")));
             }
         };
         if !out.status.success() || !path.exists() {
-            return Err(std::io::Error::other(format!(
+            return Err(Error::other(format!(
                 "snapshot creation failed: {}",
                 String::from_utf8_lossy(&out.stderr).trim()
             )));

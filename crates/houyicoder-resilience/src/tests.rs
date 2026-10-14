@@ -3,6 +3,7 @@
 
 use super::*;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::thread::sleep;
 
 #[tokio::test]
 async fn test_retry_succeeds_after_failures() {
@@ -214,7 +215,7 @@ fn test_breaker_open_then_half() {
     assert_eq!(b.state(), BreakerState::Open);
     assert!(!b.allow());
     // wait out the cool-down; next allow flips to HalfOpen
-    std::thread::sleep(Duration::from_millis(30));
+    sleep(Duration::from_millis(30));
     assert!(b.allow());
     assert_eq!(b.state(), BreakerState::HalfOpen);
 }

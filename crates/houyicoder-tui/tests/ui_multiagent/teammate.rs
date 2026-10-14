@@ -1,4 +1,6 @@
 use super::*;
+use std::thread::sleep;
+use std::time::Duration;
 
 /// Boundary: Ctrl+O expands the inline fold, then Enter opens the teammate
 /// view on the same delegation. The two paths (inline expand + teammate
@@ -359,7 +361,7 @@ fn test_parent_park_survives_child() {
     // is consumed by the exit, so the input box stays empty for Enter to
     // drill into the child.
     s.send_str("x");
-    std::thread::sleep(std::time::Duration::from_millis(400));
+    sleep(Duration::from_millis(400));
     assert!(
         s.screen().contents().contains("PARK ROW EARLY"),
         "leaving the scroll view keeps the parked rows:\n{}",
@@ -372,7 +374,7 @@ fn test_parent_park_survives_child() {
         s.output()
     );
     s.send_key(&Key::ShiftDown);
-    std::thread::sleep(std::time::Duration::from_millis(400));
+    sleep(Duration::from_millis(400));
     assert!(
         s.screen().contents().contains("PARK ROW EARLY"),
         "the exit repaints the parent at the parked rows:\n{}",
@@ -414,7 +416,7 @@ fn test_hop_expansion_isolation() {
     // agents pane lists the returned delegations only once the rows are
     // gone: while one stands, Enter on the pane follows the footer
     // selection instead, which is empty here.
-    std::thread::sleep(Duration::from_secs(6));
+    sleep(Duration::from_secs(6));
     // Drain the parent-phase stream first: the child's result text also
     // rendered while the parent was live, so a fill latch scanned against
     // the undrained stream matches that residue and the expand key goes
@@ -471,7 +473,7 @@ fn test_hop_expansion_isolation() {
         "the hopped-to view fills from the child's log:\n{}",
         s.output()
     );
-    std::thread::sleep(Duration::from_millis(400));
+    sleep(Duration::from_millis(400));
     assert!(
         !s.output_compact().contains("ATHINK"),
         "the entered child must not inherit the leaving child's expansion:\n{}",
@@ -544,7 +546,7 @@ fn test_child_search_refusal() {
         "the refusal toast names the exit gesture:\n{}",
         s.output()
     );
-    std::thread::sleep(Duration::from_millis(400));
+    sleep(Duration::from_millis(400));
     let screen = s.screen().contents();
     assert!(
         !screen.contains("SEARCH"),

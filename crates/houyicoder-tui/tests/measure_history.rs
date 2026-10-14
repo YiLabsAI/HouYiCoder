@@ -17,6 +17,15 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use common::{Key, LargeFixture, PtySession, fresh_temp_dir, seed_large_session_on_disk};
+use std::env::consts::ARCH;
+use std::env::consts::OS;
+use std::env::var;
+use std::fs::create_dir_all;
+use std::fs::write;
+use std::process::Command;
+use std::process::id;
+use std::str::from_utf8;
+use std::thread::sleep;
 
 /// Mirrors RESIDENT_BYTE_BUDGET in the transcript state: frames newer than
 /// this many bytes from the tail stay in memory; anything older is reachable
@@ -76,11 +85,11 @@ const LANDING_TIMEOUT: Duration = Duration::from_secs(10);
 const MARKER_STEP_BYTES: u64 = 64 * 1024;
 
 fn git_sha() -> String {
-    std::env::var("HOUYI_GIT_SHA").unwrap_or_else(|_| "unknown".into())
+    var("HOUYI_GIT_SHA").unwrap_or_else(|_| "unknown".into())
 }
 
 fn run_id() -> String {
-    std::env::var("HOUYI_BENCH_RUN_ID").unwrap_or_else(|_| format!("adhoc-{}", std::process::id()))
+    var("HOUYI_BENCH_RUN_ID").unwrap_or_else(|_| format!("adhoc-{}", id()))
 }
 
 fn profile() -> &'static str {
@@ -93,7 +102,7 @@ fn profile() -> &'static str {
 
 fn history_run_dir() -> PathBuf {
     let dir = Path::new("target/measurements/history-pgup").join(run_id());
-    std::fs::create_dir_all(&dir).expect("measurements dir");
+    create_dir_all(&dir).expect("measurements dir");
     dir
 }
 
@@ -106,7 +115,7 @@ fn history_run_dir() -> PathBuf {
     reason = "measurement sampling of the child process, not an engine command"
 )]
 fn sample_rss_kb(pid: u32) -> Option<u64> {
-    let out = std::process::Command::new("ps")
+    let out = Command::new("ps")
         .args(["-o", "rss=", "-p", &pid.to_string()])
         .output()
         .ok()?;
@@ -195,7 +204,7 @@ fn marker_index_at(contents: &str, start: usize) -> Option<usize> {
     if &bytes[digits_end..token_end] != MARKER_TAIL.as_bytes() {
         return None;
     }
-    std::str::from_utf8(digits).ok()?.parse::<usize>().ok()
+    from_utf8(digits).ok()?.parse::<usize>().ok()
 }
 
 /// A marker is disk-zone when its event line sits older than the resident
@@ -432,7 +441,7 @@ impl<'s, 'f> Descent<'s, 'f> {
             }
             self.resolve();
             self.maybe_send();
-            std::thread::sleep(POLL_INTERVAL);
+            sleep(POLL_INTERVAL);
         }
         self.flush_pending();
         self.flush_spill();
@@ -891,11 +900,7 @@ impl PgupRun<'_> {
         meta.push_str(&format!("sha {}\n", git_sha()));
         meta.push_str(&format!("run_id {}\n", run_id()));
         meta.push_str(&format!("profile {}\n", profile()));
-        meta.push_str(&format!(
-            "os {} {}\n",
-            std::env::consts::OS,
-            std::env::consts::ARCH
-        ));
+        meta.push_str(&format!("os {} {}\n", OS, ARCH));
         meta.push_str(&format!(
             "fixture log_bytes {} event_count {} markers {} marker_step {MARKER_STEP_BYTES}\n",
             self.fixture.log_bytes,
@@ -911,7 +916,7 @@ impl PgupRun<'_> {
             LANDING_TIMEOUT.as_millis()
         ));
         meta.push_str(&format!("max_presses {MAX_PRESSES}\n"));
-        std::fs::write(run_dir.join("meta.txt"), meta).expect("write meta");
+        write(run_dir.join("meta.txt"), meta).expect("write meta");
 
         let mut csv =
             String::from("press,t_send_ms,change_us,stall,markers_new,markers_disk_new\n");
@@ -926,7 +931,7 @@ impl PgupRun<'_> {
                 p.markers_disk_new
             ));
         }
-        std::fs::write(run_dir.join("presses.csv"), csv).expect("write presses");
+        write(run_dir.join("presses.csv"), csv).expect("write presses");
 
         let mut ep_csv = String::from(
             "episode,stall_presses,wall_ms,close_press,markers_new,markers_disk_new,landing_ms\n",
@@ -943,10 +948,10 @@ impl PgupRun<'_> {
                 ep.landing_ms.map_or_else(String::new, |v| v.to_string())
             ));
         }
-        std::fs::write(run_dir.join("episodes.csv"), ep_csv).expect("write episodes");
+        write(run_dir.join("episodes.csv"), ep_csv).expect("write episodes");
 
         let summary = self.summary_text();
-        std::fs::write(run_dir.join("summary.txt"), &summary).expect("write summary");
+        write(run_dir.join("summary.txt"), &summary).expect("write summary");
         println!("history pgup baseline ({})", run_dir.display());
         print!("{summary}");
     }
@@ -1041,7 +1046,7 @@ fn test_idle_rss_scaling() {
             if let Some(kb) = sample_rss_kb(pid) {
                 samples.push(kb);
             }
-            std::thread::sleep(Duration::from_millis(250));
+            sleep(Duration::from_millis(250));
         }
         drop(session);
         assert!(!samples.is_empty(), "no rss sample for {size} byte fixture");
@@ -1059,7 +1064,7 @@ fn test_idle_rss_scaling() {
         ));
     }
 
-    std::fs::write(run_dir.join("idle_rss.csv"), &rows).expect("write idle rss");
+    write(run_dir.join("idle_rss.csv"), &rows).expect("write idle rss");
     println!("idle rss scaling ({})", run_dir.display());
     print!("{rows}");
     if results.len() == 2 && results[0].1 > 0 {

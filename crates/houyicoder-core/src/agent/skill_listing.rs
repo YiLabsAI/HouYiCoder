@@ -17,6 +17,8 @@ use houyicoder_context::{SessionEvent, SessionId};
 
 use super::append::new_event;
 use super::{RunError, Runner, model_window, selection};
+use std::hash::DefaultHasher;
+use std::hash::{Hash, Hasher};
 
 /// Rough chars-per-token rate for converting a token budget to a char
 /// budget. An estimate; the listing is truncated to fit, not billed.
@@ -138,8 +140,7 @@ pub fn format_skill_listing(descriptors: &[SkillDescriptor], context_window_toke
 /// does not flip it. The SkillListing event field defaults to 0 in old
 /// logs (pre-content_hash), which then re-inject once to upgrade.
 fn listing_content_hash(descs: &[SkillDescriptor]) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut h = std::hash::DefaultHasher::new();
+    let mut h = DefaultHasher::new();
     for d in descs {
         d.name.hash(&mut h);
         d.description.hash(&mut h);

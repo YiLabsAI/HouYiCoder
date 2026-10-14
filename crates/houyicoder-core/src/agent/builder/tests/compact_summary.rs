@@ -1,21 +1,32 @@
 //! Tests for this module.
 
 use super::super::*;
+use crate::agent::MemoryRuntime;
+use crate::agent::ToolRegistry;
+use crate::agent::runner_config::RunnerConfig;
+use crate::provider::test_support::FakeProvider;
+use houyicoder_api::memory::MemoryProvider;
 use houyicoder_context::{
     CheckpointId, CheckpointManifest, Disposition, EventId, SessionEvent, SessionId,
     SessionLogEntry, TurnGroup,
 };
+use houyicoder_context::{MemoryEntry, MemorySource};
 use houyicoder_memory::InMemoryBackend;
+use houyicoder_memory::MarkdownMemoryProvider;
 use houyicoder_session::SessionStore;
+use std::env::temp_dir;
+use std::fs::create_dir_all;
+use std::fs::remove_dir_all;
+use std::process::id;
 
 fn runner_with_store() -> (Runner, SessionId) {
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let session = SessionId::new();
     let runner = Runner::new(
         store,
-        Arc::new(crate::provider::test_support::FakeProvider::new(vec![])),
-        crate::agent::ToolRegistry::new(),
-        crate::agent::runner_config::RunnerConfig::default(),
+        Arc::new(FakeProvider::new(vec![])),
+        ToolRegistry::new(),
+        RunnerConfig::default(),
     );
     (runner, session)
 }
@@ -158,13 +169,9 @@ fn test_memory_index_without_provider() {
 
 #[test]
 fn test_memory_index_formats_entries() {
-    use crate::agent::MemoryRuntime;
-    use houyicoder_api::memory::MemoryProvider;
-    use houyicoder_context::{MemoryEntry, MemorySource};
-    use houyicoder_memory::MarkdownMemoryProvider;
-    let root = std::env::temp_dir().join(format!("mem-index-{}-{}", std::process::id(), line!()));
-    drop(std::fs::remove_dir_all(&root));
-    std::fs::create_dir_all(&root).expect("mkdir");
+    let root = temp_dir().join(format!("mem-index-{}-{}", id(), line!()));
+    drop(remove_dir_all(&root));
+    create_dir_all(&root).expect("mkdir");
     let memory: Arc<dyn MemoryProvider> = Arc::new(MarkdownMemoryProvider::new(root.clone()));
     memory
         .add(MemoryEntry::new(
@@ -178,9 +185,9 @@ fn test_memory_index_formats_entries() {
     runtime.install_provider(memory.clone());
     let runner = Runner::new(
         store,
-        Arc::new(crate::provider::test_support::FakeProvider::new(vec![])),
-        crate::agent::ToolRegistry::new(),
-        crate::agent::runner_config::RunnerConfig::default(),
+        Arc::new(FakeProvider::new(vec![])),
+        ToolRegistry::new(),
+        RunnerConfig::default(),
     )
     .install_memory(runtime);
     let idx = runner.format_memory_index();
@@ -208,5 +215,5 @@ fn test_memory_index_formats_entries() {
         refreshed.contains("late-entry"),
         "a cache-break refreshes the index"
     );
-    drop(std::fs::remove_dir_all(&root));
+    drop(remove_dir_all(&root));
 }

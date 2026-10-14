@@ -2,8 +2,10 @@
 
 use super::super::*;
 use houyicoder_context::{ExecConfig, ExecResult, SandboxError};
+use std::env::temp_dir;
 use std::path::Path;
 use std::time::{Duration, Instant};
+use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 
 /// A sandbox whose exec hangs for a long time, like a sleep loop.
@@ -16,7 +18,7 @@ impl SandboxSession for HangingExec {
         _cfg: ExecConfig,
     ) -> PFut<'_, Result<ExecResult, SandboxError>> {
         Box::pin(async {
-            tokio::time::sleep(Duration::from_millis(200)).await;
+            sleep(Duration::from_millis(200)).await;
             Ok(ExecResult {
                 stdout: "done".to_string(),
                 stderr: String::new(),
@@ -25,7 +27,7 @@ impl SandboxSession for HangingExec {
         })
     }
     fn workspace_root(&self) -> Arc<Path> {
-        Arc::from(std::env::temp_dir())
+        Arc::from(temp_dir())
     }
 }
 
@@ -41,7 +43,7 @@ async fn test_cancel_returns_fast() {
         tool.execute(ctx, serde_json::json!({"command": "sleep 10"}))
             .await
     });
-    tokio::time::sleep(Duration::from_millis(20)).await;
+    sleep(Duration::from_millis(20)).await;
     let start = Instant::now();
     token.cancel();
     let out = handle.await.expect("join").expect("bash result");

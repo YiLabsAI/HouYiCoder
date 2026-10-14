@@ -12,7 +12,16 @@
 use houyicoder_api::sandbox::{FenceStatus, SandboxSession};
 use houyicoder_context::{ExecConfig, SandboxError};
 use houyicoder_sandbox::PlatformSession;
+use std::env::temp_dir;
+use std::fs::create_dir_all;
+use std::fs::read_to_string;
+use std::fs::remove_dir_all;
+use std::fs::remove_file;
+use std::fs::write;
 use std::path::{Path, PathBuf};
+use std::process::id;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 fn session() -> PlatformSession {
     PlatformSession::new().expect("platform session")
@@ -21,15 +30,15 @@ fn session() -> PlatformSession {
 /// A directory outside the session workspace, created by the test process
 /// (which is never fenced) so the child's view is the only thing under test.
 fn external_dir(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
+    let dir = temp_dir().join(format!(
         "houyicoder-consistency-{tag}-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+        id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0)
     ));
-    std::fs::create_dir_all(&dir).expect("create external dir");
+    create_dir_all(&dir).expect("create external dir");
     dunce::canonicalize(&dir).expect("canonical external dir")
 }
 
@@ -81,18 +90,18 @@ fn test_resolver_rejects_external_paths() {
     let s = session();
     let outside = external_dir("reject");
     let target = outside.join("probe.txt");
-    std::fs::write(&target, b"x").expect("write probe");
+    write(&target, b"x").expect("write probe");
     let target_str = target.to_str().expect("target str");
 
     assert!(matches!(
         s.resolve(target_str),
-        Err(houyicoder_context::SandboxError::PathTraversal(_))
+        Err(SandboxError::PathTraversal(_))
     ));
     assert!(matches!(
         s.resolve_write(target_str),
-        Err(houyicoder_context::SandboxError::PathTraversal(_))
+        Err(SandboxError::PathTraversal(_))
     ));
-    std::fs::remove_dir_all(&outside).ok();
+    remove_dir_all(&outside).ok();
 }
 
 #[test]
@@ -100,7 +109,7 @@ fn test_read_grant_blocks_writes() {
     let s = session();
     let outside = external_dir("read-grant");
     let target = outside.join("notes.txt");
-    std::fs::write(&target, b"x").expect("write target");
+    write(&target, b"x").expect("write target");
     let dir_str = outside.to_str().expect("dir str");
     let target_str = target.to_str().expect("target str");
 
@@ -109,15 +118,15 @@ fn test_read_grant_blocks_writes() {
     assert!(resolved.starts_with(&outside));
     assert!(matches!(
         s.resolve_write(target_str),
-        Err(houyicoder_context::SandboxError::PathTraversal(_))
+        Err(SandboxError::PathTraversal(_))
     ));
 
     s.remove_working_dir(dir_str);
     assert!(matches!(
         s.resolve(target_str),
-        Err(houyicoder_context::SandboxError::PathTraversal(_))
+        Err(SandboxError::PathTraversal(_))
     ));
-    std::fs::remove_dir_all(&outside).ok();
+    remove_dir_all(&outside).ok();
 }
 
 #[test]
@@ -125,7 +134,7 @@ fn test_write_grant_admits_writes() {
     let s = session();
     let outside = external_dir("write-grant");
     let target = outside.join("notes.txt");
-    std::fs::write(&target, b"x").expect("write target");
+    write(&target, b"x").expect("write target");
     let dir_str = outside.to_str().expect("dir str");
     let target_str = target.to_str().expect("target str");
 
@@ -138,9 +147,9 @@ fn test_write_grant_admits_writes() {
     s.remove_working_dir(dir_str);
     assert!(matches!(
         s.resolve_write(target_str),
-        Err(houyicoder_context::SandboxError::PathTraversal(_))
+        Err(SandboxError::PathTraversal(_))
     ));
-    std::fs::remove_dir_all(&outside).ok();
+    remove_dir_all(&outside).ok();
 }
 
 #[test]
@@ -175,8 +184,8 @@ fn test_grant_round_trip() {
         !s.working_dirs().iter().any(|d| Path::new(d) == write_dir),
         "revocation must clear the listing"
     );
-    std::fs::remove_dir_all(&write_dir).ok();
-    std::fs::remove_dir_all(&read_dir).ok();
+    remove_dir_all(&write_dir).ok();
+    remove_dir_all(&read_dir).ok();
 }
 
 #[test]
@@ -193,7 +202,7 @@ fn test_duplicate_grant_single_entry() {
         .filter(|d| Path::new(d.as_str()) == outside)
         .count();
     assert_eq!(count, 1, "a repeated grant must stay one entry");
-    std::fs::remove_dir_all(&outside).ok();
+    remove_dir_all(&outside).ok();
 }
 
 // ---------------------------------------------------------------------------
@@ -263,7 +272,7 @@ async fn test_kernel_denies_external_write() {
         .expect("workspace exec");
     assert!(r.is_success(), "stderr: {}", r.stderr);
     assert!(inside.exists(), "the workspace write must succeed");
-    std::fs::remove_dir_all(&outside).ok();
+    remove_dir_all(&outside).ok();
 }
 
 #[tokio::test]
@@ -296,7 +305,7 @@ async fn test_kernel_honors_runtime_grant() {
         !revoked_file.exists(),
         "revoking a grant must deny it at the next spawn"
     );
-    std::fs::remove_dir_all(&outside).ok();
+    remove_dir_all(&outside).ok();
 }
 
 #[tokio::test]
@@ -319,11 +328,8 @@ async fn test_kernel_allows_multiprocess() {
         "a pipeline must fork under the fence; stderr: {}",
         r.stderr
     );
-    assert_eq!(
-        std::fs::read_to_string(&inside).expect("pipe file").trim(),
-        "hi"
-    );
-    std::fs::remove_file(&inside).ok();
+    assert_eq!(read_to_string(&inside).expect("pipe file").trim(), "hi");
+    remove_file(&inside).ok();
 }
 
 #[tokio::test]

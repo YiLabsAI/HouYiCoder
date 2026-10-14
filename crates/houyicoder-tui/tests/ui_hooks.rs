@@ -15,6 +15,10 @@
 #![allow(clippy::unwrap_in_result)]
 
 use crate::common::{self, Key, RENDER_TIMEOUT, pty_session, run_slash_command};
+use common::PtySession;
+use std::env::current_dir;
+use std::fs::create_dir_all;
+use std::fs::write;
 
 /// /hooks opens the pane and renders the "N hooks configured" subtitle +
 /// the "edit settings.json to configure" hint. Esc at the event-list level
@@ -51,20 +55,20 @@ fn test_hooks_pane_subtitle_hint() {
 /// the given hooks config, plus a stub provider script. Pre-trusts the
 /// workspace cwd so User-source hooks are not skipped by the trust gate.
 /// Returns a logged-in session at the working screen.
-fn launch_with_hooks(hooks_json: serde_json::Value, stub_script: &str) -> common::PtySession {
+fn launch_with_hooks(hooks_json: serde_json::Value, stub_script: &str) -> PtySession {
     let home = common::fresh_temp_dir("hook-home");
     let config_dir = home.join(".houyicoder");
-    std::fs::create_dir_all(&config_dir).expect("create config dir");
+    create_dir_all(&config_dir).expect("create config dir");
     let settings = config_dir.join("settings.json");
     let settings_json = serde_json::json!({ "hooks": hooks_json });
-    std::fs::write(
+    write(
         &settings,
         serde_json::to_string_pretty(&settings_json).unwrap(),
     )
     .expect("write settings");
-    let cwd = std::env::current_dir().expect("cwd");
+    let cwd = current_dir().expect("cwd");
     houyicoder_config::persist_project_trust(&settings, &cwd).expect("pre-trust cwd");
-    let mut s = common::PtySession::launch_with_args(
+    let mut s = PtySession::launch_with_args(
         Some(stub_script.to_string()),
         None,
         Some(home.clone()),

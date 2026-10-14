@@ -15,6 +15,9 @@ use houyicoder_context::{
 };
 use std::any::Any;
 use std::collections::HashSet;
+use std::error::Error;
+use std::fmt::Display;
+use std::fmt::Formatter;
 use std::mem::take;
 
 /// Knobs for the compaction disposition policy.
@@ -50,8 +53,8 @@ pub enum SummarizeError {
     Empty,
 }
 
-impl std::fmt::Display for SummarizeError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for SummarizeError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::LlmFailed(msg) => write!(f, "summarizer LLM call failed: {msg}"),
             Self::Empty => write!(f, "no events to summarize"),
@@ -59,7 +62,7 @@ impl std::fmt::Display for SummarizeError {
     }
 }
 
-impl std::error::Error for SummarizeError {}
+impl Error for SummarizeError {}
 
 /// Produces summary text for events assigned a Summarized disposition.
 pub trait Summarizer: Send + Sync + Any {

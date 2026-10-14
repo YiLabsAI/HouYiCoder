@@ -10,6 +10,8 @@ use houyicoder_context::{
     CheckpointId, CheckpointManifest, ContextBackend, Disposition, EventId, SessionEvent,
     SessionId, SessionLogEntry, TurnGroup,
 };
+use houyicoder_core::agent::RunError;
+use houyicoder_core::agent::RunOutcome;
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::{
     CompactionOutcome, ConversationSearchTool, Runner, SummarizeError, Summarizer, ToolRegistry,
@@ -20,6 +22,11 @@ use houyicoder_protocol::llm::{
     Usage,
 };
 use houyicoder_session::SessionStore;
+use std::any::Any;
+use std::env::temp_dir;
+use std::fs::create_dir_all;
+use std::sync::atomic::AtomicU32;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// A minimal canned-response provider. The compact path never calls it (the
 /// FixedSummarizer handles the summary), but Runner construction requires one.
@@ -136,7 +143,7 @@ async fn test_search_finds_compacted_detail() {
         "folded-match count surfaces: {text}"
     );
     assert_eq!(
-        meter.load(std::sync::atomic::Ordering::Relaxed),
+        meter.load(Ordering::Relaxed),
         1,
         "recall meter bumped for the folded match"
     );
@@ -196,9 +203,7 @@ async fn test_recall_rate_in_report() {
     // Simulate prior recalls: bump the meter as the tool would on folded
     // matches. The compaction snapshots + resets, then normalizes by its own
     // folded count.
-    runner
-        .recall_meter()
-        .store(2, std::sync::atomic::Ordering::Relaxed);
+    runner.recall_meter().store(2, Ordering::Relaxed);
     let outcome: CompactionOutcome = runner.compact(session).await.expect("compact");
     assert!(
         outcome.folded_count > 0,
@@ -214,9 +219,7 @@ async fn test_recall_rate_in_report() {
         outcome.folded_count
     );
     assert_eq!(
-        runner
-            .recall_meter()
-            .load(std::sync::atomic::Ordering::Relaxed),
+        runner.recall_meter().load(Ordering::Relaxed),
         0,
         "meter reset after snapshot"
     );
@@ -239,7 +242,7 @@ async fn test_search_filters_turn_range() {
         backend.append(ev).await.unwrap();
     }
     let store = Arc::new(SessionStore::new(Box::new(backend)));
-    let meter = Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let meter = Arc::new(AtomicU32::new(0));
     let tool = ConversationSearchTool::new(log_handle(&store), meter);
     let ctx = ToolCtx::new("call_1").with_session(session);
     let out = tool
@@ -281,7 +284,7 @@ impl Summarizer for FixedSummarizer {
         Box::pin(async move { Ok(text) })
     }
 
-    fn as_any(&self) -> &dyn std::any::Any {
+    fn as_any(&self) -> &dyn Any {
         self
     }
 }
@@ -430,7 +433,6 @@ async fn test_backbone_wins_conflict() {
 /// A process-unique nonce so each test's temp cwd is distinct (parallel
 /// nextest runs do not collide on the same directory).
 fn unique_nonce() -> u64 {
-    use std::sync::atomic::{AtomicU64, Ordering};
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     COUNTER.fetch_add(1, Ordering::Relaxed)
 }
@@ -518,8 +520,8 @@ async fn test_economy_gate_fires_compact() {
     let store = Arc::new(SessionStore::new(Box::new(backend)));
     // Isolate the cwd so the system-prompt walk-up does not read this repo's
     // AGENTS.md (large) — otherwise the system prompt alone blows the window.
-    let cwd = std::env::temp_dir().join(format!("economy-test-{}", unique_nonce()));
-    drop(std::fs::create_dir_all(&cwd));
+    let cwd = temp_dir().join(format!("economy-test-{}", unique_nonce()));
+    drop(create_dir_all(&cwd));
     let runner = Runner::new(
         store.clone(),
         Arc::new(SmallWindowProvider { window: 20_000 }),
@@ -534,10 +536,7 @@ async fn test_economy_gate_fires_compact() {
     .with_cwd(cwd.clone());
     let result = runner.run(session, "go".into()).await.expect("run");
     assert!(
-        matches!(
-            result.outcome,
-            houyicoder_core::agent::RunOutcome::FinalOutput(_)
-        ),
+        matches!(result.outcome, RunOutcome::FinalOutput(_)),
         "run reaches final output after the proactive compact"
     );
     let events = store.replay(session).await.expect("replay");
@@ -581,8 +580,8 @@ async fn test_overflow_no_progress() {
         backend.append(a).await.unwrap();
     }
     let store = Arc::new(SessionStore::new(Box::new(backend)));
-    let cwd = std::env::temp_dir().join(format!("still-over-{}", unique_nonce()));
-    drop(std::fs::create_dir_all(&cwd));
+    let cwd = temp_dir().join(format!("still-over-{}", unique_nonce()));
+    drop(create_dir_all(&cwd));
     let runner = Runner::new(
         store.clone(),
         Arc::new(SmallWindowProvider { window: 4_000 }),
@@ -597,10 +596,7 @@ async fn test_overflow_no_progress() {
     .with_cwd(cwd);
     let result = runner.run(session, "go".into()).await;
     assert!(
-        matches!(
-            result.unwrap_err(),
-            houyicoder_core::agent::RunError::ContextOverflowNoProgress
-        ),
+        matches!(result.unwrap_err(), RunError::ContextOverflowNoProgress),
         "no-progress over-ceiling run fails closed"
     );
 }

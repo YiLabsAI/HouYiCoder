@@ -1,6 +1,7 @@
 //! Tests for this module.
 
 use super::*;
+use std::path::PathBuf;
 
 /// The trait must support runtime dispatch.
 #[test]
@@ -63,7 +64,7 @@ impl SandboxSession for Stub {
         Box::pin(async move { Ok(false) })
     }
     fn workspace_root(&self) -> Arc<Path> {
-        Arc::from(std::path::PathBuf::from("/"))
+        Arc::from(PathBuf::from("/"))
     }
 }
 

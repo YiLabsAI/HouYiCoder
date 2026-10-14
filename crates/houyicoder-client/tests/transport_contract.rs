@@ -16,6 +16,7 @@ use houyicoder_protocol::error::ErrorCategory;
 use houyicoder_protocol::framing::{FrameDecoder, encode};
 use houyicoder_protocol::frontend::{FrontendEvent, FrontendRequest};
 use houyicoder_protocol::handshake::{Hello, PROTOCOL_VERSION, negotiate};
+use serde::de::DeserializeOwned;
 
 /// Drive a transport pair through a full protocol turn and assert the wire
 /// path preserves message content. Written against the transport trait (not
@@ -90,7 +91,7 @@ async fn run_protocol_round(transport_a: &mut dyn Transport, transport_b: &mut d
 /// the same message — a wire-equivalence break.
 async fn recv_typed<T>(transport: &mut dyn Transport) -> Result<T, String>
 where
-    T: serde::de::DeserializeOwned,
+    T: DeserializeOwned,
 {
     let frame = transport
         .recv_frame()

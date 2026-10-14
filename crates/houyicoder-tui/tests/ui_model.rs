@@ -6,7 +6,18 @@
 #![allow(clippy::unwrap_in_result)]
 
 use crate::common::{Key, PtySession, RENDER_TIMEOUT, fresh_temp_dir, run_slash_command};
+use serde_json::Value;
+#[cfg(unix)]
+use std::fs::Permissions;
+use std::fs::create_dir_all;
+use std::fs::read_to_string;
+#[cfg(unix)]
+use std::fs::set_permissions;
+use std::fs::write;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
+use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 /// Poll a predicate at 50ms ticks until it passes or 5s elapse. The pane's
@@ -18,7 +29,7 @@ fn wait_for<F: FnMut() -> bool>(mut pred: F) -> bool {
         if pred() {
             return true;
         }
-        std::thread::sleep(Duration::from_millis(50));
+        sleep(Duration::from_millis(50));
     }
     false
 }
@@ -49,27 +60,27 @@ fn wait_for_text(s: &mut PtySession, marker: &str) -> bool {
         if Instant::now() >= deadline {
             return false;
         }
-        std::thread::sleep(Duration::from_millis(20));
+        sleep(Duration::from_millis(20));
     }
 }
 
 /// Write a settings.json into an isolated home, creating the config dir.
 fn seed_settings(home: &Path, json: &str) {
-    std::fs::create_dir_all(home.join(".houyicoder")).unwrap();
-    std::fs::write(home.join(".houyicoder").join("settings.json"), json).unwrap();
+    create_dir_all(home.join(".houyicoder")).unwrap();
+    write(home.join(".houyicoder").join("settings.json"), json).unwrap();
 }
 
 /// The settings.json of an isolated home, parsed. Null when unreadable.
-fn settings_of(home: &Path) -> serde_json::Value {
-    std::fs::read_to_string(home.join(".houyicoder").join("settings.json"))
+fn settings_of(home: &Path) -> Value {
+    read_to_string(home.join(".houyicoder").join("settings.json"))
         .ok()
         .and_then(|text| serde_json::from_str(&text).ok())
-        .unwrap_or(serde_json::Value::Null)
+        .unwrap_or(Value::Null)
 }
 
 /// The settings.json of an isolated home as text, for a failure message.
 fn settings_text(home: &Path) -> String {
-    std::fs::read_to_string(home.join(".houyicoder").join("settings.json")).unwrap_or_default()
+    read_to_string(home.join(".houyicoder").join("settings.json")).unwrap_or_default()
 }
 
 /// Launch into the working screen with an isolated home.
@@ -373,7 +384,6 @@ fn test_receipt_names_picked_model() {
 #[test]
 #[ignore]
 fn test_failure_reports_not_saved() {
-    use std::os::unix::fs::PermissionsExt;
     let home = fresh_temp_dir("model-partial-home");
     seed_settings(
         &home,
@@ -383,7 +393,7 @@ fn test_failure_reports_not_saved() {
     // Make the config dir unwritable so the settings write cannot land: the
     // session still switches, so the receipt must report the partial result.
     let cfg = home.join(".houyicoder");
-    std::fs::set_permissions(&cfg, std::fs::Permissions::from_mode(0o555)).unwrap();
+    set_permissions(&cfg, Permissions::from_mode(0o555)).unwrap();
     open_model(&mut s);
     assert!(
         wait_for_text(&mut s, "Fable"),
@@ -398,7 +408,7 @@ fn test_failure_reports_not_saved() {
         s.output_plain()
     );
     // Restore so the harness can clean the temp dir up.
-    std::fs::set_permissions(&cfg, std::fs::Permissions::from_mode(0o755)).unwrap();
+    set_permissions(&cfg, Permissions::from_mode(0o755)).unwrap();
 }
 
 /// A catalog entry the provider does not serve surfaces as a startup system
@@ -410,13 +420,13 @@ fn test_failure_reports_not_saved() {
 fn test_stale_catalog_warns_startup() {
     let home = fresh_temp_dir("stale-model-warn-home");
     let cfg = home.join(".houyicoder");
-    std::fs::create_dir_all(cfg.join("cache")).unwrap();
-    std::fs::write(
+    create_dir_all(cfg.join("cache")).unwrap();
+    write(
         cfg.join("cache").join("served-models.json"),
         r#"{"ids":["qwen3-coder","glm-5.2"],"timestamp":1700000000}"#,
     )
     .unwrap();
-    std::fs::write(
+    write(
         cfg.join("settings.json"),
         r#"{"model":{"catalog":[{"id":"qwen3.8-max"}]}}"#,
     )

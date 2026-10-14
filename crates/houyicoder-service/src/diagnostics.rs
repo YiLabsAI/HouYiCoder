@@ -29,6 +29,8 @@ use std::sync::OnceLock;
 use reload::Layer;
 #[cfg(test)]
 use std::env::temp_dir;
+use std::fmt::Display;
+use std::fmt::Formatter;
 use std::fs::File;
 use std::fs::OpenOptions;
 use std::fs::create_dir_all;
@@ -64,8 +66,8 @@ pub enum InstallError {
     AlreadyInstalled,
 }
 
-impl std::fmt::Display for InstallError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for InstallError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::File(e) => write!(f, "could not open the diagnostic log: {e}"),
             Self::AlreadyInstalled => {

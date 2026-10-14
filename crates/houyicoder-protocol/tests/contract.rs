@@ -19,12 +19,14 @@ use houyicoder_protocol::frontend::{
     run::{ApprovalDecision, ApprovalRequest, ContentBlock},
 };
 use houyicoder_protocol::handshake::{Hello, PROTOCOL_VERSION, negotiate};
+use serde::de::DeserializeOwned;
+use serde_json::Value;
 
 fn sample_approval_request() -> ApprovalRequest {
     ApprovalRequest {
         call_id: "toolu_1".into(),
         tool_name: "bash".into(),
-        input: serde_json::Value::Null,
+        input: Value::Null,
         options: Vec::new(),
         reason: None,
         delegation: None,
@@ -48,7 +50,7 @@ fn sample_approval_decision() -> ApprovalDecision {
 /// property and no public type needs to derive value equality for the test.
 fn round_trip<T>(label: &str, msg: &T)
 where
-    T: serde::Serialize + serde::de::DeserializeOwned,
+    T: serde::Serialize + DeserializeOwned,
 {
     let frame1 = encode(msg).expect("encode");
     assert!(

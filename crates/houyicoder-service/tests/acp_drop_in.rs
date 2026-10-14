@@ -9,6 +9,8 @@
 #![cfg(feature = "acp-cross-decode")]
 
 use std::io::{BufRead, BufReader, Write};
+use std::path::Path;
+use std::process::Child;
 use std::process::{Command, Stdio};
 use std::sync::Once;
 
@@ -26,7 +28,7 @@ fn binary_path() -> String {
 fn ensure_built() {
     static ONCE: Once = Once::new();
     ONCE.call_once(|| {
-        if !std::path::Path::new(&binary_path()).exists() {
+        if !Path::new(&binary_path()).exists() {
             let status = Command::new("cargo")
                 .args(["build", "--example", "acp_stdio"])
                 .status()
@@ -38,7 +40,7 @@ fn ensure_built() {
 
 /// Spawn the acp_stdio binary with piped stdio; return the bound
 /// session_id (printed to stderr on startup).
-fn spawn_server() -> (std::process::Child, String) {
+fn spawn_server() -> (Child, String) {
     ensure_built();
     let mut child = Command::new(binary_path())
         .stdin(Stdio::piped())

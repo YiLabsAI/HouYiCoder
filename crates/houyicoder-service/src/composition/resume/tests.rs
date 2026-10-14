@@ -4,22 +4,39 @@
 //! used rather than the configured default, and refuse an untrusted source
 //! instead of silently starting a blank session the user thinks is their old one.
 
+use super::super::workspace_cwd;
 use super::ResolvedProvider;
 use houyicoder_context::{
     EventId, NameSource, SessionDescriptor, SessionEvent, SessionId, SessionLogEntry,
     SessionProvenance,
 };
+use houyicoder_memory::FileDescriptorStore;
+use std::env::temp_dir;
+use std::fs::create_dir_all;
+use std::fs::read_dir;
+use std::fs::read_to_string;
+use std::fs::remove_dir_all;
+use std::fs::remove_file;
+use std::fs::write;
+use std::path::Path;
+use std::path::PathBuf;
+use std::process::id;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
+use tokio::runtime::Builder;
 
 /// Serialize a minimal export slice (session_id + model + trajectory) so the
 /// resume path can deserialize it. serde ignores the derived-stats fields a
 /// full export carries, so this slice round-trips through resume.
-fn write_export(path: &std::path::Path, session_id: &str, model: &str, events: &[SessionLogEntry]) {
+fn write_export(path: &Path, session_id: &str, model: &str, events: &[SessionLogEntry]) {
     let doc = serde_json::json!({
         "session_id": session_id,
         "model": model,
         "trajectory": events,
     });
-    std::fs::write(path, serde_json::to_string_pretty(&doc).unwrap()).unwrap();
+    write(path, serde_json::to_string_pretty(&doc).unwrap()).unwrap();
 }
 
 fn two_events(sid: SessionId) -> Vec<SessionLogEntry> {
@@ -41,12 +58,11 @@ fn two_events(sid: SessionId) -> Vec<SessionLogEntry> {
     ]
 }
 
-fn temp_root() -> std::path::PathBuf {
-    use std::sync::atomic::{AtomicU64, Ordering};
+fn temp_root() -> PathBuf {
     static SEQ: AtomicU64 = AtomicU64::new(0);
     let n = SEQ.fetch_add(1, Ordering::Relaxed);
-    let p = std::env::temp_dir().join(format!("composition-resume-{}-{n}", std::process::id()));
-    std::fs::create_dir_all(&p).unwrap();
+    let p = temp_dir().join(format!("composition-resume-{}-{n}", id()));
+    create_dir_all(&p).unwrap();
     p
 }
 
@@ -83,10 +99,7 @@ fn test_resume_export_seeds_log() {
     assert_eq!(model, "unit-resume-model");
     // The seeded events landed in the new session's log on disk + the
     // runner's store replays them.
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
+    let rt = Builder::new_current_thread().enable_all().build().unwrap();
     let events = rt.block_on(async { runner.store().replay(new_sid).await.unwrap() });
     assert!(events.len() >= 2, "seeded events should replay: {events:?}");
     // The mirror was filled before assembly, so the extractor cursor is
@@ -96,13 +109,12 @@ fn test_resume_export_seeds_log() {
         events.last().map(|e| e.id),
         "the restored tail seeds the extractor cursor"
     );
-    let body =
-        std::fs::read_to_string(sessions.join(new_sid.to_string()).join("log.jsonl")).unwrap();
+    let body = read_to_string(sessions.join(new_sid.to_string()).join("log.jsonl")).unwrap();
     assert!(
         body.contains("resume-unit-prompt"),
         "seeded prompt in log: {body}"
     );
-    std::fs::remove_dir_all(&sessions).ok();
+    remove_dir_all(&sessions).ok();
 }
 
 /// After an export-resume, the new session's descriptor carries
@@ -125,9 +137,8 @@ fn test_resume_export_descriptor_provenance() {
     .expect("resume export seeds");
     let new_sid = resumed.assembled.session;
 
-    let descriptor =
-        std::fs::read_to_string(sessions.join(new_sid.to_string()).join("session.json"))
-            .expect("descriptor exists after resume");
+    let descriptor = read_to_string(sessions.join(new_sid.to_string()).join("session.json"))
+        .expect("descriptor exists after resume");
     let descriptor: serde_json::Value =
         serde_json::from_str(&descriptor).expect("descriptor is json");
     let prov = descriptor
@@ -145,7 +156,7 @@ fn test_resume_export_descriptor_provenance() {
         Some(legacy_sid),
         "provenance should point back at the source sid:\n{descriptor}"
     );
-    std::fs::remove_dir_all(&sessions).ok();
+    remove_dir_all(&sessions).ok();
 }
 
 /// A fork-of-fork: resume an export, then resume an export built from
@@ -173,8 +184,7 @@ fn test_fork_chain_propagates_history() {
     .expect("resume A -> B");
     let sid_b = resumed.assembled.session;
 
-    let log_b =
-        std::fs::read_to_string(sessions.join(sid_b.to_string()).join("log.jsonl")).unwrap();
+    let log_b = read_to_string(sessions.join(sid_b.to_string()).join("log.jsonl")).unwrap();
     assert!(
         log_b.contains("resume-unit-prompt"),
         "B should carry A's history:\n{log_b}"
@@ -202,13 +212,12 @@ fn test_fork_chain_propagates_history() {
     let sid_c = resumed.assembled.session;
 
     assert_ne!(sid_c, sid_b, "C is a new sid, not B");
-    let log_c =
-        std::fs::read_to_string(sessions.join(sid_c.to_string()).join("log.jsonl")).unwrap();
+    let log_c = read_to_string(sessions.join(sid_c.to_string()).join("log.jsonl")).unwrap();
     assert!(
         log_c.contains("resume-unit-prompt"),
         "C should carry the propagated history:\n{log_c}"
     );
-    std::fs::remove_dir_all(&sessions).ok();
+    remove_dir_all(&sessions).ok();
 }
 
 /// build_runner_for_resume_sid re-opens an existing session: the log stays,
@@ -251,10 +260,7 @@ fn test_resume_sid_reopens_errors() {
 
     assert_eq!(sid, existing_sid, "sid resume reuses the same sid");
     assert_eq!(model, "sid-resume-model", "model restored from descriptor");
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
+    let rt = Builder::new_current_thread().enable_all().build().unwrap();
     let events = rt.block_on(async { runner.store().replay(sid).await.unwrap() });
     assert!(events.len() >= 2, "reopened log replays the seeded events");
 
@@ -273,7 +279,7 @@ fn test_resume_sid_reopens_errors() {
         err.to_string().contains("no session log"),
         "missing sid should report no session log: {err}"
     );
-    std::fs::remove_dir_all(&sessions).ok();
+    remove_dir_all(&sessions).ok();
 }
 
 /// A tampered session log: sid-resume warns (Unverified chain) but still
@@ -303,8 +309,8 @@ fn test_resume_sid_warns_unverified() {
 
     // Tamper the first line so the chain breaks.
     let log = sessions.join(existing_sid.to_string()).join("log.jsonl");
-    let body = std::fs::read_to_string(&log).unwrap();
-    std::fs::write(&log, body.replacen("resume-unit-prompt", "TAMPERED", 1)).unwrap();
+    let body = read_to_string(&log).unwrap();
+    write(&log, body.replacen("resume-unit-prompt", "TAMPERED", 1)).unwrap();
     // Resume still succeeds (warns to stderr, proceeds).
     let resumed = super::build_runner_for_resume_sid(
         existing_sid,
@@ -317,7 +323,7 @@ fn test_resume_sid_warns_unverified() {
     let sid = resumed.assembled.session;
 
     assert_eq!(sid, existing_sid);
-    std::fs::remove_dir_all(&sessions).ok();
+    remove_dir_all(&sessions).ok();
 }
 
 /// A session whose descriptor is missing (e.g. created before the descriptor
@@ -350,7 +356,7 @@ fn test_resume_sid_missing_descriptor() {
     // Remove the descriptor so the sid-resume path cannot restore the model.
     let descriptor = sessions.join(existing_sid.to_string()).join("session.json");
     assert!(descriptor.exists(), "descriptor should exist after seed");
-    std::fs::remove_file(&descriptor).expect("remove descriptor");
+    remove_file(&descriptor).expect("remove descriptor");
     // Resume still succeeds; the model falls back to resolve_model.
     let resumed = super::build_runner_for_resume_sid(
         existing_sid,
@@ -369,7 +375,7 @@ fn test_resume_sid_missing_descriptor() {
         houyicoder_config::resolve_model(),
         "model falls back to the current config without the descriptor"
     );
-    std::fs::remove_dir_all(&sessions).ok();
+    remove_dir_all(&sessions).ok();
 }
 
 /// A truncated export file (a half-written JSON, as if the writer was
@@ -381,7 +387,7 @@ fn test_resume_export_truncated_errors() {
     let sessions = temp_root();
     let export_path = sessions.join("truncated.json");
     // A valid export prefix cut mid-trajectory: the JSON is incomplete.
-    std::fs::write(
+    write(
         &export_path,
         r#"{"session_id":"01KZ5RDH4DG6YV0EDBX1KSKTRA","model":"m","trajectory":[{"id":"#,
     )
@@ -400,7 +406,7 @@ fn test_resume_export_truncated_errors() {
     // No session sid dir was created (the failure happened before seed).
     // The export file itself sits in the root; only count subdirectories
     // (a minted sid would be a UUID-named directory).
-    let sid_dirs: Vec<_> = std::fs::read_dir(&sessions)
+    let sid_dirs: Vec<_> = read_dir(&sessions)
         .map(|rd| {
             rd.filter_map(Result::ok)
                 .map(|e| e.path())
@@ -412,7 +418,7 @@ fn test_resume_export_truncated_errors() {
         sid_dirs.is_empty(),
         "no session dir should be minted on a failed resume: {sid_dirs:?}"
     );
-    std::fs::remove_dir_all(&sessions).ok();
+    remove_dir_all(&sessions).ok();
 }
 
 /// An export with an empty trajectory (session_id + model but zero
@@ -443,7 +449,7 @@ fn test_export_empty_trajectory_errors() {
         "an empty-trajectory export must error, not mint a fresh session"
     );
     // No sid dir minted on the rejection.
-    let sid_dirs: Vec<_> = std::fs::read_dir(&sessions)
+    let sid_dirs: Vec<_> = read_dir(&sessions)
         .map(|rd| {
             rd.filter_map(Result::ok)
                 .map(|e| e.path())
@@ -455,7 +461,7 @@ fn test_export_empty_trajectory_errors() {
         sid_dirs.is_empty(),
         "no session dir on empty-export reject: {sid_dirs:?}"
     );
-    std::fs::remove_dir_all(&sessions).ok();
+    remove_dir_all(&sessions).ok();
 }
 
 /// A garbage export (not JSON at all) surfaces a clean error. Guards the
@@ -464,7 +470,7 @@ fn test_export_empty_trajectory_errors() {
 fn test_resume_export_garbage_errors() {
     let sessions = temp_root();
     let export_path = sessions.join("garbage.txt");
-    std::fs::write(&export_path, "this is not json, sorry").unwrap();
+    write(&export_path, "this is not json, sorry").unwrap();
     let result = super::build_runner_for_resume_export(
         &export_path,
         &sessions,
@@ -473,7 +479,7 @@ fn test_resume_export_garbage_errors() {
         ResolvedProvider::stub(),
     );
     assert!(result.is_err(), "a non-JSON export must error, not proceed");
-    std::fs::remove_dir_all(&sessions).ok();
+    remove_dir_all(&sessions).ok();
 }
 
 /// build_runner_for_fork mints a new sid seeded from the source's durable
@@ -500,7 +506,7 @@ fn test_fork_keeps_source_untouched() {
     let source_sid = resumed.assembled.session;
 
     let source_log =
-        std::fs::read_to_string(sessions.join(source_sid.to_string()).join("log.jsonl")).unwrap();
+        read_to_string(sessions.join(source_sid.to_string()).join("log.jsonl")).unwrap();
 
     // Fork the source: a new sid seeded with the source's durable events.
     let resumed =
@@ -513,21 +519,20 @@ fn test_fork_keeps_source_untouched() {
     assert_ne!(forked_sid, source_sid, "fork mints a new sid");
     assert_eq!(model, "fork-model", "fork restores the source's model");
     let forked_log =
-        std::fs::read_to_string(sessions.join(forked_sid.to_string()).join("log.jsonl")).unwrap();
+        read_to_string(sessions.join(forked_sid.to_string()).join("log.jsonl")).unwrap();
     assert!(
         forked_log.contains("resume-unit-prompt"),
         "forked log carries the source history:\n{forked_log}"
     );
     // The source log is untouched (the fork did not append to it).
     assert_eq!(
-        std::fs::read_to_string(sessions.join(source_sid.to_string()).join("log.jsonl")).unwrap(),
+        read_to_string(sessions.join(source_sid.to_string()).join("log.jsonl")).unwrap(),
         source_log,
         "fork must not touch the source log"
     );
     // The forked descriptor records ForkedFrom provenance.
     let descriptor =
-        std::fs::read_to_string(sessions.join(forked_sid.to_string()).join("session.json"))
-            .unwrap();
+        read_to_string(sessions.join(forked_sid.to_string()).join("session.json")).unwrap();
     let descriptor: serde_json::Value =
         serde_json::from_str(&descriptor).expect("descriptor is json");
     let prov = descriptor.get("provenance").and_then(|v| v.as_object());
@@ -543,10 +548,7 @@ fn test_fork_keeps_source_untouched() {
         "fork provenance points back at the source:\n{descriptor}"
     );
     // The runner's store replays the seeded events.
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
+    let rt = Builder::new_current_thread().enable_all().build().unwrap();
     let events = rt.block_on(async { runner.store().replay(forked_sid).await.unwrap() });
     assert!(events.len() >= 2, "forked store replays the seeded events");
     // The fork fills the mirror before assembly too: same seeding contract.
@@ -555,7 +557,7 @@ fn test_fork_keeps_source_untouched() {
         events.last().map(|e| e.id),
         "the forked tail seeds the extractor cursor"
     );
-    std::fs::remove_dir_all(&sessions).ok();
+    remove_dir_all(&sessions).ok();
 }
 
 /// Forking a sid with no log on disk errors cleanly (the existence precheck)
@@ -574,7 +576,7 @@ fn test_fork_empty_source_errors() {
         err.to_string().contains("no session log"),
         "missing source sid should report no session log: {err}"
     );
-    std::fs::remove_dir_all(&sessions).ok();
+    remove_dir_all(&sessions).ok();
 }
 
 /// Forking a session whose source log is tampered warns (Unverified chain)
@@ -607,8 +609,8 @@ fn test_fork_warns_unverified_source() {
 
     // Tamper the first event so the source chain breaks.
     let log = sessions.join(source_sid.to_string()).join("log.jsonl");
-    let body = std::fs::read_to_string(&log).unwrap();
-    std::fs::write(&log, body.replacen("resume-unit-prompt", "TAMPERED", 1)).unwrap();
+    let body = read_to_string(&log).unwrap();
+    write(&log, body.replacen("resume-unit-prompt", "TAMPERED", 1)).unwrap();
     // Fork still succeeds (warns to stderr, proceeds).
     let resumed =
         super::build_runner_for_fork(source_sid, &sessions, None, None, ResolvedProvider::stub())
@@ -616,7 +618,7 @@ fn test_fork_warns_unverified_source() {
     let forked_sid = resumed.assembled.session;
 
     assert_ne!(forked_sid, source_sid, "fork mints a new sid");
-    std::fs::remove_dir_all(&sessions).ok();
+    remove_dir_all(&sessions).ok();
 }
 
 /// latest_session_sid returns the active in-cwd session (max log.jsonl mtime,
@@ -648,19 +650,17 @@ fn test_latest_picks_active_cwd() {
     // (zero turns -- e.g. a session opened + immediately quit). --continue
     // must exclude it: "continue" presupposes something to continue.
     let sid_b = SessionId::new();
-    let descriptor_store: std::sync::Arc<dyn houyicoder_context::SessionDescriptorStore> =
-        std::sync::Arc::new(houyicoder_memory::FileDescriptorStore::new(
-            sessions.clone(),
-        ));
+    let descriptor_store: Arc<dyn houyicoder_context::SessionDescriptorStore> =
+        Arc::new(FileDescriptorStore::new(sessions.clone()));
     let b_descriptor = houyicoder_context::SessionDescriptor {
         name: None,
-        name_source: houyicoder_context::NameSource::Auto,
-        cwd: super::super::workspace_cwd(None),
+        name_source: NameSource::Auto,
+        cwd: workspace_cwd(None),
         model: "mb".into(),
-        provenance: houyicoder_context::SessionProvenance::Fresh,
+        provenance: SessionProvenance::Fresh,
         version: "t".into(),
-        created_at: std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+        created_at: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs(),
         child_session_ids: Vec::new(),
@@ -672,8 +672,8 @@ fn test_latest_picks_active_cwd() {
 
     // C: an active session in a DIFFERENT workspace (project pins its cwd
     // elsewhere). --continue must not jump across workspaces.
-    let other_ws = std::env::temp_dir().join(format!("other-ws-{}-c", std::process::id()));
-    std::fs::create_dir_all(&other_ws).unwrap();
+    let other_ws = temp_dir().join(format!("other-ws-{}-c", id()));
+    create_dir_all(&other_ws).unwrap();
     let export_c = sessions.join("c.json");
     let sid_c = SessionId::new();
     write_export(&export_c, &sid_c.to_string(), "mc", &two_events(sid_c));
@@ -694,8 +694,8 @@ fn test_latest_picks_active_cwd() {
         "latest_session_sid picks the active in-cwd session, not the no-log or other-cwd ones"
     );
     assert_ne!(latest, minted_c, "must not pick the other-cwd session");
-    std::fs::remove_dir_all(&sessions).ok();
-    std::fs::remove_dir_all(&other_ws).ok();
+    remove_dir_all(&sessions).ok();
+    remove_dir_all(&other_ws).ok();
 }
 
 mod select;

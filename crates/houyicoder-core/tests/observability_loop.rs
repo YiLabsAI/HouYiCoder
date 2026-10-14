@@ -28,14 +28,18 @@ use houyicoder_protocol::llm::{
 use houyicoder_resilience::Retry;
 use houyicoder_session::SessionStore;
 
+use futures::stream::iter;
 use houyicoder_api::tool::{Tool, ToolCtx};
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::{RunOutcome, Runner, ToolRegistry};
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
+use std::vec::IntoIter;
 
 /// Pops canned CompletionResponses in sequence (last repeats). stream uses
 /// stream_from_response so each call's Finish is a clean stop.
 struct FakeProvider {
-    responses: Mutex<Option<std::vec::IntoIter<CompletionResponse>>>,
+    responses: Mutex<Option<IntoIter<CompletionResponse>>>,
     last: Mutex<Option<CompletionResponse>>,
 }
 
@@ -91,14 +95,14 @@ impl ModelProvider for FakeProvider {
 /// resume-direct recovery loop end-to-end.
 struct FakeRawProvider {
     scripts: Mutex<Vec<Vec<LlmEvent>>>,
-    next: std::sync::atomic::AtomicUsize,
+    next: AtomicUsize,
 }
 
 impl FakeRawProvider {
     fn new(scripts: Vec<Vec<LlmEvent>>) -> Self {
         Self {
             scripts: Mutex::new(scripts),
-            next: std::sync::atomic::AtomicUsize::new(0),
+            next: AtomicUsize::new(0),
         }
     }
 }
@@ -120,12 +124,12 @@ impl ModelProvider for FakeRawProvider {
         ModelCapabilities::default()
     }
     fn stream(&self, _req: CompletionRequest) -> PStream<'_, Result<LlmEvent, ProviderError>> {
-        let idx = self.next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let idx = self.next.fetch_add(1, Ordering::Relaxed);
         let events = {
             let guard = self.scripts.lock().expect("script mutex");
             guard[idx.min(guard.len() - 1)].clone()
         };
-        Box::pin(futures::stream::iter(events.into_iter().map(Ok)))
+        Box::pin(iter(events.into_iter().map(Ok)))
     }
 }
 

@@ -2,8 +2,11 @@
 
 use super::*;
 use crate::agent::obs_wire::new_log;
+use crate::agent::obs_wire::{record_tool_outcomes, record_turn};
 use crate::agent::redundancy::RedundancyTracker;
 use crate::observability::evolution::RedundancyKind;
+use houyicoder_protocol::llm::Usage;
+use std::collections::HashMap;
 
 #[test]
 fn test_empty_session_captures_empty() {
@@ -19,10 +22,8 @@ fn test_empty_session_captures_empty() {
 
 #[test]
 fn test_snapshots_ol_failures_cost() {
-    use crate::agent::obs_wire::{record_tool_outcomes, record_turn};
-    use houyicoder_protocol::llm::Usage;
     let obs = new_log(200_000);
-    let mut names = std::collections::HashMap::new();
+    let mut names = HashMap::new();
     names.insert("c1".into(), "bash".into());
     let results = vec![("c1".into(), serde_json::json!({"error": "boom"}))];
     record_tool_outcomes(&obs, &results, &names);

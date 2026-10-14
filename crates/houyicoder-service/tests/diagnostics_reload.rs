@@ -18,7 +18,12 @@
 use std::sync::Arc;
 
 use crate::common;
+use houyicoder_core::agent::Runner;
 use houyicoder_service::diagnostics;
+use std::env::temp_dir;
+use std::fs::read_to_string;
+use std::fs::remove_dir_all;
+use std::process::id;
 use tracing_subscriber::filter::LevelFilter;
 
 /// A level raised through the handle takes effect in the engine layer
@@ -32,18 +37,18 @@ use tracing_subscriber::filter::LevelFilter;
 /// from a test and logs on a path with no provider or network behind it.
 #[test]
 fn test_reload_reaches_core() {
-    let dir = std::env::temp_dir().join(format!("houyi-diag-{}", std::process::id()));
+    let dir = temp_dir().join(format!("houyi-diag-{}", id()));
     let path = dir.join("debug.log");
-    drop(std::fs::remove_dir_all(&dir));
+    drop(remove_dir_all(&dir));
     let handle = diagnostics::install(&path).expect("install the diagnostic sink");
 
     let (runner, _session) = common::stub_runner();
-    let runner: Arc<houyicoder_core::agent::Runner> = runner;
+    let runner: Arc<Runner> = runner;
 
     // Installed disabled: the engine's call site must produce nothing, so a
     // normal run leaves no file traffic behind.
     runner.abort();
-    let quiet = std::fs::read_to_string(&path).expect("the log file exists");
+    let quiet = read_to_string(&path).expect("the log file exists");
     assert!(
         !quiet.contains("abort"),
         "a disabled sink must not record the engine, got: {quiet}"
@@ -55,7 +60,7 @@ fn test_reload_reaches_core() {
         .set_level(LevelFilter::DEBUG)
         .expect("raise the level");
     runner.abort();
-    let loud = std::fs::read_to_string(&path).expect("the log file exists");
+    let loud = read_to_string(&path).expect("the log file exists");
     assert!(
         loud.contains("abort"),
         "a level raised at runtime must reach houyicoder-core, got: {loud}"
@@ -63,13 +68,13 @@ fn test_reload_reaches_core() {
 
     // And back off again, so the switch is a switch rather than a latch.
     handle.disable().expect("disable");
-    let before = std::fs::read_to_string(&path).expect("the log file exists");
+    let before = read_to_string(&path).expect("the log file exists");
     runner.abort();
-    let after = std::fs::read_to_string(&path).expect("the log file exists");
+    let after = read_to_string(&path).expect("the log file exists");
     assert_eq!(
         before, after,
         "a disabled sink must stop recording the engine"
     );
 
-    drop(std::fs::remove_dir_all(&dir));
+    drop(remove_dir_all(&dir));
 }

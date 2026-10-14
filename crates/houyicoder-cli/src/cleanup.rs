@@ -15,7 +15,9 @@ use houyicoder_service::session_prune::plan_all;
 use houyicoder_service::session_prune::{PruneEntry, PruneKind, PrunePlan, PruneReason};
 use houyicoder_service::session_repair::{DescriptorRepair, repair_child_descriptors};
 use std::env::current_dir;
+use std::error::Error;
 use std::io::IsTerminal;
+use std::io::Write;
 use std::io::stdin;
 use std::io::stdout;
 use std::time::SystemTime;
@@ -62,11 +64,7 @@ fn format_summary_count(n: usize, kind: PruneKind, reason: PruneReason) -> Strin
     format!("  {n} {} · {}", kind_label(kind), reason_label(reason))
 }
 
-pub(crate) fn run_cleanup(
-    apply: bool,
-    verbose: bool,
-    yes: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
+pub(crate) fn run_cleanup(apply: bool, verbose: bool, yes: bool) -> Result<(), Box<dyn Error>> {
     let sessions_root = session_log_root();
     let shell_snapshots = houyicoder_config::config_home().join("shell-snapshots");
     let debug_log = current_dir()
@@ -207,7 +205,7 @@ fn confirm_apply(n: usize) -> bool {
         return false;
     }
     print!("About to remove {n} entries. Type y or yes to proceed: ");
-    std::io::Write::flush(&mut stdout()).ok();
+    Write::flush(&mut stdout()).ok();
     let mut line = String::new();
     if stdin().read_line(&mut line).is_err() {
         return false;

@@ -20,6 +20,7 @@ use crate::common::{
     Key, RENDER_TIMEOUT, pty_session, pty_session_slow_in_repo, pty_session_slow_scripted,
     pty_session_slow_scripted_rows,
 };
+use vt100::Color;
 
 /// Seed a throwaway git repo for isolated PTY startup (see common/mod.rs).
 #[allow(clippy::disallowed_methods)]
@@ -297,7 +298,7 @@ fn test_cjk_background_clean() {
         .flat_map(|row| (0..cols).map(move |col| (row, col)))
         .filter(|(row, col)| {
             screen.cell(*row, *col).is_some_and(|cell| {
-                !cell.is_wide_continuation() && cell.bgcolor() == vt100::Color::Idx(238)
+                !cell.is_wide_continuation() && cell.bgcolor() == Color::Idx(238)
             })
         })
         .collect();

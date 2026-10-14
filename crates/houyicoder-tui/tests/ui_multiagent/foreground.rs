@@ -1,4 +1,6 @@
 use super::*;
+use std::thread::sleep;
+use std::time::Instant;
 
 /// PTY real-binary foreground delegation full chain. Send a message, the
 /// stub returns an agent-tool call, the foreground spawn runs the child,
@@ -90,9 +92,9 @@ fn test_multi_large_child_summary() {
     // check is whitespace-agnostic: under parallel PTY load, ratatui's
     // cell-diff rendering can collapse the spaces between words, so a
     // spaced marker flakes; the compacted form is stable.
-    let deadline = std::time::Instant::now() + RENDER_TIMEOUT * 5;
+    let deadline = Instant::now() + RENDER_TIMEOUT * 5;
     let mut ok = false;
-    while std::time::Instant::now() < deadline {
+    while Instant::now() < deadline {
         let compact: String = s
             .output_plain()
             .chars()
@@ -102,7 +104,7 @@ fn test_multi_large_child_summary() {
             ok = true;
             break;
         }
-        std::thread::sleep(Duration::from_millis(20));
+        sleep(Duration::from_millis(20));
     }
     assert!(
         ok,

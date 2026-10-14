@@ -29,6 +29,14 @@ fn test_truncate_under_budget() {
     let t = head_truncate("short", 100);
     assert_eq!(t, "short", "under budget: unchanged, no ellipsis");
 }
+use crate::agent::ToolRegistry;
+use crate::agent::runner_config::RunnerConfig;
+use crate::provider::test_support::FakeProvider;
+use houyicoder_api::session::SessionLog;
+use houyicoder_api::skill::{ProjectIdentity, SkillFamily, SkillProvenance, SkillSource};
+use houyicoder_context::SessionLogEntry;
+use houyicoder_context::{CheckpointId, CheckpointManifest, Disposition, EventId, TurnGroup};
+use std::path::Path;
 use std::sync::Arc;
 
 struct EmptyRegistry;
@@ -50,13 +58,12 @@ impl SkillRegistry for EmptyRegistry {
 }
 
 fn runner() -> Runner {
-    let store: Arc<dyn houyicoder_api::session::SessionLog> =
-        Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let store: Arc<dyn SessionLog> = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     Runner::new(
         store,
-        Arc::new(crate::provider::test_support::FakeProvider::text("done")),
-        crate::agent::ToolRegistry::new(),
-        crate::agent::runner_config::RunnerConfig {
+        Arc::new(FakeProvider::text("done")),
+        ToolRegistry::new(),
+        RunnerConfig {
             model: "test".into(),
             instructions: String::new(),
             max_turns: 5,
@@ -134,8 +141,6 @@ async fn test_inject_noop_when_empty() {
 /// an invoked skill's guidance is not lost to a compaction.
 #[tokio::test]
 async fn test_inject_revives_after_fold() {
-    use houyicoder_context::SessionLogEntry;
-    use houyicoder_context::{CheckpointId, CheckpointManifest, Disposition, EventId, TurnGroup};
     let runner = runner();
     let session = SessionId::new();
     let body_id = EventId::new();
@@ -202,8 +207,6 @@ async fn test_inject_revives_after_fold() {
 /// the per-skill cap is head-truncated.
 #[tokio::test]
 async fn test_revive_dedup_and_truncate() {
-    use houyicoder_context::SessionLogEntry;
-    use houyicoder_context::{CheckpointId, CheckpointManifest, Disposition, EventId, TurnGroup};
     let runner = runner();
     let session = SessionId::new();
     let id1 = EventId::new();
@@ -349,10 +352,6 @@ fn test_frame_neutralizes_embedded_close() {
 
 #[test]
 fn test_provenance_controls_trust() {
-    use houyicoder_api::skill::{
-        ProjectIdentity, SkillDescriptor, SkillFamily, SkillProvenance, SkillRegistry, SkillSource,
-    };
-
     struct SourceRegistry;
     impl SkillRegistry for SourceRegistry {
         fn list_model_invocable(&self) -> Vec<SkillDescriptor> {
@@ -369,9 +368,9 @@ fn test_provenance_controls_trust() {
                 )),
                 "project" => Some(SkillSource::new(
                     SkillFamily::Houyi,
-                    SkillProvenance::Project(ProjectIdentity::from_canonical_root(
-                        std::path::Path::new("/repo"),
-                    )),
+                    SkillProvenance::Project(ProjectIdentity::from_canonical_root(Path::new(
+                        "/repo",
+                    ))),
                 )),
                 _ => None,
             }
@@ -381,8 +380,8 @@ fn test_provenance_controls_trust() {
             _: &str,
             _: Option<&str>,
             _: Option<&str>,
-        ) -> Result<String, houyicoder_api::skill::SkillError> {
-            Err(houyicoder_api::skill::SkillError::NotFound("none".into()))
+        ) -> Result<String, SkillError> {
+            Err(SkillError::NotFound("none".into()))
         }
     }
 

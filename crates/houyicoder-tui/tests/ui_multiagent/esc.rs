@@ -1,4 +1,6 @@
 use super::*;
+use std::thread::sleep;
+use std::time::Duration;
 
 /// Esc inside a teammate view does NOT exit it. Esc only interrupts the
 /// viewed child's current turn; exit is Shift+Up/Down, never Esc, so a
@@ -24,7 +26,7 @@ fn test_teammate_esc_keeps_view() {
     assert!(s.wait_for_plain("Viewing", RENDER_TIMEOUT));
     s.send_key(&Key::Esc);
     // Esc never exits the view; the banner must still render a frame later.
-    std::thread::sleep(std::time::Duration::from_millis(300));
+    sleep(Duration::from_millis(300));
     assert!(
         s.output_plain().contains("Viewing"),
         "Esc must not exit the teammate view (banner should stay):\n{}",
@@ -176,7 +178,7 @@ fn test_esc_interrupt_clears_busy() {
     assert!(s.wait_for_compact("Interrupted", RENDER_TIMEOUT * 2));
     s.clear_output();
     s.send_str(" ");
-    std::thread::sleep(Duration::from_millis(300));
+    sleep(Duration::from_millis(300));
     assert!(
         !s.output_compact().contains("Working"),
         "busy indicator should clear after interrupt:\n{}",
@@ -218,10 +220,10 @@ fn test_esc_clears_child_strip() {
         "the stopped child should render a terminal strip row:\n{}",
         s.output()
     );
-    std::thread::sleep(FLEET_GRACE);
+    sleep(FLEET_GRACE);
     s.clear_output();
     s.send_str(" ");
-    std::thread::sleep(Duration::from_millis(300));
+    sleep(Duration::from_millis(300));
     assert!(
         !s.output_compact().contains("explore·done"),
         "the stopped child's strip row should clear after the grace window:\n{}",

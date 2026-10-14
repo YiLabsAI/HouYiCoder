@@ -16,6 +16,7 @@ use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::{Runner, ToolRegistry};
 use houyicoder_memory::InMemoryBackend;
 use houyicoder_protocol::acp_wire::AcpRequest;
+use houyicoder_protocol::acp_wire::{AcpRequestId, JsonRpcVersion};
 use houyicoder_protocol::acpx::AcpxCapabilities;
 use houyicoder_protocol::framing::encode;
 use houyicoder_provider::FakeProvider;
@@ -145,7 +146,6 @@ async fn test_prompt_missing_params_invalid() {
 /// issue string ids).
 #[tokio::test]
 async fn test_string_request_id_echoed() {
-    use houyicoder_protocol::acp_wire::{AcpRequestId, JsonRpcVersion};
     let (runner, session) = stub_runner();
     let adapter = Arc::new(AcpAdapter::new(
         AcpxCapabilities::default(),

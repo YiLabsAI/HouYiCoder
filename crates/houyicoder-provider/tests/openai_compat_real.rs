@@ -5,17 +5,17 @@ use houyicoder_api::provider::ModelProvider;
 use houyicoder_config::{DEFAULT_DASHSCOPE_BASE_URL, DEFAULT_MODEL};
 use houyicoder_protocol::llm::{CompletionRequest, InputItem, ModelSettings, OutputItem};
 use houyicoder_provider::OpenAiCompatibleProvider;
+use std::env::var;
 
 #[tokio::test]
 #[ignore = "requires the live provider suite"]
 async fn test_openai_roundtrip() {
-    let Ok(api_key) = std::env::var("DASHSCOPE_API_KEY") else {
+    let Ok(api_key) = var("DASHSCOPE_API_KEY") else {
         eprintln!("skip: DASHSCOPE_API_KEY not set");
         return;
     };
-    let base_url =
-        std::env::var("DASHSCOPE_BASE_URL").unwrap_or_else(|_| DEFAULT_DASHSCOPE_BASE_URL.into());
-    let model = std::env::var("HOUYICODER_TEST_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.into());
+    let base_url = var("DASHSCOPE_BASE_URL").unwrap_or_else(|_| DEFAULT_DASHSCOPE_BASE_URL.into());
+    let model = var("HOUYICODER_TEST_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.into());
     let provider = OpenAiCompatibleProvider::new(base_url, api_key);
     let req = CompletionRequest {
         model,

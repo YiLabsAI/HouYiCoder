@@ -4,6 +4,10 @@ use super::*;
 use houyicoder_async::PFut;
 use houyicoder_context::{MemoryError, MemoryScope, MemorySource};
 use std::collections::HashSet;
+use std::future::pending;
+use std::sync::atomic::{AtomicBool, Ordering};
+use tokio::sync::oneshot::channel;
+use tokio::time::sleep;
 
 fn hit(key: &str, score: u32) -> MemoryRankHit {
     MemoryRankHit::new(
@@ -172,7 +176,7 @@ async fn test_rerank_timeout_elapses() {
     struct Never;
     impl MemoryReranker for Never {
         fn rerank(&self, _q: &str, _c: &[MemoryRankHit], _limit: usize) -> PFut<'_, RerankOutcome> {
-            Box::pin(std::future::pending())
+            Box::pin(pending())
         }
     }
     let out = rerank_with_timeout(
@@ -210,13 +214,12 @@ async fn test_rerank_within_deadline() {
 /// append lands before shutdown proceeds.
 #[tokio::test]
 async fn test_tasks_drain_awaits() {
-    use std::sync::atomic::{AtomicBool, Ordering};
     let done = Arc::new(AtomicBool::new(false));
     let flag = Arc::clone(&done);
     let tasks = RecallTasks::default();
     tasks.track(
         tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(10)).await;
+            sleep(Duration::from_millis(10)).await;
             flag.store(true, Ordering::SeqCst);
         }),
         SessionId::new(),
@@ -235,7 +238,7 @@ async fn test_tasks_drain_awaits() {
 async fn test_pending_keys_reserve() {
     let session = SessionId::new();
     let tasks = RecallTasks::default();
-    let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+    let (tx, rx) = channel::<()>();
     tasks.track(
         tokio::spawn(async move {
             drop(rx.await);

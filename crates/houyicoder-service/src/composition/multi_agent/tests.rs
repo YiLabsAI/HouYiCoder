@@ -61,7 +61,7 @@ fn runtime_with_backend(
         tools,
         config,
         worktree_controller: None,
-        workspace: Some(std::path::PathBuf::from("/tmp")),
+        workspace: Some(PathBuf::from("/tmp")),
         bus,
         descriptor_store: Some(Arc::new(InMemoryDescriptorStore::new())),
     });
@@ -112,7 +112,7 @@ async fn test_provenance_precedes_child_run() {
         tools: ToolRegistry::new(),
         config: RunnerConfig::default(),
         worktree_controller: None,
-        workspace: Some(std::path::PathBuf::from("/tmp")),
+        workspace: Some(PathBuf::from("/tmp")),
         bus: Some(Arc::clone(&bus)),
         descriptor_store: Some(descriptors.clone()),
     });
@@ -168,7 +168,7 @@ async fn test_background_boundary_provenance() {
         tools: ToolRegistry::new(),
         config: RunnerConfig::default(),
         worktree_controller: None,
-        workspace: Some(std::path::PathBuf::from("/tmp")),
+        workspace: Some(PathBuf::from("/tmp")),
         bus: None,
         descriptor_store: Some(descriptors.clone()),
     });
@@ -211,9 +211,9 @@ async fn test_background_boundary_provenance() {
 /// -- identically for every child, which read as the view repeating itself.
 #[tokio::test]
 async fn test_child_task_excludes_memory() {
-    let dir = std::env::temp_dir().join(format!("child-task-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("mkdir");
-    std::fs::write(dir.join("AGENTS.md"), "MEMORYMARKER project rules").expect("write");
+    let dir = temp_dir().join(format!("child-task-{}", id()));
+    create_dir_all(&dir).expect("mkdir");
+    write(dir.join("AGENTS.md"), "MEMORYMARKER project rules").expect("write");
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("child answer"));
     let registry: Arc<dyn AgentRegistry> = Arc::new(BuiltInRegistry::from_agents(built_in_all()));
@@ -257,18 +257,18 @@ async fn test_max_turns_surfaces_partial() {
     // surfaces its last assistant text as the partial result, not an
     // empty summary.
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
-    let resp = houyicoder_protocol::llm::CompletionResponse {
+    let resp = CompletionResponse {
         output: vec![
-            houyicoder_protocol::llm::OutputItem::Text {
+            OutputItem::Text {
                 text: "halfway findings".into(),
             },
-            houyicoder_protocol::llm::OutputItem::ToolCall {
+            OutputItem::ToolCall {
                 id: "call_1".into(),
                 name: "grep".into(),
                 input: serde_json::json!({}),
             },
         ],
-        usage: houyicoder_protocol::llm::Usage::default(),
+        usage: Usage::default(),
         model: "test".into(),
     };
     let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::new(vec![resp]));
@@ -284,7 +284,7 @@ async fn test_max_turns_surfaces_partial() {
         tools: ToolRegistry::new(),
         config,
         worktree_controller: None,
-        workspace: Some(std::path::PathBuf::from("/tmp")),
+        workspace: Some(PathBuf::from("/tmp")),
         bus: None,
         descriptor_store: Some(Arc::new(InMemoryDescriptorStore::new())),
     });
@@ -328,7 +328,7 @@ async fn test_background_spawn_records_return() {
     // background task run, then poll until the boundary lands.
     let mut found = false;
     for _ in 0..200 {
-        tokio::task::yield_now().await;
+        yield_now().await;
         let has_return = store
             .trajectory_snapshot(parent_sid)
             .iter()
@@ -347,8 +347,8 @@ async fn test_background_spawn_records_return() {
 /// A HookFire whose SubagentStart dispatch waits for the test to release it,
 /// so the test can drop a spawn call while the hook is still pending.
 struct BlockingStartHook {
-    entered: tokio::sync::Notify,
-    release: tokio::sync::Notify,
+    entered: Notify,
+    release: Notify,
 }
 
 impl HookFire for BlockingStartHook {
@@ -369,8 +369,6 @@ impl HookFire for BlockingStartHook {
 /// fleet row on running and the parent log without a return boundary.
 #[tokio::test]
 async fn test_dropped_spawn_reaches_terminal() {
-    use houyicoder_core::agent::multi_agent::bus_types::AgentBus;
-
     let bus = Arc::new(AgentBus::new());
     let mut completed = bus.subscribe(global_completed_topic());
     let (runtime, store, parent_sid) = runtime_with(
@@ -379,8 +377,8 @@ async fn test_dropped_spawn_reaches_terminal() {
         ToolRegistry::new(),
     );
     let hook = Arc::new(BlockingStartHook {
-        entered: tokio::sync::Notify::new(),
-        release: tokio::sync::Notify::new(),
+        entered: Notify::new(),
+        release: Notify::new(),
     });
     let ctx = ToolCtx::new("c1")
         .with_session(parent_sid)
@@ -388,7 +386,7 @@ async fn test_dropped_spawn_reaches_terminal() {
     let mut args = SpawnArgs::new("explore", "task", "task");
     args.run_in_background = true;
     let call = tokio::spawn(async move { runtime.spawn(&ctx, args).await });
-    let entered = tokio::time::timeout(Duration::from_secs(1), hook.entered.notified()).await;
+    let entered = timeout(Duration::from_secs(1), hook.entered.notified()).await;
     assert!(entered.is_ok(), "the spawn dispatches SubagentStart");
     call.abort();
     // The abort lands wherever the call happens to be — awaiting the hook if
@@ -398,7 +396,7 @@ async fn test_dropped_spawn_reaches_terminal() {
     hook.release.notify_one();
     let mut terminal = None;
     for _ in 0..200 {
-        tokio::task::yield_now().await;
+        yield_now().await;
         if let Ok(message) = completed.try_recv() {
             terminal = Some(message);
             break;
@@ -441,9 +439,6 @@ async fn test_background_spawn_rejects_unknown() {
 /// subscribe to the child's progress before the first turn lands.
 #[tokio::test]
 async fn test_spawn_announces_on_bus() {
-    use houyicoder_async::bus::MessageBus;
-    use houyicoder_core::agent::multi_agent::bus_types::{AgentBus, BusMessage, spawned_topic};
-
     let bus = Arc::new(AgentBus::new());
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let parent_sid = SessionId::new();
@@ -456,7 +451,7 @@ async fn test_spawn_announces_on_bus() {
         tools: ToolRegistry::new(),
         config: RunnerConfig::default(),
         worktree_controller: None,
-        workspace: Some(std::path::PathBuf::from("/tmp")),
+        workspace: Some(PathBuf::from("/tmp")),
         bus: Some(bus.clone()),
         descriptor_store: None,
     });
@@ -480,8 +475,6 @@ async fn test_spawn_announces_on_bus() {
 /// runs the same narrowed pipeline; the only difference is the trigger.
 #[tokio::test]
 async fn test_spawn_system_records_trigger() {
-    use houyicoder_context::SessionEvent;
-
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let parent_sid = SessionId::new();
     let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("ok"));
@@ -493,7 +486,7 @@ async fn test_spawn_system_records_trigger() {
         tools: ToolRegistry::new(),
         config: RunnerConfig::default(),
         worktree_controller: None,
-        workspace: Some(std::path::PathBuf::from("/tmp")),
+        workspace: Some(PathBuf::from("/tmp")),
         bus: None,
         descriptor_store: Some(Arc::new(InMemoryDescriptorStore::new())),
     });
@@ -526,9 +519,6 @@ async fn test_spawn_system_records_trigger() {
 /// trigger when the detached driver runs.
 #[tokio::test]
 async fn test_background_spawn_records_trigger() {
-    use houyicoder_context::SessionEvent;
-    use houyicoder_core::agent::multi_agent::spawn::TriggerSource;
-
     let (runtime, store, parent_sid) = runtime_with_text_child("ok");
     let mut args = SpawnArgs::new("explore", "review the diff", "review the diff");
     args.run_in_background = true;
@@ -542,7 +532,7 @@ async fn test_background_spawn_records_trigger() {
     );
     let mut found = false;
     for _ in 0..200 {
-        tokio::task::yield_now().await;
+        yield_now().await;
         let has = store
             .trajectory_snapshot(parent_sid)
             .iter()
@@ -579,12 +569,8 @@ async fn test_background_spawn_records_trigger() {
 /// inbox on the bus; the child's drive loop drains it at its next turn.
 #[tokio::test]
 async fn test_send_to_child_inbox() {
-    use houyicoder_api::spawn::SpawnHandle;
-    use houyicoder_async::bus::MessageBus;
-    use houyicoder_core::agent::multi_agent::bus_types::{AgentBus, BusMessage};
-
     let bus = Arc::new(AgentBus::new());
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<BusMessage>();
+    let (tx, mut rx) = unbounded_channel::<BusMessage>();
     bus.register_inbox("c1", tx);
     let registry: Arc<dyn AgentRegistry> = Arc::new(BuiltInRegistry::from_agents(built_in_all()));
     let runtime = MultiAgentRuntime::new(MultiAgentDeps {
@@ -594,7 +580,7 @@ async fn test_send_to_child_inbox() {
         tools: ToolRegistry::new(),
         config: RunnerConfig::default(),
         worktree_controller: None,
-        workspace: Some(std::path::PathBuf::from("/tmp")),
+        workspace: Some(PathBuf::from("/tmp")),
         bus: Some(bus),
         descriptor_store: None,
     });
@@ -610,7 +596,7 @@ async fn test_send_to_child_inbox() {
 /// A recording HookFire for asserting run_foreground_spawn fires SubagentStart
 /// and SubagentStop at the durable spawn and return boundaries.
 struct RecordingHookFire {
-    events: Arc<std::sync::Mutex<Vec<HookEventKind>>>,
+    events: Arc<Mutex<Vec<HookEventKind>>>,
 }
 impl HookFire for RecordingHookFire {
     fn fire(&self, event: HookEventKind, _payload: HookFirePayload) -> PFut<'_, ()> {
@@ -626,7 +612,7 @@ impl HookFire for RecordingHookFire {
 #[tokio::test]
 async fn test_spawn_rejected_when_saturated() {
     let (runtime, _store, parent_sid) = runtime_with_text_child("x");
-    let runtime = runtime.with_gate(std::sync::Arc::new(ConcurrencyGate::new(0, 0)));
+    let runtime = runtime.with_gate(Arc::new(ConcurrencyGate::new(0, 0)));
     let ctx = ToolCtx::new("c1").with_session(parent_sid);
     let args = SpawnArgs::new("explore", "task", "task");
     let err = runtime.spawn(&ctx, args).await.unwrap_err();
@@ -652,7 +638,7 @@ async fn test_dropped_spawn_returns_slot() {
         if gate.queued_count() == 1 {
             break;
         }
-        tokio::task::yield_now().await;
+        yield_now().await;
     }
     assert_eq!(gate.queued_count(), 1, "the spawn waits for a slot");
     call.abort();
@@ -668,7 +654,7 @@ async fn test_dropped_spawn_returns_slot() {
 #[tokio::test]
 async fn test_background_spawn_rejects_saturation() {
     let (runtime, _store, parent_sid) = runtime_with_text_child("x");
-    let runtime = runtime.with_gate(std::sync::Arc::new(ConcurrencyGate::new(0, 0)));
+    let runtime = runtime.with_gate(Arc::new(ConcurrencyGate::new(0, 0)));
     let ctx = ToolCtx::new("c1").with_session(parent_sid);
     let mut args = SpawnArgs::new("explore", "task", "task");
     args.run_in_background = true;
@@ -685,7 +671,7 @@ async fn test_background_spawn_rejects_saturation() {
 #[tokio::test]
 async fn test_spawn_fires_start_stop() {
     let (runtime, _store, parent_sid) = runtime_with_text_child("child answer");
-    let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let events = Arc::new(Mutex::new(Vec::new()));
     let ctx = ToolCtx::new("c1")
         .with_session(parent_sid)
         .with_hook_fire(Arc::new(RecordingHookFire {
@@ -723,9 +709,6 @@ async fn test_spawn_fires_start_stop() {
 /// notification arrives even though the parent is not running a turn).
 #[tokio::test]
 async fn test_background_child_notifies_parent() {
-    use houyicoder_core::agent::multi_agent::bus_types::AgentBus;
-    use houyicoder_core::agent::{Runner, ToolRegistry};
-
     let bus = Arc::new(AgentBus::new());
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("done"));
@@ -736,10 +719,10 @@ async fn test_background_child_notifies_parent() {
         ToolRegistry::new(),
         RunnerConfig::default(),
     ));
-    super::super::notification_drain::spawn(
+    spawn(
         Some(bus.clone()),
         Arc::downgrade(&parent_runner),
-        tokio::runtime::Handle::current(),
+        Handle::current(),
         CancellationToken::new(),
     );
     let runtime = MultiAgentRuntime::new(MultiAgentDeps {
@@ -749,7 +732,7 @@ async fn test_background_child_notifies_parent() {
         tools: ToolRegistry::new(),
         config: RunnerConfig::default(),
         worktree_controller: None,
-        workspace: Some(std::path::PathBuf::from("/tmp")),
+        workspace: Some(PathBuf::from("/tmp")),
         bus: Some(bus.clone()),
         descriptor_store: None,
     });
@@ -766,7 +749,7 @@ async fn test_background_child_notifies_parent() {
     );
     let mut found = false;
     for _ in 0..200 {
-        tokio::task::yield_now().await;
+        yield_now().await;
         if !parent_runner.queued_notifications_snapshot().is_empty() {
             found = true;
             break;
@@ -781,13 +764,39 @@ async fn test_background_child_notifies_parent() {
     assert!(notif.contains("done"), "carries the child summary");
 }
 
+use super::super::notification_drain::spawn;
+use super::spawn_exec::child_subtree_usage;
+use futures::stream::iter;
+use futures::stream::once;
+use houyicoder_api::spawn::SpawnHandle;
 /// A provider whose stream yields one non-retryable error then ends, so a
 /// child run fails fast through the real stream path: Auth is not retryable,
 /// so the drive loop maps it to ProviderFatal and terminates without retry or
 /// backoff. The canned fake only errors the complete path, not the stream
 /// path the runner takes, so this struct owns the stream error.
 use houyicoder_async::PStream;
+use houyicoder_core::agent::VerifyFailure;
+use houyicoder_core::agent::multi_agent::bus_types::AgentBus;
+use houyicoder_core::agent::multi_agent::spawn::TriggerSource;
+use houyicoder_core::agent::{Runner, ToolRegistry};
+use houyicoder_protocol::llm::Usage;
 use houyicoder_protocol::llm::{CompletionRequest, CompletionResponse, ProviderError};
+use std::env::temp_dir;
+use std::fs::create_dir_all;
+use std::fs::write;
+use std::future::pending;
+use std::path::PathBuf;
+use std::process::id;
+use std::sync::Arc;
+use std::sync::Mutex;
+use tokio::runtime::Handle;
+use tokio::sync::Notify;
+use tokio::sync::mpsc::unbounded_channel;
+use tokio::sync::oneshot::Receiver;
+use tokio::sync::oneshot::Sender;
+use tokio::sync::oneshot::channel;
+use tokio::task::yield_now;
+use tokio::time::timeout;
 
 struct FailingProvider {
     err: ProviderError,
@@ -807,15 +816,12 @@ impl ModelProvider for FailingProvider {
         let err = self.err.clone();
         Box::pin(async move { Err(err) })
     }
-    fn stream(
-        &self,
-        _req: CompletionRequest,
-    ) -> PStream<'_, Result<houyicoder_protocol::llm::LlmEvent, ProviderError>> {
+    fn stream(&self, _req: CompletionRequest) -> PStream<'_, Result<LlmEvent, ProviderError>> {
         let err = self.err.clone();
-        Box::pin(futures::stream::once(async move { Err(err) }))
+        Box::pin(once(async move { Err(err) }))
     }
-    fn capabilities(&self) -> houyicoder_protocol::llm::ModelCapabilities {
-        houyicoder_protocol::llm::ModelCapabilities::default()
+    fn capabilities(&self) -> ModelCapabilities {
+        ModelCapabilities::default()
     }
 }
 
@@ -847,11 +853,9 @@ impl ModelProvider for PartialThenFailProvider {
     fn stream(
         &self,
         _req: CompletionRequest,
-    ) -> houyicoder_async::PStream<'_, Result<houyicoder_protocol::llm::LlmEvent, ProviderError>>
-    {
-        use houyicoder_protocol::llm::LlmEvent;
+    ) -> houyicoder_async::PStream<'_, Result<LlmEvent, ProviderError>> {
         let err = self.err.clone();
-        Box::pin(futures::stream::iter(vec![
+        Box::pin(iter(vec![
             Ok(LlmEvent::TextStart { id: "t1".into() }),
             Ok(LlmEvent::TextDelta {
                 id: "t1".into(),
@@ -861,8 +865,8 @@ impl ModelProvider for PartialThenFailProvider {
             Err(err),
         ]))
     }
-    fn capabilities(&self) -> houyicoder_protocol::llm::ModelCapabilities {
-        houyicoder_protocol::llm::ModelCapabilities::default()
+    fn capabilities(&self) -> ModelCapabilities {
+        ModelCapabilities::default()
     }
 }
 
@@ -879,7 +883,7 @@ async fn test_foreground_failure_reaches_parent() {
         tools: ToolRegistry::new(),
         config: RunnerConfig::default(),
         worktree_controller: None,
-        workspace: Some(std::path::PathBuf::from("/tmp")),
+        workspace: Some(PathBuf::from("/tmp")),
         bus: None,
         descriptor_store: Some(Arc::new(InMemoryDescriptorStore::new())),
     });
@@ -925,7 +929,7 @@ async fn test_foreground_failure_loses_partial() {
         tools: ToolRegistry::new(),
         config: RunnerConfig::default(),
         worktree_controller: None,
-        workspace: Some(std::path::PathBuf::from("/tmp")),
+        workspace: Some(PathBuf::from("/tmp")),
         bus: None,
         descriptor_store: Some(Arc::new(InMemoryDescriptorStore::new())),
     });
@@ -970,9 +974,6 @@ async fn test_foreground_failure_loses_partial() {
 /// A background child failure reaches the parent notification queue.
 #[tokio::test]
 async fn test_background_failure_notifies_parent() {
-    use houyicoder_core::agent::multi_agent::bus_types::AgentBus;
-    use houyicoder_core::agent::{Runner, ToolRegistry};
-
     let bus = Arc::new(AgentBus::new());
     let mut completed = bus.subscribe(global_completed_topic());
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
@@ -987,10 +988,10 @@ async fn test_background_failure_notifies_parent() {
         ToolRegistry::new(),
         RunnerConfig::default(),
     ));
-    super::super::notification_drain::spawn(
+    spawn(
         Some(bus.clone()),
         Arc::downgrade(&parent_runner),
-        tokio::runtime::Handle::current(),
+        Handle::current(),
         CancellationToken::new(),
     );
     let runtime = MultiAgentRuntime::new(MultiAgentDeps {
@@ -1000,7 +1001,7 @@ async fn test_background_failure_notifies_parent() {
         tools: ToolRegistry::new(),
         config: RunnerConfig::default(),
         worktree_controller: None,
-        workspace: Some(std::path::PathBuf::from("/tmp")),
+        workspace: Some(PathBuf::from("/tmp")),
         bus: Some(bus.clone()),
         descriptor_store: None,
     });
@@ -1017,7 +1018,7 @@ async fn test_background_failure_notifies_parent() {
     );
     let mut found = false;
     for _ in 0..200 {
-        tokio::task::yield_now().await;
+        yield_now().await;
         let snap = parent_runner.queued_notifications_snapshot();
         if !snap.is_empty() {
             assert!(
@@ -1153,7 +1154,7 @@ async fn test_failed_write_reaches_terminal() {
         tools: ToolRegistry::new(),
         config: RunnerConfig::default(),
         worktree_controller: None,
-        workspace: Some(std::path::PathBuf::from("/tmp")),
+        workspace: Some(PathBuf::from("/tmp")),
         bus: Some(bus.clone()),
         descriptor_store: Some(Arc::new(InMemoryDescriptorStore::new())),
     });
@@ -1210,7 +1211,7 @@ async fn test_unwritable_boundary_refuses_spawn() {
         tools: ToolRegistry::new(),
         config: RunnerConfig::default(),
         worktree_controller: None,
-        workspace: Some(std::path::PathBuf::from("/tmp")),
+        workspace: Some(PathBuf::from("/tmp")),
         bus: None,
         descriptor_store: Some(Arc::new(InMemoryDescriptorStore::new())),
     });
@@ -1246,12 +1247,10 @@ impl ModelProvider for PanicProvider {
         &self,
         _req: CompletionRequest,
     ) -> houyicoder_async::PStream<'_, Result<LlmEvent, ProviderError>> {
-        Box::pin(futures::stream::once(async move {
-            panic!("provider stream panicked")
-        }))
+        Box::pin(once(async move { panic!("provider stream panicked") }))
     }
-    fn capabilities(&self) -> houyicoder_protocol::llm::ModelCapabilities {
-        houyicoder_protocol::llm::ModelCapabilities::default()
+    fn capabilities(&self) -> ModelCapabilities {
+        ModelCapabilities::default()
     }
 }
 
@@ -1263,9 +1262,6 @@ impl ModelProvider for PanicProvider {
 /// nothing closes), no worktree cleanup, no inbox close.
 #[tokio::test]
 async fn test_foreground_panic_reaches_terminal() {
-    use houyicoder_async::bus::MessageBus;
-    use houyicoder_core::agent::multi_agent::bus_types::AgentBus;
-
     let bus = Arc::new(AgentBus::new());
     let mut completed = bus.subscribe(global_completed_topic());
     let (runtime, store, parent_sid) = runtime_with(
@@ -1317,9 +1313,6 @@ async fn test_foreground_panic_reaches_terminal() {
 /// footer strip clears instead of sitting on running forever.
 #[tokio::test]
 async fn test_background_panic_notifies_parent() {
-    use houyicoder_core::agent::multi_agent::bus_types::AgentBus;
-    use houyicoder_core::agent::{Runner, ToolRegistry};
-
     let bus = Arc::new(AgentBus::new());
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let registry: Arc<dyn AgentRegistry> = Arc::new(BuiltInRegistry::from_agents(built_in_all()));
@@ -1331,10 +1324,10 @@ async fn test_background_panic_notifies_parent() {
         ToolRegistry::new(),
         RunnerConfig::default(),
     ));
-    super::super::notification_drain::spawn(
+    spawn(
         Some(bus.clone()),
         Arc::downgrade(&parent_runner),
-        tokio::runtime::Handle::current(),
+        Handle::current(),
         CancellationToken::new(),
     );
     let runtime = MultiAgentRuntime::new(MultiAgentDeps {
@@ -1344,7 +1337,7 @@ async fn test_background_panic_notifies_parent() {
         tools: ToolRegistry::new(),
         config: RunnerConfig::default(),
         worktree_controller: None,
-        workspace: Some(std::path::PathBuf::from("/tmp")),
+        workspace: Some(PathBuf::from("/tmp")),
         bus: Some(bus.clone()),
         descriptor_store: None,
     });
@@ -1361,7 +1354,7 @@ async fn test_background_panic_notifies_parent() {
     );
     let mut found = false;
     for _ in 0..200 {
-        tokio::task::yield_now().await;
+        yield_now().await;
         let snap = parent_runner.queued_notifications_snapshot();
         if !snap.is_empty() {
             assert!(
@@ -1405,7 +1398,6 @@ async fn test_background_panic_notifies_parent() {
 /// failed upgrade.
 #[test]
 fn test_cancel_child_turn_registry() {
-    use houyicoder_core::agent::Runner;
     let (runtime, _store, _parent_sid) = runtime_with_text_child("ok");
     let runner = Arc::new(Runner::new(
         runtime.store.clone(),
@@ -1432,7 +1424,6 @@ fn test_cancel_child_turn_registry() {
 /// kill_child aborts registered children and rejects stale or unknown entries.
 #[test]
 fn test_kill_child_registry() {
-    use houyicoder_core::agent::Runner;
     let (runtime, _store, _parent_sid) = runtime_with_text_child("ok");
     let runner = Arc::new(Runner::new(
         runtime.store.clone(),
@@ -1460,7 +1451,6 @@ fn test_kill_child_registry() {
 /// Dropped (stale Weak) children are skipped, not counted.
 #[test]
 fn test_kill_all_children_registry() {
-    use houyicoder_core::agent::Runner;
     let (runtime, _store, _parent_sid) = runtime_with_text_child("ok");
     let r1 = Arc::new(Runner::new(
         runtime.store.clone(),
@@ -1487,15 +1477,15 @@ fn test_kill_all_children_registry() {
 /// and then waits forever, so a child sits inside its model call until a
 /// cancel reaches it, and the test knows exactly where the stop landed.
 struct StallForeverProvider {
-    entered: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    entered: Mutex<Option<Sender<()>>>,
 }
 
 impl StallForeverProvider {
-    fn new() -> (Arc<Self>, tokio::sync::oneshot::Receiver<()>) {
-        let (entered, rx) = tokio::sync::oneshot::channel();
+    fn new() -> (Arc<Self>, Receiver<()>) {
+        let (entered, rx) = channel();
         (
             Arc::new(Self {
-                entered: std::sync::Mutex::new(Some(entered)),
+                entered: Mutex::new(Some(entered)),
             }),
             rx,
         )
@@ -1507,16 +1497,16 @@ impl ModelProvider for StallForeverProvider {
         &self,
         _req: CompletionRequest,
     ) -> PFut<'_, Result<CompletionResponse, ProviderError>> {
-        Box::pin(std::future::pending())
+        Box::pin(pending())
     }
 
     fn stream(&self, _req: CompletionRequest) -> PStream<'_, Result<LlmEvent, ProviderError>> {
         let entered = self.entered.lock().expect("entered lock").take();
-        Box::pin(futures::stream::once(async move {
+        Box::pin(once(async move {
             if let Some(entered) = entered {
                 let _ = entered.send(());
             }
-            std::future::pending::<Result<LlmEvent, ProviderError>>().await
+            pending::<Result<LlmEvent, ProviderError>>().await
         }))
     }
 
@@ -1531,18 +1521,18 @@ impl ModelProvider for StallForeverProvider {
 /// inside its model call", which is the window a stop has to reach.
 struct StallAfterFirstProvider {
     first: FakeProvider,
-    calls: std::sync::atomic::AtomicU32,
-    resumed: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    calls: AtomicU32,
+    resumed: Mutex<Option<Sender<()>>>,
 }
 
 impl StallAfterFirstProvider {
-    fn new(outputs: Vec<Vec<OutputItem>>) -> (Arc<Self>, tokio::sync::oneshot::Receiver<()>) {
-        let (resumed, rx) = tokio::sync::oneshot::channel();
+    fn new(outputs: Vec<Vec<OutputItem>>) -> (Arc<Self>, Receiver<()>) {
+        let (resumed, rx) = channel();
         (
             Arc::new(Self {
                 first: FakeProvider::from_outputs(outputs),
-                calls: std::sync::atomic::AtomicU32::new(0),
-                resumed: std::sync::Mutex::new(Some(resumed)),
+                calls: AtomicU32::new(0),
+                resumed: Mutex::new(Some(resumed)),
             }),
             rx,
         )
@@ -1554,19 +1544,19 @@ impl ModelProvider for StallAfterFirstProvider {
         &self,
         _req: CompletionRequest,
     ) -> PFut<'_, Result<CompletionResponse, ProviderError>> {
-        Box::pin(std::future::pending())
+        Box::pin(pending())
     }
 
     fn stream(&self, req: CompletionRequest) -> PStream<'_, Result<LlmEvent, ProviderError>> {
-        if self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+        if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
             return self.first.stream(req);
         }
         let resumed = self.resumed.lock().expect("resumed lock").take();
-        Box::pin(futures::stream::once(async move {
+        Box::pin(once(async move {
             if let Some(resumed) = resumed {
                 let _ = resumed.send(());
             }
-            std::future::pending::<Result<LlmEvent, ProviderError>>().await
+            pending::<Result<LlmEvent, ProviderError>>().await
         }))
     }
 
@@ -1618,7 +1608,7 @@ async fn test_cancel_before_poll_publishes() {
         .with_cancel(token.clone());
     let mut completed = bus.subscribe(global_completed_topic());
     token.cancel();
-    let outcome = tokio::time::timeout(
+    let outcome = timeout(
         Duration::from_secs(5),
         runtime.spawn(&ctx, SpawnArgs::new("explore", "find auth", "find auth")),
     )
@@ -1630,7 +1620,7 @@ async fn test_cancel_before_poll_publishes() {
         Some("interrupted"),
         "the stop reached the child instead of letting it run on"
     );
-    let message = tokio::time::timeout(Duration::from_secs(5), completed.recv())
+    let message = timeout(Duration::from_secs(5), completed.recv())
         .await
         .expect("a child stopped before its first poll publishes its terminal status")
         .expect("the bus stays open");
@@ -1676,7 +1666,7 @@ async fn test_cancel_mid_call_publishes() {
     }
     token.cancel();
     drop(call);
-    let message = tokio::time::timeout(Duration::from_secs(5), completed.recv())
+    let message = timeout(Duration::from_secs(5), completed.recv())
         .await
         .expect("a cancelled child publishes its terminal status")
         .expect("the bus stays open");
@@ -1736,7 +1726,7 @@ async fn test_cancel_mid_ask_publishes() {
     }
     token.cancel();
     drop(call);
-    let message = tokio::time::timeout(Duration::from_secs(5), completed.recv())
+    let message = timeout(Duration::from_secs(5), completed.recv())
         .await
         .expect("a child cancelled on its ask publishes its terminal status")
         .expect("the bus stays open");
@@ -1814,7 +1804,7 @@ async fn test_cancel_mid_resume_publishes() {
     }
     token.cancel();
     drop(call);
-    let message = tokio::time::timeout(Duration::from_secs(5), completed.recv())
+    let message = timeout(Duration::from_secs(5), completed.recv())
         .await
         .expect("a child cancelled after its resume publishes its terminal status")
         .expect("the bus stays open");
@@ -1856,7 +1846,7 @@ async fn test_background_kill_publishes() {
         runtime.kill_child(&outcome.child_session_id),
         "the running child is killed"
     );
-    let message = tokio::time::timeout(Duration::from_secs(5), completed.recv())
+    let message = timeout(Duration::from_secs(5), completed.recv())
         .await
         .expect("a killed child publishes its terminal status")
         .expect("the bus stays open");
@@ -1877,9 +1867,9 @@ async fn test_background_kill_publishes() {
 #[test]
 fn test_terminal_verify_failed() {
     let r = RunResult {
-        outcome: RunOutcome::VerifyFailed(houyicoder_core::agent::VerifyFailure::new()),
+        outcome: RunOutcome::VerifyFailed(VerifyFailure::new()),
         turns: 1,
-        usage: houyicoder_protocol::llm::Usage::default(),
+        usage: Usage::default(),
     };
     let (status, summary) = super::terminal_summary(r, &[]);
     assert_eq!(status, "verify_failed");
@@ -1892,7 +1882,7 @@ fn test_terminal_handoff() {
     let r = RunResult {
         outcome: RunOutcome::Handoff(houyicoder_context::AgentId("explore".into())),
         turns: 1,
-        usage: houyicoder_protocol::llm::Usage::default(),
+        usage: Usage::default(),
     };
     let (status, summary) = super::terminal_summary(r, &[]);
     assert_eq!(status, "handoff");
@@ -1936,7 +1926,7 @@ async fn test_return_usage_covers_subtree() {
         .await
         .unwrap();
     let child_log = store.trajectory_snapshot(child_sid);
-    let usage = super::spawn_exec::child_subtree_usage(&runner, &child_log);
+    let usage = child_subtree_usage(&runner, &child_log);
     assert_eq!(
         usage.input_tokens, 30,
         "the grandchild's input reaches the parent"

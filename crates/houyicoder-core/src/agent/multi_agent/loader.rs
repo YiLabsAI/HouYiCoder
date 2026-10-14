@@ -12,6 +12,9 @@ use std::path::Path;
 use houyicoder_protocol::llm::EffortLevel;
 
 use super::registry::{AgentDefinition, IsolationMode, MemoryScope, PromptSource};
+use std::collections::BTreeMap;
+use std::fs::read_dir;
+use std::fs::read_to_string;
 
 /// Where a definition came from. Drives merge precedence: a higher-ordered
 /// source overrides a lower one for the same subagent_type. Plugin and
@@ -186,8 +189,7 @@ impl Loader {
     pub fn merge(self) -> Vec<AgentDefinition> {
         let mut keyed = self.entries;
         keyed.sort_by_key(|(s, _)| s.order());
-        let mut by_type: std::collections::BTreeMap<String, AgentDefinition> =
-            std::collections::BTreeMap::new();
+        let mut by_type: BTreeMap<String, AgentDefinition> = BTreeMap::new();
         let mut order: Vec<String> = Vec::new();
         for (_, def) in keyed {
             if !by_type.contains_key(&def.subagent_type) {
@@ -211,7 +213,7 @@ pub fn load_dir(
 ) -> (Vec<(DefinitionSource, AgentDefinition)>, Vec<String>) {
     let mut defs = Vec::new();
     let mut failures = Vec::new();
-    let Ok(entries) = std::fs::read_dir(dir) else {
+    let Ok(entries) = read_dir(dir) else {
         return (defs, failures);
     };
     for entry in entries.flatten() {
@@ -219,7 +221,7 @@ pub fn load_dir(
         if path.extension().and_then(|e| e.to_str()) != Some("md") {
             continue;
         }
-        let Ok(text) = std::fs::read_to_string(&path) else {
+        let Ok(text) = read_to_string(&path) else {
             failures.push(path.display().to_string());
             continue;
         };

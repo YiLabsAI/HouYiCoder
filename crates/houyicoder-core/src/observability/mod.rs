@@ -33,6 +33,10 @@ use serde::{Deserialize, Serialize};
 use crate::agent::compaction::RecordedCompaction;
 use crate::agent::hook::HookError;
 use std::borrow::Cow;
+use std::error::Error;
+use std::fmt::Display;
+use std::fmt::Formatter;
+use std::io::Write;
 
 // ===== bounds =====
 
@@ -687,8 +691,8 @@ pub enum ExportError {
     Serialize(String),
 }
 
-impl std::fmt::Display for ExportError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for ExportError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Io => write!(f, "export io error"),
             Self::Serialize(msg) => write!(f, "export serialize error: {msg}"),
@@ -696,7 +700,7 @@ impl std::fmt::Display for ExportError {
     }
 }
 
-impl std::error::Error for ExportError {}
+impl Error for ExportError {}
 
 /// Serialize the substrate (trajectory, tool stats, cost, errors) into an
 /// industry-standard format for analysis or post-training. Multiple sinks
@@ -705,11 +709,7 @@ pub trait ExportSink {
     /// Format identifier ("json", "otel-genai", "hf-messages", etc.).
     fn format_name(&self) -> &str;
     /// Serialize the log contents to the writer.
-    fn export(
-        &self,
-        log: &ObservabilityLog,
-        out: &mut dyn std::io::Write,
-    ) -> Result<(), ExportError>;
+    fn export(&self, log: &ObservabilityLog, out: &mut dyn Write) -> Result<(), ExportError>;
 }
 
 // ===== helpers =====

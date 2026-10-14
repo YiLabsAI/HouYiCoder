@@ -14,6 +14,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use super::{GrantScope, GrantSubject, SkillSource};
+use io::Error;
 use io::ErrorKind;
 
 /// Apple services observed during sandbox probes. All services in the
@@ -95,7 +96,7 @@ fn grant_path(home: Option<OsString>, user_profile: Option<OsString>) -> io::Res
         .flatten()
         .map(PathBuf::from)
         .find(|path| path.is_absolute())
-        .ok_or_else(|| io::Error::new(ErrorKind::InvalidInput, "absolute user home unavailable"))?;
+        .ok_or_else(|| Error::new(ErrorKind::InvalidInput, "absolute user home unavailable"))?;
     Ok(home.join(".houyicoder").join("skill-grants.json"))
 }
 
@@ -305,8 +306,8 @@ fn save_grants(path: &Path, grants: &HashMap<String, Vec<String>>) -> io::Result
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let text = serde_json::to_string_pretty(grants)
-        .map_err(|e| io::Error::new(ErrorKind::InvalidData, e))?;
+    let text =
+        serde_json::to_string_pretty(grants).map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
     let seq = SAVE_SEQ.fetch_add(1, Ordering::Relaxed);
     let tmp = path.with_extension(format!("tmp.{pid}.{seq}", pid = process::id()));
     if let Err(e) = fs::write(&tmp, &text) {

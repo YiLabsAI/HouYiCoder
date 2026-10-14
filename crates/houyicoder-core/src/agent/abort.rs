@@ -14,7 +14,10 @@
 
 use std::sync::atomic::Ordering;
 
+use crate::agent::RunOutcome;
+use crate::agent::RunResult;
 use crate::agent::{RunError, Runner};
+use houyicoder_protocol::llm::Usage;
 
 impl Runner {
     /// Cancel the in-flight run, if any, AND — only when the run is paused on
@@ -94,11 +97,11 @@ impl Runner {
         &self,
         session: houyicoder_context::SessionId,
         turn: u32,
-        usage: houyicoder_protocol::llm::Usage,
-    ) -> Result<crate::agent::RunResult, RunError> {
+        usage: Usage,
+    ) -> Result<RunResult, RunError> {
         self.reconcile_tool_results(session).await?;
-        Ok(crate::agent::RunResult {
-            outcome: crate::agent::RunOutcome::Interrupted("interrupted by user".to_string()),
+        Ok(RunResult {
+            outcome: RunOutcome::Interrupted("interrupted by user".to_string()),
             turns: turn,
             usage,
         })
@@ -116,7 +119,7 @@ impl Runner {
     pub(crate) async fn aborted_short_circuit(
         &self,
         session: houyicoder_context::SessionId,
-    ) -> Result<Option<crate::agent::RunResult>, RunError> {
+    ) -> Result<Option<RunResult>, RunError> {
         // This resume consumes the pause: clear it so a later abort (while
         // drive_loop runs) does not set the durable flag (no paused run).
         self.paused.store(false, Ordering::Release);
@@ -124,10 +127,10 @@ impl Runner {
             return Ok(None);
         }
         self.reconcile_tool_results(session).await?;
-        Ok(Some(crate::agent::RunResult {
-            outcome: crate::agent::RunOutcome::Interrupted("interrupted by user".to_string()),
+        Ok(Some(RunResult {
+            outcome: RunOutcome::Interrupted("interrupted by user".to_string()),
             turns: self.user_turn(),
-            usage: houyicoder_protocol::llm::Usage::default(),
+            usage: Usage::default(),
         }))
     }
 }

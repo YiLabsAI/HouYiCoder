@@ -6,14 +6,32 @@ use std::sync::Arc;
 use houyicoder_context::SessionId;
 use houyicoder_resilience::resource_breaker::ResourceBreaker;
 
+use super::backbone::WorkspaceProbe;
 use super::conditional_activation::ConditionalSkillActivator;
 use super::hook::registry::HookRegistry;
+use super::manifest::Summarizer;
 use super::memory::{MemoryRuntime, MutationLog};
 use super::multi_agent::bus_types::BusMessage;
+use super::reducer::ToolOutputReducer;
 use super::skill_reload::SkillReloadGuard;
 use super::tools::{MemoryAddTool, SearchMemoryTool, ShowMemoryTool};
 use super::{RunError, Runner, VerifyGate};
+use crate::agent::SkillHookRegistrar;
+use crate::agent::hook::CompactTrigger;
 use houyicoder_api::agent_event::AgentEventHandlers;
+use houyicoder_api::cache_policy::CachePolicyProvider;
+use houyicoder_api::cost_model::CostModelProvider;
+use houyicoder_api::memory::MemoryProvider;
+use houyicoder_api::skill::SkillRegistry;
+use houyicoder_api::trust::TrustState;
+use houyicoder_context::Disposition;
+use houyicoder_context::MemoryOrigin;
+use houyicoder_protocol::llm::ProviderError;
+use std::sync::RwLock;
+use std::sync::atomic::AtomicU32;
+use std::sync::atomic::Ordering;
+use std::time::Duration;
+use tokio::sync::mpsc::UnboundedReceiver;
 
 impl Runner {
     /// Attach the aggregate resource breaker the sandbox enforces against, so
@@ -42,7 +60,7 @@ impl Runner {
     /// A shared handle to the interior-mutable cwd, for a WorktreeController
     /// that repoints the cwd without a typed Runner handle (writes the Arc
     /// directly through composition).
-    pub fn cwd_handle(&self) -> std::sync::Arc<std::sync::RwLock<PathBuf>> {
+    pub fn cwd_handle(&self) -> Arc<RwLock<PathBuf>> {
         self.context_builder.cwd_handle()
     }
 
@@ -67,7 +85,7 @@ impl Runner {
     /// Install the bus inbox receiver for a spawned child. Call before the
     /// runner is shared. The drive loop drains this at each turn boundary, appending Inbox texts as user
     /// messages so a parent can steer a running child mid-task.
-    pub fn set_inbox(&mut self, rx: tokio::sync::mpsc::UnboundedReceiver<BusMessage>) {
+    pub fn set_inbox(&mut self, rx: UnboundedReceiver<BusMessage>) {
         *self.inbox.lock().expect("inbox lock") = Some(rx);
     }
 
@@ -88,7 +106,7 @@ impl Runner {
             let recorder = runtime.install_primary_recorder();
             self.tools.register(Arc::new(
                 MemoryAddTool::new(provider.clone())
-                    .with_origin(houyicoder_context::MemoryOrigin::MainAgent)
+                    .with_origin(MemoryOrigin::MainAgent)
                     .with_recorder(recorder),
             ));
             self.tools.register(Arc::new(
@@ -105,7 +123,7 @@ impl Runner {
     /// pin for new keys, and the evidence window every save must quote.
     pub(crate) fn install_extraction_memory(
         mut self,
-        provider: Arc<dyn houyicoder_api::memory::MemoryProvider>,
+        provider: Arc<dyn MemoryProvider>,
         recorder: Arc<MutationLog>,
         evidence: Arc<[houyicoder_context::SessionLogEntry]>,
     ) -> Self {
@@ -143,7 +161,7 @@ impl Runner {
     /// call its register method after a skill body prepares. Unwired in tests
     /// and the pure-stub path: no skill hooks register and set_trust is a
     /// no-op.
-    pub fn with_registrar(mut self, registrar: Arc<crate::agent::SkillHookRegistrar>) -> Self {
+    pub fn with_registrar(mut self, registrar: Arc<SkillHookRegistrar>) -> Self {
         self.registrar = Some(registrar);
         self
     }
@@ -169,7 +187,7 @@ impl Runner {
     /// calls this once after the startup trust prompt so a Project or Local
     /// skill hook invoked later reads the resolved value, not the
     /// fail-closed default. No-op without a registrar.
-    pub fn set_trust(&self, state: houyicoder_api::trust::TrustState) {
+    pub fn set_trust(&self, state: TrustState) {
         if let Some(r) = self.registrar.as_ref() {
             r.set_trust(state);
         }
@@ -178,10 +196,7 @@ impl Runner {
     /// Override the cache policy (defaults to the Auto three-breakpoint set).
     /// A provider with no prompt-cache support swaps NoCachePolicy; a
     /// config-driven explicit policy lands when that wires.
-    pub fn with_cache_policy(
-        mut self,
-        policy: Arc<dyn houyicoder_api::cache_policy::CachePolicyProvider>,
-    ) -> Self {
+    pub fn with_cache_policy(mut self, policy: Arc<dyn CachePolicyProvider>) -> Self {
         self.cache_policy = policy;
         self
     }
@@ -189,10 +204,7 @@ impl Runner {
     /// Override the per-provider cost model (defaults to the Anthropic-pricing
     /// rates). A multi-provider runtime swaps per active provider so the
     /// economy-driven compaction gate uses the right cache-read/write ratios.
-    pub fn with_cost_model(
-        mut self,
-        model: Arc<dyn houyicoder_api::cost_model::CostModelProvider>,
-    ) -> Self {
+    pub fn with_cost_model(mut self, model: Arc<dyn CostModelProvider>) -> Self {
         self.cost_model = model;
         self
     }
@@ -202,7 +214,7 @@ impl Runner {
     /// match in the folded span) and the compaction path (it snapshots +
     /// resets to compute the recall rate). The composition root registers the
     /// tool with this handle so the tool + the runner share one counter.
-    pub fn recall_meter(&self) -> Arc<std::sync::atomic::AtomicU32> {
+    pub fn recall_meter(&self) -> Arc<AtomicU32> {
         Arc::clone(&self.recall_meter)
     }
 
@@ -211,7 +223,7 @@ impl Runner {
     /// sharing the cwd handle so worktree switches propagate. Called pre-Arc,
     /// before sharing the runner. None (the default) means the backbone runs the
     /// log-rederivable layer only; the workspace watermark fields are None.
-    pub fn set_workspace_probe(&mut self, probe: Arc<dyn super::backbone::WorkspaceProbe>) {
+    pub fn set_workspace_probe(&mut self, probe: Arc<dyn WorkspaceProbe>) {
         self.workspace_probe = Some(probe);
     }
 
@@ -220,7 +232,7 @@ impl Runner {
     /// served preview is compact; the raw stays in the CAS. None (the
     /// default) ⇒ no reduction (the raw preview is served). The composition
     /// root wires a HotPathReducer for the built-in tools.
-    pub fn with_reducer(mut self, reducer: Arc<dyn super::reducer::ToolOutputReducer>) -> Self {
+    pub fn with_reducer(mut self, reducer: Arc<dyn ToolOutputReducer>) -> Self {
         self.reducer = Some(reducer);
         self
     }
@@ -232,7 +244,7 @@ impl Runner {
     /// snapshots. The composition root constructs the meter, passes clones
     /// to the tool (at registration) + here (before the runner is shared),
     /// so both see the same counter.
-    pub fn with_recall_meter(mut self, meter: Arc<std::sync::atomic::AtomicU32>) -> Self {
+    pub fn with_recall_meter(mut self, meter: Arc<AtomicU32>) -> Self {
         self.recall_meter = meter;
         self
     }
@@ -242,10 +254,7 @@ impl Runner {
     /// startup; the same Arc is shared with the Skill tool (registered
     /// separately at the composition root) so invocation + listing see one
     /// set. None in tests and the pure-stub path (no listing attached).
-    pub fn with_skill_registry(
-        mut self,
-        registry: Arc<dyn houyicoder_api::skill::SkillRegistry>,
-    ) -> Self {
+    pub fn with_skill_registry(mut self, registry: Arc<dyn SkillRegistry>) -> Self {
         self.skill_registry = Some(registry);
         self
     }
@@ -265,9 +274,7 @@ impl Runner {
     /// this on the runtime at startup, fire-and-forget. The default provider
     /// impl is a no-op; the OpenAI-compatible impl fetches /v1/models and
     /// writes the cache.
-    pub fn refresh_served_models(
-        &self,
-    ) -> houyicoder_async::PFut<'_, Result<(), houyicoder_protocol::llm::ProviderError>> {
+    pub fn refresh_served_models(&self) -> houyicoder_async::PFut<'_, Result<(), ProviderError>> {
         self.provider.refresh_served_models()
     }
 
@@ -277,7 +284,7 @@ impl Runner {
     /// dream_count on a sleep loop — the JoinHandle await is event-driven
     /// (the scheduler wakes on task completion), and the deadline is a
     /// safety bound, not a poll interval.
-    pub async fn join_dreams(&self, timeout: std::time::Duration) {
+    pub async fn join_dreams(&self, timeout: Duration) {
         self.memory.join_background(timeout).await;
     }
 
@@ -290,11 +297,8 @@ impl Runner {
     pub async fn compress(&self, session: SessionId) -> Result<bool, RunError> {
         // Compaction rewrites the prefix, so the next provider response will
         // likely show a cache-read drop. Cleared in append_turn_usage.
-        self.cache_compact_flag
-            .store(true, std::sync::atomic::Ordering::Relaxed);
-        let outcome = self
-            .run_compaction(session, crate::agent::hook::CompactTrigger::Auto)
-            .await?;
+        self.cache_compact_flag.store(true, Ordering::Relaxed);
+        let outcome = self.run_compaction(session, CompactTrigger::Auto).await?;
         Ok(outcome.made_progress)
     }
 
@@ -309,7 +313,7 @@ impl Runner {
 
     /// Override the default heuristic summarizer with an LLM-backed one. The
     /// composition root installs the production implementation.
-    pub fn with_summarizer(mut self, summarizer: Box<dyn super::manifest::Summarizer>) -> Self {
+    pub fn with_summarizer(mut self, summarizer: Box<dyn Summarizer>) -> Self {
         self.summarizer = summarizer;
         self
     }
@@ -357,7 +361,7 @@ impl Runner {
         let folded: usize = manifest
             .plan
             .iter()
-            .filter(|g| matches!(g.disposition, houyicoder_context::Disposition::Summarized))
+            .filter(|g| matches!(g.disposition, Disposition::Summarized))
             .count();
         let summary_preview = truncate_summary_preview(manifest.summary.as_deref());
         Some(format!(

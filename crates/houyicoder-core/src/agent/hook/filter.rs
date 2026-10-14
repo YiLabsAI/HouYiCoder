@@ -6,6 +6,9 @@
 //! here so both hook types share one implementation and one set of tests.
 
 use super::{HookContext, HookPayload, SessionEndReason};
+use regex::Regex;
+use regex::RegexBuilder;
+use serde_json::Value;
 
 /// Whether the context's tool name satisfies a matcher pattern. Empty or
 /// star matches all. A pattern of ascii letters, digits, underscores, and
@@ -43,11 +46,8 @@ pub(crate) fn matcher_passes(ctx: &HookContext, matcher: &str) -> bool {
 /// matcher and an equivalent anchored alternation disagree, so both
 /// branches ignore case. Returns None on an invalid pattern, which
 /// fails the matcher closed.
-fn build_matcher_regex(matcher: &str) -> Option<regex::Regex> {
-    match regex::RegexBuilder::new(matcher)
-        .case_insensitive(true)
-        .build()
-    {
+fn build_matcher_regex(matcher: &str) -> Option<Regex> {
+    match RegexBuilder::new(matcher).case_insensitive(true).build() {
         Ok(re) => Some(re),
         Err(_) => {
             tracing::warn!(matcher = %matcher, "hook matcher is not valid regex");
@@ -60,7 +60,7 @@ fn build_matcher_regex(matcher: &str) -> Option<regex::Regex> {
 /// exact/pipe matchers (no regex needed) or invalid regex (the hot path
 /// warns and fails closed). The caller passes the compiled regex to
 /// matcher_passes_compiled on each fire.
-pub(crate) fn compile_matcher(matcher: &str) -> Option<regex::Regex> {
+pub(crate) fn compile_matcher(matcher: &str) -> Option<Regex> {
     if matcher.is_empty() || matcher == "*" {
         return None;
     }
@@ -79,7 +79,7 @@ pub(crate) fn compile_matcher(matcher: &str) -> Option<regex::Regex> {
 pub(crate) fn matcher_passes_compiled(
     ctx: &HookContext,
     matcher: &str,
-    compiled: Option<&regex::Regex>,
+    compiled: Option<&Regex>,
 ) -> bool {
     if matcher.is_empty() || matcher == "*" {
         return true;
@@ -142,7 +142,7 @@ pub(crate) fn if_rule_passes(ctx: &HookContext, rule: &str) -> bool {
 /// time. Returns None if the rule has no pattern (bare Tool) or the glob
 /// fails to compile. The caller passes the compiled regex to
 /// if_rule_passes_compiled on each fire.
-pub(crate) fn compile_if_pattern(rule: &str) -> Option<regex::Regex> {
+pub(crate) fn compile_if_pattern(rule: &str) -> Option<Regex> {
     let (_tool, pattern) = parse_if_rule(rule);
     pattern.and_then(glob_to_regex)
 }
@@ -155,7 +155,7 @@ pub(crate) fn compile_if_pattern(rule: &str) -> Option<regex::Regex> {
 pub(crate) fn if_rule_passes_compiled(
     ctx: &HookContext,
     rule: &str,
-    compiled: Option<&regex::Regex>,
+    compiled: Option<&Regex>,
 ) -> bool {
     let (rule_tool, pattern) = parse_if_rule(rule);
     let Some(tool) = tool_name(ctx) else {
@@ -245,7 +245,7 @@ fn tool_name(ctx: &HookContext) -> Option<&str> {
 /// and PostToolUse, this is the tool's input JSON. For PostToolUseFailure,
 /// the error string is wrapped in a JSON object so the if-rule pattern can
 /// match against it. Returns None for non-tool events.
-fn tool_input(ctx: &HookContext) -> Option<serde_json::Value> {
+fn tool_input(ctx: &HookContext) -> Option<Value> {
     match &ctx.payload {
         HookPayload::PreToolUse { input, .. } | HookPayload::PostToolUse { input, .. } => {
             Some(input.clone())
@@ -271,7 +271,7 @@ fn parse_if_rule(rule: &str) -> (&str, Option<&str>) {
 /// rules also key on. Returns None for unknown tools so the caller falls
 /// back to walking all strings (a conservative over-approximation that
 /// never silently un-gates a new tool).
-fn primary_content_field<'a>(tool: &str, input: &'a serde_json::Value) -> Option<&'a str> {
+fn primary_content_field<'a>(tool: &str, input: &'a Value) -> Option<&'a str> {
     let key = match tool.to_ascii_lowercase().as_str() {
         "bash" | "sh" | "exec" | "shell" => "command",
         "write" | "edit" | "multiedit" | "patch" | "str_replace" => "path",
@@ -287,7 +287,7 @@ fn primary_content_field<'a>(tool: &str, input: &'a serde_json::Value) -> Option
 /// characters are literal. Anchored as a full match. Walks the JSON
 /// lazily and returns on the first match so a large input does not
 /// require collecting every string before testing.
-fn glob_matches_any(input: &serde_json::Value, pattern: &str) -> bool {
+fn glob_matches_any(input: &Value, pattern: &str) -> bool {
     let Some(re) = glob_to_regex(pattern) else {
         return false;
     };
@@ -303,7 +303,7 @@ fn glob_matches_any(input: &serde_json::Value, pattern: &str) -> bool {
     })
 }
 
-fn glob_to_regex(pattern: &str) -> Option<regex::Regex> {
+fn glob_to_regex(pattern: &str) -> Option<Regex> {
     let mut out = String::from("^");
     for c in pattern.chars() {
         match c {
@@ -313,7 +313,7 @@ fn glob_to_regex(pattern: &str) -> Option<regex::Regex> {
         }
     }
     out.push('$');
-    regex::Regex::new(&out).ok()
+    Regex::new(&out).ok()
 }
 
 /// Walk every string value reachable in the JSON (object values, array
@@ -322,18 +322,18 @@ fn glob_to_regex(pattern: &str) -> Option<regex::Regex> {
 /// early (callback returned false), true if the walk completed without
 /// stopping. Non-string leaves are ignored. Borrows the JSON — no
 /// allocation unless the callback allocates.
-fn walk_strings<F>(value: &serde_json::Value, mut f: F) -> bool
+fn walk_strings<F>(value: &Value, mut f: F) -> bool
 where
     F: FnMut(&str) -> bool,
 {
-    fn walk<F>(value: &serde_json::Value, f: &mut F) -> bool
+    fn walk<F>(value: &Value, f: &mut F) -> bool
     where
         F: FnMut(&str) -> bool,
     {
         match value {
-            serde_json::Value::String(s) => f(s),
-            serde_json::Value::Array(a) => a.iter().all(|v| walk(v, f)),
-            serde_json::Value::Object(o) => o.values().all(|v| walk(v, f)),
+            Value::String(s) => f(s),
+            Value::Array(a) => a.iter().all(|v| walk(v, f)),
+            Value::Object(o) => o.values().all(|v| walk(v, f)),
             _ => true,
         }
     }

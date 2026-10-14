@@ -8,26 +8,31 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use crate::common::{Key, RENDER_TIMEOUT, pty_session_in_repo, run_skill_command};
+use std::env::temp_dir;
+use std::fs::create_dir_all;
+use std::fs::remove_dir_all;
+use std::fs::write;
+use std::process::id;
 
 /// Throwaway git repo with a paths-gated skill plus a matching file under
 /// src/ and a non-matching one under other/.
 #[allow(clippy::disallowed_methods)]
 fn make_skill_repo(slug: u64) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("houyi-skill-paths-{}-{slug}", std::process::id()));
-    drop(std::fs::remove_dir_all(&dir));
-    std::fs::create_dir_all(&dir).expect("mkdir repo");
-    std::fs::write(dir.join("Cargo.toml"), "[workspace]\nmembers = []\n").expect("write manifest");
+    let dir = temp_dir().join(format!("houyi-skill-paths-{}-{slug}", id()));
+    drop(remove_dir_all(&dir));
+    create_dir_all(&dir).expect("mkdir repo");
+    write(dir.join("Cargo.toml"), "[workspace]\nmembers = []\n").expect("write manifest");
     let skill_dir = dir.join(".houyicoder").join("skills").join("gated");
-    std::fs::create_dir_all(&skill_dir).expect("mkdir skill");
-    std::fs::write(
+    create_dir_all(&skill_dir).expect("mkdir skill");
+    write(
         skill_dir.join("SKILL.md"),
         "---\nname: gated\ndescription: paths-gated fixture\npaths:\n  - src/**\n---\ngated body\n",
     )
     .expect("write skill");
-    std::fs::create_dir_all(dir.join("src")).expect("mkdir src");
-    std::fs::write(dir.join("src").join("foo.rs"), "fn foo() {}\n").expect("write src/foo.rs");
-    std::fs::create_dir_all(dir.join("other")).expect("mkdir other");
-    std::fs::write(dir.join("other").join("x.rs"), "fn x() {}\n").expect("write other/x.rs");
+    create_dir_all(dir.join("src")).expect("mkdir src");
+    write(dir.join("src").join("foo.rs"), "fn foo() {}\n").expect("write src/foo.rs");
+    create_dir_all(dir.join("other")).expect("mkdir other");
+    write(dir.join("other").join("x.rs"), "fn x() {}\n").expect("write other/x.rs");
     for args in [
         &["init", "-q"][..],
         &["config", "user.email", "t@x"][..],
@@ -86,7 +91,7 @@ fn test_conditional_skill_activation_flow() {
         s.output()
     );
     drop(s);
-    std::fs::remove_dir_all(&repo).ok();
+    remove_dir_all(&repo).ok();
 }
 
 /// A non-matching file touch does not activate; /gated still refuses.
@@ -114,5 +119,5 @@ fn test_nonmatching_touch_keeps_refusal() {
         s.output()
     );
     drop(s);
-    std::fs::remove_dir_all(&repo).ok();
+    remove_dir_all(&repo).ok();
 }

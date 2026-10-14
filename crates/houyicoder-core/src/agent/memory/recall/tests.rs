@@ -1,13 +1,18 @@
 //! Recall selection, surfaced scan, and injection tests.
 
 use super::*;
+use crate::agent::manifest::{CompressPolicy, HeuristicSummarizer, build_manifest};
 use houyicoder_api::memory::RerankOutcome;
 use houyicoder_async::PFut;
+use houyicoder_context::{CheckpointId, CheckpointManifest, TurnGroup};
 use houyicoder_context::{
     Disposition, EventId, MemoryEntry, MemoryError, MemoryScope, MemorySource, SessionId,
 };
+use houyicoder_memory::InMemoryBackend;
+use houyicoder_session::SessionStore;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
+use tokio::sync::Notify;
 
 fn ev(session: SessionId, id: EventId, event: SessionEvent) -> SessionLogEntry {
     SessionLogEntry {
@@ -96,7 +101,6 @@ fn test_scan_excludes_folded() {
         ev(s, ids[3], recall(&["kept"])),
     ];
     let manifest = {
-        use houyicoder_context::{CheckpointId, CheckpointManifest, Disposition, TurnGroup};
         CheckpointManifest {
             id: CheckpointId::new(),
             session: s,
@@ -132,7 +136,6 @@ fn test_scan_excludes_folded() {
 
 #[tokio::test]
 async fn test_planner_folds_recall() {
-    use crate::agent::manifest::{CompressPolicy, HeuristicSummarizer, build_manifest};
     let s = SessionId::new();
     let ids = ids(4);
     let events = vec![
@@ -233,9 +236,7 @@ fn body(key: &str) -> MemoryEntry {
 
 /// A session with one user query already logged, plus a fresh store.
 async fn session_with_query(text: &str) -> (Arc<dyn SessionLog>, SessionId) {
-    let store: Arc<dyn SessionLog> = Arc::new(houyicoder_session::SessionStore::new(Box::new(
-        houyicoder_memory::InMemoryBackend::new(),
-    )));
+    let store: Arc<dyn SessionLog> = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let session = SessionId::new();
     store
         .append(new_event(
@@ -441,7 +442,7 @@ async fn test_no_candidates_no_rerank() {
 /// A reranker that stays pending until the test releases it, so a
 /// selection is still running across the second recall.
 struct LatchReranker {
-    release: Arc<tokio::sync::Notify>,
+    release: Arc<Notify>,
     calls: Arc<AtomicUsize>,
     outcome: RerankOutcome,
 }
@@ -468,7 +469,7 @@ async fn test_second_recall_skips_reserved() {
         vec![hit("tea-order", 0)],
         vec![body("tea-order")],
     ));
-    let release = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(Notify::new());
     let calls = Arc::new(AtomicUsize::new(0));
     let reranker: Arc<dyn MemoryReranker> = Arc::new(LatchReranker {
         release: Arc::clone(&release),

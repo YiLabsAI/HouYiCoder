@@ -5,11 +5,16 @@
 
 use houyicoder_context::{ContextBackend, EventId, SessionEvent, SessionId, SessionLogEntry};
 use houyicoder_memory::LocalFileBackend;
+use std::env::temp_dir;
+use std::fs::OpenOptions;
+use std::fs::create_dir_all;
+use std::fs::metadata;
+use std::fs::remove_dir_all;
 use std::path::PathBuf;
 
 fn temp_root() -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("houyicoder_reverse_read_{}", SessionId::new()));
-    std::fs::create_dir_all(&dir).expect("create temp root");
+    let dir = temp_dir().join(format!("houyicoder_reverse_read_{}", SessionId::new()));
+    create_dir_all(&dir).expect("create temp root");
     dir
 }
 
@@ -85,7 +90,7 @@ fn test_reverse_walk_keeps_lines() {
             );
         }
     }
-    std::fs::remove_dir_all(&root).ok();
+    remove_dir_all(&root).ok();
 }
 
 /// A read whose newest end sits on the terminator of the line the chunk
@@ -128,7 +133,7 @@ fn test_reverse_ends_on_line() {
     assert_eq!(rest.lines.len(), 1, "the line before it: {:?}", rest.lines);
     assert!(rest.lines[0].1.contains("xxxx"), "the probe line");
     assert_eq!(rest.next_from, None, "the first line ends the walk");
-    std::fs::remove_dir_all(&root).ok();
+    remove_dir_all(&root).ok();
 }
 
 /// A line wider than the chunk the reader walks, as the log's last line: no
@@ -162,7 +167,7 @@ fn test_reverse_wide_last_line() {
         seen[0], truth.lines[0],
         "the line comes back as the log holds it"
     );
-    std::fs::remove_dir_all(&root).ok();
+    remove_dir_all(&root).ok();
 }
 
 /// A line wider than the chunk the reader walks, as the log's first line:
@@ -208,7 +213,7 @@ fn test_reverse_wide_first_line() {
         !seen.iter().any(|(_, t)| t.contains('z')),
         "no part of the wide line comes back"
     );
-    std::fs::remove_dir_all(&root).ok();
+    remove_dir_all(&root).ok();
 }
 
 /// The log's trailing bytes no terminator follows: they hold no line, so the
@@ -223,10 +228,10 @@ fn test_reverse_unterminated_tail() {
     append(&b, s, "first".into());
     append(&b, s, "second".into());
     let path = root.join(format!("{s}")).join("log.jsonl");
-    let size = std::fs::metadata(&path).unwrap().len();
-    let f = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+    let size = metadata(&path).unwrap().len();
+    let f = OpenOptions::new().write(true).open(&path).unwrap();
     f.set_len(size - 5).unwrap();
-    let torn = std::fs::metadata(&path).unwrap().len();
+    let torn = metadata(&path).unwrap().len();
     let r = b.read_lines_reverse(s, torn, 65536);
     assert_eq!(r.lines.len(), 1, "the line before the tail: {:?}", r.lines);
     assert!(
@@ -239,7 +244,7 @@ fn test_reverse_unterminated_tail() {
         "the tail holds no line, so the read reached the newest one"
     );
     assert_eq!(r.next_from, None, "the read reached the log's first byte");
-    std::fs::remove_dir_all(&root).ok();
+    remove_dir_all(&root).ok();
 }
 
 /// A read whose boundary is the terminator that ends a line: the byte at the
@@ -268,5 +273,5 @@ fn test_reverse_line_end_boundary() {
         r.newest_line_returned,
         "the read reached the newest line at the boundary"
     );
-    std::fs::remove_dir_all(&root).ok();
+    remove_dir_all(&root).ok();
 }

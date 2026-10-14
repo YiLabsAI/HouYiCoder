@@ -9,13 +9,18 @@
 use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
 use houyicoder_memory::LocalFileBackend;
 use houyicoder_session::SessionStore;
+use std::env::temp_dir;
+use std::fs::create_dir_all;
+use std::fs::remove_dir_all;
+use std::path::PathBuf;
+use std::process::id;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-fn temp_root() -> std::path::PathBuf {
+fn temp_root() -> PathBuf {
     static SEQ: AtomicU64 = AtomicU64::new(0);
     let n = SEQ.fetch_add(1, Ordering::Relaxed);
-    let p = std::env::temp_dir().join(format!("sidechain-{}-{n}", std::process::id()));
-    std::fs::create_dir_all(&p).expect("mkdir root");
+    let p = temp_dir().join(format!("sidechain-{}-{n}", id()));
+    create_dir_all(&p).expect("mkdir root");
     p
 }
 
@@ -175,5 +180,5 @@ async fn test_sidechain_isolates_sessions() {
         child_events
     );
 
-    std::fs::remove_dir_all(&root).ok();
+    remove_dir_all(&root).ok();
 }

@@ -19,6 +19,7 @@ use houyicoder_core::agent::multi_agent::registry::{BuiltInRegistry, built_in_al
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::{DelegationTool, Runner, Tokenizer, ToolRegistry};
 use houyicoder_memory::InMemoryBackend;
+use houyicoder_protocol::llm::InputItem;
 use houyicoder_protocol::llm::{
     CompletionRequest, CompletionResponse, LlmEvent, ModelCapabilities, OutputItem, ProviderError,
     Usage,
@@ -26,6 +27,9 @@ use houyicoder_protocol::llm::{
 use houyicoder_provider::FakeProvider;
 use houyicoder_service::composition::multi_agent::{MultiAgentDeps, MultiAgentRuntime};
 use houyicoder_session::SessionStore;
+use std::path::PathBuf;
+use tokio::runtime::Builder;
+use tokio::runtime::Runtime;
 
 /// A reference text the real BPE tokenizer counts at a known value. Pinned so
 /// that swapping Tokenizer::real for Tokenizer::new (the HOUYICODER_FAST_TOKENS
@@ -132,7 +136,6 @@ impl RecordingProvider {
     /// tool_calls would undercount the delegation parent (its agent-tool-call
     /// turn) and make the displacement bound asymmetric + lenient.
     fn prompt_text(req: &CompletionRequest) -> String {
-        use houyicoder_protocol::llm::InputItem;
         let mut out = String::new();
         out.push_str(&req.instructions);
         for item in &req.input {
@@ -248,7 +251,7 @@ fn build_harness(
             tools,
             config,
             worktree_controller: None,
-            workspace: Some(std::path::PathBuf::from("/tmp")),
+            workspace: Some(PathBuf::from("/tmp")),
             bus: None,
             descriptor_store: None,
         });
@@ -268,7 +271,7 @@ fn build_harness(
     }
 }
 
-fn run(rt: &tokio::runtime::Runtime, runner: &Runner, session: SessionId, text: &str) {
+fn run(rt: &Runtime, runner: &Runner, session: SessionId, text: &str) {
     let outcome = rt.block_on(async { runner.run(session, text.to_string()).await });
     assert!(outcome.is_ok(), "run({text}) failed: {:?}", outcome.err());
 }
@@ -312,10 +315,7 @@ fn first_prefix(records: &[CallRecord], tok: &Tokenizer, marker: &str) -> u32 {
 #[ignore]
 #[test]
 fn test_delegation_displaces_child() {
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
+    let rt = Builder::new_current_thread().enable_all().build().unwrap();
 
     // --- self-check: a real BPE, not the fast chars/4 path ---
     let tok = Tokenizer::real();
@@ -437,10 +437,7 @@ fn test_delegation_displaces_child() {
 #[ignore]
 #[test]
 fn test_gate_catches_undisplaced() {
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
+    let rt = Builder::new_current_thread().enable_all().build().unwrap();
     let delegation = build_harness(
         vec![
             text_response("ack"),
@@ -473,10 +470,7 @@ fn test_gate_catches_undisplaced() {
 #[ignore]
 #[test]
 fn test_gate_catches_missing_result() {
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
+    let rt = Builder::new_current_thread().enable_all().build().unwrap();
     let delegation = build_harness(
         vec![
             text_response("ack"),

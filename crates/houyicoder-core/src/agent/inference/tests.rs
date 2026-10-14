@@ -1,19 +1,21 @@
 //! Tests for this module.
 
 use super::*;
+use crate::agent::ToolRegistry;
 use crate::agent::runner_config::RunnerConfig;
 use crate::agent::{ModelCatalogResolver, Runner};
+use crate::provider::test_support::FakeProvider;
+use houyicoder_memory::InMemoryBackend;
+use houyicoder_session::SessionStore;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 fn runner_with(model: &str) -> Runner {
-    let store = Arc::new(houyicoder_session::SessionStore::new(Box::new(
-        houyicoder_memory::InMemoryBackend::new(),
-    )));
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     Runner::new(
         store,
-        Arc::new(crate::provider::test_support::FakeProvider::text("x")),
-        crate::agent::ToolRegistry::new(),
+        Arc::new(FakeProvider::text("x")),
+        ToolRegistry::new(),
         RunnerConfig {
             model: model.into(),
             ..RunnerConfig::default()

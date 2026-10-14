@@ -1,6 +1,7 @@
 //! Tests for this module.
 
 use super::*;
+use houyicoder_context::MemorySource;
 
 /// Every port must support runtime dispatch.
 #[test]
@@ -65,7 +66,7 @@ fn test_store_stub_round_trip() {
         matches!(store.read("any"), Err(MemoryError::NotFound)),
         "read returns NotFound for the stub"
     );
-    let entry = MemoryEntry::new("k", "content", houyicoder_context::MemorySource::User);
+    let entry = MemoryEntry::new("k", "content", MemorySource::User);
     assert!(store.write(entry).is_ok(), "write accepts the entry");
     assert!(store.rebuild().is_ok(), "rebuild succeeds");
 }

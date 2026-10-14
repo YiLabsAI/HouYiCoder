@@ -22,6 +22,7 @@ use std::fs::read_dir;
 use std::fs::remove_dir_all;
 use std::fs::remove_file;
 use std::fs::write;
+use std::io::Error;
 use std::io::ErrorKind;
 use std::time::SystemTime;
 use walkdir::WalkDir;
@@ -573,7 +574,7 @@ fn reflink_policy(can_reflink: bool, workspace_size: u64) -> std::io::Result<()>
         return Ok(());
     }
     if workspace_size > NO_REFLINK_SIZE_THRESHOLD {
-        return Err(std::io::Error::new(
+        return Err(Error::new(
             ErrorKind::Unsupported,
             format!(
                 "reflink unavailable (ext4?) + workspace {} bytes > {} threshold; \

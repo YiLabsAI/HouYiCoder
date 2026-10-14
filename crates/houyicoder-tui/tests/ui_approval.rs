@@ -11,8 +11,15 @@
 #![allow(clippy::unwrap_in_result)]
 
 use crate::common::{Key, RENDER_TIMEOUT, pty_session_in_repo};
+use std::env::temp_dir;
+use std::fs::create_dir_all;
+use std::fs::remove_dir_all;
+use std::fs::write;
 use std::path::PathBuf;
 use std::process::Command;
+use std::process::id;
+use std::thread::sleep;
+use std::time::Duration;
 
 /// A two-response script: the first carries a bash ToolCall so the runner
 /// raises a permission ask (in Manual mode bash is guarded -> ASK; read-only
@@ -37,11 +44,10 @@ const LONG_BASH_ASK_SCRIPT: &str = r#"[
 /// delay stub delivery past the render timeout.
 #[allow(clippy::disallowed_methods)]
 fn make_temp_repo(slug: u64) -> PathBuf {
-    let dir =
-        std::env::temp_dir().join(format!("houyi-approval-repo-{}-{slug}", std::process::id()));
-    drop(std::fs::remove_dir_all(&dir));
-    std::fs::create_dir_all(&dir).expect("mkdir repo");
-    std::fs::write(dir.join("Cargo.toml"), "[workspace]\nmembers = []\n").expect("write manifest");
+    let dir = temp_dir().join(format!("houyi-approval-repo-{}-{slug}", id()));
+    drop(remove_dir_all(&dir));
+    create_dir_all(&dir).expect("mkdir repo");
+    write(dir.join("Cargo.toml"), "[workspace]\nmembers = []\n").expect("write manifest");
     for args in [&["init", "-q"][..], &["add", "Cargo.toml"][..]] {
         let ok = Command::new("git")
             .arg("-C")
@@ -168,7 +174,7 @@ fn test_deny_bash_clears_ends() {
     // label stays manual.
     s.clear_output();
     s.send_key(&Key::Esc);
-    std::thread::sleep(std::time::Duration::from_millis(200));
+    sleep(Duration::from_millis(200));
     assert!(
         s.wait_for("done", RENDER_TIMEOUT),
         "denying should still let the run end:\n{}",

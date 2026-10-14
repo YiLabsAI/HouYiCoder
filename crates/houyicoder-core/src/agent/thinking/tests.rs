@@ -3,6 +3,7 @@
 use super::super::{RunOutcome, Runner, RunnerConfig, ToolRegistry};
 use super::*;
 use crate::provider::test_support::FakeProvider;
+use houyicoder_api::provider::ModelProvider;
 use houyicoder_context::{SessionEvent, SessionId};
 use houyicoder_memory::InMemoryBackend;
 use houyicoder_protocol::llm::Usage;
@@ -11,9 +12,9 @@ use houyicoder_resilience::Retry;
 use houyicoder_session::SessionStore;
 use std::sync::Arc;
 
-fn runner(provider: Arc<dyn houyicoder_api::provider::ModelProvider>) -> Runner {
+fn runner(provider: Arc<dyn ModelProvider>) -> Runner {
     Runner::new(
-        std::sync::Arc::new(SessionStore::new(Box::new(InMemoryBackend::new()))),
+        Arc::new(SessionStore::new(Box::new(InMemoryBackend::new()))),
         provider,
         ToolRegistry::new(),
         RunnerConfig {

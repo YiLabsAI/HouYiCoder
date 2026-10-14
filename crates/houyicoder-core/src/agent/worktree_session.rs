@@ -15,6 +15,9 @@ use std::process::Command;
 use houyicoder_context::SessionId;
 #[cfg(test)]
 use std::env::current_dir;
+use std::error::Error;
+use std::fmt::Display;
+use std::fmt::Formatter;
 use std::fs::create_dir_all;
 use std::process::Stdio;
 use std::thread::sleep;
@@ -44,8 +47,8 @@ pub enum WorktreeError {
     NotARepo,
 }
 
-impl std::fmt::Display for WorktreeError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for WorktreeError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::SlugInvalid(m) => write!(f, "{m}"),
             Self::Git { stderr } => write!(f, "git failed: {}", stderr.trim()),
@@ -58,7 +61,7 @@ impl std::fmt::Display for WorktreeError {
     }
 }
 
-impl std::error::Error for WorktreeError {}
+impl Error for WorktreeError {}
 
 /// Validate a worktree slug to prevent path traversal and directory escape.
 /// Each slash-separated segment must be non-empty, match the allowlist, and

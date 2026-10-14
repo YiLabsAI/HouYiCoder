@@ -14,8 +14,13 @@
 #![allow(clippy::unwrap_in_result)]
 
 use crate::common::{Key, RENDER_TIMEOUT, pty_session, pty_session_in_repo, run_slash_command};
+use std::env::temp_dir;
+use std::fs::create_dir_all;
+use std::fs::remove_dir_all;
+use std::fs::write;
 use std::path::PathBuf;
 use std::process::Command;
+use std::process::id;
 use std::time::Duration;
 
 /// /worktree opens the pane and renders the list header plus at least one
@@ -85,10 +90,10 @@ fn test_pane_search_esc_clears() {
 /// under the repo state dir, never in the developer real workspace.
 #[allow(clippy::disallowed_methods)]
 fn make_temp_repo(slug: u64) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("houyi-u8-repo-{}-{slug}", std::process::id()));
-    drop(std::fs::remove_dir_all(&dir));
-    std::fs::create_dir_all(&dir).expect("mkdir repo");
-    std::fs::write(dir.join("Cargo.toml"), "[workspace]\nmembers = []\n").expect("write manifest");
+    let dir = temp_dir().join(format!("houyi-u8-repo-{}-{slug}", id()));
+    drop(remove_dir_all(&dir));
+    create_dir_all(&dir).expect("mkdir repo");
+    write(dir.join("Cargo.toml"), "[workspace]\nmembers = []\n").expect("write manifest");
     for args in [
         &["init", "-q"][..],
         &["config", "user.email", "t@x"][..],
@@ -185,7 +190,7 @@ fn test_exit_remove_asks_deletes() {
         s.output()
     );
     drop(s);
-    std::fs::remove_dir_all(&repo).ok();
+    remove_dir_all(&repo).ok();
 }
 
 /// A four-response script: enter a worktree, dirty it with an untracked file
@@ -262,5 +267,5 @@ fn test_remove_refuses_uncommitted_work() {
         s.output()
     );
     drop(s);
-    std::fs::remove_dir_all(&repo).ok();
+    remove_dir_all(&repo).ok();
 }

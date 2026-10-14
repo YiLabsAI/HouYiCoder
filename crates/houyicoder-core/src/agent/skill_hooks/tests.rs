@@ -9,6 +9,8 @@ use std::sync::RwLock;
 
 use super::super::{HookPayload, ToolResult};
 use std::io::Cursor;
+use std::io::Read;
+use std::io::Write;
 use std::io::sink;
 use std::sync::Mutex;
 
@@ -22,8 +24,8 @@ struct StubLauncher {
 impl ProcessLauncher for StubLauncher {
     fn spawn(&self, _req: SpawnRequest, _policy: SpawnPolicy) -> Result<LauncherChild, SpawnError> {
         let stdout_buf = self.stdout.clone().into_bytes();
-        let stdout: Box<dyn std::io::Read + Send> = Box::new(Cursor::new(stdout_buf));
-        let stdin: Box<dyn std::io::Write + Send> = Box::new(sink());
+        let stdout: Box<dyn Read + Send> = Box::new(Cursor::new(stdout_buf));
+        let stdin: Box<dyn Write + Send> = Box::new(sink());
         let pipes = StdioPipes {
             stdin: Some(stdin),
             stdout: Some(stdout),

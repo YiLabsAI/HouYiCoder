@@ -31,6 +31,14 @@ use crate::runtime_dirs::RuntimeDirs;
 use helpers::COUNTER;
 use helpers::{ExecCountGuard, kill_process_group, mkdtemp, tree_cpu_secs};
 use seatbelt_stream::stream_drain;
+use std::env::var;
+use std::fs::remove_dir_all;
+use std::process::Stdio;
+use std::process::id;
+use std::sync::atomic::AtomicI64;
+use std::time::Duration;
+use tokio::process::Command;
+use tokio::time::timeout;
 
 /// A macOS Seatbelt sandbox session. The workspace is a temp dir, the user's
 /// project dir, or a linked git worktree owned by this session (the Isolated
@@ -116,9 +124,9 @@ impl MacSeatbeltSession {
         let workspace = dunce::canonicalize(&workspace)?;
         let tmpdir = mkdtemp("houyicoder-tmp")?;
         let tmpdir = dunce::canonicalize(&tmpdir)?;
-        let home = std::env::var("HOME").unwrap_or_else(|_| "/Users/unknown".into());
-        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
-        let tag = format!("houyicoder-sandbox-{}", std::process::id());
+        let home = var("HOME").unwrap_or_else(|_| "/Users/unknown".into());
+        let shell = var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
+        let tag = format!("houyicoder-sandbox-{}", id());
         let profile = render(&ProfileSpec::new(
             &workspace,
             &tmpdir.to_string_lossy(),
@@ -157,9 +165,9 @@ impl MacSeatbeltSession {
             .map_err(|e| SandboxError::Io(format!("cwd canonicalize: {e}")))?;
         let tmpdir = mkdtemp("houyicoder-tmp")?;
         let tmpdir = dunce::canonicalize(&tmpdir)?;
-        let home = std::env::var("HOME").unwrap_or_else(|_| "/Users/unknown".into());
-        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
-        let tag = format!("houyicoder-sandbox-{}", std::process::id());
+        let home = var("HOME").unwrap_or_else(|_| "/Users/unknown".into());
+        let shell = var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
+        let tag = format!("houyicoder-sandbox-{}", id());
         let profile = render(&ProfileSpec::new(
             &workspace,
             &tmpdir.to_string_lossy(),
@@ -207,7 +215,7 @@ impl MacSeatbeltSession {
     /// to work while the fence stayed contained.
     #[must_use]
     pub fn with_network(mut self, network: NetworkPolicy) -> Self {
-        let home = std::env::var("HOME").unwrap_or_else(|_| "/Users/unknown".into());
+        let home = var("HOME").unwrap_or_else(|_| "/Users/unknown".into());
         self.profile = render(
             &ProfileSpec::new(
                 &self.workspace,
@@ -258,7 +266,7 @@ impl MacSeatbeltSession {
         {
             return self.profile.clone();
         }
-        let home = std::env::var("HOME").unwrap_or_else(|_| "/Users/unknown".into());
+        let home = var("HOME").unwrap_or_else(|_| "/Users/unknown".into());
         let read_refs: Vec<&str> = read_only
             .iter()
             .map(|path| path.to_str().unwrap_or(""))
@@ -361,12 +369,12 @@ impl Drop for MacSeatbeltSession {
         // Only a tempdir workspace this session created is removed here; a
         // user-cwd workspace is never deleted. Best-effort; never panic.
         if self.owned {
-            let _result = std::fs::remove_dir_all(&self.workspace);
+            let _result = remove_dir_all(&self.workspace);
         }
         // The per-session temp dir is always created by this session, so it is
         // always removed here (unlike the workspace, which may be a user cwd).
         // Best-effort; never panic.
-        let _result = std::fs::remove_dir_all(&self.tmpdir);
+        let _result = remove_dir_all(&self.tmpdir);
     }
 }
 
@@ -376,7 +384,7 @@ impl MacSeatbeltSession {
         &self,
         command: String,
         config: ExecConfig,
-        lines: Option<std::sync::Arc<std::sync::atomic::AtomicI64>>,
+        lines: Option<Arc<AtomicI64>>,
     ) -> Result<ExecResult, SandboxError> {
         let profile = self.current_profile();
         let cwd = self.effective_workspace();
@@ -413,7 +421,7 @@ impl MacSeatbeltSession {
         {
             return Err(SandboxError::BreakerOpen(e.to_string()));
         }
-        let mut cmd = tokio::process::Command::new("sandbox-exec");
+        let mut cmd = Command::new("sandbox-exec");
         // Export the per-session temp dir as TMPDIR so heredoc temp files
         // and tools that honor TMPDIR land inside the fence (the profile
         // allow-lists this exact path). TMPPREFIX routes zsh's heredoc
@@ -430,8 +438,8 @@ impl MacSeatbeltSession {
             .arg("-c")
             .arg(&command)
             .current_dir(&cwd)
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
             .kill_on_drop(true);
         // process_group(0) puts child + all descendants in a NEW process
         // group (pgid = child pid) so killpg(pgid) reaps the whole tree on
@@ -467,7 +475,7 @@ impl MacSeatbeltSession {
         } else {
             None
         };
-        let wall = std::time::Duration::from_millis(config.wall_timeout_ms);
+        let wall = Duration::from_millis(config.wall_timeout_ms);
         // The ONLY branch that differs between exec_with_config and
         // exec_streaming: lines None → wait_with_output (the original path,
         // no behavior change); lines Some → stream_drain (concurrent stdout
@@ -477,9 +485,9 @@ impl MacSeatbeltSession {
         // the drain future → child drops (kill_on_drop) → _tree_guard killpg,
         // exactly the existing timeout path.
         let outcome = if let Some(lines) = lines.as_ref() {
-            tokio::time::timeout(wall, stream_drain(child, lines)).await
+            timeout(wall, stream_drain(child, lines)).await
         } else {
-            tokio::time::timeout(wall, child.wait_with_output()).await
+            timeout(wall, child.wait_with_output()).await
         };
         // Measure the tree's CPU while _tree_guard still holds the group
         // alive. Drop order is reverse declaration: breaker_guard drops
@@ -526,7 +534,7 @@ impl SandboxSession for MacSeatbeltSession {
         FenceStatus::Enforced
     }
 
-    fn as_containment(&self) -> Option<&dyn houyicoder_api::sandbox::Containment> {
+    fn as_containment(&self) -> Option<&dyn Containment> {
         Some(self)
     }
     /// The child is spawned via sandbox-exec (the seatbelt spawn path), not
@@ -548,7 +556,7 @@ impl SandboxSession for MacSeatbeltSession {
     fn exec_streaming(
         &self,
         command: &str,
-        lines: std::sync::Arc<std::sync::atomic::AtomicI64>,
+        lines: Arc<AtomicI64>,
     ) -> PFut<'_, Result<ExecResult, SandboxError>> {
         let command = command.to_string();
         Box::pin(async move {

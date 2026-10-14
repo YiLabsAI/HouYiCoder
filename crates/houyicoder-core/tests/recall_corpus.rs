@@ -13,10 +13,12 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use fs::OpenOptions;
 use houyicoder_api::memory::MemoryProvider;
 use houyicoder_context::{MemoryEntry, MemorySource};
 use houyicoder_memory::MarkdownMemoryProvider;
 use serde::Deserialize;
+use std::process::id;
 
 /// One topic record: the description is the frontmatter line the lexical
 /// rank scores, the body rides along for the write path only.
@@ -95,7 +97,7 @@ fn pin_recency(root: &Path, corpus: &Corpus) {
     let base = now.saturating_sub(corpus.entries.len() as u64 + 60);
     for (index, entry) in corpus.entries.iter().enumerate() {
         let path = root.join(format!("{}.md", entry.key));
-        let file = fs::OpenOptions::new()
+        let file = OpenOptions::new()
             .write(true)
             .open(&path)
             .expect("topic file openable");
@@ -113,5 +115,5 @@ fn unique_root(tag: &str) -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.subsec_nanos())
         .unwrap_or(0);
-    env::temp_dir().join(format!("{tag}-{}-{seq}-{nanos}", std::process::id()))
+    env::temp_dir().join(format!("{tag}-{}-{seq}-{nanos}", id()))
 }

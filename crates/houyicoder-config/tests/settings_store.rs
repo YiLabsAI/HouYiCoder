@@ -6,11 +6,17 @@
 use std::path::PathBuf;
 
 use houyicoder_config::update_settings;
+use std::fs::create_dir_all;
+use std::fs::read_to_string;
+use std::fs::remove_dir_all;
+use std::fs::write;
+use std::process::id;
+use std::thread::spawn;
 
 fn temp_dir(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("houyi-settings-{}-{tag}", std::process::id()));
-    drop(std::fs::remove_dir_all(&dir));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = std::env::temp_dir().join(format!("houyi-settings-{}-{tag}", id()));
+    drop(remove_dir_all(&dir));
+    create_dir_all(&dir).unwrap();
     dir
 }
 
@@ -25,7 +31,7 @@ fn test_write_preserves_unknown_keys() {
         "model": {"catalog": [{"id": "qwen3.7-max"}]},
         "foo": "unknown-key-must-survive"
     }"#;
-    std::fs::write(&path, pre).unwrap();
+    write(&path, pre).unwrap();
 
     update_settings(
         &path,
@@ -36,8 +42,7 @@ fn test_write_preserves_unknown_keys() {
     )
     .unwrap();
 
-    let after: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let after: serde_json::Value = serde_json::from_str(&read_to_string(&path).unwrap()).unwrap();
     assert_eq!(after["auto_memory"], true, "mutator target key written");
     assert_eq!(after["auto_dream"], true, "unrelated toggle key preserved");
     assert_eq!(
@@ -52,7 +57,7 @@ fn test_write_preserves_unknown_keys() {
         after["foo"], "unknown-key-must-survive",
         "unknown key preserved"
     );
-    drop(std::fs::remove_dir_all(&dir));
+    drop(remove_dir_all(&dir));
 }
 
 #[test]
@@ -60,7 +65,7 @@ fn test_corrupt_json_not_overwritten() {
     let dir = temp_dir("corrupt");
     let path = dir.join("settings.json");
     let broken = "{ this is not valid json";
-    std::fs::write(&path, broken).unwrap();
+    write(&path, broken).unwrap();
 
     let result = update_settings(
         &path,
@@ -74,9 +79,9 @@ fn test_corrupt_json_not_overwritten() {
         result.is_err(),
         "corrupt JSON must not be silently overwritten"
     );
-    let on_disk = std::fs::read_to_string(&path).unwrap();
+    let on_disk = read_to_string(&path).unwrap();
     assert_eq!(on_disk, broken, "broken file left exactly as-is");
-    drop(std::fs::remove_dir_all(&dir));
+    drop(remove_dir_all(&dir));
 }
 
 #[test]
@@ -94,28 +99,27 @@ fn test_write_creates_new_file() {
     )
     .unwrap();
 
-    let after: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let after: serde_json::Value = serde_json::from_str(&read_to_string(&path).unwrap()).unwrap();
     assert_eq!(after["auto_memory"], true, "target key written to new file");
     assert!(
         after.get("sandbox").map(|v| v.is_null()).unwrap_or(true),
         "no sandbox injected into a fresh file"
     );
-    drop(std::fs::remove_dir_all(&dir));
+    drop(remove_dir_all(&dir));
 }
 
 #[test]
 fn test_concurrent_write_keeps_keys() {
     let dir = temp_dir("concurrent");
     let path = dir.join("settings.json");
-    std::fs::write(
+    write(
         &path,
         r#"{"auto_memory":false,"auto_dream":false,"sandbox":{"network":{"mode":"off"}},"foo":"keep"}"#,
     )
     .unwrap();
 
     let p1 = path.clone();
-    let t1 = std::thread::spawn(move || {
+    let t1 = spawn(move || {
         update_settings(
             &p1,
             |v| {
@@ -125,7 +129,7 @@ fn test_concurrent_write_keeps_keys() {
         )
     });
     let p2 = path.clone();
-    let t2 = std::thread::spawn(move || {
+    let t2 = spawn(move || {
         update_settings(
             &p2,
             |v| {
@@ -137,8 +141,7 @@ fn test_concurrent_write_keeps_keys() {
     drop(t1.join().unwrap());
     drop(t2.join().unwrap());
 
-    let after: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let after: serde_json::Value = serde_json::from_str(&read_to_string(&path).unwrap()).unwrap();
     assert_eq!(
         after["sandbox"]["network"]["mode"], "off",
         "sandbox not lost to a concurrent writer"
@@ -146,5 +149,5 @@ fn test_concurrent_write_keeps_keys() {
     assert_eq!(after["foo"], "keep", "unknown key not lost");
     assert_eq!(after["auto_memory"], true, "both writes land via CAS retry");
     assert_eq!(after["auto_dream"], true, "both writes land via CAS retry");
-    drop(std::fs::remove_dir_all(&dir));
+    drop(remove_dir_all(&dir));
 }

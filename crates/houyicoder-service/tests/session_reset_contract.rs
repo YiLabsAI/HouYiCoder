@@ -12,7 +12,9 @@ use houyicoder_context::SessionId;
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::{Runner, ToolRegistry};
 use houyicoder_memory::InMemoryBackend;
+use houyicoder_permission::DefaultModeGate;
 use houyicoder_protocol::envelope::{ClientFrame, RequestEnvelope, RequestId};
+use houyicoder_protocol::framing::encode;
 use houyicoder_protocol::frontend::{FrontendRequest, SessionId as FrontendSessionId};
 use houyicoder_protocol::handshake::Hello;
 use houyicoder_provider::FakeProvider;
@@ -70,11 +72,7 @@ async fn test_session_reset_acks_matching() {
     let (runner, session) = stub_runner();
     let session_id = FrontendSessionId(session.to_string());
     let (server_io, mut client_tx, mut client_rx) = pair();
-    let server = Server::new(
-        runner,
-        session,
-        std::sync::Arc::new(houyicoder_permission::DefaultModeGate::new()),
-    );
+    let server = Server::new(runner, session, Arc::new(DefaultModeGate::new()));
     let handle = tokio::spawn(async move { server.serve(server_io).await });
 
     send(&mut client_tx, &Hello::local()).await;
@@ -96,11 +94,7 @@ async fn test_session_reset_acks_matching() {
 async fn test_reset_rejects_mismatched_session() {
     let (runner, session) = stub_runner();
     let (server_io, mut client_tx, mut client_rx) = pair();
-    let server = Server::new(
-        runner,
-        session,
-        std::sync::Arc::new(houyicoder_permission::DefaultModeGate::new()),
-    );
+    let server = Server::new(runner, session, Arc::new(DefaultModeGate::new()));
     let handle = tokio::spawn(async move { server.serve(server_io).await });
 
     send(&mut client_tx, &Hello::local()).await;
@@ -122,7 +116,7 @@ async fn test_reset_rejects_mismatched_session() {
 }
 
 async fn send(tx: &mut mpsc::Sender<String>, msg: &impl serde::Serialize) {
-    let mut f = houyicoder_protocol::framing::encode(msg).expect("encode");
+    let mut f = encode(msg).expect("encode");
     if !f.ends_with('\n') {
         f.push('\n');
     }

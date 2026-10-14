@@ -8,21 +8,33 @@
 use futures::SinkExt;
 use futures::StreamExt;
 use futures::channel::mpsc;
+use futures::stream::iter;
+use futures::stream::pending;
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_context::SessionId;
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::{Runner, ToolRegistry};
 use houyicoder_memory::InMemoryBackend;
+use houyicoder_protocol::acp_wire::AcpNotification;
 use houyicoder_protocol::acp_wire::{AcpRequest, PromptResponse};
 use houyicoder_protocol::acpx::AcpxCapabilities;
 use houyicoder_protocol::framing::encode;
+use houyicoder_protocol::frontend::run::StopReason;
+use houyicoder_protocol::llm::CompletionRequest;
+use houyicoder_protocol::llm::CompletionResponse;
+use houyicoder_protocol::llm::LlmEvent;
+use houyicoder_protocol::llm::ModelCapabilities;
+use houyicoder_protocol::llm::ProviderError;
+use houyicoder_protocol::llm::Usage;
 use houyicoder_provider::FakeProvider;
 use houyicoder_service::acp_adapter::AcpAdapter;
 use houyicoder_service::acp_serve::AcpIo;
 use houyicoder_service::acp_server::AcpServer;
 use houyicoder_service::lifecycle::SessionLeaseStore;
 use houyicoder_session::SessionStore;
+use std::pin::Pin;
 use std::sync::Arc;
+use tokio::task::yield_now;
 
 /// Build a minimal runner over a stub provider that returns one text reply.
 fn stub_runner() -> (Arc<Runner>, SessionId) {
@@ -124,7 +136,7 @@ async fn test_prompt_response_round_trips() {
     // Sanity: the PromptResponse shape the server sends is the wire shape
     // a stock ACP client decodes.
     let resp = PromptResponse {
-        stop_reason: houyicoder_protocol::frontend::run::StopReason::EndTurn,
+        stop_reason: StopReason::EndTurn,
         meta: None,
     };
     let j = serde_json::to_string(&serde_json::to_value(&resp).unwrap()).unwrap();
@@ -136,11 +148,11 @@ async fn test_prompt_response_round_trips() {
 /// the engine's HangingProvider (pub(crate) there) so this contract test can
 /// exercise the wire-side cancel path without a real latency window.
 struct HangingProvider {
-    events: Vec<houyicoder_protocol::llm::LlmEvent>,
+    events: Vec<LlmEvent>,
 }
 
 impl HangingProvider {
-    fn new(events: Vec<houyicoder_protocol::llm::LlmEvent>) -> Self {
+    fn new(events: Vec<LlmEvent>) -> Self {
         Self { events }
     }
 }
@@ -148,52 +160,35 @@ impl HangingProvider {
 impl ModelProvider for HangingProvider {
     fn complete(
         &self,
-        _req: houyicoder_protocol::llm::CompletionRequest,
-    ) -> std::pin::Pin<
+        _req: CompletionRequest,
+    ) -> Pin<
         Box<
-            dyn std::future::Future<
-                    Output = Result<
-                        houyicoder_protocol::llm::CompletionResponse,
-                        houyicoder_protocol::llm::ProviderError,
-                    >,
-                > + Send
-                + '_,
+            dyn std::future::Future<Output = Result<CompletionResponse, ProviderError>> + Send + '_,
         >,
     > {
         Box::pin(async {
-            Ok(houyicoder_protocol::llm::CompletionResponse {
+            Ok(CompletionResponse {
                 output: vec![],
-                usage: houyicoder_protocol::llm::Usage::default(),
+                usage: Usage::default(),
                 model: "test".into(),
             })
         })
     }
     fn stream(
         &self,
-        _req: houyicoder_protocol::llm::CompletionRequest,
-    ) -> std::pin::Pin<
-        Box<
-            dyn futures::Stream<
-                    Item = Result<
-                        houyicoder_protocol::llm::LlmEvent,
-                        houyicoder_protocol::llm::ProviderError,
-                    >,
-                > + Send
-                + '_,
-        >,
-    > {
-        let prefix = futures::stream::iter(self.events.clone().into_iter().map(Ok));
-        let tail = futures::stream::pending();
+        _req: CompletionRequest,
+    ) -> Pin<Box<dyn futures::Stream<Item = Result<LlmEvent, ProviderError>> + Send + '_>> {
+        let prefix = iter(self.events.clone().into_iter().map(Ok));
+        let tail = pending();
         Box::pin(prefix.chain(tail))
     }
-    fn capabilities(&self) -> houyicoder_protocol::llm::ModelCapabilities {
-        houyicoder_protocol::llm::ModelCapabilities::default()
+    fn capabilities(&self) -> ModelCapabilities {
+        ModelCapabilities::default()
     }
 }
 
 #[tokio::test]
 async fn test_cancel_during_run_cancelled() {
-    use houyicoder_protocol::llm::LlmEvent;
     let provider: Arc<dyn ModelProvider> =
         Arc::new(HangingProvider::new(vec![LlmEvent::TextDelta {
             id: "t1".into(),
@@ -242,11 +237,11 @@ async fn test_cancel_during_run_cancelled() {
 
     // Let the run enter the streaming select! (the pending tail). A yield is
     // enough — the run is hung in the stream's pending tail, no frames yet.
-    tokio::task::yield_now().await;
+    yield_now().await;
 
     // Send the cancel notification. The concurrent reader in handle_prompt
     // aborts the run; it resolves Interrupted; the prompt replies cancelled.
-    let cancel = houyicoder_protocol::acp_wire::AcpNotification::new(
+    let cancel = AcpNotification::new(
         "session/cancel",
         serde_json::json!({"sessionId": session_str}),
     );

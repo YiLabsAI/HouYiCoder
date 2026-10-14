@@ -18,6 +18,10 @@
 //! total spawned CPU, in-flight proc count, or consecutive per-cmd budget
 //! exceed. A foundation leaf with no internal deps.
 
+use std::error::Error;
+use std::fmt::Debug;
+use std::fmt::Display;
+use std::fmt::Formatter;
 use std::future::Future;
 #[cfg(test)]
 use std::sync::Arc;
@@ -27,6 +31,7 @@ use std::thread::spawn;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 use std::time::{Duration, Instant};
+use tokio::time::sleep;
 
 /// Retry configuration: exponential backoff with jitter, capped attempts.
 #[derive(Debug, Clone, Copy)]
@@ -60,8 +65,8 @@ pub enum RetryError<E> {
     Fatal { error: E },
 }
 
-impl<E: std::fmt::Display> std::fmt::Display for RetryError<E> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl<E: Display> Display for RetryError<E> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Exhausted { attempts, last } => {
                 write!(
@@ -76,7 +81,7 @@ impl<E: std::fmt::Display> std::fmt::Display for RetryError<E> {
     }
 }
 
-impl<E: std::fmt::Debug + std::fmt::Display> std::error::Error for RetryError<E> {}
+impl<E: Debug + Display> Error for RetryError<E> {}
 
 impl Retry {
     /// The delay to wait before the next attempt. Exponential backoff from
@@ -101,7 +106,7 @@ impl Retry {
     where
         F: FnMut(u32) -> Fut,
         Fut: Future<Output = Result<T, E>>,
-        E: std::fmt::Debug,
+        E: Debug,
     {
         let mut delay = self.base_delay;
         let mut last_err: Option<E> = None;
@@ -113,7 +118,7 @@ impl Retry {
                     if attempt == self.max_attempts {
                         break;
                     }
-                    tokio::time::sleep(jittered(delay)).await;
+                    sleep(jittered(delay)).await;
                     delay = (delay * 2).min(self.max_delay);
                 }
             }
@@ -137,7 +142,7 @@ impl Retry {
     where
         F: FnMut(u32) -> Fut,
         Fut: Future<Output = Result<T, E>>,
-        E: std::fmt::Debug,
+        E: Debug,
         P: Fn(&E) -> bool,
     {
         let mut delay = self.base_delay;
@@ -153,7 +158,7 @@ impl Retry {
                     if attempt == self.max_attempts {
                         break;
                     }
-                    tokio::time::sleep(jittered(delay)).await;
+                    sleep(jittered(delay)).await;
                     delay = (delay * 2).min(self.max_delay);
                 }
             }
@@ -362,8 +367,8 @@ pub enum GuardedError<E> {
     BreakerOpen,
 }
 
-impl<E: std::fmt::Display> std::fmt::Display for GuardedError<E> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl<E: Display> Display for GuardedError<E> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Retry(e) => write!(f, "{e}"),
             Self::BreakerOpen => write!(f, "circuit breaker open; call rejected"),
@@ -371,7 +376,7 @@ impl<E: std::fmt::Display> std::fmt::Display for GuardedError<E> {
     }
 }
 
-impl<E: std::fmt::Debug + std::fmt::Display> std::error::Error for GuardedError<E> {}
+impl<E: Debug + Display> Error for GuardedError<E> {}
 
 impl Retry {
     /// Run an operation with exponential backoff, retrying only errors the
@@ -389,7 +394,7 @@ impl Retry {
     where
         F: FnMut(u32) -> Fut,
         Fut: Future<Output = Result<T, E>>,
-        E: std::fmt::Debug,
+        E: Debug,
         P: Fn(&E) -> bool,
     {
         let mut delay = self.base_delay;
@@ -412,7 +417,7 @@ impl Retry {
                     if attempt == self.max_attempts {
                         break;
                     }
-                    tokio::time::sleep(jittered(delay)).await;
+                    sleep(jittered(delay)).await;
                     delay = (delay * 2).min(self.max_delay);
                 }
             }

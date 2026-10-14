@@ -18,24 +18,28 @@ use houyicoder_protocol::llm::{
 use houyicoder_resilience::Retry;
 use houyicoder_session::SessionStore;
 
+use houyicoder_api::provider::stream_from_response;
 use houyicoder_api::sandbox::SandboxSession;
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::{ApprovalDecision, BashTool, RunOutcome, Runner, ToolRegistry};
+use houyicoder_protocol::llm::LlmEvent;
 use houyicoder_sandbox::MacSeatbeltSession;
+use std::sync::Mutex;
+use std::vec::IntoIter;
 
 /// A provider that returns scripted responses in sequence, then repeats the
 /// last one forever. Test-only helper re-implemented here because integration
 /// tests reach the crate only through its public API.
 struct FakeProvider {
-    responses: std::sync::Mutex<Option<std::vec::IntoIter<CompletionResponse>>>,
-    last: std::sync::Mutex<Option<CompletionResponse>>,
+    responses: Mutex<Option<IntoIter<CompletionResponse>>>,
+    last: Mutex<Option<CompletionResponse>>,
 }
 
 impl FakeProvider {
     fn new(responses: Vec<CompletionResponse>) -> Self {
         Self {
-            responses: std::sync::Mutex::new(Some(responses.into_iter())),
-            last: std::sync::Mutex::new(None),
+            responses: Mutex::new(Some(responses.into_iter())),
+            last: Mutex::new(None),
         }
     }
 }
@@ -68,11 +72,8 @@ impl ModelProvider for FakeProvider {
 
     fn stream(
         &self,
-        _req: houyicoder_protocol::llm::CompletionRequest,
-    ) -> houyicoder_async::PStream<
-        '_,
-        Result<houyicoder_protocol::llm::LlmEvent, houyicoder_protocol::llm::ProviderError>,
-    > {
+        _req: CompletionRequest,
+    ) -> houyicoder_async::PStream<'_, Result<LlmEvent, ProviderError>> {
         let next = {
             let mut iter_guard = self.responses.lock().expect("script mutex");
             if let Some(iter) = iter_guard.as_mut() {
@@ -86,7 +87,7 @@ impl ModelProvider for FakeProvider {
                 None
             }
         };
-        houyicoder_api::provider::stream_from_response(next.expect("script has no responses"))
+        stream_from_response(next.expect("script has no responses"))
     }
 }
 
@@ -120,7 +121,7 @@ async fn test_loop_bash() {
     let mut tools = ToolRegistry::new();
     tools.register(Arc::new(BashTool::new(session.clone())));
     let runner = Runner::new(
-        std::sync::Arc::new(SessionStore::new(Box::new(InMemoryBackend::new()))),
+        Arc::new(SessionStore::new(Box::new(InMemoryBackend::new()))),
         provider,
         tools,
         RunnerConfig {

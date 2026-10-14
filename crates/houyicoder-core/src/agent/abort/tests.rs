@@ -4,21 +4,20 @@ use super::*;
 use crate::agent::RunOutcome;
 use crate::agent::ToolRegistry;
 use crate::agent::runner_tests::runner_with;
+use crate::provider::test_support::FakeProvider;
 use houyicoder_context::SessionId;
 use houyicoder_protocol::llm::{CompletionResponse, OutputItem, Usage};
 use std::sync::Arc;
 
 fn stub_runner() -> Runner {
     runner_with(
-        Arc::new(crate::provider::test_support::FakeProvider::new(vec![
-            CompletionResponse {
-                output: vec![OutputItem::Text {
-                    text: "test".into(),
-                }],
-                usage: Usage::default(),
-                model: "test".into(),
-            },
-        ])),
+        Arc::new(FakeProvider::new(vec![CompletionResponse {
+            output: vec![OutputItem::Text {
+                text: "test".into(),
+            }],
+            usage: Usage::default(),
+            model: "test".into(),
+        }])),
         ToolRegistry::new(),
     )
 }

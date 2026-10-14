@@ -17,6 +17,9 @@ use nix::fcntl::Flock;
 use nix::fcntl::FlockArg;
 #[cfg(test)]
 use std::env::temp_dir;
+use std::error::Error;
+use std::fmt::Display;
+use std::fmt::Formatter;
 use std::fs::DirBuilder;
 use std::fs::File;
 use std::fs::OpenOptions;
@@ -50,8 +53,8 @@ pub enum LockError {
     HeldByOther(String),
 }
 
-impl std::fmt::Display for LockError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for LockError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Io(m) => write!(f, "session lock io: {m}"),
             Self::HeldByOther(m) => {
@@ -61,7 +64,7 @@ impl std::fmt::Display for LockError {
     }
 }
 
-impl std::error::Error for LockError {}
+impl Error for LockError {}
 
 #[cfg(unix)]
 impl SessionLock {

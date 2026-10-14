@@ -5,6 +5,9 @@
 //! lives in the ports crate and references these.
 
 use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fmt::Display;
+use std::fmt::Formatter;
 
 /// A tool execution error. Becomes tool-result content — the model sees the
 /// error string and can react; the loop does not abort. Only covers what a
@@ -48,13 +51,13 @@ impl ToolError {
     }
 }
 
-impl std::fmt::Display for ToolError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for ToolError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "tool error: {}", self.message())
     }
 }
 
-impl std::error::Error for ToolError {}
+impl Error for ToolError {}
 
 /// The host-generated tool name for a sandbox-entitlement approval request.
 /// Used by the runner (which creates the approval), the service layer

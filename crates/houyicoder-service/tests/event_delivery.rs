@@ -6,6 +6,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use futures::channel::mpsc;
+use houyicoder_api::provider::ModelProvider;
 use houyicoder_api::tool::{Tool, ToolCtx};
 use houyicoder_async::PFut;
 use houyicoder_client::{Client, InProcTransport};
@@ -13,6 +14,8 @@ use houyicoder_context::SessionId;
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::{Runner, StubTool, ToolRegistry};
 use houyicoder_memory::InMemoryBackend;
+use houyicoder_permission::DefaultModeGate;
+use houyicoder_protocol::acp_wire::AcpNotification;
 use houyicoder_protocol::acpx::AcpxMethod;
 use houyicoder_protocol::envelope::{
     ClientResponsePayload, EventEnvelope, RequestId, ServerFrame, ServerRequestPayload,
@@ -24,11 +27,15 @@ use houyicoder_protocol::frontend::{FrontendEvent, QueuedInput};
 use houyicoder_protocol::frontend::{FrontendRequest, SessionId as FrontendSessionId};
 use houyicoder_protocol::llm::{CompletionResponse, OutputItem, Usage};
 use houyicoder_provider::FakeProvider;
+use houyicoder_service::server::EventSequencer;
 use houyicoder_service::server::{FrameCarrier, Server};
 use houyicoder_session::SessionStore;
 use serde_json::Value;
+use std::collections::VecDeque;
 use tokio::sync::Notify;
 use tokio::sync::oneshot;
+use tokio::task::JoinHandle;
+use tokio::time::timeout;
 
 /// A read-only tool that keeps the run active until released by the test.
 struct BlockingTool {
@@ -38,7 +45,7 @@ struct BlockingTool {
 
 struct SequencedBlockingTool {
     entered: Arc<Notify>,
-    releases: Arc<Mutex<std::collections::VecDeque<oneshot::Receiver<()>>>>,
+    releases: Arc<Mutex<VecDeque<oneshot::Receiver<()>>>>,
 }
 
 struct ApprovableTool;
@@ -193,7 +200,7 @@ fn count(frames: &[ServerFrame], pred: impl Fn(&ServerFrame) -> bool) -> usize {
 async fn collect_until_response(client: &mut Client, req_id: RequestId) -> Vec<ServerFrame> {
     let mut frames = Vec::new();
     for _ in 0..256 {
-        match tokio::time::timeout(Duration::from_secs(2), client.next_frame()).await {
+        match timeout(Duration::from_secs(2), client.next_frame()).await {
             Ok(Ok(ServerFrame::Response(response))) if response.req_id == req_id => break,
             Ok(Ok(frame)) => frames.push(frame),
             _ => break,
@@ -248,7 +255,7 @@ async fn await_notification_dispatch(client: &mut Client) {
         .await
         .expect("send dispatch barrier");
     loop {
-        let frame = tokio::time::timeout(Duration::from_secs(2), client.next_frame())
+        let frame = timeout(Duration::from_secs(2), client.next_frame())
             .await
             .expect("dispatch barrier timeout")
             .expect("dispatch barrier frame");
@@ -265,14 +272,13 @@ async fn await_notification_dispatch(client: &mut Client) {
 async fn spawn_server_with(
     tools: ToolRegistry,
     responses: Vec<CompletionResponse>,
-) -> (Client, tokio::task::JoinHandle<()>, RequestId) {
+) -> (Client, JoinHandle<()>, RequestId) {
     let notify = Arc::new(Notify::new());
     let store = Arc::new(
         SessionStore::new(Box::new(InMemoryBackend::new())).with_append_notify(notify.clone()),
     );
     let session = SessionId::new();
-    let provider: Arc<dyn houyicoder_api::provider::ModelProvider> =
-        Arc::new(FakeProvider::new(responses));
+    let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::new(responses));
     let mut runner = Runner::new(
         store,
         provider,
@@ -286,7 +292,7 @@ async fn spawn_server_with(
     );
     let (client_tx, server_rx) = mpsc::channel::<String>(8);
     let (server_tx, client_rx) = mpsc::channel::<String>(8);
-    let event_sequencer = houyicoder_service::server::EventSequencer::new();
+    let event_sequencer = EventSequencer::new();
     event_sequencer.install_on(&mut runner);
     let server_io = FrameCarrier::new(server_tx, server_rx);
     let client_transport = InProcTransport::from_halves(client_tx, client_rx);
@@ -294,7 +300,7 @@ async fn spawn_server_with(
     let server = Server::new_with_event_sequencer(
         Arc::new(runner),
         session,
-        Arc::new(houyicoder_permission::DefaultModeGate::new()),
+        Arc::new(DefaultModeGate::new()),
         event_sequencer,
     )
     .with_append_notify(notify);
@@ -368,7 +374,7 @@ async fn test_tool_delivery() {
     let mut got_tool_call = false;
     let mut asked = false;
     for _ in 0..32 {
-        match tokio::time::timeout(Duration::from_millis(100), client.next_frame()).await {
+        match timeout(Duration::from_millis(100), client.next_frame()).await {
             Ok(Ok(frame)) => {
                 if is_tool_call(&frame, "toolu_1") {
                     got_tool_call = true;
@@ -403,7 +409,7 @@ async fn test_tool_delivery() {
     // Wait for the run to resolve (a Response for the MessageSend req_id).
     let mut ended = false;
     for _ in 0..128 {
-        match tokio::time::timeout(Duration::from_secs(2), client.next_frame()).await {
+        match timeout(Duration::from_secs(2), client.next_frame()).await {
             Ok(Ok(ServerFrame::Response(resp))) if resp.req_id == req_id => {
                 ended = true;
                 break;
@@ -435,7 +441,7 @@ async fn test_event_dedup() {
     // Drain until the run resolves, collecting every frame.
     let mut frames: Vec<ServerFrame> = Vec::new();
     for _ in 0..256 {
-        match tokio::time::timeout(Duration::from_secs(2), client.next_frame()).await {
+        match timeout(Duration::from_secs(2), client.next_frame()).await {
             Ok(Ok(ServerFrame::Response(resp))) if resp.req_id == req_id => break,
             Ok(Ok(frame)) => frames.push(frame),
             _ => break,
@@ -462,7 +468,7 @@ async fn test_input_commit() {
     let entered = Arc::new(Notify::new());
     let (release_first_tx, release_first_rx) = oneshot::channel();
     let (release_second_tx, release_second_rx) = oneshot::channel();
-    let releases = Arc::new(Mutex::new(std::collections::VecDeque::from([
+    let releases = Arc::new(Mutex::new(VecDeque::from([
         release_first_rx,
         release_second_rx,
     ])));
@@ -483,7 +489,7 @@ async fn test_input_commit() {
 
     entered.notified().await;
     client
-        .send_notification(houyicoder_protocol::acp_wire::AcpNotification::new(
+        .send_notification(AcpNotification::new(
             "session/inject",
             serde_json::json!({ "text": "mid note" }),
         ))
@@ -491,14 +497,14 @@ async fn test_input_commit() {
         .expect("send injected input");
     await_notification_dispatch(&mut client).await;
     release_first_tx.send(()).expect("release first tool");
-    tokio::time::timeout(Duration::from_secs(2), entered.notified())
+    timeout(Duration::from_secs(2), entered.notified())
         .await
         .expect("second tool starts before the run resolves");
 
     let mut got_user = false;
     let mut got_committed = false;
     for _ in 0..64 {
-        let frame = tokio::time::timeout(Duration::from_millis(100), client.next_frame())
+        let frame = timeout(Duration::from_millis(100), client.next_frame())
             .await
             .expect("mid-run mapping must not wait for completion")
             .expect("server frame");
@@ -530,7 +536,7 @@ async fn test_input_commit() {
     release_second_tx.send(()).expect("release second tool");
     for _ in 0..128 {
         if matches!(
-            tokio::time::timeout(Duration::from_secs(2), client.next_frame()).await,
+            timeout(Duration::from_secs(2), client.next_frame()).await,
             Ok(Ok(ServerFrame::Response(ref response))) if response.req_id == req_id
         ) {
             break;
@@ -560,7 +566,7 @@ async fn test_input_order() {
     blocked.notified().await;
     let input = QueuedInput::new("ordered note");
     client
-        .send_notification(houyicoder_protocol::acp_wire::AcpNotification::new(
+        .send_notification(AcpNotification::new(
             "session/inject",
             serde_json::json!({ "input": input }),
         ))
@@ -571,7 +577,7 @@ async fn test_input_order() {
 
     let mut frames = Vec::new();
     for _ in 0..256 {
-        match tokio::time::timeout(Duration::from_secs(2), client.next_frame()).await {
+        match timeout(Duration::from_secs(2), client.next_frame()).await {
             Ok(Ok(ServerFrame::Response(response))) if response.req_id == req_id => break,
             Ok(Ok(frame)) => frames.push(frame),
             _ => break,
@@ -628,7 +634,7 @@ async fn test_resume_orders_queued_input() {
     blocked.notified().await;
     let input = QueuedInput::new("resume note");
     client
-        .send_notification(houyicoder_protocol::acp_wire::AcpNotification::new(
+        .send_notification(AcpNotification::new(
             "session/inject",
             serde_json::json!({ "input": input }),
         ))
@@ -666,7 +672,7 @@ async fn test_input_batch_preserves_fifo() {
     let inputs = [QueuedInput::new("first"), QueuedInput::new("second")];
     for input in &inputs {
         client
-            .send_notification(houyicoder_protocol::acp_wire::AcpNotification::new(
+            .send_notification(AcpNotification::new(
                 "session/inject",
                 serde_json::json!({ "input": input }),
             ))

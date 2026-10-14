@@ -15,6 +15,9 @@ use std::fmt;
 use std::path::Path;
 
 use sha2::{Digest, Sha256};
+use std::fmt::Write as _;
+#[cfg(unix)]
+use std::os::unix::ffi::OsStrExt as _;
 
 pub mod grant;
 
@@ -41,7 +44,6 @@ impl ProjectIdentity {
         let mut hasher = Sha256::new();
         #[cfg(unix)]
         {
-            use std::os::unix::ffi::OsStrExt as _;
             hasher.update(root.as_os_str().as_bytes());
         }
         #[cfg(windows)]
@@ -52,7 +54,6 @@ impl ProjectIdentity {
         let digest = hasher.finalize();
         let mut encoded = String::with_capacity(digest.len() * 2);
         for byte in digest {
-            use std::fmt::Write as _;
             let _ = write!(encoded, "{byte:02x}");
         }
         Self(encoded)

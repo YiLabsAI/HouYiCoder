@@ -5,12 +5,26 @@
 //! only); the read path in LocalFileBackend scans the same layout these write,
 //! so the binary's resume + /context see the seeded state.
 
+use futures::executor::block_on;
+use houyicoder_context::ContextBackend;
+use houyicoder_context::{CheckpointId, CheckpointManifest, Disposition, TurnGroup};
+use houyicoder_core::{EventId, SessionEvent, SessionId, SessionLogEntry};
+use houyicoder_memory::LocalFileBackend;
+use houyicoder_service::composition::workspace_cwd;
+use std::fs::File;
+use std::fs::OpenOptions;
+use std::fs::create_dir_all;
+use std::fs::write;
+use std::io::BufWriter;
+use std::io::Write;
+use std::path::Path;
+
 /// Seed a session on disk (a sid log file with one UserInput event + a
 /// session.json descriptor carrying the model) so a subsequent --resume <sid>
 /// or the /resume picker can re-open it. Shared by the sid-resume + lock
 /// PTY tests.
-pub fn seed_session_on_disk(root: &std::path::Path, sid_str: &str, model: &str, prompt: &str) {
-    let cwd = houyicoder_service::composition::workspace_cwd(None);
+pub fn seed_session_on_disk(root: &Path, sid_str: &str, model: &str, prompt: &str) {
+    let cwd = workspace_cwd(None);
     seed_session_with_cwd(root, sid_str, model, prompt, &cwd);
 }
 
@@ -23,13 +37,12 @@ pub fn seed_session_on_disk(root: &std::path::Path, sid_str: &str, model: &str, 
 /// reference it as last_event + the Summarized turn without re-deriving or
 /// duplicating the log+descriptor write.
 pub fn seed_session_with_cwd(
-    root: &std::path::Path,
+    root: &Path,
     sid_str: &str,
     model: &str,
     prompt: &str,
     cwd: &str,
-) -> houyicoder_core::EventId {
-    use houyicoder_core::{EventId, SessionEvent, SessionId, SessionLogEntry};
+) -> EventId {
     let sid = SessionId::from_display_string(sid_str).expect("sid parses");
     let event = SessionLogEntry {
         id: EventId::new(),
@@ -42,8 +55,8 @@ pub fn seed_session_with_cwd(
     };
     let line = serde_json::to_string(&event).expect("serialize event");
     let dir = root.join(sid_str);
-    std::fs::create_dir_all(&dir).expect("mkdir session dir");
-    std::fs::write(dir.join("log.jsonl"), format!("{line}\n")).expect("write log");
+    create_dir_all(&dir).expect("mkdir session dir");
+    write(dir.join("log.jsonl"), format!("{line}\n")).expect("write log");
     let meta = serde_json::json!({
         "name": null,
         "name_source": "auto",
@@ -53,7 +66,7 @@ pub fn seed_session_with_cwd(
         "version": "test",
         "created_at": 1000,
     });
-    std::fs::write(
+    write(
         dir.join("session.json"),
         serde_json::to_string_pretty(&meta).expect("serialize meta"),
     )
@@ -64,18 +77,12 @@ pub fn seed_session_with_cwd(
 /// Seed a session on disk with one user turn per prompt, so a PTY test can
 /// drive a multi-turn trajectory list. Writes the log through the real backend
 /// so the hash chain is the one a live session produces, then the descriptor.
-pub fn seed_session_turns_on_disk(
-    root: &std::path::Path,
-    sid_str: &str,
-    model: &str,
-    prompts: &[&str],
-) {
-    use houyicoder_context::{ContextBackend, SessionEvent, SessionId, SessionLogEntry};
+pub fn seed_session_turns_on_disk(root: &Path, sid_str: &str, model: &str, prompts: &[&str]) {
     let sid = SessionId::from_display_string(sid_str).expect("sid parses");
-    let backend = houyicoder_memory::LocalFileBackend::new(root.to_path_buf());
+    let backend = LocalFileBackend::new(root.to_path_buf());
     for (i, prompt) in prompts.iter().enumerate() {
         let event = SessionLogEntry {
-            id: houyicoder_core::EventId::new(),
+            id: EventId::new(),
             session: sid,
             ts: (i as u64) * 1000,
             prev_hash: None,
@@ -83,11 +90,11 @@ pub fn seed_session_turns_on_disk(
                 text: (*prompt).into(),
             },
         };
-        futures::executor::block_on(backend.append(event)).expect("append seeded turn");
+        block_on(backend.append(event)).expect("append seeded turn");
     }
-    let cwd = houyicoder_service::composition::workspace_cwd(None);
+    let cwd = workspace_cwd(None);
     let dir = root.join(sid_str);
-    std::fs::create_dir_all(&dir).expect("mkdir session dir");
+    create_dir_all(&dir).expect("mkdir session dir");
     let meta = serde_json::json!({
         "name": null,
         "name_source": "auto",
@@ -97,7 +104,7 @@ pub fn seed_session_turns_on_disk(
         "version": "test",
         "created_at": 1000,
     });
-    std::fs::write(
+    write(
         dir.join("session.json"),
         serde_json::to_string(&meta).expect("serialize descriptor"),
     )
@@ -119,19 +126,16 @@ pub fn seed_session_turns_on_disk(
 /// non-async PTY tests, so it blocks on the future directly rather than
 /// spinning a tokio runtime.
 pub fn seed_session_with_checkpoint(
-    root: &std::path::Path,
+    root: &Path,
     sid_str: &str,
     model: &str,
     prompt: &str,
     summary: &str,
 ) {
-    use houyicoder_context::{
-        CheckpointId, CheckpointManifest, ContextBackend, Disposition, SessionId, TurnGroup,
-    };
     // Reuse seed_session_with_cwd for the log + descriptor write + the event id,
     // so the two seed paths share one source of truth (a schema change to the
     // event or descriptor shape only has to be fixed once, not in two copies).
-    let cwd = houyicoder_service::composition::workspace_cwd(None);
+    let cwd = workspace_cwd(None);
     let event_id = seed_session_with_cwd(root, sid_str, model, prompt, &cwd);
     let sid = SessionId::from_display_string(sid_str).expect("sid parses");
     let manifest = CheckpointManifest {
@@ -146,8 +150,8 @@ pub fn seed_session_with_checkpoint(
         }],
         ts: 0,
     };
-    let backend = houyicoder_memory::LocalFileBackend::new(root.to_path_buf());
-    futures::executor::block_on(backend.write_checkpoint(manifest)).expect("write checkpoint");
+    let backend = LocalFileBackend::new(root.to_path_buf());
+    block_on(backend.write_checkpoint(manifest)).expect("write checkpoint");
 }
 
 /// One planted marker in a large fixture log: a unique whitespace-free token
@@ -205,7 +209,7 @@ fn filler(turn: usize, phase: usize, words: usize) -> String {
 /// describe.
 #[allow(dead_code)]
 struct FixtureWriter {
-    out: std::io::BufWriter<std::fs::File>,
+    out: BufWriter<File>,
     sid: houyicoder_core::SessionId,
     depth: u64,
     ts_next: u64,
@@ -214,10 +218,10 @@ struct FixtureWriter {
 
 #[allow(dead_code)]
 impl FixtureWriter {
-    fn new(path: &std::path::Path, sid: houyicoder_core::SessionId) -> std::io::Result<Self> {
-        let file = std::fs::File::create(path)?;
+    fn new(path: &Path, sid: houyicoder_core::SessionId) -> std::io::Result<Self> {
+        let file = File::create(path)?;
         Ok(Self {
-            out: std::io::BufWriter::with_capacity(1 << 20, file),
+            out: BufWriter::with_capacity(1 << 20, file),
             sid,
             depth: 0,
             ts_next: 1_000,
@@ -227,8 +231,6 @@ impl FixtureWriter {
 
     /// Serialize one event as a JSONL line and track its byte depth.
     fn event(&mut self, event: houyicoder_core::SessionEvent) {
-        use houyicoder_core::{EventId, SessionLogEntry};
-        use std::io::Write;
         let entry = SessionLogEntry {
             id: EventId::new(),
             session: self.sid,
@@ -249,7 +251,6 @@ impl FixtureWriter {
     /// wrap-split, no merge into an adjacent message) and doubles as a turn
     /// boundary the lookback walk can stop on.
     fn due_markers(&mut self, markers: &mut Vec<FixtureMarker>, next_marker_at: &mut u64) {
-        use houyicoder_core::SessionEvent;
         while self.depth >= *next_marker_at {
             let text = format!("MK{:04}QZX", markers.len());
             self.event(SessionEvent::UserInput { text: text.clone() });
@@ -264,7 +265,6 @@ impl FixtureWriter {
     /// One production-shaped turn: a start, a prompt, reasoning, a tool call
     /// and its result, and the answer.
     fn turn(&mut self, turn: usize) {
-        use houyicoder_core::SessionEvent;
         self.event(SessionEvent::TurnStarted {
             turn: turn as u32,
             call_in_turn: 0,
@@ -293,7 +293,6 @@ impl FixtureWriter {
 
     /// Flush the buffer and hand back (depth, event count).
     fn finish(mut self) -> (u64, usize) {
-        use std::io::Write;
         self.out.flush().expect("flush log");
         (self.depth, self.event_count)
     }
@@ -314,16 +313,14 @@ impl FixtureWriter {
 /// must be mirrored there.
 #[allow(dead_code)]
 pub fn seed_large_session_on_disk(
-    root: &std::path::Path,
+    root: &Path,
     sid_str: &str,
     model: &str,
     target_bytes: u64,
 ) -> LargeFixture {
-    use houyicoder_core::{SessionEvent, SessionId};
-
     let sid = SessionId::from_display_string(sid_str).expect("sid parses");
     let dir = root.join(sid_str);
-    std::fs::create_dir_all(&dir).expect("mkdir session dir");
+    create_dir_all(&dir).expect("mkdir session dir");
 
     let mut markers = Vec::new();
     let mut next_marker_at: u64 = MARKER_STEP_BYTES;
@@ -342,13 +339,13 @@ pub fn seed_large_session_on_disk(
     let (log_bytes, event_count) = writer.finish();
     // A write handle because syncing a file needs write access on Windows;
     // a read-only open fails there.
-    std::fs::OpenOptions::new()
+    OpenOptions::new()
         .write(true)
         .open(dir.join("log.jsonl"))
         .and_then(|f| f.sync_all())
         .expect("fsync log");
 
-    let cwd = houyicoder_service::composition::workspace_cwd(None);
+    let cwd = workspace_cwd(None);
     let meta = serde_json::json!({
         "name": null,
         "name_source": "auto",
@@ -358,7 +355,7 @@ pub fn seed_large_session_on_disk(
         "version": "test",
         "created_at": 1000,
     });
-    std::fs::write(
+    write(
         dir.join("session.json"),
         serde_json::to_string(&meta).expect("serialize meta"),
     )

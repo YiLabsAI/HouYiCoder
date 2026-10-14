@@ -8,6 +8,9 @@ use houyicoder_context::{
 };
 use houyicoder_memory::{FileDescriptorStore, LocalFileBackend};
 use houyicoder_session::{SessionStore, SourceChain};
+use std::error::Error;
+use std::fmt::Display;
+use std::fmt::Formatter;
 use std::fs::read_to_string;
 use std::path::Path;
 use std::time::SystemTime;
@@ -357,8 +360,8 @@ pub enum ResumeError {
     Seed(String),
 }
 
-impl std::fmt::Display for ResumeError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for ResumeError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Read(m) => write!(f, "resume read failed: {m}"),
             Self::Parse(m) => write!(f, "resume parse failed: {m}"),
@@ -368,7 +371,7 @@ impl std::fmt::Display for ResumeError {
     }
 }
 
-impl std::error::Error for ResumeError {}
+impl Error for ResumeError {}
 
 /// Write the descriptor for a session resumed from an export.
 fn write_resume_descriptor(

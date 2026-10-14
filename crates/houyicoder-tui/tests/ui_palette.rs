@@ -15,13 +15,15 @@
 //!   - /debug (auto-run) → Enter runs it → the debug system line
 //!     renders as a fresh transcript tail row.
 
+use crate::common::fresh_temp_dir;
 use crate::common::{self, Key, RENDER_TIMEOUT, pty_session};
+use std::thread::sleep;
 use std::time::Duration;
 
 /// After a gesture that leaves the palette / a pane open, sleep so crossterm
 /// does not glue the Esc byte (\x1b) to the next key into an Alt+<key> event.
 fn pause() {
-    std::thread::sleep(Duration::from_millis(200));
+    sleep(Duration::from_millis(200));
 }
 
 /// A prefix match outranks an earlier substring match in the real palette.
@@ -99,7 +101,6 @@ fn test_palette_select_runs_debug() {
 #[test]
 #[ignore]
 fn test_palette_select_runs_export() {
-    use crate::common::fresh_temp_dir;
     let dir = fresh_temp_dir("export");
     let target = dir.join("session.json");
     let mut s = pty_session();

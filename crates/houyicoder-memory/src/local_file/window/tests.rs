@@ -1,6 +1,9 @@
 //! Tests for this module.
 
+use crate::InMemoryBackend;
 use crate::local_file::LocalFileBackend;
+use fs::File;
+use fs::OpenOptions;
 use houyicoder_context::{
     CheckpointId, CheckpointManifest, ContextBackend, ContextError, Disposition, EventId,
     SessionEvent, SessionId, SessionLogEntry, TurnGroup,
@@ -135,7 +138,6 @@ fn test_reverse_read_multibyte_safe() {
 /// empty defaults (the trait's default impls). Covers the default bodies.
 #[test]
 fn test_in_memory_default_reads() {
-    use crate::InMemoryBackend;
     let b = InMemoryBackend::new();
     let s = SessionId::new();
     let r = b.read_log_range(s, 0, 1024);
@@ -261,7 +263,7 @@ fn test_tolerant_read_skips_corrupt() {
     )))
     .unwrap();
     // Inject a corrupt line directly into the log (bad JSON).
-    let mut f = fs::OpenOptions::new()
+    let mut f = OpenOptions::new()
         .append(true)
         .open(b.log_path(s))
         .expect("open log");
@@ -525,7 +527,7 @@ fn test_reverse_read_empty_file() {
     // Touch the log file so it exists with size 0 (not a cold session).
     let log = b.log_path(s);
     fs::create_dir_all(log.parent().unwrap()).expect("create session dir");
-    fs::File::create(&log).expect("create empty log");
+    File::create(&log).expect("create empty log");
     let r = b.read_lines_reverse(s, 0, 1 << 20);
     assert!(r.lines.is_empty(), "empty file yields no lines");
     assert_eq!(r.next_from, None, "BOF (size 0)");

@@ -3,6 +3,7 @@
 //! spawned Child (no MacSeatbeltSession dependency), so it is testable
 //! without the seatbelt fence.
 
+use std::io::Error;
 use std::process::Output;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
@@ -35,12 +36,12 @@ pub(super) async fn stream_drain(mut child: Child, lines: &AtomicI64) -> std::io
                 lines.store(nl, Ordering::Relaxed);
                 buf.extend_from_slice(&chunk[..n]);
             }
-            Ok::<_, std::io::Error>(buf)
+            Ok::<_, Error>(buf)
         },
         async {
             let mut buf = Vec::new();
             stderr.read_to_end(&mut buf).await?;
-            Ok::<_, std::io::Error>(buf)
+            Ok::<_, Error>(buf)
         }
     );
     let stdout = stdout_res?;

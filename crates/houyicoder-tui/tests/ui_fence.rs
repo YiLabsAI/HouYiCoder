@@ -16,8 +16,15 @@
 #![allow(clippy::unwrap_in_result)]
 
 use crate::common::{Key, pty_session, pty_session_in_repo};
+use std::env::temp_dir;
+use std::fs::create_dir_all;
+use std::fs::read_to_string;
+use std::fs::remove_dir_all;
+use std::fs::write;
 use std::path::PathBuf;
 use std::process::Command;
+use std::process::id;
+use std::thread::sleep;
 use std::time::Duration;
 
 /// Seed a throwaway git repo the binary can run in: a workspace manifest so
@@ -25,10 +32,10 @@ use std::time::Duration;
 /// succeeds, and a main-tree file the worktree must NOT be able to write.
 #[allow(clippy::disallowed_methods)]
 fn make_temp_repo(slug: u64) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("houyi-fence-repo-{}-{slug}", std::process::id()));
-    drop(std::fs::remove_dir_all(&dir));
-    std::fs::create_dir_all(&dir).expect("mkdir repo");
-    std::fs::write(dir.join("Cargo.toml"), "[workspace]\nmembers = []\n").expect("write manifest");
+    let dir = temp_dir().join(format!("houyi-fence-repo-{}-{slug}", id()));
+    drop(remove_dir_all(&dir));
+    create_dir_all(&dir).expect("mkdir repo");
+    write(dir.join("Cargo.toml"), "[workspace]\nmembers = []\n").expect("write manifest");
     for args in [
         &["init", "-q"][..],
         &["config", "user.email", "t@x"][..],
@@ -46,7 +53,7 @@ fn make_temp_repo(slug: u64) -> PathBuf {
         assert!(ok, "git {:?}", args);
     }
     // A main-tree file the worktree must not write (outside writable_roots).
-    std::fs::write(dir.join("main_only.txt"), "orig\n").expect("write main file");
+    write(dir.join("main_only.txt"), "orig\n").expect("write main file");
     dir
 }
 
@@ -96,13 +103,13 @@ fn test_worktree_refuses_tree_write() {
     // write even after the user confirmed. If this fails, the worktree is not
     // write-isolated (the worktree agent can corrupt the main tree).
     assert_eq!(
-        std::fs::read_to_string(&main_file).unwrap(),
+        read_to_string(&main_file).unwrap(),
         "orig\n",
         "the main-tree file must be unchanged after a confirmed-but-fence-refused write:\n{}",
         s.output()
     );
     drop(s);
-    std::fs::remove_dir_all(&repo).ok();
+    remove_dir_all(&repo).ok();
 }
 
 /// Under the default-open network posture, a bash egress command still raises
@@ -164,7 +171,7 @@ fn test_worktree_asks_egress() {
         s.output()
     );
     drop(s);
-    std::fs::remove_dir_all(&repo).ok();
+    remove_dir_all(&repo).ok();
 }
 
 /// PTY test: /trajectory on a fresh session with no turns yet. The
@@ -179,7 +186,7 @@ fn test_trajectory_session_no_crash() {
     let mut s = pty_session();
     s.send_str("/trajectory");
     s.send_key(&Key::Enter);
-    let t = std::time::Duration::from_secs(5);
+    let t = Duration::from_secs(5);
     assert!(
         s.wait_for_plain("turns", t),
         "trajectory summary must render:
@@ -198,7 +205,7 @@ fn test_trajectory_session_no_crash() {
     // drilling into zero rows; it must not appear.
     s.clear_output();
     s.send_key(&Key::Enter);
-    std::thread::sleep(std::time::Duration::from_millis(300));
+    sleep(Duration::from_millis(300));
     let plain = s.output_plain();
     assert!(
         !plain.contains("no row data"),
@@ -207,7 +214,7 @@ fn test_trajectory_session_no_crash() {
     // Esc closes the pane, returning to the working surface.
     s.clear_output();
     s.send_key(&Key::Esc);
-    std::thread::sleep(std::time::Duration::from_millis(200));
+    sleep(Duration::from_millis(200));
     let plain = s.output_plain();
     assert!(
         !plain.contains("turns"),
@@ -226,7 +233,7 @@ fn test_trajectory_read_settles() {
     let mut s = pty_session();
     s.send_str("/trajectory");
     s.send_key(&Key::Enter);
-    let t = std::time::Duration::from_secs(10);
+    let t = Duration::from_secs(10);
     // A session with no turns settles: the read lands and the pane reports the
     // session's own count rather than staying on its loading line.
     assert!(
@@ -238,7 +245,7 @@ fn test_trajectory_read_settles() {
     // The buffer holds every frame written so far, so the loading line from
     // the first frames is cleared before the settled screen is read.
     s.clear_output();
-    std::thread::sleep(std::time::Duration::from_millis(400));
+    sleep(Duration::from_millis(400));
     let plain = s.output_plain();
     assert!(
         !plain.contains("loading trajectory"),
@@ -288,7 +295,7 @@ fn test_trajectory_older_keeps_rows() {
     let mut s = pty_session();
     s.send_str("/trajectory");
     s.send_key(&Key::Enter);
-    let t = std::time::Duration::from_secs(10);
+    let t = Duration::from_secs(10);
     assert!(
         s.wait_for_plain("0 turns", t),
         "the pane opens on the session's own count:
@@ -299,7 +306,7 @@ fn test_trajectory_older_keeps_rows() {
     // read, the pane must settle rather than stay on the older-loading line.
     s.clear_output();
     s.send_key(&Key::Up);
-    std::thread::sleep(std::time::Duration::from_millis(600));
+    sleep(Duration::from_millis(600));
     let plain = s.output_plain();
     assert!(
         !plain.contains("loading older turns"),
@@ -307,7 +314,7 @@ fn test_trajectory_older_keeps_rows() {
     );
     s.clear_output();
     s.send_key(&Key::Esc);
-    std::thread::sleep(std::time::Duration::from_millis(200));
+    sleep(Duration::from_millis(200));
     assert!(
         !s.output_plain().contains("turns"),
         "Esc still closes the pane"
@@ -329,10 +336,10 @@ fn test_trajectory_older_keeps_rows() {
 #[ignore]
 fn test_grep_outside_approves_resumes() {
     let repo = make_temp_repo(7);
-    let outside = std::env::temp_dir().join(format!("houyi-buga-outside-{}-7", std::process::id()));
-    drop(std::fs::remove_dir_all(&outside));
-    std::fs::create_dir_all(&outside).expect("mkdir outside");
-    std::fs::write(outside.join("target.txt"), "matchme here\n").expect("write target");
+    let outside = temp_dir().join(format!("houyi-buga-outside-{}-7", id()));
+    drop(remove_dir_all(&outside));
+    create_dir_all(&outside).expect("mkdir outside");
+    write(outside.join("target.txt"), "matchme here\n").expect("write target");
     // serde_json, not format!, for the same reason as the worktree test
     // above: a raw path in a JSON string literal breaks the parse wherever
     // the separator is a backslash.
@@ -368,5 +375,5 @@ fn test_grep_outside_approves_resumes() {
         "the transcript must not leave a stale error after approving the outside grep:\n{}",
         s.output()
     );
-    std::fs::remove_dir_all(&outside).ok();
+    remove_dir_all(&outside).ok();
 }

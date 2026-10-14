@@ -7,6 +7,9 @@ use houyicoder_protocol::llm::{ProviderError, Usage};
 use super::step::ApprovalRequest;
 use super::verify::VerifyFailure;
 use houyicoder_context::AgentId;
+use std::error::Error;
+use std::fmt::Display;
+use std::fmt::Formatter;
 
 /// How a run ended.
 #[derive(Debug)]
@@ -100,8 +103,8 @@ pub enum RunError {
     ContextOverflowNoProgress,
 }
 
-impl std::fmt::Display for RunError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for RunError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Context(e) => write!(f, "context error: {e}"),
             Self::ProviderFatal(e) => write!(f, "provider fatal: {e}"),
@@ -132,7 +135,7 @@ impl std::fmt::Display for RunError {
     }
 }
 
-impl std::error::Error for RunError {}
+impl Error for RunError {}
 
 impl From<ContextError> for RunError {
     fn from(e: ContextError) -> Self {

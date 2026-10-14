@@ -17,6 +17,8 @@ use crate::agent::obs_wire::SharedObservability;
 use crate::agent::redundancy::RedundancyTracker;
 use crate::observability::MetricsView;
 use crate::observability::evolution::RedundancyKind;
+use houyicoder_context::SessionEvent;
+use std::cmp::Reverse;
 
 /// Maximum tools surfaced by fail count, so a pathological tool storm does
 /// not bloat the dream prompt.
@@ -94,7 +96,7 @@ pub fn capture_reward_snapshot(
             .iter()
             .filter(|t| t.fail_count > 0)
             .collect();
-        ranked.sort_by_key(|t| std::cmp::Reverse(t.fail_count));
+        ranked.sort_by_key(|t| Reverse(t.fail_count));
         for t in ranked.into_iter().take(FAILURE_HOTSPOT_TOP) {
             snap.failures.push(FailureHotspot {
                 tool: t.tool_name.clone(),
@@ -121,7 +123,7 @@ pub fn capture_reward_snapshot(
         // dream can judge each recalled memory against the failures that
         // followed — the failure→falsify-lesson edge.
         for ev in ol.trajectory() {
-            if let houyicoder_context::SessionEvent::MemoryRecall { keys, .. } = &ev.event {
+            if let SessionEvent::MemoryRecall { keys, .. } = &ev.event {
                 snap.recalled_keys.extend(keys.iter().cloned());
             }
         }
@@ -139,7 +141,7 @@ pub fn capture_reward_snapshot(
             *bucket.entry((r.tool.clone(), label)).or_insert(0) += 1;
         }
         let mut clusters: Vec<((String, &'static str), u32)> = bucket.into_iter().collect();
-        clusters.sort_by_key(|((_, _), c)| std::cmp::Reverse(*c));
+        clusters.sort_by_key(|((_, _), c)| Reverse(*c));
         for ((tool, label), count) in clusters.into_iter().take(REDUNDANT_CLUSTER_TOP) {
             let kind = match label {
                 "same_batch" => RedundancyKind::SameBatch,

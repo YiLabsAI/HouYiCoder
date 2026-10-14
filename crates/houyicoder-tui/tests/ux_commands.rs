@@ -6,6 +6,7 @@
 #![allow(clippy::unwrap_in_result)]
 
 use crate::common::{self, Key, PtySession, RENDER_TIMEOUT, fresh_temp_dir, run_slash_command};
+use std::fs::remove_dir_all;
 
 #[test]
 #[ignore]
@@ -30,8 +31,8 @@ fn test_trust_enter_skips_flash() {
         session.output_plain()
     );
     drop(session);
-    drop(std::fs::remove_dir_all(home));
-    drop(std::fs::remove_dir_all(project));
+    drop(remove_dir_all(home));
+    drop(remove_dir_all(project));
 }
 
 /// /hooks opens the Hooks pane (a live view with a "Hooks" header), not a
@@ -57,8 +58,8 @@ fn test_trust_down_exits() {
     let settings = home.join(".houyicoder").join("settings.json");
     assert!(!houyicoder_config::is_path_trusted(&settings, &project));
     drop(session);
-    drop(std::fs::remove_dir_all(home));
-    drop(std::fs::remove_dir_all(project));
+    drop(remove_dir_all(home));
+    drop(remove_dir_all(project));
 }
 
 #[test]

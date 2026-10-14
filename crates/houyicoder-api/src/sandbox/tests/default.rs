@@ -5,6 +5,13 @@
 //! against a real temp dir, covering the default bodies' branches (roundtrip,
 //! max_bytes truncation, traversal reject, list/exists, nested-dir create).
 use super::super::*;
+use std::env::temp_dir;
+use std::fs::create_dir_all;
+use std::fs::remove_dir_all;
+use std::fs::remove_file;
+use std::fs::write;
+use std::process::id;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 struct FsStub {
     ws: PathBuf,
@@ -23,11 +30,10 @@ impl SandboxSession for FsStub {
 }
 
 fn fs_stub() -> FsStub {
-    use std::sync::atomic::{AtomicU64, Ordering};
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let n = COUNTER.fetch_add(1, Ordering::SeqCst);
-    let raw = std::env::temp_dir().join(format!("houyi-api-fsstub-{}-{}", std::process::id(), n));
-    std::fs::create_dir_all(&raw).expect("create stub workspace");
+    let raw = temp_dir().join(format!("houyi-api-fsstub-{}-{}", id(), n));
+    create_dir_all(&raw).expect("create stub workspace");
     // Canonicalize: the default resolve compares a canonicalized path against
     // workspace_root(), so workspace_root() must itself be canonical (real
     // backends canonicalize at construction; /var on macOS is a symlink to
@@ -51,7 +57,7 @@ async fn test_default_file_ops_roundtrip() {
     assert!(entries.iter().any(|e| e.name == "a.txt"));
     assert!(stub.path_exists("a.txt").await.unwrap());
     assert!(!stub.path_exists("nope.txt").await.unwrap());
-    std::fs::remove_dir_all(&ws).ok();
+    remove_dir_all(&ws).ok();
 }
 
 #[tokio::test]
@@ -64,7 +70,7 @@ async fn test_resolve_fallback_blocks_traversal() {
         .parent()
         .expect("workspace has a parent")
         .join("outside_marker");
-    std::fs::write(&outside, b"secret").unwrap();
+    write(&outside, b"secret").unwrap();
     // A real sub-dir so sub/../.. has a resolvable OS prefix.
     stub.write_file("sub/x", vec![1]).await.unwrap();
 
@@ -91,8 +97,8 @@ async fn test_resolve_fallback_blocks_traversal() {
         "nonexistent-prefix traversal must not read the outside file: {res:?}"
     );
 
-    std::fs::remove_dir_all(&ws).ok();
-    std::fs::remove_file(&outside).ok();
+    remove_dir_all(&ws).ok();
+    remove_file(&outside).ok();
 }
 
 #[tokio::test]
@@ -111,12 +117,12 @@ async fn test_resolve_rejects_traversal() {
         matches!(err, SandboxError::PathTraversal(_)),
         "escape rejected: {err:?}"
     );
-    std::fs::remove_dir_all(&ws).ok();
+    remove_dir_all(&ws).ok();
 }
 
 #[test]
 fn test_discover_default_empty() {
     let stub = fs_stub();
     assert!(stub.discover_authorizable().is_empty());
-    std::fs::remove_dir_all(&stub.ws).ok();
+    remove_dir_all(&stub.ws).ok();
 }

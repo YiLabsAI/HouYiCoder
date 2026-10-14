@@ -19,7 +19,7 @@ pub struct PtySession {
     _child: Box<dyn Child + Send + Sync>,
     writer: Box<dyn Write + Send>,
     output: Arc<Mutex<Vec<u8>>>,
-    screen: Arc<Mutex<vt100::Parser>>,
+    screen: Arc<Mutex<Parser>>,
     _reader: thread::JoinHandle<()>,
     sessions_dir: PathBuf,
     /// A temp home the harness created (not caller-provided); cleaned in Drop
@@ -240,7 +240,7 @@ impl PtySession {
         let writer = pair.master.take_writer().expect("pty writer");
         let reader = pair.master.try_clone_reader().expect("pty reader clone");
         let output = Arc::new(Mutex::new(Vec::<u8>::with_capacity(64 * 1024)));
-        let screen = Arc::new(Mutex::new(vt100::Parser::new(options.rows, COLS, 0)));
+        let screen = Arc::new(Mutex::new(Parser::new(options.rows, COLS, 0)));
         let out_buf = output.clone();
         let screen_buf = screen.clone();
         let reader_thread = thread::spawn(move || {
@@ -421,8 +421,6 @@ impl Drop for PtySession {
         let _kill = self._child.kill();
         #[cfg(unix)]
         {
-            use nix::sys::signal::{Signal, kill};
-            use nix::unistd::Pid;
             if let Some(pid) = self._child.process_id() {
                 let _ = kill(Pid::from_raw(-(pid as i32)), Signal::SIGKILL);
             }
@@ -594,7 +592,6 @@ pub fn strip_ansi(s: &str) -> String {
 /// (which fails on an existing dir) would panic. The pid + a per-process
 /// monotonic counter cannot.
 pub fn fresh_temp_dir(slug: &str) -> PathBuf {
-    use std::sync::atomic::{AtomicU64, Ordering};
     static SEQ: AtomicU64 = AtomicU64::new(0);
     // Retry on collision: a stale leftover dir from a previous run (same pid
     // recycled by the OS, since nextest gives each test its own process so
@@ -606,7 +603,7 @@ pub fn fresh_temp_dir(slug: &str) -> PathBuf {
         let p = env::temp_dir().join(format!("houyi-ui-{slug}-{}-{n}", process::id(),));
         match fs::create_dir(&p) {
             Ok(()) => return p,
-            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(e) if e.kind() == ErrorKind::AlreadyExists => continue,
             Err(e) => panic!("mkdir temp dir {p:?}: {e}"),
         }
     }
@@ -667,7 +664,6 @@ pub const ONE_REPLY_SCRIPT: &str = r#"[[{"type":"Text","text":"logged"}]]"#;
 /// derived-stats fields a full export carries, so this slice round-trips
 /// through resume. Shared by the resume + status-provenance PTY tests.
 pub fn write_resume_fixture() -> PathBuf {
-    use houyicoder_core::{EventId, SessionEvent, SessionId, SessionLogEntry};
     let legacy_sid = "01KZ5RDH4DG6YV0EDBX1KSKTRA"; // legacy ULID (pre-change)
     let sid = SessionId::from_display_string(legacy_sid).expect("legacy ULID parses");
     let mk = |kind: SessionEvent| SessionLogEntry {
@@ -706,8 +702,16 @@ pub fn write_resume_fixture() -> PathBuf {
 }
 
 mod seed;
+use houyicoder_core::{EventId, SessionEvent, SessionId, SessionLogEntry};
+use io::ErrorKind;
+#[cfg(unix)]
+use nix::sys::signal::{Signal, kill};
+#[cfg(unix)]
+use nix::unistd::Pid;
 #[allow(unused_imports)]
 pub use seed::*;
+use std::sync::atomic::{AtomicU64, Ordering};
+use vt100::Parser;
 
 /// List the session-id dirs (each a sid directory) under a sessions root.
 /// Files (the export json, lock files) are filtered out. Shared by the

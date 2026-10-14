@@ -1,11 +1,13 @@
 //! Tests for this module.
 
+use super::super::CompactTrigger;
+use super::super::HookEvent;
 use super::*;
 use houyicoder_context::SessionId;
 
 fn ctx_pre(tool: &str) -> HookContext {
     HookContext {
-        event: super::super::HookEvent::PreToolUse,
+        event: HookEvent::PreToolUse,
         payload: HookPayload::PreToolUse {
             tool_name: tool.into(),
             input: serde_json::json!({"command": "git push"}),
@@ -93,7 +95,7 @@ fn test_if_rule_with_pattern() {
 fn test_if_rule_content_bash() {
     // Bash matches input.command, not other string fields.
     let ctx = HookContext {
-        event: super::super::HookEvent::PreToolUse,
+        event: HookEvent::PreToolUse,
         payload: HookPayload::PreToolUse {
             tool_name: "Bash".into(),
             input: serde_json::json!({"command": "git push", "cwd": "/tmp"}),
@@ -109,7 +111,7 @@ fn test_if_rule_content_bash() {
 fn test_if_rule_content_write() {
     // Write matches input.path.
     let ctx = HookContext {
-        event: super::super::HookEvent::PreToolUse,
+        event: HookEvent::PreToolUse,
         payload: HookPayload::PreToolUse {
             tool_name: "Write".into(),
             input: serde_json::json!({"path": "/etc/passwd", "content": "root"}),
@@ -125,7 +127,7 @@ fn test_if_rule_content_write() {
 fn test_if_unknown_walks_strings() {
     // Unknown tool falls back to walking all strings.
     let ctx = HookContext {
-        event: super::super::HookEvent::PreToolUse,
+        event: HookEvent::PreToolUse,
         payload: HookPayload::PreToolUse {
             tool_name: "CustomTool".into(),
             input: serde_json::json!({"data": "hello world"}),
@@ -139,7 +141,7 @@ fn test_if_unknown_walks_strings() {
 #[test]
 fn test_nontool_event_no_match() {
     let ctx = HookContext {
-        event: super::super::HookEvent::SessionStart,
+        event: HookEvent::SessionStart,
         payload: HookPayload::SessionStart { resumed: false },
         session: SessionId::new(),
     };
@@ -200,7 +202,7 @@ fn test_compile_if_glob() {
 fn test_if_rule_compiled_bash() {
     let re = compile_if_pattern("Bash(git *)").unwrap();
     let ctx = HookContext {
-        event: super::super::HookEvent::PreToolUse,
+        event: HookEvent::PreToolUse,
         payload: HookPayload::PreToolUse {
             tool_name: "Bash".into(),
             input: serde_json::json!({"command": "git push"}),
@@ -214,7 +216,7 @@ fn test_if_rule_compiled_bash() {
 #[test]
 fn test_match_query_session_start() {
     let ctx = HookContext {
-        event: super::super::HookEvent::SessionStart,
+        event: HookEvent::SessionStart,
         payload: HookPayload::SessionStart { resumed: false },
         session: SessionId::new(),
     };
@@ -226,7 +228,7 @@ fn test_match_query_session_start() {
 #[test]
 fn test_match_query_session_resume() {
     let ctx = HookContext {
-        event: super::super::HookEvent::SessionStart,
+        event: HookEvent::SessionStart,
         payload: HookPayload::SessionStart { resumed: true },
         session: SessionId::new(),
     };
@@ -237,7 +239,7 @@ fn test_match_query_session_resume() {
 #[test]
 fn test_match_query_setup() {
     let ctx = HookContext {
-        event: super::super::HookEvent::Setup,
+        event: HookEvent::Setup,
         payload: HookPayload::Setup,
         session: SessionId::new(),
     };
@@ -248,7 +250,7 @@ fn test_match_query_setup() {
 #[test]
 fn test_match_query_file_changed() {
     let ctx = HookContext {
-        event: super::super::HookEvent::FileChanged,
+        event: HookEvent::FileChanged,
         payload: HookPayload::FileChanged {
             paths: vec!["/tmp/foo.txt".into()],
         },
@@ -263,7 +265,7 @@ fn test_match_query_file_changed() {
 fn test_match_query_subagent() {
     // A matcher selects which subagent kind the hook fires for.
     let ctx = HookContext {
-        event: super::super::HookEvent::SubagentStop,
+        event: HookEvent::SubagentStop,
         payload: HookPayload::SubagentStop {
             agent_id: houyicoder_context::AgentId("a1".into()),
             agent_type: "code-reviewer".into(),
@@ -280,7 +282,7 @@ fn test_match_query_subagent() {
 #[test]
 fn test_match_query_session_end() {
     let ctx = HookContext {
-        event: super::super::HookEvent::SessionEnd,
+        event: HookEvent::SessionEnd,
         payload: HookPayload::SessionEnd {
             reason: SessionEndReason::Logout,
         },
@@ -297,9 +299,9 @@ fn test_match_query_compact_trigger() {
     // debug rendering, so renaming the variant cannot silently
     // change what a configured matcher selects.
     let ctx = HookContext {
-        event: super::super::HookEvent::PreCompact,
+        event: HookEvent::PreCompact,
         payload: HookPayload::PreCompact {
-            trigger: super::super::CompactTrigger::Auto,
+            trigger: CompactTrigger::Auto,
             pre_compact_event_count: 0,
             pre_compact_token_estimate: 0,
         },
@@ -315,7 +317,7 @@ fn test_match_query_unmapped_event() {
     // An event with no meaningful kind field matches only the
     // wildcard forms, never a named matcher.
     let ctx = HookContext {
-        event: super::super::HookEvent::PreSelect,
+        event: HookEvent::PreSelect,
         payload: HookPayload::PreSelect {
             current_token_estimate: 0,
         },

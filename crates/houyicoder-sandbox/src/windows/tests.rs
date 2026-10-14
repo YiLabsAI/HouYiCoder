@@ -5,13 +5,20 @@
 // outcomes (see the jobobject_smoke example for the kernel-side check).
 
 use super::*;
+use std::env::temp_dir;
+use std::fs::create_dir_all;
+use std::fs::remove_dir_all;
+use std::fs::write;
+use std::process::id;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 fn unique_dir(tag: &str) -> PathBuf {
-    std::env::temp_dir().join(format!(
+    temp_dir().join(format!(
         "houyicoder-windows-{tag}-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+        id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0)
     ))
@@ -35,9 +42,9 @@ fn test_absolute_path_rejected() {
 fn test_granted_dir_admitted() {
     let session = WindowsJobSession::new().expect("session");
     let granted = unique_dir("grant");
-    std::fs::create_dir_all(&granted).expect("create granted dir");
+    create_dir_all(&granted).expect("create granted dir");
     let target = granted.join("notes.txt");
-    std::fs::write(&target, "x").expect("write target");
+    write(&target, "x").expect("write target");
     let granted_str = granted.to_str().expect("granted str");
     let target_str = target.to_str().expect("target str");
 
@@ -50,7 +57,7 @@ fn test_granted_dir_admitted() {
     let revoked = session.resolve_write(target_str);
     assert!(matches!(revoked, Err(SandboxError::PathTraversal(_))));
 
-    let _cleanup = std::fs::remove_dir_all(&granted);
+    let _cleanup = remove_dir_all(&granted);
 }
 
 #[test]
@@ -61,10 +68,10 @@ fn test_coverage_unfenced() {
     let session = WindowsJobSession::new().expect("session");
     assert!(matches!(session.coverage(), Coverage::Unfenced));
     let granted = unique_dir("coverage");
-    std::fs::create_dir_all(&granted).expect("create granted dir");
+    create_dir_all(&granted).expect("create granted dir");
     let granted_str = granted.to_str().expect("granted str");
     session.add_working_dir(granted_str).expect("grant");
     assert!(matches!(session.coverage(), Coverage::Unfenced));
     session.remove_working_dir(granted_str);
-    let _cleanup = std::fs::remove_dir_all(&granted);
+    let _cleanup = remove_dir_all(&granted);
 }

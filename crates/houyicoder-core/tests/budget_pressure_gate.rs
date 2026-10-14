@@ -19,9 +19,10 @@ use houyicoder_session::SessionStore;
 use houyicoder_core::agent::StubTool;
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::{Runner, ToolRegistry};
+use std::vec::IntoIter;
 
 struct ScriptCapturingProvider {
-    responses: Mutex<std::vec::IntoIter<CompletionResponse>>,
+    responses: Mutex<IntoIter<CompletionResponse>>,
     seen: Arc<Mutex<Vec<CompletionRequest>>>,
 }
 

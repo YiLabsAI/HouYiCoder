@@ -43,6 +43,24 @@ use super::tools::{
     DeleteMemoryTool, DemoteMemoryTool, MemoryAddTool, PromoteMemoryTool, ShowMemoryTool,
 };
 use super::{RunError, RunResult, Runner, ToolRegistry};
+use crate::agent::durable_scan::scan_cross_session_retry;
+use crate::agent::prompt::reward_lesson::build_reward_lesson_prompt;
+use crate::agent::reward_snapshot::RewardSnapshot;
+use crate::agent::reward_snapshot::format_reward;
+use std::fs::FileTimes;
+use std::fs::OpenOptions;
+use std::fs::create_dir_all;
+use std::fs::metadata;
+use std::fs::read_to_string;
+use std::fs::remove_file;
+use std::fs::write;
+use std::io::ErrorKind;
+use std::io::Write;
+use std::mem::take;
+use std::process::id;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
+use tokio::time::sleep;
 
 const LOCK_FILE: &str = ".consolidate-lock";
 pub(crate) const INDEX_FILE: &str = "MEMORY.md";
@@ -106,10 +124,10 @@ impl ConsolidationLock {
     /// mtime of the lock file (= lastConsolidatedAt), or 0 if absent.
     /// Per-turn cost: one stat.
     pub(crate) fn last_consolidated_at(&self) -> u64 {
-        std::fs::metadata(&self.path)
+        metadata(&self.path)
             .ok()
             .and_then(|m| m.modified().ok())
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
             .map(|d| d.as_secs())
             .unwrap_or(0)
     }
@@ -135,27 +153,26 @@ impl ConsolidationLock {
             return None;
         }
         if let Some(parent) = self.path.parent() {
-            drop(std::fs::create_dir_all(parent));
+            drop(create_dir_all(parent));
         }
         // Stale reclaim: a prior lock past the stale window means the holder
         // died (maxTurns backstop is well under the stale window). Unlink it
         // so create_new can land. Absent lock (prior == 0) skips the unlink.
         if prior > 0 {
-            drop(std::fs::remove_file(&self.path));
+            drop(remove_file(&self.path));
         }
-        let pid = std::process::id();
-        match std::fs::OpenOptions::new()
+        let pid = id();
+        match OpenOptions::new()
             .create_new(true)
             .write(true)
             .open(&self.path)
         {
             Ok(mut f) => {
-                use std::io::Write;
                 drop(f.write_all(pid.to_string().as_bytes()));
                 drop(f.flush());
                 Some(prior)
             }
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => None,
+            Err(e) if e.kind() == ErrorKind::AlreadyExists => None,
             Err(_) => None,
         }
     }
@@ -167,23 +184,22 @@ impl ConsolidationLock {
     /// std FileTimes, no libc.
     pub(crate) fn rollback(&self, prior: u64) {
         if prior == 0 {
-            drop(std::fs::remove_file(&self.path));
+            drop(remove_file(&self.path));
             return;
         }
         // Recreate the file and rewind its mtime so last_consolidated_at
         // returns the pre-acquire value.
-        drop(std::fs::write(&self.path, String::new()));
-        let times = std::fs::FileTimes::new()
-            .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(prior));
-        if let Ok(file) = std::fs::OpenOptions::new().write(true).open(&self.path) {
+        drop(write(&self.path, String::new()));
+        let times = FileTimes::new().set_modified(UNIX_EPOCH + Duration::from_secs(prior));
+        if let Ok(file) = OpenOptions::new().write(true).open(&self.path) {
             drop(file.set_times(times));
         }
     }
 
     /// Stamp after a successful dream (write PID, mtime = now).
     pub(crate) fn record_consolidation(&self) {
-        let pid = std::process::id();
-        drop(std::fs::write(&self.path, pid.to_string()));
+        let pid = id();
+        drop(write(&self.path, pid.to_string()));
     }
 }
 
@@ -213,8 +229,8 @@ impl Drop for InProgressGuard<'_> {
 }
 
 fn now_secs() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
 }
@@ -288,10 +304,10 @@ fn format_recall_stats(stats: &[MemoryRecallStats], now: u64) -> String {
 pub(crate) fn merge_cross_session_reward(
     session_log_root: &Option<PathBuf>,
     current_session: Option<&str>,
-    reward: &mut Option<crate::agent::reward_snapshot::RewardSnapshot>,
+    reward: &mut Option<RewardSnapshot>,
 ) {
     if let Some(log_root) = session_log_root {
-        let cross = crate::agent::durable_scan::scan_cross_session_retry(log_root, current_session);
+        let cross = scan_cross_session_retry(log_root, current_session);
         if cross > 0
             && let Some(snap) = reward.as_mut()
         {
@@ -312,11 +328,9 @@ pub(crate) fn build_consolidation_prompt(
     index_text: &str,
     stats: &[MemoryRecallStats],
     now_secs: u64,
-    reward: Option<&crate::agent::reward_snapshot::RewardSnapshot>,
+    reward: Option<&RewardSnapshot>,
 ) -> String {
-    let reward_str = reward
-        .map(crate::agent::reward_snapshot::format_reward)
-        .unwrap_or_default();
+    let reward_str = reward.map(format_reward).unwrap_or_default();
     format!(
         "# Dream: Memory Consolidation\n\n\
         You are performing a dream — a reflective pass over the memory files. \
@@ -536,7 +550,7 @@ impl DreamRunner {
     /// consolidation. Coalesces if a dream is already in flight.
     pub fn execute_dream(
         self: &Arc<Self>,
-        mut reward: Option<crate::agent::reward_snapshot::RewardSnapshot>,
+        mut reward: Option<RewardSnapshot>,
         current_session: Option<&str>,
     ) {
         let root = self.memory.memory_root();
@@ -628,7 +642,7 @@ impl DreamRunner {
     pub(crate) async fn run_dream_body(
         self: Arc<Self>,
         root: String,
-        reward: Option<crate::agent::reward_snapshot::RewardSnapshot>,
+        reward: Option<RewardSnapshot>,
         is_reward_dream: bool,
     ) {
         // Reset in_progress on scope exit, including a panic unwinding this
@@ -663,14 +677,13 @@ impl DreamRunner {
         );
         tracing::debug!("{fork_msg}");
         let stats = self.memory.read_recall_stats();
-        let index_text =
-            std::fs::read_to_string(Path::new(&root).join(INDEX_FILE)).unwrap_or_default();
+        let index_text = read_to_string(Path::new(&root).join(INDEX_FILE)).unwrap_or_default();
         let prompt = if is_reward_dream {
             // Reward dream: focused lesson extraction from blind retries,
             // not a full consolidation pass. Uses a dedicated prompt that
             // removes the "if nothing changed, say so" blanket exit and
             // scopes out consolidation/prune/scope-flow phases.
-            crate::agent::prompt::reward_lesson::build_reward_lesson_prompt(
+            build_reward_lesson_prompt(
                 &root,
                 &listing,
                 &index_text,
@@ -737,12 +750,11 @@ impl DreamRunner {
     /// dropped (detached) so the caller can proceed. No-op when nothing is
     /// in flight.
     pub async fn drain_pending(&self, timeout: Duration) {
-        let handles: Vec<JoinHandle<()>> =
-            std::mem::take(&mut *self.in_flight.lock().expect("in_flight"));
+        let handles: Vec<JoinHandle<()>> = take(&mut *self.in_flight.lock().expect("in_flight"));
         if handles.is_empty() {
             return;
         }
-        let mut deadline = Box::pin(tokio::time::sleep(timeout));
+        let mut deadline = Box::pin(sleep(timeout));
         for handle in handles {
             tokio::select! {
                 _ = handle => {}

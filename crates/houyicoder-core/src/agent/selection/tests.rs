@@ -6,7 +6,9 @@ use super::*;
 use houyicoder_context::{
     BlockHash, CheckpointId, ContextError, EventId, SessionEvent, SessionId, SessionLogEntry,
 };
+use houyicoder_memory::InMemoryBackend;
 use houyicoder_protocol::llm::InputItem;
+use std::collections::HashSet;
 
 fn ev(id: EventId, session: SessionId, kind: SessionEvent) -> SessionLogEntry {
     SessionLogEntry {
@@ -47,7 +49,7 @@ fn ids(n: usize) -> Vec<EventId> {
 /// Verify every ToolResult in the slice has a matching ToolCall in the
 /// same slice (the pair invariant the assembler debug_assert guards).
 fn pairs_intact(events: &[SessionLogEntry]) -> bool {
-    let calls: std::collections::HashSet<&str> = events
+    let calls: HashSet<&str> = events
         .iter()
         .filter_map(|e| match &e.event {
             SessionEvent::ToolCall { call_id, .. } => Some(call_id.as_str()),
@@ -130,7 +132,6 @@ async fn test_materialize_block_restores_output() {
     // assembler materializes it on demand so the model sees the real
     // output. This test simulates the Isolate step by storing the output
     // and constructing the marker by hand.
-    use houyicoder_memory::InMemoryBackend;
     let s = SessionId::new();
     let ids = ids(5);
     let big = serde_json::json!({"out": "y".repeat(200)});

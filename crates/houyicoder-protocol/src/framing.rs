@@ -11,6 +11,9 @@
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::collections::VecDeque;
+use std::error::Error;
+use std::fmt::Display;
+use std::fmt::Formatter;
 
 /// A framing failure: a line that is not valid JSON for the expected type, or
 /// a frame that exceeded the line limit. Converted at the boundary to
@@ -25,8 +28,8 @@ pub enum FrameError {
     TooLarge { limit: usize },
 }
 
-impl std::fmt::Display for FrameError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for FrameError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Json(e) => write!(f, "frame json error: {e}"),
             Self::TooLarge { limit } => {
@@ -36,7 +39,7 @@ impl std::fmt::Display for FrameError {
     }
 }
 
-impl std::error::Error for FrameError {}
+impl Error for FrameError {}
 
 impl From<serde_json::Error> for FrameError {
     fn from(e: serde_json::Error) -> Self {

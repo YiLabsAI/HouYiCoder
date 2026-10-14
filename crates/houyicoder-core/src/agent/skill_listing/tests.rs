@@ -132,42 +132,54 @@ fn test_zero_window_default_budget() {
 // registry, mirroring the memory_gates pattern. The formatter is covered
 // above; these cover the scan-skip + append-when-absent paths.
 
+use crate::agent::ToolRegistry;
+use crate::agent::conditional_activation::ConditionalActivation;
+use crate::agent::runner_config::RunnerConfig;
+use houyicoder_api::provider::ModelProvider;
 use houyicoder_api::provider::stream_from_response;
+use houyicoder_api::session::SessionLog;
 use houyicoder_api::skill::SkillError;
+use houyicoder_api::skill::SkillRegistry;
+use houyicoder_context::SessionId;
 use houyicoder_memory::InMemoryBackend;
+use houyicoder_protocol::llm::CompletionRequest;
+use houyicoder_protocol::llm::Usage;
 use houyicoder_protocol::llm::{
     CompletionResponse, LlmEvent, ModelCapabilities, OutputItem, ProviderError,
 };
 use houyicoder_resilience::Retry;
 use houyicoder_session::SessionStore;
+use std::env::temp_dir;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU32;
+use std::sync::atomic::Ordering;
 
 /// A stub provider: only capabilities() is read at construction.
 struct StubProvider;
-impl houyicoder_api::provider::ModelProvider for StubProvider {
+impl ModelProvider for StubProvider {
     fn complete(
         &self,
-        _req: houyicoder_protocol::llm::CompletionRequest,
+        _req: CompletionRequest,
     ) -> houyicoder_async::PFut<'_, Result<CompletionResponse, ProviderError>> {
         Box::pin(async {
             Ok(CompletionResponse {
                 output: vec![OutputItem::Text {
                     text: "done".into(),
                 }],
-                usage: houyicoder_protocol::llm::Usage::default(),
+                usage: Usage::default(),
                 model: "test".into(),
             })
         })
     }
     fn stream(
         &self,
-        _req: houyicoder_protocol::llm::CompletionRequest,
+        _req: CompletionRequest,
     ) -> houyicoder_async::PStream<'_, Result<LlmEvent, ProviderError>> {
         stream_from_response(CompletionResponse {
             output: vec![OutputItem::Text {
                 text: "done".into(),
             }],
-            usage: houyicoder_protocol::llm::Usage::default(),
+            usage: Usage::default(),
             model: "test".into(),
         })
     }
@@ -178,7 +190,7 @@ impl houyicoder_api::provider::ModelProvider for StubProvider {
 
 /// A stub registry that returns one model-invocable skill.
 struct OneSkillRegistry;
-impl houyicoder_api::skill::SkillRegistry for OneSkillRegistry {
+impl SkillRegistry for OneSkillRegistry {
     fn list_model_invocable(&self) -> Vec<SkillDescriptor> {
         vec![descriptor("commit", "commit changes", None)]
     }
@@ -203,11 +215,11 @@ impl houyicoder_api::skill::SkillRegistry for OneSkillRegistry {
 /// skill-set refresh (hot reload). The first call returns one description;
 /// every later call returns a different one, so the content hash flips.
 struct ChangingSkillRegistry {
-    calls: std::sync::atomic::AtomicU32,
+    calls: AtomicU32,
 }
-impl houyicoder_api::skill::SkillRegistry for ChangingSkillRegistry {
+impl SkillRegistry for ChangingSkillRegistry {
     fn list_model_invocable(&self) -> Vec<SkillDescriptor> {
-        let n = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let n = self.calls.fetch_add(1, Ordering::SeqCst);
         let desc = if n == 0 {
             "commit changes"
         } else {
@@ -233,14 +245,12 @@ impl houyicoder_api::skill::SkillRegistry for ChangingSkillRegistry {
 }
 
 fn runner_with_changing_skills() -> (Runner, SessionId) {
-    use houyicoder_context::SessionId;
-    let store: Arc<dyn houyicoder_api::session::SessionLog> =
-        Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let store: Arc<dyn SessionLog> = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let runner = Runner::new(
         store,
         Arc::new(StubProvider),
-        crate::agent::ToolRegistry::new(),
-        crate::agent::runner_config::RunnerConfig {
+        ToolRegistry::new(),
+        RunnerConfig {
             model: "test".into(),
             instructions: String::new(),
             max_turns: 5,
@@ -249,21 +259,19 @@ fn runner_with_changing_skills() -> (Runner, SessionId) {
         },
     )
     .with_skill_registry(Arc::new(ChangingSkillRegistry {
-        calls: std::sync::atomic::AtomicU32::new(0),
+        calls: AtomicU32::new(0),
     }));
     let session = SessionId::new();
     (runner, session)
 }
 
 fn runner_with_skills() -> (Runner, SessionId) {
-    use houyicoder_context::SessionId;
-    let store: Arc<dyn houyicoder_api::session::SessionLog> =
-        Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let store: Arc<dyn SessionLog> = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let runner = Runner::new(
         store,
         Arc::new(StubProvider),
-        crate::agent::ToolRegistry::new(),
-        crate::agent::runner_config::RunnerConfig {
+        ToolRegistry::new(),
+        RunnerConfig {
             model: "test".into(),
             instructions: String::new(),
             max_turns: 5,
@@ -388,15 +396,13 @@ async fn test_re_announces_on_change() {
 /// When no registry is wired, inject is a no-op (no event appended).
 #[tokio::test]
 async fn test_inject_noop_without_registry() {
-    use houyicoder_context::SessionId;
-    let store: Arc<dyn houyicoder_api::session::SessionLog> =
-        Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let store: Arc<dyn SessionLog> = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     // No with_skill_registry: skill_registry is None.
     let runner = Runner::new(
         store.clone(),
         Arc::new(StubProvider),
-        crate::agent::ToolRegistry::new(),
-        crate::agent::runner_config::RunnerConfig {
+        ToolRegistry::new(),
+        RunnerConfig {
             model: "test".into(),
             instructions: String::new(),
             max_turns: 5,
@@ -429,7 +435,7 @@ impl ConditionalRegistry {
         }
     }
 }
-impl houyicoder_api::skill::SkillRegistry for ConditionalRegistry {
+impl SkillRegistry for ConditionalRegistry {
     fn list_model_invocable(&self) -> Vec<SkillDescriptor> {
         self.skills
             .iter()
@@ -461,25 +467,18 @@ impl houyicoder_api::skill::SkillRegistry for ConditionalRegistry {
 
 #[tokio::test]
 async fn test_conditional_hidden_until_active() {
-    let registry: Arc<dyn houyicoder_api::skill::SkillRegistry> =
-        Arc::new(ConditionalRegistry::new(&[
-            ("always", &[]),
-            ("gated", &["src"]),
-        ]));
-    let cwd = std::env::temp_dir().join("houyi-listing-test");
-    let activator = Arc::new(
-        crate::agent::conditional_activation::ConditionalActivation::new(
-            std::sync::Arc::clone(&registry),
-            cwd,
-        ),
-    );
-    let store: Arc<dyn houyicoder_api::session::SessionLog> =
-        Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let registry: Arc<dyn SkillRegistry> = Arc::new(ConditionalRegistry::new(&[
+        ("always", &[]),
+        ("gated", &["src"]),
+    ]));
+    let cwd = temp_dir().join("houyi-listing-test");
+    let activator = Arc::new(ConditionalActivation::new(Arc::clone(&registry), cwd));
+    let store: Arc<dyn SessionLog> = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let runner = Runner::new(
         store.clone(),
         Arc::new(StubProvider),
-        crate::agent::ToolRegistry::new(),
-        crate::agent::runner_config::RunnerConfig {
+        ToolRegistry::new(),
+        RunnerConfig {
             model: "test".into(),
             instructions: String::new(),
             max_turns: 5,
@@ -488,8 +487,7 @@ async fn test_conditional_hidden_until_active() {
         },
     )
     .with_skill_registry(registry)
-    .with_conditional(std::sync::Arc::clone(&activator)
-        as Arc<dyn crate::agent::conditional_activation::ConditionalSkillActivator>);
+    .with_conditional(Arc::clone(&activator) as Arc<dyn ConditionalSkillActivator>);
     let session = SessionId::new();
 
     // Before activation: only the unconditional skill is listed.

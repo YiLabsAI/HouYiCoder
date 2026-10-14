@@ -14,6 +14,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use houyicoder_core::{EventId, SessionEvent, SessionId, SessionLogEntry};
 
 use crate::common::{self, Key, PtySession, RENDER_TIMEOUT, fresh_temp_dir, run_slash_command};
+use std::thread::sleep;
 
 /// --resume <sid> re-opens an existing session: the sid is REUSED (not a
 /// fork), the model is restored from the descriptor, the seeded history stays,
@@ -950,14 +951,14 @@ fn test_trajectory_no_wrap_nav() {
     );
     // Home selects the oldest turn, and Up there must not wrap to the newest.
     s.send_key(&Key::Home);
-    std::thread::sleep(std::time::Duration::from_millis(200));
+    sleep(Duration::from_millis(200));
     assert!(
         s.screen().contents().contains("▸ T1"),
         "Home selects the oldest turn:\n{}",
         s.screen().contents()
     );
     s.send_key(&Key::Up);
-    std::thread::sleep(std::time::Duration::from_millis(200));
+    sleep(Duration::from_millis(200));
     let screen = s.screen().contents();
     assert!(
         screen.contains("▸ T1"),
@@ -965,14 +966,14 @@ fn test_trajectory_no_wrap_nav() {
     );
     // End selects the newest, and Down there must not wrap to the oldest.
     s.send_key(&Key::End);
-    std::thread::sleep(std::time::Duration::from_millis(200));
+    sleep(Duration::from_millis(200));
     assert!(
         s.screen().contents().contains("▸ T3"),
         "End selects the newest turn:\n{}",
         s.screen().contents()
     );
     s.send_key(&Key::Down);
-    std::thread::sleep(std::time::Duration::from_millis(200));
+    sleep(Duration::from_millis(200));
     let screen = s.screen().contents();
     assert!(
         screen.contains("▸ T3"),
@@ -1024,7 +1025,7 @@ fn test_trajectory_older_loads_page() {
         s.send_key(&Key::Up);
     }
     let loaded = (0..80).any(|_| {
-        std::thread::sleep(std::time::Duration::from_millis(100));
+        sleep(Duration::from_millis(100));
         !s.screen().contents().contains("older not loaded")
     });
     assert!(
@@ -1040,7 +1041,7 @@ fn test_trajectory_older_loads_page() {
         for _ in 0..5 {
             s.send_key(&Key::Up);
         }
-        std::thread::sleep(std::time::Duration::from_millis(100));
+        sleep(Duration::from_millis(100));
         s.screen().contents().contains("older prompt 0")
     });
     assert!(
@@ -1096,14 +1097,14 @@ fn test_trajectory_esc_restores_turn() {
 
     // Walk up to the second turn and open it.
     s.send_key(&Key::Up);
-    std::thread::sleep(std::time::Duration::from_millis(200));
+    sleep(Duration::from_millis(200));
     assert!(
         s.screen().contents().contains("▸ T2"),
         "Up selects the second turn:\n{}",
         s.screen().contents()
     );
     s.send_key(&Key::Enter);
-    std::thread::sleep(std::time::Duration::from_millis(200));
+    sleep(Duration::from_millis(200));
     let detail = s.screen().contents();
     assert!(
         detail.contains("T2"),
@@ -1112,7 +1113,7 @@ fn test_trajectory_esc_restores_turn() {
 
     // Up at the record list must not move the turn list behind the drill.
     s.send_key(&Key::Up);
-    std::thread::sleep(std::time::Duration::from_millis(200));
+    sleep(Duration::from_millis(200));
     let detail = s.screen().contents();
     assert!(
         detail.contains("T2") && !detail.contains("older not loaded"),
@@ -1121,7 +1122,7 @@ fn test_trajectory_esc_restores_turn() {
 
     // Esc returns to the list with the turn the drill opened still selected.
     s.send_key(&Key::Esc);
-    std::thread::sleep(std::time::Duration::from_millis(200));
+    sleep(Duration::from_millis(200));
     let back = s.screen().contents();
     assert!(
         back.contains("▸ T2"),

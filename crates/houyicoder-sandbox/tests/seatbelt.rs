@@ -6,6 +6,8 @@
 
 use houyicoder_api::sandbox::SandboxSession;
 use houyicoder_sandbox::MacSeatbeltSession;
+use std::fs::remove_file;
+use std::path::Path;
 
 #[tokio::test]
 async fn test_seatbelt_runs_echo() {
@@ -34,10 +36,10 @@ async fn test_seatbelt_denies_escape() {
     // is fragile. The security property is "the file was not created".
     let s = MacSeatbeltSession::new().unwrap();
     let probe = "/etc/houyicoder-escape-probe";
-    std::fs::remove_file(probe).ok();
+    remove_file(probe).ok();
     s.exec(&format!("printf x > {probe}")).await.ok();
     assert!(
-        !std::path::Path::new(probe).exists(),
+        !Path::new(probe).exists(),
         "the fence must refuse the write to /etc — the probe file must not exist"
     );
     // Positive control: a write INSIDE the workspace succeeds (the deny is

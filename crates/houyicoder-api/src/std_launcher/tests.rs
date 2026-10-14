@@ -2,6 +2,10 @@
 
 use super::*;
 use crate::launcher::{SpawnPolicy, SpawnRequest};
+use std::env::temp_dir;
+use std::io::{BufRead, BufReader, Write};
+use std::time::Duration;
+use std::time::Instant;
 
 #[tokio::test]
 async fn test_sync_output_captures_stdout() {
@@ -40,7 +44,7 @@ async fn test_sync_output_stderr() {
 #[tokio::test]
 async fn test_workspace_as_cwd() {
     let launcher = StdProcessLauncher::new();
-    let tmp = std::env::temp_dir();
+    let tmp = temp_dir();
     // pwd (Git Bash on Windows) translates the Windows path to a Unix
     // form (/tmp for the temp dir), so the basename check fails. Use
     // cmd /c cd on Windows to get the native path; pwd on Unix.
@@ -70,7 +74,6 @@ async fn test_workspace_as_cwd() {
 /// pipes are wired both ways.
 #[tokio::test]
 async fn test_interactive_hands_back_pipes() {
-    use std::io::{BufRead, BufReader, Write};
     let launcher = StdProcessLauncher::new();
     let req = SpawnRequest::new("cat").interactive();
     let mut child = launcher.spawn(req, SpawnPolicy::default()).unwrap();
@@ -102,7 +105,7 @@ async fn test_capture_honors_wall_timeout() {
         wall_timeout_ms: 300,
         ..FenceConfig::default()
     });
-    let start = std::time::Instant::now();
+    let start = Instant::now();
     let child = launcher.spawn(req, policy).expect("spawn succeeds");
     let outcome = child.wait().await;
     let elapsed = start.elapsed();
@@ -111,7 +114,7 @@ async fn test_capture_honors_wall_timeout() {
         "a child outliving the wall timeout must not report success"
     );
     assert!(
-        elapsed < std::time::Duration::from_secs(10),
+        elapsed < Duration::from_secs(10),
         "the wait must be bounded by the timeout, not the child's lifetime; \
          took {elapsed:?}"
     );

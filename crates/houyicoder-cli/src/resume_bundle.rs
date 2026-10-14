@@ -9,6 +9,7 @@ use houyicoder_service::composition::ResolvedProvider;
 use houyicoder_service::composition::build_runner_for_fork;
 use houyicoder_service::composition::build_runner_for_resume_sid;
 use houyicoder_service::composition::session_log_root;
+use std::error::Error;
 use std::sync::Arc;
 
 /// Resume a session already on disk (--resume <sid>). Re-opens the existing
@@ -19,7 +20,7 @@ pub(super) fn build_bundle_for_resume_sid(
     sid: houyicoder_context::SessionId,
     project: Option<String>,
     provider: ResolvedProvider,
-) -> Result<crate::WiredBundle, Box<dyn std::error::Error>> {
+) -> Result<crate::WiredBundle, Box<dyn Error>> {
     let resumed = build_runner_for_resume_sid(
         sid,
         &session_log_root(),
@@ -48,7 +49,7 @@ pub(super) fn build_bundle_for_fork(
     source_sid: houyicoder_context::SessionId,
     project: Option<String>,
     provider: ResolvedProvider,
-) -> Result<crate::WiredBundle, Box<dyn std::error::Error>> {
+) -> Result<crate::WiredBundle, Box<dyn Error>> {
     let resumed = build_runner_for_fork(
         source_sid,
         &session_log_root(),

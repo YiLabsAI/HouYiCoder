@@ -5,6 +5,9 @@ use std::path::PathBuf;
 
 use super::{DefinitionSource, LoadError, Loader, load_dir, parse_agent_definition};
 use crate::agent::multi_agent::registry::PromptSource;
+use std::env::temp_dir;
+use std::process::id;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 #[test]
 fn test_parse_minimal_definition() {
@@ -113,8 +116,7 @@ fn test_load_dir_skips_corrupt() {
 }
 
 fn unique_temp_dir() -> PathBuf {
-    use std::sync::atomic::{AtomicU32, Ordering};
     static SEQ: AtomicU32 = AtomicU32::new(0);
     let n = SEQ.fetch_add(1, Ordering::Relaxed);
-    std::env::temp_dir().join(format!("houyi-loader-{}-{}", std::process::id(), n))
+    temp_dir().join(format!("houyi-loader-{}-{}", id(), n))
 }

@@ -9,13 +9,20 @@
 use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
 use houyicoder_memory::LocalFileBackend;
 use houyicoder_session::{SessionStore, SourceChain};
+use std::env::temp_dir;
+use std::fs::create_dir_all;
+use std::fs::read_to_string;
+use std::fs::remove_dir_all;
+use std::fs::write;
+use std::path::PathBuf;
+use std::process::id;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-fn temp_root() -> std::path::PathBuf {
+fn temp_root() -> PathBuf {
     static SEQ: AtomicU64 = AtomicU64::new(0);
     let n = SEQ.fetch_add(1, Ordering::Relaxed);
-    let p = std::env::temp_dir().join(format!("verify-disk-{}-{n}", std::process::id()));
-    std::fs::create_dir_all(&p).expect("mkdir root");
+    let p = temp_dir().join(format!("verify-disk-{}-{n}", id()));
+    create_dir_all(&p).expect("mkdir root");
     p
 }
 
@@ -56,7 +63,7 @@ async fn test_disk_chain_verifies_append() {
         SourceChain::Verified,
         "a chain written by the write path must verify (raw bytes match)",
     );
-    std::fs::remove_dir_all(&root).ok();
+    remove_dir_all(&root).ok();
 }
 
 /// A tampered line (the text changed after write) breaks the chain: the
@@ -92,9 +99,9 @@ async fn test_disk_chain_detects_tamper() {
     // prev_hash (hash of the original first line) no longer matches the hash
     // of the tampered first line, so the chain breaks at index 1.
     let log_path = root.join(sid.to_string()).join("log.jsonl");
-    let body = std::fs::read_to_string(&log_path).expect("read log");
+    let body = read_to_string(&log_path).expect("read log");
     let tampered = body.replacen("orig", "TAMPERED", 1);
-    std::fs::write(&log_path, tampered).expect("write tampered log");
+    write(&log_path, tampered).expect("write tampered log");
     match store.verify_disk_chain(sid) {
         SourceChain::Unverified { at_index, .. } => {
             assert_eq!(
@@ -104,7 +111,7 @@ async fn test_disk_chain_detects_tamper() {
         }
         other => panic!("a tampered line must yield Unverified, got {other:?}"),
     }
-    std::fs::remove_dir_all(&root).ok();
+    remove_dir_all(&root).ok();
 }
 
 /// An empty session (no log) verifies as Verified (no events to chain).
@@ -119,5 +126,5 @@ async fn test_disk_chain_empty_verified() {
         SourceChain::Verified,
         "an empty session has no chain to break",
     );
-    std::fs::remove_dir_all(&root).ok();
+    remove_dir_all(&root).ok();
 }

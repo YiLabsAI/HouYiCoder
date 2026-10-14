@@ -1,5 +1,7 @@
 use super::*;
 use crate::agent::context::Tokenizer;
+use houyicoder_context::CheckpointId;
+use houyicoder_context::PermissionVerdict;
 use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
 
 fn ev(session: SessionId, id: EventId, kind: SessionEvent) -> SessionLogEntry {
@@ -372,7 +374,7 @@ fn test_estimate_counts_each_kind() {
     assert_eq!(
         estimate_event_tokens(
             &mk(CompactionBoundary {
-                checkpoint: houyicoder_context::CheckpointId::new(),
+                checkpoint: CheckpointId::new(),
                 pre_tokens: 0,
                 post_tokens: 0,
             }),
@@ -386,7 +388,7 @@ fn test_estimate_counts_each_kind() {
             &mk(PermissionDecision {
                 call_id: "c".into(),
                 tool: "bash".into(),
-                verdict: houyicoder_context::PermissionVerdict::Approved,
+                verdict: PermissionVerdict::Approved,
                 scope: "once".into()
             }),
             &tokenizer

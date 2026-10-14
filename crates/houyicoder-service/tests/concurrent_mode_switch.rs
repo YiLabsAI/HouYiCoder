@@ -39,11 +39,19 @@ use houyicoder_service::server::Server;
 use houyicoder_session::SessionStore;
 
 use crate::common::{pair, recv_frame_within, recv_hello, send_frame};
+use futures::channel::mpsc::Receiver;
+use futures::channel::mpsc::Sender;
+use futures::stream::once;
+use houyicoder_api::tool::ToolCtx;
+use houyicoder_permission::PermissionMode;
+use houyicoder_protocol::llm::LlmEvent;
+use std::time::Duration;
+use tokio::sync::Notify;
 
 /// A provider that blocks on a Notify before returning, so the run future
 /// stays pending while a control frame is injected.
 struct BlockingProvider {
-    notify: Arc<tokio::sync::Notify>,
+    notify: Arc<Notify>,
 }
 
 impl ModelProvider for BlockingProvider {
@@ -63,12 +71,9 @@ impl ModelProvider for BlockingProvider {
             })
         })
     }
-    fn stream(
-        &self,
-        _req: CompletionRequest,
-    ) -> PStream<'_, Result<houyicoder_protocol::llm::LlmEvent, ProviderError>> {
+    fn stream(&self, _req: CompletionRequest) -> PStream<'_, Result<LlmEvent, ProviderError>> {
         let notify = self.notify.clone();
-        let s = futures::stream::once(async move {
+        let s = once(async move {
             notify.notified().await;
             let resp = CompletionResponse {
                 output: vec![OutputItem::Text {
@@ -103,7 +108,7 @@ impl Tool for ApprovableTool {
     }
     fn execute(
         &self,
-        _ctx: houyicoder_api::tool::ToolCtx,
+        _ctx: ToolCtx,
         _input: serde_json::Value,
     ) -> PFut<'_, Result<serde_json::Value, ToolError>> {
         Box::pin(async move { Ok(serde_json::json!({"ok": true})) })
@@ -116,7 +121,7 @@ impl Tool for ApprovableTool {
 /// First call returns a tool call (Interruption); second call blocks on Notify
 /// (so the resume select! is live when the control frame arrives).
 struct TwoPhaseProvider {
-    notify: Arc<tokio::sync::Notify>,
+    notify: Arc<Notify>,
     calls: AtomicU32,
 }
 
@@ -152,10 +157,7 @@ impl ModelProvider for TwoPhaseProvider {
             })
         }
     }
-    fn stream(
-        &self,
-        _req: CompletionRequest,
-    ) -> PStream<'_, Result<houyicoder_protocol::llm::LlmEvent, ProviderError>> {
+    fn stream(&self, _req: CompletionRequest) -> PStream<'_, Result<LlmEvent, ProviderError>> {
         let calls = self.calls.fetch_add(1, Ordering::SeqCst);
         if calls == 0 {
             let resp = CompletionResponse {
@@ -170,7 +172,7 @@ impl ModelProvider for TwoPhaseProvider {
             stream_from_response(resp)
         } else {
             let notify = self.notify.clone();
-            let s = futures::stream::once(async move {
+            let s = once(async move {
                 notify.notified().await;
                 let resp = CompletionResponse {
                     output: vec![OutputItem::Text {
@@ -191,12 +193,7 @@ impl ModelProvider for TwoPhaseProvider {
 }
 
 /// Spawn serve + handshake. Returns the client channel halves.
-async fn handshake(
-    server: Server,
-) -> (
-    futures::channel::mpsc::Sender<String>,
-    futures::channel::mpsc::Receiver<String>,
-) {
+async fn handshake(server: Server) -> (Sender<String>, Receiver<String>) {
     let (io, mut client_tx, mut client_rx) = pair();
     tokio::spawn(async move { server.serve(io).await });
     send_frame(&mut client_tx, &Hello::local()).await;
@@ -209,7 +206,7 @@ async fn handshake(
 /// select! reads it when the run is pending (blocked on the provider).
 #[tokio::test]
 async fn test_cycle_during_run() {
-    let notify = Arc::new(tokio::sync::Notify::new());
+    let notify = Arc::new(Notify::new());
     let provider: Arc<dyn ModelProvider> = Arc::new(BlockingProvider {
         notify: notify.clone(),
     });
@@ -250,7 +247,7 @@ async fn test_cycle_during_run() {
     // recv_frame panics on channel close, so the loop either hits the
     // PermissionMode (success) or panics (the server closed without it).
     loop {
-        match recv_frame_within(&mut client_rx, std::time::Duration::from_secs(5)).await {
+        match recv_frame_within(&mut client_rx, Duration::from_secs(5)).await {
             ServerFrame::Response(env)
                 if matches!(env.payload, ResponsePayload::PermissionMode(_)) =>
             {
@@ -269,7 +266,7 @@ async fn test_cycle_during_run() {
     }
     assert_eq!(
         gate_assert.current(),
-        houyicoder_permission::PermissionMode::Manual,
+        PermissionMode::Manual,
         "gate reflects the concurrent switch"
     );
     notify.notify_one();
@@ -280,7 +277,7 @@ async fn test_cycle_during_run() {
 /// provider, + a concurrent mode cycle frame is handled by the resume select!.
 #[tokio::test]
 async fn test_cycle_during_resume() {
-    let notify = Arc::new(tokio::sync::Notify::new());
+    let notify = Arc::new(Notify::new());
     let provider: Arc<dyn ModelProvider> = Arc::new(TwoPhaseProvider {
         notify: notify.clone(),
         calls: AtomicU32::new(0),
@@ -318,7 +315,7 @@ async fn test_cycle_during_resume() {
 
     // Drain until the reverse Permission ask arrives.
     let (ask_req_id, ask_call_id) = loop {
-        match recv_frame_within(&mut client_rx, std::time::Duration::from_secs(5)).await {
+        match recv_frame_within(&mut client_rx, Duration::from_secs(5)).await {
             ServerFrame::Request(ask)
                 if matches!(ask.payload, ServerRequestPayload::Permission(_)) =>
             {
@@ -349,7 +346,7 @@ async fn test_cycle_during_resume() {
     send_frame(&mut client_tx, &ClientFrame::Request(req)).await;
 
     loop {
-        match recv_frame_within(&mut client_rx, std::time::Duration::from_secs(5)).await {
+        match recv_frame_within(&mut client_rx, Duration::from_secs(5)).await {
             ServerFrame::Response(env)
                 if matches!(env.payload, ResponsePayload::PermissionMode(_)) =>
             {
@@ -370,7 +367,7 @@ async fn test_cycle_during_resume() {
 /// mutating verb mid-run is caught.
 #[tokio::test]
 async fn test_non_mode_request_dropped() {
-    let notify = Arc::new(tokio::sync::Notify::new());
+    let notify = Arc::new(Notify::new());
     let provider: Arc<dyn ModelProvider> = Arc::new(BlockingProvider {
         notify: notify.clone(),
     });
@@ -410,7 +407,7 @@ async fn test_non_mode_request_dropped() {
     notify.notify_one();
     let mut rules_replies: u32 = 0;
     loop {
-        match recv_frame_within(&mut client_rx, std::time::Duration::from_secs(5)).await {
+        match recv_frame_within(&mut client_rx, Duration::from_secs(5)).await {
             ServerFrame::Response(env) if env.req_id == RequestId(2) => {
                 rules_replies += 1;
             }
@@ -432,7 +429,7 @@ async fn test_non_mode_request_dropped() {
 /// /compact only dispatches between runs.
 #[tokio::test]
 async fn test_active_run_drops_compact() {
-    let notify = Arc::new(tokio::sync::Notify::new());
+    let notify = Arc::new(Notify::new());
     let provider: Arc<dyn ModelProvider> = Arc::new(BlockingProvider {
         notify: notify.clone(),
     });
@@ -470,7 +467,7 @@ async fn test_active_run_drops_compact() {
     notify.notify_one();
     let mut compact_replies: u32 = 0;
     loop {
-        match recv_frame_within(&mut client_rx, std::time::Duration::from_secs(5)).await {
+        match recv_frame_within(&mut client_rx, Duration::from_secs(5)).await {
             ServerFrame::Response(env) if env.req_id == RequestId(2) => {
                 compact_replies += 1;
             }

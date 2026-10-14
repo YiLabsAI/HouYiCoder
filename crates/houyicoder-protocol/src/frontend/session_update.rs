@@ -29,6 +29,8 @@ use serde_json::Value;
 
 use super::run::ContentBlock;
 use crate::acp_wire::Meta;
+use std::fmt::Display;
+use std::fmt::Formatter;
 
 /// One chunk of streaming content (ACP ContentChunk). The full type adds
 /// an unstable message_id; omitted here, decode parity holds.
@@ -68,8 +70,8 @@ impl From<&str> for ToolCallId {
     }
 }
 
-impl std::fmt::Display for ToolCallId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for ToolCallId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.0)
     }
 }

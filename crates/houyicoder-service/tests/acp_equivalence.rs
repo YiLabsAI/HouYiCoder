@@ -15,6 +15,7 @@ use houyicoder_context::SessionId;
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::{Runner, ToolRegistry};
 use houyicoder_memory::InMemoryBackend;
+use houyicoder_permission::DefaultModeGate;
 use houyicoder_protocol::acp_wire::AcpRequest;
 use houyicoder_protocol::acpx::AcpxCapabilities;
 use houyicoder_protocol::envelope::{ClientFrame, RequestEnvelope, RequestId};
@@ -57,11 +58,7 @@ async fn frontend_turn_stop_reason(runner: Arc<Runner>, session: SessionId) -> S
     let (server_tx, client_rx) = mpsc::channel::<String>(256);
     let (client_tx, server_rx) = mpsc::channel::<String>(256);
     let server_io = FrameCarrier::new(server_tx, server_rx);
-    let server = Server::new(
-        runner,
-        session,
-        std::sync::Arc::new(houyicoder_permission::DefaultModeGate::new()),
-    );
+    let server = Server::new(runner, session, Arc::new(DefaultModeGate::new()));
     let handle = tokio::spawn(async move { server.serve(server_io).await });
 
     let mut tx = client_tx;

@@ -13,6 +13,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::{BreakerState, CircuitBreaker};
+use std::error::Error;
+use std::fmt::Display;
+use std::fmt::Formatter;
 
 /// Trip reason for observability + TUI status.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -29,8 +32,8 @@ pub enum TripReason {
     PerCmdBudgetExceeded { consecutive: u32, threshold: u32 },
 }
 
-impl std::fmt::Display for TripReason {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for TripReason {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::AggregateCpuExceeded { used, budget } => {
                 write!(f, "AggregateCpuExceeded (used {used}s / budget {budget}s)")
@@ -119,13 +122,13 @@ impl Inner {
 #[derive(Debug)]
 pub struct ResourceBreakerOpen;
 
-impl std::fmt::Display for ResourceBreakerOpen {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for ResourceBreakerOpen {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "resource breaker open; spawn refused (cool-down)")
     }
 }
 
-impl std::error::Error for ResourceBreakerOpen {}
+impl Error for ResourceBreakerOpen {}
 
 /// Aggregate resource circuit breaker. Share across tasks via
 /// Arc<ResourceBreaker>. Wraps CircuitBreaker for the Open/Closed/HalfOpen

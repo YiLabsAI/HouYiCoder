@@ -24,10 +24,15 @@ use houyicoder_protocol::llm::{LlmEvent, Usage};
 use houyicoder_resilience::Retry;
 use houyicoder_session::SessionStore;
 
+use houyicoder_api::cache_policy::NoCachePolicy;
+use houyicoder_core::agent::StubTool;
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::{
     CompressPolicy, HeuristicSummarizer, RunOutcome, Runner, ToolRegistry, build_manifest,
 };
+use houyicoder_protocol::cache_policy::CacheBreakpoint;
+use houyicoder_protocol::cache_policy::{BreakpointKind, CacheHint, CacheTtl};
+use std::vec::IntoIter;
 
 /// A stub provider that records the instructions string from each request
 /// before returning a canned response. Asserts which system prompt the loop
@@ -78,7 +83,7 @@ impl ModelProvider for RecordingProvider {
 
 fn runner_with(instructions: &str, provider: Arc<dyn ModelProvider>) -> Runner {
     Runner::new(
-        std::sync::Arc::new(SessionStore::new(Box::new(InMemoryBackend::new()))),
+        Arc::new(SessionStore::new(Box::new(InMemoryBackend::new()))),
         provider,
         ToolRegistry::new(),
         RunnerConfig {
@@ -151,7 +156,7 @@ async fn test_nonempty_overrides_assembled() {
 /// input items from each request. Used to verify the loop re-assembles the
 /// event log through build() each turn (assembled.messages carries prior turns).
 struct InputRecordingProvider {
-    responses: Mutex<std::vec::IntoIter<CompletionResponse>>,
+    responses: Mutex<IntoIter<CompletionResponse>>,
     seen: Arc<Mutex<Vec<Vec<InputItem>>>>,
 }
 
@@ -215,9 +220,9 @@ async fn test_loop_uses_assembled_messages() {
     ];
     let provider = Arc::new(InputRecordingProvider::new(responses, seen.clone()));
     let mut tools = ToolRegistry::new();
-    tools.register(Arc::new(houyicoder_core::agent::StubTool::new("echo")));
+    tools.register(Arc::new(StubTool::new("echo")));
     let runner = Runner::new(
-        std::sync::Arc::new(SessionStore::new(Box::new(InMemoryBackend::new()))),
+        Arc::new(SessionStore::new(Box::new(InMemoryBackend::new()))),
         provider,
         tools,
         RunnerConfig {
@@ -292,7 +297,7 @@ async fn test_loop_applies_manifest() {
 
     // The runner appends a new UserInput then drives the model call — the
     // new event defaults to Verbatim (not in the plan).
-    let store = std::sync::Arc::new(SessionStore::new(Box::new(backend)));
+    let store = Arc::new(SessionStore::new(Box::new(backend)));
     let seen = Arc::new(Mutex::new(Vec::new()));
     let response = CompletionResponse {
         output: vec![OutputItem::Text {
@@ -420,8 +425,7 @@ fn assert_manifest_assembled(input: &[InputItem], summary: &str) {
 /// Pins the policy-application path so a later refactor cannot drop it.
 #[tokio::test]
 async fn test_cache_policy_applied_live() {
-    use houyicoder_protocol::cache_policy::{BreakpointKind, CacheHint, CacheTtl};
-    type BpVec = Vec<houyicoder_protocol::cache_policy::CacheBreakpoint>;
+    type BpVec = Vec<CacheBreakpoint>;
     let seen: Arc<Mutex<Vec<BpVec>>> = Arc::new(Mutex::new(Vec::new()));
     struct BpProvider {
         response: CompletionResponse,
@@ -447,7 +451,7 @@ async fn test_cache_policy_applied_live() {
                 .lock()
                 .expect("bp mutex")
                 .push(req.cache_breakpoints.clone());
-            houyicoder_api::provider::stream_from_response(self.response.clone())
+            stream_from_response(self.response.clone())
         }
         fn capabilities(&self) -> ModelCapabilities {
             ModelCapabilities::default()
@@ -464,7 +468,7 @@ async fn test_cache_policy_applied_live() {
         seen: seen.clone(),
     });
     let runner = Runner::new(
-        std::sync::Arc::new(SessionStore::new(Box::new(InMemoryBackend::new()))),
+        Arc::new(SessionStore::new(Box::new(InMemoryBackend::new()))),
         provider,
         ToolRegistry::new(),
         RunnerConfig {
@@ -495,7 +499,7 @@ async fn test_cache_policy_applied_live() {
 /// (the setter is otherwise dead in the default-Auto path).
 #[tokio::test]
 async fn test_no_cache_drops_breakpoints() {
-    type BpVec = Vec<houyicoder_protocol::cache_policy::CacheBreakpoint>;
+    type BpVec = Vec<CacheBreakpoint>;
     let seen: Arc<Mutex<Vec<BpVec>>> = Arc::new(Mutex::new(Vec::new()));
     struct BpProvider {
         response: CompletionResponse,
@@ -521,7 +525,7 @@ async fn test_no_cache_drops_breakpoints() {
                 .lock()
                 .expect("bp mutex")
                 .push(req.cache_breakpoints.clone());
-            houyicoder_api::provider::stream_from_response(self.response.clone())
+            stream_from_response(self.response.clone())
         }
         fn capabilities(&self) -> ModelCapabilities {
             ModelCapabilities::default()
@@ -538,7 +542,7 @@ async fn test_no_cache_drops_breakpoints() {
         seen: seen.clone(),
     });
     let runner = Runner::new(
-        std::sync::Arc::new(SessionStore::new(Box::new(InMemoryBackend::new()))),
+        Arc::new(SessionStore::new(Box::new(InMemoryBackend::new()))),
         provider,
         ToolRegistry::new(),
         RunnerConfig {
@@ -548,9 +552,7 @@ async fn test_no_cache_drops_breakpoints() {
             ..RunnerConfig::default()
         },
     )
-    .with_cache_policy(std::sync::Arc::new(
-        houyicoder_api::cache_policy::NoCachePolicy,
-    ));
+    .with_cache_policy(Arc::new(NoCachePolicy));
     let session = SessionId::new();
     let _outcome = runner.run(session, "hi".into()).await;
     let captured = seen.lock().expect("bp mutex").clone();

@@ -4,7 +4,7 @@ use super::super::*;
 
 #[test]
 fn test_bound_under_cap_passes() {
-    let dir = std::env::temp_dir();
+    let dir = temp_dir();
     let (o, e) = bound_bash_output("hello".into(), "world".into(), &dir);
     assert_eq!(o, "hello");
     assert_eq!(e, "world");
@@ -12,7 +12,7 @@ fn test_bound_under_cap_passes() {
 
 #[test]
 fn test_bound_over_cap_spills() {
-    let dir = std::env::temp_dir();
+    let dir = temp_dir();
     let big = "a".repeat(BASH_MAX_OUTPUT_CHARS + 1);
     let (o, e) = bound_bash_output(big.clone(), String::new(), &dir);
     assert!(o.contains("Output truncated"), "marker missing: {o}");
@@ -36,6 +36,7 @@ fn test_tail_chars_no_newline() {
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use houyicoder_context::{ExecConfig, ExecResult, SandboxError};
+use std::env::temp_dir;
 
 struct DiscoverStub {
     services: Vec<String>,
@@ -70,7 +71,7 @@ impl SandboxSession for DiscoverStub {
         })
     }
     fn workspace_root(&self) -> Arc<Path> {
-        Arc::from(std::env::temp_dir())
+        Arc::from(temp_dir())
     }
     fn discover_authorizable(&self) -> Vec<String> {
         self.scans.fetch_add(1, Ordering::Relaxed);

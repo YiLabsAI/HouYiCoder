@@ -9,6 +9,7 @@
 
 use houyicoder_api::launcher::StdProcessLauncher;
 use houyicoder_api::mcp::McpClient;
+use std::env::var;
 use std::path::PathBuf;
 
 /// Resolve the real MCP server binary for the live-server test. The env var
@@ -17,7 +18,7 @@ use std::path::PathBuf;
 /// only work on one machine). None when the env var is absent or the path
 /// does not exist, so the test auto-skips elsewhere.
 fn server_binary() -> Option<PathBuf> {
-    let p = std::env::var("HOUYICODER_MCP_SERVER_BINARY").ok()?;
+    let p = var("HOUYICODER_MCP_SERVER_BINARY").ok()?;
     let path = PathBuf::from(p);
     if path.exists() { Some(path) } else { None }
 }

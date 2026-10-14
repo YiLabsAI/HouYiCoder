@@ -25,8 +25,13 @@ use houyicoder_async::PFut;
 use houyicoder_protocol::extension::ToolError;
 use serde_json::{Value, json};
 
+use crate::launcher::StdioMode;
 use crate::launcher::{LauncherChild, ProcessLauncher, SpawnPolicy, SpawnRequest};
 use crate::tool::{Tool, ToolCtx, ToolProvider};
+use std::error::Error;
+use std::fmt::Display;
+use std::fmt::Formatter;
+use tokio::task::spawn_blocking;
 
 /// The protocol version the client advertises on initialize. Pinned to a
 /// stable spec revision; a future cut can negotiate up.
@@ -62,8 +67,8 @@ pub enum McpError {
     Protocol(String),
 }
 
-impl std::fmt::Display for McpError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for McpError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Io(m) => write!(f, "mcp io failure: {m}"),
             Self::ServerError { code, message } => {
@@ -74,7 +79,7 @@ impl std::fmt::Display for McpError {
     }
 }
 
-impl std::error::Error for McpError {}
+impl Error for McpError {}
 
 impl From<McpError> for ToolError {
     fn from(err: McpError) -> Self {
@@ -118,7 +123,7 @@ impl McpClient {
         // SIGPIPE-crash when this client drops the read end of a piped
         // stderr (broken pipe on its first log line after the buffer fills).
         // Null lets the server discard its logs without a reader.
-        req.stdio.stderr = crate::launcher::StdioMode::Null;
+        req.stdio.stderr = StdioMode::Null;
         let mut child = launcher
             .spawn(req, SpawnPolicy::default().audited())
             .map_err(|e| McpError::Io(e.to_string()))?;
@@ -392,7 +397,7 @@ impl Tool for McpTool {
             // The client uses blocking pipe I/O; run it on a runtime-blocking
             // thread so the async executor is not stalled. Errors map to
             // Failed so the model sees them and the loop continues.
-            let result = tokio::task::spawn_blocking(move || client.call_tool(&name, input))
+            let result = spawn_blocking(move || client.call_tool(&name, input))
                 .await
                 .map_err(|e| ToolError::Failed(format!("tool task join failed: {e}")))?;
             Ok(result?)

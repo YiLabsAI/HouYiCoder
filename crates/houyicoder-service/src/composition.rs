@@ -97,11 +97,12 @@ pub use paths::{
 };
 use std::collections::HashSet;
 use std::env::var;
+use std::fmt::Display;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicU32;
 
-fn degrade_with_notice<T, E: std::fmt::Display>(
+fn degrade_with_notice<T, E: Display>(
     attempt: Result<T, E>,
     what_failed: &str,
     consequence: &str,

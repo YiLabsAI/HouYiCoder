@@ -22,6 +22,7 @@ use houyicoder_protocol::llm::{LlmEvent, Usage};
 use houyicoder_session::SessionStore;
 use std::collections::HashSet;
 
+use houyicoder_api::session::SessionLog;
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::{MemoryGates, MemoryRuntime, RunOutcome, Runner, ToolRegistry};
 use houyicoder_memory::InMemoryBackend;
@@ -186,8 +187,7 @@ async fn test_instructions_override_keeps_memory() {
     ));
     let seen = Arc::new(Mutex::new(Vec::new()));
     let provider = Arc::new(FinalResponseProvider { seen: seen.clone() });
-    let store: Arc<dyn houyicoder_api::session::SessionLog> =
-        std::sync::Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let store: Arc<dyn SessionLog> = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let runtime = MemoryRuntime::from_parts(
         store.clone(),
         Some(memory.clone()),
@@ -237,8 +237,7 @@ async fn test_instructions_override_keeps_memory() {
 }
 
 fn runner_with_memory(provider: Arc<dyn ModelProvider>, memory: Arc<dyn MemoryProvider>) -> Runner {
-    let store: Arc<dyn houyicoder_api::session::SessionLog> =
-        std::sync::Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let store: Arc<dyn SessionLog> = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let runtime = MemoryRuntime::from_parts(
         store.clone(),
         Some(memory),
@@ -426,7 +425,7 @@ async fn test_no_memory_no_change() {
     let seen = Arc::new(Mutex::new(Vec::new()));
     let provider = Arc::new(FinalResponseProvider { seen: seen.clone() });
     let runner = Runner::new(
-        std::sync::Arc::new(SessionStore::new(Box::new(InMemoryBackend::new()))),
+        Arc::new(SessionStore::new(Box::new(InMemoryBackend::new()))),
         provider,
         ToolRegistry::new(),
         RunnerConfig::default(),

@@ -3,14 +3,16 @@
 use super::super::ToolRegistry;
 use super::super::runner_config::RunnerConfig;
 use super::{QueuedInput, Runner};
+use crate::provider::test_support::FakeProvider;
 use houyicoder_memory::InMemoryBackend;
 use houyicoder_session::SessionStore;
+use std::sync::Arc;
 
 fn bare_runner() -> Runner {
-    let store = std::sync::Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     Runner::new(
         store,
-        std::sync::Arc::new(crate::provider::test_support::FakeProvider::text("ok")),
+        Arc::new(FakeProvider::text("ok")),
         ToolRegistry::new(),
         RunnerConfig {
             model: "test".into(),

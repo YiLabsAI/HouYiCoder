@@ -11,16 +11,26 @@ use houyicoder_context::SessionId;
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::{Runner, ToolRegistry};
 use houyicoder_memory::InMemoryBackend;
+use houyicoder_permission::DefaultModeGate;
 use houyicoder_protocol::envelope::{
     ClientFrame, RequestEnvelope, RequestId, ResponsePayload, ServerFrame,
 };
+use houyicoder_protocol::error::ProtocolError;
+use houyicoder_protocol::framing::encode;
 use houyicoder_protocol::frontend::FrontendRequest;
 use houyicoder_protocol::frontend::model::ModelChoice;
 use houyicoder_protocol::handshake::Hello;
 use houyicoder_provider::FakeProvider;
 use houyicoder_service::server::{FrameCarrier, Server};
 use houyicoder_session::SessionStore;
+use std::env::temp_dir;
+use std::fs::read_to_string;
+use std::fs::write;
+use std::path::PathBuf;
+use std::process::id;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use tokio::task::JoinHandle;
 
 fn stub_runner() -> (Arc<Runner>, SessionId) {
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
@@ -43,11 +53,10 @@ fn stub_runner() -> (Arc<Runner>, SessionId) {
 /// A unique temp settings path so ModelSet's persist_model_pick writes the
 /// temp file (not the developer's real HOME settings) + the test stays
 /// isolated from other crates' settings reads.
-fn temp_settings() -> std::path::PathBuf {
-    use std::sync::atomic::{AtomicU64, Ordering};
+fn temp_settings() -> PathBuf {
     static SEQ: AtomicU64 = AtomicU64::new(0);
     let n = SEQ.fetch_add(1, Ordering::Relaxed);
-    std::env::temp_dir().join(format!("model-contract-{n}-{}.json", std::process::id()))
+    temp_dir().join(format!("model-contract-{n}-{}.json", id()))
 }
 
 fn pair() -> (FrameCarrier, mpsc::Sender<String>, mpsc::Receiver<String>) {
@@ -65,14 +74,10 @@ fn pair() -> (FrameCarrier, mpsc::Sender<String>, mpsc::Receiver<String>) {
 async fn start_session(settings_json: &str) -> Session {
     let (runner, session) = stub_runner();
     let settings = temp_settings();
-    std::fs::write(&settings, settings_json).unwrap();
+    write(&settings, settings_json).unwrap();
     let (server_io, mut client_tx, mut client_rx) = pair();
-    let server = Server::new(
-        runner.clone(),
-        session,
-        Arc::new(houyicoder_permission::DefaultModeGate::new()),
-    )
-    .with_settings_path(settings.clone());
+    let server = Server::new(runner.clone(), session, Arc::new(DefaultModeGate::new()))
+        .with_settings_path(settings.clone());
     let handle = tokio::spawn(async move { server.serve(server_io).await });
     send(&mut client_tx, &Hello::local()).await;
     drop(recv(&mut client_rx).await); // server Hello
@@ -87,10 +92,10 @@ async fn start_session(settings_json: &str) -> Session {
 
 struct Session {
     runner: Arc<Runner>,
-    settings: std::path::PathBuf,
+    settings: PathBuf,
     client_tx: mpsc::Sender<String>,
     client_rx: mpsc::Receiver<String>,
-    handle: tokio::task::JoinHandle<Result<(), houyicoder_protocol::error::ProtocolError>>,
+    handle: JoinHandle<Result<(), ProtocolError>>,
 }
 
 impl Session {
@@ -118,7 +123,7 @@ impl Session {
     }
 
     fn settings_json(&self) -> serde_json::Value {
-        serde_json::from_str(&std::fs::read_to_string(&self.settings).unwrap()).unwrap()
+        serde_json::from_str(&read_to_string(&self.settings).unwrap()).unwrap()
     }
 
     async fn close(self) {
@@ -236,7 +241,7 @@ async fn test_set_switches_runner_model() {
 }
 
 async fn send(tx: &mut mpsc::Sender<String>, msg: &impl serde::Serialize) {
-    let mut f = houyicoder_protocol::framing::encode(msg).expect("encode");
+    let mut f = encode(msg).expect("encode");
     if !f.ends_with('\n') {
         f.push('\n');
     }

@@ -23,7 +23,9 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 // runner_with is shared from the parent tests module; reuse rather than duplicate.
+use super::HangingProvider;
 use super::runner_with;
+use std::sync::Arc;
 
 /// The runner's active model seeds from config.model and swaps on set_model
 /// (the /model pane select). The provider is stateless about the model, so the
@@ -58,13 +60,13 @@ fn runner_with_cfg0() -> RunnerConfig {
 async fn test_compress_writes_checkpoint() {
     // Compress a session with enough events to fold, then verify the next
     // current_view returns a manifest and the assembled context is smaller.
-    let store = std::sync::Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let session = SessionId::new();
     // Append enough assistant turns that compress has something to fold.
     for i in 0..6 {
         store
             .append(houyicoder_context::SessionLogEntry {
-                id: houyicoder_context::EventId::new(),
+                id: EventId::new(),
                 session,
                 ts: 0,
                 prev_hash: None,
@@ -158,16 +160,16 @@ impl SmallWindowProvider {
 impl ModelProvider for SmallWindowProvider {
     fn complete(
         &self,
-        _req: houyicoder_protocol::llm::CompletionRequest,
+        _req: CompletionRequest,
     ) -> houyicoder_async::PFut<'_, Result<CompletionResponse, ProviderError>> {
         let resp = self.response.clone();
         Box::pin(async move { Ok(resp) })
     }
     fn stream(
         &self,
-        _req: houyicoder_protocol::llm::CompletionRequest,
+        _req: CompletionRequest,
     ) -> houyicoder_async::PStream<'_, Result<LlmEvent, ProviderError>> {
-        houyicoder_api::provider::stream_from_response(self.response.clone())
+        stream_from_response(self.response.clone())
     }
     fn capabilities(&self) -> ModelCapabilities {
         self.caps
@@ -188,7 +190,7 @@ async fn test_pre_flight_trips_compress() {
     // manifest applied and the assembled context is smaller.
     let p = Arc::new(SmallWindowProvider::new("done", 22000));
     let runner = Runner::new(
-        std::sync::Arc::new(SessionStore::new(Box::new(InMemoryBackend::new()))),
+        Arc::new(SessionStore::new(Box::new(InMemoryBackend::new()))),
         p,
         ToolRegistry::new(),
         RunnerConfig {
@@ -208,7 +210,7 @@ async fn test_pre_flight_trips_compress() {
         runner
             .store()
             .append(houyicoder_context::SessionLogEntry {
-                id: houyicoder_context::EventId::new(),
+                id: EventId::new(),
                 session,
                 ts: 0,
                 prev_hash: None,
@@ -275,7 +277,7 @@ async fn test_compress_runs_reinject() {
     // turns far exceed 200 tokens regardless of the tokenizer ratio.
     let p = Arc::new(SmallWindowProvider::new("done", 200));
     let runner = Runner::new(
-        std::sync::Arc::new(SessionStore::new(Box::new(InMemoryBackend::new()))),
+        Arc::new(SessionStore::new(Box::new(InMemoryBackend::new()))),
         p,
         ToolRegistry::new(),
         RunnerConfig {
@@ -294,7 +296,7 @@ async fn test_compress_runs_reinject() {
         runner
             .store()
             .append(houyicoder_context::SessionLogEntry {
-                id: houyicoder_context::EventId::new(),
+                id: EventId::new(),
                 session,
                 ts: 0,
                 prev_hash: None,
@@ -342,8 +344,7 @@ async fn test_compress_runs_reinject() {
 /// fails with Network.
 #[tokio::test]
 async fn test_stream_stall_aborts() {
-    use houyicoder_protocol::llm::ProviderError;
-    let p = Arc::new(super::HangingProvider::new(vec![]));
+    let p = Arc::new(HangingProvider::new(vec![]));
     let runner = runner_with(p, ToolRegistry::new());
     let session = SessionId::new();
     let result = runner.run(session, "hi".into()).await.unwrap_err();
@@ -357,8 +358,7 @@ async fn test_stream_stall_aborts() {
 /// before failing, so the turn's partial is not lost.
 #[tokio::test]
 async fn test_stall_flushes_partial() {
-    use houyicoder_protocol::llm::{LlmEvent, ProviderError};
-    let p = Arc::new(super::HangingProvider::new(vec![LlmEvent::TextDelta {
+    let p = Arc::new(HangingProvider::new(vec![LlmEvent::TextDelta {
         id: "t1".into(),
         text: "partial".into(),
     }]));
@@ -371,10 +371,9 @@ async fn test_stall_flushes_partial() {
     );
     let events = runner.store().replay(session).await.expect("replay");
     assert!(
-        events.iter().any(|e| matches!(
-            e.event,
-            houyicoder_context::SessionEvent::AssistantMessage { .. }
-        )),
+        events
+            .iter()
+            .any(|e| matches!(e.event, SessionEvent::AssistantMessage { .. })),
         "partial text flushed before the stall failure"
     );
 }
