@@ -105,6 +105,11 @@ def test_a_name_the_file_defines_is_left_qualified():
     assert repeated_deep_paths(PATH_ONCE + "fn Screen() {}\n") == {}
 
 
+def test_a_name_two_chains_share_is_left_qualified():
+    two = "fn a() { let _ = crate::one::Widget::new(); let _ = crate::two::Widget::new(); }\n"
+    assert repeated_deep_paths(two) == {}
+
+
 def test_a_four_segment_deep_path_is_caught_even_once():
     assert repeated_deep_paths(DEEP_FOUR_ONCE) == {
         "houyicoder_protocol::frontend::permission::PermissionMode": 1

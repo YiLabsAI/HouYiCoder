@@ -1,8 +1,9 @@
 //! Linux clipboard probe and cache.
 
 #[cfg(target_os = "linux")]
-#[cfg(test)]
 use std::env::var_os;
+#[cfg(target_os = "linux")]
+use std::sync::Mutex;
 
 #[cfg(target_os = "linux")]
 use super::run_native;

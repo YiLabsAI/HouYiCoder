@@ -11,6 +11,8 @@
 //! machine-readable record of what happened, distinct from the
 //! human-readable .txt export (different use, not a superiority claim).
 
+#[cfg(not(unix))]
+use std::fs::File;
 use std::fs::OpenOptions;
 use std::fs::rename;
 use std::io;

@@ -3,14 +3,14 @@
 
   * a use statement inside a function body -- it belongs at module scope, so
     the import block shows where the dependency enters.
-  * an importable qualified path used twice or more in one file without an
-    import -- the reader meets the same chain again and again instead of
-    the name once. Counted as one finding per file and chain, not per use.
+  * an importable qualified path with two or more module segments, used
+    without an import -- the reader meets a chain instead of the name
+    once. Counted as one finding per file and chain, not per use.
 
 Both are counted, not listed, because the backlog is large and the rule is
 per-file. Growth blocks; lower a baseline in the commit that cleans files.
-A single use of a deep path is allowed: a one-off or a deliberate
-disambiguation is not a finding.
+A name the file defines itself, or one that two chains share, stays
+qualified: an import would collide or pick the wrong type.
 
 The detector lives in rules/imports.py, shared with the write-time hook
 (hook_rust.py) so the two cannot disagree about what a violation is.
@@ -28,15 +28,15 @@ _INLINE_USE_RULE = (
     "a use statement inside a function body; move it to the module's import block"
 )
 _REPEATED_PATH_RULE = (
-    "a qualified path repeated without an import; import the path once"
+    "a deep qualified path without an import; import it once at module scope"
 )
 
 
 def scan(root: Path = Path("crates")):
     """Count both rule violations under root, with the worst files named.
 
-    The repeated-path count is one finding per file and chain: the rule is
-    that a chain used twice should be imported, not that each use is wrong.
+    The deep-path count is one finding per file and chain: the rule is
+    that a deep chain should be imported, not that each use is wrong.
     """
     inline, repeated = [], []
     for path in sorted(root.rglob("*.rs")):
@@ -76,7 +76,7 @@ def main() -> int:
         print(
             f"error: {_REPEATED_PATH_RULE}: {len(repeated)} > "
             f"{_REPEATED_PATH_BASELINE} (+{len(repeated) - _REPEATED_PATH_BASELINE}). "
-            f"A single use is fine and is not counted.",
+            f"Import the chain once at module scope.",
             file=sys.stderr,
         )
         grew.append(repeated)

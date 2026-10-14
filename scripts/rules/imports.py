@@ -1,4 +1,4 @@
-"""Where imports belong, and how deep a qualified path may repeat.
+"""Where imports belong, and how deep a qualified path may reach.
 
 Two rules, one source, shared by the write-time hook (hook_rust.py) and the
 commit-time ratchet (check_rust_imports.py):
@@ -6,12 +6,15 @@ commit-time ratchet (check_rust_imports.py):
   * A use statement belongs at module scope. Inside a function body it is a
     local import: it hides where the dependency enters the module and it is
     invisible to anyone reading the import block.
-  * A qualified path with two or more separators belongs in the import block
-    once it is used twice in the same file. A single use is left alone: a
-    one-off or a deliberate disambiguation is not a finding.
+  * A qualified path with two or more module segments before the final item
+    (crate::state::Screen, std::time::UNIX_EPOCH) belongs in the import
+    block, whether it appears once or many times: the qualified spelling
+    repeats a module the reader already has in scope.
 
-The second rule is a repeat rule, not a depth limit: it counts how often one
-importable chain appears, and one appearance is allowed.
+The second rule is a depth rule, not a repeat rule. A name the file defines
+itself, or one that two different chains end in, stays qualified -- an
+import would collide or pick the wrong type, and a qualified path is for
+exactly that.
 """
 import re
 
@@ -183,9 +186,10 @@ def repeated_deep_paths(text):
     (crate::state::Screen, std::time::UNIX_EPOCH, crate::app::handle_key)
     belongs in the import block even when it appears once: the qualified
     spelling repeats a module the reader already has in scope, and a single
-    occurrence is exactly how the next one starts. Two segments
-    (SessionEvent::Variant, mpsc::TryRecvError) are a type or module
-    qualifier, not a deep path.
+    occurrence is exactly how the next one starts. A two-segment path
+    (SessionEvent::Variant) is a type qualifier, not a deep path; a chain
+    that continues past the type (mpsc::TryRecvError::Empty) is one, and it
+    resolves to the type the import would bring in.
 
     A name the file defines itself, or one two different chains end in, is
     left qualified: an import would collide or pick the wrong type, and the

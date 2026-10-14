@@ -227,10 +227,11 @@ the ones whose fix is not obvious from the message alone.
   the public surface hides the real dependency graph.
 
 ### Imports expose dependency intent
-- Put domain-type imports at module scope. If the same deep qualified path is
-  used twice, import it instead of repeating it in fields, signatures, or
-  function bodies. Fully qualified paths are for one-off use or ambiguity,
-  not a substitute for an import section.
+- Put domain-type imports at module scope. A qualified path with two or more
+  module segments (crate::state::Screen, std::time::UNIX_EPOCH) is imported
+  once and written bare at the call site, whether it appears once or many
+  times. A name the file defines itself, or one that two chains share, stays
+  qualified: an import would collide or pick the wrong type.
 - Do not enforce a mechanical `::` depth limit or create vague aliases; both
   hide rather than clarify ownership.
 
