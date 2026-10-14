@@ -24,13 +24,21 @@ use crate::protocol_adapter::{
     map_session_update,
 };
 use houyicoder_context::{EventId, PermissionVerdict, SessionEvent, SessionId, SessionLogEntry};
+use houyicoder_core::agent::RunResult;
 use houyicoder_core::agent::{RunOutcome, Runner};
+use houyicoder_protocol::acp_wire::RequestPermissionOutcome;
 use houyicoder_protocol::acp_wire::{
     AcpError, AcpErrorCode, AcpNotification, AcpRequest, AcpRequestId, AcpResponse, JsonRpcVersion,
     PromptRequest, PromptResponse, RequestPermissionResponse,
 };
 use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
 use houyicoder_protocol::framing::encode;
+use houyicoder_protocol::frontend::run::ContentBlock;
+use houyicoder_protocol::llm::Usage;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 /// The full ACP server. Owns the adapter (shared via Arc so the composition
 /// root and the IO bridge can hold the same one) plus the runner + session +
@@ -52,7 +60,7 @@ pub struct AcpServer {
     /// cancels the in-flight stream loop via the token; the durable flag
     /// only fires when the run is paused on an ask, so an idle cancel is a
     /// no-op on the flag.)
-    cancel_requested: std::sync::atomic::AtomicBool,
+    cancel_requested: AtomicBool,
 }
 
 impl AcpServer {
@@ -66,7 +74,7 @@ impl AcpServer {
             session,
             next_req_id: 0,
             pushed_count: 0,
-            cancel_requested: std::sync::atomic::AtomicBool::new(false),
+            cancel_requested: AtomicBool::new(false),
         }
     }
 
@@ -186,7 +194,7 @@ impl AcpServer {
             .prompt
             .into_iter()
             .filter_map(|b| match b {
-                houyicoder_protocol::frontend::run::ContentBlock::Text { text } => Some(text),
+                ContentBlock::Text { text } => Some(text),
                 _ => None,
             })
             .collect();
@@ -296,15 +304,14 @@ impl AcpServer {
                                 })?;
                             // Record the durable PermissionDecision audit event
                             // before resume applies the decision.
-                            let verdict = if matches!(
-                                perm_resp.outcome,
-                                houyicoder_protocol::acp_wire::RequestPermissionOutcome::Cancelled
-                            ) {
-                                PermissionVerdict::Denied
-                            } else {
-                                // Look up the decision the mapping computes.
-                                PermissionVerdict::Approved
-                            };
+                            let verdict =
+                                if matches!(perm_resp.outcome, RequestPermissionOutcome::Cancelled)
+                                {
+                                    PermissionVerdict::Denied
+                                } else {
+                                    // Look up the decision the mapping computes.
+                                    PermissionVerdict::Approved
+                                };
                             let _verdict = verdict; // reserved for the audit below
                             let audit = SessionLogEntry {
                                 id: EventId::new(),
@@ -334,16 +341,13 @@ impl AcpServer {
                                 // If a cancel arrived during the permission
                                 // ask (route_cancel_frame set the flag), skip
                                 // resume entirely — the turn ends cancelled.
-                                if self
-                                    .cancel_requested
-                                    .load(std::sync::atomic::Ordering::Relaxed)
-                                {
-                                    outcome = Ok(houyicoder_core::agent::RunResult {
-                                        outcome: houyicoder_core::agent::RunOutcome::Interrupted(
+                                if self.cancel_requested.load(Ordering::Relaxed) {
+                                    outcome = Ok(RunResult {
+                                        outcome: RunOutcome::Interrupted(
                                             "cancelled during permission ask".to_string(),
                                         ),
                                         turns: 0,
-                                        usage: houyicoder_protocol::llm::Usage::default(),
+                                        usage: Usage::default(),
                                     });
                                     break;
                                 }
@@ -426,8 +430,7 @@ impl AcpServer {
         }
         self.runner.abort();
         self.adapter.handle_notification(&notif).await;
-        self.cancel_requested
-            .store(true, std::sync::atomic::Ordering::Relaxed);
+        self.cancel_requested.store(true, Ordering::Relaxed);
         Ok(true)
     }
 
@@ -488,8 +491,8 @@ impl AcpServer {
 
 /// The current wall clock as milliseconds since the Unix epoch.
 fn now_millis() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
 }

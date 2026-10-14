@@ -15,11 +15,26 @@ use houyicoder_core::SessionId;
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::{RunOutcome, Runner, ToolRegistry};
 use houyicoder_memory::InMemoryBackend;
+use houyicoder_permission::ModeGate;
+use houyicoder_permission::PermissionMode;
+use houyicoder_protocol::frontend::run::ApprovalDecision;
 use houyicoder_provider::OpenAiCompatibleProvider;
+use houyicoder_service::composition::BuildRunnerOptions;
+use houyicoder_service::composition::build_runner;
+use houyicoder_service::server::EventSequencer;
 use houyicoder_service::server::{FrameCarrier, Server};
 use houyicoder_session::SessionStore;
 use houyicoder_tui::agent_message::SessionMessage;
+use houyicoder_tui::composition::FrontendStartup;
+use houyicoder_tui::composition::RunnerBundle;
+use houyicoder_tui::composition::build_app;
+use houyicoder_tui::composition::shared_runtime;
 use houyicoder_tui::records::TranscriptLine;
+use houyicoder_tui::state::App;
+use std::env::temp_dir;
+use std::env::var;
+use std::thread::sleep;
+use tokio::runtime::Builder;
 
 /// Pair an in-memory server + client around a runner, mirroring the CLI
 /// composition root: install the event sequencer, stream response events
@@ -33,16 +48,16 @@ fn pair_inproc(
 ) -> (Arc<Runner>, Client) {
     let (c2s_tx, c2s_rx) = futures::channel::mpsc::channel(16);
     let (s2c_tx, s2c_rx) = futures::channel::mpsc::channel(16);
-    let event_sequencer = houyicoder_service::server::EventSequencer::new();
+    let event_sequencer = EventSequencer::new();
     event_sequencer.install_on(&mut runner);
     let runner = Arc::new(runner);
     let server_io = FrameCarrier::new(s2c_tx, c2s_rx);
     // The server takes the composition's gate so wire mode/rule writes reach
     // the gate the GuardedTool wrappers actually use.
-    let gate_dyn: Arc<dyn houyicoder_permission::ModeGate> = gate;
+    let gate_dyn: Arc<dyn ModeGate> = gate;
     let server =
         Server::new_with_event_sequencer(runner.clone(), session, gate_dyn, event_sequencer);
-    let runtime = houyicoder_tui::composition::shared_runtime();
+    let runtime = shared_runtime();
     runtime.spawn(async move {
         let _serve = server.serve(server_io).await;
     });
@@ -52,14 +67,14 @@ fn pair_inproc(
 
 /// Poll the app's agent channel until the in-flight run lands (agent_busy
 /// flips false) or the timeout expires. Returns true when a message landed.
-fn drain(app: &mut houyicoder_tui::state::App, timeout_ms: u64) -> bool {
+fn drain(app: &mut App, timeout_ms: u64) -> bool {
     let deadline = Instant::now() + Duration::from_millis(timeout_ms);
     while Instant::now() < deadline {
         app.poll_agent();
         if !app.agent_busy() {
             return true;
         }
-        std::thread::sleep(Duration::from_millis(50));
+        sleep(Duration::from_millis(50));
     }
     false
 }
@@ -70,10 +85,8 @@ fn drain(app: &mut houyicoder_tui::state::App, timeout_ms: u64) -> bool {
 /// (bash) raise an approval card instead of auto-running — the
 /// live_bash_tool_roundtrip spine needs that HITL pause; the chat-reply test
 /// stays Auto (no tool call, no approval).
-fn live_app_with_tools(manual: bool) -> houyicoder_tui::state::App {
-    let bundle = houyicoder_service::composition::build_runner(
-        houyicoder_service::composition::BuildRunnerOptions::default(),
-    );
+fn live_app_with_tools(manual: bool) -> App {
+    let bundle = build_runner(BuildRunnerOptions::default());
     let runner = bundle.runner;
     let session = bundle.session;
     let gate = bundle.gate;
@@ -81,9 +94,9 @@ fn live_app_with_tools(manual: bool) -> houyicoder_tui::state::App {
         // set_mode is on the ModeGate trait (&self), and the same Arc is
         // shared by the server + the runner's GuardedTool wrappers, so one
         // call flips both — before pair_inproc moves the gate into the server.
-        houyicoder_permission::ModeGate::set_mode(
+        ModeGate::set_mode(
             &*gate,
-            houyicoder_permission::PermissionMode::Manual,
+            PermissionMode::Manual,
             "live_bash_tool_roundtrip needs HITL approval",
         );
     }
@@ -91,8 +104,8 @@ fn live_app_with_tools(manual: bool) -> houyicoder_tui::state::App {
     let (tx, rx) = channel::<SessionMessage>();
     let (runner, client) = pair_inproc(runner, session, gate, tx.clone());
     drop(runner); // server owns the runner; the TUI holds no engine handle.
-    houyicoder_tui::composition::build_app(
-        houyicoder_tui::composition::RunnerBundle {
+    build_app(
+        RunnerBundle {
             client,
             agent_tx: tx,
             agent_rx: rx,
@@ -103,10 +116,10 @@ fn live_app_with_tools(manual: bool) -> houyicoder_tui::state::App {
             snapshot: None,
             session_catalog: None,
         },
-        houyicoder_tui::composition::FrontendStartup {
+        FrontendStartup {
             skip_login: false,
             startup_warnings: Vec::new(),
-            history_path: std::env::temp_dir().join("houyi-history-live-test.jsonl"),
+            history_path: temp_dir().join("houyi-history-live-test.jsonl"),
         },
     )
 }
@@ -145,7 +158,7 @@ fn test_live_bash_tool_roundtrip() {
     // Approve the current approval (one decision for its call_id) and resume;
     // the sandbox runs, the result feeds back, the model emits a final answer.
     let call_id = app.approval().unwrap().call_id.clone();
-    app.resolve_current_approval(houyicoder_protocol::frontend::run::ApprovalDecision {
+    app.resolve_current_approval(ApprovalDecision {
         call_id,
         approved: true,
         updated_input: None,
@@ -171,7 +184,7 @@ fn test_live_bash_tool_roundtrip() {
 #[test]
 #[ignore]
 fn test_chat_replies_to_greeting() {
-    if std::env::var("DASHSCOPE_API_KEY").is_err() {
+    if var("DASHSCOPE_API_KEY").is_err() {
         eprintln!("skip: DASHSCOPE_API_KEY not set");
         return;
     }
@@ -202,12 +215,12 @@ fn test_chat_replies_to_greeting() {
 #[test]
 #[ignore]
 fn test_live_provider_returns_text() {
-    if std::env::var("DASHSCOPE_API_KEY").is_err() {
+    if var("DASHSCOPE_API_KEY").is_err() {
         eprintln!("skip: DASHSCOPE_API_KEY not set");
         return;
     }
-    let key = std::env::var("DASHSCOPE_API_KEY").unwrap();
-    let base = std::env::var("DASHSCOPE_BASE_URL").unwrap_or_default();
+    let key = var("DASHSCOPE_API_KEY").unwrap();
+    let base = var("DASHSCOPE_BASE_URL").unwrap_or_default();
     let model = houyicoder_config::resolve_model();
     let provider: Arc<dyn ModelProvider> = Arc::new(OpenAiCompatibleProvider::new(base, key));
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
@@ -223,10 +236,7 @@ fn test_live_provider_returns_text() {
         },
     ));
     let session = SessionId::new();
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
+    let rt = Builder::new_current_thread().enable_all().build().unwrap();
     let result = rt
         .block_on(async move { runner.run(session, "say hi".into()).await })
         .expect("run succeeds");

@@ -1,5 +1,6 @@
 use super::*;
 use std::fs::remove_file;
+use std::fs::write;
 
 /// list_sessions reads back a session id we wrote a socket + pidfile for,
 /// including the pid. Uses the real conventional dir, isolated to the
@@ -9,7 +10,7 @@ fn test_list_sessions_reads_pid() {
     let id = format!("test-list-{}", std::process::id());
     let sock = session_socket(&id);
     write(&sock, b"").expect("write test socket");
-    std::fs::write(session_pidfile(&id), "4242\n").expect("write test pid");
+    write(session_pidfile(&id), "4242\n").expect("write test pid");
     let sessions = list_sessions();
     let found = sessions.iter().find(|s| s.id == id);
     let found = found.expect("list_sessions must find the written id");
@@ -57,13 +58,13 @@ fn test_session_live_checks_pid() {
     let sock = session_socket(&id);
     write(&sock, b"").expect("write test socket");
     // Live: the pidfile points at this test process.
-    std::fs::write(session_pidfile(&id), std::process::id().to_string()).expect("write pid");
+    write(session_pidfile(&id), std::process::id().to_string()).expect("write pid");
     assert!(
         is_session_live(&id),
         "a session held by the current pid is live"
     );
     // Dead: point the pidfile at the sentinel.
-    std::fs::write(session_pidfile(&id), "1000000000").expect("write dead pid");
+    write(session_pidfile(&id), "1000000000").expect("write dead pid");
     assert!(
         !is_session_live(&id),
         "a dead pid means the session is not live"
@@ -78,11 +79,10 @@ fn test_session_live_checks_pid() {
 fn test_cleanup_stale_reaps_dead() {
     let live_id = format!("test-cleanup-live-{}", std::process::id());
     let dead_id = format!("test-cleanup-dead-{}", std::process::id());
-    std::fs::write(session_socket(&live_id), b"").expect("write live sock");
-    std::fs::write(session_pidfile(&live_id), std::process::id().to_string())
-        .expect("write live pid");
-    std::fs::write(session_socket(&dead_id), b"").expect("write dead sock");
-    std::fs::write(session_pidfile(&dead_id), "1000000000").expect("write dead pid");
+    write(session_socket(&live_id), b"").expect("write live sock");
+    write(session_pidfile(&live_id), std::process::id().to_string()).expect("write live pid");
+    write(session_socket(&dead_id), b"").expect("write dead sock");
+    write(session_pidfile(&dead_id), "1000000000").expect("write dead pid");
     let reaped = cleanup_stale();
     assert!(reaped >= 1, "the dead session must be reaped");
     assert!(is_session_live(&live_id), "the live session is untouched");

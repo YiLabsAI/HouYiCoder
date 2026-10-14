@@ -49,6 +49,19 @@ fn stub_runner() -> (Arc<Runner>, SessionId) {
 // below stays local: its canned reply + max_turns are specific to these
 // turn-outcome assertions.
 use crate::common::{pair, recv_frame, recv_hello, send_frame};
+use houyicoder_core::snapshot::{SnapshotStore, UndoEntry, UndoStack};
+use houyicoder_permission::DefaultModeGate;
+use houyicoder_protocol::frontend::permission::PermissionEffect;
+use houyicoder_protocol::frontend::permission::PermissionRule;
+use houyicoder_protocol::frontend::permission::PermissionRuleContent;
+use houyicoder_protocol::frontend::run::RunOutcome;
+use std::env::temp_dir;
+use std::fs::create_dir_all;
+use std::fs::read_to_string;
+use std::fs::remove_dir_all;
+use std::fs::write;
+use std::process::id;
+use std::sync::Mutex;
 
 /// A full turn through the in-memory carrier: handshake, MessageSend, then the
 /// server forwards the turn events and returns the run outcome. The client
@@ -58,11 +71,7 @@ use crate::common::{pair, recv_frame, recv_hello, send_frame};
 async fn test_message_send_returns_outcome() {
     let (runner, session) = stub_runner();
     let (server_io, mut client_tx, mut client_rx) = pair();
-    let server = Server::new(
-        runner,
-        session,
-        std::sync::Arc::new(houyicoder_permission::DefaultModeGate::new()),
-    );
+    let server = Server::new(runner, session, Arc::new(DefaultModeGate::new()));
     let handle = tokio::spawn(async move { server.serve(server_io).await });
 
     // Handshake: both ends send Hello first.
@@ -116,7 +125,7 @@ async fn test_message_send_returns_outcome() {
     let outcome = outcome.expect("got a run outcome");
     // FinalOutput carries content blocks; pull the first text block.
     match outcome {
-        houyicoder_protocol::frontend::run::RunOutcome::FinalOutput { content } => {
+        RunOutcome::FinalOutput { content } => {
             let text = content
                 .into_iter()
                 .find_map(|b| match b {
@@ -136,11 +145,7 @@ async fn test_message_send_returns_outcome() {
 async fn test_tool_list_without_hanging() {
     let (runner, session) = stub_runner();
     let (server_io, mut client_tx, mut client_rx) = pair();
-    let server = Server::new(
-        runner,
-        session,
-        std::sync::Arc::new(houyicoder_permission::DefaultModeGate::new()),
-    );
+    let server = Server::new(runner, session, Arc::new(DefaultModeGate::new()));
     let handle = tokio::spawn(async move { server.serve(server_io).await });
 
     send_frame(&mut client_tx, &Hello::local()).await;
@@ -171,11 +176,7 @@ async fn test_tool_list_without_hanging() {
 async fn test_run_cancel_acks() {
     let (runner, session) = stub_runner();
     let (server_io, mut client_tx, mut client_rx) = pair();
-    let server = Server::new(
-        runner,
-        session,
-        std::sync::Arc::new(houyicoder_permission::DefaultModeGate::new()),
-    );
+    let server = Server::new(runner, session, Arc::new(DefaultModeGate::new()));
     let handle = tokio::spawn(async move { server.serve(server_io).await });
 
     send_frame(&mut client_tx, &Hello::local()).await;
@@ -209,11 +210,7 @@ async fn test_run_cancel_acks() {
 async fn test_bad_frame_surfaces_error() {
     let (runner, session) = stub_runner();
     let (server_io, mut client_tx, mut client_rx) = pair();
-    let server = Server::new(
-        runner,
-        session,
-        std::sync::Arc::new(houyicoder_permission::DefaultModeGate::new()),
-    );
+    let server = Server::new(runner, session, Arc::new(DefaultModeGate::new()));
     let handle = tokio::spawn(async move { server.serve(server_io).await });
 
     send_frame(&mut client_tx, &Hello::local()).await;
@@ -255,11 +252,7 @@ async fn test_wrong_session_fails_closed() {
     let (runner, _session) = stub_runner();
     let other_session = stub_runner().1;
     let (server_io, mut client_tx, mut client_rx) = pair();
-    let server = Server::new(
-        runner,
-        other_session,
-        std::sync::Arc::new(houyicoder_permission::DefaultModeGate::new()),
-    );
+    let server = Server::new(runner, other_session, Arc::new(DefaultModeGate::new()));
     let handle = tokio::spawn(async move { server.serve(server_io).await });
 
     send_frame(&mut client_tx, &Hello::local()).await;
@@ -302,25 +295,19 @@ async fn test_wrong_session_fails_closed() {
 async fn test_add_rule_applies_scoped() {
     let (runner, session) = stub_runner();
     let (server_io, mut client_tx, mut client_rx) = pair();
-    let server = Server::new(
-        runner,
-        session,
-        std::sync::Arc::new(houyicoder_permission::DefaultModeGate::new()),
-    );
+    let server = Server::new(runner, session, Arc::new(DefaultModeGate::new()));
     let handle = tokio::spawn(async move { server.serve(server_io).await });
 
     send_frame(&mut client_tx, &Hello::local()).await;
     let _hello = recv_hello(&mut client_rx).await;
 
     let req_id = RequestId(7);
-    let rule = houyicoder_protocol::frontend::permission::PermissionRule {
+    let rule = PermissionRule {
         action: "bash".into(),
-        content: Some(
-            houyicoder_protocol::frontend::permission::PermissionRuleContent::Prefix {
-                value: "npm install".into(),
-            },
-        ),
-        effect: houyicoder_protocol::frontend::permission::PermissionEffect::Allow,
+        content: Some(PermissionRuleContent::Prefix {
+            value: "npm install".into(),
+        }),
+        effect: PermissionEffect::Allow,
         ..Default::default()
     };
     let req = RequestEnvelope::new(req_id, FrontendRequest::PermissionAddRule { rule });
@@ -335,13 +322,13 @@ async fn test_add_rule_applies_scoped() {
                     assert_eq!(rules.len(), 1, "exactly the one rule was added");
                     let applied = &rules[0];
                     assert_eq!(applied.action, "bash");
-                    assert_eq!(
-                        applied.effect,
-                        houyicoder_protocol::frontend::permission::PermissionEffect::Allow
-                    );
+                    assert_eq!(applied.effect, PermissionEffect::Allow);
                     match &applied.content {
-                        Some(houyicoder_protocol::frontend::permission::PermissionRuleContent::Prefix { value }) => {
-                            assert_eq!(value, "npm install", "prefix scope preserved, not downgraded to blanket");
+                        Some(PermissionRuleContent::Prefix { value }) => {
+                            assert_eq!(
+                                value, "npm install",
+                                "prefix scope preserved, not downgraded to blanket"
+                            );
                         }
                         other => panic!("prefix content preserved, got {other:?}"),
                     }
@@ -363,21 +350,17 @@ async fn test_add_rule_applies_scoped() {
 async fn test_add_rule_reject_denies() {
     let (runner, session) = stub_runner();
     let (server_io, mut client_tx, mut client_rx) = pair();
-    let server = Server::new(
-        runner,
-        session,
-        std::sync::Arc::new(houyicoder_permission::DefaultModeGate::new()),
-    );
+    let server = Server::new(runner, session, Arc::new(DefaultModeGate::new()));
     let handle = tokio::spawn(async move { server.serve(server_io).await });
 
     send_frame(&mut client_tx, &Hello::local()).await;
     let _hello = recv_hello(&mut client_rx).await;
 
     let req_id = RequestId(9);
-    let rule = houyicoder_protocol::frontend::permission::PermissionRule {
+    let rule = PermissionRule {
         action: "bash".into(),
         content: None,
-        effect: houyicoder_protocol::frontend::permission::PermissionEffect::Reject,
+        effect: PermissionEffect::Reject,
         ..Default::default()
     };
     let req = RequestEnvelope::new(req_id, FrontendRequest::PermissionAddRule { rule });
@@ -392,7 +375,7 @@ async fn test_add_rule_reject_denies() {
                     assert_eq!(rules.len(), 1);
                     assert_eq!(
                         rules[0].effect,
-                        houyicoder_protocol::frontend::permission::PermissionEffect::Reject,
+                        PermissionEffect::Reject,
                         "Reject must not silently flip to Allow at the boundary",
                     );
                     assert_eq!(rules[0].action, "bash");
@@ -411,11 +394,7 @@ async fn test_add_rule_reject_denies() {
 async fn test_undo_empty_returns_none() {
     let (runner, session) = stub_runner();
     let (server_io, mut client_tx, mut client_rx) = pair();
-    let server = Server::new(
-        runner,
-        session,
-        std::sync::Arc::new(houyicoder_permission::DefaultModeGate::new()),
-    );
+    let server = Server::new(runner, session, Arc::new(DefaultModeGate::new()));
     let handle = tokio::spawn(async move { server.serve(server_io).await });
 
     send_frame(&mut client_tx, &Hello::local()).await;
@@ -444,15 +423,14 @@ async fn test_undo_empty_returns_none() {
 /// — the server handler's closure body runs (covers the BeforeImage arm).
 #[tokio::test]
 async fn test_undo_entry_returns_description() {
-    use houyicoder_core::snapshot::{SnapshotStore, UndoEntry, UndoStack};
-    let tmp = std::env::temp_dir().join(format!("undo-srv-{}", std::process::id()));
-    std::fs::remove_dir_all(&tmp).ok();
-    std::fs::create_dir_all(&tmp).expect("mkdir");
+    let tmp = temp_dir().join(format!("undo-srv-{}", id()));
+    remove_dir_all(&tmp).ok();
+    create_dir_all(&tmp).expect("mkdir");
     let file_path = tmp.join("file.txt");
-    std::fs::write(&file_path, "modified").expect("write");
+    write(&file_path, "modified").expect("write");
 
     let store = Arc::new(SnapshotStore::new(&tmp).expect("store"));
-    let stack = Arc::new(std::sync::Mutex::new(UndoStack::new()));
+    let stack = Arc::new(Mutex::new(UndoStack::new()));
     stack.lock().unwrap().push(UndoEntry::BeforeImage {
         path: file_path.clone(),
         before: Some(b"original".to_vec()),
@@ -476,11 +454,7 @@ async fn test_undo_entry_returns_description() {
     let runner = Arc::new(runner);
 
     let (server_io, mut client_tx, mut client_rx) = pair();
-    let server = Server::new(
-        runner,
-        session,
-        std::sync::Arc::new(houyicoder_permission::DefaultModeGate::new()),
-    );
+    let server = Server::new(runner, session, Arc::new(DefaultModeGate::new()));
     let handle = tokio::spawn(async move { server.serve(server_io).await });
 
     send_frame(&mut client_tx, &Hello::local()).await;
@@ -506,13 +480,13 @@ async fn test_undo_entry_returns_description() {
         other => panic!("expected a response, got {other:?}"),
     }
     assert_eq!(
-        std::fs::read_to_string(&file_path).unwrap(),
+        read_to_string(&file_path).unwrap(),
         "original",
         "undo restored the before-image"
     );
     drop(client_tx);
     drop(handle.await);
-    std::fs::remove_dir_all(&tmp).ok();
+    remove_dir_all(&tmp).ok();
 }
 
 /// /permission git: query returns the default (on); set off flips it and a
@@ -521,11 +495,7 @@ async fn test_undo_entry_returns_description() {
 async fn test_git_confirm_query_set() {
     let (runner, session) = stub_runner();
     let (server_io, mut client_tx, mut client_rx) = pair();
-    let server = Server::new(
-        runner,
-        session,
-        std::sync::Arc::new(houyicoder_permission::DefaultModeGate::new()),
-    );
+    let server = Server::new(runner, session, Arc::new(DefaultModeGate::new()));
     let handle = tokio::spawn(async move { server.serve(server_io).await });
     send_frame(&mut client_tx, &Hello::local()).await;
     let _hello = recv_hello(&mut client_rx).await;

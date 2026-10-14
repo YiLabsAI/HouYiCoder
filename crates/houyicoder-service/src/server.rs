@@ -37,7 +37,23 @@ pub use event_sequencer::EventSequencer;
 
 /// The connection's raw frame I/O carrier.
 mod frame_carrier;
+use crate::diagnostics::DiagnosticsHandle;
+use crate::diagnostics::handle;
+use crate::lifecycle::PendingPermission;
+use crate::lifecycle::PendingTurn;
+use crate::protocol_adapter::consent_rule_for;
 pub use frame_carrier::FrameCarrier;
+use futures::future::Either;
+use futures::future::pending;
+use houyicoder_api::sandbox::SandboxSession;
+use houyicoder_core::agent::RunOutcome;
+use houyicoder_core::agent::multi_agent::bus_types::AgentBus;
+use houyicoder_permission::{Effect, Rule, RuleContent, Scope};
+use houyicoder_protocol::acp_wire::AcpNotification;
+use std::path::PathBuf;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
+use tokio::sync::broadcast::error::RecvError;
 
 /// Request routing plus the per-domain request handlers.
 mod capability_handler;
@@ -103,18 +119,18 @@ pub struct Server {
     /// the /permissions Workspace verbs mutate this fence so the next exec
     /// sees the new allow-paths. The gate's rule engine is a separate
     /// (tool allow/ask/deny) concern, not path access.
-    sandbox_session: Option<Arc<dyn houyicoder_api::sandbox::SandboxSession>>,
+    sandbox_session: Option<Arc<dyn SandboxSession>>,
     /// The session-indexed host a reattaching connection re-hydrates from.
     /// None on the single-shot path; Some when serve_session built this Server
     /// so permission interruptions survive a connection change.
     host: Option<Arc<SessionHost>>,
     /// The settings file path the /memory toggle handler persists to. Tests
     /// override it with a temp path so a flip never touches the real file.
-    settings_path: std::path::PathBuf,
+    settings_path: PathBuf,
     /// The project workspace path the startup trust prompt gates on. None
     /// for a non-project session (a test harness, a home-dir run) so no
     /// prompt fires. Set at the composition root from the resolved cwd.
-    project_path: Option<std::path::PathBuf>,
+    project_path: Option<PathBuf>,
     /// Optional Append Notify shared with the runner's store: the store fires
     /// notify_one per append, this select's notified() branch wakes to drain
     /// mid-run so a tool-call frame ships while the run is still in flight.
@@ -128,10 +144,10 @@ pub struct Server {
     /// was installed (the loader binary, tests). A /debug wire request
     /// against a server with no sink returns an error rather than silently
     /// succeeding — the user should know the sink is not there.
-    diagnostics: Option<crate::diagnostics::DiagnosticsHandle>,
+    diagnostics: Option<DiagnosticsHandle>,
     /// Shared multi-agent bus; routes a child permission ask to the
     /// wire-approval flow. None on the single-agent path.
-    bus: Option<Arc<houyicoder_core::agent::multi_agent::bus_types::AgentBus>>,
+    bus: Option<Arc<AgentBus>>,
 }
 
 pub(crate) mod child_permission;
@@ -168,7 +184,7 @@ impl Server {
             project_path: None,
             append_notify: None,
             descriptor_store: None,
-            diagnostics: crate::diagnostics::handle(),
+            diagnostics: handle(),
             bus: None,
         }
     }
@@ -179,7 +195,7 @@ impl Server {
     /// global path, so a caller that overrides this one builds the runner over
     /// the same file too - otherwise a catalog row and the capabilities
     /// reported for it come from different files.
-    pub fn with_settings_path(mut self, path: std::path::PathBuf) -> Self {
+    pub fn with_settings_path(mut self, path: PathBuf) -> Self {
         self.settings_path = path;
         self
     }
@@ -188,16 +204,13 @@ impl Server {
     /// The composition root passes the resolved cwd so a project session
     /// prompts once before the run loop; a non-project session leaves it
     /// None and skips the prompt.
-    pub fn with_project_path(mut self, path: std::path::PathBuf) -> Self {
+    pub fn with_project_path(mut self, path: PathBuf) -> Self {
         self.project_path = Some(path);
         self
     }
 
     /// Attach the sandbox session shared with the runner (the /permissions fence).
-    pub fn with_session(
-        mut self,
-        session: Arc<dyn houyicoder_api::sandbox::SandboxSession>,
-    ) -> Self {
+    pub fn with_session(mut self, session: Arc<dyn SandboxSession>) -> Self {
         self.sandbox_session = Some(session);
         self
     }
@@ -207,10 +220,7 @@ impl Server {
     /// diagnostics::handle(), so this is for tests that install a sink after
     /// building the server, or for explicitly clearing it (passing None) in
     /// a test that must reject /debug.
-    pub fn with_diagnostics(
-        mut self,
-        handle: Option<crate::diagnostics::DiagnosticsHandle>,
-    ) -> Self {
+    pub fn with_diagnostics(mut self, handle: Option<DiagnosticsHandle>) -> Self {
         self.diagnostics = handle;
         self
     }
@@ -239,7 +249,6 @@ impl Server {
             // shadow-able builtin rule. For a discard word, fall through to
             // the durable-rule path below (there is no builtin to shadow).
             if matches!(git_cmd, "commit" | "rebase" | "reset" | "tag") {
-                use houyicoder_permission::{Effect, Rule, RuleContent, Scope};
                 let rule = Rule::with_content(
                     "bash",
                     RuleContent::Prefix(format!("git {git_cmd}")),
@@ -251,7 +260,7 @@ impl Server {
                 return;
             }
         }
-        if let Some(rule) = crate::protocol_adapter::consent_rule_for(tool_name, input) {
+        if let Some(rule) = consent_rule_for(tool_name, input) {
             self.gate.add_rule(rule);
         }
     }
@@ -316,8 +325,8 @@ impl Server {
         loop {
             let wake = {
                 let append_fut = match &self.append_notify {
-                    Some(notify) => futures::future::Either::Left(notify.notified()),
-                    None => futures::future::Either::Right(futures::future::pending::<()>()),
+                    Some(notify) => Either::Left(notify.notified()),
+                    None => Either::Right(pending::<()>()),
                 };
                 let event_fut = self.event_sequencer.notified();
                 tokio::select! {
@@ -348,9 +357,7 @@ impl Server {
             // also parses as a notification (the id is ignored), so dispatch
             // by method name + fall through to ClientFrame for anything else
             // — otherwise a message/send would be swallowed.
-            if let Ok(notif) =
-                serde_json::from_str::<houyicoder_protocol::acp_wire::AcpNotification>(&frame)
-            {
+            if let Ok(notif) = serde_json::from_str::<AcpNotification>(&frame) {
                 match notif.method.as_str() {
                     "session/cancel" => continue,
                     "session/inject" | "session/queue_remove" => {
@@ -492,17 +499,15 @@ impl Server {
                 // never-resolving pending future when no Notify is wired (None
                 // => behavior is exactly today's: events push only at resolve).
                 let notify_fut = match &self.append_notify {
-                    Some(n) => futures::future::Either::Left(n.notified()),
-                    None => futures::future::Either::Right(futures::future::pending::<()>()),
+                    Some(n) => Either::Left(n.notified()),
+                    None => Either::Right(pending::<()>()),
                 };
                 let event_fut = self.event_sequencer.notified();
                 // Child permission ask published on the bus while this run is
                 // parked on a child. None means the branch never resolves.
                 let perm_fut = match &mut perm_rx {
-                    Some(rx) => futures::future::Either::Left(rx.recv()),
-                    None => futures::future::Either::Right(futures::future::pending::<
-                        Result<BusMessage, tokio::sync::broadcast::error::RecvError>,
-                    >()),
+                    Some(rx) => Either::Left(rx.recv()),
+                    None => Either::Right(pending::<Result<BusMessage, RecvError>>()),
                 };
                 tokio::select! {
                     r = &mut run_fut => break r,
@@ -514,7 +519,7 @@ impl Server {
                             // injection; session/queue_remove drops a queued
                             // message. Fire-and-forget — the effect shows up
                             // in the run outcome + transcript.
-                            if let Ok(notif) = serde_json::from_str::<houyicoder_protocol::acp_wire::AcpNotification>(&f) {
+                            if let Ok(notif) = serde_json::from_str::<AcpNotification>(&f) {
                                 self.handle_session_notification(&notif);
                             }
                             // Permission mode change mid-run: update the gate
@@ -550,7 +555,7 @@ impl Server {
             self.flush_events(io).await?;
             match result {
                 Ok(run) => match run.outcome {
-                    houyicoder_core::agent::RunOutcome::Interruption(approvals) => {
+                    RunOutcome::Interruption(approvals) => {
                         // Half-live turn: send one reverse permission ask per
                         // pending approval, read one decision back per ask,
                         // then resume.
@@ -561,7 +566,7 @@ impl Server {
                         if let Some(host) = &self.host {
                             let remaining = approvals
                                 .iter()
-                                .map(|a| crate::lifecycle::PendingPermission {
+                                .map(|a| PendingPermission {
                                     call_id: a.call_id.clone(),
                                     tool: a.tool_name.clone(),
                                     input: a.input.clone(),
@@ -569,7 +574,7 @@ impl Server {
                                 .collect::<Vec<_>>();
                             host.store().set_pending(
                                 self.session,
-                                Some(crate::lifecycle::PendingTurn {
+                                Some(PendingTurn {
                                     remaining,
                                     decided: Vec::new(),
                                 }),
@@ -599,12 +604,8 @@ impl Server {
                             tokio::pin!(resume_fut);
                             loop {
                                 let notify_fut = match &self.append_notify {
-                                    Some(notify) => {
-                                        futures::future::Either::Left(notify.notified())
-                                    }
-                                    None => futures::future::Either::Right(
-                                        futures::future::pending::<()>(),
-                                    ),
+                                    Some(notify) => Either::Left(notify.notified()),
+                                    None => Either::Right(pending::<()>()),
                                 };
                                 let event_fut = self.event_sequencer.notified();
                                 tokio::select! {
@@ -618,7 +619,7 @@ impl Server {
                                             // the next turn boundary after the
                                             // resumed run re-enters the drive
                                             // loop.
-                                            if let Ok(notif) = serde_json::from_str::<houyicoder_protocol::acp_wire::AcpNotification>(&f) {
+                                            if let Ok(notif) = serde_json::from_str::<AcpNotification>(&f) {
                                                 self.handle_session_notification(&notif);
                                             }
                                             // Permission mode change mid-resume:
@@ -663,8 +664,8 @@ impl Server {
 /// ts field on a server-appended audit event; falls back to 0 if the clock is
 /// before the epoch (not expected outside a misconfigured test harness).
 fn now_millis() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
 }

@@ -35,6 +35,14 @@ use houyicoder_service::server::Server;
 use houyicoder_session::SessionStore;
 
 use crate::common::{pair, recv_frame_within, recv_hello, send_frame};
+use futures::channel::mpsc::Receiver;
+use futures::channel::mpsc::Sender;
+use houyicoder_protocol::llm::LlmEvent;
+use std::env::temp_dir;
+use std::path::PathBuf;
+use std::process::id;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 /// A canned-response provider that negotiates no context window, so the
 /// runner resolves the window from the active model id through the
@@ -60,10 +68,7 @@ impl ModelProvider for WindowlessProvider {
         Box::pin(async move { Ok(Self::response()) })
     }
 
-    fn stream(
-        &self,
-        _req: CompletionRequest,
-    ) -> PStream<'_, Result<houyicoder_protocol::llm::LlmEvent, ProviderError>> {
+    fn stream(&self, _req: CompletionRequest) -> PStream<'_, Result<LlmEvent, ProviderError>> {
         stream_from_response(Self::response())
     }
 
@@ -78,23 +83,14 @@ impl ModelProvider for WindowlessProvider {
 /// A unique temp settings path so the ModelSet's persist writes a temp file,
 /// not the developer's real settings. The file need not pre-exist; the
 /// persist creates it.
-fn temp_settings(slug: &str) -> std::path::PathBuf {
-    use std::sync::atomic::{AtomicU64, Ordering};
+fn temp_settings(slug: &str) -> PathBuf {
     static SEQ: AtomicU64 = AtomicU64::new(0);
     let n = SEQ.fetch_add(1, Ordering::Relaxed);
-    std::env::temp_dir().join(format!(
-        "model-window-{slug}-{n}-{}.json",
-        std::process::id()
-    ))
+    temp_dir().join(format!("model-window-{slug}-{n}-{}.json", id()))
 }
 
 /// Spawn serve + handshake. Returns the client channel halves.
-async fn handshake(
-    server: Server,
-) -> (
-    futures::channel::mpsc::Sender<String>,
-    futures::channel::mpsc::Receiver<String>,
-) {
+async fn handshake(server: Server) -> (Sender<String>, Receiver<String>) {
     let (io, mut client_tx, mut client_rx) = pair();
     tokio::spawn(async move { server.serve(io).await });
     send_frame(&mut client_tx, &Hello::local()).await;
@@ -103,12 +99,9 @@ async fn handshake(
 }
 
 /// Drain streamed events until the response for the given request id lands.
-async fn wait_response(
-    rx: &mut futures::channel::mpsc::Receiver<String>,
-    req_id: RequestId,
-) -> ResponsePayload {
+async fn wait_response(rx: &mut Receiver<String>, req_id: RequestId) -> ResponsePayload {
     loop {
-        match recv_frame_within(rx, std::time::Duration::from_secs(10)).await {
+        match recv_frame_within(rx, Duration::from_secs(10)).await {
             ServerFrame::Response(env) if env.req_id == req_id => return env.payload,
             _ => continue,
         }

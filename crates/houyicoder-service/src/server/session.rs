@@ -12,13 +12,22 @@ use houyicoder_protocol::envelope::{
 use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
 
 use crate::composition::SessionHost;
+use crate::diagnostics::handle;
+use crate::lifecycle::LifecycleError;
 use crate::lifecycle::{LifecycleState, PendingPermission, PendingTurn};
 use crate::protocol_adapter::{build_approval_request, parse_approval_decision};
 use crate::server::approval::disclose_directory_grants;
 use crate::server::{EventSequencer, FrameCarrier, Server};
+use futures::future::Either;
+use futures::future::pending;
 use houyicoder_context::{
     EventId, PermissionVerdict, SessionDescriptorStore, SessionEvent, SessionLogEntry,
 };
+use houyicoder_core::agent::ApprovalRequest;
+use houyicoder_core::agent::RunOutcome;
+use houyicoder_protocol::extension::ENTITLEMENT_TOOL;
+use houyicoder_protocol::frontend::run::ApprovalDecision;
+use tokio::sync::Notify;
 
 impl Server {
     /// Build a server re-hydrated from a session host. The runner and event
@@ -30,7 +39,7 @@ impl Server {
         event_sequencer: EventSequencer,
         gate: Arc<dyn houyicoder_permission::ModeGate>,
         host: Arc<SessionHost>,
-        append_notify: Arc<tokio::sync::Notify>,
+        append_notify: Arc<Notify>,
     ) -> Self {
         let sandbox_session = runner.sandbox_session();
         Self {
@@ -46,7 +55,7 @@ impl Server {
             project_path: None,
             append_notify: Some(append_notify),
             descriptor_store: None,
-            diagnostics: crate::diagnostics::handle(),
+            diagnostics: handle(),
             // Resume path does not wire the bus yet; a reconnecting session
             // mid-child-approval is a follow-up (the parent serve path covers
             // the common case).
@@ -59,7 +68,7 @@ impl Server {
     /// impl at the composition root; the store fires notify_one per append
     /// and this select's notified() branch wakes to push the new event
     /// without waiting for the run future to resolve.
-    pub fn with_append_notify(mut self, notify: Arc<tokio::sync::Notify>) -> Self {
+    pub fn with_append_notify(mut self, notify: Arc<Notify>) -> Self {
         self.append_notify = Some(notify);
         self
     }
@@ -132,7 +141,7 @@ pub(crate) async fn resume_pending(
             let directory_grants =
                 server.approval_directory_grants(&ask_perm.tool, &ask_perm.input);
             disclose_directory_grants(&mut reason, &directory_grants);
-            let engine_approval = houyicoder_core::agent::ApprovalRequest::new(
+            let engine_approval = ApprovalRequest::new(
                 ask_perm.call_id.clone(),
                 ask_perm.tool.clone(),
                 ask_perm.input.clone(),
@@ -164,9 +173,7 @@ pub(crate) async fn resume_pending(
                         ));
                     }
                 };
-                if let Ok(notif) =
-                    serde_json::from_str::<houyicoder_protocol::acp_wire::AcpNotification>(&frame)
-                {
+                if let Ok(notif) = serde_json::from_str::<AcpNotification>(&frame) {
                     let is_cancel = notif.method == "session/cancel";
                     server.handle_session_notification(&notif);
                     if is_cancel {
@@ -174,7 +181,7 @@ pub(crate) async fn resume_pending(
                         // Resume proceeds with the collected verdicts + the
                         // abort token surfaces the cancellation.
                         cancelled = true;
-                        break houyicoder_protocol::frontend::run::ApprovalDecision {
+                        break ApprovalDecision {
                             call_id: ask_perm.call_id.clone(),
                             approved: false,
                             updated_input: None,
@@ -226,9 +233,7 @@ pub(crate) async fn resume_pending(
             if let Err(e) = server.runner.store().append(audit).await {
                 tracing::warn!("permission-decision audit append failed: {e}");
             }
-            if decision.approved
-                && ask_perm.tool != houyicoder_protocol::extension::ENTITLEMENT_TOOL
-            {
+            if decision.approved && ask_perm.tool != ENTITLEMENT_TOOL {
                 server
                     .route_consent_with_grants(
                         &ask_perm.tool,
@@ -269,8 +274,8 @@ pub(crate) async fn resume_pending(
             tokio::pin!(resume_fut);
             loop {
                 let notify_fut = match &server.append_notify {
-                    Some(n) => futures::future::Either::Left(n.notified()),
-                    None => futures::future::Either::Right(futures::future::pending::<()>()),
+                    Some(n) => Either::Left(n.notified()),
+                    None => Either::Right(pending::<()>()),
                 };
                 let event_fut = server.event_sequencer.notified();
                 tokio::select! {
@@ -301,7 +306,7 @@ pub(crate) async fn resume_pending(
         server.flush_events(io).await?;
         match result {
             Ok(run) => match run.outcome {
-                houyicoder_core::agent::RunOutcome::Interruption(more) => {
+                RunOutcome::Interruption(more) => {
                     // Resume produced more asks: write a fresh turn + loop.
                     let remaining = more
                         .iter()
@@ -350,7 +355,7 @@ pub(crate) async fn serve_session(
     // TOCTOU race where two concurrent serve_session calls could both observe
     // Detached and both proceed to set Running.
     host.store().try_take_lease(session).map_err(|e| match e {
-        crate::lifecycle::LifecycleError::LeaseHeld(holder) => ProtocolError::new(
+        LifecycleError::LeaseHeld(holder) => ProtocolError::new(
             ErrorCategory::Unavailable,
             format!("session lease held by {holder}"),
             false,

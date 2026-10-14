@@ -30,13 +30,36 @@
 // reasoning as the seatbelt test scaffolding. Production code still routes
 // every spawn through the launcher.
 #![allow(clippy::disallowed_methods)]
+#![cfg(target_os = "macos")]
+
+use houyicoder_api::sandbox::Egress;
+use houyicoder_api::sandbox::NetworkPolicy;
+use houyicoder_api::sandbox::UnixSockets;
+use houyicoder_sandbox::ProfileSpec;
+use std::env::temp_dir;
+use std::env::var;
+use std::fs::canonicalize;
+use std::fs::create_dir_all;
+use std::fs::remove_dir;
+use std::fs::remove_dir_all;
+use std::fs::remove_file;
+use std::net::TcpListener;
+#[cfg(unix)]
+use std::os::unix::net::UnixListener;
+use std::path::Path;
+use std::path::PathBuf;
+use std::process::Command;
+use std::process::id;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
+use std::time::Instant;
 
 /// A live fence: a throwaway workspace plus the profile rendered for it. The
 /// workspace is removed on drop so a failing assertion cannot leave a
 /// directory behind.
 #[cfg(target_os = "macos")]
 struct Fence {
-    workspace: std::path::PathBuf,
+    workspace: PathBuf,
     profile: String,
     home: String,
 }
@@ -49,7 +72,7 @@ struct Fence {
 struct Outcome {
     code: Option<i32>,
     stderr: String,
-    elapsed: std::time::Duration,
+    elapsed: Duration,
 }
 
 #[cfg(target_os = "macos")]
@@ -91,30 +114,29 @@ impl Fence {
     /// directory is the real one on purpose: the home git config rules are
     /// exactly what several of these probes verify.
     fn new(label: &str) -> Self {
-        use std::sync::atomic::{AtomicU64, Ordering};
         static SEQ: AtomicU64 = AtomicU64::new(0);
-        let home = std::env::var("HOME").unwrap_or_else(|_| "/Users/unknown".into());
+        let home = var("HOME").unwrap_or_else(|_| "/Users/unknown".into());
         // Canonicalized because the session does the same before rendering, and
         // the kernel matches rules against the resolved path. On this platform
         // the temp directory is reached through a symlink, so the unresolved
         // form names a path the kernel never sees: every allow under it would
         // silently fail to match, and every write probe would then be denied for
         // that reason rather than by the rule it means to exercise.
-        let tmpdir = dunce::canonicalize(std::env::temp_dir()).expect("canonicalize temp dir");
+        let tmpdir = dunce::canonicalize(temp_dir()).expect("canonicalize temp dir");
         let tag = format!(
             "houyi-fence-{label}-{}-{}",
-            std::process::id(),
+            id(),
             SEQ.fetch_add(1, Ordering::SeqCst)
         );
         let workspace = tmpdir.join(&tag);
-        std::fs::create_dir_all(&workspace).expect("create probe workspace");
-        let profile = houyicoder_sandbox::render(&houyicoder_sandbox::ProfileSpec::new(
+        create_dir_all(&workspace).expect("create probe workspace");
+        let profile = houyicoder_sandbox::render(&ProfileSpec::new(
             &workspace,
             &tmpdir.to_string_lossy(),
             &home,
             &tag,
         ));
-        if std::env::var("HOUYI_PROFILE_DUMP").is_ok() {
+        if var("HOUYI_PROFILE_DUMP").is_ok() {
             println!("{profile}");
         }
         Self {
@@ -127,25 +149,20 @@ impl Fence {
     /// Render the real profile with an explicit network posture. Separate from
     /// new so the filesystem probes keep the contained default they assert
     /// against, and so a network probe states its posture at the call site.
-    fn with_network(label: &str, network: houyicoder_api::sandbox::NetworkPolicy) -> Self {
+    fn with_network(label: &str, network: NetworkPolicy) -> Self {
         let mut f = Self::new(label);
-        let tmpdir = dunce::canonicalize(std::env::temp_dir()).expect("canonicalize temp dir");
+        let tmpdir = dunce::canonicalize(temp_dir()).expect("canonicalize temp dir");
         f.profile = houyicoder_sandbox::render(
-            &houyicoder_sandbox::ProfileSpec::new(
-                &f.workspace,
-                &tmpdir.to_string_lossy(),
-                &f.home,
-                label,
-            )
-            .with_network(network),
+            &ProfileSpec::new(&f.workspace, &tmpdir.to_string_lossy(), &f.home, label)
+                .with_network(network),
         );
         f
     }
 
     /// Run one shell command inside the fence and report the verdict.
     fn probe(&self, label: &str, cmd: &str) -> Outcome {
-        let started = std::time::Instant::now();
-        let out = std::process::Command::new("sandbox-exec")
+        let started = Instant::now();
+        let out = Command::new("sandbox-exec")
             .arg("-p")
             .arg(&self.profile)
             .arg("--")
@@ -174,7 +191,7 @@ impl Fence {
 #[cfg(target_os = "macos")]
 impl Drop for Fence {
     fn drop(&mut self) {
-        std::fs::remove_dir_all(&self.workspace).ok();
+        remove_dir_all(&self.workspace).ok();
     }
 }
 
@@ -252,7 +269,7 @@ fn test_resolves_etc() {
 #[test]
 fn test_denies_config_home_write() {
     let f = Fence::new("confighome");
-    let dir = std::path::PathBuf::from(&f.home).join(".houyicoder");
+    let dir = PathBuf::from(&f.home).join(".houyicoder");
     if dir.exists() {
         let probe = dir.join(".houyi-fence-write-probe");
         let o = f.probe(
@@ -262,7 +279,7 @@ fn test_denies_config_home_write() {
         // Checked and removed from outside the fence: if the write slipped
         // through then the file is real, and it must not outlive the probe.
         let leaked = probe.exists();
-        std::fs::remove_file(&probe).ok();
+        remove_file(&probe).ok();
         assert!(
             !o.allowed() && !leaked,
             "creating a file in the agent's own config home must be denied, or a \
@@ -278,7 +295,7 @@ fn test_denies_config_home_write() {
     } else {
         let o = f.probe("create-dir", "mkdir -p \"$HOME/.houyicoder\"");
         let leaked = dir.exists();
-        std::fs::remove_dir(&dir).ok();
+        remove_dir(&dir).ok();
         assert!(
             !o.allowed() && !leaked,
             "creating the agent's own config home must be denied, or a run can \
@@ -327,7 +344,7 @@ fn test_allows_workspace_write() {
 fn test_allows_skill_dir_read() {
     let f = Fence::new("skillread");
     let dir = f.workspace.join(".houyicoder/skills/commit");
-    std::fs::create_dir_all(&dir).expect("create skill dir");
+    create_dir_all(&dir).expect("create skill dir");
     std::fs::write(dir.join("reference.md"), "skill reference content").expect("seed reference");
     let read = f.probe("read-ref", "cat .houyicoder/skills/commit/reference.md");
     assert!(
@@ -347,14 +364,14 @@ fn test_allows_skill_dir_read() {
 fn test_denies_skill_dir_write() {
     let f = Fence::new("skillwrite");
     let dir = f.workspace.join(".houyicoder/skills/commit");
-    std::fs::create_dir_all(&dir).expect("create skill dir");
+    create_dir_all(&dir).expect("create skill dir");
     let probe = dir.join("SKILL.md");
     let write = f.probe(
         "plant-skill",
         "printf x >> .houyicoder/skills/commit/SKILL.md",
     );
     let leaked = probe.exists();
-    std::fs::remove_file(&probe).ok();
+    remove_file(&probe).ok();
     assert!(
         !write.allowed() && !leaked,
         "planting a SKILL.md in the skill dir must be denied: {}",
@@ -374,7 +391,7 @@ fn test_denies_ecosystem_skill_read() {
     let f = Fence::new("skillclaude");
     for family in [".claude/skills", ".agents/skills"] {
         let dir = f.workspace.join(family).join("commit");
-        std::fs::create_dir_all(&dir).expect("create skill dir");
+        create_dir_all(&dir).expect("create skill dir");
         std::fs::write(dir.join("reference.md"), "x").expect("seed reference");
         let read = f.probe(
             "read-eco-skill",
@@ -412,7 +429,7 @@ fn test_denies_ecosystem_skill_read() {
 fn test_denies_permission_store_write() {
     let f = Fence::new("permstore");
     let project = f.workspace.join(".houyicoder");
-    std::fs::create_dir_all(&project).expect("create project store dir");
+    create_dir_all(&project).expect("create project store dir");
     let project_probe = f.probe("project-scope", "printf '' >> .houyicoder/permissions.json");
     assert!(
         !project_probe.allowed(),
@@ -422,8 +439,8 @@ fn test_denies_permission_store_write() {
         project_probe.detail()
     );
 
-    let local = std::env::temp_dir().join("houyicoder-permissions");
-    std::fs::create_dir_all(&local).expect("create local store dir");
+    let local = temp_dir().join("houyicoder-permissions");
+    create_dir_all(&local).expect("create local store dir");
     let local_probe = f.probe(
         "local-scope",
         "printf '' >> \"$TMPDIR/houyicoder-permissions/permissions.json\"",
@@ -431,7 +448,7 @@ fn test_denies_permission_store_write() {
     let leaked = local.join("permissions.json");
     let existed = leaked.exists();
     if existed {
-        std::fs::remove_file(&leaked).ok();
+        remove_file(&leaked).ok();
     }
     assert!(
         !local_probe.allowed(),
@@ -444,8 +461,7 @@ fn test_denies_permission_store_write() {
     // directory, so a session can legitimately be working inside it, and a guard
     // written against the directory rather than the two files would refuse the
     // agent every write in its own workspace.
-    std::fs::create_dir_all(f.workspace.join(".houyicoder/worktrees/probe"))
-        .expect("create worktree dir");
+    create_dir_all(f.workspace.join(".houyicoder/worktrees/probe")).expect("create worktree dir");
     let worktree = f.probe(
         "worktree-file",
         "printf 'x' >> .houyicoder/worktrees/probe/source.rs",
@@ -484,7 +500,7 @@ fn test_runs_git() {
 fn test_splits_gitconfig() {
     let f = Fence::new("gitconfig");
     let path = format!("{}/.gitconfig", f.home);
-    if !std::path::Path::new(&path).exists() {
+    if !Path::new(&path).exists() {
         println!("[gitconfig] SKIPPED: {path} absent on this host");
         return;
     }
@@ -544,8 +560,8 @@ const UNROUTABLE: &str = "192.0.2.1";
 /// probe can attempt a real loopback connection with a real peer on the other
 /// end. Kept alive by the returned listener; dropping it closes the port.
 #[cfg(target_os = "macos")]
-fn loopback_listener() -> (std::net::TcpListener, u16) {
-    let l = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback listener");
+fn loopback_listener() -> (TcpListener, u16) {
+    let l = TcpListener::bind("127.0.0.1:0").expect("bind loopback listener");
     let port = l.local_addr().expect("listener addr").port();
     (l, port)
 }
@@ -556,10 +572,7 @@ fn loopback_listener() -> (std::net::TcpListener, u16) {
 #[cfg(target_os = "macos")]
 #[test]
 fn test_contained_blocks_egress() {
-    let f = Fence::with_network(
-        "net-off",
-        houyicoder_api::sandbox::NetworkPolicy::contained(),
-    );
+    let f = Fence::with_network("net-off", NetworkPolicy::contained());
     let o = f.probe("egress", &format!("nc -v -G 1 -w 1 -z {UNROUTABLE} 80"));
     assert!(!o.allowed(), "the contained posture must refuse egress");
     assert!(
@@ -577,8 +590,8 @@ fn test_contained_blocks_egress() {
 #[cfg(target_os = "macos")]
 #[test]
 fn test_open_permits_egress() {
-    let mut p = houyicoder_api::sandbox::NetworkPolicy::contained();
-    p.egress = houyicoder_api::sandbox::Egress::Unrestricted;
+    let mut p = NetworkPolicy::contained();
+    p.egress = Egress::Unrestricted;
     let f = Fence::with_network("net-open", p);
     let o = f.probe("egress", &format!("nc -v -G 1 -w 1 -z {UNROUTABLE} 80"));
     assert!(
@@ -596,10 +609,7 @@ fn test_open_permits_egress() {
 #[test]
 fn test_contained_blocks_loopback() {
     let (_l, port) = loopback_listener();
-    let f = Fence::with_network(
-        "net-lo-off",
-        houyicoder_api::sandbox::NetworkPolicy::contained(),
-    );
+    let f = Fence::with_network("net-lo-off", NetworkPolicy::contained());
     let o = f.probe("loopback", &format!("nc -v -G 1 -w 1 -z 127.0.0.1 {port}"));
     assert!(!o.allowed(), "loopback is not reachable by default");
     assert!(
@@ -623,7 +633,7 @@ fn test_contained_blocks_loopback() {
 #[test]
 fn test_loopback_grants_no_egress() {
     let (_l, port) = loopback_listener();
-    let mut p = houyicoder_api::sandbox::NetworkPolicy::contained();
+    let mut p = NetworkPolicy::contained();
     p.allow_local_binding = true;
     let f = Fence::with_network("net-lo-on", p);
     let lo = f.probe("loopback", &format!("nc -v -G 1 -w 1 -z 127.0.0.1 {port}"));
@@ -655,26 +665,22 @@ fn test_socket_allowback_works() {
     // dir is reached through a symlink on macOS, so an allow-back naming the
     // unresolved path would render a rule the kernel never matches. This is the
     // same failure that made the system-etc segment dead for a long time.
-    let dir = std::env::temp_dir().join(format!("houyi-sock-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("create socket dir");
-    let dir = std::fs::canonicalize(&dir).expect("canonicalize socket dir");
+    let dir = temp_dir().join(format!("houyi-sock-{}", id()));
+    create_dir_all(&dir).expect("create socket dir");
+    let dir = canonicalize(&dir).expect("canonicalize socket dir");
     let path = dir.join("probe.sock");
-    let listener = std::os::unix::net::UnixListener::bind(&path).expect("bind unix socket");
+    let listener = UnixListener::bind(&path).expect("bind unix socket");
     let cmd = format!("nc -v -w 1 -U {} </dev/null", path.display());
 
-    let denied = Fence::with_network(
-        "sock-off",
-        houyicoder_api::sandbox::NetworkPolicy::contained(),
-    );
+    let denied = Fence::with_network("sock-off", NetworkPolicy::contained());
     let off = denied.probe("socket", &cmd);
     assert!(
         !off.allowed(),
         "unix sockets are denied by default; the network class deny covers them"
     );
 
-    let mut p = houyicoder_api::sandbox::NetworkPolicy::contained();
-    p.unix_sockets =
-        houyicoder_api::sandbox::UnixSockets::Paths(vec![dir.to_string_lossy().into_owned()]);
+    let mut p = NetworkPolicy::contained();
+    p.unix_sockets = UnixSockets::Paths(vec![dir.to_string_lossy().into_owned()]);
     let allowed = Fence::with_network("sock-on", p);
     let on = allowed.probe("socket", &cmd);
     assert!(
@@ -685,5 +691,5 @@ fn test_socket_allowback_works() {
     );
 
     drop(listener);
-    std::fs::remove_dir_all(&dir).ok();
+    remove_dir_all(&dir).ok();
 }

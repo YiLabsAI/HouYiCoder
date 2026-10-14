@@ -10,9 +10,12 @@ use std::time::Duration;
 
 use crate::common::{self, pair, recv_hello, send_frame};
 use futures::StreamExt;
+use futures::channel::mpsc::Receiver;
+use futures::stream::once;
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_api::provider::stream_from_response;
 use houyicoder_api::tool::Tool;
+use houyicoder_api::tool::ToolCtx;
 use houyicoder_async::{PFut, PStream};
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::{Runner, ToolRegistry};
@@ -33,6 +36,13 @@ use houyicoder_protocol::llm::{
 };
 use houyicoder_service::server::Server;
 use houyicoder_session::SessionStore;
+use std::env::temp_dir;
+use std::fs::remove_file;
+use std::fs::write;
+use std::process::id;
+use std::sync::atomic::AtomicU32;
+use std::sync::atomic::Ordering;
+use tokio::sync::Notify;
 
 /// A no-approval tool the first model call asks for, so the run reaches a
 /// second model request for the switch to land on.
@@ -53,7 +63,7 @@ impl Tool for PingTool {
 
     fn execute(
         &self,
-        _ctx: houyicoder_api::tool::ToolCtx,
+        _ctx: ToolCtx,
         _input: serde_json::Value,
     ) -> PFut<'_, Result<serde_json::Value, ToolError>> {
         Box::pin(async move { Ok(serde_json::json!({"ok": true})) })
@@ -64,19 +74,19 @@ impl Tool for PingTool {
 /// until released, so a control frame lands while the run future is pending;
 /// the first call asks for a tool so the run reaches a second request.
 struct RecordingProvider {
-    started: Arc<tokio::sync::Notify>,
-    release: Arc<tokio::sync::Notify>,
+    started: Arc<Notify>,
+    release: Arc<Notify>,
     seen: Mutex<Vec<String>>,
-    calls: std::sync::atomic::AtomicU32,
+    calls: AtomicU32,
 }
 
 impl RecordingProvider {
-    fn new(started: Arc<tokio::sync::Notify>, release: Arc<tokio::sync::Notify>) -> Self {
+    fn new(started: Arc<Notify>, release: Arc<Notify>) -> Self {
         Self {
             started,
             release,
             seen: Mutex::new(Vec::new()),
-            calls: std::sync::atomic::AtomicU32::new(0),
+            calls: AtomicU32::new(0),
         }
     }
 
@@ -104,10 +114,10 @@ impl ModelProvider for RecordingProvider {
     fn stream(&self, req: CompletionRequest) -> PStream<'_, Result<LlmEvent, ProviderError>> {
         let model = req.model.clone();
         self.seen.lock().unwrap().push(model.clone());
-        let first = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0;
+        let first = self.calls.fetch_add(1, Ordering::SeqCst) == 0;
         let started = self.started.clone();
         let release = self.release.clone();
-        let s = futures::stream::once(async move {
+        let s = once(async move {
             if first {
                 // notify_one stores a permit; notify_waiters does not, so a
                 // waiter that registers after this call would wait forever.
@@ -142,10 +152,7 @@ impl ModelProvider for RecordingProvider {
 
 /// Drain frames until the response for req_id lands, so concurrent run events
 /// queued ahead of it do not mask the reply.
-async fn recv_response(
-    rx: &mut futures::channel::mpsc::Receiver<String>,
-    req_id: u64,
-) -> ResponsePayload {
+async fn recv_response(rx: &mut Receiver<String>, req_id: u64) -> ResponsePayload {
     for _ in 0..64 {
         let frame = common::recv_frame_within(rx, Duration::from_secs(6)).await;
         let ServerFrame::Response(envelope) = frame else {
@@ -166,8 +173,8 @@ async fn recv_response(
 async fn test_switch_uses_next_request() {
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let session = houyicoder_context::SessionId::new();
-    let started = Arc::new(tokio::sync::Notify::new());
-    let release = Arc::new(tokio::sync::Notify::new());
+    let started = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
     let provider = Arc::new(RecordingProvider::new(started.clone(), release.clone()));
     let mut tools = ToolRegistry::new();
     tools.register(Arc::new(PingTool));
@@ -182,9 +189,8 @@ async fn test_switch_uses_next_request() {
             ..RunnerConfig::default()
         },
     ));
-    let settings =
-        std::env::temp_dir().join(format!("model-concurrent-{}.json", std::process::id()));
-    std::fs::write(&settings, r#"{"model":{"id":"glm-5.1"}}"#).unwrap();
+    let settings = temp_dir().join(format!("model-concurrent-{}.json", id()));
+    write(&settings, r#"{"model":{"id":"glm-5.1"}}"#).unwrap();
     let server = Server::new(runner.clone(), session, Arc::new(DefaultModeGate::new()))
         .with_settings_path(settings.clone());
     let (io, mut client_tx, mut client_rx) = pair();
@@ -254,5 +260,5 @@ async fn test_switch_uses_next_request() {
 
     drop(client_tx);
     drop(handle.await);
-    drop(std::fs::remove_file(&settings));
+    drop(remove_file(&settings));
 }

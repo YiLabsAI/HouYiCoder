@@ -12,17 +12,24 @@ use std::time::{Duration, SystemTime};
 
 use crate::session_repair::repair_child_descriptors;
 
+use fs::FileTimes;
+use fs::OpenOptions;
+use fs::Permissions;
 use houyicoder_context::session_class::recent_user_sessions;
 use houyicoder_context::{
     EventId, NameSource, SessionDescriptor, SessionEvent, SessionId, SessionLogEntry,
     SessionProvenance,
 };
+use std::env::temp_dir;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+use std::process::id;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 fn temp_root() -> PathBuf {
-    use std::sync::atomic::{AtomicU64, Ordering};
     static SEQ: AtomicU64 = AtomicU64::new(0);
     let seq = SEQ.fetch_add(1, Ordering::Relaxed);
-    let d = std::env::temp_dir().join(format!("houyi-plan-{seq}-{}", std::process::id()));
+    let d = temp_dir().join(format!("houyi-plan-{seq}-{}", id()));
     let _r = fs::remove_dir_all(&d);
     fs::create_dir_all(&d).expect("mkdir root");
     d
@@ -41,7 +48,7 @@ fn temp_root() -> PathBuf {
 /// and directories together there.
 fn age(path: &Path, secs_ago: u64) {
     let t = SystemTime::now() - Duration::from_secs(secs_ago);
-    let mut opts = fs::OpenOptions::new();
+    let mut opts = OpenOptions::new();
     #[cfg(unix)]
     opts.read(true);
     #[cfg(windows)]
@@ -54,7 +61,7 @@ fn age(path: &Path, secs_ago: u64) {
         opts.write(true).custom_flags(BACKUP_SEMANTICS);
     }
     let f = opts.open(path).expect("open");
-    f.set_times(fs::FileTimes::new().set_modified(t))
+    f.set_times(FileTimes::new().set_modified(t))
         .expect("set mtime");
 }
 
@@ -375,19 +382,18 @@ fn test_plan_debug_over_cap() {
 #[cfg(unix)]
 #[test]
 fn test_apply_truncate_fails_safely() {
-    use std::os::unix::fs::PermissionsExt;
     let root = temp_root();
     let log = root.join("debug.log");
     fs::write(&log, b"head-line-1\nsecond-line-2\n").expect("write log");
     // Make the parent read-only so the sibling .debug.log.tmp cannot be
     // created: open(create=true) fails, truncate_tail cleans up + returns
     // false without touching the original.
-    fs::set_permissions(&root, fs::Permissions::from_mode(0o500)).expect("chmod ro");
+    fs::set_permissions(&root, Permissions::from_mode(0o500)).expect("chmod ro");
     let ok = apply_prune(&PrunePlan {
         entries: plan_debug_log(&log, 15),
         kept: 0,
     });
-    fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).expect("chmod rw");
+    fs::set_permissions(&root, Permissions::from_mode(0o700)).expect("chmod rw");
     assert_eq!(ok.truncated, 0, "no truncation when the tmp write fails");
     assert!(ok.errors >= 1, "the failed truncate counts as an error");
     // The original is untouched: no half-written hybrid.

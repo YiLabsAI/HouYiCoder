@@ -110,6 +110,11 @@ def test_a_name_two_chains_share_is_left_qualified():
     assert repeated_deep_paths(two) == {}
 
 
+def test_a_name_already_imported_from_another_chain_is_left_qualified():
+    imported_and_other = "use crate::one::Widget;\nfn a() { let _ = Widget::new(); let _ = crate::two::Widget::new(); }\n"
+    assert repeated_deep_paths(imported_and_other) == {}
+
+
 def test_a_prelude_name_is_left_qualified():
     # Importing std::fmt::Result would hide the prelude Result<T, E> the
     # signatures use, so the qualified spelling is correct here.

@@ -15,6 +15,7 @@ use houyicoder_context::SessionId;
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::{Runner, ToolRegistry};
 use houyicoder_memory::InMemoryBackend;
+use houyicoder_permission::DefaultModeGate;
 use houyicoder_protocol::envelope::{RequestId, ResponsePayload, ServerFrame};
 use houyicoder_protocol::frontend::FrontendRequest;
 use houyicoder_protocol::frontend::run::{ContentBlock, RunOutcome};
@@ -53,11 +54,7 @@ async fn test_drives_turn_over_wire() {
     let server_io = FrameCarrier::new(server_tx, server_rx);
     let client_transport = InProcTransport::from_halves(client_tx, client_rx);
     let mut client = Client::new(Box::new(client_transport));
-    let server = Server::new(
-        runner,
-        session,
-        std::sync::Arc::new(houyicoder_permission::DefaultModeGate::new()),
-    );
+    let server = Server::new(runner, session, Arc::new(DefaultModeGate::new()));
     let handle = tokio::spawn(async move { server.serve(server_io).await });
 
     client.connect().await.expect("handshake");
@@ -123,11 +120,7 @@ async fn test_resume_cursor_advances_events() {
     let server_io = FrameCarrier::new(server_tx, server_rx);
     let client_transport = InProcTransport::from_halves(client_tx, client_rx);
     let mut client = Client::new(Box::new(client_transport));
-    let server = Server::new(
-        runner,
-        session,
-        std::sync::Arc::new(houyicoder_permission::DefaultModeGate::new()),
-    );
+    let server = Server::new(runner, session, Arc::new(DefaultModeGate::new()));
     let handle = tokio::spawn(async move { server.serve(server_io).await });
 
     client.connect().await.expect("handshake");

@@ -24,6 +24,13 @@ use crate::launcher::{
     FenceConfig, LauncherChild, LauncherExit, ProcessLauncher, SpawnError, SpawnPolicy,
     SpawnRequest, StdioMode, StdioPipes,
 };
+use std::io::Read;
+use std::io::Write;
+use std::process::Child;
+use std::process::ExitStatus;
+use std::thread::JoinHandle;
+use std::thread::sleep;
+use std::time::Instant;
 
 /// The default ProcessLauncher: routes spawns through std Command (sync
 /// output capture) and tokio Command (async child) behind the trait. Used
@@ -160,15 +167,13 @@ fn spawn_capture(
 
 /// Read a child pipe to end on its own thread so the wait never holds an
 /// undrained pipe.
-fn drain_on_thread<R: std::io::Read + Send + 'static>(
-    mut reader: R,
-) -> std::thread::JoinHandle<Vec<u8>> {
+fn drain_on_thread<R: Read + Send + 'static>(mut reader: R) -> JoinHandle<Vec<u8>> {
     std::thread::spawn(move || {
         let mut buf = Vec::new();
         // A read failure yields whatever arrived before it; the exit status
         // carries the real verdict, and losing the tail of a stream must not
         // turn into a spawn failure.
-        drop(std::io::Read::read_to_end(&mut reader, &mut buf));
+        drop(Read::read_to_end(&mut reader, &mut buf));
         buf
     })
 }
@@ -185,21 +190,18 @@ fn joined_text(joined: std::thread::Result<Vec<u8>>) -> String {
 /// timeout either way). Polls rather than blocking because a bounded wait on
 /// a std child has no blocking form; the poll interval only costs latency
 /// when a fence is set, and the no-fence path stays a plain blocking wait.
-fn wait_until(
-    child: &mut std::process::Child,
-    limit: Duration,
-) -> Option<std::process::ExitStatus> {
-    let deadline = std::time::Instant::now() + limit;
+fn wait_until(child: &mut Child, limit: Duration) -> Option<ExitStatus> {
+    let deadline = Instant::now() + limit;
     loop {
         match child.try_wait() {
             Ok(Some(status)) => return Some(status),
             Ok(None) => {}
             Err(_) => return None,
         }
-        if std::time::Instant::now() >= deadline {
+        if Instant::now() >= deadline {
             return None;
         }
-        std::thread::sleep(Duration::from_millis(1));
+        sleep(Duration::from_millis(1));
     }
 }
 
@@ -221,7 +223,7 @@ fn spawn_async(req: SpawnRequest, fence: Option<FenceConfig>) -> Result<Launcher
     cmd.stderr(stdio_for(req.stdio.stderr));
     let mut child = cmd.spawn().map_err(|e| SpawnError::Io(e.to_string()))?;
     let pid = child.id();
-    let wall = fence.map(|f| std::time::Duration::from_millis(f.wall_timeout_ms));
+    let wall = fence.map(|f| Duration::from_millis(f.wall_timeout_ms));
     Ok(LauncherChild::new(
         pid,
         Box::pin(async move {
@@ -272,7 +274,7 @@ fn spawn_interactive(req: SpawnRequest) -> Result<LauncherChild, SpawnError> {
         child
             .stdin
             .take()
-            .map(|s| Box::new(s) as Box<dyn std::io::Write + Send>)
+            .map(|s| Box::new(s) as Box<dyn Write + Send>)
     } else {
         None
     };
@@ -280,7 +282,7 @@ fn spawn_interactive(req: SpawnRequest) -> Result<LauncherChild, SpawnError> {
         child
             .stdout
             .take()
-            .map(|s| Box::new(s) as Box<dyn std::io::Read + Send>)
+            .map(|s| Box::new(s) as Box<dyn Read + Send>)
     } else {
         None
     };
@@ -288,7 +290,7 @@ fn spawn_interactive(req: SpawnRequest) -> Result<LauncherChild, SpawnError> {
         child
             .stderr
             .take()
-            .map(|s| Box::new(s) as Box<dyn std::io::Read + Send>)
+            .map(|s| Box::new(s) as Box<dyn Read + Send>)
     } else {
         None
     };
@@ -315,7 +317,7 @@ fn spawn_interactive(req: SpawnRequest) -> Result<LauncherChild, SpawnError> {
 /// is wrong for an interactive long-lived subprocess the caller loses interest
 /// in. The kill is best-effort: a child that already exited is waited
 /// silently.
-struct KillOnDrop(Option<std::process::Child>);
+struct KillOnDrop(Option<Child>);
 
 impl Drop for KillOnDrop {
     fn drop(&mut self) {

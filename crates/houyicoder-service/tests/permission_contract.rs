@@ -26,23 +26,28 @@ use houyicoder_protocol::frontend::permission::{
 use houyicoder_service::server::Server;
 
 use crate::common::{pair, recv_frame, recv_hello, send_frame, stub_runner};
+use futures::channel::mpsc::Receiver;
+use futures::channel::mpsc::Sender;
+use houyicoder_permission::{Outcome, ToolRequest};
+use houyicoder_protocol::error::ProtocolError;
+use houyicoder_protocol::frontend::run::ContentBlock;
+use houyicoder_protocol::handshake::Hello;
+use std::path::Path;
+use std::path::PathBuf;
+use tokio::task::JoinHandle;
 
 /// Spawn the server's serve loop + complete the Hello handshake. Returns the
 /// client channel halves for the test to send requests + read responses.
 async fn handshake(
     server: Server,
 ) -> (
-    futures::channel::mpsc::Sender<String>,
-    futures::channel::mpsc::Receiver<String>,
-    tokio::task::JoinHandle<Result<(), houyicoder_protocol::error::ProtocolError>>,
+    Sender<String>,
+    Receiver<String>,
+    JoinHandle<Result<(), ProtocolError>>,
 ) {
     let (io, mut client_tx, mut client_rx) = pair();
     let handle = tokio::spawn(async move { server.serve(io).await });
-    send_frame(
-        &mut client_tx,
-        &houyicoder_protocol::handshake::Hello::local(),
-    )
-    .await;
+    send_frame(&mut client_tx, &Hello::local()).await;
     let _ = recv_hello(&mut client_rx).await;
     (client_tx, client_rx, handle)
 }
@@ -90,8 +95,8 @@ impl SandboxSession for RecordingSession {
     fn path_exists(&self, _path: &str) -> houyicoder_async::PFut<'_, Result<bool, SandboxError>> {
         Box::pin(async move { Ok(false) })
     }
-    fn workspace_root(&self) -> std::sync::Arc<std::path::Path> {
-        std::sync::Arc::from(std::path::PathBuf::from("/"))
+    fn workspace_root(&self) -> Arc<Path> {
+        Arc::from(PathBuf::from("/"))
     }
     fn add_working_dir(&self, path: &str) -> Result<(), SandboxError> {
         let mut dirs = self.dirs.lock().unwrap();
@@ -114,7 +119,6 @@ impl SandboxSession for RecordingSession {
 /// behavior, not just the rules list.
 #[tokio::test]
 async fn test_add_rule_takes_effect() {
-    use houyicoder_permission::{Outcome, ToolRequest};
     let gate: Arc<dyn ModeGate> = Arc::new(DefaultModeGate::new());
     let gate_assert = gate.clone();
     let (runner, session) = stub_runner();
@@ -265,9 +269,7 @@ async fn test_message_wrong_session_rejects() {
         RequestId(30),
         FrontendRequest::MessageSend {
             session_id: houyicoder_protocol::frontend::SessionId("wrong-session".into()),
-            content: vec![houyicoder_protocol::frontend::run::ContentBlock::Text {
-                text: "hi".into(),
-            }],
+            content: vec![ContentBlock::Text { text: "hi".into() }],
             disabled_skills: Default::default(),
         },
     );

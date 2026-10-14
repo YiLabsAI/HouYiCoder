@@ -194,6 +194,59 @@ def deep_path_violations(text):
                 yield lineno, key
 
 
+def _imported_chains_by_name(text):
+    """Map each bare name imported by a use statement to the full paths it imports."""
+    by_name = {}
+    lines = text.splitlines()
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if re.match(r"^\s*(?:pub(?:\([^)]*\))?\s+)?use\s+", line):
+            buf = [line.strip()]
+            depth = line.count("{") - line.count("}")
+            j = i
+            while (
+                depth > 0 or not lines[j].rstrip().endswith(";")
+            ) and j + 1 < len(lines):
+                j += 1
+                buf.append(lines[j].strip())
+                depth += lines[j].count("{") - lines[j].count("}")
+            full = " ".join(buf)
+            body = (
+                re.sub(r"^(?:pub(?:\([^)]*\))?\s+)?use\s+", "", full)
+                .rstrip(";")
+                .strip()
+            )
+            m_g = re.search(r"^(.*?)::\{(.*)\}$", body)
+            if m_g:
+                prefix = m_g.group(1).strip()
+                for part in m_g.group(2).split(","):
+                    part = part.strip()
+                    if not part or part == "self" or part.endswith("*"):
+                        continue
+                    if " as " in part:
+                        orig, alias = [x.strip() for x in part.split(" as ", 1)]
+                        if alias != "_":
+                            by_name.setdefault(alias, set()).add(
+                                f"{prefix}::{orig}"
+                            )
+                    else:
+                        leaf = part.rsplit("::", 1)[-1].strip()
+                        by_name.setdefault(leaf, set()).add(f"{prefix}::{part}")
+            elif not body.endswith("*"):
+                if " as " in body:
+                    orig, alias = [x.strip() for x in body.split(" as ", 1)]
+                    if alias != "_":
+                        by_name.setdefault(alias, set()).add(orig)
+                else:
+                    leaf = body.rsplit("::", 1)[-1].strip()
+                    by_name.setdefault(leaf, set()).add(body)
+            i = j + 1
+        else:
+            i += 1
+    return by_name
+
+
 def repeated_deep_paths(text):
     """Map each unimported deep path to its occurrence count when it violates.
 
@@ -214,7 +267,7 @@ def repeated_deep_paths(text):
     counts = {}
     for _, key in deep_path_violations(text):
         counts[key] = counts.get(key, 0) + 1
-    by_name = {}
+    by_name = _imported_chains_by_name(text)
     for chain in counts:
         by_name.setdefault(chain.rsplit("::", 1)[-1], set()).add(chain)
     defined = set(_PRELUDE_NAMES)

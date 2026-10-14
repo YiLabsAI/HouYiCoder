@@ -12,27 +12,36 @@ use futures::SinkExt;
 use futures::channel::mpsc;
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_api::provider::stream_from_response;
+use houyicoder_api::session::SessionLog;
 use houyicoder_api::tool::{Tool, ToolCtx};
 use houyicoder_async::{PFut, PStream};
 use houyicoder_client::{Client, InProcTransport};
+use houyicoder_context::SessionEvent;
 use houyicoder_context::SessionId;
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::{Runner, ToolRegistry};
 use houyicoder_memory::InMemoryBackend;
+use houyicoder_permission::DefaultModeGate;
 use houyicoder_protocol::acp_wire::AcpNotification;
 use houyicoder_protocol::envelope::{
     ClientResponsePayload, RequestId, ResponsePayload, ServerFrame, ServerRequestPayload,
 };
+use houyicoder_protocol::extension::ToolError;
+use houyicoder_protocol::framing::encode;
 use houyicoder_protocol::frontend::FrontendRequest;
 use houyicoder_protocol::frontend::run::{
     ApprovalDecision, ApprovalRequest, ContentBlock, RunOutcome, StopReason,
 };
+use houyicoder_protocol::llm::CompletionRequest;
+use houyicoder_protocol::llm::LlmEvent;
 use houyicoder_protocol::llm::{
     CompletionResponse, ModelCapabilities, OutputItem, ProviderError, Usage,
 };
 use houyicoder_service::server::{FrameCarrier, Server};
 use houyicoder_session::SessionStore;
 use serde_json::Value;
+use std::collections::HashSet;
+use tokio::time::timeout;
 
 /// A scripted provider that returns a queued sequence of responses, one per
 /// complete() call. Used to drive a multi-turn run: first a tool call (so the
@@ -53,7 +62,7 @@ impl FakeProvider {
 impl ModelProvider for FakeProvider {
     fn complete(
         &self,
-        _req: houyicoder_protocol::llm::CompletionRequest,
+        _req: CompletionRequest,
     ) -> PFut<'_, Result<CompletionResponse, ProviderError>> {
         let r = self
             .responses
@@ -63,10 +72,7 @@ impl ModelProvider for FakeProvider {
             .expect("scripted response available");
         Box::pin(async move { Ok(r) })
     }
-    fn stream(
-        &self,
-        _req: houyicoder_protocol::llm::CompletionRequest,
-    ) -> PStream<'_, Result<houyicoder_protocol::llm::LlmEvent, ProviderError>> {
+    fn stream(&self, _req: CompletionRequest) -> PStream<'_, Result<LlmEvent, ProviderError>> {
         let r = self
             .responses
             .lock()
@@ -95,11 +101,7 @@ impl Tool for ApprovableTool {
     fn input_schema(&self) -> Value {
         serde_json::json!({"type": "object"})
     }
-    fn execute(
-        &self,
-        _ctx: ToolCtx,
-        _input: Value,
-    ) -> PFut<'_, Result<Value, houyicoder_protocol::extension::ToolError>> {
+    fn execute(&self, _ctx: ToolCtx, _input: Value) -> PFut<'_, Result<Value, ToolError>> {
         Box::pin(async move { Ok(serde_json::json!({"ok": true})) })
     }
     fn requires_approval(&self) -> bool {
@@ -154,11 +156,7 @@ async fn test_reverse_request_permission_flow() {
     let server_io = FrameCarrier::new(server_tx, server_rx);
     let client_transport = InProcTransport::from_halves(client_tx, client_rx);
     let mut client = Client::new(Box::new(client_transport));
-    let server = Server::new(
-        Arc::new(runner),
-        session,
-        std::sync::Arc::new(houyicoder_permission::DefaultModeGate::new()),
-    );
+    let server = Server::new(Arc::new(runner), session, Arc::new(DefaultModeGate::new()));
     let handle = tokio::spawn(async move { server.serve(server_io).await });
 
     client.connect().await.expect("handshake");
@@ -280,11 +278,7 @@ async fn test_mid_ask_survives_status() {
     let server_io = FrameCarrier::new(server_tx, server_rx);
     let client_transport = InProcTransport::from_halves(client_tx, client_rx);
     let mut client = Client::new(Box::new(client_transport));
-    let server = Server::new(
-        Arc::new(runner),
-        session,
-        std::sync::Arc::new(houyicoder_permission::DefaultModeGate::new()),
-    );
+    let server = Server::new(Arc::new(runner), session, Arc::new(DefaultModeGate::new()));
     let handle = tokio::spawn(async move { server.serve(server_io).await });
 
     client.connect().await.expect("handshake");
@@ -416,11 +410,7 @@ async fn test_mid_ask_cancel_exits() {
     let server_io = FrameCarrier::new(server_tx, server_rx);
     let client_transport = InProcTransport::from_halves(client_tx, client_rx);
     let mut client = Client::new(Box::new(client_transport));
-    let server = Server::new(
-        Arc::new(runner),
-        session,
-        std::sync::Arc::new(houyicoder_permission::DefaultModeGate::new()),
-    );
+    let server = Server::new(Arc::new(runner), session, Arc::new(DefaultModeGate::new()));
     let handle = tokio::spawn(async move { server.serve(server_io).await });
 
     client.connect().await.expect("handshake");
@@ -446,7 +436,7 @@ async fn test_mid_ask_cancel_exits() {
             ServerFrame::Event(_) => {}
             ServerFrame::Request(_) => {
                 let cancel = AcpNotification::new("session/cancel", serde_json::json!({}));
-                let mut f = houyicoder_protocol::framing::encode(&cancel).expect("encode");
+                let mut f = encode(&cancel).expect("encode");
                 if !f.ends_with('\n') {
                     f.push('\n');
                 }
@@ -463,7 +453,7 @@ async fn test_mid_ask_cancel_exits() {
     // re-ask loop (cancel -> Interrupted -> re-ask) or a hang fails here.
     let mut ended = false;
     for _ in 0..64 {
-        match tokio::time::timeout(Duration::from_secs(2), client.next_frame()).await {
+        match timeout(Duration::from_secs(2), client.next_frame()).await {
             Ok(Ok(ServerFrame::Response(resp))) if resp.req_id == req_id => {
                 ended = true;
                 break;
@@ -494,12 +484,7 @@ async fn test_mid_ask_cancel_exits() {
 #[tokio::test]
 #[expect(clippy::too_many_lines, reason = "long by design, kept whole")]
 async fn test_mid_cancel_multi_approval() {
-    use houyicoder_protocol::acp_wire::AcpNotification;
-    use houyicoder_protocol::envelope::{ServerFrame, ServerRequestPayload};
-    use houyicoder_protocol::frontend::run::ApprovalRequest;
-
-    let store: Arc<dyn houyicoder_api::session::SessionLog> =
-        Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let store: Arc<dyn SessionLog> = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let log = store.clone();
     let session = SessionId::new();
     // Two approval-requiring calls in one turn → Interruption([a1, a2]).
@@ -547,11 +532,7 @@ async fn test_mid_cancel_multi_approval() {
     let server_io = FrameCarrier::new(server_tx, server_rx);
     let client_transport = InProcTransport::from_halves(client_tx, client_rx);
     let mut client = Client::new(Box::new(client_transport));
-    let server = Server::new(
-        Arc::new(runner),
-        session,
-        std::sync::Arc::new(houyicoder_permission::DefaultModeGate::new()),
-    );
+    let server = Server::new(Arc::new(runner), session, Arc::new(DefaultModeGate::new()));
     let handle = tokio::spawn(async move { server.serve(server_io).await });
 
     client.connect().await.expect("handshake");
@@ -577,7 +558,7 @@ async fn test_mid_cancel_multi_approval() {
             ServerFrame::Event(_) => {}
             ServerFrame::Request(_) => {
                 let cancel = AcpNotification::new("session/cancel", serde_json::json!({}));
-                let mut f = houyicoder_protocol::framing::encode(&cancel).expect("encode");
+                let mut f = encode(&cancel).expect("encode");
                 if !f.ends_with('\n') {
                     f.push('\n');
                 }
@@ -595,7 +576,7 @@ async fn test_mid_cancel_multi_approval() {
     let mut second_ask = false;
     let mut ended = false;
     for _ in 0..64 {
-        match tokio::time::timeout(Duration::from_secs(2), client.next_frame()).await {
+        match timeout(Duration::from_secs(2), client.next_frame()).await {
             Ok(Ok(ServerFrame::Request(req))) => {
                 if matches!(
                     req.payload,
@@ -623,18 +604,16 @@ async fn test_mid_cancel_multi_approval() {
     // and the durable session is bricked. This is the assertion that pins the
     // blocker fix (the short-circuit must call reconcile_tool_results).
     let events = log.replay(session).await.expect("replay");
-    let mut answered = std::collections::HashSet::new();
+    let mut answered = HashSet::new();
     for e in &events {
-        if let houyicoder_context::SessionEvent::ToolResult { call_id, .. } = &e.event {
+        if let SessionEvent::ToolResult { call_id, .. } = &e.event {
             answered.insert(call_id.clone());
         }
     }
     let orphans: Vec<String> = events
         .iter()
         .filter_map(|e| match &e.event {
-            houyicoder_context::SessionEvent::ToolCall { call_id, .. }
-                if !answered.contains(call_id) =>
-            {
+            SessionEvent::ToolCall { call_id, .. } if !answered.contains(call_id) => {
                 Some(call_id.clone())
             }
             _ => None,
@@ -683,11 +662,7 @@ async fn test_idle_cancel_skips_abort() {
     let server_io = FrameCarrier::new(server_tx, server_rx);
     let client_transport = InProcTransport::from_halves(client_tx, client_rx);
     let mut client = Client::new(Box::new(client_transport));
-    let server = Server::new(
-        runner,
-        session,
-        std::sync::Arc::new(houyicoder_permission::DefaultModeGate::new()),
-    );
+    let server = Server::new(runner, session, Arc::new(DefaultModeGate::new()));
     let handle = tokio::spawn(async move { server.serve(server_io).await });
     client.connect().await.expect("handshake");
 
@@ -705,7 +680,7 @@ async fn test_idle_cancel_skips_abort() {
         .expect("send run-cancel");
     // Drain the Ack + give the server time to process.
     for _ in 0..16 {
-        match tokio::time::timeout(Duration::from_millis(200), client.next_frame()).await {
+        match timeout(Duration::from_millis(200), client.next_frame()).await {
             Ok(Ok(_)) => {}
             _ => break,
         }

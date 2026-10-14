@@ -12,11 +12,25 @@ mod trajectory_row;
 use trajectory_row::{event_name, hex_short};
 
 use houyicoder_context::SessionEvent;
+use houyicoder_core::agent::StatusSnapshot;
+use houyicoder_permission::PermissionMode as M;
+use houyicoder_permission::{Effect, Rule, RuleContent, Scope};
 use houyicoder_protocol::acp_wire::{
     PermissionOption, PermissionOptionKind, RequestPermissionOutcome, RequestPermissionRequest,
     RequestPermissionResponse, SelectedPermissionOutcome,
 };
 use houyicoder_protocol::acpx::{AcpxMethod, AcpxNotification};
+use houyicoder_protocol::frontend::context::{
+    CategoryBreakdown as ProtocolCategoryBreakdown, ContextBreakdown as ProtocolContextBreakdown,
+    GridCell as ProtocolGridCell,
+};
+use houyicoder_protocol::frontend::permission::AskReason;
+use houyicoder_protocol::frontend::permission::PermissionMode as W;
+use houyicoder_protocol::frontend::permission::PermissionMode;
+use houyicoder_protocol::frontend::permission::PermissionRule;
+use houyicoder_protocol::frontend::permission::RuleDestination;
+use houyicoder_protocol::frontend::permission::{PermissionEffect, PermissionRuleContent};
+use houyicoder_protocol::frontend::run::DelegationSource;
 use houyicoder_protocol::frontend::run::{
     ApprovalDecision, ApprovalRequest, ContentBlock, RunError, RunOutcome, RunResult, StopReason,
 };
@@ -24,6 +38,8 @@ use houyicoder_protocol::frontend::session_update::{
     ContentChunk, SessionUpdate, ToolCall, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
 };
 use houyicoder_protocol::frontend::status::StatusSnapshot as ProtocolStatusSnapshot;
+use houyicoder_protocol::frontend::trajectory::TrajectoryEntry;
+use houyicoder_protocol::llm::ProviderError;
 pub(crate) use session_descriptor::map_session_descriptor;
 
 /// Map the engine run result to the protocol message form. Outcome
@@ -93,14 +109,14 @@ pub(crate) fn map_run_result(run: &houyicoder_core::agent::RunResult) -> RunResu
 pub(crate) fn build_approval_request(
     req: &houyicoder_core::agent::ApprovalRequest,
     reason: Option<&houyicoder_permission::AskReason>,
-    delegation: Option<&houyicoder_protocol::frontend::run::DelegationSource>,
+    delegation: Option<&DelegationSource>,
 ) -> ApprovalRequest {
     ApprovalRequest {
         call_id: req.call_id.clone(),
         tool_name: req.tool_name.clone(),
         input: req.input.clone(),
         options: Vec::new(),
-        reason: reason.map(houyicoder_protocol::frontend::permission::AskReason::from),
+        reason: reason.map(AskReason::from),
         delegation: delegation.cloned(),
     }
 }
@@ -124,9 +140,7 @@ pub(crate) fn parse_approval_decision(
 /// snapshot carries a borrowed breaker-state label and a Duration cool-down;
 /// the wire form owns both so the TUI renders /status without importing the
 /// engine or resilience crate.
-pub(crate) fn map_status_snapshot(
-    s: &houyicoder_core::agent::StatusSnapshot,
-) -> ProtocolStatusSnapshot {
+pub(crate) fn map_status_snapshot(s: &StatusSnapshot) -> ProtocolStatusSnapshot {
     ProtocolStatusSnapshot {
         model: s.model.clone(),
         breaker_state: s.breaker_state.map(String::from),
@@ -152,15 +166,12 @@ pub(crate) fn map_status_snapshot(
 /// intact.
 pub(crate) fn build_trajectory_entries(
     events: &[houyicoder_context::SessionLogEntry],
-) -> Vec<houyicoder_protocol::frontend::trajectory::TrajectoryEntry> {
-    use houyicoder_protocol::frontend::trajectory::TrajectoryEntry;
+) -> Vec<TrajectoryEntry> {
     events
         .iter()
         .map(|ev| {
             let duration_ms = match &ev.event {
-                houyicoder_context::SessionEvent::ToolResult { duration_ms, .. } => {
-                    Some(*duration_ms)
-                }
+                SessionEvent::ToolResult { duration_ms, .. } => Some(*duration_ms),
                 _ => None,
             };
             TrajectoryEntry {
@@ -179,10 +190,6 @@ pub(crate) fn build_trajectory_entries(
 pub(crate) fn map_context_breakdown(
     bd: &houyicoder_core::agent::ContextBreakdown,
 ) -> houyicoder_protocol::frontend::context::ContextBreakdown {
-    use houyicoder_protocol::frontend::context::{
-        CategoryBreakdown as ProtocolCategoryBreakdown,
-        ContextBreakdown as ProtocolContextBreakdown, GridCell as ProtocolGridCell,
-    };
     let grid: Vec<Vec<ProtocolGridCell>> = bd
         .grid
         .iter()
@@ -255,21 +262,17 @@ pub(crate) fn map_run_error(e: &houyicoder_core::agent::RunError) -> RunError {
     // (the design's "don't mislead" rule — a model typo read as a key error
     // sends the user debugging credentials, not the model id).
     let message = match e {
-        houyicoder_core::agent::RunError::ProviderFatal(
-            houyicoder_protocol::llm::ProviderError::Auth,
-        )
-        | houyicoder_core::agent::RunError::ProviderExhausted(
-            houyicoder_protocol::llm::ProviderError::Auth,
-        ) => "authentication failed — check your API key (DASHSCOPE_API_KEY or OPENAI_API_KEY)"
-            .to_string(),
-        houyicoder_core::agent::RunError::ProviderFatal(
-            houyicoder_protocol::llm::ProviderError::ModelNotFound(m),
-        )
-        | houyicoder_core::agent::RunError::ProviderExhausted(
-            houyicoder_protocol::llm::ProviderError::ModelNotFound(m),
-        ) => format!(
-            "model not found ({m}) — check model.catalog in settings.json, the id may be misspelled"
-        ),
+        houyicoder_core::agent::RunError::ProviderFatal(ProviderError::Auth)
+        | houyicoder_core::agent::RunError::ProviderExhausted(ProviderError::Auth) => {
+            "authentication failed — check your API key (DASHSCOPE_API_KEY or OPENAI_API_KEY)"
+                .to_string()
+        }
+        houyicoder_core::agent::RunError::ProviderFatal(ProviderError::ModelNotFound(m))
+        | houyicoder_core::agent::RunError::ProviderExhausted(ProviderError::ModelNotFound(m)) => {
+            format!(
+                "model not found ({m}) — check model.catalog in settings.json, the id may be misspelled"
+            )
+        }
         other => other.to_string(),
     };
     RunError {
@@ -281,9 +284,7 @@ pub(crate) fn map_run_error(e: &houyicoder_core::agent::RunError) -> RunError {
 /// Map the engine permission mode to the wire form.
 pub(crate) fn permission_mode_to_wire(
     mode: houyicoder_permission::PermissionMode,
-) -> houyicoder_protocol::frontend::permission::PermissionMode {
-    use houyicoder_permission::PermissionMode as M;
-    use houyicoder_protocol::frontend::permission::PermissionMode as W;
+) -> PermissionMode {
     match mode {
         M::Manual => W::Manual,
         M::Auto => W::Auto,
@@ -294,10 +295,8 @@ pub(crate) fn permission_mode_to_wire(
 /// engine form the gate stores. The server is the single write authority for
 /// mode; the frontend never names the engine PermissionMode.
 pub(crate) fn permission_mode_from_wire(
-    mode: houyicoder_protocol::frontend::permission::PermissionMode,
+    mode: PermissionMode,
 ) -> houyicoder_permission::PermissionMode {
-    use houyicoder_permission::PermissionMode as M;
-    use houyicoder_protocol::frontend::permission::PermissionMode as W;
     match mode {
         W::Manual => M::Manual,
         W::Auto => M::Auto,
@@ -314,7 +313,6 @@ pub(crate) fn consent_rule_for(
     tool_name: &str,
     input: &serde_json::Value,
 ) -> Option<houyicoder_permission::Rule> {
-    use houyicoder_permission::{Effect, Rule, RuleContent, Scope};
     let is_bash = matches!(
         tool_name.to_ascii_lowercase().as_str(),
         "bash" | "sh" | "exec" | "shell"
@@ -347,10 +345,8 @@ pub(crate) fn consent_rule_for(
 /// Inverse of permission_rule_to_wire; the wire path is the single write
 /// authority.
 pub(crate) fn permission_rule_from_wire(
-    rule: &houyicoder_protocol::frontend::permission::PermissionRule,
+    rule: &PermissionRule,
 ) -> Result<houyicoder_permission::Rule, houyicoder_permission::ModeError> {
-    use houyicoder_permission::{Effect, Rule, RuleContent};
-    use houyicoder_protocol::frontend::permission::{PermissionEffect, PermissionRuleContent};
     let effect = match rule.effect {
         PermissionEffect::Allow => Effect::Allow,
         PermissionEffect::Reject => Effect::Deny,
@@ -371,13 +367,7 @@ pub(crate) fn permission_rule_from_wire(
 
 /// Map a durable engine rule to the wire form, including its persistence
 /// scope (destination) so the /permissions Add flow's pick round-trips.
-pub(crate) fn permission_rule_to_wire(
-    rule: &houyicoder_permission::Rule,
-) -> houyicoder_protocol::frontend::permission::PermissionRule {
-    use houyicoder_permission::{Effect, RuleContent};
-    use houyicoder_protocol::frontend::permission::{
-        PermissionEffect, PermissionRule, PermissionRuleContent,
-    };
+pub(crate) fn permission_rule_to_wire(rule: &houyicoder_permission::Rule) -> PermissionRule {
     let effect = match rule.effect {
         Effect::Allow => PermissionEffect::Allow,
         Effect::Deny => PermissionEffect::Reject,
@@ -398,11 +388,7 @@ pub(crate) fn permission_rule_to_wire(
 
 /// Map a wire destination to the engine persistence scope. Identity: user,
 /// project, local.
-fn wire_destination_to_scope(
-    d: houyicoder_protocol::frontend::permission::RuleDestination,
-) -> houyicoder_permission::Scope {
-    use houyicoder_permission::Scope;
-    use houyicoder_protocol::frontend::permission::RuleDestination;
+fn wire_destination_to_scope(d: RuleDestination) -> houyicoder_permission::Scope {
     match d {
         RuleDestination::User => Scope::User,
         RuleDestination::Project => Scope::Project,
@@ -413,11 +399,7 @@ fn wire_destination_to_scope(
 }
 
 /// Inverse of wire_destination_to_scope.
-fn scope_to_wire_destination(
-    s: houyicoder_permission::Scope,
-) -> houyicoder_protocol::frontend::permission::RuleDestination {
-    use houyicoder_permission::Scope;
-    use houyicoder_protocol::frontend::permission::RuleDestination;
+fn scope_to_wire_destination(s: houyicoder_permission::Scope) -> RuleDestination {
     match s {
         Scope::User => RuleDestination::User,
         Scope::Project => RuleDestination::Project,
