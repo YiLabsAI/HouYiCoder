@@ -25,8 +25,10 @@ LIFETIME_SIG = "fn f<'a>(x: &'a str) -> &'a str {\n    use crate::state::App;\n 
 ONE_LINE_FN = 'fn f() { use crate::state::App; }\n'
 CHAR_THEN_USE = "fn f() {\n    let c = 'x';\n    use crate::state::App;\n}\n"
 PATH_TWICE = 'fn a() { let x = crate::state::Screen::Working; }\nfn b() { let y = crate::state::Screen::Focus; }\n'
+MOD_TYPE_VARIANT_TWICE = 'fn a() { let x = mpsc::TryRecvError::Empty; }\nfn b() { let y = mpsc::TryRecvError::Disconnected; }\n'
 PATH_ONCE = 'fn a() { let x = crate::state::Screen::Working; }\n'
-ONE_SEPARATOR = 'fn a() { let x = fmt::Display::fmt; }\n'
+DEEP_FOUR_ONCE = 'fn a() { let x = houyicoder_protocol::frontend::permission::PermissionMode::Manual; }\n'
+ONE_SEPARATOR = 'fn a() { let x = Screen::Working; let y = Screen::Focus; }\n'
 
 
 def check(name, got, want):
@@ -71,12 +73,23 @@ def main() -> int:
         repeated_deep_paths(PATH_TWICE),
         {"crate::state::Screen": 2},
     )
+    ok &= check(
+        "module::Type::Variant repeated is caught so Type is imported",
+        repeated_deep_paths(MOD_TYPE_VARIANT_TWICE),
+        {"mpsc::TryRecvError": 2},
+    )
     ok &= check("a path used once is allowed", repeated_deep_paths(PATH_ONCE), {})
+    ok &= check(
+        "a 4-segment deep path is caught even once",
+        repeated_deep_paths(DEEP_FOUR_ONCE),
+        {"houyicoder_protocol::frontend::permission::PermissionMode": 1},
+    )
     ok &= check("one separator is allowed", repeated_deep_paths(ONE_SEPARATOR), {})
     ok &= check("ratchet holds at the baseline", evaluate(["x"], ["y"], 1, 1), 0)
     ok &= check("ratchet blocks growth", evaluate(["x", "y"], ["y"], 1, 1), 1)
     ok &= check("ratchet blocks growth of paths", evaluate(["x"], ["y", "z"], 1, 1), 1)
     ok &= check("the hook refuses a write with a local import", _hook_verdict(IN_FN), 2)
+    ok &= check("the hook refuses a write with a deep path", _hook_verdict(DEEP_FOUR_ONCE), 2)
     ok &= check("the hook allows a write with a module-scope import", _hook_verdict(MODULE_SCOPE), 0)
     ok &= check(
         "the hook counts a repeated pair once, not once per use",

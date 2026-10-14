@@ -18,7 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from rules.comments import line_violations  # noqa: E402
-from rules.imports import inline_use_violations  # noqa: E402
+from rules.imports import inline_use_violations, repeated_deep_paths  # noqa: E402
 from rules.naming import (  # noqa: E402
     JARGON,
     TEST_NAME_LEN_HARD,
@@ -150,13 +150,14 @@ def main():
     elif tool == "NotebookEdit":
         chunks.append(ti.get("new_source", ""))
     seen = set()
-    # The lines already on disk, so a carried-over local import is not
-    # reported as a new one.
+    # The lines and deep paths already on disk, so a carried-over violation is
+    # not reported as a new one.
     existing_lines = set()
+    existing_paths = set()
     try:
-        existing_lines = {
-            line.strip() for line in Path(path).read_text(encoding="utf-8").splitlines()
-        }
+        disk_text = Path(path).read_text(encoding="utf-8")
+        existing_lines = {line.strip() for line in disk_text.splitlines()}
+        existing_paths = set(repeated_deep_paths(disk_text))
     except OSError:
         pass
     for chunk in chunks:
@@ -194,6 +195,18 @@ def main():
                     continue
                 seen.add(key)
                 print(f"blocked write to {path}: {rule}\n  -> {line}", file=sys.stderr)
+            for chain in repeated_deep_paths(chunk):
+                if chain in existing_paths:
+                    continue
+                rule = (
+                    "deep qualified path in code body; import it at module "
+                    "scope instead of repeating or nesting :: chains"
+                )
+                key = (rule, chain)
+                if key in seen:
+                    continue
+                seen.add(key)
+                print(f"blocked write to {path}: {rule}\n  -> {chain}", file=sys.stderr)
         if is_baseline_py:
             for message, line in _baseline_comment_violation(chunk):
                 key = (message, line)

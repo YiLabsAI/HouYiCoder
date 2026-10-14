@@ -28,9 +28,6 @@ _USE_HEAD = re.compile(r"^(?:pub(?:\([^)]*\))?\s+)?use\b")
 _FN_HEAD = re.compile(r"^(?:pub(?:\([^)]*\))?\s+)*(?:(?:async|unsafe|const|extern\s+\"[^\"]*\")\s+)*fn\b")
 # A char literal closes within a few characters; a lifetime like 'a does not.
 _CHAR_LITERAL = re.compile(r"'(?:\\.|[^\\'])'")
-# The first segment of a path that an import can bring in. Anything else is
-# already relative to an import in scope.
-_ROOTS = {"crate", "std", "core", "alloc", "self", "super", "tokio", "ratatui", "crossterm"}
 
 
 def _strip_line(line):
@@ -110,19 +107,28 @@ def _lines(text):
                 stack.append("other")
         in_fn = "fn" in stack
         yield lineno, raw, in_fn, False
-        for _ in range(min(line.count("}"), len(stack))):
-            stack.pop()
+        if stripped == "}" and raw[:1] not in (" ", "\t"):
+            # A brace at column zero closes the outermost item, so any block
+            # still tracked is the tail of an earlier miscount.
+            stack.clear()
+        else:
+            for _ in range(min(line.count("}"), len(stack))):
+                stack.pop()
 
 
 def inline_use_violations(text):
     """Yield (lineno, stripped_line) for a use statement inside a function.
 
-    A one-line body (fn f() { use x; }) counts: the use sits after the
+    A use at column zero is module scope by definition (rustfmt indents every
+    statement in a body), so the brace walk cannot produce a false positive
+    on it. A one-line body (fn f() { use x; }) counts: the use sits after the
     opening brace on the same line, so the line is not a plain import.
     """
     for lineno, raw, in_fn, in_use in _lines(text):
         code = _strip_line(raw)
         stripped = code.strip()
+        if raw[:1] not in (" ", "\t") and not _FN_HEAD.match(stripped):
+            continue
         if in_use:
             if not _USE_HEAD.match(stripped):
                 continue
@@ -136,15 +142,17 @@ def inline_use_violations(text):
 def _importable(path):
     """The part of a qualified path an import would bring in, or None.
 
-    A trailing variant or associated item is not part of the import: the
-    reader imports the type and writes Screen::Focus at the call site, so
-    the two spellings of one type group together. A path whose first
-    segment is not a crate root is already relative to an import in scope
-    (mpsc::TryRecvError inside a module that imported mpsc), so it is not
-    a finding and has nothing to import.
+    Any path with two or more :: separators starting with a module/crate
+    name (lowercase first segment) has at least one unimported module prefix:
+    - mpsc::TryRecvError::Empty -> import mpsc::TryRecvError, write
+      TryRecvError::Empty (one ::);
+    - crate::state::Screen::Working -> import crate::state::Screen, write
+      Screen::Working (one ::);
+    - crate::app::handle_key -> import crate::app::handle_key, write
+      handle_key (zero ::).
     """
     segments = path.split("::")
-    if segments[0] not in _ROOTS and not segments[0].startswith("houyicoder_"):
+    if len(segments) < 3 or not segments[0][:1].islower():
         return None
     for i, segment in enumerate(segments):
         if segment[:1].isupper():
@@ -152,14 +160,10 @@ def _importable(path):
     return path
 
 
-def repeated_deep_paths(text):
-    """Map each importable path used twice or more to its use count.
-
-    Import lines and comments do not count: the rule is about a path
-    repeated in fields, signatures or bodies instead of imported once.
-    """
-    counts = {}
-    for _, raw, _, in_use in _lines(text):
+def deep_path_violations(text):
+    """Yield (lineno, importable_path) for every unimported multi-module path
+    in code lines (outside use statements and comments)."""
+    for lineno, raw, _, in_use in _lines(text):
         if in_use:
             continue
         code = _strip_line(raw)
@@ -169,5 +173,21 @@ def repeated_deep_paths(text):
         for path in _DEEP_PATH.findall(code):
             key = _importable(path)
             if key is not None:
-                counts[key] = counts.get(key, 0) + 1
-    return {path: n for path, n in counts.items() if n >= 2}
+                yield lineno, key
+
+
+def repeated_deep_paths(text):
+    """Map each unimported deep path to its occurrence count when it violates:
+    - any chain with >= 3 module levels (4+ segments, e.g.
+      houyicoder_protocol::frontend::permission::PermissionMode) even once;
+    - any chain with >= 2 module levels (3+ segments, e.g.
+      crate::state::Screen or std::sync::Arc) used twice or more.
+    """
+    counts = {}
+    for _, key in deep_path_violations(text):
+        counts[key] = counts.get(key, 0) + 1
+    return {
+        path: n
+        for path, n in counts.items()
+        if n >= 2 or len(path.split("::")) >= 4
+    }
