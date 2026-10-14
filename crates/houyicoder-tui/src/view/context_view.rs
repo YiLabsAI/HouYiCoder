@@ -14,6 +14,7 @@ use ratatui::{
     text::{Line, Span},
 };
 
+use crate::records::ContextSkillEntry;
 use crate::records::{ContextView, SuggestionSeverity};
 use houyicoder_protocol::frontend::context::{ContextBreakdown, GridCell};
 
@@ -276,7 +277,7 @@ fn memory_rows(files: &[crate::records::ContextFileEntry]) -> Vec<Vec<Span<'stat
 
 /// The Skills drill-down rows: a bold header plus dim suffix, then per-source
 /// groups (dim source label + tree-glyph rows). Empty when there are no skills.
-fn skills_rows(skills: &[crate::records::ContextSkillEntry]) -> Vec<Vec<Span<'static>>> {
+fn skills_rows(skills: &[ContextSkillEntry]) -> Vec<Vec<Span<'static>>> {
     if skills.is_empty() {
         return Vec::new();
     }
@@ -296,8 +297,7 @@ fn skills_rows(skills: &[crate::records::ContextSkillEntry]) -> Vec<Vec<Span<'st
     }
     for src in &sources {
         rows.push(vec![Span::styled(src.clone(), dim)]);
-        let group: Vec<&crate::records::ContextSkillEntry> =
-            skills.iter().filter(|s| &s.source == src).collect();
+        let group: Vec<&ContextSkillEntry> = skills.iter().filter(|s| &s.source == src).collect();
         let n = group.len();
         for (i, s) in group.iter().enumerate() {
             let glyph = if i + 1 == n { "\u{2514}" } else { "\u{251C}" };

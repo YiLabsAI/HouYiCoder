@@ -174,7 +174,11 @@ use super::usage::render_usage;
 
 #[cfg(test)]
 mod tests {
+    use houyicoder_protocol::llm::EffortLevel;
+
     use super::*;
+    use crate::input::InputField;
+    use crate::test_harness::working_app;
 
     /// The sub-tab header renders Status / Config / Usage, with the active one
     /// marked (the active title appears in the header).
@@ -191,7 +195,7 @@ mod tests {
     /// the settings-file memory toggles (auto-memory / auto-dream).
     #[test]
     fn test_config_tab_has_knobs() {
-        let mut app = crate::test_harness::working_app();
+        let mut app = working_app();
         app.sessions.current.capabilities.model.catalog.applied.id = "qwen3.8-max".into();
         app.sessions.current.sandbox = "mac-seatbelt".into();
         let s = render_config(&app);
@@ -208,7 +212,7 @@ mod tests {
     /// a hardcoded default).
     #[test]
     fn test_config_tab_reflects_state() {
-        let mut app = crate::test_harness::working_app();
+        let mut app = working_app();
         let mut snap = app.snapshot_or_stub();
         snap.auto_memory = false;
         snap.auto_dream = true;
@@ -230,8 +234,7 @@ mod tests {
     /// (only when the next request really carries an effort parameter).
     #[test]
     fn test_config_tab_shows_effort() {
-        use houyicoder_protocol::llm::EffortLevel;
-        let mut app = crate::test_harness::working_app();
+        let mut app = working_app();
         app.sessions.current.capabilities.model.catalog.applied.id = "qwen3.8-max".into();
         app.sessions
             .current
@@ -259,7 +262,7 @@ mod tests {
     /// the end renders a trailing space block).
     #[test]
     fn test_name_edit_renders_buffer() {
-        let mut field = crate::input::InputField::new();
+        let mut field = InputField::new();
         field.insert_str("fix");
         let line = name_edit_line(&field);
         let rendered: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
@@ -274,7 +277,7 @@ mod tests {
     /// end), so the user sees where typing lands even before the first char.
     #[test]
     fn test_name_edit_renders_caret() {
-        let field = crate::input::InputField::new();
+        let field = InputField::new();
         let line = name_edit_line(&field);
         let rendered: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(
@@ -287,7 +290,7 @@ mod tests {
     /// styled separately from the before/after text.
     #[test]
     fn test_name_edit_cursor_buffer() {
-        let mut field = crate::input::InputField::new();
+        let mut field = InputField::new();
         field.insert_str("abc");
         field.move_left(); // cursor between b and c (after "ab")
         let line = name_edit_line(&field);

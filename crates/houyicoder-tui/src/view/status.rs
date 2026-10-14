@@ -17,8 +17,9 @@ use ratatui::{
 
 use houyicoder_protocol::frontend::permission::PermissionMode;
 
-use crate::state::{App, Stage, ViewportMode};
+use crate::state::{App, Pane, Stage, ViewportMode};
 use crate::view::logo;
+use Stage::*;
 
 /// Build the three-stage progress bar: design / implement / verify. Each
 /// stage is marked done (Green check), current (Cyan dot), or pending (dim
@@ -64,7 +65,6 @@ fn stage_mark(current: Stage, target: Stage) -> (&'static str, Style) {
 /// True when the target stage is complete given the current stage. Done
 /// stages are those the chain has moved past.
 fn stage_is_done(current: Stage, target: Stage) -> bool {
-    use Stage::*;
     let order = |s: Stage| match s {
         Idle => 0,
         Design => 1,
@@ -247,17 +247,17 @@ pub fn draw_focus_status(f: &mut Frame, area: Rect, app: &App) {
 /// knows where they are without the input box prompt.
 fn focus_action_hint(app: &App) -> String {
     match (app.ui.navigation.pane, app.workflow.stage) {
-        (crate::state::Pane::Diff, Stage::Implementing) => {
+        (Pane::Diff, Stage::Implementing) => {
             let n = app.workflow.diff.hunks.len();
             let i = app.workflow.diff.focus + 1;
             format!("change {i}/{n}  a=approve r=reject  Up/Down=change")
         }
-        (crate::state::Pane::Review, Stage::Verify) => {
+        (Pane::Review, Stage::Verify) => {
             let n = app.workflow.review.len();
             let i = app.workflow.review.focus + 1;
             format!("finding {i}/{n}  a=approve r=reject i=rework")
         }
-        (crate::state::Pane::Verify, Stage::Verify) => {
+        (Pane::Verify, Stage::Verify) => {
             if app.workflow.verify_result.passed {
                 "a=complete  r=rework".to_string()
             } else {
@@ -421,15 +421,14 @@ pub fn is_focus(app: &App) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use houyicoder_protocol::frontend::model::AppliedModel;
-    use houyicoder_protocol::frontend::model::SpeedMode;
+
+    use houyicoder_protocol::frontend::model::{AppliedModel, SpeedMode};
     use houyicoder_protocol::frontend::status::StatusSnapshot;
-    use houyicoder_protocol::llm::EffortLevel;
+    use houyicoder_protocol::llm::{EffortLevel, Usage};
     use ratatui::{Terminal, backend::TestBackend};
 
-    use houyicoder_protocol::llm::Usage;
-
     use crate::agent_message::FleetEntry;
+    use crate::composition::app;
     use crate::state::Screen;
     use crate::test_harness::{connected_app, render_text};
 
@@ -439,7 +438,7 @@ mod tests {
     }
 
     fn fleet_app(n: usize, granted: u16) -> crate::state::App {
-        let mut app = crate::composition::app();
+        let mut app = app();
         for i in 0..n {
             app.sessions
                 .current
@@ -566,7 +565,7 @@ mod tests {
 
     #[test]
     fn test_progress_str_contains_all() {
-        let app = crate::composition::app();
+        let app = app();
         let s = progress_str(&app);
         assert!(s.contains("design"), "got [{s}]");
         assert!(s.contains("implement"), "got [{s}]");
@@ -593,7 +592,7 @@ mod tests {
     /// Config status tab, not duplicated on the bar.
     #[test]
     fn test_bar_shows_model_id() {
-        let mut app = crate::composition::app();
+        let mut app = app();
         app.sessions.current.capabilities.model.catalog.applied = AppliedModel {
             id: "qwen3.7-max".into(),
             effort: Some(EffortLevel::High),
@@ -642,7 +641,7 @@ mod tests {
         // /trajectory already carry. This exercises the post-run snapshot
         // the pre-run render test never reaches, so the noise path stays
         // guarded against re-introduction.
-        let mut app = crate::composition::app();
+        let mut app = app();
         app.sessions.current.capabilities.model.catalog.applied.id = "test-model".into();
         app.sessions.current.capabilities.status.status_cache = Some(StatusSnapshot {
             model: "test-model".into(),
@@ -688,7 +687,7 @@ mod tests {
         // Before a turn has assembled a context there is no occupancy to
         // report. The gauge stays hidden rather than claiming the window is
         // a known amount full.
-        let mut app = crate::composition::app();
+        let mut app = app();
         app.sessions.current.capabilities.model.catalog.applied.id = "test-model".into();
         for width in [48, 80] {
             let backend = TestBackend::new(width, 3);

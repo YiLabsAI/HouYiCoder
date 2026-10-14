@@ -5,6 +5,7 @@ use houyicoder_protocol::frontend::session_update::{
     ContentChunk, SessionUpdate, ToolCall, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
 };
 
+use crate::fold::compute_fold_groups;
 use crate::records::TranscriptLine;
 use crate::transcript::{TranscriptFrame, transcript_from_frames};
 
@@ -141,7 +142,7 @@ fn test_edit_diff_skips_fold() {
         TranscriptLine::Tool { name, is_diff, .. }
         if name == "result" && *is_diff
     ));
-    let groups = crate::fold::compute_fold_groups(&lines, false);
+    let groups = compute_fold_groups(&lines, false);
     assert!(
         groups.is_empty(),
         "edit with diff must not fold, got {groups:?}"
@@ -189,7 +190,7 @@ fn test_edit_diff_survives_batch() {
         "edit result must be adjacent + is_diff, got {:?}",
         &lines[edit_idx..]
     );
-    let groups = crate::fold::compute_fold_groups(&lines, false);
+    let groups = compute_fold_groups(&lines, false);
     assert!(
         !groups.iter().any(|g| {
             lines[g.start..g.end]

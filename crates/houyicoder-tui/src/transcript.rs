@@ -30,6 +30,10 @@ use crate::result_body::{
 use tool_updates::{PendingUpdate, ToolRegistry, collect_tool_updates};
 use turn_fold::{RowNames, TurnFold};
 
+use houyicoder_protocol::acpx::AcpxMethod;
+use houyicoder_protocol::envelope::ChildTranscriptFrame as C;
+use houyicoder_protocol::envelope::ChildTranscriptFrame;
+use serde_json::Value;
 pub use turn_fold::bounds_turn_in;
 pub(crate) use turn_fold::is_user_frame;
 
@@ -107,9 +111,8 @@ impl FrontendRow {
 
 /// Convert a fetched child frame to the live-frame shape the fold
 /// reads, so child rows render through the same pipeline as the parent flow.
-impl From<houyicoder_protocol::envelope::ChildTranscriptFrame> for TranscriptFrame {
-    fn from(frame: houyicoder_protocol::envelope::ChildTranscriptFrame) -> Self {
-        use houyicoder_protocol::envelope::ChildTranscriptFrame as C;
+impl From<ChildTranscriptFrame> for TranscriptFrame {
+    fn from(frame: ChildTranscriptFrame) -> Self {
         match frame {
             C::Session(u) => TranscriptFrame::Session(u),
             C::Acpx(n) => TranscriptFrame::Acpx(n),
@@ -311,8 +314,8 @@ fn walk_window<'a, F: AsRef<TranscriptFrame>>(
 fn tool_result_line(
     id: &str,
     tool_name: &str,
-    output: &serde_json::Value,
-    call_input: Option<&serde_json::Value>,
+    output: &Value,
+    call_input: Option<&Value>,
 ) -> TranscriptLine {
     let out_str = output.to_string();
     let raw = extract_body(&out_str);
@@ -347,7 +350,7 @@ fn tool_result_line(
         outcome: ToolOutcome::from_output_with(
             output,
             tool_name,
-            call_input.unwrap_or(&serde_json::Value::Null),
+            call_input.unwrap_or(&Value::Null),
         ),
         call_id: id.to_string(),
         body,
@@ -367,7 +370,7 @@ struct LineBuilder<'a, F: AsRef<TranscriptFrame>> {
     updates: Vec<PendingUpdate>,
     tools: ToolRegistry,
     out: Vec<TranscriptLine>,
-    late_results: Vec<(String, String, serde_json::Value)>,
+    late_results: Vec<(String, String, Value)>,
     fold: TurnFold<'a, F>,
 }
 
@@ -407,10 +410,7 @@ impl<'a, F: AsRef<TranscriptFrame>> LineBuilder<'a, F> {
     /// duplicate id ever reaches here, the earlier call silently steals the
     /// first-arrived result for that id (pending_approvals and apply_decisions
     /// in agent/mod.rs mis-route the same invariant the same way).
-    fn take_update(
-        &mut self,
-        id: &str,
-    ) -> Option<(Option<ToolOutcome>, Option<serde_json::Value>)> {
+    fn take_update(&mut self, id: &str) -> Option<(Option<ToolOutcome>, Option<Value>)> {
         let pos = self.updates.iter().position(|(cid, _, _)| cid == id)?;
         let (_, oc, out) = self.updates.remove(pos);
         Some((oc, out))
@@ -418,8 +418,6 @@ impl<'a, F: AsRef<TranscriptFrame>> LineBuilder<'a, F> {
 
     /// Emit the lines one frame contributes at this log position.
     fn emit(&mut self, f: &TranscriptFrame) {
-        use houyicoder_protocol::acpx::AcpxMethod;
-        use houyicoder_protocol::frontend::session_update::SessionUpdate;
         match f {
             TranscriptFrame::Frontend(row) => self.out.push(row.line()),
             TranscriptFrame::Session(SessionUpdate::UserMessageChunk(chunk)) => {
@@ -508,11 +506,7 @@ impl<'a, F: AsRef<TranscriptFrame>> LineBuilder<'a, F> {
                 .as_ref()
                 .and_then(|(oc, _)| *oc)
                 .unwrap_or(ToolOutcome::Running);
-            let input = tc
-                .raw_input
-                .as_ref()
-                .cloned()
-                .unwrap_or(serde_json::Value::Null);
+            let input = tc.raw_input.as_ref().cloned().unwrap_or(Value::Null);
             self.out.push(TranscriptLine::Tool {
                 name: crate::brief::tool_user_facing_name(&tc.title, &input).to_string(),
                 tool: tc.title.clone(),

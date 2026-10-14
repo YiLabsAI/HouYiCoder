@@ -4,30 +4,34 @@
 use super::render_usage;
 use crate::command::render::format_tokens;
 use crate::state::{TrajectoryDrill, TrajectoryTurnKey};
+use crate::test_harness::working_app;
 use crate::view::trajectory_pane::TrajectoryDetailView;
 use crate::view::trajectory_pane::{SessionTiming, SubagentUsage, TrajectoryLog, TrajectoryView};
+use houyicoder_protocol::frontend::status::ModelUsageView;
+use houyicoder_protocol::llm::Usage;
+use std::sync::Arc;
 
 /// A trajectory source that answers a fixed view and does not page: the Usage
 /// tab reads the session's figures from it and never walks.
-struct Fixed(std::sync::Arc<TrajectoryView>);
+struct Fixed(Arc<TrajectoryView>);
 
 impl TrajectoryLog for Fixed {
-    fn trajectory(&self) -> std::sync::Arc<TrajectoryView> {
+    fn trajectory(&self) -> Arc<TrajectoryView> {
         self.0.clone()
     }
     fn load_older(&self) {}
     fn load_earliest(&self) {}
     fn return_to_tail(&self) {}
     fn request_detail(&self, _drill: &TrajectoryDrill) {}
-    fn detail(&self, _key: &TrajectoryTurnKey) -> std::sync::Arc<TrajectoryDetailView> {
-        std::sync::Arc::new(TrajectoryDetailView::default())
+    fn detail(&self, _key: &TrajectoryTurnKey) -> Arc<TrajectoryDetailView> {
+        Arc::new(TrajectoryDetailView::default())
     }
 }
 
 /// The Usage tab renders the token counts from the snapshot.
 #[test]
 fn test_usage_tab_has_tokens() {
-    let app = crate::test_harness::working_app();
+    let app = working_app();
     let s = render_usage(&app);
     assert!(s.contains("input tokens:"), "input row: {s}");
     assert!(s.contains("output tokens:"), "output row: {s}");
@@ -37,7 +41,7 @@ fn test_usage_tab_has_tokens() {
 /// The Usage tab shows reasoning tokens (incl. in output) only when >0.
 #[test]
 fn test_usage_tab_shows_reasoning() {
-    let mut app = crate::test_harness::working_app();
+    let mut app = working_app();
     let mut snap = app.snapshot_or_stub();
     snap.cumulative_usage.reasoning_tokens = 1500;
     app.sessions.current.capabilities.status.status_cache = Some(snap);
@@ -46,7 +50,7 @@ fn test_usage_tab_shows_reasoning() {
     assert!(s.contains("incl. in output"), "inclusion note: {s}");
 
     // Hidden when 0.
-    let mut app = crate::test_harness::working_app();
+    let mut app = working_app();
     let mut snap = app.snapshot_or_stub();
     snap.cumulative_usage.reasoning_tokens = 0;
     app.sessions.current.capabilities.status.status_cache = Some(snap);
@@ -59,9 +63,9 @@ fn test_usage_tab_shows_reasoning() {
 /// flat rows and a per-model section would just repeat them.
 #[test]
 fn test_single_omits_per_model() {
-    let mut app = crate::test_harness::working_app();
+    let mut app = working_app();
     let mut snap = app.snapshot_or_stub();
-    snap.by_model = vec![houyicoder_protocol::frontend::status::ModelUsageView {
+    snap.by_model = vec![ModelUsageView {
         model: "glm-5.2".into(),
         input_tokens: 1000,
         output_tokens: 500,
@@ -80,10 +84,10 @@ fn test_single_omits_per_model() {
 /// used any. Tokens render compact (k/m) so large counts fit one line.
 #[test]
 fn test_per_model_lists_models() {
-    let mut app = crate::test_harness::working_app();
+    let mut app = working_app();
     let mut snap = app.snapshot_or_stub();
     snap.by_model = vec![
-        houyicoder_protocol::frontend::status::ModelUsageView {
+        ModelUsageView {
             model: "qwen3.7-max".into(),
             input_tokens: 1_500_000,
             output_tokens: 400_000,
@@ -91,7 +95,7 @@ fn test_per_model_lists_models() {
             cache_write_tokens: 900_000,
             reasoning_tokens: 0,
         },
-        houyicoder_protocol::frontend::status::ModelUsageView {
+        ModelUsageView {
             model: "glm-5.2".into(),
             input_tokens: 300_000,
             output_tokens: 100_000,
@@ -124,15 +128,15 @@ fn test_per_model_lists_models() {
 /// so the row never runs the id and token count together.
 #[test]
 fn test_long_model_id_spacing() {
-    let mut app = crate::test_harness::working_app();
+    let mut app = working_app();
     let mut snap = app.snapshot_or_stub();
     snap.by_model = vec![
-        houyicoder_protocol::frontend::status::ModelUsageView {
+        ModelUsageView {
             model: "deepseek-v4-pro-0813".into(),
             input_tokens: 2_000_000,
             ..Default::default()
         },
-        houyicoder_protocol::frontend::status::ModelUsageView {
+        ModelUsageView {
             model: "qwen3.7-max".into(),
             input_tokens: 1_000,
             ..Default::default()
@@ -187,9 +191,8 @@ fn test_usage_tab_latency_rows() {
         rows: Vec::new(),
         ..TrajectoryView::default()
     };
-    let mut app = crate::test_harness::working_app();
-    app.sessions.persistence.trajectory_log =
-        Some(std::sync::Arc::new(Fixed(std::sync::Arc::new(view))));
+    let mut app = working_app();
+    app.sessions.persistence.trajectory_log = Some(Arc::new(Fixed(Arc::new(view))));
     let s = render_usage(&app);
     assert!(s.contains("model / tool time:"), "work time row: {s}");
     assert!(s.contains("91.2s / 28.4s"), "the split: {s}");
@@ -214,33 +217,31 @@ fn test_usage_tab_latency_rows() {
 /// header reports the same sample as a span of milliseconds.
 #[test]
 fn test_usage_tab_short_latency() {
-    let mut app = crate::test_harness::working_app();
-    app.sessions.persistence.trajectory_log = Some(std::sync::Arc::new(Fixed(
-        std::sync::Arc::new(TrajectoryView {
-            session_id: "s".into(),
-            model: "m".into(),
-            total_turns: 1,
-            tokens_in: Some(10),
-            tokens_out: Some(5),
-            cache_read: None,
-            failures: 0,
-            duration_ms: Some(20),
-            timing: SessionTiming {
-                ttft_samples: 3,
-                ttft_avg_ms: Some(20),
-                ttft_p95_ms: Some(30),
-                ttft_p99_ms: Some(40),
-                decode_samples: 0,
-                decode_tok_per_sec: None,
-                model_ms: 20,
-                tool_ms: 10,
-            },
-            hidden_turns: 0,
-            subagent_usage: None,
-            rows: Vec::new(),
-            ..TrajectoryView::default()
-        }),
-    )));
+    let mut app = working_app();
+    app.sessions.persistence.trajectory_log = Some(Arc::new(Fixed(Arc::new(TrajectoryView {
+        session_id: "s".into(),
+        model: "m".into(),
+        total_turns: 1,
+        tokens_in: Some(10),
+        tokens_out: Some(5),
+        cache_read: None,
+        failures: 0,
+        duration_ms: Some(20),
+        timing: SessionTiming {
+            ttft_samples: 3,
+            ttft_avg_ms: Some(20),
+            ttft_p95_ms: Some(30),
+            ttft_p99_ms: Some(40),
+            decode_samples: 0,
+            decode_tok_per_sec: None,
+            model_ms: 20,
+            tool_ms: 10,
+        },
+        hidden_turns: 0,
+        subagent_usage: None,
+        rows: Vec::new(),
+        ..TrajectoryView::default()
+    }))));
     let s = render_usage(&app);
     assert!(s.contains("20ms / 10ms"), "work time in milliseconds: {s}");
     assert!(
@@ -254,24 +255,22 @@ fn test_usage_tab_short_latency() {
 /// unmeasured session must not read as instant.
 #[test]
 fn test_usage_tab_no_timing() {
-    let mut app = crate::test_harness::working_app();
-    app.sessions.persistence.trajectory_log = Some(std::sync::Arc::new(Fixed(
-        std::sync::Arc::new(TrajectoryView {
-            session_id: "s".into(),
-            model: "m".into(),
-            total_turns: 0,
-            tokens_in: None,
-            tokens_out: None,
-            cache_read: None,
-            failures: 0,
-            duration_ms: Some(0),
-            timing: SessionTiming::default(),
-            hidden_turns: 0,
-            subagent_usage: None,
-            rows: Vec::new(),
-            ..TrajectoryView::default()
-        }),
-    )));
+    let mut app = working_app();
+    app.sessions.persistence.trajectory_log = Some(Arc::new(Fixed(Arc::new(TrajectoryView {
+        session_id: "s".into(),
+        model: "m".into(),
+        total_turns: 0,
+        tokens_in: None,
+        tokens_out: None,
+        cache_read: None,
+        failures: 0,
+        duration_ms: Some(0),
+        timing: SessionTiming::default(),
+        hidden_turns: 0,
+        subagent_usage: None,
+        rows: Vec::new(),
+        ..TrajectoryView::default()
+    }))));
     let s = render_usage(&app);
     assert!(!s.contains("ttft:"), "no ttft row without samples: {s}");
     assert!(!s.contains("decode speed:"), "no decode row: {s}");
@@ -282,29 +281,27 @@ fn test_usage_tab_no_timing() {
 /// token rows above already include it.
 #[test]
 fn test_usage_tab_delegated() {
-    let mut app = crate::test_harness::working_app();
-    app.sessions.persistence.trajectory_log = Some(std::sync::Arc::new(Fixed(
-        std::sync::Arc::new(TrajectoryView {
-            session_id: "s".into(),
-            model: "m".into(),
-            total_turns: 1,
-            tokens_in: Some(10),
-            tokens_out: Some(5),
-            cache_read: None,
-            failures: 0,
-            duration_ms: Some(1_000),
-            timing: SessionTiming::default(),
-            hidden_turns: 0,
-            subagent_usage: Some(SubagentUsage {
-                calls: 2,
-                input: 812_000,
-                output: 41_000,
-                cache_read: 755_000,
-            }),
-            rows: Vec::new(),
-            ..TrajectoryView::default()
+    let mut app = working_app();
+    app.sessions.persistence.trajectory_log = Some(Arc::new(Fixed(Arc::new(TrajectoryView {
+        session_id: "s".into(),
+        model: "m".into(),
+        total_turns: 1,
+        tokens_in: Some(10),
+        tokens_out: Some(5),
+        cache_read: None,
+        failures: 0,
+        duration_ms: Some(1_000),
+        timing: SessionTiming::default(),
+        hidden_turns: 0,
+        subagent_usage: Some(SubagentUsage {
+            calls: 2,
+            input: 812_000,
+            output: 41_000,
+            cache_read: 755_000,
         }),
-    )));
+        rows: Vec::new(),
+        ..TrajectoryView::default()
+    }))));
     let s = render_usage(&app);
     assert!(s.contains("delegated usage:"), "the row is present: {s}");
     assert!(s.contains("812k input"), "input shown: {s}");
@@ -319,24 +316,22 @@ fn test_usage_tab_delegated() {
 /// A session with no delegation shows no delegated row.
 #[test]
 fn test_usage_tab_no_delegated() {
-    let mut app = crate::test_harness::working_app();
-    app.sessions.persistence.trajectory_log = Some(std::sync::Arc::new(Fixed(
-        std::sync::Arc::new(TrajectoryView {
-            session_id: "s".into(),
-            model: "m".into(),
-            total_turns: 1,
-            tokens_in: Some(10),
-            tokens_out: Some(5),
-            cache_read: None,
-            failures: 0,
-            duration_ms: Some(1_000),
-            timing: SessionTiming::default(),
-            hidden_turns: 0,
-            subagent_usage: None,
-            rows: Vec::new(),
-            ..TrajectoryView::default()
-        }),
-    )));
+    let mut app = working_app();
+    app.sessions.persistence.trajectory_log = Some(Arc::new(Fixed(Arc::new(TrajectoryView {
+        session_id: "s".into(),
+        model: "m".into(),
+        total_turns: 1,
+        tokens_in: Some(10),
+        tokens_out: Some(5),
+        cache_read: None,
+        failures: 0,
+        duration_ms: Some(1_000),
+        timing: SessionTiming::default(),
+        hidden_turns: 0,
+        subagent_usage: None,
+        rows: Vec::new(),
+        ..TrajectoryView::default()
+    }))));
     let s = render_usage(&app);
     assert!(!s.contains("delegated usage:"), "no row: {s}");
 }
@@ -346,8 +341,7 @@ fn test_usage_tab_no_delegated() {
 /// as a cache miss.
 #[test]
 fn test_usage_cache_share() {
-    use houyicoder_protocol::llm::Usage;
-    let mut app = crate::test_harness::working_app();
+    let mut app = working_app();
     let mut snap = app
         .sessions
         .current
@@ -381,29 +375,27 @@ fn test_usage_cache_share() {
 /// rather than printing zeroes for a cost that was never measured.
 #[test]
 fn test_usage_tab_delegated_unreported() {
-    let mut app = crate::test_harness::working_app();
-    app.sessions.persistence.trajectory_log = Some(std::sync::Arc::new(Fixed(
-        std::sync::Arc::new(TrajectoryView {
-            session_id: "s".into(),
-            model: "m".into(),
-            total_turns: 1,
-            tokens_in: Some(10),
-            tokens_out: Some(5),
-            cache_read: None,
-            failures: 0,
-            duration_ms: Some(1_000),
-            timing: SessionTiming::default(),
-            hidden_turns: 0,
-            subagent_usage: Some(SubagentUsage {
-                calls: 1,
-                input: 0,
-                output: 0,
-                cache_read: 0,
-            }),
-            rows: Vec::new(),
-            ..TrajectoryView::default()
+    let mut app = working_app();
+    app.sessions.persistence.trajectory_log = Some(Arc::new(Fixed(Arc::new(TrajectoryView {
+        session_id: "s".into(),
+        model: "m".into(),
+        total_turns: 1,
+        tokens_in: Some(10),
+        tokens_out: Some(5),
+        cache_read: None,
+        failures: 0,
+        duration_ms: Some(1_000),
+        timing: SessionTiming::default(),
+        hidden_turns: 0,
+        subagent_usage: Some(SubagentUsage {
+            calls: 1,
+            input: 0,
+            output: 0,
+            cache_read: 0,
         }),
-    )));
+        rows: Vec::new(),
+        ..TrajectoryView::default()
+    }))));
     let s = render_usage(&app);
     assert!(s.contains("delegated usage:"), "the row is present: {s}");
     assert!(

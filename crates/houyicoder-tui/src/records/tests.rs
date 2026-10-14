@@ -1,6 +1,7 @@
 //! Peer tests for records.rs — the semantic-error-judgment tests split out
 //! so records.rs stays under the file-size gate.
 
+use crate::records::subagent_line;
 use crate::records::{ToolOutcome, TranscriptLine};
 use crate::toggle_hint::ToggleHint;
 
@@ -144,7 +145,6 @@ fn test_compound_not_semantic_success() {
 /// replaced and agentId was destroyed.
 #[test]
 fn test_subagent_line_field_marker() {
-    use crate::records::{TranscriptLine, subagent_line};
     let output = serde_json::json!({
         "status": "completed",
         "content": {

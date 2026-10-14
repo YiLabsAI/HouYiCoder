@@ -7,6 +7,7 @@ use super::*;
 use crate::toggle_hint::ToggleHint;
 
 use crate::view::line_wrap::wrap_line;
+use ratatui::style::Modifier;
 
 #[test]
 fn test_classify_bash_search() {
@@ -299,7 +300,6 @@ fn test_group_hint_last_call() {
 /// the bold modifier from the count span.
 #[test]
 fn test_summary_count_bold() {
-    use ratatui::style::Modifier;
     let s = ToolStats {
         search: 2,
         ..Default::default()

@@ -16,7 +16,11 @@ use ratatui::{
     style::Color,
 };
 
+use crate::selection::TAG_PLAIN;
 use crate::state::{App, Pane, ViewportMode};
+use crate::view::agents_pane::AGENTS_PANE_HEIGHT;
+use crate::view::agents_pane::draw_content;
+use crate::view::pane::render;
 use crate::view::{
     artifact, capability, hooks_pane, input_bar, memory_pane, model_pane, palette, queue_overlay,
     queue_pane, resume_picker, skill_picker, skills_pane, status, toast, trajectory_pane,
@@ -160,7 +164,7 @@ fn stash_status_rows(f: &mut Frame, area: Rect, app: &App) {
                 row.push_str(cell.symbol());
             }
         }
-        rows.push((crate::selection::TAG_PLAIN, row.trim_end().to_string()));
+        rows.push((TAG_PLAIN, row.trim_end().to_string()));
     }
 }
 
@@ -497,7 +501,7 @@ where
         .constraints([Constraint::Min(0), Constraint::Length(pane_h)])
         .split(area);
     transcript::draw_transcript(f, chunks[0], app);
-    crate::view::pane::render(f, chunks[1], Color::Cyan, |f, inner| {
+    render(f, chunks[1], Color::Cyan, |f, inner| {
         content(f, inner, app);
         stash_pane_rows(f, inner, app);
     });
@@ -530,7 +534,7 @@ fn stash_pane_rows(f: &mut Frame, inner: Rect, app: &App) {
                 row.push_str(cell.symbol());
             }
         }
-        rows.push((crate::selection::TAG_PLAIN, row.trim_end().to_string()));
+        rows.push((TAG_PLAIN, row.trim_end().to_string()));
     }
 }
 
@@ -553,7 +557,7 @@ fn stash_approval_rows(f: &mut Frame, area: Rect, app: &App) {
                 row.push_str(cell.symbol());
             }
         }
-        rows.push((crate::selection::TAG_PLAIN, row.trim_end().to_string()));
+        rows.push((TAG_PLAIN, row.trim_end().to_string()));
     }
 }
 
@@ -622,7 +626,7 @@ fn draw_worktree_pane(f: &mut Frame, area: Rect, app: &App) {
 /// observability log is wired into the agent loop.
 fn draw_trajectory_pane(f: &mut Frame, area: Rect, app: &App) {
     if app.ui.trajectory.level() >= 1 {
-        crate::view::pane::render(f, area, Color::Cyan, |f, inner| {
+        render(f, area, Color::Cyan, |f, inner| {
             trajectory_pane::draw_content(f, inner, app);
             stash_pane_rows(f, inner, app);
         });
@@ -685,13 +689,7 @@ fn draw_hooks_pane(f: &mut Frame, area: Rect, app: &App) {
 }
 
 fn draw_agents_pane(f: &mut Frame, area: Rect, app: &App) {
-    draw_command_pane(
-        f,
-        area,
-        app,
-        crate::view::agents_pane::AGENTS_PANE_HEIGHT,
-        crate::view::agents_pane::draw_content,
-    );
+    draw_command_pane(f, area, app, AGENTS_PANE_HEIGHT, draw_content);
 }
 
 fn draw_skills_pane(f: &mut Frame, area: Rect, app: &App) {

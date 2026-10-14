@@ -1,7 +1,17 @@
 //! Streaming behavior for transient output and durable completion frames.
 use super::*;
 use crate::agent_message::ServerResponse;
+use crate::input::queue::InputItem;
+use crate::keys::handle_working;
 use crate::row_id::RowId;
+use crate::state::Screen;
+use crate::test_harness::attach_connection;
+use crossterm::event::KeyCode;
+use crossterm::event::KeyEvent;
+use crossterm::event::KeyModifiers;
+use houyicoder_protocol::frontend::run::StopReason;
+use std::thread::sleep;
+use std::time::Duration;
 
 /// Streamed reasoning remains transient until completion records it in the
 /// transcript.
@@ -29,7 +39,7 @@ fn test_reasoning_streams_and_persists() {
             got = true;
             break;
         }
-        std::thread::sleep(std::time::Duration::from_millis(10));
+        sleep(Duration::from_millis(10));
     }
     assert!(got, "run should settle");
     // The durable Reasoning event lands as a first-class Thinking line.
@@ -84,7 +94,7 @@ fn test_run_row_from_record() {
             settled = true;
             break;
         }
-        std::thread::sleep(std::time::Duration::from_millis(10));
+        sleep(Duration::from_millis(10));
     }
     assert!(settled, "run should settle within the poll window");
     let row = app
@@ -138,7 +148,7 @@ fn test_streamed_tail_survives_done() {
             settled = true;
             break;
         }
-        std::thread::sleep(std::time::Duration::from_millis(10));
+        sleep(Duration::from_millis(10));
     }
     assert!(settled, "run should settle within the poll window");
     // The authoritative AssistantMessage frame must drive one Agent line whose
@@ -273,7 +283,7 @@ fn test_interrupted_content_shows_marker() {
                 },
                 turns: 1,
                 usage: Usage::default(),
-                stop_reason: houyicoder_protocol::frontend::run::StopReason::EndTurn,
+                stop_reason: StopReason::EndTurn,
             }),
         },
     };
@@ -302,9 +312,7 @@ fn test_interrupt_restores_input() {
     app.ui
         .input
         .queue
-        .push(crate::input::queue::InputItem::ParkedMessage(
-            "queued".into(),
-        ));
+        .push(InputItem::ParkedMessage("queued".into()));
     let msg = SessionMessage::Response {
         request: RequestId(12),
         response: ServerResponse::Done {
@@ -314,7 +322,7 @@ fn test_interrupt_restores_input() {
                 },
                 turns: 0,
                 usage: Usage::default(),
-                stop_reason: houyicoder_protocol::frontend::run::StopReason::EndTurn,
+                stop_reason: StopReason::EndTurn,
             }),
         },
     };
@@ -341,13 +349,7 @@ fn test_interrupt_restores_input() {
             .any(|l| matches!(l, TranscriptLine::Interrupted)),
         "restoring abort also lands the Interrupted marker"
     );
-    crate::keys::handle_working(
-        &mut app,
-        crossterm::event::KeyEvent::new(
-            crossterm::event::KeyCode::Esc,
-            crossterm::event::KeyModifiers::NONE,
-        ),
-    );
+    handle_working(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     assert_eq!(
         app.ui.input.editor.value(),
         "draft",
@@ -374,7 +376,7 @@ fn test_commit_blocks_restore() {
     app.ui
         .input
         .queue
-        .push(crate::input::queue::InputItem::Message(committed.clone()));
+        .push(InputItem::Message(committed.clone()));
     app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(
         user_msg("follow-up").into(),
     )));
@@ -392,7 +394,7 @@ fn test_commit_blocks_restore() {
                 },
                 turns: 0,
                 usage: Usage::default(),
-                stop_reason: houyicoder_protocol::frontend::run::StopReason::EndTurn,
+                stop_reason: StopReason::EndTurn,
             }),
         },
     });
@@ -433,7 +435,7 @@ fn test_live_blocks_restore() {
                 },
                 turns: 0,
                 usage: Usage::default(),
-                stop_reason: houyicoder_protocol::frontend::run::StopReason::EndTurn,
+                stop_reason: StopReason::EndTurn,
             }),
         },
     });
@@ -457,8 +459,8 @@ fn test_live_blocks_restore() {
 #[test]
 fn test_recall_survives_interrupt() {
     let mut app = composition::app();
-    crate::test_harness::attach_connection(&mut app);
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    attach_connection(&mut app);
+    app.ui.navigation.screen = Screen::Working;
     app.start_run_for_test(0);
     app.sessions.current.last_run_input = Some("first".into());
     app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(
@@ -469,11 +471,8 @@ fn test_recall_survives_interrupt() {
     app.spawn_run("zzsecond".into());
     assert!(!app.ui.input.queue.is_empty(), "message queues while busy");
     // Esc1: interrupt the run. The queue stays intact; input stays empty.
-    let esc = crossterm::event::KeyEvent::new(
-        crossterm::event::KeyCode::Esc,
-        crossterm::event::KeyModifiers::NONE,
-    );
-    crate::keys::handle_working(&mut app, esc);
+    let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+    handle_working(&mut app, esc);
     assert!(app.cancelling(), "first Esc interrupts the run");
     assert!(
         !app.ui.input.queue.is_empty(),
@@ -496,7 +495,7 @@ fn test_recall_survives_interrupt() {
                 },
                 turns: 0,
                 usage: Usage::default(),
-                stop_reason: houyicoder_protocol::frontend::run::StopReason::EndTurn,
+                stop_reason: StopReason::EndTurn,
             }),
         },
     });
@@ -546,7 +545,7 @@ fn test_resubmit_avoids_duplicate_interrupt() {
                 },
                 turns: 0,
                 usage: Usage::default(),
-                stop_reason: houyicoder_protocol::frontend::run::StopReason::EndTurn,
+                stop_reason: StopReason::EndTurn,
             }),
         },
     };
@@ -568,8 +567,8 @@ fn test_resubmit_avoids_duplicate_interrupt() {
     };
 
     let mut app = composition::app();
-    crate::test_harness::attach_connection(&mut app);
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    attach_connection(&mut app);
+    app.ui.navigation.screen = Screen::Working;
 
     // Turn 1: submit, then interrupt before output -> restore for editing.
     app.spawn_run("analysis".into());
@@ -616,7 +615,7 @@ fn test_max_turns_records_hint() {
                 outcome: RunOutcome::MaxTurnsReached { turns: 5 },
                 turns: 5,
                 usage: Usage::default(),
-                stop_reason: houyicoder_protocol::frontend::run::StopReason::MaxTurnRequests,
+                stop_reason: StopReason::MaxTurnRequests,
             }),
         },
     };
@@ -709,7 +708,7 @@ fn test_batch_keeps_tail() {
     while app.agent_busy() && tries < 1000 {
         app.poll_agent();
         if app.agent_busy() {
-            std::thread::sleep(std::time::Duration::from_millis(5));
+            sleep(Duration::from_millis(5));
         }
         tries += 1;
     }
@@ -773,7 +772,7 @@ fn test_batch_delivers_via_drain() {
     while app.agent_busy() && tries < 1000 {
         app.poll_agent();
         if app.agent_busy() {
-            std::thread::sleep(std::time::Duration::from_millis(5));
+            sleep(Duration::from_millis(5));
         }
         tries += 1;
     }
@@ -792,8 +791,8 @@ fn test_batch_delivers_via_drain() {
 #[test]
 fn test_submit_clears_lone_interrupt() {
     let mut app = composition::app();
-    crate::test_harness::attach_connection(&mut app);
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    attach_connection(&mut app);
+    app.ui.navigation.screen = Screen::Working;
     // A run with real output, interrupted: a lone notice, no restore pair.
     app.spawn_run("first".into());
     app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(
@@ -812,7 +811,7 @@ fn test_submit_clears_lone_interrupt() {
                 },
                 turns: 1,
                 usage: Usage::default(),
-                stop_reason: houyicoder_protocol::frontend::run::StopReason::EndTurn,
+                stop_reason: StopReason::EndTurn,
             }),
         },
     });

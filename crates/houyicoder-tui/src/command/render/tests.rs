@@ -1,5 +1,11 @@
 use super::*;
+use crate::command::render::render_trajectory_wire;
+use houyicoder_protocol::acpx::{AcpxMethod, AcpxNotification};
+use houyicoder_protocol::frontend::memory::MemoryDetail;
+use houyicoder_protocol::frontend::memory::MemorySummaryEntry;
+use houyicoder_protocol::frontend::permission::PermissionDecisionEntry;
 use houyicoder_protocol::frontend::status::StatusSnapshot;
+use houyicoder_protocol::frontend::trajectory::{RedundantCallEntry, TrajectoryEntry};
 use houyicoder_protocol::llm::Usage;
 
 fn snap_with_data() -> StatusSnapshot {
@@ -96,13 +102,8 @@ fn test_sandbox_open_reason() {
     assert!(s.contains("30s remaining"), "{s}");
 }
 
-fn verdict_event(
-    tool: &str,
-    verdict: &str,
-    scope: &str,
-    call_id: &str,
-) -> houyicoder_protocol::frontend::permission::PermissionDecisionEntry {
-    houyicoder_protocol::frontend::permission::PermissionDecisionEntry {
+fn verdict_event(tool: &str, verdict: &str, scope: &str, call_id: &str) -> PermissionDecisionEntry {
+    PermissionDecisionEntry {
         tool: tool.into(),
         verdict: verdict.into(),
         scope: scope.into(),
@@ -139,7 +140,6 @@ fn test_verdict_skipped_on_surface() {
     // onto the interaction surface — transcript_from_frames skips the
     // acpx/context/permissions_decision notification. The user sees
     // verdicts only via /permissions view (which filters the trajectory).
-    use houyicoder_protocol::acpx::{AcpxMethod, AcpxNotification};
     let frames = vec![crate::transcript::TranscriptFrame::Acpx(
         AcpxNotification::new(
             AcpxMethod::ContextPermissionDecision,
@@ -161,7 +161,6 @@ fn test_verdict_skipped_on_surface() {
 /// Wire summaries retain identity, classification, and recency in pane rows.
 #[test]
 fn test_wire_to_pane_rows() {
-    use houyicoder_protocol::frontend::memory::MemorySummaryEntry;
     let entries = vec![
         MemorySummaryEntry {
             key: "build-gate".into(),
@@ -194,7 +193,6 @@ fn test_wire_to_pane_rows() {
 /// Memory detail text includes source, key, description, and body.
 #[test]
 fn test_show_entry_renders() {
-    use houyicoder_protocol::frontend::memory::MemoryDetail;
     let entry = MemoryDetail {
         key: "build-gate".into(),
         content: "make check must stay green".into(),
@@ -212,7 +210,6 @@ fn test_show_entry_renders() {
 /// human-readable kind name rather than the machine label.
 #[test]
 fn test_trajectory_renders_redundant() {
-    use houyicoder_protocol::frontend::trajectory::{RedundantCallEntry, TrajectoryEntry};
     let entries: Vec<TrajectoryEntry> = Vec::new();
     let redundant = vec![
         RedundantCallEntry {
@@ -230,7 +227,7 @@ fn test_trajectory_renders_redundant() {
             last_seq: 12,
         },
     ];
-    let out = crate::command::render::render_trajectory_wire(&entries, &redundant);
+    let out = render_trajectory_wire(&entries, &redundant);
     assert!(out.contains("redundant calls: 2 flagged"), "{out}");
     assert!(out.contains("same-message repeat"), "{out}");
     assert!(out.contains("cross-turn context-loss re-read"), "{out}");
@@ -241,6 +238,6 @@ fn test_trajectory_renders_redundant() {
 /// empty-both early return.
 #[test]
 fn test_trajectory_empty_both() {
-    let out = crate::command::render::render_trajectory_wire(&[], &[]);
+    let out = render_trajectory_wire(&[], &[]);
     assert!(out.contains("no events"), "{out}");
 }

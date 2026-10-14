@@ -19,9 +19,38 @@ use houyicoder_protocol::handshake::Hello;
 use super::*;
 use crate::agent_message::{ConnectionEvent, ServerEvent, ServerRequest, ServerResponse};
 use crate::test_harness::connected_app_events;
+use crate::transcript::SequencedFrame;
+use houyicoder_protocol::acpx::{AcpxMethod, AcpxNotification};
+use houyicoder_protocol::frontend::QueuedInput;
+use houyicoder_protocol::frontend::SessionId;
+use houyicoder_protocol::frontend::compact::CompactReply;
+use houyicoder_protocol::frontend::context::ContextBreakdown;
+use houyicoder_protocol::frontend::debug::DebugLevel;
+use houyicoder_protocol::frontend::debug::DebugState;
+use houyicoder_protocol::frontend::hooks::HookEntry;
+use houyicoder_protocol::frontend::memory::{
+    MemoryChange, MemoryChangeCausality, MemoryChangeId, MemoryChangeOrigin, MemoryChangeScope,
+    MemoryOperation,
+};
+use houyicoder_protocol::frontend::memory::{MemoryDetail, MemorySummaryEntry, ToggleState};
+use houyicoder_protocol::frontend::model::ModelCatalog;
+use houyicoder_protocol::frontend::model::{
+    AppliedModel, EffectiveFrom, ModelApplyResult, ModelChoice, PersistenceOutcome, SpeedMode,
+};
+use houyicoder_protocol::frontend::permission::{PermissionMode, PermissionRule};
+use houyicoder_protocol::frontend::run::RunError;
+use houyicoder_protocol::frontend::skills::SkillEntry;
+use houyicoder_protocol::frontend::status::StatusSnapshot;
+use houyicoder_protocol::frontend::tools::ToolEntry;
+use houyicoder_protocol::frontend::trajectory::TrajectoryResponse;
+use houyicoder_protocol::frontend::trust::TrustPrompt;
+use std::future::pending;
+use std::sync::mpsc::channel;
+use tokio::sync::mpsc::unbounded_channel;
+use tokio::time::timeout;
 
-fn sid() -> houyicoder_protocol::frontend::SessionId {
-    houyicoder_protocol::frontend::SessionId::new("s1")
+fn sid() -> SessionId {
+    SessionId::new("s1")
 }
 
 /// The inject notification's method + params must match exactly what the
@@ -234,8 +263,6 @@ async fn test_drive_client_read_done() {
 /// so the status command's rename lands on the intended session.
 #[tokio::test]
 async fn test_drive_forwards_rename_command() {
-    use houyicoder_protocol::frontend::SessionId;
-
     let run = FakeEngine::new()
         .drive(vec![ClientCommand::RenameSessionQuery {
             req_id: RequestId(1),
@@ -299,9 +326,6 @@ async fn test_drive_translates_agent_status() {
 /// frame.
 #[tokio::test]
 async fn test_drive_keeps_identity() {
-    use crate::transcript::SequencedFrame;
-    use houyicoder_protocol::acpx::{AcpxMethod, AcpxNotification};
-
     let mut engine = FakeEngine::new();
     engine.durable_event(
         "01ARZ3NDEKTSV4RRFFQ69G5FAV",
@@ -495,13 +519,13 @@ impl FakeEngine {
     /// the wait when it never does.
     async fn drive(self, commands: Vec<ClientCommand>) -> SessionRun {
         let client = Client::new(Box::new(self));
-        let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel::<ClientCommand>();
-        let (agent_tx, agent_rx) = std::sync::mpsc::channel::<SessionMessage>();
+        let (cmd_tx, cmd_rx) = unbounded_channel::<ClientCommand>();
+        let (agent_tx, agent_rx) = channel::<SessionMessage>();
         for cmd in commands {
             cmd_tx.send(cmd).ok();
         }
         let _keep_alive = cmd_tx;
-        let _ = tokio::time::timeout(
+        let _ = timeout(
             Duration::from_millis(300),
             drive_client(client, cmd_rx, agent_tx),
         )
@@ -548,7 +572,7 @@ impl Transport for FakeEngine {
             Some(Ok(line)) => Box::pin(async move { Ok(Some(line)) }),
             Some(Err(e)) => Box::pin(async move { Err(e) }),
             None => Box::pin(async {
-                std::future::pending::<()>().await;
+                pending::<()>().await;
                 Ok(None)
             }),
         }
@@ -666,9 +690,6 @@ async fn test_drive_forwards_query_commands() {
 /// their identity fields through the dispatch.
 #[tokio::test]
 async fn test_drive_forwards_admin_commands() {
-    use houyicoder_protocol::frontend::SessionId;
-    use houyicoder_protocol::frontend::debug::DebugLevel;
-
     let run = FakeEngine::new()
         .drive(vec![
             ClientCommand::KillAllChildren,
@@ -714,8 +735,6 @@ async fn test_drive_forwards_admin_commands() {
 /// the skill name, and a working-dir removal that must carry the exact path.
 #[tokio::test]
 async fn test_drive_forwards_config_queries() {
-    use houyicoder_protocol::frontend::FrontendRequest;
-
     let run = FakeEngine::new()
         .drive(vec![
             ClientCommand::PermissionRulesQuery {
@@ -768,12 +787,6 @@ async fn test_drive_forwards_config_queries() {
 /// still arrive).
 #[tokio::test]
 async fn test_drive_translates_events() {
-    use houyicoder_protocol::frontend::QueuedInput;
-    use houyicoder_protocol::frontend::memory::{
-        MemoryChange, MemoryChangeCausality, MemoryChangeId, MemoryChangeOrigin, MemoryChangeScope,
-        MemoryOperation,
-    };
-
     let mut engine = FakeEngine::new();
     engine.event(FrontendEvent::QueuedInputCommitted {
         inputs: vec![QueuedInput::new("queued text")],
@@ -838,8 +851,6 @@ async fn test_drive_translates_events() {
 /// the engine sent it.
 #[tokio::test]
 async fn test_drive_translates_tool_progress() {
-    use houyicoder_protocol::acpx::{AcpxMethod, AcpxNotification};
-
     let mut engine = FakeEngine::new();
     engine.event(FrontendEvent::Acpx {
         notification: AcpxNotification::new(
@@ -893,12 +904,6 @@ async fn test_drive_translates_tool_progress() {
 /// payload but keeps the request id it answers.
 #[tokio::test]
 async fn test_drive_translates_core_responses() {
-    use houyicoder_protocol::frontend::compact::CompactReply;
-    use houyicoder_protocol::frontend::context::ContextBreakdown;
-    use houyicoder_protocol::frontend::run::RunError;
-    use houyicoder_protocol::frontend::status::StatusSnapshot;
-    use houyicoder_protocol::frontend::trajectory::TrajectoryResponse;
-
     let mut engine = FakeEngine::new();
     engine.response(ResponsePayload::Ack);
     engine.response(ResponsePayload::Status(StatusSnapshot::default()));
@@ -985,9 +990,6 @@ async fn test_drive_translates_core_responses() {
 /// Permission and debug answers translate with their identity fields.
 #[tokio::test]
 async fn test_drive_translates_permission_responses() {
-    use houyicoder_protocol::frontend::debug::DebugState;
-    use houyicoder_protocol::frontend::permission::{PermissionMode, PermissionRule};
-
     let mut engine = FakeEngine::new();
     engine.response(ResponsePayload::PermissionMode(PermissionMode::Auto));
     engine.response(ResponsePayload::PermissionRules(vec![
@@ -1041,11 +1043,6 @@ async fn test_drive_translates_permission_responses() {
 /// response the pane fills its open detail from.
 #[tokio::test]
 async fn test_drive_translates_catalog_responses() {
-    use houyicoder_protocol::frontend::SessionId;
-    use houyicoder_protocol::frontend::hooks::HookEntry;
-    use houyicoder_protocol::frontend::skills::SkillEntry;
-    use houyicoder_protocol::frontend::tools::ToolEntry;
-
     let mut engine = FakeEngine::new();
     engine.response(ResponsePayload::Tools(vec![ToolEntry {
         name: "grep".into(),
@@ -1114,8 +1111,6 @@ async fn test_drive_translates_catalog_responses() {
 /// keeps the req_id its request was minted with.
 #[tokio::test]
 async fn test_drive_translates_memory_responses() {
-    use houyicoder_protocol::frontend::memory::{MemoryDetail, MemorySummaryEntry, ToggleState};
-
     let mut engine = FakeEngine::new();
     engine.response(ResponsePayload::MemoryList(vec![MemorySummaryEntry {
         key: "topic".into(),
@@ -1196,12 +1191,6 @@ async fn test_drive_translates_memory_responses() {
 /// its own req_id so the reply can route back.
 #[tokio::test]
 async fn test_drive_translates_trust_ask() {
-    use houyicoder_protocol::frontend::model::ModelCatalog;
-    use houyicoder_protocol::frontend::model::{
-        AppliedModel, EffectiveFrom, ModelApplyResult, ModelChoice, PersistenceOutcome, SpeedMode,
-    };
-    use houyicoder_protocol::frontend::trust::TrustPrompt;
-
     let mut engine = FakeEngine::new();
     engine.response(ResponsePayload::ModelResult(ModelApplyResult {
         selected: ModelChoice::Explicit {
@@ -1345,13 +1334,13 @@ async fn test_drop_reclaims_driver() {
         fn recv_frame(
             &mut self,
         ) -> houyicoder_async::PFut<'_, Result<Option<String>, ProtocolError>> {
-            Box::pin(std::future::pending())
+            Box::pin(pending())
         }
     }
     let runtime = crate::composition::shared_runtime();
     let client = houyicoder_client::Client::new(Box::new(StuckTransport));
-    let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel::<ClientCommand>();
-    let (agent_tx, _agent_rx) = std::sync::mpsc::channel::<SessionMessage>();
+    let (cmd_tx, cmd_rx) = unbounded_channel::<ClientCommand>();
+    let (agent_tx, _agent_rx) = channel::<SessionMessage>();
     let handle = runtime.spawn(drive_client(client, cmd_rx, agent_tx));
     // The driver is stuck in connect().await (recv_frame never resolves).
     // Drop the command sender (what SessionConnection Drop does) and abort
@@ -1360,7 +1349,7 @@ async fn test_drop_reclaims_driver() {
     handle.abort();
     // An aborted task resolves to Err(JoinError) deterministically — no
     // polling loop needed. The timeout is a safety bound, not a sleep.
-    match tokio::time::timeout(Duration::from_millis(500), handle).await {
+    match timeout(Duration::from_millis(500), handle).await {
         Ok(_) => {}
         Err(_) => panic!("driver was not reclaimed within 500ms after abort"),
     }

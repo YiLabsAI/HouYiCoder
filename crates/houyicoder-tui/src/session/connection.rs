@@ -10,6 +10,10 @@ use std::time::Duration;
 use houyicoder_protocol::envelope::RequestId;
 
 use crate::agent_message::{ClientCommand, SessionMessage};
+use mpsc::TryRecvError;
+use std::error::Error;
+use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::mpsc::unbounded_channel;
 
 mod driver;
 
@@ -32,7 +36,7 @@ impl fmt::Display for RequestIdExhausted {
     }
 }
 
-impl std::error::Error for RequestIdExhausted {}
+impl Error for RequestIdExhausted {}
 
 /// A command did not enter the connection queue. Both variants mean the
 /// command never left this process: no reply will come, so the caller must
@@ -54,7 +58,7 @@ impl fmt::Display for EnqueueError {
     }
 }
 
-impl std::error::Error for EnqueueError {}
+impl Error for EnqueueError {}
 
 /// The lifecycle of one connection. Connecting spans task start to a
 /// successful Hello; Ready is confirmed by the handshake, not inferred from
@@ -93,7 +97,7 @@ pub enum PollOutcome {
 
 /// Channels, request identifiers, and driver lifetime for one live connection.
 pub struct SessionConnection {
-    cmd_tx: tokio::sync::mpsc::UnboundedSender<ClientCommand>,
+    cmd_tx: UnboundedSender<ClientCommand>,
     agent_rx: mpsc::Receiver<SessionMessage>,
     next_req_id: Cell<u64>,
     exhaustion_reported: Cell<bool>,
@@ -119,7 +123,7 @@ impl SessionConnection {
         agent_rx: mpsc::Receiver<SessionMessage>,
         runtime: &tokio::runtime::Runtime,
     ) -> Self {
-        let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel::<ClientCommand>();
+        let (cmd_tx, cmd_rx) = unbounded_channel::<ClientCommand>();
         let driver = runtime.spawn(driver::drive_client(client, cmd_rx, agent_tx));
         Self {
             cmd_tx,
@@ -137,7 +141,7 @@ impl SessionConnection {
     /// spawned task only consumes commands, keeping the outbound side open.
     #[cfg(test)]
     pub(crate) fn from_receiver(agent_rx: mpsc::Receiver<SessionMessage>) -> Self {
-        let (cmd_tx, mut cmd_rx) = tokio::sync::mpsc::unbounded_channel::<ClientCommand>();
+        let (cmd_tx, mut cmd_rx) = unbounded_channel::<ClientCommand>();
         let driver = crate::composition::shared_runtime()
             .spawn(async move { while cmd_rx.recv().await.is_some() {} });
         Self {
@@ -227,8 +231,8 @@ impl SessionConnection {
     pub fn poll(&mut self) -> PollOutcome {
         match self.agent_rx.try_recv() {
             Ok(msg) => PollOutcome::Message(msg),
-            Err(mpsc::TryRecvError::Empty) => PollOutcome::Idle,
-            Err(mpsc::TryRecvError::Disconnected) => PollOutcome::Closed,
+            Err(TryRecvError::Empty) => PollOutcome::Idle,
+            Err(TryRecvError::Disconnected) => PollOutcome::Closed,
         }
     }
 

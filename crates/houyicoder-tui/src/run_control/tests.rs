@@ -6,28 +6,41 @@
 //! MessageSend, and permission asks arrive as SessionMessage::Request
 //! reverse requests.
 use super::*;
-use crate::agent_message::{ServerEvent, ServerRequest, ServerResponse, SessionMessage};
+use crate::agent_message::SessionMessage;
+use crate::agent_message::{ServerEvent, ServerRequest, ServerResponse};
 use crate::composition;
 use crate::pending_prompt::PendingPrompt;
 use crate::records::TranscriptLine;
 use crate::session::SessionConnection;
 use crate::state::Pane;
+use crate::state::enums::LiveBlock;
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_api::tool::{Tool, ToolCtx};
 use houyicoder_core::SessionId;
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::{Runner, ToolRegistry};
 use houyicoder_memory::InMemoryBackend;
+use houyicoder_permission::DefaultModeGate;
+use houyicoder_permission::PermissionMode;
 use houyicoder_protocol::acpx::{AcpxMethod, AcpxNotification};
 use houyicoder_protocol::envelope::{DurableEventId, EventSeq, RequestId};
 use houyicoder_protocol::extension::ENTITLEMENT_TOOL;
+use houyicoder_protocol::extension::ToolError;
+use houyicoder_protocol::frontend::SlashCommand;
+use houyicoder_protocol::frontend::memory::MemorySummaryEntry;
+use houyicoder_protocol::frontend::memory::MemoryToggleWhich;
+use houyicoder_protocol::frontend::run::ApprovalDecision;
+use houyicoder_protocol::frontend::run::DelegationSource;
+use houyicoder_protocol::frontend::run::StopReason;
 use houyicoder_protocol::frontend::run::{ContentBlock, RunError, RunOutcome, RunResult};
 use houyicoder_protocol::frontend::session_update::{ContentChunk, SessionUpdate};
+use houyicoder_protocol::frontend::trust::TrustPrompt;
 use houyicoder_protocol::llm::Usage;
 use houyicoder_protocol::llm::{CompletionResponse, OutputItem};
 use houyicoder_provider::FakeProvider;
 use houyicoder_session::SessionStore;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::mpsc;
 use std::thread::sleep;
 use std::time::Duration;
@@ -79,7 +92,7 @@ pub(crate) fn app_with_provider_and_tx(
         },
     );
     let (tx, rx) = mpsc::channel::<SessionMessage>();
-    let gate = Arc::new(houyicoder_permission::DefaultModeGate::new());
+    let gate = Arc::new(DefaultModeGate::new());
     let (runner, client, startup_warnings) =
         composition::start_local_server(runner, session, gate, append_notify, None);
     drop(runner); // server owns the runner; the TUI holds no engine handle.
@@ -120,10 +133,7 @@ impl Tool for Guarded {
         &self,
         _ctx: ToolCtx,
         input: serde_json::Value,
-    ) -> houyicoder_async::PFut<
-        '_,
-        Result<serde_json::Value, houyicoder_protocol::extension::ToolError>,
-    > {
+    ) -> houyicoder_async::PFut<'_, Result<serde_json::Value, ToolError>> {
         Box::pin(async move { Ok(input) })
     }
     fn requires_approval(&self) -> bool {
@@ -136,12 +146,12 @@ impl Tool for Guarded {
 /// pause for approval on a tool that declares it needs approval). Follows the
 /// shape of the real bash/edit tools (destructive + requires approval).
 struct BoomTool {
-    ran: std::sync::Mutex<bool>,
+    ran: Mutex<bool>,
 }
 impl BoomTool {
     fn new() -> Arc<Self> {
         Arc::new(Self {
-            ran: std::sync::Mutex::new(false),
+            ran: Mutex::new(false),
         })
     }
     fn ran(&self) -> bool {
@@ -162,10 +172,7 @@ impl Tool for BoomTool {
         &self,
         _ctx: ToolCtx,
         input: serde_json::Value,
-    ) -> houyicoder_async::PFut<
-        '_,
-        Result<serde_json::Value, houyicoder_protocol::extension::ToolError>,
-    > {
+    ) -> houyicoder_async::PFut<'_, Result<serde_json::Value, ToolError>> {
         *self.ran.lock().expect("boom mutex") = true;
         Box::pin(async move { Ok(input) })
     }
@@ -181,12 +188,11 @@ impl Tool for BoomTool {
 /// real runner drives the gate. Returns the app (ready to spawn) and the
 /// shared BoomTool handle to inspect whether execute ran.
 fn app_with_guarded_tool(
-    mode: houyicoder_permission::PermissionMode,
+    mode: PermissionMode,
     responses: Vec<CompletionResponse>,
 ) -> (App, Arc<BoomTool>) {
     let boom = BoomTool::new();
-    let gate: Arc<dyn houyicoder_permission::ModeGate> =
-        Arc::new(houyicoder_permission::DefaultModeGate::with_mode(mode));
+    let gate: Arc<dyn houyicoder_permission::ModeGate> = Arc::new(DefaultModeGate::with_mode(mode));
     let mut tools = ToolRegistry::new();
     tools.register(Arc::new(houyicoder_permission::GuardedTool::new(
         boom.clone(),
@@ -221,10 +227,7 @@ fn boom_call_then_reply() -> Vec<CompletionResponse> {
 #[test]
 fn test_guarded_tool_manual_raises() {
     // Manual: boom needs approval -> Ask -> runner pauses with Interruption; popup shows, tool not run.
-    let (mut app, boom) = app_with_guarded_tool(
-        houyicoder_permission::PermissionMode::Manual,
-        boom_call_then_reply(),
-    );
+    let (mut app, boom) = app_with_guarded_tool(PermissionMode::Manual, boom_call_then_reply());
     app.spawn_run("go".into());
     let mut raised = false;
     for _ in 0..200 {
@@ -244,10 +247,7 @@ fn test_guarded_tool_auto_raises() {
     // Auto mode still gates a tool that declares it needs approval: boom ->
     // Ask -> requires_approval true -> the runner pauses with an Interruption;
     // the popup shows, the tool has not run yet.
-    let (mut app, boom) = app_with_guarded_tool(
-        houyicoder_permission::PermissionMode::Auto,
-        boom_call_then_reply(),
-    );
+    let (mut app, boom) = app_with_guarded_tool(PermissionMode::Auto, boom_call_then_reply());
     app.spawn_run("go".into());
     let mut raised = false;
     for _ in 0..200 {
@@ -278,10 +278,7 @@ fn test_guarded_tool_auto_raises() {
 /// regression gate for that path.
 #[test]
 fn test_approve_yes_executes_tool() {
-    let (mut app, boom) = app_with_guarded_tool(
-        houyicoder_permission::PermissionMode::Manual,
-        boom_call_then_reply(),
-    );
+    let (mut app, boom) = app_with_guarded_tool(PermissionMode::Manual, boom_call_then_reply());
     app.spawn_run("go".into());
     let mut raised = false;
     for _ in 0..200 {
@@ -296,7 +293,7 @@ fn test_approve_yes_executes_tool() {
 
     // Approve THIS call (one-shot Yes) — the focused=0 path the user picks.
     let call_id = app.approval().unwrap().call_id.clone();
-    app.resolve_current_approval(houyicoder_protocol::frontend::run::ApprovalDecision {
+    app.resolve_current_approval(ApprovalDecision {
         call_id,
         approved: true,
         updated_input: None,
@@ -339,10 +336,7 @@ fn test_approve_yes_executes_tool() {
 /// is a terminal-side-effect assertion, not a dispatch-shape one.
 #[test]
 fn test_reject_does_not_execute() {
-    let (mut app, boom) = app_with_guarded_tool(
-        houyicoder_permission::PermissionMode::Manual,
-        boom_call_then_reply(),
-    );
+    let (mut app, boom) = app_with_guarded_tool(PermissionMode::Manual, boom_call_then_reply());
     app.spawn_run("go".into());
     let mut raised = false;
     for _ in 0..200 {
@@ -356,7 +350,7 @@ fn test_reject_does_not_execute() {
     assert!(raised, "Manual should raise an approval popup");
 
     let call_id = app.approval().unwrap().call_id.clone();
-    app.resolve_current_approval(houyicoder_protocol::frontend::run::ApprovalDecision {
+    app.resolve_current_approval(ApprovalDecision {
         call_id,
         approved: false,
         updated_input: None,
@@ -413,7 +407,7 @@ fn test_handle_final_output_refreshes() {
                     total_tokens: 42,
                     ..Usage::default()
                 },
-                stop_reason: houyicoder_protocol::frontend::run::StopReason::EndTurn,
+                stop_reason: StopReason::EndTurn,
             }),
         },
     };
@@ -510,7 +504,7 @@ fn test_approval_ask_carries_delegation() {
         input: serde_json::json!({"command": "ls"}),
         options: Vec::new(),
         reason: None,
-        delegation: Some(houyicoder_protocol::frontend::run::DelegationSource {
+        delegation: Some(DelegationSource {
             child_id: "child-1".into(),
             subagent_type: "explore".into(),
         }),
@@ -692,7 +686,7 @@ fn test_resume_after_approval() {
     assert!(got && app.approval().is_some());
     // Approve the current approval (one decision for its call_id) and resume.
     let call_id = app.approval().unwrap().call_id.clone();
-    app.resolve_current_approval(houyicoder_protocol::frontend::run::ApprovalDecision {
+    app.resolve_current_approval(ApprovalDecision {
         call_id,
         approved: true,
         updated_input: None,
@@ -719,9 +713,6 @@ fn test_resume_after_approval() {
 /// the spinner does not read Thinking for up to 2s after a fast approval.
 #[test]
 fn test_resolve_clears_thinking_window() {
-    use crate::state::enums::LiveBlock;
-    use houyicoder_protocol::envelope::RequestId;
-    use houyicoder_protocol::frontend::run::ApprovalDecision;
     let mut app = composition::app();
     crate::test_harness::attach_connection(&mut app);
     app.start_run_for_test(1);
@@ -748,7 +739,6 @@ fn test_resolve_clears_thinking_window() {
 /// Slash queries (context / status / model) only ship with a live connection.
 #[test]
 fn test_slash_queries_ship_connected() {
-    use houyicoder_protocol::frontend::SlashCommand;
     let provider = Arc::new(FakeProvider::new(vec![]));
     let mut app = app_with_provider(provider, ToolRegistry::new());
 
@@ -847,10 +837,7 @@ impl Tool for MarkerTool {
         &self,
         _ctx: ToolCtx,
         input: serde_json::Value,
-    ) -> houyicoder_async::PFut<
-        '_,
-        Result<serde_json::Value, houyicoder_protocol::extension::ToolError>,
-    > {
+    ) -> houyicoder_async::PFut<'_, Result<serde_json::Value, ToolError>> {
         Box::pin(async move { Ok(input) })
     }
 }
@@ -862,7 +849,6 @@ impl Tool for MarkerTool {
 /// empty→non-empty. A break in the driver→server→dispatch chain fails here.
 #[test]
 fn test_agents_tools_round_trip() {
-    use houyicoder_protocol::frontend::SlashCommand;
     let provider = Arc::new(FakeProvider::new(vec![]));
     let mut tools = ToolRegistry::new();
     tools.register(Arc::new(MarkerTool));
@@ -918,10 +904,6 @@ fn test_agents_tools_round_trip() {
 /// repeat submit of a key already in flight ships nothing.
 #[test]
 fn test_forget_ships_queries_connected() {
-    use crate::agent_message::SessionMessage;
-    use houyicoder_protocol::envelope::RequestId;
-    use houyicoder_protocol::frontend::SlashCommand;
-    use houyicoder_protocol::frontend::memory::MemorySummaryEntry;
     let provider = Arc::new(FakeProvider::new(vec![]));
     let mut app = app_with_provider(provider, ToolRegistry::new());
     app.run_command(SlashCommand::Memory);
@@ -997,8 +979,6 @@ fn test_forget_ships_queries_connected() {
 /// test; this pins the send-site observable.
 #[test]
 fn test_toggle_repeat_press_dropped() {
-    use houyicoder_protocol::frontend::SlashCommand;
-    use houyicoder_protocol::frontend::memory::MemoryToggleWhich;
     let provider = Arc::new(FakeProvider::new(vec![]));
     let mut app = app_with_provider(provider, ToolRegistry::new());
     app.run_command(SlashCommand::Memory);
@@ -1079,7 +1059,6 @@ fn test_idle_seeds_mode_query() {
 /// gate sees (the integration model_wire test covers the server side only).
 #[test]
 fn test_model_switch_applies() {
-    use crate::state::Pane;
     let provider = Arc::new(FakeProvider::new(vec![]));
     let mut app = app_with_provider(provider, ToolRegistry::new());
     app.open_model_pane();
@@ -1187,7 +1166,7 @@ fn test_startup_handshake_drains_trust() {
     tx.send(SessionMessage::Request {
         request: RequestId(7),
         payload: ServerRequest::Trust {
-            prompt: houyicoder_protocol::frontend::trust::TrustPrompt {
+            prompt: TrustPrompt {
                 project_path: "/proj".into(),
                 risks: Vec::new(),
             },

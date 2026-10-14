@@ -2,6 +2,7 @@
 //! private items the inline test module reached before.
 use super::*;
 use crate::agent_message::{ConnectionEvent, SessionMessage};
+use crate::composition::app;
 use crate::records::TranscriptLine;
 use crate::session::{ConnectionStatus, EnqueueError, PollOutcome, SessionConnection};
 use crate::state::{Pane, Screen, Stage, ViewportMode};
@@ -14,13 +15,16 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::frontend::memory::MemoryToggleWhich;
 use houyicoder_protocol::frontend::{FrontendRequest, LoginMode, SessionId, SlashCommand};
+use std::sync::mpsc::channel;
+use std::time::Duration;
+use std::time::Instant;
 
 fn key(code: KeyCode) -> KeyEvent {
     KeyEvent::new(code, KeyModifiers::NONE)
 }
 
 fn working_app() -> App {
-    let mut app = crate::composition::app();
+    let mut app = app();
     app.ui.navigation.screen = Screen::Working;
     app
 }
@@ -472,7 +476,7 @@ fn test_scrollback_evicts_oldest() {
 
 #[test]
 fn test_login_sso_via_dispatch() {
-    let mut app = crate::composition::app();
+    let mut app = app();
     handle_key(&mut app, key(KeyCode::Char('1')));
     assert_eq!(app.ui.navigation.screen, Screen::Working);
     assert_eq!(app.ui.navigation.login_mode, Some(LoginMode::Sso));
@@ -875,7 +879,7 @@ fn test_connection_status_ready() {
         .connection
         .as_mut()
         .expect("session")
-        .poll_startup(std::time::Duration::from_secs(5))
+        .poll_startup(Duration::from_secs(5))
         .expect("the handshake result arrives");
     assert!(
         matches!(msg, SessionMessage::Connection(ConnectionEvent::Ready)),
@@ -974,7 +978,7 @@ fn test_poll_closed_distinct() {
         .connection
         .as_mut()
         .expect("session")
-        .poll_startup(std::time::Duration::from_secs(5))
+        .poll_startup(Duration::from_secs(5))
         .expect("the handshake result arrives");
     assert!(
         matches!(msg, SessionMessage::Connection(ConnectionEvent::Ready)),
@@ -1002,7 +1006,7 @@ fn test_closed_settles_loss() {
     let mut app = {
         let runtime = crate::composition::shared_runtime();
         let client = houyicoder_client::Client::new(Box::new(FailedHandshakeTransport));
-        let (agent_tx, agent_rx) = std::sync::mpsc::channel();
+        let (agent_tx, agent_rx) = channel();
         let session = SessionConnection::spawn(client, agent_tx, agent_rx, &runtime);
         let mut a = working_app();
         a.sessions.current.connection = Some(session);
@@ -1018,7 +1022,7 @@ fn test_closed_settles_loss() {
         .connection
         .as_mut()
         .expect("session")
-        .poll_startup(std::time::Duration::from_secs(5))
+        .poll_startup(Duration::from_secs(5))
         .expect("the failed handshake reports the death");
     assert!(
         matches!(
@@ -1031,14 +1035,14 @@ fn test_closed_settles_loss() {
     // The driver sent the death and returned, but the runtime may not have
     // dropped the task's agent_tx yet — poll with a real deadline until the
     // channel closes, so a slow instrumented run does not race the drop.
-    let settle = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let settle = Instant::now() + Duration::from_secs(5);
     let mut first_changed = false;
-    while std::time::Instant::now() < settle {
+    while Instant::now() < settle {
         if app.poll_agent() {
             first_changed = true;
             break;
         }
-        std::thread::sleep(std::time::Duration::from_millis(1));
+        std::thread::sleep(Duration::from_millis(1));
     }
     assert!(
         first_changed,

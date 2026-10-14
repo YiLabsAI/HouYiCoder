@@ -15,7 +15,9 @@ use serde_json::Value;
 
 use crate::records::Approval;
 
+use super::line_wrap::wrap_line;
 use crate::state::App;
+use houyicoder_protocol::frontend::permission::AskSource;
 
 /// Render the approval prompt inline at the transcript tail. A thin
 /// horizontal rule at the top replaces the heavy double border; the card
@@ -163,7 +165,7 @@ fn command_lines(tool: &str, value: Option<&Value>, raw: &str, width: u16) -> Ve
     let available = width.saturating_sub(3) as usize;
     command
         .split('\n')
-        .flat_map(|logical| super::line_wrap::wrap_line(logical, available))
+        .flat_map(|logical| wrap_line(logical, available))
         .map(|row| Line::from(format!("   {row}")))
         .collect()
 }
@@ -187,7 +189,7 @@ fn reason_height(a: &Approval, width: u16) -> u16 {
 
 fn wrapped_height(text: &str, width: u16) -> u16 {
     text.split('\n')
-        .map(|line| super::line_wrap::wrap_line(line, width as usize).len() as u16)
+        .map(|line| wrap_line(line, width as usize).len() as u16)
         .sum::<u16>()
         .max(1)
 }
@@ -340,7 +342,6 @@ fn render_options(f: &mut Frame, a: &Approval, chunks: &[Rect]) {
 /// line so the user reads which class of check escalated the call. Empty
 /// when no source traveled the wire (the generic-prompt path).
 fn source_label(a: &Approval) -> &'static str {
-    use houyicoder_protocol::frontend::permission::AskSource;
     if a.is_entitlement() {
         return "Deny-log discovery";
     }

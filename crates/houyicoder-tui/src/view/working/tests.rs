@@ -1,3 +1,28 @@
+use std::sync::{Arc, Mutex};
+
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use houyicoder_protocol::envelope::RequestId;
+use ratatui::buffer::CellDiffOption;
+use ratatui::layout::Rect;
+use ratatui::style::Color;
+use ratatui::{Terminal, backend::TestBackend};
+
+use crate::agent_message::FleetEntry;
+use crate::app;
+use crate::app::handle_mouse;
+use crate::composition;
+use crate::fold::{DisplaySlot, compute_fold_groups, display_slots};
+use crate::keys;
+use crate::pending_prompt::PendingPrompt;
+use crate::records::{Approval, ToolOutcome, TranscriptLine};
+use crate::selection::RecordingClipboard;
+use crate::selection::is_non_selectable;
+use crate::selection::{Selection, extract_text};
+use crate::state::Screen;
+use crate::test_harness::{render_buffer, render_text};
+use crate::todo_view::{TodoStatus, TodoView};
+use crate::view::draw;
+
 /// Regression: when an approval card is pending, prior transcript content
 /// (a /context grid block and a user "hi" line near the tail) must stay
 /// visible, not be erased. The old layout painted the card as a
@@ -7,12 +32,6 @@
 /// below the transcript, so the transcript keeps its own rows.
 #[test]
 fn test_approval_keeps_prior_content() {
-    use crate::composition;
-    use crate::pending_prompt::PendingPrompt;
-    use crate::records::{Approval, TranscriptLine};
-    use crate::state::Screen;
-    use crate::test_harness::render_text;
-    use houyicoder_protocol::envelope::RequestId;
     let mut app = composition::app();
     app.ui.navigation.screen = Screen::Working;
     app.sessions.current.transcript = vec![
@@ -51,11 +70,6 @@ fn test_approval_keeps_prior_content() {
 /// echo but left the durable Thinking line rendering above the answer.
 #[test]
 fn test_thinking_not_above_answer() {
-    use crate::composition;
-    use crate::records::TranscriptLine;
-    use crate::state::Screen;
-    use crate::test_harness::render_text;
-
     let mut app = composition::app();
     app.ui.navigation.screen = Screen::Working;
     app.sessions.current.transcript = vec![
@@ -90,16 +104,6 @@ fn test_thinking_not_above_answer() {
 #[test]
 #[expect(clippy::too_many_lines, reason = "long by design, kept whole")]
 fn test_fold_collapse_expand_toggle() {
-    use crate::app;
-    use crate::composition;
-    use crate::keys;
-    use crate::records::{ToolOutcome, TranscriptLine};
-    use crate::state::Screen;
-    use crate::test_harness::render_text;
-    use crossterm::event::{
-        KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
-    };
-
     fn tcall(cid: &str, name: &str, brief: &str, oc: ToolOutcome) -> TranscriptLine {
         TranscriptLine::Tool {
             name: name.to_string(),
@@ -302,10 +306,6 @@ fn test_fold_collapse_expand_toggle() {
 /// checks in test_fold_collapse_expand_toggle only cover the slot region.
 #[test]
 fn test_busy_count_matches_render() {
-    use crate::composition;
-    use crate::records::TranscriptLine;
-    use crate::state::Screen;
-    use crate::test_harness::render_text;
     let mut app = composition::app();
     app.ui.navigation.screen = Screen::Working;
     app.sessions.current.transcript = vec![
@@ -350,10 +350,6 @@ fn test_busy_count_matches_render() {
 /// text. This is the P-B fix: raw markdown is no longer emitted literally.
 #[test]
 fn test_markdown_strips_syntax() {
-    use crate::composition;
-    use crate::records::TranscriptLine;
-    use crate::state::Screen;
-    use crate::test_harness::render_text;
     let mut app = composition::app();
     app.ui.navigation.screen = Screen::Working;
     app.sessions.current.transcript = vec![TranscriptLine::Agent(
@@ -385,12 +381,6 @@ fn test_markdown_strips_syntax() {
 /// when the selection extends past the viewport edge.
 #[test]
 fn test_copy_preserves_scrolled_content() {
-    use crate::composition;
-    use crate::records::TranscriptLine;
-    use crate::selection::{Selection, extract_text};
-    use crate::state::Screen;
-    use crate::test_harness::render_text;
-    use ratatui::layout::Rect;
     let mut app = composition::app();
     app.ui.navigation.screen = Screen::Working;
     // 30 transcript lines; visible area is ~20 rows.
@@ -434,12 +424,6 @@ fn test_copy_preserves_scrolled_content() {
 /// + the toggle/display are per-key, only A expands.
 #[test]
 fn test_fold_expand_one_only() {
-    use crate::composition;
-    use crate::records::{ToolOutcome, TranscriptLine};
-    use crate::state::Screen;
-    use crate::test_harness::render_text;
-    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-
     fn tcall(cid: &str, name: &str, brief: &str, oc: ToolOutcome) -> TranscriptLine {
         TranscriptLine::Tool {
             name: name.to_string(),
@@ -499,7 +483,7 @@ fn test_fold_expand_one_only() {
         Some("c1#0"),
         "first fold row should be group A (key c1#0)"
     );
-    crate::app::handle_mouse(
+    handle_mouse(
         &mut app,
         MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
@@ -508,7 +492,7 @@ fn test_fold_expand_one_only() {
             modifiers: KeyModifiers::NONE,
         },
     );
-    crate::app::handle_mouse(
+    handle_mouse(
         &mut app,
         MouseEvent {
             kind: MouseEventKind::Up(MouseButton::Left),
@@ -553,19 +537,11 @@ fn test_fold_expand_one_only() {
 #[test]
 #[expect(clippy::too_many_lines, reason = "long by design, kept whole")]
 fn test_anchor_clamped_to_content() {
-    use crate::composition;
-    use crate::selection::RecordingClipboard;
-    use crate::state::Screen;
-    use crate::test_harness::{render_buffer, render_text};
-    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-    use ratatui::style::Color;
-    use std::sync::{Arc, Mutex};
-
     let mut app = composition::app();
     app.ui.navigation.screen = Screen::Working;
     app.sessions.current.transcript = vec![
-        crate::records::TranscriptLine::User("alpha bravo charlie".into()),
-        crate::records::TranscriptLine::Agent("delta echo foxtrot".into()),
+        TranscriptLine::User("alpha bravo charlie".into()),
+        TranscriptLine::Agent("delta echo foxtrot".into()),
     ]
     .into();
     let captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
@@ -589,7 +565,7 @@ fn test_anchor_clamped_to_content() {
     let last_content_y = rect.y + visible as u16 - 1;
 
     // Click at the very bottom of the transcript rect — a blank tail row.
-    crate::app::handle_mouse(
+    handle_mouse(
         &mut app,
         MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
@@ -617,7 +593,7 @@ fn test_anchor_clamped_to_content() {
     );
 
     // Drag past the bottom edge into the input border area.
-    crate::app::handle_mouse(
+    handle_mouse(
         &mut app,
         MouseEvent {
             kind: MouseEventKind::Drag(MouseButton::Left),
@@ -639,7 +615,7 @@ fn test_anchor_clamped_to_content() {
 
     // Release auto-copies (direct paste works); the selection was clamped to
     // content rows, not blank tail rows.
-    crate::app::handle_mouse(
+    handle_mouse(
         &mut app,
         MouseEvent {
             kind: MouseEventKind::Up(MouseButton::Left),
@@ -704,12 +680,6 @@ fn test_anchor_clamped_to_content() {
 /// and all-done states — otherwise the scroll offset drifts past real rows.
 #[test]
 fn test_todo_count_matches_render() {
-    use crate::composition;
-    use crate::records::TranscriptLine;
-    use crate::state::Screen;
-    use crate::test_harness::render_text;
-    use crate::todo_view::{TodoStatus, TodoView};
-
     fn item(content: &str, status: TodoStatus) -> TodoView {
         let active_form = (status == TodoStatus::InProgress).then(|| format!("doing {content}"));
         TodoView {
@@ -765,13 +735,6 @@ fn test_todo_count_matches_render() {
 /// content (no non-selectable widget tag), so a drag can copy the checklist.
 #[test]
 fn test_todo_rows_are_selectable() {
-    use crate::composition;
-    use crate::records::TranscriptLine;
-    use crate::selection::is_non_selectable;
-    use crate::state::Screen;
-    use crate::test_harness::render_text;
-    use crate::todo_view::{TodoStatus, TodoView};
-
     let mut app = composition::app();
     app.ui.navigation.screen = Screen::Working;
     app.sessions.current.transcript = vec![TranscriptLine::User("go".to_string())].into();
@@ -811,8 +774,6 @@ fn test_todo_rows_are_selectable() {
 /// HashSet.
 #[test]
 fn test_distinct_keys_callid_reuse() {
-    use crate::fold::{DisplaySlot, compute_fold_groups, display_slots};
-    use crate::records::{ToolOutcome, TranscriptLine};
     fn tcall(cid: &str, brief: &str, oc: ToolOutcome) -> TranscriptLine {
         TranscriptLine::Tool {
             name: "bash".to_string(),
@@ -873,11 +834,6 @@ fn test_distinct_keys_callid_reuse() {
 /// distinguishable.
 #[test]
 fn test_subagent_head_dim() {
-    use crate::composition;
-    use crate::records::TranscriptLine;
-    use crate::state::Screen;
-    use crate::test_harness::render_buffer;
-    use ratatui::style::Color;
     let mut app = composition::app();
     app.ui.navigation.screen = Screen::Working;
     app.sessions
@@ -910,10 +866,6 @@ fn test_subagent_head_dim() {
 /// user cannot end up toggling a block nested inside the one they opened.
 #[test]
 fn test_child_rows_hide_handles() {
-    use crate::composition;
-    use crate::records::TranscriptLine;
-    use crate::state::Screen;
-    use crate::test_harness::render_text;
     let mut app = composition::app();
     app.ui.navigation.screen = Screen::Working;
     app.sessions
@@ -963,11 +915,6 @@ fn test_child_rows_hide_handles() {
 /// delegation came to look like the transcript repeating itself.
 #[test]
 fn test_expanded_subagent_shaded() {
-    use crate::composition;
-    use crate::records::TranscriptLine;
-    use crate::state::Screen;
-    use crate::test_harness::render_buffer;
-    use ratatui::style::Color;
     let shade = Color::Indexed(238);
     let mut app = composition::app();
     app.ui.navigation.screen = Screen::Working;
@@ -1028,10 +975,6 @@ fn test_expanded_subagent_shaded() {
 /// selection not existing.
 #[test]
 fn test_fleet_click_selects() {
-    use crate::agent_message::FleetEntry;
-    use crate::composition;
-    use crate::state::Screen;
-    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
     let mut app = composition::app();
     app.ui.navigation.screen = Screen::Working;
     for i in 0..2 {
@@ -1056,7 +999,7 @@ fn test_fleet_click_selects() {
     let rect = app.ui.frame.layout.fleet_rect.get();
     assert!(rect.height >= 2, "the strip is drawn: {rect:?}");
     let click = |app: &mut crate::state::App, y: u16| {
-        crate::app::handle_mouse(
+        handle_mouse(
             app,
             MouseEvent {
                 kind: MouseEventKind::Down(MouseButton::Left),
@@ -1082,12 +1025,6 @@ fn test_fleet_click_selects() {
 /// after CJK text, so the row remains distinct without isolated gray cells.
 #[test]
 fn test_user_background_band() {
-    use crate::composition;
-    use crate::records::TranscriptLine;
-    use crate::state::Screen;
-    use crate::test_harness::render_buffer;
-    use ratatui::style::Color;
-
     let mut app = composition::app();
     app.ui.navigation.screen = Screen::Working;
     app.sessions.current.transcript =
@@ -1115,38 +1052,24 @@ fn test_user_background_band() {
         .collect();
     assert!(missing.is_empty(), "background gaps at columns {missing:?}");
     let first_wide = buf.cell((area.x + 2, user_y)).expect("first CJK cell");
-    assert_eq!(
-        first_wide.diff_option,
-        ratatui::buffer::CellDiffOption::AlwaysUpdate
-    );
+    assert_eq!(first_wide.diff_option, CellDiffOption::AlwaysUpdate);
     let continuation = buf.cell((area.x + 3, user_y)).expect("continuation cell");
-    assert_eq!(
-        continuation.diff_option,
-        ratatui::buffer::CellDiffOption::None
-    );
+    assert_eq!(continuation.diff_option, CellDiffOption::None);
     let row_tail = buf
         .cell((area.x + area.width - 1, user_y))
         .expect("row tail");
-    assert_eq!(
-        row_tail.diff_option,
-        ratatui::buffer::CellDiffOption::AlwaysUpdate
-    );
+    assert_eq!(row_tail.diff_option, CellDiffOption::AlwaysUpdate);
 }
 
 /// Removing a user row clears its background on the next terminal frame.
 #[test]
 fn test_user_background_clears() {
-    use crate::composition;
-    use crate::records::TranscriptLine;
-    use crate::state::Screen;
-    use ratatui::{Terminal, backend::TestBackend};
-
     let mut app = composition::app();
     app.ui.navigation.screen = Screen::Working;
     app.sessions.current.transcript = vec![TranscriptLine::User("中途插话".into())].into();
     let mut terminal = Terminal::new(TestBackend::new(31, 12)).expect("terminal");
     terminal
-        .draw(|frame| crate::view::draw(frame, &app))
+        .draw(|frame| draw(frame, &app))
         .expect("first draw");
     let area = app.ui.frame.layout.transcript_rect.get();
     let user_y = (area.y..area.y + area.height)
@@ -1162,7 +1085,7 @@ fn test_user_background_clears() {
     app.sessions.current.transcript = vec![TranscriptLine::Agent("replacement".into())].into();
     app.bump_transcript_version();
     terminal
-        .draw(|frame| crate::view::draw(frame, &app))
+        .draw(|frame| draw(frame, &app))
         .expect("second draw");
 
     assert!((area.x..area.x + area.width).all(|x| {
@@ -1180,11 +1103,6 @@ fn test_user_background_clears() {
 /// alone: a sub-second turn must not claim it took no time.
 #[test]
 fn test_thought_row_subsecond_draw() {
-    use crate::composition;
-    use crate::records::TranscriptLine;
-    use crate::state::Screen;
-    use crate::test_harness::render_text;
-
     let mut app = composition::app();
     app.ui.navigation.screen = Screen::Working;
     app.sessions.current.transcript = vec![

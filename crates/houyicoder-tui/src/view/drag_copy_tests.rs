@@ -1,22 +1,22 @@
 //! Drag-to-select then explicit Ctrl+C copy flow tests. Copy is explicit (no
 //! auto-copy on release); the selection persists after release and Ctrl+C copies it.
 
+use crate::app::handle_mouse;
+use crate::composition;
+use crate::records::TranscriptLine;
+use crate::selection::RecordingClipboard;
+use crate::state::Screen;
+use crate::test_harness::render_text;
 use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use std::sync::{Arc, Mutex};
 
 /// Select the agent line by dragging, release, then press Ctrl+C. No copy
 /// lands on mouse-up; one copy lands on Ctrl+C with the full line text.
 #[test]
 fn test_drag_copies_agent_line() {
-    use crate::composition;
-    use crate::selection::RecordingClipboard;
-    use crate::state::Screen;
-    use crate::test_harness::render_text;
-    use std::sync::{Arc, Mutex};
-
     let mut app = composition::app();
     app.ui.navigation.screen = Screen::Working;
-    app.sessions.current.transcript =
-        vec![crate::records::TranscriptLine::Agent("hello world".into())].into();
+    app.sessions.current.transcript = vec![TranscriptLine::Agent("hello world".into())].into();
     let captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     app.ui.clipboard = Arc::new(RecordingClipboard {
         captured: captured.clone(),
@@ -40,7 +40,7 @@ fn test_drag_copies_agent_line() {
         MouseEventKind::Drag(MouseButton::Left),
         MouseEventKind::Up(MouseButton::Left),
     ] {
-        crate::app::handle_mouse(
+        handle_mouse(
             &mut app,
             MouseEvent {
                 kind: ev,
@@ -67,13 +67,6 @@ fn test_drag_copies_agent_line() {
 /// published row store, the same rows the draw produced, not a recompute.
 #[test]
 fn test_drag_copies_cjk_line() {
-    use crate::composition;
-    use crate::records::TranscriptLine;
-    use crate::selection::RecordingClipboard;
-    use crate::state::Screen;
-    use crate::test_harness::render_text;
-    use std::sync::{Arc, Mutex};
-
     let mut app = composition::app();
     app.ui.navigation.screen = Screen::Working;
     app.sessions.current.transcript =
@@ -103,7 +96,7 @@ fn test_drag_copies_cjk_line() {
         MouseEventKind::Drag(MouseButton::Left),
         MouseEventKind::Up(MouseButton::Left),
     ] {
-        crate::app::handle_mouse(
+        handle_mouse(
             &mut app,
             MouseEvent {
                 kind: ev,
@@ -130,15 +123,9 @@ fn test_drag_copies_cjk_line() {
 /// second line is independently selectable).
 #[test]
 fn test_drag_copies_second_line() {
-    use crate::composition;
-    use crate::selection::RecordingClipboard;
-    use crate::state::Screen;
-    use crate::test_harness::render_text;
-    use std::sync::{Arc, Mutex};
-
     let mut app = composition::app();
     app.ui.navigation.screen = Screen::Working;
-    app.sessions.current.transcript = vec![crate::records::TranscriptLine::Agent(
+    app.sessions.current.transcript = vec![TranscriptLine::Agent(
         "first line\nsecond line\nthird line".into(),
     )]
     .into();
@@ -165,7 +152,7 @@ fn test_drag_copies_second_line() {
         MouseEventKind::Drag(MouseButton::Left),
         MouseEventKind::Up(MouseButton::Left),
     ] {
-        crate::app::handle_mouse(
+        handle_mouse(
             &mut app,
             MouseEvent {
                 kind: ev,

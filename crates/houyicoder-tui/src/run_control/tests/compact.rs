@@ -1,12 +1,14 @@
 use super::*;
 use crate::agent_message::ServerResponse;
+use houyicoder_protocol::frontend::SlashCommand;
+use houyicoder_protocol::frontend::compact::CompactReply;
+use houyicoder_protocol::frontend::context::stub_breakdown;
 
 /// A ContextResult lands as a ContextGrid transcript line (the inline grid),
 /// not a flat system string. Guards the /context handler regression where the
 /// breakdown routed to system_line instead of the widget.
 #[test]
 fn test_context_result_pushes_line() {
-    use houyicoder_protocol::frontend::context::stub_breakdown;
     let provider = Arc::new(FakeProvider::new(vec![]));
     let mut app = app_with_provider(provider, ToolRegistry::new());
     app.handle_agent_message(SessionMessage::Response {
@@ -36,13 +38,7 @@ fn test_result_renders_system_line() {
     app.handle_agent_message(SessionMessage::Response {
         request: RequestId(9),
         response: ServerResponse::Compact {
-            reply: houyicoder_protocol::frontend::compact::CompactReply::new(
-                true,
-                12,
-                "ckpt_abc",
-                Some(8000),
-                Some(3000),
-            ),
+            reply: CompactReply::new(true, 12, "ckpt_abc", Some(8000), Some(3000)),
         },
     });
     let line = app
@@ -77,13 +73,7 @@ fn test_result_no_progress_honest() {
     app.handle_agent_message(SessionMessage::Response {
         request: RequestId(10),
         response: ServerResponse::Compact {
-            reply: houyicoder_protocol::frontend::compact::CompactReply::new(
-                false,
-                0,
-                "ckpt_empty",
-                None,
-                None,
-            ),
+            reply: CompactReply::new(false, 0, "ckpt_empty", None, None),
         },
     });
     assert!(
@@ -101,7 +91,6 @@ fn test_result_no_progress_honest() {
 /// reply arrives.
 #[test]
 fn test_compact_dispatch_round_trip() {
-    use houyicoder_protocol::frontend::SlashCommand;
     let provider = Arc::new(FakeProvider::new(vec![]));
     let mut app = app_with_provider(provider, ToolRegistry::new());
     app.run_command(SlashCommand::Compact);

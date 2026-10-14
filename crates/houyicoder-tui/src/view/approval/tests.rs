@@ -5,9 +5,11 @@ use super::{cap_first, diff_preview};
 use crate::composition;
 use crate::pending_prompt::PendingPrompt;
 use crate::records::Approval;
+use crate::state::Screen;
 use crate::test_harness::render_text;
 use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::extension::ENTITLEMENT_TOOL;
+use houyicoder_protocol::frontend::permission::AskSource;
 use serde_json::json;
 
 #[test]
@@ -53,7 +55,7 @@ fn test_cap_first_empty() {
 #[test]
 fn test_render_no_heavy_border() {
     let mut app = composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app.sessions.current.prompt = Some(PendingPrompt::approval_card(
         RequestId(0),
         Approval {
@@ -79,7 +81,7 @@ fn test_render_no_heavy_border() {
 #[test]
 fn test_render_separator_and_question() {
     let mut app = composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app.sessions.current.prompt = Some(PendingPrompt::approval_card(
         RequestId(0),
         Approval {
@@ -121,7 +123,7 @@ fn test_render_separator_and_question() {
 #[test]
 fn test_render_cursor_on_reject() {
     let mut app = composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app.sessions.current.prompt = Some(PendingPrompt::approval_card(
         RequestId(0),
         Approval {
@@ -153,7 +155,7 @@ fn test_render_cursor_on_reject() {
 #[test]
 fn test_render_cursor_dont_ask() {
     let mut app = composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app.sessions.current.prompt = Some(PendingPrompt::approval_card(
         RequestId(0),
         Approval {
@@ -190,9 +192,8 @@ fn test_render_cursor_dont_ask() {
 /// user reads why they are being asked instead of a generic prompt.
 #[test]
 fn test_renders_gate_reason_detail() {
-    use houyicoder_protocol::frontend::permission::AskSource;
     let mut app = composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app.sessions.current.prompt = Some(PendingPrompt::approval_card(
         RequestId(0),
         Approval {
@@ -221,7 +222,7 @@ fn test_renders_gate_reason_detail() {
 #[test]
 fn test_renders_containment_note_line() {
     let mut app = composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app.sessions.current.prompt = Some(PendingPrompt::approval_card(
         RequestId(0),
         Approval {
@@ -247,9 +248,8 @@ fn test_renders_containment_note_line() {
 /// safety check, so the choice is not offered.
 #[test]
 fn test_system_safety_hides_option() {
-    use houyicoder_protocol::frontend::permission::AskSource;
     let mut app = composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app.sessions.current.prompt = Some(PendingPrompt::approval_card(
         RequestId(0),
         Approval {
@@ -289,9 +289,8 @@ fn test_system_safety_hides_option() {
 /// (the No line), not two (No + blank).
 #[test]
 fn test_two_option_card_compact() {
-    use houyicoder_protocol::frontend::permission::AskSource;
     let mut app = composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app.sessions.current.prompt = Some(PendingPrompt::approval_card(
         RequestId(0),
         Approval {
@@ -330,9 +329,8 @@ fn test_two_option_card_compact() {
 /// reason, and question stay adjacent instead of splitting surplus card rows.
 #[test]
 fn test_read_card_compact() {
-    use houyicoder_protocol::frontend::permission::AskSource;
     let mut app = composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app.sessions.current.prompt = Some(PendingPrompt::approval_card(
         RequestId(0),
         Approval {
@@ -396,7 +394,7 @@ fn test_read_card_compact() {
 #[test]
 fn test_long_command_wraps() {
     let mut app = composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     let long_cmd = format!(
         "python3 -c \"print('command-start'); payload='{}'; print('command-end')\"",
         "x".repeat(120)
@@ -451,7 +449,7 @@ fn test_long_command_wraps() {
 #[test]
 fn test_multiline_command_visible() {
     let mut app = composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app.sessions.current.prompt = Some(PendingPrompt::approval_card(
         RequestId(0),
         Approval {
@@ -481,9 +479,8 @@ fn test_multiline_command_visible() {
 /// A detection-sourced ask (not SystemSafety) keeps the remember option.
 #[test]
 fn test_non_safety_keeps_option() {
-    use houyicoder_protocol::frontend::permission::AskSource;
     let mut app = composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app.sessions.current.prompt = Some(PendingPrompt::approval_card(
         RequestId(0),
         Approval {
@@ -514,7 +511,7 @@ fn test_non_safety_keeps_option() {
 #[test]
 fn test_entitlement_card_two_option() {
     let mut app = composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app.sessions.current.prompt = Some(PendingPrompt::approval_card(RequestId(0), Approval {
         tool: ENTITLEMENT_TOOL.into(),
         args: r#"{"skill":"ego-browser","origin":"user","services":["com.citrolabs.ego.lite.ego-browser"]}"#

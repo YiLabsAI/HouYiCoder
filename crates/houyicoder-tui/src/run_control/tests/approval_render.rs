@@ -5,20 +5,27 @@
 
 use super::*;
 use crate::records::TranscriptLine;
+use crate::test_harness::render_text;
 use houyicoder_api::tool::ToolCtx;
+use houyicoder_protocol::frontend::permission::PermissionEffect;
+use houyicoder_protocol::frontend::permission::PermissionRule;
+use houyicoder_protocol::frontend::run::ApprovalDecision;
 use houyicoder_protocol::llm::Usage;
 use houyicoder_protocol::llm::{CompletionResponse, OutputItem};
+use std::sync::Mutex;
+use std::thread::sleep;
+use std::time::Duration;
 
 /// A destructive tool that returns a multi-line stdout (55 lines) so the
 /// transcript result row exercises the collapse path (>COLLAPSE_THRESHOLD).
 /// Records whether execute ran, like BoomTool.
 struct MultiBoom {
-    ran: std::sync::Mutex<bool>,
+    ran: Mutex<bool>,
 }
 impl MultiBoom {
     fn new() -> Arc<Self> {
         Arc::new(Self {
-            ran: std::sync::Mutex::new(false),
+            ran: Mutex::new(false),
         })
     }
     fn ran(&self) -> bool {
@@ -109,7 +116,6 @@ fn multiline_call_then_reply() -> Vec<CompletionResponse> {
 /// artifact (the diff renderer leaving stale cells), not a logic bug.
 #[test]
 fn test_option3_no_duplicate_result() {
-    use crate::test_harness::render_text;
     let (mut app, boom) = app_with_multiline_guarded_tool(
         houyicoder_permission::PermissionMode::Manual,
         multiline_call_then_reply(),
@@ -123,7 +129,7 @@ fn test_option3_no_duplicate_result() {
             raised = true;
             break;
         }
-        std::thread::sleep(std::time::Duration::from_millis(10));
+        sleep(Duration::from_millis(10));
     }
     assert!(raised, "Manual should raise an approval popup");
 
@@ -136,14 +142,14 @@ fn test_option3_no_duplicate_result() {
         .capabilities
         .permission
         .rules_cache
-        .push(houyicoder_protocol::frontend::permission::PermissionRule {
+        .push(PermissionRule {
             action: "boom".to_string(),
             content: None,
-            effect: houyicoder_protocol::frontend::permission::PermissionEffect::Allow,
+            effect: PermissionEffect::Allow,
             ..Default::default()
         });
     app.system_line("added allow rule for boom");
-    app.resolve_current_approval(houyicoder_protocol::frontend::run::ApprovalDecision {
+    app.resolve_current_approval(ApprovalDecision {
         call_id,
         approved: true,
         updated_input: None,
@@ -157,7 +163,7 @@ fn test_option3_no_duplicate_result() {
             settled = true;
             break;
         }
-        std::thread::sleep(std::time::Duration::from_millis(10));
+        sleep(Duration::from_millis(10));
     }
     assert!(settled, "resume should settle");
     assert!(boom.ran(), "the tool must run after always-allow");

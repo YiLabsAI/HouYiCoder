@@ -194,10 +194,7 @@ pub enum TranscriptLine {
 /// child transcript is fetched on expand, so folded_transcript starts
 /// empty. Detecting by agentId (not the tool title) is robust: only the
 /// agent tool emits this field, and the title can be a display name.
-pub(crate) fn subagent_line(
-    output: &serde_json::Value,
-    call_input: Option<&serde_json::Value>,
-) -> Option<TranscriptLine> {
+pub(crate) fn subagent_line(output: &Value, call_input: Option<&Value>) -> Option<TranscriptLine> {
     let child_sid = output.get("agentId")?.as_str()?.to_string();
     // The summary is the content string when inline. When the content was
     // field-level externalized (a large child summary), content is the
@@ -208,9 +205,9 @@ pub(crate) fn subagent_line(
     // the text truncates to fit a terminal row (~80 chars) with an ellipsis.
     // The full multiline content shows on Ctrl+O expand.
     let summary = match output.get("content") {
-        Some(serde_json::Value::String(s)) => crate::brief::fold_summary(s),
+        Some(Value::String(s)) => fold_summary(s),
         Some(c) if c.get("preview").is_some() => {
-            crate::brief::fold_summary(c.get("preview").and_then(|p| p.as_str()).unwrap_or(""))
+            fold_summary(c.get("preview").and_then(|p| p.as_str()).unwrap_or(""))
         }
         _ => String::new(),
     };
@@ -291,18 +288,14 @@ impl ToolOutcome {
     /// The command text (from the call's input) is inspected to recognize
     /// these semantic-success cases so they do not render red. Other tools
     /// keep the simple error-key / success==false rule.
-    pub fn from_output(output: &serde_json::Value) -> Self {
-        Self::from_output_with(output, "", &serde_json::Value::Null)
+    pub fn from_output(output: &Value) -> Self {
+        Self::from_output_with(output, "", &Value::Null)
     }
 
     /// Same as from_output, but with the tool name + call input so bash
     /// commands whose non-zero exit is semantic success (grep no-match,
     /// diff files-differ) are not mis-colored as errors.
-    pub fn from_output_with(
-        output: &serde_json::Value,
-        tool_name: &str,
-        call_input: &serde_json::Value,
-    ) -> Self {
+    pub fn from_output_with(output: &Value, tool_name: &str, call_input: &Value) -> Self {
         // One failure rule, shared through the tool protocol: the trajectory
         // header counts failures by the same definition, so a chip cannot
         // disagree with the header about one result.
@@ -380,7 +373,7 @@ impl TranscriptLine {
                         .collect(),
                 );
             }
-            return Some(crate::view::line_wrap::wrap_plain_block(
+            return Some(wrap_plain_block(
                 &format!("{invocation})"),
                 &prefix,
                 width,
@@ -392,16 +385,13 @@ impl TranscriptLine {
             return Some(vec![rendered]);
         }
         let max_width = width as usize;
-        let fixed = unicode_width::UnicodeWidthStr::width(prefix.as_str()) + 1;
-        let row = if unicode_width::UnicodeWidthStr::width(rendered.as_str()) <= max_width {
+        let fixed = UnicodeWidthStr::width(prefix.as_str()) + 1;
+        let row = if UnicodeWidthStr::width(rendered.as_str()) <= max_width {
             rendered
         } else if max_width > fixed {
-            format!(
-                "{prefix}{})",
-                crate::view::line_wrap::truncate_width(status, max_width - fixed)
-            )
+            format!("{prefix}{})", truncate_width(status, max_width - fixed))
         } else {
-            crate::view::line_wrap::truncate_width(&rendered, max_width)
+            truncate_width(&rendered, max_width)
         };
         Some(vec![row])
     }
@@ -602,13 +592,13 @@ pub struct Approval {
     /// The source of the ask, when the wire carried a reason. Drives the
     /// card: a SystemSafety source hides the "remember" option because
     /// consent cannot override a protected-path check.
-    pub source: Option<houyicoder_protocol::frontend::permission::AskSource>,
+    pub source: Option<AskSource>,
     /// The child delegation this ask was routed up from, when the ask
     /// originates from a spawned child rather than the parent's own run.
     /// None for a parent tool call. The card labels the child type so the
     /// user can tell a child's ask from the parent's when delegations are
     /// in flight.
-    pub delegation: Option<houyicoder_protocol::frontend::run::DelegationSource>,
+    pub delegation: Option<DelegationSource>,
     /// An optional note from the containment layer the card renders as a
     /// fourth line when present.
     pub containment_note: Option<String>,
@@ -637,10 +627,7 @@ impl Approval {
     /// at best and misleading at worst. Hide the option so the human is not
     /// offered a choice the gate will ignore.
     pub fn remember_hidden(&self) -> bool {
-        matches!(
-            self.source,
-            Some(houyicoder_protocol::frontend::permission::AskSource::SystemSafety)
-        )
+        matches!(self.source, Some(AskSource::SystemSafety))
     }
 
     /// Whether this is an entitlement ask (a deny-log discovery offering
@@ -695,11 +682,11 @@ impl Approval {
     /// Yes-don't-ask → allow-always). The cursor-priority preselect matches
     /// by this identity rather than by list position, so a sticky choice
     /// carries across even when the offered list order changes.
-    pub fn focused_kind(&self) -> houyicoder_protocol::acp_wire::PermissionOptionKind {
+    pub fn focused_kind(&self) -> PermissionOptionKind {
         match self.selected {
-            0 => houyicoder_protocol::acp_wire::PermissionOptionKind::AllowOnce,
-            1 => houyicoder_protocol::acp_wire::PermissionOptionKind::RejectOnce,
-            _ => houyicoder_protocol::acp_wire::PermissionOptionKind::AllowAlways,
+            0 => PermissionOptionKind::AllowOnce,
+            1 => PermissionOptionKind::RejectOnce,
+            _ => PermissionOptionKind::AllowAlways,
         }
     }
 
@@ -708,8 +695,7 @@ impl Approval {
     /// reject is a reject for cursor-preselect purposes). An unknown kind
     /// lands on reject too — the preselect never auto-focuses an approve it
     /// cannot identify.
-    pub fn index_for_kind(kind: houyicoder_protocol::acp_wire::PermissionOptionKind) -> usize {
-        use houyicoder_protocol::acp_wire::PermissionOptionKind as K;
+    pub fn index_for_kind(kind: PermissionOptionKind) -> usize {
         match kind {
             K::AllowOnce => 0,
             K::AllowAlways => 2,
@@ -719,6 +705,15 @@ impl Approval {
 }
 
 pub use crate::ask_question_model::{AskQuestion, OTHER_LABEL, QuestionCard, QuestionOption};
+use crate::brief::fold_summary;
+use crate::view::line_wrap::truncate_width;
+use crate::view::line_wrap::wrap_plain_block;
+use houyicoder_protocol::acp_wire::PermissionOptionKind as K;
+use houyicoder_protocol::acp_wire::PermissionOptionKind;
+use houyicoder_protocol::frontend::permission::AskSource;
+use houyicoder_protocol::frontend::run::DelegationSource;
+use serde_json::Value;
+use unicode_width::UnicodeWidthStr;
 /// Spec context strip data: the current spec, step, and clause list.
 #[derive(Debug, Clone)]
 pub struct SpecContext {

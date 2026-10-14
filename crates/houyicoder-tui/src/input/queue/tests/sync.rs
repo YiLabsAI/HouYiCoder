@@ -15,9 +15,12 @@ use std::sync::Arc;
 use crate::agent_message::{ServerEvent, ServerResponse, SessionMessage};
 use crate::composition;
 use crate::records::TranscriptLine;
+use crate::state::App;
 use crate::state::Screen;
+use crate::test_harness::attach_connection;
+use houyicoder_protocol::frontend::QueuedInput;
 
-fn working() -> crate::state::App {
+fn working() -> App {
     let mut app = composition::app();
     app.ui.navigation.screen = Screen::Working;
     app
@@ -26,7 +29,7 @@ fn working() -> crate::state::App {
 /// A working app with a live session: the promote path enqueues InjectUser
 /// before swapping a parked slot to Message, so a no-session app refuses the
 /// promotion and the slot stays parked.
-fn working_session() -> crate::state::App {
+fn working_session() -> App {
     let (app, _events) = crate::test_harness::connected_app_events();
     app
 }
@@ -38,7 +41,7 @@ fn working_session() -> crate::state::App {
 #[test]
 fn test_final_output_defers_drain() {
     let mut app = working();
-    crate::test_harness::attach_connection(&mut app);
+    attach_connection(&mut app);
     app.start_run_for_test(6);
     app.ui.input.queue.push(InputItem::Message("head".into()));
     app.ui
@@ -83,7 +86,7 @@ fn test_final_output_defers_drain() {
 #[test]
 fn test_interrupt_demotes_then_drains() {
     let mut app = working();
-    crate::test_harness::attach_connection(&mut app);
+    attach_connection(&mut app);
     app.start_run_for_test(7);
     app.ui.input.queue.push(InputItem::Message("parked".into()));
     app.handle_agent_message(SessionMessage::Response {
@@ -441,7 +444,7 @@ fn test_clear_orphans_pending_mirror() {
 #[test]
 fn test_head_drains_first_fifo() {
     let mut app = working();
-    crate::test_harness::attach_connection(&mut app);
+    attach_connection(&mut app);
     app.ui
         .input
         .queue
@@ -460,7 +463,7 @@ fn test_head_drains_first_fifo() {
 #[test]
 fn test_parked_head_drains_first() {
     let mut app = working();
-    crate::test_harness::attach_connection(&mut app);
+    attach_connection(&mut app);
     app.ui
         .input
         .queue
@@ -540,7 +543,7 @@ fn test_commit_promotes_next() {
     let p = Arc::new(FakeProvider::text("ok"));
     let mut app = app_with_provider(p, ToolRegistry::new());
     app.start_run_for_test(0);
-    let committed = houyicoder_protocol::frontend::QueuedInput::new("a");
+    let committed = QueuedInput::new("a");
     app.ui
         .input
         .queue
@@ -565,8 +568,8 @@ fn test_commit_promotes_next() {
 fn test_commit_identity() {
     let mut app = app_with_provider(Arc::new(FakeProvider::text("ok")), ToolRegistry::new());
     app.start_run_for_test(0);
-    let old = houyicoder_protocol::frontend::QueuedInput::new("same");
-    let new = houyicoder_protocol::frontend::QueuedInput::new("same");
+    let old = QueuedInput::new("same");
+    let new = QueuedInput::new("same");
     app.ui.input.queue.push(InputItem::Message(new.clone()));
 
     app.handle_agent_message(SessionMessage::Event(ServerEvent::QueuedInputCommitted {
@@ -586,7 +589,7 @@ fn test_commit_identity() {
 fn test_commit_clears_parked() {
     let mut app = working();
     app.sessions.current.last_run_input = Some("origin".into());
-    let committed = houyicoder_protocol::frontend::QueuedInput::new("same");
+    let committed = QueuedInput::new("same");
     app.ui
         .input
         .queue
@@ -628,7 +631,7 @@ fn test_busy_submit_mirrors_queue() {
 #[test]
 fn test_consumed_removes_from_mirror() {
     let mut app = working();
-    let consumed = houyicoder_protocol::frontend::QueuedInput::new("alpha");
+    let consumed = QueuedInput::new("alpha");
     app.ui
         .input
         .queue

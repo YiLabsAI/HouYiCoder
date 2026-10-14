@@ -1,10 +1,19 @@
 use super::frame_log_msg;
 use crate::agent_message::{ServerEvent, ServerResponse, SessionMessage};
+use crate::records::TranscriptLine;
 use crate::state::Pane;
 use crate::test_harness::{connected_app_events, wait_for_request};
 use crate::transcript::TranscriptFrame;
 use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::frontend::FrontendRequest;
+use houyicoder_protocol::frontend::memory::{
+    MemoryChange, MemoryChangeCausality, MemoryChangeId, MemoryChangeOrigin, MemoryChangeScope,
+    MemoryOperation,
+};
+use houyicoder_protocol::frontend::run::ContentBlock;
+use houyicoder_protocol::frontend::run::RunOutcome;
+use houyicoder_protocol::frontend::run::RunResult;
+use houyicoder_protocol::frontend::run::StopReason;
 use houyicoder_protocol::frontend::session_update::{
     SessionUpdate, ToolCall, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
 };
@@ -60,15 +69,13 @@ fn done_msg_for(req: &RequestId) -> SessionMessage {
     SessionMessage::Response {
         request: *req,
         response: ServerResponse::Done {
-            result: Ok(houyicoder_protocol::frontend::run::RunResult {
-                outcome: houyicoder_protocol::frontend::run::RunOutcome::FinalOutput {
-                    content: vec![houyicoder_protocol::frontend::run::ContentBlock::Text {
-                        text: "ok".into(),
-                    }],
+            result: Ok(RunResult {
+                outcome: RunOutcome::FinalOutput {
+                    content: vec![ContentBlock::Text { text: "ok".into() }],
                 },
                 usage: houyicoder_protocol::llm::Usage::default(),
                 turns: 1,
-                stop_reason: houyicoder_protocol::frontend::run::StopReason::EndTurn,
+                stop_reason: StopReason::EndTurn,
             }),
         },
     }
@@ -88,10 +95,6 @@ fn todo_frame(items: &[(&str, &str)]) -> TranscriptFrame {
 /// over the wire so the pane reflects the new entries.
 #[test]
 fn test_memory_change_refreshes_pane() {
-    use houyicoder_protocol::frontend::memory::{
-        MemoryChange, MemoryChangeCausality, MemoryChangeId, MemoryChangeOrigin, MemoryChangeScope,
-        MemoryOperation,
-    };
     let (mut app, events) = connected_app_events();
     app.ui.navigation.pane = Pane::Memory;
     app.handle_agent_message(SessionMessage::Event(ServerEvent::MemoryChanged {
@@ -114,11 +117,6 @@ fn test_memory_change_refreshes_pane() {
 /// lands alone. Dedup keeps the same change id from writing twice.
 #[test]
 fn test_open_pane_keeps_notice() {
-    use crate::records::TranscriptLine;
-    use houyicoder_protocol::frontend::memory::{
-        MemoryChange, MemoryChangeCausality, MemoryChangeId, MemoryChangeOrigin, MemoryChangeScope,
-        MemoryOperation,
-    };
     let (mut app, events) = connected_app_events();
     app.ui.navigation.pane = Pane::Memory;
     app.handle_agent_message(SessionMessage::Event(ServerEvent::MemoryChanged {

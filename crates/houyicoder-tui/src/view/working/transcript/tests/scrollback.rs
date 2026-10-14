@@ -10,6 +10,7 @@ use houyicoder_protocol::frontend::session_update::{
 };
 
 use crate::agent_message::{ServerEvent, SessionMessage};
+use crate::app::handle_mouse;
 use crate::composition;
 use crate::records::TranscriptLine;
 use crate::scroll::VIEWABLE_SCROLLBACK_CAP;
@@ -209,7 +210,7 @@ fn test_click_label_jumps() {
     );
     let px = rect.x + rect.width / 2;
     let py = rect.y;
-    crate::app::handle_mouse(
+    handle_mouse(
         &mut app,
         mouse(MouseEventKind::Down(MouseButton::Left), px, py),
     );
@@ -235,7 +236,7 @@ fn test_label_side_falls_through() {
         "the hit rect is the label span, not the full row"
     );
     // Click the far-left cell of the label row, outside the label span.
-    crate::app::handle_mouse(
+    handle_mouse(
         &mut app,
         mouse(MouseEventKind::Down(MouseButton::Left), 0, rect.y),
     );
@@ -297,7 +298,7 @@ fn test_wheel_moves_content() {
     let cap = app.whole_scroll().cap.get();
     let top_before = app.whole_scroll().top_offset();
     // Wheel up one notch in the middle of the transcript area.
-    crate::app::handle_mouse(&mut app, mouse(MouseEventKind::ScrollUp, 40, 12));
+    handle_mouse(&mut app, mouse(MouseEventKind::ScrollUp, 40, 12));
     let top_after = app.whole_scroll().top_offset();
     assert!(
         !app.whole_scroll().is_following_tail(),

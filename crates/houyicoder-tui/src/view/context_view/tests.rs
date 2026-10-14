@@ -2,12 +2,17 @@
 
 use super::*;
 use crate::composition;
+use crate::records::ContextDrillDown;
 use crate::records::TranscriptLine;
+use crate::records::{ContextFileEntry, ContextSkillEntry, ContextView};
+use crate::state::App;
 use crate::state::Screen;
 use crate::test_harness::render_buffer;
 use houyicoder_protocol::frontend::SlashCommand;
+use houyicoder_protocol::frontend::context::stub_breakdown;
+use houyicoder_protocol::frontend::context::{CategoryBreakdown, ContextBreakdown, GridCell};
 
-fn working_app() -> crate::state::App {
+fn working_app() -> App {
     let mut app = composition::app();
     app.ui.navigation.screen = Screen::Working;
     app.run_command(SlashCommand::Context);
@@ -17,9 +22,8 @@ fn working_app() -> crate::state::App {
 /// An app showing a context grid whose drill-down carries data. The canned
 /// no-session view serves an empty drill (matching the wired paths), so the
 /// drill-section render tests feed their own fixture directly.
-fn working_app_with_drill() -> crate::state::App {
-    use crate::records::{ContextDrillDown, ContextFileEntry, ContextSkillEntry, ContextView};
-    let breakdown = houyicoder_protocol::frontend::context::stub_breakdown();
+fn working_app_with_drill() -> App {
+    let breakdown = stub_breakdown();
     let suggestions = composition::suggestions_for(&breakdown);
     let view = ContextView {
         breakdown,
@@ -81,8 +85,7 @@ fn test_grid_inline_renders_legend() {
 /// Fixture: one category + one grid cell (so the empty-grid guard does not
 /// short-circuit before legend_rows runs) + all optional fields None. Each
 /// test overrides the field(s) it exercises.
-fn base_breakdown() -> houyicoder_protocol::frontend::context::ContextBreakdown {
-    use houyicoder_protocol::frontend::context::{CategoryBreakdown, ContextBreakdown, GridCell};
+fn base_breakdown() -> ContextBreakdown {
     ContextBreakdown {
         model: "test".into(),
         total_tokens: 100_000,
@@ -107,10 +110,10 @@ fn base_breakdown() -> houyicoder_protocol::frontend::context::ContextBreakdown 
     }
 }
 
-fn rows_text(bd: houyicoder_protocol::frontend::context::ContextBreakdown) -> String {
+fn rows_text(bd: ContextBreakdown) -> String {
     let view = ContextView {
         breakdown: bd,
-        drill: crate::records::ContextDrillDown::default(),
+        drill: ContextDrillDown::default(),
         suggestions: vec![],
     };
     render_as_rows(&view)
@@ -242,7 +245,6 @@ fn test_legend_renders_category_row() {
 /// never asserted.
 #[test]
 fn test_legend_renders_reserved_row() {
-    use houyicoder_protocol::frontend::context::{CategoryBreakdown, ContextBreakdown, GridCell};
     let bd = ContextBreakdown {
         model: "test".into(),
         total_tokens: 100_000,
@@ -280,8 +282,7 @@ fn test_legend_renders_reserved_row() {
 /// glyph for which fullness.
 #[test]
 fn test_grid_glyph_picks_fullness() {
-    use houyicoder_protocol::frontend::context::GridCell;
-    fn bd_fullness(fullness: f32) -> houyicoder_protocol::frontend::context::ContextBreakdown {
+    fn bd_fullness(fullness: f32) -> ContextBreakdown {
         let mut bd = base_breakdown();
         bd.grid = vec![vec![GridCell {
             category_idx: 0,
@@ -317,7 +318,6 @@ fn test_grid_glyph_picks_fullness() {
 /// the right flat cell index across a multi-cell grid.
 #[test]
 fn test_grid_renders_breakpoint_marker() {
-    use houyicoder_protocol::frontend::context::GridCell;
     let mut bd = base_breakdown();
     // A 5-cell single-row grid; breakpoint at cell 2 (cells 0,1 cached,
     // cell 2 onward fresh). base_breakdown's one category is idx 0.
@@ -340,8 +340,7 @@ fn test_grid_renders_breakpoint_marker() {
 /// real-ish data, not just the canned stub (Messages=120k) that
 /// grid_inline_renders_suggestions_section uses. pct=85 (>= 80), Messages
 /// 20k (>= 15%), System tools 6k (>= 5%) -- all three triggers met.
-fn full_context_breakdown() -> houyicoder_protocol::frontend::context::ContextBreakdown {
-    use houyicoder_protocol::frontend::context::{CategoryBreakdown, ContextBreakdown, GridCell};
+fn full_context_breakdown() -> ContextBreakdown {
     ContextBreakdown {
         model: "test".into(),
         total_tokens: 85_000,
@@ -424,7 +423,7 @@ fn test_real_data_renders_suggestions() {
     // The suggestion titles land in the rendered rows (suggestions_rows).
     let view = ContextView {
         breakdown: bd,
-        drill: crate::records::ContextDrillDown::default(),
+        drill: ContextDrillDown::default(),
         suggestions,
     };
     let text: String = render_as_rows(&view)

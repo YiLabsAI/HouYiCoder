@@ -3,6 +3,7 @@
 //! Pure functions map typed frontend responses to terminal text without
 //! reading application state or constructing widgets.
 
+use houyicoder_protocol::frontend::SessionId;
 use houyicoder_protocol::frontend::memory::{MemoryDetail, MemorySummaryEntry};
 use houyicoder_protocol::frontend::permission::{
     PermissionDecisionEntry, PermissionEffect, PermissionMode, PermissionRule,
@@ -13,6 +14,7 @@ use houyicoder_protocol::frontend::status::{
 use houyicoder_protocol::frontend::trajectory::{RedundantCallEntry, TrajectoryEntry};
 
 use crate::evidence::MemoryEntry;
+use crate::todo_view::{TodoStatus, TodoView};
 
 /// The display label for a wire permission mode, so the render path never
 /// imports the permission crate (the server is the mode authority).
@@ -117,8 +119,7 @@ pub(crate) fn memory_entries_from_wire(entries: &[MemorySummaryEntry]) -> Vec<Me
 /// with a counts header. Empty when no checklist tool is wired or the list is
 /// cleared, so /status stays clean on a fresh turn. Reads the tool's shared
 /// state handle (lock and clone), never dispatching a tool call.
-pub(crate) fn render_todo_section(todos: &[crate::todo_view::TodoView]) -> String {
-    use crate::todo_view::TodoStatus;
+pub(crate) fn render_todo_section(todos: &[TodoView]) -> String {
     if todos.is_empty() {
         return String::new();
     }
@@ -152,7 +153,7 @@ pub(crate) fn render_todo_section(todos: &[crate::todo_view::TodoView]) -> Strin
         TodoStatus::Completed => "✔",
         TodoStatus::Pending => "◻",
     };
-    let mut grouped: Vec<&crate::todo_view::TodoView> = Vec::with_capacity(todos.len());
+    let mut grouped: Vec<&TodoView> = Vec::with_capacity(todos.len());
     grouped.extend(todos.iter().filter(|t| t.status == TodoStatus::InProgress));
     grouped.extend(todos.iter().filter(|t| t.status == TodoStatus::Paused));
     grouped.extend(todos.iter().filter(|t| t.status == TodoStatus::Pending));
@@ -251,9 +252,9 @@ fn trim_zero(s: String) -> String {
 
 pub(crate) fn render_status(
     snap: &StatusSnapshot,
-    session: &houyicoder_protocol::frontend::SessionId,
+    session: &SessionId,
     sandbox: &str,
-    todos: &[crate::todo_view::TodoView],
+    todos: &[TodoView],
 ) -> String {
     let mut s = String::new();
     s.push_str(&field("Version", &snap.version));
@@ -395,7 +396,7 @@ mod status_tests {
     fn test_status_renders_config_fields() {
         let s = render_status(
             &snap("glm-5.1"),
-            &houyicoder_protocol::frontend::SessionId::new("test"),
+            &SessionId::new("test"),
             "mac-seatbelt",
             &[],
         );
@@ -417,7 +418,7 @@ mod status_tests {
         let todos = vec![item("run tests", TodoStatus::InProgress)];
         let s = render_status(
             &snap("glm-5.1"),
-            &houyicoder_protocol::frontend::SessionId::new("test"),
+            &SessionId::new("test"),
             "mac-seatbelt",
             &todos,
         );
@@ -429,7 +430,7 @@ mod status_tests {
     fn test_status_renders_identity_block() {
         let s = render_status(
             &snap_with_descriptor("glm-5.1"),
-            &houyicoder_protocol::frontend::SessionId::new("sess-123"),
+            &SessionId::new("sess-123"),
             "mac-seatbelt",
             &[],
         );
@@ -452,7 +453,7 @@ mod status_tests {
     fn test_status_without_descriptor_unnamed() {
         let s = render_status(
             &snap("glm-5.1"),
-            &houyicoder_protocol::frontend::SessionId::new("sess-123"),
+            &SessionId::new("sess-123"),
             "mac-seatbelt",
             &[],
         );
@@ -482,12 +483,7 @@ mod status_tests {
             };
             m
         });
-        let out = render_status(
-            &s,
-            &houyicoder_protocol::frontend::SessionId::new("sess-123"),
-            "mac-seatbelt",
-            &[],
-        );
+        let out = render_status(&s, &SessionId::new("sess-123"), "mac-seatbelt", &[]);
         assert!(!out.contains("cwd:"), "an empty cwd drops the line: {out}");
         assert!(out.contains("provenance:"), "provenance renders: {out}");
     }
@@ -502,12 +498,7 @@ mod status_tests {
             };
             m
         });
-        let out = render_status(
-            &s,
-            &houyicoder_protocol::frontend::SessionId::new("sess-123"),
-            "mac-seatbelt",
-            &[],
-        );
+        let out = render_status(&s, &SessionId::new("sess-123"), "mac-seatbelt", &[]);
         assert!(out.contains("forked from sess-aaa at turn 7") && out.contains("provenance:"));
     }
 
@@ -522,12 +513,7 @@ mod status_tests {
             };
             m
         });
-        let out = render_status(
-            &s,
-            &houyicoder_protocol::frontend::SessionId::new("sess-123"),
-            "mac-seatbelt",
-            &[],
-        );
+        let out = render_status(&s, &SessionId::new("sess-123"), "mac-seatbelt", &[]);
         assert!(out.contains("spawned by parent-1 (explore)") && out.contains("provenance:"));
     }
 
@@ -540,12 +526,7 @@ mod status_tests {
             };
             m
         });
-        let out = render_status(
-            &s,
-            &houyicoder_protocol::frontend::SessionId::new("sess-123"),
-            "mac-seatbelt",
-            &[],
-        );
+        let out = render_status(&s, &SessionId::new("sess-123"), "mac-seatbelt", &[]);
         assert!(out.contains("resumed from export sess-orig") && out.contains("provenance:"));
     }
 
@@ -556,12 +537,7 @@ mod status_tests {
             m.name = None;
             m
         });
-        let out = render_status(
-            &s,
-            &houyicoder_protocol::frontend::SessionId::new("sess-123"),
-            "mac-seatbelt",
-            &[],
-        );
+        let out = render_status(&s, &SessionId::new("sess-123"), "mac-seatbelt", &[]);
         assert!(out.contains("(unnamed)") && out.contains("Session name:"));
     }
 }

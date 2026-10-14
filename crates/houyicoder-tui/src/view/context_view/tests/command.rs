@@ -14,6 +14,10 @@ use houyicoder_provider::FakeProvider;
 
 use crate::run_control::tests::app_with_provider;
 use crate::state::App;
+use crate::state::Screen;
+use crate::test_harness::render_buffer;
+use std::thread::sleep;
+use std::time::Duration;
 
 /// The second /context draws the cached grid at once and then swaps its payload
 /// for the reply grid in place, so the transcript holds one grid either way. A
@@ -24,7 +28,7 @@ use crate::state::App;
 fn test_second_context_one_grid() {
     let provider = Arc::new(FakeProvider::new(vec![]));
     let mut app = app_with_provider(provider, ToolRegistry::new());
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     // The cache a first /context filled stands in for that reply: the fast
     // path renders from it without a round trip.
     app.sessions.current.capabilities.status.context_cache = Some(stub_breakdown());
@@ -100,7 +104,7 @@ fn test_context_cache_renders_repeat() {
         {
             break;
         }
-        std::thread::sleep(std::time::Duration::from_millis(2));
+        sleep(Duration::from_millis(2));
     }
     assert!(
         app.sessions
@@ -115,8 +119,7 @@ fn test_context_cache_renders_repeat() {
     // App state) — the default-gate wiring test for dispatch→wire→render.
     // Must be on the Working screen to render the transcript (app_with_provider
     // starts on Login).
-    app.ui.navigation.screen = crate::state::Screen::Working;
-    use crate::test_harness::render_buffer;
+    app.ui.navigation.screen = Screen::Working;
     let buf = render_buffer(&app, 100, 40);
     let text: String = (0..buf.area().height)
         .map(|y| {
@@ -189,7 +192,7 @@ fn test_undo_ships_connected() {
         {
             break;
         }
-        std::thread::sleep(std::time::Duration::from_millis(2));
+        sleep(Duration::from_millis(2));
     }
     let undo_lines: Vec<String> = app
         .sessions

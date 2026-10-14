@@ -8,10 +8,13 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::composition;
+use crate::keys::handle_working;
 use crate::pending_prompt::PendingPrompt;
 use crate::records::Approval;
 use crate::state::Screen;
+use houyicoder_protocol::acp_wire::PermissionOptionKind;
 use houyicoder_protocol::envelope::RequestId;
+use houyicoder_protocol::frontend::permission::PermissionMode;
 
 fn key(c: KeyCode) -> KeyEvent {
     KeyEvent::new(c, KeyModifiers::NONE)
@@ -48,8 +51,7 @@ fn test_reject_records_sticky() {
         RequestId(0),
         approval_at("bash", 0),
     ));
-    crate::keys::handle_working(&mut app, key(KeyCode::Esc));
-    use houyicoder_protocol::acp_wire::PermissionOptionKind;
+    handle_working(&mut app, key(KeyCode::Esc));
     assert_eq!(
         app.sessions
             .current
@@ -74,8 +76,7 @@ fn test_persist_records_sticky() {
         RequestId(0),
         approval_at("bash", 2),
     ));
-    crate::keys::handle_working(&mut app, key(KeyCode::Enter));
-    use houyicoder_protocol::acp_wire::PermissionOptionKind;
+    handle_working(&mut app, key(KeyCode::Enter));
     assert_eq!(
         app.sessions
             .current
@@ -97,7 +98,6 @@ fn test_persist_records_sticky() {
 fn test_auto_focuses_approve() {
     // Auto-approve mode (Auto) focuses Yes (0) when no sticky choice exists
     // for the tool, matching the user's minimal-friction intent.
-    use houyicoder_protocol::frontend::permission::PermissionMode;
     let mut app = composition::app();
     app.sessions.current.capabilities.permission.mode_cache = Some(PermissionMode::Auto);
     assert_eq!(app.initial_cursor("bash"), 0);
@@ -107,8 +107,6 @@ fn test_auto_focuses_approve() {
 fn test_sticky_beats_auto() {
     // A sticky choice takes priority over the auto-approve mode: a user who
     // rejected bash still lands on No even in Auto mode.
-    use houyicoder_protocol::acp_wire::PermissionOptionKind;
-    use houyicoder_protocol::frontend::permission::PermissionMode;
     let mut app = composition::app();
     app.sessions.current.capabilities.permission.mode_cache = Some(PermissionMode::Auto);
     app.sessions

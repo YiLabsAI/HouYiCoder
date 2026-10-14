@@ -6,10 +6,15 @@
 #![cfg(test)]
 
 use crate::agent_message::{ServerEvent, SessionMessage};
+use crate::app::handle_key;
+use crate::ask_question_model::tests::card::single_input;
 use crate::input::queue::InputItem;
 use crate::pending_prompt::PendingPrompt;
+use crate::records::AskQuestion;
 use crate::records::{Approval, TranscriptLine};
+use crate::state::Screen;
 use crate::test_harness::connection_lost_app;
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::frontend::trust::TrustPrompt;
 
@@ -199,15 +204,11 @@ fn test_verdict_refused() {
 /// waiting, so the answer must not vanish when its verdict cannot ship.
 #[test]
 fn test_question_verdict_refused() {
-    use crate::ask_question_model::tests::card::single_input;
-    use crate::records::AskQuestion;
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-
     let mut app = connection_lost_app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     let aq = AskQuestion::parse("c1", &single_input()).expect("parse question");
     app.sessions.current.prompt = Some(PendingPrompt::question_card(RequestId(7), aq));
-    crate::app::handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     assert!(
         app.ask_question().is_some(),
         "the question card stays until the verdict is delivered"
@@ -227,15 +228,11 @@ fn test_question_verdict_refused() {
 /// verdict, so it must not vanish the card when that verdict cannot ship.
 #[test]
 fn test_question_cancel_refused() {
-    use crate::ask_question_model::tests::card::single_input;
-    use crate::records::AskQuestion;
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-
     let mut app = connection_lost_app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     let aq = AskQuestion::parse("c1", &single_input()).expect("parse question");
     app.sessions.current.prompt = Some(PendingPrompt::question_card(RequestId(7), aq));
-    crate::app::handle_key(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    handle_key(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     assert!(
         app.ask_question().is_some(),
         "the question card stays until the decline verdict is delivered"

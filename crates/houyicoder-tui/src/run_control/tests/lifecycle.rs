@@ -4,17 +4,29 @@ use std::env::temp_dir;
 use std::thread::sleep;
 
 use super::*;
+use crate::agent_message::ServerEvent;
 use crate::agent_message::ServerResponse;
+use crate::agent_message::{ConnectionEvent, SessionMessage};
+use crate::composition;
 use crate::keys::handle_working;
 use crate::pending_prompt::PendingPrompt;
 use crate::records::{Approval, TranscriptLine};
+use crate::state::Screen;
 use crate::test_harness::{attach_connection, dump_buffer, render_buffer, render_text};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use futures::StreamExt;
 use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::frontend::run::{ApprovalDecision, ApprovalRequest, StopReason};
+use houyicoder_protocol::llm::CompletionRequest;
+use houyicoder_protocol::llm::LlmEvent;
+use houyicoder_protocol::llm::ModelCapabilities;
 use houyicoder_protocol::llm::Usage;
 use houyicoder_protocol::llm::{CompletionResponse, OutputItem, ProviderError};
 use houyicoder_provider::FakeProvider;
 use houyicoder_service::composition::walk_to_workspace_root;
+use std::fs;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 /// Pump the event loop until the predicate holds, or the budget runs out.
 /// Returns whether it held. The run is driven by a worker thread, so a test
@@ -25,7 +37,7 @@ fn pump_until(app: &mut App, tries: usize, mut held: impl FnMut(&App) -> bool) -
         if held(app) {
             return true;
         }
-        sleep(std::time::Duration::from_millis(10));
+        sleep(Duration::from_millis(10));
     }
     false
 }
@@ -33,7 +45,6 @@ fn pump_until(app: &mut App, tries: usize, mut held: impl FnMut(&App) -> bool) -
 /// Monotonic counter for unique temp-dir names, avoiding same-nanosecond
 /// collisions when tests run in parallel.
 fn unique_seq() -> u64 {
-    use std::sync::atomic::{AtomicU64, Ordering};
     static SEQ: AtomicU64 = AtomicU64::new(0);
     SEQ.fetch_add(1, Ordering::Relaxed)
 }
@@ -110,7 +121,7 @@ fn test_one_at_a_time() {
             got_second = true;
             break;
         }
-        sleep(std::time::Duration::from_millis(10));
+        sleep(Duration::from_millis(10));
     }
     assert!(
         got_second,
@@ -145,11 +156,9 @@ fn test_one_at_a_time() {
 fn test_approval_renders_inline() {
     // The prompt renders inline at the transcript tail, not as a floating
     // popup, and disappears once no approval is pending.
-    use crate::composition;
-    use render_text;
 
     let mut app = composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app.sessions.current.prompt = Some(PendingPrompt::approval_card(
         RequestId(0),
         Approval {
@@ -176,7 +185,7 @@ fn test_approval_renders_inline() {
 
     // No approval -> no separator or proceed question near tail.
     let mut app2 = composition::app();
-    app2.ui.navigation.screen = crate::state::Screen::Working;
+    app2.ui.navigation.screen = Screen::Working;
     app2.sessions.current.prompt = None;
     let text2 = render_text(&app2, 80, 24);
     assert!(
@@ -190,13 +199,12 @@ fn test_approval_esc_rejects_current() {
     // Without a runner, Esc on the current approval clears just that one
     // and records a reject verdict. No reject-all: spawn_resume is never
     // called (no runner).
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     fn key(c: KeyCode) -> KeyEvent {
         KeyEvent::new(c, KeyModifiers::NONE)
     }
     let mut app = composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app.sessions.current.prompt = Some(PendingPrompt::approval_card(
         RequestId(0),
         Approval {
@@ -217,13 +225,12 @@ fn test_approval_esc_rejects_current() {
 fn test_approval_enter_approve_current() {
     // Enter with selected=0 (approve) sends one approve decision for the
     // current call_id. Without a runner, the approval is just cleared.
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     fn key(c: KeyCode) -> KeyEvent {
         KeyEvent::new(c, KeyModifiers::NONE)
     }
     let mut app = composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app.sessions.current.prompt = Some(PendingPrompt::approval_card(
         RequestId(0),
         Approval {
@@ -244,12 +251,11 @@ fn test_approval_enter_approve_current() {
 /// change their mind before Enter. The Enter and Esc tests resolve directly.
 #[test]
 fn test_approval_char_keys_select() {
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     fn key(c: KeyCode) -> KeyEvent {
         KeyEvent::new(c, KeyModifiers::NONE)
     }
     let mut app = composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     let mk = || Approval {
         tool: "bash".to_string(),
         args: "".to_string(),
@@ -325,7 +331,6 @@ fn test_walk_finds_workspace_root() {
     // The sandbox must pin to the repo root, not the launch subdir. Build a
     // temp repo: root/Cargo.toml ([workspace]) + root/crate/Cargo.toml, then
     // walk up from crate/ and assert it returns the workspace root.
-    use std::fs;
     let root = temp_dir().join(format!("houyi-walk-{seq}", seq = unique_seq()));
     let crate_dir = root.join("crate");
     fs::create_dir_all(&crate_dir).unwrap();
@@ -348,7 +353,6 @@ fn test_walk_finds_workspace_root() {
 fn test_walk_none_outside_repo() {
     // A parent chain with no manifest yields None: the walk must not fall back
     // to the home directory.
-    use std::fs;
     let d = temp_dir().join(format!("houyi-none-{}", unique_seq()));
     fs::create_dir_all(&d).unwrap();
     let found = walk_to_workspace_root(&d);
@@ -432,35 +436,28 @@ fn test_status_snapshot_accumulates_live() {
 /// tail). Lets an abort test start a run that enters the streaming select,
 /// fire the cancel token, and observe RunOutcome::Interrupted.
 struct HangingProvider {
-    events: Vec<houyicoder_protocol::llm::LlmEvent>,
+    events: Vec<LlmEvent>,
 }
 impl HangingProvider {
-    fn new(events: Vec<houyicoder_protocol::llm::LlmEvent>) -> Self {
+    fn new(events: Vec<LlmEvent>) -> Self {
         Self { events }
     }
 }
 impl ModelProvider for HangingProvider {
     fn complete(
         &self,
-        _req: houyicoder_protocol::llm::CompletionRequest,
-    ) -> houyicoder_async::PFut<
-        '_,
-        Result<CompletionResponse, houyicoder_protocol::llm::ProviderError>,
-    > {
+        _req: CompletionRequest,
+    ) -> houyicoder_async::PFut<'_, Result<CompletionResponse, ProviderError>> {
         let e = ProviderError::Unknown("hanging provider does not complete".into());
         Box::pin(async move { Err(e) })
     }
-    fn capabilities(&self) -> houyicoder_protocol::llm::ModelCapabilities {
-        houyicoder_protocol::llm::ModelCapabilities::default()
+    fn capabilities(&self) -> ModelCapabilities {
+        ModelCapabilities::default()
     }
     fn stream(
         &self,
-        _req: houyicoder_protocol::llm::CompletionRequest,
-    ) -> houyicoder_async::PStream<
-        '_,
-        Result<houyicoder_protocol::llm::LlmEvent, houyicoder_protocol::llm::ProviderError>,
-    > {
-        use futures::StreamExt;
+        _req: CompletionRequest,
+    ) -> houyicoder_async::PStream<'_, Result<LlmEvent, ProviderError>> {
         let prefix = futures::stream::iter(self.events.clone().into_iter().map(Ok));
         let tail = futures::stream::pending();
         Box::pin(prefix.chain(tail))
@@ -471,7 +468,6 @@ impl ModelProvider for HangingProvider {
 fn test_esc_aborts_busy_run() {
     // Esc mid-run aborts: the cancel token fires and the Done handler clears
     // busy, with no user-facing marker line.
-    use houyicoder_protocol::llm::LlmEvent;
     let p = Arc::new(HangingProvider::new(vec![LlmEvent::TextDelta {
         id: "t1".into(),
         text: "partial answer".into(),
@@ -541,7 +537,7 @@ fn test_esc_abort_restores_input() {
             settled = true;
             break;
         }
-        sleep(std::time::Duration::from_millis(10));
+        sleep(Duration::from_millis(10));
     }
     assert!(settled, "aborted run should settle via Interrupted");
     // The input box is restored to the original text, cursor at the end.
@@ -573,7 +569,7 @@ fn test_context_grid_after_run() {
     // to the tail.
     let p = Arc::new(FakeProvider::text("hello back"));
     let mut app = app_with_provider(p, ToolRegistry::new());
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     // Simulate /context: raise the command echo + ContextGrid rows.
     app.push_unanswered_echo("/context".into());
     app.push_transcript_line(TranscriptLine::ContextGrid(composition::context_view()));
@@ -650,7 +646,7 @@ fn test_slash_echo_visible() {
     // the rendered output above the ContextGrid block, not be overwritten
     // by the block Clear.
     let mut app = composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     // Simulate the real /context path: submit_input pushes User echo
     // THEN run_command pushes ContextGrid.
     app.ui.input.editor.set("/context".to_string());
@@ -693,7 +689,7 @@ fn test_tui_lines_survive_runs() {
     // accumulate at the tail or vanish.
     let p = Arc::new(FakeProvider::text("first reply"));
     let mut app = app_with_provider(p, ToolRegistry::new());
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app.push_transcript_line(TranscriptLine::User("/context".into()));
     app.push_transcript_line(TranscriptLine::ContextGrid(composition::context_view()));
     // First run.
@@ -764,7 +760,7 @@ fn approval_ask(call_id: &str) -> ApprovalRequest {
 #[test]
 fn test_ask_preserves_start() {
     let mut app = composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     attach_connection(&mut app);
     assert!(
         app.spawn_run("work".into()),
@@ -798,7 +794,7 @@ fn test_ask_preserves_start() {
 #[test]
 fn test_resolve_resumes_run() {
     let mut app = composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     attach_connection(&mut app);
     assert!(
         app.spawn_run("work".into()),
@@ -823,9 +819,8 @@ fn test_resolve_resumes_run() {
 // transition, and a post-resume delta appends to the same preview.
 #[test]
 fn test_ask_preserves_progress() {
-    use crate::agent_message::ServerEvent;
     let mut app = composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     attach_connection(&mut app);
     assert!(app.spawn_run("work".into()));
     app.handle_agent_message(SessionMessage::Event(ServerEvent::Delta {
@@ -860,7 +855,7 @@ fn test_ask_preserves_progress() {
 #[test]
 fn test_finish_copies_start() {
     let mut app = composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     attach_connection(&mut app);
     assert!(app.spawn_run("work".into()));
     let run_req = app.active_run_req_id().unwrap();
@@ -890,7 +885,7 @@ fn test_finish_copies_start() {
 #[test]
 fn test_final_run_survives_loss() {
     let mut app = composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     attach_connection(&mut app);
     assert!(app.spawn_run("work".into()));
     let run_req = app.active_run_req_id().unwrap();
@@ -933,7 +928,7 @@ fn test_final_run_survives_loss() {
 #[test]
 fn test_stale_done_settles_nothing() {
     let mut app = composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     attach_connection(&mut app);
     assert!(app.spawn_run("work".into()));
     let run_req = app.active_run_req_id().unwrap();
@@ -980,7 +975,7 @@ fn test_stale_done_settles_nothing() {
 #[test]
 fn test_cycles_preserve_start() {
     let mut app = composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     attach_connection(&mut app);
     assert!(app.spawn_run("work".into()));
     let first_start = app.run_started();
@@ -1010,7 +1005,7 @@ fn test_cycles_preserve_start() {
 #[test]
 fn test_waiting_submit_parks() {
     let mut app = composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     attach_connection(&mut app);
     assert!(app.spawn_run("first".into()));
     let first_req = app.active_run_req_id();
@@ -1032,7 +1027,7 @@ fn test_waiting_submit_parks() {
 #[test]
 fn test_busy_submit_parks() {
     let mut app = composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     attach_connection(&mut app);
     assert!(app.spawn_run("first".into()));
     app.spawn_run("second".into());
@@ -1054,9 +1049,8 @@ fn test_busy_submit_parks() {
 // not_sent list reports it as unknown, since the frame may have landed.
 #[test]
 fn test_loss_unsent_vs_unknown() {
-    use crate::agent_message::{ConnectionEvent, SessionMessage};
     let mut app = composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     attach_connection(&mut app);
     assert!(app.spawn_run("work".into()));
     let run_req = app.active_run_req_id().unwrap();
@@ -1079,7 +1073,7 @@ fn test_loss_unsent_vs_unknown() {
 
     // Reset for the unknown case.
     let mut app = composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     attach_connection(&mut app);
     assert!(app.spawn_run("work".into()));
     app.handle_agent_message(SessionMessage::Connection(ConnectionEvent::Lost {
@@ -1105,7 +1099,7 @@ fn test_loss_unsent_vs_unknown() {
 #[test]
 fn test_cancel_during_waiting() {
     let mut app = composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     attach_connection(&mut app);
     assert!(app.spawn_run("work".into()));
     let run_req = app.active_run_req_id().unwrap();
@@ -1128,7 +1122,7 @@ fn test_cancel_during_waiting() {
 #[test]
 fn test_loss_during_waiting_settles() {
     let mut app = composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     attach_connection(&mut app);
     assert!(app.spawn_run("work".into()));
     app.raise_agent_approval(approval_ask("c1"), RequestId(1));
@@ -1155,7 +1149,7 @@ fn test_loss_during_waiting_settles() {
 #[test]
 fn test_loss_during_cancelling_settles() {
     let mut app = composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     attach_connection(&mut app);
     assert!(app.spawn_run("work".into()));
     app.raise_agent_approval(approval_ask("c1"), RequestId(1));
