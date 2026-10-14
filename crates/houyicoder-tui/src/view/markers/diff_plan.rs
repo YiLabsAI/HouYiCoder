@@ -5,6 +5,7 @@
 //! the layout is unit-testable in isolation. Extracted from markers.rs so
 //! that file stays under the size gate.
 
+use crate::view::line_wrap::wrap_line;
 use crate::view::word_diff::WordDiffPart;
 use crate::view::word_diff::word_diff;
 
@@ -162,7 +163,7 @@ fn wrap_diff_plan(plan: &mut Vec<PlanRow>, width: u16) {
             });
             continue;
         }
-        let segments = crate::view::line_wrap::wrap_line(&text, avail);
+        let segments = wrap_line(&text, avail);
         if segments.len() <= 1 {
             out.push(PlanRow {
                 kind,

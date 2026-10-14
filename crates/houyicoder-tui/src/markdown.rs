@@ -6,6 +6,8 @@
 //! to ANSI-styled output; this module does the same with pulldown-cmark
 //! events mapped to ratatui spans.
 
+use crate::view::line_wrap::wrap_styled_line;
+use pulldown_cmark::Alignment;
 use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -112,7 +114,7 @@ pub fn render_agent_text(
     let mut table_rows: Vec<Vec<String>> = Vec::new();
     let mut table_row: Vec<String> = Vec::new();
     let mut cell_plain = String::new();
-    let mut table_aligns: Vec<pulldown_cmark::Alignment> = Vec::new();
+    let mut table_aligns: Vec<Alignment> = Vec::new();
     let mut in_heading = false;
     // Stack of (ordered_start, counter) per list depth. None start = bullet
     // list (marker "-"); Some(n) = ordered list starting at n (marker
@@ -406,7 +408,7 @@ fn wrap_markdown(
     let mut out_s: Vec<Line<'static>> = Vec::with_capacity(styled.len());
     let mut out_p: Vec<String> = Vec::with_capacity(styled.len());
     for (line, _orig_plain) in styled.into_iter().zip(plain) {
-        let rows = crate::view::line_wrap::wrap_styled_line(line, wrap_width);
+        let rows = wrap_styled_line(line, wrap_width);
         for (i, row) in rows.into_iter().enumerate() {
             let p: String = row
                 .spans
@@ -433,7 +435,7 @@ fn wrap_markdown(
 /// are padded per the column alignment so the pipe separators line up.
 /// The table algorithm: column-width min 3, dash-only
 /// separator with no alignment colons, CJK-aware display width.
-fn render_table(rows: &[Vec<String>], aligns: &[pulldown_cmark::Alignment]) -> Vec<String> {
+fn render_table(rows: &[Vec<String>], aligns: &[Alignment]) -> Vec<String> {
     if rows.is_empty() || rows[0].is_empty() {
         return Vec::new();
     }
@@ -449,12 +451,7 @@ fn render_table(rows: &[Vec<String>], aligns: &[pulldown_cmark::Alignment]) -> V
             w
         })
         .collect();
-    let align_of = |c: usize| {
-        aligns
-            .get(c)
-            .copied()
-            .unwrap_or(pulldown_cmark::Alignment::None)
-    };
+    let align_of = |c: usize| aligns.get(c).copied().unwrap_or(Alignment::None);
     let mut out = Vec::new();
     let mut header = String::from("| ");
     for (c, cell) in rows[0].iter().enumerate() {
@@ -487,16 +484,16 @@ fn render_table(rows: &[Vec<String>], aligns: &[pulldown_cmark::Alignment]) -> V
 /// right = leading spaces, center = split. None and Left both render
 /// left-aligned. The pad-aligned rule: dash-only separator, no
 /// alignment colons rendered.
-fn pad_cell(content: &str, width: usize, align: pulldown_cmark::Alignment) -> String {
+fn pad_cell(content: &str, width: usize, align: Alignment) -> String {
     let display_w = UnicodeWidthStr::width(content);
     let pad = width.saturating_sub(display_w);
     match align {
-        pulldown_cmark::Alignment::Center => {
+        Alignment::Center => {
             let left = pad / 2;
             format!("{}{}{}", " ".repeat(left), content, " ".repeat(pad - left))
         }
-        pulldown_cmark::Alignment::Right => format!("{}{}", " ".repeat(pad), content),
-        pulldown_cmark::Alignment::Left | pulldown_cmark::Alignment::None => {
+        Alignment::Right => format!("{}{}", " ".repeat(pad), content),
+        Alignment::Left | Alignment::None => {
             format!("{content}{}", " ".repeat(pad))
         }
     }

@@ -1,4 +1,6 @@
 use super::*;
+use crate::records::ToolOutcome;
+use crate::selection::diff_gutter_skip;
 
 #[test]
 fn test_row_call_styled() {
@@ -380,7 +382,6 @@ fn test_diff_rows_numbered() {
 /// every row. Pins the budget==render invariant for a single-hunk diff.
 #[test]
 fn test_diff_wrap_budget_matches() {
-    use crate::records::ToolOutcome;
     // max_w = 1 (line numbers 1..2). gutter = 1 + 3 = 4. At width 40, avail = 36.
     // A 36-char content line fills the row exactly — it must NOT wrap to a 2nd row.
     let content = "x".repeat(36);
@@ -534,7 +535,6 @@ fn test_diff_row_tag_colors() {
 /// the line-number + sigil gutter uniformly.
 #[test]
 fn test_diff_gutter_skip_widths() {
-    use crate::selection::diff_gutter_skip;
     // Layout: marker(sigil) + sep + right-aligned num + sep + content.
     // diff_gutter_skip auto-counts so it tracks any number width.
     // w=1 (single-digit num): sigil + sep + 1 num + sep = col 4.

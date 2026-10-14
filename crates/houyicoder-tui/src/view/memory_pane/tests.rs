@@ -2,20 +2,39 @@
 
 #![cfg(test)]
 
-use houyicoder_protocol::frontend::memory::ToggleState;
+use std::sync::mpsc::channel;
+use std::time::Duration;
+
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use houyicoder_async::PFut;
+use houyicoder_client::Transport;
+use houyicoder_protocol::envelope::RequestId;
+use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
+use houyicoder_protocol::frontend::memory::{
+    MemoryDetail, MemorySummaryEntry, MemoryToggleWhich, ToggleState,
+};
+use houyicoder_protocol::frontend::run::RunError;
 use houyicoder_protocol::frontend::{FrontendRequest, SlashCommand};
+use ratatui::buffer::Buffer;
+use ratatui::style::{Color, Modifier, Style};
 
+use crate::agent_message::{ConnectionEvent, ServerResponse, SessionMessage};
 use crate::composition;
-use crate::state::Pane;
-use crate::test_harness::{connected_app_events, render_text, wait_for_request};
+use crate::keys::handle_working;
+use crate::records::TranscriptLine;
+use crate::session::SessionConnection;
+use crate::state::enums::MemoryScopeTab;
+use crate::state::{App, Pane};
+use crate::test_harness::{connected_app_events, render_buffer, render_text, wait_for_request};
+use crate::view::line_wrap::max_scroll_offset;
 
-fn working() -> crate::state::App {
+fn working() -> App {
     let mut app = composition::app();
     app.ui.navigation.screen = crate::state::Screen::Working;
     app
 }
 
-fn render(app: &crate::state::App) -> String {
+fn render(app: &App) -> String {
     render_text(app, 100, 28)
 }
 
@@ -78,9 +97,6 @@ fn test_memory_forget_disconnected() {
 /// pane entries + resets the cursor so it never points past the new list.
 #[test]
 fn test_list_result_resets_cursor() {
-    use crate::agent_message::{ServerResponse, SessionMessage};
-    use houyicoder_protocol::envelope::RequestId;
-    use houyicoder_protocol::frontend::memory::MemorySummaryEntry;
     let mut app = working();
     app.run_command(SlashCommand::Memory);
     app.ui.memory.set_cursor(5);
@@ -113,40 +129,33 @@ fn test_list_result_resets_cursor() {
     );
     assert!(render(&app).contains("source: project · age: now"));
     assert_eq!(app.sessions.current.transcript.len(), transcript_len);
-    assert_eq!(app.ui.navigation.pane, crate::state::Pane::Memory);
+    assert_eq!(app.ui.navigation.pane, Pane::Memory);
 }
 
 /// Pane navigation and actions route to the selected memory.
 #[test]
 fn test_memory_pane_keys_route() {
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     let mut app = working();
     app.run_command(SlashCommand::Memory);
     assert_eq!(app.ui.memory.cursor(), 0);
-    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     assert_eq!(app.ui.memory.cursor(), 1, "Down moves cursor");
-    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+    handle_working(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
     assert_eq!(app.ui.memory.cursor(), 0, "Up moves cursor back");
-    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
-    assert_eq!(
-        app.ui.memory.scope(),
-        crate::state::enums::MemoryScopeTab::User
-    );
-    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
-    assert_eq!(
-        app.ui.memory.scope(),
-        crate::state::enums::MemoryScopeTab::All
-    );
-    crate::keys::handle_working(
+    handle_working(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    assert_eq!(app.ui.memory.scope(), MemoryScopeTab::User);
+    handle_working(&mut app, KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+    assert_eq!(app.ui.memory.scope(), MemoryScopeTab::All);
+    handle_working(
         &mut app,
         KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
     );
-    crate::keys::handle_working(
+    handle_working(
         &mut app,
         KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE),
     );
     // d fires the forget action (a disconnected app reports not connected).
-    crate::keys::handle_working(
+    handle_working(
         &mut app,
         KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
     );
@@ -157,15 +166,11 @@ fn test_memory_pane_keys_route() {
 #[test]
 fn test_detail_soft_wrap_max() {
     let body = vec![ratatui::text::Line::from("x".repeat(25))];
-    assert_eq!(crate::view::line_wrap::max_scroll_offset(&body, 10, 2), 1);
+    assert_eq!(max_scroll_offset(&body, 10, 2), 1);
 }
 
 #[test]
 fn test_memory_detail_inline() {
-    use crate::agent_message::{ServerResponse, SessionMessage};
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-    use houyicoder_protocol::envelope::RequestId;
-    use houyicoder_protocol::frontend::memory::MemoryDetail;
     let mut app = working();
     app.run_command(SlashCommand::Memory);
     let transcript_len = app.sessions.current.transcript.len();
@@ -197,7 +202,7 @@ fn test_memory_detail_inline() {
     assert!(detail.contains("source: feedback · updated:"));
     assert!(detail.contains("Esc to back"));
     assert_eq!(app.sessions.current.transcript.len(), transcript_len);
-    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     assert_eq!(app.ui.memory.detail_offset(), Some(1));
     let scrolled = render(&app);
     assert!(
@@ -209,25 +214,22 @@ fn test_memory_detail_inline() {
         "the body, not the metadata header, advances by one row:\n{scrolled}"
     );
     for _ in 0..100 {
-        crate::keys::handle_working(
+        handle_working(
             &mut app,
             KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE),
         );
     }
     let bottom = app.ui.memory.detail_offset().expect("detail open");
-    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     assert_eq!(app.ui.memory.detail_offset(), Some(bottom));
 
-    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    handle_working(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     assert!(app.ui.memory.detail().is_none());
-    assert_eq!(app.ui.navigation.pane, crate::state::Pane::Memory);
+    assert_eq!(app.ui.navigation.pane, Pane::Memory);
 }
 
 #[test]
 fn test_stale_detail_ignored() {
-    use crate::agent_message::{ServerResponse, SessionMessage};
-    use houyicoder_protocol::envelope::RequestId;
-    use houyicoder_protocol::frontend::memory::MemoryDetail;
     let mut app = working();
     app.ui.navigation.pane = Pane::Memory;
     app.ui.memory.request_detail(RequestId(1), "old".into());
@@ -253,7 +255,6 @@ fn test_stale_detail_ignored() {
 /// build-gate / comment-style / spec-driven — "build" matches only build-gate.
 #[test]
 fn test_memory_search_narrows_clears() {
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     let mut app = working();
     app.run_tui_local_command("memory search build");
     let narrowed = render(&app);
@@ -265,7 +266,7 @@ fn test_memory_search_narrows_clears() {
     assert!(narrowed.contains("build-gate"), "matching entry shows");
     assert!(!narrowed.contains("comment-style"), "non-match hidden");
     // Esc clears the filter, back to the full set.
-    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    handle_working(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     let cleared = render(&app);
     assert!(cleared.contains("3 memories"), "Esc restores full list");
     assert!(!cleared.contains("search: ["), "search row gone after Esc");
@@ -274,10 +275,9 @@ fn test_memory_search_narrows_clears() {
 /// Enter requests detail for the selected row.
 #[test]
 fn test_enter_shows_no_carrier() {
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     let mut app = working();
     app.run_command(SlashCommand::Memory);
-    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    handle_working(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     let out = render(&app);
     assert!(out.contains("not connected"), "enter fires show action");
 }
@@ -325,11 +325,6 @@ fn test_memory_pane_renders_rows() {
 /// alike, so a refactor cannot silently drop the coloring half.
 #[test]
 fn test_header_status_row_styles() {
-    use houyicoder_protocol::envelope::RequestId;
-    use houyicoder_protocol::frontend::memory::MemoryToggleWhich;
-    use ratatui::buffer::Buffer;
-    use ratatui::style::{Color, Modifier, Style};
-
     /// The style of the cell where needle starts, scanning rows top-down.
     fn style_at(buf: &Buffer, needle: &str) -> Style {
         for y in 0..buf.area.height {
@@ -344,7 +339,7 @@ fn test_header_status_row_styles() {
 
     let mut app = working();
     app.run_command(SlashCommand::Memory);
-    let buf = crate::test_harness::render_buffer(&app, 100, 28);
+    let buf = render_buffer(&app, 100, 28);
     // Glyph cell and a label cell of the same item share the on-style.
     for needle in ["● auto-memory", "auto-memory"] {
         let st = style_at(&buf, needle);
@@ -363,7 +358,7 @@ fn test_header_status_row_styles() {
             auto_memory: false,
             auto_dream: false,
         });
-    let buf = crate::test_harness::render_buffer(&app, 100, 28);
+    let buf = render_buffer(&app, 100, 28);
     for needle in ["○ auto-memory", "auto-memory"] {
         let st = style_at(&buf, needle);
         assert_eq!(st.fg, Some(Color::DarkGray), "off item is dim: {needle}");
@@ -378,7 +373,7 @@ fn test_header_status_row_styles() {
         .capabilities
         .memory
         .begin_toggle(RequestId(1), MemoryToggleWhich::Dream);
-    let buf = crate::test_harness::render_buffer(&app, 100, 28);
+    let buf = render_buffer(&app, 100, 28);
     let st = style_at(&buf, "◌ auto-dream");
     assert_eq!(st.fg, Some(Color::Cyan), "pending item is Cyan");
     assert!(
@@ -480,8 +475,6 @@ fn test_scope_tab_narrows_list() {
 /// operable.
 #[test]
 fn test_pending_blocks_repeat_toggle() {
-    use houyicoder_protocol::envelope::RequestId;
-    use houyicoder_protocol::frontend::memory::MemoryToggleWhich;
     let mut app = working();
     app.run_command(SlashCommand::Memory);
     assert!(
@@ -516,7 +509,6 @@ fn test_pending_blocks_repeat_toggle() {
 /// stays operable, mirroring the toggle guard.
 #[test]
 fn test_forget_pending_blocks_repeat() {
-    use houyicoder_protocol::envelope::RequestId;
     let mut app = working();
     assert!(
         app.sessions
@@ -556,9 +548,6 @@ fn test_forget_pending_blocks_repeat() {
 /// A settled open detail is not pending and survives the sweep.
 #[test]
 fn test_connection_loss_clears_pending() {
-    use crate::agent_message::{ConnectionEvent, SessionMessage};
-    use houyicoder_protocol::envelope::RequestId;
-    use houyicoder_protocol::frontend::memory::{MemoryDetail, MemoryToggleWhich};
     let mut app = working();
     app.run_command(SlashCommand::Memory);
     app.sessions
@@ -605,8 +594,6 @@ fn test_connection_loss_clears_pending() {
 /// detail view sticks on a fetch that can never land.
 #[test]
 fn test_connection_loss_sweeps_detail() {
-    use crate::agent_message::{ConnectionEvent, SessionMessage};
-    use houyicoder_protocol::envelope::RequestId;
     let mut app = working();
     app.run_command(SlashCommand::Memory);
     app.ui.memory.request_detail(RequestId(2), "loading".into());
@@ -621,10 +608,6 @@ fn test_connection_loss_sweeps_detail() {
 /// alive, so their replies can still land.
 #[test]
 fn test_run_error_keeps_pending() {
-    use crate::agent_message::{ServerResponse, SessionMessage};
-    use houyicoder_protocol::envelope::RequestId;
-    use houyicoder_protocol::frontend::memory::MemoryToggleWhich;
-    use houyicoder_protocol::frontend::run::RunError;
     let mut app = working();
     app.run_command(SlashCommand::Memory);
     app.sessions
@@ -657,16 +640,6 @@ fn test_run_error_keeps_pending() {
 /// can never arrive.
 #[test]
 fn test_dead_driver_toggle_rollback() {
-    use std::time::Duration;
-
-    use crate::agent_message::{ConnectionEvent, SessionMessage};
-    use crate::records::TranscriptLine;
-    use crate::session::SessionConnection;
-    use houyicoder_async::PFut;
-    use houyicoder_client::Transport;
-    use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
-    use houyicoder_protocol::frontend::memory::MemoryToggleWhich;
-
     /// A transport whose handshake fails immediately, so the driver exits
     /// (dropping the command receiver) before translating anything.
     struct FailOnConnect;
@@ -691,7 +664,7 @@ fn test_dead_driver_toggle_rollback() {
         .build()
         .expect("runtime");
     let client = houyicoder_client::Client::new(Box::new(FailOnConnect));
-    let (agent_tx, agent_rx) = std::sync::mpsc::channel::<SessionMessage>();
+    let (agent_tx, agent_rx) = channel::<SessionMessage>();
     let mut session = SessionConnection::spawn(client, agent_tx, agent_rx, &runtime);
     // Synchronization point: the driver drops the command receiver before
     // emitting ConnectionLost, so once the event is observed the enqueue
@@ -768,10 +741,6 @@ fn test_dead_driver_toggle_rollback() {
 /// state, and writes the confirmed outcome to the transcript.
 #[test]
 fn test_toggle_reply_writes_outcome() {
-    use crate::agent_message::{ServerResponse, SessionMessage};
-    use crate::records::TranscriptLine;
-    use houyicoder_protocol::envelope::RequestId;
-    use houyicoder_protocol::frontend::memory::MemoryToggleWhich;
     let mut app = working();
     app.run_command(SlashCommand::Memory);
     app.sessions
@@ -806,8 +775,6 @@ fn test_toggle_reply_writes_outcome() {
 /// transcript — only a pending flip produces an outcome line.
 #[test]
 fn test_toggle_read_skips_transcript() {
-    use crate::agent_message::{ServerResponse, SessionMessage};
-    use houyicoder_protocol::envelope::RequestId;
     let mut app = working();
     app.run_command(SlashCommand::Memory);
     let before = app.sessions.current.transcript.len();
@@ -840,9 +807,6 @@ fn test_toggle_read_skips_transcript() {
 /// the registered pending action.
 #[test]
 fn test_forget_reply_writes_outcome() {
-    use crate::agent_message::{ServerResponse, SessionMessage};
-    use crate::records::TranscriptLine;
-    use houyicoder_protocol::envelope::RequestId;
     let mut app = working();
     app.run_command(SlashCommand::Memory);
     app.sessions
@@ -876,10 +840,6 @@ fn test_forget_reply_writes_outcome() {
 /// the old value, and clears the pending mark.
 #[test]
 fn test_toggle_failure_names_action() {
-    use crate::agent_message::{ServerResponse, SessionMessage};
-    use crate::records::TranscriptLine;
-    use houyicoder_protocol::envelope::RequestId;
-    use houyicoder_protocol::frontend::memory::MemoryToggleWhich;
     let mut app = working();
     app.run_command(SlashCommand::Memory);
     app.sessions
@@ -912,9 +872,6 @@ fn test_toggle_failure_names_action() {
 /// A failed forget names the key that could not be deleted.
 #[test]
 fn test_forget_failure_names_action() {
-    use crate::agent_message::{ServerResponse, SessionMessage};
-    use crate::records::TranscriptLine;
-    use houyicoder_protocol::envelope::RequestId;
     let mut app = working();
     app.run_command(SlashCommand::Memory);
     app.sessions

@@ -11,7 +11,9 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph},
 };
 
+use super::notice_rows::push_notice_rows;
 use super::tail_rows::build_tail_rows;
+use crate::fold::DisplaySlot;
 use crate::records::TranscriptLine;
 use crate::rows::row_set::{Row, RowSet};
 use crate::rows::slots_key::SlotsKey;
@@ -23,8 +25,11 @@ use crate::state::enums::LiveBlock;
 use crate::state::{App, ViewportMode};
 use crate::toggle_hint::ToggleHint;
 use crate::view::context_view;
+use crate::view::line_wrap::truncate_width;
+use crate::view::line_wrap::wrap_line;
 use crate::view::markers::{diff_row, styled_row};
 use crate::view::spinner::{spinner_line, stall_intensity, stall_intensity_reasoning};
+use unicode_width::UnicodeWidthStr;
 
 fn ensure_cached_slots(area: Rect, app: &App) {
     // The slot rows depend on the source and its revisions, the wrap width,
@@ -251,7 +256,7 @@ fn draw_jump_to_bottom(f: &mut Frame, inner: Rect, app: &App) {
 }
 
 fn rendered_tool_rows(
-    line: &crate::records::TranscriptLine,
+    line: &TranscriptLine,
     grp: Option<&str>,
     width: u16,
     app: &App,
@@ -277,12 +282,12 @@ fn rendered_tool_rows(
         None => format!(" ({}s)", prog.elapsed_secs),
     };
     if let Some(last) = rows.last_mut() {
-        let suffix_width = unicode_width::UnicodeWidthStr::width(suffix.as_str());
+        let suffix_width = UnicodeWidthStr::width(suffix.as_str());
         let keep = (width as usize).saturating_sub(suffix_width);
         *last = format!(
             "{}{}",
-            crate::view::line_wrap::truncate_width(last, keep),
-            crate::view::line_wrap::truncate_width(&suffix, width as usize)
+            truncate_width(last, keep),
+            truncate_width(&suffix, width as usize)
         );
     }
     Some(rows)
@@ -297,13 +302,12 @@ fn rendered_tool_rows(
 /// Thinking line (emits nothing); true otherwise.
 #[expect(clippy::too_many_lines, reason = "row formatting")]
 pub(crate) fn push_line_rows(
-    line: &crate::records::TranscriptLine,
+    line: &TranscriptLine,
     grp: Option<&str>,
     width: u16,
     app: &App,
     sink: &mut RowSet,
 ) -> bool {
-    use crate::records::TranscriptLine;
     const PLAIN: u8 = crate::selection::TAG_PLAIN;
     const USER: u8 = crate::selection::TAG_USER;
     const SYSTEM: u8 = crate::selection::TAG_SYSTEM;
@@ -464,7 +468,7 @@ pub(crate) fn push_line_rows(
     };
     for logical in text.split('\n') {
         let rows = if matches!(line, TranscriptLine::System(_)) {
-            crate::view::line_wrap::wrap_line(logical, width as usize)
+            wrap_line(logical, width as usize)
         } else {
             vec![logical.to_string()]
         };
@@ -525,7 +529,7 @@ pub(crate) fn highlighted_line(row: &str, query: &str, current: bool) -> Line<'s
 pub(crate) fn user_row(row: &str, query: &str, current: bool, width: u16) -> Line<'static> {
     let style = Style::new().bg(Color::Indexed(238));
     let mut line = highlighted_line(row, query, current).style(style);
-    let used = unicode_width::UnicodeWidthStr::width(row);
+    let used = UnicodeWidthStr::width(row);
     let padding = (width as usize).saturating_sub(used);
     if padding > 0 {
         line.spans.push(Span::styled(" ".repeat(padding), style));
@@ -540,7 +544,7 @@ pub(crate) fn refresh_wide_cells(f: &mut Frame, area: Rect) {
         let has_wide = (area.x..area.x + area.width).any(|x| {
             buffer
                 .cell((x, y))
-                .is_some_and(|cell| unicode_width::UnicodeWidthStr::width(cell.symbol()) > 1)
+                .is_some_and(|cell| UnicodeWidthStr::width(cell.symbol()) > 1)
         });
         if !has_wide {
             continue;
@@ -549,11 +553,11 @@ pub(crate) fn refresh_wide_cells(f: &mut Frame, area: Rect) {
             let previous_is_wide = x > area.x
                 && buffer
                     .cell((x - 1, y))
-                    .is_some_and(|cell| unicode_width::UnicodeWidthStr::width(cell.symbol()) > 1);
+                    .is_some_and(|cell| UnicodeWidthStr::width(cell.symbol()) > 1);
             let Some(cell) = buffer.cell_mut((x, y)) else {
                 continue;
             };
-            let width = unicode_width::UnicodeWidthStr::width(cell.symbol());
+            let width = UnicodeWidthStr::width(cell.symbol());
             if width > 1 || (cell.symbol() == " " && !previous_is_wide) {
                 cell.set_diff_option(ratatui::buffer::CellDiffOption::AlwaysUpdate);
             }
@@ -571,10 +575,7 @@ fn fold_hint_row(hint: &str, width: u16) -> String {
     } else {
         first.to_string()
     };
-    format!(
-        "{PREFIX}{}",
-        crate::view::line_wrap::truncate_width(&preview, avail)
-    )
+    format!("{PREFIX}{}", truncate_width(&preview, avail))
 }
 
 fn build_slots_rows(area: Rect, app: &App) -> RowSet {
@@ -592,7 +593,7 @@ fn build_slots_rows(area: Rect, app: &App) -> RowSet {
     );
     for slot in &slots {
         match slot {
-            crate::fold::DisplaySlot::Summary(g) => {
+            DisplaySlot::Summary(g) => {
                 if !sink.is_empty() {
                     sink.push(Row::spacer());
                 }
@@ -616,13 +617,13 @@ fn build_slots_rows(area: Rect, app: &App) -> RowSet {
                     );
                 }
             }
-            crate::fold::DisplaySlot::NoticeCollapsed { key, idx } => {
-                super::notice_rows::push_notice_rows(app, *idx, key, false, area.width, &mut sink);
+            DisplaySlot::NoticeCollapsed { key, idx } => {
+                push_notice_rows(app, *idx, key, false, area.width, &mut sink);
             }
-            crate::fold::DisplaySlot::NoticeExpanded { key, idx } => {
-                super::notice_rows::push_notice_rows(app, *idx, key, true, area.width, &mut sink);
+            DisplaySlot::NoticeExpanded { key, idx } => {
+                push_notice_rows(app, *idx, key, true, area.width, &mut sink);
             }
-            crate::fold::DisplaySlot::Line(i, grp) => {
+            DisplaySlot::Line(i, grp) => {
                 let line = &app.active_transcript()[*i];
                 push_line_rows(line, grp.as_deref(), area.width, app, &mut sink);
             }

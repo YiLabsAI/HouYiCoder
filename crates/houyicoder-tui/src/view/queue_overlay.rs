@@ -11,6 +11,7 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthStr;
 
+use super::line_wrap::truncate_width;
 use crate::input::queue::InputItem;
 use crate::state::App;
 
@@ -38,15 +39,11 @@ fn preview_text(text: &str, width: usize) -> String {
     let first = lines.next().unwrap_or_default();
     let hidden = lines.count();
     if hidden == 0 {
-        return super::line_wrap::truncate_width(first, width);
+        return truncate_width(first, width);
     }
     let suffix = format!(" … +{hidden} lines");
     let first_width = width.saturating_sub(UnicodeWidthStr::width(suffix.as_str()));
-    format!(
-        "{}{}",
-        super::line_wrap::truncate_width(first, first_width),
-        suffix
-    )
+    format!("{}{}", truncate_width(first, first_width), suffix)
 }
 
 /// Render the read-only queued-input strip above the input box. The glyph

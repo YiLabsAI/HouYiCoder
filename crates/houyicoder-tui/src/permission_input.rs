@@ -9,8 +9,11 @@ use houyicoder_protocol::frontend::permission::{
     PermissionEffect, PermissionRule, PermissionRuleContent, RuleDestination,
 };
 
+use crate::command::render::permission_effect_label;
 use crate::run_control::ClientCommand;
 use crate::state::{App, Pane, PermissionInput, PermissionTab};
+use ratatui::crossterm::event::KeyCode;
+use ratatui::crossterm::event::KeyEvent;
 
 /// A parsed rule spec: action + optional content tier + effect. The wire
 /// rule is built from this so the Add sub-mode and the /permission add
@@ -102,7 +105,7 @@ fn add_rule_with_destination(
         effect: spec.effect,
         destination,
     };
-    let label = crate::command::render::permission_effect_label(spec.effect);
+    let label = permission_effect_label(spec.effect);
     let action = wire_rule.action.clone();
     let Some(s) = app.sessions.current.connection.as_ref() else {
         app.system_line("permission: not connected");
@@ -222,8 +225,7 @@ fn content_text(r: &PermissionRule) -> String {
 /// Handle a key in the /permission pane. Returns true when consumed (nav,
 /// entry keys, or the sub-mode Esc exit); false lets the key fall through to
 /// the generic input handler so Add/Remove typing + Enter still work.
-pub(crate) fn handle_permission_key(app: &mut App, k: ratatui::crossterm::event::KeyEvent) -> bool {
-    use ratatui::crossterm::event::KeyCode;
+pub(crate) fn handle_permission_key(app: &mut App, k: KeyEvent) -> bool {
     if app.ui.navigation.pane != Pane::Permission {
         return false;
     }
@@ -257,8 +259,7 @@ pub(crate) fn handle_permission_key(app: &mut App, k: ratatui::crossterm::event:
 /// Select-style keys for the AddDestination and Remove-confirm steps:
 /// Left/Right cycle the focused option, Enter commits, Backspace/other keys
 /// are swallowed so the main input box is never touched.
-fn handle_select_keys(app: &mut App, code: ratatui::crossterm::event::KeyCode) -> bool {
-    use ratatui::crossterm::event::KeyCode;
+fn handle_select_keys(app: &mut App, code: KeyCode) -> bool {
     match &mut app.ui.permission_pane.input {
         PermissionInput::AddDestination { destination, .. } => match code {
             KeyCode::Left => {
@@ -364,8 +365,7 @@ fn next_destination(d: RuleDestination) -> RuleDestination {
 /// Search sub-mode keys: printable chars + Backspace edit the pane-local
 /// permission_pane.search buffer (live filter); Enter ends search (filter clears);
 /// Up/Down navigate the filtered list. Everything else is swallowed.
-fn handle_search_keys(app: &mut App, code: ratatui::crossterm::event::KeyCode) -> bool {
-    use ratatui::crossterm::event::KeyCode;
+fn handle_search_keys(app: &mut App, code: KeyCode) -> bool {
     match code {
         KeyCode::Char(c) => {
             app.ui.permission_pane.search.push(c);
@@ -396,8 +396,7 @@ fn handle_search_keys(app: &mut App, code: ratatui::crossterm::event::KeyCode) -
 /// List navigation + sub-mode entry keys (no sub-mode active). 'a' add, 'd'
 /// remove (on a focused rule), 's' search; Left/Right cycle tabs; Up/Down move
 /// the cursor. Entry keys fire only on an empty input + a rule tab.
-fn handle_nav_keys(app: &mut App, code: ratatui::crossterm::event::KeyCode) -> bool {
-    use ratatui::crossterm::event::KeyCode;
+fn handle_nav_keys(app: &mut App, code: KeyCode) -> bool {
     let empty = app.ui.input.editor.is_empty();
     let on_rule_tab = matches!(
         app.ui.permission_pane.tab,

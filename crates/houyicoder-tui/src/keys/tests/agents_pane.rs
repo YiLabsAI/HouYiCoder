@@ -5,6 +5,9 @@
 //! fleet when it has entries, else the returned delegations -- so an
 //! unselected fleet never opens an off-screen delegation.
 use super::*;
+use crate::agent_message::FleetEntry;
+use crate::records::TranscriptLine;
+use crate::test_harness::render_text;
 
 /// Esc closes the /agents pane. The pane had no Esc branch at all -- the key
 /// fell through to the queue-recall and abort branches, so while agents ran, Esc
@@ -49,13 +52,13 @@ fn test_agents_esc_no_abort() {
 #[test]
 fn test_agents_pane_hides_input() {
     let mut app = working_app();
-    let before = crate::test_harness::render_text(&app, 80, 24);
+    let before = render_text(&app, 80, 24);
     assert!(
         before.contains("for commands"),
         "the input box shows its prompt while the transcript is up"
     );
     app.ui.navigation.pane = Pane::Agents;
-    let after = crate::test_harness::render_text(&app, 80, 24);
+    let after = render_text(&app, 80, 24);
     assert!(
         !after.contains("for commands"),
         "the input box retracts while the agents pane is open:\n{after}"
@@ -68,8 +71,6 @@ fn test_agents_pane_hides_input() {
 /// the rendered list let that unselected case open an off-screen delegation.
 #[test]
 fn test_agents_enter_follows_list() {
-    use crate::agent_message::FleetEntry;
-    use crate::records::TranscriptLine;
     let mut app = working_app();
     app.ui.navigation.pane = Pane::Agents;
     app.push_transcript_line(TranscriptLine::Subagent {
@@ -118,7 +119,6 @@ fn test_agents_enter_follows_list() {
 /// through, since in-crate code reads the session field directly.
 #[test]
 fn test_agents_enter_returned_delegation() {
-    use crate::records::TranscriptLine;
     let mut app = working_app();
     app.ui.navigation.pane = Pane::Agents;
     app.push_transcript_line(TranscriptLine::Subagent {
@@ -151,7 +151,6 @@ fn test_agents_enter_returned_delegation() {
 /// Enter drill clamps against the rows as the marker does.
 #[test]
 fn test_enter_clamps() {
-    use crate::records::TranscriptLine;
     let mut app = working_app();
     app.ui.navigation.pane = Pane::Agents;
     for (sid, summary) in [("c1", "first"), ("c2", "second")] {
@@ -179,7 +178,6 @@ fn test_enter_clamps() {
 /// from the previous list.
 #[test]
 fn test_rebuild_parks_cursor() {
-    use crate::records::TranscriptLine;
     let mut app = working_app();
     app.ui.navigation.pane = Pane::Agents;
     for (sid, summary) in [("c1", "first"), ("c2", "second")] {

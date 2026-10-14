@@ -5,12 +5,15 @@
 use houyicoder_protocol::frontend::SlashCommand;
 use houyicoder_protocol::llm::EffortLevel;
 
+use crate::command::render::render_trajectory_wire;
 use crate::composition;
 use crate::evidence::Verdict;
+use crate::state::App;
 use crate::state::{Pane, Screen, Stage};
 use crate::test_harness::{model_caps, model_catalog, model_entry, render_text};
+use houyicoder_protocol::frontend::trajectory::TrajectoryEntry;
 
-fn working() -> crate::state::App {
+fn working() -> App {
     let mut app = composition::app();
     app.ui.navigation.screen = Screen::Working;
     app.sessions.current.agent_directory =
@@ -18,7 +21,7 @@ fn working() -> crate::state::App {
     app
 }
 
-fn render(app: &crate::state::App) -> String {
+fn render(app: &App) -> String {
     render_text(app, 100, 28)
 }
 
@@ -411,7 +414,6 @@ fn test_login_console_exit_commands() {
 /// wire entries — the chain order is covered in the session crate.
 #[test]
 fn test_trajectory_renders_chain() {
-    use houyicoder_protocol::frontend::trajectory::TrajectoryEntry;
     let e1 = TrajectoryEntry {
         kind: "user".into(),
         ts: 100,
@@ -426,7 +428,7 @@ fn test_trajectory_renders_chain() {
         prev_hash: Some("abababab".into()),
         duration_ms: None,
     };
-    let out = crate::command::render::render_trajectory_wire(&[e1, e2], &[]);
+    let out = render_trajectory_wire(&[e1, e2], &[]);
     assert!(out.starts_with("trajectory: 2 events"), "{out}");
     assert!(out.contains("user"), "{out}");
     assert!(out.contains("assistant"), "{out}");

@@ -2,12 +2,18 @@ use super::approval::handle_approval;
 use super::input::{cycle_pane, handle_input};
 use super::palette::handle_palette;
 use super::*;
+use crate::agent_message::FleetEntry;
 use crate::composition;
 use crate::evidence::Verdict;
+use crate::input::queue::InputItem;
 use crate::pending_prompt::PendingPrompt;
+use crate::records::TeammateView;
 use crate::records::{Approval, TranscriptLine};
 use crate::state::Screen;
+use crate::state::enums::StatusTab;
 use crate::state::model_draft::ModelSettingFocus;
+use crate::test_harness::attach_connection;
+use crate::test_harness::render_text;
 use crate::test_harness::{
     TransportEvent, connected_app_with_events, model_app, model_caps, model_catalog, model_entry,
 };
@@ -16,6 +22,7 @@ use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::frontend::LoginMode;
 use houyicoder_protocol::frontend::SlashCommand;
 use houyicoder_protocol::frontend::model::{ModelCatalog, ModelChoice, SpeedMode};
+use houyicoder_protocol::frontend::skills::SkillEntry;
 use houyicoder_protocol::llm::EffortLevel;
 use std::time::{Duration, Instant};
 
@@ -378,14 +385,14 @@ fn test_picker_fast_refused_off() {
         SpeedMode::Standard,
         "the draft does not ask for a tier this model cannot serve"
     );
-    let out = crate::test_harness::render_text(&app, 84, 24);
+    let out = render_text(&app, 84, 24);
     assert!(
         out.contains("off (required by selected model)"),
         "the pane says why the tier is off: {out}"
     );
     // The narrow layout renders the same line from another chunk index, so the
     // reason has to survive that path too.
-    let narrow = crate::test_harness::render_text(&app, 64, 24);
+    let narrow = render_text(&app, 64, 24);
     assert!(
         narrow.contains("off (required by selected model)"),
         "the reason shows in the narrow layout as well: {narrow}"
@@ -412,7 +419,6 @@ fn test_skills_pane_esc_closes() {
 /// Up/Down moves the skill cursor within the list bounds.
 #[test]
 fn test_skills_pane_nav() {
-    use houyicoder_protocol::frontend::skills::SkillEntry;
     let mut app = working_app();
     app.ui.navigation.pane = Pane::Skills;
     app.sessions.current.capabilities.skills.entries = vec![
@@ -449,7 +455,6 @@ fn test_skills_pane_nav() {
 /// rather than staying on a request that was never sent.
 #[test]
 fn test_skills_pane_detail() {
-    use houyicoder_protocol::frontend::skills::SkillEntry;
     let mut app = working_app();
     app.ui.navigation.pane = Pane::Skills;
     app.sessions.current.capabilities.skills.entries = vec![SkillEntry {
@@ -476,7 +481,6 @@ fn test_skills_pane_detail() {
 /// The t key toggles a skill disabled in the detail view.
 #[test]
 fn test_skills_pane_toggle() {
-    use houyicoder_protocol::frontend::skills::SkillEntry;
     let mut app = working_app();
     app.ui.navigation.pane = Pane::Skills;
     app.sessions.current.capabilities.skills.entries = vec![SkillEntry {
@@ -519,7 +523,6 @@ fn test_skills_pane_toggle() {
 /// cursor to the top.
 #[test]
 fn test_skill_picker_opens() {
-    use houyicoder_protocol::frontend::skills::SkillEntry;
     let mut app = working_app();
     app.sessions.current.capabilities.skills.entries = vec![SkillEntry {
         name: "alpha".into(),
@@ -563,7 +566,6 @@ fn test_skill_picker_blocked() {
 /// Up/Down navigate the picker list.
 #[test]
 fn test_skill_picker_nav() {
-    use houyicoder_protocol::frontend::skills::SkillEntry;
     let mut app = working_app();
     app.sessions.current.capabilities.skills.entries = vec![
         SkillEntry {
@@ -599,7 +601,6 @@ fn test_skill_picker_nav() {
 /// Esc closes the picker without inserting anything.
 #[test]
 fn test_skill_picker_esc() {
-    use houyicoder_protocol::frontend::skills::SkillEntry;
     let mut app = working_app();
     app.sessions.current.capabilities.skills.entries = vec![SkillEntry {
         name: "alpha".into(),
@@ -624,7 +625,6 @@ fn test_skill_picker_esc() {
 /// so the user can append args before pressing Enter again).
 #[test]
 fn test_skill_picker_enter_submit() {
-    use houyicoder_protocol::frontend::skills::SkillEntry;
     let mut app = working_app();
     app.sessions.current.capabilities.skills.entries = vec![SkillEntry {
         name: "alpha".into(),
@@ -672,7 +672,6 @@ fn test_skill_picker_enter_empty() {
 /// input box (no silent char loss). The modal falls through after closing.
 #[test]
 fn test_skill_picker_char() {
-    use houyicoder_protocol::frontend::skills::SkillEntry;
     let mut app = working_app();
     app.sessions.current.capabilities.skills.entries = vec![SkillEntry {
         name: "alpha".into(),
@@ -699,7 +698,6 @@ fn test_skill_picker_char() {
 /// Backspace on a lone @ closes the picker + clears the input.
 #[test]
 fn test_skill_picker_backspace_close() {
-    use houyicoder_protocol::frontend::skills::SkillEntry;
     let mut app = working_app();
     app.sessions.current.capabilities.skills.entries = vec![SkillEntry {
         name: "alpha".into(),
@@ -722,7 +720,6 @@ fn test_skill_picker_backspace_close() {
 /// A colon signals a namespace prefix — closes the picker for free-form.
 #[test]
 fn test_skill_picker_colon_closes() {
-    use houyicoder_protocol::frontend::skills::SkillEntry;
     let mut app = working_app();
     app.sessions.current.capabilities.skills.entries = vec![SkillEntry {
         name: "alpha".into(),
@@ -746,7 +743,6 @@ fn test_skill_picker_colon_closes() {
 /// (not the unfiltered list — prevents cursor/index desync).
 #[test]
 fn test_skill_picker_filter_select() {
-    use houyicoder_protocol::frontend::skills::SkillEntry;
     let mut app = working_app();
     app.sessions.current.capabilities.skills.entries = vec![
         SkillEntry {
@@ -849,20 +845,11 @@ fn test_status_pane_cycles_subtab() {
     let mut app = working_app();
     app.ui.navigation.pane = Pane::Status;
     handle_input(&mut app, key(KeyCode::Right));
-    assert_eq!(
-        app.ui.navigation.status_tab,
-        crate::state::enums::StatusTab::Config
-    );
+    assert_eq!(app.ui.navigation.status_tab, StatusTab::Config);
     handle_input(&mut app, key(KeyCode::Right));
-    assert_eq!(
-        app.ui.navigation.status_tab,
-        crate::state::enums::StatusTab::Usage
-    );
+    assert_eq!(app.ui.navigation.status_tab, StatusTab::Usage);
     handle_input(&mut app, key(KeyCode::Right));
-    assert_eq!(
-        app.ui.navigation.status_tab,
-        crate::state::enums::StatusTab::Status
-    );
+    assert_eq!(app.ui.navigation.status_tab, StatusTab::Status);
 }
 
 #[test]
@@ -1023,17 +1010,14 @@ fn test_palette_arg_keeps_open() {
 fn test_palette_typing_filters() {
     let mut app = working_app();
     app.open_palette();
-    assert_eq!(
-        app.palette_len(),
-        houyicoder_protocol::frontend::SlashCommand::ALL.len()
-    );
+    assert_eq!(app.palette_len(), SlashCommand::ALL.len());
     handle_palette(&mut app, key(KeyCode::Char('s')));
     handle_palette(&mut app, key(KeyCode::Char('p')));
     handle_palette(&mut app, key(KeyCode::Char('e')));
     assert_eq!(app.ui.navigation.palette.sel, 0);
     let cmd = app.selected_command().expect("filtered list non-empty");
     assert!(cmd.name().contains("spe"));
-    assert!(app.palette_len() < houyicoder_protocol::frontend::SlashCommand::ALL.len());
+    assert!(app.palette_len() < SlashCommand::ALL.len());
 }
 
 #[test]
@@ -1107,9 +1091,8 @@ fn test_review_rework_key_routes() {
 /// leaves queued input intact throughout the cancellation round trip.
 #[test]
 fn test_repeated_esc_keeps() {
-    use crate::input::queue::InputItem;
     let mut app = working_app();
-    crate::test_harness::attach_connection(&mut app);
+    attach_connection(&mut app);
     app.start_run_for_test(0);
     app.ui.input.queue.push(InputItem::Message("task a".into()));
     handle_working(&mut app, key(KeyCode::Esc));
@@ -1131,9 +1114,8 @@ fn test_repeated_esc_keeps() {
 /// instead of overwriting it.
 #[test]
 fn test_recall_merges_draft() {
-    use crate::input::queue::InputItem;
     let mut app = working_app();
-    crate::test_harness::attach_connection(&mut app);
+    attach_connection(&mut app);
     app.start_run_for_test(0);
     app.ui.input.queue.push(InputItem::Message("task a".into()));
     app.ui.input.editor.set("half draft".into());
@@ -1150,9 +1132,8 @@ fn test_recall_merges_draft() {
 /// the pane without changing the queued input.
 #[test]
 fn test_esc_cancelling_closes_pane() {
-    use crate::input::queue::InputItem;
     let mut app = working_app();
-    crate::test_harness::attach_connection(&mut app);
+    attach_connection(&mut app);
     app.start_run_for_test(0);
     app.ui.input.queue.push(InputItem::Message("task a".into()));
     // Esc1: interrupt (cancelling, agent_busy still true, queue intact).
@@ -1183,9 +1164,8 @@ fn test_esc_cancelling_closes_pane() {
 /// left in neither Esc arm.
 #[test]
 fn test_esc_cancelling_backs_trajectory() {
-    use crate::input::queue::InputItem;
     let mut app = working_app();
-    crate::test_harness::attach_connection(&mut app);
+    attach_connection(&mut app);
     app.start_run_for_test(0);
     app.ui.input.queue.push(InputItem::Message("task a".into()));
     handle_working(&mut app, key(KeyCode::Esc));
@@ -1421,7 +1401,7 @@ fn test_esc_keeps_input() {
 #[test]
 fn test_busy_esc_keeps_draft() {
     let mut app = working_app();
-    crate::test_harness::attach_connection(&mut app);
+    attach_connection(&mut app);
     app.start_run_for_test(0);
     app.ui.input.editor.set("draft".into());
     handle_working(&mut app, key(KeyCode::Esc));
@@ -1598,7 +1578,7 @@ fn fleet_app(n: usize) -> App {
             .capabilities
             .fleet
             .entries
-            .push(crate::agent_message::FleetEntry {
+            .push(FleetEntry {
                 agent_id: format!("child-{i}"),
                 subagent_type: "explore".into(),
                 turn: 1,
@@ -1642,7 +1622,6 @@ fn test_shift_arrow_moves_fleet() {
 /// user behind the view. Both arrow directions exit.
 #[test]
 fn test_shift_arrow_exits_teammate() {
-    use crate::records::TeammateView;
     let mut app = fleet_app(1);
     app.ui.teammate_view = Some(TeammateView {
         child_sid: "child-0".into(),
@@ -1677,7 +1656,6 @@ fn test_shift_arrow_exits_teammate() {
 /// no-op toast when idle) so the parent run is never interrupted.
 #[test]
 fn test_teammate_esc_no_leak() {
-    use crate::records::TeammateView;
     let mut app = fleet_app(1);
     app.start_run_for_test(0);
     app.ui.input.editor.set("a draft steering note".into());
@@ -1704,7 +1682,6 @@ fn test_teammate_esc_no_leak() {
 /// child is not interrupted while the user manages a pane.
 #[test]
 fn test_teammate_esc_pane_first() {
-    use crate::records::TeammateView;
     let mut app = fleet_app(1);
     app.start_run_for_test(0);
     app.ui.navigation.pane = Pane::Agents;
@@ -1727,7 +1704,7 @@ fn test_teammate_esc_pane_first() {
 #[test]
 fn test_fleet_strip_renders_rows() {
     let app = fleet_app(2);
-    let text = crate::test_harness::render_text(&app, 80, 24);
+    let text = render_text(&app, 80, 24);
     assert!(text.contains("explore"), "strip shows the child type");
     assert!(
         text.contains("searching") || text.contains("thinking"),
@@ -1739,7 +1716,6 @@ fn test_fleet_strip_renders_rows() {
 /// teammate view via the agent id, not the transcript cursor.
 #[test]
 fn test_enter_fleet_drills_teammate() {
-    use crate::records::TranscriptLine;
     let mut app = crate::composition::app();
     app.ui.navigation.screen = Screen::Working;
     app.ui.navigation.viewport = ViewportMode::Working;
@@ -1759,7 +1735,7 @@ fn test_enter_fleet_drills_teammate() {
         .capabilities
         .fleet
         .entries
-        .push(crate::agent_message::FleetEntry {
+        .push(FleetEntry {
             agent_id: "c1".into(),
             subagent_type: "explore".into(),
             turn: 1,
@@ -1858,7 +1834,7 @@ fn test_ctrl_o_follows_cursor() {
             folded_transcript: Vec::new(),
             color: None,
         });
-    drop(crate::test_harness::render_text(&app, 80, 24));
+    drop(render_text(&app, 80, 24));
     let ri = app
         .ui
         .frame

@@ -1,4 +1,6 @@
 use super::*;
+use crate::scroll::VIEWABLE_SCROLLBACK_CAP;
+use crate::transcript::FrontendRow;
 
 /// Trim runs only at the tail. A scrolled-back reader pins a fixed viewport,
 /// so draining the oldest lines would shift the content under it; a scroll-up
@@ -7,7 +9,6 @@ use super::*;
 /// lines accumulate rather than draining.
 #[test]
 fn test_trim_skips_scrollaway() {
-    use crate::scroll::VIEWABLE_SCROLLBACK_CAP;
     let mut app = fresh_app();
     app.ui.navigation.screen = Screen::Working;
     // Follow the tail: direct pushes trim down to the cap.
@@ -39,7 +40,6 @@ fn test_trim_skips_scrollaway() {
 /// prefix the next rebuild would reuse.
 #[test]
 fn test_trim_shifts_boundary() {
-    use crate::scroll::VIEWABLE_SCROLLBACK_CAP;
     let mut app = fresh_app();
     app.ui.navigation.screen = Screen::Working;
     // A turn boundary with a real prefix: 100 user messages, then an agent
@@ -75,8 +75,6 @@ fn test_trim_shifts_boundary() {
 /// content arrived.
 #[test]
 fn test_scrollback_survives_frame() {
-    use crate::scroll::VIEWABLE_SCROLLBACK_CAP;
-    use crate::transcript::FrontendRow;
     // Enough frames that repeated scroll-up prepends push the transcript
     // past the viewable cap: the frame window keeps the newest rows, and the
     // prepended older rows must push the total past the cap.

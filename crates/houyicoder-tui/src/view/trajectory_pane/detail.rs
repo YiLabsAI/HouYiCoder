@@ -40,6 +40,8 @@ pub struct TrajectoryDetailView {
     /// the whole of it.
     pub truncated: bool,
 }
+use crate::redaction::redact;
+use crate::state::App;
 use crate::view::relative_time::format_span_ms;
 
 /// The colour a record's outcome is drawn in.
@@ -61,7 +63,7 @@ pub(super) fn draw_turn_detail(
     detail: &TrajectoryDetailView,
     cursor: usize,
     area: Rect,
-    app: &crate::state::App,
+    app: &App,
 ) -> (
     Vec<Line<'static>>,
     Vec<Line<'static>>,
@@ -153,7 +155,7 @@ pub(super) fn draw_bg_detail(
     bg: &TrajectoryBg,
     _cursor: usize,
     _area: Rect,
-    app: &crate::state::App,
+    app: &App,
 ) -> (
     Vec<Line<'static>>,
     Vec<Line<'static>>,
@@ -473,17 +475,17 @@ pub(super) fn draw_event_detail(
     // log stays full-fidelity; only the display is filtered. See redaction.rs.
     // Each content field is its own block, so the boundary is not the reader's job.
     if let Some(thinking) = &ev.thinking {
-        let r = crate::redaction::redact(thinking);
+        let r = redact(thinking);
         push_field(&mut body, "thinking", &r, Color::Gray);
         body.push(blank());
     }
     if let Some(input) = &ev.input {
-        let r = crate::redaction::redact(input);
+        let r = redact(input);
         push_field(&mut body, "input", &r, Color::Gray);
         body.push(blank());
     }
     if let Some(output) = &ev.output {
-        let r = crate::redaction::redact(output);
+        let r = redact(output);
         push_field(&mut body, "output", &r, mc);
         body.push(blank());
     }

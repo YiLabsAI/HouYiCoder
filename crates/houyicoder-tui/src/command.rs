@@ -18,6 +18,7 @@ use crate::records::{ContextDrillDown, ContextView, TranscriptLine};
 use crate::run_control::ClientCommand;
 use crate::state::{App, Pane, Screen, Stage, pane_for_stage};
 use crate::view::export_log::write_atomic_0600;
+use std::path::PathBuf;
 
 mod debug;
 mod memory;
@@ -243,8 +244,8 @@ impl App {
         };
         let payload = log.export();
         let target = match path {
-            Some(p) => std::path::PathBuf::from(p),
-            None => std::path::PathBuf::from(&payload.filename),
+            Some(p) => PathBuf::from(p),
+            None => PathBuf::from(&payload.filename),
         };
         let bytes = payload.json.as_bytes();
         match write_atomic_0600(&target, bytes) {

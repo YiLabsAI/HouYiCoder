@@ -6,10 +6,13 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
 use std::sync::mpsc;
 
+use crate::composition::app;
 use crate::records::TranscriptLine;
 use crate::state::App;
+use crate::state::Screen;
 use crate::state::history_read::{HistoryReadOutcome, HistoryReadResult};
 use crate::test_harness::MockSnapshot;
+use crate::test_harness::render_text;
 use crate::transcript::TranscriptFrame;
 use houyicoder_protocol::frontend::run::ContentBlock;
 use houyicoder_protocol::frontend::session_update::{ContentChunk, SessionUpdate};
@@ -36,8 +39,8 @@ fn subagent_line(rows: usize) -> TranscriptLine {
 /// A working app whose parent transcript holds one user line per frame. The
 /// Subagent line rides after the rebuild so the rebuild cannot drop it.
 fn app_with_parent(parent_rows: usize) -> App {
-    let mut app = crate::composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    let mut app = app();
+    app.ui.navigation.screen = Screen::Working;
     for i in 0..parent_rows {
         app.sessions
             .current
@@ -55,14 +58,14 @@ fn app_with_parent(parent_rows: usize) -> App {
 #[test]
 fn test_parent_scroll_survives_visit() {
     let mut app = app_with_parent(60);
-    let first = crate::test_harness::render_text(&app, 80, 24);
+    let first = render_text(&app, 80, 24);
     app.whole_scroll_mut().jump_to(20);
-    let parked = crate::test_harness::render_text(&app, 80, 24);
+    let parked = render_text(&app, 80, 24);
     assert_ne!(first, parked, "scrolling moved the viewport");
 
     assert!(app.enter_teammate_view());
     // The child renders and scrolls on its own scroll state.
-    let _child = crate::test_harness::render_text(&app, 80, 24);
+    let _child = render_text(&app, 80, 24);
     app.scroll_transcript_up();
     assert_eq!(
         app.whole_scroll().raw_top(),
@@ -71,7 +74,7 @@ fn test_parent_scroll_survives_visit() {
     );
 
     app.exit_teammate_view();
-    let back = crate::test_harness::render_text(&app, 80, 24);
+    let back = render_text(&app, 80, 24);
     assert_eq!(
         parked, back,
         "the parent viewport renders the same rows after the visit"
@@ -114,8 +117,8 @@ fn test_child_scroll_leaves_parent() {
 /// cutting rows from the child view would lose the parent's place.
 #[test]
 fn test_child_tail_spares_parent() {
-    let mut app = crate::composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    let mut app = app();
+    app.ui.navigation.screen = Screen::Working;
     for i in 0..60 {
         app.sessions
             .current
@@ -165,8 +168,8 @@ fn test_child_tail_spares_parent() {
 /// see.
 #[test]
 fn test_child_blocks_parent_reads() {
-    let mut app = crate::composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    let mut app = app();
+    app.ui.navigation.screen = Screen::Working;
     app.sessions
         .current
         .transcript
@@ -224,7 +227,7 @@ fn test_parent_read_spares_child() {
     );
 
     assert!(app.enter_teammate_view());
-    let child_before = crate::test_harness::render_text(&app, 80, 24);
+    let child_before = render_text(&app, 80, 24);
     let parent_top = app.whole_scroll().raw_top();
 
     tx.send(HistoryReadOutcome::Rows(HistoryReadResult {
@@ -245,13 +248,13 @@ fn test_parent_read_spares_child() {
         "the parent viewport held still over the landed rows"
     );
     assert_eq!(
-        crate::test_harness::render_text(&app, 80, 24),
+        render_text(&app, 80, 24),
         child_before,
         "the child render is untouched by the parent read"
     );
 
     app.exit_teammate_view();
-    let parent_after = crate::test_harness::render_text(&app, 80, 24);
+    let parent_after = render_text(&app, 80, 24);
     assert!(
         parent_after.contains("older parent row"),
         "the parent shows the loaded row after the visit"
@@ -263,7 +266,7 @@ fn test_parent_read_spares_child() {
 #[test]
 fn test_active_total_switches() {
     let mut app = app_with_parent(60);
-    let _parent = crate::test_harness::render_text(&app, 80, 24);
+    let _parent = render_text(&app, 80, 24);
     let parent_total = app.transcript_display_rows();
     assert!(parent_total > 0, "the parent published a total");
 

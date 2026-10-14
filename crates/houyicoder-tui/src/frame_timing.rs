@@ -11,6 +11,11 @@ use crate::records::{TeammateView, ToolOutcome, TranscriptLine};
 use crate::rows::slots_key::SlotsKey;
 use crate::state::{App, Screen};
 use crate::view::draw;
+use std::env::consts::ARCH;
+use std::env::consts::OS;
+use std::env::var;
+use std::fs::write;
+use std::path::Path;
 
 const SIZES: &[(u16, u16)] = &[(40, 16), (80, 24), (160, 48)];
 const SCALES: &[usize] = &[100, 1000, 10000];
@@ -108,13 +113,13 @@ fn percentile(samples: &[Duration], pct: f64) -> Duration {
 }
 
 fn git_sha() -> String {
-    std::env::var("HOUYI_GIT_SHA").unwrap_or_else(|_| "unknown".into())
+    var("HOUYI_GIT_SHA").unwrap_or_else(|_| "unknown".into())
 }
 
 fn run_id() -> String {
     // The dispatcher passes a readable date-sha id; a bare cargo run falls
     // back to the epoch second so repeat runs never overwrite each other.
-    std::env::var("HOUYI_BENCH_RUN_ID").unwrap_or_else(|_| {
+    var("HOUYI_BENCH_RUN_ID").unwrap_or_else(|_| {
         let ts = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("clock")
@@ -132,7 +137,7 @@ fn render(app: &App, area: (u16, u16)) -> Duration {
 }
 
 fn record(
-    run_dir: &std::path::Path,
+    run_dir: &Path,
     scenario: &str,
     area: (u16, u16),
     scale: usize,
@@ -152,8 +157,7 @@ fn record(
         .iter()
         .map(|d| format!("{}\n", d.as_micros()))
         .collect();
-    std::fs::write(run_dir.join(format!("{stem}.durations_us.txt")), raw)
-        .expect("write raw durations");
+    write(run_dir.join(format!("{stem}.durations_us.txt")), raw).expect("write raw durations");
     let row = format!(
         "{scenario},{},{},{},{},{},{},{},{},{}\n",
         area.0,
@@ -166,7 +170,7 @@ fn record(
         max.as_micros(),
         rebuilds
     );
-    std::fs::write(run_dir.join(format!("{stem}.csv")), row).expect("write summary");
+    write(run_dir.join(format!("{stem}.csv")), row).expect("write summary");
 }
 
 /// Counts frames that rebuilt the transcript row cache. The cache rebuilds
@@ -199,19 +203,19 @@ impl RebuildWatch {
 #[expect(clippy::too_many_lines, reason = "flat sweep is easier to audit")]
 fn test_frame_timing_benchmark() {
     let sha = git_sha();
-    let run_dir = std::path::Path::new("target/measurements/tui").join(run_id());
+    let run_dir = Path::new("target/measurements/tui").join(run_id());
     std::fs::create_dir_all(&run_dir).expect("measurements dir");
     let profile = if cfg!(debug_assertions) {
         "debug"
     } else {
         "release"
     };
-    std::fs::write(
+    write(
         run_dir.join("meta.txt"),
         format!(
             "sha={sha}\nprofile={profile}\nos={}\ncpu={}\ncorpus_hash={}\nsizes={SIZES:?}\nscales={SCALES:?}\nwarmup={WARMUP}\nsamples={SAMPLES}\n",
-            std::env::consts::OS,
-            std::env::consts::ARCH,
+            OS,
+            ARCH,
             corpus_hash()
         ),
     )

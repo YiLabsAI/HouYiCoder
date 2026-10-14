@@ -15,6 +15,7 @@ use ratatui::{
 
 use crate::input::queue::InputItem;
 use crate::state::App;
+use crate::view::navigation::key_hint;
 
 /// The queue pane body: a header line, a scrollable list of pending items
 /// (one row per logical item), and a footer hint line.
@@ -60,7 +61,7 @@ pub(super) fn draw_content(f: &mut Frame, area: Rect, app: &App) {
         );
     }
     f.render_widget(
-        Paragraph::new(crate::view::navigation::key_hint(&[
+        Paragraph::new(key_hint(&[
             ("Up/Down", "select"),
             ("Enter", "recall"),
             ("R", "recall all"),

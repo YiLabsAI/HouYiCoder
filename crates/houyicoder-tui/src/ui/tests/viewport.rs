@@ -10,19 +10,21 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use houyicoder_protocol::frontend::SlashCommand;
 
 use crate::composition;
+use crate::composition::WorktreeEntry;
 use crate::evidence::MemoryEntry;
 use crate::keys;
+use crate::state::App;
 use crate::state::{Pane, Screen, Stage, ViewportMode};
 use crate::test_harness::render_text;
 
-fn working() -> crate::state::App {
+fn working() -> App {
     let mut app = composition::app();
     app.ui.navigation.screen = Screen::Working;
     app
     // stub starts at Idle / Working.
 }
 
-fn render(app: &crate::state::App) -> String {
+fn render(app: &App) -> String {
     render_text(app, 80, 24)
 }
 
@@ -485,14 +487,14 @@ fn test_worktree_pane_renders_columns() {
     let mut app = working();
     app.ui.navigation.pane = Pane::Worktree;
     app.sessions.current.capabilities.worktree.entries = vec![
-        crate::composition::WorktreeEntry {
+        WorktreeEntry {
             path: "/some/repo/alpha".into(),
             head: "abcdef0".into(),
             branch: "main".into(),
             is_current: true,
             ..Default::default()
         },
-        crate::composition::WorktreeEntry {
+        WorktreeEntry {
             path: "/some/repo/beta".into(),
             head: "1234567".into(),
             branch: "dev".into(),
@@ -522,8 +524,8 @@ fn test_worktree_pane_renders_columns() {
 fn test_worktree_pane_scroll() {
     let mut app = working();
     app.ui.navigation.pane = Pane::Worktree;
-    let entries: Vec<crate::composition::WorktreeEntry> = (0..20)
-        .map(|i| crate::composition::WorktreeEntry {
+    let entries: Vec<WorktreeEntry> = (0..20)
+        .map(|i| WorktreeEntry {
             path: format!("/repo/wt-{i}"),
             head: format!("head{i}"),
             branch: format!("branch{i}"),
@@ -575,7 +577,7 @@ fn test_memory_pane_scroll() {
 fn test_worktree_pane_detail() {
     let mut app = working();
     app.ui.navigation.pane = Pane::Worktree;
-    app.sessions.current.capabilities.worktree.entries = vec![crate::composition::WorktreeEntry {
+    app.sessions.current.capabilities.worktree.entries = vec![WorktreeEntry {
         path: "/some/repo/alpha".into(),
         head: "abcdef0".into(),
         branch: "main".into(),

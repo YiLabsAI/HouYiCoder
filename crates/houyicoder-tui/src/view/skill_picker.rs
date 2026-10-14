@@ -15,14 +15,13 @@ use ratatui::{
 use crate::state::App;
 use crate::view::line_wrap::truncate_width;
 use crate::view::skills_pane::display_order;
+use houyicoder_protocol::frontend::skills::SkillEntry;
 
 /// The filtered skill list. The input text after @ is the filter query;
 /// skills whose name matches (case-insensitive substring) are kept.
 /// Shared by draw() and the key handlers so navigation and selection
 /// operate on the same filtered list the user sees.
-pub(crate) fn filtered_skills(
-    app: &App,
-) -> Vec<&houyicoder_protocol::frontend::skills::SkillEntry> {
+pub(crate) fn filtered_skills(app: &App) -> Vec<&SkillEntry> {
     let query = app
         .ui
         .input
@@ -100,10 +99,7 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
 /// cut), so the eye scans names and reads descriptions only when needed
 /// without border overflow. The description budget is computed per-row from
 /// the name width, so a long name clips the description (not the border).
-fn format_one(
-    s: &houyicoder_protocol::frontend::skills::SkillEntry,
-    inner_width: u16,
-) -> Line<'static> {
+fn format_one(s: &SkillEntry, inner_width: u16) -> Line<'static> {
     let usable = s.user_invocable || s.invocable;
     let glyph = if usable { "✓" } else { "✗" };
     let glyph_color = if usable {

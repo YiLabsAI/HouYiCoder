@@ -6,6 +6,8 @@
 //! each session log head; the TUI stays a presentation layer and never names
 //! the storage traits directly (the dep-graph layering).
 
+use std::collections::HashSet;
+
 /// One row in the picker. The sid is NOT shown (the design density
 /// decision: the user knows sessions by name + cwd, the sid is queryable
 /// via /status). The relative time is a compact form so the row fits one
@@ -35,12 +37,12 @@ pub struct SessionPickerState {
     pub sel: usize,
     pub query: String,
     pub rows: Vec<SessionRow>,
-    pub resolved: std::collections::HashSet<usize>,
+    pub resolved: HashSet<usize>,
     /// Titles already claimed, in resolution order. When resolve_detail
     /// fills a row's real title and it matches a title in this set, the row
     /// is an older duplicate -> hidden. Empty at open: the first row to
     /// claim a title keeps it.
-    pub seen_titles: std::collections::HashSet<String>,
+    pub seen_titles: HashSet<String>,
 }
 
 /// The storage-facing trait the CLI implements: the resumable sessions (with

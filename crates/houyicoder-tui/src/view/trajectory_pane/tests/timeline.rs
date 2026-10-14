@@ -3,6 +3,8 @@
 
 use super::super::*;
 use super::fixtures::{detail_of, detail_of_all, lines_text, record_of, turn};
+use crate::composition::app;
+use std::slice::from_ref;
 
 /// The level 1 timeline as rendered: the ruler line, a row's text, and the
 /// display column a bar starts at.
@@ -10,17 +12,17 @@ fn timeline_text(record: TrajectoryRecord) -> (String, String) {
     let mut turn = turn(1, "ask");
     turn.duration_ms = 1000;
     let detail = detail_of(record);
-    let app = crate::composition::app();
+    let app = app();
     let (header, body, _, _) =
         detail::draw_turn_detail(&turn, &detail, 0, Rect::new(0, 0, 140, 20), &app);
     let ruler = header
         .iter()
-        .map(|l| lines_text(std::slice::from_ref(l)))
+        .map(|l| lines_text(from_ref(l)))
         .find(|l| l.matches('·').count() > 4)
         .expect("a ruler line");
     let row = body
         .iter()
-        .map(|l| lines_text(std::slice::from_ref(l)))
+        .map(|l| lines_text(from_ref(l)))
         .find(|l| l.contains('█'))
         .expect("a bar row");
     (ruler, row)
@@ -99,11 +101,11 @@ fn test_timeline_fits_narrow() {
             let mut turn = turn(1, "ask");
             turn.duration_ms = 1000;
             let detail = detail_of(record.clone());
-            let app = crate::composition::app();
+            let app = app();
             let (_, body, _, _) =
                 detail::draw_turn_detail(&turn, &detail, 0, Rect::new(0, 0, width, 20), &app);
             let row = body.first().expect("a row");
-            let text = lines_text(std::slice::from_ref(row));
+            let text = lines_text(from_ref(row));
             let drawn = UnicodeWidthStr::width(text.as_str());
             assert!(
                 drawn <= width as usize,
@@ -131,7 +133,7 @@ fn test_timeline_compact_narrow() {
 
     for width in [1usize, 2, 5, 8, 10, 19, 20, 30, 39] {
         let detail = detail_of(record.clone());
-        let app = crate::composition::app();
+        let app = app();
         let (header, body, _, _) = detail::draw_turn_detail(
             &turn(1, "ask"),
             &detail,
@@ -168,7 +170,7 @@ fn test_timeline_compact_narrow() {
 
     // At the width a bar is drawn in, the axis is back.
     let detail = detail_of(record);
-    let app = crate::composition::app();
+    let app = app();
     let (header, body, _, _) =
         detail::draw_turn_detail(&turn(1, "ask"), &detail, 0, Rect::new(0, 0, 40, 20), &app);
     assert!(
@@ -198,7 +200,7 @@ fn test_compact_row_keeps_marks() {
     second.summary = "另一件事".into();
     for cursor in [0usize, 1] {
         let detail = detail_of_all(vec![record.clone(), second.clone()]);
-        let app = crate::composition::app();
+        let app = app();
         let (_, body, _, _) = detail::draw_turn_detail(
             &turn(1, "ask"),
             &detail,
@@ -206,10 +208,7 @@ fn test_compact_row_keeps_marks() {
             Rect::new(0, 0, 30, 20),
             &app,
         );
-        let rows: Vec<String> = body
-            .iter()
-            .map(|l| lines_text(std::slice::from_ref(l)))
-            .collect();
+        let rows: Vec<String> = body.iter().map(|l| lines_text(from_ref(l))).collect();
         let marked: Vec<&String> = rows.iter().filter(|row| row.contains('▸')).collect();
         assert_eq!(marked.len(), 1, "one row carries the cursor: {rows:?}");
         assert!(

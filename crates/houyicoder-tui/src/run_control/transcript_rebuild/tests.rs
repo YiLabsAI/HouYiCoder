@@ -8,6 +8,7 @@ use std::sync::atomic::AtomicU32;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use crate::agent_message::ServerEvent;
 use crate::agent_message::SessionMessage;
 use crate::composition;
 use crate::records::{ContextSuggestion, SuggestionSeverity, TranscriptLine};
@@ -24,6 +25,7 @@ use houyicoder_protocol::frontend::session_update::{
     ContentChunk, SessionUpdate, ToolCall, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
 };
 use serde_json::json;
+use std::sync::mpsc::channel;
 
 fn user_msg(text: &str) -> TranscriptFrame {
     TranscriptFrame::Session(SessionUpdate::UserMessageChunk(ContentChunk::new(
@@ -66,7 +68,7 @@ fn todo_write_frame(id: &str, todos: &[(&str, &str)]) -> TranscriptFrame {
 fn fresh_app() -> App {
     let mut app = composition::app();
     app.transcript_mut().reset();
-    let (_tx, rx) = std::sync::mpsc::channel::<SessionMessage>();
+    let (_tx, rx) = channel::<SessionMessage>();
     app.sessions.current.connection = Some(SessionConnection::from_receiver(rx));
     app
 }
@@ -100,7 +102,6 @@ fn wait_for_workers_to_leave(app: &App) {
     }
 }
 fn pump(app: &mut App, frame: TranscriptFrame) {
-    use crate::agent_message::ServerEvent;
     app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(frame.into())));
 }
 fn compaction_frame() -> TranscriptFrame {

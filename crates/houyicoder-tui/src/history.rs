@@ -8,7 +8,11 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::input::InputField;
 use serde::{Deserialize, Serialize};
+use std::io::Write;
+use std::os::unix::fs::OpenOptionsExt;
+use std::path::PathBuf;
 
 const MAX_ENTRIES: usize = 100;
 
@@ -56,12 +60,10 @@ pub fn add(display: &str, project: &str, session: &str, path: &Path) -> u64 {
     if let Some(parent) = path.parent() {
         let _created = std::fs::create_dir_all(parent);
     }
-    use std::io::Write;
     let mut opts = std::fs::OpenOptions::new();
     opts.append(true).create(true);
     #[cfg(unix)]
     {
-        use std::os::unix::fs::OpenOptionsExt;
         opts.mode(0o600);
     }
     if let Ok(mut f) = opts.open(path) {
@@ -113,12 +115,12 @@ pub struct HistoryNav {
     loaded: bool,
     last_added: Option<u64>,
     skip: HashSet<u64>,
-    path: std::path::PathBuf,
+    path: PathBuf,
 }
 
 impl HistoryNav {
     /// Set the history file path (injected by the composition root).
-    pub fn with_path(path: std::path::PathBuf) -> Self {
+    pub fn with_path(path: PathBuf) -> Self {
         HistoryNav {
             path,
             ..HistoryNav::default()
@@ -140,12 +142,7 @@ impl HistoryNav {
     }
 
     /// Recall one step older. Cursor lands at the start. Stops at the oldest.
-    pub fn up(
-        &mut self,
-        input: &mut crate::input::InputField,
-        project: &str,
-        session: &str,
-    ) -> bool {
+    pub fn up(&mut self, input: &mut InputField, project: &str, session: &str) -> bool {
         if !self.loaded {
             self.cache = read(project, session, &self.skip, &self.path);
             self.loaded = true;
@@ -165,7 +162,7 @@ impl HistoryNav {
     }
 
     /// Recall one step newer, or restore the draft past the newest. Cursor at end.
-    pub fn down(&mut self, input: &mut crate::input::InputField) -> bool {
+    pub fn down(&mut self, input: &mut InputField) -> bool {
         if self.index == 0 {
             return false;
         }

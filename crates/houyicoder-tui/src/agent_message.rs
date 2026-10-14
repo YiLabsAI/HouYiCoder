@@ -14,7 +14,23 @@ use houyicoder_protocol::frontend::{PendingInputId, QueuedInput, SessionId as Fr
 use houyicoder_protocol::llm::EffortLevel;
 use std::time::{Duration, Instant};
 
+use crate::records::TranscriptLine;
 use crate::transcript::{SequencedFrame, TranscriptFrame};
+use houyicoder_protocol::frontend::compact::CompactReply;
+use houyicoder_protocol::frontend::context::ContextBreakdown;
+use houyicoder_protocol::frontend::debug::DebugLevel;
+use houyicoder_protocol::frontend::debug::DebugState;
+use houyicoder_protocol::frontend::hooks::HookEntry;
+use houyicoder_protocol::frontend::memory::MemoryToggleWhich;
+use houyicoder_protocol::frontend::model::ModelCatalog;
+use houyicoder_protocol::frontend::permission::PermissionMode;
+use houyicoder_protocol::frontend::permission::PermissionRule;
+use houyicoder_protocol::frontend::skills::SkillEntry;
+use houyicoder_protocol::frontend::status::StatusSnapshot;
+use houyicoder_protocol::frontend::tools::ToolEntry;
+use houyicoder_protocol::frontend::trajectory::RedundantCallEntry;
+use houyicoder_protocol::frontend::trajectory::TrajectoryEntry;
+use houyicoder_protocol::frontend::trust::TrustPrompt;
 
 /// One row in the agent status footer: a spawned child's latest snapshot.
 #[derive(Debug)]
@@ -68,8 +84,7 @@ impl PaneAgents {
     /// otherwise, so it can be called on every agent message without cost.
     /// The caller passes the version it read, so the rebuild and the version
     /// check see one consistent transcript.
-    pub fn refresh(&mut self, transcript: &[crate::records::TranscriptLine], version: u64) {
-        use crate::records::TranscriptLine;
+    pub fn refresh(&mut self, transcript: &[TranscriptLine], version: u64) {
         if version == self.version {
             return;
         }
@@ -229,9 +244,7 @@ pub enum ServerRequest {
     /// matching reverse response. Fires once per project path (the answer
     /// persists in user-level settings), so the card is simpler than
     /// Permission: no tool call to resume, no run to pause.
-    Trust {
-        prompt: houyicoder_protocol::frontend::trust::TrustPrompt,
-    },
+    Trust { prompt: TrustPrompt },
 }
 
 /// Request responses: the response direction. Each variant is a reply to a
@@ -255,28 +268,22 @@ pub enum ServerResponse {
     Ack,
     /// A status snapshot the /status command requested over the wire. The
     /// state renders it without importing the engine crate.
-    Status {
-        snapshot: Box<houyicoder_protocol::frontend::status::StatusSnapshot>,
-    },
+    Status { snapshot: Box<StatusSnapshot> },
     /// The session trajectory the /trajectory command requested over the wire.
     /// Carries the audit-log entries (3-level drill-down) + the redundant-call
     /// observations (self-evolution reward signal section).
     Trajectory {
-        entries: Vec<houyicoder_protocol::frontend::trajectory::TrajectoryEntry>,
-        redundant: Vec<houyicoder_protocol::frontend::trajectory::RedundantCallEntry>,
+        entries: Vec<TrajectoryEntry>,
+        redundant: Vec<RedundantCallEntry>,
     },
     /// The context-window breakdown the /context command requested over the
     /// wire. The state renders the grid without importing the engine crate.
-    Context {
-        breakdown: houyicoder_protocol::frontend::context::ContextBreakdown,
-    },
+    Context { breakdown: ContextBreakdown },
     /// The compaction outcome the /compact command requested over the wire.
     /// Carries whether progress was made, the folded event count, the
     /// persisted manifest id, and pre/post token estimates so the state
     /// renders a one-line outcome without importing the engine crate.
-    Compact {
-        reply: houyicoder_protocol::frontend::compact::CompactReply,
-    },
+    Compact { reply: CompactReply },
     /// The stored-memory list the /memory command requested over the wire.
     /// Frontmatter-only summaries (no body); a /memory <key> show fetches the
     /// body separately.
@@ -290,13 +297,9 @@ pub enum ServerResponse {
     /// round-trip.
     MemoryToggleState { state: ToggleState },
     /// The current permission mode the /model read requested over the wire.
-    PermissionMode {
-        mode: houyicoder_protocol::frontend::permission::PermissionMode,
-    },
+    PermissionMode { mode: PermissionMode },
     /// The durable rule set the /rules read requested over the wire.
-    PermissionRules {
-        rules: Vec<houyicoder_protocol::frontend::permission::PermissionRule>,
-    },
+    PermissionRules { rules: Vec<PermissionRule> },
     /// The working directories added to the sandbox at runtime (/permissions
     /// Workspace tab). Refreshes on every add/remove so the tab stays in sync.
     PermissionDirs { dirs: Vec<String> },
@@ -304,9 +307,7 @@ pub enum ServerResponse {
     /// requested.
     PermissionAskBeforeGit { enabled: bool },
     /// The registered tool list the /tools command requested over the wire.
-    Tools {
-        tools: Vec<houyicoder_protocol::frontend::tools::ToolEntry>,
-    },
+    Tools { tools: Vec<ToolEntry> },
     /// The formatted agent directory string the /agents command requested.
     Agents { directory: String },
     /// The on-demand child transcript for an expanded Subagent fold-group.
@@ -320,13 +321,9 @@ pub enum ServerResponse {
     },
     /// The registered hooks the /hooks command requested (read-only
     /// visibility).
-    Hooks {
-        hooks: Vec<houyicoder_protocol::frontend::hooks::HookEntry>,
-    },
+    Hooks { hooks: Vec<HookEntry> },
     /// The discovered skills the /skills command requested.
-    Skills {
-        skills: Vec<houyicoder_protocol::frontend::skills::SkillEntry>,
-    },
+    Skills { skills: Vec<SkillEntry> },
     /// One skill's body for the detail view, None when it does not resolve.
     SkillBody { body: Option<String> },
     /// The /undo reply: a description of what was undone, or None when the
@@ -341,15 +338,11 @@ pub enum ServerResponse {
     /// session's selection and applied model, the resolved Default target
     /// and the global effort fallback.
     /// a hardcoded model list, so the rows reflect settings.json.
-    ModelInfo {
-        catalog: houyicoder_protocol::frontend::model::ModelCatalog,
-    },
+    ModelInfo { catalog: ModelCatalog },
     /// The /debug reply: whether the diagnostic recorder is now recording
     /// and the file path it writes to. Routed to a system line so the user
     /// is told where to look.
-    Debug {
-        state: houyicoder_protocol::frontend::debug::DebugState,
-    },
+    Debug { state: DebugState },
 }
 
 /// A command the TUI ships to the client-driver task. The driver owns the
@@ -465,7 +458,7 @@ pub enum ClientCommand {
     /// reply carries the full snapshot so the pane re-renders both rows.
     MemoryToggleQuery {
         req_id: RequestId,
-        which: houyicoder_protocol::frontend::memory::MemoryToggleWhich,
+        which: MemoryToggleWhich,
     },
     /// Forget one memory by key + scope (the /memory forget command or the
     /// pane d action). The scope routes the delete to the matching storage
@@ -487,7 +480,7 @@ pub enum ClientCommand {
     },
     PermissionAddRuleQuery {
         req_id: RequestId,
-        rule: houyicoder_protocol::frontend::permission::PermissionRule,
+        rule: PermissionRule,
     },
     PermissionRemoveRuleQuery {
         req_id: RequestId,
@@ -608,7 +601,7 @@ pub enum ClientCommand {
     /// surface where the file is.
     DebugSet {
         req_id: RequestId,
-        level: houyicoder_protocol::frontend::debug::DebugLevel,
+        level: DebugLevel,
     },
 }
 

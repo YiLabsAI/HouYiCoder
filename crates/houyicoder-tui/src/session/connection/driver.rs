@@ -18,6 +18,8 @@ use crate::agent_message::{
     ClientCommand, ConnectionEvent, ServerEvent, ServerRequest, ServerResponse, SessionMessage,
 };
 use crate::transcript::{SequencedFrame, TranscriptFrame};
+use houyicoder_protocol::acpx::AcpxMethod;
+use tokio::sync::mpsc::UnboundedReceiver;
 
 /// How many unknown-method notices one connection writes to the diagnostic
 /// log. The notification is dropped either way; the bound keeps a peer that
@@ -90,7 +92,7 @@ impl DriverDeath {
 
 pub(crate) async fn drive_client(
     client: houyicoder_client::Client,
-    cmd_rx: tokio::sync::mpsc::UnboundedReceiver<ClientCommand>,
+    cmd_rx: UnboundedReceiver<ClientCommand>,
     agent_tx: mpsc::Sender<SessionMessage>,
 ) {
     let death = drive_connection(client, cmd_rx, &agent_tx).await;
@@ -112,7 +114,7 @@ pub(crate) async fn drive_client(
 #[expect(clippy::too_many_lines, reason = "long by design, kept whole")]
 async fn drive_connection(
     mut client: houyicoder_client::Client,
-    mut cmd_rx: tokio::sync::mpsc::UnboundedReceiver<ClientCommand>,
+    mut cmd_rx: UnboundedReceiver<ClientCommand>,
     agent_tx: &mpsc::Sender<SessionMessage>,
 ) -> Option<DriverDeath> {
     if let Err(e) = client.connect().await {
@@ -443,7 +445,6 @@ async fn drive_connection(
                         // preview when the turn lands, so deltas are NOT
                         // pushed as frames — they ship straight to the event
                         // loop and the transcript rebuild ignores them.
-                        use houyicoder_protocol::acpx::AcpxMethod;
                         match notification.method {
                             AcpxMethod::LlmTextDelta => {
                                 if let Some(text) = notification

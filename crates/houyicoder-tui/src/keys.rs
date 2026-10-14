@@ -160,7 +160,6 @@ pub fn handle_working(app: &mut App, k: KeyEvent) {
 /// session). Fires once at startup before any run, so the dispatch in
 /// handle_working checks it before the Focus/approval gate.
 pub(crate) fn handle_trust(app: &mut App, k: KeyEvent) {
-    use crossterm::event::KeyCode;
     match k.code {
         KeyCode::Up => app.set_trust_choice(TrustChoice::Accept),
         KeyCode::Down => app.set_trust_choice(TrustChoice::Exit),

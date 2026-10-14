@@ -3,6 +3,10 @@
 //! gate. Re-exported by state.rs as state::Screen etc., so callers are
 //! unchanged.
 
+use houyicoder_protocol::frontend::permission::PermissionEffect;
+use houyicoder_protocol::frontend::permission::PermissionRuleContent;
+use houyicoder_protocol::frontend::permission::RuleDestination;
+
 /// The natural pane for a stage in the guided chain. Used by rewind to land
 /// the user back on the pane that matches the stage they returned to.
 pub fn pane_for_stage(stage: Stage) -> Pane {
@@ -185,9 +189,9 @@ pub enum PermissionInput {
     /// enum stays externally nameable without exposing a crate-private spec.
     AddDestination {
         action: String,
-        content: Option<houyicoder_protocol::frontend::permission::PermissionRuleContent>,
-        effect: houyicoder_protocol::frontend::permission::PermissionEffect,
-        destination: houyicoder_protocol::frontend::permission::RuleDestination,
+        content: Option<PermissionRuleContent>,
+        effect: PermissionEffect,
+        destination: RuleDestination,
     },
     /// Confirm removing the rule at idx; Left/Right picks Yes/No, Enter fires.
     Remove {

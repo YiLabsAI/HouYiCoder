@@ -3,8 +3,12 @@
 //! each draw from the run-start Instant so the animation needs no mutable
 //! tick state.
 
+use crate::state::enums::LiveBlock;
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
+use std::f32::consts::TAU;
+use std::time::Duration;
+use std::time::Instant;
 
 /// Spinner glyph bounce (6 frames forward + 6 reverse = 12), 120 ms per
 /// frame, a standard 12-frame bounce. The live row is rebuilt each draw
@@ -18,16 +22,11 @@ const SPINNER_FRAMES: [&str; 12] = ["·", "✢", "✳", "✶", "✻", "✽", "�
 /// the width-gated suffix. The token count is a chars/4 estimate that lerps
 /// toward the actual value ~25% of the gap per draw so the meter climbs
 /// smoothly instead of jumping.
-pub fn spinner_row_text(
-    app: &crate::state::App,
-    elapsed: std::time::Duration,
-    width: u16,
-) -> String {
+pub fn spinner_row_text(app: &crate::state::App, elapsed: Duration, width: u16) -> String {
     let frame = (elapsed.as_millis() / 120) % 12;
     let glyph = SPINNER_FRAMES[frame as usize];
     let prog = app.run_progress();
-    let reasoning_active =
-        prog.is_some_and(|p| p.live_block == crate::state::enums::LiveBlock::Thinking);
+    let reasoning_active = prog.is_some_and(|p| p.live_block == LiveBlock::Thinking);
     let thinking_min_active = prog
         .and_then(|p| p.thinking_started_at)
         .is_some_and(|t| t.elapsed().as_secs() < 2);
@@ -82,7 +81,7 @@ const PULSE_GRAY: (u8, u8, u8) = (160, 160, 160);
 /// time since the last delta, against the given threshold. Returns 0.0
 /// before the threshold, then ramps linearly to 1.0 over STALL_FADE_SECS
 /// using fractional seconds so the fade is smooth, not stepped.
-fn stall_intensity_with(last_delta_at: Option<std::time::Instant>, threshold_secs: u64) -> f32 {
+fn stall_intensity_with(last_delta_at: Option<Instant>, threshold_secs: u64) -> f32 {
     let Some(t) = last_delta_at else {
         return 0.0;
     };
@@ -97,14 +96,14 @@ fn stall_intensity_with(last_delta_at: Option<std::time::Instant>, threshold_sec
 
 /// Stall intensity for the default cadence (assistant text deltas). Slow here
 /// does mean likely stuck — fire the red gradient at 3s.
-pub fn stall_intensity(last_delta_at: Option<std::time::Instant>) -> f32 {
+pub fn stall_intensity(last_delta_at: Option<Instant>) -> f32 {
     stall_intensity_with(last_delta_at, STALL_THRESHOLD_SECS)
 }
 
 /// Stall intensity during reasoning. Thinking tokens arrive sparsely, so a
 /// slow cadence is healthy, not stuck — push the red gradient out to 10s so
 /// long thinking stays calm. A true hang still trips once it exceeds this.
-pub fn stall_intensity_reasoning(last_delta_at: Option<std::time::Instant>) -> f32 {
+pub fn stall_intensity_reasoning(last_delta_at: Option<Instant>) -> f32 {
     stall_intensity_with(last_delta_at, STALL_THRESHOLD_REASONING_SECS)
 }
 
@@ -119,19 +118,19 @@ fn lerp_color(a: (u8, u8, u8), b: (u8, u8, u8), t: f32) -> Color {
 /// Compute the breathing pulse opacity for the tool-use effect. Returns 0.0
 /// when no tool is active; otherwise a sine wave oscillating between 0.0 and
 /// 0.3 at ~0.8 Hz (a gentle breathing rhythm, not a strobe).
-pub fn tool_pulse_opacity(elapsed: std::time::Duration, tool_active: bool) -> f32 {
+pub fn tool_pulse_opacity(elapsed: Duration, tool_active: bool) -> f32 {
     if !tool_active {
         return 0.0;
     }
     let ms = elapsed.as_millis() as f32;
-    let phase = (ms / 1250.0) * std::f32::consts::TAU;
+    let phase = (ms / 1250.0) * TAU;
     (phase.sin() * 0.5 + 0.5) * 0.3
 }
 
 /// Format the spinner suffix with progressive width gating. On narrow
 /// terminals the token count is dropped first, then the duration. The width
 /// parameter is the available terminal width for the spinner row.
-pub fn spinner_suffix_gated(elapsed: std::time::Duration, tokens: u32, width: u16) -> String {
+pub fn spinner_suffix_gated(elapsed: Duration, tokens: u32, width: u16) -> String {
     let secs = elapsed.as_secs();
     let dur = if secs >= 60 {
         format!("{}m {}s", secs / 60, secs % 60)
@@ -158,7 +157,7 @@ pub fn spinner_suffix_gated(elapsed: std::time::Duration, tokens: u32, width: u1
 /// Format the spinner suffix: duration (8m 14s / 14s) + ↓ N tokens (k-suffix
 /// for thousands). A down-arrow token meter. Token count is
 /// a live chars/4 estimate; authoritative usage lands on Done.
-pub fn spinner_suffix(elapsed: std::time::Duration, tokens: u32) -> String {
+pub fn spinner_suffix(elapsed: Duration, tokens: u32) -> String {
     spinner_suffix_gated(elapsed, tokens, 80)
 }
 
@@ -168,7 +167,7 @@ pub fn spinner_suffix(elapsed: std::time::Duration, tokens: u32) -> String {
 /// breathe: their color lerps between dim and a brighter gray on a sine wave.
 pub fn spinner_line(
     row: &str,
-    elapsed: std::time::Duration,
+    elapsed: Duration,
     intensity: f32,
     tool_active: bool,
 ) -> Line<'static> {

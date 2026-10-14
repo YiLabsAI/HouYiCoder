@@ -7,6 +7,9 @@
 
 use crate::records::TranscriptLine;
 use crate::state::App;
+use crate::view::context_view::render_as_rows;
+use crate::view::line_wrap::wrap_line;
+use crate::view::todo_list::render_rows;
 
 impl App {
     /// The row count a single transcript line renders to. A tool result uses
@@ -60,9 +63,7 @@ impl App {
                 w,
             ),
             // Plain selectable rows: count the exact set the draw path emits.
-            TranscriptLine::ContextGrid(view) => {
-                crate::view::context_view::render_as_rows(view).len()
-            }
+            TranscriptLine::ContextGrid(view) => render_as_rows(view).len(),
             TranscriptLine::Subagent {
                 child_sid,
                 folded_transcript,
@@ -102,7 +103,7 @@ impl App {
                     line.render()
                 };
                 text.split('\n')
-                    .map(|logical| crate::view::line_wrap::wrap_line(logical, w as usize).len())
+                    .map(|logical| wrap_line(logical, w as usize).len())
                     .sum()
             }
             // count==render: the chip text is mode-dependent (verbose renders
@@ -164,7 +165,7 @@ impl App {
             n += 1;
         }
         // Session checklist rows at the transcript tail, plus leading spacer.
-        let todo_n = crate::view::todo_list::render_rows(self).len();
+        let todo_n = render_rows(self).len();
         if todo_n > 0 {
             if n > 0 || !prefix_empty {
                 n += 1;

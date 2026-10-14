@@ -9,6 +9,7 @@ use std::sync::mpsc;
 
 use super::history_read::{OVERLAP_FRONT_ROWS, ReadJob};
 use super::{MAX_REBUILD_FRAMES, PREPEND_BATCH};
+use crate::fold::{compute_fold_groups, fold_groups_in};
 use crate::records::TranscriptLine;
 use crate::row_id::RowId;
 use crate::state::App;
@@ -19,6 +20,11 @@ use crate::state::transcript::blocks::{
 };
 use crate::transcript::TranscriptFrame;
 use crate::transcript::transcript_from_frames_at;
+use houyicoder_protocol::acpx::AcpxMethod;
+use houyicoder_protocol::frontend::permission::PermissionDecisionEntry;
+use houyicoder_protocol::frontend::session_update::SessionUpdate;
+use std::collections::HashMap;
+use std::collections::HashSet;
 
 /// Rows the view holds from the session log before it stops reading older
 /// ones: the same bound the viewable transcript keeps. The bound is checked
@@ -237,8 +243,6 @@ impl App {
     /// recomputed. The cache is keyed by absolute line index, so the split
     /// point is the prefix's line count.
     fn update_fold_cache(&mut self, prefix_line_count: usize, prefix_reused: bool) {
-        use crate::fold::{compute_fold_groups, fold_groups_in};
-        use std::collections::HashMap;
         let agent_busy = self.agent_busy();
         let groups = if prefix_reused {
             let mut groups = std::mem::take(self.sessions.current.transcript.fold_groups_mut());
@@ -591,7 +595,6 @@ impl App {
     /// frames before it are drained, so a turn whose opening frame they held
     /// is re-derived from the front on the next rebuild.
     pub(crate) fn current_turn_start(&self) -> usize {
-        use houyicoder_protocol::frontend::session_update::SessionUpdate;
         let base = self.sessions.current.transcript.frame_window_start();
         let mut search_from = self.sessions.current.transcript.frames().len();
         loop {
@@ -621,12 +624,11 @@ impl App {
     /// The candidate is an absolute frame index; the scan walks the resident
     /// log from the window's front, since frames before it were drained.
     fn prefix_has_unpaired_call(&self, candidate: usize) -> bool {
-        use houyicoder_protocol::frontend::session_update::SessionUpdate;
         let base = self.sessions.current.transcript.frame_window_start();
         let frames = self.sessions.current.transcript.frames();
         let at = candidate.saturating_sub(base).min(frames.len());
-        let mut calls = std::collections::HashSet::new();
-        let mut results = std::collections::HashSet::new();
+        let mut calls = HashSet::new();
+        let mut results = HashSet::new();
         for sf in &frames[..at] {
             match sf.as_ref() {
                 TranscriptFrame::Session(SessionUpdate::ToolCall(tc)) => {
@@ -640,7 +642,7 @@ impl App {
         }
         // A tail result for a prefix call (split). Hanging calls (no result
         // anywhere) are not in tail_results, so they do not trigger.
-        let mut tail_results = std::collections::HashSet::new();
+        let mut tail_results = HashSet::new();
         for sf in &frames[at..] {
             if let TranscriptFrame::Session(SessionUpdate::ToolCallUpdate(upd)) = sf.as_ref() {
                 tail_results.insert(upd.tool_call_id.0.as_str());
@@ -655,8 +657,6 @@ impl App {
     /// todo-write applies last-write-wins only when a new checklist frame
     /// arrives, so an unrelated user boundary cannot clear active work.
     fn accumulate_wire_state(&mut self) {
-        use houyicoder_protocol::acpx::AcpxMethod;
-        use houyicoder_protocol::frontend::permission::PermissionDecisionEntry;
         // Verdicts are append-only (audit trail). Rewind and clear truncate
         // frames below the cursor, so the cache resets and re-parses from zero
         // to match the truncated log. A front drain leaves the absolute count

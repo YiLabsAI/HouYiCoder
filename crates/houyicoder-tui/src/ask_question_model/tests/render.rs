@@ -6,19 +6,22 @@
 use serde_json::json;
 
 use crate::ask_question_model::tests::card::{multi_input, single_input, two_question_input};
+use crate::composition::app;
 use crate::pending_prompt::PendingPrompt;
 use crate::records::AskQuestion;
+use crate::state::Screen;
+use crate::test_harness::render_text;
 use houyicoder_protocol::envelope::RequestId;
 
 // --- nav bar rendering ---
 
 #[test]
 fn test_render_nav_tabs() {
-    let mut app = crate::composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    let mut app = app();
+    app.ui.navigation.screen = Screen::Working;
     let aq = AskQuestion::parse("c1", &two_question_input()).expect("parse");
     app.sessions.current.prompt = Some(PendingPrompt::question_card(RequestId(0), aq));
-    let out = crate::test_harness::render_text(&app, 80, 24);
+    let out = render_text(&app, 80, 24);
     assert!(out.contains("h1"), "header 1 tab missing:\n{out}");
     assert!(out.contains("h2"), "header 2 tab missing:\n{out}");
     assert!(out.contains("Submit"), "submit tab missing:\n{out}");
@@ -26,11 +29,11 @@ fn test_render_nav_tabs() {
 
 #[test]
 fn test_render_nav_hidden_single() {
-    let mut app = crate::composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    let mut app = app();
+    app.ui.navigation.screen = Screen::Working;
     let aq = AskQuestion::parse("c1", &single_input()).expect("parse");
     app.sessions.current.prompt = Some(PendingPrompt::question_card(RequestId(0), aq));
-    let out = crate::test_harness::render_text(&app, 80, 24);
+    let out = render_text(&app, 80, 24);
     // No nav bar (no Submit tab, no h1/h2 tabs). The header chip [Library]
     // is still present.
     assert!(
@@ -50,11 +53,11 @@ fn test_render_multi_next_btn() {
             {"question": "q2", "header": "h2", "options": [{"label":"c","description":"x"},{"label":"d","description":"y"}], "multiSelect": true}
         ]
     });
-    let mut app = crate::composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    let mut app = app();
+    app.ui.navigation.screen = Screen::Working;
     let aq = AskQuestion::parse("c1", &input).expect("parse");
     app.sessions.current.prompt = Some(PendingPrompt::question_card(RequestId(0), aq));
-    let out = crate::test_harness::render_text(&app, 80, 24);
+    let out = render_text(&app, 80, 24);
     assert!(out.contains("Next"), "Next button missing:\n{out}");
 }
 
@@ -66,12 +69,12 @@ fn test_render_multi_submit_last() {
             {"question": "q2", "header": "h2", "options": [{"label":"c","description":"x"},{"label":"d","description":"y"}], "multiSelect": true}
         ]
     });
-    let mut app = crate::composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    let mut app = app();
+    app.ui.navigation.screen = Screen::Working;
     let mut aq = AskQuestion::parse("c1", &input).expect("parse");
     aq.current = 1; // last question
     app.sessions.current.prompt = Some(PendingPrompt::question_card(RequestId(0), aq));
-    let out = crate::test_harness::render_text(&app, 80, 24);
+    let out = render_text(&app, 80, 24);
     assert!(out.contains("Submit"), "Submit button missing:\n{out}");
     assert!(
         !out.contains("Next"),

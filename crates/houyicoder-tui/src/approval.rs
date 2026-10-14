@@ -6,6 +6,8 @@
 
 use crate::artifact::{ArtifactMode, ChangeProposer};
 use crate::evidence::{Divergence, Verdict};
+use crate::fold::{DisplaySlot, display_slots, notice_slot_rows};
+use crate::records::TranscriptLine;
 use crate::run_control::ClientCommand;
 use crate::state::{App, Pane, Stage};
 use houyicoder_protocol::frontend::SessionId;
@@ -67,9 +69,7 @@ impl App {
             .and_then(|ri| self.ui.frame.keys.borrow().callid_at(ri))
             .or_else(|| {
                 lines.iter().rev().find_map(|l| match l {
-                    crate::records::TranscriptLine::Tool { name, call_id, .. }
-                        if name.as_str() == "result" =>
-                    {
+                    TranscriptLine::Tool { name, call_id, .. } if name.as_str() == "result" => {
                         Some(call_id.clone())
                     }
                     _ => None,
@@ -111,7 +111,6 @@ impl App {
     /// latest of one kind first is what let a delegation outrank a newer
     /// reasoning block. False when the transcript holds neither.
     pub(crate) fn toggle_tail_expand(&mut self) -> bool {
-        use crate::records::TranscriptLine;
         // The tail is taken from the transcript the view renders. Reading the
         // live transcript while a search or delegation view is open picks a
         // line the user cannot see, so the key toggles an off-screen block.
@@ -195,7 +194,7 @@ impl App {
         let needs_fetch = lines
             .iter()
             .find_map(|line| match line {
-                crate::records::TranscriptLine::Subagent {
+                TranscriptLine::Subagent {
                     child_sid: sid,
                     folded_transcript,
                     ..
@@ -247,8 +246,6 @@ impl App {
     /// space. A flat walk diverges whenever a folded group precedes the
     /// target line and mis-resolves to the wrong Subagent.
     pub(crate) fn subagent_target_at_cursor(&self) -> Option<(String, bool)> {
-        use crate::fold::{DisplaySlot, display_slots, notice_slot_rows};
-        use crate::records::TranscriptLine;
         let transcript = self.sessions.current.transcript.lines();
         let slots = display_slots(
             transcript,
@@ -311,7 +308,6 @@ impl App {
     /// means "open a child", so with no line named it opens the newest; the
     /// expand key has other kinds of block to weigh and defaults differently.
     pub(crate) fn subagent_target_or_last(&self) -> Option<(String, bool)> {
-        use crate::records::TranscriptLine;
         let lines = self.transcript().lines();
         self.subagent_target_at_cursor().or_else(|| {
             lines.iter().rev().find_map(|line| match line {
@@ -331,7 +327,6 @@ impl App {
     /// ThoughtFor lines the user scrolls + clicks. Returns true when a
     /// ThoughtFor with reasoning was toggled.
     pub(crate) fn toggle_thinking_expand(&mut self) -> bool {
-        use crate::records::TranscriptLine;
         // The rendered rows come from the active transcript, so the last
         // reasoning block is read from the same slice. Keyed by turn_id
         // rather than reasoning text so two turns with identical reasoning
@@ -362,7 +357,6 @@ impl App {
     /// stays at its screen position; expansion adds rows BELOW). Returns true
     /// when the row is a ThoughtFor row with reasoning.
     pub(crate) fn toggle_thinking_expand_at_row(&mut self, ri: usize) -> bool {
-        use crate::records::TranscriptLine;
         // Resolve the click row straight to the ThoughtFor turn_id published
         // by the draw pass (parallel to the visible fold keys). The old path
         // counted "Nth visible expandable ThoughtFor" then matched it to

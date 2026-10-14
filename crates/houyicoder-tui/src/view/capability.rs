@@ -21,6 +21,7 @@ use crate::state::{App, Pane, PermissionInput, PermissionTab, Stage};
 use crate::view::components;
 use crate::view::navigation::{key_hint, tab_header};
 use crate::view::status;
+use houyicoder_protocol::frontend::permission::RuleDestination;
 use houyicoder_protocol::frontend::permission::{
     PermissionDecisionEntry, PermissionRule, PermissionRuleContent,
 };
@@ -245,10 +246,7 @@ fn permission_rule_label(r: &PermissionRule) -> String {
 }
 
 /// The short persistence-scope label appended to a rule row.
-fn destination_label(
-    d: houyicoder_protocol::frontend::permission::RuleDestination,
-) -> &'static str {
-    use houyicoder_protocol::frontend::permission::RuleDestination;
+fn destination_label(d: RuleDestination) -> &'static str {
     match d {
         RuleDestination::Project => "project",
         RuleDestination::User => "user",

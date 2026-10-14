@@ -14,6 +14,9 @@ use crate::test_harness::{
 };
 
 use crate::agent_message::{ServerEvent, ServerResponse, SessionMessage};
+use crate::composition::app;
+use crate::test_harness::connection_lost_app;
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 fn model_response(req_id: u64, result: ModelApplyResult) -> SessionMessage {
     SessionMessage::Response {
@@ -34,7 +37,7 @@ fn model_info_response(req_id: u64, catalog: ModelCatalog) -> SessionMessage {
 /// draft the pane was holding.
 #[test]
 fn test_model_result_updates_status() {
-    let mut app = crate::composition::app();
+    let mut app = app();
     app.ui.navigation.pane = Pane::Model;
     app.sessions.current.capabilities.model.pending = Some(PendingCommit {
         req_id: RequestId(1),
@@ -69,7 +72,7 @@ fn test_model_result_updates_status() {
 /// the id the provider sees, the effort that will be sent and the Fast tier.
 #[test]
 fn test_receipt_from_apply_result() {
-    let mut app = crate::composition::app();
+    let mut app = app();
     app.refresh_model_catalog(model_catalog(vec![model_entry(
         "qwen3.8-max",
         "Max",
@@ -99,7 +102,7 @@ fn test_receipt_from_apply_result() {
 /// choice.
 #[test]
 fn test_receipt_names_default_target() {
-    let mut app = crate::composition::app();
+    let mut app = app();
     app.handle_agent_message(SessionMessage::Response {
         request: RequestId(1),
         response: ServerResponse::Model {
@@ -132,7 +135,7 @@ fn test_receipt_names_default_target() {
 /// restart would lose the pick.
 #[test]
 fn test_receipt_reports_session_only() {
-    let mut app = crate::composition::app();
+    let mut app = app();
     let mut result = apply_result("qwen3.8-max", None, SpeedMode::Standard);
     result.persistence = PersistenceOutcome::Partial {
         settings: Some("read-only settings".into()),
@@ -156,7 +159,7 @@ fn test_receipt_reports_session_only() {
 /// model request rather than implying the running one changed.
 #[test]
 fn test_receipt_reports_boundary() {
-    let mut app = crate::composition::app();
+    let mut app = app();
     let mut result = apply_result("glm-5.2", None, SpeedMode::Standard);
     result.effective_from = EffectiveFrom::NextRequest;
     app.handle_agent_message(model_response(1, result));
@@ -177,7 +180,7 @@ fn test_receipt_reports_boundary() {
 /// overflow the catalog could not self-heal, pointing at the override).
 #[test]
 fn test_system_line_renders_notice() {
-    let mut app = crate::composition::app();
+    let mut app = app();
     app.handle_agent_message(SessionMessage::Event(ServerEvent::SystemLine {
         text: "set catalog context_window".into(),
     }));
@@ -193,7 +196,7 @@ fn test_system_line_renders_notice() {
 /// the selection the host reports.
 #[test]
 fn test_model_info_stashes_catalog() {
-    let mut app = crate::composition::app();
+    let mut app = app();
     app.ui.navigation.pane = Pane::Model;
     let mut catalog = model_catalog(vec![
         model_entry("a", "A", model_caps(true, false)),
@@ -222,7 +225,7 @@ fn test_model_info_stashes_catalog() {
 /// draft alone: the refresh must not undo a pick in progress.
 #[test]
 fn test_model_info_keeps_draft() {
-    let mut app = crate::composition::app();
+    let mut app = app();
     app.ui.navigation.pane = Pane::Model;
     app.refresh_model_catalog(model_catalog(vec![
         model_entry("a", "A", model_caps(true, false)),
@@ -247,7 +250,7 @@ fn test_model_info_keeps_draft() {
 /// Default row rather than pointing at a row that does not exist.
 #[test]
 fn test_missing_selection_falls_back() {
-    let mut app = crate::composition::app();
+    let mut app = app();
     app.ui.navigation.pane = Pane::Model;
     let mut catalog = model_catalog(vec![model_entry("a", "A", model_caps(true, false))]);
     catalog.selected = ModelChoice::Explicit {
@@ -264,8 +267,7 @@ fn test_missing_selection_falls_back() {
 /// the input box — the pane owns the keyboard.
 #[test]
 fn test_model_pane_swallows_chars() {
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-    let mut app = crate::composition::app();
+    let mut app = app();
     app.ui.navigation.screen = Screen::Working;
     app.ui.navigation.pane = Pane::Model;
     crate::keys::handle_working(
@@ -381,7 +383,6 @@ fn test_model_pending_blocks_repeat() {
 /// for retry, and the refusal names the lost connection.
 #[test]
 fn test_model_send_failure() {
-    use crate::test_harness::connection_lost_app;
     let mut app = connection_lost_app();
     app.refresh_model_catalog(model_catalog(vec![model_entry(
         "glm-5.2",
@@ -496,7 +497,7 @@ fn test_fast_degrades_on_commit() {
 /// next request carries (None drops the badge).
 #[test]
 fn test_model_result_stashes_effort() {
-    let mut app = crate::composition::app();
+    let mut app = app();
     app.handle_agent_message(model_response(
         1,
         apply_result("qwen3.7-max", Some(EffortLevel::High), SpeedMode::Standard),
@@ -535,7 +536,7 @@ fn test_model_result_stashes_effort() {
 /// decides it.
 #[test]
 fn test_unmatched_result_still_applies() {
-    let mut app = crate::composition::app();
+    let mut app = app();
     app.ui.navigation.pane = Pane::Model;
     app.sessions.current.capabilities.model.pending = Some(PendingCommit {
         req_id: RequestId(2),
@@ -573,7 +574,7 @@ fn test_unmatched_result_still_applies() {
 /// editing: only the held commit's own reply reseeds.
 #[test]
 fn test_stale_reply_keeps_draft() {
-    let mut app = crate::composition::app();
+    let mut app = app();
     app.ui.navigation.pane = Pane::Model;
     app.sessions.current.capabilities.model.pending = Some(PendingCommit {
         req_id: RequestId(2),

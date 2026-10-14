@@ -19,6 +19,7 @@ use std::sync::{Arc, mpsc};
 
 use crate::records::TranscriptLine;
 use crate::state::transcript::DiskFront;
+use mpsc::TryRecvError;
 
 /// History reads running at once.
 ///
@@ -171,7 +172,6 @@ impl PendingHistoryRead {
     /// returns the outcome for the caller to apply and clear it; Disconnected
     /// means the worker is gone and the record must be cleared.
     pub fn poll(&self) -> HistoryReadPoll {
-        use mpsc::TryRecvError;
         match self.rx.try_recv() {
             Ok(outcome) => HistoryReadPoll::Ready(outcome),
             Err(TryRecvError::Empty) => HistoryReadPoll::Pending,

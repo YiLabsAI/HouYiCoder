@@ -12,6 +12,8 @@
 //! human-readable .txt export (different use, not a superiority claim).
 
 use std::io;
+use std::io::Write;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 
 /// The serialized export document + a suggested default filename. The
@@ -57,11 +59,9 @@ pub fn write_atomic_0600(path: &Path, bytes: &[u8]) -> io::Result<()> {
     // (OpenOptions::mode at create). std::fs::set_permissions after the fact
     // leaves a window where the temp holds real tool I/O + reasoning.
     {
-        use std::io::Write;
         let mut f = {
             #[cfg(unix)]
             {
-                use std::os::unix::fs::OpenOptionsExt;
                 std::fs::OpenOptions::new()
                     .create(true)
                     .write(true)

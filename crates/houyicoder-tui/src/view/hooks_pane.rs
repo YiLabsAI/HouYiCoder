@@ -10,6 +10,7 @@ use ratatui::{
 
 use crate::state::App;
 use crate::view::navigation::key_hint;
+use houyicoder_protocol::frontend::hooks::HookEntry;
 
 pub(crate) const HOOKS_PANE_HEIGHT: u16 = 20;
 
@@ -60,7 +61,7 @@ pub(crate) fn draw_content(f: &mut Frame, inner: Rect, app: &App) {
     );
 }
 
-fn framework_events(app: &App) -> Vec<&houyicoder_protocol::frontend::hooks::HookEntry> {
+fn framework_events(app: &App) -> Vec<&HookEntry> {
     app.sessions
         .current
         .capabilities
@@ -75,10 +76,7 @@ fn framework_events(app: &App) -> Vec<&houyicoder_protocol::frontend::hooks::Hoo
 /// are event definitions (not configured hooks); the rest are user/plugin
 /// hooks. Used by the event list (the count shown inline + the sort key) and
 /// the subtitle total.
-fn configured_count(
-    entries: &[houyicoder_protocol::frontend::hooks::HookEntry],
-    event_name: &str,
-) -> usize {
+fn configured_count(entries: &[HookEntry], event_name: &str) -> usize {
     entries
         .iter()
         .filter(|h| h.source != "framework" && h.events.iter().any(|ev| ev.as_str() == event_name))
@@ -86,7 +84,7 @@ fn configured_count(
 }
 
 /// Total configured hooks across all events (non-framework entries).
-fn total_configured(entries: &[houyicoder_protocol::frontend::hooks::HookEntry]) -> usize {
+fn total_configured(entries: &[HookEntry]) -> usize {
     entries.iter().filter(|h| h.source != "framework").count()
 }
 

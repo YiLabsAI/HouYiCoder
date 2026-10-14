@@ -34,6 +34,7 @@ pub use self::enums::{
     CyclicTab, LiveBlock, MemoryScopeTab, Pane, PermissionInput, PermissionTab, Screen, Stage,
     StatusTab, TrustChoice, ViewportMode, pane_for_stage,
 };
+use crate::agent_message::PaneAgents;
 pub(crate) use crate::state::cursors::EventCursor;
 pub(crate) use crate::state::parked_view_states::ParkedViewStates;
 pub use crate::state::trajectory::{
@@ -80,13 +81,13 @@ impl App {
     /// In-crate render and key paths read the session field directly;
     /// external integration tests reach the rows through this handle instead of
     /// the crate-private sessions field.
-    pub fn agents(&self) -> &crate::agent_message::PaneAgents {
+    pub fn agents(&self) -> &PaneAgents {
         &self.sessions.current.agents
     }
 
     /// Public mut seam for the session-owned returned-delegation rows: external
     /// integration tests stage fixtures through it.
-    pub fn agents_mut(&mut self) -> &mut crate::agent_message::PaneAgents {
+    pub fn agents_mut(&mut self) -> &mut PaneAgents {
         &mut self.sessions.current.agents
     }
 

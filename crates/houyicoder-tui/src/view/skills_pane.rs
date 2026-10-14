@@ -19,6 +19,8 @@ use crate::skills_state::SkillDetail;
 use crate::state::App;
 use crate::view::line_wrap::max_scroll_offset;
 use crate::view::navigation::key_hint;
+use crate::view::relative_time::now_epoch_secs;
+use crate::view::relative_time::relative_time;
 
 pub(crate) const SKILLS_PANE_HEIGHT: u16 = 16;
 
@@ -322,8 +324,8 @@ fn usage_line(entry: Option<&SkillEntry>) -> Line<'static> {
             Style::new().fg(Color::DarkGray),
         ));
     }
-    let now = crate::view::relative_time::now_epoch_secs();
-    let last = crate::view::relative_time::relative_time(now, usage.last_used_secs);
+    let now = now_epoch_secs();
+    let last = relative_time(now, usage.last_used_secs);
     let mut parts = format!(
         "invoked {}× · {} refused · last {} (this session)",
         usage.invocations, usage.refusals, last

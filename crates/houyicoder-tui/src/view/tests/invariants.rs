@@ -8,12 +8,19 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use houyicoder_protocol::frontend::SlashCommand;
 
+use crate::brief::edit_diff_summary;
+use crate::brief::tool_call_brief;
 use crate::composition;
 use crate::evidence::Verdict;
 use crate::keys;
+use crate::markdown::render_agent_text;
 use crate::records::{ToolOutcome, TranscriptLine};
 use crate::state::{Pane, Screen, Stage, ViewportMode};
+use crate::test_harness::dump_buffer;
+use crate::test_harness::render_buffer;
 use crate::test_harness::render_text;
+use houyicoder_core::agent::unified_diff;
+use ratatui::style::Color;
 
 fn working() -> crate::state::App {
     let mut app = composition::app();
@@ -41,8 +48,8 @@ fn test_transcript_diff_gutter_gap() {
     }
     orig.push_str("fn bar() {\n    let b = 2;\n}\n");
     new.push_str("fn bar() {\n    let b = TWO;\n}\n");
-    let diff = houyicoder_core::agent::unified_diff(&orig, &new, 3);
-    let body = format!("{}\n{}", crate::brief::edit_diff_summary(2, 2), diff);
+    let diff = unified_diff(&orig, &new, 3);
+    let body = format!("{}\n{}", edit_diff_summary(2, 2), diff);
     app.sessions.current.transcript = vec![
         TranscriptLine::User("update foo and bar".into()),
         TranscriptLine::Tool {
@@ -80,13 +87,11 @@ fn test_transcript_diff_gutter_gap() {
 // dump trims trailing spaces so a text-only assertion cannot see the fill.
 #[test]
 fn test_transcript_diff_bg_fill() {
-    use crate::test_harness::render_buffer;
-    use ratatui::style::Color;
     let mut app = working();
     let orig = "fn foo() {\n    let a = 1;\n}\n";
     let new = "fn foo() {\n    let a = ONE;\n}\n";
-    let diff = houyicoder_core::agent::unified_diff(orig, new, 3);
-    let body = format!("{}\n{}", crate::brief::edit_diff_summary(1, 1), diff);
+    let diff = unified_diff(orig, new, 3);
+    let body = format!("{}\n{}", edit_diff_summary(1, 1), diff);
     app.sessions.current.transcript = vec![TranscriptLine::Tool {
         name: "result".into(),
         tool: "result".into(),
@@ -130,13 +135,11 @@ fn test_transcript_diff_bg_fill() {
 // the cell level — the word background differs from the line background.
 #[test]
 fn test_transcript_diff_word_highlight() {
-    use crate::test_harness::render_buffer;
-    use ratatui::style::Color;
     let mut app = working();
     let orig = "fn foo() {\n    let x = 1;\n}\n";
     let new = "fn foo() {\n    let x = 2;\n}\n";
-    let diff = houyicoder_core::agent::unified_diff(orig, new, 3);
-    let body = format!("{}\n{}", crate::brief::edit_diff_summary(1, 1), diff);
+    let diff = unified_diff(orig, new, 3);
+    let body = format!("{}\n{}", edit_diff_summary(1, 1), diff);
     app.sessions.current.transcript = vec![TranscriptLine::Tool {
         name: "result".into(),
         tool: "result".into(),
@@ -150,7 +153,7 @@ fn test_transcript_diff_word_highlight() {
     .into();
     app.ui.transcript_view.toggle_result("c1".to_string());
     let buf = render_buffer(&app, 100, 20);
-    let dump = crate::test_harness::dump_buffer(&buf);
+    let dump = dump_buffer(&buf);
     println!("--- word-diff render ---\n{dump}\n--- end ---");
     let line_bg = Color::Rgb(28, 38, 32); // dim green add-line bar
     let word_bg = Color::Rgb(46, 120, 70); // darker word-added background
@@ -193,12 +196,11 @@ fn test_transcript_diff_word_highlight() {
 // a text dump cannot see the gutter gap (blank) or the per-row bar fill.
 #[test]
 fn test_transcript_diff_wraps() {
-    use crate::test_harness::render_buffer;
     let mut app = working();
     let orig = "fn foo() {\n    let x = 1;\n}\n";
     let new = "fn foo() {\n    let x = ONE_TWO_THREE_FOUR_FIVE_SIX_SEVEN_EIGHT;\n}\n";
-    let diff = houyicoder_core::agent::unified_diff(orig, new, 3);
-    let body = format!("{}\n{}", crate::brief::edit_diff_summary(1, 1), diff);
+    let diff = unified_diff(orig, new, 3);
+    let body = format!("{}\n{}", edit_diff_summary(1, 1), diff);
     app.sessions.current.transcript = vec![TranscriptLine::Tool {
         name: "result".into(),
         tool: "result".into(),
@@ -213,13 +215,13 @@ fn test_transcript_diff_wraps() {
     app.ui.transcript_view.toggle_result("c1".to_string());
     // A narrow pane forces the long added line to wrap to multiple rows.
     let buf = render_buffer(&app, 30, 14);
-    let dump = crate::test_harness::dump_buffer(&buf);
+    let dump = dump_buffer(&buf);
     println!("--- wrapped diff render (30 cols) ---\n{dump}\n--- end ---");
     // The long add line wrapped across multiple rows, each carrying the
     // green add-line background (the bar fills every wrapped row, not just
     // the first). The remove line + context are not green, so green rows ≥ 2
     // proves the add line wrapped (≥2 add rows).
-    let green = ratatui::style::Color::Rgb(28, 38, 32);
+    let green = Color::Rgb(28, 38, 32);
     let green_rows = (0..buf.area().height)
         .filter(|y| (0..buf.area().width).any(|x| buf.cell((x, *y)).unwrap().bg == green))
         .count();
@@ -413,7 +415,6 @@ fn test_diff_stacks_below_100() {
 /// "list item glued to next block" regression).
 #[test]
 fn test_list_tail_not_welded() {
-    use crate::markdown::render_agent_text;
     let (_lines, plain) = render_agent_text("●", "- apple\n- banana\n\ncherry", 80);
     let banana_row = plain.iter().position(|r| r.contains("banana")).unwrap();
     let cherry_row = plain.iter().position(|r| r.contains("cherry")).unwrap();
@@ -436,8 +437,8 @@ fn test_edit_diff_not_folded() {
     let mut app = working();
     let orig = "fn foo() {\n    let a = 1;\n}\n";
     let new = "fn foo() {\n    let a = ONE;\n}\n";
-    let diff = houyicoder_core::agent::unified_diff(orig, new, 3);
-    let body = format!("{}\n{}", crate::brief::edit_diff_summary(1, 1), diff);
+    let diff = unified_diff(orig, new, 3);
+    let body = format!("{}\n{}", edit_diff_summary(1, 1), diff);
     // Real flow: a call row (name "Update") + its diff result row. NOT
     // the results set — the default view is what we assert on.
     app.sessions.current.transcript = vec![
@@ -720,10 +721,7 @@ fn test_verbose_count_matches() {
         TranscriptLine::Tool {
             name: "bash".into(),
             tool: "bash".into(),
-            status: crate::brief::tool_call_brief(
-                "bash",
-                &serde_json::json!({ "command": cmd.clone() }),
-            ),
+            status: tool_call_brief("bash", &serde_json::json!({ "command": cmd.clone() })),
             invocation: cmd,
             outcome: ToolOutcome::Success,
             call_id: "c1".into(),
@@ -758,7 +756,6 @@ fn test_verbose_count_matches() {
 /// Continuation lines hang under the glyph (2-space indent), not at col 0.
 #[test]
 fn test_continuation_hangs_under_glyph() {
-    use crate::markdown::render_agent_text;
     let (_, plain) = render_agent_text("●", "para one\n\npara two", 80);
     assert!(plain[2].starts_with("  "), "hang-indent: {:?}", plain[2]);
     assert!(
@@ -772,7 +769,6 @@ fn test_continuation_hangs_under_glyph() {
 /// hang at col 2 (glyph width + 1), never flush-left.
 #[test]
 fn test_long_para_hang_indent() {
-    use crate::markdown::render_agent_text;
     let long = "alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa quebec romeo sierra";
     let (_, plain) = render_agent_text("●", long, 40);
     assert!(plain.len() > 1, "should wrap: {:?}", plain);
@@ -817,10 +813,7 @@ fn test_count_matches_render() {
         TranscriptLine::Tool {
             name: "bash".into(),
             tool: "bash".into(),
-            status: crate::brief::tool_call_brief(
-                "bash",
-                &serde_json::json!({ "command": cmd.clone() }),
-            ),
+            status: tool_call_brief("bash", &serde_json::json!({ "command": cmd.clone() })),
             invocation: cmd,
             outcome: ToolOutcome::Success,
             call_id: "c1".into(),

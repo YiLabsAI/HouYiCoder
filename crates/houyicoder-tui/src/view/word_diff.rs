@@ -5,6 +5,8 @@
 //! unicode-word segmentation rather than in the core diff module (which
 //! produces the line-level unified diff the renderer parses).
 
+use similar::ChangeTag;
+
 /// One part of a word-level diff (a run of words all added, all removed, or
 /// unchanged). A diff-part shape so the renderer can
 /// apply a darker, more-saturated background to just the changed words. Equal
@@ -29,9 +31,9 @@ pub fn word_diff(old: &str, new: &str) -> Vec<WordDiffPart> {
         .flat_map(|op| diff.iter_inline_changes(op))
         .map(|c| {
             let (added, removed) = match c.tag() {
-                similar::ChangeTag::Insert => (true, false),
-                similar::ChangeTag::Delete => (false, true),
-                similar::ChangeTag::Equal => (false, false),
+                ChangeTag::Insert => (true, false),
+                ChangeTag::Delete => (false, true),
+                ChangeTag::Equal => (false, false),
             };
             let value: String = c.iter_strings_lossy().map(|(_, s)| s.to_string()).collect();
             WordDiffPart {

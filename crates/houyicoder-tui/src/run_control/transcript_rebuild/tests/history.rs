@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_harness::render_text;
 
 #[test]
 fn test_replay_caps_history() {
@@ -358,7 +359,7 @@ fn test_notice_undrawn_after_window() {
     let mut app = fresh_app();
     app.ui.navigation.screen = Screen::Working;
     app.system_line("debug: logging to /tmp/houyi.log");
-    let drawn = crate::test_harness::render_text(&app, 80, 40);
+    let drawn = render_text(&app, 80, 40);
     assert!(
         drawn.contains("debug: logging"),
         "the notice is drawn while its frame is in the window: {drawn}"
@@ -368,7 +369,7 @@ fn test_notice_undrawn_after_window() {
             .push_frame(user_msg(&format!("msg {i}")));
     }
     app.rebuild_transcript();
-    let after = crate::test_harness::render_text(&app, 80, 40);
+    let after = render_text(&app, 80, 40);
     assert!(
         !after.contains("debug: logging"),
         "the notice is not drawn once its frame left the window: {after}"

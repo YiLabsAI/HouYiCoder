@@ -4,7 +4,9 @@
 
 use crate::composition;
 use crate::state::Screen;
+use crate::state::enums::LiveBlock;
 use crate::test_harness::render_text;
+use ratatui::style::Color;
 
 fn working() -> crate::state::App {
     let mut app = composition::app();
@@ -21,7 +23,7 @@ fn test_spinner_verb_reflects_phase() {
     {
         let p = app.run_progress_mut().expect("active run");
         p.live_reasoning_text = "pondering the task".to_string();
-        p.live_block = crate::state::enums::LiveBlock::Thinking;
+        p.live_block = LiveBlock::Thinking;
     }
     let out = render_text(&app, 80, 12);
     assert!(
@@ -32,7 +34,7 @@ fn test_spinner_verb_reflects_phase() {
     {
         let p = app.run_progress_mut().expect("active run");
         p.live_reasoning_text.clear();
-        p.live_block = crate::state::enums::LiveBlock::None;
+        p.live_block = LiveBlock::None;
     }
     let out = render_text(&app, 80, 12);
     assert!(
@@ -56,7 +58,7 @@ fn test_verb_works_text_streams() {
         let p = app.run_progress_mut().expect("active run");
         p.live_reasoning_text = "pondered".to_string();
         p.live_assistant_text = "Here is the answer".to_string();
-        p.live_block = crate::state::enums::LiveBlock::Responding;
+        p.live_block = LiveBlock::Responding;
     }
     let out = render_text(&app, 80, 12);
     assert!(
@@ -72,7 +74,6 @@ fn test_verb_works_text_streams() {
 #[test]
 fn test_busy_border_stays_plain() {
     // Terminal progress owns the processing signal; the pane border stays plain.
-    use ratatui::style::Color;
     let is_shimmer = |c: Color| matches!(c, Color::Rgb(0, g, b) if g == b && g > 0);
     for busy in [true, false] {
         let mut app = working();

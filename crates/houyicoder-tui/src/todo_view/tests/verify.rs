@@ -9,6 +9,8 @@ use houyicoder_protocol::frontend::SlashCommand;
 use crate::composition;
 use crate::test_harness::render_text;
 use crate::todo_view::{TodoStatus, TodoView};
+use std::time::Duration;
+use std::time::Instant;
 
 /// Build the view list the wire accumulator would leave behind: the render
 /// reads this exact cache, so direct construction drives the same view::draw
@@ -46,7 +48,7 @@ fn test_collapsed_renders_active_footer() {
         .current
         .todos
         .completion_at
-        .insert("setup".into(), std::time::Instant::now());
+        .insert("setup".into(), Instant::now());
     let out = render_text(&app, 80, 24);
     // The active item uses the cyan glyph and the active-form label.
     assert!(out.contains("◼"), "active glyph missing:\n{out}");
@@ -77,7 +79,7 @@ fn test_collapsed_no_footer_visible() {
         .current
         .todos
         .completion_at
-        .insert("done".into(), std::time::Instant::now());
+        .insert("done".into(), Instant::now());
     let out = render_text(&app, 80, 24);
     assert!(out.contains("✔"), "done glyph missing:\n{out}");
     assert!(out.contains("◻"), "pending glyph missing:\n{out}");
@@ -111,8 +113,8 @@ fn test_done_tasks_clear() {
         ("first", TodoStatus::Completed),
         ("second", TodoStatus::Completed),
     ]);
-    let now = std::time::Instant::now();
-    let completed = now - std::time::Duration::from_secs(6);
+    let now = Instant::now();
+    let completed = now - Duration::from_secs(6);
     app.sessions
         .current
         .todos
@@ -144,10 +146,11 @@ fn test_done_stays_open() {
         ("finished", TodoStatus::Completed),
         ("next", TodoStatus::Pending),
     ]);
-    app.sessions.current.todos.completion_at.insert(
-        "finished".into(),
-        std::time::Instant::now() - std::time::Duration::from_secs(31),
-    );
+    app.sessions
+        .current
+        .todos
+        .completion_at
+        .insert("finished".into(), Instant::now() - Duration::from_secs(31));
 
     let out = render_text(&app, 80, 24);
 

@@ -4,8 +4,12 @@
 use super::super::list;
 use super::super::*;
 use super::fixtures::{detail_of_all, record_of, selected_number, window_view};
+use crate::composition::app;
+use crate::keys::handle_working;
+use crate::state::Pane;
 use crate::view::working;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ratatui::layout::Rect;
 use ratatui::{Terminal, backend::TestBackend};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -87,8 +91,8 @@ fn test_cursor_restored_by_turn() {
         window_view(401, 500, 500, 1),
         window_view(301, 500, 500, 1),
     ]));
-    let mut app = crate::composition::app();
-    app.ui.navigation.pane = crate::state::Pane::Trajectory;
+    let mut app = app();
+    app.ui.navigation.pane = Pane::Trajectory;
     app.sessions.persistence.trajectory_log = Some(log.clone());
     let mut terminal = Terminal::new(TestBackend::new(80, 40)).unwrap();
 
@@ -126,8 +130,8 @@ fn test_cursor_restored_by_turn() {
 #[test]
 fn test_home_end_move_window() {
     let log = Arc::new(ScriptedLog::new(vec![window_view(401, 500, 500, 1)]));
-    let mut app = crate::composition::app();
-    app.ui.navigation.pane = crate::state::Pane::Trajectory;
+    let mut app = app();
+    app.ui.navigation.pane = Pane::Trajectory;
     app.sessions.persistence.trajectory_log = Some(log.clone());
     let mut terminal = Terminal::new(TestBackend::new(80, 40)).unwrap();
     terminal
@@ -136,7 +140,7 @@ fn test_home_end_move_window() {
         })
         .unwrap();
 
-    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
+    handle_working(&mut app, KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
     assert_eq!(
         log.earliest.load(Ordering::Relaxed),
         1,
@@ -145,7 +149,7 @@ fn test_home_end_move_window() {
     assert_eq!(selected_number(&app), Some(1));
     assert_eq!(app.ui.trajectory.cursor(), 0);
 
-    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
+    handle_working(&mut app, KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
     assert_eq!(log.tail.load(Ordering::Relaxed), 1, "End reads the tail");
     assert_eq!(
         selected_number(&app),
@@ -160,7 +164,7 @@ fn test_home_end_move_window() {
 #[test]
 fn test_header_reports_newer() {
     let view = window_view(301, 400, 500, 1);
-    let (header, _, _, _) = list::draw_turn_list(&view, 0, ratatui::layout::Rect::ZERO);
+    let (header, _, _, _) = list::draw_turn_list(&view, 0, Rect::ZERO);
     let text: String = header
         .iter()
         .flat_map(|l| l.spans.iter().map(|s| s.content.as_ref().to_string()))
@@ -169,7 +173,7 @@ fn test_header_reports_newer() {
     assert!(text.contains("100 newer not loaded"), "{text}");
     // With nothing hidden the label is just the count, as before.
     let whole = window_view(1, 20, 20, 1);
-    let (header, _, _, _) = list::draw_turn_list(&whole, 0, ratatui::layout::Rect::ZERO);
+    let (header, _, _, _) = list::draw_turn_list(&whole, 0, Rect::ZERO);
     let text: String = header
         .iter()
         .flat_map(|l| l.spans.iter().map(|s| s.content.as_ref().to_string()))
@@ -182,12 +186,12 @@ fn test_header_reports_newer() {
 /// rewrite which turn the turn list will return to.
 #[test]
 fn test_level1_move_keeps_selection() {
-    let mut app = crate::composition::app();
-    app.ui.navigation.pane = crate::state::Pane::Trajectory;
+    let mut app = app();
+    app.ui.navigation.pane = Pane::Trajectory;
     app.ui.trajectory.set_level(1);
     app.ui.trajectory.select(7, 1);
     app.ui.trajectory.set_list_len(3);
-    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     assert_eq!(
         selected_number(&app),
         Some(7),
@@ -203,8 +207,8 @@ fn test_selection_dropped_across_history() {
         window_view(1, 100, 100, 1),
         window_view(1, 100, 100, 2),
     ]));
-    let mut app = crate::composition::app();
-    app.ui.navigation.pane = crate::state::Pane::Trajectory;
+    let mut app = app();
+    app.ui.navigation.pane = Pane::Trajectory;
     app.sessions.persistence.trajectory_log = Some(log.clone());
     let mut terminal = Terminal::new(TestBackend::new(80, 40)).unwrap();
 
@@ -244,13 +248,13 @@ fn test_selection_dropped_across_history() {
 #[test]
 fn test_home_end_stay_local() {
     let log = Arc::new(ScriptedLog::new(vec![window_view(401, 500, 500, 1)]));
-    let mut app = crate::composition::app();
-    app.ui.navigation.pane = crate::state::Pane::Trajectory;
+    let mut app = app();
+    app.ui.navigation.pane = Pane::Trajectory;
     app.sessions.persistence.trajectory_log = Some(log.clone());
     app.ui.trajectory.set_level(1);
     app.ui.trajectory.set_list_len(4);
 
-    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
+    handle_working(&mut app, KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
     assert_eq!(app.ui.trajectory.cursor(), 3, "End is the last record");
     assert_eq!(
         log.tail.load(Ordering::Relaxed),
@@ -258,7 +262,7 @@ fn test_home_end_stay_local() {
         "and the window did not move"
     );
 
-    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
+    handle_working(&mut app, KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
     assert_eq!(app.ui.trajectory.cursor(), 0, "Home is the first record");
     assert_eq!(
         log.earliest.load(Ordering::Relaxed),
@@ -270,8 +274,8 @@ fn test_home_end_stay_local() {
     // window is not its to move either.
     app.ui.trajectory.set_level(2);
     app.ui.trajectory.set_cursor(0);
-    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
-    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
+    handle_working(&mut app, KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
+    handle_working(&mut app, KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
     assert_eq!(
         app.ui.trajectory.cursor(),
         0,
@@ -287,8 +291,8 @@ fn test_home_end_stay_local() {
 #[test]
 fn test_esc_restores_turn() {
     let log = Arc::new(ScriptedLog::new(vec![window_view(401, 500, 500, 1)]));
-    let mut app = crate::composition::app();
-    app.ui.navigation.pane = crate::state::Pane::Trajectory;
+    let mut app = app();
+    app.ui.navigation.pane = Pane::Trajectory;
     app.sessions.persistence.trajectory_log = Some(log.clone());
     let mut terminal = Terminal::new(TestBackend::new(80, 40)).unwrap();
     terminal
@@ -299,14 +303,14 @@ fn test_esc_restores_turn() {
 
     // The user walks to turn 405 and opens it.
     for _ in 0..4 {
-        crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     }
     assert_eq!(app.ui.trajectory.cursor(), 4);
-    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    handle_working(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     assert_eq!(app.ui.trajectory.level(), 1);
     assert_eq!(selected_number(&app), Some(405), "the drill is about 405");
 
-    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    handle_working(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     assert_eq!(app.ui.trajectory.level(), 0, "Esc returns to the turn list");
     assert_eq!(
         app.ui.trajectory.cursor(),
@@ -320,12 +324,12 @@ fn test_esc_restores_turn() {
 /// selected: the user was looking at one record, not at the top of the list.
 #[test]
 fn test_esc_keeps_record() {
-    let mut app = crate::composition::app();
-    app.ui.navigation.pane = crate::state::Pane::Trajectory;
+    let mut app = app();
+    app.ui.navigation.pane = Pane::Trajectory;
     app.ui.trajectory.set_level(2);
     app.ui.trajectory.set_cursor(3);
 
-    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    handle_working(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     assert_eq!(
         app.ui.trajectory.level(),
         1,
@@ -344,14 +348,14 @@ fn test_esc_keeps_record() {
 #[test]
 fn test_level1_up_keeps_window() {
     let log = Arc::new(ScriptedLog::new(vec![window_view(401, 500, 500, 1)]));
-    let mut app = crate::composition::app();
-    app.ui.navigation.pane = crate::state::Pane::Trajectory;
+    let mut app = app();
+    app.ui.navigation.pane = Pane::Trajectory;
     app.sessions.persistence.trajectory_log = Some(log.clone());
     app.ui.trajectory.set_level(1);
     app.ui.trajectory.set_list_len(4);
     app.ui.trajectory.set_cursor(0);
 
-    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+    handle_working(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
     assert_eq!(app.ui.trajectory.cursor(), 0, "the top of the record list");
     assert_eq!(
         log.older.load(Ordering::Relaxed),
@@ -361,7 +365,7 @@ fn test_level1_up_keeps_window() {
 
     // At the turn list the same key does widen the window.
     app.ui.trajectory.set_level(0);
-    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+    handle_working(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
     assert_eq!(
         log.older.load(Ordering::Relaxed),
         1,
@@ -392,8 +396,8 @@ fn test_esc_survives_window_move() {
         window_view(401, 500, 500, 1),
         window_view(402, 501, 501, 1),
     ]));
-    let mut app = crate::composition::app();
-    app.ui.navigation.pane = crate::state::Pane::Trajectory;
+    let mut app = app();
+    app.ui.navigation.pane = Pane::Trajectory;
     app.sessions.persistence.trajectory_log = Some(log.clone());
     let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
     terminal
@@ -403,9 +407,9 @@ fn test_esc_survives_window_move() {
         .unwrap();
 
     for _ in 0..4 {
-        crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     }
-    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    handle_working(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     assert_eq!(selected_number(&app), Some(405));
 
     // The tail page refreshes under the drill while the user reads it.
@@ -421,7 +425,7 @@ fn test_esc_survives_window_move() {
         "the drill still shows the turn it named: {screen}"
     );
 
-    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    handle_working(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     terminal
         .draw(|f| {
             working::draw(f, &app);
@@ -454,8 +458,8 @@ fn test_bg_row_clears_selection() {
         duration_ms: 5,
     }));
     let log = Arc::new(ScriptedLog::new(vec![view]));
-    let mut app = crate::composition::app();
-    app.ui.navigation.pane = crate::state::Pane::Trajectory;
+    let mut app = app();
+    app.ui.navigation.pane = Pane::Trajectory;
     app.sessions.persistence.trajectory_log = Some(log.clone());
     let mut terminal = Terminal::new(TestBackend::new(80, 40)).unwrap();
     terminal
@@ -464,10 +468,10 @@ fn test_bg_row_clears_selection() {
         })
         .unwrap();
 
-    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     assert_eq!(selected_number(&app), Some(402), "a turn is selected");
     for _ in 0..2 {
-        crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     }
     assert_eq!(app.ui.trajectory.cursor(), 3, "the background row");
     assert_eq!(
@@ -482,19 +486,19 @@ fn test_bg_row_clears_selection() {
 /// no row to clamp it against until the window arrives.
 #[test]
 fn test_down_before_first_page() {
-    let mut app = crate::composition::app();
-    app.ui.navigation.pane = crate::state::Pane::Trajectory;
+    let mut app = app();
+    app.ui.navigation.pane = Pane::Trajectory;
     // What opening the pane leaves behind: no rows loaded yet.
     app.ui.trajectory.set_cursor(usize::MAX);
     app.ui.trajectory.set_list_len(0);
 
-    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     assert_eq!(
         app.ui.trajectory.cursor(),
         0,
         "the cursor stays on a real row"
     );
-    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+    handle_working(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
     assert_eq!(app.ui.trajectory.cursor(), 0);
 }
 
@@ -507,8 +511,8 @@ fn test_drill_gone_when_evicted() {
         window_view(401, 500, 500, 1),
         window_view(402, 501, 501, 1),
     ]));
-    let mut app = crate::composition::app();
-    app.ui.navigation.pane = crate::state::Pane::Trajectory;
+    let mut app = app();
+    app.ui.navigation.pane = Pane::Trajectory;
     app.sessions.persistence.trajectory_log = Some(log.clone());
     let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
     terminal
@@ -518,7 +522,7 @@ fn test_drill_gone_when_evicted() {
         .unwrap();
 
     // The user opens the oldest turn of the window.
-    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    handle_working(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     assert_eq!(selected_number(&app), Some(401));
     // The window moves past it.
     log.advance();
@@ -547,8 +551,8 @@ fn test_drill_drops_across_history() {
         window_view(1, 10, 10, 1),
         window_view(1, 10, 10, 2),
     ]));
-    let mut app = crate::composition::app();
-    app.ui.navigation.pane = crate::state::Pane::Trajectory;
+    let mut app = app();
+    app.ui.navigation.pane = Pane::Trajectory;
     app.sessions.persistence.trajectory_log = Some(log.clone());
     let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
     terminal
@@ -558,9 +562,9 @@ fn test_drill_drops_across_history() {
         .unwrap();
 
     for _ in 0..4 {
-        crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     }
-    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    handle_working(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     assert_eq!(selected_number(&app), Some(5));
 
     // The history is cleared under the drill and the new one numbers its turns
@@ -588,8 +592,8 @@ fn test_drill_drops_across_history() {
 #[test]
 fn test_drill_holds_key() {
     let log = Arc::new(ScriptedLog::new(vec![window_view(401, 500, 500, 1)]));
-    let mut app = crate::composition::app();
-    app.ui.navigation.pane = crate::state::Pane::Trajectory;
+    let mut app = app();
+    app.ui.navigation.pane = Pane::Trajectory;
     app.sessions.persistence.trajectory_log = Some(log.clone());
     let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
     terminal
@@ -599,14 +603,14 @@ fn test_drill_holds_key() {
         .unwrap();
 
     for _ in 0..2 {
-        crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     }
-    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    handle_working(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     let drill = app.ui.trajectory.drill().expect("a drill");
     assert_eq!(drill.key.as_str(), "t403", "the key of the row it opened");
     assert_eq!(drill.history_generation, 1);
 
-    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    handle_working(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     assert_eq!(
         app.ui.trajectory.drill(),
         None,
@@ -627,8 +631,8 @@ fn test_drill_survives_eviction() {
         TrajectoryRecordKind::Tool,
         None,
     )]));
-    let mut app = crate::composition::app();
-    app.ui.navigation.pane = crate::state::Pane::Trajectory;
+    let mut app = app();
+    app.ui.navigation.pane = Pane::Trajectory;
     app.sessions.persistence.trajectory_log = Some(log.clone());
     let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
     terminal
@@ -639,7 +643,7 @@ fn test_drill_survives_eviction() {
 
     // The user opens the oldest turn of the window, then the window moves past
     // it.
-    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    handle_working(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     log.advance();
     terminal
         .draw(|f| {

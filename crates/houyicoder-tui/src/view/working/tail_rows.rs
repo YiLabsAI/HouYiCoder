@@ -6,6 +6,8 @@ use ratatui::layout::Rect;
 
 use crate::rows::row_set::{Row, RowSet};
 use crate::state::App;
+use crate::view::spinner::spinner_row_text;
+use crate::view::todo_list::render_rows;
 
 /// Build the per-frame live rows: the streaming assistant text (when active),
 /// the spinner (when a run is in flight), and the session checklist. Each
@@ -54,11 +56,11 @@ pub(super) fn build_tail_rows(area: Rect, app: &App, has_slots: bool) -> RowSet 
         && let Some(start) = app.run_started()
     {
         spacer_if_needed(&mut sink);
-        let text = crate::view::spinner::spinner_row_text(app, start.elapsed(), area.width);
+        let text = spinner_row_text(app, start.elapsed(), area.width);
         sink.push(Row::new(SPINNER, text));
     }
 
-    let todo_rows = crate::view::todo_list::render_rows(app);
+    let todo_rows = render_rows(app);
     if !todo_rows.is_empty() {
         spacer_if_needed(&mut sink);
         for (plain, styled) in todo_rows {

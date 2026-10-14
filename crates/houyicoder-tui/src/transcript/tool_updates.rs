@@ -4,7 +4,10 @@
 
 use crate::records::ToolOutcome;
 use crate::transcript::TranscriptFrame;
+use houyicoder_protocol::frontend::session_update::SessionUpdate;
 use houyicoder_protocol::frontend::session_update::ToolCallStatus;
+use houyicoder_protocol::frontend::session_update::ToolCallUpdate;
+use std::collections::HashMap;
 
 /// A resolved tool update awaiting pairing with its call: the call id, the
 /// outcome the result row colors by, and the raw output the body reads.
@@ -12,8 +15,7 @@ pub(super) type PendingUpdate = (String, Option<ToolOutcome>, Option<serde_json:
 
 /// The title and raw input a ToolCall frame carries, keyed by call id so an
 /// orphan result can still name its tool. First-write is fine for orphans.
-pub(super) type ToolRegistry =
-    std::collections::HashMap<String, (String, Option<serde_json::Value>)>;
+pub(super) type ToolRegistry = HashMap<String, (String, Option<serde_json::Value>)>;
 
 /// Resolve each tool call's outcome + output from its matching ToolCallUpdate
 /// (by tool_call_id) so the call chip colors by outcome and the result row
@@ -29,8 +31,6 @@ pub(super) type ToolRegistry =
 pub(super) fn collect_tool_updates<F: AsRef<TranscriptFrame>>(
     frames: &[F],
 ) -> (Vec<PendingUpdate>, ToolRegistry) {
-    use houyicoder_protocol::frontend::session_update::SessionUpdate;
-    use std::collections::HashMap;
     let mut updates: Vec<PendingUpdate> = Vec::new();
     let mut tools: ToolRegistry = HashMap::new();
     for f in frames {
@@ -52,11 +52,7 @@ pub(super) fn collect_tool_updates<F: AsRef<TranscriptFrame>>(
 
 /// Push one resolved update for a ToolCallUpdate frame, drawing the tool name
 /// and call input from the registry the matching ToolCall populated.
-fn push_update(
-    updates: &mut Vec<PendingUpdate>,
-    tools: &mut ToolRegistry,
-    upd: &houyicoder_protocol::frontend::session_update::ToolCallUpdate,
-) {
+fn push_update(updates: &mut Vec<PendingUpdate>, tools: &mut ToolRegistry, upd: &ToolCallUpdate) {
     let id = upd.tool_call_id.0.clone();
     let Some(out) = &upd.fields.raw_output else {
         if let Some(status) = upd.fields.status {

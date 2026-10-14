@@ -17,6 +17,8 @@ use ratatui::{
 use crate::evidence::Verdict;
 use crate::state::App;
 use crate::view::components;
+use crate::view::navigation::key_hint;
+use houyicoder_protocol::frontend::LoginMode;
 
 /// Render the review-node console.
 pub fn draw(f: &mut Frame, app: &App) {
@@ -32,7 +34,7 @@ pub fn draw(f: &mut Frame, app: &App) {
     draw_topbar(f, outer[0], app);
     draw_columns(f, outer[1], app);
     f.render_widget(
-        Paragraph::new(crate::view::navigation::key_hint(&[
+        Paragraph::new(key_hint(&[
             ("Enter", "start"),
             ("Up/Down", "find"),
             ("a", "approve"),
@@ -47,9 +49,9 @@ pub fn draw(f: &mut Frame, app: &App) {
 
 fn draw_topbar(f: &mut Frame, area: Rect, app: &App) {
     let mode = match app.ui.navigation.login_mode {
-        Some(houyicoder_protocol::frontend::LoginMode::Sso) => "SSO",
-        Some(houyicoder_protocol::frontend::LoginMode::ApiKey) => "API key",
-        Some(houyicoder_protocol::frontend::LoginMode::Local) => "local",
+        Some(LoginMode::Sso) => "SSO",
+        Some(LoginMode::ApiKey) => "API key",
+        Some(LoginMode::Local) => "local",
         None => "-",
     };
     let text = format!(

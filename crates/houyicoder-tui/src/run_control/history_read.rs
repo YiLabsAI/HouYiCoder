@@ -13,6 +13,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use crate::records::TranscriptLine;
 use crate::state::history_read::{HistoryReadOutcome, HistoryReadResult};
 use crate::transcript::snapshot::TranscriptSnapshot;
+use std::sync::mpsc::Sender;
 
 /// Byte budget of one older-row read from the session log, and of each window
 /// the first read walks back through.
@@ -70,11 +71,7 @@ impl ReadJob {
     /// here, so a poll on the receiver sees Disconnected once this returns. A
     /// stopped read sends nothing, and the invalidation that stopped it dropped
     /// the receiver too, so no poll ever sees that silence.
-    pub(crate) fn run_and_send(
-        self,
-        tx: std::sync::mpsc::Sender<HistoryReadOutcome>,
-        stop: &AtomicBool,
-    ) {
+    pub(crate) fn run_and_send(self, tx: Sender<HistoryReadOutcome>, stop: &AtomicBool) {
         if let Some(outcome) = self.run(stop) {
             tx.send(outcome).ok();
         }

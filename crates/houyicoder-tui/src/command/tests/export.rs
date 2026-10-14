@@ -9,7 +9,15 @@ use std::sync::Arc;
 
 use crate::records::TranscriptLine;
 use crate::state::App;
+use crate::test_harness::connected_app;
 use crate::view::export_log::{ExportLog, ExportPayload};
+use std::env::temp_dir;
+use std::fs::create_dir_all;
+use std::fs::remove_dir;
+use std::fs::remove_file;
+use std::os::unix::fs::PermissionsExt;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 /// A stub ExportLog that returns a fixed payload so run_export's write path is
 /// testable without a real SessionLog.
@@ -40,16 +48,16 @@ fn last_system_line(app: &App) -> Option<String> {
 
 #[test]
 fn test_export_writes_file_reports() {
-    let dir = std::env::temp_dir().join(format!(
+    let dir = temp_dir().join(format!(
         "houyi-export-unit-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0)
     ));
-    std::fs::create_dir_all(&dir).unwrap();
+    create_dir_all(&dir).unwrap();
     let target = dir.join("out.json");
-    let mut app = crate::test_harness::connected_app();
+    let mut app = connected_app();
     app.sessions.persistence.export_log = Some(Arc::new(StubExport {
         payload: ExportPayload {
             filename: "ignored.json".into(),
@@ -67,12 +75,11 @@ fn test_export_writes_file_reports() {
     assert!(body.contains("hello"), "the serialized JSON is in the file");
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
         let mode = std::fs::metadata(&target).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600, "export file is 0o600");
     }
-    std::fs::remove_file(&target).ok();
-    std::fs::remove_dir(&dir).ok();
+    remove_file(&target).ok();
+    remove_dir(&dir).ok();
 }
 
 #[test]
@@ -89,7 +96,7 @@ fn test_export_disconnected() {
 
 #[test]
 fn test_export_source_gap() {
-    let mut app = crate::test_harness::connected_app();
+    let mut app = connected_app();
     // Connected, but the export source is not installed — a capability gap,
     // not a disconnect.
     app.run_export(None);
@@ -102,7 +109,7 @@ fn test_export_source_gap() {
 
 #[test]
 fn test_unwritable_path_reports_error() {
-    let mut app = crate::test_harness::connected_app();
+    let mut app = connected_app();
     app.sessions.persistence.export_log = Some(Arc::new(StubExport {
         payload: ExportPayload {
             filename: "x.json".into(),
@@ -110,7 +117,7 @@ fn test_unwritable_path_reports_error() {
         },
     }));
     // A path under a directory that does not exist — the atomic write fails.
-    let bad = std::env::temp_dir().join("houyi-no-such-dir-xyz/sub/export.json");
+    let bad = temp_dir().join("houyi-no-such-dir-xyz/sub/export.json");
     app.run_export(Some(bad.to_str().unwrap()));
     let line = last_system_line(&app).expect("a system line lands");
     assert!(
@@ -123,16 +130,16 @@ fn test_unwritable_path_reports_error() {
 fn test_dispatched_via_local_command() {
     // run_tui_local_command with an export + path arg routes to run_export
     // via the arg-parse branch — covers the dispatch arm. Returns true.
-    let dir = std::env::temp_dir().join(format!(
+    let dir = temp_dir().join(format!(
         "houyi-export-dispatch-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0)
     ));
-    std::fs::create_dir_all(&dir).unwrap();
+    create_dir_all(&dir).unwrap();
     let target = dir.join("dispatched.json");
-    let mut app = crate::test_harness::connected_app();
+    let mut app = connected_app();
     app.sessions.persistence.export_log = Some(Arc::new(StubExport {
         payload: ExportPayload {
             filename: "d.json".into(),
@@ -148,6 +155,6 @@ fn test_dispatched_via_local_command() {
             .unwrap_or(false),
         "the dispatched run reported success"
     );
-    std::fs::remove_file(&target).ok();
-    std::fs::remove_dir(&dir).ok();
+    remove_file(&target).ok();
+    remove_dir(&dir).ok();
 }

@@ -9,7 +9,11 @@ use std::time::Duration;
 use super::App;
 use super::index_read::{INDEX_CHUNK_BUDGET, IndexChunkPoll, PendingIndexChunk};
 use crate::notifications::{NotifKind, Notification};
+use crate::scroll::SEARCH_LOG_THRESHOLD;
+use crate::scroll::WINDOW_MAX_BYTES;
+use crate::transcript::snapshot::IndexProgress;
 use crate::transcript::snapshot::{SnapshotLoad, WindowLoad};
+use std::sync::mpsc::channel;
 
 impl App {
     /// Enter Scroll mode, remembering the current viewport so Esc/End returns
@@ -62,11 +66,11 @@ impl App {
         }
         let loaded = self.sessions.persistence.snapshot.as_ref().map(|snap| {
             let log_bytes = snap.log_size();
-            if log_bytes > crate::scroll::SEARCH_LOG_THRESHOLD {
-                let w = snap.tail_window(crate::scroll::WINDOW_MAX_BYTES);
+            if log_bytes > SEARCH_LOG_THRESHOLD {
+                let w = snap.tail_window(WINDOW_MAX_BYTES);
                 Loaded::Over { log_bytes, w }
             } else {
-                let load = snap.load(crate::scroll::SEARCH_LOG_THRESHOLD);
+                let load = snap.load(SEARCH_LOG_THRESHOLD);
                 Loaded::Under { load }
             }
         });
@@ -224,7 +228,7 @@ impl App {
             if anchor == 0 {
                 return; // BOF: no older window.
             }
-            let w = snap.window_before(anchor, crate::scroll::WINDOW_MAX_BYTES);
+            let w = snap.window_before(anchor, WINDOW_MAX_BYTES);
             if w.lines.is_empty() || w.start_offset == anchor {
                 return; // no progress (corrupt/empty) -- stop.
             }
@@ -273,7 +277,7 @@ impl App {
             if cursor >= self.frozen_file_size() {
                 return; // EOF: no newer window.
             }
-            let w = snap.window(cursor, crate::scroll::WINDOW_MAX_BYTES);
+            let w = snap.window(cursor, WINDOW_MAX_BYTES);
             if w.lines.is_empty() || w.next_offset == cursor {
                 return; // no progress -- stop.
             }
@@ -404,7 +408,7 @@ impl App {
         let Some(snap) = self.sessions.persistence.snapshot.clone() else {
             return;
         };
-        let (tx, rx) = std::sync::mpsc::channel();
+        let (tx, rx) = channel();
         crate::composition::shared_runtime().spawn_blocking(move || {
             tx.send(snap.index_chunk()).ok();
         });
@@ -456,7 +460,7 @@ impl App {
 
     /// Publish a chunk's progress to the cells the chrome reads, and finish the
     /// build when the chunk says it is complete.
-    fn apply_index_chunk(&self, progress: crate::transcript::snapshot::IndexProgress) {
+    fn apply_index_chunk(&self, progress: IndexProgress) {
         self.sessions
             .current
             .index_build

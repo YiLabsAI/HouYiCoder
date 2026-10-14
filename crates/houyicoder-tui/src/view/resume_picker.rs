@@ -15,8 +15,10 @@ use ratatui::{
     widgets::{List, ListItem, ListState, Paragraph},
 };
 
+use crate::resume_picker::SessionRow;
 use crate::state::App;
 use crate::view::line_wrap::truncate_width;
+use crate::view::navigation::key_hint;
 
 /// Maximum rows the list shows before scrolling. Keeps the pane small so it
 /// never covers the whole working surface (the design ~10 visible).
@@ -80,7 +82,7 @@ pub fn draw_content(f: &mut Frame, inner: Rect, app: &App) {
         f.render_stateful_widget(list, chunks[1], &mut state);
     }
     // Footer: the key hints.
-    let footer = Paragraph::new(crate::view::navigation::key_hint(&[
+    let footer = Paragraph::new(key_hint(&[
         ("Up/Down", "select"),
         ("Enter", "resume"),
         ("Esc", "close"),
@@ -93,11 +95,11 @@ pub fn draw_content(f: &mut Frame, inner: Rect, app: &App) {
 /// aligns across rows), cwd basename dim. The title is padded to its budget
 /// so the cwd starts at a stable column — a one-line layout that stays
 /// scannable where a two-line layout would spend the extra row.
-fn format_row(row: &crate::resume_picker::SessionRow, now: u64, width: u16) -> ListItem<'static> {
+fn format_row(row: &SessionRow, now: u64, width: u16) -> ListItem<'static> {
     ListItem::new(format_line(row, now, width))
 }
 
-fn format_line(row: &crate::resume_picker::SessionRow, now: u64, width: u16) -> Line<'static> {
+fn format_line(row: &SessionRow, now: u64, width: u16) -> Line<'static> {
     let time = crate::resume_picker::relative_time(row.last_active, now);
     let size = crate::resume_picker::format_size(row.log_size);
     let budget = title_budget(width);

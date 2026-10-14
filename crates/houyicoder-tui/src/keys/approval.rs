@@ -4,19 +4,22 @@
 
 use crossterm::event::{KeyCode, KeyEvent};
 
+use crate::records::APPROVAL_OPTIONS;
+use crate::records::Approval;
 use crate::state::App;
+use houyicoder_protocol::frontend::run::ApprovalDecision;
 
 /// Display order of the three built-in approval options, the canonical
 /// layout: Yes, then Yes-don't-ask, then No. The selected index
 /// keeps its internal mapping (0=Yes, 1=No, 2=Yes-don't-ask); this array
 /// maps display position to selected value. Used when the server sends no
 /// options (the fallback built-in 3-option set).
-pub(super) const APPROVAL_DISPLAY_ORDER: [usize; crate::records::APPROVAL_OPTIONS] = [0, 2, 1];
+pub(super) const APPROVAL_DISPLAY_ORDER: [usize; APPROVAL_OPTIONS] = [0, 2, 1];
 
 /// The number of options the cursor cycles through: the server's offered
 /// list when present, otherwise the built-in set (two when remember is hidden
 /// for a protected-path ask, three otherwise).
-pub(super) fn option_count(a: &crate::records::Approval) -> usize {
+pub(super) fn option_count(a: &Approval) -> usize {
     if a.options.is_empty() {
         a.visible_option_count()
     } else {
@@ -27,7 +30,7 @@ pub(super) fn option_count(a: &crate::records::Approval) -> usize {
 /// The wire scope of the focused approval choice. Entitlement approval
 /// always persists to the user grant store, so its allow choice must not
 /// claim one-shot scope.
-pub(crate) fn approval_scope(a: &crate::records::Approval) -> &'static str {
+pub(crate) fn approval_scope(a: &Approval) -> &'static str {
     if a.focused_persists() || (a.is_entitlement() && a.focused_approves()) {
         "always"
     } else {
@@ -39,7 +42,7 @@ pub(crate) fn approval_scope(a: &crate::records::Approval) -> &'static str {
 /// options, uses the built-in display order (Yes, Yes-don't-ask, No);
 /// when it does, cycles linearly through the dynamic list.
 pub(super) fn approval_next(current: usize, count: usize) -> usize {
-    if count == crate::records::APPROVAL_OPTIONS {
+    if count == APPROVAL_OPTIONS {
         let pos = APPROVAL_DISPLAY_ORDER
             .iter()
             .position(|&s| s == current)
@@ -54,7 +57,7 @@ pub(super) fn approval_next(current: usize, count: usize) -> usize {
 
 /// Advance to the previous option. Wraps around.
 pub(super) fn approval_prev(current: usize, count: usize) -> usize {
-    if count == crate::records::APPROVAL_OPTIONS {
+    if count == APPROVAL_OPTIONS {
         let pos = APPROVAL_DISPLAY_ORDER
             .iter()
             .position(|&s| s == current)
@@ -127,14 +130,12 @@ pub(super) fn handle_approval(app: &mut App, k: KeyEvent) {
                 // from the approval's own tool and input, and applies a scoped
                 // always-allow rule to the gate. The prefix scoping lives
                 // server-side so the TUI never imports the permission crate.
-                app.resolve_current_approval(
-                    houyicoder_protocol::frontend::run::ApprovalDecision {
-                        call_id,
-                        approved,
-                        updated_input: None,
-                        scope: scope.to_string(),
-                    },
-                );
+                app.resolve_current_approval(ApprovalDecision {
+                    call_id,
+                    approved,
+                    updated_input: None,
+                    scope: scope.to_string(),
+                });
             } else {
                 app.sessions.current.clear_prompt();
             }
@@ -159,14 +160,12 @@ pub(super) fn handle_approval(app: &mut App, k: KeyEvent) {
                     houyicoder_protocol::acp_wire::PermissionOptionKind::RejectOnce,
                 );
             if app.sessions.current.connection.is_some() {
-                app.resolve_current_approval(
-                    houyicoder_protocol::frontend::run::ApprovalDecision {
-                        call_id,
-                        approved: false,
-                        updated_input: None,
-                        scope: "once".to_string(),
-                    },
-                );
+                app.resolve_current_approval(ApprovalDecision {
+                    call_id,
+                    approved: false,
+                    updated_input: None,
+                    scope: "once".to_string(),
+                });
             } else {
                 app.sessions.current.clear_prompt();
             }

@@ -1,4 +1,5 @@
 use super::*;
+use crate::scroll::VIEWABLE_SCROLLBACK_CAP;
 
 /// The rows a scroll back to the resident front reads from the session log:
 /// the frames there were drained, so the log is the only source for them. The
@@ -455,7 +456,7 @@ fn test_rows_leave_on_drain() {
 #[test]
 fn test_log_rows_capped() {
     let mut app = fresh_app();
-    let rows: Vec<TranscriptLine> = (0..crate::scroll::VIEWABLE_SCROLLBACK_CAP)
+    let rows: Vec<TranscriptLine> = (0..VIEWABLE_SCROLLBACK_CAP)
         .map(|i| TranscriptLine::User(format!("older {i}")))
         .collect();
     app.transcript_mut().prepend_disk_rows(rows, 100, 0);
@@ -471,7 +472,7 @@ fn test_log_rows_capped() {
 
     assert_eq!(
         app.transcript().disk_row_count(),
-        crate::scroll::VIEWABLE_SCROLLBACK_CAP,
+        VIEWABLE_SCROLLBACK_CAP,
         "the loaded rows stay at the budget"
     );
     assert_eq!(

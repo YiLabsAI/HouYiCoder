@@ -8,6 +8,7 @@
 use std::sync::LazyLock;
 
 use regex::Regex;
+use std::collections::HashMap;
 
 /// Build a regex matching git <subcmd> while tolerating git's global options
 /// between git and the subcommand (-c key=val, -C path, --git-dir=path).
@@ -253,7 +254,6 @@ pub(crate) fn detect_git_operation(command: &str, output: &str) -> GitOp {
 /// verb-dim + value-bold (the SHA/branch/ref/PR#N is the load-bearing part).
 /// Commits group by kind so "committed abc, def" reads as one part, not two.
 pub(crate) fn git_op_parts(ops: &[GitOp]) -> Vec<(String, String)> {
-    use std::collections::HashMap;
     let mut parts: Vec<(String, String)> = Vec::new();
     let mut by_kind: HashMap<CommitKind, Vec<String>> = HashMap::new();
     for op in ops {

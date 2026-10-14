@@ -20,6 +20,7 @@ use crate::scroll::{TranscriptScroll, TranscriptSearch};
 use crate::state::App;
 use crate::state::cursors::EventCursor;
 use crate::state::parked_view_states::ExpandedKeys;
+use crossterm::event::KeyCode;
 
 /// The transcript view state the view on screen holds: where the reader is,
 /// what they have expanded, and whether a search view is open over it.
@@ -253,8 +254,7 @@ impl TranscriptViewState {
     }
 
     /// Dispatch editing key codes to the in-view search bar input buffer.
-    pub(crate) fn handle_search_input_key(&mut self, code: crossterm::event::KeyCode) {
-        use crossterm::event::KeyCode;
+    pub(crate) fn handle_search_input_key(&mut self, code: KeyCode) {
         match code {
             KeyCode::Backspace => self.search.input.backspace(),
             KeyCode::Delete => self.search.input.delete(),

@@ -11,12 +11,18 @@ use crate::composition;
 use crate::keys::handle_ctrl_o;
 use crate::records::TranscriptLine;
 use crate::row_id::RowId;
+use crate::state::transcript::blocks::BlockAnchor;
 use crate::state::{App, Pane, Screen};
 use crate::test_harness::render_text;
 use crate::view::line_wrap::wrap_line;
 use houyicoder_protocol::acpx::{AcpxMethod, AcpxNotification};
+use houyicoder_protocol::envelope::RequestId;
+use houyicoder_protocol::frontend::memory::MemoryDetail;
+use houyicoder_protocol::frontend::memory::MemorySummaryEntry;
+use houyicoder_protocol::frontend::memory::ToggleState;
 use houyicoder_protocol::frontend::run::ContentBlock;
 use houyicoder_protocol::frontend::session_update::ContentChunk;
+use houyicoder_protocol::frontend::trajectory::RedundantCallEntry;
 
 /// A working-screen app holding one memory-change notice: the shape every
 /// notice test starts from, so the broadcast setup lives here once.
@@ -94,15 +100,13 @@ fn test_transcript_shows_redundant_calls() {
         request: RequestId(2),
         response: ServerResponse::Trajectory {
             entries: vec![],
-            redundant: vec![
-                houyicoder_protocol::frontend::trajectory::RedundantCallEntry {
-                    tool: "read".into(),
-                    input_preview: "{\"file_path\":\"a.rs\"}".into(),
-                    kind: "same-batch".into(),
-                    gap: 0,
-                    last_seq: 3,
-                },
-            ],
+            redundant: vec![RedundantCallEntry {
+                tool: "read".into(),
+                input_preview: "{\"file_path\":\"a.rs\"}".into(),
+                kind: "same-batch".into(),
+                gap: 0,
+                last_seq: 3,
+            }],
         },
     });
     assert!(
@@ -314,8 +318,6 @@ fn test_replayed_open_renders() {
 /// A toggle-state result updates memory state without changing the active pane.
 #[test]
 fn test_toggle_state_applies_view() {
-    use houyicoder_protocol::envelope::RequestId;
-    use houyicoder_protocol::frontend::memory::ToggleState;
     // On the pane: the snapshot applies + the pane stays open.
     let mut app = composition::app();
     app.ui.navigation.pane = Pane::Memory;
@@ -379,8 +381,6 @@ fn test_toggle_state_applies_view() {
 /// A list refresh updates memory data without changing the active pane.
 #[test]
 fn test_memory_list_respects_dismissal() {
-    use houyicoder_protocol::envelope::RequestId;
-    use houyicoder_protocol::frontend::memory::MemorySummaryEntry;
     // On the pane: the list populates + the pane stays open.
     let mut app = composition::app();
     app.ui.navigation.pane = Pane::Memory;
@@ -446,9 +446,6 @@ fn test_memory_list_respects_dismissal() {
 
 #[test]
 fn test_pane_shows_command_result() {
-    use houyicoder_protocol::envelope::RequestId;
-    use houyicoder_protocol::frontend::memory::MemoryDetail;
-
     let mut app = composition::app();
     app.ui.navigation.pane = Pane::Memory;
     app.handle_agent_message(SessionMessage::Response {
@@ -1051,7 +1048,6 @@ fn test_expand_survives_reread() {
 /// grown.
 #[test]
 fn test_block_anchor_durable() {
-    use crate::state::transcript::blocks::BlockAnchor;
     let mut app = composition::app();
     app.ui.navigation.screen = Screen::Working;
     app.sessions

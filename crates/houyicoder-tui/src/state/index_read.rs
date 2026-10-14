@@ -8,6 +8,8 @@
 //! history read uses.
 
 use crate::transcript::snapshot::IndexProgress;
+use std::sync::mpsc::Receiver;
+use std::sync::mpsc::TryRecvError;
 
 /// Index chunks reading the log at once.
 ///
@@ -24,7 +26,7 @@ pub(crate) const INDEX_CHUNK_BUDGET: usize = 1;
 /// background task sends progress over; the task owns the sender and drops it
 /// on exit.
 pub struct PendingIndexChunk {
-    rx: std::sync::mpsc::Receiver<IndexProgress>,
+    rx: Receiver<IndexProgress>,
 }
 
 impl std::fmt::Debug for PendingIndexChunk {
@@ -44,13 +46,12 @@ pub enum IndexChunkPoll {
 }
 
 impl PendingIndexChunk {
-    pub(crate) fn new(rx: std::sync::mpsc::Receiver<IndexProgress>) -> Self {
+    pub(crate) fn new(rx: Receiver<IndexProgress>) -> Self {
         Self { rx }
     }
 
     /// Drain the channel without blocking.
     pub fn poll(&self) -> IndexChunkPoll {
-        use std::sync::mpsc::TryRecvError;
         match self.rx.try_recv() {
             Ok(progress) => IndexChunkPoll::Ready(progress),
             Err(TryRecvError::Empty) => IndexChunkPoll::Pending,

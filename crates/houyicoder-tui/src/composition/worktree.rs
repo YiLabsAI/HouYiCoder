@@ -5,7 +5,11 @@
 
 #![allow(clippy::disallowed_methods)]
 
+use std::fs::canonicalize;
+use std::mem::take;
 use std::process::Command;
+use std::process::Stdio;
+use std::time::UNIX_EPOCH;
 
 /// One linked worktree row. path is the working tree, head is the short HEAD
 /// sha, branch is the ref (or a bare marker), is_current flags the worktree
@@ -41,7 +45,7 @@ pub fn parse_worktrees(repo_root: Option<&str>, working_dir: &str) -> Vec<Worktr
         .arg("worktree")
         .arg("list")
         .arg("--porcelain")
-        .stdin(std::process::Stdio::null())
+        .stdin(Stdio::null())
         .output();
     let o = match out {
         Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).into_owned(),
@@ -53,14 +57,14 @@ pub fn parse_worktrees(repo_root: Option<&str>, working_dir: &str) -> Vec<Worktr
     for line in o.lines() {
         if line.is_empty() {
             if have {
-                entries.push(std::mem::take(&mut cur));
+                entries.push(take(&mut cur));
                 have = false;
             }
             continue;
         }
         if let Some(path) = line.strip_prefix("worktree ") {
             if have {
-                entries.push(std::mem::take(&mut cur));
+                entries.push(take(&mut cur));
             }
             cur.path = path.to_string();
             cur.head.clear();
@@ -84,9 +88,9 @@ pub fn parse_worktrees(repo_root: Option<&str>, working_dir: &str) -> Vec<Worktr
     // the comparison canonicalizes both sides before falling back to a direct
     // compare. A miss leaves no row flagged, which is correct when the cwd is
     // not a linked worktree.
-    let wd_canon = std::fs::canonicalize(working_dir).ok();
+    let wd_canon = canonicalize(working_dir).ok();
     for e in &mut entries {
-        let e_canon = std::fs::canonicalize(&e.path).ok();
+        let e_canon = canonicalize(&e.path).ok();
         let matches = match (e_canon, &wd_canon) {
             (Some(a), Some(b)) => a == *b,
             _ => e.path == working_dir,
@@ -101,14 +105,14 @@ pub fn parse_worktrees(repo_root: Option<&str>, working_dir: &str) -> Vec<Worktr
     // status --porcelain per worktree). Git status on the main repo may
     // be slow if the index is large, but it runs on pane-open only.
     let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
+        .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
     for e in &mut entries {
         e.last_modified = std::fs::metadata(&e.path)
             .and_then(|m| m.modified())
             .ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
             .map(|d| d.as_secs())
             .unwrap_or(0);
         // Parse git status --porcelain into a dirty summary (modified /
@@ -118,8 +122,8 @@ pub fn parse_worktrees(repo_root: Option<&str>, working_dir: &str) -> Vec<Worktr
             .arg(&e.path)
             .arg("status")
             .arg("--porcelain")
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::piped())
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
             .output();
         e.dirty_summary = status
             .ok()

@@ -32,7 +32,9 @@ mod view;
 
 use sample::sample_trajectory;
 
+use crate::state::App;
 pub use detail::{TrajectoryDetailState, TrajectoryDetailView};
+use ratatui::layout::{Constraint, Direction, Layout};
 pub use view::{
     SessionTiming, SubagentUsage, TrajectoryBg, TrajectoryRecord, TrajectoryRow, TrajectoryTurn,
     TrajectoryView, TrajectoryViewState,
@@ -170,7 +172,7 @@ pub trait TrajectoryLog: Send + Sync {
     /// Build the view from the session's durable event log. Called on every
     /// draw, so an implementation reuses its last view while the log has
     /// not changed.
-    fn trajectory(&self) -> std::sync::Arc<TrajectoryView>;
+    fn trajectory(&self) -> Arc<TrajectoryView>;
 
     /// Widen the loaded window by one page of older turns. Called when the user
     /// walks past the oldest loaded turn; an implementation with nothing older
@@ -195,7 +197,7 @@ pub trait TrajectoryLog: Send + Sync {
 
     /// What is known about a turn's records. A draw calls this, so it must not
     /// read the log: it serves what the read has produced so far.
-    fn detail(&self, key: &TrajectoryTurnKey) -> std::sync::Arc<TrajectoryDetailView>;
+    fn detail(&self, key: &TrajectoryTurnKey) -> Arc<TrajectoryDetailView>;
 }
 
 /// Put the cursor on the turn the selection names, when the window in hand
@@ -275,10 +277,7 @@ pub(crate) fn note_drilled_row(state: &TrajectoryPaneState, view: &TrajectoryVie
 
 /// The records of the turn the drill is on, asked for once and then served from
 /// the source's cache.
-fn detail_for(
-    app: &crate::state::App,
-    drill: Option<&TrajectoryDrill>,
-) -> Arc<TrajectoryDetailView> {
+fn detail_for(app: &App, drill: Option<&TrajectoryDrill>) -> Arc<TrajectoryDetailView> {
     let Some(drill) = drill else {
         return Arc::new(TrajectoryDetailView::default());
     };
@@ -300,7 +299,7 @@ fn detail_for(
 /// off. The selected body line, not the row index, drives the scroll offset:
 /// a boundary separator occupies a body line without being a selectable row, so
 /// the two are not the same number.
-pub fn draw_content(f: &mut Frame, area: Rect, app: &crate::state::App) {
+pub fn draw_content(f: &mut Frame, area: Rect, app: &App) {
     // Real data when wired; fallback sample in unwired modes so the pane
     // still renders demonstration rows.
     let traj = app
@@ -309,7 +308,7 @@ pub fn draw_content(f: &mut Frame, area: Rect, app: &crate::state::App) {
         .trajectory_log
         .as_ref()
         .map(|l| l.trajectory())
-        .unwrap_or_else(|| std::sync::Arc::new(sample_trajectory()));
+        .unwrap_or_else(|| Arc::new(sample_trajectory()));
     let level = app.ui.trajectory.level();
     // The window slides, so the selection is a turn number and the row is
     // found from it again rather than carried as an index.
@@ -383,7 +382,6 @@ fn render_scrolled(
     footer: Vec<Line<'static>>,
     sel_line: usize,
 ) {
-    use ratatui::layout::{Constraint, Direction, Layout};
     let h = header.len() as u16;
     let ft = footer.len() as u16;
     let chunks = Layout::default()

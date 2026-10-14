@@ -20,6 +20,7 @@ use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthStr;
 
 mod diff_plan;
+use crate::view::line_wrap::wrap_line;
 use diff_plan::{DiffKind, PlanKind, PlanRow, plan_diff_body};
 
 /// One planned display row: the selection tag, the row text (gutter + content
@@ -204,7 +205,7 @@ pub(crate) fn result_body_rows(
             if avail == 0 {
                 w.push((*l).to_string());
             } else {
-                w.extend(crate::view::line_wrap::wrap_line(l, avail));
+                w.extend(wrap_line(l, avail));
             }
         }
         (w, 0)
@@ -216,7 +217,7 @@ pub(crate) fn result_body_rows(
             if avail == 0 {
                 w.push(l.clone());
             } else {
-                w.extend(crate::view::line_wrap::wrap_line(l, avail));
+                w.extend(wrap_line(l, avail));
             }
         }
         let remaining_after_wrap = w.len().saturating_sub(COLLAPSE_SHOW);

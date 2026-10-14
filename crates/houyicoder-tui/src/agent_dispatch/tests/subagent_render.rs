@@ -1,4 +1,9 @@
 use super::*;
+use crate::composition::app;
+use crate::keys::handle_ctrl_o;
+use crate::records::TranscriptLine;
+use crate::state::Screen;
+use crate::test_harness::render_text;
 
 /// A Subagent delegation line renders inline in the parent flow (no context
 /// switch): collapsed shows the subagent type + summary + an expand hint.
@@ -6,9 +11,8 @@ use super::*;
 /// reverts to a context-switch) fails here.
 #[test]
 fn test_subagent_renders_collapsed() {
-    use crate::records::TranscriptLine;
-    let mut app = crate::composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    let mut app = app();
+    app.ui.navigation.screen = Screen::Working;
     app.sessions
         .current
         .transcript
@@ -20,7 +24,7 @@ fn test_subagent_renders_collapsed() {
             folded_transcript: Vec::new(),
             color: None,
         });
-    let out = crate::test_harness::render_text(&app, 80, 24);
+    let out = render_text(&app, 80, 24);
     assert!(out.contains("explore"), "subagent type renders: {out}");
     assert!(out.contains("found auth module"), "summary renders: {out}");
     assert!(
@@ -35,9 +39,8 @@ fn test_subagent_renders_collapsed() {
 /// branch so a refactor that drops it fails here.
 #[test]
 fn test_subagent_renders_expanded() {
-    use crate::records::TranscriptLine;
-    let mut app = crate::composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    let mut app = app();
+    app.ui.navigation.screen = Screen::Working;
     app.sessions
         .current
         .transcript
@@ -50,7 +53,7 @@ fn test_subagent_renders_expanded() {
             color: None,
         });
     app.ui.transcript_view.toggle_subagent("child-1".into());
-    let out = crate::test_harness::render_text(&app, 80, 24);
+    let out = render_text(&app, 80, 24);
     assert!(
         out.contains("ctrl+o to collapse"),
         "expanded shows the collapse hint: {out}"
@@ -67,9 +70,8 @@ fn test_subagent_renders_expanded() {
 /// fails here.
 #[test]
 fn test_subagent_expanded_renders_child() {
-    use crate::records::TranscriptLine;
-    let mut app = crate::composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    let mut app = app();
+    app.ui.navigation.screen = Screen::Working;
     app.sessions
         .current
         .transcript
@@ -82,7 +84,7 @@ fn test_subagent_expanded_renders_child() {
             color: None,
         });
     app.ui.transcript_view.toggle_subagent("child-1".into());
-    let out = crate::test_harness::render_text(&app, 80, 24);
+    let out = render_text(&app, 80, 24);
     assert!(
         out.contains("child reply: auth is here"),
         "expanded with a loaded child renders the child row inline: {out}"
@@ -95,9 +97,8 @@ fn test_subagent_expanded_renders_child() {
 /// fails here.
 #[test]
 fn test_subagent_toggle_expand() {
-    use crate::records::TranscriptLine;
-    let mut app = crate::composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    let mut app = app();
+    app.ui.navigation.screen = Screen::Working;
     app.sessions
         .current
         .transcript
@@ -134,9 +135,8 @@ fn test_subagent_toggle_expand() {
 /// Pins the fetch-result to update path (lookup by child_sid + in-place swap).
 #[test]
 fn test_child_transcript_fills() {
-    use crate::records::TranscriptLine;
-    let mut app = crate::composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    let mut app = app();
+    app.ui.navigation.screen = Screen::Working;
     app.sessions
         .current
         .transcript
@@ -178,7 +178,7 @@ fn test_child_transcript_fills() {
         !folded.is_empty(),
         "ChildTranscriptResult fills folded_transcript, got empty"
     );
-    let out = crate::test_harness::render_text(&app, 80, 24);
+    let out = render_text(&app, 80, 24);
     assert!(
         out.to_lowercase().contains("grep auth"),
         "expanded render shows the fetched child row: {out}"
@@ -195,9 +195,8 @@ fn test_child_transcript_fills() {
 /// them could see this. Render first, then toggle.
 #[test]
 fn test_subagent_toggle_repaints() {
-    use crate::records::TranscriptLine;
-    let mut app = crate::composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    let mut app = app();
+    app.ui.navigation.screen = Screen::Working;
     app.sessions
         .current
         .transcript
@@ -213,19 +212,19 @@ fn test_subagent_toggle_repaints() {
             folded_transcript: vec![TranscriptLine::Agent("child reply here".into())],
             color: None,
         });
-    let out = crate::test_harness::render_text(&app, 80, 24);
+    let out = render_text(&app, 80, 24);
     assert!(
         !out.contains("child reply here"),
         "first render is collapsed: {out}"
     );
     app.toggle_tail_expand();
-    let out = crate::test_harness::render_text(&app, 80, 24);
+    let out = render_text(&app, 80, 24);
     assert!(
         out.contains("child reply here"),
         "expand must repaint the child rows: {out}"
     );
     app.toggle_tail_expand();
-    let out = crate::test_harness::render_text(&app, 80, 24);
+    let out = render_text(&app, 80, 24);
     assert!(
         !out.contains("child reply here"),
         "collapse must repaint too: {out}"
@@ -239,9 +238,8 @@ fn test_subagent_toggle_repaints() {
 /// than waiting for an unrelated change to bump the version.
 #[test]
 fn test_child_fetch_repaints() {
-    use crate::records::TranscriptLine;
-    let mut app = crate::composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    let mut app = app();
+    app.ui.navigation.screen = Screen::Working;
     app.sessions
         .current
         .transcript
@@ -254,7 +252,7 @@ fn test_child_fetch_repaints() {
             color: None,
         });
     app.ui.transcript_view.toggle_subagent("child-1".into());
-    let out = crate::test_harness::render_text(&app, 80, 24);
+    let out = render_text(&app, 80, 24);
     assert!(
         out.contains("not yet loaded"),
         "warm the cache on the unloaded state: {out}"
@@ -270,7 +268,7 @@ fn test_child_fetch_repaints() {
             )],
         },
     });
-    let out = crate::test_harness::render_text(&app, 80, 24);
+    let out = render_text(&app, 80, 24);
     assert!(
         out.to_lowercase().contains("grep auth"),
         "the fetched child rows must repaint: {out}"
@@ -281,9 +279,8 @@ fn test_child_fetch_repaints() {
 /// expand path. Pins the fallthrough so a refactor that drops it fails.
 #[test]
 fn test_ctrl_o_fallthrough() {
-    use crate::records::TranscriptLine;
-    let mut app = crate::composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    let mut app = app();
+    app.ui.navigation.screen = Screen::Working;
     app.sessions
         .current
         .transcript
@@ -294,7 +291,7 @@ fn test_ctrl_o_fallthrough() {
             turn_id: "t1".into(),
         });
     assert!(app.ui.transcript_view.expanded.thinking.is_empty());
-    crate::keys::handle_ctrl_o(&mut app);
+    handle_ctrl_o(&mut app);
     assert!(
         app.ui
             .transcript_view
@@ -309,8 +306,8 @@ fn test_ctrl_o_fallthrough() {
 /// expands the collapsed checklist. Pins the todo fallthrough path.
 #[test]
 fn test_ctrl_o_todo_expand() {
-    let mut app = crate::composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    let mut app = app();
+    app.ui.navigation.screen = Screen::Working;
     app.sessions
         .current
         .todos
@@ -321,7 +318,7 @@ fn test_ctrl_o_todo_expand() {
             active_form: None,
         });
     assert!(!app.sessions.current.todos.expanded);
-    crate::keys::handle_ctrl_o(&mut app);
+    handle_ctrl_o(&mut app);
     assert!(
         app.sessions.current.todos.expanded,
         "Ctrl+O expands the todo list"
@@ -336,9 +333,8 @@ fn test_ctrl_o_todo_expand() {
 /// expand fails here.
 #[test]
 fn test_subagent_expand_stable_index() {
-    use crate::records::TranscriptLine;
-    let mut app = crate::composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    let mut app = app();
+    app.ui.navigation.screen = Screen::Working;
     app.sessions
         .current
         .transcript
@@ -407,8 +403,7 @@ fn test_subagent_expand_stable_index() {
 /// children. Pins the count==render invariant the scroll math depends on.
 #[test]
 fn test_subagent_row_count() {
-    use crate::records::TranscriptLine;
-    let mut app = crate::composition::app();
+    let mut app = app();
     let sub = TranscriptLine::Subagent {
         child_sid: "c1".into(),
         subagent_type: "explore".into(),

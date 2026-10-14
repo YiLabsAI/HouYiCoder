@@ -8,6 +8,7 @@ use houyicoder_protocol::envelope::RequestId;
 
 use crate::state::BashProgress;
 use crate::state::enums::LiveBlock;
+use std::mem::replace;
 
 /// Streaming progress for one in-flight run. Lives with the run, so the
 /// transient preview and the tool runtime are dropped when the run finishes
@@ -191,7 +192,7 @@ impl RunState {
     /// cancel or completion must not revive a dead run). Moves the whole
     /// ActiveRun so its progress carries across the pause unchanged.
     pub fn begin_waiting(&mut self) {
-        let prev = std::mem::replace(self, RunState::Idle);
+        let prev = replace(self, RunState::Idle);
         *self = match prev {
             RunState::Running(run) => RunState::Waiting(run),
             other => other,
@@ -202,7 +203,7 @@ impl RunState {
     /// ended must not flip a dead run back to Running). Moves the whole
     /// ActiveRun so its progress carries across the resume.
     pub fn end_waiting(&mut self) {
-        let prev = std::mem::replace(self, RunState::Idle);
+        let prev = replace(self, RunState::Idle);
         *self = match prev {
             RunState::Waiting(run) => RunState::Running(run),
             other => other,
@@ -212,7 +213,7 @@ impl RunState {
     /// Running/Waiting → Cancelling. No-op if Idle. Moves the whole ActiveRun
     /// so its progress carries across the cancel.
     pub fn begin_cancel(&mut self) {
-        let prev = std::mem::replace(self, RunState::Idle);
+        let prev = replace(self, RunState::Idle);
         *self = match prev {
             RunState::Running(run) | RunState::Waiting(run) => RunState::Cancelling(run),
             other => other,
@@ -223,7 +224,7 @@ impl RunState {
     /// caller can run completion processing. Called on Done, Error, or
     /// connection loss.
     pub fn finish(&mut self) -> Option<ActiveRun> {
-        match std::mem::replace(self, RunState::Idle) {
+        match replace(self, RunState::Idle) {
             RunState::Idle => None,
             RunState::Running(run) | RunState::Waiting(run) | RunState::Cancelling(run) => {
                 Some(run)

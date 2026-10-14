@@ -9,8 +9,11 @@ use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
 use crate::agent_message::FleetEntry;
 use crate::app::handle_mouse;
+use crate::composition::app;
 use crate::records::TranscriptLine;
 use crate::state::App;
+use crate::state::Screen;
+use crate::test_harness::render_text;
 use crate::transcript::TranscriptFrame;
 use houyicoder_protocol::frontend::run::ContentBlock;
 use houyicoder_protocol::frontend::session_update::{ContentChunk, SessionUpdate};
@@ -39,8 +42,8 @@ fn subagent_line(sid: &str, rows: usize) -> TranscriptLine {
 /// A working app whose parent transcript holds one user line per frame,
 /// followed by two delegation lines with loaded child transcripts.
 fn app_with_two_children(parent_rows: usize) -> App {
-    let mut app = crate::composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    let mut app = app();
+    app.ui.navigation.screen = Screen::Working;
     for i in 0..parent_rows {
         app.sessions
             .current
@@ -104,10 +107,10 @@ fn test_child_scroll_restored() {
     let mut app = app_with_two_children(60);
     assert!(app.enter_teammate_view_for_sid("c1", false));
     // Publish the child totals so the page steps move by a full screen.
-    let _first = crate::test_harness::render_text(&app, 80, 24);
+    let _first = render_text(&app, 80, 24);
     app.scroll_transcript_up();
     app.scroll_transcript_up();
-    let parked = crate::test_harness::render_text(&app, 80, 24);
+    let parked = render_text(&app, 80, 24);
     let top = app
         .ui
         .teammate_view
@@ -124,7 +127,7 @@ fn test_child_scroll_restored() {
         top,
         "the re-entered child resumes at the parked offset"
     );
-    let back = crate::test_harness::render_text(&app, 80, 24);
+    let back = render_text(&app, 80, 24);
     assert_eq!(
         parked, back,
         "the re-entered child renders the parked viewport"
@@ -220,8 +223,8 @@ fn test_sibling_view_swap() {
 /// the view.
 #[test]
 fn test_ctrl_o_expands_child() {
-    let mut app = crate::composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    let mut app = app();
+    app.ui.navigation.screen = Screen::Working;
     app.sessions
         .current
         .transcript
@@ -247,7 +250,7 @@ fn test_ctrl_o_expands_child() {
             color: None,
         });
     assert!(app.enter_teammate_view_for_sid("c1", false));
-    let before = crate::test_harness::render_text(&app, 100, 30);
+    let before = render_text(&app, 100, 30);
     assert!(
         !before.contains("CHILDTHINK"),
         "the row starts collapsed:\n{before}"
@@ -262,7 +265,7 @@ fn test_ctrl_o_expands_child() {
         "the toggle targets the child row, set: {:?}",
         app.ui.transcript_view.expanded.thinking
     );
-    let after = crate::test_harness::render_text(&app, 100, 30);
+    let after = render_text(&app, 100, 30);
     assert!(after.contains("CHILDTHINK"), "the row expands:\n{after}");
 }
 
@@ -292,7 +295,7 @@ fn test_search_ignores_fleet_click() {
                 started_at: None,
             });
     }
-    let _working = crate::test_harness::render_text(&app, 80, 24);
+    let _working = render_text(&app, 80, 24);
     let strip = app.ui.frame.layout.fleet_rect.get();
     assert!(
         strip.width > 0 && strip.height > 0,
@@ -300,7 +303,7 @@ fn test_search_ignores_fleet_click() {
     );
 
     app.enter_search_view("row");
-    let _search = crate::test_harness::render_text(&app, 80, 24);
+    let _search = render_text(&app, 80, 24);
     let cleared = app.ui.frame.layout.fleet_rect.get();
     assert!(
         cleared.width == 0 && cleared.height == 0,

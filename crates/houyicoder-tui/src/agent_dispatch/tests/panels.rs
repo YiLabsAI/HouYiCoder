@@ -1,9 +1,17 @@
 use super::*;
+use crate::composition::app;
+use crate::records::TranscriptLine;
 use crate::skills_state::SkillDetail;
+use crate::state::Pane;
+use crate::state::Screen;
+use crate::test_harness::connected_app_with_events;
+use crate::test_harness::render_text;
+use houyicoder_protocol::frontend::skills::SkillEntry;
+use houyicoder_protocol::frontend::tools::ToolEntry;
 
 #[test]
 fn test_agents_result_stores_directory() {
-    let mut app = crate::composition::app();
+    let mut app = app();
     app.handle_agent_message(SessionMessage::Response {
         request: RequestId(9),
         response: ServerResponse::Agents {
@@ -18,11 +26,11 @@ fn test_agents_result_stores_directory() {
 
 #[test]
 fn test_tool_list_result_stored() {
-    let mut app = crate::composition::app();
+    let mut app = app();
     app.handle_agent_message(SessionMessage::Response {
         request: RequestId(10),
         response: ServerResponse::Tools {
-            tools: vec![houyicoder_protocol::frontend::tools::ToolEntry {
+            tools: vec![ToolEntry {
                 name: "bash".into(),
                 description: "run a command".into(),
             }],
@@ -37,11 +45,11 @@ fn test_tool_list_result_stored() {
 
 #[test]
 fn test_skills_result_stored() {
-    let mut app = crate::composition::app();
+    let mut app = app();
     app.handle_agent_message(SessionMessage::Response {
         request: RequestId(11),
         response: ServerResponse::Skills {
-            skills: vec![houyicoder_protocol::frontend::skills::SkillEntry {
+            skills: vec![SkillEntry {
                 name: "pdf-export".into(),
                 description: "export chat to pdf".into(),
                 origin: "user".into(),
@@ -68,7 +76,7 @@ fn test_skills_result_stored() {
 /// the model would read on invocation.
 #[test]
 fn test_skill_body_fills_detail() {
-    let mut app = crate::composition::app();
+    let mut app = app();
     app.ui
         .skills_pane
         .request_detail(RequestId(21), "alpha".into());
@@ -85,7 +93,7 @@ fn test_skill_body_fills_detail() {
 /// body it carries belongs to a detail the user already replaced.
 #[test]
 fn test_stale_skill_body_dropped() {
-    let mut app = crate::composition::app();
+    let mut app = app();
     app.ui
         .skills_pane
         .request_detail(RequestId(22), "beta".into());
@@ -106,7 +114,7 @@ fn test_stale_skill_body_dropped() {
 /// the body unavailable rather than leaving it loading forever.
 #[test]
 fn test_open_detail_without_session() {
-    let mut app = crate::composition::app();
+    let mut app = app();
     app.ui.navigation.pane = Pane::Skills;
     app.sessions.current.capabilities.skills.entries = vec![skill_entry("alpha")];
     app.open_skill_detail();
@@ -135,7 +143,7 @@ fn test_lost_send_settles_detail() {
 /// A connection loss settles a loading detail, because no reply is coming.
 #[test]
 fn test_loss_settles_skill_detail() {
-    let (mut app, _events) = crate::test_harness::connected_app_with_events();
+    let (mut app, _events) = connected_app_with_events();
     app.ui
         .skills_pane
         .request_detail(RequestId(31), "alpha".into());
@@ -152,7 +160,7 @@ fn test_loss_settles_skill_detail() {
 /// on a reply that cannot arrive.
 #[test]
 fn test_error_settles_skill_detail() {
-    let (mut app, _events) = crate::test_harness::connected_app_with_events();
+    let (mut app, _events) = connected_app_with_events();
     app.ui
         .skills_pane
         .request_detail(RequestId(41), "alpha".into());
@@ -167,7 +175,6 @@ fn test_error_settles_skill_detail() {
         Some(SkillDetail::Open { .. })
     ));
     assert!(app.ui.skills_pane.detail_body().is_none());
-    use crate::records::TranscriptLine;
     assert!(
         app.sessions.current.transcript.iter().any(
             |l| matches!(l, TranscriptLine::System(s) if s.contains("error: body read failed"))
@@ -180,7 +187,7 @@ fn test_error_settles_skill_detail() {
 /// reply it waits on is still to come.
 #[test]
 fn test_error_keeps_detail_loading() {
-    let (mut app, _events) = crate::test_harness::connected_app_with_events();
+    let (mut app, _events) = connected_app_with_events();
     app.ui
         .skills_pane
         .request_detail(RequestId(42), "alpha".into());
@@ -199,7 +206,7 @@ fn test_error_keeps_detail_loading() {
 /// t flips the session disable for the invocable skill the cursor points at.
 #[test]
 fn test_toggle_skill_at_cursor() {
-    let mut app = crate::composition::app();
+    let mut app = app();
     app.ui.navigation.pane = Pane::Skills;
     app.sessions.current.capabilities.skills.entries = vec![skill_entry("alpha")];
     app.toggle_skill_at_cursor();
@@ -228,7 +235,7 @@ fn test_toggle_skill_at_cursor() {
 /// it blocked until its file changes.
 #[test]
 fn test_toggle_blocked_skill_noop() {
-    let mut app = crate::composition::app();
+    let mut app = app();
     app.ui.navigation.pane = Pane::Skills;
     let mut blocked = skill_entry("alpha");
     blocked.user_invocable = false;
@@ -246,9 +253,9 @@ fn test_toggle_blocked_skill_noop() {
 /// shows the empty placeholder.
 #[test]
 fn test_skills_pane_renders_entries() {
-    let mut app = crate::composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
-    app.ui.navigation.pane = crate::state::Pane::Skills;
+    let mut app = app();
+    app.ui.navigation.screen = Screen::Working;
+    app.ui.navigation.pane = Pane::Skills;
     app.sessions.current.capabilities.skills.entries = vec![
         SkillEntry {
             name: "pdf-export".into(),
@@ -269,7 +276,7 @@ fn test_skills_pane_renders_entries() {
             usage: None,
         },
     ];
-    let out = crate::test_harness::render_text(&app, 80, 24);
+    let out = render_text(&app, 80, 24);
     assert!(out.contains("pdf-export"), "name row renders: {out}");
     assert!(out.contains("internal-only"), "second name renders: {out}");
     assert!(
@@ -289,9 +296,9 @@ fn test_skills_pane_renders_entries() {
 /// eyeballed. Run with --nocapture to view.
 #[test]
 fn test_skills_pane_showcase() {
-    let mut app = crate::composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
-    app.ui.navigation.pane = crate::state::Pane::Skills;
+    let mut app = app();
+    app.ui.navigation.screen = Screen::Working;
+    app.ui.navigation.pane = Pane::Skills;
     app.sessions.current.capabilities.skills.entries = vec![
         SkillEntry {
             name: "pdf-export".into(),
@@ -321,7 +328,7 @@ fn test_skills_pane_showcase() {
             usage: None,
         },
     ];
-    let out = crate::test_harness::render_text(&app, 80, 24);
+    let out = render_text(&app, 80, 24);
     println!("--- /skills pane showcase (80x24) ---\n{out}\n--- end ---");
     assert!(out.contains("Skills"), "pane title renders");
     assert!(out.contains("3 skills discovered"), "count line renders");
@@ -330,10 +337,9 @@ fn test_skills_pane_showcase() {
 
 #[test]
 fn test_tools_pane_renders_entries() {
-    use houyicoder_protocol::frontend::tools::ToolEntry;
-    let mut app = crate::composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
-    app.ui.navigation.pane = crate::state::Pane::Tools;
+    let mut app = app();
+    app.ui.navigation.screen = Screen::Working;
+    app.ui.navigation.pane = Pane::Tools;
     app.sessions.current.capabilities.tools.entries = vec![
         ToolEntry {
             name: "zed".into(),
@@ -344,7 +350,7 @@ fn test_tools_pane_renders_entries() {
             description: "runs a command\nsecond line".into(),
         },
     ];
-    let out = crate::test_harness::render_text(&app, 80, 24);
+    let out = render_text(&app, 80, 24);
     assert!(out.contains("bash"), "bash row renders: {out}");
     assert!(out.contains("zed"), "zed row renders: {out}");
     // Sorted: bash before zed.
@@ -363,11 +369,11 @@ fn test_tools_pane_renders_entries() {
 /// empty-branch render so a refactor that drops the guard renders blank.
 #[test]
 fn test_tools_pane_renders_empty() {
-    let mut app = crate::composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
-    app.ui.navigation.pane = crate::state::Pane::Tools;
+    let mut app = app();
+    app.ui.navigation.screen = Screen::Working;
+    app.ui.navigation.pane = Pane::Tools;
     app.sessions.current.capabilities.tools.entries = vec![];
-    let out = crate::test_harness::render_text(&app, 80, 24);
+    let out = render_text(&app, 80, 24);
     assert!(
         out.contains("(no tools loaded)"),
         "empty tools renders placeholder: {out}"
@@ -376,12 +382,12 @@ fn test_tools_pane_renders_empty() {
 
 #[test]
 fn test_agents_directory_renders_lines() {
-    let mut app = crate::composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
-    app.ui.navigation.pane = crate::state::Pane::Agents;
+    let mut app = app();
+    app.ui.navigation.screen = Screen::Working;
+    app.ui.navigation.pane = Pane::Agents;
     app.sessions.current.agent_directory =
         Some("## Available agents\n\n- explore: fast search\n- plan: design".into());
-    let out = crate::test_harness::render_text(&app, 80, 24);
+    let out = render_text(&app, 80, 24);
     let header_row = out.lines().position(|l| l.contains("Available agents"));
     let explore_row = out.lines().position(|l| l.contains("explore"));
     assert!(header_row.is_some(), "header renders: {out}");
@@ -396,11 +402,11 @@ fn test_agents_directory_renders_lines() {
 /// blank pane. Pins the empty-filter so the fallback fires on empty content.
 #[test]
 fn test_agents_directory_empty_placeholder() {
-    let mut app = crate::composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
-    app.ui.navigation.pane = crate::state::Pane::Agents;
+    let mut app = app();
+    app.ui.navigation.screen = Screen::Working;
+    app.ui.navigation.pane = Pane::Agents;
     app.sessions.current.agent_directory = Some(String::new());
-    let out = crate::test_harness::render_text(&app, 80, 24);
+    let out = render_text(&app, 80, 24);
     assert!(
         out.contains("(no agent directory loaded)"),
         "empty directory shows placeholder, not blank: {out}"

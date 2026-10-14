@@ -9,6 +9,8 @@ use std::time::Instant;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use ratatui::layout::Rect;
+use std::env::var_os;
+use std::io::Result;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
@@ -481,14 +483,14 @@ pub fn write_clipboard(text: &str) {
     // Native net fires first in a thread so OSC 52 is not delayed by a
     // subprocess. Gated on SSH_CONNECTION: over SSH these hit the remote
     // clipboard, not the local one.
-    if std::env::var_os("SSH_CONNECTION").is_none() {
+    if var_os("SSH_CONNECTION").is_none() {
         let owned = text.to_string();
         std::thread::spawn(move || copy_native(&owned));
     }
     // tmux fast path: load-buffer reaches the outer terminal via the
     // multiplexer own clipboard bridge (-w, dropped for iTerm2). On
     // success also emit a passthrough-wrapped OSC 52.
-    if std::env::var_os("TMUX").is_some() && tmux_load_buffer(text) {
+    if var_os("TMUX").is_some() && tmux_load_buffer(text) {
         let _r = emit_raw(&tmux_passthrough_osc52(&b64));
         return;
     }
@@ -500,8 +502,8 @@ pub fn write_clipboard(text: &str) {
 /// claimed on macOS without an SSH session; the Linux probe is lazy.
 pub fn get_clipboard_path() -> &'static str {
     clipboard_path_for(
-        cfg!(target_os = "macos") && std::env::var_os("SSH_CONNECTION").is_none(),
-        std::env::var_os("TMUX").is_some(),
+        cfg!(target_os = "macos") && var_os("SSH_CONNECTION").is_none(),
+        var_os("TMUX").is_some(),
     )
 }
 
@@ -540,7 +542,7 @@ pub(crate) fn tmux_passthrough_osc52(b64: &str) -> String {
 // not pull a ports dependency, so the chokepoint rule is allowed here.
 #[expect(clippy::disallowed_methods, reason = "infra spawn, not model-driven")]
 fn tmux_load_buffer(text: &str) -> bool {
-    let args: &[&str] = if std::env::var_os("LC_TERMINAL").is_some_and(|v| v == "iTerm2") {
+    let args: &[&str] = if var_os("LC_TERMINAL").is_some_and(|v| v == "iTerm2") {
         &["load-buffer", "-"]
     } else {
         &["load-buffer", "-w", "-"]
@@ -594,7 +596,7 @@ fn copy_native(text: &str) {
 /// Run a native clipboard binary, feeding text via stdin. Ok on a clean
 /// (exit-0) run so the Linux probe can pick a winner.
 #[expect(clippy::disallowed_methods, reason = "infra spawn, not model-driven")]
-fn run_native(bin: &str, args: &[&str], text: &str) -> std::io::Result<()> {
+fn run_native(bin: &str, args: &[&str], text: &str) -> Result<()> {
     let mut child = Command::new(bin).args(args).stdin(Stdio::piped()).spawn()?;
     if let Some(mut stdin) = child.stdin.take() {
         stdin.write_all(text.as_bytes())?;
@@ -610,7 +612,7 @@ fn run_native(bin: &str, args: &[&str], text: &str) -> std::io::Result<()> {
 
 /// Write a byte sequence to stdout (locked, flushed). OSC 52 is a
 /// fire-and-forget emit; a write failure is silent.
-fn emit_raw(seq: &str) -> std::io::Result<()> {
+fn emit_raw(seq: &str) -> Result<()> {
     let mut out = std::io::stdout().lock();
     out.write_all(seq.as_bytes())?;
     out.flush()

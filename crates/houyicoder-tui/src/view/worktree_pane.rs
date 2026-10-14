@@ -16,6 +16,8 @@ use crate::composition::WorktreeEntry;
 use crate::list_pane_state::{filter_by_query, search_hint_line, truncate_path};
 use crate::state::App;
 use crate::view::navigation::key_hint;
+use crate::view::relative_time::now_epoch_secs;
+use crate::view::relative_time::relative_time;
 
 /// Max width for the path column. Long paths are left-truncated (tail kept)
 /// so the identifying segment stays visible. Fixed width so the column
@@ -180,13 +182,7 @@ fn worktree_items(
             ];
             if e.last_modified > 0 {
                 spans.push(Span::styled(
-                    format!(
-                        " {}",
-                        crate::view::relative_time::relative_time(
-                            crate::view::relative_time::now_epoch_secs(),
-                            e.last_modified
-                        )
-                    ),
+                    format!(" {}", relative_time(now_epoch_secs(), e.last_modified)),
                     Style::new().fg(Color::DarkGray),
                 ));
             }

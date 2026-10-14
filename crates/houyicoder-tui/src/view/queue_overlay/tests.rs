@@ -7,11 +7,15 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent,
 use ratatui::layout::Rect;
 use ratatui::style::Color;
 
+use crate::app::handle_mouse;
 use crate::composition;
+use crate::keys::handle_working;
+use crate::state::App;
 use crate::state::{Pane, Screen, Stage};
+use crate::test_harness::attach_connection;
 use crate::test_harness::{render_buffer, render_text};
 
-fn working() -> crate::state::App {
+fn working() -> App {
     let mut app = composition::app();
     app.ui.navigation.screen = Screen::Working;
     app
@@ -20,12 +24,12 @@ fn working() -> crate::state::App {
 /// A working app with a live session so enqueue accepts commands into the
 /// local queue (recall + promote path enqueues before mutating the local
 /// copy, so a no-session app refuses the removal).
-fn working_session() -> crate::state::App {
+fn working_session() -> App {
     let (app, _events) = crate::test_harness::connected_app_events();
     app
 }
 
-fn render(app: &crate::state::App) -> String {
+fn render(app: &App) -> String {
     render_text(app, 100, 28)
 }
 
@@ -44,7 +48,7 @@ fn test_idle_esc_keeps() {
     let mut app = working();
     app.ui.input.queue.push(InputItem::Message("task a".into()));
     app.ui.input.queue.push(InputItem::Message("task b".into()));
-    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    handle_working(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     assert!(
         app.ui.input.editor.is_empty(),
         "Esc leaves the input box untouched"
@@ -57,13 +61,13 @@ fn test_idle_esc_keeps() {
 #[test]
 fn test_busy_esc_keeps() {
     let mut app = working();
-    crate::test_harness::attach_connection(&mut app);
+    attach_connection(&mut app);
     app.start_run_for_test(0);
     app.ui.input.queue.push(InputItem::Message("task a".into()));
     app.ui.input.queue.push(InputItem::Message("task b".into()));
     let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
-    crate::keys::handle_working(&mut app, esc);
-    crate::keys::handle_working(&mut app, esc);
+    handle_working(&mut app, esc);
+    handle_working(&mut app, esc);
     assert!(app.cancelling(), "Esc interrupts the run");
     assert!(
         app.ui.input.editor.is_empty(),
@@ -85,7 +89,7 @@ fn test_recall_includes_parked() {
         .input
         .queue
         .push(InputItem::ParkedMessage("held b".into()));
-    crate::keys::handle_working(&mut app, key('R'));
+    handle_working(&mut app, key('R'));
     assert_eq!(app.ui.input.editor.value(), "held a\nheld b");
     assert!(app.ui.input.queue.is_empty(), "queue drained");
 }
@@ -94,14 +98,14 @@ fn test_recall_includes_parked() {
 #[test]
 fn test_recall_keeps_command() {
     let mut app = working();
-    crate::test_harness::attach_connection(&mut app);
+    attach_connection(&mut app);
     app.ui.navigation.pane = Pane::Queue;
     app.ui
         .input
         .queue
         .push(InputItem::Message("do work".into()));
     app.ui.input.queue.push(InputItem::Command("/clear".into()));
-    crate::keys::handle_working(&mut app, key('R'));
+    handle_working(&mut app, key('R'));
     assert_eq!(
         app.ui.input.editor.value(),
         "do work",
@@ -119,13 +123,13 @@ fn test_recall_keeps_command() {
 #[test]
 fn test_recall_clear_loses() {
     let mut app = working();
-    crate::test_harness::attach_connection(&mut app);
+    attach_connection(&mut app);
     app.ui.navigation.pane = Pane::Queue;
     app.ui
         .input
         .queue
         .push(InputItem::Message("important task".into()));
-    crate::keys::handle_working(&mut app, key('R'));
+    handle_working(&mut app, key('R'));
     assert_eq!(
         app.ui.input.editor.value(),
         "important task",
@@ -133,7 +137,7 @@ fn test_recall_clear_loses() {
     );
     assert!(app.ui.input.queue.is_empty(), "queue drained on recall");
     // Clear the recalled input.
-    crate::keys::handle_working(&mut app, ctrl('u'));
+    handle_working(&mut app, ctrl('u'));
     assert!(
         app.ui.input.editor.is_empty(),
         "Ctrl+U clears the recalled text"
@@ -268,7 +272,7 @@ fn test_click_footer_recalls_item() {
     assert!(qrect.height > 0, "queue strip rendered with a rect");
     // Click the first item row (row 0 inside the strip).
     let click = mouse_at(qrect.x + 2, qrect.y);
-    crate::app::handle_mouse(&mut app, click);
+    handle_mouse(&mut app, click);
     assert_eq!(
         app.ui.input.editor.value(),
         "first task",
@@ -299,7 +303,7 @@ fn test_click_second_row_recalls() {
     let qrect = app.ui.frame.layout.queue_rect.get();
     assert!(qrect.height >= 2, "two-item queue gets two rows");
     let click = mouse_at(qrect.x + 2, qrect.y + 1);
-    crate::app::handle_mouse(&mut app, click);
+    handle_mouse(&mut app, click);
     assert_eq!(
         app.ui.input.editor.value(),
         "second task",
@@ -424,7 +428,7 @@ fn test_click_more_opens_queue() {
     assert!(qrect.height >= 2, "strip has the head row + a +N row");
     let more_row = qrect.y + 1;
     let click = mouse_at(qrect.x + 2, more_row);
-    crate::app::handle_mouse(&mut app, click);
+    handle_mouse(&mut app, click);
     assert_eq!(
         app.ui.navigation.pane,
         crate::state::Pane::Queue,
@@ -462,7 +466,7 @@ fn test_collapsed_strip_opens_queue() {
         qrect.height, 1,
         "a tight window leaves the strip its summary row"
     );
-    crate::app::handle_mouse(&mut app, mouse_at(qrect.x + 1, qrect.y));
+    handle_mouse(&mut app, mouse_at(qrect.x + 1, qrect.y));
     assert_eq!(
         app.ui.navigation.pane,
         Pane::Queue,
@@ -497,7 +501,7 @@ fn test_pane_enter_recalls_one() {
     app.ui.input.queue.push(InputItem::Message("alpha".into()));
     app.ui.input.queue.push(InputItem::Message("beta".into()));
     app.ui.input.queue.move_cursor(1);
-    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    handle_working(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     assert_eq!(
         app.ui.input.editor.value(),
         "beta",
@@ -519,12 +523,12 @@ fn test_pane_enter_recalls_one() {
 #[test]
 fn test_pane_r_recalls_all() {
     let mut app = working();
-    crate::test_harness::attach_connection(&mut app);
+    attach_connection(&mut app);
     app.ui.navigation.pane = Pane::Queue;
     app.ui.input.queue.push(InputItem::Message("a".into()));
     app.ui.input.queue.push(InputItem::Message("b".into()));
     app.ui.input.queue.push(InputItem::Message("c".into()));
-    crate::keys::handle_working(
+    handle_working(
         &mut app,
         KeyEvent::new(KeyCode::Char('R'), KeyModifiers::NONE),
     );
@@ -548,7 +552,7 @@ fn test_pane_d_deletes_one() {
     app.ui.navigation.pane = Pane::Queue;
     app.ui.input.queue.push(InputItem::Message("alpha".into()));
     app.ui.input.queue.push(InputItem::Message("beta".into()));
-    crate::keys::handle_working(
+    handle_working(
         &mut app,
         KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
     );
@@ -579,7 +583,7 @@ fn test_pane_recall_promotes_next() {
         .queue
         .push(InputItem::ParkedMessage("second".into()));
 
-    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    handle_working(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
     assert_eq!(
         app.ui.input.queue,
@@ -598,7 +602,7 @@ fn test_pane_delete_promotes_next() {
         .queue
         .push(InputItem::ParkedMessage("second".into()));
 
-    crate::keys::handle_working(
+    handle_working(
         &mut app,
         KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
     );
@@ -621,7 +625,7 @@ fn test_strip_recall_promotes_next() {
     render_buffer(&app, 100, 28);
     let qrect = app.ui.frame.layout.queue_rect.get();
 
-    crate::app::handle_mouse(&mut app, mouse_at(qrect.x + 2, qrect.y));
+    handle_mouse(&mut app, mouse_at(qrect.x + 2, qrect.y));
 
     assert_eq!(
         app.ui.input.queue,
@@ -635,7 +639,7 @@ fn test_queue_pane_esc_closes() {
     let mut app = working();
     app.ui.navigation.pane = Pane::Queue;
     app.ui.input.queue.push(InputItem::Message("alpha".into()));
-    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    handle_working(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     assert_eq!(
         app.ui.navigation.pane,
         Pane::Transcript,
@@ -684,7 +688,7 @@ fn test_queue_pane_nav() {
     app.ui.input.queue.push(InputItem::Message("alpha".into()));
     app.ui.input.queue.push(InputItem::Message("beta".into()));
     app.ui.input.queue.push(InputItem::Message("gamma".into()));
-    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     assert_eq!(
         app.ui.input.queue.selected_index(),
         Some(1),
@@ -695,7 +699,7 @@ fn test_queue_pane_nav() {
         text.contains("❯ beta"),
         "the highlight follows the selection down: {text}"
     );
-    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+    handle_working(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
     assert_eq!(
         app.ui.input.queue.selected_index(),
         Some(0),

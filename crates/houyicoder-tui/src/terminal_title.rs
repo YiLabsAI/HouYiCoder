@@ -8,6 +8,7 @@
 //! (no terminal-title sync exists otherwise).
 
 use houyicoder_protocol::frontend::status::StatusSnapshot;
+use std::borrow::Cow;
 use std::io::Write;
 
 /// The tab title when no session name is set (the bare app name; a clearer
@@ -75,17 +76,17 @@ pub(crate) fn set_title(title: &str) {
 /// OSC early + feed the rest to the terminal as commands (escape injection).
 /// Rust's char::is_control covers C0 (0x00-0x1f) + C1 (0x80-0x9f) incl. the
 /// OSC delimiters themselves.
-fn sanitize(title: &str) -> std::borrow::Cow<'_, str> {
+fn sanitize(title: &str) -> Cow<'_, str> {
     let trimmed = title.trim();
     if !trimmed.chars().any(char::is_control) && trimmed.chars().count() <= MAX_TITLE_LEN {
-        return std::borrow::Cow::Borrowed(trimmed);
+        return Cow::Borrowed(trimmed);
     }
     let cleaned: String = trimmed
         .chars()
         .filter(|c| !c.is_control())
         .take(MAX_TITLE_LEN)
         .collect();
-    std::borrow::Cow::Owned(cleaned)
+    Cow::Owned(cleaned)
 }
 
 #[cfg(test)]

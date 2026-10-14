@@ -22,8 +22,13 @@ use std::hash::{Hash, Hasher};
 
 use ratatui::text::Line;
 
+use crate::markdown::render_agent_text;
 use crate::records::ToolOutcome;
+use crate::view::line_wrap::wrap_indented_block;
+use crate::view::line_wrap::wrap_plain_block;
 use crate::view::markers::PlannedRow;
+use crate::view::markers::result_body_rows;
+use std::collections::hash_map::DefaultHasher;
 
 /// Cap on cached entries. A transcript holds at most a few thousand distinct
 /// lines at one width; passing this means width churn or a very long session,
@@ -89,10 +94,10 @@ struct Key {
 }
 
 fn hash128(text: &str) -> (u64, u64) {
-    let mut s = std::collections::hash_map::DefaultHasher::new();
+    let mut s = DefaultHasher::new();
     (0xA5_u8, text).hash(&mut s);
     let h1 = s.finish();
-    s = std::collections::hash_map::DefaultHasher::new();
+    s = DefaultHasher::new();
     (0x9E_u8, text).hash(&mut s);
     let h2 = s.finish();
     (h1, h2)
@@ -113,10 +118,10 @@ fn hash128_tool(
     outcome: Option<ToolOutcome>,
     is_diff: bool,
 ) -> (u64, u64) {
-    let mut s = std::collections::hash_map::DefaultHasher::new();
+    let mut s = DefaultHasher::new();
     (0xA5_u8, body, call_id, outcome_byte(outcome), is_diff).hash(&mut s);
     let h1 = s.finish();
-    s = std::collections::hash_map::DefaultHasher::new();
+    s = DefaultHasher::new();
     (0x9E_u8, body, call_id, outcome_byte(outcome), is_diff).hash(&mut s);
     let h2 = s.finish();
     (h1, h2)
@@ -145,7 +150,7 @@ impl RenderCache {
             return (lines.clone(), plain.clone());
         }
         self.evict_if_needed();
-        let (lines, plain) = crate::markdown::render_agent_text("●", text, width as usize);
+        let (lines, plain) = render_agent_text("●", text, width as usize);
         self.map.insert(
             key,
             CachedRender::Agent {
@@ -170,7 +175,7 @@ impl RenderCache {
             return c.len();
         }
         self.evict_if_needed();
-        let (lines, plain) = crate::markdown::render_agent_text("●", text, width as usize);
+        let (lines, plain) = render_agent_text("●", text, width as usize);
         let n = lines.len();
         self.map.insert(key, CachedRender::Agent { lines, plain });
         n
@@ -198,9 +203,7 @@ impl RenderCache {
             return rows.clone();
         }
         self.evict_if_needed();
-        let rows = crate::view::markers::result_body_rows(
-            body, call_id, outcome, expanded, is_diff, width,
-        );
+        let rows = result_body_rows(body, call_id, outcome, expanded, is_diff, width);
         self.map
             .insert(key, CachedRender::Tool { rows: rows.clone() });
         rows
@@ -231,9 +234,7 @@ impl RenderCache {
             return c.len();
         }
         self.evict_if_needed();
-        let rows = crate::view::markers::result_body_rows(
-            body, call_id, outcome, expanded, is_diff, width,
-        );
+        let rows = result_body_rows(body, call_id, outcome, expanded, is_diff, width);
         let n = rows.len();
         self.map.insert(key, CachedRender::Tool { rows });
         n
@@ -264,8 +265,7 @@ impl RenderCache {
             return rows.clone();
         }
         self.evict_if_needed();
-        let rows =
-            crate::view::line_wrap::wrap_plain_block(text, "> ", width, Some(USER_DISPLAY_CAP));
+        let rows = wrap_plain_block(text, "> ", width, Some(USER_DISPLAY_CAP));
         self.map
             .insert(key, CachedRender::Plain { rows: rows.clone() });
         rows
@@ -287,8 +287,7 @@ impl RenderCache {
             return c.len();
         }
         self.evict_if_needed();
-        let rows =
-            crate::view::line_wrap::wrap_plain_block(text, "> ", width, Some(USER_DISPLAY_CAP));
+        let rows = wrap_plain_block(text, "> ", width, Some(USER_DISPLAY_CAP));
         let n = rows.len();
         self.map.insert(key, CachedRender::Plain { rows });
         n
@@ -310,7 +309,7 @@ impl RenderCache {
             return rows.clone();
         }
         self.evict_if_needed();
-        let rows = crate::view::line_wrap::wrap_indented_block(text, "  ", width);
+        let rows = wrap_indented_block(text, "  ", width);
         self.map
             .insert(key, CachedRender::Plain { rows: rows.clone() });
         rows
@@ -331,7 +330,7 @@ impl RenderCache {
             return c.len();
         }
         self.evict_if_needed();
-        let rows = crate::view::line_wrap::wrap_indented_block(text, "  ", width);
+        let rows = wrap_indented_block(text, "  ", width);
         let n = rows.len();
         self.map.insert(key, CachedRender::Plain { rows });
         n
@@ -365,7 +364,7 @@ impl RenderCache {
         {
             return (lines.clone(), plain.clone());
         }
-        let (lines, plain) = crate::markdown::render_agent_text("●", text, width as usize);
+        let (lines, plain) = render_agent_text("●", text, width as usize);
         self.live_agent = Some(LiveEntry {
             h1,
             h2,
@@ -391,7 +390,7 @@ impl RenderCache {
                 _ => 0,
             };
         }
-        let (lines, plain) = crate::markdown::render_agent_text("●", text, width as usize);
+        let (lines, plain) = render_agent_text("●", text, width as usize);
         let n = lines.len();
         self.live_agent = Some(LiveEntry {
             h1,
@@ -415,7 +414,7 @@ impl RenderCache {
         {
             return rows.clone();
         }
-        let rows = crate::view::line_wrap::wrap_indented_block(text, "  ", width);
+        let rows = wrap_indented_block(text, "  ", width);
         self.live_reason = Some(LiveEntry {
             h1,
             h2,
@@ -439,7 +438,7 @@ impl RenderCache {
                 _ => 0,
             };
         }
-        let rows = crate::view::line_wrap::wrap_indented_block(text, "  ", width);
+        let rows = wrap_indented_block(text, "  ", width);
         let n = rows.len();
         self.live_reason = Some(LiveEntry {
             h1,

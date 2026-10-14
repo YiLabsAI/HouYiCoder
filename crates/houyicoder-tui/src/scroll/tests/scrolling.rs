@@ -13,6 +13,7 @@ use ratatui::style::Color;
 
 use crate::app::handle_event;
 use crate::composition;
+use crate::keys::handle_working;
 use crate::records::{ToolOutcome, TranscriptLine};
 use crate::state::{App, Screen, ViewportMode};
 use crate::test_harness::{render_buffer, render_text};
@@ -216,7 +217,7 @@ fn test_focus_lost_hides_caret() {
         "draw publishes the hidden cursor position for input methods"
     );
     // FocusLost event hides the caret.
-    assert!(crate::app::handle_event(&mut app, Event::FocusLost).unwrap());
+    assert!(handle_event(&mut app, Event::FocusLost).unwrap());
     assert!(
         !app.ui.terminal_focused,
         "FocusLost clears terminal_focused"
@@ -224,7 +225,7 @@ fn test_focus_lost_hides_caret() {
     let buf = render_buffer(&app, 80, 24);
     assert!(!has_white(&buf), "no inverted caret when focus lost");
     // FocusGained re-inverts.
-    assert!(crate::app::handle_event(&mut app, Event::FocusGained).unwrap());
+    assert!(handle_event(&mut app, Event::FocusGained).unwrap());
     assert!(app.ui.terminal_focused, "FocusGained sets terminal_focused");
     let buf = render_buffer(&app, 80, 24);
     assert!(has_white(&buf), "caret re-inverted on refocus");
@@ -280,10 +281,10 @@ fn context_app() -> App {
 }
 
 fn fill_transcript(app: &mut App, n: usize) {
-    app.push_transcript_line(crate::records::TranscriptLine::User("hi".into()));
-    app.push_transcript_line(crate::records::TranscriptLine::Agent("hello back".into()));
+    app.push_transcript_line(TranscriptLine::User("hi".into()));
+    app.push_transcript_line(TranscriptLine::Agent("hello back".into()));
     for _ in 0..n {
-        app.push_transcript_line(crate::records::TranscriptLine::System("filler".into()));
+        app.push_transcript_line(TranscriptLine::System("filler".into()));
     }
 }
 
@@ -291,7 +292,7 @@ fn fill_transcript(app: &mut App, n: usize) {
 fn test_grid_survives_page_up() {
     let mut app = context_app();
     fill_transcript(&mut app, 20);
-    app.ui.navigation.viewport = crate::state::ViewportMode::Scroll;
+    app.ui.navigation.viewport = ViewportMode::Scroll;
     drop(render(&app));
     app.whole_scroll_mut().page_up();
     app.whole_scroll_mut().page_up();
@@ -304,7 +305,7 @@ fn test_grid_survives_page_up() {
 fn test_context_grid_visible_top() {
     let mut app = context_app();
     fill_transcript(&mut app, 20);
-    app.ui.navigation.viewport = crate::state::ViewportMode::Scroll;
+    app.ui.navigation.viewport = ViewportMode::Scroll;
     app.whole_scroll_mut().jump_to(0);
     drop(render(&app));
     let out = render(&app);
@@ -323,7 +324,7 @@ fn test_context_grid_visible_top() {
 fn test_context_grid_renders_overlap() {
     let mut app = context_app();
     fill_transcript(&mut app, 20);
-    app.ui.navigation.viewport = crate::state::ViewportMode::Scroll;
+    app.ui.navigation.viewport = ViewportMode::Scroll;
     drop(render(&app));
     app.whole_scroll_mut().jump_to(5);
     let out = render(&app);
@@ -337,7 +338,7 @@ fn test_context_grid_renders_overlap() {
 fn test_context_grid_pgup_working() {
     let mut app = context_app();
     fill_transcript(&mut app, 20);
-    app.ui.navigation.viewport = crate::state::ViewportMode::Working;
+    app.ui.navigation.viewport = ViewportMode::Working;
     drop(render(&app));
     app.enter_scroll();
     drop(render(&app));
@@ -452,7 +453,7 @@ fn test_search_chrome_exit_key() {
     let out = render(&app);
     assert!(out.contains("SEARCH"), "chrome shows SEARCH: {out}");
     assert!(out.contains("foo"), "query in chrome: {out}");
-    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    handle_working(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     assert!(
         !app.ui.transcript_view.search_active(),
         "Esc exits the search view"
@@ -480,7 +481,7 @@ fn test_n_walks_toward_older() {
         "entry at newest: {out}"
     );
     // n -> older match; its line text must be ON SCREEN after the jump.
-    crate::keys::handle_working(
+    handle_working(
         &mut app,
         KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE),
     );
@@ -490,7 +491,7 @@ fn test_n_walks_toward_older() {
         "n walks to the older match on screen: {out}"
     );
     // N -> back to the newer match.
-    crate::keys::handle_working(
+    handle_working(
         &mut app,
         KeyEvent::new(KeyCode::Char('N'), KeyModifiers::NONE),
     );
@@ -521,7 +522,7 @@ fn test_search_current_match_yellow() {
     // Warm the width (jump reads the width a prior draw measured)
     // then walk to the older, multi-line tool-result match.
     drop(render(&app));
-    crate::keys::handle_working(
+    handle_working(
         &mut app,
         KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE),
     );
@@ -578,7 +579,7 @@ fn test_search_input_opens_seeded() {
     let mut app = working();
     app.sessions.current.transcript = vec![TranscriptLine::Agent("needle match".into())].into();
     app.enter_search_view("needle");
-    crate::keys::handle_working(
+    handle_working(
         &mut app,
         KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE),
     );
@@ -613,23 +614,23 @@ fn test_search_commit_switches_query() {
     assert!(render(&app).contains("needle older"));
 
     // Open the bar, clear the seed, type a new query, commit.
-    crate::keys::handle_working(
+    handle_working(
         &mut app,
         KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE),
     );
     for _ in 0..6 {
-        crate::keys::handle_working(
+        handle_working(
             &mut app,
             KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
         );
     }
     for c in "other".chars() {
-        crate::keys::handle_working(
+        handle_working(
             &mut app,
             KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE),
         );
     }
-    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    handle_working(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     let out = render(&app);
     assert!(
         out.contains("other newer"),
@@ -657,18 +658,18 @@ fn test_search_cancel_restores_query() {
     let mut app = working();
     app.sessions.current.transcript = vec![TranscriptLine::Agent("needle match".into())].into();
     app.enter_search_view("needle");
-    crate::keys::handle_working(
+    handle_working(
         &mut app,
         KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE),
     );
     // Type junk into the bar -- must NOT affect the committed query.
     for c in "xyz".chars() {
-        crate::keys::handle_working(
+        handle_working(
             &mut app,
             KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE),
         );
     }
-    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    handle_working(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     let out = render(&app);
     assert!(
         out.contains("n=older"),
@@ -691,13 +692,13 @@ fn test_search_input_edits_buffer() {
     let mut app = working();
     app.sessions.current.transcript = vec![TranscriptLine::Agent("needle match".into())].into();
     app.enter_search_view("needle");
-    crate::keys::handle_working(
+    handle_working(
         &mut app,
         KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE),
     );
     // Clear the seed to empty -- the empty-buffer hint renders.
     for _ in 0..6 {
-        crate::keys::handle_working(
+        handle_working(
             &mut app,
             KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
         );
@@ -709,13 +710,13 @@ fn test_search_input_edits_buffer() {
     );
     // Type "abc", then Left + insert X -> "abXc" (Left routes to move_left).
     for c in "abc".chars() {
-        crate::keys::handle_working(
+        handle_working(
             &mut app,
             KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE),
         );
     }
-    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
-    crate::keys::handle_working(
+    handle_working(&mut app, KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+    handle_working(
         &mut app,
         KeyEvent::new(KeyCode::Char('X'), KeyModifiers::NONE),
     );
@@ -725,8 +726,8 @@ fn test_search_input_edits_buffer() {
         render(&app)
     );
     // Home + Delete -> drops the first char -> "bXc" (Home + Delete route).
-    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
-    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE));
+    handle_working(&mut app, KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
+    handle_working(&mut app, KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE));
     assert!(
         render(&app).contains("bXc"),
         "Home+Delete: {}",
@@ -734,15 +735,15 @@ fn test_search_input_edits_buffer() {
     );
     // End pins the cursor at the tail; Right from End is a no-op (covers
     // End + Right routing); the buffer text is unchanged.
-    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
-    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+    handle_working(&mut app, KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
+    handle_working(&mut app, KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
     assert!(
         render(&app).contains("bXc"),
         "End+Right no-op: {}",
         render(&app)
     );
     // Ctrl+C cancels like Esc -- the SEARCH chrome returns.
-    crate::keys::handle_working(
+    handle_working(
         &mut app,
         KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
     );

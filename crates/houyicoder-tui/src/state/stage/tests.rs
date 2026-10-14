@@ -6,16 +6,17 @@ use houyicoder_protocol::frontend::SlashCommand;
 
 use crate::composition;
 use crate::evidence::{Divergence, Verdict};
+use crate::state::App;
 use crate::state::{Pane, Screen, Stage};
 use crate::test_harness::render_text;
 
-fn working() -> crate::state::App {
+fn working() -> App {
     let mut app = composition::app();
     app.ui.navigation.screen = Screen::Working;
     app
 }
 
-fn render(app: &crate::state::App) -> String {
+fn render(app: &App) -> String {
     render_text(app, 100, 28)
 }
 

@@ -9,9 +9,14 @@ mod selection;
 mod timeline;
 
 use super::*;
+use crate::composition::app;
+use crate::keys::handle_working;
+use crate::state::Pane;
 use crate::view::working;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use fixtures::{detail_of_all, record_of, turn, view};
+use houyicoder_protocol::frontend::SlashCommand;
+use ratatui::layout::Rect;
 use ratatui::{Terminal, backend::TestBackend};
 use std::sync::{Arc, Mutex};
 
@@ -74,8 +79,8 @@ fn test_down_clamps_last_row() {
     // Adversarial: the bug was Down past the last row made the selection
     // glyph vanish (no row matched the out-of-range cursor). With clamping
     // in both render and the key handler, the cursor pins to the last row.
-    let mut app = crate::composition::app();
-    app.ui.navigation.pane = crate::state::Pane::Trajectory;
+    let mut app = app();
+    app.ui.navigation.pane = Pane::Trajectory;
     // First render stashes the list length; simulate by drawing once.
     let backend = TestBackend::new(80, 24);
     let mut terminal = Terminal::new(backend).unwrap();
@@ -88,7 +93,7 @@ fn test_down_clamps_last_row() {
     assert!(len > 0, "render must stash the list length");
     // Hammer Down past the end.
     for _ in 0..len + 5 {
-        crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     }
     assert_eq!(
         app.ui.trajectory.cursor(),
@@ -106,13 +111,13 @@ fn test_fmt_k_short_long() {
 
 #[test]
 fn test_pane_label_is_trajectory() {
-    assert_eq!(crate::state::Pane::Trajectory.label(), "trajectory");
+    assert_eq!(Pane::Trajectory.label(), "trajectory");
 }
 
 #[test]
 fn test_level0_renders_turn_list() {
-    let mut app = crate::composition::app();
-    app.ui.navigation.pane = crate::state::Pane::Trajectory;
+    let mut app = app();
+    app.ui.navigation.pane = Pane::Trajectory;
     let backend = TestBackend::new(80, 24);
     let mut terminal = Terminal::new(backend).unwrap();
     terminal
@@ -166,8 +171,8 @@ fn test_attached_seam_supplies_view() {
     // branch) rather than the mock fallback. The stub flips a shared flag on
     // call; a render pass leaves it set.
     let flag = Arc::new(Mutex::new(false));
-    let mut app = crate::composition::app();
-    app.ui.navigation.pane = crate::state::Pane::Trajectory;
+    let mut app = app();
+    app.ui.navigation.pane = Pane::Trajectory;
     app.sessions.persistence.trajectory_log = Some(Arc::new(StubLog {
         called: flag.clone(),
     }));
@@ -188,8 +193,8 @@ fn test_attached_seam_supplies_view() {
 fn test_level1_renders_row_detail() {
     // Drilling a [bg] row (dream/compact/save) shows that row's detail at L1,
     // not the first turn's events. turn_idx 2 = the dream [bg] row in the mock.
-    let mut app = crate::composition::app();
-    app.ui.navigation.pane = crate::state::Pane::Trajectory;
+    let mut app = app();
+    app.ui.navigation.pane = Pane::Trajectory;
     app.ui.trajectory.set_level(1);
     app.ui.trajectory.set_turn_idx(2);
     let backend = TestBackend::new(80, 24);
@@ -207,8 +212,8 @@ fn test_level1_renders_row_detail() {
 
 #[test]
 fn test_level1_renders_turn_detail() {
-    let mut app = crate::composition::app();
-    app.ui.navigation.pane = crate::state::Pane::Trajectory;
+    let mut app = app();
+    app.ui.navigation.pane = Pane::Trajectory;
     app.ui.trajectory.set_level(1);
     let backend = TestBackend::new(80, 24);
     let mut terminal = Terminal::new(backend).unwrap();
@@ -221,8 +226,8 @@ fn test_level1_renders_turn_detail() {
 
 #[test]
 fn test_level2_renders_event_detail() {
-    let mut app = crate::composition::app();
-    app.ui.navigation.pane = crate::state::Pane::Trajectory;
+    let mut app = app();
+    app.ui.navigation.pane = Pane::Trajectory;
     app.ui.trajectory.set_level(2);
     let backend = TestBackend::new(80, 24);
     let mut terminal = Terminal::new(backend).unwrap();
@@ -288,8 +293,7 @@ fn test_level2_renders_record_detail() {
         ),
     ]);
     let body_text = |cursor: usize| {
-        let (_, body, _, _) =
-            detail::draw_event_detail(&turn, &detail, cursor, ratatui::layout::Rect::ZERO);
+        let (_, body, _, _) = detail::draw_event_detail(&turn, &detail, cursor, Rect::ZERO);
         body.iter()
             .flat_map(|l| l.spans.iter().map(|s| s.content.as_ref().to_string()))
             .collect::<String>()
@@ -329,9 +333,9 @@ fn test_level2_renders_record_detail() {
 /// bars vs ASCII hashes).
 #[test]
 fn test_trajectory_bar_invariants_mock() {
-    let mut app = crate::composition::app();
+    let mut app = app();
     app.ui.navigation.screen = crate::state::Screen::Working;
-    app.ui.navigation.pane = crate::state::Pane::Trajectory;
+    app.ui.navigation.pane = Pane::Trajectory;
     app.ui.trajectory.set_level(1);
     let out = crate::test_harness::render_text(&app, 100, 40);
     assert!(
@@ -380,7 +384,7 @@ fn test_event_detail_redacts_secrets() {
         timing: None,
         retries: 0,
     }]);
-    let (_, body, _, _) = detail::draw_event_detail(&turn, &detail, 0, ratatui::layout::Rect::ZERO);
+    let (_, body, _, _) = detail::draw_event_detail(&turn, &detail, 0, Rect::ZERO);
     let text = body
         .iter()
         .flat_map(|l| l.spans.iter().map(|s| s.content.as_ref().to_string()))
@@ -397,8 +401,8 @@ fn test_event_detail_redacts_secrets() {
 
 #[test]
 fn test_enter_drill_esc_back() {
-    let mut app = crate::composition::app();
-    app.ui.navigation.pane = crate::state::Pane::Trajectory;
+    let mut app = app();
+    app.ui.navigation.pane = Pane::Trajectory;
     // Render once so the turn-list length is stashed — the drill guard reads
     // it to decide whether Enter may drill (it must not drill into an empty
     // row list). Without this render the stashed length is 0 and the guard
@@ -407,49 +411,48 @@ fn test_enter_drill_esc_back() {
     let mut terminal = Terminal::new(backend).unwrap();
     terminal.draw(|f| working::draw(f, &app)).unwrap();
     assert_eq!(app.ui.trajectory.level(), 0);
-    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    handle_working(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     assert_eq!(app.ui.trajectory.level(), 1);
-    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    handle_working(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     assert_eq!(app.ui.trajectory.level(), 2);
-    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    handle_working(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     assert_eq!(app.ui.trajectory.level(), 1);
-    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    handle_working(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     assert_eq!(app.ui.trajectory.level(), 0);
-    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-    assert_eq!(app.ui.navigation.pane, crate::state::Pane::Transcript);
+    handle_working(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert_eq!(app.ui.navigation.pane, Pane::Transcript);
 }
 
 #[test]
 fn test_up_down_move_cursor() {
-    let mut app = crate::composition::app();
-    app.ui.navigation.pane = crate::state::Pane::Trajectory;
+    let mut app = app();
+    app.ui.navigation.pane = Pane::Trajectory;
     app.ui.trajectory.set_list_len(5);
     assert_eq!(app.ui.trajectory.cursor(), 0);
     // Down advances
-    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     assert_eq!(app.ui.trajectory.cursor(), 1);
     // Up decrements
-    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+    handle_working(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
     assert_eq!(app.ui.trajectory.cursor(), 0);
     // Up at the top stays at the top: the list is an audit trail with a
     // direction in time, so it does not wrap.
-    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+    handle_working(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
     assert_eq!(app.ui.trajectory.cursor(), 0);
     // With no paged history attached, End and Home are the ends of the list in
     // hand, and Down at the end stays put.
-    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
+    handle_working(&mut app, KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
     assert_eq!(app.ui.trajectory.cursor(), 4);
-    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     assert_eq!(app.ui.trajectory.cursor(), 4);
     // Home jumps to the oldest.
-    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
+    handle_working(&mut app, KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
     assert_eq!(app.ui.trajectory.cursor(), 0);
 }
 
 /// Thinking tokens render as (thinking Nk) only when Some and >0.
 #[test]
 fn test_thinking_tokens_render_nonzero() {
-    use super::*;
     let view = TrajectoryView {
         models_used: 2,
         tokens_in: Some(100),
@@ -475,7 +478,6 @@ fn test_thinking_tokens_render_nonzero() {
 /// Thinking tokens are hidden when 0 or None.
 #[test]
 fn test_thinking_tokens_hidden_zero() {
-    use super::*;
     let view = TrajectoryView {
         models_used: 2,
         tokens_in: Some(100),
@@ -503,7 +505,6 @@ fn test_thinking_tokens_hidden_zero() {
 /// Per-turn model renders only when ≥2 distinct models in the session.
 #[test]
 fn test_per_turn_model_two() {
-    use super::*;
     let view = TrajectoryView {
         models_used: 2,
         model: "2 models".into(),
@@ -543,7 +544,6 @@ fn test_per_turn_model_two() {
 /// Per-turn model is hidden when the session used only one model.
 #[test]
 fn test_per_turn_model_one() {
-    use super::*;
     let view = TrajectoryView {
         models_used: 2,
         model: "qwen3.7-max".into(),
@@ -583,7 +583,6 @@ fn test_per_turn_model_one() {
 /// Turn rows render the per-turn cached ratio.
 #[test]
 fn test_turn_row_cached_ratio() {
-    use super::*;
     let view = TrajectoryView {
         models_used: 2,
         tokens_in: Some(200),
@@ -626,11 +625,10 @@ fn test_turn_row_cached_ratio() {
 /// Entering trajectory initializes cursor to tail, and draw clamps and persists it.
 #[test]
 fn test_enter_trajectory_clamps_tail() {
-    use houyicoder_protocol::frontend::SlashCommand;
-    let mut app = crate::composition::app();
+    let mut app = app();
     app.run_command(SlashCommand::Trajectory);
     assert_eq!(app.ui.trajectory.cursor(), usize::MAX);
-    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
+    let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
     terminal
         .draw(|f| {
             draw_content(f, f.area(), &app);
@@ -640,7 +638,7 @@ fn test_enter_trajectory_clamps_tail() {
     let len = app.ui.trajectory.list_len();
     assert!(app.ui.trajectory.cursor() < len);
     // Enter drills into Level 1 without displaying "no row data"
-    crate::keys::handle_working(
+    handle_working(
         &mut app,
         crossterm::event::KeyEvent::new(
             crossterm::event::KeyCode::Enter,
@@ -653,12 +651,12 @@ fn test_enter_trajectory_clamps_tail() {
 /// Level 1 navigation properly uses events length, allowing Down to advance.
 #[test]
 fn test_level1_navigates_events() {
-    let mut app = crate::composition::app();
-    app.ui.navigation.pane = crate::state::Pane::Trajectory;
+    let mut app = app();
+    app.ui.navigation.pane = Pane::Trajectory;
     app.ui.trajectory.set_level(1);
     app.ui.trajectory.set_turn_idx(0);
     app.ui.trajectory.set_cursor(0);
-    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
+    let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
     terminal
         .draw(|f| {
             draw_content(f, f.area(), &app);
@@ -667,7 +665,7 @@ fn test_level1_navigates_events() {
     let event_count = app.ui.trajectory.list_len();
     assert!(event_count > 1, "mock turn 0 has multiple events");
     // Down advances through events
-    crate::keys::handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     assert_eq!(app.ui.trajectory.cursor(), 1);
 }
 
@@ -699,8 +697,7 @@ fn test_timing_and_cache_render() {
             ..turn(1, "test")
         })])
     };
-    let (header, body, _, _) =
-        list::draw_turn_list(&view, 0, ratatui::layout::Rect::new(0, 0, 100, 25));
+    let (header, body, _, _) = list::draw_turn_list(&view, 0, Rect::new(0, 0, 100, 25));
     let head_text: String = header
         .iter()
         .flat_map(|l| l.spans.iter())
@@ -824,7 +821,7 @@ fn test_timeline_shows_record_names() {
         ..turn(1, "go")
     };
     let detail = detail_of_all(vec![record_of(TrajectoryRecordKind::Tool, None)]);
-    let app = crate::composition::app();
+    let app = app();
     let (_, body, _, _) =
         detail::draw_turn_detail(&turn, &detail, 0, Rect::new(0, 0, 120, 20), &app);
     let text: String = body
@@ -940,7 +937,7 @@ fn test_turn_detail_latency_split() {
         ..turn(1, "ask")
     };
     let detail = detail_of_all(vec![record]);
-    let app = crate::composition::app();
+    let app = app();
     let (_, body, _, _) =
         detail::draw_turn_detail(&turn, &detail, 0, Rect::new(0, 0, 140, 20), &app);
     let text: String = body
@@ -1162,7 +1159,7 @@ fn test_compaction_without_counts() {
 /// than render an empty table, which would read as a session with no turns.
 #[test]
 fn test_list_renders_read_states() {
-    let area = ratatui::layout::Rect::new(0, 0, 100, 30);
+    let area = Rect::new(0, 0, 100, 30);
     for (state, needle) in [
         (TrajectoryViewState::Loading, "loading trajectory"),
         (TrajectoryViewState::LoadingOlder, "loading older turns"),
@@ -1195,7 +1192,7 @@ fn test_loading_older_keeps_rows() {
     let mut view = sample_trajectory();
     view.state = TrajectoryViewState::LoadingOlder;
     let rows_before = view.rows.len();
-    let area = ratatui::layout::Rect::new(0, 0, 120, 40);
+    let area = Rect::new(0, 0, 120, 40);
     let (_header, body, _footer, _sel) = list::draw_turn_list(&view, 0, area);
     let text: String = body.iter().map(|line| line.to_string()).collect();
     assert!(text.contains("loading older turns"), "{text:?}");
