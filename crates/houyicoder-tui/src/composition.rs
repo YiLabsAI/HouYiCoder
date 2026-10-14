@@ -20,7 +20,7 @@ use crate::evidence::{
     ReviewFinding, SpecArtifact, SpecClause, Verdict, VerifyResult, audit_entry,
 };
 use crate::palette::PaletteState;
-use crate::records::SpecContext;
+use crate::records::{ContextSuggestion, SpecContext, SuggestionSeverity};
 use crate::resume_picker::SessionCatalog;
 use crate::review_queue::ReviewQueue;
 use crate::session::Session;
@@ -31,20 +31,51 @@ use crate::state::{App, Pane, Screen, Stage, ViewportMode};
 use crate::transcript::snapshot::TranscriptSnapshot;
 use crate::view::export_log::ExportLog;
 use crate::view::trajectory_pane::TrajectoryLog;
+#[cfg(test)]
+use futures::channel::mpsc::channel;
 use houyicoder_client::Client;
 #[cfg(test)]
-use houyicoder_core::SessionId;
+use houyicoder_client::InProcTransport;
+#[cfg(test)]
+use houyicoder_core::SessionId as EngineSessionId;
 #[cfg(test)]
 use houyicoder_core::agent::Runner;
 #[cfg(test)]
+use houyicoder_core::agent::multi_agent::bus_types::AgentBus;
+#[cfg(test)]
 use houyicoder_permission::DefaultModeGate;
 use houyicoder_protocol::frontend::LoginMode;
+use houyicoder_protocol::frontend::SessionId;
+use houyicoder_protocol::frontend::context::ContextBreakdown;
+#[cfg(test)]
+use houyicoder_service::CancellationToken;
+#[cfg(test)]
+use houyicoder_service::composition::fleet_status_relay;
+#[cfg(test)]
+use houyicoder_service::composition::{BuildRunnerOptions, build_runner};
+#[cfg(test)]
+use houyicoder_service::server::{EventSequencer, FrameCarrier, Server};
+use std::env::current_dir;
+#[cfg(test)]
+use std::env::temp_dir;
+use std::error::Error;
+use std::path::PathBuf;
+#[cfg(test)]
+use std::process;
 use std::sync::Arc;
+use std::sync::OnceLock;
 #[cfg(test)]
 use std::sync::atomic::AtomicU64;
 #[cfg(test)]
 use std::sync::atomic::Ordering;
 use std::sync::mpsc;
+#[cfg(test)]
+use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::runtime::{Builder, Runtime};
+#[cfg(test)]
+use tokio::sync::Notify;
+#[cfg(test)]
+use tokio::task::JoinHandle;
 
 /// The wired protocol bundle the composition root (the CLI bin, or the test
 /// pairing helper) builds and hands to the TUI: the protocol client the driver
@@ -67,8 +98,9 @@ pub struct RunnerBundle {
     /// Receiver drained by the TUI event loop each poll tick.
     pub agent_rx: mpsc::Receiver<SessionMessage>,
     /// The active session id (wire-typed). The engine session id is converted
-    /// at the composition root; the TUI never imports the engine SessionId.
-    pub session: houyicoder_protocol::frontend::SessionId,
+    /// at the composition root, so the field and the production paths hold the
+    /// wire type; only the test pairing helpers take the engine id.
+    pub session: SessionId,
     /// The resolved model name, for the status bar display. The composition
     /// root resolves this; the TUI never calls the config layer itself.
     pub model: String,
@@ -92,7 +124,7 @@ pub struct RunnerBundle {
 pub struct FrontendStartup {
     pub skip_login: bool,
     pub startup_warnings: Vec<String>,
-    pub history_path: std::path::PathBuf,
+    pub history_path: PathBuf,
 }
 
 /// A shared tokio runtime for tests. Building a multi-thread runtime with
@@ -100,12 +132,11 @@ pub struct FrontendStartup {
 /// would spend seconds constructing runtimes. The runtime is read-only after
 /// construction and tasks are independent (separate channels/runners), so
 /// sharing the thread pool is safe.
-pub fn shared_runtime() -> std::sync::Arc<tokio::runtime::Runtime> {
-    use std::sync::OnceLock;
-    static RT: OnceLock<std::sync::Arc<tokio::runtime::Runtime>> = OnceLock::new();
+pub fn shared_runtime() -> Arc<Runtime> {
+    static RT: OnceLock<Arc<Runtime>> = OnceLock::new();
     RT.get_or_init(|| {
-        std::sync::Arc::new(
-            tokio::runtime::Builder::new_multi_thread()
+        Arc::new(
+            Builder::new_multi_thread()
                 .worker_threads(4)
                 .enable_all()
                 .build()
@@ -119,7 +150,7 @@ pub fn shared_runtime() -> std::sync::Arc<tokio::runtime::Runtime> {
 /// top of the /permissions Workspace tab. Empty when the cwd cannot be read
 /// (a sandboxed or stub context).
 fn cwd_string() -> String {
-    std::env::current_dir()
+    current_dir()
         .ok()
         .and_then(|p| p.to_str().map(str::to_string))
         .unwrap_or_default()
@@ -171,8 +202,7 @@ pub fn build_app(bundle: RunnerBundle, startup: FrontendStartup) -> App {
     app
 }
 
-pub type ResumeBuilderRef =
-    dyn Fn(&str) -> Result<(RunnerBundle, FrontendStartup), Box<dyn std::error::Error>>;
+pub type ResumeBuilderRef = dyn Fn(&str) -> Result<(RunnerBundle, FrontendStartup), Box<dyn Error>>;
 
 /// Build the runner bundle via the composition root and wire it, matching the
 /// build_app_for_test(project) API so the existing test suite needs
@@ -181,10 +211,10 @@ pub type ResumeBuilderRef =
 /// lives in the CLI bin at runtime.
 #[cfg(test)]
 pub fn build_app_for_test(project: Option<String>) -> App {
-    let mut options = houyicoder_service::composition::BuildRunnerOptions::default();
+    let mut options = BuildRunnerOptions::default();
     options.project = project;
-    let bundle = houyicoder_service::composition::build_runner(options);
-    let wire_session = houyicoder_protocol::frontend::SessionId(bundle.session.to_string());
+    let bundle = build_runner(options);
+    let wire_session = SessionId(bundle.session.to_string());
     let (tx, rx) = mpsc::channel::<SessionMessage>();
     let (runner, client, startup_warnings) = start_local_server(
         bundle.runner,
@@ -209,11 +239,11 @@ pub fn build_app_for_test(project: Option<String>) -> App {
         FrontendStartup {
             skip_login: false,
             startup_warnings,
-            history_path: std::env::temp_dir().join(format!(
+            history_path: temp_dir().join(format!(
                 "houyi-history-test-{}-{}.jsonl",
-                std::process::id(),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
+                process::id(),
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
                     .map(|d| d.as_nanos())
                     .unwrap_or(0)
             )),
@@ -227,10 +257,10 @@ pub fn build_app_for_test(project: Option<String>) -> App {
 #[cfg(test)]
 pub fn start_local_server(
     runner: Runner,
-    session: SessionId,
+    session: EngineSessionId,
     gate: Arc<DefaultModeGate>,
-    append_notify: Arc<tokio::sync::Notify>,
-    bus: Option<Arc<houyicoder_core::agent::multi_agent::bus_types::AgentBus>>,
+    append_notify: Arc<Notify>,
+    bus: Option<Arc<AgentBus>>,
 ) -> (Arc<Runner>, Client, Vec<String>) {
     let (runner, client, _serve, warnings) =
         start_local_server_tracked(runner, session, gate, append_notify, bus);
@@ -245,41 +275,32 @@ pub fn start_local_server(
 #[cfg(test)]
 pub fn start_local_server_tracked(
     mut runner: Runner,
-    session: SessionId,
+    session: EngineSessionId,
     gate: Arc<DefaultModeGate>,
-    append_notify: Arc<tokio::sync::Notify>,
-    bus: Option<Arc<houyicoder_core::agent::multi_agent::bus_types::AgentBus>>,
-) -> (
-    Arc<Runner>,
-    Client,
-    tokio::task::JoinHandle<()>,
-    Vec<String>,
-) {
-    let (c2s_tx, c2s_rx) = futures::channel::mpsc::channel(16);
-    let (s2c_tx, s2c_rx) = futures::channel::mpsc::channel(16);
-    let event_sequencer = houyicoder_service::server::EventSequencer::new();
+    append_notify: Arc<Notify>,
+    bus: Option<Arc<AgentBus>>,
+) -> (Arc<Runner>, Client, JoinHandle<()>, Vec<String>) {
+    let (c2s_tx, c2s_rx) = channel(16);
+    let (s2c_tx, s2c_rx) = channel(16);
+    let event_sequencer = EventSequencer::new();
     event_sequencer.install_on(&mut runner);
     // Fleet status relay: translate bus child status into AgentStatus wire
     // frames so the TUI footer renders without touching the engine bus.
-    houyicoder_service::composition::fleet_status_relay::spawn(
+    fleet_status_relay::spawn(
         bus,
         event_sequencer.clone(),
         shared_runtime().handle().clone(),
-        houyicoder_service::CancellationToken::new(),
+        CancellationToken::new(),
     );
     // Drain startup warnings synchronously before the runner is shared so the
     // host can push them as initial transcript system lines — no async-sink
     // race with later command output or test assertions.
     let startup_warnings = runner.drain_startup_warnings();
     let runner = Arc::new(runner);
-    let server_io = houyicoder_service::server::FrameCarrier::new(s2c_tx, c2s_rx);
+    let server_io = FrameCarrier::new(s2c_tx, c2s_rx);
     let gate_dyn: Arc<dyn houyicoder_permission::ModeGate> = gate;
-    let server = houyicoder_service::server::Server::new_with_event_sequencer(
-        runner.clone(),
-        session,
-        gate_dyn,
-        event_sequencer,
-    );
+    let server =
+        Server::new_with_event_sequencer(runner.clone(), session, gate_dyn, event_sequencer);
     // Test isolation: the server's settings path defaults to the real config
     // file, so a model pick persisted the test's id into the developer's real
     // settings on every check run. Redirect to a unique temp path under
@@ -291,7 +312,7 @@ pub fn start_local_server_tracked(
     let serve_handle = runtime.spawn(async move {
         let _serve = server.serve(server_io).await;
     });
-    let transport = houyicoder_client::InProcTransport::from_halves(c2s_tx, s2c_rx);
+    let transport = InProcTransport::from_halves(c2s_tx, s2c_rx);
     let client = Client::new(Box::new(transport));
     (runner, client, serve_handle, startup_warnings)
 }
@@ -299,10 +320,10 @@ pub fn start_local_server_tracked(
 /// A unique temp settings path for one in-process test server, so a /model
 /// persist writes the temp file instead of the developer's real config.
 #[cfg(test)]
-fn local_test_settings_path() -> std::path::PathBuf {
+fn local_test_settings_path() -> PathBuf {
     static SEQ: AtomicU64 = AtomicU64::new(0);
     let n = SEQ.fetch_add(1, Ordering::Relaxed);
-    std::env::temp_dir().join(format!("houyi-settings-{}-{}.json", std::process::id(), n))
+    temp_dir().join(format!("houyi-settings-{}-{}.json", process::id(), n))
 }
 
 fn spec_context() -> SpecContext {
@@ -517,10 +538,7 @@ fn console_todos() -> Vec<ConsoleTodo> {
 /// size: the autocompact-near, heavy-bash-results, and heavy-read-results
 /// hints. Shared by the stub and the real /context path so the logic is not
 /// duplicated.
-pub fn suggestions_for(
-    breakdown: &houyicoder_protocol::frontend::context::ContextBreakdown,
-) -> Vec<crate::records::ContextSuggestion> {
-    use crate::records::{ContextSuggestion, SuggestionSeverity};
+pub fn suggestions_for(breakdown: &ContextBreakdown) -> Vec<ContextSuggestion> {
     let pct = if breakdown.context_window > 0 {
         100.0 * breakdown.total_tokens as f64 / breakdown.context_window as f64
     } else {
