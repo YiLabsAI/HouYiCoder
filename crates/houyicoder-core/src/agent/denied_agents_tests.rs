@@ -200,7 +200,7 @@ async fn test_dispatch_serial_spawn() {
 }
 
 #[tokio::test]
-async fn test_approval_dispatch_threads_capabilities() {
+async fn test_approval_dispatch_carries_caps() {
     // A guarded call is not dispatched by the loop: it pauses for approval and
     // runs later on the resume path. That path must hand the tool the same
     // capability set — the denied-agent rule included, since a delegation it

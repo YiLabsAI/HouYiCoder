@@ -991,7 +991,7 @@ async fn test_drive_translates_core_responses() {
 
 /// Permission and debug answers translate with their identity fields.
 #[tokio::test]
-async fn test_drive_translates_permission_responses() {
+async fn test_drive_translates_permissions() {
     let mut engine = FakeEngine::new();
     engine.response(ResponsePayload::PermissionMode(PermissionMode::Auto));
     engine.response(ResponsePayload::PermissionRules(vec![

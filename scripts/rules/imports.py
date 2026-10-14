@@ -31,6 +31,21 @@ _USE_HEAD = re.compile(r"^(?:pub(?:\([^)]*\))?\s+)?use\b")
 _FN_HEAD = re.compile(r"^(?:pub(?:\([^)]*\))?\s+)*(?:(?:async|unsafe|const|extern\s+\"[^\"]*\")\s+)*fn\b")
 # A char literal closes within a few characters; a lifetime like 'a does not.
 _CHAR_LITERAL = re.compile(r"'(?:\\.|[^\\'])'")
+# Rust puts these names in scope in every file without an import (the
+# prelude). Importing a different item under one of them hides the automatic
+# one: a file that writes Result<T, E> everywhere stops compiling the moment
+# `use std::fmt::Result` lands, because that Result takes no type arguments.
+# Such a name is left qualified rather than imported. Only names the language
+# really provides belong here -- std::fmt::Formatter is NOT one, and importing
+# it is legal, so it must stay a finding.
+_PRELUDE_NAMES = frozenset(
+    {
+        "Result", "Option", "String", "Vec", "Box", "Clone", "Copy", "Default",
+        "Iterator", "Into", "From", "ToOwned", "Send", "Sync", "Sized", "Drop",
+        "PartialEq", "Eq", "Ord", "PartialOrd", "ToString", "Fn", "FnMut",
+        "FnOnce", "Future",
+    }
+)
 
 
 def _strip_line(line):
@@ -191,9 +206,10 @@ def repeated_deep_paths(text):
     that continues past the type (mpsc::TryRecvError::Empty) is one, and it
     resolves to the type the import would bring in.
 
-    A name the file defines itself, or one two different chains end in, is
-    left qualified: an import would collide or pick the wrong type, and the
-    rules reserve a qualified path for exactly that case.
+    A name the file defines itself, one that two different chains end in, or
+    one the prelude already provides is left qualified: importing it would
+    collide, pick the wrong type, or hide the automatic one. A qualified path
+    is for exactly that case.
     """
     counts = {}
     for _, key in deep_path_violations(text):
@@ -201,7 +217,7 @@ def repeated_deep_paths(text):
     by_name = {}
     for chain in counts:
         by_name.setdefault(chain.rsplit("::", 1)[-1], set()).add(chain)
-    defined = set()
+    defined = set(_PRELUDE_NAMES)
     for line in text.splitlines():
         m = re.match(
             r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?"

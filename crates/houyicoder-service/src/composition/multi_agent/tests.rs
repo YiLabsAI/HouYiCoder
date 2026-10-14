@@ -156,7 +156,7 @@ async fn test_provenance_precedes_child_run() {
 /// The write also precedes the caller's ready signal, so the caller learns the
 /// child id only after the provenance is durable and never waits on the run.
 #[tokio::test]
-async fn test_background_boundary_writes_provenance() {
+async fn test_background_boundary_provenance() {
     let (provider, entered) = StallForeverProvider::new();
     let descriptors = Arc::new(InMemoryDescriptorStore::new());
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));

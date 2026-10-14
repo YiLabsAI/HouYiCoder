@@ -115,11 +115,13 @@ SCRIPT_TESTS=(
   test_harness_routing.py
   test_rust_imports.py
   test_cross_target.py
+  test_orphan_modules.py
   test_pre_push_chain.py
 )
 for script_test in "${SCRIPT_TESTS[@]}"; do
   run_check "script-tests:$script_test" python3 "scripts/$script_test"
 done
+run_check "orphan-modules" python3 scripts/check_orphan_modules.py
 run_check "rust-naming" python3 scripts/check_rust_naming.py $RS_FILES
 run_check "struct-fields" python3 scripts/check_struct_fields.py
 run_check "app-mut-borrows" python3 scripts/check_app_mut_borrows.py

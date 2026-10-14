@@ -24,6 +24,12 @@ use std::path::Path;
 
 use houyicoder_context::{NameSource, PrevHash, SessionDescriptor, SessionId, SessionProvenance};
 use sha2::{Digest, Sha256};
+use std::env::args;
+use std::env::current_dir;
+use std::error::Error;
+use std::fs::write;
+use std::process::exit;
+use std::str::from_utf8;
 
 mod mapping;
 
@@ -36,15 +42,15 @@ fn main() {
     let cfg = parse_args();
     if let Err(e) = run(&cfg) {
         eprintln!("houyi-load: {e}");
-        std::process::exit(1);
+        exit(1);
     }
 }
 
 fn parse_args() -> Cfg {
-    let args: Vec<String> = std::env::args().collect();
+    let args: Vec<String> = args().collect();
     if args.len() != 3 {
         eprintln!("usage: houyi-load <transcript.jsonl> <sessions-dir>");
-        std::process::exit(2);
+        exit(2);
     }
     Cfg {
         cc_path: args[1].clone(),
@@ -52,7 +58,7 @@ fn parse_args() -> Cfg {
     }
 }
 
-fn run(cfg: &Cfg) -> Result<(), Box<dyn std::error::Error>> {
+fn run(cfg: &Cfg) -> Result<(), Box<dyn Error>> {
     let sid = find_session_id(&cfg.cc_path)?;
     let session_dir = Path::new(&cfg.out_dir).join(sid.to_string());
     create_dir_all(&session_dir)?;
@@ -67,7 +73,7 @@ fn run(cfg: &Cfg) -> Result<(), Box<dyn std::error::Error>> {
     let reader = BufReader::new(File::open(&cfg.cc_path)?);
     for line_res in reader.split(b'\n') {
         let bytes = line_res?;
-        let trimmed = std::str::from_utf8(&bytes).unwrap_or("").trim_end();
+        let trimmed = from_utf8(&bytes).unwrap_or("").trim_end();
         if trimmed.is_empty() {
             continue;
         }
@@ -96,7 +102,7 @@ fn run(cfg: &Cfg) -> Result<(), Box<dyn std::error::Error>> {
 
 /// Find the sessionId on the first parseable record that carries one.
 /// Every record carries sessionId, so this is the first line.
-fn find_session_id(cc_path: &str) -> Result<SessionId, Box<dyn std::error::Error>> {
+fn find_session_id(cc_path: &str) -> Result<SessionId, Box<dyn Error>> {
     let file = File::open(cc_path)?;
     let mut reader = BufReader::new(file);
     let mut buf = String::new();
@@ -129,7 +135,7 @@ fn write_event(
     writer: &mut BufWriter<File>,
     mut event: houyicoder_context::SessionLogEntry,
     prev_hash: Option<PrevHash>,
-) -> Result<Option<PrevHash>, Box<dyn std::error::Error>> {
+) -> Result<Option<PrevHash>, Box<dyn Error>> {
     event.prev_hash = prev_hash;
     let bytes = serde_json::to_vec(&event)?;
     writer.write_all(&bytes)?;
@@ -149,13 +155,13 @@ fn write_descriptor(
     model: Option<String>,
     cwd: Option<String>,
     created_at_secs: u64,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), Box<dyn Error>> {
     let session_dir = Path::new(&cfg.out_dir).join(sid.to_string());
     let descriptor = SessionDescriptor {
         name: None,
         name_source: NameSource::Auto,
         cwd: cwd.filter(|c| !c.is_empty()).unwrap_or_else(|| {
-            std::env::current_dir()
+            current_dir()
                 .map(|p| p.to_string_lossy().into_owned())
                 .unwrap_or_default()
         }),
@@ -168,79 +174,9 @@ fn write_descriptor(
         child_session_ids: Vec::new(),
     };
     let json = serde_json::to_string_pretty(&descriptor)?;
-    std::fs::write(session_dir.join("session.json"), json + "\n")?;
+    write(session_dir.join("session.json"), json + "\n")?;
     Ok(())
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn write_cc_log(path: &Path, lines: &[&str]) {
-        std::fs::write(path, lines.join("\n") + "\n").unwrap();
-    }
-
-    #[test]
-    fn test_export_log_produces_sessions() {
-        let tmp = tempfile_dir();
-        let cc = tmp.join("cc.jsonl");
-        write_cc_log(
-            &cc,
-            &[
-                r#"{"type":"user","isMeta":false,"sessionId":"11111111-1111-1111-1111-111111111111","cwd":"/repo","timestamp":"2026-08-02T15:38:23.123Z","message":{"role":"user","content":"hi"}}"#,
-                r#"{"type":"assistant","isMeta":false,"sessionId":"11111111-1111-1111-1111-111111111111","cwd":"/repo","timestamp":"2026-08-02T15:38:24.000Z","message":{"role":"assistant","model":"glm-5.2","content":[{"type":"text","text":"hello back"}]}}"#,
-                r#"{"type":"mode","sessionId":"11111111-1111-1111-1111-111111111111"}"#,
-            ],
-        );
-        let out = tmp.join("sessions");
-        let cfg = Cfg {
-            cc_path: cc.to_string_lossy().into_owned(),
-            out_dir: out.to_string_lossy().into_owned(),
-        };
-        run(&cfg).unwrap();
-
-        // Output log + descriptor exist.
-        let sid = "11111111-1111-1111-1111-111111111111";
-        let log = out.join(sid).join("log.jsonl");
-        let descriptor = out.join(sid).join("session.json");
-        assert!(log.exists(), "log.jsonl written");
-        assert!(descriptor.exists(), "session.json written");
-
-        // Descriptor carries the model + cwd.
-        let sc: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(&descriptor).unwrap()).unwrap();
-        assert_eq!(sc["model"], "glm-5.2");
-        assert_eq!(sc["cwd"], "/repo");
-
-        // Chain verifies: each line's prev_hash = SHA-256 of the previous
-        // line's bytes (the first is null). The mode line is skipped.
-        let lines: Vec<String> =
-            std::io::BufRead::lines(std::io::BufReader::new(std::fs::File::open(&log).unwrap()))
-                .map(|l| l.unwrap())
-                .collect();
-        assert_eq!(lines.len(), 2, "user + assistant events (mode skipped)");
-        let mut prev: Option<PrevHash> = None;
-        for line in &lines {
-            let ev: houyicoder_context::SessionLogEntry = serde_json::from_str(line).unwrap();
-            assert_eq!(ev.prev_hash, prev, "chain links at {}", line.len());
-            let mut h = Sha256::new();
-            h.update(line.as_bytes());
-            let b: [u8; 32] = h.finalize().as_slice().try_into().unwrap();
-            prev = Some(PrevHash(b));
-        }
-    }
-
-    fn tempfile_dir() -> std::path::PathBuf {
-        let mut p = std::env::temp_dir();
-        p.push(format!("houyi-load-test-{}", std::process::id()));
-        p.push(format!("{}", random_suffix()));
-        std::fs::create_dir_all(&p).unwrap();
-        p
-    }
-
-    fn random_suffix() -> u64 {
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static N: AtomicU64 = AtomicU64::new(0);
-        N.fetch_add(1, Ordering::SeqCst)
-    }
-}
+mod tests;

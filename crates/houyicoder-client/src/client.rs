@@ -6,13 +6,16 @@
 //! only; it never imports engine types.
 
 use crate::transport::Transport;
+use houyicoder_protocol::acp_wire::AcpNotification;
 use houyicoder_protocol::envelope::{
     ClientFrame, ClientResponseEnvelope, ClientResponsePayload, RequestEnvelope, RequestId,
     ResumeFrom, ServerFrame,
 };
 use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
 use houyicoder_protocol::framing::encode;
+use houyicoder_protocol::frontend::FrontendRequest;
 use houyicoder_protocol::handshake::{Hello, Negotiated, negotiate};
+use serde::de::DeserializeOwned;
 
 /// A protocol client bound to one transport. One end of the connection; the
 /// service holds the other. The transport is carrier mechanics only (the
@@ -64,7 +67,7 @@ impl Client {
     pub async fn send_request(
         &mut self,
         req_id: RequestId,
-        payload: houyicoder_protocol::frontend::FrontendRequest,
+        payload: FrontendRequest,
     ) -> Result<(), ProtocolError> {
         let env = RequestEnvelope::new(req_id, payload);
         self.send_typed(&ClientFrame::Request(env)).await
@@ -85,10 +88,7 @@ impl Client {
     /// Send a JSON-RPC notification (no id, no reply). Used for client-to-server
     /// signals like session/cancel, which the server reads mid-run without
     /// correlating a response.
-    pub async fn send_notification(
-        &mut self,
-        notif: houyicoder_protocol::acp_wire::AcpNotification,
-    ) -> Result<(), ProtocolError> {
+    pub async fn send_notification(&mut self, notif: AcpNotification) -> Result<(), ProtocolError> {
         self.send_typed(&notif).await
     }
 
@@ -122,7 +122,7 @@ impl Client {
 
 /// Decode a frame string into a typed message. Surfaces bad framing as a
 /// protocol error at the boundary.
-fn decode_frame<T: serde::de::DeserializeOwned>(frame: &str) -> Result<T, ProtocolError> {
+fn decode_frame<T: DeserializeOwned>(frame: &str) -> Result<T, ProtocolError> {
     serde_json::from_str(frame)
         .map_err(|e| ProtocolError::new(ErrorCategory::InvalidFrame, e.to_string(), false))
 }

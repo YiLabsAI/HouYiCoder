@@ -110,6 +110,20 @@ def test_a_name_two_chains_share_is_left_qualified():
     assert repeated_deep_paths(two) == {}
 
 
+def test_a_prelude_name_is_left_qualified():
+    # Importing std::fmt::Result would hide the prelude Result<T, E> the
+    # signatures use, so the qualified spelling is correct here.
+    assert repeated_deep_paths("fn a() -> std::fmt::Result { Ok(()) }\n") == {}
+
+
+def test_a_name_outside_the_prelude_is_still_a_finding():
+    # std::fmt::Formatter is not in the prelude; importing it is legal, so
+    # the qualified spelling is a finding like any other.
+    assert repeated_deep_paths("fn a() -> std::fmt::Formatter { todo!() }\n") == {
+        "std::fmt::Formatter": 1
+    }
+
+
 def test_a_four_segment_deep_path_is_caught_even_once():
     assert repeated_deep_paths(DEEP_FOUR_ONCE) == {
         "houyicoder_protocol::frontend::permission::PermissionMode": 1

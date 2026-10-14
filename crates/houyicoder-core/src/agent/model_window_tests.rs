@@ -320,7 +320,7 @@ fn test_normalize_growing_lowercase_suffix() {
 }
 
 #[test]
-fn test_normalize_shrinking_lowercase_suffix() {
+fn test_normalize_shrinks_lowercase_suffix() {
     // The kelvin sign shrinks by two bytes when lowered; a suffix offset
     // taken back on the id would cut inside the char.
     assert_eq!(normalize_model_for_api("\u{212a}[1m]"), "\u{212a}");
