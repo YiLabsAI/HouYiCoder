@@ -15,6 +15,10 @@
 //! default, or fully off — until a hostname-filtering proxy lands as the
 //! next stage of this work.
 
+use std::collections::BTreeMap;
+use std::fs::read_to_string;
+use std::path::Path;
+
 /// How wide the network fence is opened.
 ///
 /// Deliberately binary. A middle tier that allows egress by port number is
@@ -86,7 +90,7 @@ pub struct SandboxNetworkConfig {
     /// the allowlist is protecting them. The same capture catches a misspelled
     /// key, which would otherwise also fail silently.
     #[serde(flatten)]
-    pub unrecognized: std::collections::BTreeMap<String, serde_json::Value>,
+    pub unrecognized: BTreeMap<String, serde_json::Value>,
 }
 
 /// Keys that name a real planned capability which this version cannot enforce,
@@ -141,8 +145,8 @@ pub fn load_sandbox_network() -> SandboxNetworkConfig {
 }
 
 /// Pure loader against an explicit path; testable without env mutation.
-pub fn load_sandbox_network_from(path: &std::path::Path) -> SandboxNetworkConfig {
-    let Ok(text) = std::fs::read_to_string(path) else {
+pub fn load_sandbox_network_from(path: &Path) -> SandboxNetworkConfig {
+    let Ok(text) = read_to_string(path) else {
         return SandboxNetworkConfig::default();
     };
     serde_json::from_str::<SettingsNetworkView>(&text)
@@ -166,5 +170,4 @@ struct SandboxSectionView {
 }
 
 #[cfg(test)]
-#[path = "sandbox_network_tests.rs"]
-mod sandbox_network_tests;
+mod tests;

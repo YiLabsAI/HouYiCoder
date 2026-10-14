@@ -12,9 +12,10 @@ use houyicoder_context::{
 
 use super::log_index::SessionWriteState;
 use crate::local_file::LocalFileBackend;
+use std::env::temp_dir;
 
 fn temp_root() -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("houyicoder_log_index_test_{}", SessionId::new()));
+    let dir = temp_dir().join(format!("houyicoder_log_index_test_{}", SessionId::new()));
     fs::create_dir_all(&dir).expect("create the temp root");
     dir
 }

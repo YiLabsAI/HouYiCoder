@@ -37,6 +37,10 @@ use houyicoder_context::{
 use sha2::{Digest, Sha256};
 
 mod trajectory;
+use houyicoder_api::session::SessionLog;
+use std::path::Path;
+use std::path::PathBuf;
+use tokio::sync::Mutex as AsyncMutex;
 use tokio::sync::Notify;
 use trajectory::TrajectoryMirrors;
 
@@ -53,7 +57,7 @@ pub struct SessionStore {
     /// so concurrent same-session appends don't fork the chain. v0: a single
     /// lock serializes all sessions; a real impl uses per-session locks.
     /// tokio::sync::Mutex so the guard is Send across the backend awaits.
-    append_lock: tokio::sync::Mutex<()>,
+    append_lock: AsyncMutex<()>,
     /// Per-session delta-persistence counter (the interrupted-turn rewind
     /// pattern).
     persisted: Mutex<HashMap<SessionId, u32>>,
@@ -118,7 +122,7 @@ impl SessionStore {
         Self {
             backend,
             last_hashes: Mutex::new(HashMap::new()),
-            append_lock: tokio::sync::Mutex::new(()),
+            append_lock: AsyncMutex::new(()),
             persisted: Mutex::new(HashMap::new()),
             mirrors: TrajectoryMirrors::default(),
             append_notify: None,
@@ -603,7 +607,7 @@ impl SessionStore {
 /// The port impl: SessionStore satisfies the engine-facing SessionLog trait by
 /// delegating to its inherent methods. Boxed futures re-pin the async bodies so
 /// the trait stays object-safe (Arc<dyn SessionLog>).
-impl houyicoder_api::session::SessionLog for SessionStore {
+impl SessionLog for SessionStore {
     fn append(&self, event: SessionLogEntry) -> PFut<'_, Result<EventId, ContextError>> {
         Box::pin(Self::append(self, event))
     }
@@ -652,13 +656,10 @@ impl houyicoder_api::session::SessionLog for SessionStore {
     fn backend(&self) -> &dyn ContextBackend {
         Self::backend(self)
     }
-    fn session_log_root(&self) -> Option<std::path::PathBuf> {
-        self.backend
-            .session_log_root()
-            .map(std::path::Path::to_path_buf)
+    fn session_log_root(&self) -> Option<PathBuf> {
+        self.backend.session_log_root().map(Path::to_path_buf)
     }
 }
 
 #[cfg(test)]
-#[path = "session_tests.rs"]
 mod tests;

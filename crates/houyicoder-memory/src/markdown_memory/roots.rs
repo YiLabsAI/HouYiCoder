@@ -8,6 +8,7 @@
 use std::path::Path;
 
 use houyicoder_context::MemoryScope;
+use std::path::PathBuf;
 
 impl super::MarkdownMemoryProvider {
     /// Resolve a storage root by scope. User -> roots[0], Project -> roots[1]
@@ -20,12 +21,12 @@ impl super::MarkdownMemoryProvider {
             MemoryScope::User => self
                 .roots
                 .first()
-                .map(std::path::PathBuf::as_path)
+                .map(PathBuf::as_path)
                 .unwrap_or(self.write_root()),
             MemoryScope::Project => self
                 .roots
                 .get(1)
-                .map(std::path::PathBuf::as_path)
+                .map(PathBuf::as_path)
                 .unwrap_or(self.write_root()),
             MemoryScope::Auto => self.write_root(),
         }

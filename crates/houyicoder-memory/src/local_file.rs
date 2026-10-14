@@ -37,6 +37,9 @@ use houyicoder_context::{
 
 mod blocks;
 mod log_index;
+#[cfg(unix)]
+use fs::DirBuilder;
+use fs::File;
 use log_index::SessionWriteState;
 
 #[cfg(test)]
@@ -106,7 +109,7 @@ impl LocalFileBackend {
     fn ensure_dir(path: &Path) -> Result<(), ContextError> {
         #[cfg(unix)]
         {
-            fs::DirBuilder::new()
+            DirBuilder::new()
                 .recursive(true)
                 .mode(0o700)
                 .create(path)
@@ -226,7 +229,7 @@ impl LocalFileBackend {
         drop(f);
         fs::rename(&tmp, &path).map_err(|_| ContextError::Io)?;
         if let Some(dir) = path.parent()
-            && let Ok(dir_file) = fs::File::open(dir)
+            && let Ok(dir_file) = File::open(dir)
         {
             drop(dir_file.sync_all());
         }
@@ -276,7 +279,7 @@ impl LocalFileBackend {
 /// line's head, the byte at its newest boundary whether the window's last
 /// stretch is a line the log terminates. A read that fails leaves the caller
 /// without the fact, which costs it the segment rather than the whole batch.
-fn byte_ends_line(f: &mut fs::File, at: u64) -> bool {
+fn byte_ends_line(f: &mut File, at: u64) -> bool {
     let mut one = [0u8; 1];
     f.seek(SeekFrom::Start(at)).is_ok() && f.read_exact(&mut one).is_ok() && one[0] == b'\n'
 }
@@ -417,7 +420,7 @@ impl ContextBackend for LocalFileBackend {
         // view. NOT the strict replay path (that errors on a bad line) --
         // two paths, not one shared helper.
         let log = self.log_path(session);
-        let Ok(f) = fs::File::open(&log) else {
+        let Ok(f) = File::open(&log) else {
             return LenientRead::default();
         };
         let reader = BufReader::new(f);
@@ -442,7 +445,7 @@ impl ContextBackend for LocalFileBackend {
         // split is on b'\n' (a single-byte ASCII), never inside a multi-byte
         // sequence.
         let log = self.log_path(session);
-        let Ok(f) = fs::File::open(&log) else {
+        let Ok(f) = File::open(&log) else {
             return LogRangeRead::default();
         };
         let mut f = f;
@@ -538,7 +541,7 @@ impl ContextBackend for LocalFileBackend {
         // segments at its ends are lines the log shows whole. The bytes stay
         // raw, so a multi-byte UTF-8 sequence never meets a split inside it.
         let log = self.log_path(session);
-        let Ok(mut f) = fs::File::open(&log) else {
+        let Ok(mut f) = File::open(&log) else {
             return ReverseRead::default();
         };
         let size = f.metadata().map(|m| m.len()).unwrap_or(0);

@@ -8,20 +8,23 @@
 //! rather than being folded into one.
 
 use super::*;
+use std::env::temp_dir;
+use std::fs::create_dir_all;
+use std::fs::write;
+use std::path::Path;
+use std::path::PathBuf;
+use std::process::id;
+use std::thread::current;
 
-fn write_settings(dir: &std::path::Path, body: &str) -> std::path::PathBuf {
+fn write_settings(dir: &Path, body: &str) -> PathBuf {
     let path = dir.join("settings.json");
-    std::fs::write(&path, body).expect("write settings fixture");
+    write(&path, body).expect("write settings fixture");
     path
 }
 
-fn tempdir() -> std::path::PathBuf {
-    let base = std::env::temp_dir().join(format!(
-        "hc-net-cfg-{}-{:?}",
-        std::process::id(),
-        std::thread::current().id()
-    ));
-    std::fs::create_dir_all(&base).expect("create fixture dir");
+fn tempdir() -> PathBuf {
+    let base = temp_dir().join(format!("hc-net-cfg-{}-{:?}", id(), current().id()));
+    create_dir_all(&base).expect("create fixture dir");
     base
 }
 

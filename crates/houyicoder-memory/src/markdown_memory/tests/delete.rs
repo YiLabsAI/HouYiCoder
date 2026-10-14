@@ -4,19 +4,21 @@
 //! file stays under the file-size gate. Like the scope_tests split: each
 //! split file carries its own temp_root + entry helpers.
 
-use super::*;
+use super::super::*;
+use houyicoder_context::MemoryScope;
 use houyicoder_context::MemorySource;
+use std::env::temp_dir;
+use std::fs::create_dir_all;
+use std::fs::remove_dir_all;
 use std::path::PathBuf;
+use std::process::id;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 fn temp_root() -> PathBuf {
-    use std::sync::atomic::{AtomicU64, Ordering};
     static SEQ: AtomicU64 = AtomicU64::new(0);
     let seq = SEQ.fetch_add(1, Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!(
-        "markdown_memory_delete_test_{seq}_{}",
-        std::process::id(),
-    ));
-    std::fs::create_dir_all(&dir).expect("create temp root");
+    let dir = temp_dir().join(format!("markdown_memory_delete_test_{seq}_{}", id(),));
+    create_dir_all(&dir).expect("create temp root");
     dir
 }
 
@@ -74,7 +76,7 @@ fn test_delete_removes_topic_index() {
         ),
         "traversal key rejected before any fs op"
     );
-    std::fs::remove_dir_all(&root).ok();
+    remove_dir_all(&root).ok();
 }
 
 /// delete_memory_in_scope routes the delete to the matching root: forgetting
@@ -83,7 +85,6 @@ fn test_delete_removes_topic_index() {
 /// auto fallback that would mask the missing explicit original).
 #[test]
 fn test_delete_routes_by_scope() {
-    use houyicoder_context::MemoryScope;
     let user_dir = temp_root();
     let project_dir = temp_root();
     let auto_dir = temp_root();
@@ -119,7 +120,7 @@ fn test_delete_routes_by_scope() {
         "auto-scope delete of a project-only key must NotFound, not silently no-op"
     );
     for d in [user_dir, project_dir, auto_dir] {
-        std::fs::remove_dir_all(&d).ok();
+        remove_dir_all(&d).ok();
     }
 }
 
@@ -142,5 +143,5 @@ fn test_delete_prunes_stats_sidecar() {
         !p.read_recall_stats().iter().any(|s| s.key == "doomed"),
         "stats entry pruned on delete (no monotonic growth)"
     );
-    std::fs::remove_dir_all(&root).ok();
+    remove_dir_all(&root).ok();
 }

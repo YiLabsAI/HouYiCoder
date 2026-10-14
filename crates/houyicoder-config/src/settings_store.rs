@@ -1,6 +1,6 @@
 //! Merge-preserving, atomic, CAS-guarded settings writes.
 //!
-//! Reads the settings file as a serde_json::Value (preserving all unknown
+//! Reads the settings file as a Value (preserving all unknown
 //! keys), runs a caller-supplied mutator to edit only the target keys, and
 //! writes back via a pid- and timestamp-suffixed temp file + rename.
 //! Concurrent writers are serialised by an exclusive file lock on a
@@ -9,8 +9,37 @@
 //! a writer that does not take the lock (e.g. a user hand-editing the
 //! file).
 
+use serde_json::Map;
+use serde_json::Value;
+use std::collections::hash_map::DefaultHasher;
+#[cfg(test)]
+use std::env::temp_dir;
 use std::error::Error;
 use std::fmt;
+use std::fs::File;
+use std::fs::OpenOptions;
+use std::fs::create_dir_all;
+use std::fs::read_to_string;
+#[cfg(test)]
+use std::fs::remove_dir_all;
+use std::fs::remove_file;
+use std::fs::rename;
+#[cfg(test)]
+use std::fs::write;
+use std::hash::{Hash, Hasher};
+use std::io::ErrorKind;
+use std::io::Write;
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
+use std::path::Path;
+use std::process::id;
+#[cfg(test)]
+use std::sync::atomic::AtomicBool;
+#[cfg(test)]
+use std::sync::atomic::Ordering;
+use std::thread::current;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 /// Error from a merge-preserving settings write. Separate from ConfigError
 /// (provider resolution) so a settings failure never masquerades as an auth
@@ -63,14 +92,14 @@ impl Error for SettingsWriteError {}
 /// change made outside update_settings (a user hand-editing the file
 /// mid-write) — the lock does not fence that out, the hash does.
 pub fn update_settings(
-    path: &std::path::Path,
-    mutator: impl Fn(&mut serde_json::Value),
+    path: &Path,
+    mutator: impl Fn(&mut Value),
     max_retries: usize,
 ) -> Result<(), SettingsWriteError> {
     let parent = path
         .parent()
         .ok_or_else(|| SettingsWriteError::Io("settings path has no parent".into()))?;
-    std::fs::create_dir_all(parent).map_err(|e| SettingsWriteError::Io(e.to_string()))?;
+    create_dir_all(parent).map_err(|e| SettingsWriteError::Io(e.to_string()))?;
     let lock_path = parent.join(format!(
         "{}.lock",
         path.file_name()
@@ -83,48 +112,44 @@ pub fn update_settings(
         path.file_name()
             .and_then(|s| s.to_str())
             .unwrap_or("settings"),
-        std::process::id(),
-        std::thread::current().id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+        id(),
+        current().id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0),
     ));
     for _ in 0..=max_retries {
-        let mut value = match std::fs::read_to_string(path) {
-            Ok(text) => serde_json::from_str::<serde_json::Value>(&text)
+        let mut value = match read_to_string(path) {
+            Ok(text) => serde_json::from_str::<Value>(&text)
                 .map_err(|e| SettingsWriteError::CorruptJson(e.to_string()))?,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                serde_json::Value::Object(serde_json::Map::new())
-            }
+            Err(e) if e.kind() == ErrorKind::NotFound => Value::Object(Map::new()),
             Err(e) => return Err(SettingsWriteError::Io(e.to_string())),
         };
-        let token = content_token(&std::fs::read_to_string(path).unwrap_or_default());
+        let token = content_token(&read_to_string(path).unwrap_or_default());
         mutator(&mut value);
         let json = serde_json::to_string_pretty(&value)
             .map_err(|e| SettingsWriteError::Io(e.to_string()))?;
         {
-            use std::io::Write;
-            let mut opts = std::fs::OpenOptions::new();
+            let mut opts = OpenOptions::new();
             opts.write(true).create(true).truncate(true);
             #[cfg(unix)]
             {
-                use std::os::unix::fs::OpenOptionsExt;
                 opts.mode(0o600);
             }
             let mut f = match opts.open(&temp) {
                 Ok(f) => f,
                 Err(_) => {
-                    drop(std::fs::remove_file(&temp));
+                    drop(remove_file(&temp));
                     return Err(SettingsWriteError::Io("failed to open temp file".into()));
                 }
             };
             if f.write_all(json.as_bytes()).is_err() || f.sync_all().is_err() {
-                drop(std::fs::remove_file(&temp));
+                drop(remove_file(&temp));
                 return Err(SettingsWriteError::Io("failed to write temp file".into()));
             }
         }
-        let current_token = content_token(&std::fs::read_to_string(path).unwrap_or_default());
+        let current_token = content_token(&read_to_string(path).unwrap_or_default());
         if current_token == token {
             // Under the lock no in-process caller races us, so the token
             // + verify guard only against an OUT-OF-BAND change (a hand-edit
@@ -134,21 +159,19 @@ pub fn update_settings(
             // overwritten — that caller already returned Ok with no chance
             // to retry — which is exactly why inter-caller exclusion lives
             // in the lock, not in this CAS loop.
-            if std::fs::rename(&temp, path).is_err() {
-                drop(std::fs::remove_file(&temp));
+            if rename(&temp, path).is_err() {
+                drop(remove_file(&temp));
                 return Err(SettingsWriteError::Io("failed to rename temp".into()));
             }
             // Best-effort fsync of the parent directory so the rename
             // survives a crash.
-            if let Ok(dir) = std::fs::File::open(parent) {
+            if let Ok(dir) = File::open(parent) {
                 drop(dir.sync_all());
             }
             // Verify: did we win the race? If another thread renamed after
             // us, its content (without our mutation) would be on disk. We
             // compare the file content to what we wrote.
-            let verify = std::fs::read_to_string(path)
-                .map(|c| c == json)
-                .unwrap_or(false);
+            let verify = read_to_string(path).map(|c| c == json).unwrap_or(false);
             if verify {
                 return Ok(());
             }
@@ -156,7 +179,7 @@ pub fn update_settings(
             continue;
         }
         // Another writer won the race; retry against the latest content.
-        drop(std::fs::remove_file(&temp));
+        drop(remove_file(&temp));
     }
     Err(SettingsWriteError::CasRetriesExhausted)
 }
@@ -167,16 +190,13 @@ pub fn update_settings(
 /// — not cryptographic, only a collision-free token for the CAS loop within
 /// a process; the same bytes always hash to the same value.
 fn content_token(text: &str) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let mut hasher = DefaultHasher::new();
     text.hash(&mut hasher);
     hasher.finish()
 }
 
-fn acquire_settings_lock(
-    lock_path: &std::path::Path,
-) -> Result<SettingsLockGuard, SettingsWriteError> {
-    // std::fs::File::lock is an exclusive file lock: flock on unix,
+fn acquire_settings_lock(lock_path: &Path) -> Result<SettingsLockGuard, SettingsWriteError> {
+    // File::lock is an exclusive file lock: flock on unix,
     // LockFileEx on windows — same primitive the previous unix-only flock
     // used, now covering both. Opened .write(true) (windows refuses to
     // lock an append-only handle) and .truncate(false) explicitly: the
@@ -184,7 +204,7 @@ fn acquire_settings_lock(
     // windows can fail while another handle holds the exclusive lock. The
     // guard holds the File; dropping it closes the handle and releases
     // the lock.
-    let file = std::fs::OpenOptions::new()
+    let file = OpenOptions::new()
         .create(true)
         .write(true)
         .truncate(false)
@@ -196,7 +216,7 @@ fn acquire_settings_lock(
 }
 
 struct SettingsLockGuard {
-    _file: std::fs::File,
+    _file: File,
 }
 
 #[cfg(test)]
@@ -209,31 +229,29 @@ mod tests {
     /// retry path.
     #[test]
     fn test_cas_retries_toctou_race() {
-        let dir =
-            std::env::temp_dir().join(format!("cas-toctou-{}-{}", std::process::id(), line!()));
-        drop(std::fs::remove_dir_all(&dir));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = temp_dir().join(format!("cas-toctou-{}-{}", id(), line!()));
+        drop(remove_dir_all(&dir));
+        create_dir_all(&dir).unwrap();
         let path = dir.join("settings.json");
-        std::fs::write(&path, r#"{"v":0}"#).unwrap();
-        let first = std::sync::atomic::AtomicBool::new(true);
+        write(&path, r#"{"v":0}"#).unwrap();
+        let first = AtomicBool::new(true);
         let path_for_mutator = path.clone();
         let result = update_settings(
             &path,
             |v| {
-                if first.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                if first.swap(false, Ordering::SeqCst) {
                     // Simulate a concurrent writer: modify the file so our CAS
                     // token is stale, forcing the verify to see different
                     // content and retry.
-                    std::fs::write(&path_for_mutator, r#"{"v":99}"#).unwrap();
+                    write(&path_for_mutator, r#"{"v":99}"#).unwrap();
                 }
                 v["v"] = 1.into();
             },
             5,
         );
         assert!(result.is_ok(), "CAS retry should succeed: {result:?}");
-        let after: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let after: Value = serde_json::from_str(&read_to_string(&path).unwrap()).unwrap();
         assert_eq!(after["v"], 1, "our mutation landed after retry");
-        drop(std::fs::remove_dir_all(&dir));
+        drop(remove_dir_all(&dir));
     }
 }

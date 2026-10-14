@@ -4,8 +4,18 @@
 //!   MED-1 closure (a project-scope refresh no longer shadows the explicit
 //!   entry with a competing auto copy).
 
-use super::*;
+use super::super::*;
 use houyicoder_context::{MemoryEntry, MemoryScope, MemorySource};
+use std::collections::HashMap;
+use std::env::temp_dir;
+use std::fs::create_dir_all;
+use std::fs::read_to_string;
+use std::fs::remove_dir_all;
+use std::fs::rename;
+use std::process::id;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 /// A three-root provider rooted at a temp workspace, mirroring the
 /// composition-root layout: user / project / auto roots under a workspace
@@ -20,20 +30,18 @@ struct ThreeScopeFixture {
 
 impl ThreeScopeFixture {
     fn new() -> Self {
-        use std::sync::atomic::{AtomicU64, Ordering};
         static SEQ: AtomicU64 = AtomicU64::new(0);
         let seq = SEQ.fetch_add(1, Ordering::Relaxed);
-        let workspace =
-            std::env::temp_dir().join(format!("scope-flow-{seq}-{}", std::process::id(),));
+        let workspace = temp_dir().join(format!("scope-flow-{seq}-{}", id(),));
         // Layout matches the composition root: the project memory root sits
         // two directories below the workspace root, so the project memory
         // file at <workspace>/agent.md resolves via parent().parent().
         let user_root = workspace.join("user-memory");
         let project_root = workspace.join(".config").join("memory");
         let auto_root = workspace.join("auto-memory");
-        std::fs::create_dir_all(&user_root).expect("mkdir user");
-        std::fs::create_dir_all(&project_root).expect("mkdir project");
-        std::fs::create_dir_all(&auto_root).expect("mkdir auto");
+        create_dir_all(&user_root).expect("mkdir user");
+        create_dir_all(&project_root).expect("mkdir project");
+        create_dir_all(&auto_root).expect("mkdir auto");
         let provider = MarkdownMemoryProvider::new_multi(vec![
             user_root.clone(),
             project_root.clone(),
@@ -59,7 +67,7 @@ impl ThreeScopeFixture {
 
 impl Drop for ThreeScopeFixture {
     fn drop(&mut self) {
-        drop(std::fs::remove_dir_all(&self.workspace));
+        drop(remove_dir_all(&self.workspace));
     }
 }
 
@@ -136,7 +144,7 @@ fn test_promote_moves_and_merges() {
     );
     // agent.md created with the rule sentence as the first content line
     // (after the header).
-    let carrier = std::fs::read_to_string(fx.agent_md()).expect("read carrier");
+    let carrier = read_to_string(fx.agent_md()).expect("read carrier");
     assert!(
         carrier.contains("Test names use verb-object."),
         "rule sentence in carrier: {carrier}"
@@ -169,7 +177,7 @@ fn test_promote_idempotent_project_topic() {
     fx.provider
         .promote_memory("rule-idem")
         .expect("second promote (idempotent)");
-    let carrier = std::fs::read_to_string(fx.agent_md()).expect("carrier");
+    let carrier = read_to_string(fx.agent_md()).expect("carrier");
     let count = carrier
         .lines()
         .filter(|l| l.trim() == "Rule sentence here.")
@@ -189,7 +197,7 @@ fn test_demote_reverses_promote() {
     let entry = fx.entry("rule-rev", "Always-on rule.\nWhy: y.\n");
     fx.provider.add(entry).expect("seed auto");
     fx.provider.promote_memory("rule-rev").expect("promote");
-    let carrier_after_promote = std::fs::read_to_string(fx.agent_md()).expect("carrier");
+    let carrier_after_promote = read_to_string(fx.agent_md()).expect("carrier");
     assert!(carrier_after_promote.contains("Always-on rule."));
     fx.provider.demote_memory("rule-rev").expect("demote");
     // Topic moved project -> auto.
@@ -202,7 +210,7 @@ fn test_demote_reverses_promote() {
         "auto topic present"
     );
     // Carrier line stripped.
-    let carrier = std::fs::read_to_string(fx.agent_md()).expect("carrier post-demote");
+    let carrier = read_to_string(fx.agent_md()).expect("carrier post-demote");
     assert!(
         !carrier.contains("Always-on rule."),
         "rule line stripped: {carrier}"
@@ -230,14 +238,14 @@ fn test_demote_strips_when_auto() {
         .promote_memory("rule-decay")
         .expect("promote to add the carrier line");
     // Simulate a manual topic move back to auto (e.g. user moved the file).
-    std::fs::rename(
+    rename(
         fx.project_root.join("rule-decay.md"),
         fx.auto_root.join("rule-decay.md"),
     )
     .expect("manual move");
     // demote should still strip the carrier line.
     fx.provider.demote_memory("rule-decay").expect("demote");
-    let carrier = std::fs::read_to_string(fx.agent_md()).expect("carrier");
+    let carrier = read_to_string(fx.agent_md()).expect("carrier");
     assert!(
         !carrier.contains("Decayed rule."),
         "carrier line stripped even when topic already in auto: {carrier}"
@@ -280,21 +288,21 @@ fn test_demote_missing_not_found() {
 /// malicious deny reason cannot poison the sidecar.
 #[test]
 fn test_gate_violation_accumulates() {
-    let root = std::env::temp_dir().join(format!(
+    let root = temp_dir().join(format!(
         "scope-flow-gate-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+        id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0),
     ));
-    std::fs::create_dir_all(&root).expect("mkdir");
+    create_dir_all(&root).expect("mkdir");
     let p = MarkdownMemoryProvider::new(root.clone());
     p.record_gate_violation("test-naming");
     p.record_gate_violation("test-naming");
     p.record_gate_violation("test-naming");
     let stats = p.read_recall_stats();
-    let by_key: std::collections::HashMap<&str, &MemoryRecallStats> =
+    let by_key: HashMap<&str, &MemoryRecallStats> =
         stats.iter().map(|s| (s.key.as_str(), s)).collect();
     let entry = by_key["test-naming"];
     assert_eq!(entry.gate_violations, 3, "three violations accumulate to 3");
@@ -309,7 +317,7 @@ fn test_gate_violation_accumulates() {
         still.iter().all(|s| s.key != ".."),
         "no orphan row for a rejected key"
     );
-    std::fs::remove_dir_all(&root).ok();
+    remove_dir_all(&root).ok();
 }
 
 /// promote_memory when the key exists in BOTH roots: the project copy is
@@ -332,8 +340,8 @@ fn test_promote_roots_keeps_project() {
     assert!(fx.auto_root.join("rule-both.md").is_file());
     fx.provider.promote_memory("rule-both").expect("promote");
     // The project copy (the explicit source of truth) survives.
-    let project_text = std::fs::read_to_string(fx.project_root.join("rule-both.md"))
-        .expect("project copy survives");
+    let project_text =
+        read_to_string(fx.project_root.join("rule-both.md")).expect("project copy survives");
     assert!(
         project_text.contains("Project rule sentence."),
         "project content preserved (not overwritten by the auto copy): {project_text}"
@@ -344,7 +352,7 @@ fn test_promote_roots_keeps_project() {
         "auto copy dropped so it cannot shadow the project copy"
     );
     // The carrier line is the project rule (the explicit source).
-    let carrier = std::fs::read_to_string(fx.agent_md()).expect("carrier");
+    let carrier = read_to_string(fx.agent_md()).expect("carrier");
     assert!(
         carrier.contains("Project rule sentence."),
         "carrier carries the project rule: {carrier}"

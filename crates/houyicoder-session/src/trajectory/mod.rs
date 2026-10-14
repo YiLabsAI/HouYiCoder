@@ -21,6 +21,7 @@ use std::sync::Mutex;
 use houyicoder_api::session::{TrajectoryHead, TrajectoryRevision, last_user_input_id};
 use houyicoder_context::{EventId, SessionId, SessionLogEntry};
 
+use std::sync::MutexGuard;
 use summary::TrajectorySummaryState;
 
 /// One session's durable facts, mirrored in memory.
@@ -153,7 +154,7 @@ impl TrajectoryMirrors {
         self.lock().remove(&session);
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<SessionId, SessionMirror>> {
+    fn lock(&self) -> MutexGuard<'_, HashMap<SessionId, SessionMirror>> {
         self.inner.lock().expect("session mirrors mutex poisoned")
     }
 }

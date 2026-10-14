@@ -25,6 +25,7 @@ use houyicoder_context::{BlockHash, ContextError, session_class::LOG_FILE};
 use crate::sha256_hex;
 
 use crate::local_file::LocalFileBackend;
+use fs::File;
 
 impl LocalFileBackend {
     fn cas_dir(&self) -> PathBuf {
@@ -62,7 +63,7 @@ impl LocalFileBackend {
         // crash; otherwise the block's data is fsynced but its directory
         // entry is not, leaving a dangling block_ref on restart.
         if let Some(dir) = path.parent()
-            && let Ok(dir_file) = fs::File::open(dir)
+            && let Ok(dir_file) = File::open(dir)
         {
             drop(dir_file.sync_all());
         }

@@ -10,6 +10,18 @@ use houyicoder_context::{
 use std::path::Path;
 
 use super::MarkdownMemoryProvider;
+#[cfg(unix)]
+use std::fs::OpenOptions;
+use std::fs::read_to_string;
+use std::fs::rename;
+#[cfg(not(unix))]
+use std::fs::write;
+#[cfg(unix)]
+use std::io::Write;
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
+use std::path::PathBuf;
+use unicode_normalization::UnicodeNormalization;
 
 /// Fields parsed from a topic file frontmatter.
 #[derive(Debug, Clone)]
@@ -39,7 +51,7 @@ pub(super) struct StatRecord {
 pub(super) struct ScannedTopic {
     pub(super) key: String,
     pub(super) mtime: u64,
-    pub(super) path: std::path::PathBuf,
+    pub(super) path: PathBuf,
     /// Position of the root this topic was scanned from, in the provider's
     /// ordered roots vec. Mapped to a MemoryScope at list time so the wire
     /// carries the physical scope (which root the surviving newest copy lives
@@ -120,7 +132,6 @@ pub(super) fn serialize_topic_file(entry: &MemoryEntry) -> String {
 /// root or poison the line-based MEMORY.md index. Returns the normalized
 /// key so callers write, look up, and index under one canonical form.
 pub(super) fn sanitize_key(key: &str) -> Result<String, MemoryError> {
-    use unicode_normalization::UnicodeNormalization;
     let key = key.nfc().collect::<String>();
     if key.is_empty() {
         return Err(MemoryError::InvalidPath("empty key".into()));
@@ -169,9 +180,6 @@ pub(super) fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> Result<(), Memory
     ));
     #[cfg(unix)]
     {
-        use std::fs::OpenOptions;
-        use std::io::Write;
-        use std::os::unix::fs::OpenOptionsExt;
         let mut f = OpenOptions::new()
             .create(true)
             .write(true)
@@ -184,9 +192,9 @@ pub(super) fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> Result<(), Memory
     }
     #[cfg(not(unix))]
     {
-        std::fs::write(&temp, bytes).map_err(|_| MemoryError::Io)?;
+        write(&temp, bytes).map_err(|_| MemoryError::Io)?;
     }
-    std::fs::rename(&temp, path).map_err(|_| MemoryError::Io)?;
+    rename(&temp, path).map_err(|_| MemoryError::Io)?;
     Ok(())
 }
 
@@ -267,7 +275,7 @@ pub(super) fn merge_rule_into_carrier(path: &Path, rule: &str) -> Result<(), Str
     if rule.is_empty() {
         return Ok(());
     }
-    let existing = std::fs::read_to_string(path).unwrap_or_default();
+    let existing = read_to_string(path).unwrap_or_default();
     if existing.lines().any(|line| line.trim() == rule) {
         return Ok(());
     }
@@ -294,7 +302,7 @@ pub(super) fn strip_rule_from_carrier(path: &Path, rule: &str) -> Result<(), Str
     if rule.is_empty() {
         return Ok(());
     }
-    let Ok(existing) = std::fs::read_to_string(path) else {
+    let Ok(existing) = read_to_string(path) else {
         return Ok(());
     };
     let filtered: Vec<&str> = existing

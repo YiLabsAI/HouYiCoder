@@ -1,17 +1,24 @@
 //! Markdown memory ranking, atomic writes, index repair, and boundary behavior.
 
-use super::*;
+use super::super::*;
 use houyicoder_context::{MemoryOrigin, MemoryScope, MemorySource};
+use std::collections::HashMap;
+use std::env::temp_dir;
+use std::fs::create_dir_all;
+use std::fs::metadata;
+use std::fs::read_to_string;
+use std::fs::remove_dir_all;
+use std::fs::write;
 use std::fs::{File, FileTimes, OpenOptions};
+use std::process::id;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 fn temp_root() -> PathBuf {
-    use std::sync::atomic::{AtomicU64, Ordering};
     static SEQ: AtomicU64 = AtomicU64::new(0);
     let seq = SEQ.fetch_add(1, Ordering::Relaxed);
-    let dir =
-        std::env::temp_dir().join(format!("markdown_memory_test_{seq}_{}", std::process::id(),));
-    std::fs::create_dir_all(&dir).expect("create temp root");
+    let dir = temp_dir().join(format!("markdown_memory_test_{seq}_{}", id(),));
+    create_dir_all(&dir).expect("create temp root");
     dir
 }
 
@@ -43,7 +50,7 @@ fn test_rank_orders_frontmatter_hits() {
     );
     assert_eq!(out[1].key, "cat-facts");
     assert_eq!(out[1].score, 0);
-    std::fs::remove_dir_all(&root).ok();
+    remove_dir_all(&root).ok();
 }
 
 #[test]
@@ -69,7 +76,7 @@ fn test_rank_dedups_already_surfaced() {
     surfaced.clear();
     let third = p.rank_candidates("fox", &surfaced);
     assert_eq!(third.len(), 1);
-    std::fs::remove_dir_all(&root).ok();
+    remove_dir_all(&root).ok();
 }
 
 /// A key in the surfaced set passed to the rank suppresses that entry;
@@ -99,7 +106,7 @@ fn test_surfaced_param_suppresses() {
         1,
         "cleared surfaced set must re-surface the entry"
     );
-    std::fs::remove_dir_all(&root).ok();
+    remove_dir_all(&root).ok();
 }
 
 #[test]
@@ -114,7 +121,7 @@ fn test_atomic_write_lands_topic() {
     assert!(index.exists(), "index pointer must land");
     let idx = fs::read_to_string(&index).unwrap();
     assert!(idx.contains("alpha"), "index must reference the key");
-    std::fs::remove_dir_all(&root).ok();
+    remove_dir_all(&root).ok();
 }
 
 #[test]
@@ -143,20 +150,14 @@ fn test_identical_add_is_unchanged() {
         provider.add_if_changed(value).unwrap(),
         MemoryWriteOutcome::Unchanged
     );
+    assert_eq!(metadata(&topic).unwrap().modified().unwrap(), old_time);
     assert_eq!(
-        std::fs::metadata(&topic).unwrap().modified().unwrap(),
-        old_time
-    );
-    assert_eq!(
-        std::fs::metadata(&index).unwrap().modified().unwrap(),
+        metadata(&index).unwrap().modified().unwrap(),
         old_time,
         "unchanged saves must not rewrite the derived index"
     );
     assert_eq!(
-        std::fs::read_to_string(&index)
-            .unwrap()
-            .matches("stable")
-            .count(),
+        read_to_string(&index).unwrap().matches("stable").count(),
         1,
         "unchanged saves must not duplicate index pointers"
     );
@@ -186,7 +187,7 @@ fn test_add_rollback_bad() {
     assert!(!root.join("../escape.md").exists());
     // The index must not exist either (nothing landed).
     assert!(!root.join(INDEX_FILE).exists());
-    std::fs::remove_dir_all(&root).ok();
+    remove_dir_all(&root).ok();
 }
 
 #[test]
@@ -276,7 +277,7 @@ fn test_sanitize_nfc_normalizes() {
         .show_memory("café-rules")
         .expect("nfc key finds nfd-written entry");
     assert_eq!(found.key, "café-rules", "stored key is the nfc form");
-    std::fs::remove_dir_all(&root).ok();
+    remove_dir_all(&root).ok();
 }
 
 #[test]
@@ -290,7 +291,7 @@ fn test_rebuild_index_regenerates() {
     p.rebuild_index().unwrap();
     let idx = fs::read_to_string(root.join(INDEX_FILE)).unwrap();
     assert!(idx.contains("alpha"), "rebuild must restore the pointer");
-    std::fs::remove_dir_all(&root).ok();
+    remove_dir_all(&root).ok();
 }
 
 #[test]
@@ -305,7 +306,7 @@ fn test_rank_empty_query_returns() {
         p.rank_candidates("!!!", &HashSet::new()).is_empty(),
         "punctuation carries no word content"
     );
-    std::fs::remove_dir_all(&root).ok();
+    remove_dir_all(&root).ok();
 }
 
 /// A single CJK char is too short to become a keyword but is a real query;
@@ -329,7 +330,7 @@ fn test_rank_unsplittable_offers_rows() {
     );
     assert_eq!(out[0].key, "tea-order");
     assert_eq!(out[0].score, 0);
-    std::fs::remove_dir_all(&root).ok();
+    remove_dir_all(&root).ok();
 }
 
 #[test]
@@ -355,7 +356,7 @@ fn test_round_trip_preserves_fields() {
         .show_memory("round-trip")
         .expect("a ranked key reads back");
     assert_eq!(body.content, "the fox feedback here");
-    std::fs::remove_dir_all(&root).ok();
+    remove_dir_all(&root).ok();
 }
 
 /// Successive ranks with an accumulating surfaced set shrink until
@@ -383,7 +384,7 @@ fn test_surfaced_set_exhausts() {
     // Clear the set: both entries surface again.
     surfaced.clear();
     assert_eq!(p.rank_candidates("fox", &surfaced).len(), 2);
-    std::fs::remove_dir_all(&root).ok();
+    remove_dir_all(&root).ok();
 }
 
 /// The rank carries no result cap and the surfaced filter runs before
@@ -417,7 +418,7 @@ fn test_rank_fresh_after_surfaced() {
     // Third rank: all surfaced, returns empty.
     let third = p.rank_candidates("fox", &surfaced);
     assert!(third.is_empty(), "all surfaced must return empty");
-    std::fs::remove_dir_all(&root).ok();
+    remove_dir_all(&root).ok();
 }
 
 /// The index byte cap (25 KB) must cut on a UTF-8 char boundary, not a
@@ -452,7 +453,7 @@ fn test_index_cap_char_boundary() {
         index.len(),
         INDEX_BYTE_CAP
     );
-    std::fs::remove_dir_all(&root).ok();
+    remove_dir_all(&root).ok();
 }
 
 /// When the index exceeds the line cap (200 lines), it must be truncated
@@ -482,7 +483,7 @@ fn test_index_line_cap_warning() {
         index.lines().count(),
         5
     );
-    std::fs::remove_dir_all(&root).ok();
+    remove_dir_all(&root).ok();
 }
 
 /// When append_index_pointer fails after the topic file has landed, the
@@ -505,7 +506,7 @@ fn test_rollback_removes_topic() {
         !root.join("alpha.md").exists(),
         "rollback must remove the topic file"
     );
-    std::fs::remove_dir_all(&root).ok();
+    remove_dir_all(&root).ok();
 }
 
 /// The rank over a multi-root provider merges every scope: an entry seeded
@@ -547,7 +548,7 @@ fn test_rank_merges_scopes() {
     assert_eq!(scope_by_key["project-fact"], &MemoryScope::Project);
     assert_eq!(scope_by_key["auto-fact"], &MemoryScope::Auto);
     for d in [user_dir, project_dir, auto_dir] {
-        std::fs::remove_dir_all(&d).ok();
+        remove_dir_all(&d).ok();
     }
 }
 
@@ -567,7 +568,7 @@ fn test_rank_dedups_across_scopes() {
     let out = p.rank_candidates("fox", &HashSet::new());
     assert_eq!(out.len(), 1, "same key across scopes must dedup to one");
     for d in [user_dir, auto_dir] {
-        std::fs::remove_dir_all(&d).ok();
+        remove_dir_all(&d).ok();
     }
 }
 
@@ -593,7 +594,7 @@ fn test_multi_dedups_dup_roots() {
     let out = p.rank_candidates("fox", &HashSet::new());
     assert_eq!(out.len(), 1, "deduped roots still rank the one entry");
     for d in [user_dir, auto_dir] {
-        std::fs::remove_dir_all(&d).ok();
+        remove_dir_all(&d).ok();
     }
 }
 
@@ -624,7 +625,7 @@ fn test_write_lands_in_auto() {
         "write must not land in the project scope"
     );
     for d in [user_dir, project_dir, auto_dir] {
-        std::fs::remove_dir_all(&d).ok();
+        remove_dir_all(&d).ok();
     }
 }
 
@@ -668,7 +669,7 @@ fn test_rebuild_heals_external_edit() {
         out.iter().any(|e| e.key == "bravo"),
         "the rank must surface the healed entry"
     );
-    std::fs::remove_dir_all(&root).ok();
+    remove_dir_all(&root).ok();
 }
 
 /// list_memories returns the frontmatter-only summary for every topic — key,
@@ -694,7 +695,7 @@ fn test_list_memories_frontmatter() {
     for s in &list {
         assert!(!s.description.is_empty(), "description hook present");
     }
-    std::fs::remove_dir_all(&root).ok();
+    remove_dir_all(&root).ok();
 }
 
 /// A corrupt topic file (unparseable frontmatter) is included in
@@ -707,7 +708,7 @@ fn test_list_includes_corrupt_file() {
     p.add(entry("good-key", "a valid fact", MemorySource::Project))
         .unwrap();
     // Write a corrupt topic file (no frontmatter, garbage content).
-    std::fs::write(root.join("broken.md"), "this is not valid frontmatter\n").unwrap();
+    write(root.join("broken.md"), "this is not valid frontmatter\n").unwrap();
     let list = p.list_memories();
     assert_eq!(list.len(), 2, "corrupt file included in list");
     let broken = list
@@ -719,7 +720,7 @@ fn test_list_includes_corrupt_file() {
         "corrupt file marked with sentinel: {}",
         broken.description
     );
-    std::fs::remove_dir_all(&root).ok();
+    remove_dir_all(&root).ok();
 }
 
 /// show_memory returns the full body (key, content, source) for an existing
@@ -740,7 +741,7 @@ fn test_show_memory_body() {
     assert_eq!(entry.source, MemorySource::Project);
     assert!(p.show_memory("no-such-key").is_none(), "absent key → None");
     assert!(p.show_memory("../escape").is_none(), "traversal key → None");
-    std::fs::remove_dir_all(&root).ok();
+    remove_dir_all(&root).ok();
 }
 
 /// memory_root returns the write root path (the auto scope = last root), so
@@ -755,7 +756,7 @@ fn test_memory_root_is_write() {
         "memory_root is the write root: {got}"
     );
     assert!(!got.is_empty(), "non-empty for a filesystem provider");
-    std::fs::remove_dir_all(&root).ok();
+    remove_dir_all(&root).ok();
 }
 
 /// record_recall_hits increments recall_hits + last_access_ts and persists
@@ -768,7 +769,7 @@ fn test_stats_round_trip_accumulates() {
     p.record_recall_hits(&["alpha".to_string(), "bravo".to_string()]);
     p.record_recall_hits(&["alpha".to_string()]);
     let stats = p.read_recall_stats();
-    let by_key: std::collections::HashMap<&str, &MemoryRecallStats> =
+    let by_key: HashMap<&str, &MemoryRecallStats> =
         stats.iter().map(|s| (s.key.as_str(), s)).collect();
     let alpha = by_key["alpha"];
     assert_eq!(alpha.recall_hits, 2, "alpha hit twice → 2");
@@ -778,7 +779,7 @@ fn test_stats_round_trip_accumulates() {
         alpha.gate_violations, 0,
         "gate_violations zero until the PreToolUse gate feeds it"
     );
-    std::fs::remove_dir_all(&root).ok();
+    remove_dir_all(&root).ok();
 }
 
 /// The stats sidecar is advisory: a missing sidecar yields empty stats
@@ -792,12 +793,12 @@ fn test_stats_missing_corrupt() {
         p.read_recall_stats().is_empty(),
         "missing sidecar → empty stats (cold restart)"
     );
-    std::fs::write(root.join(".stats.json"), "not valid json {{{").unwrap();
+    write(root.join(".stats.json"), "not valid json {{{").unwrap();
     assert!(
         p.read_recall_stats().is_empty(),
         "corrupt sidecar → empty stats, no panic"
     );
-    std::fs::remove_dir_all(&root).ok();
+    remove_dir_all(&root).ok();
 }
 
 /// The sidecar persists across provider instances (cross-process
@@ -815,5 +816,5 @@ fn test_stats_persist_across_instances() {
             .any(|s| s.key == "persisted" && s.recall_hits == 1),
         "a fresh provider instance reads the persisted sidecar"
     );
-    std::fs::remove_dir_all(&root).ok();
+    remove_dir_all(&root).ok();
 }

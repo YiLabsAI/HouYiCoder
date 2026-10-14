@@ -8,8 +8,12 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::*;
 use houyicoder_api::session::SessionLog;
+use houyicoder_api::session::SubagentUsage;
 use houyicoder_context::{EventId, SessionEvent};
 use houyicoder_memory::{InMemoryBackend, LocalFileBackend};
+use std::sync::Arc;
+use tokio::sync::Notify;
+use tokio::time::timeout;
 
 fn child_return(input: u64, output: u64, cache_read: u64) -> SessionEvent {
     SessionEvent::SubagentReturn {
@@ -80,7 +84,7 @@ async fn test_append_sets_hash_chain() {
 
 #[tokio::test]
 async fn test_wakeup_retained() {
-    let signal = Arc::new(tokio::sync::Notify::new());
+    let signal = Arc::new(Notify::new());
     let store =
         SessionStore::new(Box::new(InMemoryBackend::new())).with_append_notify(signal.clone());
     let session = SessionId::new();
@@ -94,7 +98,7 @@ async fn test_wakeup_retained() {
         ))
         .await
         .unwrap();
-    tokio::time::timeout(Duration::from_millis(20), signal.notified())
+    timeout(Duration::from_millis(20), signal.notified())
         .await
         .expect("an append remains observable when the receiver polls after it");
 }
@@ -165,7 +169,7 @@ async fn test_subagent_usage_tracks_view() {
     store.reset_trajectory(session);
     assert_eq!(
         store.trajectory_head(session).summary.usage.subagent,
-        houyicoder_api::session::SubagentUsage::default(),
+        SubagentUsage::default(),
         "clear resets the summary with the view"
     );
 }
@@ -320,7 +324,7 @@ async fn test_head_model_interned() {
         .expect("one model");
     assert_eq!(&*first, "qwen");
     assert!(
-        std::sync::Arc::ptr_eq(&first, &second),
+        Arc::ptr_eq(&first, &second),
         "a read shares the interned id instead of rebuilding it"
     );
 }
@@ -330,12 +334,8 @@ async fn test_head_model_interned() {
 /// would restore the turns and the spend the session no longer counts.
 #[tokio::test]
 async fn test_restore_respects_last_clear() {
-    let root = std::env::temp_dir().join(format!(
-        "usage-clear-{}-{}",
-        std::process::id(),
-        EventId::new()
-    ));
-    std::fs::create_dir_all(&root).expect("mkdir root");
+    let root = temp_dir().join(format!("usage-clear-{}-{}", id(), EventId::new()));
+    create_dir_all(&root).expect("mkdir root");
     let session = SessionId::new();
     {
         let store = SessionStore::new(Box::new(LocalFileBackend::new(root.clone())));

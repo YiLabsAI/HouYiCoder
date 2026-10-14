@@ -16,6 +16,17 @@
 //! one test cache file shadow another).
 
 use serde::{Deserialize, Serialize};
+#[cfg(test)]
+use std::env::temp_dir;
+use std::fs::read_to_string;
+#[cfg(test)]
+use std::fs::remove_file;
+#[cfg(test)]
+use std::fs::write;
+use std::path::Path;
+use std::path::PathBuf;
+#[cfg(test)]
+use std::process::id;
 
 /// The on-disk cache: the ids the provider said it serves, plus the fetch
 /// timestamp. Written 0o600 by the provider; read here.
@@ -26,7 +37,7 @@ pub struct ServedModels {
 }
 
 /// The cache file path: the config-home cache dir, file served-models.json.
-pub fn cache_path() -> std::path::PathBuf {
+pub fn cache_path() -> PathBuf {
     crate::config_home()
         .join("cache")
         .join("served-models.json")
@@ -54,8 +65,8 @@ pub fn cached_ids() -> Vec<String> {
 /// Read the cache at an explicit path. Returns the ids or empty on any
 /// error (missing file, corrupt JSON). Public so the provider crate (which
 /// writes the cache) and tests share one reader.
-pub fn load_ids_at(path: &std::path::Path) -> Vec<String> {
-    match std::fs::read_to_string(path) {
+pub fn load_ids_at(path: &Path) -> Vec<String> {
+    match read_to_string(path) {
         Ok(raw) => serde_json::from_str::<ServedModels>(&raw)
             .map(|p| p.ids)
             .unwrap_or_default(),
@@ -116,29 +127,29 @@ mod tests {
 
     #[test]
     fn test_missing_file_is_empty() {
-        let ids = load_ids_at(std::path::Path::new("/nonexistent/v1-models-test.json"));
+        let ids = load_ids_at(Path::new("/nonexistent/v1-models-test.json"));
         assert!(ids.is_empty());
     }
 
     #[test]
     fn test_corrupt_is_empty() {
-        let path = std::env::temp_dir().join(format!("v1-corrupt-{}.json", std::process::id()));
-        std::fs::write(&path, "not json").unwrap();
+        let path = temp_dir().join(format!("v1-corrupt-{}.json", id()));
+        write(&path, "not json").unwrap();
         assert!(load_ids_at(&path).is_empty());
-        drop(std::fs::remove_file(&path));
+        drop(remove_file(&path));
     }
 
     #[test]
     fn test_reads_cached_ids() {
-        let path = std::env::temp_dir().join(format!("v1-read-{}.json", std::process::id()));
-        std::fs::write(
+        let path = temp_dir().join(format!("v1-read-{}.json", id()));
+        write(
             &path,
             r#"{"ids":["qwen3.7-max","glm-5.2"],"timestamp":1700000000}"#,
         )
         .unwrap();
         let ids = load_ids_at(&path);
         assert_eq!(ids, vec!["qwen3.7-max", "glm-5.2"]);
-        drop(std::fs::remove_file(&path));
+        drop(remove_file(&path));
     }
 
     #[test]

@@ -5,6 +5,7 @@
 //! re-exports so the public surface is unchanged.
 
 use crate::ENV_HOUYICODER_HOOKS;
+use std::env::var;
 
 /// One external command hook. The composition root spawns the program per
 /// fire, pipes the hook context as JSON to stdin, and parses the verdict JSON
@@ -70,7 +71,7 @@ pub struct HookSpec {
 /// verdict source). A malformed value is also an empty Vec with a stderr
 /// warning — the engine must not brick on a config typo.
 pub fn resolve_hooks() -> Vec<HookSpec> {
-    let raw = std::env::var(ENV_HOUYICODER_HOOKS).ok();
+    let raw = var(ENV_HOUYICODER_HOOKS).ok();
     match parse_hooks(raw.as_deref()) {
         Ok(list) => list,
         Err(msg) => {

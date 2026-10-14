@@ -7,6 +7,21 @@ use houyicoder_protocol::llm::EffortLevel;
 
 use crate::ConfigWarning;
 use crate::json_type_name;
+use crate::served_models::cached_ids;
+use crate::served_models::exists_in;
+use serde::de::DeserializeOwned;
+use serde_json::Value;
+use std::collections::HashSet;
+#[cfg(test)]
+use std::env::temp_dir;
+use std::fs::read_to_string;
+#[cfg(test)]
+use std::fs::remove_file;
+#[cfg(test)]
+use std::fs::write;
+use std::path::Path;
+#[cfg(test)]
+use std::process::id;
 
 /// The shipped default catalog shown in the /model pane when settings.json has
 /// no catalog. A provider-agnostic client cannot auto-discover which models the
@@ -94,12 +109,12 @@ fn default_section_with_catalog() -> ModelSection {
 /// especially the catalog — stays usable. Per-field recovery, like the
 /// toggles loader already uses: a single bad value must not silently reset
 /// every other setting.
-pub fn load_model_section_from(path: &std::path::Path) -> (ModelSection, Vec<ConfigWarning>) {
-    let text = match std::fs::read_to_string(path) {
+pub fn load_model_section_from(path: &Path) -> (ModelSection, Vec<ConfigWarning>) {
+    let text = match read_to_string(path) {
         Ok(t) => t,
         Err(_) => return (default_section_with_catalog(), Vec::new()),
     };
-    let value: serde_json::Value = match serde_json::from_str(&text) {
+    let value: Value = match serde_json::from_str(&text) {
         Ok(v) => v,
         Err(_) => {
             return (
@@ -112,7 +127,7 @@ pub fn load_model_section_from(path: &std::path::Path) -> (ModelSection, Vec<Con
         }
     };
     let model_value = match value.get("model") {
-        None | Some(serde_json::Value::Null) => {
+        None | Some(Value::Null) => {
             return (default_section_with_catalog(), Vec::new());
         }
         Some(v) if !v.is_object() => {
@@ -160,10 +175,7 @@ pub fn load_model_section_from(path: &std::path::Path) -> (ModelSection, Vec<Con
             })
             .collect();
     }
-    warnings.extend(validate_catalog(
-        &mut section,
-        &crate::served_models::cached_ids(),
-    ));
+    warnings.extend(validate_catalog(&mut section, &cached_ids()));
     (section, warnings)
 }
 
@@ -171,14 +183,14 @@ pub fn load_model_section_from(path: &std::path::Path) -> (ModelSection, Vec<Con
 /// null yields None (the field's default); a type error yields None plus a
 /// warning naming the field, so the caller keeps loading the sibling fields.
 /// Per-field recovery is the point: one bad value must not reset the section.
-fn extract_field<T: serde::de::DeserializeOwned>(
-    parent: &serde_json::Value,
+fn extract_field<T: DeserializeOwned>(
+    parent: &Value,
     key: &str,
     label: &str,
     warnings: &mut Vec<ConfigWarning>,
 ) -> Option<T> {
     match parent.get(key) {
-        None | Some(serde_json::Value::Null) => None,
+        None | Some(Value::Null) => None,
         Some(v) => match serde_json::from_value::<T>(v.clone()) {
             Ok(t) => Some(t),
             Err(e) => {
@@ -196,13 +208,10 @@ fn extract_field<T: serde::de::DeserializeOwned>(
 /// (not an array) yields an empty catalog plus a warning. Each entry is
 /// parsed field by field, so a bad effort on one entry nulls that entry's
 /// effort without dropping the entry or the rest of the catalog.
-fn extract_catalog(
-    parent: &serde_json::Value,
-    warnings: &mut Vec<ConfigWarning>,
-) -> Vec<ModelEntry> {
+fn extract_catalog(parent: &Value, warnings: &mut Vec<ConfigWarning>) -> Vec<ModelEntry> {
     match parent.get("catalog") {
-        None | Some(serde_json::Value::Null) => Vec::new(),
-        Some(serde_json::Value::Array(arr)) => arr
+        None | Some(Value::Null) => Vec::new(),
+        Some(Value::Array(arr)) => arr
             .iter()
             .enumerate()
             .filter_map(|(i, entry)| parse_catalog_entry(entry, i, warnings))
@@ -225,7 +234,7 @@ fn extract_catalog(
 /// rather than reading as blank; a blank or missing id falls through to
 /// validate_catalog, which drops it with its own warning.
 fn parse_catalog_entry(
-    value: &serde_json::Value,
+    value: &Value,
     index: usize,
     warnings: &mut Vec<ConfigWarning>,
 ) -> Option<ModelEntry> {
@@ -240,8 +249,8 @@ fn parse_catalog_entry(
         return None;
     }
     let id = match value.get("id") {
-        None | Some(serde_json::Value::Null) => String::new(),
-        Some(serde_json::Value::String(s)) => s.clone(),
+        None | Some(Value::Null) => String::new(),
+        Some(Value::String(s)) => s.clone(),
         Some(other) => {
             warnings.push(ConfigWarning {
                 field: format!("model.catalog[{index}].id"),
@@ -295,7 +304,7 @@ fn parse_catalog_entry(
 /// must not silently register a no-op entry.
 fn validate_catalog(section: &mut ModelSection, served: &[String]) -> Vec<ConfigWarning> {
     let mut warnings = Vec::new();
-    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut seen: HashSet<String> = HashSet::new();
     let mut kept: Vec<ModelEntry> = Vec::with_capacity(section.catalog.len());
     for entry in section.catalog.drain(..) {
         if entry.id.trim().is_empty() {
@@ -344,7 +353,7 @@ fn validate_catalog(section: &mut ModelSection, served: &[String]) -> Vec<Config
     // blocks loading or drops the entry; the next fetch may add it back.
     if !served.is_empty() {
         for entry in &section.catalog {
-            if !crate::served_models::exists_in(served, &entry.id) {
+            if !exists_in(served, &entry.id) {
                 warnings.push(ConfigWarning {
                     field: "model.catalog".into(),
                     reason: format!(
@@ -389,8 +398,8 @@ mod tests {
         // The global speed preference round-trips through settings.json, and
         // a bad value degrades to None with a warning rather than resetting
         // the section.
-        let path = std::env::temp_dir().join(format!("speed-mode-{}.json", std::process::id()));
-        std::fs::write(
+        let path = temp_dir().join(format!("speed-mode-{}.json", id()));
+        write(
             &path,
             r#"{"model":{"speed_mode":"fast","catalog":[{"id":"a"}]}}"#,
         )
@@ -399,9 +408,9 @@ mod tests {
         assert_eq!(s.speed_mode, Some(SpeedMode::Fast));
         assert_eq!(s.catalog.len(), 1, "sibling catalog survives");
         assert!(w.is_empty(), "a valid speed_mode does not warn: {w:?}");
-        drop(std::fs::remove_file(&path));
+        drop(remove_file(&path));
 
-        std::fs::write(&path, r#"{"model":{"speed_mode":"warp"}}"#).unwrap();
+        write(&path, r#"{"model":{"speed_mode":"warp"}}"#).unwrap();
         let (s, w) = load_model_section_from(&path);
         assert_eq!(s.speed_mode, None, "bad value falls back to the default");
         assert!(
@@ -409,15 +418,15 @@ mod tests {
             "warning names the bad field: {w:?}"
         );
         assert!(!s.catalog.is_empty(), "catalog survives a bad sibling");
-        drop(std::fs::remove_file(&path));
+        drop(remove_file(&path));
     }
 
     #[test]
     fn test_entry_fast_override() {
         // A per-model fast flag parses on its own entry; a bad value nulls
         // only that field.
-        let path = std::env::temp_dir().join(format!("entry-fast-{}.json", std::process::id()));
-        std::fs::write(
+        let path = temp_dir().join(format!("entry-fast-{}.json", id()));
+        write(
             &path,
             r#"{"model":{"catalog":[{"id":"a","fast":true},{"id":"b","fast":"yes"}]}}"#,
         )
@@ -430,7 +439,7 @@ mod tests {
             w.iter().any(|x| x.field == "model.catalog[1].fast"),
             "warning names the bad field: {w:?}"
         );
-        drop(std::fs::remove_file(&path));
+        drop(remove_file(&path));
     }
 
     #[test]
@@ -499,8 +508,8 @@ mod tests {
         // A settings.json with several catalog entries round-trips through
         // disk preserving insertion order (the catalog is a Vec, not a map),
         // so the /model panel lists entries in the author's intended order.
-        let path = std::env::temp_dir().join(format!("catalog-order-{}.json", std::process::id()));
-        std::fs::write(
+        let path = temp_dir().join(format!("catalog-order-{}.json", id()));
+        write(
             &path,
             r#"{"model":{"id":"a","catalog":[{"id":"a"},{"id":"b"},{"id":"c"}]}}"#,
         )
@@ -512,7 +521,7 @@ mod tests {
             ["a", "b", "c"],
             "insertion order preserved through a write->read cycle"
         );
-        drop(std::fs::remove_file(&path));
+        drop(remove_file(&path));
     }
 
     #[test]
@@ -520,8 +529,8 @@ mod tests {
         // A typo'd effort_level must degrade only that field; the catalog
         // stays usable and effort falls to the next layer. The whole-section
         // reset (catalog lost) is the failure mode this guards against.
-        let path = std::env::temp_dir().join(format!("m19-badeff-{}.json", std::process::id()));
-        std::fs::write(
+        let path = temp_dir().join(format!("m19-badeff-{}.json", id()));
+        write(
             &path,
             r#"{"model":{"effort_level":"insane","catalog":[{"id":"qwen3.7-max"}]}}"#,
         )
@@ -535,7 +544,7 @@ mod tests {
         assert_eq!(s.catalog[0].id, "qwen3.7-max");
         let bad = w.iter().find(|x| x.field == "model.effort_level");
         assert!(bad.is_some(), "a warning names the bad field: {w:?}");
-        drop(std::fs::remove_file(&path));
+        drop(remove_file(&path));
     }
 
     #[test]
@@ -543,8 +552,8 @@ mod tests {
         // A bad effort on one catalog entry nulls that entry's effort; the
         // entry itself and the rest of the catalog survive. Same failure
         // class as the top-level case, one layer down.
-        let path = std::env::temp_dir().join(format!("m19-entryeff-{}.json", std::process::id()));
-        std::fs::write(
+        let path = temp_dir().join(format!("m19-entryeff-{}.json", id()));
+        write(
             &path,
             r#"{"model":{"catalog":[{"id":"a","effort":"insane"},{"id":"b","effort":"low"}]}}"#,
         )
@@ -566,15 +575,15 @@ mod tests {
             w.iter().any(|x| x.field == "model.catalog[0].effort"),
             "warning names the entry field: {w:?}"
         );
-        drop(std::fs::remove_file(&path));
+        drop(remove_file(&path));
     }
 
     #[test]
     fn test_bad_context_window_salvaged() {
         // A non-numeric context_window nulls only that field; the entry and
         // its sibling fields survive.
-        let path = std::env::temp_dir().join(format!("m19-badctx-{}.json", std::process::id()));
-        std::fs::write(
+        let path = temp_dir().join(format!("m19-badctx-{}.json", id()));
+        write(
             &path,
             r#"{"model":{"catalog":[{"id":"a","context_window":"huge","effort":"low"}]}}"#,
         )
@@ -592,7 +601,7 @@ mod tests {
                 .any(|x| x.field == "model.catalog[0].context_window"),
             "warning names the bad field: {w:?}"
         );
-        drop(std::fs::remove_file(&path));
+        drop(remove_file(&path));
     }
 
     #[test]
@@ -600,8 +609,8 @@ mod tests {
         // A catalog that is not an array cannot be salvaged entry by entry;
         // the field falls back to the shipped default catalog (not empty) with
         // a warning naming the malformed field.
-        let path = std::env::temp_dir().join(format!("m19-notarray-{}.json", std::process::id()));
-        std::fs::write(&path, r#"{"model":{"catalog":"not-an-array"}}"#).unwrap();
+        let path = temp_dir().join(format!("m19-notarray-{}.json", id()));
+        write(&path, r#"{"model":{"catalog":"not-an-array"}}"#).unwrap();
         let (s, w) = load_model_section_from(&path);
         assert!(
             !s.catalog.is_empty(),
@@ -611,15 +620,15 @@ mod tests {
             w.iter().any(|x| x.field == "model.catalog"),
             "warning names the catalog field: {w:?}"
         );
-        drop(std::fs::remove_file(&path));
+        drop(remove_file(&path));
     }
 
     #[test]
     fn test_non_object_catalog_dropped() {
         // A non-object array element is dropped with a warning; sibling
         // entries survive.
-        let path = std::env::temp_dir().join(format!("m19-nonobj-{}.json", std::process::id()));
-        std::fs::write(&path, r#"{"model":{"catalog":[123,{"id":"a"}]}}"#).unwrap();
+        let path = temp_dir().join(format!("m19-nonobj-{}.json", id()));
+        write(&path, r#"{"model":{"catalog":[123,{"id":"a"}]}}"#).unwrap();
         let (s, w) = load_model_section_from(&path);
         assert_eq!(s.catalog.len(), 1, "non-object dropped, object kept");
         assert_eq!(s.catalog[0].id, "a");
@@ -627,21 +636,21 @@ mod tests {
             w.iter().any(|x| x.field == "model.catalog[0]"),
             "warning names the dropped entry: {w:?}"
         );
-        drop(std::fs::remove_file(&path));
+        drop(remove_file(&path));
     }
 
     #[test]
     fn test_non_string_id_dropped() {
         // A non-string id reports honestly as a type error, not as blank.
-        let path = std::env::temp_dir().join(format!("m19-badid-{}.json", std::process::id()));
-        std::fs::write(&path, r#"{"model":{"catalog":[{"id":123}]}}"#).unwrap();
+        let path = temp_dir().join(format!("m19-badid-{}.json", id()));
+        write(&path, r#"{"model":{"catalog":[{"id":123}]}}"#).unwrap();
         let (s, w) = load_model_section_from(&path);
         assert!(s.catalog.is_empty(), "non-string id entry dropped");
         assert!(
             w.iter().any(|x| x.field == "model.catalog[0].id"),
             "warning names the id field: {w:?}"
         );
-        drop(std::fs::remove_file(&path));
+        drop(remove_file(&path));
     }
 
     #[test]
@@ -649,22 +658,22 @@ mod tests {
         // A model section that is not an object (a common shape mistake:
         // writing the id as a string) yields defaults plus a warning, not a
         // silent no-op.
-        let path = std::env::temp_dir().join(format!("m19-notobj-{}.json", std::process::id()));
-        std::fs::write(&path, r#"{"model":"glm-5.2"}"#).unwrap();
+        let path = temp_dir().join(format!("m19-notobj-{}.json", id()));
+        write(&path, r#"{"model":"glm-5.2"}"#).unwrap();
         let (s, w) = load_model_section_from(&path);
         assert!(s.id.is_none(), "non-object model yields defaults");
         assert!(!s.catalog.is_empty(), "falls back to default catalog");
         assert_eq!(w.len(), 1, "one warning, not silent");
         assert_eq!(w[0].field, "model");
-        drop(std::fs::remove_file(&path));
+        drop(remove_file(&path));
     }
 
     #[test]
     fn test_empty_model_object_default() {
         // An empty model object has every field absent. The catalog falls back
         // to the shipped default; no warnings (a valid, unconfigured state).
-        let path = std::env::temp_dir().join(format!("m19-empty-{}.json", std::process::id()));
-        std::fs::write(&path, r#"{"model":{}}"#).unwrap();
+        let path = temp_dir().join(format!("m19-empty-{}.json", id()));
+        write(&path, r#"{"model":{}}"#).unwrap();
         let (s, w) = load_model_section_from(&path);
         assert!(s.id.is_none());
         assert!(
@@ -672,13 +681,13 @@ mod tests {
             "empty model falls back to default catalog"
         );
         assert!(w.is_empty(), "absent fields are not warnings");
-        drop(std::fs::remove_file(&path));
+        drop(remove_file(&path));
     }
 
     #[test]
     fn test_null_catalog_falls_back() {
-        let path = std::env::temp_dir().join(format!("catalog-null-{}.json", std::process::id()));
-        std::fs::write(&path, r#"{"model":{"catalog":null}}"#).unwrap();
+        let path = temp_dir().join(format!("catalog-null-{}.json", id()));
+        write(&path, r#"{"model":{"catalog":null}}"#).unwrap();
         let (s, w) = load_model_section_from(&path);
         assert!(!s.catalog.is_empty(), "null catalog falls back to default");
         assert_eq!(s.catalog.len(), 4, "DEFAULT_CATALOG has 4 entries");
@@ -691,38 +700,37 @@ mod tests {
             "qwen3.7-max in default"
         );
         assert!(w.is_empty(), "no warnings on default catalog fallback");
-        drop(std::fs::remove_file(&path));
+        drop(remove_file(&path));
     }
 
     #[test]
     fn test_missing_catalog_falls_back() {
-        let path =
-            std::env::temp_dir().join(format!("catalog-missing-{}.json", std::process::id()));
-        std::fs::write(&path, r#"{"model":{"id":"glm-5.2"}}"#).unwrap();
+        let path = temp_dir().join(format!("catalog-missing-{}.json", id()));
+        write(&path, r#"{"model":{"id":"glm-5.2"}}"#).unwrap();
         let (s, _) = load_model_section_from(&path);
         assert!(!s.catalog.is_empty(), "missing catalog field falls back");
         assert_eq!(s.catalog.len(), 4);
-        drop(std::fs::remove_file(&path));
+        drop(remove_file(&path));
     }
 
     #[test]
     fn test_empty_catalog_falls_back() {
-        let path = std::env::temp_dir().join(format!("catalog-empty-{}.json", std::process::id()));
-        std::fs::write(&path, r#"{"model":{"catalog":[]}}"#).unwrap();
+        let path = temp_dir().join(format!("catalog-empty-{}.json", id()));
+        write(&path, r#"{"model":{"catalog":[]}}"#).unwrap();
         let (s, _) = load_model_section_from(&path);
         assert!(!s.catalog.is_empty(), "empty array falls back to default");
         assert_eq!(s.catalog.len(), 4);
-        drop(std::fs::remove_file(&path));
+        drop(remove_file(&path));
     }
 
     #[test]
     fn test_user_catalog_no_fallback() {
-        let path = std::env::temp_dir().join(format!("catalog-user-{}.json", std::process::id()));
-        std::fs::write(&path, r#"{"model":{"catalog":[{"id":"my-custom-model"}]}}"#).unwrap();
+        let path = temp_dir().join(format!("catalog-user-{}.json", id()));
+        write(&path, r#"{"model":{"catalog":[{"id":"my-custom-model"}]}}"#).unwrap();
         let (s, _) = load_model_section_from(&path);
         assert_eq!(s.catalog.len(), 1, "user catalog replaces default entirely");
         assert_eq!(s.catalog[0].id, "my-custom-model");
-        drop(std::fs::remove_file(&path));
+        drop(remove_file(&path));
     }
 
     #[test]

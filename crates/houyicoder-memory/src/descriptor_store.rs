@@ -11,11 +11,19 @@ use std::sync::{Arc, Mutex};
 #[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 
+#[cfg(unix)]
+use fs::DirBuilder;
+use fs::OpenOptions;
 use houyicoder_context::{
     DescriptorUpdate, SessionDescriptor, SessionDescriptorError, SessionDescriptorStore, SessionId,
     SessionProvenance,
     session_class::{DESCRIPTOR_FILE, session_dir},
 };
+#[cfg(test)]
+use std::env::temp_dir;
+use std::process::id;
+#[cfg(test)]
+use std::thread::scope;
 
 /// Disk-backed descriptor store rooted beside the session event logs.
 pub struct FileDescriptorStore {
@@ -61,7 +69,7 @@ impl FileDescriptorStore {
     fn ensure_dir(path: &Path) -> Result<(), SessionDescriptorError> {
         #[cfg(unix)]
         {
-            fs::DirBuilder::new()
+            DirBuilder::new()
                 .recursive(true)
                 .mode(0o700)
                 .create(path)
@@ -89,18 +97,18 @@ impl FileDescriptorStore {
         static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
         let tmp = dir.join(format!(
             "session.json.tmp.{}.{}",
-            std::process::id(),
+            id(),
             TMP_SEQ.fetch_add(1, Ordering::Relaxed)
         ));
         {
             #[cfg(unix)]
             let mut opts = {
-                let mut o = fs::OpenOptions::new();
+                let mut o = OpenOptions::new();
                 o.write(true).create(true).truncate(true).mode(0o600);
                 o
             };
             #[cfg(not(unix))]
-            let mut opts = fs::OpenOptions::new();
+            let mut opts = OpenOptions::new();
             opts.write(true).create(true).truncate(true);
             let mut f = opts
                 .open(&tmp)
@@ -290,10 +298,9 @@ mod tests {
     }
 
     fn temp_root() -> PathBuf {
-        use std::sync::atomic::{AtomicU64, Ordering};
         static SEQ: AtomicU64 = AtomicU64::new(0);
         let n = SEQ.fetch_add(1, Ordering::Relaxed);
-        let p = std::env::temp_dir().join(format!("descriptor-test-{}-{n}", std::process::id()));
+        let p = temp_dir().join(format!("descriptor-test-{}-{n}", id()));
         fs::create_dir_all(&p).expect("mkdir root");
         p
     }
@@ -374,7 +381,7 @@ mod tests {
         store
             .write_descriptor(sid, &sample_descriptor(Some(""), 1))
             .expect("seed");
-        std::thread::scope(|scope| {
+        scope(|scope| {
             for _ in 0..WRITERS {
                 scope.spawn(|| {
                     for _ in 0..EDITS {

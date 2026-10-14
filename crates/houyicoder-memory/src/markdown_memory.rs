@@ -30,6 +30,9 @@ use io::{
     merge_rule_into_carrier, parse_topic_file, sanitize_key, scopes_for_key_impl,
     serialize_topic_file, show_memory_in_scope_impl, strip_rule_from_carrier, write_bytes_atomic,
 };
+use std::io::ErrorKind;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 /// Cap on candidate files scanned per rank; keeps the scan bounded.
 const SCAN_FILE_CAP: usize = 200;
@@ -206,7 +209,7 @@ impl MarkdownMemoryProvider {
                 let mtime = meta
                     .modified()
                     .ok()
-                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
                     .map(|d| d.as_secs())
                     .unwrap_or(0);
                 Some(ScannedTopic {
@@ -224,8 +227,7 @@ impl MarkdownMemoryProvider {
     /// Scan every root and merge. When the same key appears in multiple
     /// scopes, the newest mtime wins so recall does not return duplicates.
     fn scan_candidates(&self) -> Vec<ScannedTopic> {
-        let mut by_key: std::collections::HashMap<String, ScannedTopic> =
-            std::collections::HashMap::new();
+        let mut by_key: HashMap<String, ScannedTopic> = HashMap::new();
         for (root_index, root) in self.roots.iter().enumerate() {
             for mut t in Self::scan_root(root) {
                 t.root_index = root_index;
@@ -284,7 +286,7 @@ impl MarkdownMemoryProvider {
 
     fn read_frontmatter(&self, path: &Path) -> Result<Frontmatter, MemoryError> {
         let text = fs::read_to_string(path).map_err(|e| match e.kind() {
-            std::io::ErrorKind::NotFound => MemoryError::NotFound,
+            ErrorKind::NotFound => MemoryError::NotFound,
             _ => MemoryError::Io,
         })?;
         let (fm, _body) = parse_topic_file(&text)?;
@@ -295,7 +297,7 @@ impl MarkdownMemoryProvider {
     /// into a MemoryEntry.
     fn read_topic(&self, path: &Path) -> Result<MemoryEntry, MemoryError> {
         let text = fs::read_to_string(path).map_err(|e| match e.kind() {
-            std::io::ErrorKind::NotFound => MemoryError::NotFound,
+            ErrorKind::NotFound => MemoryError::NotFound,
             _ => MemoryError::Io,
         })?;
         let (fm, body) = parse_topic_file(&text)?;
@@ -307,7 +309,7 @@ impl MarkdownMemoryProvider {
         let mtime_secs = fs::metadata(path)
             .ok()
             .and_then(|m| m.modified().ok())
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
             .map(|d| d.as_secs())
             .unwrap_or(0);
         Ok(MemoryEntry::new(key, body, fm.source).with_meta(fm.description.clone(), mtime_secs))
@@ -430,7 +432,7 @@ impl MemoryProvider for MarkdownMemoryProvider {
             let _guard = self.write_lock.lock().expect("write lock poisoned");
             match fs::remove_file(&topic_path) {
                 Ok(()) => {}
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                Err(e) if e.kind() == ErrorKind::NotFound => {
                     return Err(MemoryError::NotFound);
                 }
                 Err(_) => return Err(MemoryError::Io),
@@ -480,8 +482,8 @@ impl MemoryProvider for MarkdownMemoryProvider {
             return;
         }
         let _guard = self.write_lock.lock().expect("write lock poisoned");
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
         let mut stats = self.load_stats();
@@ -706,7 +708,7 @@ impl MarkdownMemoryProvider {
         let payload = serialize_topic_file(entry).into_bytes();
         let previous = match fs::read(&topic_path) {
             Ok(bytes) => Some(bytes),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) if error.kind() == ErrorKind::NotFound => None,
             Err(_) => return Err(MemoryError::Io),
         };
         if previous.as_deref() == Some(payload.as_slice()) {
@@ -738,17 +740,4 @@ impl MarkdownMemoryProvider {
 }
 
 #[cfg(test)]
-#[path = "markdown_memory_tests.rs"]
-mod markdown_memory_tests;
-
-#[cfg(test)]
-#[path = "markdown_memory_delete_tests.rs"]
-mod markdown_memory_delete_tests;
-
-#[cfg(test)]
-#[path = "markdown_memory_scope_tests.rs"]
-mod markdown_memory_scope_tests;
-
-#[cfg(test)]
-#[path = "markdown_memory_scope_flow_tests.rs"]
-mod markdown_memory_scope_flow_tests;
+mod tests;

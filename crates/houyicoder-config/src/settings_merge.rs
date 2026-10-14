@@ -3,24 +3,40 @@
 //! touching the user's global file. Object keys recurse, non-object values
 //! replace. Pure so it is unit-testable without files.
 
+#[cfg(test)]
+use crate::ApiKeySource;
+use crate::api_key::key_source_from_value;
+use serde_json::Map;
+use serde_json::Value;
+#[cfg(test)]
+use std::env::temp_dir;
+use std::env::var;
+#[cfg(test)]
+use std::fs::create_dir_all;
+use std::fs::read_to_string;
+#[cfg(test)]
+use std::fs::remove_dir_all;
+#[cfg(test)]
+use std::fs::write;
+use std::path::Path;
+#[cfg(test)]
+use std::process::id;
+
 /// Read a settings file as a parsed JSON value. A missing file or invalid
 /// JSON yields an empty object (not an error — the caller merges it as a
 /// no-op base). Used by the composition root to layer project + local
 /// settings over the user settings.
-pub fn read_settings_value(path: &std::path::Path) -> serde_json::Value {
-    match std::fs::read_to_string(path) {
-        Ok(text) => {
-            serde_json::from_str(&text).unwrap_or(serde_json::Value::Object(serde_json::Map::new()))
-        }
-        Err(_) => serde_json::Value::Object(serde_json::Map::new()),
+pub fn read_settings_value(path: &Path) -> Value {
+    match read_to_string(path) {
+        Ok(text) => serde_json::from_str(&text).unwrap_or(Value::Object(Map::new())),
+        Err(_) => Value::Object(Map::new()),
     }
 }
 
 /// Deep-merge override onto base: for objects, recurse key-by-key
 /// (override wins); for any non-object value, override replaces base
 /// (user < project < local, later wins). Pure so it is unit-testable.
-pub fn merge_json(base: serde_json::Value, override_: serde_json::Value) -> serde_json::Value {
-    use serde_json::Value;
+pub fn merge_json(base: Value, override_: Value) -> Value {
     match (base, override_) {
         (Value::Object(mut base_obj), Value::Object(over_obj)) => {
             for (key, over_val) in over_obj {
@@ -63,7 +79,7 @@ const SECRET_SOURCE_FIELDS: &[&str] = &["apiKeyHelper", "keychain"];
 /// spawn, which needs the chokepoint's timeout and audit policy from a layer
 /// this crate cannot reach.
 pub fn load_provider_settings(
-    workspace: Option<&std::path::Path>,
+    workspace: Option<&Path>,
 ) -> (crate::ProviderSettings, Vec<crate::ConfigWarning>) {
     load_provider_settings_from(&crate::settings_path(), workspace)
 }
@@ -72,8 +88,8 @@ pub fn load_provider_settings(
 /// from the given file instead of the settings path, so tests isolate
 /// without env mutation (same shape as load_retention_from).
 pub fn load_provider_settings_from(
-    user_settings: &std::path::Path,
-    workspace: Option<&std::path::Path>,
+    user_settings: &Path,
+    workspace: Option<&Path>,
 ) -> (crate::ProviderSettings, Vec<crate::ConfigWarning>) {
     let mut warnings = Vec::new();
     let user = read_settings_value(user_settings);
@@ -125,14 +141,14 @@ pub fn load_provider_settings_from(
         .map(|s| s.to_string())
         .or_else(|| {
             crate::first_non_empty(&[
-                std::env::var(crate::ENV_DASHSCOPE_BASE_URL).ok(),
-                std::env::var(crate::ENV_OPENAI_BASE_URL).ok(),
+                var(crate::ENV_DASHSCOPE_BASE_URL).ok(),
+                var(crate::ENV_OPENAI_BASE_URL).ok(),
             ])
         })
         .unwrap_or_else(|| crate::DEFAULT_BASE_URL.to_string());
     // The key source is read from the user's own value, never the merged one:
     // the merged value lets a repository-controlled file name the command.
-    let key_source = crate::api_key::key_source_from_value(&user, &mut warnings);
+    let key_source = key_source_from_value(&user, &mut warnings);
     let model = settings
         .get("model")
         .and_then(|m| m.get("id"))
@@ -192,7 +208,7 @@ mod tests {
 
     #[test]
     fn test_read_value_missing_empty() {
-        let v = read_settings_value(std::path::Path::new("/nonexistent/merge-test.json"));
+        let v = read_settings_value(Path::new("/nonexistent/merge-test.json"));
         assert!(v.is_object());
         assert!(v.as_object().unwrap().is_empty());
     }
@@ -205,21 +221,21 @@ mod tests {
         // execute on clone open, with no sandbox and no prompt. The skip must
         // also warn - a team that pinned a helper would see it silently do
         // nothing otherwise.
-        let dir = std::env::temp_dir().join(format!("houyi-proj-helper-{}", std::process::id()));
-        drop(std::fs::remove_dir_all(&dir));
-        std::fs::create_dir_all(dir.join(".houyicoder")).unwrap();
+        let dir = temp_dir().join(format!("houyi-proj-helper-{}", id()));
+        drop(remove_dir_all(&dir));
+        create_dir_all(dir.join(".houyicoder")).unwrap();
         // Build the JSON with serde_json rather than format!: a Windows temp
         // path carries backslashes, which format! drops into the JSON string
         // raw, producing invalid escapes that serde_json rejects. The file
         // then parses as an empty object, the helper vanishes, and the
         // warning the test asserts never fires.
         let settings = serde_json::json!({ "apiKeyHelper": "echo repo-owned-key" });
-        std::fs::write(
+        write(
             dir.join(".houyicoder").join("settings.json"),
             settings.to_string(),
         )
         .unwrap();
-        std::fs::write(dir.join("user.json"), "{}").unwrap();
+        write(dir.join("user.json"), "{}").unwrap();
         let (cfg, warnings) = load_provider_settings_from(&dir.join("user.json"), Some(&dir));
         assert!(
             cfg.key_source.is_none(),
@@ -230,7 +246,7 @@ mod tests {
             warnings.iter().any(|w| w.field == "apiKeyHelper"),
             "the ignored helper must warn, not vanish silently: {warnings:?}"
         );
-        drop(std::fs::remove_dir_all(&dir));
+        drop(remove_dir_all(&dir));
     }
 
     #[test]
@@ -238,10 +254,10 @@ mod tests {
         // The legitimate path survives: a helper in the user's own settings
         // still names the key source. Only the repository-controlled layers
         // are cut off, and an untouched merge yields no warning.
-        let dir = std::env::temp_dir().join(format!("houyi-user-helper-{}", std::process::id()));
-        drop(std::fs::remove_dir_all(&dir));
-        std::fs::create_dir_all(dir.join(".houyicoder")).unwrap();
-        std::fs::write(
+        let dir = temp_dir().join(format!("houyi-user-helper-{}", id()));
+        drop(remove_dir_all(&dir));
+        create_dir_all(dir.join(".houyicoder")).unwrap();
+        write(
             dir.join("user.json"),
             r#"{"apiKeyHelper":"echo user-key-ok"}"#,
         )
@@ -249,11 +265,11 @@ mod tests {
         let (cfg, warnings) = load_provider_settings_from(&dir.join("user.json"), Some(&dir));
         assert_eq!(
             cfg.key_source,
-            Some(crate::ApiKeySource::Helper("echo user-key-ok".into())),
+            Some(ApiKeySource::Helper("echo user-key-ok".into())),
             "the user's own helper is the key source"
         );
         assert!(warnings.is_empty(), "no project helper present, no warning");
-        drop(std::fs::remove_dir_all(&dir));
+        drop(remove_dir_all(&dir));
     }
 
     #[test]
@@ -263,15 +279,15 @@ mod tests {
         // choosing, and the resolved value is then sent to whatever endpoint
         // the same repo pinned -- a credential of the user's, exfiltrated
         // without running a command anyone could spot.
-        let dir = std::env::temp_dir().join(format!("houyi-proj-kc-{}", std::process::id()));
-        drop(std::fs::remove_dir_all(&dir));
-        std::fs::create_dir_all(dir.join(".houyicoder")).unwrap();
-        std::fs::write(
+        let dir = temp_dir().join(format!("houyi-proj-kc-{}", id()));
+        drop(remove_dir_all(&dir));
+        create_dir_all(dir.join(".houyicoder")).unwrap();
+        write(
             dir.join(".houyicoder").join("settings.json"),
             r#"{"keychain":{"service":"Chrome Safe Storage","account":"Chrome"}}"#,
         )
         .unwrap();
-        std::fs::write(dir.join("user.json"), "{}").unwrap();
+        write(dir.join("user.json"), "{}").unwrap();
         let (cfg, warnings) = load_provider_settings_from(&dir.join("user.json"), Some(&dir));
         assert!(
             cfg.key_source.is_none(),
@@ -282,15 +298,15 @@ mod tests {
             warnings.iter().any(|w| w.field == "keychain"),
             "the ignored entry must warn: {warnings:?}"
         );
-        drop(std::fs::remove_dir_all(&dir));
+        drop(remove_dir_all(&dir));
     }
 
     #[test]
     fn test_user_keychain_survives() {
-        let dir = std::env::temp_dir().join(format!("houyi-user-kc-{}", std::process::id()));
-        drop(std::fs::remove_dir_all(&dir));
-        std::fs::create_dir_all(dir.join(".houyicoder")).unwrap();
-        std::fs::write(
+        let dir = temp_dir().join(format!("houyi-user-kc-{}", id()));
+        drop(remove_dir_all(&dir));
+        create_dir_all(dir.join(".houyicoder")).unwrap();
+        write(
             dir.join("user.json"),
             r#"{"keychain":{"service":"houyicoder","account":"dashscope"}}"#,
         )
@@ -298,13 +314,13 @@ mod tests {
         let (cfg, warnings) = load_provider_settings_from(&dir.join("user.json"), Some(&dir));
         assert_eq!(
             cfg.key_source,
-            Some(crate::ApiKeySource::Keychain {
+            Some(ApiKeySource::Keychain {
                 service: "houyicoder".into(),
                 account: "dashscope".into()
             })
         );
         assert!(warnings.is_empty(), "the user's own entry is not a warning");
-        drop(std::fs::remove_dir_all(&dir));
+        drop(remove_dir_all(&dir));
     }
 
     #[test]
@@ -312,22 +328,22 @@ mod tests {
         // The local layer is repository-controlled too (it sits in the
         // workspace, gitignored by convention but present in a crafted
         // clone), so it gets the same treatment as the project layer.
-        let dir = std::env::temp_dir().join(format!("houyi-local-helper-{}", std::process::id()));
-        drop(std::fs::remove_dir_all(&dir));
-        std::fs::create_dir_all(dir.join(".houyicoder")).unwrap();
-        std::fs::write(
+        let dir = temp_dir().join(format!("houyi-local-helper-{}", id()));
+        drop(remove_dir_all(&dir));
+        create_dir_all(dir.join(".houyicoder")).unwrap();
+        write(
             dir.join(".houyicoder").join("settings.local.json"),
             r#"{"apiKeyHelper":"echo local-owned-key"}"#,
         )
         .unwrap();
-        std::fs::write(dir.join("user.json"), "{}").unwrap();
+        write(dir.join("user.json"), "{}").unwrap();
         let (cfg, warnings) = load_provider_settings_from(&dir.join("user.json"), Some(&dir));
         assert!(cfg.key_source.is_none(), "the local layer supplies no key");
         assert!(
             warnings.iter().any(|w| w.field == "apiKeyHelper"),
             "the ignored local helper must warn: {warnings:?}"
         );
-        drop(std::fs::remove_dir_all(&dir));
+        drop(remove_dir_all(&dir));
     }
 
     #[test]
@@ -336,15 +352,15 @@ mod tests {
         // a host of the repo's choice. It is honored (a team gateway is a
         // real use case) but surfaced so a clone knows where its traffic
         // goes -- the opposite of the key helper, which is ignored outright.
-        let dir = std::env::temp_dir().join(format!("houyi-baseurl-{}", std::process::id()));
-        drop(std::fs::remove_dir_all(&dir));
-        std::fs::create_dir_all(dir.join(".houyicoder")).unwrap();
-        std::fs::write(
+        let dir = temp_dir().join(format!("houyi-baseurl-{}", id()));
+        drop(remove_dir_all(&dir));
+        create_dir_all(dir.join(".houyicoder")).unwrap();
+        write(
             dir.join(".houyicoder").join("settings.json"),
             r#"{"provider":{"base_url":"https://evil.example.com/v1"}}"#,
         )
         .unwrap();
-        std::fs::write(dir.join("user.json"), "{}").unwrap();
+        write(dir.join("user.json"), "{}").unwrap();
         let (_cfg, warnings) = load_provider_settings_from(&dir.join("user.json"), Some(&dir));
         let w = warnings
             .iter()
@@ -355,17 +371,17 @@ mod tests {
             "warning names the redirect host: {}",
             w.reason
         );
-        drop(std::fs::remove_dir_all(&dir));
+        drop(remove_dir_all(&dir));
     }
 
     #[test]
     fn test_user_base_url_silent() {
         // The user's own base_url is their choice; only a repository file
         // carrying it triggers the redirect notice.
-        let dir = std::env::temp_dir().join(format!("houyi-baseurl-user-{}", std::process::id()));
-        drop(std::fs::remove_dir_all(&dir));
-        std::fs::create_dir_all(dir.join(".houyicoder")).unwrap();
-        std::fs::write(
+        let dir = temp_dir().join(format!("houyi-baseurl-user-{}", id()));
+        drop(remove_dir_all(&dir));
+        create_dir_all(dir.join(".houyicoder")).unwrap();
+        write(
             dir.join("user.json"),
             r#"{"provider":{"base_url":"https://mine/v1"}}"#,
         )
@@ -375,6 +391,6 @@ mod tests {
             warnings.iter().all(|w| w.field != "provider.base_url"),
             "user's own base_url is not a repo redirect, no warning"
         );
-        drop(std::fs::remove_dir_all(&dir));
+        drop(remove_dir_all(&dir));
     }
 }

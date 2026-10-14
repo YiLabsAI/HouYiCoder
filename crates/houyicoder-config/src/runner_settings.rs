@@ -6,6 +6,21 @@
 
 use crate::settings_merge::{merge_json, read_settings_value};
 use crate::{ConfigWarning, settings_path};
+use serde_json::Value;
+#[cfg(test)]
+use std::env::temp_dir;
+use std::env::var;
+#[cfg(test)]
+use std::fs::remove_file;
+#[cfg(test)]
+use std::fs::write;
+use std::path::Path;
+#[cfg(test)]
+use std::path::PathBuf;
+#[cfg(test)]
+use std::process::id;
+#[cfg(test)]
+use std::sync::atomic::{AtomicU64, Ordering};
 
 const DEFAULT_MAX_TURNS: u32 = 200;
 
@@ -29,9 +44,7 @@ impl Default for RunnerSettings {
 /// Load runner settings, layering project and local settings over the user
 /// file when a workspace is given (user < project < local), then env, then
 /// the default. A bad type warns and falls back rather than bricking.
-pub fn load_runner_settings(
-    workspace: Option<&std::path::Path>,
-) -> (RunnerSettings, Vec<ConfigWarning>) {
+pub fn load_runner_settings(workspace: Option<&Path>) -> (RunnerSettings, Vec<ConfigWarning>) {
     load_runner_settings_from(&settings_path(), workspace)
 }
 
@@ -39,8 +52,8 @@ pub fn load_runner_settings(
 /// the base; project and local settings layer over it when a workspace is
 /// given.
 pub fn load_runner_settings_from(
-    user: &std::path::Path,
-    workspace: Option<&std::path::Path>,
+    user: &Path,
+    workspace: Option<&Path>,
 ) -> (RunnerSettings, Vec<ConfigWarning>) {
     let mut settings = read_settings_value(user);
     if let Some(ws) = workspace {
@@ -52,7 +65,7 @@ pub fn load_runner_settings_from(
     let mut warnings = Vec::new();
     let from_settings = parse_max_turns(&settings, &mut warnings);
     let value = from_settings.or_else(|| {
-        std::env::var(crate::ENV_HOUYICODER_MAX_TURNS)
+        var(crate::ENV_HOUYICODER_MAX_TURNS)
             .ok()
             .and_then(|raw| parse_env_max_turns(&raw, &mut warnings))
     });
@@ -64,10 +77,10 @@ pub fn load_runner_settings_from(
     )
 }
 
-fn parse_max_turns(value: &serde_json::Value, warnings: &mut Vec<ConfigWarning>) -> Option<u32> {
+fn parse_max_turns(value: &Value, warnings: &mut Vec<ConfigWarning>) -> Option<u32> {
     match value.get("max_turns") {
-        None | Some(serde_json::Value::Null) => None,
-        Some(serde_json::Value::Number(n)) => n
+        None | Some(Value::Null) => None,
+        Some(Value::Number(n)) => n
             .as_u64()
             .and_then(|v| u32::try_from(v).ok())
             .filter(|v| *v > 0)
@@ -112,13 +125,11 @@ fn parse_env_max_turns(raw: &str, warnings: &mut Vec<ConfigWarning>) -> Option<u
 mod tests {
     use super::*;
 
-    fn temp_settings(content: &str) -> std::path::PathBuf {
-        use std::sync::atomic::{AtomicU64, Ordering};
+    fn temp_settings(content: &str) -> PathBuf {
         static SEQ: AtomicU64 = AtomicU64::new(0);
         let seq = SEQ.fetch_add(1, Ordering::Relaxed);
-        let p =
-            std::env::temp_dir().join(format!("houyi-runner-{seq}-{}.json", std::process::id()));
-        std::fs::write(&p, content).expect("write");
+        let p = temp_dir().join(format!("houyi-runner-{seq}-{}.json", id()));
+        write(&p, content).expect("write");
         p
     }
 
@@ -126,7 +137,7 @@ mod tests {
     fn test_settings_value_wins() {
         let p = temp_settings(r#"{"max_turns": 7}"#);
         let (s, w) = load_runner_settings_from(&p, None);
-        std::fs::remove_file(&p).ok();
+        remove_file(&p).ok();
         assert_eq!(s.max_turns, 7);
         assert!(w.is_empty());
     }
@@ -135,7 +146,7 @@ mod tests {
     fn test_missing_uses_default() {
         let p = temp_settings(r#"{"auto_memory": true}"#);
         let (s, w) = load_runner_settings_from(&p, None);
-        std::fs::remove_file(&p).ok();
+        remove_file(&p).ok();
         assert_eq!(s.max_turns, DEFAULT_MAX_TURNS);
         assert!(w.is_empty(), "a missing field is not a warning");
     }
@@ -144,7 +155,7 @@ mod tests {
     fn test_bad_type_warns() {
         let p = temp_settings(r#"{"max_turns": "two"}"#);
         let (s, w) = load_runner_settings_from(&p, None);
-        std::fs::remove_file(&p).ok();
+        remove_file(&p).ok();
         assert_eq!(s.max_turns, DEFAULT_MAX_TURNS);
         assert_eq!(w.len(), 1);
     }
@@ -153,7 +164,7 @@ mod tests {
     fn test_zero_rejected() {
         let p = temp_settings(r#"{"max_turns": 0}"#);
         let (s, w) = load_runner_settings_from(&p, None);
-        std::fs::remove_file(&p).ok();
+        remove_file(&p).ok();
         assert_eq!(s.max_turns, DEFAULT_MAX_TURNS, "0 would stop every run");
         assert_eq!(w.len(), 1);
     }

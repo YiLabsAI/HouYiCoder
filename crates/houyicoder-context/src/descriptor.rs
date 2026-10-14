@@ -183,5 +183,4 @@ impl Display for SessionDescriptorError {
 impl Error for SessionDescriptorError {}
 
 #[cfg(test)]
-#[path = "descriptor_tests.rs"]
-mod descriptor_tests;
+mod tests;

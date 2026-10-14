@@ -2,7 +2,7 @@
 //! environment-variable resolution. Sits at the bottom of the layer cake
 //! (alongside the async and resilience foundation leaves) so every crate that needs a base URL, api
 //! key, or model id depends on this one place instead of each calling
-//! std::env::var inline.
+//! var inline.
 //!
 //! Resolution order honours 12-factor (env wins) with project-preferred env
 //! var names tried first: DASHSCOPE_ (project .env convention) then OPENAI_
@@ -44,6 +44,18 @@ pub use hook_spec::{
     resolve_hooks,
 };
 pub mod trust;
+use serde_json::Value;
+use std::env::temp_dir;
+use std::env::var;
+use std::fs::read_to_string;
+#[cfg(test)]
+use std::fs::remove_file;
+#[cfg(test)]
+use std::fs::write;
+use std::path::Path;
+use std::path::PathBuf;
+#[cfg(test)]
+use std::process::id;
 pub use trust::{is_path_trusted, persist_project_trust};
 
 // ---- defaults (const, no inline literals at call sites) -------------------
@@ -150,14 +162,10 @@ pub struct ConfigWarning {
 /// and recording a warning when the field is missing or the wrong type.
 /// Per-field recovery (rather than failing the whole file) is the point: a
 /// single bad value must not silently reset every other setting.
-fn extract_bool_field(
-    value: &serde_json::Value,
-    field: &str,
-    warnings: &mut Vec<ConfigWarning>,
-) -> bool {
+fn extract_bool_field(value: &Value, field: &str, warnings: &mut Vec<ConfigWarning>) -> bool {
     match value.get(field) {
-        None | Some(serde_json::Value::Null) => true,
-        Some(serde_json::Value::Bool(b)) => *b,
+        None | Some(Value::Null) => true,
+        Some(Value::Bool(b)) => *b,
         Some(other) => {
             warnings.push(ConfigWarning {
                 field: field.to_string(),
@@ -172,14 +180,14 @@ fn extract_bool_field(
 }
 
 /// One-word JSON value type name, for warning wording.
-pub(crate) fn json_type_name(v: &serde_json::Value) -> &'static str {
+pub(crate) fn json_type_name(v: &Value) -> &'static str {
     match v {
-        serde_json::Value::Null => "null",
-        serde_json::Value::Bool(_) => "bool",
-        serde_json::Value::Number(_) => "number",
-        serde_json::Value::String(_) => "string",
-        serde_json::Value::Array(_) => "array",
-        serde_json::Value::Object(_) => "object",
+        Value::Null => "null",
+        Value::Bool(_) => "bool",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
     }
 }
 
@@ -212,9 +220,9 @@ fn first_non_empty(vals: &[Option<String>]) -> Option<String> {
 /// an effect that needs the spawn chokepoint, unlike running a helper command.
 pub fn api_key_from_env() -> Option<String> {
     first_non_empty(&[
-        std::env::var(ENV_DASHSCOPE_API_KEY).ok(),
-        std::env::var(ENV_OPENAI_API_KEY).ok(),
-        std::env::var(ENV_HOUYICODER_API_KEY).ok(),
+        var(ENV_DASHSCOPE_API_KEY).ok(),
+        var(ENV_OPENAI_API_KEY).ok(),
+        var(ENV_HOUYICODER_API_KEY).ok(),
     ])
 }
 
@@ -222,8 +230,8 @@ pub fn api_key_from_env() -> Option<String> {
 /// OPENAI_BASE_URL, then DEFAULT_BASE_URL. Never fails (always has a default).
 pub fn resolve_base_url() -> String {
     first_non_empty(&[
-        std::env::var(ENV_DASHSCOPE_BASE_URL).ok(),
-        std::env::var(ENV_OPENAI_BASE_URL).ok(),
+        var(ENV_DASHSCOPE_BASE_URL).ok(),
+        var(ENV_OPENAI_BASE_URL).ok(),
     ])
     .unwrap_or_else(|| DEFAULT_BASE_URL.to_string())
 }
@@ -242,7 +250,7 @@ pub fn resolve_model() -> String {
 /// settings.json model.id → DEFAULT_MODEL. A missing file, a corrupt file, or
 /// a blank id all yield DEFAULT_MODEL — the load_model_section_from helper
 /// already degrades per-field with warnings, so this layer only picks the id.
-pub fn resolve_model_from(path: &std::path::Path) -> String {
+pub fn resolve_model_from(path: &Path) -> String {
     resolve_model_selection_from(path).model
 }
 
@@ -250,7 +258,7 @@ pub fn resolve_model_from(path: &std::path::Path) -> String {
 /// selection intent instead of guessing it from id equality later: an
 /// explicit model.id that happens to equal the default constant stays
 /// Explicit, and the fallback is Default, never a coincidental match.
-pub fn resolve_model_selection_from(path: &std::path::Path) -> ModelSelection {
+pub fn resolve_model_selection_from(path: &Path) -> ModelSelection {
     let (section, _warnings) = load_model_section_from(path);
     match section
         .id
@@ -300,7 +308,7 @@ pub fn resolve_default_model() -> String {
 /// built-in tools still load). A malformed value is also an empty Vec with a
 /// stderr warning — the engine must not brick on a config typo.
 pub fn resolve_mcp_servers() -> Vec<McpServerConfig> {
-    let raw = std::env::var(ENV_HOUYICODER_MCP_SERVERS).ok();
+    let raw = var(ENV_HOUYICODER_MCP_SERVERS).ok();
     match parse_mcp_servers(raw.as_deref()) {
         Ok(list) => list,
         Err(msg) => {
@@ -339,18 +347,18 @@ fn parse_mcp_servers(raw: Option<&str>) -> Result<Vec<McpServerConfig>, String> 
 /// HOUYICODER_CONFIG_HOME overrides the HOME-derived root (tests isolate
 /// the config dir from the developer's real home without env races on
 /// HOME itself).
-pub fn config_home() -> std::path::PathBuf {
-    if let Ok(dir) = std::env::var(ENV_HOUYICODER_CONFIG_HOME) {
-        return std::path::PathBuf::from(dir);
+pub fn config_home() -> PathBuf {
+    if let Ok(dir) = var(ENV_HOUYICODER_CONFIG_HOME) {
+        return PathBuf::from(dir);
     }
-    let base = std::env::var("HOME")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| std::env::temp_dir());
+    let base = var("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| temp_dir());
     base.join(".houyicoder")
 }
 
 /// The settings file path inside the config-home directory.
-pub fn settings_path() -> std::path::PathBuf {
+pub fn settings_path() -> PathBuf {
     config_home().join(retention::SETTINGS_FILE)
 }
 
@@ -396,12 +404,12 @@ pub fn load_toggles() -> (MemoryToggles, Vec<ConfigWarning>) {
 /// defaults plus a single warning. A valid file with one bad field yields
 /// that field's default plus a warning, but the other fields are read
 /// normally — one typo does not reset the whole file.
-pub fn load_toggles_from(path: &std::path::Path) -> (MemoryToggles, Vec<ConfigWarning>) {
-    let text = match std::fs::read_to_string(path) {
+pub fn load_toggles_from(path: &Path) -> (MemoryToggles, Vec<ConfigWarning>) {
+    let text = match read_to_string(path) {
         Ok(t) => t,
         Err(_) => return (MemoryToggles::default(), Vec::new()),
     };
-    let value: serde_json::Value = match serde_json::from_str(&text) {
+    let value: Value = match serde_json::from_str(&text) {
         Ok(v) => v,
         Err(_) => {
             return (
@@ -430,10 +438,7 @@ pub fn load_toggles_from(path: &std::path::Path) -> (MemoryToggles, Vec<ConfigWa
 /// like sandbox.network survive) and CAS-guarded. The write failure is
 /// returned, not dropped: callers flip runtime state only after Ok so a
 /// toggle that would not survive a restart is never reported as applied.
-pub fn save_toggles_to(
-    path: &std::path::Path,
-    toggles: &MemoryToggles,
-) -> Result<(), SettingsWriteError> {
+pub fn save_toggles_to(path: &Path, toggles: &MemoryToggles) -> Result<(), SettingsWriteError> {
     let auto_memory = toggles.auto_memory;
     let auto_dream = toggles.auto_dream;
     update_settings(
@@ -452,8 +457,8 @@ mod tests {
 
     #[test]
     fn test_model_section_round_trip() {
-        let path = std::env::temp_dir().join(format!("model-{}.json", std::process::id()));
-        std::fs::write(
+        let path = temp_dir().join(format!("model-{}.json", id()));
+        write(
             &path,
             r#"{"model":{"id":"qwen3-coder","effort_level":"high","catalog":[{"id":"qwen3-coder","effort":"low","context_window":131072}]}}"#,
         )
@@ -466,28 +471,28 @@ mod tests {
         assert_eq!(s.catalog[0].effort, Some(EffortLevel::Low));
         assert_eq!(s.catalog[0].context_window, Some(131072));
         assert!(w.is_empty(), "no warnings on a valid model section");
-        drop(std::fs::remove_file(&path));
+        drop(remove_file(&path));
     }
 
     #[test]
     fn test_model_section_missing() {
-        let path = std::env::temp_dir().join(format!("model-missing-{}.json", std::process::id()));
-        std::fs::write(&path, r#"{"auto_memory":true}"#).unwrap();
+        let path = temp_dir().join(format!("model-missing-{}.json", id()));
+        write(&path, r#"{"auto_memory":true}"#).unwrap();
         let (s, w) = load_model_section_from(&path);
         assert!(s.id.is_none(), "no model section => default");
         assert!(!s.catalog.is_empty(), "falls back to default catalog");
         assert!(w.is_empty(), "a missing section is not a warning");
-        drop(std::fs::remove_file(&path));
+        drop(remove_file(&path));
     }
 
     #[test]
     fn test_model_section_corrupt() {
-        let path = std::env::temp_dir().join(format!("model-corrupt-{}.json", std::process::id()));
-        std::fs::write(&path, "not json {").unwrap();
+        let path = temp_dir().join(format!("model-corrupt-{}.json", id()));
+        write(&path, "not json {").unwrap();
         let (s, w) = load_model_section_from(&path);
         assert!(s.id.is_none(), "corrupt => default");
         assert_eq!(w.len(), 1, "corrupt file warns");
-        drop(std::fs::remove_file(&path));
+        drop(remove_file(&path));
     }
 
     #[test]
@@ -537,8 +542,8 @@ mod tests {
         let base = resolve_base_url();
         assert!(
             base == DEFAULT_BASE_URL
-                || base == std::env::var(ENV_DASHSCOPE_BASE_URL).unwrap_or_default()
-                || base == std::env::var(ENV_OPENAI_BASE_URL).unwrap_or_default()
+                || base == var(ENV_DASHSCOPE_BASE_URL).unwrap_or_default()
+                || base == var(ENV_OPENAI_BASE_URL).unwrap_or_default()
         );
     }
 
@@ -547,24 +552,24 @@ mod tests {
         // A settings file with no model.id yields DEFAULT_MODEL. Uses the
         // pure loader against a temp path so the test never touches the real
         // user settings.json, and no env var can shadow the pick.
-        let path = std::env::temp_dir().join(format!("no-model-{}.json", std::process::id()));
-        std::fs::write(&path, r#"{"auto_memory":true}"#).unwrap();
+        let path = temp_dir().join(format!("no-model-{}.json", id()));
+        write(&path, r#"{"auto_memory":true}"#).unwrap();
         assert_eq!(resolve_model_from(&path), DEFAULT_MODEL);
-        drop(std::fs::remove_file(&path));
+        drop(remove_file(&path));
     }
 
     #[test]
     fn test_resolve_model_from_id() {
         // A settings.json with model.id overrides DEFAULT_MODEL. The env
         // layer is gone, so the persisted id is the authority.
-        let path = std::env::temp_dir().join(format!("with-model-{}.json", std::process::id()));
-        std::fs::write(
+        let path = temp_dir().join(format!("with-model-{}.json", id()));
+        write(
             &path,
             r#"{"model":{"id":"qwen3-coder","catalog":[{"id":"qwen3-coder"}]}}"#,
         )
         .unwrap();
         assert_eq!(resolve_model_from(&path), "qwen3-coder");
-        drop(std::fs::remove_file(&path));
+        drop(remove_file(&path));
     }
 
     #[test]
@@ -572,14 +577,14 @@ mod tests {
         // Setting HOUYICODER_TEST_MODEL in the process must not shadow the
         // settings pick: resolve_* reads no env. The var name still exists in
         // the wild; resolving ignores it (whether set or unset).
-        let path = std::env::temp_dir().join(format!("no-env-{}.json", std::process::id()));
-        std::fs::write(
+        let path = temp_dir().join(format!("no-env-{}.json", id()));
+        write(
             &path,
             r#"{"model":{"id":"qwen3-coder","catalog":[{"id":"qwen3-coder"}]}}"#,
         )
         .unwrap();
         assert_eq!(resolve_model_from(&path), "qwen3-coder");
-        drop(std::fs::remove_file(&path));
+        drop(remove_file(&path));
     }
 
     #[test]
@@ -588,8 +593,8 @@ mod tests {
         // another id: that id is the selection the pick replaces, so reading
         // it would keep the session on the model the user deselected.
         assert_eq!(resolve_default_model(), DEFAULT_MODEL);
-        let path = std::env::temp_dir().join(format!("default-pick-{}.json", std::process::id()));
-        std::fs::write(
+        let path = temp_dir().join(format!("default-pick-{}.json", id()));
+        write(
             &path,
             r#"{"model":{"id":"glm-5.2","catalog":[{"id":"glm-5.2"}]}}"#,
         )
@@ -604,7 +609,7 @@ mod tests {
             DEFAULT_MODEL,
             "a Default pick does not read the persisted id"
         );
-        drop(std::fs::remove_file(&path));
+        drop(remove_file(&path));
     }
 
     #[test]
@@ -647,7 +652,7 @@ mod tests {
     /// A missing settings file yields the default (both on).
     #[test]
     fn test_load_missing_is_default() {
-        let path = std::env::temp_dir().join(format!("nope-{}.json", std::process::id()));
+        let path = temp_dir().join(format!("nope-{}.json", id()));
         let (t, _w) = load_toggles_from(&path);
         assert!(t.auto_memory && t.auto_dream, "missing file => both on");
     }
@@ -655,17 +660,17 @@ mod tests {
     /// A corrupt settings file yields the default, not a panic.
     #[test]
     fn test_load_corrupt_is_default() {
-        let path = std::env::temp_dir().join(format!("bad-{}.json", std::process::id()));
-        std::fs::write(&path, "not json {").unwrap();
+        let path = temp_dir().join(format!("bad-{}.json", id()));
+        write(&path, "not json {").unwrap();
         let (t, _w) = load_toggles_from(&path);
         assert!(t.auto_memory && t.auto_dream, "corrupt file => both on");
-        drop(std::fs::remove_file(&path));
+        drop(remove_file(&path));
     }
 
     /// Save then load round-trips a non-default state.
     #[test]
     fn test_save_load_round_trips() {
-        let path = std::env::temp_dir().join(format!("toggles-{}.json", std::process::id()));
+        let path = temp_dir().join(format!("toggles-{}.json", id()));
         let toggles = MemoryToggles {
             auto_memory: false,
             auto_dream: true,
@@ -673,22 +678,22 @@ mod tests {
         save_toggles_to(&path, &toggles).expect("save succeeds");
         let (loaded, _w) = load_toggles_from(&path);
         assert_eq!(loaded, toggles, "round-trip preserves the off/on state");
-        drop(std::fs::remove_file(&path));
+        drop(remove_file(&path));
     }
 
     /// An unwritable settings path returns the failure instead of dropping
     /// it, so the caller can keep runtime state unchanged.
     #[test]
     fn test_save_failure_returns_err() {
-        let blocker = std::env::temp_dir().join(format!("toggles-block-{}", std::process::id()));
-        std::fs::write(&blocker, "regular file, not a directory").unwrap();
+        let blocker = temp_dir().join(format!("toggles-block-{}", id()));
+        write(&blocker, "regular file, not a directory").unwrap();
         let path = blocker.join("settings.json");
         let err = save_toggles_to(&path, &MemoryToggles::default()).unwrap_err();
         assert!(
             matches!(err, SettingsWriteError::Io(_)),
             "parent is a file, so the write fails with Io: {err:?}"
         );
-        drop(std::fs::remove_file(&blocker));
+        drop(remove_file(&blocker));
     }
 
     /// config_home + settings_path resolve under the user HOME. Deterministic
@@ -705,20 +710,20 @@ mod tests {
     /// file from an older build does not brick the load.
     #[test]
     fn test_partial_json_uses_defaults() {
-        let path = std::env::temp_dir().join(format!("partial-{}.json", std::process::id()));
-        std::fs::write(&path, r#"{"auto_dream":false}"#).unwrap();
+        let path = temp_dir().join(format!("partial-{}.json", id()));
+        write(&path, r#"{"auto_dream":false}"#).unwrap();
         let (t, _w) = load_toggles_from(&path);
         assert!(t.auto_memory, "missing auto_memory defaults on");
         assert!(!t.auto_dream, "auto_dream false from the file");
-        drop(std::fs::remove_file(&path));
+        drop(remove_file(&path));
     }
 
     /// A bad-typed field falls back to its default and warns; a sibling field
     /// is still read normally. One typo does not reset the whole file.
     #[test]
     fn test_bad_field_defaults_warns() {
-        let path = std::env::temp_dir().join(format!("badfield-{}.json", std::process::id()));
-        std::fs::write(&path, r#"{"auto_memory":"yes","auto_dream":false}"#).unwrap();
+        let path = temp_dir().join(format!("badfield-{}.json", id()));
+        write(&path, r#"{"auto_memory":"yes","auto_dream":false}"#).unwrap();
         let (t, warnings) = load_toggles_from(&path);
         assert!(t.auto_memory, "bad auto_memory falls back to default true");
         assert!(
@@ -730,6 +735,6 @@ mod tests {
             warnings[0].field.contains("auto_memory"),
             "warning names the bad field"
         );
-        drop(std::fs::remove_file(&path));
+        drop(remove_file(&path));
     }
 }

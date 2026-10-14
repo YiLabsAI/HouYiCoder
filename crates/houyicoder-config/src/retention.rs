@@ -11,6 +11,15 @@
 //! (delete everything) least of all.
 
 use crate::{ConfigWarning, json_type_name, settings_path};
+use serde_json::Value;
+#[cfg(test)]
+use std::env::temp_dir;
+use std::fs::read_to_string;
+use std::path::Path;
+#[cfg(test)]
+use std::process::id;
+#[cfg(test)]
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// How long to keep sessions, and how many to keep at minimum. Both default
 /// to bounded values so a session store is bounded out of the box; the TTL
@@ -59,17 +68,17 @@ pub(crate) const SETTINGS_FILE: &str = "settings.json";
 
 /// Retention under a config home the caller names; load_retention is this
 /// at the resolved home.
-pub fn load_retention_in(home: &std::path::Path) -> (RetentionConfig, Vec<ConfigWarning>) {
+pub fn load_retention_in(home: &Path) -> (RetentionConfig, Vec<ConfigWarning>) {
     load_retention_from(&home.join(SETTINGS_FILE))
 }
 
 /// Pure loader against an explicit path; testable without env mutation.
-pub fn load_retention_from(path: &std::path::Path) -> (RetentionConfig, Vec<ConfigWarning>) {
-    let text = match std::fs::read_to_string(path) {
+pub fn load_retention_from(path: &Path) -> (RetentionConfig, Vec<ConfigWarning>) {
+    let text = match read_to_string(path) {
         Ok(t) => t,
         Err(_) => return (RetentionConfig::default(), Vec::new()),
     };
-    let value: serde_json::Value = match serde_json::from_str(&text) {
+    let value: Value = match serde_json::from_str(&text) {
         Ok(v) => v,
         Err(_) => {
             return (
@@ -117,7 +126,7 @@ pub fn load_retention_from(path: &std::path::Path) -> (RetentionConfig, Vec<Conf
 /// knob, because the store keeps growing and nothing ever says why. Warn,
 /// never accept: accepting would give one setting two valid spellings and
 /// split every config in the wild into two dialects.
-fn warn_near_miss_keys(value: &serde_json::Value, warnings: &mut Vec<ConfigWarning>) {
+fn warn_near_miss_keys(value: &Value, warnings: &mut Vec<ConfigWarning>) {
     const NEAR_MISS: [(&str, &str); 3] = [
         ("sessionRetentionDays", "session_retention_days"),
         ("sessionRetentionCount", "session_retention_count"),
@@ -137,14 +146,14 @@ fn warn_near_miss_keys(value: &serde_json::Value, warnings: &mut Vec<ConfigWarni
 /// default (no warning); a non-number yields the default plus a warning so
 /// the typo is surfaced, not silently swallowed.
 fn extract_u32_field(
-    value: &serde_json::Value,
+    value: &Value,
     field: &str,
     default: u32,
     warnings: &mut Vec<ConfigWarning>,
 ) -> u32 {
     match value.get(field) {
-        None | Some(serde_json::Value::Null) => default,
-        Some(serde_json::Value::Number(n)) => n
+        None | Some(Value::Null) => default,
+        Some(Value::Number(n)) => n
             .as_u64()
             .and_then(|v| u32::try_from(v).ok())
             .unwrap_or_else(|| {
@@ -176,10 +185,9 @@ mod tests {
     use std::path::PathBuf;
 
     fn temp_settings(content: &str) -> PathBuf {
-        use std::sync::atomic::{AtomicU64, Ordering};
         static SEQ: AtomicU64 = AtomicU64::new(0);
         let seq = SEQ.fetch_add(1, Ordering::Relaxed);
-        let p = std::env::temp_dir().join(format!("houyi-ret-{seq}-{}.json", std::process::id()));
+        let p = temp_dir().join(format!("houyi-ret-{seq}-{}.json", id()));
         fs::write(&p, content).expect("write");
         p
     }

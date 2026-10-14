@@ -556,9 +556,4 @@ impl SessionEvent {
 }
 
 #[cfg(test)]
-#[path = "event_tests.rs"]
-mod event_tests;
-
-#[cfg(test)]
-#[path = "turn_usage_tests.rs"]
-mod turn_usage_tests;
+mod tests;

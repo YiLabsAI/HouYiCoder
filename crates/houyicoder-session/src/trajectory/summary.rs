@@ -426,5 +426,4 @@ fn split(value: Option<(u64, bool)>) -> (Option<u64>, bool) {
 }
 
 #[cfg(test)]
-#[path = "summary_tests.rs"]
 mod tests;

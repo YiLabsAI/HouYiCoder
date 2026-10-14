@@ -239,5 +239,4 @@ impl LogIndex {
 }
 
 #[cfg(test)]
-#[path = "log_index_tests.rs"]
-mod log_index_tests;
+mod tests;

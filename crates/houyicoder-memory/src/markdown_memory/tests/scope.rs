@@ -4,16 +4,17 @@
 //! on each MemorySummary so the /memory pane can filter by scope — the
 //! dimension orthogonal to the provenance source.
 
-use super::*;
+use super::super::*;
+use houyicoder_context::MemoryScope;
 use houyicoder_context::MemorySource;
 use std::env;
 use std::fs;
 use std::path::PathBuf;
 use std::process;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn temp_root() -> PathBuf {
-    use std::sync::atomic::{AtomicU64, Ordering};
     static SEQ: AtomicU64 = AtomicU64::new(0);
     let seq = SEQ.fetch_add(1, Ordering::Relaxed);
     let dir = env::temp_dir().join(format!(
@@ -34,7 +35,6 @@ fn entry(key: &str, content: &str, source: MemorySource) -> MemoryEntry {
 /// newest one.
 #[test]
 fn test_show_scoped_body() {
-    use houyicoder_context::MemoryScope;
     let user_dir = temp_root();
     let project_dir = temp_root();
     let auto_dir = temp_root();
@@ -97,7 +97,6 @@ fn test_show_scoped_body() {
 /// ambiguous one before it reads.
 #[test]
 fn test_scopes_for_key_absent() {
-    use houyicoder_context::MemoryScope;
     let user_dir = temp_root();
     let project_dir = temp_root();
     let auto_dir = temp_root();
@@ -130,7 +129,6 @@ fn test_scopes_for_key_absent() {
 /// (positional, by the documented new_multi order).
 #[test]
 fn test_list_scope_per_root() {
-    use houyicoder_context::MemoryScope;
     let user_dir = temp_root();
     let project_dir = temp_root();
     let auto_dir = temp_root();

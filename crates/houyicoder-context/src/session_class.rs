@@ -303,5 +303,4 @@ fn epoch_secs(time: SystemTime) -> u64 {
 }
 
 #[cfg(test)]
-#[path = "session_class_tests.rs"]
-mod session_class_tests;
+mod tests;
