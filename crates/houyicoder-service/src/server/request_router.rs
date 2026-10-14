@@ -339,29 +339,4 @@ impl Server {
 }
 
 #[cfg(test)]
-#[path = "trajectory_handler_tests.rs"]
-mod trajectory_handler_tests;
-
-#[cfg(test)]
-#[path = "rename_session_tests.rs"]
-mod rename_session_tests;
-
-#[cfg(test)]
-#[path = "memory_tests.rs"]
-mod memory_tests;
-
-#[cfg(test)]
-#[path = "context_dispatch_tests.rs"]
-mod context_dispatch_tests;
-
-#[cfg(test)]
-#[path = "model_set_tests.rs"]
-mod model_set_tests;
-
-#[cfg(test)]
-#[path = "request_rejection_tests.rs"]
-mod request_rejection_tests;
-
-#[cfg(test)]
-#[path = "dispatch_response_tests.rs"]
-mod dispatch_response_tests;
+mod tests;

@@ -388,13 +388,4 @@ pub(crate) async fn serve_session(
 }
 
 #[cfg(test)]
-#[path = "session_tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "reconnect_tests.rs"]
-mod reconnect_tests;
-
-#[cfg(test)]
-#[path = "orphan_recovery_tests.rs"]
-mod orphan_recovery_tests;

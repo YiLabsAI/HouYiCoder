@@ -473,5 +473,4 @@ pub fn store_backlog_notice(
 }
 
 #[cfg(test)]
-#[path = "session_prune_tests.rs"]
 mod tests;

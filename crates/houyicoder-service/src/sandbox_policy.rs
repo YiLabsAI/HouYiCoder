@@ -93,5 +93,4 @@ fn map_unix_sockets(cfg: &SandboxNetworkConfig, warnings: &mut Vec<PolicyWarning
 }
 
 #[cfg(test)]
-#[path = "sandbox_policy_tests.rs"]
-mod sandbox_policy_tests;
+mod tests;

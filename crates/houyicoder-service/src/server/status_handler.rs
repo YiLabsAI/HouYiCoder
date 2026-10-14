@@ -189,5 +189,4 @@ pub(super) fn compact_session_title(text: &str) -> String {
 }
 
 #[cfg(test)]
-#[path = "status_handler_tests.rs"]
 mod tests;

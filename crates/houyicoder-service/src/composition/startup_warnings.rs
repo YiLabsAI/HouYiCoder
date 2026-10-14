@@ -30,5 +30,4 @@ fn format_warning(w: &ConfigWarning) -> String {
 }
 
 #[cfg(test)]
-#[path = "startup_warnings_tests.rs"]
 mod tests;

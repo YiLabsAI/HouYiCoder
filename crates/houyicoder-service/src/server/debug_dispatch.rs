@@ -45,5 +45,4 @@ impl Server {
 }
 
 #[cfg(test)]
-#[path = "debug_dispatch_tests.rs"]
-mod debug_dispatch_tests;
+mod tests;

@@ -38,5 +38,4 @@ pub(crate) fn declared_events() -> Vec<HookEntry> {
 }
 
 #[cfg(test)]
-#[path = "hooks_tests.rs"]
 mod tests;

@@ -680,5 +680,4 @@ pub(crate) fn acp_permission_response_to_decision(
 }
 
 #[cfg(test)]
-#[path = "protocol_adapter_tests.rs"]
 mod tests;

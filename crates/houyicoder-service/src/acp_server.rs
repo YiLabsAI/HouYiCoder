@@ -495,5 +495,4 @@ fn now_millis() -> u64 {
 }
 
 #[cfg(test)]
-#[path = "acp_server_tests.rs"]
-mod acp_server_tests;
+mod tests;

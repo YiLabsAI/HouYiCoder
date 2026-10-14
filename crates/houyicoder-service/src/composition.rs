@@ -785,6 +785,6 @@ pub(crate) struct RunnerHandleClone {
     pub(crate) gate: Arc<dyn ModeGate>,
     pub(crate) append_notify: Arc<Notify>,
 }
+
 #[cfg(test)]
-#[path = "composition_tests.rs"]
 mod tests;

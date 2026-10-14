@@ -26,5 +26,4 @@ pub(crate) fn skill_entries(entries: Vec<SkillSnapshot>) -> Vec<SkillEntry> {
 }
 
 #[cfg(test)]
-#[path = "skills_tests.rs"]
 mod tests;

@@ -154,5 +154,4 @@ impl Server {
 }
 
 #[cfg(test)]
-#[path = "outbound_frames_tests.rs"]
-mod outbound_frames_tests;
+mod tests;

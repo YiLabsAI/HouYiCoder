@@ -349,5 +349,4 @@ fn parse_tool_grant(spec: &str) -> (String, Option<RuleContent>) {
 }
 
 #[cfg(test)]
-#[path = "hook_compose_tests.rs"]
-mod hook_compose_tests;
+mod tests;

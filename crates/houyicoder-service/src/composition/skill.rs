@@ -475,5 +475,4 @@ fn diff_changed(old: &SkillSet, new: &SkillSet) -> Vec<String> {
 }
 
 #[cfg(test)]
-#[path = "skill_tests.rs"]
 mod tests;

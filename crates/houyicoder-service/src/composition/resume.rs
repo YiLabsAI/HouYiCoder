@@ -429,5 +429,4 @@ fn write_fork_descriptor(
 }
 
 #[cfg(test)]
-#[path = "resume_tests.rs"]
 mod tests;

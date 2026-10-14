@@ -447,13 +447,9 @@ fn format_skill_script_detail(scripts: &[SkillScriptRef]) -> String {
     }
 }
 
-#[cfg(test)]
-#[path = "approval_tests.rs"]
-mod tests;
-
 // Every test in this module exercises the macOS sandbox consent chain,
 // so the whole module compiles only on macOS. Gating the module keeps
 // its imports from turning unused on other platforms.
 #[cfg(all(test, target_os = "macos"))]
-#[path = "consent_chain_tests.rs"]
-mod consent_chain_tests;
+#[cfg(test)]
+mod tests;

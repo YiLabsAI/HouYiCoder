@@ -159,5 +159,4 @@ fn run_helper(command: &str, launcher: Option<&dyn ProcessLauncher>) -> Option<S
 }
 
 #[cfg(test)]
-#[path = "api_key_tests.rs"]
-mod api_key_tests;
+mod tests;

@@ -78,5 +78,4 @@ fn write_child_descriptor_if_absent(
 }
 
 #[cfg(test)]
-#[path = "session_repair_tests.rs"]
 mod tests;
