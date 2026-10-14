@@ -327,11 +327,9 @@ Choosing the delivery destination is a design decision, not a matter of taste:
 | Diagnostic | Only a developer can use it | `tracing` macros (`tracing::warn!`, `tracing::debug!`); a file-backed subscriber installed at the composition root, toggled at runtime via the `/debug` wire command. Never the terminal |
 | Console | No alternate screen is up: argument parsing, startup failure, a non-TUI binary | A print macro, correct here and only here |
 
-- Enforced by scripts/check_stderr.py. Two tables: `_CONSOLE_OK` (correct
-  console writes, permanent) and `_STDERR_BASELINE` (pre-existing runtime
-  writes awaiting migration, ratchets to empty). Both are matched exactly
-  per file, so a count that drifts in either direction fails. The baseline
-  is currently empty — all runtime writes have migrated to tracing.
+- Enforced by scripts/check_stderr.py: legitimate non-TUI console writes are
+  whitelisted per file with exact counts, and runtime console writes are
+  rejected.
 - Counted per file rather than exempting a file, because both classes share
   files: the cli entry point holds argument parsing and post-alternate-screen
   wiring in one module, and a whole-file exemption would bless exactly the
@@ -378,14 +376,12 @@ Choosing the delivery destination is a design decision, not a matter of taste:
   faking a hierarchy. Split to X.rs + X/sub.rs so the path is X::sub (no
   stutter -- X_sub::item repeats the X concept twice) and the file tree
   shows the subsystem. The 2018 form (X.rs + X/) is preferred over mod.rs.
-  Enforced by check_rust_naming.py rule 8; the baseline of pre-existing
-  flat prefixes ratchets down as each pair converts. Each tests/*.rs under
-  a crate's tests/ is exempt: it is its own binary, not a module.
-- The flat test peer has its own rule (9) and its own ratchet, counted as
-  the number of `#[path = "..._tests.rs"]` declarations under crates/*/src:
-  the count may only fall, so a new flat pair fails the gate. Lower
-  _FLAT_TEST_PEER_BASELINE in the same commit that converts a pair.
-  Guarded by scripts/test_flat_test_peer.py.
+  Enforced by scripts/check_rust_naming.py. Each tests/*.rs under a crate's
+  tests/ is exempt: it is its own binary, not a module.
+- Flat test peers (`#[path = "..._tests.rs"]`) and inline `#[cfg(test)] mod`
+  blocks in production files are also gated by scripts/check_rust_naming.py:
+  new ones fail the gate, and converting existing ones ratchets the baseline
+  down toward zero.
 
 ### Mock the bottom (unit tests)
 - Unit tests NEVER hit real external calls: no real LLM/provider HTTP, no
@@ -512,9 +508,9 @@ Choosing the delivery destination is a design decision, not a matter of taste:
   modules snake_case -- enforced by rustc lints under -D warnings.
 
 ### Coverage
-- Gate: workspace unit line coverage ≥ 85% (check_coverage.sh, COV_THRESHOLD)
-  and ≥ 85% of the lines a branch adds or modifies (check_diff_coverage.py,
-  COV_DIFF_THRESHOLD). Both raise to 90 once comfortably green.
+- Gate: workspace unit line coverage ≥ 85% and ≥ 85% of the lines a branch
+  adds or modifies (scripts/check_diff_coverage.py). Both raise to 90 once
+  comfortably green.
 - Risk-driven over a fixed count: cover happy path + boundary + error path +
   one dependency-interaction assertion per non-trivial module.
 - diff-cov (make check) reads the --lib lcov only; integration tests in

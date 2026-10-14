@@ -16,27 +16,28 @@ segment count and length, and soft length warns on any fn or type name.
 
 Checks .rs files (pass files as args; no args = all crates/**/*.rs):
 
-1. ERROR - a test fn (any #[test] / #[tokio::test]-marked fn) whose full
-   name contains more than 4 underscores. Long sentence-style names are hard
-   to scan in test output and to filter; move detail into a module doc.
-2. ERROR - a test fn name longer than 50 chars (hard).
-3. WARN  - a test fn name longer than 40 chars (trim in the same patch).
-4. ERROR - a test fn name starting with a project-specific bugN_ prefix;
-   names must describe behavior, not reference an internal bug number.
-5. ERROR - a test fn name ending on a function word that takes a complement
-   (and, after, with, to, is, ...), which means the phrase never closes:
-   test_mandatory_deny_read_and has lost its object. These come from trimming
-   an over-cap name by dropping trailing segments, which satisfies rule 1
-   while destroying the sentence -- rule 1 counts separators and cannot see a
-   severed clause. Rename for the behavior; do not cut the last word.
-6. WARN  - any non-test fn name longer than 50 chars, or any
-   struct/enum/trait/union name longer than 40 chars.
-7. ERROR - a struct/enum/trait/union name ending in "Wire". Wire DTOs share
-   a name with their domain type and rely on the module path to disambiguate
-   (e.g. frontend::memory::MemoryDetail vs context::MemoryEntry); a Wire
-   suffix is a smell that the name collides or the type was not given a
-   descriptive one. Pick a descriptive name or use the path.
-8. ERROR - a flat-prefix module pair: a directory under crates/*/src/ that
+- ERROR - a test fn (any #[test] / #[tokio::test]-marked fn) whose full
+  name contains more than 4 underscores. Long sentence-style names are hard
+  to scan in test output and to filter; move detail into a module doc.
+- ERROR - a test fn name longer than 50 chars (hard).
+- WARN  - a test fn name longer than 40 chars (trim in the same patch).
+- ERROR - a test fn name starting with a project-specific bugN_ prefix;
+  names must describe behavior, not reference an internal bug number.
+- ERROR - a test fn name ending on a function word that takes a complement
+  (and, after, with, to, is, ...), which means the phrase never closes:
+  test_mandatory_deny_read_and has lost its object. These come from trimming
+  an over-cap name by dropping trailing segments, which satisfies the
+  underscore cap while destroying the sentence -- the underscore cap counts
+  separators and cannot see a severed clause. Rename for the behavior; do
+  not cut the last word.
+- WARN  - any non-test fn name longer than 50 chars, or any
+  struct/enum/trait/union name longer than 40 chars.
+- ERROR - a struct/enum/trait/union name ending in "Wire". Wire DTOs share
+  a name with their domain type and rely on the module path to disambiguate
+  (e.g. frontend::memory::MemoryDetail vs context::MemoryEntry); a Wire
+  suffix is a smell that the name collides or the type was not given a
+  descriptive one. Pick a descriptive name or use the path.
+- ERROR - a flat-prefix module pair: a directory under crates/*/src/ that
    holds both X.rs and X_<suffix>.rs is faking a module hierarchy by filename
    prefix. Rust has a first-class directory module -- X.rs + X/<suffix>.rs
    gives the path X::<suffix>, which does not stutter (X_<suffix>::item
@@ -101,7 +102,7 @@ _TEST_NAME_LEN_SOFT = 40
 _FN_LEN_WARN = 50
 _TYPE_LEN_WARN = 40
 
-# Pre-existing flat-prefix module pairs (rule 8), as the CHILD path relative
+# Pre-existing flat-prefix module pairs, as the CHILD path relative
 # to the repo root. The gate tolerates these so it can land before the
 # directory-module migration; a flat prefix not listed here is a NEW one and
 # fails the gate. Delete a line in the same commit that converts the pair to
@@ -118,7 +119,7 @@ _FILE_QUALIFIER_RE = re.compile(r"(?:_extra|_part\d|_misc)[_.]|^tests_|_tests_")
 _FILE_QUALIFIER_BASELINE: frozenset[str] = frozenset({
 })
 
-# Flat test peers (rule 9), counted rather than listed: a module whose tests
+# Flat test peers, counted rather than listed: a module whose tests
 # sit in a sibling X_tests.rs instead of X/tests.rs. The flat form has to
 # escape the module system -- a mod declared in X.rs resolves to X/tests.rs,
 # so reaching a sibling X_tests.rs takes an explicit #[path = "..._tests.rs"]
@@ -128,6 +129,8 @@ _FILE_QUALIFIER_BASELINE: frozenset[str] = frozenset({
 # lower this number in the same commit that converts a pair.
 _FLAT_TEST_PEER_BASELINE = 98
 _FLAT_TEST_PEER_PATH_RE = re.compile(r'#\[path\s*=\s*"[^"]*_tests\.rs"\]')
+_INLINE_TEST_MOD_BASELINE = 187
+_INLINE_TEST_MOD_RE = re.compile(r"(?m)^#\[cfg\(test\)\]\s*\nmod\s+[a-z_]+\s*\{")
 
 
 def _check_flat_test_peer(
@@ -140,14 +143,43 @@ def _check_flat_test_peer(
     mod declared in X.rs resolves to X/tests.rs; the directory form needs no
     attribute and mirrors the source path, so it is the standard. Pre-existing
     peers are grandfathered by count so the gate could land before the
-    migration; adding one raises the count and fails."""
+    migration; adding one raises the count and fails.
+
+    Also locks inline #[cfg(test)] mod { ... } blocks to a downward ratchet
+    (zero in houyicoder-tui, where the directory migration is complete)."""
     detected: list[str] = []
+    inline_mods: list[str] = []
+    tui_violations: list[str] = []
     for p in sorted(root.rglob("*.rs")):
-        if "/target/" in str(p) or "/tests/" in str(p):
+        posix = p.as_posix()
+        if "/target/" in posix or posix.split("/src/")[0].endswith("/tests"):
             continue
-        for lineno, line in enumerate(p.read_text().splitlines(), 1):
-            if _FLAT_TEST_PEER_PATH_RE.search(line):
-                detected.append(f"{p.as_posix()}:{lineno}")
+        is_tui_src = "houyicoder-tui/src/" in posix
+        if is_tui_src and p.name.endswith("_tests.rs"):
+            tui_violations.append(f"{posix}: flat *_tests.rs file in tui")
+        text = p.read_text(encoding="utf-8")
+        if "/tests/" not in posix:
+            for lineno, line in enumerate(text.splitlines(), 1):
+                if _FLAT_TEST_PEER_PATH_RE.search(line):
+                    detected.append(f"{posix}:{lineno}")
+        for m in _INLINE_TEST_MOD_RE.finditer(text):
+            lineno = text[: m.start()].count("\n") + 1
+            inline_mods.append(f"{posix}:{lineno}")
+            if is_tui_src:
+                tui_violations.append(f"{posix}:{lineno}: inline test mod in tui")
+    if tui_violations:
+        errors.append(
+            "houyicoder-tui test layout is locked to 0 flat *_tests.rs files "
+            "and 0 inline #[cfg(test)] mod { ... } blocks; use X/tests.rs: "
+            + ", ".join(tui_violations[:8])
+        )
+    if len(inline_mods) > _INLINE_TEST_MOD_BASELINE:
+        errors.append(
+            f"inline #[cfg(test)] mod blocks: {len(inline_mods)} "
+            f"(baseline {_INLINE_TEST_MOD_BASELINE}). Put tests in X/tests.rs "
+            f"with #[cfg(test)] mod tests; instead of embedding a second "
+            f"module scope inside a production file."
+        )
     if len(detected) > baseline:
         errors.append(
             f"flat test peers: {len(detected)} (baseline {baseline}). A new "
