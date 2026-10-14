@@ -7,6 +7,8 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use houyicoder_core::agent::multi_agent::registry::ResolveCtx;
 
 use super::build_agent_registry;
+use std::env::temp_dir;
+use std::process::id;
 
 #[test]
 fn test_registry_resolves_builtins() {
@@ -68,5 +70,5 @@ fn test_project_overrides_user() {
 fn unique_temp_dir() -> PathBuf {
     static SEQ: AtomicU32 = AtomicU32::new(0);
     let n = SEQ.fetch_add(1, Ordering::Relaxed);
-    std::env::temp_dir().join(format!("houyi-agentreg-{}-{}", std::process::id(), n))
+    temp_dir().join(format!("houyi-agentreg-{}-{}", id(), n))
 }

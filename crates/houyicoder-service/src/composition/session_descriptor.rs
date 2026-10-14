@@ -4,12 +4,14 @@ use super::*;
 use houyicoder_context::{
     NameSource, SessionDescriptor, SessionDescriptorStore, SessionProvenance,
 };
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 /// Build the descriptor for a fresh session.
 pub(crate) fn build_initial_descriptor(model: &str, project: Option<&str>) -> SessionDescriptor {
     let cwd = workspace_cwd(project.map(str::to_string));
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
     SessionDescriptor {

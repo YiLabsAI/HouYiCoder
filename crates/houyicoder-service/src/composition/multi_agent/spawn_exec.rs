@@ -27,6 +27,7 @@ use tokio::sync::oneshot::{Sender, channel};
 use tokio::task::JoinHandle;
 
 use super::announce_spawn;
+use super::drive::drive_child_to_terminal;
 use super::fire_subagent_start;
 use super::stamp_spawned_by;
 use super::{DriverEntry, DriverRegistry, MultiAgentRuntime};
@@ -37,6 +38,7 @@ use houyicoder_core::agent::multi_agent::registry::AgentDefinition;
 use houyicoder_core::agent::multi_agent::registry::AgentError;
 use houyicoder_core::agent::multi_agent::registry::PromptSource;
 use houyicoder_core::agent::runner_config::RunnerConfig;
+use std::panic::resume_unwind;
 
 #[expect(
     clippy::too_many_arguments,
@@ -68,7 +70,7 @@ pub(super) async fn finalize_child(
     // the worktree fence slot is released. Catching here keeps the tail's
     // single copy shared by both spawn paths. The wrap is sound: the runner is
     // not polled again after the catch, so no half-updated state is read.
-    let result = AssertUnwindSafe(super::drive::drive_child_to_terminal(
+    let result = AssertUnwindSafe(drive_child_to_terminal(
         Arc::clone(&handle.runner),
         child_sid,
         task,
@@ -140,7 +142,7 @@ pub(super) async fn finalize_child(
         // The child is finalized; the panic continues outward from here, so a
         // caller awaiting the driver still sees it as the panic it is rather
         // than as an ordinary refusal.
-        std::panic::resume_unwind(payload);
+        resume_unwind(payload);
     }
     (status, summary, usage)
 }
@@ -505,7 +507,7 @@ pub(super) async fn run_foreground_spawn(
         Ok(outcome) => outcome,
         // A panic inside the driver would otherwise reach the model as an
         // ordinary refusal, so surface it as the panic it is.
-        Err(join) => std::panic::resume_unwind(join.into_panic()),
+        Err(join) => resume_unwind(join.into_panic()),
     }
 }
 

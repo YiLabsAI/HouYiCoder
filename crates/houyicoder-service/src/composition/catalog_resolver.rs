@@ -11,6 +11,7 @@ use houyicoder_core::agent::{ModelCatalogResolver, effort_default_for};
 use houyicoder_protocol::frontend::model::SpeedMode;
 use houyicoder_protocol::llm::EffortLevel;
 use serde_json::json;
+use std::path::Path;
 
 /// The effort level to persist on Enter: the effective pick, or nothing
 /// when the pick equals the model's fallback default — so a deliberate
@@ -48,7 +49,7 @@ pub(crate) struct SettingsCatalogResolver {
 /// reports a partial result, so a session that switched but did not save
 /// says so.
 pub fn persist_model_pick(
-    path: &std::path::Path,
+    path: &Path,
     model_input: Option<&str>,
     picked_effort: Option<EffortLevel>,
     toggled: bool,

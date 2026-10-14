@@ -11,7 +11,11 @@ use houyicoder_context::{
     SessionLogEntry, TurnGroup,
 };
 use houyicoder_core::agent::Runner;
+use houyicoder_core::agent::ToolRegistry;
+use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_memory::InMemoryBackend;
+use houyicoder_permission::DefaultModeGate;
+use houyicoder_protocol::envelope::ResponsePayload;
 use houyicoder_protocol::envelope::{ClientFrame, RequestEnvelope, RequestId, ServerFrame};
 use houyicoder_protocol::framing::encode;
 use houyicoder_protocol::frontend::FrontendRequest;
@@ -26,8 +30,8 @@ fn stub_runner_with_checkpoint() -> (Arc<Runner>, SessionId) {
     let runner = Runner::new(
         store.clone(),
         Arc::new(FakeProvider::text("x")),
-        houyicoder_core::agent::ToolRegistry::new(),
-        houyicoder_core::agent::runner_config::RunnerConfig::default(),
+        ToolRegistry::new(),
+        RunnerConfig::default(),
     );
     (Arc::new(runner), session)
 }
@@ -83,11 +87,7 @@ async fn test_query_injects_compact_buffer() {
     let (server_tx, mut client_rx) = mpsc::channel::<String>(256);
     let (mut client_tx, server_rx) = mpsc::channel::<String>(256);
     let io = FrameCarrier::new(server_tx, server_rx);
-    let server = Server::new(
-        runner,
-        session,
-        Arc::new(houyicoder_permission::DefaultModeGate::new()),
-    );
+    let server = Server::new(runner, session, Arc::new(DefaultModeGate::new()));
     let handle = tokio::spawn(async move { server.serve(io).await });
     send_line(&mut client_tx, &Hello::local());
     drop(client_rx.next().await);
@@ -99,7 +99,7 @@ async fn test_query_injects_compact_buffer() {
     );
     let _snap = match recv_frame(&mut client_rx).await {
         ServerFrame::Response(r) => match r.payload {
-            houyicoder_protocol::envelope::ResponsePayload::Status(s) => s,
+            ResponsePayload::Status(s) => s,
             _ => panic!("expected Status"),
         },
         other => panic!("expected status response: {other:?}"),
@@ -110,7 +110,7 @@ async fn test_query_injects_compact_buffer() {
     );
     let bd = match recv_frame(&mut client_rx).await {
         ServerFrame::Response(r) => match r.payload {
-            houyicoder_protocol::envelope::ResponsePayload::Context(bd) => bd,
+            ResponsePayload::Context(bd) => bd,
             _ => panic!("expected Context"),
         },
         other => panic!("expected context response: {other:?}"),

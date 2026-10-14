@@ -3,7 +3,11 @@
 use std::path::{Path, PathBuf};
 
 use super::*;
+use houyicoder_api::memory::MemoryProvider;
 use houyicoder_core::agent::{MemoryGates, MemoryRuntime};
+use houyicoder_memory::MarkdownMemoryProvider;
+use houyicoder_memory::SemanticReranker;
+use std::env::var;
 
 /// Build a three-scope provider and repair its derived index. The home
 /// override exists so tests inject an isolated root instead of reading the
@@ -11,10 +15,10 @@ use houyicoder_core::agent::{MemoryGates, MemoryRuntime};
 pub(super) fn memory_provider_for(
     ws: &Path,
     home_override: Option<&Path>,
-) -> houyicoder_memory::MarkdownMemoryProvider {
+) -> MarkdownMemoryProvider {
     let home: PathBuf = home_override
         .map(Path::to_path_buf)
-        .or_else(|| std::env::var("HOME").ok().map(PathBuf::from))
+        .or_else(|| var("HOME").ok().map(PathBuf::from))
         .unwrap_or_else(|| ws.to_path_buf());
     let slug = worktree::git_canonical_slug(ws);
     let user_root = home.join(".houyicoder").join("memory");
@@ -24,11 +28,7 @@ pub(super) fn memory_provider_for(
         .join("projects")
         .join(&slug)
         .join("memory");
-    let provider = houyicoder_memory::MarkdownMemoryProvider::new_multi(vec![
-        user_root,
-        project_root,
-        auto_root,
-    ]);
+    let provider = MarkdownMemoryProvider::new_multi(vec![user_root, project_root, auto_root]);
     heal_memory_index(&provider);
     provider
 }
@@ -40,7 +40,7 @@ fn build_memory_extractor(
     session_log: Arc<dyn SessionLog>,
     provider: Arc<dyn ModelProvider>,
     memory: Arc<dyn MemoryProvider>,
-    cwd: std::path::PathBuf,
+    cwd: PathBuf,
     model: String,
 ) -> Arc<MemoryExtractor> {
     let fork: Arc<dyn SessionLog> = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
@@ -70,9 +70,9 @@ pub(super) fn build_memory_runtime(
     session: SessionId,
     provider: Arc<dyn MemoryProvider>,
     model_provider: Arc<dyn ModelProvider>,
-    cwd: std::path::PathBuf,
+    cwd: PathBuf,
     model: String,
-    session_log_root: Option<std::path::PathBuf>,
+    session_log_root: Option<PathBuf>,
 ) -> (MemoryRuntime, Vec<houyicoder_config::ConfigWarning>) {
     let (toggles, settings_warnings) = houyicoder_config::load_toggles();
     let gates = MemoryGates::new(toggles.auto_memory, toggles.auto_dream);
@@ -90,7 +90,7 @@ pub(super) fn build_memory_runtime(
     }
     // The semantic selection stage shares the main model; recall fires it
     // only on a weak lexical signal, off the first-token path.
-    let reranker = Arc::new(houyicoder_memory::SemanticReranker::new(
+    let reranker = Arc::new(SemanticReranker::new(
         Arc::clone(&model_provider),
         model.clone(),
     ));
@@ -111,9 +111,9 @@ pub(super) fn build_memory_runtime(
 fn build_dream_runner(
     provider: Arc<dyn ModelProvider>,
     memory: Arc<dyn MemoryProvider>,
-    cwd: std::path::PathBuf,
+    cwd: PathBuf,
     model: String,
-    session_log_root: Option<std::path::PathBuf>,
+    session_log_root: Option<PathBuf>,
 ) -> Arc<DreamRunner> {
     let ephemeral: Arc<dyn SessionLog> =
         Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
@@ -133,8 +133,8 @@ fn build_dream_runner(
 }
 
 /// Repair a stale derived index without preventing startup.
-pub(super) fn heal_memory_index(provider: &houyicoder_memory::MarkdownMemoryProvider) {
-    if let Err(e) = houyicoder_api::memory::MemoryProvider::rebuild_if_stale(provider) {
+pub(super) fn heal_memory_index(provider: &MarkdownMemoryProvider) {
+    if let Err(e) = MemoryProvider::rebuild_if_stale(provider) {
         tracing::warn!("memory self-heal failed: {e}");
     }
 }

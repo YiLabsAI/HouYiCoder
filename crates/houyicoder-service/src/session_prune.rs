@@ -23,6 +23,18 @@ use std::path::{Path, PathBuf};
 
 use houyicoder_context::SessionId;
 use houyicoder_context::session_class::{SessionClass, scan_sessions};
+use std::fs::File;
+use std::fs::OpenOptions;
+use std::fs::metadata;
+use std::fs::read_dir;
+use std::fs::remove_dir_all;
+use std::fs::remove_file;
+use std::fs::rename;
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::process::id;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 /// The retention policy: how old before a session is prunable, how soon an
 /// empty one is, the count cap, and the sessions a caller is live in (never
@@ -200,8 +212,8 @@ pub fn apply_prune(plan: &PrunePlan) -> PruneReport {
     let mut report = PruneReport::default();
     for entry in &plan.entries {
         let ok = match entry.action {
-            PruneAction::RemoveDir => std::fs::remove_dir_all(&entry.path).is_ok(),
-            PruneAction::RemoveFile => std::fs::remove_file(&entry.path).is_ok(),
+            PruneAction::RemoveDir => remove_dir_all(&entry.path).is_ok(),
+            PruneAction::RemoveFile => remove_file(&entry.path).is_ok(),
             PruneAction::TruncateFile { keep_bytes } => truncate_tail(&entry.path, keep_bytes),
         };
         if ok {
@@ -224,15 +236,14 @@ pub fn apply_prune(plan: &PrunePlan) -> PruneReport {
 /// atomic, so a crash leaves either the old full file or the new tail,
 /// never a corrupt mix.
 fn truncate_tail(path: &Path, keep_bytes: u64) -> bool {
-    use std::io::{Read, Seek, SeekFrom, Write};
-    let Ok(metadata) = std::fs::metadata(path) else {
+    let Ok(metadata) = metadata(path) else {
         return false;
     };
     if metadata.len() <= keep_bytes {
         return true; // Already under the cap; nothing to do.
     }
     let start = metadata.len() - keep_bytes;
-    let Ok(mut src) = std::fs::File::open(path) else {
+    let Ok(mut src) = File::open(path) else {
         return false;
     };
     if src.seek(SeekFrom::Start(start)).is_err() {
@@ -259,15 +270,14 @@ fn truncate_tail(path: &Path, keep_bytes: u64) -> bool {
     // reaps it today (the debug-log plan looks at the log itself, not its
     // siblings). One orphan per crashed rotation, so it is bounded by
     // crashes, not by time.
-    use std::sync::atomic::{AtomicU64, Ordering};
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let tmp = path.with_file_name(format!(".{file_name}.{}.{}.tmp", std::process::id(), seq));
+    let tmp = path.with_file_name(format!(".{file_name}.{}.{}.tmp", id(), seq));
     let cleanup = |tmp: &Path| {
-        let _r = std::fs::remove_file(tmp);
+        let _r = remove_file(tmp);
         false
     };
-    let Ok(mut out) = std::fs::OpenOptions::new()
+    let Ok(mut out) = OpenOptions::new()
         .create(true)
         .truncate(true)
         .write(true)
@@ -284,15 +294,15 @@ fn truncate_tail(path: &Path, keep_bytes: u64) -> bool {
         return cleanup(&tmp);
     }
     drop(out);
-    if std::fs::rename(&tmp, path).is_err() {
+    if rename(&tmp, path).is_err() {
         return cleanup(&tmp);
     }
     true
 }
 
 fn now_secs() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
 }
@@ -316,7 +326,7 @@ pub fn plan_shell_snapshots(root: &Path, ttl_secs: u64) -> Vec<PruneEntry> {
     }
     let now = now_secs();
     let mut out = Vec::new();
-    let Ok(entries) = std::fs::read_dir(root) else {
+    let Ok(entries) = read_dir(root) else {
         return out;
     };
     for entry in entries.flatten() {
@@ -328,7 +338,7 @@ pub fn plan_shell_snapshots(root: &Path, ttl_secs: u64) -> Vec<PruneEntry> {
             .metadata()
             .and_then(|m| m.modified())
             .ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
             .map(|d| d.as_secs())
             .unwrap_or(now);
         if now.saturating_sub(last_active) > ttl_secs {
@@ -351,7 +361,7 @@ pub fn plan_debug_log(path: &Path, max_bytes: u64) -> Vec<PruneEntry> {
     if max_bytes == 0 {
         return Vec::new();
     }
-    let Ok(metadata) = std::fs::metadata(path) else {
+    let Ok(metadata) = metadata(path) else {
         return Vec::new();
     };
     if metadata.len() <= max_bytes {
@@ -360,7 +370,7 @@ pub fn plan_debug_log(path: &Path, max_bytes: u64) -> Vec<PruneEntry> {
     let last_active = metadata
         .modified()
         .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
         .map(|d| d.as_secs())
         .unwrap_or(0);
     vec![PruneEntry {

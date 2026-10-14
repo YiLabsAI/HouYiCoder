@@ -1,6 +1,7 @@
 //! Tests for this module.
 
 use super::*;
+use std::future::pending;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::oneshot::channel;
@@ -11,7 +12,7 @@ fn token_task(token: CancellationToken, done: Arc<AtomicBool>) -> JoinHandle<()>
     tokio::spawn(async move {
         tokio::select! {
             _ = token.cancelled() => done.store(true, Ordering::SeqCst),
-            _ = std::future::pending::<()>() => {}
+            _ = pending::<()>() => {}
         }
     })
 }
@@ -98,7 +99,7 @@ async fn test_begin_shutdown_aborts() {
     };
     host.track(tokio::spawn(async move {
         let _mark = mark;
-        std::future::pending::<()>().await;
+        pending::<()>().await;
     }));
 
     let report = host.begin_shutdown().await;

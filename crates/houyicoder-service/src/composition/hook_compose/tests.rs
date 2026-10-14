@@ -10,10 +10,13 @@ use houyicoder_api::skill::{
 };
 use houyicoder_api::tool::{Tool, ToolCtx};
 use houyicoder_config::HookSpec;
+use houyicoder_context::SessionId;
 use houyicoder_core::agent::{
     HookContext, HookEvent, HookPayload, HookPolicy, HookSource, SkillTool, ToolResult,
 };
+use houyicoder_permission::DefaultModeGate;
 use houyicoder_permission::{Effect, Scope};
+use std::path::Path;
 use std::sync::Arc;
 
 fn launcher() -> Arc<dyn ProcessLauncher> {
@@ -204,7 +207,6 @@ fn test_build_if_cond_fires() {
     assert_eq!(reg.len(), 1);
     // Dispatch the hook on a Bash PreToolUse event and verify it fires
     // (returns a verdict, not an Allow skip).
-    use houyicoder_context::SessionId;
     let ctx = HookContext {
         event: HookEvent::PreToolUse,
         payload: HookPayload::PreToolUse {
@@ -223,9 +225,6 @@ fn test_build_if_cond_fires() {
 /// rules so the granted tools do not re-ask during the skill execution.
 #[test]
 fn test_grant_adds_rules() {
-    use houyicoder_context::SessionId;
-    use houyicoder_permission::DefaultModeGate;
-
     let gate = Arc::new(DefaultModeGate::new());
     let hook = SkillGrantHook::new(gate.clone());
 
@@ -271,9 +270,6 @@ fn test_grant_adds_rules() {
 /// absent) fails closed — nothing is granted.
 #[test]
 fn test_grant_skips_untrusted() {
-    use houyicoder_context::SessionId;
-    use houyicoder_permission::DefaultModeGate;
-
     let gate = Arc::new(DefaultModeGate::new());
     let hook = SkillGrantHook::new(gate.clone());
 
@@ -364,9 +360,6 @@ fn test_grant_skips_untrusted() {
 /// A non-skill tool does not trigger the grant.
 #[test]
 fn test_grant_skips_other() {
-    use houyicoder_context::SessionId;
-    use houyicoder_permission::DefaultModeGate;
-
     let gate = Arc::new(DefaultModeGate::new());
     let hook = SkillGrantHook::new(gate.clone());
 
@@ -440,9 +433,7 @@ impl SkillRegistry for StubRegistry {
             "ecosystem" => (SkillFamily::Agents, SkillProvenance::UserHome),
             _ => (
                 SkillFamily::Houyi,
-                SkillProvenance::Project(ProjectIdentity::from_canonical_root(
-                    std::path::Path::new("/repo"),
-                )),
+                SkillProvenance::Project(ProjectIdentity::from_canonical_root(Path::new("/repo"))),
             ),
         };
         Some(SkillSource::new(family, provenance))
@@ -459,9 +450,6 @@ impl SkillRegistry for StubRegistry {
 /// silently in production.
 #[tokio::test]
 async fn test_grant_contract_runs_skilltool() {
-    use houyicoder_context::SessionId;
-    use houyicoder_permission::DefaultModeGate;
-
     let gate = Arc::new(DefaultModeGate::new());
     let hook = SkillGrantHook::new(gate.clone());
     let reg: Arc<dyn SkillRegistry> = Arc::new(StubRegistry {
@@ -526,9 +514,6 @@ async fn test_grant_contract_runs_skilltool() {
 
 #[tokio::test]
 async fn test_ecosystem_tools_stay_gated() {
-    use houyicoder_context::SessionId;
-    use houyicoder_permission::DefaultModeGate;
-
     let registry: Arc<dyn SkillRegistry> = Arc::new(StubRegistry {
         origin: "ecosystem",
         allowed: vec!["Bash".into()],

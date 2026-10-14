@@ -27,12 +27,13 @@ use tokio::task::yield_now;
 use tokio::time::timeout;
 
 use super::{runtime_with, runtime_with_backend};
+use futures::stream::once;
 
 /// A provider that parks the child in its model call and only returns once
 /// the test releases it, so the finalize tail is observably late.
 struct GateProvider {
-    entered: Arc<tokio::sync::Notify>,
-    release: Arc<tokio::sync::Notify>,
+    entered: Arc<Notify>,
+    release: Arc<Notify>,
 }
 
 impl ModelProvider for GateProvider {
@@ -57,7 +58,7 @@ impl ModelProvider for GateProvider {
     fn stream(&self, _req: CompletionRequest) -> PStream<'_, Result<LlmEvent, ProviderError>> {
         self.entered.notify_one();
         let release = self.release.clone();
-        Box::pin(futures::stream::once(async move {
+        Box::pin(once(async move {
             release.notified().await;
             Err(ProviderError::Network)
         }))
@@ -380,7 +381,7 @@ async fn test_shutdown_covers_construction() {
             yield_now().await;
         }
     };
-    tokio::time::timeout(Duration::from_secs(1), gate_closed)
+    timeout(Duration::from_secs(1), gate_closed)
         .await
         .expect("the join closed the gate before construction freed");
     // Construction is still parked on the write, so the join is waiting on the

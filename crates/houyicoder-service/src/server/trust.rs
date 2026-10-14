@@ -9,13 +9,13 @@ use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
 use houyicoder_protocol::frontend::trust::TrustPrompt;
 
 use super::Server;
+use super::frame_carrier::FrameCarrier;
+use houyicoder_protocol::acp_wire::AcpNotification;
+use std::path::Path;
 
 /// Resolve project trust from user-owned settings. Ancestor trust applies to
 /// descendants; a session without a project is trusted.
-pub(crate) fn compute_trust_state(
-    settings_path: &std::path::Path,
-    project_path: Option<&std::path::Path>,
-) -> TrustState {
+pub(crate) fn compute_trust_state(settings_path: &Path, project_path: Option<&Path>) -> TrustState {
     let Some(path) = project_path else {
         return TrustState::Trusted;
     };
@@ -31,7 +31,7 @@ impl Server {
     /// project boundary; rejection ends the session.
     pub(crate) async fn ensure_trust(
         &mut self,
-        io: &mut super::frame_carrier::FrameCarrier,
+        io: &mut FrameCarrier,
     ) -> Result<TrustState, ProtocolError> {
         // Clone the path + settings path into owned locals so no shared
         // borrow of self spans the mutable send_typed / mint_req_id calls.
@@ -65,9 +65,7 @@ impl Server {
                     ));
                 }
             };
-            if let Ok(notif) =
-                serde_json::from_str::<houyicoder_protocol::acp_wire::AcpNotification>(&frame)
-            {
+            if let Ok(notif) = serde_json::from_str::<AcpNotification>(&frame) {
                 let is_cancel = notif.method == "session/cancel";
                 self.handle_session_notification(&notif);
                 if is_cancel {

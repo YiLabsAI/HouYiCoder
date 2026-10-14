@@ -15,19 +15,30 @@ use houyicoder_api::spawn::{SpawnArgs, SpawnFailure, SpawnHandle, SpawnOutcome};
 use houyicoder_api::tool::ToolCtx;
 use houyicoder_async::CancellationToken;
 use houyicoder_async::PFut;
+use houyicoder_async::bus::MessageBus;
+use houyicoder_context::SessionEvent;
 use houyicoder_context::{
     DescriptorUpdate, HookEventKind, HookFirePayload, SessionDescriptor, SessionDescriptorStore,
     SessionId, SessionProvenance,
 };
+use houyicoder_core::agent::multi_agent::bus_types::BusMessage;
+use houyicoder_core::agent::multi_agent::bus_types::spawned_topic;
 use houyicoder_core::agent::multi_agent::bus_types::{AgentBus, ChildDescriptor};
 use houyicoder_core::agent::multi_agent::concurrency_gate::ConcurrencyGate;
 use houyicoder_core::agent::multi_agent::record_subagent_return;
 use houyicoder_core::agent::multi_agent::registry::AgentRegistry;
+use houyicoder_core::agent::multi_agent::registry::BuiltInRegistry;
+use houyicoder_core::agent::multi_agent::registry::agent_directory_section;
+use houyicoder_core::agent::multi_agent::registry::built_in_all;
 use houyicoder_core::agent::multi_agent::spawn::{ChildHandle, TriggerSource};
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::worktree_controller::WorktreeController;
 use houyicoder_core::agent::{RunOutcome, RunResult, Runner, ToolRegistry};
+use std::env::current_dir;
+use std::mem::take;
 use std::time::Duration;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 use tokio::sync::oneshot::{Receiver, Sender, channel};
 use tokio::task::AbortHandle;
 use tokio::task::JoinHandle;
@@ -213,14 +224,14 @@ impl DriverRegistry {
     fn close_and_drain_into(&mut self) {
         self.closing = true;
         if self.draining.is_empty() {
-            self.draining = std::mem::take(&mut self.drivers).into_iter().collect();
+            self.draining = take(&mut self.drivers).into_iter().collect();
         }
     }
 
     /// Take the drivers the close step drained. Empty when the gate never
     /// closed (an empty registry at shutdown) or after a prior take.
     fn take_drained(&mut self) -> Vec<(u64, DriverSlot)> {
-        std::mem::take(&mut self.draining).into_iter().collect()
+        take(&mut self.draining).into_iter().collect()
     }
 }
 
@@ -235,7 +246,7 @@ impl MultiAgentRuntime {
             worktree_controller: deps.worktree_controller,
             cwd: deps
                 .workspace
-                .unwrap_or_else(|| std::env::current_dir().unwrap_or_default()),
+                .unwrap_or_else(|| current_dir().unwrap_or_default()),
             bus: deps.bus,
             gate: Arc::new(ConcurrencyGate::new(
                 ConcurrencyGate::DEFAULT_CAP,
@@ -303,24 +314,18 @@ impl MultiAgentRuntime {
 /// between the agent tool (resolve) and the spawn runtime (materialize) so
 /// the two see one source of truth.
 pub(super) fn built_in_registry() -> Arc<dyn AgentRegistry> {
-    Arc::new(
-        houyicoder_core::agent::multi_agent::registry::BuiltInRegistry::from_agents(
-            houyicoder_core::agent::multi_agent::registry::built_in_all(),
-        ),
-    )
+    Arc::new(BuiltInRegistry::from_agents(built_in_all()))
 }
 
 /// Install the agent directory (registered sub-agent types, minus denied)
 /// on the runner's system prompt. Session-stable: the registry is fixed for
 /// the session, so the section's bytes do not change across turns.
 pub(super) fn wire_agent_directory(
-    runner: &houyicoder_core::agent::Runner,
+    runner: &Runner,
     registry: &dyn AgentRegistry,
     denied: &HashSet<String>,
 ) {
-    if let Some(dir) =
-        houyicoder_core::agent::multi_agent::registry::agent_directory_section(registry, denied)
-    {
+    if let Some(dir) = agent_directory_section(registry, denied) {
         runner.set_agent_directory(dir);
     }
 }
@@ -380,8 +385,6 @@ impl SpawnHandle for MultiAgentRuntime {
     /// The child registered its inbox at spawn; send_inbox errors when the
     /// child is gone (completed + unregistered) or no bus is attached.
     fn send_to_child_inbox(&self, child_id: &str, text: String) -> Result<(), String> {
-        use houyicoder_async::bus::MessageBus;
-        use houyicoder_core::agent::multi_agent::bus_types::BusMessage;
         match self.bus.as_ref() {
             Some(bus) => bus.send_inbox(child_id, BusMessage::Inbox { text }),
             None => Err("no bus wired".into()),
@@ -593,8 +596,6 @@ async fn join_driver(slot: DriverSlot, budget: Duration) {
 
 /// Announce a child before its first status event can be published.
 pub(super) fn announce_spawn(bus: Option<&Arc<AgentBus>>, child: ChildDescriptor) {
-    use houyicoder_async::bus::MessageBus;
-    use houyicoder_core::agent::multi_agent::bus_types::{BusMessage, spawned_topic};
     if let Some(bus) = bus {
         bus.publish(spawned_topic(), BusMessage::Spawned { child });
     }
@@ -603,7 +604,6 @@ pub(super) fn announce_spawn(bus: Option<&Arc<AgentBus>>, child: ChildDescriptor
 /// Close a child's inbox after its run so a parent's send_inbox errors
 /// rather than queueing into a dead receiver. Mirrors announce_spawn.
 fn close_child_inbox(bus: Option<&Arc<AgentBus>>, child_id: &str) {
-    use houyicoder_async::bus::MessageBus;
     if let Some(bus) = bus {
         bus.unregister_inbox(child_id);
     }
@@ -686,8 +686,8 @@ pub(super) fn stamp_spawned_by(
         // here, in the same shape the repair pass writes for a child whose
         // boundary write was lost.
         if !matches!(outcome, Ok(DescriptorUpdate::Written)) {
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
                 .map(|d| d.as_secs())
                 .unwrap_or(0);
             let descriptor = SessionDescriptor::delegated_child(prov, now);
@@ -731,7 +731,6 @@ fn partial_of(child_log: &[houyicoder_context::SessionLogEntry]) -> String {
 /// the partial result a non-final terminal leaves behind. None when no
 /// assistant message (or none with text) was emitted.
 fn extract_last_assistant(events: &[houyicoder_context::SessionLogEntry]) -> Option<String> {
-    use houyicoder_context::SessionEvent;
     for ev in events.iter().rev() {
         if let SessionEvent::AssistantMessage { ref text, .. } = ev.event
             && !text.is_empty()

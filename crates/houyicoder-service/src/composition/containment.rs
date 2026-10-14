@@ -4,6 +4,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use super::worktree::git_common_dir;
 use houyicoder_api::sandbox::{Containment, Coverage, SandboxSession, SideEffect};
 use houyicoder_permission::RuleStore;
 
@@ -106,7 +107,7 @@ pub(crate) fn attach_git_common_dir(session: &dyn SandboxSession, workspace: &Pa
     // git for Windows is also widely reported to reject it, which would fail
     // the probe and leave the allow-back a silent no-op.
     let ws = dunce::canonicalize(workspace).unwrap_or_else(|_| workspace.to_path_buf());
-    let Some(common) = super::worktree::git_common_dir(&ws) else {
+    let Some(common) = git_common_dir(&ws) else {
         return;
     };
     if common.starts_with(&ws) {

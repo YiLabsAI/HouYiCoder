@@ -4,8 +4,16 @@ use houyicoder_protocol::envelope::{RequestId, ResponsePayload};
 use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
 use houyicoder_protocol::frontend::SessionId;
 
+use super::status_view::auth_token_source;
+use super::status_view::build_model_usage_view;
+use super::status_view::setting_sources_label;
 use super::{Server, frame_carrier::FrameCarrier};
 use crate::protocol_adapter as pa;
+use houyicoder_api::session::SessionLog;
+use houyicoder_context::DescriptorUpdate;
+use houyicoder_context::NameSource;
+use houyicoder_context::{SessionEvent, SessionLogEntry};
+use houyicoder_protocol::frontend::status::StatusSnapshot;
 
 impl Server {
     pub(super) async fn handle_status(
@@ -60,15 +68,15 @@ impl Server {
         let outcome = store.update_descriptor(self.session, &mut |descriptor| {
             if trimmed.is_empty() {
                 descriptor.name = None;
-                descriptor.name_source = houyicoder_context::NameSource::Auto;
+                descriptor.name_source = NameSource::Auto;
             } else {
                 descriptor.name = Some(trimmed.clone());
-                descriptor.name_source = houyicoder_context::NameSource::User;
+                descriptor.name_source = NameSource::User;
             }
         });
         let detail = match outcome {
-            Ok(houyicoder_context::DescriptorUpdate::Written) => None,
-            Ok(houyicoder_context::DescriptorUpdate::Absent) => {
+            Ok(DescriptorUpdate::Written) => None,
+            Ok(DescriptorUpdate::Absent) => {
                 Some("rename: no session descriptor to rename".to_string())
             }
             Err(e) => Some(format!("rename: write failed: {e}")),
@@ -93,9 +101,7 @@ impl Server {
 
     /// Build the current protocol status, deriving an unnamed session's display
     /// name from the first prompt when its descriptor is available.
-    pub(super) fn build_status_snapshot(
-        &self,
-    ) -> houyicoder_protocol::frontend::status::StatusSnapshot {
+    pub(super) fn build_status_snapshot(&self) -> StatusSnapshot {
         let snap = self.runner.status_snapshot();
         let mut snapshot = pa::map_status_snapshot(&snap);
         // The append owner folds the whole-session figures once. Status is
@@ -125,14 +131,13 @@ impl Server {
             snapshot.descriptor = Some(pa::map_session_descriptor(&descriptor));
         }
         snapshot.version = env!("CARGO_PKG_VERSION").to_string();
-        snapshot.auth_token_source = super::status_view::auth_token_source();
+        snapshot.auth_token_source = auth_token_source();
         snapshot.base_url = houyicoder_config::resolve_base_url();
-        snapshot.setting_sources = super::status_view::setting_sources_label();
+        snapshot.setting_sources = setting_sources_label();
         let (toggles, _settings_warnings) = houyicoder_config::load_toggles();
         snapshot.auto_memory = toggles.auto_memory;
         snapshot.auto_dream = toggles.auto_dream;
-        snapshot.by_model =
-            super::status_view::build_model_usage_view(self.runner.by_model_usage());
+        snapshot.by_model = build_model_usage_view(self.runner.by_model_usage());
         snapshot
     }
 }
@@ -142,10 +147,9 @@ impl Server {
 /// only the bounded log head, not a full replay, so it stays cheap even for a
 /// large resumed session.
 pub(super) fn first_prompt_title(
-    log: &dyn houyicoder_api::session::SessionLog,
+    log: &dyn SessionLog,
     session: houyicoder_context::SessionId,
 ) -> Option<String> {
-    use houyicoder_context::{SessionEvent, SessionLogEntry};
     let read = log.backend().read_log_range(session, 0, 64_000);
     for (_, line) in &read.lines {
         if let Ok(ev) = serde_json::from_str::<SessionLogEntry>(line)

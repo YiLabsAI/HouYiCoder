@@ -10,23 +10,30 @@ use futures::channel::mpsc;
 use houyicoder_context::{
     NameSource, SessionDescriptor, SessionDescriptorStore, SessionProvenance,
 };
+use houyicoder_core::agent::Runner;
+use houyicoder_core::agent::ToolRegistry;
+use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_memory::{InMemoryBackend, InMemoryDescriptorStore};
+use houyicoder_permission::DefaultModeGate;
+use houyicoder_protocol::envelope::ResponsePayload;
 use houyicoder_protocol::envelope::{ClientFrame, RequestEnvelope, RequestId, ServerFrame};
+use houyicoder_protocol::error::ErrorCategory;
 use houyicoder_protocol::framing::encode;
 use houyicoder_protocol::frontend::FrontendRequest;
 use houyicoder_protocol::handshake::Hello;
+use houyicoder_provider::FakeProvider;
 use houyicoder_session::SessionStore;
 use std::sync::Arc;
 
-fn stub_runner() -> Arc<houyicoder_core::agent::Runner> {
+fn stub_runner() -> Arc<Runner> {
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
-    Arc::new(houyicoder_core::agent::Runner::new(
+    Arc::new(Runner::new(
         store,
-        Arc::new(houyicoder_provider::FakeProvider::text("x")),
-        houyicoder_core::agent::ToolRegistry::new(),
-        houyicoder_core::agent::runner_config::RunnerConfig {
+        Arc::new(FakeProvider::text("x")),
+        ToolRegistry::new(),
+        RunnerConfig {
             model: "test".into(),
-            ..houyicoder_core::agent::runner_config::RunnerConfig::default()
+            ..RunnerConfig::default()
         },
     ))
 }
@@ -74,12 +81,8 @@ async fn test_rename_sets_user_name() {
     let (server_tx, mut client_rx) = mpsc::channel::<String>(256);
     let (mut client_tx, server_rx) = mpsc::channel::<String>(256);
     let io = FrameCarrier::new(server_tx, server_rx);
-    let server = Server::new(
-        runner,
-        session,
-        Arc::new(houyicoder_permission::DefaultModeGate::new()),
-    )
-    .with_descriptor_store(store.clone());
+    let server = Server::new(runner, session, Arc::new(DefaultModeGate::new()))
+        .with_descriptor_store(store.clone());
     let handle = tokio::spawn(async move { server.serve(io).await });
     send_line(&mut client_tx, &Hello::local());
     drop(client_rx.next().await);
@@ -95,7 +98,7 @@ async fn test_rename_sets_user_name() {
     );
     match recv_frame(&mut client_rx).await {
         ServerFrame::Response(r) => match r.payload {
-            houyicoder_protocol::envelope::ResponsePayload::Status(snap) => {
+            ResponsePayload::Status(snap) => {
                 let name = snap.descriptor.as_ref().and_then(|m| m.name.as_deref());
                 assert_eq!(name, Some("fix-login"), "reply carries the new name");
             }
@@ -121,12 +124,8 @@ async fn test_empty_clears_to_auto() {
     let (server_tx, mut client_rx) = mpsc::channel::<String>(256);
     let (mut client_tx, server_rx) = mpsc::channel::<String>(256);
     let io = FrameCarrier::new(server_tx, server_rx);
-    let server = Server::new(
-        runner,
-        session,
-        Arc::new(houyicoder_permission::DefaultModeGate::new()),
-    )
-    .with_descriptor_store(store.clone());
+    let server = Server::new(runner, session, Arc::new(DefaultModeGate::new()))
+        .with_descriptor_store(store.clone());
     let handle = tokio::spawn(async move { server.serve(io).await });
     send_line(&mut client_tx, &Hello::local());
     drop(client_rx.next().await);
@@ -143,7 +142,7 @@ async fn test_empty_clears_to_auto() {
     let resp = recv_frame(&mut client_rx).await;
     assert!(matches!(
         resp,
-        ServerFrame::Response(r) if matches!(r.payload, houyicoder_protocol::envelope::ResponsePayload::Status(_))
+        ServerFrame::Response(r) if matches!(r.payload, ResponsePayload::Status(_))
     ));
     let after = store
         .read_descriptor(session)
@@ -156,19 +155,14 @@ async fn test_empty_clears_to_auto() {
 /// A mismatched session id fails closed with an InvalidRequest error.
 #[tokio::test]
 async fn test_rename_mismatch_sid_errors() {
-    use houyicoder_protocol::error::ErrorCategory;
     let runner = stub_runner();
     let session = houyicoder_context::SessionId::new();
     let store = seeded_store(session);
     let (server_tx, mut client_rx) = mpsc::channel::<String>(256);
     let (mut client_tx, server_rx) = mpsc::channel::<String>(256);
     let io = FrameCarrier::new(server_tx, server_rx);
-    let server = Server::new(
-        runner,
-        session,
-        Arc::new(houyicoder_permission::DefaultModeGate::new()),
-    )
-    .with_descriptor_store(store);
+    let server =
+        Server::new(runner, session, Arc::new(DefaultModeGate::new())).with_descriptor_store(store);
     let handle = tokio::spawn(async move { server.serve(io).await });
     send_line(&mut client_tx, &Hello::local());
     drop(client_rx.next().await);
@@ -184,7 +178,7 @@ async fn test_rename_mismatch_sid_errors() {
     );
     match recv_frame(&mut client_rx).await {
         ServerFrame::Response(r) => match r.payload {
-            houyicoder_protocol::envelope::ResponsePayload::Error(e) => {
+            ResponsePayload::Error(e) => {
                 assert_eq!(
                     e.category,
                     ErrorCategory::InvalidRequest,
@@ -201,18 +195,13 @@ async fn test_rename_mismatch_sid_errors() {
 /// A missing descriptor store returns an Internal error.
 #[tokio::test]
 async fn test_no_descriptor_store_errors() {
-    use houyicoder_protocol::error::ErrorCategory;
     let runner = stub_runner();
     let session = houyicoder_context::SessionId::new();
     let wire_sid = houyicoder_protocol::frontend::SessionId(session.to_string());
     let (server_tx, mut client_rx) = mpsc::channel::<String>(256);
     let (mut client_tx, server_rx) = mpsc::channel::<String>(256);
     let io = FrameCarrier::new(server_tx, server_rx);
-    let server = Server::new(
-        runner,
-        session,
-        Arc::new(houyicoder_permission::DefaultModeGate::new()),
-    );
+    let server = Server::new(runner, session, Arc::new(DefaultModeGate::new()));
     let handle = tokio::spawn(async move { server.serve(io).await });
     send_line(&mut client_tx, &Hello::local());
     drop(client_rx.next().await);
@@ -228,7 +217,7 @@ async fn test_no_descriptor_store_errors() {
     );
     match recv_frame(&mut client_rx).await {
         ServerFrame::Response(r) => match r.payload {
-            houyicoder_protocol::envelope::ResponsePayload::Error(e) => {
+            ResponsePayload::Error(e) => {
                 assert_eq!(
                     e.category,
                     ErrorCategory::Internal,
@@ -245,7 +234,6 @@ async fn test_no_descriptor_store_errors() {
 /// A wired store with no descriptor for the session errors Internal.
 #[tokio::test]
 async fn test_rename_no_descriptor_errors() {
-    use houyicoder_protocol::error::ErrorCategory;
     let runner = stub_runner();
     let session = houyicoder_context::SessionId::new();
     let wire_sid = houyicoder_protocol::frontend::SessionId(session.to_string());
@@ -253,12 +241,8 @@ async fn test_rename_no_descriptor_errors() {
     let (server_tx, mut client_rx) = mpsc::channel::<String>(256);
     let (mut client_tx, server_rx) = mpsc::channel::<String>(256);
     let io = FrameCarrier::new(server_tx, server_rx);
-    let server = Server::new(
-        runner,
-        session,
-        Arc::new(houyicoder_permission::DefaultModeGate::new()),
-    )
-    .with_descriptor_store(store);
+    let server =
+        Server::new(runner, session, Arc::new(DefaultModeGate::new())).with_descriptor_store(store);
     let handle = tokio::spawn(async move { server.serve(io).await });
     send_line(&mut client_tx, &Hello::local());
     drop(client_rx.next().await);
@@ -274,7 +258,7 @@ async fn test_rename_no_descriptor_errors() {
     );
     match recv_frame(&mut client_rx).await {
         ServerFrame::Response(r) => match r.payload {
-            houyicoder_protocol::envelope::ResponsePayload::Error(e) => {
+            ResponsePayload::Error(e) => {
                 assert_eq!(
                     e.category,
                     ErrorCategory::Internal,
@@ -334,7 +318,6 @@ impl SessionDescriptorStore for FailingDescriptorStore {
 /// A descriptor write failure surfaces as an Internal error.
 #[tokio::test]
 async fn test_rename_write_failure_errors() {
-    use houyicoder_protocol::error::ErrorCategory;
     let runner = stub_runner();
     let session = houyicoder_context::SessionId::new();
     let wire_sid = houyicoder_protocol::frontend::SessionId(session.to_string());
@@ -358,12 +341,8 @@ async fn test_rename_write_failure_errors() {
     let (server_tx, mut client_rx) = mpsc::channel::<String>(256);
     let (mut client_tx, server_rx) = mpsc::channel::<String>(256);
     let io = FrameCarrier::new(server_tx, server_rx);
-    let server = Server::new(
-        runner,
-        session,
-        Arc::new(houyicoder_permission::DefaultModeGate::new()),
-    )
-    .with_descriptor_store(store);
+    let server =
+        Server::new(runner, session, Arc::new(DefaultModeGate::new())).with_descriptor_store(store);
     let handle = tokio::spawn(async move { server.serve(io).await });
     send_line(&mut client_tx, &Hello::local());
     drop(client_rx.next().await);
@@ -379,7 +358,7 @@ async fn test_rename_write_failure_errors() {
     );
     match recv_frame(&mut client_rx).await {
         ServerFrame::Response(r) => match r.payload {
-            houyicoder_protocol::envelope::ResponsePayload::Error(e) => {
+            ResponsePayload::Error(e) => {
                 assert_eq!(
                     e.category,
                     ErrorCategory::Internal,

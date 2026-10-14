@@ -73,6 +73,21 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::sync::RwLock;
 
+use crate::lifecycle::SessionLeaseStore;
+use crate::sandbox_policy::network_policy_from;
+use crate::server::EventSequencer;
+use built_in_tools::BuiltInToolProvider;
+use houyicoder_api::launcher::ProcessLauncher;
+use houyicoder_api::launcher::StdProcessLauncher;
+use houyicoder_api::mcp::McpClient;
+use houyicoder_api::mcp::McpToolProvider;
+use houyicoder_api::skill::SkillRegistry;
+use houyicoder_api::tool::ToolProvider;
+use houyicoder_config::settings_merge::load_provider_settings;
+use houyicoder_core::agent::WorktreeController;
+use houyicoder_core::agent::build_hook_fire;
+use houyicoder_core::agent::multi_agent::bus_types::AgentBus;
+use houyicoder_protocol::llm::OutputItem;
 /// Give up on a capability, and say so, returning the absence as None.
 /// Every degradation point routes through one function so the decision
 /// and the disclosure stay inseparable — both args required so the
@@ -80,6 +95,11 @@ use std::sync::RwLock;
 pub use paths::{
     resolve_project_workspace, session_log_root, walk_to_workspace_root, workspace_cwd,
 };
+use std::collections::HashSet;
+use std::env::var;
+use std::path::Path;
+use std::path::PathBuf;
+use std::sync::atomic::AtomicU32;
 
 fn degrade_with_notice<T, E: std::fmt::Display>(
     attempt: Result<T, E>,
@@ -105,10 +125,10 @@ pub struct AssembledRunner {
     pub gate: Arc<DefaultModeGate>,
     pub sandbox_session: Option<Arc<dyn SandboxSession>>,
     pub append_notify: Arc<Notify>,
-    pub worktree_controller: Option<Arc<houyicoder_core::agent::WorktreeController>>,
+    pub worktree_controller: Option<Arc<WorktreeController>>,
     /// The shared multi-agent bus; threaded to the pairing point so the
     /// fleet status relay can subscribe + emit agent status wire frames.
-    pub bus: Option<Arc<houyicoder_core::agent::multi_agent::bus_types::AgentBus>>,
+    pub bus: Option<Arc<AgentBus>>,
 }
 
 /// An assembled runner plus the model restored from a resumed session's
@@ -165,7 +185,7 @@ impl BuildRunnerOptions {
 
     /// The same preset at an explicit root, for a test isolating its session dir.
     pub fn disk_at(
-        root: std::path::PathBuf,
+        root: PathBuf,
         project: Option<String>,
         rule_store: Option<Arc<dyn RuleStore>>,
     ) -> Self {
@@ -185,7 +205,7 @@ pub fn disk_descriptor_store() -> Arc<dyn SessionDescriptorStore> {
 }
 
 /// Build a descriptor store at an explicit sessions root.
-pub fn disk_descriptor_store_at(root: std::path::PathBuf) -> Arc<dyn SessionDescriptorStore> {
+pub fn disk_descriptor_store_at(root: PathBuf) -> Arc<dyn SessionDescriptorStore> {
     Arc::new(FileDescriptorStore::new(root))
 }
 
@@ -296,7 +316,7 @@ pub(crate) fn assemble(
     // is the single authority over containment, and the gate asks for every
     // egress command regardless.
     let (network, network_warnings) =
-        crate::sandbox_policy::network_policy_from(&houyicoder_config::load_sandbox_network());
+        network_policy_from(&houyicoder_config::load_sandbox_network());
     // Guarded mode (default): fence the user's project dir directly — the
     // agent edits the real tree (changes immediate) and the seatbelt denies
     // writes outside it + the network. Isolated (worktree) mode is opt-in via
@@ -396,12 +416,11 @@ pub(crate) fn assemble(
     let active_skill = Arc::new(Mutex::new(None::<String>));
     let skill_grants = hook_compose::build_skill_grants();
     let discovery_skill = skill_grants.as_ref().map(|_| active_skill.clone());
-    let builtin =
-        built_in_tools::BuiltInToolProvider::new(sandbox_session.clone(), gate_dyn.clone())
-            .with_activator(Some(std::sync::Arc::clone(&skill_conditional)))
-            .with_active_skill(discovery_skill);
+    let builtin = BuiltInToolProvider::new(sandbox_session.clone(), gate_dyn.clone())
+        .with_activator(Some(Arc::clone(&skill_conditional)))
+        .with_active_skill(discovery_skill);
     let undo_handles = builtin.undo_handles();
-    let mut providers: Vec<Box<dyn houyicoder_api::tool::ToolProvider>> = vec![Box::new(builtin)];
+    let mut providers: Vec<Box<dyn ToolProvider>> = vec![Box::new(builtin)];
     // External tool servers (block-on-init): spawn each subprocess via the
     // launcher, run the initialize plus tools/list handshake before the agent
     // loop starts, and contribute the discovered tools behind the Tool trait.
@@ -409,13 +428,11 @@ pub(crate) fn assemble(
     // tools; the error is surfaced on stderr so a misconfigured server does
     // not brick the run. The tool list is fixed for the session (a server
     // that adds tools mid-session does not surface until restart).
-    let launcher = houyicoder_api::launcher::StdProcessLauncher::new();
+    let launcher = StdProcessLauncher::new();
     for cfg in houyicoder_config::resolve_mcp_servers() {
-        match houyicoder_api::mcp::McpClient::spawn(&cfg.program, &cfg.args, &launcher) {
+        match McpClient::spawn(&cfg.program, &cfg.args, &launcher) {
             Ok((client, entries)) => {
-                providers.push(Box::new(houyicoder_api::mcp::McpToolProvider::new(
-                    client, entries,
-                )));
+                providers.push(Box::new(McpToolProvider::new(client, entries)));
             }
             Err(e) => {
                 tracing::warn!(
@@ -455,7 +472,7 @@ pub(crate) fn assemble(
     // to compute the recall rate). Constructed here so the tool + the runner
     // share one Arc; passed to the tool at registration + to the runner via
     // with_recall_meter before the runner is shared.
-    let recall_meter = Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let recall_meter = Arc::new(AtomicU32::new(0));
     // The conversation recall tool is not sandbox-backed (it replays the raw
     // session log the runner holds), so it is registered directly like the
     // checklist tool, not via the sandbox-built-in provider. Shares the store
@@ -464,20 +481,19 @@ pub(crate) fn assemble(
     let conversation_search = ConversationSearchTool::new(store.clone(), recall_meter.clone());
     tools.register(Arc::new(conversation_search));
     // Hook registry + skill-hook registrar + shared launcher.
-    let hook_launcher: Arc<dyn houyicoder_api::launcher::ProcessLauncher> =
-        Arc::new(houyicoder_api::launcher::StdProcessLauncher::new());
+    let hook_launcher: Arc<dyn ProcessLauncher> = Arc::new(StdProcessLauncher::new());
     let hook_registry = hook_compose::build_session_registry(
         gate_dyn.clone(),
-        std::sync::Arc::clone(&hook_launcher),
+        Arc::clone(&hook_launcher),
         workspace.as_deref(),
     );
     // Live workspace-trust ref: fail-closed (Untrusted) until the server
     // writes the resolved state back after the startup trust prompt.
     let trust_state = Arc::new(RwLock::new(TrustState::Untrusted));
     let skill_registrar = Arc::new(SkillHookRegistrar::new(
-        std::sync::Arc::clone(&hook_registry),
-        std::sync::Arc::clone(&trust_state),
-        std::sync::Arc::clone(&hook_launcher),
+        Arc::clone(&hook_registry),
+        Arc::clone(&trust_state),
+        Arc::clone(&hook_launcher),
     ));
     hook_compose::register_skill_tool(
         &mut tools,
@@ -486,19 +502,19 @@ pub(crate) fn assemble(
         &skill_conditional,
         sandbox_session.clone(),
         skill_grants.clone(),
-        std::sync::Arc::clone(&active_skill),
+        Arc::clone(&active_skill),
     );
     // Agent tool: delegate a sub-task to a spawned child (not sandbox-backed;
     // resolves the requested type against the built-in agent registry).
     let denied_agents = Arc::new(match rule_store.as_ref() {
         Some(rules) => houyicoder_permission::denied_agent_types(&rules.load()),
-        None => std::collections::HashSet::new(),
+        None => HashSet::new(),
     });
     let agent_registry = multi_agent::built_in_registry();
     tools.register(Arc::new(DelegationTool::new(agent_registry.clone())));
     // Spawn port + agent directory; construction is in the multi_agent module.
     // Hoist the bus so the fleet status relay (wired at pairing) can share it.
-    let bus = std::sync::Arc::new(houyicoder_core::agent::multi_agent::bus_types::AgentBus::new());
+    let bus = Arc::new(AgentBus::new());
     let spawn_handle = multi_agent::build_runtime(multi_agent::MultiAgentDeps {
         registry: agent_registry.clone(),
         store: store.clone(),
@@ -534,14 +550,13 @@ pub(crate) fn assemble(
         .with_catalog_resolver(Arc::new(catalog))
         .with_model_choice(model_choice)
         .with_speed_mode(speed_mode.unwrap_or(SpeedMode::Standard))
-        .with_denied_agents(std::sync::Arc::clone(&denied_agents))
+        .with_denied_agents(Arc::clone(&denied_agents))
         .with_spawn_handle(spawn_handle)
-        .with_skill_registry(std::sync::Arc::clone(&skill_registry)
-            as std::sync::Arc<dyn houyicoder_api::skill::SkillRegistry>)
+        .with_skill_registry(Arc::clone(&skill_registry) as Arc<dyn SkillRegistry>)
         .with_sandbox_session(sandbox_session.clone())
         .with_skill_grants(skill_grants)
-        .with_active_skill(std::sync::Arc::clone(&active_skill))
-        .with_conditional(std::sync::Arc::clone(&skill_conditional));
+        .with_active_skill(Arc::clone(&active_skill))
+        .with_conditional(Arc::clone(&skill_conditional));
     runner.set_skill_reloader(hook_compose::build_skill_reloader(
         &skill_registry,
         &skill_conditional,
@@ -549,21 +564,19 @@ pub(crate) fn assemble(
         workspace.clone(),
     ));
     // Workspace probe for the compaction watermark.
-    runner.set_workspace_probe(std::sync::Arc::new(GitWorkspaceProbe::new(
-        runner.cwd_handle(),
-    )));
+    runner.set_workspace_probe(Arc::new(GitWorkspaceProbe::new(runner.cwd_handle())));
     multi_agent::wire_agent_directory(&runner, agent_registry.as_ref(), &denied_agents);
     // Wire the hot-path tool-output reducer so the Isolate stage strips ansi
     // + truncates a large bash result before serving it (the raw stays in the
     // CAS for on-demand retrieval).
-    runner = runner.with_reducer(std::sync::Arc::new(HotPathReducer));
+    runner = runner.with_reducer(Arc::new(HotPathReducer));
     // Attach the hook registry (built above, before the Skill tool) + the
     // skill-hook registrar to the runner so the fire points drive the
     // registered hooks and both skill-invocation paths share one registrar.
     let runner = runner
-        .with_hooks(std::sync::Arc::clone(&hook_registry))
-        .with_registrar(std::sync::Arc::clone(&skill_registrar));
-    let hook_fire = houyicoder_core::agent::build_hook_fire(&runner);
+        .with_hooks(Arc::clone(&hook_registry))
+        .with_registrar(Arc::clone(&skill_registrar));
+    let hook_fire = build_hook_fire(&runner);
     if let Some(controller) = &worktree_controller {
         controller.set_hook_fire(hook_fire);
     }
@@ -614,8 +627,7 @@ pub(crate) fn assemble(
     // stay in the tracing sink as diagnostics). Suppressed in test/PTY
     // environments via HOUYICODER_TEST_SUPPRESS_FENCE_NOTICE so the notice does not occupy a
     // transcript line that PTY assertions must account for.
-    if std::env::var(houyicoder_config::ENV_HOUYICODER_TEST_SUPPRESS_FENCE_NOTICE)
-        .map_or(true, |v| v != "1")
+    if var(houyicoder_config::ENV_HOUYICODER_TEST_SUPPRESS_FENCE_NOTICE).map_or(true, |v| v != "1")
         && let Some(session) = &sandbox_session
         && let Some(notice) = session.fence_status().unfenced_notice()
     {
@@ -650,7 +662,7 @@ pub fn resolve_provider(project: Option<&str>) -> ResolvedProvider {
 /// A real provider when a key resolves, else a stub so the loop still drives
 /// with a canned reply rather than going silently offline.
 fn provider_or_stub(
-    workspace: Option<&std::path::Path>,
+    workspace: Option<&Path>,
 ) -> (
     Arc<dyn ModelProvider>,
     Vec<houyicoder_config::ConfigWarning>,
@@ -664,18 +676,13 @@ fn provider_or_stub(
     // same ToolCall every call and loops to max_turns). Falls through to the
     // normal stub path on any parse failure. Honest test knob, not a feature
     // — the stub providers exist for dev/test.
-    if let Ok(raw) = std::env::var(houyicoder_config::ENV_HOUYICODER_TEST_STUB_RESPONSE_SCRIPT)
-        && let Ok(per_call) =
-            serde_json::from_str::<Vec<Vec<houyicoder_protocol::llm::OutputItem>>>(&raw)
+    if let Ok(raw) = var(houyicoder_config::ENV_HOUYICODER_TEST_STUB_RESPONSE_SCRIPT)
+        && let Ok(per_call) = serde_json::from_str::<Vec<Vec<OutputItem>>>(&raw)
         && !per_call.is_empty()
     {
-        return (
-            Arc::new(houyicoder_provider::FakeProvider::from_outputs(per_call)),
-            Vec::new(),
-        );
+        return (Arc::new(FakeProvider::from_outputs(per_call)), Vec::new());
     }
-    let (settings, mut warnings) =
-        houyicoder_config::settings_merge::load_provider_settings(workspace);
+    let (settings, mut warnings) = load_provider_settings(workspace);
     // The config layer names where the key comes from; obtaining it is a spawn,
     // so it happens here through the chokepoint.
     let (key, resolve_warnings) = api_key::resolve_api_key(settings.key_source.as_ref(), None);
@@ -704,7 +711,7 @@ fn provider_or_stub(
 /// log cursor while each attachment supplies a new carrier.
 struct LiveRunnerHandle {
     runner: Arc<Runner>,
-    event_sequencer: crate::server::EventSequencer,
+    event_sequencer: EventSequencer,
     gate: Arc<dyn ModeGate>,
     append_notify: Arc<Notify>,
 }
@@ -720,14 +727,14 @@ struct LiveRunnerHandle {
 /// the host — a multi-session host holds one gate per live runner.
 pub struct SessionHost {
     runners: Mutex<HashMap<SessionId, LiveRunnerHandle>>,
-    store: crate::lifecycle::SessionLeaseStore,
+    store: SessionLeaseStore,
 }
 
 impl SessionHost {
     /// In-memory host with no persisted backing. The single-process
     /// fast path: a new process cannot reload sessions (cross-process
     /// reconnect is the UDS cut).
-    pub fn new(store: crate::lifecycle::SessionLeaseStore) -> Self {
+    pub fn new(store: SessionLeaseStore) -> Self {
         Self {
             runners: Mutex::new(HashMap::new()),
             store,
@@ -739,7 +746,7 @@ impl SessionHost {
         &self,
         session: SessionId,
         runner: Arc<Runner>,
-        event_sequencer: crate::server::EventSequencer,
+        event_sequencer: EventSequencer,
         gate: Arc<dyn ModeGate>,
         append_notify: Arc<Notify>,
     ) {
@@ -771,7 +778,7 @@ impl SessionHost {
 
     /// Single source of truth for the parked PendingTurn, lease holder, and
     /// state. pub(crate) so serve_session runs the lease guard.
-    pub(crate) fn store(&self) -> &crate::lifecycle::SessionLeaseStore {
+    pub(crate) fn store(&self) -> &SessionLeaseStore {
         &self.store
     }
 }
@@ -781,7 +788,7 @@ impl SessionHost {
 /// host exposing its internal LiveRunnerHandle.
 pub(crate) struct RunnerHandleClone {
     pub(crate) runner: Arc<Runner>,
-    pub(crate) event_sequencer: crate::server::EventSequencer,
+    pub(crate) event_sequencer: EventSequencer,
     pub(crate) gate: Arc<dyn ModeGate>,
     pub(crate) append_notify: Arc<Notify>,
 }

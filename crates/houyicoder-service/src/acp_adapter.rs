@@ -21,9 +21,11 @@ use houyicoder_protocol::acp_wire::{
 };
 use houyicoder_protocol::acpx::{AcpxCapabilities, TakeControlOutcome, TakeControlParams};
 
+use crate::lifecycle::LifecycleError;
 use crate::lifecycle::{Lifecycle, SessionLeaseStore, SessionRecord};
 #[cfg(test)]
 use crate::lifecycle::{PendingPermission, PendingTurn};
+use serde_json::Map;
 
 /// The adapter's static config: the capability block it advertises at
 /// initialize. Built by the composition root from what the agent supports.
@@ -79,7 +81,7 @@ impl AcpAdapter {
     }
 
     fn handle_initialize(&self, req: &AcpRequest) -> AcpResponse {
-        let mut meta = serde_json::Map::new();
+        let mut meta = Map::new();
         meta.insert(
             "acpx".into(),
             serde_json::to_value(&self.caps).expect("capabilities serialize"),
@@ -243,14 +245,12 @@ impl AcpAdapter {
                         pending_resent: if has_pending { Some(true) } else { None },
                     }
                 }
-                Err(crate::lifecycle::LifecycleError::NotFound) => TakeControlOutcome::Denied {
+                Err(LifecycleError::NotFound) => TakeControlOutcome::Denied {
                     reason: "session not found".into(),
                 },
-                Err(crate::lifecycle::LifecycleError::LeaseHeld(holder)) => {
-                    TakeControlOutcome::Denied {
-                        reason: format!("lease held by {holder}"),
-                    }
-                }
+                Err(LifecycleError::LeaseHeld(holder)) => TakeControlOutcome::Denied {
+                    reason: format!("lease held by {holder}"),
+                },
                 Err(_) => TakeControlOutcome::Denied {
                     reason: "lifecycle error".into(),
                 },

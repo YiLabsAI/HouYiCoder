@@ -14,6 +14,7 @@ use houyicoder_core::agent::multi_agent::bus_types::{
 
 use super::frame_carrier::FrameCarrier;
 use super::{ProtocolError, Server};
+use houyicoder_protocol::frontend::run::DelegationSource;
 
 impl Server {
     /// Wire the shared multi-agent bus so a child's permission ask reaches
@@ -49,7 +50,7 @@ pub(crate) async fn handle(
     let approval = ApprovalRequest::new(call_id.clone(), tool.clone(), input.clone());
     // Label the ask with its origin so the TUI card shows which delegation
     // the ask belongs to (a child ask vs the parent's own tool call).
-    let delegation = houyicoder_protocol::frontend::run::DelegationSource {
+    let delegation = DelegationSource {
         child_id: child_id.clone(),
         subagent_type: subagent_type.clone(),
     };

@@ -3,7 +3,12 @@
 //! from composition.rs on the per-file size gate, same reasoning as the
 //! startup-warnings module beside it.
 
+use crate::session_prune::EMPTY_TTL_SECS;
+use crate::session_prune::PrunePolicy;
+use crate::session_prune::store_backlog_notice;
+use houyicoder_config::retention::load_retention;
 use houyicoder_context::SessionId;
+use std::path::PathBuf;
 
 /// Push the retention warnings + the backlog hint into the startup queue.
 /// The warnings (a near-miss key, a bad type) must not wait for the sweep's
@@ -13,11 +18,11 @@ use houyicoder_context::SessionId;
 /// root is the store backend's own (reader and writer can never disagree);
 /// None for an in-memory build, so the notice scans nothing.
 pub(super) fn push_startup_notices(
-    store_log_root: Option<std::path::PathBuf>,
+    store_log_root: Option<PathBuf>,
     current_session: SessionId,
     startup: &mut Vec<String>,
 ) {
-    let (cfg, warnings) = houyicoder_config::retention::load_retention();
+    let (cfg, warnings) = load_retention();
     startup.extend(
         warnings
             .iter()
@@ -28,16 +33,16 @@ pub(super) fn push_startup_notices(
     // protected set carries only the current session (no lock-held scan):
     // the gap notice carries no prunable number, so an approximate
     // protected set cannot drift against cleanup's authoritative plan.
-    let policy = crate::session_prune::PrunePolicy {
+    let policy = PrunePolicy {
         ttl_secs: (cfg.session_retention_days as u64) * 24 * 3600,
-        empty_ttl_secs: crate::session_prune::EMPTY_TTL_SECS,
+        empty_ttl_secs: EMPTY_TTL_SECS,
         max_count: cfg.session_retention_count as usize,
         protected: vec![current_session],
         snapshot_ttl_secs: 0,
         debug_max_bytes: 0,
     };
     if let Some(root) = store_log_root
-        && let Some(notice) = crate::session_prune::store_backlog_notice(
+        && let Some(notice) = store_backlog_notice(
             &root,
             cfg.session_retention_count as usize,
             cfg.prune_confirm_threshold as usize,

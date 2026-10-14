@@ -11,6 +11,8 @@ use tokio::sync::oneshot::channel;
 use tokio::sync::oneshot::error::TryRecvError;
 
 use super::super::{DriverEntry, DriverRegistry, DriverSlot, join_driver};
+use std::future::pending;
+use tokio::time::timeout;
 
 /// The foreground join confirms the driver's end signal closed, not merely
 /// that it issued the abort: a done Sender the abort cannot reach keeps the
@@ -37,7 +39,7 @@ async fn test_join_foreground_confirms_end() {
                 }
             }
             let _signal = SignalOnDrop(aborted);
-            std::future::pending::<()>().await
+            pending::<()>().await
         })
         .abort_handle()
     };
@@ -50,7 +52,7 @@ async fn test_join_foreground_confirms_end() {
     // Wait until the backstop fired, not merely until the join task was
     // spawned: on the current-thread runtime a freshly spawned task has not run
     // yet, so is_finished alone would be trivially false.
-    tokio::time::timeout(Duration::from_secs(1), aborted.notified())
+    timeout(Duration::from_secs(1), aborted.notified())
         .await
         .expect("the join's timeout fires the abort backstop");
     // The abort has run, but done is still open: the join must still be parked.

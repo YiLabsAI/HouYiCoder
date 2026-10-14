@@ -7,6 +7,9 @@
 //! a std canonicalize form would never prefix-match the grants, and git for
 //! Windows is widely reported to reject it as well.
 
+use std::env::current_dir;
+use std::env::var;
+use std::fs::read_to_string;
 use std::path::{Path, PathBuf};
 
 /// The workspace override decision: the first non-empty raw value wins and is
@@ -35,13 +38,10 @@ fn override_workspace(project: Option<&str>, env_value: Option<&str>) -> Option<
 /// decision above, which is where the testable logic lives.
 pub fn resolve_project_workspace(project: Option<String>) -> Option<PathBuf> {
     const ENV_PROJECT: &str = houyicoder_config::ENV_HOUYICODER_PROJECT;
-    if let Some(ws) = override_workspace(
-        project.as_deref(),
-        std::env::var(ENV_PROJECT).ok().as_deref(),
-    ) {
+    if let Some(ws) = override_workspace(project.as_deref(), var(ENV_PROJECT).ok().as_deref()) {
         return Some(ws);
     }
-    let start = std::env::current_dir().ok()?;
+    let start = current_dir().ok()?;
     walk_to_workspace_root(&start)
 }
 
@@ -60,7 +60,7 @@ pub fn walk_to_workspace_root(start: &Path) -> Option<PathBuf> {
         let manifest = d.join("Cargo.toml");
         if manifest.is_file() {
             any_root = Some(d.clone());
-            if std::fs::read_to_string(&manifest)
+            if read_to_string(&manifest)
                 .map(|body| body.contains("[workspace]"))
                 .unwrap_or(false)
             {
@@ -77,7 +77,7 @@ pub fn walk_to_workspace_root(start: &Path) -> Option<PathBuf> {
 /// a non-project dir's sessions match across symlinked paths (macOS /tmp vs
 /// /private/tmp), not just the manifest case.
 fn cwd_fallback() -> Option<PathBuf> {
-    std::env::current_dir()
+    current_dir()
         .ok()
         .and_then(|p| dunce::canonicalize(&p).ok().or(Some(p)))
 }
@@ -101,12 +101,12 @@ pub fn workspace_cwd(project: Option<String>) -> String {
 /// log in an isolated temp dir, never the developer real home). Public so
 /// the CLI resume path builds a file backend at the same root.
 pub fn session_log_root() -> PathBuf {
-    if let Ok(p) = std::env::var(houyicoder_config::ENV_HOUYICODER_SESSIONS_DIR)
+    if let Ok(p) = var(houyicoder_config::ENV_HOUYICODER_SESSIONS_DIR)
         && !p.is_empty()
     {
         return PathBuf::from(p);
     }
-    let home = std::env::var("HOME")
+    let home = var("HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::new());
     home.join(".houyicoder").join("sessions")

@@ -1,6 +1,8 @@
 //! Tests for this module.
 
 use super::*;
+use crate::lifecycle::LifecycleState;
+use futures::executor::block_on;
 use houyicoder_protocol::acp_wire::{AcpRequest, AcpRequestId, JsonRpcVersion};
 
 fn req(method: &str, id: i64) -> AcpRequest {
@@ -21,7 +23,7 @@ fn test_initialize_replies_acpx_caps() {
         ext_methods: vec!["acpx/session/takeControl".into()],
     };
     let adapter = AcpAdapter::new(caps, 1, SessionLeaseStore::new());
-    let resp = futures::executor::block_on(adapter.handle(&req("initialize", 5)));
+    let resp = block_on(adapter.handle(&req("initialize", 5)));
     match resp {
         AcpResponse::Result { result, .. } => {
             let s = result.to_string();
@@ -39,7 +41,7 @@ fn test_initialize_replies_acpx_caps() {
 #[test]
 fn test_unknown_method_not_found() {
     let adapter = AcpAdapter::new(AcpxCapabilities::default(), 1, SessionLeaseStore::new());
-    let resp = futures::executor::block_on(adapter.handle(&req("bogus", 9)));
+    let resp = block_on(adapter.handle(&req("bogus", 9)));
     match resp {
         AcpResponse::Error { error, id, .. } => {
             assert!(matches!(id, AcpRequestId::Number(9)));
@@ -58,7 +60,7 @@ fn test_new_session_mints_stores() {
         method: "session/new".into(),
         params: Some(serde_json::json!({"cwd": "/tmp"})),
     };
-    let resp = futures::executor::block_on(adapter.handle(&req));
+    let resp = block_on(adapter.handle(&req));
     match resp {
         AcpResponse::Result { result, .. } => {
             assert!(
@@ -88,7 +90,7 @@ fn test_load_session_reattaches_known() {
         method: "session/load".into(),
         params: Some(serde_json::json!({"sessionId": sid.to_string(), "cwd": "/tmp"})),
     };
-    let resp = futures::executor::block_on(adapter.handle(&req));
+    let resp = block_on(adapter.handle(&req));
     assert!(
         matches!(resp, AcpResponse::Result { .. }),
         "load must succeed"
@@ -106,7 +108,7 @@ fn test_load_session_unknown_fails() {
         method: "session/load".into(),
         params: Some(serde_json::json!({"sessionId": sid, "cwd": "/tmp"})),
     };
-    let resp = futures::executor::block_on(adapter.handle(&req));
+    let resp = block_on(adapter.handle(&req));
     match resp {
         AcpResponse::Error { error, .. } => {
             assert_eq!(error.code, AcpErrorCode::ResourceNotFound);
@@ -133,7 +135,7 @@ fn test_take_control_grants_lease() {
         method: "_acpx/session/takeControl".into(),
         params: Some(serde_json::json!({"sessionId": sid.to_string()})),
     };
-    let resp = futures::executor::block_on(adapter.handle(&req));
+    let resp = block_on(adapter.handle(&req));
     match resp {
         AcpResponse::Result { result, .. } => {
             assert!(
@@ -175,7 +177,7 @@ fn test_take_control_reports_pending() {
         method: "_acpx/session/takeControl".into(),
         params: Some(serde_json::json!({"sessionId": sid.to_string()})),
     };
-    let resp = futures::executor::block_on(adapter.handle(&req));
+    let resp = block_on(adapter.handle(&req));
     match resp {
         AcpResponse::Result { result, .. } => {
             let s = result.to_string();
@@ -210,7 +212,7 @@ fn test_take_control_no_pending() {
         method: "_acpx/session/takeControl".into(),
         params: Some(serde_json::json!({"sessionId": sid.to_string()})),
     };
-    let resp = futures::executor::block_on(adapter.handle(&req));
+    let resp = block_on(adapter.handle(&req));
     match resp {
         AcpResponse::Result { result, .. } => {
             let s = result.to_string();
@@ -242,7 +244,7 @@ fn test_take_control_denied_lease() {
         method: "_acpx/session/takeControl".into(),
         params: Some(serde_json::json!({"sessionId": sid.to_string()})),
     };
-    let resp = futures::executor::block_on(adapter.handle(&req));
+    let resp = block_on(adapter.handle(&req));
     match resp {
         AcpResponse::Result { result, .. } => {
             assert!(
@@ -270,9 +272,6 @@ fn test_cancel_notification_reaps_session() {
         "session/cancel",
         serde_json::json!({"sessionId": sid.to_string()}),
     );
-    futures::executor::block_on(adapter.handle_notification(&notif));
-    assert_eq!(
-        store.state(sid),
-        crate::lifecycle::LifecycleState::Cancelled
-    );
+    block_on(adapter.handle_notification(&notif));
+    assert_eq!(store.state(sid), LifecycleState::Cancelled);
 }

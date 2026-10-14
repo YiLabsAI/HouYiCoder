@@ -14,6 +14,9 @@ use houyicoder_protocol::frontend::model::EffectiveFrom;
 use super::Server;
 use super::frame_carrier::FrameCarrier;
 use super::model_apply::ModelSelection;
+use crate::protocol_adapter::permission_mode_to_wire;
+use houyicoder_protocol::acp_wire::AcpNotification;
+use houyicoder_protocol::frontend::QueuedInput;
 
 impl Server {
     /// Handle a request received mid-run. The payloads safe to process while
@@ -42,9 +45,7 @@ impl Server {
                 };
                 let frame = ServerFrame::Response(ResponseEnvelope::new(
                     req_id,
-                    ResponsePayload::PermissionMode(
-                        crate::protocol_adapter::permission_mode_to_wire(mode),
-                    ),
+                    ResponsePayload::PermissionMode(permission_mode_to_wire(mode)),
                 ));
                 // Encode failure is survivable: skip the frame and keep the
                 // serve loop alive rather than panicking the task, matching
@@ -107,10 +108,7 @@ impl Server {
     /// only the identified item, so equal message text is unambiguous. All
     /// three are fire-and-forget; effects appear in the run outcome and
     /// transcript. Legacy text-only injection remains accepted.
-    pub(super) fn handle_session_notification(
-        &self,
-        notif: &houyicoder_protocol::acp_wire::AcpNotification,
-    ) {
+    pub(super) fn handle_session_notification(&self, notif: &AcpNotification) {
         match notif.method.as_str() {
             "session/cancel" => self.runner.abort(),
             "session/inject" => {
@@ -123,7 +121,7 @@ impl Server {
                                 .get("text")
                                 .and_then(|value| value.as_str())
                                 .filter(|text| !text.is_empty())
-                                .map(houyicoder_protocol::frontend::QueuedInput::new)
+                                .map(QueuedInput::new)
                         })
                 });
                 if let Some(input) = input {

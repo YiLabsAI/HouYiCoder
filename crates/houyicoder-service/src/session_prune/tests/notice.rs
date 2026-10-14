@@ -4,6 +4,7 @@
 //! retention engine produces, so the two change for different reasons.
 
 use super::*;
+use crate::session_prune::GAP_PRECISE_MAX_DIRS;
 
 /// The count bounds the user's own sessions: a child has a log and a descriptor
 /// like any other session, but reporting it would name a store size the user
@@ -153,7 +154,7 @@ fn test_backlog_gap_ttl_backlog() {
 /// The ceiling is a bound on the directory total, inclusive at the ceiling.
 #[test]
 fn test_gap_route_ceiling_bounds() {
-    let ceiling = crate::session_prune::GAP_PRECISE_MAX_DIRS;
+    let ceiling = GAP_PRECISE_MAX_DIRS;
     assert!(
         gap_route_taken(ceiling),
         "a store at the ceiling still gets the precise plan"
@@ -186,7 +187,7 @@ fn store_with_backlog(root: &Path, total: usize, expired: usize) {
 #[test]
 fn test_gap_ceiling_bounds_notice() {
     let root = temp_root();
-    store_with_backlog(&root, crate::session_prune::GAP_PRECISE_MAX_DIRS + 1, 100);
+    store_with_backlog(&root, GAP_PRECISE_MAX_DIRS + 1, 100);
     assert!(
         store_backlog_notice(&root, 1000, 100, &default_policy()).is_none(),
         "past the ceiling this backlog is judged by the count route alone"

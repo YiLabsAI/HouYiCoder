@@ -4,6 +4,7 @@ use houyicoder_protocol::envelope::{RequestId, ResponsePayload};
 use houyicoder_protocol::error::ProtocolError;
 
 use super::{Server, frame_carrier::FrameCarrier};
+use houyicoder_protocol::frontend::tools::ToolEntry;
 
 impl Server {
     /// Reply with the registered tools so /tools can show what the agent can
@@ -17,12 +18,7 @@ impl Server {
             .runner
             .tools_snapshot()
             .into_iter()
-            .map(
-                |(name, description)| houyicoder_protocol::frontend::tools::ToolEntry {
-                    name,
-                    description,
-                },
-            )
+            .map(|(name, description)| ToolEntry { name, description })
             .collect::<Vec<_>>();
         self.send_response(io, req_id, ResponsePayload::Tools(tools))
             .await

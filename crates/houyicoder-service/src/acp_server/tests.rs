@@ -38,6 +38,7 @@ use super::AcpServer;
 use crate::acp_adapter::AcpAdapter;
 use crate::acp_serve::AcpIo;
 use crate::lifecycle::SessionLeaseStore;
+use tokio::time::timeout;
 
 /// A tool that always needs a human verdict, so a run suspends at
 /// Interruption and the server surfaces the permission reverse request.
@@ -243,7 +244,7 @@ async fn send(tx: &mut mpsc::Sender<String>, msg: &impl serde::Serialize) {
 }
 
 async fn recv(rx: &mut mpsc::Receiver<String>) -> String {
-    tokio::time::timeout(Duration::from_secs(5), rx.next())
+    timeout(Duration::from_secs(5), rx.next())
         .await
         .expect("server frame timeout")
         .expect("server replied")
@@ -327,7 +328,7 @@ async fn test_client_closed_during_run() {
     send(&mut tx, &prompt_request(session, 1)).await;
     // Effect latch: the run is live inside the tool, so the closed carrier
     // is observed by the frame branch of the run select, not raced.
-    tokio::time::timeout(Duration::from_secs(5), entered.notified())
+    timeout(Duration::from_secs(5), entered.notified())
         .await
         .expect("run entered the blocking tool");
     drop(tx);
@@ -352,7 +353,7 @@ async fn test_unexpected_frame_during_run() {
     let (handle, mut tx, mut rx) = spawn_server(runner, session);
 
     send(&mut tx, &prompt_request(session, 1)).await;
-    tokio::time::timeout(Duration::from_secs(5), entered.notified())
+    timeout(Duration::from_secs(5), entered.notified())
         .await
         .expect("run entered the blocking tool");
     send(&mut tx, &AcpRequest::new(5, "bogus", json!({}))).await;
@@ -378,7 +379,7 @@ async fn test_cancel_during_run_stops() {
     let (handle, mut tx, mut rx) = spawn_server(runner, session);
 
     send(&mut tx, &prompt_request(session, 3)).await;
-    tokio::time::timeout(Duration::from_secs(5), entered.notified())
+    timeout(Duration::from_secs(5), entered.notified())
         .await
         .expect("run entered the blocking tool");
     send(&mut tx, &AcpNotification::new("session/cancel", json!({}))).await;
@@ -529,7 +530,7 @@ async fn test_unexpected_frame_during_resume() {
     send(&mut tx, &allow_once(ask.id.clone())).await;
     // Effect latch: the resumed run is live inside the tool, so the bogus
     // frame arrives while the resume select is still reading.
-    tokio::time::timeout(Duration::from_secs(5), entered.notified())
+    timeout(Duration::from_secs(5), entered.notified())
         .await
         .expect("resumed run entered the blocking tool");
     send(&mut tx, &AcpRequest::new(9, "bogus", json!({}))).await;
@@ -557,7 +558,7 @@ async fn test_client_closed_during_resume() {
     send(&mut tx, &prompt_request(session, 1)).await;
     let ask = recv_ask(&mut rx).await;
     send(&mut tx, &allow_once(ask.id.clone())).await;
-    tokio::time::timeout(Duration::from_secs(5), entered.notified())
+    timeout(Duration::from_secs(5), entered.notified())
         .await
         .expect("resumed run entered the blocking tool");
     drop(tx);

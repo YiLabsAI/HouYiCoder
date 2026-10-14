@@ -29,7 +29,17 @@ use houyicoder_context::{EventId, SessionId};
 use houyicoder_protocol::frontend::run::ApprovalDecision;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::HashMap;
+use std::fs::create_dir_all;
+use std::fs::read;
+#[cfg(test)]
+use std::fs::read_dir;
+use std::fs::remove_file;
+use std::fs::rename;
+use std::fs::write;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::Mutex;
 
 /// The durable, session-indexed companion to a live runner. Fields are pub so
 /// the runtime layer reads and updates them; construction goes through the
@@ -216,16 +226,16 @@ pub trait Lifecycle: Send + Sync {
 /// the runner host, and the IO bridge without each copying the maps.
 #[derive(Clone)]
 pub struct SessionLeaseStore {
-    inner: std::sync::Arc<Inner>,
+    inner: Arc<Inner>,
 }
 
 struct Inner {
-    sessions: std::sync::Mutex<std::collections::HashMap<SessionId, SessionRecord>>,
-    states: std::sync::Mutex<std::collections::HashMap<SessionId, LifecycleState>>,
+    sessions: Mutex<HashMap<SessionId, SessionRecord>>,
+    states: Mutex<HashMap<SessionId, LifecycleState>>,
     /// Optional persistence backing. None keeps the in-memory fast path
     /// (single-process). When present, mutations persist so a new process
     /// that never held the session in memory can load it on reconnect.
-    registry: Option<std::sync::Arc<dyn SessionRegistry>>,
+    registry: Option<Arc<dyn SessionRegistry>>,
 }
 
 impl SessionLeaseStore {
@@ -234,9 +244,9 @@ impl SessionLeaseStore {
     /// across processes.
     pub fn new() -> Self {
         Self {
-            inner: std::sync::Arc::new(Inner {
-                sessions: std::sync::Mutex::new(std::collections::HashMap::new()),
-                states: std::sync::Mutex::new(std::collections::HashMap::new()),
+            inner: Arc::new(Inner {
+                sessions: Mutex::new(HashMap::new()),
+                states: Mutex::new(HashMap::new()),
                 registry: None,
             }),
         }
@@ -245,11 +255,11 @@ impl SessionLeaseStore {
     /// Back the store with a registry. Insertions and state mutations persist;
     /// load_session hydrates from the registry when the session is not in
     /// memory (the cross-process reconnect path).
-    pub fn with_registry(registry: std::sync::Arc<dyn SessionRegistry>) -> Self {
+    pub fn with_registry(registry: Arc<dyn SessionRegistry>) -> Self {
         Self {
-            inner: std::sync::Arc::new(Inner {
-                sessions: std::sync::Mutex::new(std::collections::HashMap::new()),
-                states: std::sync::Mutex::new(std::collections::HashMap::new()),
+            inner: Arc::new(Inner {
+                sessions: Mutex::new(HashMap::new()),
+                states: Mutex::new(HashMap::new()),
                 registry: Some(registry),
             }),
         }
@@ -691,7 +701,7 @@ impl FileSessionRegistry {
     /// Open a registry rooted at the given directory. The directory is
     /// created (recursively) if missing; existing records are readable as-is.
     pub fn open(root: PathBuf) -> Result<Self, LifecycleError> {
-        std::fs::create_dir_all(&root).map_err(|_| LifecycleError::Io)?;
+        create_dir_all(&root).map_err(|_| LifecycleError::Io)?;
         Ok(Self { root })
     }
 
@@ -703,8 +713,8 @@ impl FileSessionRegistry {
         let path = self.path_for(record.session_id);
         let tmp = self.root.join(format!(".{}.tmp", record.session_id));
         let bytes = serde_json::to_vec(record).map_err(|_| LifecycleError::Io)?;
-        std::fs::write(&tmp, bytes).map_err(|_| LifecycleError::Io)?;
-        std::fs::rename(&tmp, &path).map_err(|_| LifecycleError::Io)?;
+        write(&tmp, bytes).map_err(|_| LifecycleError::Io)?;
+        rename(&tmp, &path).map_err(|_| LifecycleError::Io)?;
         Ok(())
     }
 }
@@ -719,7 +729,7 @@ impl SessionRegistry for FileSessionRegistry {
         if !path.exists() {
             return Ok(None);
         }
-        let bytes = std::fs::read(&path).map_err(|_| LifecycleError::Io)?;
+        let bytes = read(&path).map_err(|_| LifecycleError::Io)?;
         let record: SessionRecord =
             serde_json::from_slice(&bytes).map_err(|_| LifecycleError::Io)?;
         Ok(Some(record))
@@ -728,7 +738,7 @@ impl SessionRegistry for FileSessionRegistry {
     fn remove(&self, session_id: SessionId) -> Result<(), LifecycleError> {
         let path = self.path_for(session_id);
         if path.exists() {
-            std::fs::remove_file(&path).map_err(|_| LifecycleError::Io)?;
+            remove_file(&path).map_err(|_| LifecycleError::Io)?;
         }
         Ok(())
     }
@@ -741,9 +751,9 @@ impl FileSessionRegistry {
     /// (cancel + handoff already remove their files).
     #[cfg(test)]
     pub fn clear(&self) {
-        if let Ok(entries) = std::fs::read_dir(&self.root) {
+        if let Ok(entries) = read_dir(&self.root) {
             for e in entries.flatten() {
-                drop(std::fs::remove_file(e.path()));
+                drop(remove_file(e.path()));
             }
         }
     }

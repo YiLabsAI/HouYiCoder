@@ -1,10 +1,19 @@
 //! Tests for this module.
 
 use super::*;
+use crate::server::log_bad_frame;
+use houyicoder_protocol::envelope::ClientFrame;
+use std::fs::create_dir_all;
+use std::fs::read_to_string;
+use std::fs::remove_dir_all;
+use std::fs::write;
+use std::path::PathBuf;
+use std::process::id;
+use tracing::subscriber::with_default;
 
-fn temp_dir(tag: &str) -> std::path::PathBuf {
-    let d = std::env::temp_dir().join(format!("houyi-diag-{tag}-{}", std::process::id()));
-    drop(std::fs::remove_dir_all(&d));
+fn temp_dir(tag: &str) -> PathBuf {
+    let d = std::env::temp_dir().join(format!("houyi-diag-{tag}-{}", id()));
+    drop(remove_dir_all(&d));
     d
 }
 
@@ -16,7 +25,7 @@ fn test_open_creates_parent_dirs() {
     let path = dir.join("nested").join("debug.log");
     drop(open_log_file(&path).expect("open under a fresh parent"));
     assert!(path.exists(), "the log file was not created");
-    drop(std::fs::remove_dir_all(&dir));
+    drop(remove_dir_all(&dir));
 }
 
 /// A parent that is a regular file cannot hold a log, and the caller is
@@ -24,9 +33,9 @@ fn test_open_creates_parent_dirs() {
 #[test]
 fn test_open_reports_bad_parent() {
     let dir = temp_dir("badparent");
-    std::fs::create_dir_all(&dir).expect("create the test dir");
+    create_dir_all(&dir).expect("create the test dir");
     let blocker = dir.join("a-file");
-    std::fs::write(&blocker, b"not a directory").expect("write the blocker");
+    write(&blocker, b"not a directory").expect("write the blocker");
     let err = open_log_file(&blocker.join("debug.log")).expect_err("must not open");
     assert!(
         matches!(err, InstallError::File(_)),
@@ -36,7 +45,7 @@ fn test_open_reports_bad_parent() {
         err.to_string().contains("diagnostic log"),
         "the message should name what failed, got {err}"
     );
-    drop(std::fs::remove_dir_all(&dir));
+    drop(remove_dir_all(&dir));
 }
 
 /// The already-installed case is a wiring mistake, so its message names
@@ -64,14 +73,14 @@ fn test_handle_toggles_recording() {
     let dir = temp_dir("toggle");
     let path = dir.join("debug.log");
     let (subscriber, handle) = build(open_log_file(&path).expect("open"), path.clone());
-    tracing::subscriber::with_default(subscriber, || {
+    with_default(subscriber, || {
         tracing::debug!("while disabled");
         handle.set_level(LevelFilter::DEBUG).expect("raise");
         tracing::debug!("while enabled");
         handle.disable().expect("disable");
         tracing::debug!("after disabling");
     });
-    let body = std::fs::read_to_string(&path).expect("read the log");
+    let body = read_to_string(&path).expect("read the log");
     assert!(
         !body.contains("while disabled"),
         "a disabled sink recorded anyway: {body}"
@@ -84,7 +93,7 @@ fn test_handle_toggles_recording() {
         !body.contains("after disabling"),
         "the switch latched on instead of turning off: {body}"
     );
-    drop(std::fs::remove_dir_all(&dir));
+    drop(remove_dir_all(&dir));
 }
 
 /// The handle carries the path it was installed with, so a /debug reply
@@ -98,7 +107,7 @@ fn test_handle_carries_path() {
     let (_subscriber, handle) = build(open_log_file(&path).expect("open"), path.clone());
     let got = handle.path().expect("the handle carries a path");
     assert_eq!(got, path, "the path is the one the handle was built with");
-    drop(std::fs::remove_dir_all(&dir));
+    drop(remove_dir_all(&dir));
 }
 
 /// install claims the process-wide subscriber slot, stores the handle for
@@ -127,7 +136,7 @@ fn test_install_claims_rejects_second() {
     }
     // The first handle still works.
     assert!(h1.path().is_some(), "the first handle is still valid");
-    drop(std::fs::remove_dir_all(&dir));
+    drop(remove_dir_all(&dir));
 }
 
 /// The InvalidFrame diagnostic lands the raw failing wire line + the
@@ -140,16 +149,16 @@ fn test_log_bad_frame_writes() {
     let path = dir.join("debug.log");
     let (subscriber, handle) = build(open_log_file(&path).expect("open"), path.clone());
     let bad = "not-a-client-frame";
-    let e = serde_json::from_str::<houyicoder_protocol::envelope::ClientFrame>(bad).unwrap_err();
-    tracing::subscriber::with_default(subscriber, || {
+    let e = serde_json::from_str::<ClientFrame>(bad).unwrap_err();
+    with_default(subscriber, || {
         handle.set_level(LevelFilter::WARN).expect("raise");
-        crate::server::log_bad_frame(bad, &e);
+        log_bad_frame(bad, &e);
     });
-    let body = std::fs::read_to_string(&path).expect("read the log");
+    let body = read_to_string(&path).expect("read the log");
     assert!(body.contains(bad), "raw line not logged: {body}");
     assert!(
         body.contains("client frame parse failed"),
         "message not logged: {body}"
     );
-    drop(std::fs::remove_dir_all(&dir));
+    drop(remove_dir_all(&dir));
 }

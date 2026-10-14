@@ -11,12 +11,16 @@ use houyicoder_context::SessionId;
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::{Runner, ToolRegistry};
 use houyicoder_memory::InMemoryBackend;
+use houyicoder_permission::DefaultModeGate;
 use houyicoder_protocol::envelope::{
     ClientFrame, RequestEnvelope, RequestId, ResponsePayload, ServerFrame,
 };
 use houyicoder_protocol::error::ErrorCategory;
+use houyicoder_protocol::framing::encode;
 use houyicoder_protocol::frontend::FrontendRequest;
+use houyicoder_protocol::frontend::debug::DebugLevel;
 use houyicoder_protocol::handshake::Hello;
+use houyicoder_provider::FakeProvider;
 use houyicoder_session::SessionStore;
 use std::sync::Arc;
 
@@ -24,14 +28,14 @@ fn stub_runner() -> Arc<Runner> {
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     Arc::new(Runner::new(
         store,
-        Arc::new(houyicoder_provider::FakeProvider::text("x")),
+        Arc::new(FakeProvider::text("x")),
         ToolRegistry::new(),
         RunnerConfig::default(),
     ))
 }
 
 fn send_line(tx: &mut mpsc::Sender<String>, frame: &impl serde::Serialize) {
-    let mut s = houyicoder_protocol::framing::encode(frame).unwrap();
+    let mut s = encode(frame).unwrap();
     if !s.ends_with('\n') {
         s.push('\n');
     }
@@ -51,12 +55,8 @@ async fn test_no_sink_replies_error() {
     let (server_tx, mut client_rx) = mpsc::channel::<String>(256);
     let (mut client_tx, server_rx) = mpsc::channel::<String>(256);
     let io = FrameCarrier::new(server_tx, server_rx);
-    let server = Server::new(
-        runner,
-        session,
-        Arc::new(houyicoder_permission::DefaultModeGate::new()),
-    )
-    .with_diagnostics(None);
+    let server =
+        Server::new(runner, session, Arc::new(DefaultModeGate::new())).with_diagnostics(None);
     let handle = tokio::spawn(async move { server.serve(io).await });
     send_line(&mut client_tx, &Hello::local());
     drop(client_rx.next().await);
@@ -66,7 +66,7 @@ async fn test_no_sink_replies_error() {
         &ClientFrame::Request(RequestEnvelope::new(
             RequestId(1),
             FrontendRequest::DebugSet {
-                level: houyicoder_protocol::frontend::debug::DebugLevel::Debug,
+                level: DebugLevel::Debug,
             },
         )),
     );
@@ -108,12 +108,8 @@ async fn test_set_level_replies_enabled() {
     let (server_tx, mut client_rx) = mpsc::channel::<String>(256);
     let (mut client_tx, server_rx) = mpsc::channel::<String>(256);
     let io = FrameCarrier::new(server_tx, server_rx);
-    let server = Server::new(
-        runner,
-        session,
-        Arc::new(houyicoder_permission::DefaultModeGate::new()),
-    )
-    .with_diagnostics(Some(diag_handle));
+    let server = Server::new(runner, session, Arc::new(DefaultModeGate::new()))
+        .with_diagnostics(Some(diag_handle));
     let handle = tokio::spawn(async move { server.serve(io).await });
     send_line(&mut client_tx, &Hello::local());
     drop(client_rx.next().await);
@@ -123,7 +119,7 @@ async fn test_set_level_replies_enabled() {
         &ClientFrame::Request(RequestEnvelope::new(
             RequestId(1),
             FrontendRequest::DebugSet {
-                level: houyicoder_protocol::frontend::debug::DebugLevel::Debug,
+                level: DebugLevel::Debug,
             },
         )),
     );
@@ -143,7 +139,7 @@ async fn test_set_level_replies_enabled() {
         &ClientFrame::Request(RequestEnvelope::new(
             RequestId(2),
             FrontendRequest::DebugSet {
-                level: houyicoder_protocol::frontend::debug::DebugLevel::Off,
+                level: DebugLevel::Off,
             },
         )),
     );
@@ -167,12 +163,8 @@ async fn test_set_level_failure_internal() {
     let (server_tx, mut client_rx) = mpsc::channel::<String>(256);
     let (mut client_tx, server_rx) = mpsc::channel::<String>(256);
     let io = FrameCarrier::new(server_tx, server_rx);
-    let server = Server::new(
-        runner,
-        session,
-        Arc::new(houyicoder_permission::DefaultModeGate::new()),
-    )
-    .with_diagnostics(Some(diagnostics::disconnected_handle()));
+    let server = Server::new(runner, session, Arc::new(DefaultModeGate::new()))
+        .with_diagnostics(Some(diagnostics::disconnected_handle()));
     let handle = tokio::spawn(async move { server.serve(io).await });
     send_line(&mut client_tx, &Hello::local());
     drop(client_rx.next().await);
@@ -182,7 +174,7 @@ async fn test_set_level_failure_internal() {
         &ClientFrame::Request(RequestEnvelope::new(
             RequestId(1),
             FrontendRequest::DebugSet {
-                level: houyicoder_protocol::frontend::debug::DebugLevel::Debug,
+                level: DebugLevel::Debug,
             },
         )),
     );

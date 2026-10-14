@@ -1,6 +1,17 @@
 //! Tests for session title derivation from the log head.
 
 use super::*;
+use houyicoder_api::session::SessionLog;
+use houyicoder_context::SessionId;
+use houyicoder_context::{EventId, SessionEvent, SessionLogEntry};
+use houyicoder_memory::LocalFileBackend;
+use houyicoder_session::SessionStore;
+use std::env::temp_dir;
+use std::fs::create_dir_all;
+use std::fs::remove_dir_all;
+use std::process::id;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 /// Compact title formatting turns a prompt into a clean session name.
 #[test]
@@ -20,20 +31,16 @@ fn test_compact_session_title() {
 
 #[tokio::test]
 async fn test_first_prompt_title_log() {
-    use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
-    use houyicoder_session::SessionStore;
-    let root = std::env::temp_dir().join(format!(
+    let root = temp_dir().join(format!(
         "title-test-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+        id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0)
     ));
-    std::fs::create_dir_all(&root).unwrap();
-    let store = SessionStore::new(Box::new(houyicoder_memory::LocalFileBackend::new(
-        root.clone(),
-    )));
+    create_dir_all(&root).unwrap();
+    let store = SessionStore::new(Box::new(LocalFileBackend::new(root.clone())));
     let sid = SessionId::new();
     store
         .append(SessionLogEntry {
@@ -47,32 +54,26 @@ async fn test_first_prompt_title_log() {
         })
         .await
         .unwrap();
-    let log: &dyn houyicoder_api::session::SessionLog =
-        &store as &dyn houyicoder_api::session::SessionLog;
+    let log: &dyn SessionLog = &store as &dyn SessionLog;
     let title = first_prompt_title(log, sid);
     assert_eq!(title.as_deref(), Some("research-demo-repo"));
-    std::fs::remove_dir_all(&root).ok();
+    remove_dir_all(&root).ok();
 }
 
 #[tokio::test]
 async fn test_first_prompt_title_absent() {
-    use houyicoder_context::SessionId;
-    use houyicoder_session::SessionStore;
-    let root = std::env::temp_dir().join(format!(
+    let root = temp_dir().join(format!(
         "title-empty-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+        id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0)
     ));
-    std::fs::create_dir_all(&root).unwrap();
-    let store = SessionStore::new(Box::new(houyicoder_memory::LocalFileBackend::new(
-        root.clone(),
-    )));
+    create_dir_all(&root).unwrap();
+    let store = SessionStore::new(Box::new(LocalFileBackend::new(root.clone())));
     let sid = SessionId::new();
-    let log: &dyn houyicoder_api::session::SessionLog =
-        &store as &dyn houyicoder_api::session::SessionLog;
+    let log: &dyn SessionLog = &store as &dyn SessionLog;
     assert!(first_prompt_title(log, sid).is_none());
-    std::fs::remove_dir_all(&root).ok();
+    remove_dir_all(&root).ok();
 }

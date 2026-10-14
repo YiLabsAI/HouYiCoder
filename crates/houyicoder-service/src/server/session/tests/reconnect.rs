@@ -39,6 +39,11 @@ use tokio::sync::{Notify, oneshot};
 
 use crate::composition::SessionHost;
 use crate::lifecycle::{Lifecycle, LifecycleState, SessionLeaseStore};
+use houyicoder_context::PermissionVerdict;
+use houyicoder_context::SessionEvent;
+use houyicoder_protocol::acp_wire::AcpNotification;
+use houyicoder_protocol::framing::encode;
+use tokio::time::timeout;
 
 /// A read-only tool that keeps a resumed run active until released.
 struct ReconnectBlockingTool {
@@ -123,7 +128,7 @@ async fn await_inject_dispatch(client: &mut Client) {
         .await
         .expect("send dispatch barrier");
     loop {
-        let frame = tokio::time::timeout(Duration::from_secs(2), client.next_frame())
+        let frame = timeout(Duration::from_secs(2), client.next_frame())
             .await
             .expect("dispatch barrier timeout")
             .expect("dispatch barrier frame");
@@ -224,7 +229,7 @@ async fn test_reconnect_replays_queued_input() {
         .await
         .expect("start interrupted run");
     loop {
-        let frame = tokio::time::timeout(Duration::from_secs(2), client1.next_frame())
+        let frame = timeout(Duration::from_secs(2), client1.next_frame())
             .await
             .expect("first connection frame timeout")
             .expect("first connection frame");
@@ -233,7 +238,7 @@ async fn test_reconnect_replays_queued_input() {
         }
     }
     drop(client1);
-    tokio::time::timeout(Duration::from_secs(2), serve1)
+    timeout(Duration::from_secs(2), serve1)
         .await
         .expect("first connection closes")
         .expect("first serve task");
@@ -248,7 +253,7 @@ async fn test_reconnect_replays_queued_input() {
     )));
     client2.connect().await.expect("second handshake");
     loop {
-        let frame = tokio::time::timeout(Duration::from_secs(2), client2.next_frame())
+        let frame = timeout(Duration::from_secs(2), client2.next_frame())
             .await
             .expect("reattach frame timeout")
             .expect("reattach frame");
@@ -273,12 +278,12 @@ async fn test_reconnect_replays_queued_input() {
         }
     }
 
-    tokio::time::timeout(Duration::from_secs(2), entered.notified())
+    timeout(Duration::from_secs(2), entered.notified())
         .await
         .expect("resumed run entered blocking tool");
     let input = QueuedInput::new("reconnected note");
     client2
-        .send_notification(houyicoder_protocol::acp_wire::AcpNotification::new(
+        .send_notification(AcpNotification::new(
             "session/inject",
             serde_json::json!({ "input": input }),
         ))
@@ -289,7 +294,7 @@ async fn test_reconnect_replays_queued_input() {
 
     let mut frames = Vec::new();
     for _ in 0..256 {
-        let frame = tokio::time::timeout(Duration::from_secs(2), client2.next_frame())
+        let frame = timeout(Duration::from_secs(2), client2.next_frame())
             .await
             .expect("ordered reconnect frames timeout")
             .expect("ordered reconnect frame");
@@ -329,7 +334,7 @@ async fn test_reconnect_replays_queued_input() {
     );
 
     drop(client2);
-    tokio::time::timeout(Duration::from_secs(2), serve2)
+    timeout(Duration::from_secs(2), serve2)
         .await
         .expect("second connection closes")
         .expect("second serve task");
@@ -389,7 +394,7 @@ async fn test_reconnect_resumes_interruption() {
         runner.clone(),
         event_sequencer,
         gate,
-        std::sync::Arc::new(tokio::sync::Notify::new()),
+        Arc::new(Notify::new()),
     );
 
     // Connection 1: drive to the first Interruption, receive ask1, disconnect.
@@ -560,7 +565,7 @@ async fn test_deny_verdict_completes_run() {
         runner.clone(),
         event_sequencer,
         gate,
-        std::sync::Arc::new(tokio::sync::Notify::new()),
+        Arc::new(Notify::new()),
     );
 
     // Connection 1: receive ask1, disconnect before answering.
@@ -662,8 +667,8 @@ async fn test_deny_verdict_completes_run() {
         .any(|ev| {
             matches!(
                 ev.event,
-                houyicoder_context::SessionEvent::PermissionDecision {
-                    verdict: houyicoder_context::PermissionVerdict::Denied,
+                SessionEvent::PermissionDecision {
+                    verdict: PermissionVerdict::Denied,
                     ..
                 }
             )
@@ -746,7 +751,7 @@ async fn test_mid_reemit_disconnect_errors() {
         "reattach re-emitted the ask before the disconnect"
     );
     drop(client2);
-    let outcome = tokio::time::timeout(Duration::from_secs(2), serve2).await;
+    let outcome = timeout(Duration::from_secs(2), serve2).await;
     assert!(
         outcome.is_ok(),
         "serve_session returns (no hang) on mid-re-emit disconnect"
@@ -887,8 +892,7 @@ async fn test_reattach_cancelled_session_errors() {
     let (_client_tx, server_rx) = mpsc::channel::<String>(8);
     let (server_tx, _client_rx) = mpsc::channel::<String>(8);
     let io = FrameCarrier::new(server_tx, server_rx);
-    let outcome =
-        tokio::time::timeout(Duration::from_secs(2), serve_session(host, session, io)).await;
+    let outcome = timeout(Duration::from_secs(2), serve_session(host, session, io)).await;
     assert!(
         outcome.is_ok(),
         "serve returns (no hang) on a terminal session"
@@ -960,7 +964,7 @@ async fn test_reattach_occupied_session_errors() {
     let io2 = FrameCarrier::new(server_tx2, server_rx2);
     let host2 = host.clone();
     let s2 = session;
-    let outcome = tokio::time::timeout(Duration::from_secs(2), serve_session(host2, s2, io2)).await;
+    let outcome = timeout(Duration::from_secs(2), serve_session(host2, s2, io2)).await;
     assert!(
         outcome.is_ok(),
         "second serve returns (no hang) on occupied lease"
@@ -990,7 +994,7 @@ async fn test_reattach_occupied_session_errors() {
 /// Encode a frame for the raw client ends that drive a channel pair without
 /// the Client wrapper.
 fn reconnect_encode(msg: &impl serde::Serialize) -> String {
-    let mut f = houyicoder_protocol::framing::encode(msg).expect("encode");
+    let mut f = encode(msg).expect("encode");
     if !f.ends_with('\n') {
         f.push('\n');
     }
@@ -1062,7 +1066,7 @@ async fn park_first_connection(host: &Arc<SessionHost>, session: SessionId) {
         .await
         .expect("start interrupted run");
     loop {
-        let frame = tokio::time::timeout(Duration::from_secs(2), client1.next_frame())
+        let frame = timeout(Duration::from_secs(2), client1.next_frame())
             .await
             .expect("first connection frame timeout")
             .expect("first connection frame");
@@ -1071,7 +1075,7 @@ async fn park_first_connection(host: &Arc<SessionHost>, session: SessionId) {
         }
     }
     drop(client1);
-    tokio::time::timeout(Duration::from_secs(2), serve1)
+    timeout(Duration::from_secs(2), serve1)
         .await
         .expect("first connection closes")
         .expect("first serve task");
@@ -1116,7 +1120,7 @@ async fn test_reemit_wrong_payload_fails() {
     client2.connect().await.expect("second handshake");
     let mut ask_id = None;
     while ask_id.is_none() {
-        let frame = tokio::time::timeout(Duration::from_secs(2), client2.next_frame())
+        let frame = timeout(Duration::from_secs(2), client2.next_frame())
             .await
             .expect("re-emit frame timeout")
             .expect("re-emit frame");
@@ -1131,7 +1135,7 @@ async fn test_reemit_wrong_payload_fails() {
         )
         .await
         .expect("send the wrong payload");
-    let err = tokio::time::timeout(Duration::from_secs(2), serve2)
+    let err = timeout(Duration::from_secs(2), serve2)
         .await
         .expect("second serve returns")
         .expect("second serve join")
@@ -1199,7 +1203,7 @@ async fn test_client_closed_during_resume() {
         .expect("send hello");
     let mut ask = None;
     while ask.is_none() {
-        let line = tokio::time::timeout(Duration::from_secs(2), client_rx2.next())
+        let line = timeout(Duration::from_secs(2), client_rx2.next())
             .await
             .expect("re-emit frame timeout")
             .expect("re-emit frame");
@@ -1227,11 +1231,11 @@ async fn test_client_closed_during_resume() {
 
     // Effect latch: the resumed run is inside the blocking tool, so the
     // resume loop is live when the send half closes.
-    tokio::time::timeout(Duration::from_secs(2), entered.notified())
+    timeout(Duration::from_secs(2), entered.notified())
         .await
         .expect("resumed run entered the blocking tool");
     drop(client_tx2);
-    let err = tokio::time::timeout(Duration::from_secs(2), serve2)
+    let err = timeout(Duration::from_secs(2), serve2)
         .await
         .expect("second serve returns")
         .expect("second serve join")

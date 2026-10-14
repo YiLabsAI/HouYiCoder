@@ -1,10 +1,12 @@
 //! Tests for this module.
 
 use super::*;
+use std::env::current_dir;
 use std::fs;
+use std::process::id;
 
 fn temp_dir(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("houyi-paths-{tag}-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("houyi-paths-{tag}-{}", id()));
     drop(fs::remove_dir_all(&dir));
     fs::create_dir_all(&dir).expect("mkdir");
     dir
@@ -59,7 +61,7 @@ fn test_resolve_explicit_project() {
 /// across symlinked paths.
 #[test]
 fn test_cwd_fallback_canonical() {
-    let cwd = std::env::current_dir().expect("cwd");
+    let cwd = current_dir().expect("cwd");
     let expected = dunce::canonicalize(&cwd).expect("canonical cwd");
     assert_eq!(cwd_fallback().expect("fallback"), expected);
 }

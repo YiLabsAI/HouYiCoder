@@ -8,6 +8,7 @@
 //! service and account in argv, and reading a user's keychain is precisely the
 //! event an operator should be able to see, so that spawn is audited.
 
+use futures::executor::block_on;
 use houyicoder_api::launcher::{
     FenceConfig, ProcessLauncher, SpawnPolicy, SpawnRequest, StdProcessLauncher,
 };
@@ -95,7 +96,7 @@ fn read_keychain(
         Ok(child) => child,
         Err(e) => return failed(warnings, e.to_string()),
     };
-    let exit = match futures::executor::block_on(child.wait()) {
+    let exit = match block_on(child.wait()) {
         Ok(exit) => exit,
         Err(e) => return failed(warnings, e.to_string()),
     };
@@ -136,7 +137,7 @@ fn run_helper(command: &str, launcher: Option<&dyn ProcessLauncher>) -> Option<S
     };
     // The capture path resolves its wait future before handing the child back,
     // so this is already settled; the fence above is what bounded it.
-    let exit = match futures::executor::block_on(child.wait()) {
+    let exit = match block_on(child.wait()) {
         Ok(exit) => exit,
         Err(e) => {
             tracing::warn!("api key helper did not finish: {e}");

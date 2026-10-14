@@ -3,6 +3,7 @@
 use super::*;
 use houyicoder_async::CancellationToken;
 use std::sync::Arc;
+use tokio::task::yield_now;
 
 /// route_approvals_via_bus round-trips a permission ask to a parent
 /// responder and collects the decision. drive_child_to_terminal relies
@@ -61,7 +62,7 @@ async fn test_route_approvals_cancel_none() {
     let task = tokio::spawn(async move {
         route_approvals_via_bus(&bus, "child-1", "explore", approvals, &cancel_for_task).await
     });
-    tokio::task::yield_now().await;
+    yield_now().await;
     cancel.cancel();
     assert!(
         task.await.expect("task done").is_none(),

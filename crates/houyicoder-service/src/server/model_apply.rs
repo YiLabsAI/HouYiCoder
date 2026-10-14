@@ -15,6 +15,8 @@ use houyicoder_protocol::llm::EffortLevel;
 
 use super::Server;
 use crate::composition::persist_model_pick;
+use houyicoder_core::agent::resolve_applied_effort;
+use tokio::task::spawn_blocking;
 
 /// A model pick the host is about to apply, in the terms the wire carries it.
 pub(super) struct ModelSelection {
@@ -81,11 +83,8 @@ impl Server {
         // model accepts clamps to the set's top, so the session state, the
         // reply, and the persisted value all carry the same effective level —
         // what is saved is what runs, never a level the model would clamp.
-        let effective_effort = houyicoder_core::agent::resolve_applied_effort(
-            &resolved,
-            selection.effort,
-            self.runner.catalog_resolver(),
-        );
+        let effective_effort =
+            resolve_applied_effort(&resolved, selection.effort, self.runner.catalog_resolver());
         // Apply choice, model, effort and speed together under one write. The
         // selection intent is stored, not derived from id equality later, so
         // an explicit pick that resolves to the default id stays Explicit.
@@ -137,7 +136,7 @@ impl Server {
         let store = self.descriptor_store.clone();
         let session = self.session;
         let resolved = resolved.to_string();
-        let writes = tokio::task::spawn_blocking(move || {
+        let writes = spawn_blocking(move || {
             let settings = persist_model_pick(
                 &settings_path,
                 model_input.as_deref(),
@@ -181,7 +180,7 @@ impl Server {
     pub(super) async fn model_catalog_snapshot(&self) -> Result<ModelCatalog, ProtocolError> {
         let runner = self.runner.clone();
         let settings_path = self.settings_path.clone();
-        let catalog = tokio::task::spawn_blocking(move || {
+        let catalog = spawn_blocking(move || {
             let (section, _warnings) = houyicoder_config::load_model_section_from(&settings_path);
             Self::catalog_from_section(&runner, section)
         })

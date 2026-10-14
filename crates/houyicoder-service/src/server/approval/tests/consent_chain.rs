@@ -30,6 +30,8 @@ use crate::lifecycle::SessionLeaseStore;
 use crate::server::EventSequencer;
 use serde_json::json;
 use std::{env, fs, path::Path, process, sync::Arc, time::Duration};
+use tokio::sync::Notify;
+use tokio::time::timeout;
 
 /// A runner over an in-memory session store with a fixed turn budget, the
 /// shape both chain tests drive.
@@ -110,7 +112,7 @@ async fn approve_once_and_finish(
     expected_directory: &Path,
 ) -> bool {
     for _ in 0..64 {
-        let frame = tokio::time::timeout(Duration::from_secs(5), client.next_frame())
+        let frame = timeout(Duration::from_secs(5), client.next_frame())
             .await
             .expect("server frame timeout")
             .expect("server frame");
@@ -341,7 +343,7 @@ fn test_resume_server_restores_sandbox() {
         EventSequencer::new(),
         gate,
         host,
-        Arc::new(tokio::sync::Notify::new()),
+        Arc::new(Notify::new()),
     );
     let input = json!({"path": target.to_string_lossy()});
     let reason = AskReason {

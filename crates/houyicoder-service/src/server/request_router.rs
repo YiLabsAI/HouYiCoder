@@ -8,6 +8,17 @@ use houyicoder_protocol::frontend::{FrontendRequest, SessionId};
 use super::model_apply::ModelSelection;
 use super::{Server, frame_carrier::FrameCarrier};
 use crate::protocol_adapter as pa;
+use houyicoder_context::SessionEvent;
+use houyicoder_core::snapshot::UndoOutcome;
+use houyicoder_protocol::frontend::model::SpeedMode;
+use houyicoder_protocol::frontend::run::ContentBlock;
+use houyicoder_protocol::frontend::trajectory::TrajectoryResponse;
+use houyicoder_protocol::llm::EffortLevel;
+use pa::hooks::declared_events;
+use pa::hooks::hook_entries;
+use pa::redundancy::map_redundant_entries;
+use pa::skills::skill_entries;
+use std::collections::HashSet;
 
 impl Server {
     /// True when the protocol session id names this server's session. The
@@ -155,8 +166,8 @@ impl Server {
         io: &mut FrameCarrier,
         req_id: RequestId,
         session_id: SessionId,
-        content: Vec<houyicoder_protocol::frontend::run::ContentBlock>,
-        disabled_skills: std::collections::HashSet<String>,
+        content: Vec<ContentBlock>,
+        disabled_skills: HashSet<String>,
     ) -> Result<(), ProtocolError> {
         if !self.session_matches(&session_id) {
             return self
@@ -205,8 +216,8 @@ impl Server {
         io: &mut FrameCarrier,
         req_id: RequestId,
     ) -> Result<(), ProtocolError> {
-        let mut hooks = pa::hooks::hook_entries(self.runner.hooks_list());
-        hooks.extend(pa::hooks::declared_events());
+        let mut hooks = hook_entries(self.runner.hooks_list());
+        hooks.extend(declared_events());
         hooks.sort_by(|a, b| a.name.cmp(&b.name));
         self.send_response(io, req_id, ResponsePayload::Hooks(hooks))
             .await
@@ -217,7 +228,7 @@ impl Server {
         io: &mut FrameCarrier,
         req_id: RequestId,
     ) -> Result<(), ProtocolError> {
-        let skills = pa::skills::skill_entries(self.runner.skills_snapshot());
+        let skills = skill_entries(self.runner.skills_snapshot());
         self.send_response(io, req_id, ResponsePayload::Skills(skills))
             .await
     }
@@ -255,11 +266,9 @@ impl Server {
         req_id: RequestId,
     ) -> Result<(), ProtocolError> {
         let desc = match self.runner.undo_last() {
-            houyicoder_core::snapshot::UndoOutcome::Restored(entry) => Some(entry.description()),
-            houyicoder_core::snapshot::UndoOutcome::Empty => None,
-            houyicoder_core::snapshot::UndoOutcome::Failed(msg) => {
-                Some(format!("restore failed: {msg}"))
-            }
+            UndoOutcome::Restored(entry) => Some(entry.description()),
+            UndoOutcome::Empty => None,
+            UndoOutcome::Failed(msg) => Some(format!("restore failed: {msg}")),
         };
         self.send_response(io, req_id, ResponsePayload::UndoResult(desc))
             .await
@@ -270,9 +279,9 @@ impl Server {
         io: &mut FrameCarrier,
         req_id: RequestId,
         model: Option<String>,
-        effort: Option<houyicoder_protocol::llm::EffortLevel>,
+        effort: Option<EffortLevel>,
         effort_toggled: bool,
-        speed: Option<houyicoder_protocol::frontend::model::SpeedMode>,
+        speed: Option<SpeedMode>,
     ) -> Result<(), ProtocolError> {
         let result = self
             .apply_model_selection(ModelSelection {
@@ -294,12 +303,12 @@ impl Server {
     ) -> Result<(), ProtocolError> {
         let events = self.runner.store().trajectory_snapshot(self.session);
         let entries = pa::build_trajectory_entries(&events);
-        let redundant = pa::redundancy::map_redundant_entries(&self.runner.redundancy_snapshot());
+        let redundant = map_redundant_entries(&self.runner.redundancy_snapshot());
         let unknown_count = events
             .iter()
-            .filter(|e| matches!(e.event, houyicoder_context::SessionEvent::Unknown))
+            .filter(|e| matches!(e.event, SessionEvent::Unknown))
             .count() as u32;
-        let trajectory = houyicoder_protocol::frontend::trajectory::TrajectoryResponse {
+        let trajectory = TrajectoryResponse {
             entries,
             redundant,
             unknown_count,

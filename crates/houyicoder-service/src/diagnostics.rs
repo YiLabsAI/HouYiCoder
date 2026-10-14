@@ -26,6 +26,18 @@ use std::path::Path;
 use std::sync::Mutex;
 use std::sync::OnceLock;
 
+use reload::Layer;
+#[cfg(test)]
+use std::env::temp_dir;
+use std::fs::File;
+use std::fs::OpenOptions;
+use std::fs::create_dir_all;
+#[cfg(test)]
+use std::fs::remove_dir_all;
+use std::path::PathBuf;
+#[cfg(test)]
+use std::process::id;
+use tracing::subscriber::set_global_default;
 use tracing_subscriber::filter::{LevelFilter, Targets};
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::{Registry, fmt, reload};
@@ -73,13 +85,13 @@ impl std::error::Error for InstallError {}
 #[derive(Clone)]
 pub struct DiagnosticsHandle {
     inner: reload::Handle<Targets, Registry>,
-    path: std::path::PathBuf,
+    path: PathBuf,
 }
 
 impl DiagnosticsHandle {
     /// The file the sink writes to. Fixed at install time; a /debug reply
     /// carries it so the user is told where to look.
-    pub fn path(&self) -> Option<std::path::PathBuf> {
+    pub fn path(&self) -> Option<PathBuf> {
         Some(self.path.clone())
     }
 
@@ -101,13 +113,13 @@ impl DiagnosticsHandle {
     }
 }
 
-fn open_log_file(path: &Path) -> Result<std::fs::File, InstallError> {
+fn open_log_file(path: &Path) -> Result<File, InstallError> {
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
     {
-        std::fs::create_dir_all(parent).map_err(InstallError::File)?;
+        create_dir_all(parent).map_err(InstallError::File)?;
     }
-    std::fs::OpenOptions::new()
+    OpenOptions::new()
         .create(true)
         .append(true)
         .open(path)
@@ -127,13 +139,13 @@ fn open_log_file(path: &Path) -> Result<std::fs::File, InstallError> {
 /// formatting. ANSI colouring is off because the destination is a file read
 /// with a pager or a grep, where escape sequences are noise.
 fn build(
-    file: std::fs::File,
-    path: std::path::PathBuf,
+    file: File,
+    path: PathBuf,
 ) -> (
     impl tracing::Subscriber + Send + Sync + 'static,
     DiagnosticsHandle,
 ) {
-    let (filter, handle) = reload::Layer::new(Targets::new().with_default(LevelFilter::OFF));
+    let (filter, handle) = Layer::new(Targets::new().with_default(LevelFilter::OFF));
     // The filter is layered directly onto the registry, ahead of the format
     // layer. Both orders filter identically, because a Targets added as a
     // layer is a global filter rather than a per-layer one, but this order
@@ -157,8 +169,7 @@ fn build(
 /// handle that changes its level later.
 pub fn install(path: &Path) -> Result<DiagnosticsHandle, InstallError> {
     let (subscriber, handle) = build(open_log_file(path)?, path.to_path_buf());
-    tracing::subscriber::set_global_default(subscriber)
-        .map_err(|_| InstallError::AlreadyInstalled)?;
+    set_global_default(subscriber).map_err(|_| InstallError::AlreadyInstalled)?;
     // Store the handle for callers that did not receive it directly (the
     // composition root's start_local_server reads it via handle()). set
     // returns Err if already set; a second install is already an error
@@ -182,7 +193,7 @@ pub fn handle() -> Option<DiagnosticsHandle> {
 /// stored handle's current filter state — the path is fixed at install time,
 /// so this is stable, but reading it through the handle keeps the source of
 /// truth in one place.
-pub fn installed_path() -> Option<std::path::PathBuf> {
+pub fn installed_path() -> Option<PathBuf> {
     HANDLE.get().and_then(|h| h.as_ref()).and_then(|h| h.path())
 }
 
@@ -191,13 +202,13 @@ pub fn installed_path() -> Option<std::path::PathBuf> {
 /// the failure path of a level change after teardown.
 #[cfg(test)]
 pub(crate) fn disconnected_handle() -> DiagnosticsHandle {
-    let path = std::env::temp_dir()
-        .join(format!("houyi-diag-disconnected-{}", std::process::id()))
+    let path = temp_dir()
+        .join(format!("houyi-diag-disconnected-{}", id()))
         .join("debug.log");
     let file = open_log_file(&path).expect("open the throwaway log");
     let (subscriber, handle) = build(file, path.clone());
     drop(subscriber);
-    drop(std::fs::remove_dir_all(path.parent().expect("log parent")));
+    drop(remove_dir_all(path.parent().expect("log parent")));
     handle
 }
 

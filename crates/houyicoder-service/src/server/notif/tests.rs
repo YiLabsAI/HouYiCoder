@@ -1,25 +1,31 @@
 //! Tests for this module.
 
 use super::*;
+use houyicoder_api::provider::ModelProvider;
+use houyicoder_context::SessionId;
+use houyicoder_core::agent::Runner;
+use houyicoder_core::agent::ToolRegistry;
+use houyicoder_core::agent::runner_config::RunnerConfig;
+use houyicoder_memory::InMemoryBackend;
+use houyicoder_permission::DefaultModeGate;
 use houyicoder_protocol::acp_wire::AcpNotification;
+use houyicoder_provider::FakeProvider;
+use houyicoder_session::SessionStore;
 use std::sync::Arc;
 
 fn server_no_runtime() -> Server {
-    let store = Arc::new(houyicoder_session::SessionStore::new(Box::new(
-        houyicoder_memory::InMemoryBackend::new(),
-    )));
-    let provider: Arc<dyn houyicoder_api::provider::ModelProvider> =
-        Arc::new(houyicoder_provider::FakeProvider::text("x"));
-    let runner = houyicoder_core::agent::Runner::new(
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("x"));
+    let runner = Runner::new(
         store,
         provider,
-        houyicoder_core::agent::ToolRegistry::new(),
-        houyicoder_core::agent::runner_config::RunnerConfig::default(),
+        ToolRegistry::new(),
+        RunnerConfig::default(),
     );
     Server::new(
         Arc::new(runner),
-        houyicoder_context::SessionId::new(),
-        Arc::new(houyicoder_permission::DefaultModeGate::new()),
+        SessionId::new(),
+        Arc::new(DefaultModeGate::new()),
     )
 }
 

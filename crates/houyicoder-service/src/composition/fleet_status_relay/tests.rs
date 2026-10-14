@@ -1,7 +1,11 @@
 //! Tests for this module.
 
 use super::*;
+use houyicoder_async::CancellationToken;
 use houyicoder_core::agent::multi_agent::bus_types::{ChildDescriptor, ChildRunMode};
+use std::time::Duration;
+use tokio::runtime::Handle;
+use tokio::time::timeout;
 
 #[test]
 fn test_emit_submits_reliable_status() {
@@ -33,8 +37,8 @@ async fn test_spawn_translates_completion() {
     spawn(
         Some(bus.clone()),
         sequencer.clone(),
-        tokio::runtime::Handle::current(),
-        houyicoder_async::CancellationToken::new(),
+        Handle::current(),
+        CancellationToken::new(),
     );
     bus.publish(
         spawned_topic(),
@@ -46,7 +50,7 @@ async fn test_spawn_translates_completion() {
             },
         },
     );
-    tokio::time::timeout(std::time::Duration::from_secs(1), sequencer.notified())
+    timeout(Duration::from_secs(1), sequencer.notified())
         .await
         .expect("spawn status submitted");
     drop(sequencer.sequence_pending_for_test());
@@ -62,7 +66,7 @@ async fn test_spawn_translates_completion() {
             summary: "done".into(),
         },
     );
-    tokio::time::timeout(std::time::Duration::from_secs(1), sequencer.notified())
+    timeout(Duration::from_secs(1), sequencer.notified())
         .await
         .expect("completion status submitted");
     let frames = sequencer.sequence_pending_for_test();
@@ -79,16 +83,16 @@ async fn test_spawn_translates_completion() {
 async fn test_cancel_ends_relay() {
     let bus = Arc::new(AgentBus::new());
     let sequencer = EventSequencer::new();
-    let cancel = houyicoder_async::CancellationToken::new();
+    let cancel = CancellationToken::new();
     let handle = spawn(
         Some(bus.clone()),
         sequencer,
-        tokio::runtime::Handle::current(),
+        Handle::current(),
         cancel.clone(),
     )
     .expect("a bus present yields a handle");
     cancel.cancel();
-    let outcome = tokio::time::timeout(std::time::Duration::from_secs(1), handle).await;
+    let outcome = timeout(Duration::from_secs(1), handle).await;
     assert!(outcome.is_ok(), "cancel ends the relay task");
     assert!(
         outcome.unwrap().is_ok(),

@@ -3,7 +3,12 @@
 use super::*;
 use houyicoder_permission::{FileRuleStore, Scope};
 use houyicoder_sandbox::PlatformSession;
+use std::env::temp_dir;
 use std::fs;
+#[cfg(windows)]
+use std::fs::canonicalize;
+use std::process::Command;
+use std::process::id;
 
 /// Never default_paths: that would write the developer's real home.
 fn temp_store(root: &Path) -> Arc<dyn RuleStore> {
@@ -15,7 +20,7 @@ fn temp_store(root: &Path) -> Arc<dyn RuleStore> {
 }
 
 fn temp_root(tag: &str) -> PathBuf {
-    let root = std::env::temp_dir().join(format!("{tag}-{}", std::process::id()));
+    let root = temp_dir().join(format!("{tag}-{}", id()));
     drop(fs::remove_dir_all(&root));
     fs::create_dir_all(&root).expect("mkdir root");
     root
@@ -118,7 +123,7 @@ fn git_repo_with_worktree(root: &Path) -> Option<(PathBuf, PathBuf)> {
     let repo = root.join("repo");
     fs::create_dir_all(&repo).ok()?;
     let git = |args: &[&str], cwd: &Path| {
-        std::process::Command::new("git")
+        Command::new("git")
             .args(args)
             .current_dir(cwd)
             .output()
@@ -207,7 +212,7 @@ fn test_attach_normalizes_verbatim() {
         fs::remove_dir_all(&root).ok();
         return;
     };
-    let ws = std::fs::canonicalize(&repo).expect("canonicalize repo");
+    let ws = canonicalize(&repo).expect("canonicalize repo");
     let session: Arc<dyn SandboxSession> =
         Arc::new(PlatformSession::new_in_cwd(&ws).expect("sandbox"));
 
@@ -235,7 +240,7 @@ fn test_attach_verbatim_worktree() {
         fs::remove_dir_all(&root).ok();
         return;
     };
-    let ws = std::fs::canonicalize(&wt).expect("canonicalize worktree");
+    let ws = canonicalize(&wt).expect("canonicalize worktree");
     let session: Arc<dyn SandboxSession> =
         Arc::new(PlatformSession::new_in_cwd(&ws).expect("sandbox"));
 

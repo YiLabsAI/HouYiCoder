@@ -8,7 +8,11 @@ use houyicoder_context::{
 };
 use houyicoder_memory::{FileDescriptorStore, LocalFileBackend};
 use houyicoder_session::{SessionStore, SourceChain};
+use std::fs::read_to_string;
 use std::path::Path;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
+use tokio::runtime::Builder;
 
 /// The most-recently-active session id in the current workspace, or None when
 /// no session of the user's matches. Drives --continue: the session is picked
@@ -76,7 +80,7 @@ pub fn build_runner_for_resume_export(
     rule_store: Option<Arc<dyn RuleStore>>,
     resolved: ResolvedProvider,
 ) -> Result<ResumedRunner, ResumeError> {
-    let body = std::fs::read_to_string(export_path)
+    let body = read_to_string(export_path)
         .map_err(|e| ResumeError::Read(format!("{}: {e}", export_path.display())))?;
     let payload: ResumePayload = serde_json::from_str(&body)
         .map_err(|e| ResumeError::Parse(format!("{}: {e}", export_path.display())))?;
@@ -100,7 +104,7 @@ pub fn build_runner_for_resume_export(
     let seed_store = Arc::clone(&store);
     let seed_session = session;
     let events = payload.trajectory;
-    let rt = tokio::runtime::Builder::new_current_thread()
+    let rt = Builder::new_current_thread()
         .enable_all()
         .build()
         .map_err(|e| ResumeError::Seed(format!("runtime: {e}")))?;
@@ -189,7 +193,7 @@ pub fn build_runner_for_resume_sid(
     // history just is not pre-rendered).
     let restore_store = Arc::clone(&store);
     let restore_session = sid;
-    let rt = tokio::runtime::Builder::new_current_thread()
+    let rt = Builder::new_current_thread()
         .enable_all()
         .build()
         .map_err(|e| ResumeError::Read(format!("restore runtime: {e}")))?;
@@ -281,7 +285,7 @@ pub fn build_runner_for_fork(
     let seed_store = Arc::clone(&store);
     let seed_session = new_session;
     let from_sid_str = source_sid.to_string();
-    let rt = tokio::runtime::Builder::new_current_thread()
+    let rt = Builder::new_current_thread()
         .enable_all()
         .build()
         .map_err(|e| ResumeError::Seed(format!("runtime: {e}")))?;
@@ -375,8 +379,8 @@ fn write_resume_descriptor(
     source_session_id: &str,
 ) {
     let cwd = workspace_cwd(project.map(str::to_string));
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
     let descriptor = SessionDescriptor {
@@ -406,8 +410,8 @@ fn write_fork_descriptor(
     from_seq: u64,
 ) {
     let cwd = workspace_cwd(project.map(str::to_string));
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
     let descriptor = SessionDescriptor {

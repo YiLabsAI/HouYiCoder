@@ -13,12 +13,14 @@ use houyicoder_context::session_class::{
 };
 use houyicoder_context::{DescriptorUpdate, EventId, NameSource, SessionEvent, SessionLogEntry};
 use houyicoder_memory::FileDescriptorStore;
+use std::env::temp_dir;
+use std::process::id;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 fn temp_root() -> PathBuf {
-    use std::sync::atomic::{AtomicU64, Ordering};
     static SEQ: AtomicU64 = AtomicU64::new(0);
     let seq = SEQ.fetch_add(1, Ordering::Relaxed);
-    let d = std::env::temp_dir().join(format!("houyi-repair-{seq}-{}", std::process::id()));
+    let d = temp_dir().join(format!("houyi-repair-{seq}-{}", id()));
     let _r = fs::remove_dir_all(&d);
     fs::create_dir_all(&d).expect("mkdir root");
     d

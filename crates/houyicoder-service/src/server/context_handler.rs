@@ -5,6 +5,9 @@ use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
 
 use super::{Server, frame_carrier::FrameCarrier};
 use crate::protocol_adapter as pa;
+use houyicoder_core::agent::CategoryBreakdown;
+use houyicoder_core::agent::SectionKind;
+use pa::compaction::map_compact_reply;
 
 impl Server {
     /// Reply with the assembled context breakdown. When no turn has run yet
@@ -31,7 +34,7 @@ impl Server {
                 .unwrap_or(bd.categories.len());
             bd.categories.insert(
                 insert_at,
-                houyicoder_core::agent::CategoryBreakdown {
+                CategoryBreakdown {
                     label: "Compact buffer".into(),
                     color_hint: 61,
                     tokens: summary_tokens,
@@ -41,11 +44,11 @@ impl Server {
             );
         }
         let prefix: u32 = measurement
-            .section(houyicoder_core::agent::SectionKind::SystemPrompt)
+            .section(SectionKind::SystemPrompt)
             .map(|s| s.tokens)
             .unwrap_or(0)
             + measurement
-                .section(houyicoder_core::agent::SectionKind::Tools)
+                .section(SectionKind::Tools)
                 .map(|s| s.tokens)
                 .unwrap_or(0);
         bd.cache_prefix_tokens = Some(prefix);
@@ -69,7 +72,7 @@ impl Server {
     ) -> Result<(), ProtocolError> {
         match self.runner.compact(self.session).await {
             Ok(outcome) => {
-                let reply = pa::compaction::map_compact_reply(&outcome);
+                let reply = map_compact_reply(&outcome);
                 self.send_response(io, req_id, ResponsePayload::Compact(reply))
                     .await
             }

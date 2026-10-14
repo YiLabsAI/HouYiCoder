@@ -14,7 +14,23 @@ use houyicoder_core::agent::{
     EnterWorktreeTool, ExitWorktreeTool, ToolRegistry, WorktreeController,
 };
 use houyicoder_permission::{GuardedTool, ModeGate};
+#[cfg(test)]
+use houyicoder_sandbox::PlatformSession;
 use houyicoder_session::SessionStore;
+#[cfg(test)]
+use std::env::temp_dir;
+use std::fs::canonicalize;
+#[cfg(test)]
+use std::fs::create_dir_all;
+#[cfg(test)]
+use std::fs::remove_dir_all;
+use std::process::Command;
+#[cfg(test)]
+use std::process::Stdio;
+#[cfg(test)]
+use std::process::id;
+#[cfg(test)]
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Build the worktree controller when both a workspace + a sandbox session
 /// resolved, and register the enter/exit tools through the permission gate.
@@ -67,7 +83,7 @@ pub fn wire_worktree_controller(
 /// sandboxed tool run), so the spawn-chokepoint rule is allowed here.
 #[expect(clippy::disallowed_methods, reason = "infra spawn, not model-driven")]
 pub fn git_common_dir(ws: &Path) -> Option<PathBuf> {
-    let out = std::process::Command::new("git")
+    let out = Command::new("git")
         .arg("-C")
         .arg(ws)
         .arg("rev-parse")
@@ -85,7 +101,7 @@ pub fn git_common_dir(ws: &Path) -> Option<PathBuf> {
     // roots that carry no Windows verbatim prefix, and a std canonicalize
     // form would never prefix-match them.
     dunce::canonicalize(ws.join(&s))
-        .or_else(|_| dunce::canonicalize(std::path::Path::new(&s)))
+        .or_else(|_| dunce::canonicalize(Path::new(&s)))
         .ok()
 }
 
@@ -105,7 +121,7 @@ pub fn git_canonical_slug(ws: &Path) -> String {
 }
 
 fn canonical_dir_name(p: &Path) -> String {
-    std::fs::canonicalize(p)
+    canonicalize(p)
         .ok()
         .and_then(|c| c.file_name().map(|n| n.to_string_lossy().into_owned()))
         .unwrap_or_else(|| "default".to_string())
@@ -123,10 +139,10 @@ mod tests {
 
     /// The slug tests need a real repo, so they skip when git is absent.
     fn git_available() -> bool {
-        std::process::Command::new("git")
+        Command::new("git")
             .arg("--version")
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
             .status()
             .is_ok()
     }
@@ -135,24 +151,22 @@ mod tests {
     /// seq-unique parent so parallel runs do not collide. One empty commit, so a
     /// linked worktree has a HEAD to branch from.
     fn temp_git_repo(name: &str) -> PathBuf {
-        use std::sync::atomic::{AtomicU64, Ordering};
         static SEQ: AtomicU64 = AtomicU64::new(0);
         let seq = SEQ.fetch_add(1, Ordering::Relaxed);
-        let parent =
-            std::env::temp_dir().join(format!("houyi-slug-{}-{}", std::process::id(), seq));
-        drop(std::fs::remove_dir_all(&parent));
-        std::fs::create_dir_all(&parent).expect("mkdir parent");
+        let parent = temp_dir().join(format!("houyi-slug-{}-{}", id(), seq));
+        drop(remove_dir_all(&parent));
+        create_dir_all(&parent).expect("mkdir parent");
         let dir = parent.join(name);
-        std::fs::create_dir_all(&dir).expect("mkdir repo");
-        std::process::Command::new("git")
+        create_dir_all(&dir).expect("mkdir repo");
+        Command::new("git")
             .arg("-C")
             .arg(&dir)
             .arg("init")
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
             .status()
             .expect("git init");
-        std::process::Command::new("git")
+        Command::new("git")
             .arg("-C")
             .arg(&dir)
             .args([
@@ -165,8 +179,8 @@ mod tests {
                 "-m",
                 "x",
             ])
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
             .status()
             .expect("git commit");
         dir
@@ -177,14 +191,14 @@ mod tests {
         let wt = main
             .parent()
             .expect("parent")
-            .join(format!("{name}-{}", std::process::id()));
-        let added = std::process::Command::new("git")
+            .join(format!("{name}-{}", id()));
+        let added = Command::new("git")
             .arg("-C")
             .arg(main)
             .args(["worktree", "add", "--detach"])
             .arg(&wt)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
             .status()
             .is_ok();
         if added { Some(wt) } else { None }
@@ -193,16 +207,16 @@ mod tests {
     /// Remove the linked worktree and the whole temp parent dir.
     fn cleanup(main: &Path, wt: &Path) {
         drop(
-            std::process::Command::new("git")
+            Command::new("git")
                 .arg("-C")
                 .arg(main)
                 .args(["worktree", "remove", "--force"])
                 .arg(wt)
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
                 .status(),
         );
-        drop(std::fs::remove_dir_all(main.parent().expect("parent")));
+        drop(remove_dir_all(main.parent().expect("parent")));
     }
 
     /// A main repo's slug is its own dir name (the git common dir's parent).
@@ -213,7 +227,7 @@ mod tests {
         }
         let repo = temp_git_repo("mainrepo");
         assert_eq!(git_canonical_slug(&repo), "mainrepo");
-        drop(std::fs::remove_dir_all(repo.parent().expect("parent")));
+        drop(remove_dir_all(repo.parent().expect("parent")));
     }
 
     /// A linked worktree must resolve to the same slug as its main repo so a
@@ -226,7 +240,7 @@ mod tests {
         }
         let main = temp_git_repo("sharedmain");
         let Some(wt) = add_linked_worktree(&main, "sharedwt") else {
-            drop(std::fs::remove_dir_all(main.parent().expect("parent")));
+            drop(remove_dir_all(main.parent().expect("parent")));
             return;
         };
         let main_slug = git_canonical_slug(&main);
@@ -250,13 +264,13 @@ mod tests {
         }
         let main = temp_git_repo("sharedmain2");
         let Some(wt) = add_linked_worktree(&main, "sharedwt2") else {
-            drop(std::fs::remove_dir_all(main.parent().expect("parent")));
+            drop(remove_dir_all(main.parent().expect("parent")));
             return;
         };
-        let main_git = std::fs::canonicalize(main.join(".git")).expect("canonicalize main .git");
+        let main_git = canonicalize(main.join(".git")).expect("canonicalize main .git");
         let wt_common = git_common_dir(&wt).expect("common dir resolves for linked worktree");
         assert_eq!(
-            std::fs::canonicalize(&wt_common).expect("canonicalize wt common"),
+            canonicalize(&wt_common).expect("canonicalize wt common"),
             main_git,
             "linked worktree common dir must be the main repo .git, not the gitfile"
         );
@@ -275,14 +289,14 @@ mod tests {
     /// works outside a repo (just not shared across worktrees).
     #[test]
     fn test_slug_non_git_dir() {
-        let dir = std::env::temp_dir().join(format!("houyi-slug-nogit-{}", std::process::id()));
-        drop(std::fs::remove_dir_all(&dir));
-        std::fs::create_dir_all(&dir).expect("mkdir non-git");
+        let dir = temp_dir().join(format!("houyi-slug-nogit-{}", id()));
+        drop(remove_dir_all(&dir));
+        create_dir_all(&dir).expect("mkdir non-git");
         assert_eq!(
             git_canonical_slug(&dir),
-            format!("houyi-slug-nogit-{}", std::process::id())
+            format!("houyi-slug-nogit-{}", id())
         );
-        drop(std::fs::remove_dir_all(&dir));
+        drop(remove_dir_all(&dir));
     }
 
     /// The enter/exit tools exist only when there is something to isolate: a
@@ -290,11 +304,11 @@ mod tests {
     /// so the model is never offered a switch it cannot perform.
     #[test]
     fn test_controller_registers_tools() {
-        let dir = std::env::temp_dir().join(format!("houyi-wire-wt-{}", std::process::id()));
-        drop(std::fs::remove_dir_all(&dir));
-        std::fs::create_dir_all(&dir).expect("mkdir");
+        let dir = temp_dir().join(format!("houyi-wire-wt-{}", id()));
+        drop(remove_dir_all(&dir));
+        create_dir_all(&dir).expect("mkdir");
         let sandbox: Arc<dyn SandboxSession> =
-            Arc::new(houyicoder_sandbox::PlatformSession::new_in_cwd(&dir).expect("sandbox"));
+            Arc::new(PlatformSession::new_in_cwd(&dir).expect("sandbox"));
         let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
         let gate: Arc<dyn ModeGate> = Arc::new(DefaultModeGate::new());
 
@@ -325,6 +339,6 @@ mod tests {
             bare.get("enter_worktree").is_none(),
             "no tools registered when unwired"
         );
-        std::fs::remove_dir_all(&dir).ok();
+        remove_dir_all(&dir).ok();
     }
 }

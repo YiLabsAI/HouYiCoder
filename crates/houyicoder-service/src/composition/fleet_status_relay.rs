@@ -10,6 +10,9 @@ use houyicoder_core::agent::multi_agent::bus_types::{
 use houyicoder_protocol::frontend::event::FrontendEvent;
 
 use crate::server::EventSequencer;
+use tokio::runtime::Handle;
+use tokio::sync::broadcast::error::RecvError;
+use tokio::task::JoinHandle;
 
 /// Subscribe to fleet status changes and submit reliable status events.
 /// Returns the task handle for the host lifecycle owner to reap; the cancel
@@ -17,9 +20,9 @@ use crate::server::EventSequencer;
 pub fn spawn(
     bus: Option<Arc<AgentBus>>,
     event_sequencer: EventSequencer,
-    runtime: tokio::runtime::Handle,
+    runtime: Handle,
     cancel: houyicoder_async::CancellationToken,
-) -> Option<tokio::task::JoinHandle<()>> {
+) -> Option<JoinHandle<()>> {
     let bus = bus?;
     let mut spawned_rx = bus.subscribe(spawned_topic());
     let mut progress_rx = bus.subscribe(global_progress_topic());
@@ -37,8 +40,8 @@ pub fn spawn(
                         children.insert(child.agent_id, (child.agent_type, snap));
                     }
                     Ok(_) => {}
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    Err(RecvError::Lagged(_)) => continue,
+                    Err(RecvError::Closed) => break,
                 },
                 msg = progress_rx.recv() => match msg {
                     Ok(BusMessage::Progress { child, turn, tokens, tool_uses, last_activity }) => {
@@ -49,8 +52,8 @@ pub fn spawn(
                         emit(&event_sequencer, &child.agent_id, &entry.0, &entry.1);
                     }
                     Ok(_) => {}
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    Err(RecvError::Lagged(_)) => continue,
+                    Err(RecvError::Closed) => break,
                 },
                 msg = completed_rx.recv() => match msg {
                     Ok(BusMessage::Completed { child, status, summary }) => {
@@ -62,8 +65,8 @@ pub fn spawn(
                         emit(&event_sequencer, &child.agent_id, &child.agent_type, &snap);
                     }
                     Ok(_) => {}
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    Err(RecvError::Lagged(_)) => continue,
+                    Err(RecvError::Closed) => break,
                 },
             }
         }

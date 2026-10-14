@@ -22,14 +22,17 @@ use houyicoder_permission::{
 use houyicoder_protocol::envelope::{
     ClientFrame, RequestEnvelope, RequestId, ResponsePayload, ServerFrame,
 };
+use houyicoder_protocol::framing::encode;
 use houyicoder_protocol::frontend::SessionId as FrontendSessionId;
 use houyicoder_protocol::frontend::permission::{
     PermissionEffect, PermissionRule, RuleDestination,
 };
 use houyicoder_protocol::frontend::run::ContentBlock;
 use houyicoder_protocol::handshake::Hello;
+use houyicoder_provider::FakeProvider;
 use houyicoder_session::SessionStore;
 use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 /// A gate that delegates everything but the mode cycle, which always refuses.
@@ -100,7 +103,7 @@ impl SandboxSession for StubFence {
         Box::pin(async move { Ok(false) })
     }
     fn workspace_root(&self) -> Arc<Path> {
-        Arc::from(std::path::PathBuf::from("/"))
+        Arc::from(PathBuf::from("/"))
     }
     fn narrow_to_worktree(
         &self,
@@ -154,7 +157,7 @@ fn stub_runner() -> Arc<Runner> {
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     Arc::new(Runner::new(
         store,
-        Arc::new(houyicoder_provider::FakeProvider::text("x")),
+        Arc::new(FakeProvider::text("x")),
         ToolRegistry::new(),
         RunnerConfig::default(),
     ))
@@ -164,14 +167,14 @@ fn failing_checkpoint_runner() -> Arc<Runner> {
     let store = Arc::new(SessionStore::new(Box::new(FailingCheckpoint)));
     Arc::new(Runner::new(
         store,
-        Arc::new(houyicoder_provider::FakeProvider::text("x")),
+        Arc::new(FakeProvider::text("x")),
         ToolRegistry::new(),
         RunnerConfig::default(),
     ))
 }
 
 fn send_line(tx: &mut mpsc::Sender<String>, frame: &impl serde::Serialize) {
-    let mut s = houyicoder_protocol::framing::encode(frame).unwrap();
+    let mut s = encode(frame).unwrap();
     if !s.ends_with('\n') {
         s.push('\n');
     }

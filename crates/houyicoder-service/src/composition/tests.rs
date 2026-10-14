@@ -5,10 +5,20 @@
 //!
 //! Everything the root merely wires up is tested next to the thing it wires:
 //! memory, worktree, containment and resume each own their peer tests.
+use super::BuildRunnerOptions;
 use super::*;
 use crate::lifecycle::SessionLeaseStore;
 use crate::server::{EventSequencer, Server};
+use houyicoder_context::{NameSource, SessionDescriptor, SessionProvenance};
+use houyicoder_permission::{Decision, ModeGate, ToolRequest};
 use houyicoder_protocol::frontend::FrontendEvent;
+use std::env::temp_dir;
+use std::fs::create_dir_all;
+use std::fs::remove_dir_all;
+use std::fs::write;
+use std::process::id;
+use std::sync::Arc;
+use tokio::sync::Notify;
 #[test]
 fn test_degrade_passes_success_through() {
     let kept: Option<u8> = degrade_with_notice(Ok::<u8, String>(7), "unused", "unused");
@@ -77,7 +87,7 @@ fn test_host_clones_runner_handle() {
         runner.clone(),
         event_sequencer.clone(),
         gate.clone(),
-        std::sync::Arc::new(tokio::sync::Notify::new()),
+        Arc::new(Notify::new()),
     );
 
     let handle = host.clone_handle(session).expect("handle after insert");
@@ -113,7 +123,7 @@ fn test_new_for_resume_hydrates() {
         runner,
         event_sequencer,
         gate,
-        std::sync::Arc::new(tokio::sync::Notify::new()),
+        Arc::new(Notify::new()),
     );
 
     let handle = host.clone_handle(session).expect("handle present");
@@ -130,15 +140,14 @@ fn test_new_for_resume_hydrates() {
 /// Paths outside the workspace must reach the gate's containment validator.
 #[test]
 fn test_external_approval() {
-    use houyicoder_permission::{Decision, ModeGate, ToolRequest};
-    let root = std::env::temp_dir().join(format!("houyi-wire-{}-{}", std::process::id(), line!()));
-    drop(std::fs::remove_dir_all(&root));
-    std::fs::create_dir_all(&root).expect("mkdir root");
+    let root = temp_dir().join(format!("houyi-wire-{}-{}", id(), line!()));
+    drop(remove_dir_all(&root));
+    create_dir_all(&root).expect("mkdir root");
     let repo = root.join("repo");
-    std::fs::create_dir_all(&repo).expect("mkdir repo");
-    std::fs::write(repo.join("Cargo.toml"), "[workspace]\nmembers = []\n").expect("manifest");
+    create_dir_all(&repo).expect("mkdir repo");
+    write(repo.join("Cargo.toml"), "[workspace]\nmembers = []\n").expect("manifest");
     let external_path = root.join("external");
-    std::fs::create_dir_all(&external_path).expect("mkdir external path");
+    create_dir_all(&external_path).expect("mkdir external path");
     let bundle = super::build_runner(BuildRunnerOptions {
         project: Some(repo.to_string_lossy().into_owned()),
         ..Default::default()
@@ -159,7 +168,7 @@ fn test_external_approval() {
         Decision::Ask(reason) => assert_eq!(reason.validator, "path-bounds"),
         other => panic!("external path must require approval, got {other:?}"),
     }
-    std::fs::remove_dir_all(&root).ok();
+    remove_dir_all(&root).ok();
 }
 
 /// The production composition root wires an LlmSummarizer (real summaries)
@@ -169,9 +178,9 @@ fn test_external_approval() {
 /// placeholder. Type-level assertion via Summarizer::as_any downcast.
 #[test]
 fn test_build_runner_wires_summarizer() {
-    let root = std::env::temp_dir().join(format!("houyi-sum-{}-{}", std::process::id(), line!()));
-    drop(std::fs::remove_dir_all(&root));
-    std::fs::create_dir_all(&root).expect("mkdir root");
+    let root = temp_dir().join(format!("houyi-sum-{}-{}", id(), line!()));
+    drop(remove_dir_all(&root));
+    create_dir_all(&root).expect("mkdir root");
     let bundle = super::build_runner(BuildRunnerOptions {
         project: Some(root.to_string_lossy().into_owned()),
         ..Default::default()
@@ -180,7 +189,7 @@ fn test_build_runner_wires_summarizer() {
         bundle.runner.summarizer_is_llm(),
         "production runner must carry an LlmSummarizer, not the heuristic placeholder"
     );
-    std::fs::remove_dir_all(&root).ok();
+    remove_dir_all(&root).ok();
 }
 
 /// The production persistence constructors are pure construction - no
@@ -189,13 +198,13 @@ fn test_build_runner_wires_summarizer() {
 /// default path never reaches.
 #[test]
 fn test_disk_options_construct_clean() {
-    let opts = super::BuildRunnerOptions::disk(None, None);
+    let opts = BuildRunnerOptions::disk(None, None);
     assert!(opts.backend.is_some(), "disk() must wire a backend");
     assert!(
         opts.descriptor_store.is_some(),
         "disk() must wire a descriptor store"
     );
-    let opts = super::BuildRunnerOptions::disk_at(std::env::temp_dir(), None, None);
+    let opts = BuildRunnerOptions::disk_at(temp_dir(), None, None);
     assert!(opts.backend.is_some(), "disk_at() must wire a backend");
     assert!(
         opts.descriptor_store.is_some(),
@@ -207,10 +216,9 @@ fn test_disk_options_construct_clean() {
 /// Descriptor stores are isolated by their sessions root.
 #[test]
 fn test_store_isolation() {
-    use houyicoder_context::{NameSource, SessionDescriptor, SessionProvenance};
-    let root = std::env::temp_dir().join(format!("houyi-dms-{}-{}", std::process::id(), line!()));
-    let _r = std::fs::remove_dir_all(&root);
-    std::fs::create_dir_all(&root).expect("mkdir dms root");
+    let root = temp_dir().join(format!("houyi-dms-{}-{}", id(), line!()));
+    let _r = remove_dir_all(&root);
+    create_dir_all(&root).expect("mkdir dms root");
     let store = super::disk_descriptor_store_at(root.clone());
     let sid = SessionId::new();
     let descriptor = SessionDescriptor {
@@ -230,18 +238,14 @@ fn test_store_isolation() {
         .read_descriptor(sid)
         .expect("read_descriptor roundtrips at same root");
     assert_eq!(back.name.as_deref(), Some("named"));
-    let other = std::env::temp_dir().join(format!(
-        "houyi-dms-other-{}-{}",
-        std::process::id(),
-        line!()
-    ));
+    let other = temp_dir().join(format!("houyi-dms-other-{}-{}", id(), line!()));
     let other_store = super::disk_descriptor_store_at(other.clone());
     assert!(
         other_store.read_descriptor(sid).is_none(),
         "a store at a different root must not see the descriptor"
     );
-    std::fs::remove_dir_all(&root).ok();
-    std::fs::remove_dir_all(&other).ok();
+    remove_dir_all(&root).ok();
+    remove_dir_all(&other).ok();
 }
 
 /// Cloning a resolved provider shares the one provider instance rather than

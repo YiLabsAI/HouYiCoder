@@ -22,22 +22,28 @@ use houyicoder_protocol::envelope::{
     ResponsePayload, ServerFrame, ServerRequestPayload,
 };
 use houyicoder_protocol::error::ErrorCategory;
+use houyicoder_protocol::error::ProtocolError;
 use houyicoder_protocol::extension::ToolError;
+use houyicoder_protocol::framing::encode;
 use houyicoder_protocol::frontend::FrontendRequest;
 use houyicoder_protocol::frontend::run::ApprovalDecision;
+use houyicoder_protocol::frontend::run::ContentBlock;
 use houyicoder_protocol::frontend::trust::TrustAccept;
 use houyicoder_protocol::handshake::Hello;
 use houyicoder_protocol::llm::{CompletionResponse, OutputItem, Usage};
+use houyicoder_provider::FakeProvider;
 use houyicoder_session::SessionStore;
 use serde_json::Value;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tokio::sync::{Notify, oneshot};
+use tokio::time::timeout;
 
 fn stub_runner() -> Arc<Runner> {
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     Arc::new(Runner::new(
         store,
-        Arc::new(houyicoder_provider::FakeProvider::text("x")),
+        Arc::new(FakeProvider::text("x")),
         ToolRegistry::new(),
         RunnerConfig::default(),
     ))
@@ -52,7 +58,7 @@ fn stub_server() -> Server {
 }
 
 fn send_line(tx: &mut mpsc::Sender<String>, frame: &impl serde::Serialize) {
-    let mut s = houyicoder_protocol::framing::encode(frame).unwrap();
+    let mut s = encode(frame).unwrap();
     if !s.ends_with('\n') {
         s.push('\n');
     }
@@ -63,7 +69,7 @@ async fn recv_frame(rx: &mut mpsc::Receiver<String>) -> ServerFrame {
     serde_json::from_str(&rx.next().await.unwrap()).expect("frame decodes")
 }
 
-async fn recv_error(rx: &mut mpsc::Receiver<String>) -> houyicoder_protocol::error::ProtocolError {
+async fn recv_error(rx: &mut mpsc::Receiver<String>) -> ProtocolError {
     match recv_frame(rx).await {
         ServerFrame::Response(r) => match r.payload {
             ResponsePayload::Error(e) => e,
@@ -250,7 +256,7 @@ async fn test_client_closed_during_resume() {
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let runner = Arc::new(Runner::new(
         store,
-        Arc::new(houyicoder_provider::FakeProvider::new(responses)),
+        Arc::new(FakeProvider::new(responses)),
         tools,
         RunnerConfig {
             model: "test".into(),
@@ -276,9 +282,7 @@ async fn test_client_closed_during_resume() {
             RequestId(1),
             FrontendRequest::MessageSend {
                 session_id: houyicoder_protocol::frontend::SessionId::new(session.to_string()),
-                content: vec![houyicoder_protocol::frontend::run::ContentBlock::Text {
-                    text: "go".into(),
-                }],
+                content: vec![ContentBlock::Text { text: "go".into() }],
                 disabled_skills: Default::default(),
             },
         )),
@@ -313,7 +317,7 @@ async fn test_client_closed_during_resume() {
 
     // Effect latch: the resumed run is inside the blocking tool, so the
     // resume loop is live when the send half closes.
-    tokio::time::timeout(std::time::Duration::from_secs(2), entered.notified())
+    timeout(Duration::from_secs(2), entered.notified())
         .await
         .expect("resumed run entered the blocking tool");
     drop(client_tx);

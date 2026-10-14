@@ -18,12 +18,14 @@ use houyicoder_provider::FakeProvider;
 use tokio::sync::Notify;
 
 use super::runtime_with;
+use std::panic::AssertUnwindSafe;
+use std::panic::catch_unwind;
 
 /// A provider whose stream never yields, so a child running against it parks
 /// inside its model call. The first entry signals the test so it waits until
 /// the child has actually reached the call before joining shutdown.
 struct HangProvider {
-    entered: Arc<tokio::sync::Notify>,
+    entered: Arc<Notify>,
 }
 
 impl ModelProvider for HangProvider {
@@ -52,7 +54,7 @@ impl ModelProvider for HangProvider {
 /// child's completion tail had still not run.
 #[tokio::test]
 async fn test_join_children_awaits_completion() {
-    let entered = Arc::new(tokio::sync::Notify::new());
+    let entered = Arc::new(Notify::new());
     let provider = Arc::new(HangProvider {
         entered: Arc::clone(&entered),
     });
@@ -82,7 +84,7 @@ async fn test_join_children_awaits_completion() {
 /// unwinds. finalize_child catches the panic, runs its tail, then re-raises,
 /// so the detached driver itself panics — the branch shutdown must survive.
 struct PanickingProvider {
-    entered: Arc<tokio::sync::Notify>,
+    entered: Arc<Notify>,
 }
 
 impl ModelProvider for PanickingProvider {
@@ -108,7 +110,7 @@ impl ModelProvider for PanickingProvider {
 /// returns instead of re-raising the panic into the host teardown.
 #[tokio::test]
 async fn test_join_children_survives_panic() {
-    let entered = Arc::new(tokio::sync::Notify::new());
+    let entered = Arc::new(Notify::new());
     let provider = Arc::new(PanickingProvider {
         entered: Arc::clone(&entered),
     });
@@ -200,7 +202,7 @@ async fn test_shutdown_aborts_slow_hook() {
 /// parked, and never write the return boundary.
 #[tokio::test]
 async fn test_join_children_survives_poisoned() {
-    let entered = Arc::new(tokio::sync::Notify::new());
+    let entered = Arc::new(Notify::new());
     let provider = Arc::new(HangProvider {
         entered: Arc::clone(&entered),
     });
@@ -216,7 +218,7 @@ async fn test_join_children_survives_poisoned() {
     // children lock so the join must recover it instead of reading an empty
     // close.
     entered.notified().await;
-    let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    let poisoned = catch_unwind(AssertUnwindSafe(|| {
         let _guard = runtime.children.lock().expect("children lock");
         panic!("poison the children lock");
     }));

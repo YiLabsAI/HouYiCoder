@@ -3,30 +3,32 @@
 //! Extracted from server.rs to keep the file under the size gate.
 
 use super::Server;
+use houyicoder_api::provider::ModelProvider;
+use houyicoder_context::SessionId;
+use houyicoder_core::agent::Runner;
+use houyicoder_core::agent::ToolRegistry;
+use houyicoder_core::agent::runner_config::RunnerConfig;
+use houyicoder_memory::InMemoryBackend;
+use houyicoder_permission::DefaultModeGate;
 use houyicoder_permission::ModeGate;
 use houyicoder_protocol::envelope::ResponsePayload;
+use houyicoder_provider::FakeProvider;
+use houyicoder_session::SessionStore;
 use std::sync::Arc;
 
 /// Build a Server over a stub runner + a real gate (returned so the test
 /// can inspect how a consent was recorded).
-fn server_with_gate() -> (Server, Arc<houyicoder_permission::DefaultModeGate>) {
-    let store = Arc::new(houyicoder_session::SessionStore::new(Box::new(
-        houyicoder_memory::InMemoryBackend::new(),
-    )));
-    let provider: Arc<dyn houyicoder_api::provider::ModelProvider> =
-        Arc::new(houyicoder_provider::FakeProvider::text("test"));
-    let runner = houyicoder_core::agent::Runner::new(
+fn server_with_gate() -> (Server, Arc<DefaultModeGate>) {
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("test"));
+    let runner = Runner::new(
         store,
         provider,
-        houyicoder_core::agent::ToolRegistry::new(),
-        houyicoder_core::agent::runner_config::RunnerConfig::default(),
+        ToolRegistry::new(),
+        RunnerConfig::default(),
     );
-    let gate = Arc::new(houyicoder_permission::DefaultModeGate::new());
-    let server = Server::new(
-        Arc::new(runner),
-        houyicoder_context::SessionId::new(),
-        gate.clone(),
-    );
+    let gate = Arc::new(DefaultModeGate::new());
+    let server = Server::new(Arc::new(runner), SessionId::new(), gate.clone());
     (server, gate)
 }
 
@@ -53,9 +55,8 @@ fn test_git_ops_query_set() {
 #[test]
 fn test_git_consent_skips_rule() {
     let (server, gate) = server_with_gate();
-    let durable = |g: &std::sync::Arc<houyicoder_permission::DefaultModeGate>| {
-        g.rules().iter().filter(|r| r.scope.is_writable()).count()
-    };
+    let durable =
+        |g: &Arc<DefaultModeGate>| g.rules().iter().filter(|r| r.scope.is_writable()).count();
     // The gate seeds four builtin rules at construction; none are durable.
     assert_eq!(durable(&gate), 0, "no durable rules at start");
     // A git commit approval routes to a session-scope allow rule (in-memory,

@@ -5,7 +5,12 @@ use houyicoder_core::agent::ToolRegistry;
 use houyicoder_core::agent::multi_agent::bus_types::{ChildDescriptor, spawned_topic};
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_memory::InMemoryBackend;
+use houyicoder_provider::FakeProvider;
 use houyicoder_session::SessionStore;
+use std::time::Duration;
+use tokio::runtime::Handle;
+use tokio::task::yield_now;
+use tokio::time::timeout;
 
 fn child(id: &str, run_mode: ChildRunMode) -> ChildDescriptor {
     ChildDescriptor {
@@ -19,7 +24,7 @@ fn bare_runner() -> Arc<Runner> {
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     Arc::new(Runner::new(
         store,
-        Arc::new(houyicoder_provider::FakeProvider::text("ok")),
+        Arc::new(FakeProvider::text("ok")),
         ToolRegistry::new(),
         RunnerConfig {
             model: "test".into(),
@@ -40,7 +45,7 @@ async fn test_background_completion_enqueues() {
     spawn(
         Some(bus.clone()),
         Arc::downgrade(&runner),
-        tokio::runtime::Handle::current(),
+        Handle::current(),
         CancellationToken::new(),
     );
     bus.publish(
@@ -52,7 +57,7 @@ async fn test_background_completion_enqueues() {
     // No sleep: the global completion subscription exists at startup, so
     // publishing Completed immediately cannot lose it to a per-child
     // subscribe race. A yield lets the drain task process both messages.
-    tokio::task::yield_now().await;
+    yield_now().await;
     bus.publish(
         global_completed_topic(),
         BusMessage::Completed {
@@ -61,7 +66,7 @@ async fn test_background_completion_enqueues() {
             summary: "found auth".into(),
         },
     );
-    tokio::task::yield_now().await;
+    yield_now().await;
     let snap = runner.queued_notifications_snapshot();
     assert_eq!(snap.len(), 1, "one notification for one completion");
     assert!(snap[0].contains("explore"), "carries the subagent type");
@@ -78,7 +83,7 @@ async fn test_foreground_completion_skips_queue() {
     spawn(
         Some(bus.clone()),
         Arc::downgrade(&runner),
-        tokio::runtime::Handle::current(),
+        Handle::current(),
         CancellationToken::new(),
     );
     bus.publish(
@@ -87,7 +92,7 @@ async fn test_foreground_completion_skips_queue() {
             child: child("c2", ChildRunMode::Foreground),
         },
     );
-    tokio::task::yield_now().await;
+    yield_now().await;
     bus.publish(
         global_completed_topic(),
         BusMessage::Completed {
@@ -96,7 +101,7 @@ async fn test_foreground_completion_skips_queue() {
             summary: "done".into(),
         },
     );
-    tokio::task::yield_now().await;
+    yield_now().await;
     assert!(
         runner.queued_notifications_snapshot().is_empty(),
         "foreground children do not enqueue a notification"
@@ -113,7 +118,7 @@ async fn test_duplicate_signal_dedups() {
     spawn(
         Some(bus.clone()),
         Arc::downgrade(&runner),
-        tokio::runtime::Handle::current(),
+        Handle::current(),
         CancellationToken::new(),
     );
     bus.publish(
@@ -128,7 +133,7 @@ async fn test_duplicate_signal_dedups() {
             child: child("c3", ChildRunMode::Background),
         },
     );
-    tokio::task::yield_now().await;
+    yield_now().await;
     bus.publish(
         global_completed_topic(),
         BusMessage::Completed {
@@ -137,7 +142,7 @@ async fn test_duplicate_signal_dedups() {
             summary: "done".into(),
         },
     );
-    tokio::task::yield_now().await;
+    yield_now().await;
     assert_eq!(
         runner.queued_notifications_snapshot().len(),
         1,
@@ -153,7 +158,7 @@ async fn test_failed_completion_enqueues() {
     spawn(
         Some(bus.clone()),
         Arc::downgrade(&runner),
-        tokio::runtime::Handle::current(),
+        Handle::current(),
         CancellationToken::new(),
     );
     bus.publish(
@@ -162,7 +167,7 @@ async fn test_failed_completion_enqueues() {
             child: child("c4", ChildRunMode::Background),
         },
     );
-    tokio::task::yield_now().await;
+    yield_now().await;
     bus.publish(
         global_completed_topic(),
         BusMessage::Completed {
@@ -171,7 +176,7 @@ async fn test_failed_completion_enqueues() {
             summary: "provider fatal".into(),
         },
     );
-    tokio::task::yield_now().await;
+    yield_now().await;
     let snap = runner.queued_notifications_snapshot();
     assert_eq!(snap.len(), 1, "a failed child still notifies the parent");
     assert!(snap[0].contains("failed"), "carries the failed status");
@@ -188,7 +193,7 @@ async fn test_multi_child_concurrent_enqueues() {
     spawn(
         Some(bus.clone()),
         Arc::downgrade(&runner),
-        tokio::runtime::Handle::current(),
+        Handle::current(),
         CancellationToken::new(),
     );
     for id in ["c5", "c6", "c7"] {
@@ -199,7 +204,7 @@ async fn test_multi_child_concurrent_enqueues() {
             },
         );
     }
-    tokio::task::yield_now().await;
+    yield_now().await;
     for (id, summary) in [("c5", "found a"), ("c6", "found b"), ("c7", "found c")] {
         bus.publish(
             global_completed_topic(),
@@ -210,7 +215,7 @@ async fn test_multi_child_concurrent_enqueues() {
             },
         );
     }
-    tokio::task::yield_now().await;
+    yield_now().await;
     let snap = runner.queued_notifications_snapshot();
     assert_eq!(snap.len(), 3, "three children produce three notifications");
     let joined = snap.join(";");
@@ -229,7 +234,7 @@ async fn test_empty_summary_still_enqueues() {
     spawn(
         Some(bus.clone()),
         Arc::downgrade(&runner),
-        tokio::runtime::Handle::current(),
+        Handle::current(),
         CancellationToken::new(),
     );
     bus.publish(
@@ -238,7 +243,7 @@ async fn test_empty_summary_still_enqueues() {
             child: child("c8", ChildRunMode::Background),
         },
     );
-    tokio::task::yield_now().await;
+    yield_now().await;
     bus.publish(
         global_completed_topic(),
         BusMessage::Completed {
@@ -247,7 +252,7 @@ async fn test_empty_summary_still_enqueues() {
             summary: String::new(),
         },
     );
-    tokio::task::yield_now().await;
+    yield_now().await;
     let snap = runner.queued_notifications_snapshot();
     assert_eq!(
         snap.len(),
@@ -273,7 +278,7 @@ async fn test_back_to_back_deliver() {
     spawn(
         Some(bus.clone()),
         Arc::downgrade(&runner),
-        tokio::runtime::Handle::current(),
+        Handle::current(),
         CancellationToken::new(),
     );
     bus.publish(
@@ -290,8 +295,8 @@ async fn test_back_to_back_deliver() {
             summary: "race".into(),
         },
     );
-    tokio::task::yield_now().await;
-    tokio::task::yield_now().await;
+    yield_now().await;
+    yield_now().await;
     let snap = runner.queued_notifications_snapshot();
     assert_eq!(
         snap.len(),
@@ -310,10 +315,10 @@ async fn test_orphan_completion_notifies() {
     spawn(
         Some(bus.clone()),
         Arc::downgrade(&runner),
-        tokio::runtime::Handle::current(),
+        Handle::current(),
         CancellationToken::new(),
     );
-    tokio::task::yield_now().await;
+    yield_now().await;
     bus.publish(
         global_completed_topic(),
         BusMessage::Completed {
@@ -322,7 +327,7 @@ async fn test_orphan_completion_notifies() {
             summary: "no spawn seen".into(),
         },
     );
-    tokio::task::yield_now().await;
+    yield_now().await;
     let snap = runner.queued_notifications_snapshot();
     assert_eq!(
         snap.len(),
@@ -348,12 +353,12 @@ async fn test_cancel_ends_drain() {
     let handle = spawn(
         Some(bus.clone()),
         Arc::downgrade(&runner),
-        tokio::runtime::Handle::current(),
+        Handle::current(),
         cancel.clone(),
     )
     .expect("a bus present yields a handle");
     cancel.cancel();
-    let outcome = tokio::time::timeout(std::time::Duration::from_secs(1), handle).await;
+    let outcome = timeout(Duration::from_secs(1), handle).await;
     assert!(outcome.is_ok(), "cancel ends the drain task");
     assert!(
         outcome.unwrap().is_ok(),
@@ -374,7 +379,7 @@ async fn test_drain_releases_runner() {
     let _handle = spawn(
         Some(bus.clone()),
         Arc::downgrade(&runner),
-        tokio::runtime::Handle::current(),
+        Handle::current(),
         cancel.clone(),
     );
     drop(runner);

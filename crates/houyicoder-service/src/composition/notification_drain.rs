@@ -14,6 +14,9 @@ use houyicoder_core::agent::Runner;
 use houyicoder_core::agent::multi_agent::bus_types::{
     AgentBus, BusMessage, ChildRunMode, ChildStatus, global_completed_topic,
 };
+use tokio::runtime::Handle;
+use tokio::sync::broadcast::error::RecvError;
+use tokio::task::JoinHandle;
 
 /// Lowercase label for a child's terminal status, mirrored from the fleet
 /// projector so the footer strip and the notification text agree.
@@ -51,9 +54,9 @@ fn notification_text(
 pub fn spawn(
     bus: Option<Arc<AgentBus>>,
     runner: Weak<Runner>,
-    runtime: tokio::runtime::Handle,
+    runtime: Handle,
     cancel: CancellationToken,
-) -> Option<tokio::task::JoinHandle<()>> {
+) -> Option<JoinHandle<()>> {
     let bus = bus?;
     let mut completed_rx = bus.subscribe(global_completed_topic());
     let handle = runtime.spawn(async move {
@@ -76,8 +79,8 @@ pub fn spawn(
                         }
                     }
                     Ok(_) => {}
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    Err(RecvError::Lagged(_)) => continue,
+                    Err(RecvError::Closed) => break,
                 },
             }
         }

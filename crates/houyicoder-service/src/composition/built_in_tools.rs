@@ -7,12 +7,14 @@ use std::sync::Arc;
 
 use houyicoder_api::sandbox::SandboxSession;
 use houyicoder_api::tool::{Tool, ToolProvider};
+use houyicoder_core::agent::ConditionalSkillActivator;
 use houyicoder_core::agent::{
     AskUserQuestionTool, BashTool, EditTool, GlobTool, GrepTool, MultiEditTool, ReadTool,
     WebFetchTool, WriteTool,
 };
 use houyicoder_core::snapshot::{SnapshotStore, UndoStack};
 use houyicoder_permission::{GuardedTool, ModeGate};
+use std::sync::Mutex;
 
 /// The built-in tool set: AskUserQuestion always, plus the sandboxed
 /// filesystem + search + network tools (wrapped through the permission
@@ -23,10 +25,10 @@ use houyicoder_permission::{GuardedTool, ModeGate};
 pub(super) struct BuiltInToolProvider {
     session: Option<Arc<dyn SandboxSession>>,
     gate: Arc<dyn ModeGate>,
-    undo_stack: Option<Arc<std::sync::Mutex<UndoStack>>>,
+    undo_stack: Option<Arc<Mutex<UndoStack>>>,
     snapshot_store: Option<Arc<SnapshotStore>>,
-    activator: Option<Arc<dyn houyicoder_core::agent::ConditionalSkillActivator>>,
-    active_skill: Option<Arc<std::sync::Mutex<Option<String>>>>,
+    activator: Option<Arc<dyn ConditionalSkillActivator>>,
+    active_skill: Option<Arc<Mutex<Option<String>>>>,
 }
 
 impl BuiltInToolProvider {
@@ -44,7 +46,7 @@ impl BuiltInToolProvider {
                 // process: the in-memory stack is lost on restart, but the
                 // snap-N dirs persist. An empty stack (store init failed, or
                 // no surviving snapshots) leaves /undo as no-op, same as before.
-                let stack = Arc::new(std::sync::Mutex::new(match &store {
+                let stack = Arc::new(Mutex::new(match &store {
                     Some(st) => UndoStack::from_entries(st.relink_undo_entries()),
                     None => UndoStack::new(),
                 }));
@@ -66,26 +68,21 @@ impl BuiltInToolProvider {
     /// activates matching conditional skills.
     pub(super) fn with_activator(
         mut self,
-        activator: Option<Arc<dyn houyicoder_core::agent::ConditionalSkillActivator>>,
+        activator: Option<Arc<dyn ConditionalSkillActivator>>,
     ) -> Self {
         self.activator = activator;
         self
     }
 
     /// Wire the skill attribution shared by the runner and skill tool.
-    pub(super) fn with_active_skill(
-        mut self,
-        cell: Option<Arc<std::sync::Mutex<Option<String>>>>,
-    ) -> Self {
+    pub(super) fn with_active_skill(mut self, cell: Option<Arc<Mutex<Option<String>>>>) -> Self {
         self.active_skill = cell;
         self
     }
 
     /// The shared undo stack (cloned into the BashTool; also set on the Runner
     /// for /undo). None when no session or the snapshot store failed.
-    pub(super) fn undo_handles(
-        &self,
-    ) -> Option<(Arc<std::sync::Mutex<UndoStack>>, Arc<SnapshotStore>)> {
+    pub(super) fn undo_handles(&self) -> Option<(Arc<Mutex<UndoStack>>, Arc<SnapshotStore>)> {
         self.undo_stack
             .as_ref()
             .zip(self.snapshot_store.as_ref())

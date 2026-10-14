@@ -2,7 +2,10 @@
 //! (snake_case serialization). Extracted from server.rs to keep the file
 //! under the size gate. These test crate::protocol_adapter functions, not Server.
 
+use crate::protocol_adapter::permission_rule_from_wire;
+use crate::protocol_adapter::permission_rule_to_wire;
 use houyicoder_permission::{Effect, Rule, RuleContent};
+use houyicoder_protocol::frontend::permission::PermissionEffect;
 
 /// An Ask rule round-trips through the mapping losslessly: engine
 /// Effect::Ask -> wire Ask -> engine Effect::Ask (was wrongly dropped to
@@ -11,12 +14,9 @@ use houyicoder_permission::{Effect, Rule, RuleContent};
 fn test_ask_rule_round_trips() {
     let engine_rule =
         Rule::with_content("bash", RuleContent::Prefix("git push".into()), Effect::Ask).unwrap();
-    let wire = crate::protocol_adapter::permission_rule_to_wire(&engine_rule);
-    assert_eq!(
-        wire.effect,
-        houyicoder_protocol::frontend::permission::PermissionEffect::Ask
-    );
-    let back = crate::protocol_adapter::permission_rule_from_wire(&wire).unwrap();
+    let wire = permission_rule_to_wire(&engine_rule);
+    assert_eq!(wire.effect, PermissionEffect::Ask);
+    let back = permission_rule_from_wire(&wire).unwrap();
     assert_eq!(
         back.effect,
         Effect::Ask,
@@ -27,10 +27,8 @@ fn test_ask_rule_round_trips() {
 /// The wire Ask variant serializes as "ask" (snake_case).
 #[test]
 fn test_ask_effect_label() {
-    use houyicoder_protocol::frontend::permission::PermissionEffect;
     assert_eq!(
-        crate::protocol_adapter::permission_rule_to_wire(&Rule::new("edit", Effect::Ask).unwrap())
-            .effect,
+        permission_rule_to_wire(&Rule::new("edit", Effect::Ask).unwrap()).effect,
         PermissionEffect::Ask
     );
 }

@@ -6,38 +6,44 @@ use futures::SinkExt;
 use futures::StreamExt;
 use futures::channel::mpsc;
 use houyicoder_api::provider::ModelProvider;
+use houyicoder_context::SessionId;
+use houyicoder_core::agent::Runner;
+use houyicoder_core::agent::ToolRegistry;
 use houyicoder_core::agent::multi_agent::bus_types::{
     AgentBus, ChildDescriptor, ChildRunMode, permission_response_topic,
 };
+use houyicoder_core::agent::runner_config::RunnerConfig;
+use houyicoder_memory::InMemoryBackend;
+use houyicoder_permission::DefaultModeGate;
 use houyicoder_protocol::envelope::{
     ClientFrame, ClientResponseEnvelope, ClientResponsePayload, ServerFrame,
 };
+use houyicoder_protocol::framing::encode;
 use houyicoder_protocol::frontend::run::ApprovalDecision;
+use houyicoder_provider::FakeProvider;
+use houyicoder_session::SessionStore;
 use std::sync::Arc;
 
 /// A minimal server with a bus + a real gate, so handle() can route a
 /// child ask through the wire flow + publish the decision on the bus.
 fn server_with_bus() -> (Server, Arc<AgentBus>) {
-    let sess_store = Arc::new(houyicoder_session::SessionStore::new(Box::new(
-        houyicoder_memory::InMemoryBackend::new(),
-    )));
-    let provider: Arc<dyn ModelProvider> =
-        Arc::new(houyicoder_provider::FakeProvider::text("test"));
-    let runner = houyicoder_core::agent::Runner::new(
+    let sess_store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("test"));
+    let runner = Runner::new(
         sess_store,
         provider,
-        houyicoder_core::agent::ToolRegistry::new(),
-        houyicoder_core::agent::runner_config::RunnerConfig::default(),
+        ToolRegistry::new(),
+        RunnerConfig::default(),
     );
-    let gate = Arc::new(houyicoder_permission::DefaultModeGate::new());
+    let gate = Arc::new(DefaultModeGate::new());
     let bus = Arc::new(AgentBus::new());
-    let server = Server::new(Arc::new(runner), houyicoder_context::SessionId::new(), gate)
-        .with_bus(Some(Arc::clone(&bus)));
+    let server =
+        Server::new(Arc::new(runner), SessionId::new(), gate).with_bus(Some(Arc::clone(&bus)));
     (server, bus)
 }
 
 fn encode_line(msg: &impl serde::Serialize) -> String {
-    let mut f = houyicoder_protocol::framing::encode(msg).expect("encode");
+    let mut f = encode(msg).expect("encode");
     if !f.ends_with('\n') {
         f.push('\n');
     }

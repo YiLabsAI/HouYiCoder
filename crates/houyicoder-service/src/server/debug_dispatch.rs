@@ -8,6 +8,7 @@ use houyicoder_protocol::frontend::debug::DebugLevel;
 use tracing_subscriber::filter::LevelFilter;
 
 use super::Server;
+use houyicoder_protocol::frontend::debug::DebugState;
 
 impl Server {
     /// The /debug reply: set the level when a handle is present, then report
@@ -34,7 +35,7 @@ impl Server {
                 false,
             ));
         }
-        ResponsePayload::Debug(houyicoder_protocol::frontend::debug::DebugState {
+        ResponsePayload::Debug(DebugState {
             enabled: filter != LevelFilter::OFF,
             path: h
                 .path()

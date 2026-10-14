@@ -12,6 +12,7 @@ use houyicoder_protocol::frontend::{FrontendEvent, PendingInputId, QueuedInput};
 
 use super::event_sequencer::EntryPayloads;
 use super::{FrameCarrier, Server};
+use houyicoder_protocol::envelope::ChildTranscriptFrame;
 
 impl Server {
     fn map_turn_event(event: &SessionLogEntry) -> EntryPayloads {
@@ -102,7 +103,7 @@ impl Server {
     pub(super) async fn child_transcript_frames(
         &self,
         child_sid: &houyicoder_protocol::frontend::SessionId,
-    ) -> Vec<houyicoder_protocol::envelope::ChildTranscriptFrame> {
+    ) -> Vec<ChildTranscriptFrame> {
         let Some(sid) = houyicoder_context::SessionId::from_display_string(&child_sid.0) else {
             return Vec::new();
         };
@@ -110,12 +111,10 @@ impl Server {
         let mut frames = Vec::with_capacity(events.len());
         for event in &events {
             if let Some(update) = map_session_update(&event.event) {
-                frames.push(houyicoder_protocol::envelope::ChildTranscriptFrame::Session(update));
+                frames.push(ChildTranscriptFrame::Session(update));
             }
             if let Some(notification) = map_acpx_notification(&event.event) {
-                frames.push(houyicoder_protocol::envelope::ChildTranscriptFrame::Acpx(
-                    notification,
-                ));
+                frames.push(ChildTranscriptFrame::Acpx(notification));
             }
         }
         frames

@@ -17,20 +17,24 @@ use houyicoder_context::{DirEntry, ExecConfig, ExecResult, SandboxError, Session
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::{Runner, ToolRegistry};
 use houyicoder_memory::InMemoryBackend;
+use houyicoder_permission::DefaultModeGate;
 use houyicoder_protocol::envelope::{
     ClientFrame, RequestEnvelope, RequestId, ResponsePayload, ServerFrame,
 };
 use houyicoder_protocol::extension::ToolError;
+use houyicoder_protocol::framing::encode;
 use houyicoder_protocol::frontend::FrontendRequest;
 use houyicoder_protocol::frontend::permission::{
     PermissionEffect, PermissionRule, RuleDestination,
 };
 use houyicoder_protocol::handshake::Hello;
+use houyicoder_provider::FakeProvider;
 use houyicoder_session::SessionStore;
 use serde_json::Value;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::id;
 use std::sync::{Arc, Mutex};
 
 /// A tool with a distinct name so the list request has something to return.
@@ -128,7 +132,7 @@ fn runner_with_tool() -> Arc<Runner> {
     tools.register(Arc::new(ListedTool));
     Arc::new(Runner::new(
         store,
-        Arc::new(houyicoder_provider::FakeProvider::text("x")),
+        Arc::new(FakeProvider::text("x")),
         tools,
         RunnerConfig::default(),
     ))
@@ -138,7 +142,7 @@ fn plain_server() -> Server {
     Server::new(
         runner_with_tool(),
         SessionId::new(),
-        Arc::new(houyicoder_permission::DefaultModeGate::new()),
+        Arc::new(DefaultModeGate::new()),
     )
 }
 
@@ -150,7 +154,7 @@ fn server_with_skill(root: &Path) -> Server {
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let runner = Runner::new(
         store,
-        Arc::new(houyicoder_provider::FakeProvider::text("x")),
+        Arc::new(FakeProvider::text("x")),
         ToolRegistry::new(),
         RunnerConfig::default(),
     )
@@ -158,12 +162,12 @@ fn server_with_skill(root: &Path) -> Server {
     Server::new(
         Arc::new(runner),
         SessionId::new(),
-        Arc::new(houyicoder_permission::DefaultModeGate::new()),
+        Arc::new(DefaultModeGate::new()),
     )
 }
 
 fn send_line(tx: &mut mpsc::Sender<String>, frame: &impl serde::Serialize) {
-    let mut s = houyicoder_protocol::framing::encode(frame).unwrap();
+    let mut s = encode(frame).unwrap();
     if !s.ends_with('\n') {
         s.push('\n');
     }
@@ -234,7 +238,7 @@ async fn test_skills_returns_payload() {
 /// unavailable note instead of dropping the open view.
 #[tokio::test]
 async fn test_skill_body_reply() {
-    let tmp = env::temp_dir().join(format!("skill-body-{}-{}", std::process::id(), line!()));
+    let tmp = env::temp_dir().join(format!("skill-body-{}-{}", id(), line!()));
     drop(fs::remove_dir_all(&tmp));
     let skill_dir = tmp.join(".houyicoder").join("skills").join("alpha");
     fs::create_dir_all(&skill_dir).unwrap();

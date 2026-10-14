@@ -6,10 +6,12 @@ use super::super::*;
 use futures::StreamExt;
 use futures::channel::mpsc;
 use houyicoder_api::memory::MemoryProvider;
+use houyicoder_context::SessionId;
 use houyicoder_context::{MemoryEntry, MemoryError, MemoryScope, MemorySummary};
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::{MemoryGates, MemoryRuntime, Runner, ToolRegistry};
 use houyicoder_memory::InMemoryBackend;
+use houyicoder_permission::DefaultModeGate;
 use houyicoder_protocol::envelope::{
     ClientFrame, RequestEnvelope, RequestId, ResponsePayload, ServerFrame,
 };
@@ -17,8 +19,14 @@ use houyicoder_protocol::framing::encode;
 use houyicoder_protocol::frontend::FrontendRequest;
 use houyicoder_protocol::frontend::memory::MemoryToggleWhich;
 use houyicoder_protocol::handshake::Hello;
+use houyicoder_provider::FakeProvider;
 use houyicoder_session::SessionStore;
+use std::env::temp_dir;
+use std::fs::remove_dir_all;
+use std::fs::remove_file;
+use std::fs::write;
 use std::path::PathBuf;
+use std::process::id;
 use std::sync::Arc;
 
 /// In-memory provider with a deterministic delete failure.
@@ -52,7 +60,7 @@ fn stub_runner_with_memory() -> Arc<Runner> {
     Arc::new(
         Runner::new(
             store,
-            Arc::new(houyicoder_provider::FakeProvider::text("x")),
+            Arc::new(FakeProvider::text("x")),
             ToolRegistry::new(),
             RunnerConfig {
                 model: "test".into(),
@@ -94,15 +102,11 @@ async fn memory_dispatch(
     reqs: Vec<FrontendRequest>,
 ) -> Vec<ResponsePayload> {
     let runner = stub_runner_with_memory();
-    let session = houyicoder_context::SessionId::new();
+    let session = SessionId::new();
     let (server_tx, mut client_rx) = mpsc::channel::<String>(256);
     let (mut client_tx, server_rx) = mpsc::channel::<String>(256);
     let io = FrameCarrier::new(server_tx, server_rx);
-    let mut server = Server::new(
-        runner,
-        session,
-        Arc::new(houyicoder_permission::DefaultModeGate::new()),
-    );
+    let mut server = Server::new(runner, session, Arc::new(DefaultModeGate::new()));
     if let Some(path) = settings {
         server = server.with_settings_path(path);
     }
@@ -183,7 +187,7 @@ async fn test_io_failure_replies_error() {
 /// value, and the settings file agrees, so the choice survives a restart.
 #[tokio::test]
 async fn test_toggle_persists_then_flips() {
-    let dir = std::env::temp_dir().join(format!("toggle-ok-{}", std::process::id()));
+    let dir = temp_dir().join(format!("toggle-ok-{}", id()));
     let settings = dir.join("settings.json");
     let payloads = memory_dispatch(
         Some(settings.clone()),
@@ -213,15 +217,15 @@ async fn test_toggle_persists_then_flips() {
         !loaded.auto_memory,
         "the flip is persisted, not just in-memory"
     );
-    drop(std::fs::remove_dir_all(&dir));
+    drop(remove_dir_all(&dir));
 }
 
 /// A settings write failure replies Error and leaves the runtime gate on
 /// the old value — the pane never shows a toggle a restart would revert.
 #[tokio::test]
 async fn test_failed_toggle_keeps_state() {
-    let blocker = std::env::temp_dir().join(format!("toggle-block-{}", std::process::id()));
-    std::fs::write(&blocker, "regular file, not a directory").unwrap();
+    let blocker = temp_dir().join(format!("toggle-block-{}", id()));
+    write(&blocker, "regular file, not a directory").unwrap();
     let payloads = memory_dispatch(
         Some(blocker.join("settings.json")),
         vec![
@@ -246,5 +250,5 @@ async fn test_failed_toggle_keeps_state() {
         }
         other => panic!("expected ToggleState, got {other:?}"),
     }
-    drop(std::fs::remove_file(&blocker));
+    drop(remove_file(&blocker));
 }

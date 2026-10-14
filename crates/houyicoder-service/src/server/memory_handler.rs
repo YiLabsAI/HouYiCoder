@@ -6,6 +6,10 @@ use houyicoder_protocol::frontend::memory::MemoryToggleWhich;
 
 use super::{Server, frame_carrier::FrameCarrier};
 use crate::protocol_adapter as pa;
+use houyicoder_context::MemoryError;
+use pa::memory_view::map_memory_entry;
+use pa::memory_view::map_memory_list;
+use pa::memory_view::map_toggle_state;
 
 impl Server {
     pub(super) async fn handle_memory_list(
@@ -13,7 +17,7 @@ impl Server {
         io: &mut FrameCarrier,
         req_id: RequestId,
     ) -> Result<(), ProtocolError> {
-        let entries = pa::memory_view::map_memory_list(self.runner.memory_list());
+        let entries = map_memory_list(self.runner.memory_list());
         self.send_response(io, req_id, ResponsePayload::MemoryList(entries))
             .await
     }
@@ -24,7 +28,7 @@ impl Server {
         req_id: RequestId,
         key: String,
     ) -> Result<(), ProtocolError> {
-        let entry = pa::memory_view::map_memory_entry(self.runner.memory_show(&key));
+        let entry = map_memory_entry(self.runner.memory_show(&key));
         self.send_response(io, req_id, ResponsePayload::MemoryShow(entry))
             .await
     }
@@ -37,8 +41,8 @@ impl Server {
         scope: String,
     ) -> Result<(), ProtocolError> {
         match self.runner.memory_forget(&key, &scope) {
-            Ok(()) | Err(houyicoder_context::MemoryError::NotFound) => {
-                let entries = pa::memory_view::map_memory_list(self.runner.memory_list());
+            Ok(()) | Err(MemoryError::NotFound) => {
+                let entries = map_memory_list(self.runner.memory_list());
                 self.send_response(io, req_id, ResponsePayload::MemoryList(entries))
                     .await
             }
@@ -63,7 +67,7 @@ impl Server {
         req_id: RequestId,
     ) -> Result<(), ProtocolError> {
         let state = self.runner.memory_gate_state();
-        let toggle = pa::memory_view::map_toggle_state(state.auto_memory, state.auto_dream);
+        let toggle = map_toggle_state(state.auto_memory, state.auto_dream);
         self.send_response(io, req_id, ResponsePayload::ToggleState(toggle))
             .await
     }
@@ -102,7 +106,7 @@ impl Server {
             MemoryToggleWhich::Auto => self.runner.set_auto_memory(auto_memory),
             MemoryToggleWhich::Dream => self.runner.set_auto_dream(auto_dream),
         }
-        let toggle = pa::memory_view::map_toggle_state(auto_memory, auto_dream);
+        let toggle = map_toggle_state(auto_memory, auto_dream);
         self.send_response(io, req_id, ResponsePayload::ToggleState(toggle))
             .await
     }

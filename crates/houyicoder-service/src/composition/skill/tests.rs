@@ -8,6 +8,12 @@ use houyicoder_api::tool::{Tool, ToolCtx};
 use houyicoder_async::PFut;
 use houyicoder_context::{ExecConfig, ExecResult, SandboxError};
 use houyicoder_core::agent::SkillTool;
+use serde_yaml::Value;
+use std::env::temp_dir;
+use std::path::PathBuf;
+use std::process::id;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 fn data_source(family: SkillFamily, provenance: SkillProvenance) -> SkillSource {
     SkillSource::new(family, provenance)
@@ -85,15 +91,12 @@ fn write_family_skill(root: &Path, family: &str, name: &str) {
     .unwrap();
 }
 
-fn provenance_dir(label: &str) -> std::path::PathBuf {
-    let nonce = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
+fn provenance_dir(label: &str) -> PathBuf {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    std::env::temp_dir().join(format!(
-        "skill-provenance-{label}-{}-{nonce}",
-        std::process::id()
-    ))
+    temp_dir().join(format!("skill-provenance-{label}-{}-{nonce}", id()))
 }
 
 #[test]
@@ -132,7 +135,7 @@ impl SandboxSession for RecordingSandbox {
     }
 
     fn workspace_root(&self) -> Arc<Path> {
-        Arc::from(std::env::temp_dir())
+        Arc::from(temp_dir())
     }
 
     fn set_extra_mach_services(&self, services: &[String]) {
@@ -203,7 +206,7 @@ fn test_project_ecosystem_skips_profile() {
 
 #[test]
 fn test_list_filters_disabled() {
-    let tmp = std::env::temp_dir().join(format!("skill-reg-list-{}", std::process::id()));
+    let tmp = temp_dir().join(format!("skill-reg-list-{}", id()));
     write_skill(&tmp, "on", "on body");
     let off_dir = tmp.join(".houyicoder").join("skills").join("off");
     fs::create_dir_all(&off_dir).unwrap();
@@ -229,7 +232,7 @@ fn test_list_filters_disabled() {
 /// pane groups on.
 #[test]
 fn test_list_origin_tags_project() {
-    let tmp = std::env::temp_dir().join(format!("skill-reg-origin-{}", std::process::id()));
+    let tmp = temp_dir().join(format!("skill-reg-origin-{}", id()));
     write_skill(&tmp, "on", "on body");
     let reg = SkillRegistryImpl::discover_with_home(Some(&tmp), None);
     let snap = reg.list_with_origin();
@@ -249,7 +252,7 @@ fn test_list_origin_tags_project() {
 /// filtered disabled skills, making the wire invocable flag always true.
 #[test]
 fn test_list_origin_keeps_disabled() {
-    let tmp = std::env::temp_dir().join(format!("skill-reg-dis-origin-{}", std::process::id()));
+    let tmp = temp_dir().join(format!("skill-reg-dis-origin-{}", id()));
     write_skill(&tmp, "on", "on body");
     let off_dir = tmp.join(".houyicoder").join("skills").join("off");
     fs::create_dir_all(&off_dir).unwrap();
@@ -286,7 +289,7 @@ fn test_list_origin_keeps_disabled() {
 /// dispatch falls back to the builtin.
 #[test]
 fn test_reserved_name_rejected() {
-    let tmp = std::env::temp_dir().join(format!("skill-reg-conflict-{}", std::process::id()));
+    let tmp = temp_dir().join(format!("skill-reg-conflict-{}", id()));
     write_skill(&tmp, "compact", "hijack body");
     write_skill(&tmp, "commit", "legit body");
     let reg = SkillRegistryImpl::discover_with_home(Some(&tmp), None);
@@ -306,7 +309,7 @@ fn test_reserved_name_rejected() {
 
 #[test]
 fn test_prepare_body_returns_body() {
-    let tmp = std::env::temp_dir().join(format!("skill-reg-body-{}", std::process::id()));
+    let tmp = temp_dir().join(format!("skill-reg-body-{}", id()));
     write_skill(&tmp, "commit", "run git status");
     let reg = SkillRegistryImpl::discover_with_home(Some(&tmp), None);
     let body = reg.prepare_body("commit", None, None).unwrap();
@@ -320,7 +323,7 @@ fn test_prepare_body_returns_body() {
 
 #[test]
 fn test_prepare_body_substitutes_args() {
-    let tmp = std::env::temp_dir().join(format!("skill-reg-args-{}", std::process::id()));
+    let tmp = temp_dir().join(format!("skill-reg-args-{}", id()));
     let skill_dir = tmp.join(".houyicoder").join("skills").join("echo");
     fs::create_dir_all(&skill_dir).unwrap();
     fs::write(
@@ -339,7 +342,7 @@ fn test_prepare_body_substitutes_args() {
 
 #[test]
 fn test_unknown_skill_not_found() {
-    let tmp = std::env::temp_dir().join(format!("skill-reg-nf-{}", std::process::id()));
+    let tmp = temp_dir().join(format!("skill-reg-nf-{}", id()));
     let reg = SkillRegistryImpl::discover_with_home(Some(&tmp), None);
     let err = reg.prepare_body("nope", None, None).unwrap_err();
     match err {
@@ -355,7 +358,7 @@ fn test_find_exposes_disable_flag() {
     // disable-model-invocation flag, and the caller (Skill tool) checks
     // it. prepare_body is ungated, so a disabled skill's body is still
     // loadable from the slash path when user-invocable is true.
-    let tmp = std::env::temp_dir().join(format!("skill-reg-dis-{}", std::process::id()));
+    let tmp = temp_dir().join(format!("skill-reg-dis-{}", id()));
     let off_dir = tmp.join(".houyicoder").join("skills").join("off");
     fs::create_dir_all(&off_dir).unwrap();
     fs::write(
@@ -384,7 +387,7 @@ fn test_find_exposes_disable_flag() {
 /// A re-reading impl would report the new size; the cache does not.
 #[test]
 fn test_token_estimate_cached() {
-    let tmp = std::env::temp_dir().join(format!("skill-reg-tok-{}", std::process::id()));
+    let tmp = temp_dir().join(format!("skill-reg-tok-{}", id()));
     write_skill(&tmp, "commit", "run git status");
     let reg = SkillRegistryImpl::discover_with_home(Some(&tmp), None);
     let at_discovery = reg.find("commit").unwrap().body_token_estimate;
@@ -408,7 +411,7 @@ fn test_token_estimate_cached() {
 
 #[test]
 fn test_session_id_substituted() {
-    let tmp = std::env::temp_dir().join(format!("skill-reg-sid-{}", std::process::id()));
+    let tmp = temp_dir().join(format!("skill-reg-sid-{}", id()));
     let skill_dir = tmp.join(".houyicoder").join("skills").join("sid");
     fs::create_dir_all(&skill_dir).unwrap();
     fs::write(
@@ -431,7 +434,7 @@ fn test_session_id_substituted() {
 /// summary (attacker-controlled text).
 #[test]
 fn test_detect_run_scripts_summary() {
-    let tmp = std::env::temp_dir().join(format!("skill-reg-detect-{}", std::process::id()));
+    let tmp = temp_dir().join(format!("skill-reg-detect-{}", id()));
     let skill_dir = tmp.join(".houyicoder").join("skills").join("deploy");
     fs::create_dir_all(skill_dir.join("scripts")).unwrap();
     fs::write(
@@ -475,7 +478,7 @@ PreToolUse:
   - hooks:
       - command: ./nomatch.sh
 "#;
-    let raw = serde_yaml::from_str::<serde_yaml::Value>(yaml).unwrap();
+    let raw = serde_yaml::from_str::<Value>(yaml).unwrap();
     let specs = parse_hooks(Some(&raw), &project_source(SkillFamily::Houyi));
     assert_eq!(specs.len(), 3, "three hook entries: {specs:?}");
     let first = &specs[0];
@@ -506,7 +509,7 @@ fn test_parse_hooks_none_empty() {
 #[test]
 fn test_parse_hooks_mcp_filtered() {
     let yaml = "PreToolUse:\n  - hooks:\n      - command: ./evil.sh\n";
-    let raw = serde_yaml::from_str::<serde_yaml::Value>(yaml).unwrap();
+    let raw = serde_yaml::from_str::<Value>(yaml).unwrap();
     assert!(
         parse_hooks(Some(&raw), &remote_source()).is_empty(),
         "MCP source produces no specs"
@@ -519,7 +522,7 @@ fn test_parse_hooks_mcp_filtered() {
 /// is not the one tested.
 #[test]
 fn test_usage_records_invocation() {
-    let tmp = std::env::temp_dir().join(format!("skill-usage-inv-{}", std::process::id()));
+    let tmp = temp_dir().join(format!("skill-usage-inv-{}", id()));
     write_skill(&tmp, "alpha", "alpha body");
     let reg = SkillRegistryImpl::discover_with_home(Some(&tmp), None);
     assert_eq!(reg.usage_for("alpha").invocations, 0, "starts at zero");
@@ -535,7 +538,7 @@ fn test_usage_records_invocation() {
 /// and does not stamp last_used (no successful invocation happened).
 #[test]
 fn test_usage_records_refusal() {
-    let tmp = std::env::temp_dir().join(format!("skill-usage-ref-{}", std::process::id()));
+    let tmp = temp_dir().join(format!("skill-usage-ref-{}", id()));
     write_skill(&tmp, "beta", "beta body");
     let reg = SkillRegistryImpl::discover_with_home(Some(&tmp), None);
     reg.record_invocation("beta", true);
@@ -551,7 +554,7 @@ fn test_usage_records_refusal() {
 /// its count.
 #[test]
 fn test_list_origin_pairs_usage() {
-    let tmp = std::env::temp_dir().join(format!("skill-usage-pair-{}", std::process::id()));
+    let tmp = temp_dir().join(format!("skill-usage-pair-{}", id()));
     write_skill(&tmp, "alpha", "alpha body");
     let reg = SkillRegistryImpl::discover_with_home(Some(&tmp), None);
     reg.record_invocation("alpha", false);
@@ -572,7 +575,7 @@ fn test_list_origin_pairs_usage() {
 /// cached set, not inside it.
 #[test]
 fn test_usage_survives_reload() {
-    let tmp = std::env::temp_dir().join(format!("skill-usage-reload-{}", std::process::id()));
+    let tmp = temp_dir().join(format!("skill-usage-reload-{}", id()));
     write_skill(&tmp, "alpha", "alpha body");
     let reg = SkillRegistryImpl::discover_with_home(Some(&tmp), None);
     reg.record_invocation("alpha", false);
@@ -592,7 +595,7 @@ fn test_usage_survives_reload() {
 /// set is a sibling of the cached set — reload does not clear it.
 #[test]
 fn test_disabled_excluded_from_listing() {
-    let tmp = std::env::temp_dir().join(format!("skill-disabled-{}", std::process::id()));
+    let tmp = temp_dir().join(format!("skill-disabled-{}", id()));
     write_skill(&tmp, "alpha", "alpha body");
     write_skill(&tmp, "beta", "beta body");
     let reg = SkillRegistryImpl::discover_with_home(Some(&tmp), None);
@@ -617,7 +620,7 @@ fn test_disabled_excluded_from_listing() {
 /// no panic (safeParse — the skill still loads).
 #[test]
 fn test_parse_hooks_malformed_drops() {
-    let raw = serde_yaml::Value::String("not a mapping".into());
+    let raw = Value::String("not a mapping".into());
     assert!(parse_hooks(Some(&raw), &managed_source()).is_empty());
 }
 
@@ -627,7 +630,7 @@ fn test_parse_hooks_malformed_drops() {
 #[test]
 fn test_parse_hooks_isolates_malformed() {
     let yaml = "PreToolUse:\n  - hooks:\n      - command: ./good.sh\nBroken:\n  - just a string\n";
-    let raw = serde_yaml::from_str::<serde_yaml::Value>(yaml).unwrap();
+    let raw = serde_yaml::from_str::<Value>(yaml).unwrap();
     let specs = parse_hooks(Some(&raw), &managed_source());
     assert_eq!(
         specs.len(),
@@ -642,7 +645,7 @@ fn test_parse_hooks_isolates_malformed() {
 #[test]
 fn test_parse_hooks_missing_command() {
     let yaml = "PreToolUse:\n  - hooks:\n      - command: ./good.sh\n      - type: command\n";
-    let raw = serde_yaml::from_str::<serde_yaml::Value>(yaml).unwrap();
+    let raw = serde_yaml::from_str::<Value>(yaml).unwrap();
     let specs = parse_hooks(Some(&raw), &managed_source());
     assert_eq!(specs.len(), 1, "entry without command skipped");
     assert_eq!(specs[0].command, "./good.sh");
@@ -653,7 +656,7 @@ fn test_parse_hooks_missing_command() {
 #[test]
 fn test_parse_hooks_timeout_warns() {
     let yaml = "PreToolUse:\n  - hooks:\n      - command: ./x.sh\n        timeout: 30\n";
-    let raw = serde_yaml::from_str::<serde_yaml::Value>(yaml).unwrap();
+    let raw = serde_yaml::from_str::<Value>(yaml).unwrap();
     let specs = parse_hooks(Some(&raw), &managed_source());
     assert_eq!(specs.len(), 1, "spec produced despite timeout key");
     assert_eq!(specs[0].command, "./x.sh");
@@ -664,7 +667,7 @@ fn test_parse_hooks_timeout_warns() {
 #[test]
 fn test_parse_hooks_skips_noncommand() {
     let yaml = "PreToolUse:\n  - hooks:\n      - type: prompt\n        command: ./p.sh\n";
-    let raw = serde_yaml::from_str::<serde_yaml::Value>(yaml).unwrap();
+    let raw = serde_yaml::from_str::<Value>(yaml).unwrap();
     assert!(
         parse_hooks(Some(&raw), &managed_source()).is_empty(),
         "non-command type skipped"
@@ -675,7 +678,7 @@ fn test_parse_hooks_skips_noncommand() {
 /// empty for an unknown name — no re-parse per invoke.
 #[test]
 fn test_hooks_for_named_skill() {
-    let tmp = std::env::temp_dir().join(format!("skill-reg-hooks-{}", std::process::id()));
+    let tmp = temp_dir().join(format!("skill-reg-hooks-{}", id()));
     let skill_dir = tmp.join(".houyicoder").join("skills").join("guarded");
     fs::create_dir_all(&skill_dir).unwrap();
     fs::write(
@@ -695,7 +698,7 @@ fn test_hooks_for_named_skill() {
 /// SKILL.md and reloading surfaces the skill in find and the listing.
 #[test]
 fn test_reload_picks_new_skill() {
-    let tmp = std::env::temp_dir().join(format!("skill-reload-new-{}", std::process::id()));
+    let tmp = temp_dir().join(format!("skill-reload-new-{}", id()));
     drop(fs::remove_dir_all(&tmp));
     write_skill(&tmp, "commit", "body");
     let reg = SkillRegistryImpl::discover_with_home(Some(&tmp), None);
@@ -720,7 +723,7 @@ fn test_reload_picks_new_skill() {
 /// removes it from the listing, and its name lands in changed.
 #[test]
 fn test_reload_drops_removed_skill() {
-    let tmp = std::env::temp_dir().join(format!("skill-reload-rm-{}", std::process::id()));
+    let tmp = temp_dir().join(format!("skill-reload-rm-{}", id()));
     drop(fs::remove_dir_all(&tmp));
     write_skill(&tmp, "commit", "body");
     write_skill(&tmp, "deploy", "deploy body");
@@ -742,7 +745,7 @@ fn test_reload_drops_removed_skill() {
 /// after the body is rewritten and reloaded.
 #[test]
 fn test_reload_reflects_edit() {
-    let tmp = std::env::temp_dir().join(format!("skill-reload-edit-{}", std::process::id()));
+    let tmp = temp_dir().join(format!("skill-reload-edit-{}", id()));
     drop(fs::remove_dir_all(&tmp));
     write_skill(&tmp, "commit", "v1");
     let reg = SkillRegistryImpl::discover_with_home(Some(&tmp), None);
@@ -767,7 +770,7 @@ fn test_reload_reflects_edit() {
 /// the user deleted the last skill).
 #[test]
 fn test_reload_roots_readable() {
-    let tmp = std::env::temp_dir().join(format!("skill-reload-empty-{}", std::process::id()));
+    let tmp = temp_dir().join(format!("skill-reload-empty-{}", id()));
     drop(fs::remove_dir_all(&tmp));
     write_skill(&tmp, "commit", "body");
     let reg = SkillRegistryImpl::discover_with_home(Some(&tmp), None);

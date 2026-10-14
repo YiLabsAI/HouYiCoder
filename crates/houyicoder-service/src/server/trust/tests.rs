@@ -1,18 +1,45 @@
 //! Tests for this module.
 
+use super::super::frame_carrier::FrameCarrier;
+use super::Server;
 use super::*;
+use futures::SinkExt;
+use futures::StreamExt;
+use futures::channel::mpsc;
+use houyicoder_api::provider::ModelProvider;
+use houyicoder_context::SessionId;
+use houyicoder_core::agent::Runner;
+use houyicoder_core::agent::ToolRegistry;
+use houyicoder_core::agent::runner_config::RunnerConfig;
+use houyicoder_memory::InMemoryBackend;
+use houyicoder_permission::DefaultModeGate;
+use houyicoder_protocol::acp_wire::AcpNotification;
+use houyicoder_protocol::envelope::{
+    ClientFrame, ClientResponseEnvelope, ClientResponsePayload, ServerFrame,
+};
+use houyicoder_protocol::framing::encode;
+use houyicoder_protocol::frontend::run::ApprovalDecision;
+use houyicoder_protocol::frontend::trust::TrustAccept;
+use houyicoder_provider::FakeProvider;
+use houyicoder_session::SessionStore;
+use std::env::temp_dir;
+use std::fs::create_dir_all;
+use std::fs::remove_dir_all;
+use std::path::PathBuf;
+use std::process::id;
+use std::sync::Arc;
 
 /// A project path not recorded in settings is Untrusted; recording it
 /// flips it to Acknowledged (persisted in user-level settings). A None
 /// project path is Trusted (a non-project session, no project source).
 #[test]
 fn test_compute_trust_state() {
-    let dir = std::env::temp_dir().join(format!("trust-compute-{}", std::process::id()));
-    drop(std::fs::remove_dir_all(&dir));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = temp_dir().join(format!("trust-compute-{}", id()));
+    drop(remove_dir_all(&dir));
+    create_dir_all(&dir).unwrap();
     let settings = dir.join("settings.json");
     let proj = dir.join("proj");
-    std::fs::create_dir_all(&proj).unwrap();
+    create_dir_all(&proj).unwrap();
 
     assert_eq!(
         compute_trust_state(&settings, Some(&proj)),
@@ -33,36 +60,32 @@ fn test_compute_trust_state() {
         "no project path is trusted"
     );
 
-    drop(std::fs::remove_dir_all(&dir));
+    drop(remove_dir_all(&dir));
 }
 
 /// A minimal server bound to a temp settings path + a project path that
 /// is not yet trusted, so ensure_trust fires the prompt. Mirrors the
 /// ask_wait_server helper in server/approval.rs.
-fn trust_prompt_server(settings: std::path::PathBuf, project: std::path::PathBuf) -> super::Server {
-    use std::sync::Arc;
-    let sess_store = Arc::new(houyicoder_session::SessionStore::new(Box::new(
-        houyicoder_memory::InMemoryBackend::new(),
-    )));
-    let provider: Arc<dyn houyicoder_api::provider::ModelProvider> =
-        Arc::new(houyicoder_provider::FakeProvider::text("test"));
-    let runner = houyicoder_core::agent::Runner::new(
+fn trust_prompt_server(settings: PathBuf, project: PathBuf) -> Server {
+    let sess_store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("test"));
+    let runner = Runner::new(
         sess_store,
         provider,
-        houyicoder_core::agent::ToolRegistry::new(),
-        houyicoder_core::agent::runner_config::RunnerConfig::default(),
+        ToolRegistry::new(),
+        RunnerConfig::default(),
     );
-    super::Server::new(
+    Server::new(
         Arc::new(runner),
-        houyicoder_context::SessionId::new(),
-        Arc::new(houyicoder_permission::DefaultModeGate::new()),
+        SessionId::new(),
+        Arc::new(DefaultModeGate::new()),
     )
     .with_settings_path(settings)
     .with_project_path(project)
 }
 
 fn encode_line(msg: &impl serde::Serialize) -> String {
-    let mut f = houyicoder_protocol::framing::encode(msg).expect("encode");
+    let mut f = encode(msg).expect("encode");
     if !f.ends_with('\n') {
         f.push('\n');
     }
@@ -74,24 +97,17 @@ fn encode_line(msg: &impl serde::Serialize) -> String {
 /// Acknowledged (so the prompt will not repeat next launch).
 #[tokio::test]
 async fn test_ensure_trust_accepts() {
-    use futures::SinkExt;
-    use futures::StreamExt;
-    use futures::channel::mpsc;
-    use houyicoder_protocol::envelope::{
-        ClientFrame, ClientResponseEnvelope, ClientResponsePayload, ServerFrame,
-    };
-
-    let dir = std::env::temp_dir().join(format!("trust-accept-{}", std::process::id()));
-    drop(std::fs::remove_dir_all(&dir));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = temp_dir().join(format!("trust-accept-{}", id()));
+    drop(remove_dir_all(&dir));
+    create_dir_all(&dir).unwrap();
     let settings = dir.join("settings.json");
     let proj = dir.join("proj");
-    std::fs::create_dir_all(&proj).unwrap();
+    create_dir_all(&proj).unwrap();
 
     let mut server = trust_prompt_server(settings.clone(), proj.clone());
     let (mut client_tx, server_rx) = mpsc::channel::<String>(8);
     let (server_tx, mut client_rx) = mpsc::channel::<String>(8);
-    let mut io = super::super::frame_carrier::FrameCarrier::new(server_tx, server_rx);
+    let mut io = FrameCarrier::new(server_tx, server_rx);
 
     let feeder = tokio::spawn(async move {
         // Read the TrustPrompt ask to learn its req_id, then accept.
@@ -106,9 +122,7 @@ async fn test_ensure_trust_accepts() {
         let ask_id = ask_id.expect("trust prompt sent");
         let resp = ClientFrame::Response(ClientResponseEnvelope::new(
             ask_id,
-            ClientResponsePayload::TrustAccept(houyicoder_protocol::frontend::trust::TrustAccept {
-                accepted: true,
-            }),
+            ClientResponsePayload::TrustAccept(TrustAccept { accepted: true }),
         ));
         client_tx
             .send(encode_line(&resp))
@@ -128,31 +142,24 @@ async fn test_ensure_trust_accepts() {
         "accept persists the path"
     );
 
-    drop(std::fs::remove_dir_all(&dir));
+    drop(remove_dir_all(&dir));
 }
 
 /// A decline ends the session: ensure_trust returns Err, and the path is
 /// NOT persisted (no partial trust, no silent acceptance).
 #[tokio::test]
 async fn test_ensure_trust_declines() {
-    use futures::SinkExt;
-    use futures::StreamExt;
-    use futures::channel::mpsc;
-    use houyicoder_protocol::envelope::{
-        ClientFrame, ClientResponseEnvelope, ClientResponsePayload, ServerFrame,
-    };
-
-    let dir = std::env::temp_dir().join(format!("trust-decline-{}", std::process::id()));
-    drop(std::fs::remove_dir_all(&dir));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = temp_dir().join(format!("trust-decline-{}", id()));
+    drop(remove_dir_all(&dir));
+    create_dir_all(&dir).unwrap();
     let settings = dir.join("settings.json");
     let proj = dir.join("proj");
-    std::fs::create_dir_all(&proj).unwrap();
+    create_dir_all(&proj).unwrap();
 
     let mut server = trust_prompt_server(settings.clone(), proj.clone());
     let (mut client_tx, server_rx) = mpsc::channel::<String>(8);
     let (server_tx, mut client_rx) = mpsc::channel::<String>(8);
-    let mut io = super::super::frame_carrier::FrameCarrier::new(server_tx, server_rx);
+    let mut io = FrameCarrier::new(server_tx, server_rx);
 
     let feeder = tokio::spawn(async move {
         let mut ask_id = None;
@@ -166,9 +173,7 @@ async fn test_ensure_trust_declines() {
         let ask_id = ask_id.expect("trust prompt sent");
         let resp = ClientFrame::Response(ClientResponseEnvelope::new(
             ask_id,
-            ClientResponsePayload::TrustAccept(houyicoder_protocol::frontend::trust::TrustAccept {
-                accepted: false,
-            }),
+            ClientResponsePayload::TrustAccept(TrustAccept { accepted: false }),
         ));
         client_tx
             .send(encode_line(&resp))
@@ -184,7 +189,7 @@ async fn test_ensure_trust_declines() {
         "decline must not persist trust"
     );
 
-    drop(std::fs::remove_dir_all(&dir));
+    drop(remove_dir_all(&dir));
 }
 
 /// A client that closes while the trust prompt is in flight ends the
@@ -192,20 +197,17 @@ async fn test_ensure_trust_declines() {
 /// disconnect.
 #[tokio::test]
 async fn test_client_closed_during_prompt() {
-    use futures::StreamExt;
-    use futures::channel::mpsc;
-
-    let dir = std::env::temp_dir().join(format!("trust-closed-{}", std::process::id()));
-    drop(std::fs::remove_dir_all(&dir));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = temp_dir().join(format!("trust-closed-{}", id()));
+    drop(remove_dir_all(&dir));
+    create_dir_all(&dir).unwrap();
     let settings = dir.join("settings.json");
     let proj = dir.join("proj");
-    std::fs::create_dir_all(&proj).unwrap();
+    create_dir_all(&proj).unwrap();
 
     let mut server = trust_prompt_server(settings, proj);
     let (client_tx, server_rx) = mpsc::channel::<String>(8);
     let (server_tx, mut client_rx) = mpsc::channel::<String>(8);
-    let mut io = super::super::frame_carrier::FrameCarrier::new(server_tx, server_rx);
+    let mut io = FrameCarrier::new(server_tx, server_rx);
     let task = tokio::spawn(async move { server.ensure_trust(&mut io).await });
 
     let _prompt = client_rx.next().await.expect("trust prompt frame");
@@ -217,7 +219,7 @@ async fn test_client_closed_during_prompt() {
     assert_eq!(err.category, ErrorCategory::Unavailable);
     assert_eq!(err.message, "client closed mid-trust-prompt");
 
-    drop(std::fs::remove_dir_all(&dir));
+    drop(remove_dir_all(&dir));
 }
 
 /// A session/cancel while the trust prompt is in flight is a decline,
@@ -225,28 +227,21 @@ async fn test_client_closed_during_prompt() {
 /// cancel, and the project is not persisted as trusted.
 #[tokio::test]
 async fn test_cancel_declines_trust() {
-    use futures::SinkExt;
-    use futures::StreamExt;
-    use futures::channel::mpsc;
-
-    let dir = std::env::temp_dir().join(format!("trust-cancel-{}", std::process::id()));
-    drop(std::fs::remove_dir_all(&dir));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = temp_dir().join(format!("trust-cancel-{}", id()));
+    drop(remove_dir_all(&dir));
+    create_dir_all(&dir).unwrap();
     let settings = dir.join("settings.json");
     let proj = dir.join("proj");
-    std::fs::create_dir_all(&proj).unwrap();
+    create_dir_all(&proj).unwrap();
 
     let mut server = trust_prompt_server(settings.clone(), proj.clone());
     let (mut client_tx, server_rx) = mpsc::channel::<String>(8);
     let (server_tx, mut client_rx) = mpsc::channel::<String>(8);
-    let mut io = super::super::frame_carrier::FrameCarrier::new(server_tx, server_rx);
+    let mut io = FrameCarrier::new(server_tx, server_rx);
     let task = tokio::spawn(async move { server.ensure_trust(&mut io).await });
 
     let _prompt = client_rx.next().await.expect("trust prompt frame");
-    let cancel = houyicoder_protocol::acp_wire::AcpNotification::new(
-        "session/cancel",
-        serde_json::json!({}),
-    );
+    let cancel = AcpNotification::new("session/cancel", serde_json::json!({}));
     client_tx
         .send(encode_line(&cancel))
         .await
@@ -262,7 +257,7 @@ async fn test_cancel_declines_trust() {
         "cancel must not persist trust"
     );
 
-    drop(std::fs::remove_dir_all(&dir));
+    drop(remove_dir_all(&dir));
 }
 
 /// Answering the trust prompt with a permission payload fails closed:
@@ -270,25 +265,17 @@ async fn test_cancel_declines_trust() {
 /// InvalidFrame error rather than a guessed decline.
 #[tokio::test]
 async fn test_wrong_payload_rejected() {
-    use futures::SinkExt;
-    use futures::StreamExt;
-    use futures::channel::mpsc;
-    use houyicoder_protocol::envelope::{
-        ClientFrame, ClientResponseEnvelope, ClientResponsePayload, ServerFrame,
-    };
-    use houyicoder_protocol::frontend::run::ApprovalDecision;
-
-    let dir = std::env::temp_dir().join(format!("trust-payload-{}", std::process::id()));
-    drop(std::fs::remove_dir_all(&dir));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = temp_dir().join(format!("trust-payload-{}", id()));
+    drop(remove_dir_all(&dir));
+    create_dir_all(&dir).unwrap();
     let settings = dir.join("settings.json");
     let proj = dir.join("proj");
-    std::fs::create_dir_all(&proj).unwrap();
+    create_dir_all(&proj).unwrap();
 
     let mut server = trust_prompt_server(settings.clone(), proj.clone());
     let (mut client_tx, server_rx) = mpsc::channel::<String>(8);
     let (server_tx, mut client_rx) = mpsc::channel::<String>(8);
-    let mut io = super::super::frame_carrier::FrameCarrier::new(server_tx, server_rx);
+    let mut io = FrameCarrier::new(server_tx, server_rx);
     let task = tokio::spawn(async move { server.ensure_trust(&mut io).await });
 
     let line = client_rx.next().await.expect("trust prompt frame");
@@ -320,5 +307,5 @@ async fn test_wrong_payload_rejected() {
         "a rejected answer must not persist trust"
     );
 
-    drop(std::fs::remove_dir_all(&dir));
+    drop(remove_dir_all(&dir));
 }

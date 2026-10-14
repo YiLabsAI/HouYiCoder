@@ -3,24 +3,33 @@
 use super::super::*;
 use futures::StreamExt;
 use futures::channel::mpsc;
+use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
+use houyicoder_core::agent::Runner;
+use houyicoder_core::agent::ToolRegistry;
+use houyicoder_core::agent::runner_config::RunnerConfig;
+use houyicoder_memory::InMemoryBackend;
+use houyicoder_permission::DefaultModeGate;
 use houyicoder_protocol::envelope::{ClientFrame, RequestEnvelope, RequestId};
 use houyicoder_protocol::framing::encode;
 use houyicoder_protocol::frontend::FrontendRequest;
+use houyicoder_protocol::frontend::run::ContentBlock;
 use houyicoder_protocol::handshake::Hello;
+use houyicoder_protocol::llm::CompletionResponse;
+use houyicoder_protocol::llm::OutputItem;
+use houyicoder_protocol::llm::Usage;
+use houyicoder_provider::FakeProvider;
 use houyicoder_session::SessionStore;
 use std::sync::Arc;
 
-fn stub_runner() -> std::sync::Arc<houyicoder_core::agent::Runner> {
-    let store = Arc::new(SessionStore::new(Box::new(
-        houyicoder_memory::InMemoryBackend::new(),
-    )));
-    Arc::new(houyicoder_core::agent::Runner::new(
+fn stub_runner() -> Arc<Runner> {
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    Arc::new(Runner::new(
         store,
-        Arc::new(houyicoder_provider::FakeProvider::text("x")),
-        houyicoder_core::agent::ToolRegistry::new(),
-        houyicoder_core::agent::runner_config::RunnerConfig {
+        Arc::new(FakeProvider::text("x")),
+        ToolRegistry::new(),
+        RunnerConfig {
             model: "test".into(),
-            ..houyicoder_core::agent::runner_config::RunnerConfig::default()
+            ..RunnerConfig::default()
         },
     ))
 }
@@ -28,25 +37,20 @@ fn stub_runner() -> std::sync::Arc<houyicoder_core::agent::Runner> {
 /// A runner whose provider delays before its first event, so a parent run
 /// stays in-flight long enough for the test to send a mid-run frame and the
 /// serve loop's mid-run select to handle it.
-fn delayed_runner(delay_ms: u64) -> std::sync::Arc<houyicoder_core::agent::Runner> {
-    let store = Arc::new(SessionStore::new(Box::new(
-        houyicoder_memory::InMemoryBackend::new(),
-    )));
-    let resp = houyicoder_protocol::llm::CompletionResponse {
-        output: vec![houyicoder_protocol::llm::OutputItem::Text { text: "ok".into() }],
-        usage: houyicoder_protocol::llm::Usage::default(),
+fn delayed_runner(delay_ms: u64) -> Arc<Runner> {
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let resp = CompletionResponse {
+        output: vec![OutputItem::Text { text: "ok".into() }],
+        usage: Usage::default(),
         model: "test".into(),
     };
-    Arc::new(houyicoder_core::agent::Runner::new(
+    Arc::new(Runner::new(
         store,
-        Arc::new(houyicoder_provider::FakeProvider::new_with_delay(
-            vec![resp],
-            delay_ms,
-        )),
-        houyicoder_core::agent::ToolRegistry::new(),
-        houyicoder_core::agent::runner_config::RunnerConfig {
+        Arc::new(FakeProvider::new_with_delay(vec![resp], delay_ms)),
+        ToolRegistry::new(),
+        RunnerConfig {
             model: "test".into(),
-            ..houyicoder_core::agent::runner_config::RunnerConfig::default()
+            ..RunnerConfig::default()
         },
     ))
 }
@@ -61,11 +65,7 @@ async fn test_trajectory_handler_builds_response() {
     let (server_tx, mut client_rx) = mpsc::channel::<String>(256);
     let (client_tx, server_rx) = mpsc::channel::<String>(256);
     let io = FrameCarrier::new(server_tx, server_rx);
-    let server = Server::new(
-        runner,
-        session,
-        Arc::new(houyicoder_permission::DefaultModeGate::new()),
-    );
+    let server = Server::new(runner, session, Arc::new(DefaultModeGate::new()));
     let handle = tokio::spawn(async move { server.serve(io).await });
     let mut tx = client_tx.clone();
     let mut f = encode(&Hello::local()).unwrap();
@@ -96,7 +96,6 @@ async fn test_trajectory_handler_builds_response() {
 /// Covers the outbound frame mapping the no-log wired TUI test skips.
 #[tokio::test]
 async fn test_child_transcript_reads_log() {
-    use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
     let runner = stub_runner();
     let child = SessionId::new();
     for (ts, kind) in [
@@ -130,11 +129,7 @@ async fn test_child_transcript_reads_log() {
     let (server_tx, mut client_rx) = mpsc::channel::<String>(256);
     let (client_tx, server_rx) = mpsc::channel::<String>(256);
     let io = FrameCarrier::new(server_tx, server_rx);
-    let server = Server::new(
-        runner,
-        session,
-        Arc::new(houyicoder_permission::DefaultModeGate::new()),
-    );
+    let server = Server::new(runner, session, Arc::new(DefaultModeGate::new()));
     let handle = tokio::spawn(async move { server.serve(io).await });
     let mut tx = client_tx.clone();
     let mut f = encode(&Hello::local()).unwrap();
@@ -178,7 +173,6 @@ async fn test_child_transcript_reads_log() {
 /// which left the TUI stuck on the placeholder until the run ended.
 #[tokio::test]
 async fn test_child_transcript_during_run() {
-    use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
     let runner = stub_runner();
     let child = SessionId::new();
     for (ts, kind) in [
@@ -212,11 +206,7 @@ async fn test_child_transcript_during_run() {
     let (server_tx, mut client_rx) = mpsc::channel::<String>(256);
     let (_client_tx, server_rx) = mpsc::channel::<String>(256);
     let mut io = FrameCarrier::new(server_tx, server_rx);
-    let server = Server::new(
-        runner,
-        session,
-        Arc::new(houyicoder_permission::DefaultModeGate::new()),
-    );
+    let server = Server::new(runner, session, Arc::new(DefaultModeGate::new()));
     // Call the mid-run handler directly (the serve loop routes mid-run
     // requests here); no run is in flight, but the handler is the unit under
     // test — it must replay the child log, map it to frames, and respond.
@@ -254,11 +244,7 @@ async fn test_model_query_during_run() {
     let (server_tx, mut client_rx) = mpsc::channel::<String>(256);
     let (_client_tx, server_rx) = mpsc::channel::<String>(256);
     let mut io = FrameCarrier::new(server_tx, server_rx);
-    let server = Server::new(
-        runner,
-        session,
-        Arc::new(houyicoder_permission::DefaultModeGate::new()),
-    );
+    let server = Server::new(runner, session, Arc::new(DefaultModeGate::new()));
     server
         .handle_request_during_run(
             &mut io,
@@ -287,11 +273,7 @@ async fn test_permission_cycle_during_run() {
     let (server_tx, mut client_rx) = mpsc::channel::<String>(256);
     let (_client_tx, server_rx) = mpsc::channel::<String>(256);
     let mut io = FrameCarrier::new(server_tx, server_rx);
-    let server = Server::new(
-        runner,
-        session,
-        Arc::new(houyicoder_permission::DefaultModeGate::new()),
-    );
+    let server = Server::new(runner, session, Arc::new(DefaultModeGate::new()));
     server
         .handle_request_during_run(
             &mut io,
@@ -313,8 +295,6 @@ async fn test_permission_cycle_during_run() {
 /// response carries the mapped transcript.
 #[tokio::test]
 async fn test_child_fetch_during_run() {
-    use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
-    use houyicoder_protocol::frontend::run::ContentBlock;
     let runner = delayed_runner(800);
     let child = SessionId::new();
     runner
@@ -335,11 +315,7 @@ async fn test_child_fetch_during_run() {
     let (server_tx, mut client_rx) = mpsc::channel::<String>(256);
     let (client_tx, server_rx) = mpsc::channel::<String>(256);
     let io = FrameCarrier::new(server_tx, server_rx);
-    let server = Server::new(
-        runner,
-        session,
-        Arc::new(houyicoder_permission::DefaultModeGate::new()),
-    );
+    let server = Server::new(runner, session, Arc::new(DefaultModeGate::new()));
     let handle = tokio::spawn(async move { server.serve(io).await });
     let mut tx = client_tx.clone();
     let mut f = encode(&Hello::local()).unwrap();
@@ -408,11 +384,7 @@ async fn test_unserved_request_dropped() {
     let (server_tx, mut client_rx) = mpsc::channel::<String>(256);
     let (_client_tx, server_rx) = mpsc::channel::<String>(256);
     let mut io = FrameCarrier::new(server_tx, server_rx);
-    let server = Server::new(
-        runner,
-        session,
-        Arc::new(houyicoder_permission::DefaultModeGate::new()),
-    );
+    let server = Server::new(runner, session, Arc::new(DefaultModeGate::new()));
     server
         .handle_request_during_run(
             &mut io,

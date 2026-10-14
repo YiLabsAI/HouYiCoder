@@ -52,10 +52,7 @@ impl ModelProvider for FakeProvider {
             .expect("scripted response");
         Box::pin(async move { Ok(r) })
     }
-    fn stream(
-        &self,
-        _req: CompletionRequest,
-    ) -> PStream<'_, Result<houyicoder_protocol::llm::LlmEvent, ProviderError>> {
+    fn stream(&self, _req: CompletionRequest) -> PStream<'_, Result<LlmEvent, ProviderError>> {
         let r = self
             .responses
             .lock()
@@ -81,11 +78,7 @@ impl Tool for ApprovableTool {
     fn input_schema(&self) -> Value {
         serde_json::json!({"type":"object"})
     }
-    fn execute(
-        &self,
-        _ctx: ToolCtx,
-        _input: Value,
-    ) -> PFut<'_, Result<Value, houyicoder_protocol::extension::ToolError>> {
+    fn execute(&self, _ctx: ToolCtx, _input: Value) -> PFut<'_, Result<Value, ToolError>> {
         Box::pin(async move { Ok(serde_json::json!({"ok": true})) })
     }
     fn requires_approval(&self) -> bool {
@@ -138,7 +131,7 @@ pub fn runner_and_host() -> (Arc<Runner>, SessionId, Arc<SessionHost>) {
         runner.clone(),
         event_sequencer,
         gate,
-        std::sync::Arc::new(tokio::sync::Notify::new()),
+        Arc::new(Notify::new()),
     );
     (runner, session, host)
 }
@@ -224,7 +217,13 @@ async fn test_serve_drives_parked_turn() {
     );
 }
 
+use houyicoder_protocol::acp_wire::AcpNotification;
+use houyicoder_protocol::extension::ToolError;
+use houyicoder_protocol::frontend::FrontendEvent;
+use houyicoder_protocol::llm::LlmEvent;
 use std::time::Duration;
+use tokio::sync::Notify;
+use tokio::time::sleep;
 
 /// Poll the host store until the parked turn is cleared (resume completed).
 /// Deterministic — does not depend on frame-drain timing, which coverage
@@ -236,7 +235,7 @@ pub async fn await_pending_cleared(host: &SessionHost, session: SessionId) {
         if host.store().pending(session).is_none() {
             return;
         }
-        tokio::time::sleep(Duration::from_millis(10)).await;
+        sleep(Duration::from_millis(10)).await;
     }
     panic!("parked turn not cleared within 4s — resume did not complete");
 }
@@ -408,7 +407,7 @@ async fn test_reconnect_batch_preserves_decided() {
         runner.clone(),
         event_sequencer,
         gate,
-        std::sync::Arc::new(tokio::sync::Notify::new()),
+        Arc::new(Notify::new()),
     );
 
     // Connection 1: answer a1, then disconnect when a2 arrives.
@@ -549,11 +548,7 @@ impl Tool for NoopTool {
     fn input_schema(&self) -> Value {
         serde_json::json!({"type":"object"})
     }
-    fn execute(
-        &self,
-        _ctx: ToolCtx,
-        _input: Value,
-    ) -> PFut<'_, Result<Value, houyicoder_protocol::extension::ToolError>> {
+    fn execute(&self, _ctx: ToolCtx, _input: Value) -> PFut<'_, Result<Value, ToolError>> {
         Box::pin(async move { Ok(serde_json::json!({"ok": true})) })
     }
 }
@@ -601,7 +596,7 @@ fn runner_with_noop() -> (Arc<Runner>, SessionId, Arc<SessionHost>) {
         runner.clone(),
         event_sequencer,
         gate,
-        std::sync::Arc::new(tokio::sync::Notify::new()),
+        Arc::new(Notify::new()),
     );
     (runner, session, host)
 }
@@ -629,7 +624,7 @@ async fn test_between_runs_inject_drains() {
     // Inject while no run is active: the between-runs loop catches the
     // session/* notification + enqueues it for the next run.
     client
-        .send_notification(houyicoder_protocol::acp_wire::AcpNotification::new(
+        .send_notification(AcpNotification::new(
             "session/inject",
             serde_json::json!({ "sessionId": session.to_string(), "text": "extra note" }),
         ))
@@ -658,7 +653,7 @@ async fn test_between_runs_inject_drains() {
             ServerFrame::Event(ev) => {
                 if matches!(
                     ev.payload,
-                    houyicoder_protocol::frontend::FrontendEvent::QueuedInputCommitted {
+                    FrontendEvent::QueuedInputCommitted {
                         ref inputs
                     } if inputs.iter().any(|input| input.text == "extra note")
                 ) {
@@ -695,13 +690,9 @@ impl Tool for SleepNoopTool {
     fn input_schema(&self) -> Value {
         serde_json::json!({"type":"object"})
     }
-    fn execute(
-        &self,
-        _ctx: ToolCtx,
-        _input: Value,
-    ) -> PFut<'_, Result<Value, houyicoder_protocol::extension::ToolError>> {
+    fn execute(&self, _ctx: ToolCtx, _input: Value) -> PFut<'_, Result<Value, ToolError>> {
         Box::pin(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            sleep(Duration::from_millis(20)).await;
             Ok(serde_json::json!({"ok": true}))
         })
     }
@@ -752,7 +743,7 @@ async fn test_during_run_inject_caught() {
         runner.clone(),
         event_sequencer,
         gate,
-        std::sync::Arc::new(tokio::sync::Notify::new()),
+        Arc::new(Notify::new()),
     );
 
     let (client_tx, server_rx) = mpsc::channel::<String>(8);
@@ -786,7 +777,7 @@ async fn test_during_run_inject_caught() {
     // The run is now mid-flight (turn 1 is the noop tool call). Send the
     // inject so the mid-run select catches it before the run advances.
     client
-        .send_notification(houyicoder_protocol::acp_wire::AcpNotification::new(
+        .send_notification(AcpNotification::new(
             "session/inject",
             serde_json::json!({ "sessionId": session.to_string(), "text": "mid note" }),
         ))
@@ -800,7 +791,7 @@ async fn test_during_run_inject_caught() {
             ServerFrame::Event(ev) => {
                 if matches!(
                     ev.payload,
-                    houyicoder_protocol::frontend::FrontendEvent::QueuedInputCommitted {
+                    FrontendEvent::QueuedInputCommitted {
                         ref inputs
                     } if inputs.iter().any(|input| input.text == "mid note")
                 ) {

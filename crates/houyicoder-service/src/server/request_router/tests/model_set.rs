@@ -23,10 +23,18 @@ use houyicoder_protocol::llm::EffortLevel;
 use houyicoder_session::SessionStore;
 
 use crate::composition::catalog_resolver::SettingsCatalogResolver;
+#[cfg(unix)]
+use fs::Permissions;
+use houyicoder_permission::DefaultModeGate;
+use houyicoder_protocol::framing::encode;
+use houyicoder_provider::FakeProvider;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::{env, fs, process};
+use tokio::task::JoinHandle;
 
 /// The runner the fixture server runs on: the stub provider plus a catalog
 /// resolver over the fixture's own settings file. The capabilities the server
@@ -38,7 +46,7 @@ fn runner_with_settings(path: &Path) -> Arc<Runner> {
     Arc::new(
         Runner::new(
             store,
-            Arc::new(houyicoder_provider::FakeProvider::text("x")),
+            Arc::new(FakeProvider::text("x")),
             ToolRegistry::new(),
             RunnerConfig {
                 model: "stub-model".into(),
@@ -59,7 +67,7 @@ fn temp_settings(slug: &str) -> PathBuf {
 }
 
 fn send_line(tx: &mut mpsc::Sender<String>, frame: &impl serde::Serialize) {
-    let mut s = houyicoder_protocol::framing::encode(frame).unwrap();
+    let mut s = encode(frame).unwrap();
     if !s.ends_with('\n') {
         s.push('\n');
     }
@@ -72,7 +80,7 @@ struct Fixture {
     runner: Arc<Runner>,
     tx: mpsc::Sender<String>,
     rx: mpsc::Receiver<String>,
-    handle: tokio::task::JoinHandle<Result<(), ProtocolError>>,
+    handle: JoinHandle<Result<(), ProtocolError>>,
 }
 
 impl Fixture {
@@ -89,7 +97,7 @@ impl Fixture {
         let server = Server::new(
             runner.clone(),
             SessionId::new(),
-            Arc::new(houyicoder_permission::DefaultModeGate::new()),
+            Arc::new(DefaultModeGate::new()),
         )
         .with_settings_path(path);
         let handle =
@@ -165,16 +173,15 @@ async fn test_model_set_some_swaps() {
 #[cfg(unix)]
 #[tokio::test]
 async fn test_set_reports_settings_loss() {
-    use std::os::unix::fs::PermissionsExt;
     let dir = env::temp_dir().join(format!("model-set-locked-{}", process::id()));
     // Clear a read-only dir an earlier failed run may have left behind.
-    fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).ok();
+    fs::set_permissions(&dir, Permissions::from_mode(0o755)).ok();
     fs::remove_dir_all(&dir).ok();
     fs::create_dir_all(&dir).unwrap();
     let path = dir.join("settings.json");
     fs::write(&path, "{}").unwrap();
     // A read-only dir blocks the lock and temp files the settings write needs.
-    fs::set_permissions(&dir, fs::Permissions::from_mode(0o555)).unwrap();
+    fs::set_permissions(&dir, Permissions::from_mode(0o555)).unwrap();
     let mut fx = Fixture::start_at(path).await;
     let payload = fx
         .request(
@@ -187,7 +194,7 @@ async fn test_set_reports_settings_loss() {
             },
         )
         .await;
-    fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();
+    fs::set_permissions(&dir, Permissions::from_mode(0o755)).unwrap();
     let ResponsePayload::ModelResult(result) = payload else {
         panic!("expected ModelResult, got {payload:?}");
     };

@@ -2,6 +2,11 @@
 
 use super::*;
 use houyicoder_config::ModelEntry;
+use std::env::temp_dir;
+use std::fs::read_to_string;
+use std::fs::remove_file;
+use std::fs::write;
+use std::process::id;
 
 fn resolver_with(catalog: &[(&str, Option<u32>, Option<u32>)]) -> SettingsCatalogResolver {
     let section = ModelSection {
@@ -90,15 +95,14 @@ fn test_auto_no_default_clears() {
 /// arriving here is already the served tier).
 #[test]
 fn test_speed_mode_persisted() {
-    let path = std::env::temp_dir().join(format!("m-speed-{}.json", std::process::id()));
-    std::fs::write(
+    let path = temp_dir().join(format!("m-speed-{}.json", id()));
+    write(
         &path,
         r#"{"model":{"id":"glm-5.2","catalog":[{"id":"glm-5.2","fast":true}]}}"#,
     )
     .unwrap();
     persist_model_pick(&path, Some("glm-5.2"), None, false, SpeedMode::Fast).unwrap();
-    let back: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let back: serde_json::Value = serde_json::from_str(&read_to_string(&path).unwrap()).unwrap();
     assert_eq!(
         back["model"]["speed_mode"], "fast",
         "a Fast pick writes the tier: {back}"
@@ -106,13 +110,12 @@ fn test_speed_mode_persisted() {
     // The tier moved, so the write fires again — Standard is not pinned
     // by a no-op write but by an actual change.
     persist_model_pick(&path, Some("glm-5.2"), None, false, SpeedMode::Standard).unwrap();
-    let back: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let back: serde_json::Value = serde_json::from_str(&read_to_string(&path).unwrap()).unwrap();
     assert_eq!(
         back["model"]["speed_mode"], "standard",
         "a moved tier rewrites the stored value: {back}"
     );
-    drop(std::fs::remove_file(&path));
+    drop(remove_file(&path));
 }
 
 /// A pick whose target has no catalog entry on disk (the shipped
@@ -120,8 +123,8 @@ fn test_speed_mode_persisted() {
 /// silently dropped while the receipt says saved.
 #[test]
 fn test_effort_materializes_entry() {
-    let path = std::env::temp_dir().join(format!("m-effort-new-{}.json", std::process::id()));
-    std::fs::write(&path, "{}").unwrap();
+    let path = temp_dir().join(format!("m-effort-new-{}.json", id()));
+    write(&path, "{}").unwrap();
     persist_model_pick(
         &path,
         Some("qwen3.7-max"),
@@ -130,8 +133,7 @@ fn test_effort_materializes_entry() {
         SpeedMode::Standard,
     )
     .unwrap();
-    let back: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let back: serde_json::Value = serde_json::from_str(&read_to_string(&path).unwrap()).unwrap();
     assert_eq!(
         back["model"]["catalog"][0]["id"], "qwen3.7-max",
         "the pick's target gets an entry: {back}"
@@ -144,7 +146,7 @@ fn test_effort_materializes_entry() {
         back["model"].get("speed_mode").is_none(),
         "a Standard pick on an unset section pins no tier: {back}"
     );
-    drop(std::fs::remove_file(&path));
+    drop(remove_file(&path));
 }
 
 /// The stored tier only carries meaning when it is Fast: clearing a
@@ -152,11 +154,10 @@ fn test_effort_materializes_entry() {
 /// writes nothing.
 #[test]
 fn test_speed_write_guards_pin() {
-    let path = std::env::temp_dir().join(format!("m-speed-pin-{}.json", std::process::id()));
-    std::fs::write(&path, r#"{"model":{}}"#).unwrap();
+    let path = temp_dir().join(format!("m-speed-pin-{}.json", id()));
+    write(&path, r#"{"model":{}}"#).unwrap();
     persist_model_pick(&path, Some("glm-5.2"), None, false, SpeedMode::Standard).unwrap();
-    let back: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let back: serde_json::Value = serde_json::from_str(&read_to_string(&path).unwrap()).unwrap();
     assert!(
         back["model"].get("speed_mode").is_none(),
         "Standard on unset writes nothing: {back}"
@@ -164,19 +165,18 @@ fn test_speed_write_guards_pin() {
     // Clearing a stored Fast is a real change and writes.
     persist_model_pick(&path, Some("glm-5.2"), None, false, SpeedMode::Fast).unwrap();
     persist_model_pick(&path, Some("glm-5.2"), None, false, SpeedMode::Standard).unwrap();
-    let back: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let back: serde_json::Value = serde_json::from_str(&read_to_string(&path).unwrap()).unwrap();
     assert_eq!(
         back["model"]["speed_mode"], "standard",
         "clearing Fast writes"
     );
-    drop(std::fs::remove_file(&path));
+    drop(remove_file(&path));
 }
 
 #[test]
 fn test_clears_on_global_default() {
-    let path = std::env::temp_dir().join(format!("m-return-{}.json", std::process::id()));
-    std::fs::write(
+    let path = temp_dir().join(format!("m-return-{}.json", id()));
+    write(
         &path,
         r#"{"model":{"effort_level":"medium","catalog":[{"id":"qwen3.7-max","effort":"low"}]}}"#,
     )
@@ -191,15 +191,14 @@ fn test_clears_on_global_default() {
         SpeedMode::Standard,
     )
     .unwrap();
-    let back: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let back: serde_json::Value = serde_json::from_str(&read_to_string(&path).unwrap()).unwrap();
     assert!(
         back["model"]["catalog"][0].get("effort").is_none(),
         "returning to the global default clears the per-model key: {back}"
     );
     // With the key gone, the resolver leads from the global fallback, so a
     // later global change propagates without re-touching the entry.
-    std::fs::write(
+    write(
         &path,
         r#"{"model":{"effort_level":"high","catalog":[{"id":"qwen3.7-max"}]}}"#,
     )
@@ -211,13 +210,13 @@ fn test_clears_on_global_default() {
         Some(EffortLevel::High),
         "the chain follows the new global default after the clear"
     );
-    drop(std::fs::remove_file(&path));
+    drop(remove_file(&path));
 }
 
 #[test]
 fn test_default_sentinel_deletes_id() {
-    let path = std::env::temp_dir().join(format!("m25-default-{}.json", std::process::id()));
-    std::fs::write(
+    let path = temp_dir().join(format!("m25-default-{}.json", id()));
+    write(
         &path,
         r#"{"model":{"id":"qwen3-coder","catalog":[{"id":"qwen3-coder"}]}}"#,
     )
@@ -232,19 +231,18 @@ fn test_default_sentinel_deletes_id() {
         },
         3,
     ));
-    let back: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let back: serde_json::Value = serde_json::from_str(&read_to_string(&path).unwrap()).unwrap();
     assert!(
         back["model"].get("id").is_none(),
         "model.id key deleted on Default sentinel: {back}"
     );
-    drop(std::fs::remove_file(&path));
+    drop(remove_file(&path));
 }
 
 #[test]
 fn test_id_writes_model_id() {
-    let path = std::env::temp_dir().join(format!("m25-concrete-{}.json", std::process::id()));
-    std::fs::write(&path, r#"{"model":{"catalog":[{"id":"x"}]}}"#).unwrap();
+    let path = temp_dir().join(format!("m25-concrete-{}.json", id()));
+    write(&path, r#"{"model":{"catalog":[{"id":"x"}]}}"#).unwrap();
     drop(houyicoder_config::update_settings(
         &path,
         |v| {
@@ -252,7 +250,7 @@ fn test_id_writes_model_id() {
         },
         3,
     ));
-    let text = std::fs::read_to_string(&path).unwrap();
+    let text = read_to_string(&path).unwrap();
     assert!(text.contains(r#""glm-5.2""#), "concrete id written: {text}");
-    drop(std::fs::remove_file(&path));
+    drop(remove_file(&path));
 }

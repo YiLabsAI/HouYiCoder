@@ -21,11 +21,21 @@ use houyicoder_session::SessionStore;
 
 use crate::composition::SessionHost;
 use crate::lifecycle::SessionLeaseStore;
+use houyicoder_api::tool::Tool;
+use houyicoder_api::tool::ToolCtx;
+use houyicoder_context::SessionEvent;
+use houyicoder_core::agent::assemble_model_input;
+use houyicoder_protocol::extension::ToolError;
+use houyicoder_protocol::llm::InputItem;
+use std::collections::HashSet;
+use std::future::pending;
+use tokio::sync::Notify;
+use tokio::task::yield_now;
 
 // The pending execution keeps ToolCall durable while ToolResult is absent,
 // reproducing the state left by a mid-run disconnect.
 struct BlockingTool;
-impl houyicoder_api::tool::Tool for BlockingTool {
+impl Tool for BlockingTool {
     fn name(&self) -> &str {
         "blocking"
     }
@@ -37,13 +47,10 @@ impl houyicoder_api::tool::Tool for BlockingTool {
     }
     fn execute(
         &self,
-        _ctx: houyicoder_api::tool::ToolCtx,
+        _ctx: ToolCtx,
         _input: serde_json::Value,
-    ) -> houyicoder_async::PFut<
-        '_,
-        Result<serde_json::Value, houyicoder_protocol::extension::ToolError>,
-    > {
-        Box::pin(std::future::pending())
+    ) -> houyicoder_async::PFut<'_, Result<serde_json::Value, ToolError>> {
+        Box::pin(pending())
     }
 }
 
@@ -61,10 +68,6 @@ impl houyicoder_api::tool::Tool for BlockingTool {
 #[tokio::test]
 #[expect(clippy::too_many_lines, reason = "long by design, kept whole")]
 async fn test_disconnect_orphan_repaired() {
-    use houyicoder_context::SessionEvent;
-    use houyicoder_core::agent::assemble_model_input;
-    use houyicoder_protocol::llm::InputItem;
-
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let session = SessionId::new();
     let tool_call = |id: &str| CompletionResponse {
@@ -106,7 +109,7 @@ async fn test_disconnect_orphan_repaired() {
         runner.clone(),
         event_sequencer,
         gate,
-        std::sync::Arc::new(tokio::sync::Notify::new()),
+        Arc::new(Notify::new()),
     );
 
     // Connection 1: send "go" → run starts → provider emits ToolCall(c1) →
@@ -153,7 +156,7 @@ async fn test_disconnect_orphan_repaired() {
             saw_call = true;
             break;
         }
-        tokio::task::yield_now().await;
+        yield_now().await;
     }
     assert!(saw_call, "ToolCall c1 must persist before the disconnect");
     // Disconnect: drop client1 → io.next_frame() returns None → serve_session
@@ -226,7 +229,7 @@ async fn test_disconnect_orphan_repaired() {
             break;
         }
         drop(client2.next_frame().await);
-        tokio::task::yield_now().await;
+        yield_now().await;
     }
     assert!(
         done,
@@ -249,9 +252,8 @@ async fn test_disconnect_orphan_repaired() {
             && !tool_calls.is_empty()
         {
             checked += 1;
-            let expected: std::collections::HashSet<&str> =
-                tool_calls.iter().map(|c| c.id.as_str()).collect();
-            let mut got = std::collections::HashSet::new();
+            let expected: HashSet<&str> = tool_calls.iter().map(|c| c.id.as_str()).collect();
+            let mut got = HashSet::new();
             let mut j = i + 1;
             while j < items.len() {
                 match &items[j] {

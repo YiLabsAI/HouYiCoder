@@ -6,17 +6,19 @@
 use super::super::{build_runner_for_resume_sid, latest_session_sid};
 use super::*;
 use crate::composition::workspace_cwd;
+use std::fs::create_dir_all;
+use std::fs::remove_dir_all;
+use std::fs::write;
+use std::path::Path;
+use std::path::PathBuf;
+use tokio::runtime::Builder;
 
 /// Write a session directly on disk: a log with one event plus a descriptor whose
 /// cwd is the current workspace, under the given directory name. Returns the
 /// directory. Used where the directory name is the point of the test.
-fn write_session_at(
-    sessions: &std::path::Path,
-    name: &str,
-    provenance: SessionProvenance,
-) -> std::path::PathBuf {
+fn write_session_at(sessions: &Path, name: &str, provenance: SessionProvenance) -> PathBuf {
     let dir = sessions.join(name);
-    std::fs::create_dir_all(&dir).unwrap();
+    create_dir_all(&dir).unwrap();
     let sid = SessionId::from_display_string(name).expect("directory name is a session id");
     let entry = SessionLogEntry {
         id: EventId::new(),
@@ -27,7 +29,7 @@ fn write_session_at(
             text: "continue-me".into(),
         },
     };
-    std::fs::write(
+    write(
         dir.join("log.jsonl"),
         format!("{}\n", serde_json::to_string(&entry).unwrap()),
     )
@@ -42,7 +44,7 @@ fn write_session_at(
         created_at: 1,
         child_session_ids: Vec::new(),
     };
-    std::fs::write(
+    write(
         dir.join("session.json"),
         serde_json::to_vec(&descriptor).unwrap(),
     )
@@ -68,7 +70,7 @@ fn test_latest_skips_child() {
         latest_session_sid(&sessions).is_none(),
         "a child is a sidechain of a parent, not something to continue"
     );
-    std::fs::remove_dir_all(&sessions).ok();
+    remove_dir_all(&sessions).ok();
 }
 
 /// A directory named in the legacy id spelling is reachable: the sid prints as
@@ -91,7 +93,7 @@ fn test_latest_reads_legacy_name() {
         Some(sid),
         "the legacy-named session is still the workspace's latest"
     );
-    std::fs::remove_dir_all(&sessions).ok();
+    remove_dir_all(&sessions).ok();
 }
 
 /// Continuing the session above opens it: the store resolves the id to the
@@ -107,10 +109,7 @@ fn test_resume_reads_legacy_dir() {
     let resumed = build_runner_for_resume_sid(sid, &sessions, None, None, ResolvedProvider::stub())
         .expect("a legacy-named directory is a session the store can open");
     assert_eq!(resumed.assembled.session, sid);
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
+    let rt = Builder::new_current_thread().enable_all().build().unwrap();
     let events = rt.block_on(async {
         resumed
             .assembled
@@ -121,5 +120,5 @@ fn test_resume_reads_legacy_dir() {
             .expect("the legacy directory's log replays")
     });
     assert_eq!(events.len(), 1, "the log written there is the one read");
-    std::fs::remove_dir_all(&sessions).ok();
+    remove_dir_all(&sessions).ok();
 }
