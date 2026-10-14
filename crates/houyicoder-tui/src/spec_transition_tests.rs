@@ -5,7 +5,8 @@
 use houyicoder_protocol::frontend::SlashCommand;
 
 use crate::composition;
-use crate::state::{Divergence, Pane, Screen, Stage, Verdict};
+use crate::evidence::{Divergence, Verdict};
+use crate::state::{Pane, Screen, Stage};
 use crate::test_harness::render_text;
 
 fn working() -> crate::state::App {

@@ -39,8 +39,10 @@ from cov_lcov import cov_env, cov_target_dir, lcov_path
 # paths honor GATE_SECS so CI can tune the budget per step (ci.yml sets 120
 # for the unit step, 300 for the integration step). The old code hardcoded
 # 120 for FULL and ignored the env, making ci.yml's 300 a dead config.
+# Fractional values are accepted so the timeout regression test can drive the
+# timeout path without waiting a whole second for it.
 FULL = "--full" in sys.argv
-GATE_SECS = int(os.environ.get("GATE_SECS", "120" if FULL else "60"))
+GATE_SECS = float(os.environ.get("GATE_SECS", "120" if FULL else "60"))
 
 
 def changed_crates():
@@ -251,7 +253,7 @@ try:
 except subprocess.TimeoutExpired:
     os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
     out, _ = proc.communicate()
-    print(f"error: tests exceeded {gate}s gate", file=sys.stderr)
+    print(f"error: tests exceeded {gate:g}s gate", file=sys.stderr)
     print("       (a slow test blocks every commit; mock external calls,", file=sys.stderr)
     print("        or a per-test lazy init is paid per process under nextest)", file=sys.stderr)
     print(f"       (running {'full' if FULL else 'unit'} suite)", file=sys.stderr)

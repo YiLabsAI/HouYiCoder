@@ -17,10 +17,11 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthStr;
 
+use crate::evidence::MemoryEntry;
 use crate::memory_state::{MemoryDetailState, MemoryPaneState, toggle_label};
 use crate::session::capabilities::MemoryCapability;
+use crate::state::App;
 use crate::state::enums::MemoryScopeTab;
-use crate::state::{App, MemoryEntry};
 use crate::view::line_wrap::{max_scroll_offset, truncate_width, wrap_styled_line};
 use crate::view::navigation::{key_hint, tab_header};
 

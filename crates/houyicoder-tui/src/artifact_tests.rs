@@ -11,7 +11,8 @@ use houyicoder_protocol::frontend::SlashCommand;
 use crate::artifact::ArtifactSession;
 use crate::composition;
 use crate::keys::handle_working;
-use crate::state::{App, Pane, Screen, TranscriptLine, ViewportMode};
+use crate::records::TranscriptLine;
+use crate::state::{App, Pane, Screen, ViewportMode};
 use crate::test_harness::render_text;
 
 fn key(code: KeyCode) -> KeyEvent {

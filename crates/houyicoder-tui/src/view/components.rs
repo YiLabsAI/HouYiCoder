@@ -16,8 +16,7 @@ use ratatui::{
     text::{Line, Span},
 };
 
-use crate::evidence::ReviewFinding;
-use crate::state::Verdict;
+use crate::evidence::{ReviewFinding, Verdict};
 
 /// Style for a review verdict. Monochrome: a real finding is the actionable
 /// one so it takes the Cyan accent; a refuted finding is dim. No red/green

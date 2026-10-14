@@ -9,8 +9,8 @@
 fn test_approval_keeps_prior_content() {
     use crate::composition;
     use crate::pending_prompt::PendingPrompt;
-    use crate::records::TranscriptLine;
-    use crate::state::{Approval, Screen};
+    use crate::records::{Approval, TranscriptLine};
+    use crate::state::Screen;
     use crate::test_harness::render_text;
     use houyicoder_protocol::envelope::RequestId;
     let mut app = composition::app();

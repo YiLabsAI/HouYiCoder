@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regression test: a 60s-gate timeout must reap cargo's test-binary
+"""Regression test: a gate timeout must reap cargo's test-binary
 grandchildren, not orphan them under init.
 
 run_tests.py launches `cargo test` under start_new_session so cargo is its
@@ -12,29 +12,49 @@ grandchild that outlives the gate) and asserts the grandchild is gone after
 run_tests.py exits.
 
 Covered:
-  - the gated cargo invocation times out at GATE_SECS=1
+  - the gated cargo invocation times out at the gate budget below
   - the long-lived grandchild is dead once run_tests.py returns (killpg
     reaped the session); before the fix the grandchild survived
+
+The gate budget is a fraction of a second: the timeout path only needs the
+gate to fire while the stand-in cargo is still running, and waiting a whole
+second for that made this the slowest step in the gate by far.
 """
 import os
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 RUN_TESTS = REPO_ROOT / "scripts" / "run_tests.py"
 
-FAKE_CARGO = """#!/usr/bin/env python3
-# Stand-in for cargo: --no-run exits at once (the pre-compile step); the
-# gated run spawns a long-lived grandchild (the orphan class) then sleeps
-# past the gate.
-import os, sys, subprocess, time
-if "--no-run" in sys.argv:
-    raise SystemExit(0)
-g = subprocess.Popen(["sleep", "30"])
-open(os.environ["HOYI_FAKE_PIDFILE"], "w").write(str(g.pid))
-time.sleep(30)
+# The gate must fire after the stand-in cargo has spawned its grandchild
+# (a few ms for a shell script) and before it finishes sleeping, so the
+# pidfile exists to assert on. A tenth of a second leaves that margin many
+# times over while keeping this step around 0.2s, most of which is the two
+# interpreter starts plus the deliberate wait.
+GATE_SECS = 0.1
+
+# Stand-in for cargo, in shell so the two invocations do not each pay a
+# Python interpreter start. --no-run exits at once (the pre-compile step);
+# the gated run spawns a grandchild that outlives everything (the orphan
+# class) and then holds the gate's pipe for a short while, the way cargo
+# does while it runs tests.
+#
+# The two sleeps have different jobs. The grandchild must still be alive
+# when the gate has returned, or the liveness check below could only ever
+# see a process that exited on its own. The foreground sleep must be short
+# enough that a gate which fails to reap the tree still returns, so the
+# failure is reported as a surviving orphan rather than as a hang.
+FAKE_CARGO = """#!/bin/sh
+case "$*" in
+  *--no-run*) exit 0 ;;
+esac
+sleep 600 >/dev/null 2>&1 &
+echo $! > "$HOYI_FAKE_PIDFILE"
+sleep 5
 """
 
 
@@ -47,38 +67,40 @@ def main() -> int:
         fake_bin.write_text(FAKE_CARGO)
         fake_bin.chmod(0o755)
         pidfile = tmp / "grandchild.pid"
-        # A clean git repo: no crates/ changes -> run_tests takes the
-        # plain-test path (cargo test --workspace --lib), which the fake
-        # cargo turns into the grandchild-spawn shape.
-        repo = tmp / "repo"
-        repo.mkdir()
-        for args in (
-            ["git", "init", "-q"],
-            ["git", "config", "user.email", "t@x"],
-            ["git", "config", "user.name", "t"],
-        ):
-            subprocess.run(["git", "-C", str(repo), *args[1:]], check=True)
-        subprocess.run(
-            ["git", "-C", str(repo), "commit", "--allow-empty", "-m", "init", "-q"],
-            check=True,
-        )
+        # The run directory is deliberately not a git repo: changed_crates()
+        # then finds no crates/ diff and run_tests takes the plain-test path
+        # (cargo test --workspace --lib), which the fake cargo turns into the
+        # grandchild-spawn shape. Creating a repo here would only slow it down.
+        workdir = tmp / "work"
+        workdir.mkdir()
         env = {
             **os.environ,
             "PATH": f"{tmp}:{os.environ['PATH']}",
-            "GATE_SECS": "1",
+            "GATE_SECS": str(GATE_SECS),
             "HOYI_FAKE_PIDFILE": str(pidfile),
         }
+        started = time.monotonic()
         r = subprocess.run(
             [sys.executable, str(RUN_TESTS)],
-            cwd=str(repo), env=env, capture_output=True, text=True,
+            cwd=str(workdir), env=env, capture_output=True, text=True,
         )
+        elapsed = time.monotonic() - started
         if r.returncode != 1:
             failures.append(
                 f"expected exit 1 (gate timeout), got {r.returncode}; "
                 f"stderr={r.stderr!r}"
             )
-        if "exceeded 1s gate" not in r.stderr:
+        if f"exceeded {GATE_SECS:g}s gate" not in r.stderr:
             failures.append(f"missing timeout banner; stderr={r.stderr!r}")
+        # A gate that fired must return right after it fired. The stand-in
+        # cargo holds the gate's pipe for five seconds, so a gate that killed
+        # only the leader returns after that wait; a reaping gate returns in
+        # well under a second.
+        if elapsed > 3:
+            failures.append(
+                f"run_tests returned after {elapsed:.1f}s for a "
+                f"{GATE_SECS:g}s gate - it waited on something it did not reap"
+            )
         if not pidfile.exists():
             failures.append(
                 "grandchild pidfile never written - the gated cargo invocation "

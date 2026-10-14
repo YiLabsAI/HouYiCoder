@@ -19,7 +19,7 @@ use houyicoder_provider::OpenAiCompatibleProvider;
 use houyicoder_service::server::{FrameCarrier, Server};
 use houyicoder_session::SessionStore;
 use houyicoder_tui::agent_message::SessionMessage;
-use houyicoder_tui::state::TranscriptLine;
+use houyicoder_tui::records::TranscriptLine;
 
 /// Pair an in-memory server + client around a runner, mirroring the CLI
 /// composition root: install the event sequencer, stream response events

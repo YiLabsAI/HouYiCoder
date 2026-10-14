@@ -5,7 +5,7 @@
 //! row exercises the collapse path.
 
 use super::*;
-use crate::state::TranscriptLine;
+use crate::records::TranscriptLine;
 use houyicoder_api::tool::ToolCtx;
 use houyicoder_protocol::llm::Usage;
 use houyicoder_protocol::llm::{CompletionResponse, OutputItem};

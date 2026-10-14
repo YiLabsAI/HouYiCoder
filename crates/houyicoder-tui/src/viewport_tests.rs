@@ -10,6 +10,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use houyicoder_protocol::frontend::SlashCommand;
 
 use crate::composition;
+use crate::evidence::MemoryEntry;
 use crate::keys;
 use crate::state::{Pane, Screen, Stage, ViewportMode};
 use crate::test_harness::render_text;
@@ -550,8 +551,8 @@ fn test_worktree_pane_scroll() {
 fn test_memory_pane_scroll() {
     let mut app = working();
     app.ui.navigation.pane = Pane::Memory;
-    let entries: Vec<crate::state::MemoryEntry> = (0..20)
-        .map(|i| crate::state::MemoryEntry {
+    let entries: Vec<MemoryEntry> = (0..20)
+        .map(|i| MemoryEntry {
             topic: format!("topic-{i}"),
             summary: String::new(),
             scope: "project".into(),

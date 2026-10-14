@@ -3,10 +3,10 @@ use super::input::{cycle_pane, handle_input};
 use super::palette::handle_palette;
 use super::*;
 use crate::composition;
+use crate::evidence::Verdict;
 use crate::pending_prompt::PendingPrompt;
+use crate::records::{Approval, TranscriptLine};
 use crate::state::Screen;
-use crate::state::TranscriptLine;
-use crate::state::Verdict;
 use crate::state::model_draft::ModelSettingFocus;
 use crate::test_harness::{
     TransportEvent, connected_app_with_events, model_app, model_caps, model_catalog, model_entry,
@@ -1230,7 +1230,7 @@ fn test_approval_enter_clears_popup() {
     let mut app = working_app();
     app.sessions.current.prompt = Some(PendingPrompt::approval_card(
         RequestId(0),
-        crate::state::Approval {
+        Approval {
             tool: "FsWrite".to_string(),
             args: "".to_string(),
             reason: "".to_string(),
@@ -1254,7 +1254,7 @@ fn approval_app(selected: usize) -> App {
     let mut app = working_app();
     app.sessions.current.prompt = Some(PendingPrompt::approval_card(
         RequestId(0),
-        crate::state::Approval {
+        Approval {
             tool: "bash".to_string(),
             args: r#"{"command":"ls"}"#.to_string(),
             reason: "test".to_string(),

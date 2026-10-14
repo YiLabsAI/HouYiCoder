@@ -3,6 +3,7 @@
 #![cfg(test)]
 
 use crate::composition;
+use crate::records::TranscriptLine;
 use crate::state::Screen;
 use std::time::{Duration, Instant};
 
@@ -27,7 +28,7 @@ fn test_paste_submit_expands() {
         .transcript
         .iter()
         .find_map(|l| match l {
-            crate::state::TranscriptLine::User(s) => Some(s.clone()),
+            TranscriptLine::User(s) => Some(s.clone()),
             _ => None,
         });
     assert_eq!(user.as_deref(), Some(big.as_str()));
@@ -54,7 +55,7 @@ fn test_two_pastes_submit_distinct() {
         .iter()
         .rev()
         .find_map(|l| match l {
-            crate::state::TranscriptLine::User(s) => Some(s.clone()),
+            TranscriptLine::User(s) => Some(s.clone()),
             _ => None,
         })
         .unwrap_or_default();
@@ -69,7 +70,7 @@ fn test_two_pastes_submit_distinct() {
         .iter()
         .rev()
         .find_map(|l| match l {
-            crate::state::TranscriptLine::User(s) => Some(s.clone()),
+            TranscriptLine::User(s) => Some(s.clone()),
             _ => None,
         })
         .unwrap_or_default();

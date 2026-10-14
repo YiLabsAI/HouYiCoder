@@ -3,8 +3,9 @@
 //! reaches app private items the same way the inline mod tests did.
 use super::*;
 use crate::agent_message::{ConnectionEvent, SessionMessage};
+use crate::records::TranscriptLine;
 use crate::session::{ConnectionStatus, EnqueueError, PollOutcome, SessionConnection};
-use crate::state::{Pane, Screen, Stage, TranscriptLine, ViewportMode};
+use crate::state::{Pane, Screen, Stage, ViewportMode};
 use crate::test_harness::{
     FailedHandshakeTransport, connected_app_events, connection_lost_app, render_text,
     wait_for_request,

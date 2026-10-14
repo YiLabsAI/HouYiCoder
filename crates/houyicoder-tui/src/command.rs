@@ -11,11 +11,12 @@ use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::frontend::SlashCommand;
 use houyicoder_protocol::frontend::status::StatusSnapshot;
 
+use crate::artifact::ArtifactSession;
 use crate::composition;
 use crate::input::queue::{InputItem, is_state_changing};
-use crate::records::{ContextDrillDown, ContextView};
+use crate::records::{ContextDrillDown, ContextView, TranscriptLine};
 use crate::run_control::ClientCommand;
-use crate::state::{App, ArtifactSession, Pane, Screen, Stage, TranscriptLine, pane_for_stage};
+use crate::state::{App, Pane, Screen, Stage, pane_for_stage};
 use crate::view::export_log::write_atomic_0600;
 
 mod debug;

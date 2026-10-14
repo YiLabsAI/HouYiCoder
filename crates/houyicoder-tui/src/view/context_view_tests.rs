@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::composition;
+use crate::records::TranscriptLine;
 use crate::state::Screen;
 use crate::test_harness::render_buffer;
 use houyicoder_protocol::frontend::SlashCommand;
@@ -37,7 +38,7 @@ fn working_app_with_drill() -> crate::state::App {
     };
     let mut app = composition::app();
     app.ui.navigation.screen = Screen::Working;
-    app.push_transcript_line(crate::state::TranscriptLine::ContextGrid(view));
+    app.push_transcript_line(TranscriptLine::ContextGrid(view));
     app
 }
 

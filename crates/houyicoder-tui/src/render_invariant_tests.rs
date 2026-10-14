@@ -9,6 +9,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use houyicoder_protocol::frontend::SlashCommand;
 
 use crate::composition;
+use crate::evidence::Verdict;
 use crate::keys;
 use crate::records::{ToolOutcome, TranscriptLine};
 use crate::state::{Pane, Screen, Stage, ViewportMode};
@@ -344,7 +345,7 @@ fn test_repeated_approve_advances() {
             .diff
             .hunks
             .iter()
-            .all(|h| h.approved == crate::state::Verdict::Approved),
+            .all(|h| h.approved == Verdict::Approved),
         "all changes should be approved"
     );
 }

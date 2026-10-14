@@ -8,6 +8,7 @@
 use crate::agent_message::{ServerEvent, SessionMessage};
 use crate::input::queue::InputItem;
 use crate::pending_prompt::PendingPrompt;
+use crate::records::{Approval, TranscriptLine};
 use crate::test_harness::connection_lost_app;
 use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::frontend::trust::TrustPrompt;
@@ -19,7 +20,7 @@ fn last_line(app: &crate::state::App) -> String {
         .iter()
         .rev()
         .find_map(|l| match l {
-            crate::state::TranscriptLine::System(s) => Some(s.clone()),
+            TranscriptLine::System(s) => Some(s.clone()),
             _ => None,
         })
         .unwrap_or_default()
@@ -49,7 +50,7 @@ fn test_spawn_refused() {
             .current
             .transcript
             .iter()
-            .any(|l| matches!(l, crate::state::TranscriptLine::User(_))),
+            .any(|l| matches!(l, TranscriptLine::User(_))),
         "no optimistic user echo without delivery"
     );
     assert!(
@@ -159,7 +160,7 @@ fn test_verdict_refused() {
     let mut app = connection_lost_app();
     app.sessions.current.prompt = Some(PendingPrompt::approval_card(
         RequestId(7),
-        crate::state::Approval {
+        Approval {
             tool: "bash".into(),
             args: r#"{"command":"ls"}"#.into(),
             reason: "wants to run".into(),

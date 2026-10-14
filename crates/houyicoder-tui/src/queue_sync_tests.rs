@@ -14,7 +14,8 @@ use std::sync::Arc;
 
 use crate::agent_message::{ServerEvent, ServerResponse, SessionMessage};
 use crate::composition;
-use crate::state::{Screen, TranscriptLine};
+use crate::records::TranscriptLine;
+use crate::state::Screen;
 
 fn working() -> crate::state::App {
     let mut app = composition::app();

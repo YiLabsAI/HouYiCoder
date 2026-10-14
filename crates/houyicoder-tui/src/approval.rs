@@ -4,8 +4,10 @@
 //! (single responsibility), while this file owns per-pane approve/reject and
 //! the modal edit -> proposed change -> apply orchestration.
 
+use crate::artifact::{ArtifactMode, ChangeProposer};
+use crate::evidence::{Divergence, Verdict};
 use crate::run_control::ClientCommand;
-use crate::state::{App, ArtifactMode, ChangeProposer, Pane, Stage};
+use crate::state::{App, Pane, Stage};
 use houyicoder_protocol::frontend::SessionId;
 
 impl App {
@@ -575,7 +577,7 @@ impl App {
             .map(|h| h.evidence.spec_clause_id.clone())
             .unwrap_or_default();
         // A change now implements the requirement: unimpl -> partial.
-        self.set_clause_status(&clause_id, crate::state::Divergence::Partial);
+        self.set_clause_status(&clause_id, Divergence::Partial);
         self.system_line("change approved -> spec requirement moved to partial");
         if self.all_hunks_approved() {
             // All changes approved -> verify stage, agent-review phase first.
@@ -637,11 +639,11 @@ impl App {
         let approved_clauses: Vec<String> = diff
             .hunks
             .iter()
-            .filter(|h| h.approved == crate::state::Verdict::Approved)
+            .filter(|h| h.approved == Verdict::Approved)
             .map(|h| h.evidence.spec_clause_id.clone())
             .collect();
         for cid in approved_clauses {
-            self.set_clause_status(&cid, crate::state::Divergence::Satisfied);
+            self.set_clause_status(&cid, Divergence::Satisfied);
         }
         self.enter_stage(
             Stage::Done,
@@ -673,7 +675,7 @@ impl App {
         let clause_id = f.spec_clause_id.clone();
         let finding_id = f.id.clone();
         // Regress the requirement: a real finding means the change is incomplete.
-        self.set_clause_status(&clause_id, crate::state::Divergence::Partial);
+        self.set_clause_status(&clause_id, Divergence::Partial);
         self.enter_stage(
             Stage::Implementing,
             Pane::Diff,

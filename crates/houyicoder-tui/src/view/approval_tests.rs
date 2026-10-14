@@ -4,6 +4,7 @@
 use super::{cap_first, diff_preview};
 use crate::composition;
 use crate::pending_prompt::PendingPrompt;
+use crate::records::Approval;
 use crate::test_harness::render_text;
 use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::extension::ENTITLEMENT_TOOL;
@@ -55,7 +56,7 @@ fn test_render_no_heavy_border() {
     app.ui.navigation.screen = crate::state::Screen::Working;
     app.sessions.current.prompt = Some(PendingPrompt::approval_card(
         RequestId(0),
-        crate::state::Approval {
+        Approval {
             tool: "bash".into(),
             args: r#"{"command":"find . -type f | wc -l"}"#.into(),
             reason: "agent wants to run this tool".into(),
@@ -81,7 +82,7 @@ fn test_render_separator_and_question() {
     app.ui.navigation.screen = crate::state::Screen::Working;
     app.sessions.current.prompt = Some(PendingPrompt::approval_card(
         RequestId(0),
-        crate::state::Approval {
+        Approval {
             tool: "bash".into(),
             args: r#"{"command":"find . -type f | wc -l"}"#.into(),
             reason: "agent wants to run this tool".into(),
@@ -123,7 +124,7 @@ fn test_render_cursor_on_reject() {
     app.ui.navigation.screen = crate::state::Screen::Working;
     app.sessions.current.prompt = Some(PendingPrompt::approval_card(
         RequestId(0),
-        crate::state::Approval {
+        Approval {
             tool: "bash".into(),
             args: r#"{"command":"ls"}"#.into(),
             reason: "test".into(),
@@ -155,7 +156,7 @@ fn test_render_cursor_dont_ask() {
     app.ui.navigation.screen = crate::state::Screen::Working;
     app.sessions.current.prompt = Some(PendingPrompt::approval_card(
         RequestId(0),
-        crate::state::Approval {
+        Approval {
             tool: "bash".into(),
             args: r#"{"command":"ls"}"#.into(),
             reason: "test".into(),
@@ -194,7 +195,7 @@ fn test_renders_gate_reason_detail() {
     app.ui.navigation.screen = crate::state::Screen::Working;
     app.sessions.current.prompt = Some(PendingPrompt::approval_card(
         RequestId(0),
-        crate::state::Approval {
+        Approval {
             tool: "bash".into(),
             args: r#"{"command":"rm -rf x"}"#.into(),
             reason: "rm needs confirmation".into(),
@@ -223,7 +224,7 @@ fn test_renders_containment_note_line() {
     app.ui.navigation.screen = crate::state::Screen::Working;
     app.sessions.current.prompt = Some(PendingPrompt::approval_card(
         RequestId(0),
-        crate::state::Approval {
+        Approval {
             tool: "bash".into(),
             args: r#"{"command":"curl x"}"#.into(),
             reason: "network egress".into(),
@@ -251,7 +252,7 @@ fn test_system_safety_hides_option() {
     app.ui.navigation.screen = crate::state::Screen::Working;
     app.sessions.current.prompt = Some(PendingPrompt::approval_card(
         RequestId(0),
-        crate::state::Approval {
+        Approval {
             tool: "edit".into(),
             args: r#"{"path":".git/config"}"#.into(),
             reason: "protected path".into(),
@@ -293,7 +294,7 @@ fn test_two_option_card_compact() {
     app.ui.navigation.screen = crate::state::Screen::Working;
     app.sessions.current.prompt = Some(PendingPrompt::approval_card(
         RequestId(0),
-        crate::state::Approval {
+        Approval {
             tool: "edit".into(),
             args: r#"{"path":".git/config"}"#.into(),
             reason: "protected path".into(),
@@ -334,7 +335,7 @@ fn test_read_card_compact() {
     app.ui.navigation.screen = crate::state::Screen::Working;
     app.sessions.current.prompt = Some(PendingPrompt::approval_card(
         RequestId(0),
-        crate::state::Approval {
+        Approval {
             tool: "read".into(),
             args: r#"{"path":"/repo/.houyicoder/bash-output/out.log","max_bytes":5000}"#.into(),
             reason: "accessing a protected path needs confirmation".into(),
@@ -402,7 +403,7 @@ fn test_long_command_wraps() {
     );
     app.sessions.current.prompt = Some(PendingPrompt::approval_card(
         RequestId(0),
-        crate::state::Approval {
+        Approval {
             tool: "bash".into(),
             args: serde_json::to_string(&serde_json::json!({ "command": long_cmd })).unwrap(),
             reason: "test".into(),
@@ -453,7 +454,7 @@ fn test_multiline_command_visible() {
     app.ui.navigation.screen = crate::state::Screen::Working;
     app.sessions.current.prompt = Some(PendingPrompt::approval_card(
         RequestId(0),
-        crate::state::Approval {
+        Approval {
             tool: "bash".into(),
             args: serde_json::json!({
                 "command": "python3 - <<'PY'\nprint('first-line')\nprint('last-line')\nPY"
@@ -485,7 +486,7 @@ fn test_non_safety_keeps_option() {
     app.ui.navigation.screen = crate::state::Screen::Working;
     app.sessions.current.prompt = Some(PendingPrompt::approval_card(
         RequestId(0),
-        crate::state::Approval {
+        Approval {
             tool: "bash".into(),
             args: r#"{"command":"rm x"}"#.into(),
             reason: "rm needs confirmation".into(),
@@ -514,7 +515,7 @@ fn test_non_safety_keeps_option() {
 fn test_entitlement_card_two_option() {
     let mut app = composition::app();
     app.ui.navigation.screen = crate::state::Screen::Working;
-    app.sessions.current.prompt = Some(PendingPrompt::approval_card(RequestId(0), crate::state::Approval {
+    app.sessions.current.prompt = Some(PendingPrompt::approval_card(RequestId(0), Approval {
         tool: ENTITLEMENT_TOOL.into(),
         args: r#"{"skill":"ego-browser","origin":"user","services":["com.citrolabs.ego.lite.ego-browser"]}"#
             .into(),

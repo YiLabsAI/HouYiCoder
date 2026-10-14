@@ -7,7 +7,7 @@ use super::*;
 use crate::agent_message::ServerResponse;
 use crate::keys::handle_working;
 use crate::pending_prompt::PendingPrompt;
-use crate::state::TranscriptLine;
+use crate::records::{Approval, TranscriptLine};
 use crate::test_harness::{attach_connection, dump_buffer, render_buffer, render_text};
 use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::frontend::run::{ApprovalDecision, ApprovalRequest, StopReason};
@@ -152,7 +152,7 @@ fn test_approval_renders_inline() {
     app.ui.navigation.screen = crate::state::Screen::Working;
     app.sessions.current.prompt = Some(PendingPrompt::approval_card(
         RequestId(0),
-        crate::state::Approval {
+        Approval {
             tool: "bash".to_string(),
             args: r#"{"command":"ls"}"#.to_string(),
             reason: "wants to run".to_string(),
@@ -199,7 +199,7 @@ fn test_approval_esc_rejects_current() {
     app.ui.navigation.screen = crate::state::Screen::Working;
     app.sessions.current.prompt = Some(PendingPrompt::approval_card(
         RequestId(0),
-        crate::state::Approval {
+        Approval {
             tool: "bash".to_string(),
             args: "".to_string(),
             reason: "".to_string(),
@@ -226,7 +226,7 @@ fn test_approval_enter_approve_current() {
     app.ui.navigation.screen = crate::state::Screen::Working;
     app.sessions.current.prompt = Some(PendingPrompt::approval_card(
         RequestId(0),
-        crate::state::Approval {
+        Approval {
             tool: "bash".to_string(),
             args: "".to_string(),
             reason: "".to_string(),
@@ -250,7 +250,7 @@ fn test_approval_char_keys_select() {
     }
     let mut app = composition::app();
     app.ui.navigation.screen = crate::state::Screen::Working;
-    let mk = || crate::state::Approval {
+    let mk = || Approval {
         tool: "bash".to_string(),
         args: "".to_string(),
         reason: "".to_string(),
@@ -424,7 +424,7 @@ fn test_status_snapshot_accumulates_live() {
         .current
         .transcript
         .iter()
-        .any(|l| matches!(l, crate::state::TranscriptLine::ContextGrid(_)));
+        .any(|l| matches!(l, TranscriptLine::ContextGrid(_)));
     assert!(has_grid, "/context should push an inline ContextGrid line");
 }
 

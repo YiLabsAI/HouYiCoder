@@ -5,8 +5,8 @@ use crate::input::queue::InputItem;
 use crate::input::queue::resume_command_target;
 use crate::pending_prompt::PendingPrompt;
 use crate::records::ToolOutcome;
+use crate::records::TranscriptLine;
 use crate::row_id::RowId;
-use crate::state::TranscriptLine;
 use crate::state::history_read::HistoryReadOutcome;
 use crate::state::transcript::DiskFront;
 use crate::transcript::{SequencedFrame, TranscriptFrame};
@@ -377,9 +377,11 @@ fn test_resume_err_keeps_session() {
         "target consumed on error (no retry-every-frame storm)"
     );
     assert!(
-        app.sessions.current.transcript.iter().any(
-            |l| matches!(l, crate::state::TranscriptLine::System(s) if s.contains("resume failed"))
-        ),
+        app.sessions
+            .current
+            .transcript
+            .iter()
+            .any(|l| matches!(l, TranscriptLine::System(s) if s.contains("resume failed"))),
         "a 'resume failed' system line must surface the error"
     );
 }
@@ -703,7 +705,7 @@ fn test_drops_non_resume_commands() {
     assert!(
         app.sessions.current.transcript.iter().any(|l| matches!(
             l,
-            crate::state::TranscriptLine::System(s)
+            TranscriptLine::System(s)
                 if s.contains("dropped 2 command(s)") && s.contains("/clear") && s.contains("/rewind")
         )),
         "a hint must name the dropped commands:\n{:?}",

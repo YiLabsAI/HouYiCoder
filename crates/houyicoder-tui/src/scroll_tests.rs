@@ -48,7 +48,7 @@ fn render(app: &crate::state::App) -> String {
 fn test_scrollback_keeps_top_row() {
     let mut app = working();
     for i in 0..40 {
-        app.push_transcript_line(crate::state::TranscriptLine::System(format!("row-{i}")));
+        app.push_transcript_line(TranscriptLine::System(format!("row-{i}")));
     }
     app.whole_scroll_mut().jump_to(0);
     let out = render_text(&app, 80, 12);

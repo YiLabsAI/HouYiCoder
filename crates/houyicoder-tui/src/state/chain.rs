@@ -3,7 +3,8 @@
 //! approved gate. Split from App so the chain's working state is one cohesive
 //! unit rather than scattered App methods.
 
-use crate::state::{App, Divergence, Verdict};
+use crate::evidence::{Divergence, Verdict};
+use crate::state::App;
 
 impl App {
     /// Reset the guided-chain working state to a fresh draft: hunks back to

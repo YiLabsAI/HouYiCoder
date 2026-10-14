@@ -6,7 +6,8 @@ use houyicoder_protocol::frontend::SlashCommand;
 use houyicoder_protocol::llm::EffortLevel;
 
 use crate::composition;
-use crate::state::{Pane, Screen, Stage, Verdict};
+use crate::evidence::Verdict;
+use crate::state::{Pane, Screen, Stage};
 use crate::test_harness::{model_caps, model_catalog, model_entry, render_text};
 
 fn working() -> crate::state::App {

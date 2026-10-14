@@ -16,7 +16,8 @@ use ratatui::{
     widgets::{Block, BorderType, Borders, Paragraph, Wrap},
 };
 
-use crate::state::{App, Pane, PermissionInput, PermissionTab, Stage, Verdict};
+use crate::evidence::Verdict;
+use crate::state::{App, Pane, PermissionInput, PermissionTab, Stage};
 use crate::view::components;
 use crate::view::navigation::{key_hint, tab_header};
 use crate::view::status;

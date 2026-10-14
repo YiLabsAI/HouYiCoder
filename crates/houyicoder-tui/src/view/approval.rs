@@ -13,6 +13,8 @@ use ratatui::{
 };
 use serde_json::Value;
 
+use crate::records::Approval;
+
 use crate::state::App;
 
 /// Render the approval prompt inline at the transcript tail. A thin
@@ -135,12 +137,12 @@ fn split_card(
         .split(area)
 }
 
-pub(super) fn card_height(a: &crate::state::Approval, width: u16) -> u16 {
+pub(super) fn card_height(a: &Approval, width: u16) -> u16 {
     let fixed = if a.two_option_card() { 6 } else { 7 };
     fixed + args_height(a, width) + reason_height(a, width)
 }
 
-fn args_height(a: &crate::state::Approval, width: u16) -> u16 {
+fn args_height(a: &Approval, width: u16) -> u16 {
     let parsed = serde_json::from_str::<Value>(&a.args).ok();
     if a.is_entitlement() {
         return lines_height(&entitlement_detail(&a.args, parsed.as_ref()), width);
@@ -174,7 +176,7 @@ fn lines_height(lines: &[Line<'_>], width: u16) -> u16 {
         .max(1)
 }
 
-fn reason_height(a: &crate::state::Approval, width: u16) -> u16 {
+fn reason_height(a: &Approval, width: u16) -> u16 {
     let detail = format!(" {}: {}", source_label(a), a.reason);
     let mut rows = wrapped_height(&detail, width);
     if let Some(note) = &a.containment_note {
@@ -193,7 +195,7 @@ fn wrapped_height(text: &str, width: u16) -> u16 {
 /// Render the command/args block. For edit/multiedit, render a colored
 /// old-to-new diff preview; other tools show the extracted command or raw
 /// args. Entitlement asks render their own detail lines.
-fn render_args(f: &mut Frame, a: &crate::state::Approval, slot: Rect) {
+fn render_args(f: &mut Frame, a: &Approval, slot: Rect) {
     let args_value = serde_json::from_str::<Value>(&a.args).ok();
     if a.is_entitlement() {
         f.render_widget(
@@ -263,7 +265,7 @@ fn entitlement_detail(args: &str, parsed: Option<&Value>) -> Vec<Line<'static>> 
 /// Yes then Yes-don't-ask then No; the selected index keeps its internal
 /// mapping (0=Yes, 1=No, 2=Yes-don't-ask). A two-option card (protected-path
 /// or entitlement) hides Yes-don't-ask and renumbers No to 2.
-fn render_options(f: &mut Frame, a: &crate::state::Approval, chunks: &[Rect]) {
+fn render_options(f: &mut Frame, a: &Approval, chunks: &[Rect]) {
     let yes_focused = a.selected == 0;
     let yes_label = if a.is_entitlement() {
         "Always allow"
@@ -337,7 +339,7 @@ fn render_options(f: &mut Frame, a: &crate::state::Approval, chunks: &[Rect]) {
 /// A short label for the ask source, rendered as a prefix on the reason
 /// line so the user reads which class of check escalated the call. Empty
 /// when no source traveled the wire (the generic-prompt path).
-fn source_label(a: &crate::state::Approval) -> &'static str {
+fn source_label(a: &Approval) -> &'static str {
     use houyicoder_protocol::frontend::permission::AskSource;
     if a.is_entitlement() {
         return "Deny-log discovery";

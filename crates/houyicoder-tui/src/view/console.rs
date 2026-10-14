@@ -14,7 +14,8 @@ use ratatui::{
     widgets::{Block, BorderType, Borders, List, ListItem, Paragraph, Wrap},
 };
 
-use crate::state::{App, Verdict};
+use crate::evidence::Verdict;
+use crate::state::App;
 use crate::view::components;
 
 /// Render the review-node console.

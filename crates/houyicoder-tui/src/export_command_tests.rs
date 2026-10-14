@@ -7,7 +7,8 @@
 
 use std::sync::Arc;
 
-use crate::state::{App, TranscriptLine};
+use crate::records::TranscriptLine;
+use crate::state::App;
 use crate::view::export_log::{ExportLog, ExportPayload};
 
 /// A stub ExportLog that returns a fixed payload so run_export's write path is

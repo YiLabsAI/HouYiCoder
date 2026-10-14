@@ -9,7 +9,8 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::composition;
 use crate::pending_prompt::PendingPrompt;
-use crate::state::{Approval, Screen};
+use crate::records::Approval;
+use crate::state::Screen;
 use houyicoder_protocol::envelope::RequestId;
 
 fn key(c: KeyCode) -> KeyEvent {

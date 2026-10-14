@@ -20,13 +20,14 @@ use crate::evidence::{
     ReviewFinding, SpecArtifact, SpecClause, Verdict, VerifyResult, audit_entry,
 };
 use crate::palette::PaletteState;
+use crate::records::SpecContext;
 use crate::resume_picker::SessionCatalog;
 use crate::review_queue::ReviewQueue;
 use crate::session::Session;
 use crate::session::SessionConnection;
 use crate::session::identity::SessionIdentity;
 use crate::session::persistence::SessionPersistence;
-use crate::state::{App, Pane, Screen, SpecContext, Stage, ViewportMode};
+use crate::state::{App, Pane, Screen, Stage, ViewportMode};
 use crate::transcript::snapshot::TranscriptSnapshot;
 use crate::view::export_log::ExportLog;
 use crate::view::trajectory_pane::TrajectoryLog;

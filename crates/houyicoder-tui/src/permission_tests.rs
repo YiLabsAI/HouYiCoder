@@ -9,6 +9,7 @@
 use crate::agent_message::{ServerEvent, ServerResponse, SessionMessage};
 use crate::composition;
 use crate::pending_prompt::PendingPrompt;
+use crate::records::{Approval, TranscriptLine};
 use crate::state::{App, Pane};
 use crate::test_harness::render_text;
 use houyicoder_protocol::envelope::RequestId;
@@ -62,7 +63,7 @@ fn last_system(app: &App) -> String {
         .iter()
         .rev()
         .find_map(|l| match l {
-            crate::state::TranscriptLine::System(s) => Some(s.clone()),
+            TranscriptLine::System(s) => Some(s.clone()),
             _ => None,
         })
         .unwrap_or_default()
@@ -184,7 +185,7 @@ fn test_approval_popup_no_placeholder() {
     app.ui.navigation.screen = crate::state::Screen::Working;
     app.sessions.current.prompt = Some(PendingPrompt::approval_card(
         RequestId(0),
-        crate::state::Approval {
+        Approval {
             tool: "bash".into(),
             args: "{\"command\":\"ls\"}".into(),
             reason: "agent wants to run this tool".into(),
@@ -224,7 +225,7 @@ fn test_approval_r_binds_reject() {
     app.ui.navigation.screen = crate::state::Screen::Working;
     app.sessions.current.prompt = Some(PendingPrompt::approval_card(
         RequestId(0),
-        crate::state::Approval {
+        Approval {
             tool: "bash".into(),
             args: "{\"command\":\"rm -rf /\"}".into(),
             reason: "dangerous".into(),
@@ -269,8 +270,8 @@ fn test_entitlement_scope_always() {
     assert_eq!(crate::keys::approval_scope(&approval), "always");
 }
 
-fn entitlement_approval() -> crate::state::Approval {
-    crate::state::Approval {
+fn entitlement_approval() -> Approval {
+    Approval {
         tool: ENTITLEMENT_TOOL.into(),
         args: r#"{"skill":"ego-browser","origin":"user","services":["x.y.z"]}"#.into(),
         reason: "deny-log discovery".into(),
@@ -325,7 +326,9 @@ fn test_git_show_disconnected() {
         last_system(&app)
     );
     assert!(
-        !app.sessions.current.transcript.iter().any(|l| matches!(l, crate::state::TranscriptLine::System(s) if s.contains("ask before git operations:"))),
+        !app.sessions.current.transcript.iter().any(
+            |l| matches!(l, TranscriptLine::System(s) if s.contains("ask before git operations:"))
+        ),
         "no cached-state line is shown while disconnected"
     );
 }
@@ -419,7 +422,7 @@ fn test_open_no_transcript_hint() {
         .iter()
         .rev()
         .filter_map(|l| match l {
-            crate::state::TranscriptLine::System(s) => Some(s.clone()),
+            TranscriptLine::System(s) => Some(s.clone()),
             _ => None,
         })
         .take(2)
