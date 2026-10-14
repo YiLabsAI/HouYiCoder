@@ -22,6 +22,8 @@ use super::*;
 use crate::provider::test_support::FakeProvider;
 use houyicoder_api::tool::{Tool, ToolCtx};
 use houyicoder_protocol::extension::ToolError;
+use houyicoder_protocol::llm::LlmEvent;
+use tokio::task::yield_now;
 
 /// The seven canonical model-visible tool-result payloads, in dispatch-path
 /// order. The ToolError reshape and the FallbackToolOutcome enum must produce
@@ -199,7 +201,6 @@ async fn test_baseline_rejected_approval() {
 async fn test_baseline_interrupted_orphan() {
     // An abort with a pending approval-requiring tool call must reconcile an
     // interrupted-by-user result for the orphan (the reconcile_tool_results path).
-    use houyicoder_protocol::llm::LlmEvent;
     let p = Arc::new(HangingProvider::new(vec![LlmEvent::ToolCall {
         id: "c1".into(),
         name: "guarded".into(),
@@ -212,7 +213,7 @@ async fn test_baseline_interrupted_orphan() {
     let r = runner.clone();
     let task = tokio::spawn(async move { r.run(session, "hi".into()).await });
     for _ in 0..5 {
-        tokio::task::yield_now().await;
+        yield_now().await;
     }
     runner.abort();
     let result = task.await.expect("run task").expect("run ok");

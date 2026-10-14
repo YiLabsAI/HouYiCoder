@@ -9,6 +9,14 @@ use crate::agent::ToolRegistry;
 use crate::agent::append::new_event;
 use crate::agent::runner_config::RunnerConfig;
 use crate::provider::test_support::FakeProvider;
+use houyicoder_api::memory::MemoryProvider;
+use houyicoder_api::skill::SkillDescriptor;
+use houyicoder_api::skill::SkillError;
+use houyicoder_api::skill::SkillRegistry;
+use houyicoder_api::skill::SkillSnapshot;
+use houyicoder_context::{MemoryEntry, MemoryError, MemoryScope, MemorySource};
+use houyicoder_protocol::llm::EffortLevel;
+use std::collections::HashSet;
 
 fn usage(input: u32, output: u32, cache_read: u32) -> Usage {
     Usage {
@@ -250,7 +258,6 @@ fn test_snapshot_reflects_model_switch() {
 /// level; None reverts to auto.
 #[test]
 fn test_set_effort_swaps_pick() {
-    use houyicoder_protocol::llm::EffortLevel;
     let runner = Runner::new(
         Arc::new(SessionStore::new(Box::new(InMemoryBackend::new()))),
         Arc::new(FakeProvider::text("x")),
@@ -303,14 +310,14 @@ fn test_skills_snapshot_without_registry() {
 #[test]
 fn test_skills_snapshot_lists_registry() {
     struct SnapshotStubRegistry;
-    impl houyicoder_api::skill::SkillRegistry for SnapshotStubRegistry {
-        fn list_model_invocable(&self) -> Vec<houyicoder_api::skill::SkillDescriptor> {
+    impl SkillRegistry for SnapshotStubRegistry {
+        fn list_model_invocable(&self) -> Vec<SkillDescriptor> {
             Vec::new()
         }
-        fn list_with_origin(&self) -> Vec<houyicoder_api::skill::SkillSnapshot> {
+        fn list_with_origin(&self) -> Vec<SkillSnapshot> {
             vec![
-                houyicoder_api::skill::SkillSnapshot {
-                    descriptor: houyicoder_api::skill::SkillDescriptor {
+                SkillSnapshot {
+                    descriptor: SkillDescriptor {
                         name: "pdf-export".into(),
                         description: "export chat to pdf".into(),
                         when_to_use: None,
@@ -325,8 +332,8 @@ fn test_skills_snapshot_lists_registry() {
                     origin: "user".into(),
                     usage: Default::default(),
                 },
-                houyicoder_api::skill::SkillSnapshot {
-                    descriptor: houyicoder_api::skill::SkillDescriptor {
+                SkillSnapshot {
+                    descriptor: SkillDescriptor {
                         name: "internal-only".into(),
                         description: "host-restricted".into(),
                         when_to_use: None,
@@ -343,7 +350,7 @@ fn test_skills_snapshot_lists_registry() {
                 },
             ]
         }
-        fn find(&self, _: &str) -> Option<houyicoder_api::skill::SkillDescriptor> {
+        fn find(&self, _: &str) -> Option<SkillDescriptor> {
             None
         }
         fn prepare_body(
@@ -351,8 +358,8 @@ fn test_skills_snapshot_lists_registry() {
             _: &str,
             _: Option<&str>,
             _: Option<&str>,
-        ) -> Result<String, houyicoder_api::skill::SkillError> {
-            Err(houyicoder_api::skill::SkillError::NotFound(String::new()))
+        ) -> Result<String, SkillError> {
+            Err(SkillError::NotFound(String::new()))
         }
     }
     let runner = Runner::new(
@@ -379,10 +386,6 @@ fn test_skills_snapshot_lists_registry() {
 /// are both covered.
 #[test]
 fn test_memory_forget_routes_scope() {
-    use houyicoder_api::memory::MemoryProvider;
-    use houyicoder_context::{MemoryEntry, MemoryError, MemoryScope, MemorySource};
-    use std::collections::HashSet;
-
     struct RecordingMemory {
         deletes: Arc<Mutex<Vec<(String, MemoryScope)>>>,
     }

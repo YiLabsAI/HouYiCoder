@@ -3,16 +3,18 @@
 #![cfg(test)]
 
 use crate::agent::{ModelCatalogResolver, Runner, RunnerConfig, ToolRegistry};
+use crate::provider::test_support::FakeProvider;
 use houyicoder_api::agent_event::{AgentEventHandlers, UserNoticeEvent};
+use houyicoder_memory::InMemoryBackend;
 use houyicoder_protocol::llm::EffortLevel;
+use houyicoder_session::SessionStore;
 use std::sync::{Arc, Mutex};
+use tokio::runtime::Builder;
 
 fn stub_runner(config_max: u32) -> Runner {
     Runner::new(
-        Arc::new(houyicoder_session::SessionStore::new(Box::new(
-            houyicoder_memory::InMemoryBackend::new(),
-        ))),
-        Arc::new(crate::provider::test_support::FakeProvider::text("x")),
+        Arc::new(SessionStore::new(Box::new(InMemoryBackend::new()))),
+        Arc::new(FakeProvider::text("x")),
         ToolRegistry::new(),
         RunnerConfig {
             max_output_tokens: config_max,
@@ -108,10 +110,7 @@ fn test_startup_warnings_drain_clears() {
 #[test]
 fn test_refresh_served_models_delegates() {
     let runner = stub_runner(32_768);
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
+    let rt = Builder::new_current_thread().enable_all().build().unwrap();
     let result = rt.block_on(runner.refresh_served_models());
     assert!(
         result.is_ok(),

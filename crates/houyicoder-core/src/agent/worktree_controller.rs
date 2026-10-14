@@ -37,6 +37,8 @@ use houyicoder_context::{
 };
 
 use super::worktree_session::{self, WorktreeError, WorktreeSession};
+use houyicoder_api::sandbox::WorktreeFenceGuard;
+use std::process::id;
 
 /// Monotonic counter for random worktree slugs (no Math.random — a random
 /// name is a nicety; here a counter + pid derives a unique slug
@@ -84,7 +86,7 @@ pub struct ChildWorktree {
     pub worktree_path: PathBuf,
     pub worktree_branch: String,
     slug: String,
-    pub fence_guard: houyicoder_api::sandbox::WorktreeFenceGuard,
+    pub fence_guard: WorktreeFenceGuard,
 }
 
 /// The outcome of cleaning up a per-child worktree at terminal state. A
@@ -258,7 +260,7 @@ pub struct WorktreeController {
     sandbox: Arc<dyn SandboxSession>,
     /// The narrow-to-worktree guard; restore on exit (keep + remove both
     /// restore the fence to the repo root before any other action).
-    fence_guard: Mutex<Option<houyicoder_api::sandbox::WorktreeFenceGuard>>,
+    fence_guard: Mutex<Option<WorktreeFenceGuard>>,
     store: Arc<dyn SessionLog>,
     session_id: SessionId,
     /// The main branch ref at enter, so exit can warn (not block) if the
@@ -375,7 +377,7 @@ impl WorktreeController {
         }
         let slug = slug.unwrap_or_else(|| {
             let n = SLUG_COUNTER.fetch_add(1, Ordering::Relaxed);
-            format!("wt-{}-{}", std::process::id(), n)
+            format!("wt-{}-{}", id(), n)
         });
         let created = worktree_session::get_or_create_worktree(&self.repo_root, &slug)?;
         let original_branch = worktree_session::current_branch(&self.repo_root);

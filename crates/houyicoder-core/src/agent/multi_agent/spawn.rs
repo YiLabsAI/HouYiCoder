@@ -12,10 +12,16 @@ use crate::agent::runner_config::RunnerConfig;
 use crate::agent::worktree_controller::{ChildWorktree, WorktreeController};
 use crate::agent::{Runner, ToolRegistry};
 
+use super::bus_types::AgentBus;
+use super::bus_types::BusMessage;
 use super::bus_types::{ChildDescriptor, ChildRunMode};
 use super::child_prompt::resolve_child_effort;
 use super::registry::IsolationMode;
 use super::status_publisher::ChildStatusPublisher;
+use houyicoder_api::spawn::AgentIdentity;
+use houyicoder_async::bus::MessageBus;
+use houyicoder_protocol::llm::Usage;
+use tokio::sync::mpsc::unbounded_channel;
 
 /// Cap on spawn nesting. A top-level agent is depth 0; each spawn adds 1.
 /// v0 limit per the multi-agent config (max_depth = 4): levels 0-3 spawn
@@ -86,7 +92,7 @@ pub struct SpawnRequest {
     /// credential.
     pub child_cancel: CancellationToken,
     /// The shared in-process bus used for child status and steering.
-    pub bus: Option<Arc<super::bus_types::AgentBus>>,
+    pub bus: Option<Arc<AgentBus>>,
 }
 
 /// A handle to a spawned child. Carries the child session id + a cancel
@@ -179,7 +185,7 @@ pub async fn spawn_child(req: SpawnRequest) -> Result<ChildHandle, SpawnError> {
     };
 
     let mut runner = Runner::new(req.parent_store, req.provider, req.tools, req.config)
-        .with_agent_identity(houyicoder_api::spawn::AgentIdentity {
+        .with_agent_identity(AgentIdentity {
             subagent_type: Some(req.subagent_type.clone()),
             // The child dispatches carry the child's own identity, so a
             // nested agent call reports depth + 1 to the recursion guard.
@@ -187,7 +193,6 @@ pub async fn spawn_child(req: SpawnRequest) -> Result<ChildHandle, SpawnError> {
             parent_session_id: Some(req.parent_sid.to_string()),
         });
     if let Some(bus) = bus {
-        use houyicoder_async::bus::MessageBus;
         let mut events = AgentEventHandlers::default();
         events.set_run_lifecycle(Arc::new(ChildStatusPublisher::new(bus.clone(), child)));
         runner.set_event_handlers(events);
@@ -195,7 +200,7 @@ pub async fn spawn_child(req: SpawnRequest) -> Result<ChildHandle, SpawnError> {
         // child mid-task: the drive loop drains the receiver at each turn
         // boundary, appending each Inbox text as a user message. The bus
         // routes send_inbox calls to the registered sender.
-        let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<super::bus_types::BusMessage>();
+        let (tx, rx) = unbounded_channel::<BusMessage>();
         bus.register_inbox(&child_sid.to_string(), tx);
         runner.set_inbox(rx);
     }
@@ -257,7 +262,7 @@ pub async fn record_subagent_return(
     status: &str,
     summary: &str,
     result_ref: &str,
-    usage: &houyicoder_protocol::llm::Usage,
+    usage: &Usage,
 ) -> Result<(), SpawnError> {
     let event = new_event(
         parent_sid,

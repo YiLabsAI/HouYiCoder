@@ -17,6 +17,7 @@ use houyicoder_context::EventId;
 use serde::{Deserialize, Serialize};
 
 use super::truncate_str;
+use houyicoder_protocol::llm::Usage;
 
 // ===== bounds =====
 
@@ -203,7 +204,7 @@ pub struct ExperienceRecord {
     pub cohort_id: Option<String>,
     pub task: String,
     pub outcome: RunOutcome,
-    pub token_cost: houyicoder_protocol::llm::Usage,
+    pub token_cost: Usage,
     pub wall_clock_ms: u64,
     pub parent_run_id: Option<String>,
 }

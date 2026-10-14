@@ -17,6 +17,12 @@ use tokio::sync::Notify;
 use crate::agent::runner_tests::runner_with;
 use crate::agent::{RunError, RunOutcome, ToolRegistry};
 use crate::provider::test_support::FakeProvider;
+use futures::StreamExt;
+use futures::stream::pending;
+use futures::stream::unfold;
+use std::time::Duration;
+use tokio::task::yield_now;
+use tokio::time::timeout;
 
 /// A provider whose first stream call never yields (the model fetch is
 /// in-flight, waiting) so a per-turn cancel can race the stream select.
@@ -46,7 +52,7 @@ impl ModelProvider for StallOnceProvider {
         if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
             // The first model call stalls forever so the per-turn cancel
             // can fire while the stream select waits on stream.next().
-            Box::pin(futures::stream::pending())
+            Box::pin(pending())
         } else {
             self.inner.stream(req)
         }
@@ -77,10 +83,10 @@ async fn test_per_turn_abort_continues() {
     let task = tokio::spawn(async move { r.run(session, "hi".into()).await });
     // Let the run enter the first model call + stall on the pending stream.
     for _ in 0..30 {
-        tokio::task::yield_now().await;
+        yield_now().await;
     }
     runner.cancel_turn();
-    let result = tokio::time::timeout(std::time::Duration::from_secs(3), task)
+    let result = timeout(Duration::from_secs(3), task)
         .await
         .expect("run resolved within 3s after the per-turn abort")
         .expect("run task")
@@ -139,12 +145,11 @@ impl ModelProvider for StallMidStreamProvider {
         self.finish.complete(req)
     }
     fn stream(&self, req: CompletionRequest) -> PStream<'_, Result<LlmEvent, ProviderError>> {
-        use futures::StreamExt;
         if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
             // Emit the first event of the real stream, then stall forever
             // so the drive loop is mid-stream when cancel_turn fires.
             let first = self.finish.stream(req);
-            Box::pin(first.take(1).chain(futures::stream::pending()))
+            Box::pin(first.take(1).chain(pending()))
         } else {
             self.finish.stream(req)
         }
@@ -175,10 +180,10 @@ async fn test_mid_stream_abort() {
     let task = tokio::spawn(async move { r.run(session, "hi".into()).await });
     // Let the run emit the first event + enter the mid-stream stall.
     for _ in 0..40 {
-        tokio::task::yield_now().await;
+        yield_now().await;
     }
     runner.cancel_turn();
-    let result = tokio::time::timeout(std::time::Duration::from_secs(3), task)
+    let result = timeout(Duration::from_secs(3), task)
         .await
         .expect("run resolved within 3s after the mid-stream abort")
         .expect("run task")
@@ -210,7 +215,7 @@ impl ModelProvider for AlwaysStallProvider {
         Box::pin(async { Err(ProviderError::Network) })
     }
     fn stream(&self, _req: CompletionRequest) -> PStream<'_, Result<LlmEvent, ProviderError>> {
-        Box::pin(futures::stream::pending())
+        Box::pin(pending())
     }
     fn capabilities(&self) -> ModelCapabilities {
         ModelCapabilities::default()
@@ -227,7 +232,7 @@ async fn test_idle_timeout_to_fatal() {
     let session = SessionId::new();
     let r = runner.clone();
     let task = tokio::spawn(async move { r.run(session, "hi".into()).await });
-    let result = tokio::time::timeout(std::time::Duration::from_secs(10), task)
+    let result = timeout(Duration::from_secs(10), task)
         .await
         .expect("run resolved within 10s (idle timeout retries)")
         .expect("run task");
@@ -279,14 +284,13 @@ impl ModelProvider for RaceMidStreamProvider {
         self.finish.complete(req)
     }
     fn stream(&self, req: CompletionRequest) -> PStream<'_, Result<LlmEvent, ProviderError>> {
-        use futures::StreamExt;
         if self.calls.fetch_add(1, Ordering::SeqCst) != 0 {
             return self.finish.stream(req);
         }
         let inner = self.finish.stream(req);
         let at_gate = self.at_gate.clone();
         let release = self.release.clone();
-        Box::pin(futures::stream::unfold(
+        Box::pin(unfold(
             (inner, at_gate, release, GateStep::First),
             |(mut inner, at_gate, release, step)| async move {
                 match step {
@@ -338,7 +342,7 @@ async fn test_lifecycle_abort_wins_race() {
         // between, so both select branches are ready in the same re-poll.
         runner.abort();
         release.notify_one();
-        let result = tokio::time::timeout(std::time::Duration::from_secs(3), task)
+        let result = timeout(Duration::from_secs(3), task)
             .await
             .expect("run resolved within 3s of the lifecycle abort")
             .expect("run task")

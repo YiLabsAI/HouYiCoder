@@ -18,6 +18,10 @@
 
 use houyicoder_context::MemorySummary;
 
+use crate::agent::auto_dream::INDEX_FILE;
+use crate::agent::auto_dream::format_listing;
+#[cfg(test)]
+use crate::agent::reward_snapshot::format_reward;
 use crate::agent::reward_snapshot::{RewardSnapshot, format_reward_data};
 
 /// Build the reward-dream prompt. Unlike the consolidation prompt, this is a
@@ -73,10 +77,10 @@ pub(crate) fn build_reward_lesson_prompt(
         Return a brief summary: which lessons you wrote or updated, and which \
         patterns you skipped because an existing lesson already covers them.",
         count = listing.len(),
-        listing = crate::agent::auto_dream::format_listing(listing),
+        listing = format_listing(listing),
         reward_data = reward_data,
         index_text = index_text,
-        INDEX_FILE = crate::agent::auto_dream::INDEX_FILE,
+        INDEX_FILE = INDEX_FILE,
     )
 }
 
@@ -240,7 +244,7 @@ mod tests {
     #[test]
     fn test_format_keeps_phase_instruction() {
         let snap = snap_with_retry(2);
-        let full = crate::agent::reward_snapshot::format_reward(&snap);
+        let full = format_reward(&snap);
         assert!(
             full.contains("Phase 2"),
             "Phase 2 instruction in consolidation path: {full}"

@@ -2,25 +2,35 @@ use super::*;
 
 use std::sync::Arc;
 
+use super::RetentionDecision;
 use crate::agent::cache_liveness::{CACHE_TTL_MS, CacheLivenessRetentionPolicy, CachedPrefixState};
+use houyicoder_context::ContextError;
+use houyicoder_context::SessionEvent;
+use houyicoder_context::{CheckpointId, EventId, SessionId, SessionLogEntry};
+use std::collections::HashMap;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+use std::sync::Mutex;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 
 /// A backend that counts block_get calls so a test can assert the
 /// Summarize and Evict tiers skip the retrieval. block_put stores bytes
 /// so a marker with a real hash round-trips when Materialize fires.
 struct CountingBackend {
-    gets: std::sync::atomic::AtomicUsize,
-    store: std::sync::Mutex<std::collections::HashMap<String, Vec<u8>>>,
+    gets: AtomicUsize,
+    store: Mutex<HashMap<String, Vec<u8>>>,
 }
 
 impl CountingBackend {
     fn new() -> Self {
         Self {
             gets: 0.into(),
-            store: std::sync::Mutex::new(std::collections::HashMap::new()),
+            store: Mutex::new(HashMap::new()),
         }
     }
     fn gets(&self) -> usize {
-        self.gets.load(std::sync::atomic::Ordering::Relaxed)
+        self.gets.load(Ordering::Relaxed)
     }
 }
 
@@ -28,65 +38,49 @@ impl houyicoder_context::ContextBackend for CountingBackend {
     fn append(
         &self,
         _: houyicoder_context::SessionLogEntry,
-    ) -> houyicoder_async::PFut<
-        '_,
-        Result<houyicoder_context::EventId, houyicoder_context::ContextError>,
-    > {
-        Box::pin(async move { Err(houyicoder_context::ContextError::Unsupported) })
+    ) -> houyicoder_async::PFut<'_, Result<houyicoder_context::EventId, ContextError>> {
+        Box::pin(async move { Err(ContextError::Unsupported) })
     }
     fn read_range(
         &self,
         _: houyicoder_context::SessionId,
         _: Option<houyicoder_context::EventId>,
         _: Option<houyicoder_context::EventId>,
-    ) -> houyicoder_async::PFut<
-        '_,
-        Result<Vec<houyicoder_context::SessionLogEntry>, houyicoder_context::ContextError>,
-    > {
+    ) -> houyicoder_async::PFut<'_, Result<Vec<houyicoder_context::SessionLogEntry>, ContextError>>
+    {
         Box::pin(async move { Ok(Vec::new()) })
     }
     fn replay(
         &self,
         _: houyicoder_context::SessionId,
-    ) -> houyicoder_async::PFut<
-        '_,
-        Result<Vec<houyicoder_context::SessionLogEntry>, houyicoder_context::ContextError>,
-    > {
+    ) -> houyicoder_async::PFut<'_, Result<Vec<houyicoder_context::SessionLogEntry>, ContextError>>
+    {
         Box::pin(async move { Ok(Vec::new()) })
     }
     fn write_checkpoint(
         &self,
         _: houyicoder_context::CheckpointManifest,
-    ) -> houyicoder_async::PFut<
-        '_,
-        Result<houyicoder_context::CheckpointId, houyicoder_context::ContextError>,
-    > {
-        Box::pin(async move { Err(houyicoder_context::ContextError::Unsupported) })
+    ) -> houyicoder_async::PFut<'_, Result<houyicoder_context::CheckpointId, ContextError>> {
+        Box::pin(async move { Err(ContextError::Unsupported) })
     }
     fn read_checkpoint(
         &self,
         _: houyicoder_context::CheckpointId,
-    ) -> houyicoder_async::PFut<
-        '_,
-        Result<houyicoder_context::CheckpointManifest, houyicoder_context::ContextError>,
-    > {
-        Box::pin(async move { Err(houyicoder_context::ContextError::Unsupported) })
+    ) -> houyicoder_async::PFut<'_, Result<houyicoder_context::CheckpointManifest, ContextError>>
+    {
+        Box::pin(async move { Err(ContextError::Unsupported) })
     }
     fn list_checkpoints(
         &self,
         _: houyicoder_context::SessionId,
-    ) -> houyicoder_async::PFut<
-        '_,
-        Result<Vec<houyicoder_context::CheckpointId>, houyicoder_context::ContextError>,
-    > {
+    ) -> houyicoder_async::PFut<'_, Result<Vec<houyicoder_context::CheckpointId>, ContextError>>
+    {
         Box::pin(async move { Ok(Vec::new()) })
     }
     fn block_put(
         &self,
         block: Vec<u8>,
-    ) -> houyicoder_async::PFut<'_, Result<BlockHash, houyicoder_context::ContextError>> {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
+    ) -> houyicoder_async::PFut<'_, Result<BlockHash, ContextError>> {
         let mut store = self.store.lock().unwrap();
         let mut hasher = DefaultHasher::new();
         block.hash(&mut hasher);
@@ -97,11 +91,11 @@ impl houyicoder_context::ContextBackend for CountingBackend {
     fn block_get(
         &self,
         hash: &BlockHash,
-    ) -> houyicoder_async::PFut<'_, Result<Vec<u8>, houyicoder_context::ContextError>> {
-        self.gets.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    ) -> houyicoder_async::PFut<'_, Result<Vec<u8>, ContextError>> {
+        self.gets.fetch_add(1, Ordering::Relaxed);
         let store = self.store.lock().unwrap();
         let out = store.get(&hash.0).cloned();
-        Box::pin(async move { out.ok_or(houyicoder_context::ContextError::Unsupported) })
+        Box::pin(async move { out.ok_or(ContextError::Unsupported) })
     }
 }
 
@@ -404,13 +398,12 @@ fn test_materialize_top_level_compat() {
 #[test]
 fn test_counting_backend_noop() {
     let backend = CountingBackend::new();
-    use houyicoder_context::{CheckpointId, EventId, SessionId, SessionLogEntry};
     let ev = SessionLogEntry {
         id: EventId::new(),
         session: SessionId::new(),
         ts: 0,
         prev_hash: None,
-        event: houyicoder_context::SessionEvent::UserInput { text: "x".into() },
+        event: SessionEvent::UserInput { text: "x".into() },
     };
     assert!(pollster::block_on(backend.append(ev.clone())).is_err());
     assert!(
@@ -482,7 +475,6 @@ fn age_ctx(age: u32) -> RetentionContext<'static> {
 
 #[test]
 fn test_superseded_file_re_read() {
-    use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
     fn tc(cid: &str, tool: &str, input: serde_json::Value) -> SessionLogEntry {
         SessionLogEntry {
             id: EventId::new(),
@@ -528,7 +520,6 @@ fn test_superseded_file_re_read() {
 
 #[test]
 fn test_different_file_not_superseded() {
-    use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
     fn tc(cid: &str, path: &str) -> SessionLogEntry {
         SessionLogEntry {
             id: EventId::new(),
@@ -565,7 +556,6 @@ fn test_different_file_not_superseded() {
 
 #[test]
 fn test_edit_supersedes_prior_read() {
-    use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
     fn tc(cid: &str, tool: &str, input: serde_json::Value) -> SessionLogEntry {
         SessionLogEntry {
             id: EventId::new(),
@@ -766,7 +756,7 @@ fn test_cache_cold_evicts_results() {
     };
     assert_eq!(
         policy.decide(&ctx),
-        super::RetentionDecision::Evict,
+        RetentionDecision::Evict,
         "cache cold + old age = Evict"
     );
 }

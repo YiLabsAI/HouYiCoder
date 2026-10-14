@@ -2,6 +2,7 @@ use super::*;
 use crate::agent::ToolRegistry;
 use crate::agent::auto_dream::DreamRunner;
 use crate::agent::memory::{MemoryGates, MemoryRuntime, MutationLog};
+use crate::agent::reward_snapshot::capture_reward_snapshot;
 use crate::agent::run_completion_tests::RefusesResults;
 use crate::agent::runner_config::RunnerConfig;
 use crate::agent::runner_tests::{GuardedTool, approvals_of, guarded_runner, runner_with_cfg0};
@@ -12,11 +13,18 @@ use houyicoder_api::agent_event::{
 };
 use houyicoder_api::memory::MemoryProvider;
 use houyicoder_api::provider::ModelProvider;
+use houyicoder_api::session::SessionLog;
+use houyicoder_context::SessionEvent;
 use houyicoder_context::{MemoryEntry, MemoryError, MemoryScope, SessionId};
 use houyicoder_memory::InMemoryBackend;
 use houyicoder_protocol::llm::{CompletionResponse, OutputItem, Usage};
 use houyicoder_session::SessionStore;
+use std::env::temp_dir;
+use std::path::PathBuf;
+use std::process::id;
 use std::sync::Mutex as StdMutex;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 /// MemoryProvider stub with an empty memory_root so execute_dream
 /// returns early — enough to cover the reward assembly + the
@@ -38,7 +46,7 @@ fn runner_with_empty_dream() -> Runner {
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("x"));
     let memory: Arc<dyn MemoryProvider> = Arc::new(EmptyMemory);
-    let ephemeral: Arc<dyn houyicoder_api::session::SessionLog> = store.clone();
+    let ephemeral: Arc<dyn SessionLog> = store.clone();
     let dream = Arc::new(DreamRunner::new(
         ephemeral,
         Arc::clone(&provider),
@@ -62,11 +70,10 @@ fn runner_with_empty_dream() -> Runner {
     .install_memory(runtime)
 }
 
-fn unique_dream_cwd() -> std::path::PathBuf {
-    use std::sync::atomic::{AtomicU64, Ordering};
+fn unique_dream_cwd() -> PathBuf {
     static SEQ: AtomicU64 = AtomicU64::new(0);
     let seq = SEQ.fetch_add(1, Ordering::Relaxed);
-    std::env::temp_dir().join(format!("houyi-reward-feed-{}-{seq}", std::process::id()))
+    temp_dir().join(format!("houyi-reward-feed-{}-{seq}", id()))
 }
 
 /// Install a memory runtime on a runner, so a test can install a recorder on it
@@ -177,12 +184,7 @@ async fn test_reward_feeds_into_dream() {
         .memory
         .fire_background(
             session,
-            Some(|| {
-                crate::agent::reward_snapshot::capture_reward_snapshot(
-                    &runner.observability,
-                    &runner.redundancy,
-                )
-            }),
+            Some(|| capture_reward_snapshot(&runner.observability, &runner.redundancy)),
         )
         .await;
 }
@@ -193,7 +195,7 @@ async fn test_join_dreams_no_inflight() {
     // fired (empty memory root → execute_dream returns early), there
     // are no in-flight handles — the call returns immediately.
     let runner = runner_with_empty_dream();
-    runner.join_dreams(std::time::Duration::from_secs(1)).await;
+    runner.join_dreams(Duration::from_secs(1)).await;
     // A runner with no dream wired is also a no-op (None path).
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("x"));
@@ -203,9 +205,7 @@ async fn test_join_dreams_no_inflight() {
         ToolRegistry::new(),
         RunnerConfig::default(),
     );
-    runner_no_dream
-        .join_dreams(std::time::Duration::from_secs(1))
-        .await;
+    runner_no_dream.join_dreams(Duration::from_secs(1)).await;
     runner_no_dream
         .memory
         .fire_background(SessionId::new(), Some(|| panic!("reward must stay lazy")))
@@ -520,7 +520,7 @@ async fn test_redundancy_reminder_appends_user() {
     assert!(
         events.iter().any(|e| matches!(
             &e.event,
-            houyicoder_context::SessionEvent::MetaUser { text }
+            SessionEvent::MetaUser { text }
                 if text.contains("bash") && text.contains("Reuse")
         )),
         "dedup reminder appended as MetaUser naming the tool + reuse cue"
@@ -548,7 +548,7 @@ async fn test_blind_retry_reminder_appended() {
     assert!(
         events.iter().any(|e| matches!(
             &e.event,
-            houyicoder_context::SessionEvent::MetaUser { text }
+            SessionEvent::MetaUser { text }
                 if text.contains("blind retry") && text.contains("bash")
         )),
         "blind-retry warning appended as MetaUser: {:?}",

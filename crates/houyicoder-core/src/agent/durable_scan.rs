@@ -17,6 +17,18 @@ use std::path::Path;
 
 use houyicoder_context::session_class::{LOG_FILE, SessionClass, SessionEntry, scan_sessions};
 use houyicoder_context::{SessionEvent, SessionId, SessionLogEntry};
+use std::cmp::Reverse;
+#[cfg(test)]
+use std::env::temp_dir;
+#[cfg(test)]
+use std::fs::create_dir_all;
+use std::fs::read_to_string;
+#[cfg(test)]
+use std::fs::remove_dir_all;
+#[cfg(test)]
+use std::fs::write;
+#[cfg(test)]
+use std::process::id;
 
 /// Maximum sessions to scan, most recent first. A long-running project may
 /// have hundreds of sessions on disk; scanning all of them on every
@@ -51,7 +63,7 @@ pub(crate) fn scan_cross_session_retry(root: &Path, skip: Option<&str>) -> u32 {
         // sub-agent session (its failures are the project's failures).
         .filter(|session| session.class != SessionClass::Shell)
         .collect();
-    sessions.sort_by_key(|session| std::cmp::Reverse(session.last_active));
+    sessions.sort_by_key(|session| Reverse(session.last_active));
     // The skip arrives as a string (the caller's display form); comparing
     // parsed ids keeps it matching a directory named in either the current
     // or the legacy id format.
@@ -64,7 +76,7 @@ pub(crate) fn scan_cross_session_retry(root: &Path, skip: Option<&str>) -> u32 {
             continue;
         }
         let log = session.path.join(LOG_FILE);
-        let Ok(content) = std::fs::read_to_string(&log) else {
+        let Ok(content) = read_to_string(&log) else {
             continue;
         };
         for line in content.lines() {
@@ -97,7 +109,7 @@ mod tests {
 
     fn write_session(root: &Path, retry: u32) {
         let dir = root.join(SessionId::new().to_string());
-        std::fs::create_dir_all(&dir).expect("mkdir");
+        create_dir_all(&dir).expect("mkdir");
         let ev = SessionLogEntry {
             id: EventId::new(),
             session: SessionId::new(),
@@ -109,28 +121,28 @@ mod tests {
             },
         };
         let line = serde_json::to_string(&ev).expect("serialize");
-        std::fs::write(dir.join("log.jsonl"), format!("{line}\n")).expect("write");
+        write(dir.join("log.jsonl"), format!("{line}\n")).expect("write");
     }
 
     /// Two sessions with blind retries sum across sessions.
     #[test]
     fn test_sums_retry_across_sessions() {
-        let tmp = std::env::temp_dir().join(format!("durable-scan-{}", std::process::id()));
-        let _cleanup = std::fs::remove_dir_all(&tmp);
+        let tmp = temp_dir().join(format!("durable-scan-{}", id()));
+        let _cleanup = remove_dir_all(&tmp);
         write_session(&tmp, 2);
         write_session(&tmp, 3);
         assert_eq!(scan_cross_session_retry(&tmp, None), 5);
-        let _cleanup = std::fs::remove_dir_all(&tmp);
+        let _cleanup = remove_dir_all(&tmp);
     }
 
     /// A directory that is not a session (no session id for a name) holds no
     /// trajectory to scan, whatever it carries.
     #[test]
     fn test_ignores_non_session_dir() {
-        let tmp = std::env::temp_dir().join(format!("durable-scan-stray-{}", std::process::id()));
-        let _cleanup = std::fs::remove_dir_all(&tmp);
+        let tmp = temp_dir().join(format!("durable-scan-stray-{}", id()));
+        let _cleanup = remove_dir_all(&tmp);
         let dir = tmp.join("notes");
-        std::fs::create_dir_all(&dir).expect("mkdir");
+        create_dir_all(&dir).expect("mkdir");
         let ev = SessionLogEntry {
             id: EventId::new(),
             session: SessionId::new(),
@@ -142,9 +154,9 @@ mod tests {
             },
         };
         let line = serde_json::to_string(&ev).expect("serialize");
-        std::fs::write(dir.join("log.jsonl"), format!("{line}\n")).expect("write");
+        write(dir.join("log.jsonl"), format!("{line}\n")).expect("write");
         assert_eq!(scan_cross_session_retry(&tmp, None), 0);
-        let _cleanup = std::fs::remove_dir_all(&tmp);
+        let _cleanup = remove_dir_all(&tmp);
     }
 
     /// The current session is excluded even when its directory is named in the
@@ -154,11 +166,11 @@ mod tests {
     /// would miss the directory and double-count it.
     #[test]
     fn test_skips_current_legacy_dir() {
-        let tmp = std::env::temp_dir().join(format!("durable-scan-legacy-{}", std::process::id()));
-        let _cleanup = std::fs::remove_dir_all(&tmp);
+        let tmp = temp_dir().join(format!("durable-scan-legacy-{}", id()));
+        let _cleanup = remove_dir_all(&tmp);
         let current = SessionId::new();
         let dir = tmp.join(current.ulid_name());
-        std::fs::create_dir_all(&dir).expect("mkdir");
+        create_dir_all(&dir).expect("mkdir");
         let ev = SessionLogEntry {
             id: EventId::new(),
             session: current,
@@ -170,7 +182,7 @@ mod tests {
             },
         };
         let line = serde_json::to_string(&ev).expect("serialize");
-        std::fs::write(dir.join("log.jsonl"), format!("{line}\n")).expect("write");
+        write(dir.join("log.jsonl"), format!("{line}\n")).expect("write");
 
         let skip = current.to_string();
         assert_eq!(
@@ -178,19 +190,19 @@ mod tests {
             0,
             "the current session's directory is named in the other spelling"
         );
-        let _cleanup = std::fs::remove_dir_all(&tmp);
+        let _cleanup = remove_dir_all(&tmp);
     }
 
     /// A session with no RewardObservation events contributes 0.
     #[test]
     fn test_session_without_observations() {
-        let tmp = std::env::temp_dir().join(format!("durable-scan-empty-{}", std::process::id()));
-        let _cleanup = std::fs::remove_dir_all(&tmp);
+        let tmp = temp_dir().join(format!("durable-scan-empty-{}", id()));
+        let _cleanup = remove_dir_all(&tmp);
         let dir = tmp.join(SessionId::new().to_string());
-        std::fs::create_dir_all(&dir).expect("mkdir");
-        std::fs::write(dir.join("log.jsonl"), "").expect("write");
+        create_dir_all(&dir).expect("mkdir");
+        write(dir.join("log.jsonl"), "").expect("write");
         assert_eq!(scan_cross_session_retry(&tmp, None), 0);
-        let _cleanup = std::fs::remove_dir_all(&tmp);
+        let _cleanup = remove_dir_all(&tmp);
     }
 
     /// A missing root returns 0, not an error.
@@ -205,10 +217,10 @@ mod tests {
     /// A corrupt line is skipped, not fatal.
     #[test]
     fn test_corrupt_line_skipped() {
-        let tmp = std::env::temp_dir().join(format!("durable-scan-corrupt-{}", std::process::id()));
-        let _cleanup = std::fs::remove_dir_all(&tmp);
+        let tmp = temp_dir().join(format!("durable-scan-corrupt-{}", id()));
+        let _cleanup = remove_dir_all(&tmp);
         let dir = tmp.join(SessionId::new().to_string());
-        std::fs::create_dir_all(&dir).expect("mkdir");
+        create_dir_all(&dir).expect("mkdir");
         let valid = {
             let ev = SessionLogEntry {
                 id: EventId::new(),
@@ -223,8 +235,8 @@ mod tests {
             serde_json::to_string(&ev).expect("serialize")
         };
         let content = format!("garbage line\n{valid}\nmore garbage\n");
-        std::fs::write(dir.join("log.jsonl"), &content).expect("write");
+        write(dir.join("log.jsonl"), &content).expect("write");
         assert_eq!(scan_cross_session_retry(&tmp, None), 2);
-        let _cleanup = std::fs::remove_dir_all(&tmp);
+        let _cleanup = remove_dir_all(&tmp);
     }
 }

@@ -4,16 +4,29 @@
 //! not tokens, and the tests stay sub-millisecond under any tokenizer.
 
 use super::*;
+use crate::agent::MemoryRuntime;
+use crate::provider::test_support::FakeProvider;
+use houyicoder_api::memory::MemoryProvider;
+use houyicoder_api::provider::stream_from_response;
+use houyicoder_context::EventId;
 use houyicoder_context::{MemoryEntry, MemorySource, SessionEvent, SessionId, SessionLogEntry};
 use houyicoder_memory::InMemoryBackend;
+use houyicoder_memory::KeywordRecallProvider;
+use houyicoder_memory::MarkdownMemoryProvider;
+use houyicoder_protocol::llm::CompletionRequest;
 use houyicoder_protocol::llm::{CompletionResponse, ModelCapabilities, OutputItem, ProviderError};
 use houyicoder_protocol::llm::{LlmEvent, Usage};
 use houyicoder_resilience::Retry;
 use houyicoder_session::SessionStore;
+use std::env::temp_dir;
+use std::fs;
+use std::fs::remove_dir_all;
+use std::process::id;
+use std::sync::Arc;
 
 fn runner_with(provider: Arc<dyn ModelProvider>, tools: ToolRegistry) -> Runner {
     Runner::new(
-        std::sync::Arc::new(SessionStore::new(Box::new(InMemoryBackend::new()))),
+        Arc::new(SessionStore::new(Box::new(InMemoryBackend::new()))),
         provider,
         tools,
         RunnerConfig {
@@ -37,7 +50,7 @@ struct StubGateProvider;
 impl ModelProvider for StubGateProvider {
     fn complete(
         &self,
-        _req: houyicoder_protocol::llm::CompletionRequest,
+        _req: CompletionRequest,
     ) -> houyicoder_async::PFut<'_, Result<CompletionResponse, ProviderError>> {
         Box::pin(async {
             Ok(CompletionResponse {
@@ -51,9 +64,9 @@ impl ModelProvider for StubGateProvider {
     }
     fn stream(
         &self,
-        _req: houyicoder_protocol::llm::CompletionRequest,
+        _req: CompletionRequest,
     ) -> houyicoder_async::PStream<'_, Result<LlmEvent, ProviderError>> {
-        houyicoder_api::provider::stream_from_response(CompletionResponse {
+        stream_from_response(CompletionResponse {
             output: vec![OutputItem::Text {
                 text: "done".into(),
             }],
@@ -74,13 +87,12 @@ impl ModelProvider for StubGateProvider {
 #[tokio::test]
 async fn test_byte_cap_skips_recall() {
     let provider: Arc<dyn ModelProvider> = Arc::new(StubGateProvider);
-    let memory: Arc<dyn houyicoder_api::memory::MemoryProvider> = Arc::new(
-        houyicoder_memory::KeywordRecallProvider::with_entries(vec![MemoryEntry::new(
+    let memory: Arc<dyn MemoryProvider> =
+        Arc::new(KeywordRecallProvider::with_entries(vec![MemoryEntry::new(
             "fact-key",
             "matching fact content here",
             MemorySource::Project,
-        )]),
-    );
+        )]));
     let mut runner = runner_with(provider, ToolRegistry::new());
     runner.memory.install_provider(memory);
     let session = SessionId::new();
@@ -100,7 +112,7 @@ async fn test_byte_cap_skips_recall() {
         runner
             .store()
             .append(SessionLogEntry {
-                id: houyicoder_context::EventId::new(),
+                id: EventId::new(),
                 session,
                 ts: 0,
                 prev_hash: None,
@@ -128,20 +140,19 @@ async fn test_byte_cap_skips_recall() {
 #[tokio::test]
 async fn test_recall_records_bytes() {
     let provider: Arc<dyn ModelProvider> = Arc::new(StubGateProvider);
-    let memory: Arc<dyn houyicoder_api::memory::MemoryProvider> = Arc::new(
-        houyicoder_memory::KeywordRecallProvider::with_entries(vec![MemoryEntry::new(
+    let memory: Arc<dyn MemoryProvider> =
+        Arc::new(KeywordRecallProvider::with_entries(vec![MemoryEntry::new(
             "fact-key",
             "matching fact content here",
             MemorySource::Project,
-        )]),
-    );
+        )]));
     let mut runner = runner_with(provider, ToolRegistry::new());
     runner.memory.install_provider(memory);
     let session = SessionId::new();
     runner
         .store()
         .append(SessionLogEntry {
-            id: houyicoder_context::EventId::new(),
+            id: EventId::new(),
             session,
             ts: 0,
             prev_hash: None,
@@ -174,13 +185,12 @@ async fn test_recall_records_bytes() {
 #[tokio::test]
 async fn test_toggle_off_skips_recall() {
     let provider: Arc<dyn ModelProvider> = Arc::new(StubGateProvider);
-    let memory: Arc<dyn houyicoder_api::memory::MemoryProvider> = Arc::new(
-        houyicoder_memory::KeywordRecallProvider::with_entries(vec![MemoryEntry::new(
+    let memory: Arc<dyn MemoryProvider> =
+        Arc::new(KeywordRecallProvider::with_entries(vec![MemoryEntry::new(
             "fact-key",
             "matching fact content here",
             MemorySource::Project,
-        )]),
-    );
+        )]));
     let mut runner = runner_with(provider, ToolRegistry::new());
     runner.memory.set_auto_memory(false);
     runner.memory.install_provider(memory);
@@ -188,7 +198,7 @@ async fn test_toggle_off_skips_recall() {
     runner
         .store()
         .append(SessionLogEntry {
-            id: houyicoder_context::EventId::new(),
+            id: EventId::new(),
             session,
             ts: 0,
             prev_hash: None,
@@ -213,12 +223,7 @@ async fn test_toggle_off_skips_recall() {
 /// from the store instead of replaying a disabled-era snapshot.
 #[test]
 fn test_memory_index_respects_gate() {
-    use crate::agent::MemoryRuntime;
-    use crate::provider::test_support::FakeProvider;
-    use houyicoder_api::memory::MemoryProvider;
-    use houyicoder_memory::MarkdownMemoryProvider;
-    use std::fs;
-    let root = std::env::temp_dir().join(format!("mem-gate-{}-{}", std::process::id(), line!()));
+    let root = temp_dir().join(format!("mem-gate-{}-{}", id(), line!()));
     drop(fs::remove_dir_all(&root));
     fs::create_dir_all(&root).expect("mkdir");
     let memory: Arc<dyn MemoryProvider> = Arc::new(MarkdownMemoryProvider::new(root.clone()));
@@ -251,5 +256,5 @@ fn test_memory_index_respects_gate() {
         reopened.contains("gated-key"),
         "re-enabling rebuilds rather than replaying a disabled-era cache: {reopened}"
     );
-    drop(std::fs::remove_dir_all(&root));
+    drop(remove_dir_all(&root));
 }

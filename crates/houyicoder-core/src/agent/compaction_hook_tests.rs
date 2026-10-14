@@ -17,6 +17,12 @@ use crate::agent::hook::{
     CompactTrigger, Hook, HookContext, HookError, HookEvent, HookSource, HookVerdict,
 };
 use crate::agent::manifest::{CompressPolicy, SummarizeError, Summarizer, build_manifest};
+use crate::agent::runner_config::RunnerConfig;
+use crate::agent::tool::ToolRegistry;
+use crate::provider::test_support::FakeProvider;
+use houyicoder_context::Disposition;
+use houyicoder_context::HookEventKind;
+use std::any::Any;
 
 /// CompactTrigger::as_str maps each variant to the wire/JSON string for
 /// the trigger field (manual / auto).
@@ -30,7 +36,6 @@ fn test_trigger_as_str_maps() {
 /// summarizer fails and the heuristic fallback runs.
 #[tokio::test]
 async fn test_fallback_preserves_hook_guidance() {
-    use houyicoder_context::Disposition;
     let s = SessionId::new();
     // Six assistant turns so the default tail_turns=4 Summarizes the first 2
     // (the folded span the failing summarizer + heuristic fallback run on).
@@ -68,7 +73,7 @@ async fn test_fallback_preserves_hook_guidance() {
         ) -> PFut<'a, Result<String, SummarizeError>> {
             Box::pin(async { Err(SummarizeError::LlmFailed("forced failure".into())) })
         }
-        fn as_any(&self) -> &dyn std::any::Any {
+        fn as_any(&self) -> &dyn Any {
             self
         }
     }
@@ -140,7 +145,7 @@ impl Summarizer for SummaryCapture {
         })
     }
 
-    fn as_any(&self) -> &dyn std::any::Any {
+    fn as_any(&self) -> &dyn Any {
         self
     }
 }
@@ -153,11 +158,11 @@ fn build_runner(
 ) -> Runner {
     let mut runner = Runner::new(
         store.clone(),
-        Arc::new(crate::provider::test_support::FakeProvider::text("summary")),
-        crate::agent::tool::ToolRegistry::new(),
-        crate::agent::runner_config::RunnerConfig {
+        Arc::new(FakeProvider::text("summary")),
+        ToolRegistry::new(),
+        RunnerConfig {
             max_turns: 5,
-            ..crate::agent::runner_config::RunnerConfig::default()
+            ..RunnerConfig::default()
         },
     );
     runner = runner.with_summarizer(Box::new(CapturingSummarizer(summarizer)));
@@ -179,7 +184,7 @@ impl Summarizer for CapturingSummarizer {
         self.0.summarize(events, custom_instructions)
     }
 
-    fn as_any(&self) -> &dyn std::any::Any {
+    fn as_any(&self) -> &dyn Any {
         self
     }
 }
@@ -244,7 +249,7 @@ async fn test_precompress_fires_return_channel() {
         replay.iter().any(|e| matches!(
             &e.event,
             SessionEvent::HookSignal {
-                event: houyicoder_context::HookEventKind::PreCompact,
+                event: HookEventKind::PreCompact,
                 ..
             }
         )),
@@ -309,7 +314,7 @@ async fn test_postcompact_fires_with_summary() {
             matches!(
                 &e.event,
                 SessionEvent::HookSignal {
-                    event: houyicoder_context::HookEventKind::PostCompact,
+                    event: HookEventKind::PostCompact,
                     ..
                 }
             )
@@ -324,7 +329,7 @@ async fn test_postcompact_fires_with_summary() {
         matches!(
             &e.event,
             SessionEvent::HookSignal {
-                event: houyicoder_context::HookEventKind::PostCompact,
+                event: HookEventKind::PostCompact,
                 ..
             }
         )
@@ -376,7 +381,7 @@ async fn test_auto_path_fires_precompact() {
         replay.iter().any(|e| matches!(
             &e.event,
             SessionEvent::HookSignal {
-                event: houyicoder_context::HookEventKind::PreCompact,
+                event: HookEventKind::PreCompact,
                 ..
             }
         )),

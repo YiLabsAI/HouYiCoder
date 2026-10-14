@@ -27,7 +27,11 @@ use super::{RunError, RunResult, RunnerConfig};
 /// The evidence-boundary type the extractor cuts and the forked run reads.
 #[path = "extraction_window.rs"]
 pub(crate) mod extraction_window;
+use super::auto_dream::InProgressGuard;
 use extraction_window::ExactExtractionWindow;
+use std::mem::take;
+use std::pin::Pin;
+use tokio::time::sleep;
 
 #[derive(Debug)]
 pub enum ExtractOutcome {
@@ -248,7 +252,7 @@ impl MemoryExtractor {
         self: Arc<Self>,
         messages: Vec<SessionLogEntry>,
         is_trailing: bool,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+    ) -> Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
         Box::pin(async move {
             // Guard the initial run only: in_progress stays true across the
             // trailing chain so concurrent triggers coalesce; the guard
@@ -257,7 +261,7 @@ impl MemoryExtractor {
             // otherwise wedge the flag true forever. Trailing runs skip the
             // guard — they are inner to the initial's scope.
             let _guard = if !is_trailing {
-                Some(super::auto_dream::InProgressGuard::new(&self.in_progress))
+                Some(InProgressGuard::new(&self.in_progress))
             } else {
                 None
             };
@@ -320,12 +324,11 @@ impl MemoryExtractor {
     /// stragglers. No-op when nothing is in flight. Soft-timeout drain
     /// shape.
     pub async fn drain_pending(&self, timeout: Duration) {
-        let handles: Vec<JoinHandle<()>> =
-            std::mem::take(&mut *self.in_flight.lock().expect("in_flight"));
+        let handles: Vec<JoinHandle<()>> = take(&mut *self.in_flight.lock().expect("in_flight"));
         if handles.is_empty() {
             return;
         }
-        let mut deadline = Box::pin(tokio::time::sleep(timeout));
+        let mut deadline = Box::pin(sleep(timeout));
         for handle in handles {
             tokio::select! {
                 _ = handle => {}

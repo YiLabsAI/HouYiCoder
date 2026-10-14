@@ -1,13 +1,16 @@
 //! System-prompt assembly tests: project memory file discovery,
 //! merge order, local overlay, and section layout.
 
+use super::super::context::Tokenizer;
 use super::*;
+use std::env::temp_dir;
 use std::fs;
+use std::process::id;
 
 /// A per-process temp dir so parallel test runs do not collide.
 fn scratch_dir(label: &str) -> PathBuf {
-    let mut p = std::env::temp_dir();
-    p.push(format!("prompt-test-{}-{}", label, std::process::id()));
+    let mut p = temp_dir();
+    p.push(format!("prompt-test-{}-{}", label, id()));
     fs::create_dir_all(&p).expect("mkdir scratch");
     p
 }
@@ -196,7 +199,7 @@ fn test_token_count_positive() {
     let dir = scratch_dir("tok");
     fs::write(dir.join("AGENTS.md"), "some content for token count").expect("write");
     let p = SystemPrompt::build(&dir);
-    let t = super::super::context::Tokenizer::new();
+    let t = Tokenizer::new();
     assert!(t.count(&p.text) > 0, "built prompt must tokenize to > 0");
 }
 

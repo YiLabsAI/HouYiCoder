@@ -2,17 +2,31 @@
 //! (the runner picks it up after the current tool returns). Uses the parent
 //! tests module's fixtures via the glob import.
 use super::*;
+use crate::provider::test_support::FakeProvider;
+use houyicoder_api::provider::ModelProvider;
+use houyicoder_api::provider::stream_from_response;
+use houyicoder_context::SessionEvent;
+use houyicoder_context::SessionId;
+use houyicoder_protocol::frontend::QueuedInput;
+use houyicoder_protocol::llm::InputItem;
+use houyicoder_protocol::llm::LlmEvent;
+use houyicoder_protocol::llm::ModelCapabilities;
+use houyicoder_protocol::llm::OutputItem;
+use std::collections::HashSet;
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::OnceLock;
 
 // A tool that enqueues a fixed string onto the runner's mid-turn queue when
 // it executes, simulating the host queueing a user message mid-run (the host
 // service would call enqueue_input on receiving the inject wire; the test
 // calls it directly via a shared Arc<Runner> slot set after construction).
 struct QueuingTool {
-    slot: std::sync::Arc<std::sync::OnceLock<Arc<Runner>>>,
+    slot: Arc<OnceLock<Arc<Runner>>>,
     msg: String,
 }
 impl QueuingTool {
-    fn new(slot: std::sync::Arc<std::sync::OnceLock<Arc<Runner>>>, msg: &str) -> Self {
+    fn new(slot: Arc<OnceLock<Arc<Runner>>>, msg: &str) -> Self {
         Self {
             slot,
             msg: msg.into(),
@@ -35,9 +49,7 @@ impl Tool for QueuingTool {
         _input: serde_json::Value,
     ) -> houyicoder_async::PFut<'_, Result<serde_json::Value, ToolError>> {
         if let Some(r) = self.slot.get() {
-            r.enqueue_input(houyicoder_protocol::frontend::QueuedInput::new(
-                self.msg.clone(),
-            ));
+            r.enqueue_input(QueuedInput::new(self.msg.clone()));
         }
         Box::pin(async move { Ok(serde_json::json!({"queued": true})) })
     }
@@ -47,22 +59,22 @@ impl Tool for QueuingTool {
 // scripted response sequence. Call 1 emits the queueing tool call so the
 // run continues (RunAgain); call 2 returns final text so the loop ends.
 struct CaptureProvider {
-    calls: std::sync::Mutex<usize>,
-    seen: std::sync::Mutex<Vec<String>>,
+    calls: Mutex<usize>,
+    seen: Mutex<Vec<String>>,
     tool_name: String,
 }
 impl CaptureProvider {
     fn new() -> Self {
         Self {
-            calls: std::sync::Mutex::new(0),
-            seen: std::sync::Mutex::new(Vec::new()),
+            calls: Mutex::new(0),
+            seen: Mutex::new(Vec::new()),
             tool_name: "queue_user".into(),
         }
     }
     fn with_tool(name: &str) -> Self {
         Self {
-            calls: std::sync::Mutex::new(0),
-            seen: std::sync::Mutex::new(Vec::new()),
+            calls: Mutex::new(0),
+            seen: Mutex::new(Vec::new()),
             tool_name: name.into(),
         }
     }
@@ -82,7 +94,7 @@ impl CaptureProvider {
         scripted_capture(n, &tool_name)
     }
 }
-impl houyicoder_api::provider::ModelProvider for CaptureProvider {
+impl ModelProvider for CaptureProvider {
     fn complete(
         &self,
         req: CompletionRequest,
@@ -94,14 +106,13 @@ impl houyicoder_api::provider::ModelProvider for CaptureProvider {
     fn stream(
         &self,
         req: CompletionRequest,
-    ) -> houyicoder_async::PStream<'_, Result<houyicoder_protocol::llm::LlmEvent, ProviderError>>
-    {
+    ) -> houyicoder_async::PStream<'_, Result<LlmEvent, ProviderError>> {
         self.capture_input(&req);
         let resp = self.next_script();
-        houyicoder_api::provider::stream_from_response(resp)
+        stream_from_response(resp)
     }
-    fn capabilities(&self) -> houyicoder_protocol::llm::ModelCapabilities {
-        houyicoder_protocol::llm::ModelCapabilities::default()
+    fn capabilities(&self) -> ModelCapabilities {
+        ModelCapabilities::default()
     }
 }
 fn scripted_capture(n: usize, tool_name: &str) -> CompletionResponse {
@@ -137,19 +148,19 @@ fn scripted_capture(n: usize, tool_name: &str) -> CompletionResponse {
 /// turn-boundary injection — finer than the run-boundary queue.
 #[tokio::test]
 async fn test_turn_injects_between_turns() {
-    let slot = std::sync::Arc::new(std::sync::OnceLock::<Arc<Runner>>::new());
+    let slot = Arc::new(OnceLock::<Arc<Runner>>::new());
     let provider = Arc::new(CaptureProvider::new());
     let mut tools = ToolRegistry::new();
     tools.register(Arc::new(QueuingTool::new(
-        std::sync::Arc::clone(&slot),
+        Arc::clone(&slot),
         "wait, also check the logs",
     )));
     let runner = Arc::new(runner_with(
-        Arc::clone(&provider) as Arc<dyn houyicoder_api::provider::ModelProvider>,
+        Arc::clone(&provider) as Arc<dyn ModelProvider>,
         tools,
     ));
     slot.set(Arc::clone(&runner)).ok();
-    let session = houyicoder_context::SessionId::new();
+    let session = SessionId::new();
     let result = runner
         .run(session, "do the task".into())
         .await
@@ -174,21 +185,21 @@ async fn test_turn_injects_between_turns() {
 /// overlay-delete wire path (remove_input by id, no-op when already gone).
 #[tokio::test]
 async fn test_removed_input_not_injected() {
-    let slot = std::sync::Arc::new(std::sync::OnceLock::<Arc<Runner>>::new());
+    let slot = Arc::new(OnceLock::<Arc<Runner>>::new());
     let provider = Arc::new(CaptureProvider::new());
     let mut tools = ToolRegistry::new();
     // The tool enqueues the message then immediately removes it before the
     // drive loop can drain at the next turn boundary.
     tools.register(Arc::new(RemoveAfterEnqueueTool::new(
-        std::sync::Arc::clone(&slot),
+        Arc::clone(&slot),
         "wait, also check the logs",
     )));
     let runner = Arc::new(runner_with(
-        Arc::clone(&provider) as Arc<dyn houyicoder_api::provider::ModelProvider>,
+        Arc::clone(&provider) as Arc<dyn ModelProvider>,
         tools,
     ));
     slot.set(Arc::clone(&runner)).ok();
-    let session = houyicoder_context::SessionId::new();
+    let session = SessionId::new();
     let result = runner
         .run(session, "do the task".into())
         .await
@@ -204,11 +215,11 @@ async fn test_removed_input_not_injected() {
 }
 
 struct RemoveAfterEnqueueTool {
-    slot: std::sync::Arc<std::sync::OnceLock<Arc<Runner>>>,
+    slot: Arc<OnceLock<Arc<Runner>>>,
     msg: String,
 }
 impl RemoveAfterEnqueueTool {
-    fn new(slot: std::sync::Arc<std::sync::OnceLock<Arc<Runner>>>, msg: &str) -> Self {
+    fn new(slot: Arc<OnceLock<Arc<Runner>>>, msg: &str) -> Self {
         Self {
             slot,
             msg: msg.into(),
@@ -231,7 +242,7 @@ impl Tool for RemoveAfterEnqueueTool {
         _input: serde_json::Value,
     ) -> houyicoder_async::PFut<'_, Result<serde_json::Value, ToolError>> {
         if let Some(r) = self.slot.get() {
-            let input = houyicoder_protocol::frontend::QueuedInput::new(self.msg.clone());
+            let input = QueuedInput::new(self.msg.clone());
             r.enqueue_input(input.clone());
             r.remove_input(input.id);
         }
@@ -249,21 +260,17 @@ impl Tool for RemoveAfterEnqueueTool {
 /// no-fix red, wrapper-site red, run-entry green.
 #[tokio::test]
 async fn test_run_repairs_orphan_call() {
-    use houyicoder_context::SessionEvent;
-    use houyicoder_protocol::llm::{InputItem, OutputItem};
     let runner = Arc::new(runner_with(
-        Arc::new(crate::provider::test_support::FakeProvider::new(vec![
-            CompletionResponse {
-                output: vec![OutputItem::Text {
-                    text: "done".into(),
-                }],
-                usage: Usage::default(),
-                model: "test".into(),
-            },
-        ])),
+        Arc::new(FakeProvider::new(vec![CompletionResponse {
+            output: vec![OutputItem::Text {
+                text: "done".into(),
+            }],
+            usage: Usage::default(),
+            model: "test".into(),
+        }])),
         ToolRegistry::new(),
     ));
-    let session = houyicoder_context::SessionId::new();
+    let session = SessionId::new();
     // Simulate a crash that logged a ToolCall but not its ToolResult.
     runner
         .store()
@@ -303,9 +310,8 @@ async fn test_run_repairs_orphan_call() {
             && !tool_calls.is_empty()
         {
             checked += 1;
-            let expected: std::collections::HashSet<&str> =
-                tool_calls.iter().map(|c| c.id.as_str()).collect();
-            let mut got = std::collections::HashSet::new();
+            let expected: HashSet<&str> = tool_calls.iter().map(|c| c.id.as_str()).collect();
+            let mut got = HashSet::new();
             let mut j = i + 1;
             while j < items.len() {
                 match &items[j] {
@@ -336,20 +342,20 @@ async fn test_run_repairs_orphan_call() {
 /// user input.
 #[tokio::test]
 async fn test_notification_defers_to_user() {
-    let slot = std::sync::Arc::new(std::sync::OnceLock::<Arc<Runner>>::new());
+    let slot = Arc::new(OnceLock::<Arc<Runner>>::new());
     let provider = Arc::new(CaptureProvider::with_tool("enqueue_both"));
     let mut tools = ToolRegistry::new();
     tools.register(Arc::new(EnqueueBothTool::new(
-        std::sync::Arc::clone(&slot),
+        Arc::clone(&slot),
         "user interjection",
         "child finished working",
     )));
     let runner = Arc::new(runner_with(
-        Arc::clone(&provider) as Arc<dyn houyicoder_api::provider::ModelProvider>,
+        Arc::clone(&provider) as Arc<dyn ModelProvider>,
         tools,
     ));
     slot.set(Arc::clone(&runner)).ok();
-    let session = houyicoder_context::SessionId::new();
+    let session = SessionId::new();
     let result = runner
         .run(session, "do the task".into())
         .await
@@ -379,19 +385,19 @@ async fn test_notification_defers_to_user() {
 /// starved indefinitely, only deferred behind user input.
 #[tokio::test]
 async fn test_notification_drains_when_idle() {
-    let slot = std::sync::Arc::new(std::sync::OnceLock::<Arc<Runner>>::new());
+    let slot = Arc::new(OnceLock::<Arc<Runner>>::new());
     let provider = Arc::new(CaptureProvider::with_tool("enqueue_notification"));
     let mut tools = ToolRegistry::new();
     tools.register(Arc::new(EnqueueNotificationTool::new(
-        std::sync::Arc::clone(&slot),
+        Arc::clone(&slot),
         "child finished working",
     )));
     let runner = Arc::new(runner_with(
-        Arc::clone(&provider) as Arc<dyn houyicoder_api::provider::ModelProvider>,
+        Arc::clone(&provider) as Arc<dyn ModelProvider>,
         tools,
     ));
     slot.set(Arc::clone(&runner)).ok();
-    let session = houyicoder_context::SessionId::new();
+    let session = SessionId::new();
     let result = runner
         .run(session, "do the task".into())
         .await
@@ -410,16 +416,12 @@ async fn test_notification_drains_when_idle() {
 }
 
 struct EnqueueBothTool {
-    slot: std::sync::Arc<std::sync::OnceLock<Arc<Runner>>>,
+    slot: Arc<OnceLock<Arc<Runner>>>,
     user_msg: String,
     notification: String,
 }
 impl EnqueueBothTool {
-    fn new(
-        slot: std::sync::Arc<std::sync::OnceLock<Arc<Runner>>>,
-        user_msg: &str,
-        notification: &str,
-    ) -> Self {
+    fn new(slot: Arc<OnceLock<Arc<Runner>>>, user_msg: &str, notification: &str) -> Self {
         Self {
             slot,
             user_msg: user_msg.into(),
@@ -443,9 +445,7 @@ impl Tool for EnqueueBothTool {
         _input: serde_json::Value,
     ) -> houyicoder_async::PFut<'_, Result<serde_json::Value, ToolError>> {
         if let Some(r) = self.slot.get() {
-            r.enqueue_input(houyicoder_protocol::frontend::QueuedInput::new(
-                self.user_msg.clone(),
-            ));
+            r.enqueue_input(QueuedInput::new(self.user_msg.clone()));
             r.enqueue_notification("test-child".into(), self.notification.clone());
         }
         Box::pin(async move { Ok(serde_json::json!({"queued": true})) })
@@ -453,11 +453,11 @@ impl Tool for EnqueueBothTool {
 }
 
 struct EnqueueNotificationTool {
-    slot: std::sync::Arc<std::sync::OnceLock<Arc<Runner>>>,
+    slot: Arc<OnceLock<Arc<Runner>>>,
     notification: String,
 }
 impl EnqueueNotificationTool {
-    fn new(slot: std::sync::Arc<std::sync::OnceLock<Arc<Runner>>>, notification: &str) -> Self {
+    fn new(slot: Arc<OnceLock<Arc<Runner>>>, notification: &str) -> Self {
         Self {
             slot,
             notification: notification.into(),
@@ -491,21 +491,17 @@ impl Tool for EnqueueNotificationTool {
 /// so a healthy session is not mutated.
 #[tokio::test]
 async fn test_reconcile_noop_clean_log() {
-    use houyicoder_context::SessionEvent;
-    use houyicoder_protocol::llm::OutputItem;
     let runner = Arc::new(runner_with(
-        Arc::new(crate::provider::test_support::FakeProvider::new(vec![
-            CompletionResponse {
-                output: vec![OutputItem::Text {
-                    text: "done".into(),
-                }],
-                usage: Usage::default(),
-                model: "test".into(),
-            },
-        ])),
+        Arc::new(FakeProvider::new(vec![CompletionResponse {
+            output: vec![OutputItem::Text {
+                text: "done".into(),
+            }],
+            usage: Usage::default(),
+            model: "test".into(),
+        }])),
         ToolRegistry::new(),
     ));
-    let session = houyicoder_context::SessionId::new();
+    let session = SessionId::new();
     // A clean prefix: assistant turn + tool call + its matching result.
     runner
         .store()

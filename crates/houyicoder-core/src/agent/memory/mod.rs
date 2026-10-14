@@ -21,9 +21,12 @@ pub use gates::{MemoryGateState, MemoryGates};
 pub(crate) use mutation_log::MutationLog;
 use selector::RecallTasks;
 
+use crate::agent::RunError;
 use crate::agent::auto_dream::DreamRunner;
 use crate::agent::extractor::MemoryExtractor;
 use crate::agent::reward_snapshot::RewardSnapshot;
+use houyicoder_context::MemoryChangeId;
+use std::path::Path;
 
 /// Optional background memory workers.
 struct BackgroundMemory {
@@ -152,7 +155,7 @@ impl MemoryRuntime {
     /// auto_memory is off, no provider is configured, or the selection
     /// settles on nothing. A triggered semantic stage runs beside the model
     /// call and appends its recall on completion.
-    pub(crate) async fn recall(&self, session: SessionId) -> Result<(), crate::agent::RunError> {
+    pub(crate) async fn recall(&self, session: SessionId) -> Result<(), RunError> {
         recall::recall(
             &self.store,
             self.provider.as_ref(),
@@ -349,7 +352,7 @@ impl MemoryRuntime {
         let handler = self.memory_changed.lock().expect("memory_changed").clone();
         if let Some(handler) = handler {
             handler.handle(MemoryChangedEvent {
-                id: houyicoder_context::MemoryChangeId::new(),
+                id: MemoryChangeId::new(),
                 origin: MemoryChangeOrigin::PrimaryAgent,
                 // The drain runs while the leg's turn is still current, a pause
                 // included, so the notice is attributed to that turn.
@@ -360,7 +363,7 @@ impl MemoryRuntime {
     }
 
     /// The dream's cross-session scan root, or None when in-memory.
-    pub(crate) fn dream_session_log_root(&self) -> Option<&std::path::Path> {
+    pub(crate) fn dream_session_log_root(&self) -> Option<&Path> {
         self.background
             .dream
             .as_ref()

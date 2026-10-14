@@ -9,6 +9,12 @@
 //! file-size gate; the string is byte-stable (no volatile inputs) so a
 //! forked run that shares the provider benefits from prefix caching.
 
+#[cfg(test)]
+use houyicoder_context::MemoryOrigin;
+#[cfg(test)]
+use houyicoder_context::MemoryScope;
+#[cfg(test)]
+use houyicoder_context::MemorySource;
 use houyicoder_context::MemorySummary;
 
 /// The extraction user prompt. Assumed to be appended after the main system
@@ -161,10 +167,10 @@ mod tests {
         let mem = MemorySummary {
             key: "build-gate".into(),
             description: "make check must stay green".into(),
-            source: houyicoder_context::MemorySource::Project,
+            source: MemorySource::Project,
             mtime_secs: 0,
-            scope: houyicoder_context::MemoryScope::Auto,
-            origin: houyicoder_context::MemoryOrigin::Unknown,
+            scope: MemoryScope::Auto,
+            origin: MemoryOrigin::Unknown,
         };
         let p = build_extraction_prompt(&[mem]);
         assert!(p.contains("## Existing memory files"));

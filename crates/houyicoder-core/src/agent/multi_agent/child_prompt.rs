@@ -14,6 +14,13 @@ use std::path::Path;
 use houyicoder_protocol::llm::EffortLevel;
 
 use crate::agent::prompt::project_context_section;
+use std::env::consts::OS;
+#[cfg(test)]
+use std::env::temp_dir;
+#[cfg(test)]
+use std::process::id;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 /// Assemble a child's system prompt: its base instructions, the project
 /// memory file (AGENTS.md equivalent plus the local overlay) unless the
@@ -67,7 +74,7 @@ fn env_block(cwd: &Path, model: &str) -> String {
         "<env>\nWorking directory: {cwd}\nIs directory a git repo: {repo}\n\
          Platform: {platform}\n{date}\nYou are powered by the model named {model}.\n</env>",
         cwd = cwd.display(),
-        platform = std::env::consts::OS,
+        platform = OS,
         date = utc_date_line(),
     )
 }
@@ -91,8 +98,8 @@ fn is_git_workdir(cwd: &Path) -> bool {
 /// local-midnight-to-UTC-midnight window, immaterial for date-grounding a
 /// coding run, and staying UTC keeps a timezone dependency out of this crate.
 fn utc_date_line() -> String {
-    let secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
     format!("Today's date is {}.", iso_date(secs))
@@ -130,12 +137,8 @@ mod tests {
 
     /// A per-process temp dir so parallel test runs do not collide.
     fn scratch_dir(label: &str) -> PathBuf {
-        let mut p = std::env::temp_dir();
-        p.push(format!(
-            "child-prompt-test-{}-{}",
-            label,
-            std::process::id()
-        ));
+        let mut p = temp_dir();
+        p.push(format!("child-prompt-test-{}-{}", label, id()));
         fs::create_dir_all(&p).expect("mkdir scratch");
         p
     }

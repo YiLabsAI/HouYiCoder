@@ -12,8 +12,31 @@ use houyicoder_protocol::llm::{
 };
 use houyicoder_session::SessionStore;
 
+use crate::agent::memory::MutationLog;
+use crate::agent::reward_snapshot::RedundantCluster;
+use crate::agent::reward_snapshot::RewardSnapshot;
+use crate::agent::runner_config::RunnerConfig;
+use crate::agent::tools::MemoryAddTool;
+use crate::observability::evolution::RedundancyKind;
+use crate::provider::test_support::FakeProvider;
+use houyicoder_api::memory::MemoryProvider;
 use houyicoder_api::provider::stream_from_response;
+use houyicoder_api::tool::{Tool, ToolCtx};
 use houyicoder_async::{PFut, PStream};
+use houyicoder_context::MemoryOrigin;
+use houyicoder_context::MemorySummary;
+use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
+use houyicoder_memory::MarkdownMemoryProvider;
+use std::fs::FileTimes;
+use std::fs::OpenOptions;
+use std::fs::create_dir_all;
+use std::fs::read_dir;
+use std::fs::remove_dir_all;
+use std::fs::write;
+use std::path::PathBuf;
+use std::process::id;
+use std::time::Duration;
+use std::time::UNIX_EPOCH;
 
 struct RecordingChanges(StdMutex<Vec<MemoryChangedEvent>>);
 impl RecordingChanges {
@@ -44,9 +67,9 @@ impl RecordingChanges {
 // -- ConsolidationLock tests --
 
 fn temp_dir(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("auto-dream-{tag}-{}", std::process::id()));
-    drop(std::fs::remove_dir_all(&dir));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = std::env::temp_dir().join(format!("auto-dream-{tag}-{}", id()));
+    drop(remove_dir_all(&dir));
+    create_dir_all(&dir).unwrap();
     dir
 }
 
@@ -55,7 +78,7 @@ fn test_lock_absent_returns_zero() {
     let dir = temp_dir("absent");
     let lock = ConsolidationLock::new(&dir);
     assert_eq!(lock.last_consolidated_at(), 0, "absent lock returns 0");
-    drop(std::fs::remove_dir_all(&dir));
+    drop(remove_dir_all(&dir));
 }
 
 #[test]
@@ -70,7 +93,7 @@ fn test_lock_acquire_then_record() {
     // Stamp a successful dream.
     lock.record_consolidation();
     assert!(lock.last_consolidated_at() > 0, "record stamps the mtime");
-    drop(std::fs::remove_dir_all(&dir));
+    drop(remove_dir_all(&dir));
 }
 
 /// rollback rewinds the mtime to the pre-acquire value (not unlink-to-0)
@@ -82,7 +105,7 @@ fn test_rollback_rewinds_mtime() {
     let lock = ConsolidationLock::new(&dir);
     // Simulate a prior successful consolidation an hour ago.
     let prior_at = now_secs().saturating_sub(3600);
-    drop(std::fs::write(lock_path(&dir), "old"));
+    drop(write(lock_path(&dir), "old"));
     set_mtime(&lock_path(&dir), prior_at);
     assert_eq!(lock.last_consolidated_at(), prior_at, "prior stamp set");
 
@@ -96,7 +119,7 @@ fn test_rollback_rewinds_mtime() {
         prior_at,
         "rollback rewinds the mtime to the pre-acquire value"
     );
-    drop(std::fs::remove_dir_all(&dir));
+    drop(remove_dir_all(&dir));
 }
 
 #[test]
@@ -111,7 +134,7 @@ fn test_rollback_unlinks_no_prior() {
         0,
         "rollback to prior 0 unlinks"
     );
-    drop(std::fs::remove_dir_all(&dir));
+    drop(remove_dir_all(&dir));
 }
 
 fn lock_path(dir: &Path) -> PathBuf {
@@ -119,9 +142,8 @@ fn lock_path(dir: &Path) -> PathBuf {
 }
 
 fn set_mtime(path: &Path, secs: u64) {
-    let times = std::fs::FileTimes::new()
-        .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs));
-    if let Ok(file) = std::fs::OpenOptions::new().write(true).open(path) {
+    let times = FileTimes::new().set_modified(UNIX_EPOCH + Duration::from_secs(secs));
+    if let Ok(file) = OpenOptions::new().write(true).open(path) {
         drop(file.set_times(times));
     }
 }
@@ -130,11 +152,11 @@ fn set_mtime(path: &Path, secs: u64) {
 
 #[test]
 fn test_prompt_has_phases_root() {
-    let listing = vec![houyicoder_context::MemorySummary::new(
+    let listing = vec![MemorySummary::new(
         "user-prefers-terse",
         "User prefers terse responses",
-        houyicoder_context::MemorySource::Feedback,
-        houyicoder_context::MemoryScope::Auto,
+        MemorySource::Feedback,
+        MemoryScope::Auto,
         100,
     )];
     let prompt = build_consolidation_prompt(
@@ -256,7 +278,7 @@ struct FsMemory {
 }
 impl FsMemory {
     fn new(root: PathBuf) -> Self {
-        std::fs::create_dir_all(&root).unwrap();
+        create_dir_all(&root).unwrap();
         Self {
             root,
             written: StdMutex::new(Vec::new()),
@@ -276,7 +298,7 @@ impl MemoryProvider for FsMemory {
     /// new material landed; the stub matches the markdown provider so the
     /// gate tests can drive the memory-delta path without the real provider.
     fn count_new_since(&self, since: u64) -> usize {
-        std::fs::read_dir(&self.root)
+        read_dir(&self.root)
             .map(|entries| {
                 entries
                     .flatten()
@@ -285,7 +307,7 @@ impl MemoryProvider for FsMemory {
                         e.metadata()
                             .ok()
                             .and_then(|m| m.modified().ok())
-                            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
                             .is_some_and(|d| d.as_secs() > since)
                     })
                     .count()
@@ -361,8 +383,8 @@ fn dream_runner(
     let root = memory.memory_root();
     let ephemeral: Arc<dyn SessionLog> =
         Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
-    let cwd = std::env::temp_dir().join(format!("dream-cwd-{}", std::process::id()));
-    std::fs::create_dir_all(&cwd).unwrap();
+    let cwd = std::env::temp_dir().join(format!("dream-cwd-{}", id()));
+    create_dir_all(&cwd).unwrap();
     let config = RunnerConfig {
         max_turns: DEFAULT_DREAM_MAX_TURNS,
         ..RunnerConfig::default()
@@ -384,7 +406,7 @@ async fn test_gate_closed_lock_recent() {
     let root = temp_dir("closed");
     let memory = Arc::new(FsMemory::new(root.clone()));
     // Stamp a recent lock so the time-gate closes.
-    std::fs::write(root.join(LOCK_FILE), "pid").unwrap();
+    write(root.join(LOCK_FILE), "pid").unwrap();
     let provider = Arc::new(DreamProvider {
         calls: StdMutex::new(0),
     });
@@ -396,7 +418,7 @@ async fn test_gate_closed_lock_recent() {
         0,
         "gate closed → no forked write"
     );
-    drop(std::fs::remove_dir_all(&root));
+    drop(remove_dir_all(&root));
 }
 
 /// A reward snapshot with blind retries (retry_after_error >= threshold)
@@ -413,7 +435,7 @@ async fn test_reward_dream_blind_retry() {
         calls: StdMutex::new(0),
     });
     let (dream, _) = dream_runner(memory.clone(), provider.clone() as Arc<dyn ModelProvider>);
-    let reward = crate::agent::reward_snapshot::RewardSnapshot {
+    let reward = RewardSnapshot {
         retry_after_error: 2,
         ..Default::default()
     };
@@ -421,7 +443,7 @@ async fn test_reward_dream_blind_retry() {
     dream.drain_pending(Duration::from_secs(5)).await;
     let calls = *provider.calls.lock().expect("calls");
     assert!(calls > 0, "reward-dream spawned the forked agent");
-    drop(std::fs::remove_dir_all(&root));
+    drop(remove_dir_all(&root));
 }
 
 /// run_dream_body called directly (not via execute_dream's spawn) so the
@@ -436,7 +458,7 @@ async fn test_dream_body_runs_direct() {
         calls: StdMutex::new(0),
     });
     let (dream, _) = dream_runner(memory.clone(), provider.clone() as Arc<dyn ModelProvider>);
-    let reward = crate::agent::reward_snapshot::RewardSnapshot {
+    let reward = RewardSnapshot {
         retry_after_error: 2,
         ..Default::default()
     };
@@ -445,7 +467,7 @@ async fn test_dream_body_runs_direct() {
         .await;
     let calls = *provider.calls.lock().expect("calls");
     assert!(calls > 0, "run_dream_body ran the forked agent directly");
-    drop(std::fs::remove_dir_all(&root));
+    drop(remove_dir_all(&root));
 }
 
 /// A reward snapshot with only redundant clusters (no blind retries) does
@@ -460,16 +482,16 @@ async fn test_reward_skip_redundant_only() {
         calls: StdMutex::new(0),
     });
     let (dream, _) = dream_runner(memory.clone(), provider.clone() as Arc<dyn ModelProvider>);
-    let reward = crate::agent::reward_snapshot::RewardSnapshot {
+    let reward = RewardSnapshot {
         redundant: vec![
-            crate::agent::reward_snapshot::RedundantCluster {
+            RedundantCluster {
                 tool: "grep".into(),
-                kind: crate::observability::evolution::RedundancyKind::CrossBatch,
+                kind: RedundancyKind::CrossBatch,
                 count: 3,
             },
-            crate::agent::reward_snapshot::RedundantCluster {
+            RedundantCluster {
                 tool: "read".into(),
-                kind: crate::observability::evolution::RedundancyKind::SameBatch,
+                kind: RedundancyKind::SameBatch,
                 count: 2,
             },
         ],
@@ -479,7 +501,7 @@ async fn test_reward_skip_redundant_only() {
     dream.drain_pending(Duration::from_secs(5)).await;
     let calls = *provider.calls.lock().expect("calls");
     assert_eq!(calls, 0, "redundant-only snapshot must not fire the gate");
-    drop(std::fs::remove_dir_all(&root));
+    drop(remove_dir_all(&root));
 }
 
 /// When the gate opens (no prior lock, fresh root, enough new memories),
@@ -493,7 +515,7 @@ async fn test_gate_open_fires_stamps() {
     // Seed five topic files so the memory-delta gate sees enough new
     // material to fire (last_at is 0 on a fresh root, so elapsed is huge).
     for i in 0..5 {
-        std::fs::write(root.join(format!("seed-{i}.md")), "body").unwrap();
+        write(root.join(format!("seed-{i}.md")), "body").unwrap();
     }
     let provider = Arc::new(DreamProvider {
         calls: StdMutex::new(0),
@@ -515,7 +537,7 @@ async fn test_gate_open_fires_stamps() {
         vec![(1, MemoryChangeOrigin::AutoDream)],
         "a successful dream fires one Consolidated memory-saved notice"
     );
-    drop(std::fs::remove_dir_all(&root));
+    drop(remove_dir_all(&root));
 }
 
 /// The memory-delta gate: a fresh root (elapsed is huge since last_at is 0)
@@ -537,7 +559,7 @@ async fn test_gate_closed_when_quiet() {
         0,
         "no new memories → no forked write"
     );
-    drop(std::fs::remove_dir_all(&root));
+    drop(remove_dir_all(&root));
 }
 
 /// A provider with no filesystem root (empty memory_root) never fires a
@@ -553,8 +575,7 @@ async fn test_gate_noop_without_root() {
     }
     let ephemeral: Arc<dyn SessionLog> =
         Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
-    let provider: Arc<dyn ModelProvider> =
-        Arc::new(crate::provider::test_support::FakeProvider::text("ok"));
+    let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("ok"));
     let dream = Arc::new(DreamRunner::new(
         ephemeral,
         provider,
@@ -588,7 +609,7 @@ async fn test_execute_dream_coalesces_flight() {
         before,
         "no spawn while a dream is in flight"
     );
-    drop(std::fs::remove_dir_all(&root));
+    drop(remove_dir_all(&root));
 }
 
 /// A memory whose list_memories panics — drives the InProgressGuard path
@@ -615,8 +636,7 @@ impl MemoryProvider for PanickingMemory {
 async fn test_panic_resets_in_progress() {
     let root = temp_dir("panic-guard");
     let memory = Arc::new(PanickingMemory { root: root.clone() });
-    let provider: Arc<dyn ModelProvider> =
-        Arc::new(crate::provider::test_support::FakeProvider::text("ok"));
+    let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("ok"));
     let ephemeral: Arc<dyn SessionLog> =
         Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let dream = Arc::new(DreamRunner::new(
@@ -635,7 +655,7 @@ async fn test_panic_resets_in_progress() {
         !*dream.in_progress.lock().expect("in_progress"),
         "in_progress must reset after a panic (Drop guard)"
     );
-    drop(std::fs::remove_dir_all(&root));
+    drop(remove_dir_all(&root));
 }
 
 /// try_acquire uses create_new (atomic create-if-absent). A second
@@ -659,15 +679,14 @@ fn test_lock_acquire_is_atomic() {
         lock_b.try_acquire().is_none(),
         "a fresh lock blocks a second acquirer"
     );
-    drop(std::fs::remove_dir_all(&dir));
+    drop(remove_dir_all(&dir));
 }
 
 #[test]
 fn test_dream_reports_memory_operations() {
     let root = temp_dir("emit-changes");
     let memory = Arc::new(FsMemory::new(root.clone()));
-    let provider: Arc<dyn ModelProvider> =
-        Arc::new(crate::provider::test_support::FakeProvider::text("ok"));
+    let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("ok"));
     let (dream, _) = dream_runner(memory, provider);
     let (events, recording) = RecordingChanges::new();
     dream.set_memory_changed_handler(events.memory_changed_handler());
@@ -701,7 +720,7 @@ fn test_dream_reports_memory_operations() {
             },
         ]
     );
-    drop(std::fs::remove_dir_all(&root));
+    drop(remove_dir_all(&root));
 }
 
 /// Cross-session scan merges previous sessions' retry_after_error from the
@@ -710,13 +729,10 @@ fn test_dream_reports_memory_operations() {
 /// count is added to the snapshot.
 #[test]
 fn test_merge_session_adds_retry() {
-    use crate::agent::reward_snapshot::RewardSnapshot;
-    use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
-
-    let tmp = std::env::temp_dir().join(format!("merge-cross-{}", std::process::id()));
-    let _cleanup = std::fs::remove_dir_all(&tmp);
+    let tmp = std::env::temp_dir().join(format!("merge-cross-{}", id()));
+    let _cleanup = remove_dir_all(&tmp);
     let dir = tmp.join(SessionId::new().to_string());
-    std::fs::create_dir_all(&dir).expect("mkdir");
+    create_dir_all(&dir).expect("mkdir");
     let ev = SessionLogEntry {
         id: EventId::new(),
         session: SessionId::new(),
@@ -728,9 +744,9 @@ fn test_merge_session_adds_retry() {
         },
     };
     let line = serde_json::to_string(&ev).expect("serialize");
-    std::fs::write(dir.join("log.jsonl"), format!("{line}\n")).expect("write");
+    write(dir.join("log.jsonl"), format!("{line}\n")).expect("write");
 
-    let root = std::path::PathBuf::from(&tmp);
+    let root = PathBuf::from(&tmp);
     let mut reward = Some(RewardSnapshot {
         retry_after_error: 1,
         ..Default::default()
@@ -741,13 +757,12 @@ fn test_merge_session_adds_retry() {
         4,
         "cross-session 3 + current 1 = 4"
     );
-    let _cleanup2 = std::fs::remove_dir_all(&tmp);
+    let _cleanup2 = remove_dir_all(&tmp);
 }
 
 /// A None session_log_root is a no-op (tests, forked runners).
 #[test]
 fn test_merge_session_none_noop() {
-    use crate::agent::reward_snapshot::RewardSnapshot;
     let mut reward = Some(RewardSnapshot {
         retry_after_error: 2,
         ..Default::default()
@@ -762,22 +777,13 @@ fn test_merge_session_none_noop() {
 /// key already in the project root routes into that root in place.
 #[tokio::test]
 async fn test_dream_pins_save_scope() {
-    use crate::agent::memory::MutationLog;
-    use crate::agent::runner_config::RunnerConfig;
-    use crate::agent::tools::MemoryAddTool;
-    use crate::provider::test_support::FakeProvider;
-    use houyicoder_api::memory::MemoryProvider;
-    use houyicoder_api::tool::{Tool, ToolCtx};
-    use houyicoder_context::MemoryOrigin;
-    use houyicoder_memory::MarkdownMemoryProvider;
-
     let root = temp_dir("pin-scope");
     let user_root = root.join("user");
     let project_root = root.join("project");
     let auto_root = root.join("auto");
-    std::fs::create_dir_all(&user_root).unwrap();
-    std::fs::create_dir_all(&project_root).unwrap();
-    std::fs::create_dir_all(&auto_root).unwrap();
+    create_dir_all(&user_root).unwrap();
+    create_dir_all(&project_root).unwrap();
+    create_dir_all(&auto_root).unwrap();
     let memory: Arc<dyn MemoryProvider> = Arc::new(MarkdownMemoryProvider::new_multi(vec![
         user_root,
         project_root,
@@ -863,5 +869,5 @@ async fn test_dream_pins_save_scope() {
         !auto_root.join("promoted-rule.md").exists(),
         "no shadow copy in the auto root"
     );
-    drop(std::fs::remove_dir_all(&root));
+    drop(remove_dir_all(&root));
 }

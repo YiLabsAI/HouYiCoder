@@ -30,6 +30,11 @@ use std::process::Stdio;
 use std::sync::Arc;
 
 use houyicoder_context::{EventId, SessionEvent, SessionLogEntry};
+use std::collections::HashMap;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+use std::process::Command;
+use std::sync::RwLock;
 
 /// A host-side workspace probe for the derivation watermark. The git rev +
 /// dirty-tree hash come from the live workspace, which is mutable, so the
@@ -49,13 +54,13 @@ pub trait WorkspaceProbe: Send + Sync {
 /// controller's git probing, because the backbone is a compaction-internal
 /// read, not an agent-driven command.
 pub struct GitWorkspaceProbe {
-    cwd: Arc<std::sync::RwLock<PathBuf>>,
+    cwd: Arc<RwLock<PathBuf>>,
 }
 
 impl GitWorkspaceProbe {
     /// Construct with the runner's shared cwd handle so a worktree switch is
     /// visible at the next probe.
-    pub fn new(cwd: Arc<std::sync::RwLock<PathBuf>>) -> Self {
+    pub fn new(cwd: Arc<RwLock<PathBuf>>) -> Self {
         Self { cwd }
     }
 
@@ -66,7 +71,7 @@ impl GitWorkspaceProbe {
     #[expect(clippy::disallowed_methods, reason = "infra spawn, not model-driven")]
     fn run_git(&self, args: &[&str]) -> Option<String> {
         let cwd = self.cwd.read().ok()?;
-        let out = std::process::Command::new("git")
+        let out = Command::new("git")
             .arg("-C")
             .arg(cwd.as_os_str())
             .args(args)
@@ -185,8 +190,7 @@ pub fn derive_backbone(
 
     // Pair ToolCall ↔ ToolResult by call_id so a bash test run can read its
     // own exit code + stdout.
-    let mut results_by_call: std::collections::HashMap<&str, &SessionLogEntry> =
-        std::collections::HashMap::new();
+    let mut results_by_call: HashMap<&str, &SessionLogEntry> = HashMap::new();
     for ev in &folded {
         if let SessionEvent::ToolResult { call_id, .. } = &ev.event {
             results_by_call.insert(call_id.as_str(), ev);
@@ -457,8 +461,7 @@ fn is_path_like(s: &str) -> bool {
 /// needs to agree across re-derivation of the same porcelain, not be
 /// cryptographically strong).
 fn simple_hash(s: &str) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut h = std::collections::hash_map::DefaultHasher::new();
+    let mut h = DefaultHasher::new();
     s.hash(&mut h);
     h.finish()
 }

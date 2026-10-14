@@ -27,6 +27,8 @@ use super::{
     GrepOptions, GrepOutput, IGNORE_DIRS, OutputMode, VCS_DIRS, build_output, relativize, run_grep,
     split_glob_patterns,
 };
+use std::fs::metadata;
+use tokio::task::spawn_blocking;
 
 /// Dispatch a grep: try the rg subprocess first (a cancel kills the child and
 /// stops CPU at once), then fall back to the in-process WalkDir traversal on
@@ -42,7 +44,7 @@ pub(super) async fn dispatch_grep(
     if let Some(out) = try_run_grep_subprocess(&root, &dirs, &opts, cancel.as_ref()).await? {
         return Ok(out.to_json());
     }
-    let handle = tokio::task::spawn_blocking(move || run_grep(&root, &dirs, &opts));
+    let handle = spawn_blocking(move || run_grep(&root, &dirs, &opts));
     let output = match cancel {
         Some(token) => tokio::select! {
             _ = token.cancelled() => return Err(ToolError::Failed(
@@ -181,7 +183,7 @@ fn parse_files_with_matches(
     let mut entries: Vec<(PathBuf, SystemTime)> = Vec::with_capacity(lines.len());
     for line in lines {
         let p = PathBuf::from(line);
-        let mtime = std::fs::metadata(&p)
+        let mtime = metadata(&p)
             .and_then(|m| m.modified())
             .unwrap_or(UNIX_EPOCH);
         entries.push((p, mtime));

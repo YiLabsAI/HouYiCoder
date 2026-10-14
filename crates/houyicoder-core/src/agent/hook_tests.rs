@@ -8,7 +8,15 @@ use houyicoder_context::AgentId;
 use houyicoder_context::{CheckpointId, SessionId};
 use std::path::PathBuf;
 
+use super::CompactTrigger;
 use super::ToolResult;
+use crate::agent::ToolRegistry;
+use crate::agent::runner_tests::runner_with;
+use crate::provider::test_support::FakeProvider;
+use houyicoder_api::agent_event::{AgentEventHandlers, UserNoticeEvent};
+use std::sync::{Arc, Mutex};
+use std::thread::sleep;
+use std::time::Duration;
 
 // --- test doubles ---
 
@@ -75,7 +83,7 @@ impl Hook for SlowHook {
         &self.events
     }
     fn evaluate(&self, _ctx: &HookContext) -> Result<HookVerdict, HookError> {
-        std::thread::sleep(std::time::Duration::from_millis(self.sleep_ms));
+        sleep(Duration::from_millis(self.sleep_ms));
         Ok(self.verdict.clone())
     }
     fn source(&self) -> HookSource {
@@ -260,7 +268,7 @@ fn test_payload_exhaustive_construct() {
     let tid = TaskId("t1".into());
     let keys = vec!["k".to_string()];
     let paths = vec![PathBuf::from("/tmp")];
-    let cwd = std::path::PathBuf::from("/cwd");
+    let cwd = PathBuf::from("/cwd");
 
     let p = HookPayload::PreToolUse {
         tool_name: s.clone(),
@@ -283,14 +291,14 @@ fn test_payload_exhaustive_construct() {
     assert!(matches!(p, HookPayload::PostToolUseFailure { .. }));
 
     let p = HookPayload::PreCompact {
-        trigger: super::CompactTrigger::Manual,
+        trigger: CompactTrigger::Manual,
         pre_compact_event_count: 10,
         pre_compact_token_estimate: 500,
     };
     assert!(matches!(p, HookPayload::PreCompact { .. }));
 
     let p = HookPayload::PostCompact {
-        trigger: super::CompactTrigger::Auto,
+        trigger: CompactTrigger::Auto,
         checkpoint_id: ck,
         folded_turns: 2,
         compression_ratio: 0.5,
@@ -621,10 +629,6 @@ fn test_untrusted_skip_notice() {
     // system line when a project hook is registered against an untrusted
     // registry. The notice must name the skipped hooks and must not point at
     // an escape hatch that does not exist.
-    use crate::agent::ToolRegistry;
-    use crate::agent::runner_tests::runner_with;
-    use houyicoder_api::agent_event::{AgentEventHandlers, UserNoticeEvent};
-    use std::sync::{Arc, Mutex};
 
     let captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let cap = Arc::clone(&captured);
@@ -634,10 +638,7 @@ fn test_untrusted_skip_notice() {
         HookVerdict::Allow,
         HookSource::Project,
     ));
-    let mut runner = runner_with(
-        Arc::new(crate::provider::test_support::FakeProvider::text("ok")),
-        ToolRegistry::new(),
-    );
+    let mut runner = runner_with(Arc::new(FakeProvider::text("ok")), ToolRegistry::new());
     let mut events = AgentEventHandlers::default();
     events.set_user_notice(Arc::new(move |event: UserNoticeEvent| {
         cap.lock().unwrap().push(event.message);

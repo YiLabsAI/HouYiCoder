@@ -10,11 +10,18 @@ use houyicoder_context::{SessionEvent, SessionId, SessionLogEntry};
 use houyicoder_protocol::extension::ToolError;
 use houyicoder_protocol::llm::{CompletionResponse, OutputItem, Usage};
 
+use crate::agent::Runner;
+use crate::agent::hook::HookPayload;
 use crate::agent::hook::registry::HookRegistry;
 use crate::agent::hook::{Hook, HookContext, HookError, HookEvent, HookSource, HookVerdict};
 use crate::agent::runner_tests::runner_with;
 use crate::agent::{RunOutcome, ToolRegistry};
 use crate::provider::test_support::FakeProvider;
+use houyicoder_api::memory::MemoryProvider;
+use houyicoder_api::provider::ModelProvider;
+use houyicoder_context::EventId;
+use houyicoder_context::HookVerdictKind;
+use std::sync::Mutex;
 
 /// A tool that records each execution to a shared counter. Does not require
 /// approval, so it travels the exec path where PreToolUse fires.
@@ -62,13 +69,9 @@ impl Hook for DenyRecordableHook {
     }
     fn evaluate(&self, ctx: &HookContext) -> Result<HookVerdict, HookError> {
         match &ctx.payload {
-            crate::agent::hook::HookPayload::PreToolUse { tool_name, .. }
-                if tool_name == "recordable" =>
-            {
-                Ok(HookVerdict::Deny(
-                    "recordable is off-limits in tests".into(),
-                ))
-            }
+            HookPayload::PreToolUse { tool_name, .. } if tool_name == "recordable" => Ok(
+                HookVerdict::Deny("recordable is off-limits in tests".into()),
+            ),
             _ => Ok(HookVerdict::Allow),
         }
     }
@@ -91,8 +94,8 @@ impl Hook for ObserveRecordableHook {
     }
     fn evaluate(&self, ctx: &HookContext) -> Result<HookVerdict, HookError> {
         match &ctx.payload {
-            crate::agent::hook::HookPayload::PreToolUse { tool_name, .. }
-            | crate::agent::hook::HookPayload::PostToolUse { tool_name, .. }
+            HookPayload::PreToolUse { tool_name, .. }
+            | HookPayload::PostToolUse { tool_name, .. }
                 if tool_name == "recordable" =>
             {
                 Ok(HookVerdict::Observe("recordable observed".into()))
@@ -108,7 +111,7 @@ impl Hook for ObserveRecordableHook {
 /// Build a runner whose first scripted response calls the recordable tool,
 /// whose second is final text, and whose hook registry denies the recordable
 /// tool on PreToolUse. Returns (runner, session, ran-counter).
-fn deny_runner() -> (crate::agent::Runner, SessionId, Arc<AtomicU8>) {
+fn deny_runner() -> (Runner, SessionId, Arc<AtomicU8>) {
     let ran = Arc::new(AtomicU8::new(0));
     let mut tools = ToolRegistry::new();
     tools.register(Arc::new(RecordingTool::new(ran.clone())));
@@ -128,8 +131,7 @@ fn deny_runner() -> (crate::agent::Runner, SessionId, Arc<AtomicU8>) {
         usage: Usage::default(),
         model: "test".into(),
     };
-    let provider: Arc<dyn houyicoder_api::provider::ModelProvider> =
-        Arc::new(FakeProvider::new(vec![first, second]));
+    let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::new(vec![first, second]));
     let registry = HookRegistry::new();
     registry.register(Arc::new(DenyRecordableHook));
     let runner = runner_with(provider, tools).with_hooks(Arc::new(registry));
@@ -186,7 +188,7 @@ async fn test_hook_deny_records_signal() {
             tool_name,
             error,
             ..
-        } if *verdict == houyicoder_context::HookVerdictKind::Deny => {
+        } if *verdict == HookVerdictKind::Deny => {
             Some((hook_name.clone(), reason.clone(), tool_name.clone(), *error))
         }
         _ => None,
@@ -227,8 +229,7 @@ async fn test_pre_tool_use_observe() {
         usage: Usage::default(),
         model: "test".into(),
     };
-    let provider: Arc<dyn houyicoder_api::provider::ModelProvider> =
-        Arc::new(FakeProvider::new(vec![first, second]));
+    let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::new(vec![first, second]));
     let registry = HookRegistry::new();
     registry.register(Arc::new(ObserveRecordableHook));
     let runner = runner_with(provider, tools).with_hooks(Arc::new(registry));
@@ -271,8 +272,7 @@ async fn test_no_registry_no_fire() {
         usage: Usage::default(),
         model: "test".into(),
     };
-    let provider: Arc<dyn houyicoder_api::provider::ModelProvider> =
-        Arc::new(FakeProvider::new(vec![first, second]));
+    let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::new(vec![first, second]));
     let runner = runner_with(provider, tools);
     let session = SessionId::new();
     let result = runner.run(session, "go".into()).await.expect("run");
@@ -298,9 +298,7 @@ impl Hook for FeedbackRecordableHook {
     }
     fn evaluate(&self, ctx: &HookContext) -> Result<HookVerdict, HookError> {
         match &ctx.payload {
-            crate::agent::hook::HookPayload::PreToolUse { tool_name, .. }
-                if tool_name == "recordable" =>
-            {
+            HookPayload::PreToolUse { tool_name, .. } if tool_name == "recordable" => {
                 Ok(HookVerdict::Feedback("rewrite the recordable call".into()))
             }
             _ => Ok(HookVerdict::Allow),
@@ -356,8 +354,7 @@ async fn test_pre_tool_use_feedback() {
         usage: Usage::default(),
         model: "test".into(),
     };
-    let provider: Arc<dyn houyicoder_api::provider::ModelProvider> =
-        Arc::new(FakeProvider::new(vec![first, second]));
+    let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::new(vec![first, second]));
     let registry = HookRegistry::new();
     registry.register(Arc::new(FeedbackRecordableHook));
     let runner = runner_with(provider, tools).with_hooks(Arc::new(registry));
@@ -402,8 +399,7 @@ async fn test_post_tool_use_fires() {
         usage: Usage::default(),
         model: "test".into(),
     };
-    let provider: Arc<dyn houyicoder_api::provider::ModelProvider> =
-        Arc::new(FakeProvider::new(vec![first, second]));
+    let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::new(vec![first, second]));
     let registry = HookRegistry::new();
     registry.register(Arc::new(ObserveRecordableHook));
     let runner = runner_with(provider, tools).with_hooks(Arc::new(registry));
@@ -426,8 +422,6 @@ async fn test_post_tool_use_fires() {
 /// TurnAborted boundary marker lands before the regenerated content.
 #[tokio::test]
 async fn test_recover_turn_not_reexecute() {
-    use houyicoder_context::SessionEvent;
-
     let ran = Arc::new(AtomicU8::new(0));
     let mut tools = ToolRegistry::new();
     tools.register(Arc::new(RecordingTool::new(ran.clone())));
@@ -455,7 +449,7 @@ async fn test_recover_turn_not_reexecute() {
     runner
         .store()
         .append(houyicoder_context::SessionLogEntry {
-            id: houyicoder_context::EventId::new(),
+            id: EventId::new(),
             session,
             ts: 0,
             prev_hash: None,
@@ -542,7 +536,7 @@ async fn test_recover_reply_not_reexecute() {
     runner
         .store()
         .append(houyicoder_context::SessionLogEntry {
-            id: houyicoder_context::EventId::new(),
+            id: EventId::new(),
             session,
             ts: 0,
             prev_hash: None,
@@ -567,7 +561,7 @@ async fn test_recover_reply_not_reexecute() {
     runner
         .store()
         .append(houyicoder_context::SessionLogEntry {
-            id: houyicoder_context::EventId::new(),
+            id: EventId::new(),
             session,
             ts: 0,
             prev_hash: None,
@@ -597,14 +591,12 @@ async fn test_recover_reply_not_reexecute() {
 /// enough violations for the dream to promote it into the always-on carrier.
 #[tokio::test]
 async fn test_deny_records_gate_violation() {
-    use std::sync::Mutex;
-
     /// A recording memory that captures every record_gate_violation call
     /// so the test asserts the deny fed signal B without a real descriptor.
     struct ViolationMemory {
         violations: Mutex<Vec<String>>,
     }
-    impl houyicoder_api::memory::MemoryProvider for ViolationMemory {
+    impl MemoryProvider for ViolationMemory {
         fn add(
             &self,
             _e: houyicoder_context::MemoryEntry,
@@ -635,9 +627,7 @@ async fn test_deny_records_gate_violation() {
         }
         fn evaluate(&self, ctx: &HookContext) -> Result<HookVerdict, HookError> {
             match &ctx.payload {
-                crate::agent::hook::HookPayload::PreToolUse { tool_name, .. }
-                    if tool_name == "recordable" =>
-                {
+                HookPayload::PreToolUse { tool_name, .. } if tool_name == "recordable" => {
                     Ok(HookVerdict::Deny("test-placement".into()))
                 }
                 _ => Ok(HookVerdict::Allow),
@@ -667,14 +657,13 @@ async fn test_deny_records_gate_violation() {
         usage: Usage::default(),
         model: "test".into(),
     };
-    let provider: Arc<dyn houyicoder_api::provider::ModelProvider> =
-        Arc::new(FakeProvider::new(vec![first, second]));
+    let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::new(vec![first, second]));
     let registry = HookRegistry::new();
     registry.register(Arc::new(DenyNamedRule));
     let mut runner = runner_with(provider, tools).with_hooks(Arc::new(registry));
     runner
         .memory
-        .install_provider(Arc::clone(&memory) as Arc<dyn houyicoder_api::memory::MemoryProvider>);
+        .install_provider(Arc::clone(&memory) as Arc<dyn MemoryProvider>);
     let session = SessionId::new();
     let result = runner.run(session, "go".into()).await.expect("run");
     assert!(matches!(result.outcome, RunOutcome::FinalOutput(_)));

@@ -20,6 +20,10 @@ use walkdir::WalkDir;
 
 use super::path_util::{canonical_root, confine_path, relativize};
 use super::{Tool, ToolCtx, ToolError};
+use regex::RegexBuilder;
+use std::fs::File;
+use std::fs::metadata;
+use std::fs::read_to_string;
 
 /// VCS metadata directories excluded from search to reduce noise.
 const VCS_DIRS: &[&str] = &[".git", ".svn", ".hg", ".bzr", ".jj", ".sl"];
@@ -358,7 +362,7 @@ fn run_grep(root: &Path, dirs: &[String], opts: &GrepOptions) -> Result<GrepOutp
                     // after the walk, then apply_limit in build_output caps
                     // the count. Early-exit here would keep only the first N
                     // in walkdir order, dropping newest files visited last.
-                    let mtime = std::fs::metadata(path)
+                    let mtime = metadata(path)
                         .and_then(|m| m.modified())
                         .unwrap_or(SystemTime::UNIX_EPOCH);
                     match_files_raw.push((path.to_path_buf(), mtime));
@@ -395,7 +399,7 @@ fn run_grep(root: &Path, dirs: &[String], opts: &GrepOptions) -> Result<GrepOutp
 
 /// Build the regex from the pattern, honoring case-insensitive and multiline.
 fn build_regex(pattern: &str, case_insensitive: bool, multiline: bool) -> Result<Regex, ToolError> {
-    let mut builder = regex::RegexBuilder::new(pattern);
+    let mut builder = RegexBuilder::new(pattern);
     builder.case_insensitive(case_insensitive);
     if multiline {
         builder.dot_matches_new_line(true);
@@ -510,7 +514,7 @@ fn passes_type(path: &Path, exts: Option<&[&str]>) -> bool {
 
 /// True when the file exceeds the max readable size.
 fn file_too_large(path: &Path) -> bool {
-    std::fs::metadata(path)
+    metadata(path)
         .map(|m| m.len() > MAX_FILE_BYTES)
         .unwrap_or(true)
 }
@@ -526,7 +530,7 @@ fn search_content(
     show_line_numbers: bool,
     out: &mut Vec<String>,
 ) -> Result<usize, ToolError> {
-    let file = std::fs::File::open(path)
+    let file = File::open(path)
         .map_err(|e| ToolError::Failed(format!("grep: cannot open {}: {e}", path.display())))?;
     let reader = BufReader::new(file);
     let rel = relativize(root, path);
@@ -575,7 +579,7 @@ fn search_content(
 /// Search a file for at least one match (files_with_matches mode). Returns 1
 /// if there is a match, 0 otherwise. Stops at the first match.
 fn search_file_matches(path: &Path, re: &Regex) -> Result<usize, ToolError> {
-    let file = std::fs::File::open(path)
+    let file = File::open(path)
         .map_err(|e| ToolError::Failed(format!("grep: cannot open {}: {e}", path.display())))?;
     let reader = BufReader::new(file);
     for line in reader.lines() {
@@ -598,7 +602,7 @@ fn search_count(
     out: &mut Vec<String>,
     root: &Path,
 ) -> Result<usize, ToolError> {
-    let file = std::fs::File::open(path)
+    let file = File::open(path)
         .map_err(|e| ToolError::Failed(format!("grep: cannot open {}: {e}", path.display())))?;
     let reader = BufReader::new(file);
     let rel = relativize(root, path);
@@ -618,7 +622,7 @@ fn search_count(
 
 /// Read the entire file into a single string (for multiline search).
 fn read_whole_file(path: &Path) -> Result<String, ToolError> {
-    std::fs::read_to_string(path)
+    read_to_string(path)
         .map_err(|e| ToolError::Failed(format!("grep: cannot read {}: {e}", path.display())))
 }
 

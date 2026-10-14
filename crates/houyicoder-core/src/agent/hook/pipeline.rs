@@ -29,6 +29,7 @@ use houyicoder_context::SessionId;
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
+use super::fire::build_hook_fire;
 use super::{
     HookContext, HookEvent, HookOutcome, HookPayload, HookRegistry, HookVerdict, ToolResult,
     combine_verdicts,
@@ -36,6 +37,8 @@ use super::{
 use crate::agent::fallback::{FallbackToolOutcome, tool_error_json};
 use crate::agent::resolve::ToolCallPlan;
 use crate::agent::{RunError, Runner};
+use crate::observability::tool_failure_reason;
+use std::time::Instant;
 
 /// Forwards progress from one tool call to the tool-execution event handler.
 /// The call identity lets the host route each update to the correct tool.
@@ -215,7 +218,7 @@ impl Runner {
                             // /trajectory's gantt + the ExPeL slow-tool mining. The
                             // start is captured inside the per-call future so each
                             // result carries its OWN duration, not the batch's.
-                            let start = std::time::Instant::now();
+                            let start = Instant::now();
                             // The ctx carries the run token, so a tool
                             // honoring cancellation (Grep/Glob) returns
                             // promptly on a stop; the batch select below drops
@@ -329,7 +332,7 @@ impl Runner {
         } else {
             tool.execute(ctx, input.clone())
         };
-        let start = std::time::Instant::now();
+        let start = Instant::now();
         let (r, cancelled) = tokio::select! {
             _ = token.cancelled() => (Ok(FallbackToolOutcome::Interrupted.to_json()), true),
             r = exec_fut => (r, false),
@@ -364,7 +367,7 @@ impl Runner {
         output: &Value,
         duration_ms: u64,
     ) -> Result<(), RunError> {
-        let is_error = crate::observability::tool_failure_reason(output).is_some();
+        let is_error = tool_failure_reason(output).is_some();
         self.fire_post_tool_use(session, id, name, input, output, is_error)
             .await;
         self.record_redundancy(name, input, is_error);
@@ -408,7 +411,7 @@ impl Runner {
         if let Some(h) = self.spawn_handle() {
             ctx = ctx.with_spawn_handle(h.clone());
         }
-        if let Some(hf) = super::fire::build_hook_fire(self) {
+        if let Some(hf) = build_hook_fire(self) {
             ctx = ctx.with_hook_fire(hf);
         }
         ctx
@@ -432,7 +435,7 @@ impl Runner {
         let payload = if is_error {
             HookPayload::PostToolUseFailure {
                 tool_name: tool_name.to_string(),
-                error: crate::observability::tool_failure_reason(output)
+                error: tool_failure_reason(output)
                     .map(|r| r.into_owned())
                     .unwrap_or_else(|| "tool error".to_string()),
             }

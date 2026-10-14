@@ -27,6 +27,8 @@ use houyicoder_protocol::llm::Usage;
 
 use super::Runner;
 use super::retention::{RetentionContext, RetentionDecision, RetentionPolicy};
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 /// Cache-liveness policy wiring and per-turn cache-read state.
 impl Runner {
@@ -36,9 +38,9 @@ impl Runner {
     /// prefix is live and recompute aggressively once it expires.
     pub(super) fn wire_cache_liveness_policy(&self) {
         self.context_builder
-            .set_retention_policy(std::sync::Arc::new(CacheLivenessRetentionPolicy::new(
-                std::sync::Arc::clone(&self.cached_prefix),
-            )));
+            .set_retention_policy(Arc::new(CacheLivenessRetentionPolicy::new(Arc::clone(
+                &self.cached_prefix,
+            ))));
     }
 
     /// Stamp the cached-prefix state with a completed API turn's wall clock
@@ -46,8 +48,8 @@ impl Runner {
     /// fresh, so the serve path's retention policy holds per-block decisions
     /// stable.
     pub(crate) fn record_turn_cache(&self, usage: &Usage) {
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
         self.cached_prefix
@@ -57,7 +59,7 @@ impl Runner {
     /// A shared handle to the cached-prefix state. The serve path's retention
     /// policy reads it; compact bumps the generation to clear per-block
     /// decisions.
-    pub fn cached_prefix(&self) -> &std::sync::Arc<CachedPrefixState> {
+    pub fn cached_prefix(&self) -> &Arc<CachedPrefixState> {
         &self.cached_prefix
     }
 }

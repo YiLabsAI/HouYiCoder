@@ -1,9 +1,12 @@
 use super::*;
+use crate::agent::conditional_activation::ConditionalSkillActivator;
 use houyicoder_api::sandbox::SandboxSession;
 use houyicoder_api::skill::{
     ProjectIdentity, SkillDescriptor, SkillError, SkillFamily, SkillProvenance, SkillRegistry,
     SkillSnapshot, SkillSource,
 };
+use houyicoder_context::ExecConfig;
+use houyicoder_context::SandboxError;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -403,7 +406,7 @@ impl StubActivator {
         s
     }
 }
-impl crate::agent::conditional_activation::ConditionalSkillActivator for StubActivator {
+impl ConditionalSkillActivator for StubActivator {
     fn activate_for_paths(&self, _file_paths: &[String]) -> Vec<String> {
         Vec::new()
     }
@@ -452,22 +455,14 @@ impl SandboxSession for RecordingSession {
     fn exec_with_config(
         &self,
         _: &str,
-        _: houyicoder_context::ExecConfig,
-    ) -> PFut<'_, Result<houyicoder_context::ExecResult, houyicoder_context::SandboxError>> {
-        Box::pin(async { Err(houyicoder_context::SandboxError::Unsupported("test".into())) })
+        _: ExecConfig,
+    ) -> PFut<'_, Result<houyicoder_context::ExecResult, SandboxError>> {
+        Box::pin(async { Err(SandboxError::Unsupported("test".into())) })
     }
-    fn read_file(
-        &self,
-        _: &str,
-        _: usize,
-    ) -> PFut<'_, Result<Vec<u8>, houyicoder_context::SandboxError>> {
+    fn read_file(&self, _: &str, _: usize) -> PFut<'_, Result<Vec<u8>, SandboxError>> {
         Box::pin(async { Ok(Vec::new()) })
     }
-    fn write_file(
-        &self,
-        _: &str,
-        _: Vec<u8>,
-    ) -> PFut<'_, Result<(), houyicoder_context::SandboxError>> {
+    fn write_file(&self, _: &str, _: Vec<u8>) -> PFut<'_, Result<(), SandboxError>> {
         Box::pin(async { Ok(()) })
     }
     fn workspace_root(&self) -> Arc<Path> {
@@ -585,9 +580,7 @@ async fn test_skill_grants_sandbox_entitlements() {
     );
     // The trait's other methods are stubs; exercise them so the mock's
     // full surface is covered (the grant path does not call them).
-    let _r = session
-        .exec_with_config("x", houyicoder_context::ExecConfig::default())
-        .await;
+    let _r = session.exec_with_config("x", ExecConfig::default()).await;
     let _r = session.read_file("x", 1).await;
     let _r = session.write_file("x", Vec::new()).await;
     assert_eq!(session.workspace_root().as_os_str(), "/");

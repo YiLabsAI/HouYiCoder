@@ -67,8 +67,18 @@ use std::env;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 
+use super::SkillSlashOutcome;
+use crate::agent::ConditionalActivation;
+use crate::agent::HookContext;
+use crate::agent::RunOutcome;
 use crate::agent::SkillHookRegistrar;
+use crate::agent::ToolRegistry;
+use crate::agent::runner_config::RunnerConfig;
 use crate::agent::{HookEvent, HookPayload, HookRegistry, ToolResult};
+use crate::provider::test_support::FakeProvider;
+use houyicoder_context::SandboxError;
+use houyicoder_context::SessionEvent;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// A stub registry: "commit" is user-invocable + echoes args, "secret"
 /// is not user-invocable, anything else NotFound.
@@ -138,9 +148,9 @@ fn runner_with_slash() -> Runner {
     let store: Arc<dyn SessionLog> = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     Runner::new(
         store,
-        Arc::new(crate::provider::test_support::FakeProvider::text("done")),
-        crate::agent::ToolRegistry::new(),
-        crate::agent::runner_config::RunnerConfig {
+        Arc::new(FakeProvider::text("done")),
+        ToolRegistry::new(),
+        RunnerConfig {
             model: "test".into(),
             instructions: String::new(),
             max_turns: 5,
@@ -196,9 +206,9 @@ async fn test_missing_origin_fails_closed() {
     let store: Arc<dyn SessionLog> = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let runner = Runner::new(
         store,
-        Arc::new(crate::provider::test_support::FakeProvider::text("done")),
-        crate::agent::ToolRegistry::new(),
-        crate::agent::runner_config::RunnerConfig::default(),
+        Arc::new(FakeProvider::text("done")),
+        ToolRegistry::new(),
+        RunnerConfig::default(),
     )
     .with_skill_registry(Arc::new(MissingOriginRegistry));
     let outcome = runner
@@ -257,9 +267,9 @@ async fn test_resolve_noop_without_registry() {
     let store: Arc<dyn SessionLog> = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let runner = Runner::new(
         store,
-        Arc::new(crate::provider::test_support::FakeProvider::text("done")),
-        crate::agent::ToolRegistry::new(),
-        crate::agent::runner_config::RunnerConfig {
+        Arc::new(FakeProvider::text("done")),
+        ToolRegistry::new(),
+        RunnerConfig {
             model: "test".into(),
             instructions: String::new(),
             max_turns: 5,
@@ -282,7 +292,6 @@ async fn test_resolve_noop_without_registry() {
 /// run() entry integration (resolve + append SkillBody).
 #[tokio::test]
 async fn test_run_lands_skill_body() {
-    use houyicoder_context::SessionEvent;
     let runner = runner_with_slash();
     let session = SessionId::new();
     runner
@@ -322,7 +331,6 @@ async fn test_run_lands_skill_body() {
 /// assistant message.
 #[tokio::test]
 async fn test_run_refused_skips_model() {
-    use houyicoder_context::SessionEvent;
     let runner = runner_with_slash();
     let session = SessionId::new();
     let result = runner
@@ -331,7 +339,7 @@ async fn test_run_refused_skips_model() {
         .expect("run completes");
     assert_eq!(result.turns, 0, "no model turns for a refused skill");
     assert!(
-        matches!(result.outcome, crate::agent::RunOutcome::FinalOutput(_)),
+        matches!(result.outcome, RunOutcome::FinalOutput(_)),
         "turn ended without a model call"
     );
     let view = runner.store().current_view(session).await.unwrap();
@@ -416,9 +424,9 @@ async fn test_invoke_registers_hook_timing() {
     let store: Arc<dyn SessionLog> = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let runner = Runner::new(
         store,
-        Arc::new(crate::provider::test_support::FakeProvider::text("done")),
-        crate::agent::ToolRegistry::new(),
-        crate::agent::runner_config::RunnerConfig {
+        Arc::new(FakeProvider::text("done")),
+        ToolRegistry::new(),
+        RunnerConfig {
             model: "test".into(),
             instructions: String::new(),
             max_turns: 5,
@@ -436,7 +444,7 @@ async fn test_invoke_registers_hook_timing() {
         .await;
     assert!(matches!(outcome, SkillSlashOutcome::Prepared { .. }));
     // After invoke: the spec registered, dispatch fires it.
-    let ctx = crate::agent::HookContext {
+    let ctx = HookContext {
         event: HookEvent::PostToolUse,
         payload: HookPayload::PostToolUse {
             tool_name: "bash".into(),
@@ -495,13 +503,13 @@ fn paths_descriptor(name: &str) -> SkillDescriptor {
     }
 }
 
-fn runner_with_paths(activator: Arc<dyn crate::agent::ConditionalSkillActivator>) -> Runner {
+fn runner_with_paths(activator: Arc<dyn ConditionalSkillActivator>) -> Runner {
     let store: Arc<dyn SessionLog> = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     Runner::new(
         store,
-        Arc::new(crate::provider::test_support::FakeProvider::text("done")),
-        crate::agent::ToolRegistry::new(),
-        crate::agent::runner_config::RunnerConfig {
+        Arc::new(FakeProvider::text("done")),
+        ToolRegistry::new(),
+        RunnerConfig {
             model: "test".into(),
             instructions: String::new(),
             max_turns: 5,
@@ -519,7 +527,7 @@ fn runner_with_paths(activator: Arc<dyn crate::agent::ConditionalSkillActivator>
 async fn test_slash_conditional_refuses() {
     let reg: Arc<dyn SkillRegistry> = Arc::new(PathsSlashRegistry);
     let cwd = env::temp_dir().join("houyi-slash-refuse");
-    let activator = Arc::new(crate::agent::ConditionalActivation::new(reg, cwd));
+    let activator = Arc::new(ConditionalActivation::new(reg, cwd));
     let runner = runner_with_paths(activator);
     let outcome = runner
         .resolve_skill_slash(SessionId::new(), "@skill:gated")
@@ -537,7 +545,7 @@ async fn test_slash_conditional_refuses() {
 async fn test_slash_conditional_passes() {
     let reg: Arc<dyn SkillRegistry> = Arc::new(PathsSlashRegistry);
     let cwd = env::temp_dir().join("houyi-slash-pass");
-    let activator = Arc::new(crate::agent::ConditionalActivation::new(reg, cwd));
+    let activator = Arc::new(ConditionalActivation::new(reg, cwd));
     // Activate via a matching file, then slash reaches the body.
     activator.activate_for_paths(&["src/foo.rs".to_string()]);
     let runner = runner_with_paths(activator);
@@ -558,8 +566,6 @@ async fn test_slash_conditional_passes() {
 /// the error path is wired, not silently skipped.
 #[tokio::test]
 async fn test_slash_load_error_refusal() {
-    use std::sync::atomic::{AtomicU64, Ordering};
-
     struct LoadFailRegistry {
         refused: AtomicU64,
     }
@@ -602,9 +608,9 @@ async fn test_slash_load_error_refusal() {
     let store: Arc<dyn SessionLog> = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let runner = Runner::new(
         store,
-        Arc::new(crate::provider::test_support::FakeProvider::text("done")),
-        crate::agent::ToolRegistry::new(),
-        crate::agent::runner_config::RunnerConfig {
+        Arc::new(FakeProvider::text("done")),
+        ToolRegistry::new(),
+        RunnerConfig {
             model: "test".into(),
             instructions: String::new(),
             max_turns: 5,
@@ -666,9 +672,9 @@ async fn test_session_context_injection() {
     let store: Arc<dyn SessionLog> = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let runner = Runner::new(
         store,
-        Arc::new(crate::provider::test_support::FakeProvider::text("done")),
-        crate::agent::ToolRegistry::new(),
-        crate::agent::runner_config::RunnerConfig {
+        Arc::new(FakeProvider::text("done")),
+        ToolRegistry::new(),
+        RunnerConfig {
             model: "test".into(),
             instructions: String::new(),
             max_turns: 5,
@@ -719,24 +725,21 @@ impl SandboxSession for SlashRecordingSession {
         &self,
         _: &str,
         _: houyicoder_context::ExecConfig,
-    ) -> houyicoder_async::PFut<
-        '_,
-        Result<houyicoder_context::ExecResult, houyicoder_context::SandboxError>,
-    > {
-        Box::pin(async { Err(houyicoder_context::SandboxError::Unsupported("test".into())) })
+    ) -> houyicoder_async::PFut<'_, Result<houyicoder_context::ExecResult, SandboxError>> {
+        Box::pin(async { Err(SandboxError::Unsupported("test".into())) })
     }
     fn read_file(
         &self,
         _: &str,
         _: usize,
-    ) -> houyicoder_async::PFut<'_, Result<Vec<u8>, houyicoder_context::SandboxError>> {
+    ) -> houyicoder_async::PFut<'_, Result<Vec<u8>, SandboxError>> {
         Box::pin(async { Ok(Vec::new()) })
     }
     fn write_file(
         &self,
         _: &str,
         _: Vec<u8>,
-    ) -> houyicoder_async::PFut<'_, Result<(), houyicoder_context::SandboxError>> {
+    ) -> houyicoder_async::PFut<'_, Result<(), SandboxError>> {
         Box::pin(async { Ok(()) })
     }
     fn workspace_root(&self) -> Arc<Path> {
@@ -766,7 +769,7 @@ async fn test_slash_grants() {
         .resolve_skill_slash(SessionId::new(), "@skill:launcher")
         .await;
     assert!(
-        matches!(outcome, super::SkillSlashOutcome::Prepared { .. }),
+        matches!(outcome, SkillSlashOutcome::Prepared { .. }),
         "launcher skill should resolve: {outcome:?}"
     );
     assert_eq!(

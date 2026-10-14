@@ -9,6 +9,8 @@ use houyicoder_context::{
     CheckpointManifest, ContextError, Disposition, EventId, SessionEvent, SessionId,
     SessionLogEntry,
 };
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 /// Result of a compaction recording. Carries the persisted manifest, whether
 /// any events were actually folded (no-progress detection), and a count of
@@ -42,8 +44,8 @@ pub(super) async fn record_compaction(
     let made_progress = folded_count > 0;
     store.write_checkpoint(manifest.clone()).await?;
     if let Some(summary_text) = &manifest.summary {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
         store

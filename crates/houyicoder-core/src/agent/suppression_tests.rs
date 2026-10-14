@@ -9,11 +9,17 @@ use houyicoder_session::SessionStore;
 use super::{CompactionSuppression, SuppressionCause};
 use crate::agent::runner_config::RunnerConfig;
 use crate::agent::{Runner, ToolRegistry};
+use crate::provider::test_support::FakeProvider;
+use houyicoder_async::PFut;
+use houyicoder_context::SessionEvent;
+use houyicoder_context::{ContextBackend, ContextError, EventId, SessionLogEntry};
+use houyicoder_protocol::llm::Usage;
+use std::sync::atomic::Ordering;
 
 fn runner() -> Runner {
     Runner::new(
-        std::sync::Arc::new(SessionStore::new(Box::new(InMemoryBackend::new()))),
-        Arc::new(crate::provider::test_support::FakeProvider::text("ok")),
+        Arc::new(SessionStore::new(Box::new(InMemoryBackend::new()))),
+        Arc::new(FakeProvider::text("ok")),
         ToolRegistry::new(),
         RunnerConfig {
             max_turns: 5,
@@ -177,8 +183,7 @@ fn test_success_resets_failure_streak() {
     r.record_compaction_failure(SuppressionCause::Transient);
     // Simulate the success path: clear suppress + reset the streak.
     r.set_compaction_suppression(CompactionSuppression::None);
-    r.compaction_transient_failures
-        .store(0, std::sync::atomic::Ordering::Relaxed);
+    r.compaction_transient_failures.store(0, Ordering::Relaxed);
     r.record_compaction_failure(SuppressionCause::Transient);
     assert_eq!(
         r.compaction_suppression(),
@@ -205,9 +210,6 @@ fn test_model_switch_resets_streak() {
 
 #[tokio::test]
 async fn test_auto_failure_suppression() {
-    use houyicoder_async::PFut;
-    use houyicoder_context::{ContextBackend, ContextError, EventId, SessionLogEntry};
-
     /// A backend whose write_checkpoint always fails, so the auto compact's
     /// commit errors + the suppress is set. append succeeds so the
     /// TurnStarted marker + replay work.
@@ -247,10 +249,10 @@ async fn test_auto_failure_suppression() {
         }
     }
 
-    let store = std::sync::Arc::new(SessionStore::new(Box::new(FailingBackend)));
+    let store = Arc::new(SessionStore::new(Box::new(FailingBackend)));
     let r = Runner::new(
         store,
-        Arc::new(crate::provider::test_support::FakeProvider::text("ok")),
+        Arc::new(FakeProvider::text("ok")),
         ToolRegistry::new(),
         RunnerConfig {
             max_turns: 5,
@@ -274,8 +276,6 @@ async fn test_auto_failure_suppression() {
 /// pre-compact input tokens, so max(estimate, stale) re-tripped the gate.
 #[tokio::test]
 async fn test_compact_clears_stale_delta() {
-    use houyicoder_context::{EventId, SessionEvent, SessionLogEntry};
-    use houyicoder_protocol::llm::Usage;
     let r = runner();
     let session = SessionId::new();
     // Seed events so compress has something to fold.

@@ -15,6 +15,15 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use crate::agent::git_discard::command_triggers_git_snapshot;
+use std::fs::copy;
+use std::fs::create_dir_all;
+use std::fs::read_dir;
+use std::fs::remove_dir_all;
+use std::fs::remove_file;
+use std::fs::write;
+use std::io::ErrorKind;
+use std::time::SystemTime;
 use walkdir::WalkDir;
 
 /// Directories excluded from a snapshot: the snapshot store itself (prevents
@@ -50,7 +59,7 @@ pub fn is_destructive_command(command: &str) -> bool {
     // git checkout <branch> switch does NOT trigger a snapshot. Matches
     // the consent-gate classifier in the permission crate; keep both in
     // sync.
-    let has_git_discard = crate::agent::git_discard::command_triggers_git_snapshot(command);
+    let has_git_discard = command_triggers_git_snapshot(command);
     has_rm || has_sudo || has_redirect || has_git_discard
 }
 
@@ -209,7 +218,7 @@ impl SnapshotStore {
     pub fn new(workspace_root: impl AsRef<Path>) -> std::io::Result<Self> {
         let workspace_root = workspace_root.as_ref().to_path_buf();
         let store_root = workspace_root.join(".houyicoder").join("snapshots");
-        std::fs::create_dir_all(&store_root)?;
+        create_dir_all(&store_root)?;
         // Scan existing snap-N dirs to avoid id collision across restarts.
         // The store dir persists across processes; a fresh counter at 0
         // would land new snap-0 on top of old snap-0.
@@ -246,7 +255,7 @@ impl SnapshotStore {
     /// /undo after a restart, the same as before this re-link.
     pub fn relink_undo_entries(&self) -> Vec<UndoEntry> {
         let mut ids: Vec<u64> = Vec::new();
-        if let Ok(dir) = std::fs::read_dir(&self.store_root) {
+        if let Ok(dir) = read_dir(&self.store_root) {
             for entry in dir.flatten() {
                 let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
                 if !is_dir {
@@ -292,12 +301,12 @@ impl SnapshotStore {
         *self.reflink_capable.get_or_init(|| {
             let src = self.store_root.join(".reflink-test-src");
             let dst = self.store_root.join(".reflink-test-dst");
-            if std::fs::write(&src, b"t").is_err() {
+            if write(&src, b"t").is_err() {
                 return false;
             }
             let ok = reflink_copy::reflink(&src, &dst).is_ok();
-            let _r1 = std::fs::remove_file(&src);
-            let _r2 = std::fs::remove_file(&dst);
+            let _r1 = remove_file(&src);
+            let _r2 = remove_file(&dst);
             ok
         })
     }
@@ -364,7 +373,7 @@ impl SnapshotStore {
         // I/O error does not leave an orphan dir (prune would reap it
         // eventually, but only after it ages past TTL or trips the size cap).
         if let Err(e) = self.snapshot_walk(&snap_dir, additional) {
-            let _cleanup = std::fs::remove_dir_all(&snap_dir);
+            let _cleanup = remove_dir_all(&snap_dir);
             return Err(e);
         }
         let entry = UndoEntry::CoWSnapshot {
@@ -378,7 +387,7 @@ impl SnapshotStore {
     }
 
     fn snapshot_walk(&self, snap_dir: &Path, additional: &[PathBuf]) -> std::io::Result<()> {
-        std::fs::create_dir_all(snap_dir)?;
+        create_dir_all(snap_dir)?;
         // The workspace root maps to snap_dir/<rel>. Each additional writable
         // root (user-added working dir, outside the workspace) maps to
         // snap_dir/__extra/<i>/<rel> so restore can route it back to its
@@ -386,7 +395,7 @@ impl SnapshotStore {
         self.walk_root_into(snap_dir, &self.workspace_root)?;
         for (i, root) in additional.iter().enumerate() {
             let extra_dir = snap_dir.join("__extra").join(i.to_string());
-            std::fs::create_dir_all(&extra_dir)?;
+            create_dir_all(&extra_dir)?;
             self.walk_root_into(&extra_dir, root)?;
         }
         Ok(())
@@ -406,10 +415,10 @@ impl SnapshotStore {
             let rel = entry.path().strip_prefix(root).unwrap_or(entry.path());
             let dst_path = dst.join(rel);
             if entry.file_type().is_dir() {
-                std::fs::create_dir_all(&dst_path)?;
+                create_dir_all(&dst_path)?;
             } else if entry.file_type().is_file() {
                 if let Some(parent) = dst_path.parent() {
-                    std::fs::create_dir_all(parent)?;
+                    create_dir_all(parent)?;
                 }
                 reflink_copy::reflink_or_copy(entry.path(), &dst_path)?;
             }
@@ -450,9 +459,9 @@ impl SnapshotStore {
                 Ok(())
             }
             UndoEntry::BeforeImage { path, before } => match before {
-                Some(bytes) => std::fs::write(path, bytes),
-                None => std::fs::remove_file(path).or_else(|e| {
-                    if e.kind() == std::io::ErrorKind::NotFound {
+                Some(bytes) => write(path, bytes),
+                None => remove_file(path).or_else(|e| {
+                    if e.kind() == ErrorKind::NotFound {
                         Ok(())
                     } else {
                         Err(e)
@@ -485,12 +494,12 @@ impl SnapshotStore {
             }
             let dst = dest_root.join(rel);
             if entry.file_type().is_dir() {
-                std::fs::create_dir_all(&dst)?;
+                create_dir_all(&dst)?;
             } else if entry.file_type().is_file() {
                 if let Some(parent) = dst.parent() {
-                    std::fs::create_dir_all(parent)?;
+                    create_dir_all(parent)?;
                 }
-                std::fs::copy(entry.path(), &dst)?;
+                copy(entry.path(), &dst)?;
             }
         }
         Ok(())
@@ -502,9 +511,9 @@ impl SnapshotStore {
     /// (entries still referenced by the undo stack) are never removed.
     pub fn prune(&self, ttl_secs: u64, max_size: u64, protected: &[PathBuf]) -> usize {
         let mut removed = 0;
-        let now = std::time::SystemTime::now();
-        let mut snaps: Vec<(PathBuf, std::time::SystemTime, u64)> = Vec::new();
-        if let Ok(entries) = std::fs::read_dir(&self.store_root) {
+        let now = SystemTime::now();
+        let mut snaps: Vec<(PathBuf, SystemTime, u64)> = Vec::new();
+        if let Ok(entries) = read_dir(&self.store_root) {
             for entry in entries.flatten() {
                 let path = entry.path();
                 if !path.is_dir() {
@@ -521,7 +530,7 @@ impl SnapshotStore {
                 let age = now.duration_since(mtime).unwrap_or_default();
                 let size = dir_size(&path);
                 if age.as_secs() > ttl_secs {
-                    let _r3 = std::fs::remove_dir_all(&path);
+                    let _r3 = remove_dir_all(&path);
                     removed += 1;
                 } else {
                     snaps.push((path, mtime, size));
@@ -534,7 +543,7 @@ impl SnapshotStore {
             if total <= max_size {
                 break;
             }
-            let _r4 = std::fs::remove_dir_all(path);
+            let _r4 = remove_dir_all(path);
             total -= size;
             removed += 1;
         }
@@ -565,7 +574,7 @@ fn reflink_policy(can_reflink: bool, workspace_size: u64) -> std::io::Result<()>
     }
     if workspace_size > NO_REFLINK_SIZE_THRESHOLD {
         return Err(std::io::Error::new(
-            std::io::ErrorKind::Unsupported,
+            ErrorKind::Unsupported,
             format!(
                 "reflink unavailable (ext4?) + workspace {} bytes > {} threshold; \
                  degrade to Ask instead of slow copy",
@@ -580,7 +589,7 @@ fn reflink_policy(can_reflink: bool, workspace_size: u64) -> std::io::Result<()>
 /// starts its counter past existing snapshots (avoids collision).
 fn scan_max_snapshot_id(store_root: &Path) -> u64 {
     let mut max = 0;
-    if let Ok(entries) = std::fs::read_dir(store_root) {
+    if let Ok(entries) = read_dir(store_root) {
         for entry in entries.flatten() {
             if entry.file_type().map(|t| t.is_dir()).unwrap_or(false)
                 && let Some(name) = entry.file_name().to_str()

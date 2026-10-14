@@ -12,18 +12,28 @@ use tokio::process::Command;
 use tokio_util::sync::CancellationToken;
 
 use houyicoder_protocol::extension::ToolError;
+use std::env::split_paths;
+use std::env::var;
+use std::env::var_os;
+use std::fs::metadata;
+use std::io::ErrorKind;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+use std::process::Output;
+use tokio::io::BufReader;
+use tokio::task::spawn;
 
 /// Locate the rg binary. Ok(Some) means a usable binary was found; None
 /// means not found, so the caller falls back to the in-process traversal.
 pub(crate) fn find_rg() -> Option<PathBuf> {
-    if let Ok(p) = std::env::var("HOUYI_RG_PATH") {
+    if let Ok(p) = var("HOUYI_RG_PATH") {
         let candidate = PathBuf::from(p);
         if candidate.is_file() {
             return Some(candidate);
         }
     }
-    let path_var = std::env::var_os("PATH")?;
-    for dir in std::env::split_paths(&path_var) {
+    let path_var = var_os("PATH")?;
+    for dir in split_paths(&path_var) {
         let candidate = dir.join("rg");
         if is_executable(&candidate) {
             return Some(candidate);
@@ -34,8 +44,7 @@ pub(crate) fn find_rg() -> Option<PathBuf> {
 
 #[cfg(unix)]
 fn is_executable(p: &Path) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-    match std::fs::metadata(p) {
+    match metadata(p) {
         Ok(m) => m.is_file() && m.permissions().mode() & 0o111 != 0,
         Err(_) => false,
     }
@@ -43,7 +52,7 @@ fn is_executable(p: &Path) -> bool {
 
 #[cfg(not(unix))]
 fn is_executable(p: &Path) -> bool {
-    std::fs::metadata(p).map(|m| m.is_file()).unwrap_or(false)
+    metadata(p).map(|m| m.is_file()).unwrap_or(false)
 }
 
 /// Spawn rg with the given args and target, race the cancellation token
@@ -68,7 +77,7 @@ pub(crate) async fn spawn_rg_select_cancel(
     args: &[String],
     target: &Path,
     cancel: Option<&CancellationToken>,
-) -> Result<Option<std::process::Output>, ToolError> {
+) -> Result<Option<Output>, ToolError> {
     let mut cmd = Command::new(rg);
     cmd.args(args);
     cmd.arg(target);
@@ -85,20 +94,20 @@ pub(crate) async fn spawn_rg_select_cancel(
     cmd.kill_on_drop(true);
     let mut child = match cmd.spawn() {
         Ok(c) => c,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(ToolError::Failed(format!("spawn rg: {e}"))),
     };
     let stdout = child.stdout.take().expect("piped stdout");
     let stderr = child.stderr.take().expect("piped stderr");
-    let stdout_task = tokio::task::spawn(async move {
+    let stdout_task = spawn(async move {
         let mut buf = Vec::new();
-        let mut reader = tokio::io::BufReader::new(stdout);
+        let mut reader = BufReader::new(stdout);
         let _result = reader.read_to_end(&mut buf).await;
         buf
     });
-    let stderr_task = tokio::task::spawn(async move {
+    let stderr_task = spawn(async move {
         let mut buf = Vec::new();
-        let mut reader = tokio::io::BufReader::new(stderr);
+        let mut reader = BufReader::new(stderr);
         let _result = reader.read_to_end(&mut buf).await;
         buf
     });
@@ -137,7 +146,7 @@ pub(crate) async fn spawn_rg_select_cancel(
             stderr_text.trim()
         )));
     }
-    Ok(Some(std::process::Output {
+    Ok(Some(Output {
         status,
         stdout: stdout_bytes,
         stderr: stderr_bytes,

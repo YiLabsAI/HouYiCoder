@@ -6,7 +6,19 @@
 
 use std::path::{Path, PathBuf};
 
+use houyicoder_api::sandbox::is_within_bounds;
 use houyicoder_protocol::extension::ToolError;
+#[cfg(test)]
+use std::env::temp_dir;
+#[cfg(test)]
+use std::fs::create_dir_all;
+#[cfg(test)]
+use std::fs::remove_dir_all;
+#[cfg(test)]
+use std::fs::write;
+use std::path::Component;
+#[cfg(test)]
+use std::process::id;
 
 /// Canonicalize without the Windows verbatim prefix. The std form returns
 /// \\?\ paths, which break glob patterns and git arguments; dunce drops the
@@ -42,7 +54,7 @@ pub(crate) fn confine_path(
         .collect();
     match canonicalize(&candidate) {
         Ok(canonical) => {
-            if houyicoder_api::sandbox::is_within_bounds(&canonical, &croot, &extra) {
+            if is_within_bounds(&canonical, &croot, &extra) {
                 Ok(canonical)
             } else {
                 Err(ToolError::PathEscapes("path escapes workspace".into()))
@@ -79,8 +91,8 @@ fn normalize_lexical(p: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for c in p.components() {
         match c {
-            std::path::Component::CurDir => {}
-            std::path::Component::ParentDir => {
+            Component::CurDir => {}
+            Component::ParentDir => {
                 out.pop();
             }
             other => out.push(other.as_os_str()),
@@ -137,20 +149,20 @@ mod tests {
     /// regression that over-rejects is caught.
     #[test]
     fn test_confine_path_accepts_inside() {
-        let dir = std::env::temp_dir().join(format!("path-util-inside-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("mkdir");
+        let dir = temp_dir().join(format!("path-util-inside-{}", id()));
+        create_dir_all(&dir).expect("mkdir");
         let file = dir.join("a.txt");
-        std::fs::write(&file, b"x").expect("write");
+        write(&file, b"x").expect("write");
         let confined = confine_path(&dir, &[], "a.txt").expect("inside root");
         assert_eq!(confined, canonicalize(&file).unwrap());
-        std::fs::remove_dir_all(&dir).ok();
+        remove_dir_all(&dir).ok();
     }
 
     /// Forward slashes whatever the host separator is. Built with join so
     /// strip_prefix sees a real platform path (backslash on Windows).
     #[test]
     fn test_relativize_normalizes_separators() {
-        let root = std::env::temp_dir().join("path-util-sep-root");
+        let root = temp_dir().join("path-util-sep-root");
         let nested = root.join("src").join("a.rs");
         assert_eq!(relativize(&root, &nested), "src/a.rs");
     }
@@ -170,26 +182,26 @@ mod tests {
     /// exists outside the workspace.
     #[test]
     fn test_confine_path_rejects_escape() {
-        let dir = std::env::temp_dir().join(format!("path-util-esc-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("mkdir");
+        let dir = temp_dir().join(format!("path-util-esc-{}", id()));
+        create_dir_all(&dir).expect("mkdir");
         let err = confine_path(&dir, &[], "../../etc").expect_err("escape rejected");
         assert!(
             matches!(err, ToolError::PathEscapes(_)),
             "escape surfaces as PathEscapes"
         );
-        std::fs::remove_dir_all(&dir).ok();
+        remove_dir_all(&dir).ok();
     }
 
     /// require_dir rejects a file path with a clear error naming the path.
     #[test]
     fn test_require_dir_rejects_file() {
-        let dir = std::env::temp_dir().join(format!("path-util-dir-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("mkdir");
+        let dir = temp_dir().join(format!("path-util-dir-{}", id()));
+        create_dir_all(&dir).expect("mkdir");
         let file = dir.join("a.txt");
-        std::fs::write(&file, b"x").expect("write");
+        write(&file, b"x").expect("write");
         assert!(require_dir(&file).is_err(), "a file is not a directory");
         assert!(require_dir(&dir).is_ok(), "the dir itself is a directory");
-        std::fs::remove_dir_all(&dir).ok();
+        remove_dir_all(&dir).ok();
     }
 
     /// The shared boundary predicate: a canonical candidate is within bounds
@@ -198,27 +210,27 @@ mod tests {
     /// cannot drift on what "inside the workspace" means.
     #[test]
     fn test_within_bounds_covers_extra() {
-        let root = std::env::temp_dir().join(format!("path-util-bounds-{}", std::process::id()));
-        std::fs::create_dir_all(&root).expect("mkdir");
-        let extra = std::env::temp_dir().join(format!("path-util-extra-{}", std::process::id()));
-        std::fs::create_dir_all(&extra).expect("mkdir extra");
+        let root = temp_dir().join(format!("path-util-bounds-{}", id()));
+        create_dir_all(&root).expect("mkdir");
+        let extra = temp_dir().join(format!("path-util-extra-{}", id()));
+        create_dir_all(&extra).expect("mkdir extra");
         let croot = canonicalize(&root).unwrap();
         let cextra = canonicalize(&extra).unwrap();
         let additional = vec![cextra.clone()];
         assert!(
-            houyicoder_api::sandbox::is_within_bounds(&croot.join("a.txt"), &croot, &additional),
+            is_within_bounds(&croot.join("a.txt"), &croot, &additional),
             "inside root is within bounds"
         );
         assert!(
-            houyicoder_api::sandbox::is_within_bounds(&cextra.join("b.txt"), &croot, &additional),
+            is_within_bounds(&cextra.join("b.txt"), &croot, &additional),
             "inside an additional dir is within bounds"
         );
-        let outside = std::env::temp_dir().join(format!("path-util-out-{}", std::process::id()));
+        let outside = temp_dir().join(format!("path-util-out-{}", id()));
         assert!(
-            !houyicoder_api::sandbox::is_within_bounds(&outside, &croot, &additional),
+            !is_within_bounds(&outside, &croot, &additional),
             "outside both is not within bounds"
         );
-        std::fs::remove_dir_all(&root).ok();
-        std::fs::remove_dir_all(&extra).ok();
+        remove_dir_all(&root).ok();
+        remove_dir_all(&extra).ok();
     }
 }

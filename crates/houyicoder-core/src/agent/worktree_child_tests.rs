@@ -24,6 +24,9 @@ use super::ChildCleanup;
 use super::ExitAction;
 use super::run_conservative_reclaim;
 use super::tests::{make_repo, wired, wired_err};
+use houyicoder_api::provider::ModelProvider;
+use std::fs::remove_dir_all;
+use std::fs::write;
 
 /// enter_for_child creates a worktree + returns a guard, without entering a
 /// user worktree session or repointing the parent cwd. The parent stays
@@ -48,7 +51,7 @@ async fn test_enter_child_leaves_parent() {
         "parent not in a user worktree session"
     );
     assert_eq!(*cwd.read().unwrap(), repo, "parent cwd unchanged");
-    std::fs::remove_dir_all(&repo).ok();
+    remove_dir_all(&repo).ok();
 }
 
 /// enter_for_child refuses while a sandbox exec is in flight (an in-flight
@@ -62,7 +65,7 @@ async fn test_enter_child_refused_inflight() {
         Ok(_) => panic!("in-flight must refuse"),
         Err(e) => assert!(e.to_string().contains("in flight"), "{e}"),
     }
-    std::fs::remove_dir_all(&repo).ok();
+    remove_dir_all(&repo).ok();
 }
 
 /// spawn_child with Worktree isolation creates a child + a per-child
@@ -73,8 +76,7 @@ async fn test_spawn_child_worktree_isolation() {
     let repo = make_repo(12);
     let (controller, store, _cwd) = wired(&repo, 0);
     let parent_sid = SessionId::new();
-    let provider: std::sync::Arc<dyn houyicoder_api::provider::ModelProvider> =
-        std::sync::Arc::new(FakeProvider::text("ok"));
+    let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("ok"));
     let req = SpawnRequest {
         parent_sid,
         parent_store: store.clone(),
@@ -109,7 +111,7 @@ async fn test_spawn_child_worktree_isolation() {
         .expect("spawn boundary present");
     assert_eq!(iso, "worktree", "boundary records the worktree isolation");
     drop(handle);
-    std::fs::remove_dir_all(&repo).ok();
+    remove_dir_all(&repo).ok();
 }
 
 /// A worktree fence failure rejects the spawn (fail-closed: no degradation
@@ -121,8 +123,7 @@ async fn test_spawn_child_fence_fail() {
     let controller = wired_err(&repo);
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let parent_sid = SessionId::new();
-    let provider: std::sync::Arc<dyn houyicoder_api::provider::ModelProvider> =
-        std::sync::Arc::new(FakeProvider::text("ok"));
+    let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("ok"));
     let req = SpawnRequest {
         parent_sid,
         parent_store: store.clone(),
@@ -153,7 +154,7 @@ async fn test_spawn_child_fence_fail() {
         store.trajectory_snapshot(parent_sid).is_empty(),
         "a rejected spawn writes no boundary"
     );
-    std::fs::remove_dir_all(&repo).ok();
+    remove_dir_all(&repo).ok();
 }
 
 /// cleanup_child on a clean worktree (no uncommitted files, no new commits)
@@ -174,7 +175,7 @@ async fn test_cleanup_clean_worktree_removed() {
         ChildCleanup::Kept { .. } => panic!("clean worktree must be removed, not kept"),
     }
     assert!(!path.exists(), "clean worktree dir removed");
-    std::fs::remove_dir_all(&repo).ok();
+    remove_dir_all(&repo).ok();
 }
 
 /// cleanup_child on a dirty worktree (uncommitted changes) restores the
@@ -188,7 +189,7 @@ async fn test_cleanup_dirty_worktree_kept() {
         .enter_for_child("agent-dirty".into())
         .await
         .expect("enter");
-    std::fs::write(cw.worktree_path.join("uncommitted.txt"), "dirty").expect("write");
+    write(cw.worktree_path.join("uncommitted.txt"), "dirty").expect("write");
     let path = cw.worktree_path.clone();
     let outcome = controller.cleanup_child(cw).await;
     match outcome {
@@ -202,7 +203,7 @@ async fn test_cleanup_dirty_worktree_kept() {
         ChildCleanup::Removed { .. } => panic!("dirty worktree must be kept, not removed"),
     }
     assert!(path.exists(), "dirty worktree dir preserved");
-    std::fs::remove_dir_all(&repo).ok();
+    remove_dir_all(&repo).ok();
 }
 
 /// reclaim_abandoned removes a clean per-child worktree that was never
@@ -226,7 +227,7 @@ async fn test_reclaim_removes_clean_worktree() {
     assert!(path.exists(), "drop leaves the worktree for reclaim");
     controller.reclaim_abandoned().await;
     assert!(!path.exists(), "abandoned clean worktree removed");
-    std::fs::remove_dir_all(&repo).ok();
+    remove_dir_all(&repo).ok();
 }
 
 /// reclaim_abandoned preserves a dirty per-child worktree (uncommitted
@@ -240,12 +241,12 @@ async fn test_reclaim_keeps_dirty_worktree() {
         .enter_for_child("agent-abandon-dirty".into())
         .await
         .expect("enter");
-    std::fs::write(cw.worktree_path.join("uncommitted.txt"), "dirty").expect("write");
+    write(cw.worktree_path.join("uncommitted.txt"), "dirty").expect("write");
     let path = cw.worktree_path.clone();
     drop(cw);
     controller.reclaim_abandoned().await;
     assert!(path.exists(), "dirty abandoned worktree preserved");
-    std::fs::remove_dir_all(&repo).ok();
+    remove_dir_all(&repo).ok();
 }
 
 /// The shutdown sweep removes an abandoned clean worktree without firing
@@ -277,7 +278,7 @@ async fn test_reclaim_skips_remove_hook() {
         !fired.contains(&HookEventKind::WorktreeRemove),
         "sweep does not fire WorktreeRemove: {fired:?}"
     );
-    std::fs::remove_dir_all(&repo).ok();
+    remove_dir_all(&repo).ok();
 }
 
 /// cleanup_child removes the reclaim record, so a later shutdown sweep finds
@@ -312,7 +313,7 @@ async fn test_cleanup_removes_worktree_once() {
         "one WorktreeRemove fires: {fired:?}"
     );
     assert!(!path.exists(), "worktree removed exactly once");
-    std::fs::remove_dir_all(&repo).ok();
+    remove_dir_all(&repo).ok();
 }
 
 /// cleanup_child on a committed worktree (new commits beyond the parent tip)
@@ -345,7 +346,7 @@ async fn test_cleanup_committed_worktree_kept() {
         ChildCleanup::Removed { .. } => panic!("committed worktree must be kept, not removed"),
     }
     assert!(path.exists(), "committed worktree dir preserved");
-    std::fs::remove_dir_all(&repo).ok();
+    remove_dir_all(&repo).ok();
 }
 
 /// A worktree whose state cannot be verified (the checkout is gone before
@@ -360,13 +361,13 @@ async fn test_cleanup_missing_worktree_kept() {
         .await
         .expect("enter");
     let path = cw.worktree_path.clone();
-    std::fs::remove_dir_all(&path).expect("remove checkout");
+    remove_dir_all(&path).expect("remove checkout");
     let outcome = controller.cleanup_child(cw).await;
     assert!(
         matches!(outcome, ChildCleanup::Kept { .. }),
         "unverifiable worktree kept"
     );
-    std::fs::remove_dir_all(&repo).ok();
+    remove_dir_all(&repo).ok();
 }
 
 /// Resuming an existing child worktree (the same slug re-entered) never treats
@@ -406,7 +407,7 @@ async fn test_cleanup_reused_worktree_kept() {
         "reused worktree kept"
     );
     assert!(path.exists(), "prior output preserved");
-    std::fs::remove_dir_all(&repo).ok();
+    remove_dir_all(&repo).ok();
 }
 
 /// A HookFire that records the event kinds it was called with, for asserting
@@ -444,7 +445,7 @@ async fn test_enter_fires_worktree_create() {
         fired.contains(&HookEventKind::WorktreeCreate),
         "enter_for_child fires WorktreeCreate: {fired:?}"
     );
-    std::fs::remove_dir_all(&repo).ok();
+    remove_dir_all(&repo).ok();
 }
 
 /// cleanup_child on a removed (clean) worktree fires WorktreeRemove at the
@@ -472,7 +473,7 @@ async fn test_cleanup_removed_fires_remove() {
             && fired.contains(&HookEventKind::WorktreeRemove),
         "enter + cleanup fire Create + Remove: {fired:?}"
     );
-    std::fs::remove_dir_all(&repo).ok();
+    remove_dir_all(&repo).ok();
 }
 
 /// The user-facing enter + exit(Remove) tool path fires WorktreeCreate +
@@ -503,7 +504,7 @@ async fn test_toolpath_fires_create_remove() {
         fired.contains(&HookEventKind::WorktreeRemove),
         "exit Remove fires WorktreeRemove: {fired:?}"
     );
-    std::fs::remove_dir_all(&repo).ok();
+    remove_dir_all(&repo).ok();
 }
 
 /// reclaim_abandoned awaits an already-launched reclaim instead of relaunching
@@ -590,5 +591,5 @@ async fn test_reclaim_awaits_launched_task() {
         !path.exists(),
         "launched task removed the tree, observed by the sweep"
     );
-    std::fs::remove_dir_all(&repo).ok();
+    remove_dir_all(&repo).ok();
 }

@@ -10,9 +10,27 @@ use super::runner_config::{
     DEFAULT_SNAPSHOT_SIZE_CAP_BYTES, DEFAULT_SNAPSHOT_TTL_SECS, RunnerConfig,
 };
 use super::*;
+use crate::agent::skill_slash::SkillSlashOutcome;
+use cache_liveness::CachedPrefixState;
 use houyicoder_api::agent_event::AgentEventHandlers;
+use houyicoder_api::cache_policy::AutoCachePolicy;
+use houyicoder_api::cost_model::AnthropicCostModel;
 use houyicoder_api::provider::ModelProvider;
+use houyicoder_api::sandbox::SandboxSession;
+use houyicoder_api::session::SessionLog;
+use houyicoder_api::skill::SkillRegistry;
+use houyicoder_api::skill::grant::SkillGrantStore;
+use houyicoder_api::skill::grant::resolve_entitlements;
+use houyicoder_api::spawn::AgentIdentity;
+use input_queue::InputQueue;
+use memory::MemoryRuntime;
+use redundancy::RedundancyTracker;
 use std::collections::{HashSet, VecDeque};
+#[cfg(test)]
+use std::env::temp_dir;
+use std::env::var;
+#[cfg(test)]
+use std::process::id;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
@@ -22,7 +40,7 @@ impl Runner {
     /// its own clone so it can replay events (e.g. a TUI rendering the live
     /// transcript) while the runner appends to the same log.
     pub fn new(
-        store: Arc<dyn houyicoder_api::session::SessionLog>,
+        store: Arc<dyn SessionLog>,
         provider: Arc<dyn ModelProvider>,
         tools: ToolRegistry,
         config: RunnerConfig,
@@ -32,7 +50,7 @@ impl Runner {
         // calls with_model_choice(Default) when it resolved the sentinel. The
         // apply path overwrites this with each pick's real intent.
         let initial_model = config.model.clone();
-        let memory = memory::MemoryRuntime::new(store.clone());
+        let memory = MemoryRuntime::new(store.clone());
         let runner = Self {
             store,
             provider,
@@ -74,8 +92,8 @@ impl Runner {
             registrar: None,
             conditional: None,
             skill_reloader: None,
-            cache_policy: Arc::new(houyicoder_api::cache_policy::AutoCachePolicy),
-            cost_model: Arc::new(houyicoder_api::cost_model::AnthropicCostModel),
+            cache_policy: Arc::new(AutoCachePolicy),
+            cost_model: Arc::new(AnthropicCostModel),
             recall_meter: Arc::new(AtomicU32::new(0)),
             workspace_probe: None,
             compaction_suppression: AtomicU8::new(0),
@@ -84,14 +102,14 @@ impl Runner {
             cache_compact_flag: AtomicBool::new(false),
             cache_model_switch_flag: AtomicBool::new(false),
             last_request_model: Mutex::new(None),
-            cached_prefix: Arc::new(cache_liveness::CachedPrefixState::new()),
+            cached_prefix: Arc::new(CachedPrefixState::new()),
             reducer: None,
-            input_queue: input_queue::InputQueue::new(),
+            input_queue: InputQueue::new(),
             queued_notifications: Mutex::new(VecDeque::new()),
-            redundancy: Mutex::new(redundancy::RedundancyTracker::new()),
+            redundancy: Mutex::new(RedundancyTracker::new()),
             denied_agents: Arc::new(HashSet::new()),
             spawn_handle: None,
-            agent_identity: houyicoder_api::spawn::AgentIdentity::top_level(),
+            agent_identity: AgentIdentity::top_level(),
         };
         runner.wire_cache_liveness_policy();
         runner
@@ -138,8 +156,8 @@ impl Runner {
         let skill_meta = self.resolve_skill_slash(session, &user_input).await;
         self.append_user_input(session, user_input).await?;
         match skill_meta {
-            crate::agent::skill_slash::SkillSlashOutcome::NotASkill => {}
-            crate::agent::skill_slash::SkillSlashOutcome::Prepared {
+            SkillSlashOutcome::NotASkill => {}
+            SkillSlashOutcome::Prepared {
                 name,
                 body,
                 untrusted,
@@ -162,7 +180,7 @@ impl Runner {
                     return failed;
                 }
             }
-            crate::agent::skill_slash::SkillSlashOutcome::Refused(notice) => {
+            SkillSlashOutcome::Refused(notice) => {
                 self.emit_system_line(notice);
                 let result = Ok(RunResult {
                     outcome: RunOutcome::FinalOutput(String::new()),
@@ -382,7 +400,7 @@ impl Runner {
     /// Reward capture is withheld when the operator sets HOUYICODER_REWARD_OFF,
     /// which suppresses the dream reward signal only.
     pub(crate) async fn fire_background_memory(&self, session: SessionId) {
-        let reward_off = std::env::var("HOUYICODER_REWARD_OFF").is_ok();
+        let reward_off = var("HOUYICODER_REWARD_OFF").is_ok();
         let reward = if reward_off {
             None
         } else {
@@ -395,9 +413,9 @@ impl Runner {
 /// Extracted as a free function so the logic is testable without a Runner.
 fn reapply_skill_entitlements_impl(
     active: Option<String>,
-    session: Option<&dyn houyicoder_api::sandbox::SandboxSession>,
-    registry: Option<&dyn houyicoder_api::skill::SkillRegistry>,
-    grants: Option<&houyicoder_api::skill::grant::SkillGrantStore>,
+    session: Option<&dyn SandboxSession>,
+    registry: Option<&dyn SkillRegistry>,
+    grants: Option<&SkillGrantStore>,
 ) {
     if let Some(name) = active
         && let Some(session) = session
@@ -405,7 +423,7 @@ fn reapply_skill_entitlements_impl(
     {
         let desc = registry.find(&name);
         let source = registry.source_for(&name);
-        let (mach, allow_launch) = houyicoder_api::skill::grant::resolve_entitlements(
+        let (mach, allow_launch) = resolve_entitlements(
             grants,
             &name,
             source.as_ref(),
@@ -561,9 +579,9 @@ mod tests {
     #[test]
     fn test_reapply_picks_up_grant() {
         let session = RecordingSession::new();
-        let grants = SkillGrantStore::with_path(std::env::temp_dir().join(format!(
+        let grants = SkillGrantStore::with_path(temp_dir().join(format!(
             "houyi-reapply-grants-{}-{}.json",
-            std::process::id(),
+            id(),
             1
         )));
         let source = SkillSource::new(SkillFamily::Agents, SkillProvenance::UserHome);

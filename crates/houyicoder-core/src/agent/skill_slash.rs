@@ -10,6 +10,7 @@ use houyicoder_context::SessionEvent;
 use houyicoder_context::SessionId;
 
 use super::Runner;
+use super::skill_body::skill_source;
 
 /// Parse an @skill:-prefixed input into (skill name, optional args). Returns
 /// None when the input lacks the prefix or the name is not valid
@@ -111,7 +112,7 @@ impl Runner {
         // entitlement trust both derive from the same origin string, so
         // one scan suffices. Fails closed (untrusted) when the skill is
         // absent from the origin snapshot.
-        let source = super::skill_body::skill_source(&**registry, &name);
+        let source = skill_source(&**registry, &name);
         let untrusted = source
             .as_ref()
             .map(|source| !source.is_trusted())

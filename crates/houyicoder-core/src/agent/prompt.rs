@@ -13,6 +13,7 @@ pub(crate) mod extract;
 pub(crate) mod memory_behavior;
 pub(crate) mod reward_lesson;
 
+use std::fs::read_to_string;
 use std::path::{Path, PathBuf};
 
 /// The candidate project-memory file names, in preference order. agent.md is
@@ -360,7 +361,7 @@ pub(crate) fn project_context_section(cwd: &Path) -> Option<String> {
     if let Some(parent) = paths.first().and_then(|p| p.parent())
         && let local = parent.join(LOCAL_MEMORY_FILE)
         && local.is_file()
-        && let Ok(local_text) = std::fs::read_to_string(&local)
+        && let Ok(local_text) = read_to_string(&local)
     {
         content.push_str("\n\n");
         content.push_str(&local_text);
@@ -420,7 +421,7 @@ fn find_memory_files(cwd: &Path) -> Option<(Vec<PathBuf>, String)> {
                 continue;
             }
             seen.push(canonical);
-            let Ok(text) = std::fs::read_to_string(&candidate) else {
+            let Ok(text) = read_to_string(&candidate) else {
                 continue;
             };
             found.push((candidate, text));

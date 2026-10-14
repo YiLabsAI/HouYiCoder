@@ -1,7 +1,13 @@
 //! Isolate-stage tests: the runner under input isolation (paused from the
 //! host queue mid-run). Uses the parent tests module's fixtures (Runner,
 //! runner_with, SessionStore) via the glob import.
+use super::append::new_event;
+use super::turn_group::assemble_model_input;
 use super::*;
+use crate::agent::reducer::HotPathReducer;
+use houyicoder_context::BlockHash;
+use houyicoder_context::SessionEvent;
+use houyicoder_protocol::llm::InputItem;
 
 #[tokio::test]
 async fn test_externalizes_large_tool_result() {
@@ -11,8 +17,6 @@ async fn test_externalizes_large_tool_result() {
     // raw is in the CAS; the turn-group assembly materializes it on
     // demand. This is the wiring that makes the 3-tier retention policy
     // fire on real tool outputs, not just simulated markers in tests.
-    use houyicoder_context::{BlockHash, SessionEvent};
-    use houyicoder_protocol::llm::InputItem;
     let p = Arc::new(FakeProvider::text("done"));
     let runner = runner_with(p, ToolRegistry::new());
     let session = SessionId::new();
@@ -21,7 +25,7 @@ async fn test_externalizes_large_tool_result() {
     for cid in ["c1", "c2"] {
         runner
             .store()
-            .append(super::append::new_event(
+            .append(new_event(
                 session,
                 SessionEvent::ToolCall {
                     call_id: cid.into(),
@@ -94,7 +98,7 @@ async fn test_externalizes_large_tool_result() {
     }
     // The turn-group assembly materializes the large result (age 0 =>
     // Materialize tier) so the model sees the real content.
-    let items = super::turn_group::assemble_model_input(&events, Some(runner.store().backend()));
+    let items = assemble_model_input(&events, Some(runner.store().backend()));
     let tr_item = items
         .iter()
         .find(|i| matches!(i, InputItem::ToolResult { call_id, .. } if call_id == "c1"))
@@ -108,14 +112,12 @@ async fn test_externalizes_large_tool_result() {
 async fn test_isolate_reduces_large_output() {
     // With a tool-output reducer wired, the isolate stage reduces the preview
     // (strips ANSI for bash) + tags it as data. The raw stays in the CAS.
-    use houyicoder_context::SessionEvent;
     let p = Arc::new(FakeProvider::text("done"));
-    let runner = runner_with(p, ToolRegistry::new())
-        .with_reducer(Arc::new(crate::agent::reducer::HotPathReducer));
+    let runner = runner_with(p, ToolRegistry::new()).with_reducer(Arc::new(HotPathReducer));
     let session = SessionId::new();
     runner
         .store()
-        .append(super::append::new_event(
+        .append(new_event(
             session,
             SessionEvent::ToolCall {
                 call_id: "cr".into(),
@@ -168,13 +170,12 @@ async fn test_isolate_reduces_large_output() {
 /// (whole-marker in the event, full restore on materialize) must not drift.
 #[tokio::test]
 async fn test_blob_result_whole_externalize() {
-    use houyicoder_context::SessionEvent;
     let p = Arc::new(FakeProvider::text("done"));
     let runner = runner_with(p, ToolRegistry::new());
     let session = SessionId::new();
     runner
         .store()
-        .append(super::append::new_event(
+        .append(new_event(
             session,
             SessionEvent::ToolCall {
                 call_id: "cg".into(),

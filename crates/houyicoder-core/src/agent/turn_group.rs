@@ -26,7 +26,11 @@ use houyicoder_protocol::llm::{AssistantToolCall, InputItem};
 #[cfg(debug_assertions)]
 use std::collections::HashSet;
 
+use super::retention::RetentionContext;
+use super::retention::materialize_block;
+use super::retention::superseded_by_later;
 use super::retention::{AgeRetentionPolicy, RetentionPolicy};
+use super::skill_body::frame_untrusted_body;
 
 /// Assemble the model-input history from a replayed event log, in order.
 ///
@@ -100,7 +104,7 @@ pub fn assemble_model_input_with(
                 // on state-changing steps. The framing helper is shared
                 // with the Skill tool path so framing does not differ by
                 // invocation path.
-                let text = super::skill_body::frame_untrusted_body(skill_name, content, *untrusted);
+                let text = frame_untrusted_body(skill_name, content, *untrusted);
                 append_user_text(&mut items, &text);
                 i += 1;
             }
@@ -237,15 +241,15 @@ fn materialize_result(
         .iter()
         .filter(|e| matches!(e.event, SessionEvent::AssistantMessage { .. }))
         .count() as u32;
-    let is_superseded = super::retention::superseded_by_later(events, i);
-    let ctx = super::retention::RetentionContext {
+    let is_superseded = superseded_by_later(events, i);
+    let ctx = RetentionContext {
         age_in_turns,
         is_superseded,
         block_ref: None,
         now_ms,
         cache_cold: false,
     };
-    super::retention::materialize_block(output, backend, policy, &ctx)
+    materialize_block(output, backend, policy, &ctx)
 }
 
 #[cfg(test)]

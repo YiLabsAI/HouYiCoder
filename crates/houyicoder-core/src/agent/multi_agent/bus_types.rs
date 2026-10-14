@@ -4,6 +4,7 @@
 //! the async foundation crate; this module defines the agent-domain T
 //! that plugs into it: BusMessage, ChildStatus, and the topic naming scheme.
 
+use houyicoder_async::bus::InProcBus;
 use serde::{Deserialize, Serialize};
 
 /// Whether a child blocks its parent turn or continues independently.
@@ -100,7 +101,7 @@ pub enum ChildStatus {
 
 /// The agent bus type alias: InProcBus instantiated with the domain
 /// message type.
-pub type AgentBus = houyicoder_async::bus::InProcBus<BusMessage>;
+pub type AgentBus = InProcBus<BusMessage>;
 
 /// Build a topic string for a child's progress channel. Per-child targeted
 /// channel for a watcher that already learned the id from Spawned. The

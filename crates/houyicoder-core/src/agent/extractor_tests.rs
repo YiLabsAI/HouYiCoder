@@ -14,8 +14,16 @@ use houyicoder_protocol::llm::{
 use houyicoder_session::SessionStore;
 use std::sync::{Arc, Mutex as StdMutex};
 
+use crate::agent::RunOutcome;
 use houyicoder_api::provider::stream_from_response;
 use houyicoder_async::{PFut, PStream};
+use houyicoder_context::MemoryOrigin;
+use houyicoder_context::MemoryScope;
+use houyicoder_context::MemorySource;
+use std::env::temp_dir;
+use std::fs::create_dir_all;
+use std::fs::remove_dir_all;
+use std::process::id;
 
 /// A recording memory so the test asserts writes landed.
 struct RecordingMemory {
@@ -229,8 +237,8 @@ fn extractor_on(
     let memory = Arc::new(RecordingMemory {
         written: StdMutex::new(Vec::new()),
     });
-    let cwd = std::env::temp_dir().join(format!("extractor-{}", std::process::id()));
-    std::fs::create_dir_all(&cwd).expect("mkdir");
+    let cwd = temp_dir().join(format!("extractor-{}", id()));
+    create_dir_all(&cwd).expect("mkdir");
     let config = RunnerConfig {
         max_turns: 5,
         ..RunnerConfig::default()
@@ -273,7 +281,7 @@ fn test_seed_never_moves_cursor() {
 
 /// Build a simple conversation prefix: user asks, assistant answers.
 fn conversation() -> Vec<SessionLogEntry> {
-    let session = houyicoder_context::SessionId::new();
+    let session = SessionId::new();
     vec![
         SessionLogEntry {
             id: EventId::new(),
@@ -435,8 +443,8 @@ async fn test_unrelated_turn_stays_silent() {
     let provider = Arc::new(FakeProvider {
         calls: StdMutex::new(0),
     });
-    let memory_root = std::env::temp_dir().join(format!("extract-repeat-{}", std::process::id()));
-    std::fs::create_dir_all(&memory_root).unwrap();
+    let memory_root = temp_dir().join(format!("extract-repeat-{}", id()));
+    create_dir_all(&memory_root).unwrap();
     let memory = Arc::new(MarkdownMemoryProvider::new(memory_root.clone()));
     let store: Arc<dyn SessionLog> = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let extractor = MemoryExtractor::new(
@@ -476,7 +484,7 @@ async fn test_unrelated_turn_stays_silent() {
         1,
         "an unrelated turn that repeats the same save stays silent"
     );
-    std::fs::remove_dir_all(memory_root).ok();
+    remove_dir_all(memory_root).ok();
 }
 
 /// When the main agent already emitted a save_memory call in this turn
@@ -738,8 +746,8 @@ async fn test_runner_fires_extractor_final() {
         Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let ephemeral: Arc<dyn SessionLog> =
         Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
-    let cwd = std::env::temp_dir().join(format!("runner-fire-{}", std::process::id()));
-    std::fs::create_dir_all(&cwd).expect("mkdir");
+    let cwd = temp_dir().join(format!("runner-fire-{}", id()));
+    create_dir_all(&cwd).expect("mkdir");
     let ext = Arc::new(MemoryExtractor::new(
         ExtractionLogs {
             session: Arc::clone(&ephemeral),
@@ -770,13 +778,13 @@ async fn test_runner_fires_extractor_final() {
         None,
     );
     let runner = runner.install_memory(runtime);
-    let session = houyicoder_context::SessionId::new();
+    let session = SessionId::new();
     let result = runner
         .run(session, "remember to keep responses terse".into())
         .await
         .expect("run");
     assert!(
-        matches!(result.outcome, crate::agent::RunOutcome::FinalOutput(_)),
+        matches!(result.outcome, RunOutcome::FinalOutput(_)),
         "main run reaches FinalOutput"
     );
     // FinalOutput fired the extractor (fire-and-forget). Drain the fork.
@@ -786,7 +794,7 @@ async fn test_runner_fires_extractor_final() {
         1,
         "forked extraction wrote a memory after FinalOutput"
     );
-    std::fs::remove_dir_all(&cwd).ok();
+    remove_dir_all(&cwd).ok();
 }
 
 /// Reward capture off (None) must not skip the extractor. The reward switch
@@ -811,8 +819,8 @@ async fn test_extractor_fires_reward_off() {
     for entry in conv {
         main_store.append(entry).await.expect("append");
     }
-    let cwd = std::env::temp_dir().join(format!("reward-off-{}", std::process::id()));
-    std::fs::create_dir_all(&cwd).expect("mkdir");
+    let cwd = temp_dir().join(format!("reward-off-{}", id()));
+    create_dir_all(&cwd).expect("mkdir");
     let ext = Arc::new(MemoryExtractor::new(
         ExtractionLogs {
             session: Arc::clone(&ephemeral),
@@ -842,7 +850,7 @@ async fn test_extractor_fires_reward_off() {
         1,
         "extractor fires even when reward capture is off"
     );
-    std::fs::remove_dir_all(&cwd).ok();
+    remove_dir_all(&cwd).ok();
 }
 
 /// Extraction remains idle when the cursor covers the latest message.
@@ -1006,10 +1014,10 @@ async fn test_forked_extract_receives_manifest() {
         existing: vec![MemorySummary {
             key: "build-gate".into(),
             description: "make check must stay green".into(),
-            source: houyicoder_context::MemorySource::Project,
+            source: MemorySource::Project,
             mtime_secs: 0,
-            scope: houyicoder_context::MemoryScope::Auto,
-            origin: houyicoder_context::MemoryOrigin::Unknown,
+            scope: MemoryScope::Auto,
+            origin: MemoryOrigin::Unknown,
         }],
         written: StdMutex::new(Vec::new()),
     });
@@ -1018,8 +1026,8 @@ async fn test_forked_extract_receives_manifest() {
         calls: StdMutex::new(0),
     });
     let store: Arc<dyn SessionLog> = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
-    let cwd = std::env::temp_dir().join(format!("manifest-{}", std::process::id()));
-    std::fs::create_dir_all(&cwd).expect("mkdir");
+    let cwd = temp_dir().join(format!("manifest-{}", id()));
+    create_dir_all(&cwd).expect("mkdir");
     let config = RunnerConfig {
         max_turns: 5,
         ..RunnerConfig::default()

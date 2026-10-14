@@ -16,6 +16,8 @@ use crate::agent::tools::path_util::canonical_root;
 use crate::agent::tools::subprocess_util::{find_rg, spawn_rg_select_cancel};
 
 use super::{GLOB_MAX_FILES, IGNORE_DIRS, VCS_DIRS, relativize};
+use std::cmp::Reverse;
+use std::fs::metadata;
 
 /// Try to run glob via the rg --files subprocess. Ok(Some) means rg ran and
 /// produced the file list; Ok(None) means rg is not available or the pattern
@@ -79,12 +81,12 @@ fn parse_files(stdout: &[u8], croot: &Path) -> (Vec<String>, bool) {
             continue;
         }
         let p = PathBuf::from(line);
-        let mtime = std::fs::metadata(&p)
+        let mtime = metadata(&p)
             .and_then(|m| m.modified())
             .unwrap_or(UNIX_EPOCH);
         entries.push((p, mtime));
     }
-    entries.sort_by_key(|(_, t)| std::cmp::Reverse(*t));
+    entries.sort_by_key(|(_, t)| Reverse(*t));
     let truncated = entries.len() > GLOB_MAX_FILES;
     let files: Vec<String> = entries
         .into_iter()

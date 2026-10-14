@@ -3,6 +3,15 @@ use super::*;
 use houyicoder_context::{
     EventId, MemoryEntry, MemorySource, SessionEvent, SessionId, SessionLogEntry,
 };
+use houyicoder_protocol::llm::ToolDef;
+use prompt::SystemPrompt;
+use std::env::temp_dir;
+use std::fs::create_dir_all;
+use std::fs::remove_dir_all;
+use std::fs::write;
+use std::process::id;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 #[test]
 fn test_tokenizer_counts_text() {
@@ -88,9 +97,9 @@ fn test_preview_truncates_long() {
 #[test]
 fn test_builder_empty_log_system() {
     // A scratch cwd with no memory file: identity-only system prompt.
-    let mut scratch = std::env::temp_dir();
-    scratch.push(format!("ctx-test-empty-{}", std::process::id()));
-    std::fs::create_dir_all(&scratch).expect("mkdir scratch");
+    let mut scratch = temp_dir();
+    scratch.push(format!("ctx-test-empty-{}", id()));
+    create_dir_all(&scratch).expect("mkdir scratch");
     let b = ContextBuilder::new().with_cwd(scratch);
     let v = b.build(&[]);
     assert!(v.messages.is_empty());
@@ -119,11 +128,11 @@ fn test_tool_schema_tokens_counted() {
     // R11a: tool schemas occupy the context window. The pre-flight gate
     // must see them or it underestimates by 3-8k/turn on a tool-heavy
     // session — a late trip left the model to overflow mid-response.
-    let mut scratch = std::env::temp_dir();
-    scratch.push(format!("ctx-test-tools-{}", std::process::id()));
-    std::fs::create_dir_all(&scratch).expect("mkdir scratch");
+    let mut scratch = temp_dir();
+    scratch.push(format!("ctx-test-tools-{}", id()));
+    create_dir_all(&scratch).expect("mkdir scratch");
     let b = ContextBuilder::new().with_cwd(scratch);
-    let tool_defs = vec![houyicoder_protocol::llm::ToolDef {
+    let tool_defs = vec![ToolDef {
         name: "bash".into(),
         description: "run a shell command".into(),
         input_schema: serde_json::json!({
@@ -160,9 +169,9 @@ fn test_clear_drops_measurement() {
     // A cleared session has no assembled context, so the cached figure must go
     // with it. Leaving it would report the size of a context that no longer
     // exists as the current occupancy.
-    let mut scratch = std::env::temp_dir();
-    scratch.push(format!("ctx-test-clear-{}", std::process::id()));
-    std::fs::create_dir_all(&scratch).expect("mkdir scratch");
+    let mut scratch = temp_dir();
+    scratch.push(format!("ctx-test-clear-{}", id()));
+    create_dir_all(&scratch).expect("mkdir scratch");
     let b = ContextBuilder::new().with_cwd(scratch);
     let v = b.build_for_turn(&[], None, None, &[], None);
     assert!(v.measurement.token_count() > 0, "a turn measures something");
@@ -178,9 +187,9 @@ fn test_clear_drops_measurement() {
 fn test_bare_build_skips_cache() {
     // Bare assembly must leave the cache alone: a prospective /context on a
     // fresh session must not masquerade as a served turn measurement.
-    let mut scratch = std::env::temp_dir();
-    scratch.push(format!("ctx-test-nocache-{}", std::process::id()));
-    std::fs::create_dir_all(&scratch).expect("mkdir scratch");
+    let mut scratch = temp_dir();
+    scratch.push(format!("ctx-test-nocache-{}", id()));
+    create_dir_all(&scratch).expect("mkdir scratch");
     let b = ContextBuilder::new().with_cwd(scratch);
     let v = b.build(&[]);
     assert!(!v.system.is_empty());
@@ -193,10 +202,10 @@ fn test_bare_build_skips_cache() {
 #[test]
 fn test_builder_injects_memory() {
     // A scratch cwd with an AGENTS.md: project context injected.
-    let mut scratch = std::env::temp_dir();
-    scratch.push(format!("ctx-test-mem-{}", std::process::id()));
-    std::fs::create_dir_all(&scratch).expect("mkdir scratch");
-    std::fs::write(scratch.join("AGENTS.md"), "# Scratch Project\n\nrules.").expect("write");
+    let mut scratch = temp_dir();
+    scratch.push(format!("ctx-test-mem-{}", id()));
+    create_dir_all(&scratch).expect("mkdir scratch");
+    write(scratch.join("AGENTS.md"), "# Scratch Project\n\nrules.").expect("write");
     let b = ContextBuilder::new().with_cwd(scratch.clone());
     let v = b.build(&[]);
     assert!(!v.system.is_empty());
@@ -207,7 +216,7 @@ fn test_builder_injects_memory() {
         .expect("system section");
     assert!(sys.tokens > 0);
     assert!(sys.items.contains(&"Project context".to_string()));
-    std::fs::remove_dir_all(&scratch).ok();
+    remove_dir_all(&scratch).ok();
 }
 
 /// The memory behavior guidance (what to save, when, how to treat a recalled
@@ -215,9 +224,9 @@ fn test_builder_injects_memory() {
 /// rather than only on an explicit "remember" signal. Constant across turns.
 #[test]
 fn test_memory_behavior_section_present() {
-    let mut dir = std::env::temp_dir();
-    dir.push(format!("ctx-test-behavior-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("mkdir");
+    let mut dir = temp_dir();
+    dir.push(format!("ctx-test-behavior-{}", id()));
+    create_dir_all(&dir).expect("mkdir");
     let v = ContextBuilder::new().with_cwd(dir.clone()).build(&[]);
     assert!(v.system.contains("# Memory"), "behavior section heading");
     assert!(
@@ -240,7 +249,7 @@ fn test_memory_behavior_section_present() {
         sys.items.contains(&"Memory".to_string()),
         "Memory listed in system items"
     );
-    std::fs::remove_dir_all(&dir).ok();
+    remove_dir_all(&dir).ok();
 }
 
 /// The render helper produces a system-reminder-wrapped attachment whose
@@ -292,8 +301,8 @@ fn test_memory_manifest_format_aligned() {
 /// A fresh entry renders without a staleness caveat.
 #[test]
 fn test_memory_manifest_no_caveat() {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
     let entry = MemoryEntry::new("fresh-note", "just saved a fact", MemorySource::User)
@@ -313,9 +322,9 @@ fn test_memory_manifest_no_caveat() {
 /// changing the cache-stable system prompt or double-counting message input.
 #[test]
 fn test_context_partitions_recall_tokens() {
-    let mut scratch = std::env::temp_dir();
-    scratch.push(format!("ctx-test-memsec-{}", std::process::id()));
-    std::fs::create_dir_all(&scratch).expect("mkdir scratch");
+    let mut scratch = temp_dir();
+    scratch.push(format!("ctx-test-memsec-{}", id()));
+    create_dir_all(&scratch).expect("mkdir scratch");
     let mem_text = render_recall_text(&[MemoryEntry::new(
         "build-gate",
         "make check must stay green",
@@ -388,7 +397,7 @@ fn test_context_partitions_recall_tokens() {
         sys_tokens + full_input,
         "total == system + full input, no memory inflation"
     );
-    std::fs::remove_dir_all(&scratch).ok();
+    remove_dir_all(&scratch).ok();
 }
 
 #[test]
@@ -396,9 +405,9 @@ fn test_skill_section_recomputed() {
     // A SkillListing event in the log: the context assembly merges its text
     // into the user message, and the Skills section attributes the attachment
     // tokens so /context shows the discovery cost without double-counting.
-    let mut scratch = std::env::temp_dir();
-    scratch.push(format!("ctx-test-skillsec-{}", std::process::id()));
-    std::fs::create_dir_all(&scratch).expect("mkdir scratch");
+    let mut scratch = temp_dir();
+    scratch.push(format!("ctx-test-skillsec-{}", id()));
+    create_dir_all(&scratch).expect("mkdir scratch");
     let listing_text = "- commit: commit changes - after edits\n- review: review a PR";
     let events = vec![
         SessionLogEntry {
@@ -444,7 +453,7 @@ fn test_skill_section_recomputed() {
         full_input,
         "listing must not be double-counted (Messages + Skills == full input)"
     );
-    std::fs::remove_dir_all(&scratch).ok();
+    remove_dir_all(&scratch).ok();
 }
 
 #[test]
@@ -557,10 +566,10 @@ fn test_build_empty_events_view() {
 /// The system prompt remains byte-stable as the event log grows in one cwd.
 #[test]
 fn test_system_block_stable_turns() {
-    let mut scratch = std::env::temp_dir();
-    scratch.push(format!("ctx-test-stable-{}", std::process::id()));
-    std::fs::create_dir_all(&scratch).expect("mkdir scratch");
-    std::fs::write(scratch.join("AGENTS.md"), "# Stable Project\n\nrules.").expect("write");
+    let mut scratch = temp_dir();
+    scratch.push(format!("ctx-test-stable-{}", id()));
+    create_dir_all(&scratch).expect("mkdir scratch");
+    write(scratch.join("AGENTS.md"), "# Stable Project\n\nrules.").expect("write");
     let b = ContextBuilder::new().with_cwd(scratch.clone());
     let s = SessionId::new();
     let turn1 = vec![SessionLogEntry {
@@ -617,16 +626,16 @@ fn test_system_block_stable_turns() {
         .section(SectionKind::SystemPrompt)
         .expect("system section");
     assert_eq!(sys1.tokens, sys2.tokens, "system section tokens stable");
-    std::fs::remove_dir_all(&scratch).ok();
+    remove_dir_all(&scratch).ok();
 }
 
 /// Recalled memory remains in the message stream and outside the static
 /// system prompt.
 #[test]
 fn test_recall_not_system_section() {
-    let mut scratch = std::env::temp_dir();
-    scratch.push(format!("ctx-test-recall-sep-{}", std::process::id()));
-    std::fs::create_dir_all(&scratch).expect("mkdir scratch");
+    let mut scratch = temp_dir();
+    scratch.push(format!("ctx-test-recall-sep-{}", id()));
+    create_dir_all(&scratch).expect("mkdir scratch");
     let b = ContextBuilder::new().with_cwd(scratch.clone());
     let s = SessionId::new();
     let recall_text = "DEPLOY_COMMAND=make deploy".to_string();
@@ -677,24 +686,24 @@ fn test_recall_not_system_section() {
         msgs.tokens > 0,
         "messages section carries the merged recall"
     );
-    std::fs::remove_dir_all(&scratch).ok();
+    remove_dir_all(&scratch).ok();
 }
 
 /// The dynamic boundary keeps the static prefix stable across working
 /// directories while project context remains in the session-scoped suffix.
 #[test]
 fn test_boundary_splits_static_dynamic() {
-    let mut dir_a = std::env::temp_dir();
-    dir_a.push(format!("ctx-test-boundary-a-{}", std::process::id()));
-    std::fs::create_dir_all(&dir_a).expect("mkdir a");
-    std::fs::write(dir_a.join("AGENTS.md"), "# Project A\n\nrules A.").expect("write a");
-    let mut dir_b = std::env::temp_dir();
-    dir_b.push(format!("ctx-test-boundary-b-{}", std::process::id()));
-    std::fs::create_dir_all(&dir_b).expect("mkdir b");
-    std::fs::write(dir_b.join("AGENTS.md"), "# Project B\n\nrules B.").expect("write b");
+    let mut dir_a = temp_dir();
+    dir_a.push(format!("ctx-test-boundary-a-{}", id()));
+    create_dir_all(&dir_a).expect("mkdir a");
+    write(dir_a.join("AGENTS.md"), "# Project A\n\nrules A.").expect("write a");
+    let mut dir_b = temp_dir();
+    dir_b.push(format!("ctx-test-boundary-b-{}", id()));
+    create_dir_all(&dir_b).expect("mkdir b");
+    write(dir_b.join("AGENTS.md"), "# Project B\n\nrules B.").expect("write b");
 
-    let pa = prompt::SystemPrompt::build(&dir_a);
-    let pb = prompt::SystemPrompt::build(&dir_b);
+    let pa = SystemPrompt::build(&dir_a);
+    let pb = SystemPrompt::build(&dir_b);
 
     // The static prefix (before dynamic_boundary) is byte-identical across
     // different cwds + different project memory files.
@@ -715,17 +724,17 @@ fn test_boundary_splits_static_dynamic() {
     assert!(suffix_b.contains("Project B"), "suffix B carries project B");
     assert_ne!(suffix_a, suffix_b, "dynamic suffix differs per cwd");
 
-    std::fs::remove_dir_all(&dir_a).ok();
-    std::fs::remove_dir_all(&dir_b).ok();
+    remove_dir_all(&dir_a).ok();
+    remove_dir_all(&dir_b).ok();
 }
 
 /// The dynamic boundary remains present when no project memory exists.
 #[test]
 fn test_boundary_set_without_project() {
-    let mut scratch = std::env::temp_dir();
-    scratch.push(format!("ctx-test-boundary-empty-{}", std::process::id()));
-    std::fs::create_dir_all(&scratch).expect("mkdir");
-    let p = prompt::SystemPrompt::build(&scratch);
+    let mut scratch = temp_dir();
+    scratch.push(format!("ctx-test-boundary-empty-{}", id()));
+    create_dir_all(&scratch).expect("mkdir");
+    let p = SystemPrompt::build(&scratch);
     assert!(
         p.dynamic_boundary > 0,
         "boundary is set even without project context"
@@ -737,7 +746,7 @@ fn test_boundary_set_without_project() {
     // The env section is in the dynamic suffix.
     let suffix = &p.text[p.dynamic_boundary..];
     assert!(!suffix.is_empty(), "dynamic suffix carries env");
-    std::fs::remove_dir_all(&scratch).ok();
+    remove_dir_all(&scratch).ok();
 }
 
 #[test]

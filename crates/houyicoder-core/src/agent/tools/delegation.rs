@@ -15,7 +15,19 @@ use houyicoder_async::PFut;
 use houyicoder_protocol::extension::ToolError;
 use serde_json::{Value, json};
 
+#[cfg(test)]
+use crate::agent::multi_agent::registry::BuiltInRegistry;
+#[cfg(test)]
+use crate::agent::multi_agent::registry::built_in_all;
 use crate::agent::multi_agent::registry::{AgentError, AgentRegistry, ResolveCtx};
+#[cfg(test)]
+use houyicoder_api::spawn::AgentIdentity;
+use houyicoder_api::spawn::SpawnArgs;
+#[cfg(test)]
+use houyicoder_api::spawn::SpawnHandle;
+use houyicoder_api::spawn::SpawnOutcome;
+#[cfg(test)]
+use houyicoder_protocol::llm::Usage;
 
 /// The model-facing delegation tool. Resolves the requested type against
 /// the registry; never holds the runner.
@@ -138,8 +150,7 @@ impl Tool for DelegationTool {
                 .and_then(|v| v.as_str())
                 .unwrap_or("none")
                 .to_string();
-            let mut args =
-                houyicoder_api::spawn::SpawnArgs::new(subagent_type.clone(), prompt, summary);
+            let mut args = SpawnArgs::new(subagent_type.clone(), prompt, summary);
             args.isolation = isolation;
             args.run_in_background = run_in_background;
             let Some(handle) = ctx.spawn_handle.as_ref() else {
@@ -223,7 +234,7 @@ fn spawn_failure_msg(f: SpawnFailure) -> String {
 /// output. A background outcome (no terminal status) surfaces a "launched in
 /// the background" message instead — the result arrives later as a
 /// turn-boundary notification, not as this tool_result.
-fn build_tool_result(outcome: houyicoder_api::spawn::SpawnOutcome, color: Option<&str>) -> Value {
+fn build_tool_result(outcome: SpawnOutcome, color: Option<&str>) -> Value {
     let usage = outcome.usage.unwrap_or_default();
     // A background outcome carries no terminal status or summary — the parent
     // does not block on the child. Surface that distinctly so the model does
@@ -289,11 +300,8 @@ mod tests {
     use std::collections::HashSet;
 
     fn make_tool() -> DelegationTool {
-        let registry = Arc::new(
-            crate::agent::multi_agent::registry::BuiltInRegistry::from_agents(
-                crate::agent::multi_agent::registry::built_in_all(),
-            ),
-        ) as Arc<dyn AgentRegistry>;
+        let registry =
+            Arc::new(BuiltInRegistry::from_agents(built_in_all())) as Arc<dyn AgentRegistry>;
         DelegationTool::new(registry)
     }
 
@@ -405,13 +413,11 @@ mod tests {
         // A spawn handle that returns a canned terminal outcome: the tool
         // maps it into a tool_result carrying the summary, the child
         // session id, and the usage block.
-        use houyicoder_api::spawn::{SpawnArgs, SpawnFailure, SpawnHandle, SpawnOutcome};
-        use houyicoder_protocol::llm::Usage;
         struct FakeSpawn;
         impl SpawnHandle for FakeSpawn {
             fn spawn(
                 &self,
-                _ctx: &houyicoder_api::tool::ToolCtx,
+                _ctx: &ToolCtx,
                 _args: SpawnArgs,
             ) -> PFut<'_, Result<SpawnOutcome, SpawnFailure>> {
                 Box::pin(async {
@@ -431,7 +437,7 @@ mod tests {
         let t = make_tool();
         let ctx = ToolCtx::new("c1")
             .with_session(SessionId::new())
-            .with_spawn_handle(std::sync::Arc::new(FakeSpawn));
+            .with_spawn_handle(Arc::new(FakeSpawn));
         let out = pollster::block_on(t.execute(
             ctx,
             json!({"description": "find auth", "prompt": "find the auth module"}),
@@ -446,8 +452,6 @@ mod tests {
 
     #[test]
     fn test_tool_result_placeholder() {
-        use houyicoder_api::spawn::SpawnOutcome;
-        use houyicoder_protocol::llm::Usage;
         let out = build_tool_result(
             SpawnOutcome::foreground("c1", "completed", "", Usage::default()),
             None,
@@ -461,7 +465,6 @@ mod tests {
     /// an empty foreground result.
     #[test]
     fn test_background_result_reports_start() {
-        use houyicoder_api::spawn::SpawnOutcome;
         let out = build_tool_result(SpawnOutcome::background_started("c1"), None);
         assert_eq!(
             out["status"], "",
@@ -480,8 +483,6 @@ mod tests {
 
     #[test]
     fn test_tool_result_carries_color() {
-        use houyicoder_api::spawn::SpawnOutcome;
-        use houyicoder_protocol::llm::Usage;
         let out = build_tool_result(
             SpawnOutcome::foreground("c1", "completed", "done", Usage::default()),
             Some("red"),
@@ -491,8 +492,6 @@ mod tests {
 
     #[test]
     fn test_tool_result_truncates_tail() {
-        use houyicoder_api::spawn::SpawnOutcome;
-        use houyicoder_protocol::llm::Usage;
         // 100k + 5 chars: the tail keeps the last 100k; the marker notes the
         // child log holds the full output.
         let big: String = "a".repeat(100_005);
@@ -510,21 +509,17 @@ mod tests {
     #[test]
     fn test_toolctx_threads_spawn() {
         // The per-call context carries agent identity and the spawn handle.
-        use houyicoder_api::spawn::{AgentIdentity, SpawnArgs};
         struct NoSpawn;
-        impl houyicoder_api::spawn::SpawnHandle for NoSpawn {
+        impl SpawnHandle for NoSpawn {
             fn spawn(
                 &self,
-                _ctx: &houyicoder_api::tool::ToolCtx,
+                _ctx: &ToolCtx,
                 _args: SpawnArgs,
-            ) -> PFut<
-                '_,
-                Result<houyicoder_api::spawn::SpawnOutcome, houyicoder_api::spawn::SpawnFailure>,
-            > {
+            ) -> PFut<'_, Result<SpawnOutcome, SpawnFailure>> {
                 Box::pin(async { Err(SpawnFailure::Recursive) })
             }
         }
-        let handle: Arc<dyn houyicoder_api::spawn::SpawnHandle> = Arc::new(NoSpawn);
+        let handle: Arc<dyn SpawnHandle> = Arc::new(NoSpawn);
         let identity = AgentIdentity {
             subagent_type: Some("explore".into()),
             depth: 0,

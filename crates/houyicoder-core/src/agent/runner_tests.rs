@@ -1,7 +1,11 @@
 use super::*;
 use crate::agent::runner_config::DEFAULT_SNAPSHOT_TTL_SECS;
 use crate::provider::test_support::FakeProvider;
+use crate::snapshot::SnapshotStore;
+use crate::snapshot::UndoStack;
 use futures::StreamExt;
+use futures::stream::iter;
+use futures::stream::pending;
 use houyicoder_api::agent_event::{
     AgentEventHandlers, ResponseStreamEvent, RunCompletionStatus, RunLifecycleEvent,
 };
@@ -9,11 +13,22 @@ use houyicoder_api::tool::{Tool, ToolCtx};
 use houyicoder_context::SessionEvent;
 use houyicoder_memory::InMemoryBackend;
 use houyicoder_protocol::extension::ToolError;
+use houyicoder_protocol::llm::InputItem;
+use houyicoder_protocol::llm::LlmEvent;
+use houyicoder_protocol::llm::ModelCapabilities;
 use houyicoder_protocol::llm::Usage;
 use houyicoder_protocol::llm::{CompletionRequest, CompletionResponse, OutputItem, ProviderError};
 use houyicoder_resilience::Retry;
 use houyicoder_session::SessionStore;
+use std::env::temp_dir;
+use std::fs::create_dir_all;
+use std::fs::read_dir;
+use std::fs::remove_dir_all;
+use std::fs::write;
+use std::process::id;
+use std::sync::Arc;
 use std::sync::Mutex;
+use tokio::task::yield_now;
 #[cfg(test)]
 mod mid_turn;
 
@@ -423,8 +438,7 @@ async fn test_stream_persists_deltas() {
     let p = Arc::new(FakeProvider::text("hello world"));
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let session = SessionId::new();
-    let collected: Arc<Mutex<Vec<ResponseStreamEvent>>> =
-        Arc::new(std::sync::Mutex::new(Vec::new()));
+    let collected: Arc<Mutex<Vec<ResponseStreamEvent>>> = Arc::new(Mutex::new(Vec::new()));
     let mut events = AgentEventHandlers::default();
     let captured = collected.clone();
     events.set_response_stream(Arc::new(move |event| {
@@ -479,7 +493,7 @@ async fn test_stream_persists_deltas() {
     let items = assemble_model_input(&events, None);
     let assistant = items
         .iter()
-        .filter(|i| matches!(i, houyicoder_protocol::llm::InputItem::Assistant { .. }))
+        .filter(|i| matches!(i, InputItem::Assistant { .. }))
         .count();
     assert_eq!(assistant, 1, "the assembly folds deltas into one Assistant");
 }
@@ -772,11 +786,11 @@ impl Tool for GuardedTool {
 
 /// A provider whose stream emits the given LlmEvents then never yields again (esc-interrupt path).
 pub(crate) struct HangingProvider {
-    events: Vec<houyicoder_protocol::llm::LlmEvent>,
+    events: Vec<LlmEvent>,
 }
 
 impl HangingProvider {
-    pub(crate) fn new(events: Vec<houyicoder_protocol::llm::LlmEvent>) -> Self {
+    pub(crate) fn new(events: Vec<LlmEvent>) -> Self {
         Self { events }
     }
 }
@@ -794,16 +808,15 @@ impl ModelProvider for HangingProvider {
             })
         })
     }
-    fn capabilities(&self) -> houyicoder_protocol::llm::ModelCapabilities {
-        houyicoder_protocol::llm::ModelCapabilities::default()
+    fn capabilities(&self) -> ModelCapabilities {
+        ModelCapabilities::default()
     }
     fn stream(
         &self,
         _req: CompletionRequest,
-    ) -> houyicoder_async::PStream<'_, Result<houyicoder_protocol::llm::LlmEvent, ProviderError>>
-    {
-        let prefix = futures::stream::iter(self.events.clone().into_iter().map(Ok));
-        let tail = futures::stream::pending();
+    ) -> houyicoder_async::PStream<'_, Result<LlmEvent, ProviderError>> {
+        let prefix = iter(self.events.clone().into_iter().map(Ok));
+        let tail = pending();
         Box::pin(prefix.chain(tail))
     }
 }
@@ -812,7 +825,6 @@ impl ModelProvider for HangingProvider {
 async fn test_abort_flushes_partial() {
     // One text delta then a hang: abort must surface RunOutcome::Interrupted
     // and the partial delta must land as an authoritative AssistantMessage.
-    use houyicoder_protocol::llm::LlmEvent;
     let p = Arc::new(HangingProvider::new(vec![LlmEvent::TextDelta {
         id: "t1".into(),
         text: "partial answer".into(),
@@ -823,7 +835,7 @@ async fn test_abort_flushes_partial() {
     let task = tokio::spawn(async move { r.run(session, "hi".into()).await });
     // Let the run enter the streaming select! (yields until the pending tail).
     for _ in 0..5 {
-        tokio::task::yield_now().await;
+        yield_now().await;
     }
     runner.abort();
     let result = task.await.expect("run task").expect("run ok");
@@ -853,7 +865,6 @@ async fn test_abort_reconciles_orphan_results() {
     // A tool-call delta (approval-requiring tool) then a hang: abort must flush
     // the ToolCall to the log and reconcile an interrupted-by-user ToolResult
     // for it so the session stays lossless and resumable.
-    use houyicoder_protocol::llm::LlmEvent;
     let p = Arc::new(HangingProvider::new(vec![LlmEvent::ToolCall {
         id: "c1".into(),
         name: "guarded".into(),
@@ -866,7 +877,7 @@ async fn test_abort_reconciles_orphan_results() {
     let r = runner.clone();
     let task = tokio::spawn(async move { r.run(session, "hi".into()).await });
     for _ in 0..5 {
-        tokio::task::yield_now().await;
+        yield_now().await;
     }
     runner.abort();
     let result = task.await.expect("run task").expect("run ok");
@@ -904,26 +915,25 @@ fn test_snapshot_override_drives_prune() {
     // snapshot. If prune_snapshots still used the default 1GB cap, nothing
     // would be removed. Guards the retention-override wiring from regressing
     // to hardcodes.
-    use std::sync::{Arc, Mutex};
-    let tmp = std::env::temp_dir().join(format!("t7-ret-{}", std::process::id()));
-    std::fs::remove_dir_all(&tmp).ok();
-    std::fs::create_dir_all(&tmp).unwrap();
-    std::fs::write(tmp.join("f.txt"), "x").unwrap();
-    let store = Arc::new(crate::snapshot::SnapshotStore::new(&tmp).unwrap());
+    let tmp = temp_dir().join(format!("t7-ret-{}", id()));
+    remove_dir_all(&tmp).ok();
+    create_dir_all(&tmp).unwrap();
+    write(tmp.join("f.txt"), "x").unwrap();
+    let store = Arc::new(SnapshotStore::new(&tmp).unwrap());
     store.snapshot(&[]).unwrap();
     store.snapshot(&[]).unwrap();
     let snap_dir = tmp.join(".houyicoder").join("snapshots");
-    let before = std::fs::read_dir(&snap_dir).map(|d| d.count()).unwrap_or(0);
-    let stack = Arc::new(Mutex::new(crate::snapshot::UndoStack::new()));
+    let before = read_dir(&snap_dir).map(|d| d.count()).unwrap_or(0);
+    let stack = Arc::new(Mutex::new(UndoStack::new()));
     let p = Arc::new(FakeProvider::text("done"));
     let mut r =
         runner_with(p, ToolRegistry::new()).with_snapshot_retention(DEFAULT_SNAPSHOT_TTL_SECS, 0);
     r.set_undo(stack, store);
     r.prune_snapshots();
-    let after = std::fs::read_dir(&snap_dir).map(|d| d.count()).unwrap_or(0);
+    let after = read_dir(&snap_dir).map(|d| d.count()).unwrap_or(0);
     assert!(
         after < before,
         "size cap 0 override should prune snapshots (before={before}, after={after})"
     );
-    std::fs::remove_dir_all(&tmp).ok();
+    remove_dir_all(&tmp).ok();
 }

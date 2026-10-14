@@ -14,6 +14,10 @@
 
 use std::sync::{Arc, Mutex};
 
+use super::super::SkillHookRegistrar;
+use super::super::conditional_activation::ConditionalSkillActivator;
+use super::super::skill_body::frame_untrusted_body;
+use super::super::skill_body::skill_source;
 use houyicoder_api::sandbox::SandboxSession;
 use houyicoder_api::skill::grant::{SkillGrantStore, resolve_entitlements};
 use houyicoder_api::skill::{SkillError, SkillRegistry, SkillSource};
@@ -29,8 +33,8 @@ use serde_json::{Value, json};
 /// current sandbox entitlement and invocation metadata.
 pub struct SkillTool {
     registry: Arc<dyn SkillRegistry>,
-    registrar: Option<Arc<super::super::SkillHookRegistrar>>,
-    activator: Option<Arc<dyn super::super::conditional_activation::ConditionalSkillActivator>>,
+    registrar: Option<Arc<SkillHookRegistrar>>,
+    activator: Option<Arc<dyn ConditionalSkillActivator>>,
     sandbox: Option<Arc<dyn SandboxSession>>,
     skill_grants: Option<Arc<SkillGrantStore>>,
     active_skill: Option<Arc<Mutex<Option<String>>>>,
@@ -51,7 +55,7 @@ impl SkillTool {
     /// Wire the skill-hook registrar so invoking a skill registers its
     /// frontmatter hooks into the session hook registry. Unwired in tests
     /// that do not exercise hooks; the execute path skips registration.
-    pub fn with_registrar(mut self, registrar: Arc<super::super::SkillHookRegistrar>) -> Self {
+    pub fn with_registrar(mut self, registrar: Arc<SkillHookRegistrar>) -> Self {
         self.registrar = Some(registrar);
         self
     }
@@ -77,10 +81,7 @@ impl SkillTool {
     /// Wire the paths-skill activator so a conditional skill refuses until a
     /// matching file touch activates it. Unwired in tests; the gate then
     /// passes (feature off).
-    pub fn with_activator(
-        mut self,
-        activator: Option<Arc<dyn super::super::conditional_activation::ConditionalSkillActivator>>,
-    ) -> Self {
+    pub fn with_activator(mut self, activator: Option<Arc<dyn ConditionalSkillActivator>>) -> Self {
         self.activator = activator;
         self
     }
@@ -186,7 +187,7 @@ impl Tool for SkillTool {
             // key so a same-named project skill cannot consume grants
             // approved for a user-level copy. One origin scan feeds
             // both body-trust and entitlement-trust decisions.
-            let source = super::super::skill_body::skill_source(&*registry, &params.skill);
+            let source = skill_source(&*registry, &params.skill);
             let untrusted = source
                 .as_ref()
                 .map(|source| !source.is_trusted())
@@ -218,8 +219,7 @@ impl Tool for SkillTool {
             }
             // Frame an untrusted body as data so the model treats its
             // directives as unverified. Shared with the slash path.
-            let body =
-                super::super::skill_body::frame_untrusted_body(&params.skill, &body, untrusted);
+            let body = frame_untrusted_body(&params.skill, &body, untrusted);
             // Skill-authored tool grants use the same authority boundary as
             // other frontmatter entitlements. A user-home compatibility skill
             // may receive a host profile without self-authorizing tool rules.

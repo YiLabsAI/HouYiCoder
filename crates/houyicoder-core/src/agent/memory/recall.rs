@@ -23,6 +23,7 @@ use super::selector::{
 use crate::agent::RunError;
 use crate::agent::append::new_event;
 use crate::agent::context;
+use crate::agent::selection::apply_manifest;
 
 /// Maximum memory bytes retained in the active context.
 const MAX_SESSION_BYTES: usize = 60 * 1024;
@@ -198,7 +199,7 @@ fn surfaced_memory_scan(
     backend: Option<&dyn ContextBackend>,
 ) -> (HashSet<String>, usize) {
     let filtered = match manifest {
-        Some(m) => crate::agent::selection::apply_manifest(events, m, backend),
+        Some(m) => apply_manifest(events, m, backend),
         None => events.to_vec(),
     };
     let mut keys = HashSet::new();

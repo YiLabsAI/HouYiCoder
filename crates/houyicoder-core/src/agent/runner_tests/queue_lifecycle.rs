@@ -5,6 +5,9 @@
 //! These are the engine-level proofs; the wire-level coverage lives in the
 //! service session tests.
 use super::*;
+use houyicoder_protocol::frontend::QueuedInput;
+use houyicoder_protocol::llm::LlmEvent;
+use tokio::task::yield_now;
 
 /// A message enqueued after the run's turn-1 drain + then interrupted must
 /// NOT survive in the server queue. Without the clear-on-interrupt, the
@@ -14,7 +17,6 @@ use super::*;
 /// never sees).
 #[tokio::test]
 async fn test_interrupt_clears_queued_input() {
-    use houyicoder_protocol::llm::LlmEvent;
     let p = Arc::new(HangingProvider::new(vec![LlmEvent::TextDelta {
         id: "t1".into(),
         text: "partial".into(),
@@ -28,9 +30,9 @@ async fn test_interrupt_clears_queued_input() {
     // delta + goes pending). Anything enqueued now lands AFTER that drain,
     // so only a turn-2 drain (which never happens) would consume it.
     for _ in 0..5 {
-        tokio::task::yield_now().await;
+        yield_now().await;
     }
-    runner.enqueue_input(houyicoder_protocol::frontend::QueuedInput::new("m1"));
+    runner.enqueue_input(QueuedInput::new("m1"));
     runner.abort();
     let result = task.await.expect("run task").expect("run ok");
     assert!(

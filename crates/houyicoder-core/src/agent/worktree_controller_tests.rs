@@ -1,10 +1,19 @@
 use super::*;
+use crate::agent::tools::{EnterWorktreeTool, ExitWorktreeTool};
+use houyicoder_api::sandbox::WorktreeFenceGuard;
+use houyicoder_api::tool::{Tool, ToolCtx};
 use houyicoder_async::PFut;
 use houyicoder_context::{DirEntry, ExecConfig, ExecResult, SandboxError};
 use houyicoder_memory::InMemoryBackend;
 use houyicoder_session::SessionStore;
+use serde_json::json;
+use std::env::temp_dir;
+use std::fs::create_dir_all;
+use std::fs::remove_dir_all;
 use std::path::Path;
+use std::path::PathBuf;
 use std::process::Command;
+use std::process::id;
 use std::sync::atomic::AtomicU64;
 
 /// A stub sandbox whose narrow returns a no-op restore guard. The
@@ -41,23 +50,21 @@ impl SandboxSession for StubSandbox {
     fn path_exists(&self, _path: &str) -> PFut<'_, Result<bool, SandboxError>> {
         Box::pin(async move { Ok(false) })
     }
-    fn workspace_root(&self) -> Arc<std::path::Path> {
-        Arc::from(std::path::PathBuf::from("/"))
+    fn workspace_root(&self) -> Arc<Path> {
+        Arc::from(PathBuf::from("/"))
     }
     fn narrow_to_worktree(
         &self,
         _worktree: &Path,
         _git_common_dir: &Path,
-    ) -> Result<houyicoder_api::sandbox::WorktreeFenceGuard, SandboxError> {
+    ) -> Result<WorktreeFenceGuard, SandboxError> {
         if self.narrow_err {
             return Err(SandboxError::Unsupported(
                 "stub narrow failure for fail-closed test".into(),
             ));
         }
         self.narrows.fetch_add(1, Ordering::SeqCst);
-        Ok(houyicoder_api::sandbox::WorktreeFenceGuard::new(Box::new(
-            || Ok(()),
-        )))
+        Ok(WorktreeFenceGuard::new(Box::new(|| Ok(()))))
     }
     fn active_exec_count(&self) -> usize {
         self.in_flight
@@ -65,9 +72,9 @@ impl SandboxSession for StubSandbox {
 }
 
 pub(crate) fn make_repo(tag: u64) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("houyi-wt-ctrl-{}-{tag}", std::process::id()));
-    drop(std::fs::remove_dir_all(&dir));
-    std::fs::create_dir_all(&dir).expect("mkdir");
+    let dir = temp_dir().join(format!("houyi-wt-ctrl-{}-{tag}", id()));
+    drop(remove_dir_all(&dir));
+    create_dir_all(&dir).expect("mkdir");
     drop(
         Command::new("git")
             .arg("-C")
@@ -163,7 +170,7 @@ async fn test_enter_exit_round_trip() {
         .await
         .expect("exit keep");
     assert!(!controller.current(), "out of session after exit");
-    std::fs::remove_dir_all(&repo).ok();
+    remove_dir_all(&repo).ok();
 }
 
 #[tokio::test]
@@ -179,7 +186,7 @@ async fn test_exit_remove_clean_succeeds() {
         .await
         .expect("exit remove clean");
     assert!(!controller.current());
-    std::fs::remove_dir_all(&repo).ok();
+    remove_dir_all(&repo).ok();
 }
 
 #[tokio::test]
@@ -196,7 +203,7 @@ async fn test_second_enter_refused() {
         .expect_err("second refused");
     assert!(err.to_string().contains("already in a worktree"));
     controller.exit(ExitAction::Remove, true).await.ok();
-    std::fs::remove_dir_all(&repo).ok();
+    remove_dir_all(&repo).ok();
 }
 
 #[tokio::test]
@@ -208,7 +215,7 @@ async fn test_enter_refused_inflight_exec() {
         .await
         .expect_err("in-flight refused");
     assert!(err.to_string().contains("in flight"));
-    std::fs::remove_dir_all(&repo).ok();
+    remove_dir_all(&repo).ok();
 }
 
 #[tokio::test]
@@ -255,7 +262,7 @@ async fn test_remove_refuses_without_discard() {
         .await
         .expect("exit remove with discard");
     assert!(!controller.current());
-    std::fs::remove_dir_all(&repo).ok();
+    remove_dir_all(&repo).ok();
 }
 
 #[tokio::test]
@@ -267,15 +274,11 @@ async fn test_exit_without_session_noop() {
         .await
         .expect("noop");
     assert!(outcome.message.contains("No active worktree"));
-    std::fs::remove_dir_all(&repo).ok();
+    remove_dir_all(&repo).ok();
 }
 
 #[tokio::test]
 async fn test_tools_execute_through_controller() {
-    use crate::agent::tools::{EnterWorktreeTool, ExitWorktreeTool};
-    use houyicoder_api::tool::{Tool, ToolCtx};
-    use serde_json::json;
-
     let repo = make_repo(6);
     let (controller, _store, _cwd) = wired(&repo, 0);
     let enter = EnterWorktreeTool::new(controller.clone());
@@ -295,7 +298,7 @@ async fn test_tools_execute_through_controller() {
         .await
         .expect("exit tool");
     assert_eq!(out["action"].as_str().unwrap(), "keep");
-    std::fs::remove_dir_all(&repo).ok();
+    remove_dir_all(&repo).ok();
 }
 
 /// Exiting isolation emits a user notice when the main branch ref changed.
@@ -331,5 +334,5 @@ async fn test_exit_warns_history_rewrite() {
             .any(|l| l.contains("main branch") && l.contains("moved")),
         "main-branch-moved surfaces a system line: {lines:?}"
     );
-    std::fs::remove_dir_all(&repo).ok();
+    remove_dir_all(&repo).ok();
 }

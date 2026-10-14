@@ -3,11 +3,13 @@
 use houyicoder_context::{SessionEvent, SessionLogEntry};
 
 use super::{SubagentUsage, aggregate_subagent_usage};
+use houyicoder_context::EventId;
+use houyicoder_context::SessionId;
 
 fn entry(event: SessionEvent) -> SessionLogEntry {
     SessionLogEntry {
-        id: houyicoder_context::EventId::new(),
-        session: houyicoder_context::SessionId::new(),
+        id: EventId::new(),
+        session: SessionId::new(),
         ts: 0,
         prev_hash: None,
         event,

@@ -14,8 +14,14 @@ use houyicoder_protocol::llm::{OutputItem, Usage};
 use serde_json::Value;
 
 use super::compaction::CompactionOutcome;
+use super::hook::CompactTrigger;
 use super::hook::{HookEvent, wire::HookOutcome};
+use super::reducer::ReduceCtx;
+use super::reducer::TrustLevel;
 use super::{CompletionResponse, RunError, RunOutcome, RunResult, Runner};
+use crate::agent::multi_agent::bus_types::BusMessage;
+use std::env::var;
+use std::sync::atomic::Ordering;
 
 /// Emit progress after a completed turn when the run will continue.
 pub(crate) fn emit_turn_progress(
@@ -96,7 +102,7 @@ impl Runner {
         };
         let mut acc = Vec::new();
         while let Ok(msg) = rx.try_recv() {
-            if let crate::agent::multi_agent::bus_types::BusMessage::Inbox { text } = msg {
+            if let BusMessage::Inbox { text } = msg {
                 acc.push(text);
             }
         }
@@ -169,7 +175,7 @@ impl Runner {
         session: SessionId,
         calls: &[(&str, &serde_json::Value)],
     ) {
-        if std::env::var("HOUYICODER_REWARD_OFF").is_ok() {
+        if var("HOUYICODER_REWARD_OFF").is_ok() {
             return;
         }
         let (prev_flagged, prev_retry, prev_retry_tools) = {
@@ -505,9 +511,9 @@ impl Runner {
                 let reduced = r.reduce(
                     &raw_preview,
                     tool,
-                    &super::reducer::ReduceCtx {
+                    &ReduceCtx {
                         raw: false,
-                        trust: super::reducer::TrustLevel::Untrusted,
+                        trust: TrustLevel::Untrusted,
                     },
                 );
                 (reduced.text, reduced.data_tag)
@@ -531,8 +537,7 @@ impl Runner {
     /// build_for_turn — compaction does not reduce the in-flight context
     /// immediately, only the next turn's window.
     pub async fn compact(&self, session: SessionId) -> Result<CompactionOutcome, RunError> {
-        self.run_compaction(session, super::hook::CompactTrigger::Manual)
-            .await
+        self.run_compaction(session, CompactTrigger::Manual).await
     }
 
     /// Append a logical turn boundary. The durable companion to the in-memory
@@ -622,15 +627,9 @@ impl Runner {
             Ok(mut prev) => {
                 let p = *prev;
                 let cause = if p.is_some_and(|v| v > 0 && current < v / 2) {
-                    if self
-                        .cache_compact_flag
-                        .load(std::sync::atomic::Ordering::Relaxed)
-                    {
+                    if self.cache_compact_flag.load(Ordering::Relaxed) {
                         Some("compact")
-                    } else if self
-                        .cache_model_switch_flag
-                        .load(std::sync::atomic::Ordering::Relaxed)
-                    {
+                    } else if self.cache_model_switch_flag.load(Ordering::Relaxed) {
                         Some("model-switch")
                     } else {
                         Some("unknown")
@@ -643,10 +642,8 @@ impl Runner {
             }
             Err(_) => None,
         };
-        self.cache_compact_flag
-            .store(false, std::sync::atomic::Ordering::Relaxed);
-        self.cache_model_switch_flag
-            .store(false, std::sync::atomic::Ordering::Relaxed);
+        self.cache_compact_flag.store(false, Ordering::Relaxed);
+        self.cache_model_switch_flag.store(false, Ordering::Relaxed);
         if let Some(c) = cause {
             self.store
                 .append(new_event(

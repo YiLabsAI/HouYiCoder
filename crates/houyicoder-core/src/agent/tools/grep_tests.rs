@@ -6,18 +6,33 @@
 #![allow(clippy::disallowed_methods)]
 
 use super::*;
+use crate::agent::tools::subprocess_util::find_rg;
+use houyicoder_api::sandbox::SandboxSession;
+use houyicoder_api::tool::ToolCtx;
+use houyicoder_context::SandboxError;
+use std::env::temp_dir;
 use std::fs;
+use std::path::Path;
 use std::path::PathBuf;
+use std::process::Command;
+use std::process::id;
+use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
+use std::time::Duration;
+use std::time::Instant;
 use std::time::SystemTime;
+use tokio::time::timeout;
+use tokio_util::sync::CancellationToken;
 
 fn test_dir() -> PathBuf {
-    static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-    let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    static COUNTER: AtomicUsize = AtomicUsize::new(0);
+    let n = COUNTER.fetch_add(1, Ordering::SeqCst);
     let nanos = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    let path = std::env::temp_dir().join(format!("grep-test-{}-{n}-{nanos}", std::process::id()));
+    let path = temp_dir().join(format!("grep-test-{}-{n}-{nanos}", id()));
     fs::create_dir_all(&path).unwrap();
     path
 }
@@ -140,7 +155,7 @@ fn test_head_limit_keeps_newest() {
     for i in 0..5 {
         touch(&dir, &format!("old{i}.rs"), "match\n");
     }
-    std::thread::sleep(std::time::Duration::from_millis(20));
+    std::thread::sleep(Duration::from_millis(20));
     touch(&dir, "new.rs", "match\n");
     let mut o = opts("match");
     o.head_limit = 3;
@@ -289,7 +304,7 @@ fn test_type_filter_rust() {
 fn test_sort_mtime_desc() {
     let dir = test_dir();
     touch(&dir, "old.rs", "match\n");
-    std::thread::sleep(std::time::Duration::from_millis(20));
+    std::thread::sleep(Duration::from_millis(20));
     touch(&dir, "new.rs", "match\n");
     let out = run_grep(&dir, &[], &opts("match")).unwrap();
     assert_eq!(out.filenames.len(), 2);
@@ -416,48 +431,39 @@ fn test_offset_beyond_len_empty() {
 struct StubSession {
     root: PathBuf,
 }
-impl houyicoder_api::sandbox::SandboxSession for StubSession {
+impl SandboxSession for StubSession {
     fn exec_with_config(
         &self,
         _command: &str,
         _config: houyicoder_context::ExecConfig,
-    ) -> houyicoder_async::PFut<
-        '_,
-        Result<houyicoder_context::ExecResult, houyicoder_context::SandboxError>,
-    > {
-        Box::pin(async { Err(houyicoder_context::SandboxError::Unsupported("test".into())) })
+    ) -> houyicoder_async::PFut<'_, Result<houyicoder_context::ExecResult, SandboxError>> {
+        Box::pin(async { Err(SandboxError::Unsupported("test".into())) })
     }
     fn read_file(
         &self,
         _path: &str,
         _max: usize,
-    ) -> houyicoder_async::PFut<'_, Result<Vec<u8>, houyicoder_context::SandboxError>> {
-        Box::pin(async { Err(houyicoder_context::SandboxError::Unsupported("test".into())) })
+    ) -> houyicoder_async::PFut<'_, Result<Vec<u8>, SandboxError>> {
+        Box::pin(async { Err(SandboxError::Unsupported("test".into())) })
     }
     fn write_file(
         &self,
         _path: &str,
         _content: Vec<u8>,
-    ) -> houyicoder_async::PFut<'_, Result<(), houyicoder_context::SandboxError>> {
-        Box::pin(async { Err(houyicoder_context::SandboxError::Unsupported("test".into())) })
+    ) -> houyicoder_async::PFut<'_, Result<(), SandboxError>> {
+        Box::pin(async { Err(SandboxError::Unsupported("test".into())) })
     }
     fn list_dir(
         &self,
         _path: &str,
-    ) -> houyicoder_async::PFut<
-        '_,
-        Result<Vec<houyicoder_context::DirEntry>, houyicoder_context::SandboxError>,
-    > {
-        Box::pin(async { Err(houyicoder_context::SandboxError::Unsupported("test".into())) })
+    ) -> houyicoder_async::PFut<'_, Result<Vec<houyicoder_context::DirEntry>, SandboxError>> {
+        Box::pin(async { Err(SandboxError::Unsupported("test".into())) })
     }
-    fn path_exists(
-        &self,
-        _path: &str,
-    ) -> houyicoder_async::PFut<'_, Result<bool, houyicoder_context::SandboxError>> {
+    fn path_exists(&self, _path: &str) -> houyicoder_async::PFut<'_, Result<bool, SandboxError>> {
         Box::pin(async { Ok(false) })
     }
-    fn workspace_root(&self) -> std::sync::Arc<std::path::Path> {
-        std::sync::Arc::from(self.root.clone())
+    fn workspace_root(&self) -> Arc<Path> {
+        Arc::from(self.root.clone())
     }
 }
 
@@ -468,14 +474,10 @@ async fn test_execute_runs_blocking_pool() {
     let dir = test_dir();
     touch(&dir, "a.rs", "match\n");
     touch(&dir, "target/x.rs", "match\n");
-    let session = std::sync::Arc::new(StubSession { root: dir.clone() })
-        as std::sync::Arc<dyn houyicoder_api::sandbox::SandboxSession>;
+    let session = Arc::new(StubSession { root: dir.clone() }) as Arc<dyn SandboxSession>;
     let tool = GrepTool::new(session);
     let out = tool
-        .execute(
-            houyicoder_api::tool::ToolCtx::new("c1"),
-            serde_json::json!({"pattern": "match"}),
-        )
+        .execute(ToolCtx::new("c1"), serde_json::json!({"pattern": "match"}))
         .await
         .expect("execute ok");
     let files = out.get("filenames").and_then(|v| v.as_array()).unwrap();
@@ -490,12 +492,11 @@ async fn test_execute_runs_blocking_pool() {
 async fn test_execute_cancel_returns_interrupted() {
     let dir = test_dir();
     touch(&dir, "a.rs", "match\n");
-    let session = std::sync::Arc::new(StubSession { root: dir.clone() })
-        as std::sync::Arc<dyn houyicoder_api::sandbox::SandboxSession>;
+    let session = Arc::new(StubSession { root: dir.clone() }) as Arc<dyn SandboxSession>;
     let tool = GrepTool::new(session);
-    let token = tokio_util::sync::CancellationToken::new();
+    let token = CancellationToken::new();
     token.cancel();
-    let ctx = houyicoder_api::tool::ToolCtx::new("c1").with_cancel(token);
+    let ctx = ToolCtx::new("c1").with_cancel(token);
     let err = tool
         .execute(ctx, serde_json::json!({"pattern": "match"}))
         .await
@@ -513,7 +514,7 @@ async fn test_execute_cancel_returns_interrupted() {
 /// assertion) when rg is absent, so the test skips instead of false-failing.
 #[tokio::test]
 async fn test_execute_respects_gitignore() {
-    if crate::agent::tools::subprocess_util::find_rg().is_none() {
+    if find_rg().is_none() {
         eprintln!("execute_respects_gitignore: rg not on PATH; skipping");
         return;
     }
@@ -524,19 +525,18 @@ async fn test_execute_respects_gitignore() {
     // rg only reads .gitignore inside a git repository, so initialize one in
     // the temp dir. Without this rg treats .gitignore as a plain file and
     // the gitignore-aware behavior under test would not engage.
-    let git_init = std::process::Command::new("git")
+    let git_init = Command::new("git")
         .arg("init")
         .arg("-q")
         .current_dir(&dir)
         .status()
         .expect("git init");
     assert!(git_init.success(), "git init failed in test dir");
-    let session = std::sync::Arc::new(StubSession { root: dir.clone() })
-        as std::sync::Arc<dyn houyicoder_api::sandbox::SandboxSession>;
+    let session = Arc::new(StubSession { root: dir.clone() }) as Arc<dyn SandboxSession>;
     let tool = GrepTool::new(session);
     let out = tool
         .execute(
-            houyicoder_api::tool::ToolCtx::new("c1"),
+            ToolCtx::new("c1"),
             serde_json::json!({"pattern": "match", "output_mode": "files_with_matches"}),
         )
         .await
@@ -565,18 +565,17 @@ async fn test_execute_respects_gitignore() {
 /// tests above, which already assert the same format).
 #[tokio::test]
 async fn test_subprocess_content_uniform_format() {
-    if crate::agent::tools::subprocess_util::find_rg().is_none() {
+    if find_rg().is_none() {
         eprintln!("subprocess_content_uniform_format: rg not on PATH; skipping");
         return;
     }
     let dir = test_dir();
     touch(&dir, "a.rs", "line1\nMATCH\nline3\n");
-    let session = std::sync::Arc::new(StubSession { root: dir.clone() })
-        as std::sync::Arc<dyn houyicoder_api::sandbox::SandboxSession>;
+    let session = Arc::new(StubSession { root: dir.clone() }) as Arc<dyn SandboxSession>;
     let tool = GrepTool::new(session);
     let out = tool
         .execute(
-            houyicoder_api::tool::ToolCtx::new("c1"),
+            ToolCtx::new("c1"),
             serde_json::json!({
                 "pattern": "MATCH",
                 "output_mode": "content",
@@ -618,8 +617,7 @@ async fn test_subprocess_content_uniform_format() {
 #[cfg(unix)]
 #[tokio::test]
 async fn test_stop_subprocess_on_cancel() {
-    use std::time::{Duration, Instant};
-    if crate::agent::tools::subprocess_util::find_rg().is_none() {
+    if find_rg().is_none() {
         eprintln!("stop_subprocess_on_cancel: rg not on PATH; skipping");
         return;
     }
@@ -627,16 +625,12 @@ async fn test_stop_subprocess_on_cancel() {
     // A FIFO target with no writer blocks rg on read forever, so a non-killed
     // child would linger — the discriminator for kill-on-cancel.
     let fifo = dir.join("blocker.fifo");
-    let mk = std::process::Command::new("mkfifo")
-        .arg(&fifo)
-        .status()
-        .expect("mkfifo");
+    let mk = Command::new("mkfifo").arg(&fifo).status().expect("mkfifo");
     assert!(mk.success(), "mkfifo failed");
-    let session = std::sync::Arc::new(StubSession { root: dir.clone() })
-        as std::sync::Arc<dyn houyicoder_api::sandbox::SandboxSession>;
+    let session = Arc::new(StubSession { root: dir.clone() }) as Arc<dyn SandboxSession>;
     let tool = GrepTool::new(session);
-    let token = tokio_util::sync::CancellationToken::new();
-    let ctx = houyicoder_api::tool::ToolCtx::new("c1").with_cancel(token.clone());
+    let token = CancellationToken::new();
+    let ctx = ToolCtx::new("c1").with_cancel(token.clone());
     let handle = tokio::spawn(async move {
         tool.execute(
             ctx,
@@ -648,7 +642,7 @@ async fn test_stop_subprocess_on_cancel() {
     tokio::time::sleep(Duration::from_millis(300)).await;
     let started = Instant::now();
     token.cancel();
-    let res = tokio::time::timeout(Duration::from_secs(2), handle).await;
+    let res = timeout(Duration::from_secs(2), handle).await;
     let elapsed = started.elapsed();
     assert!(
         elapsed < Duration::from_secs(2),
@@ -663,7 +657,7 @@ async fn test_stop_subprocess_on_cancel() {
     // the full command line; the FIFO path is unique per test, so only a
     // non-killed rg child would match.
     tokio::time::sleep(Duration::from_millis(300)).await;
-    let out = std::process::Command::new("pgrep")
+    let out = Command::new("pgrep")
         .args(["-f", &fifo.to_string_lossy()])
         .output()
         .expect("pgrep");
@@ -686,23 +680,18 @@ async fn test_stop_subprocess_on_cancel() {
 #[cfg(unix)]
 #[tokio::test]
 async fn test_stop_subprocess_on_drop() {
-    use std::time::{Duration, Instant};
-    if crate::agent::tools::subprocess_util::find_rg().is_none() {
+    if find_rg().is_none() {
         eprintln!("stop_subprocess_on_drop: rg not on PATH; skipping");
         return;
     }
     let dir = test_dir();
     let fifo = dir.join("dropper.fifo");
-    let mk = std::process::Command::new("mkfifo")
-        .arg(&fifo)
-        .status()
-        .expect("mkfifo");
+    let mk = Command::new("mkfifo").arg(&fifo).status().expect("mkfifo");
     assert!(mk.success(), "mkfifo failed");
-    let session = std::sync::Arc::new(StubSession { root: dir.clone() })
-        as std::sync::Arc<dyn houyicoder_api::sandbox::SandboxSession>;
+    let session = Arc::new(StubSession { root: dir.clone() }) as Arc<dyn SandboxSession>;
     let tool = GrepTool::new(session);
-    let token = tokio_util::sync::CancellationToken::new();
-    let ctx = houyicoder_api::tool::ToolCtx::new("c1").with_cancel(token.clone());
+    let token = CancellationToken::new();
+    let ctx = ToolCtx::new("c1").with_cancel(token.clone());
     let exec_fut = tool.execute(
         ctx,
         serde_json::json!({"pattern": "match", "path": "dropper.fifo"}),
@@ -729,7 +718,7 @@ async fn test_stop_subprocess_on_drop() {
     // Without kill_on_drop, the dropped Child detaches and rg keeps blocking
     // on the FIFO; the unique path means only an orphan would match pgrep.
     tokio::time::sleep(Duration::from_millis(300)).await;
-    let out = std::process::Command::new("pgrep")
+    let out = Command::new("pgrep")
         .args(["-f", &fifo.to_string_lossy()])
         .output()
         .expect("pgrep");
@@ -746,7 +735,6 @@ async fn test_stop_subprocess_on_drop() {
 /// exercised so the trait surface stays honest and covered.
 #[tokio::test]
 async fn test_stub_unused_return_unsupported() {
-    use houyicoder_api::sandbox::SandboxSession;
     let dir = test_dir();
     let s = StubSession { root: dir.clone() };
     assert!(s.exec("git status").await.is_err());

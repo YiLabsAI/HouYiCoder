@@ -9,9 +9,13 @@
 
 use super::*;
 use crate::agent::abort_tool_tests::GuardedHangingTool;
+use crate::agent::memory::MemoryGates;
+use crate::agent::memory::MemoryRuntime;
 use crate::agent::runner_config::RunnerConfig;
 use crate::agent::runner_tests::{approvals_of, guarded_runner, runner_with};
 use crate::provider::test_support::FakeProvider;
+use houyicoder_api::memory::MemoryProvider;
+use houyicoder_api::session::SessionLog;
 use houyicoder_api::skill::{SkillDescriptor, SkillError, SkillRegistry};
 use houyicoder_async::PFut;
 use houyicoder_context::{
@@ -22,6 +26,9 @@ use houyicoder_memory::InMemoryBackend;
 use houyicoder_protocol::llm::{CompletionResponse, OutputItem};
 use houyicoder_resilience::Retry;
 use houyicoder_session::SessionStore;
+use std::time::Duration;
+use tokio::sync::Notify;
+use tokio::time::timeout;
 
 /// The durations of every completion record in the log, in order.
 fn recorded_ms(events: &[houyicoder_context::SessionLogEntry]) -> Vec<Option<u64>> {
@@ -322,7 +329,7 @@ impl ContextBackend for RefusesViews {
 /// ranking, so the provider only has to exist for the recall to run.
 struct UnreachableMemory;
 
-impl houyicoder_api::memory::MemoryProvider for UnreachableMemory {
+impl MemoryProvider for UnreachableMemory {
     fn add(
         &self,
         _entry: houyicoder_context::MemoryEntry,
@@ -331,7 +338,7 @@ impl houyicoder_api::memory::MemoryProvider for UnreachableMemory {
     }
 }
 
-fn refused_view_store() -> Arc<dyn houyicoder_api::session::SessionLog> {
+fn refused_view_store() -> Arc<dyn SessionLog> {
     Arc::new(SessionStore::new(Box::new(RefusesViews {
         inner: InMemoryBackend::new(),
     })))
@@ -353,10 +360,10 @@ async fn test_failed_recall_records_end() {
     // so its failure ends an opened turn: the record closes it, unmeasured
     // because no leg ran.
     let store = refused_view_store();
-    let runtime = crate::agent::memory::MemoryRuntime::from_parts(
+    let runtime = MemoryRuntime::from_parts(
         store.clone(),
         Some(Arc::new(UnreachableMemory)),
-        crate::agent::memory::MemoryGates::new(true, true),
+        MemoryGates::new(true, true),
         None,
         None,
     );
@@ -516,7 +523,7 @@ async fn test_stopped_run_records_end() {
         usage: Usage::default(),
         model: "test".into(),
     };
-    let started = Arc::new(tokio::sync::Notify::new());
+    let started = Arc::new(Notify::new());
     let mut tools = ToolRegistry::new();
     tools.register(Arc::new(GuardedHangingTool::new(started.clone())));
     let runner = Arc::new(runner_with(Arc::new(FakeProvider::new(vec![resp])), tools));
@@ -536,7 +543,7 @@ async fn test_stopped_run_records_end() {
     let task = tokio::spawn(async move { r.resume(session, &decisions).await });
     started.notified().await;
     runner.abort();
-    let stopped = tokio::time::timeout(std::time::Duration::from_secs(2), task)
+    let stopped = timeout(Duration::from_secs(2), task)
         .await
         .expect("resume resolved after the stop")
         .expect("resume task")

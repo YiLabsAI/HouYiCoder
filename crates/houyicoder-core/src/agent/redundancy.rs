@@ -35,6 +35,8 @@ use crate::observability::evolution::{
     REDUNDANCY_INPUT_PREVIEW_CAP, REDUNDANCY_RECORDS_CAP, RedundancyKind, RedundantCall,
 };
 use crate::observability::truncate_str;
+#[cfg(test)]
+use std::iter::once;
 
 /// Cap on the ledger so a very long session does not grow it without bound.
 /// LRU-evict (drop a random-ish entry) when exceeded — the ledger is a
@@ -434,7 +436,7 @@ mod tests {
         let mut t = RedundancyTracker::new();
         let input = json!({"command": "cargo build"});
         t.record("bash", &input, true);
-        t.check_batch(std::iter::once(("bash", &input)));
+        t.check_batch(once(("bash", &input)));
         assert_eq!(t.retry_after_error(), 1);
     }
 
@@ -446,7 +448,7 @@ mod tests {
         let input = json!({"command": "cargo build"});
         t.record("bash", &input, true);
         t.record("edit", &json!({"file_path": "src/lib.rs"}), false);
-        t.check_batch(std::iter::once(("bash", &input)));
+        t.check_batch(once(("bash", &input)));
         assert_eq!(t.retry_after_error(), 0);
     }
 
@@ -457,7 +459,7 @@ mod tests {
         let mut t = RedundancyTracker::new();
         let input = json!({"file_path": "src/lib.rs"});
         t.record("read", &input, false);
-        t.check_batch(std::iter::once(("read", &input)));
+        t.check_batch(once(("read", &input)));
         assert_eq!(t.retry_after_error(), 0);
         assert_eq!(
             t.records().len(),
@@ -473,7 +475,7 @@ mod tests {
         let mut t = RedundancyTracker::new();
         let input = json!({"command": "cargo build"});
         t.record("bash", &input, true);
-        t.check_batch(std::iter::once(("bash", &input)));
+        t.check_batch(once(("bash", &input)));
         assert_eq!(t.retry_after_error(), 1);
         assert_eq!(t.retry_tools().len(), 1, "blind retry tool name recorded");
         assert_eq!(t.retry_tools()[0], "bash");
@@ -487,7 +489,7 @@ mod tests {
         let input = json!({"command": "cargo build"});
         t.record("bash", &input, true);
         for _ in 0..(REDUNDANCY_RECORDS_CAP + 5) {
-            t.check_batch(std::iter::once(("bash", &input)));
+            t.check_batch(once(("bash", &input)));
             t.record("bash", &input, true);
         }
         assert!(

@@ -8,6 +8,13 @@ use houyicoder_api::tool::{Tool, ToolCtx};
 use houyicoder_context::SessionEvent;
 use houyicoder_protocol::extension::ToolError;
 use houyicoder_protocol::llm::{CompletionResponse, OutputItem, Usage};
+use std::future::pending;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
+use std::time::Duration;
+use tokio::sync::Notify;
+use tokio::task::yield_now;
+use tokio::time::timeout;
 
 /// A concurrency-safe tool whose execute future never resolves. Proves the
 /// run CancellationToken propagates into tool dispatch: without the
@@ -43,7 +50,7 @@ impl Tool for HangingTool {
         Box::pin(async move {
             // Never resolves: the only way out is the partition-level
             // select!{cancelled => interrupted} race on abort.
-            std::future::pending::<()>().await;
+            pending::<()>().await;
             Ok(serde_json::json!({"unreachable": true}))
         })
     }
@@ -86,13 +93,13 @@ async fn test_abort_in_tool_dispatch() {
     // call, resolve_turn reaches execute_partitioned, the HangingTool future
     // is polled and goes pending).
     for _ in 0..20 {
-        tokio::task::yield_now().await;
+        yield_now().await;
     }
     runner.abort();
     // Without the select!{cancelled} race this await would hang forever (the
     // pending tool future never returns). A timeout makes the discrimination
     // explicit: the fix resolves promptly, the regression hangs.
-    let result = tokio::time::timeout(std::time::Duration::from_secs(2), task)
+    let result = timeout(Duration::from_secs(2), task)
         .await
         .expect("run resolved on abort within 2s (token reaches tool dispatch)")
         .expect("run task")
@@ -119,10 +126,10 @@ async fn test_abort_in_tool_dispatch() {
 /// run token: without that race a stop issued while an approved command runs
 /// waits for the command to finish, so a long script ignores the key.
 pub(crate) struct GuardedHangingTool {
-    started: Arc<tokio::sync::Notify>,
+    started: Arc<Notify>,
 }
 impl GuardedHangingTool {
-    pub(crate) fn new(started: Arc<tokio::sync::Notify>) -> Self {
+    pub(crate) fn new(started: Arc<Notify>) -> Self {
         Self { started }
     }
 }
@@ -144,7 +151,7 @@ impl Tool for GuardedHangingTool {
         let started = Arc::clone(&self.started);
         Box::pin(async move {
             started.notify_one();
-            std::future::pending::<()>().await;
+            pending::<()>().await;
             Ok(serde_json::json!({"unreachable": true}))
         })
     }
@@ -159,7 +166,7 @@ impl Tool for GuardedHangingTool {
 /// A guarded call that records whether it ran. The call behind a stopped one
 /// must never reach it.
 struct GuardedProbeTool {
-    ran: Arc<std::sync::atomic::AtomicBool>,
+    ran: Arc<AtomicBool>,
 }
 impl Tool for GuardedProbeTool {
     fn name(&self) -> &str {
@@ -176,7 +183,7 @@ impl Tool for GuardedProbeTool {
         _ctx: ToolCtx,
         _input: serde_json::Value,
     ) -> houyicoder_async::PFut<'_, Result<serde_json::Value, ToolError>> {
-        self.ran.store(true, std::sync::atomic::Ordering::SeqCst);
+        self.ran.store(true, Ordering::SeqCst);
         Box::pin(async { Ok(serde_json::json!({"ok": true})) })
     }
     fn requires_approval(&self) -> bool {
@@ -212,8 +219,8 @@ async fn test_abort_stops_approved_batch() {
         model: "test".into(),
     };
     let p = Arc::new(FakeProvider::new(vec![resp]));
-    let started = Arc::new(tokio::sync::Notify::new());
-    let ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let started = Arc::new(Notify::new());
+    let ran = Arc::new(AtomicBool::new(false));
     let mut tools = ToolRegistry::new();
     tools.register(Arc::new(GuardedHangingTool::new(started.clone())));
     tools.register(Arc::new(GuardedProbeTool { ran: ran.clone() }));
@@ -235,7 +242,7 @@ async fn test_abort_stops_approved_batch() {
     // read off the interrupted result, not off a fixed sleep.
     started.notified().await;
     runner.abort();
-    let resumed = tokio::time::timeout(std::time::Duration::from_secs(2), task)
+    let resumed = timeout(Duration::from_secs(2), task)
         .await
         .expect("resume resolved after the stop")
         .expect("resume task")
@@ -269,7 +276,7 @@ async fn test_abort_stops_approved_batch() {
         "the call behind the stopped one is reported interrupted"
     );
     assert!(
-        !ran.load(std::sync::atomic::Ordering::SeqCst),
+        !ran.load(Ordering::SeqCst),
         "the call behind the stopped one must not run"
     );
 }

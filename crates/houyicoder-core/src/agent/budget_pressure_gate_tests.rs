@@ -8,6 +8,8 @@
 //! CompletionRequests.
 
 use crate::agent::prompt::SystemPrompt;
+use regex::Regex;
+use std::path::Path;
 
 const PRESSURE_PATTERNS: &[&str] = &[
     r"\d+ of \d+ turns",
@@ -20,7 +22,7 @@ const PRESSURE_PATTERNS: &[&str] = &[
 
 fn assert_no_pressure(text: &str, source: &str) {
     for pat in PRESSURE_PATTERNS {
-        let re = regex::Regex::new(&format!("(?i){pat}")).unwrap();
+        let re = Regex::new(&format!("(?i){pat}")).unwrap();
         assert!(
             !re.is_match(text),
             "pressure pattern '{pat}' found in {source}:\n{text}"
@@ -30,6 +32,6 @@ fn assert_no_pressure(text: &str, source: &str) {
 
 #[test]
 fn test_system_prompt_no_pressure() {
-    let prompt = SystemPrompt::build(std::path::Path::new("/tmp"));
+    let prompt = SystemPrompt::build(Path::new("/tmp"));
     assert_no_pressure(&prompt.text, "system prompt");
 }

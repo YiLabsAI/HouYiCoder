@@ -10,6 +10,7 @@ use crate::agent::ToolRegistry;
 use crate::agent::hook::{HookError, HookEvent, HookOutcome, HookVerdict};
 use crate::agent::runner_tests::runner_with;
 use crate::provider::test_support::FakeProvider;
+use houyicoder_context::{HookErrorKind, HookEventKind, HookVerdictKind};
 
 #[tokio::test]
 #[expect(clippy::too_many_lines, reason = "long by design, kept whole")]
@@ -18,7 +19,6 @@ async fn test_append_signals_cover_verdicts() {
     // verdict arm (Allow/Trigger + the 5 string verdicts + Err) is covered
     // + the per-arm mapping (reason, triggered_event, error_kind) is pinned.
     // Allow is skipped (no HookSignal); the rest each land one signal.
-    use houyicoder_context::{HookErrorKind, HookEventKind, HookVerdictKind};
     let runner = runner_with(
         Arc::new(FakeProvider::new(vec![CompletionResponse {
             output: vec![OutputItem::Text {

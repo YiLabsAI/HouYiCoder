@@ -39,7 +39,10 @@ use serde_json::{Value, json};
 use super::{Tool, ToolCtx, ToolError};
 use crate::agent::memory::MutationLog;
 use houyicoder_api::agent_event::MemoryOperation;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 use tracing::debug;
+use unicode_normalization::UnicodeNormalization;
 
 /// A structured memory-write tool. The forked extraction agent calls it to
 /// persist a new memory entry; the provider owns the atomic write. Holds the
@@ -251,8 +254,8 @@ impl Tool for MemoryAddTool {
             // not restat on recall still sees a fresh mtime; backends that
             // restat (the markdown store) overwrite this with the file stat,
             // so the value is correct either way.
-            let now_secs = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
+            let now_secs = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
                 .map(|d| d.as_secs())
                 .unwrap_or(0);
             let entry = MemoryEntry::new(key.clone(), content, source)
@@ -428,7 +431,6 @@ fn validate_extraction_evidence(
 /// from the conversation matches its source body under this normalization
 /// even if line breaks or extra spaces drifted.
 fn normalize_quote(quote: &str) -> String {
-    use unicode_normalization::UnicodeNormalization;
     let nfc: String = quote.nfc().collect();
     nfc.split_whitespace().collect::<Vec<_>>().join(" ")
 }

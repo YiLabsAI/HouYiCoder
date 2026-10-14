@@ -11,7 +11,10 @@ use houyicoder_protocol::llm::{CompletionResponse, OutputItem, Usage};
 use houyicoder_session::SessionStore;
 use std::sync::Arc;
 
+use super::BlockSpans;
 use crate::agent::{Runner, ToolRegistry, runner_config::RunnerConfig};
+use houyicoder_protocol::llm::LlmEvent;
+use std::time::{Duration, Instant};
 
 /// The timing facts one model call recorded, in the order the tests read them.
 #[derive(Debug)]
@@ -183,12 +186,9 @@ async fn test_clear_appends_marker() {
 /// sleeping for them.
 #[test]
 fn test_spans_sum_closed_blocks() {
-    use houyicoder_protocol::llm::LlmEvent;
-    use std::time::{Duration, Instant};
-
     let t0 = Instant::now();
     let at = |ms: u64| t0 + Duration::from_millis(ms);
-    let mut spans = super::BlockSpans::default();
+    let mut spans = BlockSpans::default();
     assert_eq!(spans.reasoning_ms(), None, "nothing closed yet");
     assert_eq!(spans.response_ms(), None, "nothing closed yet");
 
@@ -217,9 +217,7 @@ fn test_spans_sum_closed_blocks() {
 /// is unknown, and zero would claim the model thought for no time.
 #[test]
 fn test_spans_open_block_unknown() {
-    use houyicoder_protocol::llm::LlmEvent;
-
-    let mut spans = super::BlockSpans::default();
+    let mut spans = BlockSpans::default();
     spans.note(&LlmEvent::ReasoningStart { id: "r".into() });
     assert_eq!(
         spans.reasoning_ms(),
@@ -227,7 +225,7 @@ fn test_spans_open_block_unknown() {
         "a block the call ended inside is not a measurement"
     );
 
-    let mut reply = super::BlockSpans::default();
+    let mut reply = BlockSpans::default();
     reply.note(&LlmEvent::TextStart { id: "t".into() });
     reply.note(&LlmEvent::TextEnd { id: "t".into() });
     assert_eq!(reply.reasoning_ms(), None, "no reasoning block was opened");
@@ -242,8 +240,6 @@ fn test_spans_open_block_unknown() {
 /// alone rather than a reasoning span of zero.
 #[tokio::test]
 async fn test_spans_reach_the_event() {
-    use houyicoder_protocol::llm::{OutputItem, Usage};
-
     let runner = test_runner(FakeProvider::new(vec![CompletionResponse {
         output: vec![
             OutputItem::Reasoning {

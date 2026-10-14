@@ -13,6 +13,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+#[cfg(test)]
+use tokio::task::yield_now;
 
 /// The verdict from a concurrency-gate acquire.
 pub enum AcquireResult {
@@ -160,7 +162,7 @@ mod tests {
             if gate.queued_count() >= n {
                 return;
             }
-            tokio::task::yield_now().await;
+            yield_now().await;
         }
         panic!("only {} queued, expected {n}", gate.queued_count());
     }

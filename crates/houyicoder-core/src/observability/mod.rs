@@ -36,6 +36,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::agent::compaction::RecordedCompaction;
 use crate::agent::hook::HookError;
+use std::borrow::Cow;
 
 // ===== bounds =====
 
@@ -371,8 +372,7 @@ pub struct ObservabilityLog {
 /// failure predicate for the agent loop so the observability tally, the
 /// hook pipeline, the redundancy retry test, and the TUI status count
 /// stay in sync.
-pub fn tool_failure_reason(output: &serde_json::Value) -> Option<std::borrow::Cow<'_, str>> {
-    use std::borrow::Cow;
+pub fn tool_failure_reason(output: &serde_json::Value) -> Option<Cow<'_, str>> {
     if let Some(err) = output.get("error").and_then(|v| v.as_str()) {
         return Some(Cow::Borrowed(err));
     }
@@ -473,7 +473,7 @@ impl ObservabilityLog {
     pub fn record_tool_outcomes(
         &mut self,
         results: &[(String, serde_json::Value)],
-        call_names: &std::collections::HashMap<String, String>,
+        call_names: &HashMap<String, String>,
     ) {
         for (id, output) in results {
             let Some(name) = call_names.get(id) else {

@@ -134,12 +134,12 @@ pub struct Tokenizer {
 }
 
 // The immutable BPE table is shared because construction is expensive.
-static BPE: std::sync::OnceLock<tiktoken_rs::CoreBPE> = std::sync::OnceLock::new();
+static BPE: OnceLock<tiktoken_rs::CoreBPE> = OnceLock::new();
 
 impl Tokenizer {
     pub fn new() -> Self {
         // The test harness bypasses BPE construction unless accuracy is under test.
-        if std::env::var("HOUYICODER_FAST_TOKENS").is_ok() {
+        if var("HOUYICODER_FAST_TOKENS").is_ok() {
             return Self { bpe: None };
         }
         Self::real()
@@ -215,7 +215,7 @@ pub struct ContextBuilder {
 
 impl ContextBuilder {
     pub fn new() -> Self {
-        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let cwd = current_dir().unwrap_or_else(|_| PathBuf::from("."));
         Self {
             tokenizer: Tokenizer::new(),
             cwd: Arc::new(RwLock::new(cwd)),
@@ -288,7 +288,7 @@ impl ContextBuilder {
         events: &[SessionLogEntry],
         manifest: Option<&CheckpointManifest>,
         backend: Option<&dyn houyicoder_context::ContextBackend>,
-        tool_defs: &[houyicoder_protocol::llm::ToolDef],
+        tool_defs: &[ToolDef],
         memory_index: Option<&str>,
     ) -> AssembledContext {
         let assembled = self.assemble(events, manifest, backend, tool_defs, memory_index);
@@ -303,7 +303,7 @@ impl ContextBuilder {
         events: &[SessionLogEntry],
         manifest: Option<&CheckpointManifest>,
         backend: Option<&dyn houyicoder_context::ContextBackend>,
-        tool_defs: &[houyicoder_protocol::llm::ToolDef],
+        tool_defs: &[ToolDef],
         memory_index: Option<&str>,
     ) -> AssembledContext {
         let filtered = match manifest {
@@ -318,11 +318,8 @@ impl ContextBuilder {
 
         let cwd = self.cwd.read().expect("cwd lock").clone();
         let agent_directory = self.agent_directory.lock().ok().and_then(|g| g.clone());
-        let prompt = prompt::SystemPrompt::build_with_memory_index(
-            &cwd,
-            memory_index,
-            agent_directory.as_deref(),
-        );
+        let prompt =
+            SystemPrompt::build_with_memory_index(&cwd, memory_index, agent_directory.as_deref());
 
         // Attribute attachments already merged into the assembled messages.
         let mut mem_tokens = 0u32;
@@ -421,8 +418,8 @@ impl ContextBuilder {
         let Some(policy) = policy else {
             return turn_group::assemble_model_input(events, backend);
         };
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_millis() as u64)
             .unwrap_or(0);
         turn_group::assemble_model_input_with(events, backend, &*policy, now_ms)
@@ -487,8 +484,8 @@ pub(crate) fn render_recall_text(entries: &[MemoryEntry]) -> String {
     if entries.is_empty() {
         return String::new();
     }
-    let now_secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
+    let now_secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
     let mut text = String::from("<system-reminder>\n# Recalled memories\n");
@@ -530,6 +527,13 @@ pub(crate) fn render_recall_text(entries: &[MemoryEntry]) -> String {
 pub use houyicoder_protocol::frontend::context::{
     CategoryBreakdown, ContextBreakdown, GridCell, build_grid,
 };
+use houyicoder_protocol::llm::ToolDef;
+use prompt::SystemPrompt;
+use std::env::current_dir;
+use std::env::var;
+use std::sync::OnceLock;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 /// Representative /context data for paths without a runner.
 pub fn stub_breakdown() -> ContextBreakdown {

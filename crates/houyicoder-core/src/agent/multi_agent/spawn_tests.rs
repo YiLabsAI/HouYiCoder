@@ -10,9 +10,14 @@ use std::sync::Arc;
 
 use crate::agent::ToolRegistry;
 use crate::agent::multi_agent::bus_types::ChildRunMode;
+use crate::agent::multi_agent::bus_types::progress_topic;
+use crate::agent::multi_agent::bus_types::{AgentBus, BusMessage, ChildStatus, completed_topic};
 use crate::agent::multi_agent::registry::IsolationMode;
 use crate::agent::runner_config::RunnerConfig;
 use crate::provider::test_support::FakeProvider;
+use houyicoder_async::bus::MessageBus;
+use houyicoder_protocol::llm::EffortLevel;
+use houyicoder_protocol::llm::{CompletionResponse, OutputItem, Usage};
 
 fn req_at_depth(
     parent_sid: SessionId,
@@ -227,7 +232,7 @@ async fn test_spawn_child_effort_gate() {
     let handle = spawn_child(req).await.expect("spawn");
     assert_eq!(
         handle.runner.active_effort(),
-        Some(houyicoder_protocol::llm::EffortLevel::Low),
+        Some(EffortLevel::Low),
         "child uses the lowest effort tier"
     );
 }
@@ -235,10 +240,6 @@ async fn test_spawn_child_effort_gate() {
 /// A child publishes one progress snapshot after each non-terminal turn.
 #[tokio::test]
 async fn test_spawn_publishes_progress() {
-    use crate::agent::multi_agent::bus_types::{AgentBus, BusMessage, progress_topic};
-    use houyicoder_async::bus::MessageBus;
-    use houyicoder_protocol::llm::{CompletionResponse, OutputItem, Usage};
-
     let bus = Arc::new(AgentBus::new());
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let parent_sid = SessionId::new();
@@ -315,9 +316,6 @@ async fn test_spawn_publishes_progress() {
 /// too, flooding the bus with useless completion-coupled progress.
 #[tokio::test]
 async fn test_spawn_terminal_skips_progress() {
-    use crate::agent::multi_agent::bus_types::{AgentBus, progress_topic};
-    use houyicoder_async::bus::MessageBus;
-
     let bus = Arc::new(AgentBus::new());
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let parent_sid = SessionId::new();
@@ -342,11 +340,6 @@ async fn test_spawn_terminal_skips_progress() {
 /// topic, so a parent subscribed before the run learns the child is done.
 #[tokio::test]
 async fn test_spawn_publishes_completion() {
-    use crate::agent::multi_agent::bus_types::{
-        AgentBus, BusMessage, ChildStatus, completed_topic,
-    };
-    use houyicoder_async::bus::MessageBus;
-
     let bus = Arc::new(AgentBus::new());
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let parent_sid = SessionId::new();
@@ -380,10 +373,6 @@ async fn test_spawn_publishes_completion() {
 /// after spawn + before run is drained at turn 2 — no race.
 #[tokio::test]
 async fn test_inbox_drained_at_boundary() {
-    use crate::agent::multi_agent::bus_types::{AgentBus, BusMessage};
-    use houyicoder_async::bus::MessageBus;
-    use houyicoder_protocol::llm::{CompletionResponse, OutputItem, Usage};
-
     let bus = Arc::new(AgentBus::new());
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let parent_sid = SessionId::new();

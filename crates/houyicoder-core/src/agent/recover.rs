@@ -13,6 +13,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::append::new_event;
 use super::{RunError, RunResult, Runner};
+use std::time::Instant;
 
 impl Runner {
     /// Re-drive a turn interrupted by a process crash. The durable session
@@ -45,7 +46,7 @@ impl Runner {
         // A recovery attempt is a fresh turn: reset the max_turns budget so a
         // session retried after a crash is not permanently capped.
         self.reset_user_turn();
-        let started = std::time::Instant::now();
+        let started = Instant::now();
         let result = self.drive_loop(session, 0, Usage::default(), &token).await;
         // The re-drive is a drive loop like any other: the turn it ends needs
         // its record and its primary saves noticed, or the frontend has no

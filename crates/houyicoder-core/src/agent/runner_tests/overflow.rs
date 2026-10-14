@@ -8,7 +8,21 @@ use houyicoder_context::SessionEvent;
 use houyicoder_protocol::llm::{CompletionResponse, ModelCapabilities, OutputItem, ProviderError};
 use houyicoder_protocol::llm::{LlmEvent, Usage};
 
+use super::compaction::CompactionSuppression;
 use super::{GuardedTool, runner_with};
+use futures::stream::iter;
+use houyicoder_api::provider::stream_from_response;
+use houyicoder_context::EventId;
+use houyicoder_memory::InMemoryBackend;
+use houyicoder_protocol::llm::CompletionRequest;
+use houyicoder_protocol::llm::ModelSettings;
+use houyicoder_resilience::Retry;
+use houyicoder_session::SessionStore;
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::atomic::AtomicU32;
+use std::sync::atomic::Ordering;
+use std::vec::IntoIter;
 
 /// Build a runner on a unique model id so enforced-limit writes to the
 /// global learned-window store do not leak into sibling tests resolving the
@@ -30,7 +44,7 @@ fn overflow_err() -> ProviderError {
 
 /// A provider that returns ContextOverflow N times, then succeeds.
 struct OverflowThenSucceedProvider {
-    count: std::sync::atomic::AtomicU32,
+    count: AtomicU32,
     overflow_times: u32,
     response: CompletionResponse,
     caps: ModelCapabilities,
@@ -39,7 +53,7 @@ struct OverflowThenSucceedProvider {
 impl OverflowThenSucceedProvider {
     fn new(overflow_times: u32, text: &str) -> Self {
         Self {
-            count: std::sync::atomic::AtomicU32::new(0),
+            count: AtomicU32::new(0),
             overflow_times,
             response: CompletionResponse {
                 output: vec![OutputItem::Text {
@@ -56,21 +70,21 @@ impl OverflowThenSucceedProvider {
 impl ModelProvider for OverflowThenSucceedProvider {
     fn complete(
         &self,
-        _req: houyicoder_protocol::llm::CompletionRequest,
+        _req: CompletionRequest,
     ) -> houyicoder_async::PFut<'_, Result<CompletionResponse, ProviderError>> {
         let resp = self.response.clone();
         Box::pin(async move { Ok(resp) })
     }
     fn stream(
         &self,
-        _req: houyicoder_protocol::llm::CompletionRequest,
+        _req: CompletionRequest,
     ) -> houyicoder_async::PStream<'_, Result<LlmEvent, ProviderError>> {
-        let n = self.count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let n = self.count.fetch_add(1, Ordering::SeqCst);
         if n < self.overflow_times {
             // Return ContextOverflow as the first (and only) stream event.
-            Box::pin(futures::stream::iter(vec![Err(overflow_err())]))
+            Box::pin(iter(vec![Err(overflow_err())]))
         } else {
-            houyicoder_api::provider::stream_from_response(self.response.clone())
+            stream_from_response(self.response.clone())
         }
     }
     fn capabilities(&self) -> ModelCapabilities {
@@ -91,7 +105,7 @@ async fn test_overflow_retries_then_compact() {
         runner
             .store()
             .append(houyicoder_context::SessionLogEntry {
-                id: houyicoder_context::EventId::new(),
+                id: EventId::new(),
                 session,
                 ts: 0,
                 prev_hash: None,
@@ -134,7 +148,7 @@ async fn test_overflow_no_progress_fails() {
     runner
         .store()
         .append(houyicoder_context::SessionLogEntry {
-            id: houyicoder_context::EventId::new(),
+            id: EventId::new(),
             session,
             ts: 0,
             prev_hash: None,
@@ -147,7 +161,7 @@ async fn test_overflow_no_progress_fails() {
     runner
         .store()
         .append(houyicoder_context::SessionLogEntry {
-            id: houyicoder_context::EventId::new(),
+            id: EventId::new(),
             session,
             ts: 0,
             prev_hash: None,
@@ -169,7 +183,7 @@ async fn test_overflow_no_progress_fails() {
     // previously left unasserted (it only checked the error variant).
     assert_eq!(
         runner.compaction_suppression(),
-        super::compaction::CompactionSuppression::Sticky,
+        CompactionSuppression::Sticky,
         "NoProgress should set Sticky suppress so auto-compact does not retry pointlessly next turn"
     );
 }
@@ -187,7 +201,7 @@ async fn test_overflow_still_overflows_bounded() {
         runner
             .store()
             .append(houyicoder_context::SessionLogEntry {
-                id: houyicoder_context::EventId::new(),
+                id: EventId::new(),
                 session,
                 ts: 0,
                 prev_hash: None,
@@ -242,7 +256,7 @@ struct OverflowProvider;
 impl ModelProvider for OverflowProvider {
     fn complete(
         &self,
-        _req: houyicoder_protocol::llm::CompletionRequest,
+        _req: CompletionRequest,
     ) -> houyicoder_async::PFut<'_, Result<CompletionResponse, ProviderError>> {
         Box::pin(async { Err(overflow_err()) })
     }
@@ -251,9 +265,9 @@ impl ModelProvider for OverflowProvider {
     }
     fn stream(
         &self,
-        _req: houyicoder_protocol::llm::CompletionRequest,
+        _req: CompletionRequest,
     ) -> houyicoder_async::PStream<'_, Result<LlmEvent, ProviderError>> {
-        Box::pin(futures::stream::iter(vec![Err(overflow_err())]))
+        Box::pin(iter(vec![Err(overflow_err())]))
     }
 }
 
@@ -279,12 +293,12 @@ async fn test_overflow_provider_complete() {
     // shape stream returns).
     let p = OverflowProvider;
     let err = p
-        .complete(houyicoder_protocol::llm::CompletionRequest {
+        .complete(CompletionRequest {
             model: "test".into(),
             instructions: String::new(),
             input: vec![],
             tools: vec![],
-            settings: houyicoder_protocol::llm::ModelSettings::default(),
+            settings: ModelSettings::default(),
             cache_breakpoints: Vec::new(),
         })
         .await
@@ -313,7 +327,6 @@ fn test_overflow_display_no_limit() {
 async fn test_cache_break_compact_attribution() {
     // A turn with high cache_read, then a compact flag, then a turn with
     // low cache_read: the sharp drop is detected + attributed to compact.
-    use houyicoder_protocol::llm::Usage;
     let runner = runner_with_overflow(
         Arc::new(OverflowThenSucceedProvider::new(0, "x")),
         ToolRegistry::new(),
@@ -329,9 +342,7 @@ async fn test_cache_break_compact_attribution() {
         .await
         .unwrap();
     // Simulate a compact since the previous response.
-    runner
-        .cache_compact_flag
-        .store(true, std::sync::atomic::Ordering::Relaxed);
+    runner.cache_compact_flag.store(true, Ordering::Relaxed);
     // Next turn: cache_read dropped to 0 (the compact rewrote the prefix).
     runner
         .append_turn_usage(session, "test", &Usage::default(), false, None)
@@ -343,7 +354,7 @@ async fn test_cache_break_compact_attribution() {
         .filter(|e| {
             matches!(
                 &e.event,
-                houyicoder_context::SessionEvent::CacheBreak { cause } if cause == "compact"
+                SessionEvent::CacheBreak { cause } if cause == "compact"
             )
         })
         .collect();
@@ -357,7 +368,6 @@ async fn test_cache_break_compact_attribution() {
 #[tokio::test]
 async fn test_cache_break_model_switch() {
     // Same drop but the model-switch flag is set instead of compact.
-    use houyicoder_protocol::llm::Usage;
     let runner = runner_with_overflow(
         Arc::new(OverflowThenSucceedProvider::new(0, "x")),
         ToolRegistry::new(),
@@ -374,7 +384,7 @@ async fn test_cache_break_model_switch() {
         .unwrap();
     runner
         .cache_model_switch_flag
-        .store(true, std::sync::atomic::Ordering::Relaxed);
+        .store(true, Ordering::Relaxed);
     runner
         .append_turn_usage(session, "test", &Usage::default(), false, None)
         .await
@@ -384,7 +394,7 @@ async fn test_cache_break_model_switch() {
         events.iter().any(|e| {
             matches!(
                 &e.event,
-                houyicoder_context::SessionEvent::CacheBreak { cause } if cause == "model-switch"
+                SessionEvent::CacheBreak { cause } if cause == "model-switch"
             )
         }),
         "break attributed to model-switch"
@@ -394,7 +404,6 @@ async fn test_cache_break_model_switch() {
 #[tokio::test]
 async fn test_cache_break_no_drop() {
     // When cache_read does not drop, no CacheBreak event is recorded.
-    use houyicoder_protocol::llm::Usage;
     let runner = runner_with_overflow(
         Arc::new(OverflowThenSucceedProvider::new(0, "x")),
         ToolRegistry::new(),
@@ -416,10 +425,9 @@ async fn test_cache_break_no_drop() {
         .unwrap();
     let events = runner.store().replay(session).await.unwrap();
     assert!(
-        events.iter().all(|e| !matches!(
-            &e.event,
-            houyicoder_context::SessionEvent::CacheBreak { .. }
-        )),
+        events
+            .iter()
+            .all(|e| !matches!(&e.event, SessionEvent::CacheBreak { .. })),
         "no CacheBreak when cache_read does not drop"
     );
 }
@@ -439,15 +447,15 @@ enum FakeStreamItem {
 /// place an overflow on a precise turn (e.g. the resumed turn after an
 /// interrupted tool call) instead of on every call.
 struct FakeStreamProvider {
-    items: std::sync::Mutex<std::vec::IntoIter<FakeStreamItem>>,
-    last: std::sync::Mutex<Option<CompletionResponse>>,
+    items: Mutex<IntoIter<FakeStreamItem>>,
+    last: Mutex<Option<CompletionResponse>>,
 }
 
 impl FakeStreamProvider {
     fn new(items: Vec<FakeStreamItem>) -> Self {
         Self {
-            items: std::sync::Mutex::new(items.into_iter()),
-            last: std::sync::Mutex::new(None),
+            items: Mutex::new(items.into_iter()),
+            last: Mutex::new(None),
         }
     }
 }
@@ -455,7 +463,7 @@ impl FakeStreamProvider {
 impl ModelProvider for FakeStreamProvider {
     fn complete(
         &self,
-        _req: houyicoder_protocol::llm::CompletionRequest,
+        _req: CompletionRequest,
     ) -> houyicoder_async::PFut<'_, Result<CompletionResponse, ProviderError>> {
         let resp = self
             .last
@@ -474,17 +482,15 @@ impl ModelProvider for FakeStreamProvider {
     }
     fn stream(
         &self,
-        _req: houyicoder_protocol::llm::CompletionRequest,
+        _req: CompletionRequest,
     ) -> houyicoder_async::PStream<'_, Result<LlmEvent, ProviderError>> {
         let next = self.items.lock().expect("script mutex").next();
         match next {
             Some(FakeStreamItem::Response(r)) => {
                 *self.last.lock().expect("last mutex") = Some(r.clone());
-                houyicoder_api::provider::stream_from_response(r)
+                stream_from_response(r)
             }
-            Some(FakeStreamItem::Overflow) => {
-                Box::pin(futures::stream::iter(vec![Err(overflow_err())]))
-            }
+            Some(FakeStreamItem::Overflow) => Box::pin(iter(vec![Err(overflow_err())])),
             None => {
                 let last = self
                     .last
@@ -492,7 +498,7 @@ impl ModelProvider for FakeStreamProvider {
                     .expect("last mutex")
                     .clone()
                     .expect("script exhausted with no prior response");
-                houyicoder_api::provider::stream_from_response(last)
+                stream_from_response(last)
             }
         }
     }
@@ -506,11 +512,8 @@ fn runner_overflow_maxturn(
     tools: ToolRegistry,
     max_turns: u32,
 ) -> Runner {
-    use houyicoder_memory::InMemoryBackend;
-    use houyicoder_resilience::Retry;
-    use houyicoder_session::SessionStore;
     Runner::new(
-        std::sync::Arc::new(SessionStore::new(Box::new(InMemoryBackend::new()))),
+        Arc::new(SessionStore::new(Box::new(InMemoryBackend::new()))),
         provider,
         tools,
         RunnerConfig {
@@ -566,7 +569,7 @@ async fn test_resume_then_overflow_recovers() {
         runner
             .store()
             .append(houyicoder_context::SessionLogEntry {
-                id: houyicoder_context::EventId::new(),
+                id: EventId::new(),
                 session,
                 ts: 0,
                 prev_hash: None,
@@ -618,12 +621,12 @@ async fn test_fake_stream_complete() {
     // stream call, complete returns the empty default.
     let p = FakeStreamProvider::new(vec![]);
     let resp = p
-        .complete(houyicoder_protocol::llm::CompletionRequest {
+        .complete(CompletionRequest {
             model: "test".into(),
             instructions: String::new(),
             input: vec![],
             tools: vec![],
-            settings: houyicoder_protocol::llm::ModelSettings::default(),
+            settings: ModelSettings::default(),
             cache_breakpoints: Vec::new(),
         })
         .await

@@ -18,6 +18,22 @@ use serde_json::{Value, json};
 
 use super::path_util::{canonical_root, confine_path, relativize, require_dir};
 use super::{Tool, ToolCtx, ToolError};
+use std::cmp::Reverse;
+#[cfg(test)]
+use std::env::temp_dir;
+use std::fs::metadata;
+#[cfg(all(test, unix))]
+use std::os::unix::fs::symlink;
+use std::path::is_separator;
+#[cfg(test)]
+use std::process::id;
+#[cfg(test)]
+use std::sync::atomic::AtomicUsize;
+#[cfg(test)]
+use std::sync::atomic::Ordering;
+use tokio::task::spawn_blocking;
+#[cfg(test)]
+use tokio_util::sync::CancellationToken;
 
 /// Placeholder cap pending the isolate seam (context lifecycle will make
 /// large tool outputs lossless via a CAS block ref). Generous enough for
@@ -125,9 +141,7 @@ impl Tool for GlobTool {
             // async worker. Race against the run's CancellationToken: an Esc
             // mid-walk short-circuits to an interrupted error instead of
             // waiting for the blocking traversal to return.
-            let handle = tokio::task::spawn_blocking(move || {
-                glob_files(&root, &base, &pattern, GLOB_MAX_FILES)
-            });
+            let handle = spawn_blocking(move || glob_files(&root, &base, &pattern, GLOB_MAX_FILES));
             let (files, truncated) = match cancel {
                 Some(token) => tokio::select! {
                     _ = token.cancelled() => return Err(ToolError::Failed(
@@ -192,14 +206,14 @@ fn glob_files(
             !under_ignore_dir(rel)
         })
         .map(|p| {
-            let mtime = std::fs::metadata(&p)
+            let mtime = metadata(&p)
                 .and_then(|m| m.modified())
                 .unwrap_or(SystemTime::UNIX_EPOCH);
             (p, mtime)
         })
         .collect();
     let mut sorted = entries;
-    sorted.sort_by_key(|(_, t)| std::cmp::Reverse(*t));
+    sorted.sort_by_key(|(_, t)| Reverse(*t));
     let truncated = sorted.len() > max_files;
     let files: Vec<String> = sorted
         .into_iter()
@@ -236,7 +250,7 @@ fn check_pattern_confined(croot: &Path, base: &Path, pattern: &str) -> Result<()
             wildcard_pos = i;
             break;
         }
-        if std::path::is_separator(c) {
+        if is_separator(c) {
             last_sep = Some(i);
         }
     }
@@ -250,7 +264,7 @@ fn check_pattern_confined(croot: &Path, base: &Path, pattern: &str) -> Result<()
     // No separator means the pattern names an entry directly in the base, so
     // the base itself is what needs checking.
     let dir_part = match last_sep {
-        Some(i) => pattern[..i].trim_end_matches(std::path::is_separator),
+        Some(i) => pattern[..i].trim_end_matches(is_separator),
         None => "",
     };
     // Mirror join_pattern's notion of absolute so this check and the
@@ -347,22 +361,21 @@ mod tests {
         ) -> houyicoder_async::PFut<'_, Result<bool, SandboxError>> {
             Box::pin(async { Ok(false) })
         }
-        fn workspace_root(&self) -> std::sync::Arc<std::path::Path> {
-            std::sync::Arc::from(self.root.clone())
+        fn workspace_root(&self) -> Arc<Path> {
+            Arc::from(self.root.clone())
         }
     }
 
     /// Create a unique temp dir for test isolation. std lacks mkdtemp so
     /// compose pid + counter + nanos.
     fn test_dir() -> PathBuf {
-        static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::SeqCst);
         let nanos = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
-        let path =
-            std::env::temp_dir().join(format!("glob-test-{}-{n}-{nanos}", std::process::id()));
+        let path = temp_dir().join(format!("glob-test-{}-{n}-{nanos}", id()));
         fs::create_dir_all(&path).unwrap();
         path
     }
@@ -440,7 +453,7 @@ mod tests {
         touch(&dir, "a.rs", "");
         let session = Arc::new(StubSession { root: dir.clone() }) as Arc<dyn SandboxSession>;
         let tool = GlobTool::new(session);
-        let token = tokio_util::sync::CancellationToken::new();
+        let token = CancellationToken::new();
         token.cancel();
         let ctx = ToolCtx::new("c1").with_cancel(token);
         let err = tool
@@ -663,7 +676,6 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn test_symlink_escape_filtered() {
-        use std::os::unix::fs::symlink;
         let dir = test_dir();
         let outside = test_dir();
         touch(&dir, "real.rs", "");

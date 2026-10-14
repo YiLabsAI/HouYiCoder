@@ -21,6 +21,7 @@ use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
 use super::outcome_counts;
+use super::skill_body::skill_source;
 use super::step::{NextStep, extract_final_text};
 use super::{ApprovalRequest, FallbackToolOutcome, RunError, Runner, obs_wire};
 
@@ -143,7 +144,7 @@ impl Runner {
         self.fold_tool_outcomes(&results, &call_names);
         if let Some(skill) = self.active_skill()
             && let Some(req) = self.skill_registry.as_ref().and_then(|registry| {
-                let source = super::skill_body::skill_source(&**registry, &skill)?;
+                let source = skill_source(&**registry, &skill)?;
                 let subject = source.grant_subject(&skill);
                 let origin = registry
                     .list_with_origin()

@@ -4,26 +4,28 @@
 
 use super::*;
 use houyicoder_api::session::TrajectoryHead;
+use houyicoder_context::CheckpointId;
 use houyicoder_context::{
     CheckpointManifest, ContextBackend, ContextError, ContextSnapshot, EventId, SessionId,
     SessionLogEntry, TurnGroup,
 };
 use houyicoder_protocol::extension::ToolError;
+use std::sync::Mutex;
 use std::sync::atomic::AtomicU32;
 
 /// An in-memory session log the tool tests drive directly. Records events
 /// in a Vec; current_view returns the manifest the test sets, so the
 /// folded-id path is exercisable without a real backend.
 struct InMemoryLog {
-    events: std::sync::Mutex<Vec<SessionLogEntry>>,
-    manifest: std::sync::Mutex<Option<CheckpointManifest>>,
+    events: Mutex<Vec<SessionLogEntry>>,
+    manifest: Mutex<Option<CheckpointManifest>>,
 }
 
 impl InMemoryLog {
     fn new() -> Self {
         Self {
-            events: std::sync::Mutex::new(Vec::new()),
-            manifest: std::sync::Mutex::new(None),
+            events: Mutex::new(Vec::new()),
+            manifest: Mutex::new(None),
         }
     }
     fn push(&self, ev: SessionLogEntry) {
@@ -69,14 +71,14 @@ impl SessionLog for InMemoryLog {
     fn write_checkpoint(
         &self,
         manifest: CheckpointManifest,
-    ) -> PFut<'_, Result<houyicoder_context::CheckpointId, ContextError>> {
+    ) -> PFut<'_, Result<CheckpointId, ContextError>> {
         let id = manifest.id;
         *self.manifest.lock().unwrap() = Some(manifest);
         Box::pin(async move { Ok(id) })
     }
     fn read_checkpoint(
         &self,
-        _id: houyicoder_context::CheckpointId,
+        _id: CheckpointId,
     ) -> PFut<'_, Result<CheckpointManifest, ContextError>> {
         let m = self.manifest.lock().unwrap().clone();
         Box::pin(async move { m.ok_or(ContextError::NotFound) })
@@ -84,7 +86,7 @@ impl SessionLog for InMemoryLog {
     fn list_checkpoints(
         &self,
         _session: SessionId,
-    ) -> PFut<'_, Result<Vec<houyicoder_context::CheckpointId>, ContextError>> {
+    ) -> PFut<'_, Result<Vec<CheckpointId>, ContextError>> {
         Box::pin(async move { Ok(Vec::new()) })
     }
     fn backend(&self) -> &dyn ContextBackend {
@@ -128,7 +130,7 @@ fn make_manifest_summarized(ids: Vec<EventId>) -> CheckpointManifest {
     let anchor = ids.first().copied().unwrap_or_else(EventId::new);
     let last = ids.last().copied().unwrap_or_else(EventId::new);
     CheckpointManifest {
-        id: houyicoder_context::CheckpointId::new(),
+        id: CheckpointId::new(),
         session: SessionId::new(),
         last_event: last,
         summary: Some("folded".to_string()),

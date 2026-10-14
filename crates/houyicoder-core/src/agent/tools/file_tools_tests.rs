@@ -12,6 +12,10 @@ use serde_json::json;
 
 use super::{EditTool, MultiEditTool, ReadTool, WriteTool};
 use crate::agent::conditional_activation::ConditionalSkillActivator;
+use std::collections::HashMap;
+use std::path::Path;
+use std::path::PathBuf;
+use std::sync::Mutex;
 
 /// A stub session that satisfies read/write without touching disk.
 struct StubSession;
@@ -29,14 +33,14 @@ impl SandboxSession for StubSession {
     fn write_file(&self, _path: &str, _content: Vec<u8>) -> PFut<'_, Result<(), SandboxError>> {
         Box::pin(async { Ok(()) })
     }
-    fn workspace_root(&self) -> Arc<std::path::Path> {
-        Arc::from(std::path::PathBuf::from("/"))
+    fn workspace_root(&self) -> Arc<Path> {
+        Arc::from(PathBuf::from("/"))
     }
 }
 
 /// An activator that records the paths it is asked to activate on.
 struct CountingActivator {
-    calls: std::sync::Mutex<Vec<String>>,
+    calls: Mutex<Vec<String>>,
 }
 impl ConditionalSkillActivator for CountingActivator {
     fn activate_for_paths(&self, file_paths: &[String]) -> Vec<String> {
@@ -58,7 +62,7 @@ impl ConditionalSkillActivator for CountingActivator {
 async fn test_file_tools_activate() {
     let session: Arc<dyn SandboxSession> = Arc::new(StubSession);
     let activator = Arc::new(CountingActivator {
-        calls: std::sync::Mutex::new(Vec::new()),
+        calls: Mutex::new(Vec::new()),
     });
     let a = activator.clone();
     let ctx = ToolCtx::new("c");
@@ -99,13 +103,13 @@ async fn test_file_tools_activate() {
 /// A stub session backed by an in-memory HashMap so edit/multiedit can
 /// exercise their success paths without a real sandbox.
 struct ContentStubSession {
-    files: std::sync::Mutex<std::collections::HashMap<String, Vec<u8>>>,
+    files: Mutex<HashMap<String, Vec<u8>>>,
 }
 
 impl ContentStubSession {
     fn new() -> Self {
         Self {
-            files: std::sync::Mutex::new(std::collections::HashMap::new()),
+            files: Mutex::new(HashMap::new()),
         }
     }
     fn with(path: &str, content: &[u8]) -> Self {
@@ -135,8 +139,8 @@ impl SandboxSession for ContentStubSession {
         self.files.lock().unwrap().insert(path.to_string(), content);
         Box::pin(async { Ok(()) })
     }
-    fn workspace_root(&self) -> Arc<std::path::Path> {
-        Arc::from(std::path::PathBuf::from("/"))
+    fn workspace_root(&self) -> Arc<Path> {
+        Arc::from(PathBuf::from("/"))
     }
 }
 

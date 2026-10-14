@@ -27,9 +27,11 @@ use serde::{Deserialize, Serialize};
 
 use houyicoder_api::launcher::{ProcessLauncher, SpawnPolicy, SpawnRequest};
 
+use super::HookPayload;
 use super::filter;
 use super::registry::{HookId, HookRegistry};
 use super::{Hook, HookContext, HookError, HookEvent, HookSource, HookVerdict};
+use std::time::Duration;
 /// An external-process hook. Spawns the configured program per evaluate,
 /// pipes the hook context JSON to stdin, parses the verdict JSON from
 /// stdout. The optional matcher and if_condition fields filter before
@@ -47,7 +49,7 @@ pub struct CommandHook {
     matcher_regex: Option<regex::Regex>,
     if_condition: Option<String>,
     if_regex: Option<regex::Regex>,
-    timeout: Option<std::time::Duration>,
+    timeout: Option<Duration>,
     once: bool,
     fired: AtomicBool,
     hook_reg: Option<Arc<HookRegistry>>,
@@ -109,7 +111,7 @@ impl CommandHook {
 
     /// Attach a per-hook timeout. None means the registry default
     /// applies. Returns self for chaining.
-    pub fn with_timeout(mut self, timeout: std::time::Duration) -> Self {
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = Some(timeout);
         self
     }
@@ -243,7 +245,7 @@ impl Hook for CommandHook {
     fn source(&self) -> HookSource {
         self.source.clone()
     }
-    fn timeout(&self) -> Option<std::time::Duration> {
+    fn timeout(&self) -> Option<Duration> {
         self.timeout
     }
     fn once(&self) -> bool {
@@ -357,7 +359,7 @@ impl HookContextJson {
         let mut result = None;
         let mut error = None;
         match &ctx.payload {
-            super::HookPayload::PreToolUse {
+            HookPayload::PreToolUse {
                 tool_name: t,
                 input: i,
                 ..
@@ -365,7 +367,7 @@ impl HookContextJson {
                 tool_name = Some(t.clone());
                 input = Some(i.clone());
             }
-            super::HookPayload::PostToolUse {
+            HookPayload::PostToolUse {
                 tool_name: t,
                 input: i,
                 result: r,
@@ -374,7 +376,7 @@ impl HookContextJson {
                 input = Some(i.clone());
                 result = Some(r.output.clone());
             }
-            super::HookPayload::PostToolUseFailure {
+            HookPayload::PostToolUseFailure {
                 tool_name: t,
                 error: e,
             } => {

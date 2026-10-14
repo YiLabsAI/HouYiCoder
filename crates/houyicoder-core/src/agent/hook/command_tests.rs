@@ -1,8 +1,14 @@
 //! Tests for CommandHook, split from command.rs on file-size grounds.
 
+use super::super::HookPayload;
+use super::super::ToolResult;
+use super::super::registry::HookRegistry;
 use super::*;
 use houyicoder_api::launcher::{LauncherChild, LauncherExit, SpawnError, StdioPipes};
 use houyicoder_context::SessionId;
+use std::io::Cursor;
+use std::io::sink;
+use std::sync::Mutex;
 
 /// A stub launcher whose command returns a canned verdict JSON on
 /// stdout. The pipes are in-memory handles so the CommandHook
@@ -13,8 +19,8 @@ struct StubLauncher {
 impl ProcessLauncher for StubLauncher {
     fn spawn(&self, _req: SpawnRequest, _policy: SpawnPolicy) -> Result<LauncherChild, SpawnError> {
         let stdout_buf = self.stdout.clone().into_bytes();
-        let stdout: Box<dyn std::io::Read + Send> = Box::new(std::io::Cursor::new(stdout_buf));
-        let stdin: Box<dyn std::io::Write + Send> = Box::new(std::io::sink());
+        let stdout: Box<dyn std::io::Read + Send> = Box::new(Cursor::new(stdout_buf));
+        let stdin: Box<dyn std::io::Write + Send> = Box::new(sink());
         let pipes = StdioPipes {
             stdin: Some(stdin),
             stdout: Some(stdout),
@@ -37,7 +43,7 @@ impl ProcessLauncher for StubLauncher {
 pub(crate) fn ctx_pre_tool_use() -> HookContext {
     HookContext {
         event: HookEvent::PreToolUse,
-        payload: super::super::HookPayload::PreToolUse {
+        payload: HookPayload::PreToolUse {
             tool_name: "recordable".into(),
             input: serde_json::json!({}),
             backfilled_input: None,
@@ -90,7 +96,6 @@ fn test_if_skip_returns_allow() {
 /// dispatch sees an empty registry.
 #[test]
 fn test_once_self_unregisters() {
-    use super::super::registry::HookRegistry;
     let launcher = Arc::new(StubLauncher {
         stdout: r#"{"verdict":"allow"}"#.into(),
     }) as Arc<dyn ProcessLauncher>;
@@ -121,7 +126,6 @@ fn test_once_self_unregisters() {
 /// consumes the one shot.
 #[test]
 fn test_once_retries_after_failure() {
-    use super::super::registry::HookRegistry;
     let reg = Arc::new(HookRegistry::new());
     let hook = Arc::new(
         CommandHook::new(
@@ -241,10 +245,10 @@ async fn test_malformed_json_hook_error() {
 fn ctx_post_tool_use() -> HookContext {
     HookContext {
         event: HookEvent::PostToolUse,
-        payload: super::super::HookPayload::PostToolUse {
+        payload: HookPayload::PostToolUse {
             tool_name: "recordable".into(),
             input: serde_json::json!({"x": 1}),
-            result: super::super::ToolResult {
+            result: ToolResult {
                 output: "ok".into(),
             },
         },
@@ -255,7 +259,7 @@ fn ctx_post_tool_use() -> HookContext {
 fn ctx_post_tool_use_failure() -> HookContext {
     HookContext {
         event: HookEvent::PostToolUseFailure,
-        payload: super::super::HookPayload::PostToolUseFailure {
+        payload: HookPayload::PostToolUseFailure {
             tool_name: "recordable".into(),
             error: "boom".into(),
         },
@@ -353,15 +357,15 @@ impl ProcessLauncher for FailingLauncher {
 /// A launcher that records the policy it was handed and returns a canned
 /// allow verdict, so a test can assert the spawn policy the hook built.
 struct PolicyRecordingLauncher {
-    policy: std::sync::Mutex<Option<SpawnPolicy>>,
+    policy: Mutex<Option<SpawnPolicy>>,
     stdout: String,
 }
 impl ProcessLauncher for PolicyRecordingLauncher {
     fn spawn(&self, _req: SpawnRequest, policy: SpawnPolicy) -> Result<LauncherChild, SpawnError> {
         *self.policy.lock().unwrap() = Some(policy);
         let stdout: Box<dyn std::io::Read + Send> =
-            Box::new(std::io::Cursor::new(self.stdout.clone().into_bytes()));
-        let stdin: Box<dyn std::io::Write + Send> = Box::new(std::io::sink());
+            Box::new(Cursor::new(self.stdout.clone().into_bytes()));
+        let stdin: Box<dyn std::io::Write + Send> = Box::new(sink());
         let pipes = StdioPipes {
             stdin: Some(stdin),
             stdout: Some(stdout),
@@ -387,7 +391,7 @@ async fn test_hook_spawn_policy_audited() {
     // the engine executes leaves a structured trace through the launcher
     // chokepoint, regardless of the hook's source.
     let launcher = Arc::new(PolicyRecordingLauncher {
-        policy: std::sync::Mutex::new(None),
+        policy: Mutex::new(None),
         stdout: r#"{"verdict":"allow"}"#.into(),
     });
     let policy_slot = Arc::clone(&launcher);

@@ -614,8 +614,7 @@ mod tests {
 
     fn runner_with_tools(provider: Arc<dyn ModelProvider>, tools: ToolRegistry) -> Runner {
         Runner::new(
-            std::sync::Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())))
-                as std::sync::Arc<dyn houyicoder_api::session::SessionLog>,
+            Arc::new(SessionStore::new(Box::new(InMemoryBackend::new()))) as Arc<dyn SessionLog>,
             provider,
             tools,
             RunnerConfig {

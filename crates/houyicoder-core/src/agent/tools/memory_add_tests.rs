@@ -1,6 +1,11 @@
 use super::*;
 use houyicoder_api::memory::{MemoryProvider, MemoryWriteOutcome};
 use houyicoder_context::{EventId, MemoryEntry, SessionEvent, SessionId, SessionLogEntry};
+use houyicoder_memory::MarkdownMemoryProvider;
+use std::env::temp_dir;
+use std::fs::create_dir_all;
+use std::fs::remove_dir_all;
+use std::process::id;
 use std::sync::Mutex;
 
 /// An in-memory capturing provider so the tool test stays deterministic
@@ -167,9 +172,9 @@ async fn test_save_records_scope() {
 
 #[tokio::test]
 async fn test_repeat_save_emits_once() {
-    let root = std::env::temp_dir().join(format!("memory-add-unchanged-{}", std::process::id()));
-    std::fs::create_dir_all(&root).expect("create memory root");
-    let provider = Arc::new(houyicoder_memory::MarkdownMemoryProvider::new(root.clone()));
+    let root = temp_dir().join(format!("memory-add-unchanged-{}", id()));
+    create_dir_all(&root).expect("create memory root");
+    let provider = Arc::new(MarkdownMemoryProvider::new(root.clone()));
     let recorder = Arc::new(MutationLog::new());
     let tool = MemoryAddTool::new(provider).with_recorder(recorder.clone());
     let input = json!({ "key": "stable", "description": "d", "source": "user", "content": "c" });
@@ -178,7 +183,7 @@ async fn test_repeat_save_emits_once() {
     let second = run(&tool, input).await.expect("repeated save");
     assert_eq!(second, json!({"saved": "stable", "outcome": "unchanged"}));
     assert!(recorder.take().is_empty(), "the repeated save is silent");
-    std::fs::remove_dir_all(root).ok();
+    remove_dir_all(root).ok();
 }
 
 /// A fresh key records Created; rewriting the same key with new content
@@ -187,9 +192,9 @@ async fn test_repeat_save_emits_once() {
 /// an update.
 #[tokio::test]
 async fn test_save_maps_outcome() {
-    let root = std::env::temp_dir().join(format!("memory-outcome-{}", std::process::id()));
-    std::fs::create_dir_all(&root).expect("create memory root");
-    let store = Arc::new(houyicoder_memory::MarkdownMemoryProvider::new(root.clone()));
+    let root = temp_dir().join(format!("memory-outcome-{}", id()));
+    create_dir_all(&root).expect("create memory root");
+    let store = Arc::new(MarkdownMemoryProvider::new(root.clone()));
     let recorder = Arc::new(MutationLog::new());
     let tool = MemoryAddTool::new(store).with_recorder(recorder.clone());
     let base =
@@ -210,7 +215,7 @@ async fn test_save_maps_outcome() {
         MemoryOperation::Updated,
         "changed existing key records Updated"
     );
-    std::fs::remove_dir_all(root).ok();
+    remove_dir_all(root).ok();
 }
 
 #[tokio::test]

@@ -4,7 +4,12 @@
 
 use super::*;
 use houyicoder_api::trust::TrustState;
+#[cfg(test)]
+use houyicoder_context::SessionId;
 use std::sync::RwLock;
+use std::sync::mpsc::Receiver;
+use std::thread::spawn;
+use std::time::Duration;
 
 /// A stable handle for a registered hook. Stable across removals (unlike a
 /// Vec index), so a caller can hold the id and unregister later — the
@@ -16,9 +21,9 @@ pub struct HookId(u64);
 /// receiver channel, the hook name, the per-hook timeout duration, and
 /// the configured limit in milliseconds (for the Timeout error report).
 struct PendingHook {
-    rx: std::sync::mpsc::Receiver<Result<HookVerdict, HookError>>,
+    rx: Receiver<Result<HookVerdict, HookError>>,
     name: String,
-    hook_timeout: std::time::Duration,
+    hook_timeout: Duration,
     configured_limit_ms: u64,
 }
 
@@ -242,7 +247,7 @@ impl HookRegistry {
                     .timeout()
                     .unwrap_or_else(|| Duration::from_millis(registry_timeout_ms));
                 let configured_limit_ms = hook_timeout.as_millis() as u64;
-                std::thread::spawn(move || {
+                spawn(move || {
                     let result = catch_panic(|| hook.evaluate(&ctx), &thread_name);
                     drop(tx.send(result));
                 });
@@ -391,8 +396,6 @@ mod tests {
     /// change works end-to-end on a shared reference.
     #[test]
     fn test_register_on_shared_arc() {
-        use houyicoder_context::SessionId;
-
         let reg = Arc::new(HookRegistry::new());
         // Register on the shared Arc — this is the &self path.
         reg.register(Arc::new(StubHook {
@@ -423,8 +426,6 @@ mod tests {
     /// once:true skill-hook pattern relies on this to drop itself.
     #[test]
     fn test_unregister_removes_hook() {
-        use houyicoder_context::SessionId;
-
         let reg = HookRegistry::new();
         let keep_id = reg.register(Arc::new(StubHook {
             name: "keep".into(),

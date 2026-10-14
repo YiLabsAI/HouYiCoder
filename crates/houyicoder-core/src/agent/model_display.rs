@@ -12,7 +12,9 @@ use houyicoder_protocol::frontend::model::{
     ModelDisplayCapabilities,
 };
 
+use super::effort::effort_levels_for;
 use crate::agent::{ModelCatalogResolver, Runner, model_window};
+use model_window::EffortDialect;
 
 /// The resolved request facts a frozen inference snapshot carries: the
 /// context window the pre-flight gate uses and the output cap the request
@@ -82,14 +84,11 @@ impl Runner {
             }),
             max_output_tokens: Some(self.resolve_max_output_tokens_for(model)),
             effort: match model_window::effort_dialect(model) {
-                model_window::EffortDialect::NotSupported => EffortCapability::Unsupported,
+                EffortDialect::NotSupported => EffortCapability::Unsupported,
                 // The dialect's set, minus what the catalog's per-model
                 // list excludes.
                 _ => EffortCapability::Supported {
-                    levels: super::effort::effort_levels_for(
-                        model,
-                        self.catalog_resolver.as_deref(),
-                    ),
+                    levels: effort_levels_for(model, self.catalog_resolver.as_deref()),
                 },
             },
             fast: self.fast_availability(model),

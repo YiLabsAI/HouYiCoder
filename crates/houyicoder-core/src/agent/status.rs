@@ -15,7 +15,22 @@ use std::sync::{Arc, Mutex};
 use houyicoder_protocol::llm::Usage;
 use houyicoder_resilience::BreakerState;
 
+use super::memory::MemoryGateState;
+use super::model_window::resolve_capabilities;
+use crate::agent::ContextMeasurement;
+use crate::agent::Runner;
+use crate::agent::append::new_event;
+use crate::agent::hook::registry::HookEntry;
 use crate::observability::MetricsView;
+use crate::observability::ModelUsage;
+use crate::observability::evolution::RedundantCall;
+use crate::snapshot::SnapshotStore;
+use crate::snapshot::UndoOutcome;
+use crate::snapshot::UndoStack;
+use houyicoder_api::skill::SkillSnapshot;
+use houyicoder_context::SessionEvent;
+use std::mem::take;
+use std::time::Duration;
 
 /// A point-in-time view of the runner's live state for the host to render.
 /// Carries only engine-owned state; the mode and session id live in the host
@@ -40,7 +55,7 @@ pub struct StatusSnapshot {
     /// Remaining cool-down when the breaker is Open and the cool-down has not
     /// elapsed; None otherwise. The host renders the secs; it does not need to
     /// know about the resilience type behind it.
-    pub breaker_cool_down: Option<std::time::Duration>,
+    pub breaker_cool_down: Option<Duration>,
     /// Cumulative provider-reported usage across every turn this runner has
     /// driven (since the accumulator was last reset). 7-field inclusive totals
     /// plus the non-overlapping breakdown; see the protocol layer's Usage doc.
@@ -170,7 +185,7 @@ impl UsageAccumulator {
 /// reads from status_snapshot (reader).
 pub(crate) type SharedUsage = Arc<Mutex<UsageAccumulator>>;
 
-impl crate::agent::Runner {
+impl Runner {
     /// A cheap point-in-time snapshot of the runner's live state for the host
     /// to render. Reads the breaker (when attached) and the shared usage
     /// accumulator; no await, no channel, safe to call on every dispatch.
@@ -202,7 +217,7 @@ impl crate::agent::Runner {
         // (RwLock) and the next request resolves the new window; status must
         // reflect both so a post-switch /status does not show stale fields.
         let model = self.active_model();
-        let resolved_caps = super::model_window::resolve_capabilities(
+        let resolved_caps = resolve_capabilities(
             &model,
             self.provider.capabilities(),
             self.catalog_resolver
@@ -230,12 +245,11 @@ impl crate::agent::Runner {
     /// lock is poisoned; the render path then degrades to the flat cumulative
     /// tally. The server trims this to the protocol view (no USD, no capability
     /// fields) before sending.
-    pub fn by_model_usage(&self) -> Vec<(String, crate::observability::ModelUsage)> {
+    pub fn by_model_usage(&self) -> Vec<(String, ModelUsage)> {
         let Ok(ol) = self.observability.lock() else {
             return Vec::new();
         };
-        let mut entries: Vec<(String, crate::observability::ModelUsage)> =
-            ol.cost().by_model.into_iter().collect();
+        let mut entries: Vec<(String, ModelUsage)> = ol.cost().by_model.into_iter().collect();
         entries.sort_by(|a, b| {
             (b.1.input_tokens + b.1.output_tokens).cmp(&(a.1.input_tokens + a.1.output_tokens))
         });
@@ -263,7 +277,7 @@ impl crate::agent::Runner {
     /// before any run output — no async-sink race with later assertions.
     /// Drains the queue so a second call returns empty.
     pub fn drain_startup_warnings(&self) -> Vec<String> {
-        std::mem::take(
+        take(
             &mut *self
                 .startup_warnings
                 .lock()
@@ -297,9 +311,9 @@ impl crate::agent::Runner {
         self.store.reset_trajectory(session);
         if let Err(e) = self
             .store
-            .append(crate::agent::append::new_event(
+            .append(new_event(
                 session,
-                houyicoder_context::SessionEvent::ContextCleared { prior_turn },
+                SessionEvent::ContextCleared { prior_turn },
             ))
             .await
         {
@@ -324,14 +338,14 @@ impl crate::agent::Runner {
     /// List all registered hooks for the /hooks visibility command. Empty when
     /// no hook registry is configured. Returns core HookEntry (name, events,
     /// source); the server converts to the protocol DTO.
-    pub fn hooks_list(&self) -> Vec<crate::agent::hook::registry::HookEntry> {
+    pub fn hooks_list(&self) -> Vec<HookEntry> {
         self.hooks.as_ref().map(|r| r.list()).unwrap_or_default()
     }
 
     /// List model-invocable skills paired with their discovery origin, for
     /// the /skills visibility command. The server converts to the protocol DTO.
     /// Empty when no skill registry is configured.
-    pub fn skills_snapshot(&self) -> Vec<houyicoder_api::skill::SkillSnapshot> {
+    pub fn skills_snapshot(&self) -> Vec<SkillSnapshot> {
         self.skill_registry
             .as_ref()
             .map(|r| r.list_with_origin())
@@ -342,7 +356,7 @@ impl crate::agent::Runner {
     /// /trajectory pane (the self-evolution reward signal surface). Clones
     /// the records (they stay for future queries); empty when the tracker
     /// caught nothing.
-    pub fn redundancy_snapshot(&self) -> Vec<crate::observability::evolution::RedundantCall> {
+    pub fn redundancy_snapshot(&self) -> Vec<RedundantCall> {
         self.redundancy
             .lock()
             .map(|t| t.records().iter().cloned().collect())
@@ -380,7 +394,7 @@ impl crate::agent::Runner {
     /// drive loop, so a change lands on the next gate check with no restart.
     /// Pure read; the caller owns persistence (the layering keeps the config
     /// crate out of core, so the persist call lives in the service boundary).
-    pub fn memory_gate_state(&self) -> super::memory::MemoryGateState {
+    pub fn memory_gate_state(&self) -> MemoryGateState {
         self.memory.gate_state()
     }
 
@@ -401,7 +415,7 @@ impl crate::agent::Runner {
 
     /// The measurement of the most recent turn. None before the first turn;
     /// the host falls back to prospective_measurement() then.
-    pub fn last_measurement(&self) -> Option<crate::agent::ContextMeasurement> {
+    pub fn last_measurement(&self) -> Option<ContextMeasurement> {
         self.context_builder.last_measurement()
     }
 
@@ -409,7 +423,7 @@ impl crate::agent::Runner {
     /// first turn (system prompt + tools, messages = 0). Used when
     /// last_measurement() is None so /context is never empty on a fresh
     /// session.
-    pub fn prospective_measurement(&self) -> crate::agent::ContextMeasurement {
+    pub fn prospective_measurement(&self) -> ContextMeasurement {
         self.context_builder.build(&[]).measurement
     }
 
@@ -419,8 +433,8 @@ impl crate::agent::Runner {
     /// (undo_last) share one stack.
     pub fn set_undo(
         &mut self,
-        undo_stack: Arc<std::sync::Mutex<crate::snapshot::UndoStack>>,
-        snapshot_store: Arc<crate::snapshot::SnapshotStore>,
+        undo_stack: Arc<Mutex<UndoStack>>,
+        snapshot_store: Arc<SnapshotStore>,
     ) {
         self.undo_stack = Some(undo_stack);
         self.snapshot_store = Some(snapshot_store);
@@ -430,25 +444,25 @@ impl crate::agent::Runner {
     /// restores from it, and only pops on success — a restore failure
     /// leaves the entry on the stack so the user can retry. Returns a
     /// typed outcome distinguishing empty stack, success, and failure.
-    pub fn undo_last(&self) -> crate::snapshot::UndoOutcome {
+    pub fn undo_last(&self) -> UndoOutcome {
         let Some(stack) = &self.undo_stack else {
-            return crate::snapshot::UndoOutcome::Empty;
+            return UndoOutcome::Empty;
         };
         let Some(store) = &self.snapshot_store else {
-            return crate::snapshot::UndoOutcome::Empty;
+            return UndoOutcome::Empty;
         };
         let Ok(mut guard) = stack.lock() else {
-            return crate::snapshot::UndoOutcome::Empty;
+            return UndoOutcome::Empty;
         };
         let Some(entry) = guard.peek() else {
-            return crate::snapshot::UndoOutcome::Empty;
+            return UndoOutcome::Empty;
         };
         match store.restore(entry) {
             Ok(()) => {
                 let entry = guard.pop().expect("peeked entry exists after restore");
-                crate::snapshot::UndoOutcome::Restored(entry)
+                UndoOutcome::Restored(entry)
             }
-            Err(e) => crate::snapshot::UndoOutcome::Failed(e.to_string()),
+            Err(e) => UndoOutcome::Failed(e.to_string()),
         }
     }
 

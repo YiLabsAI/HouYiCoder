@@ -4,17 +4,26 @@
 
 use super::runner_with;
 use super::*;
+use futures::stream::iter;
+use houyicoder_context::SessionEvent;
+use houyicoder_context::TruncationSignal;
 use houyicoder_protocol::llm::CompletionRequest;
+use houyicoder_protocol::llm::LlmEvent;
+use houyicoder_protocol::llm::ModelCapabilities;
+use houyicoder_protocol::llm::ProviderError;
+use std::sync::Mutex;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 
 /// A provider whose stream emits the given LlmEvents then ends, so a run can
 /// complete against a raw event sequence. Used to inject a finish_reason the
 /// canned stream path always emits as stop (e.g. length truncation).
 struct RawProvider {
-    events: Vec<houyicoder_protocol::llm::LlmEvent>,
+    events: Vec<LlmEvent>,
 }
 
 impl RawProvider {
-    fn new(events: Vec<houyicoder_protocol::llm::LlmEvent>) -> Self {
+    fn new(events: Vec<LlmEvent>) -> Self {
         Self { events }
     }
 }
@@ -32,19 +41,14 @@ impl ModelProvider for RawProvider {
             })
         })
     }
-    fn capabilities(&self) -> houyicoder_protocol::llm::ModelCapabilities {
-        houyicoder_protocol::llm::ModelCapabilities::default()
+    fn capabilities(&self) -> ModelCapabilities {
+        ModelCapabilities::default()
     }
     fn stream(
         &self,
         _req: CompletionRequest,
-    ) -> houyicoder_async::PStream<
-        '_,
-        Result<houyicoder_protocol::llm::LlmEvent, houyicoder_protocol::llm::ProviderError>,
-    > {
-        Box::pin(futures::stream::iter(
-            self.events.clone().into_iter().map(Ok),
-        ))
+    ) -> houyicoder_async::PStream<'_, Result<LlmEvent, ProviderError>> {
+        Box::pin(iter(self.events.clone().into_iter().map(Ok)))
     }
 }
 
@@ -52,15 +56,15 @@ impl ModelProvider for RawProvider {
 /// script repeats). Lets a test script a length-cut on call 1 then a natural
 /// stop on call 2 to exercise the resume-direct recovery loop end-to-end.
 pub(crate) struct ScriptRawProvider {
-    scripts: std::sync::Mutex<Vec<Vec<houyicoder_protocol::llm::LlmEvent>>>,
-    next: std::sync::atomic::AtomicUsize,
+    scripts: Mutex<Vec<Vec<LlmEvent>>>,
+    next: AtomicUsize,
 }
 
 impl ScriptRawProvider {
-    pub(crate) fn new(scripts: Vec<Vec<houyicoder_protocol::llm::LlmEvent>>) -> Self {
+    pub(crate) fn new(scripts: Vec<Vec<LlmEvent>>) -> Self {
         Self {
-            scripts: std::sync::Mutex::new(scripts),
-            next: std::sync::atomic::AtomicUsize::new(0),
+            scripts: Mutex::new(scripts),
+            next: AtomicUsize::new(0),
         }
     }
 }
@@ -78,24 +82,21 @@ impl ModelProvider for ScriptRawProvider {
             })
         })
     }
-    fn capabilities(&self) -> houyicoder_protocol::llm::ModelCapabilities {
-        houyicoder_protocol::llm::ModelCapabilities::default()
+    fn capabilities(&self) -> ModelCapabilities {
+        ModelCapabilities::default()
     }
     fn stream(
         &self,
         _req: CompletionRequest,
-    ) -> houyicoder_async::PStream<
-        '_,
-        Result<houyicoder_protocol::llm::LlmEvent, houyicoder_protocol::llm::ProviderError>,
-    > {
-        let idx = self.next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    ) -> houyicoder_async::PStream<'_, Result<LlmEvent, ProviderError>> {
+        let idx = self.next.fetch_add(1, Ordering::Relaxed);
         let events = {
             let guard = self.scripts.lock().expect("script mutex");
             // Last script repeats so an under-scripted test fails bounded,
             // not with an empty stream.
             guard[idx.min(guard.len() - 1)].clone()
         };
-        Box::pin(futures::stream::iter(events.into_iter().map(Ok)))
+        Box::pin(iter(events.into_iter().map(Ok)))
     }
 }
 
@@ -106,7 +107,6 @@ async fn test_max_tokens_alias_recovers() {
     // partial + nudge + continuation, no truncation marker (bug-log #29 —
     // the unnormalized alias silently disabled recovery and the reply
     // rendered cut mid-sentence).
-    use houyicoder_protocol::llm::LlmEvent;
     let p = Arc::new(ScriptRawProvider::new(vec![
         vec![
             LlmEvent::StepStart { index: 0 },
@@ -158,8 +158,6 @@ async fn test_length_recovery_resumes_completes() {
     // the nudge must NOT surface as a readable transcript line, and the final
     // output must be the continuation with NO truncation marker (recovery
     // succeeded, so the notice is withheld).
-    use houyicoder_context::SessionEvent;
-    use houyicoder_protocol::llm::LlmEvent;
     let p = Arc::new(ScriptRawProvider::new(vec![
         vec![
             LlmEvent::StepStart { index: 0 },
@@ -243,8 +241,6 @@ async fn test_stop_finish_no_recovery() {
     // A natural stop finish must NOT trigger recovery: no nudge appended, the
     // reply returns directly. Guards against the recovery loop firing on
     // every turn.
-    use houyicoder_context::SessionEvent;
-    use houyicoder_protocol::llm::LlmEvent;
     let p = Arc::new(RawProvider::new(vec![
         LlmEvent::StepStart { index: 0 },
         LlmEvent::TextStart { id: "t1".into() },
@@ -286,8 +282,6 @@ async fn test_silent_trunc_recovers() {
     // here. The heuristic synthesizes "length" so the existing resume loop
     // appends the partial + nudge and re-calls. Call 2 is a clean stop with
     // low tokens and an even fence count — no synthesis, natural end.
-    use houyicoder_context::SessionEvent;
-    use houyicoder_protocol::llm::LlmEvent;
     let p = Arc::new(ScriptRawProvider::new(vec![
         vec![
             LlmEvent::StepStart { index: 0 },
@@ -364,8 +358,6 @@ async fn test_stop_clean_skips_recovery() {
     // trigger the silent-truncation heuristic. No nudge appended, the reply
     // returns directly. Guards against false-positive recovery on every
     // normal turn.
-    use houyicoder_context::SessionEvent;
-    use houyicoder_protocol::llm::LlmEvent;
     let p = Arc::new(RawProvider::new(vec![
         LlmEvent::StepStart { index: 0 },
         LlmEvent::TextStart { id: "t1".into() },
@@ -407,7 +399,6 @@ async fn test_length_finish_truncation_marker() {
     // cap mid-sentence. The fold must append a visible marker so the cut is
     // not silent -- the caller cannot otherwise tell length from stop, so a
     // truncated reply would read as a complete one.
-    use houyicoder_protocol::llm::LlmEvent;
     let p = Arc::new(RawProvider::new(vec![
         LlmEvent::StepStart { index: 0 },
         LlmEvent::TextStart { id: "t1".into() },
@@ -444,7 +435,6 @@ async fn test_length_finish_surfaces_note() {
     // itself) consumed the budget before any content landed. The fold must
     // surface a note rather than return an empty FinalOutput that reads as a
     // complete (if terse) reply.
-    use houyicoder_protocol::llm::LlmEvent;
     let p = Arc::new(RawProvider::new(vec![
         LlmEvent::StepStart { index: 0 },
         LlmEvent::ReasoningStart { id: "r1".into() },
@@ -483,7 +473,6 @@ async fn test_stop_reply_skips_recovery() {
     // Guards against a regression that false-fires recovery on every short
     // reply when the proxy omits usage (the path the silent-truncation
     // heuristic's else branch covers).
-    use houyicoder_protocol::llm::LlmEvent;
     let p = Arc::new(ScriptRawProvider::new(vec![vec![
         LlmEvent::StepStart { index: 0 },
         LlmEvent::TextStart { id: "t1".into() },
@@ -518,8 +507,6 @@ async fn test_recovery_verdict_preserves_dialect() {
     // carries the flattened form (length) the loop keys on. Recovery fires
     // on call 1 (recovery_fired true, recovery_attempts 1); call 2 is a clean
     // stop (recovery_fired false). Two verdicts in the replay.
-    use houyicoder_context::{SessionEvent, TruncationSignal};
-    use houyicoder_protocol::llm::LlmEvent;
     let p = Arc::new(ScriptRawProvider::new(vec![
         vec![
             LlmEvent::StepStart { index: 0 },
@@ -615,8 +602,6 @@ async fn test_stop_verdict_signals_none() {
     // A clean stop with low tokens must emit exactly one verdict with no
     // signal and recovery_fired false. Guards against false-positive signal
     // classification on every normal turn.
-    use houyicoder_context::{SessionEvent, TruncationSignal};
-    use houyicoder_protocol::llm::LlmEvent;
     let p = Arc::new(RawProvider::new(vec![
         LlmEvent::StepStart { index: 0 },
         LlmEvent::TextStart { id: "t1".into() },
@@ -661,8 +646,6 @@ async fn test_verdict_records_truncation_signal() {
     // whose signal is ServerUsageNearCap (the server-reported count reached
     // the cap). The raw finish_reason stays stop (the proxy's dialect),
     // the normalized becomes length (synthesized), and recovery fires.
-    use houyicoder_context::{SessionEvent, TruncationSignal};
-    use houyicoder_protocol::llm::LlmEvent;
     let p = Arc::new(ScriptRawProvider::new(vec![
         vec![
             LlmEvent::StepStart { index: 0 },

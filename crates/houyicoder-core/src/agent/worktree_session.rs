@@ -13,6 +13,12 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use houyicoder_context::SessionId;
+#[cfg(test)]
+use std::env::current_dir;
+use std::fs::create_dir_all;
+use std::process::Stdio;
+use std::thread::sleep;
+use std::time::Duration;
 
 /// Per-segment allowlist: letters, digits, dot, underscore, dash. The
 /// allowlist is the single source — no extra chars, no path-traversal
@@ -156,7 +162,7 @@ fn run_git(repo_root: &Path, args: &[&str]) -> Result<String, WorktreeError> {
         .arg(repo_root)
         .args(args)
         .envs(GIT_NO_PROMPT_ENV)
-        .stdin(std::process::Stdio::null())
+        .stdin(Stdio::null())
         .output()
         .map_err(|e| WorktreeError::Git {
             stderr: format!("spawn git: {e}"),
@@ -208,7 +214,7 @@ pub fn get_or_create_worktree(
 
     // New worktree. The -b flag refuses an existing branch (collision -> Err,
     // not clobber). The base is HEAD: the agent works off the current commit.
-    std::fs::create_dir_all(worktrees_dir(&repo_root)).map_err(|e| WorktreeError::Git {
+    create_dir_all(worktrees_dir(&repo_root)).map_err(|e| WorktreeError::Git {
         stderr: format!("mkdir worktrees dir: {e}"),
     })?;
     run_git(
@@ -298,7 +304,7 @@ pub fn remove_worktree(repo_root: &Path, slug: &str) -> Result<(), WorktreeError
     ));
     // Best-effort lock-release wait; a git that just removed the worktree may
     // hold the branch ref lock for a few ms.
-    std::thread::sleep(std::time::Duration::from_millis(100));
+    sleep(Duration::from_millis(100));
     run_git(&repo_root, &["branch", "-D", &branch])?;
     Ok(())
 }
@@ -425,7 +431,7 @@ mod tests {
     /// not run from a git work tree.
     #[test]
     fn test_get_create_round_trips() {
-        let cwd = std::env::current_dir().expect("cwd");
+        let cwd = current_dir().expect("cwd");
         if !cwd.join(".git").exists() {
             return;
         }
@@ -452,7 +458,7 @@ mod tests {
     /// worktree dir does not yet exist, so the fast-resume path is skipped).
     #[test]
     fn test_collision_on_existing_branch() {
-        let cwd = std::env::current_dir().expect("cwd");
+        let cwd = current_dir().expect("cwd");
         if !cwd.join(".git").exists() {
             return;
         }

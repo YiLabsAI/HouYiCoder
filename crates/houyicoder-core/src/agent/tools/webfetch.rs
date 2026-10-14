@@ -14,6 +14,9 @@ use houyicoder_async::PFut;
 use serde_json::{Value, json};
 
 use super::{Tool, ToolCtx, ToolError};
+use reqwest::Client;
+use reqwest::redirect::Policy;
+use std::time::Duration;
 
 /// Maximum URL length accepted by the tool. Guards against oversized URLs
 /// that may be crafted for data exfiltration.
@@ -40,14 +43,14 @@ const MAX_REDIRECTS: usize = 10;
 /// Arc clone. Construction is infallible unless the TLS backend cannot be
 /// initialized (a system-level failure).
 pub struct WebFetchTool {
-    client: reqwest::Client,
+    client: Client,
 }
 
 impl WebFetchTool {
     pub fn new() -> Self {
-        let client = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::limited(MAX_REDIRECTS))
-            .timeout(std::time::Duration::from_secs(FETCH_TIMEOUT_SECS))
+        let client = Client::builder()
+            .redirect(Policy::limited(MAX_REDIRECTS))
+            .timeout(Duration::from_secs(FETCH_TIMEOUT_SECS))
             .build()
             .expect("HTTP client construction failed (TLS backend error)");
         Self { client }

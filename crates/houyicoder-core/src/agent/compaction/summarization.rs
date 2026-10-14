@@ -12,6 +12,14 @@ use houyicoder_protocol::llm::{CompletionRequest, CompletionResponse, ModelSetti
 
 use super::super::manifest::{HeuristicSummarizer, SummarizeError, Summarizer};
 use super::super::turn_group;
+#[cfg(test)]
+use futures::stream::iter;
+#[cfg(test)]
+use houyicoder_protocol::llm::LlmEvent;
+#[cfg(test)]
+use houyicoder_protocol::llm::ModelCapabilities;
+use std::any::Any;
+use std::mem::take;
 
 /// Structured instructions emphasizing the information needed to resume work.
 const SUMMARIZER_INSTRUCTION: &str = "You are a helpful AI assistant tasked with \
@@ -115,7 +123,7 @@ impl Summarizer for LlmSummarizer {
         })
     }
 
-    fn as_any(&self) -> &dyn std::any::Any {
+    fn as_any(&self) -> &dyn Any {
         self
     }
 }
@@ -151,7 +159,7 @@ fn build_summary_batches(
             && !current.is_empty()
             && current_bytes > byte_limit
         {
-            batches.push(std::mem::take(&mut current));
+            batches.push(take(&mut current));
             current_bytes = 0;
         }
 
@@ -297,14 +305,11 @@ mod tests {
             fn stream(
                 &self,
                 _req: CompletionRequest,
-            ) -> houyicoder_async::PStream<
-                '_,
-                Result<houyicoder_protocol::llm::LlmEvent, ProviderError>,
-            > {
-                Box::pin(futures::stream::iter(Vec::new()))
+            ) -> houyicoder_async::PStream<'_, Result<LlmEvent, ProviderError>> {
+                Box::pin(iter(Vec::new()))
             }
-            fn capabilities(&self) -> houyicoder_protocol::llm::ModelCapabilities {
-                houyicoder_protocol::llm::ModelCapabilities::default()
+            fn capabilities(&self) -> ModelCapabilities {
+                ModelCapabilities::default()
             }
         }
         let provider: Arc<dyn ModelProvider> = Arc::new(ErrorProvider);

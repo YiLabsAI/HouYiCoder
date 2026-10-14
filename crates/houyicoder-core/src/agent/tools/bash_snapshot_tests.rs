@@ -9,8 +9,19 @@ use houyicoder_api::sandbox::SandboxSession;
 use houyicoder_api::tool::Tool;
 use houyicoder_async::PFut;
 use houyicoder_context::{ExecConfig, ExecResult, SandboxError};
+use std::env::temp_dir;
+use std::fs::create_dir_all;
+use std::fs::remove_dir_all;
+use std::panic::AssertUnwindSafe;
+use std::panic::catch_unwind;
 use std::path::{Path, PathBuf};
+use std::process::id;
+use std::slice::from_ref;
 use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
+use std::time::SystemTime;
 
 /// A sandbox stub whose working_dirs() is configurable. The other trait
 /// methods are required by the trait but never called by prepare_with_probe,
@@ -52,15 +63,14 @@ impl SandboxSession for StubSession {
 }
 
 fn temp_workspace() -> PathBuf {
-    static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-    let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+    static COUNTER: AtomicUsize = AtomicUsize::new(0);
+    let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+    let nanos = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    let path =
-        std::env::temp_dir().join(format!("bash-snap-test-{}-{n}-{nanos}", std::process::id()));
-    std::fs::create_dir_all(&path).unwrap();
+    let path = temp_dir().join(format!("bash-snap-test-{}-{n}-{nanos}", id()));
+    create_dir_all(&path).unwrap();
     path
 }
 
@@ -79,7 +89,7 @@ fn test_prepare_ok_pushes_proceeds() {
     assert!(result.is_ok(), "ok snapshot proceeds: {:?}", result);
     assert!(result.unwrap().is_none(), "no notice on a pushed snapshot");
     assert_eq!(stack.lock().unwrap().len(), 1, "entry pushed");
-    std::fs::remove_dir_all(&ws).ok();
+    remove_dir_all(&ws).ok();
 }
 
 /// A real I/O failure from the walk (an additional root that does not
@@ -95,7 +105,7 @@ fn test_prepare_walk_failure_refuses() {
     // error surfaces (rather than WalkDir silently yielding nothing)
     // before relying on this path as the failure trigger.
     let bogus = ws.join("does-not-exist-xyz");
-    let snapshot_result = store.snapshot(std::slice::from_ref(&bogus));
+    let snapshot_result = store.snapshot(from_ref(&bogus));
     assert!(
         snapshot_result.is_err(),
         "nonexistent root must error, not skip"
@@ -110,7 +120,7 @@ fn test_prepare_walk_failure_refuses() {
     assert!(msg.contains("snapshot failed"), "{msg}");
     assert!(msg.contains("refusing"), "{msg}");
     assert_eq!(stack.lock().unwrap().len(), 0, "no entry pushed on failure");
-    std::fs::remove_dir_all(&ws).ok();
+    remove_dir_all(&ws).ok();
 }
 
 /// A policy decline (injected probe that returns Err) proceeds without a
@@ -140,7 +150,7 @@ fn test_prepare_decline_returns_notice() {
     // The probe's reason is carried, not hardcoded as size.
     assert!(notice.contains("probe-decline-reason"), "{notice}");
     assert_eq!(stack.lock().unwrap().len(), 0, "no entry pushed on decline");
-    std::fs::remove_dir_all(&ws).ok();
+    remove_dir_all(&ws).ok();
 }
 
 /// A poisoned undo stack refuses to run the command even when the snapshot
@@ -150,9 +160,9 @@ fn test_prepare_decline_returns_notice() {
 fn test_prepare_poisoned_stack_refuses() {
     let ws = temp_workspace();
     let store = SnapshotStore::new(&ws).expect("store");
-    let stack = std::sync::Mutex::new(UndoStack::new());
+    let stack = Mutex::new(UndoStack::new());
     // Poison the mutex by panicking while holding the lock.
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    catch_unwind(AssertUnwindSafe(|| {
         let _guard = stack.lock().unwrap();
         panic!("poison the undo stack");
     }))
@@ -166,7 +176,7 @@ fn test_prepare_poisoned_stack_refuses() {
     let msg = result.unwrap_err().to_string();
     assert!(msg.contains("corrupted"), "{msg}");
     assert!(msg.contains("refusing"), "{msg}");
-    std::fs::remove_dir_all(&ws).ok();
+    remove_dir_all(&ws).ok();
 }
 
 /// The bash schema does not advertise a workdir field. The sandbox runs in

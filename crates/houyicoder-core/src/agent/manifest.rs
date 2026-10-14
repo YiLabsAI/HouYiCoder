@@ -7,10 +7,15 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use super::context::Tokenizer;
 use houyicoder_async::PFut;
+use houyicoder_context::TurnGroup;
 use houyicoder_context::{
     CheckpointId, CheckpointManifest, Disposition, SessionEvent, SessionLogEntry,
 };
+use std::any::Any;
+use std::collections::HashSet;
+use std::mem::take;
 
 /// Knobs for the compaction disposition policy.
 #[derive(Debug, Clone)]
@@ -57,7 +62,7 @@ impl std::fmt::Display for SummarizeError {
 impl std::error::Error for SummarizeError {}
 
 /// Produces summary text for events assigned a Summarized disposition.
-pub trait Summarizer: Send + Sync + std::any::Any {
+pub trait Summarizer: Send + Sync + Any {
     /// Summarize the folded events. Provider-backed implementations may merge
     /// custom_instructions into their prompt; deterministic ones may ignore it.
     fn summarize<'a>(
@@ -71,7 +76,7 @@ pub trait Summarizer: Send + Sync + std::any::Any {
     /// heuristic placeholder). Each concrete impl returns self; the method
     /// is required (no default) because the self-to-Any upcast needs a
     /// Sized Self, which holds inside each impl but not on the trait object.
-    fn as_any(&self) -> &dyn std::any::Any;
+    fn as_any(&self) -> &dyn Any;
 }
 
 /// Placeholder summarizer: returns a deterministic one-line note counting the
@@ -101,7 +106,7 @@ impl Summarizer for HeuristicSummarizer {
         })
     }
 
-    fn as_any(&self) -> &dyn std::any::Any {
+    fn as_any(&self) -> &dyn Any {
         self
     }
 }
@@ -162,7 +167,7 @@ pub async fn build_manifest(
     // 1. Compute the verbatim/summarized boundary. The token estimate uses
     //    the same tokenizer as the assembled context so the preserve_recent_tokens
     //    ceiling and the assembled-context count never disagree on what a token is.
-    let tokenizer = super::context::Tokenizer::new();
+    let tokenizer = Tokenizer::new();
     let mut boundary = verbatim_boundary(events, policy.tail_turns);
     if policy.preserve_recent_tokens > 0 {
         boundary = apply_token_ceiling(events, boundary, policy.preserve_recent_tokens, &tokenizer);
@@ -250,8 +255,7 @@ pub async fn build_manifest(
 fn group_into_turn_groups(
     events: &[SessionLogEntry],
     dispositions: &[Disposition],
-) -> Vec<houyicoder_context::TurnGroup> {
-    use houyicoder_context::TurnGroup;
+) -> Vec<TurnGroup> {
     let mut groups: Vec<TurnGroup> = Vec::new();
     let mut current_ids: Vec<houyicoder_context::EventId> = Vec::new();
     let mut current_disp: Option<Disposition> = None;
@@ -273,7 +277,7 @@ fn group_into_turn_groups(
             groups.push(TurnGroup {
                 turn_id: current_turn_id.unwrap_or(current_ids[0]),
                 disposition: current_disp.unwrap(),
-                event_ids: std::mem::take(&mut current_ids),
+                event_ids: take(&mut current_ids),
             });
             current_turn_id = None;
         }
@@ -284,7 +288,7 @@ fn group_into_turn_groups(
         }
     }
     if !current_ids.is_empty() {
-        groups.push(houyicoder_context::TurnGroup {
+        groups.push(TurnGroup {
             turn_id: current_turn_id.unwrap_or(current_ids[0]),
             disposition: current_disp.unwrap(),
             event_ids: current_ids,
@@ -297,8 +301,7 @@ fn group_into_turn_groups(
 /// is non-empty. The structural pair invariant (thinking + tool_use share a
 /// group) falls out of the grouping; this guard catches a regression that
 /// would orphan an event (no disposition applied) or duplicate one.
-fn groups_cover_all(events: &[SessionLogEntry], plan: &[houyicoder_context::TurnGroup]) -> bool {
-    use std::collections::HashSet;
+fn groups_cover_all(events: &[SessionLogEntry], plan: &[TurnGroup]) -> bool {
     let mut seen: HashSet<houyicoder_context::EventId> = HashSet::new();
     for g in plan {
         if g.event_ids.is_empty() {
@@ -350,7 +353,7 @@ fn apply_token_ceiling(
     events: &[SessionLogEntry],
     mut boundary: usize,
     ceiling: usize,
-    tokenizer: &super::context::Tokenizer,
+    tokenizer: &Tokenizer,
 ) -> usize {
     while boundary < events.len() {
         let tokens = estimate_tokens(&events[boundary..], tokenizer);
@@ -370,10 +373,10 @@ fn apply_token_ceiling(
 
 /// Estimate model-visible payload tokens without materializing external blocks.
 pub(crate) fn estimate_transcript_tokens(events: &[SessionLogEntry]) -> u64 {
-    estimate_tokens(events, &super::context::Tokenizer::new()) as u64
+    estimate_tokens(events, &Tokenizer::new()) as u64
 }
 
-fn estimate_tokens(events: &[SessionLogEntry], tokenizer: &super::context::Tokenizer) -> usize {
+fn estimate_tokens(events: &[SessionLogEntry], tokenizer: &Tokenizer) -> usize {
     events
         .iter()
         .map(|e| estimate_event_tokens(e, tokenizer))
@@ -388,7 +391,7 @@ fn estimate_tokens(events: &[SessionLogEntry], tokenizer: &super::context::Token
 /// the assembly skips them. Shared by the compaction pre/post measurement
 /// and by apply_token_ceiling, so the verbatim-tail boundary is placed
 /// against the same model-visible token budget the estimator reports.
-fn estimate_event_tokens(event: &SessionLogEntry, tokenizer: &super::context::Tokenizer) -> usize {
+fn estimate_event_tokens(event: &SessionLogEntry, tokenizer: &Tokenizer) -> usize {
     let count = |s: &str| tokenizer.count(s) as usize;
     match &event.event {
         SessionEvent::UserInput { text }

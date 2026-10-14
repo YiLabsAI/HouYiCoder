@@ -8,6 +8,9 @@ use serde_json::json;
 use std::sync::RwLock;
 
 use super::super::{HookPayload, ToolResult};
+use std::io::Cursor;
+use std::io::sink;
+use std::sync::Mutex;
 
 /// A stub launcher that returns a canned stdout (a verdict JSON) without
 /// spawning a real process. The SkillCommandHook's spawn+pipe+parse path
@@ -19,8 +22,8 @@ struct StubLauncher {
 impl ProcessLauncher for StubLauncher {
     fn spawn(&self, _req: SpawnRequest, _policy: SpawnPolicy) -> Result<LauncherChild, SpawnError> {
         let stdout_buf = self.stdout.clone().into_bytes();
-        let stdout: Box<dyn std::io::Read + Send> = Box::new(std::io::Cursor::new(stdout_buf));
-        let stdin: Box<dyn std::io::Write + Send> = Box::new(std::io::sink());
+        let stdout: Box<dyn std::io::Read + Send> = Box::new(Cursor::new(stdout_buf));
+        let stdin: Box<dyn std::io::Write + Send> = Box::new(sink());
         let pipes = StdioPipes {
             stdin: Some(stdin),
             stdout: Some(stdout),
@@ -529,7 +532,7 @@ fn test_once_unregisters_after_fire() {
 /// A stub registry whose per-skill specs can be swapped between calls, so a
 /// test can simulate a reload that changed a skill's hooks.
 struct ReloadingSpecRegistry {
-    specs: std::sync::Mutex<HashMap<String, Vec<SkillHookSpec>>>,
+    specs: Mutex<HashMap<String, Vec<SkillHookSpec>>>,
 }
 impl SkillRegistry for ReloadingSpecRegistry {
     fn list_model_invocable(&self) -> Vec<SkillDescriptor> {
@@ -576,7 +579,7 @@ fn spec_cmd(event: &str, source: HookSourceKind, command: &str) -> SkillHookSpec
 fn test_invalidate_reregisters_changed() {
     let (r, reg) = registrar(TrustState::Trusted);
     let registry = ReloadingSpecRegistry {
-        specs: std::sync::Mutex::new(HashMap::from([(
+        specs: Mutex::new(HashMap::from([(
             "deploy".to_string(),
             vec![spec_cmd("PostToolUse", HookSourceKind::Managed, "./a.sh")],
         )])),
@@ -602,7 +605,7 @@ fn test_invalidate_reregisters_changed() {
 fn test_invalidate_skips_uninvoked() {
     let (r, reg) = registrar(TrustState::Trusted);
     let registry = ReloadingSpecRegistry {
-        specs: std::sync::Mutex::new(HashMap::from([(
+        specs: Mutex::new(HashMap::from([(
             "evil".to_string(),
             vec![spec_cmd("PreToolUse", HookSourceKind::Project, "./evil.sh")],
         )])),
@@ -621,7 +624,7 @@ fn test_invalidate_skips_uninvoked() {
 fn test_invalidate_removes_deleted() {
     let (r, reg) = registrar(TrustState::Trusted);
     let registry = ReloadingSpecRegistry {
-        specs: std::sync::Mutex::new(HashMap::from([(
+        specs: Mutex::new(HashMap::from([(
             "deploy".to_string(),
             vec![spec_cmd("PostToolUse", HookSourceKind::Managed, "./a.sh")],
         )])),

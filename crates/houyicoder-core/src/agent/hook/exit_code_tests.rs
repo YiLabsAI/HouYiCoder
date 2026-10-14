@@ -4,6 +4,8 @@
 
 use super::*;
 use houyicoder_api::launcher::{LauncherChild, LauncherExit, SpawnError, StdioPipes};
+use std::io::Cursor;
+use std::io::sink;
 
 /// A stub launcher that returns non-JSON stdout plus an exit code and
 /// stderr, simulating a shell-style hook that uses the exit-code contract
@@ -18,9 +20,9 @@ impl ProcessLauncher for ExitCodeLauncher {
     fn spawn(&self, _req: SpawnRequest, _policy: SpawnPolicy) -> Result<LauncherChild, SpawnError> {
         let stdout_buf = self.stdout.clone().into_bytes();
         let stderr_buf = self.stderr.clone().into_bytes();
-        let stdout: Box<dyn std::io::Read + Send> = Box::new(std::io::Cursor::new(stdout_buf));
-        let stderr: Box<dyn std::io::Read + Send> = Box::new(std::io::Cursor::new(stderr_buf));
-        let stdin: Box<dyn std::io::Write + Send> = Box::new(std::io::sink());
+        let stdout: Box<dyn std::io::Read + Send> = Box::new(Cursor::new(stdout_buf));
+        let stderr: Box<dyn std::io::Read + Send> = Box::new(Cursor::new(stderr_buf));
+        let stdin: Box<dyn std::io::Write + Send> = Box::new(sink());
         let pipes = StdioPipes {
             stdin: Some(stdin),
             stdout: Some(stdout),

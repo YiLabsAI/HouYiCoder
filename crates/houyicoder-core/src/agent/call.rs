@@ -22,19 +22,25 @@ use houyicoder_api::agent_event::{EventHandler, ResponseStreamEvent};
 
 #[path = "stream_fold.rs"]
 mod stream_fold;
+use super::Tokenizer;
+use super::append::timing::BlockSpans;
+use super::compaction::pre_flight_threshold;
+use std::time::Duration;
+use std::time::Instant;
 use stream_fold::StreamFold;
+use tokio::time::sleep;
 
 /// Max gap between stream chunks before the run aborts the call as a stall
 /// (dead socket / half-open gateway). On by default; without it a dead socket
 /// hangs the run forever unless the user presses Esc. Tests use a tiny value
 /// so the stall path runs instantly — a normal test stream emits chunks far faster than 50ms, so only a truly pending stream (no chunks at all) trips it.
 #[cfg(not(test))]
-fn stream_idle_timeout() -> std::time::Duration {
-    std::time::Duration::from_secs(90)
+fn stream_idle_timeout() -> Duration {
+    Duration::from_secs(90)
 }
 #[cfg(test)]
-fn stream_idle_timeout() -> std::time::Duration {
-    std::time::Duration::from_millis(50)
+fn stream_idle_timeout() -> Duration {
+    Duration::from_millis(50)
 }
 
 impl Runner {
@@ -152,8 +158,7 @@ impl Runner {
                 // The reserve uses the frozen output cap — the same value
                 // the request body sends — so the room the gate reserves
                 // matches the room the request asks for.
-                let threshold =
-                    super::compaction::pre_flight_threshold(window, inference.max_output_tokens);
+                let threshold = pre_flight_threshold(window, inference.max_output_tokens);
                 // Floor the estimate to the last observed input tokens so a
                 // tiktoken undercount on a non-native model cannot false-trip
                 // the gate. The max is the conservative floor.
@@ -308,7 +313,7 @@ impl Runner {
             // First provider.stream call → stream end (Finish event); covers
             // transport retries inside the first-event loop (without_retries
             // would split those off — deferred, passed 0).
-            let api_start = std::time::Instant::now();
+            let api_start = Instant::now();
             tracing::debug!(
                 attempt = attempts,
                 overflow_retries,
@@ -334,7 +339,7 @@ impl Runner {
                             // max-delay tick.
                             let wait = self.config.retry.delay_for(attempts, e.retry_after_delay());
                             tracing::debug!(attempt = attempts, wait = ?wait, "retrying after error");
-                            tokio::time::sleep(wait).await;
+                            sleep(wait).await;
                             stream = provider.stream(request.clone());
                             continue;
                         }
@@ -399,12 +404,12 @@ impl Runner {
                         Some(Err(e)) => return Err(RunError::ProviderFatal(e)),
                         None => break None,
                     },
-                    _ = tokio::time::sleep(stream_idle_timeout()) => {
+                    _ = sleep(stream_idle_timeout()) => {
                         tracing::debug!(elapsed = ?api_start.elapsed(), "stall retry (no chunk for idle timeout)");
                         if attempts + 1 < max_attempts {
                             attempts += 1;
                             let wait = self.config.retry.delay_for(attempts, None);
-                            tokio::time::sleep(wait).await;
+                            sleep(wait).await;
                             stream = provider.stream(request.clone());
                             continue;
                         }
@@ -415,7 +420,7 @@ impl Runner {
 
             let mut state = StreamFold::default();
             let mut first_token_elapsed: Option<u64> = None;
-            let mut blocks = super::append::timing::BlockSpans::default();
+            let mut blocks = BlockSpans::default();
             // Process events as they arrive so response handlers and the log
             // observe each delta without waiting for stream completion.
             if let Some(ev) = first {
@@ -450,7 +455,7 @@ impl Runner {
                         Some(Err(e)) => return Err(RunError::ProviderFatal(e)),
                         None => break,
                     },
-                    _ = tokio::time::sleep(stream_idle_timeout()) => {
+                    _ = sleep(stream_idle_timeout()) => {
                         // Stall mid-stream: flush the partial so text is not lost, then fail (no retry — would replay emitted events).
                         let response = state.clone().into_response(inference.model.clone());
                         self.append_response_events(session, &response).await?;
@@ -497,7 +502,7 @@ impl Runner {
             // the token cap (server usage or a self-count), or an unclosed
             // code fence (odd triple-backtick count). Classified once into
             // TruncationSignal; skipped when the provider already cut.
-            let self_count_output_tokens = super::Tokenizer::new().count(&state.assistant_text);
+            let self_count_output_tokens = Tokenizer::new().count(&state.assistant_text);
             let mut truncation_signal = TruncationSignal::None;
             if state.finish_reason.as_deref() != Some("length") {
                 truncation_signal = classify_truncation_signal(
@@ -676,7 +681,7 @@ impl Runner {
         self.store
             .append(new_event(
                 session,
-                houyicoder_context::SessionEvent::MetaUser {
+                SessionEvent::MetaUser {
                     text: NUDGE.to_string(),
                 },
             ))

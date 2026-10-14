@@ -578,7 +578,7 @@ pub trait Hook: Send + Sync {
     /// Per-hook timeout. None means the registry default applies. The
     /// registry uses this to set a per-hook deadline during dispatch so
     /// a slow hook does not block the whole dispatch budget.
-    fn timeout(&self) -> Option<std::time::Duration> {
+    fn timeout(&self) -> Option<Duration> {
         None
     }
 
@@ -622,6 +622,7 @@ pub trait HookExecutor: Send + Sync {
 /// self-check.
 pub(crate) mod registry;
 pub(crate) use registry::HookRegistry;
+use std::panic::catch_unwind;
 
 // policy_allows — source vs policy filter predicate.
 
@@ -670,7 +671,7 @@ fn catch_panic<F>(f: F, hook_name: &str) -> Result<HookVerdict, HookError>
 where
     F: FnOnce() -> Result<HookVerdict, HookError>,
 {
-    match std::panic::catch_unwind(AssertUnwindSafe(f)) {
+    match catch_unwind(AssertUnwindSafe(f)) {
         Ok(result) => result,
         Err(payload) => {
             let backtrace = if let Some(s) = payload.downcast_ref::<&str>() {

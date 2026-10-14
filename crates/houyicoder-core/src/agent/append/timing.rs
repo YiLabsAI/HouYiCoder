@@ -5,6 +5,7 @@ use houyicoder_protocol::llm::LlmEvent;
 
 use super::{RunError, Runner};
 use crate::agent::append::new_event;
+use std::time::Instant;
 
 /// The time a stream spent inside its reasoning and reply blocks.
 ///
@@ -14,8 +15,8 @@ use crate::agent::append::new_event;
 /// out: an unfinished span is unknown, and zero would be a measurement.
 #[derive(Default)]
 pub(crate) struct BlockSpans {
-    open_reasoning: Option<std::time::Instant>,
-    open_reply: Option<std::time::Instant>,
+    open_reasoning: Option<Instant>,
+    open_reply: Option<Instant>,
     reasoning_ms: u64,
     response_ms: u64,
     closed_reasoning: bool,
@@ -25,11 +26,11 @@ pub(crate) struct BlockSpans {
 impl BlockSpans {
     /// Note an event, reading the clock now.
     pub(crate) fn note(&mut self, ev: &LlmEvent) {
-        self.note_at(ev, std::time::Instant::now());
+        self.note_at(ev, Instant::now());
     }
 
     /// Note an event at a given instant, so a test can state exact spans.
-    pub(crate) fn note_at(&mut self, ev: &LlmEvent, now: std::time::Instant) {
+    pub(crate) fn note_at(&mut self, ev: &LlmEvent, now: Instant) {
         match ev {
             LlmEvent::ReasoningStart { .. } => {
                 self.open_reasoning = Some(now);

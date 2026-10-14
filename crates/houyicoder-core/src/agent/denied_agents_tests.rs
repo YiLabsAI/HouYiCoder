@@ -17,6 +17,7 @@ use houyicoder_protocol::llm::{CompletionResponse, OutputItem, Usage};
 use crate::agent::runner_tests::runner_with;
 use crate::agent::{ApprovalDecision, RunOutcome, ToolRegistry};
 use crate::provider::test_support::FakeProvider;
+use houyicoder_api::provider::ModelProvider;
 
 /// A tool that captures the per-call context it saw, then returns a plain
 /// result so the run finishes on the next scripted response. The
@@ -93,7 +94,7 @@ impl SpawnHandle for NoSpawn {
     }
 }
 
-fn two_response_script() -> Arc<dyn houyicoder_api::provider::ModelProvider> {
+fn two_response_script() -> Arc<dyn ModelProvider> {
     let first = CompletionResponse {
         output: vec![OutputItem::ToolCall {
             id: "call_1".into(),
@@ -252,8 +253,7 @@ async fn test_approval_dispatch_carries_caps() {
 
 #[test]
 fn test_runner_agent_directory() {
-    let provider: Arc<dyn houyicoder_api::provider::ModelProvider> =
-        Arc::new(FakeProvider::text("ok"));
+    let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("ok"));
     let runner = runner_with(provider, ToolRegistry::new());
     assert!(runner.agent_directory().is_none());
 }

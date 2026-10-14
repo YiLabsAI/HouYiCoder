@@ -2,6 +2,22 @@
 //! workspace size caps, and restore round-trip.
 
 use super::*;
+use crate::agent::BashTool;
+use houyicoder_api::sandbox::SandboxSession;
+use houyicoder_api::tool::{Tool, ToolCtx};
+use std::env::temp_dir;
+use std::fs::create_dir_all;
+use std::fs::read_to_string;
+use std::fs::remove_dir_all;
+use std::fs::write;
+use std::io::ErrorKind;
+use std::path::Path;
+use std::path::PathBuf;
+use std::process::id;
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::atomic::AtomicU64;
+use std::thread;
 
 #[test]
 fn test_undo_stack_lifo() {
@@ -24,25 +40,19 @@ fn test_undo_stack_lifo() {
 
 #[test]
 fn test_snapshot_restore_recovers_file() {
-    let tmp = std::env::temp_dir().join(format!("snap-test-{}", std::process::id()));
-    std::fs::remove_dir_all(&tmp).ok();
-    std::fs::create_dir_all(&tmp).expect("mkdir");
-    std::fs::write(tmp.join("hello.txt"), "world").expect("write");
+    let tmp = temp_dir().join(format!("snap-test-{}", id()));
+    remove_dir_all(&tmp).ok();
+    create_dir_all(&tmp).expect("mkdir");
+    write(tmp.join("hello.txt"), "world").expect("write");
     let store = SnapshotStore::new(&tmp).expect("store");
     let entry = store.snapshot(&[]).expect("snapshot");
     // Mutate the file (simulates a destructive op).
-    std::fs::write(tmp.join("hello.txt"), "DELETED").expect("mutate");
-    assert_eq!(
-        std::fs::read_to_string(tmp.join("hello.txt")).unwrap(),
-        "DELETED"
-    );
+    write(tmp.join("hello.txt"), "DELETED").expect("mutate");
+    assert_eq!(read_to_string(tmp.join("hello.txt")).unwrap(), "DELETED");
     // Undo restores.
     store.restore(&entry).expect("restore");
-    assert_eq!(
-        std::fs::read_to_string(tmp.join("hello.txt")).unwrap(),
-        "world"
-    );
-    std::fs::remove_dir_all(&tmp).ok();
+    assert_eq!(read_to_string(tmp.join("hello.txt")).unwrap(), "world");
+    remove_dir_all(&tmp).ok();
 }
 
 /// A resumed session re-links its undo stack to the on-disk snapshots the
@@ -53,10 +63,10 @@ fn test_snapshot_restore_recovers_file() {
 /// this test pins.
 #[test]
 fn test_relink_recovers_snapshots_restart() {
-    let tmp = std::env::temp_dir().join(format!("snap-relink-{}", std::process::id()));
-    std::fs::remove_dir_all(&tmp).ok();
-    std::fs::create_dir_all(&tmp).expect("mkdir");
-    std::fs::write(tmp.join("hello.txt"), "world").expect("write");
+    let tmp = temp_dir().join(format!("snap-relink-{}", id()));
+    remove_dir_all(&tmp).ok();
+    create_dir_all(&tmp).expect("mkdir");
+    write(tmp.join("hello.txt"), "world").expect("write");
     // Prior process: take a snapshot (simulates a destructive bash guard).
     let store = SnapshotStore::new(&tmp).expect("store");
     let entry = store.snapshot(&[]).expect("snapshot");
@@ -67,7 +77,7 @@ fn test_relink_recovers_snapshots_restart() {
     else {
         panic!("expected CoWSnapshot");
     };
-    std::fs::write(tmp.join("hello.txt"), "DELETED").expect("mutate");
+    write(tmp.join("hello.txt"), "DELETED").expect("mutate");
     // Restart: a fresh store has an empty in-memory stack, but the on-disk
     // snap-N dir survives.
     let resumed = SnapshotStore::new(&tmp).expect("resumed store");
@@ -86,11 +96,11 @@ fn test_relink_recovers_snapshots_restart() {
     );
     resumed.restore(&restored).expect("restore after relink");
     assert_eq!(
-        std::fs::read_to_string(tmp.join("hello.txt")).unwrap(),
+        read_to_string(tmp.join("hello.txt")).unwrap(),
         "world",
         "undo works after a restart via re-link"
     );
-    std::fs::remove_dir_all(&tmp).ok();
+    remove_dir_all(&tmp).ok();
 }
 
 /// relink_undo_entries skips non-directory entries, non-snap-N named dirs,
@@ -98,8 +108,8 @@ fn test_relink_recovers_snapshots_restart() {
 /// Pins the skip branches so a regression that re-links junk goes red.
 #[test]
 fn test_relink_skips_junk_entries() {
-    let tmp = std::env::temp_dir().join(format!("snap-relink-junk-{}", std::process::id()));
-    std::fs::remove_dir_all(&tmp).ok();
+    let tmp = temp_dir().join(format!("snap-relink-junk-{}", id()));
+    remove_dir_all(&tmp).ok();
     let store = SnapshotStore::new(&tmp).expect("store");
     // A valid workspace-only snapshot (the one entry that should re-link).
     let entry = store.snapshot(&[]).expect("snapshot");
@@ -111,9 +121,9 @@ fn test_relink_skips_junk_entries() {
     };
     let store_dir = tmp.join(".houyicoder").join("snapshots");
     // A junk file in the store dir (skip: not a directory).
-    std::fs::write(store_dir.join("junk-file"), "x").unwrap();
+    write(store_dir.join("junk-file"), "x").unwrap();
     // A non-snap-N named directory (skip: name does not match snap-<n>).
-    std::fs::create_dir_all(store_dir.join("other-dir")).unwrap();
+    create_dir_all(store_dir.join("other-dir")).unwrap();
     // Re-link from a fresh store (simulates restart).
     let resumed = SnapshotStore::new(&tmp).expect("resumed");
     let entries = resumed.relink_undo_entries();
@@ -126,16 +136,16 @@ fn test_relink_skips_junk_entries() {
         panic!("expected CoWSnapshot");
     };
     assert_eq!(store_path, &valid, "re-linked the valid snapshot");
-    std::fs::remove_dir_all(&tmp).ok();
+    remove_dir_all(&tmp).ok();
 }
 
 #[test]
 fn test_snapshot_prunes_store_target() {
-    let tmp = std::env::temp_dir().join(format!("snap-prune-{}", std::process::id()));
-    std::fs::remove_dir_all(&tmp).ok();
-    std::fs::create_dir_all(tmp.join("target")).expect("mkdir target");
-    std::fs::write(tmp.join("target/build.txt"), "x").expect("write target");
-    std::fs::write(tmp.join("real.txt"), "y").expect("write real");
+    let tmp = temp_dir().join(format!("snap-prune-{}", id()));
+    remove_dir_all(&tmp).ok();
+    create_dir_all(tmp.join("target")).expect("mkdir target");
+    write(tmp.join("target/build.txt"), "x").expect("write target");
+    write(tmp.join("real.txt"), "y").expect("write real");
     let store = SnapshotStore::new(&tmp).expect("store");
     let entry = store.snapshot(&[]).expect("snapshot");
     let UndoEntry::CoWSnapshot { store_path, .. } = entry else {
@@ -149,7 +159,7 @@ fn test_snapshot_prunes_store_target() {
         "snapshot store pruned from its own walk"
     );
     assert!(store_path.join("real.txt").exists(), "real.txt snapshotted");
-    std::fs::remove_dir_all(&tmp).ok();
+    remove_dir_all(&tmp).ok();
 }
 
 #[test]
@@ -183,7 +193,7 @@ fn test_undo_entry_description() {
 struct StubSession {
     root: PathBuf,
 }
-impl houyicoder_api::sandbox::SandboxSession for StubSession {
+impl SandboxSession for StubSession {
     fn exec_with_config(
         &self,
         _command: &str,
@@ -229,22 +239,19 @@ impl houyicoder_api::sandbox::SandboxSession for StubSession {
     ) -> houyicoder_async::PFut<'_, Result<bool, houyicoder_context::SandboxError>> {
         Box::pin(async move { Ok(false) })
     }
-    fn workspace_root(&self) -> std::sync::Arc<std::path::Path> {
-        std::sync::Arc::from(self.root.clone())
+    fn workspace_root(&self) -> Arc<Path> {
+        Arc::from(self.root.clone())
     }
 }
 
 #[test]
 fn test_bash_tool_snapshots_destructive() {
-    use crate::agent::BashTool;
-    use houyicoder_api::tool::{Tool, ToolCtx};
-    use std::sync::Arc;
-    let tmp = std::env::temp_dir().join(format!("bash-snap-{}", std::process::id()));
-    std::fs::remove_dir_all(&tmp).ok();
-    std::fs::create_dir_all(&tmp).expect("mkdir");
-    std::fs::write(tmp.join("real.txt"), "data").expect("write");
+    let tmp = temp_dir().join(format!("bash-snap-{}", id()));
+    remove_dir_all(&tmp).ok();
+    create_dir_all(&tmp).expect("mkdir");
+    write(tmp.join("real.txt"), "data").expect("write");
     let store = Arc::new(SnapshotStore::new(&tmp).expect("store"));
-    let stack = Arc::new(std::sync::Mutex::new(UndoStack::new()));
+    let stack = Arc::new(Mutex::new(UndoStack::new()));
     let session = Arc::new(StubSession { root: tmp.clone() });
     let tool = BashTool::with_undo(session, stack.clone(), store);
     // Execute a destructive command — the hook snapshots + pushes.
@@ -256,38 +263,38 @@ fn test_bash_tool_snapshots_destructive() {
         1,
         "undo stack should have 1 entry after a destructive command"
     );
-    std::fs::remove_dir_all(&tmp).ok();
+    remove_dir_all(&tmp).ok();
 }
 
 #[test]
 fn test_workspace_size_sums_files() {
-    let tmp = std::env::temp_dir().join(format!("ws-size-{}", std::process::id()));
-    std::fs::remove_dir_all(&tmp).ok();
-    std::fs::create_dir_all(&tmp).expect("mkdir");
-    std::fs::write(tmp.join("a.txt"), b"hello").expect("write");
-    std::fs::write(tmp.join("b.txt"), b"world!!").expect("write");
+    let tmp = temp_dir().join(format!("ws-size-{}", id()));
+    remove_dir_all(&tmp).ok();
+    create_dir_all(&tmp).expect("mkdir");
+    write(tmp.join("a.txt"), b"hello").expect("write");
+    write(tmp.join("b.txt"), b"world!!").expect("write");
     let store = SnapshotStore::new(&tmp).expect("store");
     let size = store.workspace_size();
     assert!(
         size >= 12,
         "sums file sizes (at least the two files' bytes)"
     );
-    std::fs::remove_dir_all(&tmp).ok();
+    remove_dir_all(&tmp).ok();
 }
 
 #[test]
 fn test_check_reflink_policy_passes() {
     // On APFS (the test runner's FS), reflink should be available, so the
     // policy passes regardless of workspace size.
-    let tmp = std::env::temp_dir().join(format!("reflink-ok-{}", std::process::id()));
-    std::fs::remove_dir_all(&tmp).ok();
-    std::fs::create_dir_all(&tmp).expect("mkdir");
+    let tmp = temp_dir().join(format!("reflink-ok-{}", id()));
+    remove_dir_all(&tmp).ok();
+    create_dir_all(&tmp).expect("mkdir");
     let store = SnapshotStore::new(&tmp).expect("store");
     assert!(
         store.check_reflink_policy().is_ok(),
         "policy passes when reflink is available"
     );
-    std::fs::remove_dir_all(&tmp).ok();
+    remove_dir_all(&tmp).ok();
 }
 #[test]
 fn test_reflink_available_policy_passes() {
@@ -309,7 +316,7 @@ fn test_large_workspace_without_reflink() {
     // ext4 fallback: CoW unavailable + workspace over threshold -> Err so
     // the caller degrades to Ask instead of paying a slow full copy.
     let err = reflink_policy(false, NO_REFLINK_SIZE_THRESHOLD + 1).unwrap_err();
-    assert_eq!(err.kind(), std::io::ErrorKind::Unsupported);
+    assert_eq!(err.kind(), ErrorKind::Unsupported);
     assert!(err.to_string().contains("degrade to Ask"));
 }
 
@@ -318,8 +325,6 @@ fn test_undo_stack_push_safe() {
     // Concurrent pushers under the shared Arc<Mutex<UndoStack>> must not
     // panic or corrupt the stack. Deterministic invariant: after all
     // threads join, len == total pushes (no lost entries).
-    use std::sync::{Arc, Mutex};
-    use std::thread;
     let stack = Arc::new(Mutex::new(UndoStack::new()));
     let n_threads = 8;
     let per_thread = 500;
@@ -329,7 +334,7 @@ fn test_undo_stack_push_safe() {
         handles.push(thread::spawn(move || {
             for i in 0..per_thread {
                 s.lock().unwrap().push(UndoEntry::BeforeImage {
-                    path: std::path::PathBuf::from(format!("t{t}-{i}")),
+                    path: PathBuf::from(format!("t{t}-{i}")),
                     before: None,
                 });
             }
@@ -346,13 +351,11 @@ fn test_undo_stack_pop_drains() {
     // Pre-fill, then concurrent poppers drain the stack. Deterministic
     // invariant: every pop that returns Some subtracts one, so total
     // popped == total pushed and the stack ends empty.
-    use std::sync::{Arc, Mutex};
-    use std::thread;
     let stack = Arc::new(Mutex::new(UndoStack::new()));
     let total = 2000;
     for i in 0..total {
         stack.lock().unwrap().push(UndoEntry::BeforeImage {
-            path: std::path::PathBuf::from(format!("f{i}")),
+            path: PathBuf::from(format!("f{i}")),
             before: None,
         });
     }
@@ -381,7 +384,6 @@ fn test_audit_sink_records_lifecycle() {
     // The injected audit sink receives snapshot_created / snapshot_pruned /
     // undo_applied as each lifecycle event happens. Guards the wiring that
     // threads the audit sink through the snapshot lifecycle.
-    use std::sync::{Arc, Mutex};
     let events: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     struct Sink(Arc<Mutex<Vec<String>>>);
     impl SnapshotAuditSink for Sink {
@@ -395,10 +397,10 @@ fn test_audit_sink_records_lifecycle() {
             self.0.lock().unwrap().push("undo".into());
         }
     }
-    let tmp = std::env::temp_dir().join(format!("audit-sink-{}", std::process::id()));
-    std::fs::remove_dir_all(&tmp).ok();
-    std::fs::create_dir_all(&tmp).unwrap();
-    std::fs::write(tmp.join("f.txt"), "x").unwrap();
+    let tmp = temp_dir().join(format!("audit-sink-{}", id()));
+    remove_dir_all(&tmp).ok();
+    create_dir_all(&tmp).unwrap();
+    write(tmp.join("f.txt"), "x").unwrap();
     let store = SnapshotStore::new(&tmp)
         .unwrap()
         .with_audit(Arc::new(Sink(events.clone())));
@@ -422,30 +424,30 @@ fn test_audit_sink_records_lifecycle() {
         ev.iter().any(|s| s.as_str() == "undo"),
         "undo applied fired: {ev:?}"
     );
-    std::fs::remove_dir_all(&tmp).ok();
+    remove_dir_all(&tmp).ok();
 }
 
 #[test]
 fn test_prune_removes_old_snapshots() {
-    let tmp = std::env::temp_dir().join(format!("prune-old-{}", std::process::id()));
-    std::fs::remove_dir_all(&tmp).ok();
-    std::fs::create_dir_all(&tmp).expect("mkdir");
-    std::fs::write(tmp.join("real.txt"), "data").expect("write");
+    let tmp = temp_dir().join(format!("prune-old-{}", id()));
+    remove_dir_all(&tmp).ok();
+    create_dir_all(&tmp).expect("mkdir");
+    write(tmp.join("real.txt"), "data").expect("write");
     let store = SnapshotStore::new(&tmp).expect("store");
     store.snapshot(&[]).expect("snap1");
     store.snapshot(&[]).expect("snap2");
     // Prune with size cap 0 (remove everything) + no protected entries.
     let removed = store.prune(604800, 0, &[]);
     assert!(removed >= 1, "size cap 0 removes at least one snapshot");
-    std::fs::remove_dir_all(&tmp).ok();
+    remove_dir_all(&tmp).ok();
 }
 
 #[test]
 fn test_prune_skips_protected_snapshots() {
-    let tmp = std::env::temp_dir().join(format!("prune-prot-{}", std::process::id()));
-    std::fs::remove_dir_all(&tmp).ok();
-    std::fs::create_dir_all(&tmp).expect("mkdir");
-    std::fs::write(tmp.join("real.txt"), "data").expect("write");
+    let tmp = temp_dir().join(format!("prune-prot-{}", id()));
+    remove_dir_all(&tmp).ok();
+    create_dir_all(&tmp).expect("mkdir");
+    write(tmp.join("real.txt"), "data").expect("write");
     let store = SnapshotStore::new(&tmp).expect("store");
     let entry = store.snapshot(&[]).expect("snap");
     let protected = match &entry {
@@ -455,7 +457,7 @@ fn test_prune_skips_protected_snapshots() {
     // Prune with size cap 0 but the snapshot is protected → 0 removed.
     let removed = store.prune(604800, 0, &protected);
     assert_eq!(removed, 0, "protected snapshot not pruned");
-    std::fs::remove_dir_all(&tmp).ok();
+    remove_dir_all(&tmp).ok();
 }
 
 #[test]
@@ -479,14 +481,14 @@ fn test_undo_stack_peek_paths() {
 
 #[test]
 fn test_id_continues_across_restart() {
-    let tmp = std::env::temp_dir().join(format!(
+    let tmp = temp_dir().join(format!(
         "snap-id-{}-{}",
-        std::process::id(),
-        std::sync::atomic::AtomicU64::new(0).fetch_add(1, Ordering::Relaxed)
+        id(),
+        AtomicU64::new(0).fetch_add(1, Ordering::Relaxed)
     ));
-    std::fs::remove_dir_all(&tmp).ok();
-    std::fs::create_dir_all(&tmp).expect("mkdir");
-    std::fs::write(tmp.join("real.txt"), "data").expect("write");
+    remove_dir_all(&tmp).ok();
+    create_dir_all(&tmp).expect("mkdir");
+    write(tmp.join("real.txt"), "data").expect("write");
     let store = SnapshotStore::new(&tmp).expect("store");
     store.snapshot(&[]).expect("snap-0");
     store.snapshot(&[]).expect("snap-1");
@@ -505,5 +507,5 @@ fn test_id_continues_across_restart() {
         .and_then(|n| n.parse::<u64>().ok())
         .unwrap_or(0);
     assert!(id >= 2, "counter continues past restart: id={id}");
-    std::fs::remove_dir_all(&tmp).ok();
+    remove_dir_all(&tmp).ok();
 }

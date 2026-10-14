@@ -18,6 +18,7 @@ use serde_json::Value;
 use super::runner_tests::runner_with;
 use super::*;
 use crate::provider::test_support::FakeProvider;
+use tokio::time::sleep;
 
 /// A tool that sleeps a fixed duration before returning, so the per-call
 /// timing has a known lower bound. The safe flag picks the parallel vs serial
@@ -55,7 +56,7 @@ impl Tool for SleepingTool {
     ) -> houyicoder_async::PFut<'_, Result<Value, ToolError>> {
         let ms = self.sleep_ms;
         Box::pin(async move {
-            tokio::time::sleep(Duration::from_millis(ms)).await;
+            sleep(Duration::from_millis(ms)).await;
             Ok(serde_json::json!({"ok": true}))
         })
     }

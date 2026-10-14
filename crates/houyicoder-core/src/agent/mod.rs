@@ -114,7 +114,20 @@ pub mod runner_config;
 use runner_config::RunnerConfig;
 
 mod result;
+use crate::snapshot::SnapshotStore;
+use crate::snapshot::UndoStack;
+use houyicoder_api::cache_policy::CachePolicyProvider;
+use houyicoder_api::cost_model::CostModelProvider;
+use houyicoder_api::sandbox::SandboxSession;
+use houyicoder_api::session::SessionLog;
+use houyicoder_api::skill::SkillRegistry;
+use houyicoder_api::skill::grant::SkillGrantStore;
+use houyicoder_api::spawn::AgentIdentity;
+use houyicoder_api::spawn::SpawnHandle;
+use houyicoder_protocol::frontend::QueuedInput;
 pub use result::{RunError, RunOutcome, RunResult};
+use std::path::Path;
+use tokio::sync::mpsc::UnboundedReceiver;
 
 /// The single-agent tool-use loop. Owns a SessionStore (lossless event log),
 /// a ModelProvider (LLM seam), and a ToolRegistry. run drives the loop to
@@ -123,7 +136,7 @@ pub use result::{RunError, RunOutcome, RunResult};
 /// the runner (a TUI host) can clone the handle and replay events for a live
 /// transcript view while a run is in flight.
 pub struct Runner {
-    store: Arc<dyn houyicoder_api::session::SessionLog>,
+    store: Arc<dyn SessionLog>,
     provider: Arc<dyn ModelProvider>,
     tools: ToolRegistry,
     config: RunnerConfig,
@@ -149,7 +162,7 @@ pub struct Runner {
     /// BusMessage::Inbox texts and the drive loop drains them at each turn
     /// boundary, appending each as a user message before the next model
     /// call. None for the top-level runner (no bus steering).
-    inbox: Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<BusMessage>>>,
+    inbox: Mutex<Option<UnboundedReceiver<BusMessage>>>,
     /// Startup warnings (bad settings fields, network policy typos) queued
     /// for the host to surface as initial transcript system lines. The
     /// composition root collects these during build; the host drains them at
@@ -197,8 +210,8 @@ pub struct Runner {
     verify_gate: Option<Arc<dyn VerifyGate>>,
     /// The undo stack + snapshot store for recoverable destructive ops.
     /// Shared with the BashTool (which pushes); undo_last pops + restores.
-    undo_stack: Option<Arc<Mutex<crate::snapshot::UndoStack>>>,
-    snapshot_store: Option<Arc<crate::snapshot::SnapshotStore>>,
+    undo_stack: Option<Arc<Mutex<UndoStack>>>,
+    snapshot_store: Option<Arc<SnapshotStore>>,
     /// Snapshot retention TTL in seconds; prune_snapshots drops older entries.
     snapshot_ttl_secs: u64,
     /// Snapshot store size cap in bytes; prune_snapshots enforces it.
@@ -216,14 +229,14 @@ pub struct Runner {
     /// skill-discovery listing attachment (descriptions only — the Skill
     /// tool loads bodies on demand). None in tests and the pure-stub path
     /// (no skill discovery).
-    skill_registry: Option<Arc<dyn houyicoder_api::skill::SkillRegistry>>,
+    skill_registry: Option<Arc<dyn SkillRegistry>>,
     /// Optional sandbox session, shared with the BashTool so the @skill:
     /// path (skill_slash) can grant the same entitlements the Skill tool
     /// grants (app-launch + extra mach services). None in tests / no-sandbox.
-    sandbox_session: Option<Arc<dyn houyicoder_api::sandbox::SandboxSession>>,
+    sandbox_session: Option<Arc<dyn SandboxSession>>,
     /// Per-skill sandbox grant store (user-scope, not in repo). When configured,
     /// grants for a skill merge with its frontmatter declaration on invoke.
-    skill_grants: Option<Arc<houyicoder_api::skill::grant::SkillGrantStore>>,
+    skill_grants: Option<Arc<SkillGrantStore>>,
     /// The skill whose entitlements are active for the current run. Shared
     /// with the SkillTool so both invocation paths can set it. Read by the
     /// post-bash-failure approval to attribute discovered services.
@@ -252,12 +265,12 @@ pub struct Runner {
     /// for reuse; providers lower each protocol kind to their own format.
     /// Defaults to the Auto
     /// three-breakpoint set; a provider with no cache support swaps NoCachePolicy.
-    cache_policy: Arc<dyn houyicoder_api::cache_policy::CachePolicyProvider>,
+    cache_policy: Arc<dyn CachePolicyProvider>,
     /// Per-provider token-cost model. Drives the economy-driven compaction
     /// gate (projected cache savings vs rewrite + summarizer cost). Defaults
     /// to the Anthropic-pricing rates; a multi-provider runtime swaps per
     /// active provider.
-    cost_model: Arc<dyn houyicoder_api::cost_model::CostModelProvider>,
+    cost_model: Arc<dyn CostModelProvider>,
     /// Recall meter: counts conversation_search matches that landed in the
     /// folded (Summarized) span since the last compaction. The conversation
     /// recall tool bumps it; run_compaction snapshots + resets it to
@@ -314,8 +327,8 @@ pub struct Runner {
     /// composition root (where permission rules live); empty by default.
     denied_agents: Arc<HashSet<String>>,
     /// Spawn port + identity the dispatch threads into the agent tool's ctx.
-    spawn_handle: Option<Arc<dyn houyicoder_api::spawn::SpawnHandle>>,
-    agent_identity: houyicoder_api::spawn::AgentIdentity,
+    spawn_handle: Option<Arc<dyn SpawnHandle>>,
+    agent_identity: AgentIdentity,
 }
 
 impl Runner {
@@ -327,37 +340,31 @@ impl Runner {
     /// A shared handle to the session store. Clone it to replay events from a
     /// side channel (the TUI host does this after each run to refresh the
     /// transcript view from real SessionLogEntries).
-    pub fn store(&self) -> Arc<dyn houyicoder_api::session::SessionLog> {
+    pub fn store(&self) -> Arc<dyn SessionLog> {
         self.store.clone()
     }
 
     /// The skill registry, when configured. The approval path reads it to detect
     /// when a Bash command runs a skill-directory script so the prompt can
     /// show what would execute. None on the pure-stub path (no discovery).
-    pub fn skill_registry(&self) -> Option<&Arc<dyn houyicoder_api::skill::SkillRegistry>> {
+    pub fn skill_registry(&self) -> Option<&Arc<dyn SkillRegistry>> {
         self.skill_registry.as_ref()
     }
 
     /// Install the shared sandbox session so the @skill: slash path can
     /// grant entitlements the Skill tool grants. None in tests.
-    pub fn with_sandbox_session(
-        mut self,
-        session: Option<Arc<dyn houyicoder_api::sandbox::SandboxSession>>,
-    ) -> Self {
+    pub fn with_sandbox_session(mut self, session: Option<Arc<dyn SandboxSession>>) -> Self {
         self.sandbox_session = session;
         self
     }
 
     /// The sandbox session shared by tools and reconnecting service hosts.
-    pub fn sandbox_session(&self) -> Option<Arc<dyn houyicoder_api::sandbox::SandboxSession>> {
+    pub fn sandbox_session(&self) -> Option<Arc<dyn SandboxSession>> {
         self.sandbox_session.clone()
     }
 
     /// Install the per-skill grant store.
-    pub fn with_skill_grants(
-        mut self,
-        grants: Option<Arc<houyicoder_api::skill::grant::SkillGrantStore>>,
-    ) -> Self {
+    pub fn with_skill_grants(mut self, grants: Option<Arc<SkillGrantStore>>) -> Self {
         self.skill_grants = grants;
         self
     }
@@ -382,7 +389,7 @@ impl Runner {
     }
 
     /// The dream's cross-session scan root, or None when in-memory.
-    pub fn dream_session_log_root(&self) -> Option<&std::path::Path> {
+    pub fn dream_session_log_root(&self) -> Option<&Path> {
         self.memory.dream_session_log_root()
     }
 
@@ -717,8 +724,7 @@ impl Runner {
     /// Notifications defer to user input — drained only when the user queue is
     /// empty — so a notification never jumps ahead of a pending user message.
     async fn drain_turn_boundary(&self, session: SessionId) -> Result<bool, RunError> {
-        let pending_user: Vec<houyicoder_protocol::frontend::QueuedInput> =
-            self.drain_pending_input();
+        let pending_user: Vec<QueuedInput> = self.drain_pending_input();
         let inbox_pending = self.drain_inbox();
         // Notifications are lower priority than a user interjection: drain
         // them only when no user input is pending, so a notification that

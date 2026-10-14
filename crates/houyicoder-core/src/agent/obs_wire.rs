@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex};
 use houyicoder_protocol::llm::Usage;
 
 use crate::observability::ObservabilityLog;
+use std::collections::HashMap;
 
 /// Shared observability log handle.
 pub type SharedObservability = Arc<Mutex<ObservabilityLog>>;
@@ -65,7 +66,7 @@ pub fn record_turn(
 pub fn record_tool_outcomes(
     obs: &SharedObservability,
     results: &[(String, serde_json::Value)],
-    call_names: &std::collections::HashMap<String, String>,
+    call_names: &HashMap<String, String>,
 ) {
     if let Ok(mut ol) = obs.lock() {
         ol.record_tool_outcomes(results, call_names);
@@ -168,7 +169,7 @@ mod tests {
     #[test]
     fn test_record_tool_outcomes_aggregates() {
         let obs = new_log(200_000);
-        let mut names = std::collections::HashMap::new();
+        let mut names = HashMap::new();
         names.insert("c1".to_string(), "bash".to_string());
         names.insert("c2".to_string(), "bash".to_string());
         let results = vec![

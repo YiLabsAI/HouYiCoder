@@ -10,6 +10,7 @@ use houyicoder_context::SessionEvent;
 use houyicoder_protocol::llm::{CompletionResponse, OutputItem, Usage};
 
 use super::*;
+use serde_json::Value;
 
 #[tokio::test]
 async fn test_ask_question_resume_answer() {
@@ -63,7 +64,7 @@ async fn test_ask_question_resume_answer() {
     assert_eq!(approvals[0].tool_name, "AskUserQuestion");
     // The user picks chrono: build the answer-populated input the UI would.
     let mut updated = approvals[0].input.clone();
-    if let serde_json::Value::Object(ref mut obj) = updated {
+    if let Value::Object(ref mut obj) = updated {
         obj.insert(
             "answers".into(),
             serde_json::json!({"Which library?": "chrono"}),

@@ -15,6 +15,14 @@ use super::memory::MutationLog;
 use super::prompt::extract::build_extraction_prompt;
 use super::runner_config::RunnerConfig;
 use super::{RunError, RunOutcome, RunResult, Runner, ToolRegistry};
+#[cfg(test)]
+use std::env::temp_dir;
+#[cfg(test)]
+use std::fs::create_dir_all;
+#[cfg(test)]
+use std::fs::remove_dir_all;
+#[cfg(test)]
+use std::process::id;
 
 /// Build a forked extraction runner over a caller-provided ephemeral store.
 /// The store is ephemeral (an in-memory backend the caller constructs) so the
@@ -239,8 +247,8 @@ mod tests {
         let ephemeral: Arc<dyn SessionLog> =
             Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
 
-        let cwd = std::env::temp_dir().join(format!("fork-extract-{}", std::process::id()));
-        std::fs::create_dir_all(&cwd).expect("mkdir cwd");
+        let cwd = temp_dir().join(format!("fork-extract-{}", id()));
+        create_dir_all(&cwd).expect("mkdir cwd");
 
         let prefix = main_prefix();
         let recorder = Arc::new(MutationLog::new());
@@ -287,7 +295,7 @@ mod tests {
             "extraction tool doc reached the forked agent"
         );
 
-        std::fs::remove_dir_all(&cwd).ok();
+        remove_dir_all(&cwd).ok();
     }
 
     /// The run completes within max_turns for a longer prefix and still
@@ -304,8 +312,8 @@ mod tests {
         });
         let ephemeral: Arc<dyn SessionLog> =
             Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
-        let cwd = std::env::temp_dir().join(format!("fork-prefix-{}", std::process::id()));
-        std::fs::create_dir_all(&cwd).expect("mkdir cwd");
+        let cwd = temp_dir().join(format!("fork-prefix-{}", id()));
+        create_dir_all(&cwd).expect("mkdir cwd");
         let prefix = main_prefix();
         let recorder = Arc::new(MutationLog::new());
         let window = ExactExtractionWindow::from_unconsumed(
@@ -329,7 +337,7 @@ mod tests {
             1,
             "one memory written from the prefix"
         );
-        std::fs::remove_dir_all(&cwd).ok();
+        remove_dir_all(&cwd).ok();
     }
 
     /// install_memory registers the memory tool set on the runner: the write

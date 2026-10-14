@@ -12,6 +12,10 @@ use super::*;
 use crate::provider::test_support::FakeProvider;
 use houyicoder_context::SessionEvent;
 use houyicoder_protocol::llm::{CompletionResponse, EffortLevel, LlmEvent, OutputItem, Usage};
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::task::yield_now;
+use tokio::time::timeout;
 
 fn usage_response() -> CompletionResponse {
     CompletionResponse {
@@ -36,7 +40,7 @@ fn usage_response() -> CompletionResponse {
 /// does not silently under-report what ran.
 #[tokio::test]
 async fn test_usage_records_effort() {
-    let p = std::sync::Arc::new(FakeProvider::new(vec![usage_response()]));
+    let p = Arc::new(FakeProvider::new(vec![usage_response()]));
     let runner = runner_with(p, ToolRegistry::new());
     let mut pick = InferenceConfig::for_model("qwen3.7-max".into(), true);
     pick.effort = Some(EffortLevel::High);
@@ -58,7 +62,7 @@ async fn test_usage_records_effort() {
 /// so the TurnUsage records None rather than the stale in-session pick.
 #[tokio::test]
 async fn test_usage_skips_effort() {
-    let p = std::sync::Arc::new(FakeProvider::new(vec![usage_response()]));
+    let p = Arc::new(FakeProvider::new(vec![usage_response()]));
     let runner = runner_with(p, ToolRegistry::new());
     let mut pick = InferenceConfig::for_model("deepseek-chat".into(), true);
     pick.effort = Some(EffortLevel::High);
@@ -78,7 +82,7 @@ async fn test_usage_skips_effort() {
 
 #[tokio::test]
 async fn test_turn_usage_records_cost() {
-    let p = std::sync::Arc::new(FakeProvider::new(vec![usage_response()]));
+    let p = Arc::new(FakeProvider::new(vec![usage_response()]));
     let runner = runner_with(p, ToolRegistry::new());
     let session = SessionId::new();
     runner.run(session, "hi".into()).await.unwrap();
@@ -157,9 +161,9 @@ async fn test_usage_one_per_turn() {
         },
         model: "stub-model".into(),
     };
-    let p = std::sync::Arc::new(FakeProvider::new(vec![tool_turn, final_turn]));
+    let p = Arc::new(FakeProvider::new(vec![tool_turn, final_turn]));
     let mut tools = ToolRegistry::new();
-    tools.register(std::sync::Arc::new(StubTool::new("echo")));
+    tools.register(Arc::new(StubTool::new("echo")));
     let runner = runner_with(p, tools);
     let session = SessionId::new();
     runner.run(session, "hi".into()).await.unwrap();
@@ -199,7 +203,7 @@ async fn test_recovery_retry_records_usage() {
         cache_write_input_tokens: 0,
         reasoning_tokens: 0,
     };
-    let p = std::sync::Arc::new(ScriptRawProvider::new(vec![
+    let p = Arc::new(ScriptRawProvider::new(vec![
         vec![
             LlmEvent::StepStart { index: 0 },
             LlmEvent::TextStart { id: "t1".into() },
@@ -285,16 +289,16 @@ async fn test_cancelled_records_no_usage() {
     // dropped on return, and record_turn (the only thing that writes timing)
     // never fires on the cancel path — consistent with "cancelled calls do
     // not record usage".
-    let p = std::sync::Arc::new(HangingProvider::new(vec![LlmEvent::StepStart { index: 0 }]));
-    let runner = std::sync::Arc::new(runner_with(p, ToolRegistry::new()));
+    let p = Arc::new(HangingProvider::new(vec![LlmEvent::StepStart { index: 0 }]));
+    let runner = Arc::new(runner_with(p, ToolRegistry::new()));
     let session = SessionId::new();
     let r = runner.clone();
     let task = tokio::spawn(async move { r.run(session, "hi".into()).await });
     for _ in 0..20 {
-        tokio::task::yield_now().await;
+        yield_now().await;
     }
     runner.abort();
-    let result = tokio::time::timeout(std::time::Duration::from_secs(2), task)
+    let result = timeout(Duration::from_secs(2), task)
         .await
         .expect("run resolves on abort within 2s")
         .expect("run task")
@@ -320,7 +324,7 @@ async fn test_cancelled_records_no_usage() {
 /// while /context (tiktoken) showed real numbers.
 #[tokio::test]
 async fn test_omitted_usage_estimate_fallback() {
-    let p = std::sync::Arc::new(ScriptRawProvider::new(vec![vec![
+    let p = Arc::new(ScriptRawProvider::new(vec![vec![
         LlmEvent::StepStart { index: 0 },
         LlmEvent::TextStart { id: "t1".into() },
         LlmEvent::TextDelta {
@@ -381,9 +385,9 @@ fn guarded_then_answer() -> Vec<CompletionResponse> {
 /// invisible to the tally, which then reports fewer calls than the run made.
 #[tokio::test]
 async fn test_approved_call_counts() {
-    let p = std::sync::Arc::new(FakeProvider::new(guarded_then_answer()));
+    let p = Arc::new(FakeProvider::new(guarded_then_answer()));
     let mut tools = ToolRegistry::new();
-    tools.register(std::sync::Arc::new(GuardedTool::new()));
+    tools.register(Arc::new(GuardedTool::new()));
     let runner = runner_with(p, tools);
     let session = SessionId::new();
     let paused = runner.run(session, "go".into()).await.expect("run ok");
@@ -410,9 +414,9 @@ async fn test_approved_call_counts() {
 /// than the model emitted, nor as a success.
 #[tokio::test]
 async fn test_rejected_call_counts_error() {
-    let p = std::sync::Arc::new(FakeProvider::new(guarded_then_answer()));
+    let p = Arc::new(FakeProvider::new(guarded_then_answer()));
     let mut tools = ToolRegistry::new();
-    tools.register(std::sync::Arc::new(GuardedTool::new()));
+    tools.register(Arc::new(GuardedTool::new()));
     let runner = runner_with(p, tools);
     let session = SessionId::new();
     let paused = runner.run(session, "go".into()).await.expect("run ok");

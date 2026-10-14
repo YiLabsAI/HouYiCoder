@@ -16,6 +16,8 @@ use crate::agent::tool::ToolRegistry;
 use crate::agent::{RunOutcome, Runner, VerifyFailure, VerifyGate};
 use crate::provider::test_support::FakeProvider;
 use futures::StreamExt;
+use futures::stream::iter;
+use futures::stream::poll_fn;
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_api::session::SessionLog;
 use houyicoder_async::{PFut, PStream};
@@ -28,9 +30,14 @@ use houyicoder_protocol::llm::{
     CompletionRequest, CompletionResponse, LlmEvent, ModelCapabilities, ProviderError, Usage,
 };
 use houyicoder_session::SessionStore;
+use std::env::temp_dir;
+use std::fs::create_dir_all;
+use std::fs::remove_dir_all;
 use std::path::PathBuf;
+use std::process::id;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Weak};
+use std::task::Poll;
 
 /// A provider that cancels the run on the stream's final poll, once its last
 /// chunk is out — the window a real Esc lands in when the user presses it
@@ -67,17 +74,17 @@ impl ModelProvider for AbortOnStreamEnd {
         ModelCapabilities::default()
     }
     fn stream(&self, _req: CompletionRequest) -> PStream<'_, Result<LlmEvent, ProviderError>> {
-        let prefix = futures::stream::iter(self.events.clone().into_iter().map(Ok));
+        let prefix = iter(self.events.clone().into_iter().map(Ok));
         let runner = self.runner.lock().expect("runner slot").clone();
         let mut fired = false;
-        let tail = futures::stream::poll_fn(move |_| {
+        let tail = poll_fn(move |_| {
             if !fired {
                 fired = true;
                 if let Some(runner) = runner.upgrade() {
                     runner.abort();
                 }
             }
-            std::task::Poll::Ready(None)
+            Poll::Ready(None)
         });
         Box::pin(prefix.chain(tail))
     }
@@ -257,8 +264,8 @@ impl ContextBackend for StopOnReplayLog {
 
 /// The extractor whose session read is the tail's own await.
 fn tail_extractor(provider: Arc<dyn ModelProvider>) -> (Arc<MemoryExtractor>, PathBuf) {
-    let root = std::env::temp_dir().join(format!("abort-tail-{}", std::process::id()));
-    std::fs::create_dir_all(&root).expect("mkdir");
+    let root = temp_dir().join(format!("abort-tail-{}", id()));
+    create_dir_all(&root).expect("mkdir");
     let store: Arc<dyn SessionLog> = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let extractor = Arc::new(MemoryExtractor::new(
         ExtractionLogs {
@@ -313,5 +320,5 @@ async fn test_abort_outranks_memory_tail() {
         matches!(outcome, RunOutcome::Interrupted(_)),
         "a stop during the answer's tail is not a finished turn: {outcome:?}"
     );
-    std::fs::remove_dir_all(&root).ok();
+    remove_dir_all(&root).ok();
 }

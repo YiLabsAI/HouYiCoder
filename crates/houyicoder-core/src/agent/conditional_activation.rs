@@ -10,6 +10,13 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 
 use houyicoder_api::skill::SkillRegistry;
+use ignore::gitignore::GitignoreBuilder;
+#[cfg(test)]
+use std::env::temp_dir;
+#[cfg(test)]
+use std::fs::create_dir_all;
+#[cfg(test)]
+use std::process::id;
 
 /// Activation seam the file-touch tools call and the listing step reads.
 /// Engine-local: every consumer lives in the engine, so lifting it to the
@@ -119,7 +126,7 @@ impl ConditionalSkillActivator for ConditionalActivation {
             // One matcher per skill, globs in order so negation holds.
             // add_line takes a glob; ::add opens a file path and fails
             // silently as Option<Error>.
-            let mut builder = ignore::gitignore::GitignoreBuilder::new(&self.cwd);
+            let mut builder = GitignoreBuilder::new(&self.cwd);
             let mut bad = false;
             for g in globs {
                 if let Err(e) = builder.add_line(None, g) {
@@ -264,8 +271,8 @@ mod tests {
 
     /// Temp dir as the workspace cwd + matcher base.
     fn tmp_cwd() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("houyi-ca-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).ok();
+        let dir = temp_dir().join(format!("houyi-ca-{}", id()));
+        create_dir_all(&dir).ok();
         dir
     }
 

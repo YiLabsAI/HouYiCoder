@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use houyicoder_context::{SessionEvent, SessionId};
 use houyicoder_protocol::llm::{CompletionResponse, OutputItem, Usage};
 
+use crate::agent::Runner;
 use crate::agent::ToolRegistry;
 use crate::agent::hook::{
     Hook, HookContext, HookError, HookEvent, HookRegistry, HookSource, HookVerdict,
@@ -95,7 +96,7 @@ fn call_then_answer() -> Vec<CompletionResponse> {
     ]
 }
 
-fn runner_with_rule(hook: Arc<dyn Hook>) -> crate::agent::Runner {
+fn runner_with_rule(hook: Arc<dyn Hook>) -> Runner {
     let mut tools = ToolRegistry::new();
     tools.register(Arc::new(GuardedTool::new()));
     let reg = HookRegistry::new();
@@ -140,11 +141,7 @@ async fn test_approved_call_fires_hooks() {
     );
 }
 
-async fn result_for(
-    runner: &crate::agent::Runner,
-    session: SessionId,
-    want: &str,
-) -> Option<serde_json::Value> {
+async fn result_for(runner: &Runner, session: SessionId, want: &str) -> Option<serde_json::Value> {
     let events = runner.store().replay(session).await.expect("replay");
     events.iter().find_map(|e| match &e.event {
         SessionEvent::ToolResult {
