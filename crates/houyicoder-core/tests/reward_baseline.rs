@@ -2,7 +2,7 @@
 
 #![cfg(test)]
 
-use houyicoder_context::{SessionEvent, SessionId, SessionLogEntry};
+use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
 
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct RoundMetrics {
@@ -48,68 +48,62 @@ fn passes_self_evolution(off: &RoundMetrics, on: &RoundMetrics) -> bool {
     redundant_down && retries_down && recall_hit && net_not_up
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use houyicoder_context::{EventId, SessionLogEntry};
-
-    fn mk(kind: SessionEvent) -> SessionLogEntry {
-        SessionLogEntry {
-            id: EventId::new(),
-            session: SessionId::new(),
-            ts: 0,
-            prev_hash: None,
-            event: kind,
-        }
+fn mk(kind: SessionEvent) -> SessionLogEntry {
+    SessionLogEntry {
+        id: EventId::new(),
+        session: SessionId::new(),
+        ts: 0,
+        prev_hash: None,
+        event: kind,
     }
-
-    #[test]
-    fn test_dry_run_structure() {
-        let events = vec![
-            mk(SessionEvent::ToolResult {
-                call_id: "c1".into(),
-                output: serde_json::json!({"error": "boom"}),
-                duration_ms: 0,
-            }),
-            mk(SessionEvent::TurnUsage {
-                turn: 0,
-                call_in_turn: 1,
-                input_tokens: 100,
-                output_tokens: 50,
-                cache_read_input_tokens: 80,
-                cache_write_input_tokens: 0,
-                reasoning_tokens: 0,
-                model: "test".into(),
-                recovery: true,
-                effort: None,
-            }),
-            mk(SessionEvent::MemoryRecall {
-                text: "lesson".into(),
-                keys: vec!["feedback_dedup_grep".into()],
-                bytes: 6,
-            }),
-        ];
-        let m = collect_from_events(&events);
-        assert_eq!(m.tool_failures, 1);
-        assert_eq!(m.recovery_retries, 1);
-        assert_eq!(m.recall_keys, vec!["feedback_dedup_grep".to_string()]);
-        let off = RoundMetrics {
-            tool_failures: 5,
-            recovery_retries: 5,
-            redundant_clusters: 5,
-            ..Default::default()
-        };
-        let on = RoundMetrics {
-            tool_failures: 1,
-            recovery_retries: 1,
-            redundant_clusters: 1,
-            recall_keys: vec!["feedback_dedup_grep".into()],
-            ..Default::default()
-        };
-        assert!(passes_self_evolution(&off, &on));
-    }
-
-    #[test]
-    #[ignore = "real dogfood run, needs real provider + snapshot API"]
-    fn test_benchmark_eighteen_rounds() {}
 }
+
+#[test]
+fn test_dry_run_structure() {
+    let events = vec![
+        mk(SessionEvent::ToolResult {
+            call_id: "c1".into(),
+            output: serde_json::json!({"error": "boom"}),
+            duration_ms: 0,
+        }),
+        mk(SessionEvent::TurnUsage {
+            turn: 0,
+            call_in_turn: 1,
+            input_tokens: 100,
+            output_tokens: 50,
+            cache_read_input_tokens: 80,
+            cache_write_input_tokens: 0,
+            reasoning_tokens: 0,
+            model: "test".into(),
+            recovery: true,
+            effort: None,
+        }),
+        mk(SessionEvent::MemoryRecall {
+            text: "lesson".into(),
+            keys: vec!["feedback_dedup_grep".into()],
+            bytes: 6,
+        }),
+    ];
+    let m = collect_from_events(&events);
+    assert_eq!(m.tool_failures, 1);
+    assert_eq!(m.recovery_retries, 1);
+    assert_eq!(m.recall_keys, vec!["feedback_dedup_grep".to_string()]);
+    let off = RoundMetrics {
+        tool_failures: 5,
+        recovery_retries: 5,
+        redundant_clusters: 5,
+        ..Default::default()
+    };
+    let on = RoundMetrics {
+        tool_failures: 1,
+        recovery_retries: 1,
+        redundant_clusters: 1,
+        recall_keys: vec!["feedback_dedup_grep".into()],
+        ..Default::default()
+    };
+    assert!(passes_self_evolution(&off, &on));
+}
+
+#[test]
+#[ignore = "real dogfood run, needs real provider + snapshot API"]
+fn test_benchmark_eighteen_rounds() {}

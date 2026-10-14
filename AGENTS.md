@@ -356,7 +356,9 @@ Choosing the delivery destination is a design decision, not a matter of taste:
 | Live | Real providers/network — opt-in, NEVER in default gates. | env-gated |
 
 ### Layout policy
-- Tests live under each crate's tests/ or inline #[cfg(test)] modules.
+- Tests live under each crate's tests/ directory or beside their owner in
+  the directory form below. No inline test module and no flat peer remains:
+  both ratchets are at zero, so a new one fails the gate.
 - One source module → one peer test file, in the directory form:
   foo.rs + foo/tests.rs, declared as `#[cfg(test)] mod tests;`. No
   attribute is needed because a mod declared in foo.rs resolves to
