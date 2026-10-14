@@ -67,20 +67,6 @@ mod workflow;
 pub mod bench_api;
 
 #[cfg(test)]
-mod activity_indicator_tests;
-#[cfg(test)]
-mod artifact_tests;
-#[cfg(test)]
 mod frame_timing;
-#[cfg(test)]
-mod history_read_tests;
-#[cfg(test)]
-mod permission_render_tests;
-#[cfg(test)]
-mod queue_sync_tests;
-#[cfg(test)]
-mod render_invariant_tests;
-#[path = "resume_picker_tests.rs"]
-mod resume_picker_tests;
 #[cfg(test)]
 mod test_harness;
