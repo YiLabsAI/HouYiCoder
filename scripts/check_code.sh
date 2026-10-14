@@ -114,6 +114,7 @@ SCRIPT_TESTS=(
   test_run_tests_timeout.py
   test_harness_routing.py
   test_rust_imports.py
+  test_cross_target.py
   test_pre_push_chain.py
 )
 for script_test in "${SCRIPT_TESTS[@]}"; do
