@@ -1,10 +1,15 @@
 use houyicoder_protocol::envelope::RequestId;
+use houyicoder_protocol::frontend::run::ContentBlock;
+use houyicoder_protocol::frontend::session_update::{ContentChunk, SessionUpdate};
 use ratatui::layout::Rect;
+use unicode_width::UnicodeWidthStr;
 
+use crate::agent_message::{FleetEntry, ServerResponse, SessionMessage};
 use crate::brief::tool_call_brief;
-use crate::records::{ToolOutcome, TranscriptLine};
+use crate::records::{TeammateView, ToolOutcome, TranscriptLine};
 use crate::rows::slots_key::SlotsKey;
 use crate::test_harness::{attach_connection, render_text, working_app};
+use crate::transcript::TranscriptFrame;
 
 use super::super::tail_rows::build_tail_rows;
 
@@ -36,7 +41,6 @@ fn bash_result() -> TranscriptLine {
 
 #[test]
 fn test_hint_single_line() {
-    use unicode_width::UnicodeWidthStr;
     let mut app = working_app();
     let command = "ego-browser nodejs <<'EOF'\nconst task = 7\nEOF";
     app.sessions.current.transcript = vec![
@@ -158,11 +162,6 @@ fn test_exit_teammate_restores_parent() {
 /// so the cache rebuilds with the child rows.
 #[test]
 fn test_teammate_fill_renders_child() {
-    use crate::agent_message::{ServerResponse, SessionMessage};
-    use crate::transcript::TranscriptFrame;
-    use houyicoder_protocol::frontend::run::ContentBlock;
-    use houyicoder_protocol::frontend::session_update::ContentChunk;
-    use houyicoder_protocol::frontend::session_update::SessionUpdate;
     let mut app = working_app();
     app.sessions
         .current
@@ -204,8 +203,6 @@ fn test_teammate_fill_renders_child() {
 /// turn-boundary refetch lands. Regression for the steering-echo bump site.
 #[test]
 fn test_steer_echo_renders() {
-    use crate::agent_message::FleetEntry;
-    use crate::records::TeammateView;
     let mut app = working_app();
     attach_connection(&mut app);
     app.sessions
@@ -289,7 +286,6 @@ fn test_spinner_keeps_blank_above() {
 /// live_assistant_text the result is zero rows.
 #[test]
 fn test_view_hides_tail() {
-    use crate::records::TeammateView;
     let mut app = working_app();
     app.start_run_for_test(0);
     {

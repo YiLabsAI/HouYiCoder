@@ -1,10 +1,13 @@
 //! Trust-screen state and key-routing tests.
 
 use crate::agent_message::{ServerRequest, SessionMessage};
+use crate::app::handle_key;
 use crate::composition;
 use crate::pending_prompt::PendingPrompt;
 use crate::state::{Screen, TrustChoice};
-use crate::test_harness::{TransportEvent, render_text};
+use crate::test_harness::{
+    TransportEvent, attach_connection, connected_app_with_events, render_text,
+};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::frontend::trust::TrustPrompt;
@@ -43,14 +46,14 @@ fn test_trust_ask_resets_choice() {
 #[test]
 fn test_trust_down_selects_exit() {
     let mut app = composition::app();
-    crate::test_harness::attach_connection(&mut app);
+    attach_connection(&mut app);
     app.sessions.current.prompt = Some(PendingPrompt::trust_ask(
         RequestId(4),
         trust_prompt("/proj"),
     ));
-    crate::app::handle_key(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    handle_key(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     assert_eq!(app.trust_choice(), TrustChoice::Exit);
-    crate::app::handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     assert!(app.pending_trust().is_none());
     assert!(app.ui.quit);
 }
@@ -58,13 +61,13 @@ fn test_trust_down_selects_exit() {
 #[test]
 fn test_login_enter_accepts_trust() {
     let mut app = composition::app();
-    crate::test_harness::attach_connection(&mut app);
+    attach_connection(&mut app);
     app.ui.navigation.screen = Screen::Login;
     app.sessions.current.prompt = Some(PendingPrompt::trust_ask(
         RequestId(5),
         trust_prompt("/proj"),
     ));
-    crate::app::handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     assert!(app.pending_trust().is_none());
     assert!(app.sessions.current.prompt.is_none());
 }
@@ -72,7 +75,7 @@ fn test_login_enter_accepts_trust() {
 #[test]
 fn test_resolve_trust_accept_clears() {
     let mut app = composition::app();
-    crate::test_harness::attach_connection(&mut app);
+    attach_connection(&mut app);
     app.sessions.current.prompt = Some(PendingPrompt::trust_ask(
         RequestId(7),
         trust_prompt("/proj"),
@@ -90,7 +93,7 @@ fn test_resolve_trust_accept_clears() {
 #[test]
 fn test_resolve_trust_decline_clears() {
     let mut app = composition::app();
-    crate::test_harness::attach_connection(&mut app);
+    attach_connection(&mut app);
     app.sessions.current.prompt = Some(PendingPrompt::trust_ask(
         RequestId(9),
         trust_prompt("/proj"),
@@ -137,7 +140,7 @@ fn test_trust_up_selects_accept() {
         trust_prompt("/proj"),
     ));
     app.set_trust_choice(TrustChoice::Exit);
-    crate::app::handle_key(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+    handle_key(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
     assert_eq!(app.trust_choice(), TrustChoice::Accept);
 }
 
@@ -149,7 +152,7 @@ fn test_trust_up_selects_accept() {
 /// landed.
 #[test]
 fn test_trust_loss_invalidates() {
-    let (mut app, events) = crate::test_harness::connected_app_with_events();
+    let (mut app, events) = connected_app_with_events();
     app.sessions.current.prompt = Some(PendingPrompt::trust_ask(
         RequestId(11),
         trust_prompt("/secret/proj"),
@@ -171,7 +174,7 @@ fn test_trust_loss_invalidates() {
         }
     }
     assert!(!shipped_verdict, "loss ships no fake trust verdict");
-    let rendered = crate::test_harness::render_text(&app, 100, 30);
+    let rendered = render_text(&app, 100, 30);
     assert!(
         rendered.contains("/secret/proj"),
         "transcript surfaces the project path"
@@ -187,13 +190,13 @@ fn test_trust_loss_invalidates() {
 /// quits, because handle_key routes past the dead card to the base surface.
 #[test]
 fn test_loss_unblocks_exit() {
-    let (mut app, _events) = crate::test_harness::connected_app_with_events();
+    let (mut app, _events) = connected_app_with_events();
     app.sessions.current.prompt = Some(PendingPrompt::trust_ask(
         RequestId(12),
         trust_prompt("/proj"),
     ));
     // While the card is up, Ctrl+D is swallowed by the trust handler.
-    crate::app::handle_key(
+    handle_key(
         &mut app,
         KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL),
     );
@@ -205,7 +208,7 @@ fn test_loss_unblocks_exit() {
     app.apply_connection_loss("driver exited".into(), Vec::new());
     assert!(app.pending_trust().is_none());
     // Now the exit sequence reaches the base surface.
-    crate::app::handle_key(
+    handle_key(
         &mut app,
         KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL),
     );
@@ -217,10 +220,10 @@ fn test_loss_unblocks_exit() {
         "first Ctrl+D raises exit confirmation after loss"
     );
     assert!(
-        crate::test_harness::render_text(&app, 100, 30).contains("Press Ctrl+D again to exit"),
+        render_text(&app, 100, 30).contains("Press Ctrl+D again to exit"),
         "exit confirmation is visible"
     );
-    crate::app::handle_key(
+    handle_key(
         &mut app,
         KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL),
     );

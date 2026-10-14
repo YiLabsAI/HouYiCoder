@@ -2,6 +2,7 @@
 //! plus the buffer-dump invariant suite and the pane/drag selection suites.
 
 use crate::composition;
+use crate::state::Screen;
 use crate::test_harness::render_text;
 
 use super::badge_color;
@@ -26,7 +27,7 @@ fn test_badge_color_unknown() {
 #[test]
 fn test_dump_working_after_login() {
     let mut app = composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     let out = render_text(&app, 80, 24);
     // sanity: status bar tiny mark present
     assert!(
@@ -45,7 +46,7 @@ fn test_dump_working_after_login() {
 #[test]
 fn test_dump_palette_render() {
     let mut app = composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app.open_palette();
     let out = render_text(&app, 80, 24);
     println!("--- palette AFTER (80x24) ---\n{out}\n--- end ---");
@@ -103,7 +104,7 @@ fn test_dump_palette_render() {
 #[test]
 fn test_status_bar_is_contextual() {
     let mut app = composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     let out = render_text(&app, 80, 24);
     println!("--- status bar (80x24) ---\n{out}\n--- end ---");
     // The status bar sits above the bottom-pinned input box; find it by its
