@@ -4,6 +4,8 @@
 #![cfg(test)]
 
 use super::*;
+use serde_json::Map;
+use serde_json::Value;
 
 fn event(session: SessionId, id: EventId, kind: SessionEvent) -> SessionLogEntry {
     SessionLogEntry {
@@ -122,24 +124,24 @@ fn test_notification_old_log_deserializes() {
     );
     let json = serde_json::to_string(&e).expect("serialize");
     // Strip the summary field so the JSON looks like a pre-summary log line.
-    let value = serde_json::from_str::<serde_json::Value>(&json).expect("parse");
+    let value = serde_json::from_str::<Value>(&json).expect("parse");
     let kind = value
         .get("event")
-        .and_then(serde_json::Value::as_object)
+        .and_then(Value::as_object)
         .expect("event object");
     let mut kind_obj = kind.clone();
     kind_obj.remove("summary");
-    let mut wrapped = serde_json::Map::new();
-    if let serde_json::Value::Object(top) = value {
+    let mut wrapped = Map::new();
+    if let Value::Object(top) = value {
         for (k, v) in top {
             if k == "event" {
-                wrapped.insert("event".into(), serde_json::Value::Object(kind_obj.clone()));
+                wrapped.insert("event".into(), Value::Object(kind_obj.clone()));
             } else {
                 wrapped.insert(k, v);
             }
         }
     }
-    let old = serde_json::to_string(&serde_json::Value::Object(wrapped)).expect("re-serialize");
+    let old = serde_json::to_string(&Value::Object(wrapped)).expect("re-serialize");
     let back: SessionLogEntry = serde_json::from_str(&old).expect("old log deserializes");
     match back.event {
         SessionEvent::NotificationInjected {
@@ -199,7 +201,7 @@ fn test_session_id_rejects_garbage() {
 #[expect(clippy::too_many_lines, reason = "long by design, kept whole")]
 fn test_event_variants_round_trip() {
     // Every SessionEvent variant must survive a serde cycle: the
-    // internally-tagged enum plus nested serde_json::Value and CheckpointId.
+    // internally-tagged enum plus nested Value and CheckpointId.
     let s = SessionId::new();
     let call_id = "toolu_01call";
     let cp = CheckpointId::new();
@@ -351,8 +353,8 @@ fn test_event_variants_round_trip() {
         sl_json.contains("\"content_hash\""),
         "hash on the wire: {sl_json}"
     );
-    let mut v: serde_json::Value = serde_json::from_str(&sl_json).unwrap();
-    if let Some(serde_json::Value::Object(kind_map)) = v.get_mut("event") {
+    let mut v: Value = serde_json::from_str(&sl_json).unwrap();
+    if let Some(Value::Object(kind_map)) = v.get_mut("event") {
         kind_map.remove("content_hash");
     }
     let legacy: SessionLogEntry = serde_json::from_value(v).expect("legacy deserialize");
@@ -374,8 +376,8 @@ fn test_event_variants_round_trip() {
         json.contains("\"RunCompleted\""),
         "named in the stored form: {json}"
     );
-    let mut v: serde_json::Value = serde_json::from_str(&json).unwrap();
-    if let Some(serde_json::Value::Object(fields)) = v.get_mut("event") {
+    let mut v: Value = serde_json::from_str(&json).unwrap();
+    if let Some(Value::Object(fields)) = v.get_mut("event") {
         fields.remove("ms");
     }
     let older: SessionLogEntry = serde_json::from_value(v).expect("legacy deserialize");

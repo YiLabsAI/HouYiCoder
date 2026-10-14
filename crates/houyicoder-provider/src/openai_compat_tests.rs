@@ -1,6 +1,9 @@
 use super::*;
 use crate::http_error::{classify_status, classify_with_body, parse_retry_after};
+use houyicoder_protocol::cache_policy::{BreakpointKind, CacheBreakpoint, CacheHint, CacheTtl};
+use houyicoder_protocol::llm::Usage;
 use houyicoder_protocol::llm::{AssistantToolCall, EffortLevel, ModelSettings, SpeedMode, ToolDef};
+use reqwest::header::HeaderMap;
 
 fn req(input: Vec<InputItem>, tools: Vec<ToolDef>) -> CompletionRequest {
     CompletionRequest {
@@ -105,8 +108,6 @@ fn test_build_body_includes_tools() {
 /// requests. Without a breakpoint (the None policy), no key is sent.
 #[test]
 fn test_prompt_cache_key_lowered() {
-    use houyicoder_protocol::cache_policy::{BreakpointKind, CacheBreakpoint, CacheHint, CacheTtl};
-
     let mut r = req(
         vec![InputItem::User {
             content: "hi".into(),
@@ -167,8 +168,6 @@ fn test_prompt_cache_key_lowered() {
 /// thrash the prefix cache on every reasoning-bearing turn.
 #[test]
 fn test_cache_key_excludes_history() {
-    use houyicoder_protocol::cache_policy::{BreakpointKind, CacheBreakpoint, CacheHint, CacheTtl};
-
     let tools = vec![ToolDef {
         name: "edit".into(),
         description: "edit a file".into(),
@@ -309,7 +308,7 @@ fn test_classify_status_retryable_split() {
 
 #[test]
 fn test_parse_retry_after_integer() {
-    let mut h = reqwest::header::HeaderMap::new();
+    let mut h = HeaderMap::new();
     assert!(parse_retry_after(&h).is_none());
     h.insert("retry-after", "30".parse().unwrap());
     assert_eq!(parse_retry_after(&h), Some(30_000));
@@ -499,7 +498,7 @@ fn test_parse_usage_defaults() {
 #[test]
 fn test_parse_usage_none() {
     let usage = parse_usage(None);
-    assert_eq!(usage, houyicoder_protocol::llm::Usage::default());
+    assert_eq!(usage, Usage::default());
 }
 
 /// An abnormal close (the byte stream ended without an explicit

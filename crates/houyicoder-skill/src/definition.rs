@@ -3,6 +3,7 @@
 //! it, custom slash commands will be another. loaded_from distinguishes
 //! the source.
 
+use std::fs::read_to_string;
 use std::path::PathBuf;
 
 /// The directory or transport family that supplied a skill.
@@ -138,7 +139,7 @@ impl SkillDefinition {
     /// find do not re-read per call. Rough estimate (bytes / 4); a real
     /// tokenizer would replace the divisor without changing the contract.
     pub fn body_token_estimate(&self) -> u32 {
-        match std::fs::read_to_string(&self.body_path) {
+        match read_to_string(&self.body_path) {
             Ok(content) => (content.len() / 4) as u32,
             Err(_) => 0,
         }

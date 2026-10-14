@@ -24,19 +24,29 @@
 
 use std::time::Duration;
 
+use crate::served_models::write_cache;
 use crate::{
     http_error::{classify_with_body, map_reqwest_err, parse_retry_after},
     stream_decoder::{ChunkAction, StreamDecoder},
     usage::parse_usage,
 };
+use futures::StreamExt;
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_async::PFut;
 use houyicoder_protocol::cache_policy::BreakpointKind;
+use houyicoder_protocol::llm::Usage;
 use houyicoder_protocol::llm::{
     CompletionRequest, CompletionResponse, EffortLevel, InputItem, LlmEvent, ModelCapabilities,
     OutputItem, ProviderError, SpeedMode,
 };
+use reqwest::Client;
 use serde_json::{Value, json};
+use std::collections::HashSet;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+use std::path::PathBuf;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 
 /// An OpenAI-compatible chat/completions provider. Configure with base_url
 /// (e.g. https://api.openai.com/v1) and api_key; the model is per-request.
@@ -45,13 +55,13 @@ use serde_json::{Value, json};
 pub struct OpenAiCompatibleProvider {
     base_url: String,
     api_key: String,
-    http: reqwest::Client,
+    http: Client,
 }
 
 impl OpenAiCompatibleProvider {
     /// Construct a provider over an OpenAI-compatible endpoint.
     pub fn new(base_url: String, api_key: String) -> Self {
-        let http = reqwest::Client::builder()
+        let http = Client::builder()
             .timeout(Duration::from_secs(180))
             .connect_timeout(Duration::from_secs(10))
             .build()
@@ -72,7 +82,7 @@ impl OpenAiCompatibleProvider {
     /// when the parsed list equals the cached list.
     pub fn refresh_served_models_to(
         &self,
-        cache_path: std::path::PathBuf,
+        cache_path: PathBuf,
     ) -> PFut<'_, Result<(), ProviderError>> {
         let base_url = self.base_url.clone();
         let api_key = self.api_key.clone();
@@ -103,7 +113,7 @@ impl OpenAiCompatibleProvider {
             if existing == ids {
                 return Ok(());
             }
-            crate::served_models::write_cache(&cache_path, &ids);
+            write_cache(&cache_path, &ids);
             Ok(())
         })
     }
@@ -144,10 +154,7 @@ impl ModelProvider for OpenAiCompatibleProvider {
     fn stream(
         &self,
         req: CompletionRequest,
-    ) -> houyicoder_async::PStream<'_, Result<houyicoder_protocol::llm::LlmEvent, ProviderError>>
-    {
-        use futures::StreamExt;
-
+    ) -> houyicoder_async::PStream<'_, Result<LlmEvent, ProviderError>> {
         let base_url = self.base_url.clone();
         let api_key = self.api_key.clone();
         let http = self.http.clone();
@@ -272,7 +279,7 @@ pub(crate) fn abnormal_close_events(
     reasoning_started: bool,
     text_started: bool,
     tool_calls: Vec<ToolCallAccum>,
-    final_usage: Option<houyicoder_protocol::llm::Usage>,
+    final_usage: Option<Usage>,
 ) -> Vec<LlmEvent> {
     let mut events = Vec::new();
     if reasoning_started {
@@ -327,14 +334,11 @@ pub(crate) fn accumulate_tool_call(acc: &mut Vec<ToolCallAccum>, tc: &Value) {
 /// route a decision or result to the wrong call. Minted ids use a process-wide
 /// counter and reserve the houyi_tc_ prefix.
 fn unique_id_gen() -> impl FnMut(&str) -> String {
-    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let mut seen: HashSet<String> = HashSet::new();
     move |raw: &str| {
         if raw.is_empty() || seen.contains(raw) {
-            let id = format!(
-                "houyi_tc_{}",
-                COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-            );
+            let id = format!("houyi_tc_{}", COUNTER.fetch_add(1, Ordering::Relaxed));
             seen.insert(id.clone());
             id
         } else {
@@ -566,8 +570,6 @@ fn lower_prompt_cache_key(req: &CompletionRequest) -> Option<String> {
     if !has_prefix_breakpoint {
         return None;
     }
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
     let mut hasher = DefaultHasher::new();
     req.instructions.hash(&mut hasher);
     req.tools.iter().for_each(|t| t.name.hash(&mut hasher));

@@ -12,6 +12,8 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::{SessionDescriptor, SessionEvent, SessionId, SessionLogEntry, SessionProvenance};
+use fs::File;
+use std::cmp::Reverse;
 
 /// The event log a session's directory holds.
 pub const LOG_FILE: &str = "log.jsonl";
@@ -238,7 +240,7 @@ pub fn scan_sessions(root: &Path) -> Vec<SessionEntry> {
 /// may ask for one. A limit of zero asks for none of them.
 pub fn recent_user_sessions(root: &Path, limit: usize) -> Vec<SessionEntry> {
     let mut candidates = candidates(root);
-    candidates.sort_by_key(|candidate| std::cmp::Reverse(candidate.last_active));
+    candidates.sort_by_key(|candidate| Reverse(candidate.last_active));
     let mut out = Vec::new();
     for candidate in candidates {
         if out.len() >= limit {
@@ -265,7 +267,7 @@ fn read_descriptor(dir: &Path) -> Option<SessionDescriptor> {
 /// head bound means no delegation is recorded: the class then rests on the
 /// descriptor alone.
 fn read_parent_link(log: &Path) -> Option<ParentLink> {
-    let file = fs::File::open(log).ok()?;
+    let file = File::open(log).ok()?;
     let mut head = String::new();
     BufReader::new(file)
         .take(HEAD_BYTES)

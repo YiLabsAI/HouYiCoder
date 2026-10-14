@@ -8,6 +8,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::hook_types::{HookErrorKind, HookEventKind, HookVerdictKind};
+use crate::ids::AgentId;
 use crate::ids::{CheckpointId, EventId, PrevHash, SessionId};
 
 /// One record in the append-only session log. The wire type stored by a
@@ -174,7 +175,7 @@ pub enum SessionEvent {
         skill_name: String,
         content: String,
         #[serde(default)]
-        agent_id: Option<crate::ids::AgentId>,
+        agent_id: Option<AgentId>,
         #[serde(default)]
         untrusted: bool,
     },

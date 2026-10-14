@@ -7,6 +7,7 @@ use crate::openai_compat::{
     ToolCallAccum, abnormal_close_events, accumulate_tool_call, finalize_tool_calls,
 };
 use crate::usage::parse_usage;
+use std::mem::take;
 
 /// Progress outcome after consuming one parsed JSON SSE chunk.
 #[derive(Debug, PartialEq, Eq)]
@@ -57,7 +58,7 @@ impl StreamDecoder {
 
         if let Some(reason) = choice.get("finish_reason").and_then(Value::as_str) {
             self.close_in_flight(out);
-            for ev in finalize_tool_calls(std::mem::take(&mut self.tool_calls)) {
+            for ev in finalize_tool_calls(take(&mut self.tool_calls)) {
                 out.push(ev);
             }
             self.finish_reason = Some(reason.to_string());

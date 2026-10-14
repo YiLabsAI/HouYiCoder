@@ -129,7 +129,7 @@ _FILE_QUALIFIER_BASELINE: frozenset[str] = frozenset({
 # lower this number in the same commit that converts a pair.
 _FLAT_TEST_PEER_BASELINE = 98
 _FLAT_TEST_PEER_PATH_RE = re.compile(r'#\[path\s*=\s*"[^"]*_tests\.rs"\]')
-_INLINE_TEST_MOD_BASELINE = 180
+_INLINE_TEST_MOD_BASELINE = 168
 _INLINE_TEST_MOD_RE = re.compile(r"(?m)^#\[cfg\(test\)\]\s*\nmod\s+[a-z_]+\s*\{")
 
 

@@ -5,6 +5,9 @@
 use houyicoder_async::PFut;
 
 use crate::{BlockHash, CheckpointId, CheckpointManifest, EventId, SessionId, SessionLogEntry};
+use std::error::Error;
+use std::fmt::{Display, Formatter};
+use std::path::Path;
 
 /// A lenient whole-log read: the parsed events plus a count of lines
 /// skipped (corrupt JSON). The search snapshot uses this so a single bad
@@ -71,8 +74,8 @@ pub enum ContextError {
     Unsupported,
 }
 
-impl std::fmt::Display for ContextError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for ContextError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Io => write!(f, "context backend io error"),
             Self::NotFound => write!(f, "not found"),
@@ -82,7 +85,7 @@ impl std::fmt::Display for ContextError {
     }
 }
 
-impl std::error::Error for ContextError {}
+impl Error for ContextError {}
 
 /// The pluggable, deny-by-default storage interface. Append-only event log
 /// plus checkpoint (compaction plan) storage plus an optional CAS for large
@@ -221,7 +224,7 @@ pub trait ContextBackend: Send + Sync {
     /// disk-backed build exposes its own root, an in-memory build returns
     /// None and carries no cross-session history at all - it must not read
     /// the real home. Default None (no on-disk log).
-    fn session_log_root(&self) -> Option<&std::path::Path> {
+    fn session_log_root(&self) -> Option<&Path> {
         None
     }
 }

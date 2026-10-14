@@ -1,6 +1,8 @@
 //! Stable identifier and hash newtypes used by context records.
 
+use serde::de::Error as SerdeError;
 use serde::{Deserialize, Serialize};
+use std::fmt::{Display, Formatter};
 use ulid::Ulid;
 use uuid::Uuid;
 
@@ -29,8 +31,8 @@ impl Default for SessionId {
     }
 }
 
-impl std::fmt::Display for SessionId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for SessionId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
     }
 }
@@ -65,7 +67,7 @@ impl<'de> Deserialize<'de> for SessionId {
     {
         let s = String::deserialize(deserializer)?;
         SessionId::from_display_string(&s).ok_or_else(|| {
-            serde::de::Error::custom(format!("session id is neither a UUID nor a ULID: {s}"))
+            SerdeError::custom(format!("session id is neither a UUID nor a ULID: {s}"))
         })
     }
 }
@@ -88,8 +90,8 @@ impl Default for EventId {
     }
 }
 
-impl std::fmt::Display for EventId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for EventId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
     }
 }
@@ -137,32 +139,9 @@ impl Default for MemoryChangeId {
     }
 }
 
-impl std::fmt::Display for MemoryChangeId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for MemoryChangeId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
-    }
-}
-
-#[cfg(test)]
-mod memory_change_id_tests {
-    use super::*;
-
-    #[test]
-    fn test_memory_id_round_trips() {
-        let id = MemoryChangeId::default();
-        assert_ne!(id, MemoryChangeId::new());
-        let rendered = id.to_string();
-        assert_eq!(MemoryChangeId::from_display_string(&rendered), Some(id));
-        let json = serde_json::to_string(&id).expect("serialize memory change id");
-        assert_eq!(
-            serde_json::from_str::<MemoryChangeId>(&json).expect("deserialize memory change id"),
-            id
-        );
-    }
-
-    #[test]
-    fn test_memory_id_rejects_invalid() {
-        assert!(MemoryChangeId::from_display_string("not-an-id").is_none());
     }
 }
 
@@ -184,8 +163,8 @@ impl Default for CheckpointId {
     }
 }
 
-impl std::fmt::Display for CheckpointId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for CheckpointId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
     }
 }
@@ -217,3 +196,6 @@ pub struct PrevHash(pub [u8; 32]);
 /// spawn-port AgentIdentity type, which stays a distinct type (not merged).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct AgentId(pub String);
+
+#[cfg(test)]
+mod tests;

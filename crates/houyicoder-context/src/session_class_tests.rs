@@ -4,13 +4,17 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::*;
 use crate::{EventId, NameSource};
+use fs::File;
+use std::cmp::Reverse;
+use std::env::temp_dir;
+use std::process::id;
 
 /// Stamp a log's mtime to N seconds ago. Last-active reads the log mtime, so
 /// a store built inside one second leaves every session equally recent and no
 /// assertion can tell one order from another.
 fn age(path: &Path, secs_ago: u64) {
     let t = SystemTime::now() - Duration::from_secs(secs_ago);
-    fs::File::options()
+    File::options()
         .write(true)
         .open(path)
         .expect("open to age")
@@ -23,12 +27,7 @@ fn temp_root(tag: &str) -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let root = std::env::temp_dir().join(format!(
-        "houyi-session-class-{}-{}-{}",
-        tag,
-        std::process::id(),
-        nanos
-    ));
+    let root = temp_dir().join(format!("houyi-session-class-{}-{}-{}", tag, id(), nanos));
     fs::create_dir_all(&root).unwrap();
     root
 }
@@ -360,7 +359,7 @@ fn test_recent_matches_scan_order() {
         .into_iter()
         .filter(SessionEntry::is_user_session)
         .collect();
-    full.sort_by_key(|entry| std::cmp::Reverse(entry.last_active));
+    full.sort_by_key(|entry| Reverse(entry.last_active));
 
     let bounded = recent_user_sessions(&root, full.len());
     assert_eq!(

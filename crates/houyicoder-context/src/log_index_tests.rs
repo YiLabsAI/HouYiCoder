@@ -5,14 +5,18 @@ use super::{
     SAMPLE_INTERVAL_BYTES, entry_at, entry_count, readable_len,
 };
 use crate::ids::EventId;
+use crate::ids::SessionId;
+use std::env::temp_dir;
+use std::fs::OpenOptions;
+use std::fs::create_dir_all;
+use std::fs::remove_dir_all;
+use std::fs::remove_file;
+use std::fs::write;
 use std::path::PathBuf;
 
 fn temp_path(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "houyicoder_log_index_{tag}_{}",
-        crate::ids::SessionId::new()
-    ));
-    std::fs::create_dir_all(&dir).expect("create the temp dir");
+    let dir = temp_dir().join(format!("houyicoder_log_index_{tag}_{}", SessionId::new()));
+    create_dir_all(&dir).expect("create the temp dir");
     dir.join("log.index")
 }
 
@@ -123,9 +127,9 @@ fn test_zero_interval_refused() {
     assert_eq!(LogIndexHeader::decode(&bytes), None);
 
     let path = temp_path("zero_interval");
-    std::fs::write(&path, &bytes).expect("write the index");
+    write(&path, &bytes).expect("write the index");
     assert_eq!(LogIndex::load(&path, 10, None), None);
-    std::fs::remove_file(&path).expect("remove the index");
+    remove_file(&path).expect("remove the index");
 }
 
 /// The entry count comes out of the file length, and a tail entry only
@@ -181,13 +185,13 @@ fn test_stale_index_refused() {
         },
         &[entry(0)],
     );
-    std::fs::write(&path, &bytes).expect("write the index");
+    write(&path, &bytes).expect("write the index");
 
     assert!(LogIndex::load(&path, 4096, Some(first)).is_some());
     assert_eq!(LogIndex::load(&path, 4095, Some(first)), None);
     assert_eq!(LogIndex::load(&path, 4096, Some(EventId::new())), None);
     assert_eq!(LogIndex::load(&path, 4096, None), None);
-    std::fs::remove_file(&path).expect("remove the index");
+    remove_file(&path).expect("remove the index");
 }
 
 /// The size bound alone refuses this file: the same header loads at the
@@ -207,10 +211,10 @@ fn test_oversized_file_refused() {
         },
         &[entry(0)],
     );
-    std::fs::write(&path, &bytes).expect("write the index");
+    write(&path, &bytes).expect("write the index");
     assert!(LogIndex::load(&path, 512, Some(first)).is_some());
 
-    let file = std::fs::OpenOptions::new()
+    let file = OpenOptions::new()
         .write(true)
         .open(&path)
         .expect("reopen the index");
@@ -218,7 +222,7 @@ fn test_oversized_file_refused() {
         .expect("claim a size no log produces");
     drop(file);
     assert_eq!(LogIndex::load(&path, 512, Some(first)), None);
-    std::fs::remove_file(&path).expect("remove the index");
+    remove_file(&path).expect("remove the index");
 }
 
 /// A log that has grown since the index was built is the normal case, and
@@ -236,12 +240,12 @@ fn test_grown_log_still_loads() {
         },
         &entries,
     );
-    std::fs::write(&path, &bytes).expect("write the index");
+    write(&path, &bytes).expect("write the index");
 
     let loaded = LogIndex::load(&path, 999_999, Some(first)).expect("load the index");
     assert_eq!(loaded.entries, entries);
     assert_eq!(loaded.header.covered_len, 20_480);
-    std::fs::remove_file(&path).expect("remove the index");
+    remove_file(&path).expect("remove the index");
 }
 
 /// A torn tail survives a load: the whole entries are returned and the part
@@ -261,11 +265,11 @@ fn test_load_drops_torn_tail() {
         &entries,
     );
     bytes.truncate(bytes.len() - 5);
-    std::fs::write(&path, &bytes).expect("write the index");
+    write(&path, &bytes).expect("write the index");
 
     let loaded = LogIndex::load(&path, 40_000, Some(first)).expect("load the index");
     assert_eq!(loaded.entries, entries[..2].to_vec());
-    std::fs::remove_file(&path).expect("remove the index");
+    remove_file(&path).expect("remove the index");
 }
 
 /// A missing index is not an error and not an empty one: the caller has no
@@ -274,7 +278,7 @@ fn test_load_drops_torn_tail() {
 fn test_missing_file_refused() {
     let path = temp_path("missing");
     assert_eq!(LogIndex::load(&path, 100, None), None);
-    std::fs::remove_dir_all(path.parent().expect("a parent")).ok();
+    remove_dir_all(path.parent().expect("a parent")).ok();
 }
 
 /// An index over an empty log holds no first event and no entries, which is
@@ -290,8 +294,8 @@ fn test_empty_log_index_loads() {
         },
         &[],
     );
-    std::fs::write(&path, &bytes).expect("write the index");
+    write(&path, &bytes).expect("write the index");
     let loaded = LogIndex::load(&path, 0, None).expect("load the index");
     assert!(loaded.entries.is_empty());
-    std::fs::remove_file(&path).expect("remove the index");
+    remove_file(&path).expect("remove the index");
 }

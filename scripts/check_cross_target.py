@@ -98,14 +98,24 @@ def check(root: Path = Path(".")) -> int:
             print(f"[cross-target] {target}: not installed, skipped")
             continue
         total, skipped = 0, 0
+        skipped_names = []
         for crate in crates:
             count = error_count(crate, target, root)
             if count is None:
                 skipped += 1
+                skipped_names.append(crate)
                 continue
             if count:
                 print(f"  {crate}: {count} error(s) for {target}", file=sys.stderr)
             total += count
+        if skipped:
+            # A skipped crate is not checked at all, and this is how a cfg
+            # break escaped once: its dependency needs a linker the toolchain
+            # does not have. Say so rather than reporting a clean sweep.
+            print(
+                f"[cross-target] {target}: NOT CHECKED for "
+                f"{', '.join(skipped_names)} (a build script cannot run here)"
+            )
         if total > baseline:
             over += 1
             print(

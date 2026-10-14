@@ -12,6 +12,8 @@
 
 use crate::SessionId;
 use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fmt::{Display, Formatter};
 
 /// The provenance of a session: where it came from. Fresh = minted new;
 /// ForkedFrom = --fork-session off an existing session; ResumedFromExport =
@@ -172,13 +174,13 @@ pub enum DescriptorUpdate {
 #[derive(Debug)]
 pub struct SessionDescriptorError(pub String);
 
-impl std::fmt::Display for SessionDescriptorError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for SessionDescriptorError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "session descriptor error: {}", self.0)
     }
 }
 
-impl std::error::Error for SessionDescriptorError {}
+impl Error for SessionDescriptorError {}
 
 #[cfg(test)]
 #[path = "descriptor_tests.rs"]
