@@ -291,7 +291,7 @@ fn test_slide_drops_notice_row() {
             .iter()
             .any(|l| matches!(l, TranscriptLine::Interrupted)),
         "a notice whose frames left the window is gone: {:?}",
-        &app.transcript()[..3]
+        &app.transcript().lines()[..3]
     );
 }
 
@@ -339,14 +339,14 @@ fn test_system_row_leaves_window() {
     assert!(
         matches!(app.transcript().first(), Some(TranscriptLine::User(t)) if t == "msg 210"),
         "the window's oldest row heads the transcript: {:?}",
-        &app.transcript()[..3]
+        &app.transcript().lines()[..3]
     );
     assert!(
         !app.transcript()
             .iter()
             .any(|l| matches!(l, TranscriptLine::System(t) if t.starts_with("debug: logging"))),
         "a system line whose frames left the window is gone: {:?}",
-        &app.transcript()[..3]
+        &app.transcript().lines()[..3]
     );
 }
 
@@ -400,14 +400,14 @@ fn test_echo_row_leaves_window() {
     assert!(
         matches!(app.transcript().first(), Some(TranscriptLine::User(t)) if t == "msg 210"),
         "the window's oldest row heads the transcript: {:?}",
-        &app.transcript()[..3]
+        &app.transcript().lines()[..3]
     );
     assert!(
         !app.transcript()
             .iter()
             .any(|l| matches!(l, TranscriptLine::User(t) if t == "/model")),
         "an echo whose frames left the window is gone: {:?}",
-        &app.transcript()[..3]
+        &app.transcript().lines()[..3]
     );
 }
 

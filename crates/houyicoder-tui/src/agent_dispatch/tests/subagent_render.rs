@@ -360,43 +360,43 @@ fn test_subagent_expand_stable_index() {
         .push(TranscriptLine::Agent("parent result".into()));
     // Content row indices: User=0, Subagent=1, Agent=2.
     assert!(matches!(
-        app.sessions.current.transcript[0],
+        app.sessions.current.transcript.lines()[0],
         TranscriptLine::User(_)
     ));
     assert!(matches!(
-        app.sessions.current.transcript[1],
+        app.sessions.current.transcript.lines()[1],
         TranscriptLine::Subagent { .. }
     ));
     assert!(matches!(
-        app.sessions.current.transcript[2],
+        app.sessions.current.transcript.lines()[2],
         TranscriptLine::Agent(_)
     ));
     // Expand the Subagent — the transcript Vec does not change.
     app.ui.transcript_view.toggle_subagent("child-1".into());
     assert!(matches!(
-        app.sessions.current.transcript[0],
+        app.sessions.current.transcript.lines()[0],
         TranscriptLine::User(_)
     ));
     assert!(matches!(
-        app.sessions.current.transcript[1],
+        app.sessions.current.transcript.lines()[1],
         TranscriptLine::Subagent { .. }
     ));
     assert!(matches!(
-        app.sessions.current.transcript[2],
+        app.sessions.current.transcript.lines()[2],
         TranscriptLine::Agent(_)
     ));
     // Collapse — still stable.
     app.ui.transcript_view.toggle_subagent("child-1".into());
     assert!(matches!(
-        app.sessions.current.transcript[0],
+        app.sessions.current.transcript.lines()[0],
         TranscriptLine::User(_)
     ));
     assert!(matches!(
-        app.sessions.current.transcript[1],
+        app.sessions.current.transcript.lines()[1],
         TranscriptLine::Subagent { .. }
     ));
     assert!(matches!(
-        app.sessions.current.transcript[2],
+        app.sessions.current.transcript.lines()[2],
         TranscriptLine::Agent(_)
     ));
 }

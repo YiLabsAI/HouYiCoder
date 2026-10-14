@@ -267,7 +267,7 @@ fn test_agents_pane_cursor_walks() {
         });
     }
     let v = app.transcript().revision();
-    let rows = app.transcript().to_vec();
+    let rows = app.transcript().lines().to_vec();
     app.agents_mut().refresh(&rows, v);
     app.move_agents_cursor(1);
     assert_eq!(app.ui.agents_sel, 1);

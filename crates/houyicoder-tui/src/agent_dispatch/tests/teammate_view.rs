@@ -139,7 +139,7 @@ fn test_teammate_view_fill_isomorphic() {
     assert!(matches!(view.transcript[0], TranscriptLine::User(_)));
     assert!(matches!(view.transcript[1], TranscriptLine::Agent(_)));
     // Isomorphism: the fold-group and the view carry the same folded rows.
-    let folded = match &app.sessions.current.transcript[0] {
+    let folded = match &app.sessions.current.transcript.lines()[0] {
         TranscriptLine::Subagent {
             folded_transcript, ..
         } => folded_transcript.clone(),

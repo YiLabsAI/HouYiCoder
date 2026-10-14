@@ -41,7 +41,7 @@ fn test_child_transcript_fills_folded() {
             frames,
         },
     });
-    match &app.sessions.current.transcript[0] {
+    match &app.sessions.current.transcript.lines()[0] {
         TranscriptLine::Subagent {
             folded_transcript, ..
         } => {
@@ -79,7 +79,7 @@ fn test_child_transcript_empty_unavailable() {
             frames: Vec::new(),
         },
     });
-    match &app.sessions.current.transcript[0] {
+    match &app.sessions.current.transcript.lines()[0] {
         TranscriptLine::Subagent {
             folded_transcript, ..
         } => {
@@ -134,18 +134,24 @@ fn test_child_transcript_preserves_position() {
         },
     });
     assert!(
-        matches!(app.sessions.current.transcript[0], TranscriptLine::Agent(_)),
+        matches!(
+            app.sessions.current.transcript.lines()[0],
+            TranscriptLine::Agent(_)
+        ),
         "before stays at 0"
     );
     assert!(
         matches!(
-            app.sessions.current.transcript[1],
+            app.sessions.current.transcript.lines()[1],
             TranscriptLine::Subagent { .. }
         ),
         "subagent stays at 1"
     );
     assert!(
-        matches!(app.sessions.current.transcript[2], TranscriptLine::Agent(_)),
+        matches!(
+            app.sessions.current.transcript.lines()[2],
+            TranscriptLine::Agent(_)
+        ),
         "after stays at 2"
     );
 }
@@ -176,7 +182,7 @@ fn test_subagent_collapse_keeps_folded() {
         !app.ui.transcript_view.expanded.subagents.contains("c1"),
         "collapsed"
     );
-    match &app.sessions.current.transcript[0] {
+    match &app.sessions.current.transcript.lines()[0] {
         TranscriptLine::Subagent {
             folded_transcript, ..
         } => {

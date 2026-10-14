@@ -791,7 +791,7 @@ fn folded_transcript() -> Vec<TranscriptLine> {
 /// summary alone.
 fn group_body_visible(app: &App) -> bool {
     crate::fold::display_slots(
-        &app.sessions.current.transcript,
+        app.sessions.current.transcript.lines(),
         app.sessions.current.transcript.fold_groups(),
         &app.ui.transcript_view.expanded.fold_groups,
         false,

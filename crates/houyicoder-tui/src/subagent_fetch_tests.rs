@@ -42,7 +42,7 @@ fn test_expand_fires_child_fetch() {
         app.poll_agent();
         if let TranscriptLine::Subagent {
             folded_transcript, ..
-        } = &app.sessions.current.transcript[0]
+        } = &app.sessions.current.transcript.lines()[0]
             && !folded_transcript.is_empty()
         {
             filled = true;
@@ -51,7 +51,7 @@ fn test_expand_fires_child_fetch() {
         std::thread::sleep(std::time::Duration::from_millis(2));
     }
     assert!(filled, "fetch round-trip populated the fold-group");
-    match &app.sessions.current.transcript[0] {
+    match &app.sessions.current.transcript.lines()[0] {
         TranscriptLine::Subagent {
             folded_transcript, ..
         } => {

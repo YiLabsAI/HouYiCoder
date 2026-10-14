@@ -9,7 +9,6 @@ pub(crate) mod blocks;
 pub(crate) mod view;
 
 use std::cell::Cell;
-use std::ops::Deref;
 
 use crate::fold::{FoldGroup, compute_fold_groups};
 use crate::records::{ContextView, TranscriptLine};
@@ -89,14 +88,6 @@ impl Default for Transcript {
             current_turn: CurrentTurnBoundary::default(),
             revision: Cell::new(0),
         }
-    }
-}
-
-impl Deref for Transcript {
-    type Target = [TranscriptLine];
-
-    fn deref(&self) -> &[TranscriptLine] {
-        &self.lines
     }
 }
 
@@ -243,8 +234,37 @@ impl Transcript {
         &mut self.blocks
     }
 
-    pub(crate) fn lines(&self) -> &[TranscriptLine] {
+    /// The resident lines, oldest first. The frames, the byte budget, and the
+    /// fold groups are the transcript's other halves, so a reader asks for the
+    /// conversation by name instead of dereferencing to it.
+    pub fn lines(&self) -> &[TranscriptLine] {
         &self.lines
+    }
+
+    /// How many lines the resident window holds. Not the frame count: frames
+    /// carry the log's own boundaries, lines are what the view renders.
+    pub fn len(&self) -> usize {
+        self.lines.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.lines.is_empty()
+    }
+
+    pub fn iter(&self) -> std::slice::Iter<'_, TranscriptLine> {
+        self.lines.iter()
+    }
+
+    pub fn first(&self) -> Option<&TranscriptLine> {
+        self.lines.first()
+    }
+
+    pub fn last(&self) -> Option<&TranscriptLine> {
+        self.lines.last()
+    }
+
+    pub fn get(&self, index: usize) -> Option<&TranscriptLine> {
+        self.lines.get(index)
     }
 
     pub(crate) fn lines_mut(&mut self) -> &mut Vec<TranscriptLine> {
