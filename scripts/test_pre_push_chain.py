@@ -688,8 +688,3 @@ if __name__ == "__main__":
     from test_runner import run
 
     sys.exit(run("pre-push-chain", dict(globals())))
-    try:
-        sys.exit(main())
-    except AssertionError as failure:
-        print(f"FAIL {failure}")
-        sys.exit(1)
