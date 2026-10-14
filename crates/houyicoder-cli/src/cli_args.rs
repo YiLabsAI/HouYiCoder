@@ -3,6 +3,8 @@
 //! Parsing is pure (no I/O, no process exit) so the full flag/subcommand
 //! matrix is unit-testable from main_tests.
 
+use std::vec::IntoIter;
+
 #[derive(Debug)]
 pub(crate) enum CliCommand {
     /// Run the interactive TUI (default when no mode flag is given).
@@ -70,11 +72,7 @@ struct Flags {
     serve: Option<Option<String>>,
 }
 
-fn parse_flag(
-    iter: &mut std::vec::IntoIter<String>,
-    arg: &str,
-    flags: &mut Flags,
-) -> Result<bool, String> {
+fn parse_flag(iter: &mut IntoIter<String>, arg: &str, flags: &mut Flags) -> Result<bool, String> {
     if arg == "--project" || arg == "-p" {
         flags.project = Some(iter.next().ok_or("--project requires a path argument")?);
     } else if arg == "--model" {

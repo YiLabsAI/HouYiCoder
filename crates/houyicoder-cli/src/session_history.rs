@@ -9,6 +9,13 @@ use std::sync::{Arc, Mutex};
 
 use houyicoder_api::session::SessionLog;
 use houyicoder_context::{EventId, LenientRead, SessionEvent, SessionId, SessionLogEntry};
+use std::mem::take;
+#[cfg(test)]
+use std::sync::atomic::AtomicU64;
+#[cfg(test)]
+use std::sync::atomic::AtomicUsize;
+#[cfg(test)]
+use std::sync::atomic::Ordering::Relaxed;
 
 mod head;
 
@@ -198,11 +205,11 @@ impl TurnPage {
 #[derive(Default)]
 pub(crate) struct ReadStats {
     /// Whole-log reads. A paged read must never perform one.
-    pub whole_reads: std::sync::atomic::AtomicUsize,
+    pub whole_reads: AtomicUsize,
     /// Reverse and range reads, one per call to the backend.
-    pub window_reads: std::sync::atomic::AtomicUsize,
+    pub window_reads: AtomicUsize,
     /// Bytes asked of the backend, which is what a budget can bound.
-    pub requested_bytes: std::sync::atomic::AtomicU64,
+    pub requested_bytes: AtomicU64,
 }
 
 pub(crate) struct SessionHistory {
@@ -246,16 +253,13 @@ impl SessionHistory {
     /// than failing the read.
     pub(crate) fn read_whole_lenient(&self) -> LenientRead {
         #[cfg(test)]
-        self.stats
-            .whole_reads
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.stats.whole_reads.fetch_add(1, Relaxed);
         self.session_log.backend().read_log_lenient(self.session_id)
     }
 
     /// The reads this reader has performed, for a test to assert on.
     #[cfg(test)]
     pub(crate) fn read_stats(&self) -> (usize, usize, u64) {
-        use std::sync::atomic::Ordering::Relaxed;
         (
             self.stats.whole_reads.load(Relaxed),
             self.stats.window_reads.load(Relaxed),
@@ -267,7 +271,6 @@ impl SessionHistory {
     fn note_window_read(&self, bytes: u64) {
         #[cfg(test)]
         {
-            use std::sync::atomic::Ordering::Relaxed;
             self.stats.window_reads.fetch_add(1, Relaxed);
             self.stats.requested_bytes.fetch_add(bytes, Relaxed);
         }
@@ -615,7 +618,7 @@ impl SessionHistory {
         // The scan is newest-first, so the batch's own finds are too.
         idx.epoch_starts.extend(batch_epochs);
         batch_offsets.reverse();
-        let mut offsets = std::mem::take(&mut idx.offsets);
+        let mut offsets = take(&mut idx.offsets);
         batch_offsets.extend_from_slice(&offsets);
         offsets = batch_offsets;
         idx.offsets = offsets;
@@ -698,5 +701,4 @@ fn parse_event(line: &str) -> Option<SessionLogEntry> {
 }
 
 #[cfg(test)]
-#[path = "session_history_tests.rs"]
 mod tests;

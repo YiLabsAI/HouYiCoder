@@ -6,6 +6,7 @@ use super::super::reader::window_view::seam_rows;
 use super::super::turns::FoldMode;
 use super::super::view::*;
 use crate::session_history::TurnPage;
+use houyicoder_context::CheckpointId;
 use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
 use houyicoder_tui::view::trajectory_pane::{
     CompactedBoundary, ModelSwitchBoundary, RecordOutcome, TrajectoryRecord, TrajectoryRecordKind,
@@ -1133,7 +1134,6 @@ fn test_model_switch_boundary() {
 /// A compaction between turns records a boundary naming the checkpoint.
 #[test]
 fn test_compaction_boundary_attached() {
-    use houyicoder_context::CheckpointId;
     let ck = CheckpointId::new();
     let events = vec![
         ev(100, SessionEvent::UserInput { text: "t1".into() }),
@@ -1183,7 +1183,6 @@ fn test_compaction_boundary_attached() {
 /// have dropped one of them without saying so.
 #[test]
 fn test_two_boundaries_kept() {
-    use houyicoder_context::CheckpointId;
     let ck = CheckpointId::new();
     let usage = |ts: u64, model: &str| {
         ev(
@@ -1580,8 +1579,6 @@ fn test_delegation_split_across_batches() {
 /// turn that follows them the way an accumulation over both pages would.
 #[test]
 fn test_seam_keeps_boundaries() {
-    use houyicoder_context::CheckpointId;
-
     let ck = CheckpointId::new();
     let usage = |ts: u64, model: &str| {
         ev(
@@ -1678,8 +1675,6 @@ fn test_seam_keeps_boundaries() {
 /// before it left must survive the empty page between them.
 #[test]
 fn test_seam_survives_empty_page() {
-    use houyicoder_context::CheckpointId;
-
     let ck = CheckpointId::new();
     let older = [
         ev(100, SessionEvent::UserInput { text: "t1".into() }),

@@ -14,18 +14,29 @@
 
 #![cfg(unix)]
 
+use nix::errno::Errno;
+use nix::sys::signal::kill;
+use nix::unistd::Pid;
+use std::env::temp_dir;
+use std::env::var_os;
+use std::fs::create_dir_all;
+use std::fs::read_dir;
+use std::fs::read_to_string;
+use std::fs::remove_file;
+use std::fs::write;
 use std::path::PathBuf;
+use std::process::id;
 
 /// The conventional per-user directory where detached-session sockets and
 /// pidfiles live. Created on first use; never silently uses a shared world
 /// location.
 pub fn sessions_dir() -> PathBuf {
-    let base = std::env::var_os("XDG_RUNTIME_DIR")
+    let base = var_os("XDG_RUNTIME_DIR")
         .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
-        .unwrap_or_else(std::env::temp_dir);
+        .or_else(|| var_os("HOME").map(PathBuf::from))
+        .unwrap_or_else(temp_dir);
     let dir = base.join("houyicoder").join("sessions");
-    std::fs::create_dir_all(&dir).ok();
+    create_dir_all(&dir).ok();
     dir
 }
 
@@ -43,7 +54,7 @@ fn session_pidfile(session_id: &str) -> PathBuf {
 /// report it. Best-effort: a write failure only means ps omits the pid for
 /// this session; the socket still works.
 pub fn write_pidfile(session_id: &str) {
-    std::fs::write(session_pidfile(session_id), std::process::id().to_string()).ok();
+    write(session_pidfile(session_id), id().to_string()).ok();
 }
 
 /// A discovered detached session: its id, the pid its pidfile recorded (if
@@ -66,11 +77,9 @@ pub struct DiscoveredSession {
 /// a start-time comparison needs /proc or ps, neither available without a
 /// spawn; pid_alive is the primary signal.
 pub fn pid_alive(pid: i32) -> bool {
-    use nix::sys::signal::kill;
-    use nix::unistd::Pid;
     match kill(Pid::from_raw(pid), None) {
         Ok(()) => true,
-        Err(nix::errno::Errno::EPERM) => true,
+        Err(Errno::EPERM) => true,
         Err(_) => false,
     }
 }
@@ -82,7 +91,7 @@ pub fn pid_alive(pid: i32) -> bool {
 pub fn list_sessions() -> Vec<DiscoveredSession> {
     let dir = sessions_dir();
     let mut out = Vec::new();
-    let Ok(entries) = std::fs::read_dir(&dir) else {
+    let Ok(entries) = read_dir(&dir) else {
         return out;
     };
     for entry in entries.flatten() {
@@ -91,7 +100,7 @@ pub fn list_sessions() -> Vec<DiscoveredSession> {
         let Some(id) = name.strip_suffix(".sock") else {
             continue;
         };
-        let pid = std::fs::read_to_string(session_pidfile(id))
+        let pid = read_to_string(session_pidfile(id))
             .ok()
             .and_then(|s| s.trim().parse().ok());
         let live = pid.map(pid_alive).unwrap_or(false);
@@ -110,7 +119,7 @@ pub fn list_sessions() -> Vec<DiscoveredSession> {
 /// resuming a session a live process is still writing (the hash chain
 /// needs a single writer) and point at attach or fork-session instead.
 pub fn is_session_live(session_id: &str) -> bool {
-    let pid = std::fs::read_to_string(session_pidfile(session_id))
+    let pid = read_to_string(session_pidfile(session_id))
         .ok()
         .and_then(|s| s.trim().parse::<i32>().ok());
     pid.map(pid_alive).unwrap_or(false)
@@ -127,111 +136,12 @@ pub fn cleanup_stale() -> usize {
             continue;
         }
         let id = &s.id;
-        drop(std::fs::remove_file(session_socket(id)));
-        drop(std::fs::remove_file(session_pidfile(id)));
+        drop(remove_file(session_socket(id)));
+        drop(remove_file(session_pidfile(id)));
         reaped += 1;
     }
     reaped
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// list_sessions reads back a session id we wrote a socket + pidfile for,
-    /// including the pid. Uses the real conventional dir, isolated to the
-    /// user's own sessions.
-    #[test]
-    fn test_list_sessions_reads_pid() {
-        let id = format!("test-list-{}", std::process::id());
-        let sock = session_socket(&id);
-        std::fs::write(&sock, b"").expect("write test socket");
-        std::fs::write(session_pidfile(&id), "4242\n").expect("write test pid");
-        let sessions = list_sessions();
-        let found = sessions.iter().find(|s| s.id == id);
-        let found = found.expect("list_sessions must find the written id");
-        assert_eq!(found.pid, Some(4242), "pid must be read from the pidfile");
-        std::fs::remove_file(&sock).ok();
-        std::fs::remove_file(session_pidfile(&id)).ok();
-    }
-
-    /// list_sessions omits the pid when the pidfile is absent (a predecessor
-    /// crashed without writing one, or the socket is stale).
-    #[test]
-    fn test_list_sessions_pid_optional() {
-        let id = format!("test-nopid-{}", std::process::id());
-        let sock = session_socket(&id);
-        std::fs::write(&sock, b"").expect("write test socket");
-        drop(std::fs::remove_file(session_pidfile(&id)));
-        let sessions = list_sessions();
-        let found = sessions
-            .iter()
-            .find(|s| s.id == id)
-            .expect("list_sessions must find the written id");
-        assert_eq!(found.pid, None, "no pidfile means no pid");
-        assert!(!found.live, "no pid means not live");
-        std::fs::remove_file(&sock).ok();
-    }
-
-    /// pid_alive: the current process is alive; a pid certain to not exist
-    /// (a high sentinel) is not.
-    #[test]
-    fn test_pid_alive_self_dead() {
-        let self_pid = std::process::id() as i32;
-        assert!(pid_alive(self_pid), "the current process is alive");
-        // A sentinel pid certain to not exist. PIDs are positive; pick one
-        // in a range the OS is vanishingly unlikely to have allocated, and
-        // accept ESRCH (no such pid) as the not-alive verdict.
-        let sentinel = 1_000_000_000;
-        assert!(!pid_alive(sentinel), "a non-existent pid is not alive");
-    }
-
-    /// is_session_live: a session whose pidfile points at the current
-    /// process is live; a session whose pidfile points at a dead pid is not.
-    #[test]
-    fn test_session_live_checks_pid() {
-        let id = format!("test-live-{}", std::process::id());
-        let sock = session_socket(&id);
-        std::fs::write(&sock, b"").expect("write test socket");
-        // Live: the pidfile points at this test process.
-        std::fs::write(session_pidfile(&id), std::process::id().to_string()).expect("write pid");
-        assert!(
-            is_session_live(&id),
-            "a session held by the current pid is live"
-        );
-        // Dead: point the pidfile at the sentinel.
-        std::fs::write(session_pidfile(&id), "1000000000").expect("write dead pid");
-        assert!(
-            !is_session_live(&id),
-            "a dead pid means the session is not live"
-        );
-        std::fs::remove_file(&sock).ok();
-        std::fs::remove_file(session_pidfile(&id)).ok();
-    }
-
-    /// cleanup_stale removes the socket + pidfile for a session whose pid is
-    /// dead, leaving live sessions alone.
-    #[test]
-    fn test_cleanup_stale_reaps_dead() {
-        let live_id = format!("test-cleanup-live-{}", std::process::id());
-        let dead_id = format!("test-cleanup-dead-{}", std::process::id());
-        std::fs::write(session_socket(&live_id), b"").expect("write live sock");
-        std::fs::write(session_pidfile(&live_id), std::process::id().to_string())
-            .expect("write live pid");
-        std::fs::write(session_socket(&dead_id), b"").expect("write dead sock");
-        std::fs::write(session_pidfile(&dead_id), "1000000000").expect("write dead pid");
-        let reaped = cleanup_stale();
-        assert!(reaped >= 1, "the dead session must be reaped");
-        assert!(is_session_live(&live_id), "the live session is untouched");
-        assert!(
-            !session_socket(&dead_id).exists(),
-            "the dead session socket is removed"
-        );
-        assert!(
-            !session_pidfile(&dead_id).exists(),
-            "the dead session pidfile is removed"
-        );
-        std::fs::remove_file(session_socket(&live_id)).ok();
-        std::fs::remove_file(session_pidfile(&live_id)).ok();
-    }
-}
+mod tests;

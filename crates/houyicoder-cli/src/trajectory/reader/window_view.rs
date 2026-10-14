@@ -15,6 +15,7 @@ use houyicoder_tui::view::trajectory_pane::{
 };
 use houyicoder_tui::view::trajectory_pane::{TrajectoryRow, TrajectoryView, TrajectoryViewState};
 use std::collections::VecDeque;
+use std::mem::take;
 use std::sync::Arc;
 
 impl SessionLogTrajectory {
@@ -180,7 +181,7 @@ pub(in crate::trajectory) fn seam_rows(pages: &VecDeque<ResidentPage>) -> Vec<Tr
         let drew_rows = !page_rows.is_empty();
         if let Some(TrajectoryRow::Turn(first)) = page_rows.first_mut() {
             if !carried_boundaries.is_empty() {
-                let mut boundaries = std::mem::take(&mut carried_boundaries);
+                let mut boundaries = take(&mut carried_boundaries);
                 boundaries.append(&mut first.boundary_before);
                 first.boundary_before = boundaries;
             }

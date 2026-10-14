@@ -7,14 +7,30 @@ use super::super::reader::{
 use super::super::view::build_view;
 use super::test_support::gated_range_backend;
 use crate::session_history::SessionHistory;
+use futures::executor::block_on;
+use houyicoder_api::session::SessionLog;
+use houyicoder_context::{
+    CheckpointId, CheckpointManifest, ContextBackend, ContextError, ReverseRead,
+};
 use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
+use houyicoder_memory::InMemoryBackend;
 use houyicoder_memory::LocalFileBackend;
 use houyicoder_session::SessionStore;
 use houyicoder_tui::view::trajectory_pane::{
     TrajectoryLog as _, TrajectoryRow, TrajectoryView, TrajectoryViewState,
 };
+use std::env::temp_dir;
+use std::fs::OpenOptions;
+use std::fs::create_dir_all;
 use std::path::PathBuf;
+use std::pin::Pin;
+use std::process::id;
 use std::sync::Arc;
+use std::sync::mpsc::Receiver;
+use std::sync::mpsc::Sender;
+use std::thread::sleep;
+use std::time::Duration;
+use tokio::runtime::Runtime;
 
 fn ev(ts: u64, kind: SessionEvent) -> SessionLogEntry {
     SessionLogEntry {
@@ -95,11 +111,11 @@ fn turn_numbers(view: &TrajectoryView) -> Vec<usize> {
 /// A reader over the given store, with the history reader it pages, so a test
 /// can assert on what the reader asked the disk for.
 pub(super) fn reader_of(
-    store: &std::sync::Arc<houyicoder_session::SessionStore>,
+    store: &Arc<SessionStore>,
     sid: SessionId,
-) -> (SessionLogTrajectory, std::sync::Arc<SessionHistory>) {
-    let log: std::sync::Arc<dyn houyicoder_api::session::SessionLog> = store.clone();
-    let history = std::sync::Arc::new(SessionHistory::new(log.clone(), sid));
+) -> (SessionLogTrajectory, Arc<SessionHistory>) {
+    let log: Arc<dyn SessionLog> = store.clone();
+    let history = Arc::new(SessionHistory::new(log.clone(), sid));
     (
         SessionLogTrajectory::with_history(history.clone(), log, sid, "test".into()),
         history,
@@ -114,7 +130,7 @@ pub(super) fn pump(reader: &SessionLogTrajectory) -> Arc<TrajectoryView> {
         if view.state == TrajectoryViewState::Ready {
             return view;
         }
-        std::thread::sleep(std::time::Duration::from_millis(5));
+        sleep(Duration::from_millis(5));
     }
     panic!("the page never landed");
 }
@@ -124,9 +140,7 @@ pub(super) fn pump(reader: &SessionLogTrajectory) -> Arc<TrajectoryView> {
 /// re-read and re-folded per draw.
 #[test]
 fn test_reader_cache_invalidates() {
-    let store = Arc::new(SessionStore::new(Box::new(
-        houyicoder_memory::InMemoryBackend::new(),
-    )));
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let sid = SessionId::new();
     let (reader, _history) = reader_of(&store, sid);
 
@@ -134,7 +148,7 @@ fn test_reader_cache_invalidates() {
     let first = pump(&reader);
     assert_eq!(first.total_turns, 0);
 
-    futures::executor::block_on(store.append(SessionLogEntry {
+    block_on(store.append(SessionLogEntry {
         id: EventId::new(),
         session: sid,
         ts: 0,
@@ -163,12 +177,10 @@ fn test_reader_cache_invalidates() {
 /// page appears once the user walks past the oldest loaded turn.
 #[test]
 fn test_reader_loads_older() {
-    let store = Arc::new(SessionStore::new(Box::new(
-        houyicoder_memory::InMemoryBackend::new(),
-    )));
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let sid = SessionId::new();
     for i in 0..(TRAJECTORY_PAGE_TURNS + 5) {
-        futures::executor::block_on(store.append(SessionLogEntry {
+        block_on(store.append(SessionLogEntry {
             id: EventId::new(),
             session: sid,
             ts: (i as u64) * 1000,
@@ -537,17 +549,13 @@ pub(super) fn disk_reader_at(
     Arc<SessionHistory>,
     PathBuf,
 ) {
-    let root = std::env::temp_dir().join(format!(
-        "houyi_disk_reader_{}_{}",
-        SessionId::new(),
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&root).expect("create temp root");
+    let root = temp_dir().join(format!("houyi_disk_reader_{}_{}", SessionId::new(), id()));
+    create_dir_all(&root).expect("create temp root");
     let store = Arc::new(SessionStore::new(Box::new(LocalFileBackend::new(
         root.clone(),
     ))));
     let sid = SessionId::new();
-    let rt = tokio::runtime::Runtime::new().expect("test runtime");
+    let rt = Runtime::new().expect("test runtime");
     for i in 0..turns {
         rt.block_on(store.append(SessionLogEntry {
             id: EventId::new(),
@@ -572,7 +580,7 @@ fn test_disk_reader_refreshes_tail() {
     let (store, reader, sid) = disk_reader(3);
     let first = pump(&reader);
     assert_eq!(first.rows.len(), 3);
-    futures::executor::block_on(store.append(SessionLogEntry {
+    block_on(store.append(SessionLogEntry {
         id: EventId::new(),
         session: sid,
         ts: 9000,
@@ -706,7 +714,7 @@ fn test_clear_drops_old_epoch() {
     // boundary the new epoch's first durable event.
     reader.load_older();
     store.reset_trajectory(sid);
-    futures::executor::block_on(store.append(SessionLogEntry {
+    block_on(store.append(SessionLogEntry {
         id: EventId::new(),
         session: sid,
         ts: 999_000,
@@ -737,7 +745,7 @@ fn test_clear_drops_old_epoch() {
             settled = true;
             break;
         }
-        std::thread::sleep(std::time::Duration::from_millis(5));
+        sleep(Duration::from_millis(5));
     }
     assert!(
         settled,
@@ -896,7 +904,7 @@ fn test_append_after_evict() {
     let newer_before = reader.trajectory().newer_hidden;
     assert!(newer_before > 0, "the window is behind the tail");
 
-    futures::executor::block_on(store.append(SessionLogEntry {
+    block_on(store.append(SessionLogEntry {
         id: EventId::new(),
         session: sid,
         ts: 999_000,
@@ -937,7 +945,7 @@ fn test_stale_anchor_refused() {
     // The bytes the anchor names are gone: the log is rewritten short, so the
     // offset the anchor holds no longer lands on its turn.
     let log = root.join(sid.to_string()).join("log.jsonl");
-    let file = std::fs::OpenOptions::new()
+    let file = OpenOptions::new()
         .write(true)
         .open(&log)
         .expect("open the log");
@@ -971,7 +979,7 @@ fn pump_settled(reader: &SessionLogTrajectory) -> Arc<TrajectoryView> {
         ) {
             return view;
         }
-        std::thread::sleep(std::time::Duration::from_millis(5));
+        sleep(Duration::from_millis(5));
     }
     panic!("the reader never settled");
 }
@@ -986,7 +994,7 @@ fn test_clear_moves_history_generation() {
     let before = first.history_generation;
 
     store.reset_trajectory(sid);
-    futures::executor::block_on(store.append(SessionLogEntry {
+    block_on(store.append(SessionLogEntry {
         id: EventId::new(),
         session: sid,
         ts: 999_000,
@@ -1008,18 +1016,15 @@ fn test_clear_moves_history_generation() {
 /// A reader over a history whose start cannot be named: its first line is wider
 /// than one range read, so the head read finds no event to name it with.
 fn unlocatable_head_reader() -> SessionLogTrajectory {
-    use houyicoder_memory::LocalFileBackend;
-    use houyicoder_session::SessionStore;
-
-    let root = std::env::temp_dir().join(format!(
+    let root = temp_dir().join(format!(
         "houyi_traj_head_unknown_{}_{}",
         SessionId::new(),
-        std::process::id()
+        id()
     ));
-    std::fs::create_dir_all(&root).expect("create temp root");
-    let store = std::sync::Arc::new(SessionStore::new(Box::new(LocalFileBackend::new(root))));
+    create_dir_all(&root).expect("create temp root");
+    let store = Arc::new(SessionStore::new(Box::new(LocalFileBackend::new(root))));
     let sid = SessionId::new();
-    let rt = tokio::runtime::Runtime::new().expect("test runtime");
+    let rt = Runtime::new().expect("test runtime");
     rt.block_on(store.append(SessionLogEntry {
         id: EventId::new(),
         session: sid,
@@ -1064,16 +1069,11 @@ fn test_unlocatable_head_keeps_window() {
 /// A store whose log reads panic, so the reader's worker dies without sending a
 /// page. Nothing else about the store changes.
 fn panicking_reader() -> SessionLogTrajectory {
-    use houyicoder_context::{
-        CheckpointId, CheckpointManifest, ContextBackend, ContextError, ReverseRead, SessionId,
-        SessionLogEntry,
-    };
-
     /// The same future type the trait spells, without depending on the crate
     /// that defines its alias.
-    type PFut<'a, T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;
+    type PFut<'a, T> = Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;
 
-    struct PanicReads(houyicoder_memory::InMemoryBackend);
+    struct PanicReads(InMemoryBackend);
 
     impl ContextBackend for PanicReads {
         fn append(&self, event: SessionLogEntry) -> PFut<'_, Result<EventId, ContextError>> {
@@ -1134,9 +1134,9 @@ fn panicking_reader() -> SessionLogTrajectory {
 
     // The log is written through the backend directly: the store's own append
     // reads the log back to link the chain, and every read panics here.
-    let rt = tokio::runtime::Runtime::new().expect("test runtime");
+    let rt = Runtime::new().expect("test runtime");
     let sid = SessionId::new();
-    let inner = houyicoder_memory::InMemoryBackend::new();
+    let inner = InMemoryBackend::new();
     for i in 0..3u64 {
         rt.block_on(ContextBackend::append(
             &inner,
@@ -1152,9 +1152,7 @@ fn panicking_reader() -> SessionLogTrajectory {
         ))
         .expect("append");
     }
-    let store = std::sync::Arc::new(houyicoder_session::SessionStore::new(Box::new(PanicReads(
-        inner,
-    ))));
+    let store = Arc::new(SessionStore::new(Box::new(PanicReads(inner))));
     let (reader, _history) = reader_of(&store, sid);
     reader
 }
@@ -1174,7 +1172,7 @@ fn test_broken_read_ends_failed() {
         if view.state == TrajectoryViewState::Failed {
             break;
         }
-        std::thread::sleep(std::time::Duration::from_millis(20));
+        sleep(Duration::from_millis(20));
     }
     assert!(
         seen.contains(&TrajectoryViewState::Failed),
@@ -1243,7 +1241,7 @@ fn test_end_supersedes_older_read() {
 fn test_older_supersedes_tail_refresh() {
     let (store, reader, sid) = disk_reader(500);
     drop(pump(&reader));
-    futures::executor::block_on(store.append(SessionLogEntry {
+    block_on(store.append(SessionLogEntry {
         id: EventId::new(),
         session: sid,
         ts: 999_000,
@@ -1285,7 +1283,7 @@ fn test_older_supersedes_tail_refresh() {
 fn test_append_keeps_window_numbers() {
     let (store, reader, sid) = disk_reader(500);
     drop(pump(&reader));
-    futures::executor::block_on(store.append(SessionLogEntry {
+    block_on(store.append(SessionLogEntry {
         id: EventId::new(),
         session: sid,
         ts: 999_000,
@@ -1339,7 +1337,7 @@ fn test_clear_drops_older_walk() {
     // The clear lands with no draw in between, so the resident window is still
     // the one the previous history was read for.
     store.reset_trajectory(sid);
-    futures::executor::block_on(store.append(SessionLogEntry {
+    block_on(store.append(SessionLogEntry {
         id: EventId::new(),
         session: sid,
         ts: 999_000,
@@ -1366,7 +1364,7 @@ fn test_clear_drops_older_walk() {
         if view.state == TrajectoryViewState::Ready {
             break;
         }
-        std::thread::sleep(std::time::Duration::from_millis(5));
+        sleep(Duration::from_millis(5));
     }
 }
 
@@ -1385,7 +1383,7 @@ fn test_repeated_intent_reads_once() {
     assert_eq!(view.state, TrajectoryViewState::Ready, "the head lands");
     // A superseded worker stops at its next chunk; give the burst's strays a
     // moment to do that before counting.
-    std::thread::sleep(std::time::Duration::from_millis(300));
+    sleep(Duration::from_millis(300));
     let (_, reads_after, _) = history.read_stats();
     assert!(
         reads_after - reads_before < 20,
@@ -1419,7 +1417,7 @@ fn test_append_reads_delta() {
     let before = turn_rows(&pump(&reader));
     let (_, reads_before, bytes_before) = history.read_stats();
 
-    let rt = tokio::runtime::Runtime::new().expect("test runtime");
+    let rt = Runtime::new().expect("test runtime");
     rt.block_on(store.append(SessionLogEntry {
         id: EventId::new(),
         session: sid,
@@ -1465,7 +1463,7 @@ fn test_burst_reads_tail() {
     drop(pump(&reader));
     let (_, _, bytes_before) = history.read_stats();
 
-    let rt = tokio::runtime::Runtime::new().expect("test runtime");
+    let rt = Runtime::new().expect("test runtime");
     rt.block_on(store.append(SessionLogEntry {
         id: EventId::new(),
         session: sid,
@@ -1503,7 +1501,7 @@ fn test_append_delta_stays_bounded() {
     let (store, reader, sid, history, entered, release) = gated_disk_reader(300, "append");
     drop(pump(&reader));
 
-    let rt = tokio::runtime::Runtime::new().expect("test runtime");
+    let rt = Runtime::new().expect("test runtime");
     let append = |text: &str, ts: u64| {
         let entry = SessionLogEntry {
             id: EventId::new(),
@@ -1519,7 +1517,7 @@ fn test_append_delta_stays_bounded() {
     append("first", 900_000);
     drop(reader.trajectory());
     entered
-        .recv_timeout(std::time::Duration::from_secs(5))
+        .recv_timeout(Duration::from_secs(5))
         .expect("the delta read starts");
     append("second", 901_000);
     release.send(()).ok();
@@ -1557,7 +1555,7 @@ fn test_append_delta_stays_bounded() {
 #[test]
 fn test_range_read_bounded() {
     let (store, _reader, sid, history, _root) = disk_reader_at(50);
-    let rt = tokio::runtime::Runtime::new().expect("test runtime");
+    let rt = Runtime::new().expect("test runtime");
     for i in 0..20u64 {
         rt.block_on(store.append(SessionLogEntry {
             id: EventId::new(),
@@ -1600,19 +1598,15 @@ fn gated_disk_reader(
     SessionLogTrajectory,
     SessionId,
     Arc<SessionHistory>,
-    std::sync::mpsc::Receiver<()>,
-    std::sync::mpsc::Sender<()>,
+    Receiver<()>,
+    Sender<()>,
 ) {
-    let root = std::env::temp_dir().join(format!(
-        "houyi_gate_{tag}_{}_{}",
-        SessionId::new(),
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&root).expect("create temp root");
+    let root = temp_dir().join(format!("houyi_gate_{tag}_{}_{}", SessionId::new(), id()));
+    create_dir_all(&root).expect("create temp root");
     let (backend, entered_rx, release_tx) = gated_range_backend(root);
     let store = Arc::new(SessionStore::new(Box::new(backend)));
     let sid = SessionId::new();
-    let rt = tokio::runtime::Runtime::new().expect("test runtime");
+    let rt = Runtime::new().expect("test runtime");
     for i in 0..turns as u64 {
         rt.block_on(store.append(SessionLogEntry {
             id: EventId::new(),
@@ -1638,7 +1632,7 @@ fn test_append_extends_page() {
     drop(pump(&reader));
     let (built_before, applied_before) = reader.page_stats();
 
-    let rt = tokio::runtime::Runtime::new().expect("test runtime");
+    let rt = Runtime::new().expect("test runtime");
     for i in 0..3u64 {
         rt.block_on(store.append(SessionLogEntry {
             id: EventId::new(),
@@ -1685,9 +1679,7 @@ fn test_empty_session_span_unknown() {
         "an empty byte-window log has no span to report"
     );
 
-    let store = Arc::new(SessionStore::new(Box::new(
-        houyicoder_memory::InMemoryBackend::new(),
-    )));
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let sid = SessionId::new();
     let (mirror_reader, _history) = reader_of(&store, sid);
     let mirror_view = pump(&mirror_reader);
@@ -1702,7 +1694,7 @@ fn test_empty_session_span_unknown() {
 #[test]
 fn test_single_event_span_zero() {
     let (store, reader, sid) = disk_reader(0);
-    let rt = tokio::runtime::Runtime::new().expect("test runtime");
+    let rt = Runtime::new().expect("test runtime");
     rt.block_on(store.append(SessionLogEntry {
         id: EventId::new(),
         session: sid,

@@ -18,6 +18,10 @@ use super::super::view::fold_rows;
 use super::TrajectoryState;
 
 use crate::session_history::{SessionHistory, is_user_input};
+use std::sync::mpsc::Receiver;
+use std::sync::mpsc::TryRecvError;
+use std::sync::mpsc::channel;
+use std::thread::spawn;
 
 /// How much of a turn one detail read takes. A turn wider than this comes back
 /// with its beginning and says so, rather than showing part of a turn as the
@@ -58,7 +62,7 @@ const MAX_READ_RETRIES: usize = 2;
 
 /// A detail read in flight.
 pub(super) struct PendingDetailRead {
-    pub(super) rx: std::sync::mpsc::Receiver<TrajectoryDetailView>,
+    pub(super) rx: Receiver<TrajectoryDetailView>,
 }
 
 /// One turn's events: from its opening event to the next turn's opening. The
@@ -254,8 +258,8 @@ fn dispatch_read(
     offset: u64,
 ) -> PendingDetailRead {
     let history = Arc::clone(history);
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
+    let (tx, rx) = channel();
+    spawn(move || {
         // The reader may be gone; the read is bounded, so the worker finishes
         // and its result is dropped.
         drop(tx.send(read_detail(&history, offset, &drill)));
@@ -299,7 +303,7 @@ pub(super) fn detail(
             state.pending = None;
             state.view = Some(Arc::new(view));
         }
-        Some(Err(std::sync::mpsc::TryRecvError::Disconnected)) => {
+        Some(Err(TryRecvError::Disconnected)) => {
             // The worker died without sending. One dead worker is a transient,
             // so the read is asked for again from the anchor already captured;
             // a run of them means the reads are not working, and the pane says

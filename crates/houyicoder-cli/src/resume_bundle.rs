@@ -4,6 +4,11 @@
 //! through assemble_bundle (crate root) so the bridge wiring cannot drift from
 //! the fresh path.
 
+use houyicoder_permission::FileRuleStore;
+use houyicoder_service::composition::ResolvedProvider;
+use houyicoder_service::composition::build_runner_for_fork;
+use houyicoder_service::composition::build_runner_for_resume_sid;
+use houyicoder_service::composition::session_log_root;
 use std::sync::Arc;
 
 /// Resume a session already on disk (--resume <sid>). Re-opens the existing
@@ -13,15 +18,13 @@ use std::sync::Arc;
 pub(super) fn build_bundle_for_resume_sid(
     sid: houyicoder_context::SessionId,
     project: Option<String>,
-    provider: houyicoder_service::composition::ResolvedProvider,
+    provider: ResolvedProvider,
 ) -> Result<crate::WiredBundle, Box<dyn std::error::Error>> {
-    let resumed = houyicoder_service::composition::build_runner_for_resume_sid(
+    let resumed = build_runner_for_resume_sid(
         sid,
-        &houyicoder_service::composition::session_log_root(),
+        &session_log_root(),
         project,
-        Some(Arc::new(
-            houyicoder_permission::FileRuleStore::default_paths(),
-        )),
+        Some(Arc::new(FileRuleStore::default_paths())),
         provider,
     )?;
     Ok(crate::assemble_bundle(
@@ -44,15 +47,13 @@ pub(super) fn build_bundle_for_resume_sid(
 pub(super) fn build_bundle_for_fork(
     source_sid: houyicoder_context::SessionId,
     project: Option<String>,
-    provider: houyicoder_service::composition::ResolvedProvider,
+    provider: ResolvedProvider,
 ) -> Result<crate::WiredBundle, Box<dyn std::error::Error>> {
-    let resumed = houyicoder_service::composition::build_runner_for_fork(
+    let resumed = build_runner_for_fork(
         source_sid,
-        &houyicoder_service::composition::session_log_root(),
+        &session_log_root(),
         project,
-        Some(Arc::new(
-            houyicoder_permission::FileRuleStore::default_paths(),
-        )),
+        Some(Arc::new(FileRuleStore::default_paths())),
         provider,
     )?;
     Ok(crate::assemble_bundle(

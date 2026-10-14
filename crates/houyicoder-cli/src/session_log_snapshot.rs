@@ -224,5 +224,4 @@ impl TranscriptSnapshot for SessionLogSnapshot {
 }
 
 #[cfg(test)]
-#[path = "session_log_snapshot_tests.rs"]
 mod tests;

@@ -9,13 +9,32 @@ use std::path::{Path, PathBuf};
 
 use houyicoder_context::SessionId;
 use houyicoder_context::session_class::session_dir;
+#[cfg(unix)]
+use nix::errno::Errno;
+#[cfg(unix)]
+use nix::fcntl::Flock;
+#[cfg(unix)]
+use nix::fcntl::FlockArg;
+#[cfg(test)]
+use std::env::temp_dir;
+use std::fs::DirBuilder;
+use std::fs::File;
+use std::fs::OpenOptions;
+#[cfg(test)]
+use std::fs::create_dir_all;
+#[cfg(test)]
+use std::fs::remove_dir_all;
+#[cfg(test)]
+use std::fs::write;
+#[cfg(test)]
+use std::process::id;
 
 /// An held exclusive lock on a session's session.lock file. Drop releases
 /// it. On unix the fd is kept open for the guard's lifetime; on a non-unix
 /// build the guard holds nothing because no flock primitive exists.
 #[cfg(unix)]
 pub struct SessionLock {
-    _lock: nix::fcntl::Flock<std::fs::File>,
+    _lock: Flock<File>,
 }
 
 /// A no-op lock guard on a platform without flock. Holds nothing; acquire
@@ -60,12 +79,12 @@ impl SessionLock {
             Some(sid) => session_dir(sessions_root, sid),
             None => sessions_root.join(sid_str),
         };
-        std::fs::DirBuilder::new()
+        DirBuilder::new()
             .recursive(true)
             .create(&dir)
             .map_err(|e| LockError::Io(format!("mkdir {dir:?}: {e}")))?;
         let lock_path = dir.join("session.lock");
-        let file = std::fs::OpenOptions::new()
+        let file = OpenOptions::new()
             .create(true)
             .truncate(true)
             .write(true)
@@ -73,12 +92,9 @@ impl SessionLock {
             .map_err(|e| LockError::Io(format!("open {lock_path:?}: {e}")))?;
         // Non-blocking exclusive flock: EAGAIN means another live process
         // holds the lock. Flock is RAII: the guard's Drop releases the lock.
-        use nix::fcntl::{Flock, FlockArg};
         match Flock::lock(file, FlockArg::LockExclusiveNonblock) {
             Ok(lock) => Ok(Self { _lock: lock }),
-            Err((_file, nix::errno::Errno::EAGAIN)) => {
-                Err(LockError::HeldByOther(sid_str.to_string()))
-            }
+            Err((_file, Errno::EAGAIN)) => Err(LockError::HeldByOther(sid_str.to_string())),
             Err((_, e)) => Err(LockError::Io(format!("flock {lock_path:?}: {e}"))),
         }
     }
@@ -102,8 +118,8 @@ mod tests {
     fn temp_root() -> PathBuf {
         static SEQ: AtomicU64 = AtomicU64::new(0);
         let n = SEQ.fetch_add(1, Ordering::Relaxed);
-        let p = std::env::temp_dir().join(format!("session-lock-{}-{n}", std::process::id()));
-        std::fs::create_dir_all(&p).unwrap();
+        let p = temp_dir().join(format!("session-lock-{}-{n}", id()));
+        create_dir_all(&p).unwrap();
         p
     }
 
@@ -123,7 +139,7 @@ mod tests {
         }
         drop(first);
         let _second = SessionLock::acquire(&sid_str, &root).expect("acquire after drop");
-        std::fs::remove_dir_all(&root).ok();
+        remove_dir_all(&root).ok();
     }
 
     /// Different sids do not contend (each has its own lock file).
@@ -133,7 +149,7 @@ mod tests {
         let a = SessionLock::acquire(&SessionId::new().to_string(), &root).expect("acquire a");
         let _b = SessionLock::acquire(&SessionId::new().to_string(), &root).expect("acquire b");
         drop(a);
-        std::fs::remove_dir_all(&root).ok();
+        remove_dir_all(&root).ok();
     }
 
     /// A session whose directory is named in the ULID spelling locks beside
@@ -144,8 +160,8 @@ mod tests {
         let root = temp_root();
         let sid = SessionId::new();
         let legacy = root.join(sid.ulid_name());
-        std::fs::create_dir_all(&legacy).unwrap();
-        std::fs::write(legacy.join("log.jsonl"), "[]").unwrap();
+        create_dir_all(&legacy).unwrap();
+        write(legacy.join("log.jsonl"), "[]").unwrap();
 
         let _lock = SessionLock::acquire(&sid.to_string(), &root).expect("acquire");
         assert!(
@@ -156,6 +172,6 @@ mod tests {
             !root.join(sid.to_string()).exists(),
             "one session does not get a second directory"
         );
-        std::fs::remove_dir_all(&root).ok();
+        remove_dir_all(&root).ok();
     }
 }

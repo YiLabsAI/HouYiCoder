@@ -25,6 +25,10 @@ mod drain;
 pub(super) mod window_view;
 
 use super::view::build_view;
+use detail::TrajectoryDetailRead;
+use std::sync::mpsc::Receiver;
+use std::sync::mpsc::channel;
+use std::thread::spawn;
 
 /// How many turns the pane loads by default, and how many it adds each time
 /// the user asks for older history.
@@ -102,7 +106,7 @@ struct PendingPageRead {
     /// the page it returns is numbered from.
     total_turns: usize,
     read: PageRead,
-    rx: std::sync::mpsc::Receiver<TurnPage>,
+    rx: Receiver<TurnPage>,
     /// Set when the read is superseded, so a read with more to do than one
     /// page stops instead of finishing for nobody. A head read walks the log
     /// to find where the history began, and a superseded one that kept walking
@@ -209,7 +213,7 @@ pub struct SessionLogTrajectory {
     /// One turn's records, read when the user drills into it. Its own state: a
     /// page read and a detail read answer different questions and must not
     /// cancel each other.
-    detail: Mutex<detail::TrajectoryDetailRead>,
+    detail: Mutex<TrajectoryDetailRead>,
     /// Turns to load: one page at first, grown when the user walks past the
     /// oldest loaded turn.
     loaded_turns: AtomicUsize,
@@ -235,7 +239,7 @@ impl SessionLogTrajectory {
                 follow_tail: true,
                 ..TrajectoryState::default()
             }),
-            detail: Mutex::new(detail::TrajectoryDetailRead::default()),
+            detail: Mutex::new(TrajectoryDetailRead::default()),
             loaded_turns: AtomicUsize::new(TRAJECTORY_PAGE_TURNS),
         }
     }
@@ -272,8 +276,8 @@ impl SessionLogTrajectory {
         let epoch = dispatched.epoch;
         let cancel = Arc::new(AtomicBool::new(false));
         let worker_cancel = Arc::clone(&cancel);
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
+        let (tx, rx) = channel();
+        spawn(move || {
             let page = match read {
                 PageRead::Tail { to } => history.turns_before(to, page_turns, PAGE_MAX_BYTES),
                 PageRead::Append { from, to } => {

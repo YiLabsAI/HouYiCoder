@@ -54,10 +54,37 @@ pub(crate) use cli_args::{CliCommand, parse_args, print_help};
 pub(crate) use composition::{WiredBundle, assemble_bundle, build_bundle, build_bundle_for_resume};
 pub(crate) use local_host::{HostLease, HostLeaseScope, HostLeaseSlot, LeaseScopeGuard};
 
+use futures::StreamExt;
+use futures::channel::mpsc;
+use houyicoder_client::{Client, UdsTransport};
 use houyicoder_context::SessionId;
 use houyicoder_core::agent::Runner;
+use houyicoder_permission::FileRuleStore;
+use houyicoder_permission::ModeGate;
+use houyicoder_protocol::acpx::AcpxCapabilities;
+use houyicoder_service::CancellationToken;
+use houyicoder_service::acp_adapter::AcpAdapter;
+use houyicoder_service::acp_serve::AcpIo;
+use houyicoder_service::acp_server::AcpServer;
+use houyicoder_service::composition::BuildRunnerOptions;
 use houyicoder_service::composition::ResolvedProvider;
+use houyicoder_service::composition::SessionHost;
+use houyicoder_service::composition::build_runner;
+use houyicoder_service::composition::latest_session_sid;
+use houyicoder_service::composition::resolve_provider;
+use houyicoder_service::composition::workspace_cwd;
+use houyicoder_service::diagnostics::install;
+use houyicoder_service::lifecycle::SessionLeaseStore;
+use houyicoder_service::server::EventSequencer;
+use houyicoder_service::uds;
+use houyicoder_tui::app::run_with_runner;
 use session_lock::{LockError, SessionLock};
+use std::fs::remove_file;
+use std::io::stdin;
+use std::io::stdout;
+use std::io::{BufRead, Write};
+use std::process::id;
+use tokio::runtime::Builder;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<String> = env::args().skip(1).collect();
@@ -81,7 +108,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .unwrap_or_default()
         .join(".houyicoder")
         .join("debug.log");
-    if let Err(e) = houyicoder_service::diagnostics::install(&log_path) {
+    if let Err(e) = install(&log_path) {
         // Not fatal: the session proceeds without a diagnostic channel, and
         // /debug will report the sink is absent. Logged to stderr here
         // because the alternate screen is not up yet — this is the one
@@ -126,7 +153,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             Ok(())
         }
         CliCommand::Tui { project, model } => {
-            let provider = houyicoder_service::composition::resolve_provider(project.as_deref());
+            let provider = resolve_provider(project.as_deref());
             let (bundle, startup, host, runner) =
                 build_bundle(project.clone(), model, provider.clone());
             let (bundle, startup, lease) =
@@ -159,7 +186,7 @@ fn run_resume(value: String, project: Option<String>, fork: bool) -> Result<(), 
     {
         let _ = detach::cleanup_stale();
     }
-    let provider = houyicoder_service::composition::resolve_provider(project.as_deref());
+    let provider = resolve_provider(project.as_deref());
     let path = PathBuf::from(&value);
     if path.exists() {
         // Resume-from-export already forks a fresh sid (unique); --fork-session
@@ -195,14 +222,14 @@ fn run_continue(project: Option<String>, fork: bool) -> Result<(), Box<dyn Error
         let _ = detach::cleanup_stale();
     }
     let sessions_root = session_log_root();
-    let Some(sid) = houyicoder_service::composition::latest_session_sid(&sessions_root) else {
-        let cwd = houyicoder_service::composition::workspace_cwd(None);
+    let Some(sid) = latest_session_sid(&sessions_root) else {
+        let cwd = workspace_cwd(None);
         eprintln!(
             "no session in {cwd} to continue\n  --resume <sid>   continue a session by id\n  houyi            start a fresh one"
         );
         exit(2);
     };
-    let provider = houyicoder_service::composition::resolve_provider(project.as_deref());
+    let provider = resolve_provider(project.as_deref());
     let (bundle, startup, lease) = if fork {
         let (bundle, startup, host, runner) =
             resume_bundle::build_bundle_for_fork(sid, project.clone(), provider.clone())?;
@@ -309,16 +336,9 @@ fn build_lease_for_existing_sid_at(
 /// The runner wiring every binary entry shares: the disk persistence
 /// preset plus the default permission rule store. One site so a future
 /// entry cannot drift onto a different store configuration by accident.
-fn production_runner(
-    project: Option<String>,
-    provider: ResolvedProvider,
-) -> houyicoder_service::composition::BuildRunnerOptions {
-    let mut options = houyicoder_service::composition::BuildRunnerOptions::disk(
-        project,
-        Some(std::sync::Arc::new(
-            houyicoder_permission::FileRuleStore::default_paths(),
-        )),
-    );
+fn production_runner(project: Option<String>, provider: ResolvedProvider) -> BuildRunnerOptions {
+    let mut options =
+        BuildRunnerOptions::disk(project, Some(Arc::new(FileRuleStore::default_paths())));
     options.provider = Some(provider);
     options
 }
@@ -337,19 +357,13 @@ fn run_serve(
     socket: Option<String>,
     model_override: Option<String>,
 ) -> Result<(), Box<dyn Error>> {
-    use houyicoder_permission::ModeGate;
-    use houyicoder_service::composition::{SessionHost, build_runner};
-    use houyicoder_service::lifecycle::SessionLeaseStore;
-    use houyicoder_service::uds;
-    use std::sync::Arc;
-
-    let provider = houyicoder_service::composition::resolve_provider(project.as_deref());
+    let provider = resolve_provider(project.as_deref());
     let mut bundle = build_runner(production_runner(project, provider));
     if let Some(m) = &model_override {
         bundle.runner.set_model(m.clone());
     }
     eprintln!("session_id={}", bundle.session);
-    eprintln!("pid={}", std::process::id());
+    eprintln!("pid={}", id());
     let socket_path = match socket {
         Some(p) => {
             eprintln!("uds={p}");
@@ -364,14 +378,12 @@ fn run_serve(
     };
     // Remove a stale socket file at the path so a fresh bind does not fail on
     // a previous process that crashed without cleanup.
-    std::fs::remove_file(&socket_path).ok();
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()?;
+    remove_file(&socket_path).ok();
+    let runtime = Builder::new_multi_thread().enable_all().build()?;
     let host = Arc::new(SessionHost::new(SessionLeaseStore::new()));
-    let event_sequencer = houyicoder_service::server::EventSequencer::new();
+    let event_sequencer = EventSequencer::new();
     event_sequencer.install_on(&mut bundle.runner);
-    let relay_cancel = houyicoder_service::CancellationToken::new();
+    let relay_cancel = CancellationToken::new();
     let relay_handle = houyicoder_service::composition::fleet_status_relay::spawn(
         bundle.bus.clone(),
         event_sequencer.clone(),
@@ -407,12 +419,11 @@ fn run_serve(
 /// leaves the session alive for a later reattach.
 #[cfg(unix)]
 fn run_attach(socket: String, session_id: String) -> Result<(), Box<dyn Error>> {
-    use houyicoder_client::{Client, UdsTransport};
     let transport = UdsTransport::connect(&socket, 1024 * 1024)?;
     let client = Client::new(Box::new(transport));
     let (tx, rx) = channel::<SessionMessage>();
     let wire_session = houyicoder_protocol::frontend::SessionId(session_id);
-    let bundle = houyicoder_tui::composition::RunnerBundle {
+    let bundle = RunnerBundle {
         client,
         agent_tx: tx,
         agent_rx: rx,
@@ -423,7 +434,7 @@ fn run_attach(socket: String, session_id: String) -> Result<(), Box<dyn Error>> 
         snapshot: None,
         session_catalog: None,
     };
-    let startup = houyicoder_tui::composition::FrontendStartup {
+    let startup = FrontendStartup {
         skip_login: false,
         startup_warnings: Vec::new(),
         history_path: houyicoder_config::config_home().join("history.jsonl"),
@@ -431,7 +442,7 @@ fn run_attach(socket: String, session_id: String) -> Result<(), Box<dyn Error>> 
     // Attach mode has no session_log/descriptor_store, so the /resume picker
     // cannot open (run_resume reports no store wired); no /resume Command is
     // enqueued.
-    drop(houyicoder_tui::app::run_with_runner(bundle, startup, None)?);
+    drop(run_with_runner(bundle, startup, None)?);
     Ok(())
 }
 
@@ -447,18 +458,8 @@ fn run_acp_stdio(
     project: Option<String>,
     model_override: Option<String>,
 ) -> Result<(), Box<dyn Error>> {
-    use futures::StreamExt;
-    use futures::channel::mpsc;
-    use houyicoder_protocol::acpx::AcpxCapabilities;
-    use houyicoder_service::acp_adapter::AcpAdapter;
-    use houyicoder_service::acp_serve::AcpIo;
-    use houyicoder_service::acp_server::AcpServer;
-    use houyicoder_service::lifecycle::SessionLeaseStore;
-    use std::io::{BufRead, Write};
-
-    let provider = houyicoder_service::composition::resolve_provider(project.as_deref());
-    let bundle =
-        houyicoder_service::composition::build_runner(production_runner(project, provider));
+    let provider = resolve_provider(project.as_deref());
+    let bundle = build_runner(production_runner(project, provider));
     if let Some(m) = &model_override {
         bundle.runner.set_model(m.clone());
     }
@@ -485,7 +486,7 @@ fn run_acp_stdio(
     // read_line (tokio stdin has an event-loop blocking pitfall); EOF drops
     // the sender so the server sees a clean close.
     std::thread::spawn(move || {
-        let stdin = std::io::stdin();
+        let stdin = stdin();
         let mut tx = client_tx;
         for line in stdin.lock().lines() {
             match line {
@@ -503,9 +504,7 @@ fn run_acp_stdio(
     // calls) + the sandbox (subprocess spawns) have a runtime that can handle
     // blocking I/O + child reaping. serve returns when the client closes
     // stdin; the buffered outbound frames drain to stdout after.
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()?;
+    let runtime = Builder::new_multi_thread().enable_all().build()?;
     runtime.block_on(async move {
         housekeeping::fire_after_bundle(session);
         let server = AcpServer::new(adapter, runner, session);
@@ -514,7 +513,7 @@ fn run_acp_stdio(
         // sender) outlives serve. Drop it so the drain below terminates.
         drop(io);
         let mut out_rx = client_rx;
-        let stdout = std::io::stdout();
+        let stdout = stdout();
         let mut out = stdout.lock();
         while let Some(frame) = out_rx.next().await {
             drop(out.write_all(frame.as_bytes()));
@@ -651,7 +650,7 @@ fn run_tui_loop(
         }))
     };
     loop {
-        match houyicoder_tui::app::run_with_runner(bundle, startup, resume_builder.take()) {
+        match run_with_runner(bundle, startup, resume_builder.take()) {
             Ok(None) => break Ok(()),
             Ok(Some(new_target)) => {
                 match build_bundle_for_target(
@@ -673,5 +672,4 @@ fn run_tui_loop(
 }
 
 #[cfg(test)]
-#[path = "main_tests.rs"]
 mod tests;

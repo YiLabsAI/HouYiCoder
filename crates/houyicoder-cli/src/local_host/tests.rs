@@ -36,6 +36,8 @@ use tokio::task::yield_now;
 use super::*;
 use crate::composition::start_local_server;
 use crate::session_lock::{LockError, SessionLock};
+use futures::stream::once;
+use std::process::Command;
 
 fn temp_root() -> PathBuf {
     static SEQ: AtomicU64 = AtomicU64::new(0);
@@ -237,28 +239,28 @@ fn make_test_repo(tag: &str) -> PathBuf {
     #[expect(clippy::disallowed_methods, reason = "test scaffolding git init")]
     {
         drop(
-            std::process::Command::new("git")
+            Command::new("git")
                 .arg("-C")
                 .arg(&dir)
                 .args(["init", "-q"])
                 .status(),
         );
         drop(
-            std::process::Command::new("git")
+            Command::new("git")
                 .arg("-C")
                 .arg(&dir)
                 .args(["config", "user.email", "t@x"])
                 .status(),
         );
         drop(
-            std::process::Command::new("git")
+            Command::new("git")
                 .arg("-C")
                 .arg(&dir)
                 .args(["config", "user.name", "t"])
                 .status(),
         );
         drop(
-            std::process::Command::new("git")
+            Command::new("git")
                 .arg("-C")
                 .arg(&dir)
                 .args(["commit", "--allow-empty", "-m", "init", "-q"])
@@ -295,7 +297,7 @@ impl ModelProvider for GateProvider {
     fn stream(&self, _req: CompletionRequest) -> PStream<'_, Result<LlmEvent, ProviderError>> {
         self.entered.notify_one();
         let release = self.release.clone();
-        Box::pin(futures::stream::once(async move {
+        Box::pin(once(async move {
             release.notified().await;
             Err(ProviderError::Network)
         }))

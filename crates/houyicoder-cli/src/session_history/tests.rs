@@ -6,10 +6,33 @@ use super::*;
 use houyicoder_context::{EventId, SessionEvent, SessionLogEntry};
 use houyicoder_memory::LocalFileBackend;
 use houyicoder_session::SessionStore;
+use std::env::consts::ARCH;
+use std::env::consts::OS;
+use std::env::temp_dir;
+use std::env::var;
+use std::fs::File;
+use std::fs::create_dir_all;
+use std::fs::metadata;
+use std::fs::read_to_string;
+use std::fs::remove_dir_all;
+use std::fs::write;
+use std::io::BufReader;
+use std::io::BufWriter;
+use std::io::Write;
+use std::io::{BufRead, Seek, SeekFrom};
+use std::mem::size_of;
+use std::path::Path;
+use std::path::PathBuf;
+use std::process::Command;
+use std::process::id;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::time::Instant;
+use tokio::runtime::Runtime;
 
 /// A cancel flag no read sets: a test drives the read to its end.
-fn live() -> std::sync::atomic::AtomicBool {
-    std::sync::atomic::AtomicBool::new(false)
+fn live() -> AtomicBool {
+    AtomicBool::new(false)
 }
 
 fn ev(ts: u64, kind: SessionEvent) -> SessionLogEntry {
@@ -23,15 +46,11 @@ fn ev(ts: u64, kind: SessionEvent) -> SessionLogEntry {
 }
 
 /// A session of the given number of turns, each a user input then an answer.
-fn session_of(turns: usize) -> (SessionHistory, SessionId, std::path::PathBuf) {
-    let root = std::env::temp_dir().join(format!(
-        "houyi_history_page_{}_{}",
-        SessionId::new(),
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&root).expect("create temp root");
+fn session_of(turns: usize) -> (SessionHistory, SessionId, PathBuf) {
+    let root = temp_dir().join(format!("houyi_history_page_{}_{}", SessionId::new(), id()));
+    create_dir_all(&root).expect("create temp root");
     let store = SessionStore::new(Box::new(LocalFileBackend::new(root.clone())));
-    let rt = tokio::runtime::Runtime::new().expect("test runtime");
+    let rt = Runtime::new().expect("test runtime");
     let session = SessionId::new();
     let mut events = Vec::new();
     for i in 0..turns {
@@ -58,7 +77,7 @@ fn session_of(turns: usize) -> (SessionHistory, SessionId, std::path::PathBuf) {
     for event in events {
         rt.block_on(store.append(event)).expect("append");
     }
-    let history = SessionHistory::new(std::sync::Arc::new(store), session);
+    let history = SessionHistory::new(Arc::new(store), session);
     (history, session, root)
 }
 
@@ -177,14 +196,14 @@ fn test_head_page_at_end() {
 /// first turn after the event that began the epoch, not the log's first turn.
 #[test]
 fn test_head_page_after_clear() {
-    let root = std::env::temp_dir().join(format!(
+    let root = temp_dir().join(format!(
         "houyi_history_head_clear_{}_{}",
         SessionId::new(),
-        std::process::id()
+        id()
     ));
-    std::fs::create_dir_all(&root).expect("create temp root");
+    create_dir_all(&root).expect("create temp root");
     let store = SessionStore::new(Box::new(LocalFileBackend::new(root)));
-    let rt = tokio::runtime::Runtime::new().expect("test runtime");
+    let rt = Runtime::new().expect("test runtime");
     let session = SessionId::new();
     for i in 0..4u64 {
         rt.block_on(store.append(SessionLogEntry {
@@ -217,7 +236,7 @@ fn test_head_page_after_clear() {
         .expect("append after");
     }
 
-    let history = SessionHistory::new(std::sync::Arc::new(store), session);
+    let history = SessionHistory::new(Arc::new(store), session);
     let page = history.head_turns(Some(clear_id), 3, PAGE_MAX_BYTES, &live());
     let prompts: Vec<String> = page
         .events
@@ -250,14 +269,14 @@ fn test_head_page_unknown_epoch() {
 /// forward walk grows its step rather than returning an empty page.
 #[test]
 fn test_head_page_wide_first() {
-    let root = std::env::temp_dir().join(format!(
+    let root = temp_dir().join(format!(
         "houyi_history_head_wide_{}_{}",
         SessionId::new(),
-        std::process::id()
+        id()
     ));
-    std::fs::create_dir_all(&root).expect("create temp root");
+    create_dir_all(&root).expect("create temp root");
     let store = SessionStore::new(Box::new(LocalFileBackend::new(root)));
-    let rt = tokio::runtime::Runtime::new().expect("test runtime");
+    let rt = Runtime::new().expect("test runtime");
     let session = SessionId::new();
     let mut events = vec![SessionLogEntry {
         session,
@@ -283,7 +302,7 @@ fn test_head_page_wide_first() {
     for event in events {
         rt.block_on(store.append(event)).expect("append");
     }
-    let history = SessionHistory::new(std::sync::Arc::new(store), session);
+    let history = SessionHistory::new(Arc::new(store), session);
     let page = history.head_turns(None, 2, PAGE_MAX_BYTES, &live());
     assert!(
         page.turn_count() == 2,
@@ -307,14 +326,10 @@ fn test_page_at_log_start() {
 /// has to grow rather than the page giving up.
 #[test]
 fn test_page_reads_wide_event() {
-    let root = std::env::temp_dir().join(format!(
-        "houyi_history_wide_{}_{}",
-        SessionId::new(),
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&root).expect("create temp root");
+    let root = temp_dir().join(format!("houyi_history_wide_{}_{}", SessionId::new(), id()));
+    create_dir_all(&root).expect("create temp root");
     let store = SessionStore::new(Box::new(LocalFileBackend::new(root.clone())));
-    let rt = tokio::runtime::Runtime::new().expect("test runtime");
+    let rt = Runtime::new().expect("test runtime");
     let session = SessionId::new();
     let mut events = Vec::new();
     for i in 0..2u64 {
@@ -342,7 +357,7 @@ fn test_page_reads_wide_event() {
     for event in events {
         rt.block_on(store.append(event)).expect("append");
     }
-    let history = SessionHistory::new(std::sync::Arc::new(store), session);
+    let history = SessionHistory::new(Arc::new(store), session);
     let page = history.turns_before(history.log_size(), 2, PAGE_MAX_BYTES);
     let prompts: Vec<String> = page
         .events
@@ -363,14 +378,10 @@ fn test_page_reads_wide_event() {
 /// not read past it and show turns the session no longer counts.
 #[test]
 fn test_page_stops_at_clear() {
-    let root = std::env::temp_dir().join(format!(
-        "houyi_history_clear_{}_{}",
-        SessionId::new(),
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&root).expect("create temp root");
+    let root = temp_dir().join(format!("houyi_history_clear_{}_{}", SessionId::new(), id()));
+    create_dir_all(&root).expect("create temp root");
     let store = SessionStore::new(Box::new(LocalFileBackend::new(root.clone())));
-    let rt = tokio::runtime::Runtime::new().expect("test runtime");
+    let rt = Runtime::new().expect("test runtime");
     let session = SessionId::new();
     let events = vec![
         SessionLogEntry {
@@ -399,7 +410,7 @@ fn test_page_stops_at_clear() {
     for event in events {
         rt.block_on(store.append(event)).expect("append");
     }
-    let history = SessionHistory::new(std::sync::Arc::new(store), session);
+    let history = SessionHistory::new(Arc::new(store), session);
     let page = history.turns_before(history.log_size(), 10, PAGE_MAX_BYTES);
     let prompts: Vec<String> = page
         .events
@@ -421,14 +432,14 @@ fn test_page_stops_at_clear() {
 /// step forever and losing the valid history behind them.
 #[test]
 fn test_page_skips_corrupt_chunk() {
-    let root = std::env::temp_dir().join(format!(
+    let root = temp_dir().join(format!(
         "houyi_history_corrupt_{}_{}",
         SessionId::new(),
-        std::process::id()
+        id()
     ));
-    std::fs::create_dir_all(&root).expect("create temp root");
+    create_dir_all(&root).expect("create temp root");
     let store = SessionStore::new(Box::new(LocalFileBackend::new(root.clone())));
-    let rt = tokio::runtime::Runtime::new().expect("test runtime");
+    let rt = Runtime::new().expect("test runtime");
     let session = SessionId::new();
     rt.block_on(store.append(SessionLogEntry {
         session,
@@ -439,23 +450,23 @@ fn test_page_skips_corrupt_chunk() {
     // step of its own, sitting between the two turns.
     let log = root.join(session.to_string()).join("log.jsonl");
     if let Some(parent) = log.parent() {
-        std::fs::create_dir_all(parent).ok();
+        create_dir_all(parent).ok();
     }
-    let mut existing = std::fs::read_to_string(&log).unwrap_or_default();
+    let mut existing = read_to_string(&log).unwrap_or_default();
     for _ in 0..40 {
         existing.push_str(&format!(
             "{{\"not\":\"an event\",\"pad\":\"{}\"}}\n",
             "x".repeat(8 * 1024)
         ));
     }
-    std::fs::write(&log, existing).expect("write corrupt lines");
+    write(&log, existing).expect("write corrupt lines");
     rt.block_on(store.append(SessionLogEntry {
         session,
         ..ev(10, SessionEvent::UserInput { text: "new".into() })
     }))
     .expect("append new");
 
-    let history = SessionHistory::new(std::sync::Arc::new(store), session);
+    let history = SessionHistory::new(Arc::new(store), session);
     let page = history.turns_before(history.log_size(), 5, PAGE_MAX_BYTES);
     let prompts: Vec<String> = page
         .events
@@ -479,14 +490,10 @@ fn test_page_skips_corrupt_chunk() {
 /// page rather than loop or read without bound.
 #[test]
 fn test_page_caps_oversized_event() {
-    let root = std::env::temp_dir().join(format!(
-        "houyi_history_huge_{}_{}",
-        SessionId::new(),
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&root).expect("create temp root");
+    let root = temp_dir().join(format!("houyi_history_huge_{}_{}", SessionId::new(), id()));
+    create_dir_all(&root).expect("create temp root");
     let store = SessionStore::new(Box::new(LocalFileBackend::new(root.clone())));
-    let rt = tokio::runtime::Runtime::new().expect("test runtime");
+    let rt = Runtime::new().expect("test runtime");
     let session = SessionId::new();
     let events = vec![
         SessionLogEntry {
@@ -508,7 +515,7 @@ fn test_page_caps_oversized_event() {
     for event in events {
         rt.block_on(store.append(event)).expect("append");
     }
-    let history = SessionHistory::new(std::sync::Arc::new(store), session);
+    let history = SessionHistory::new(Arc::new(store), session);
     let page = history.turns_before(history.log_size(), 5, PAGE_MAX_BYTES);
     assert!(
         page.oldest_partial,
@@ -541,15 +548,11 @@ fn test_page_budget_reports_partial() {
 /// chain would measure the writer instead.
 #[test]
 fn test_long_log_page_bounded() {
-    let root = std::env::temp_dir().join(format!(
-        "houyi_history_long_{}_{}",
-        SessionId::new(),
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&root).expect("create temp root");
+    let root = temp_dir().join(format!("houyi_history_long_{}_{}", SessionId::new(), id()));
+    create_dir_all(&root).expect("create temp root");
     let session = SessionId::new();
     let log = root.join(session.to_string()).join("log.jsonl");
-    std::fs::create_dir_all(log.parent().expect("log parent")).expect("mkdir session");
+    create_dir_all(log.parent().expect("log parent")).expect("mkdir session");
     let mut body = String::with_capacity(12 * 1024 * 1024);
     for i in 0..50_000u64 {
         for (offset, event) in [
@@ -572,10 +575,10 @@ fn test_long_log_page_bounded() {
             body.push('\n');
         }
     }
-    std::fs::write(&log, body).expect("write log");
+    write(&log, body).expect("write log");
 
     let store = SessionStore::new(Box::new(LocalFileBackend::new(root)));
-    let history = SessionHistory::new(std::sync::Arc::new(store), session);
+    let history = SessionHistory::new(Arc::new(store), session);
     let page = history.turns_before(history.log_size(), 100, PAGE_MAX_BYTES);
     let turns = page
         .events
@@ -612,17 +615,14 @@ fn test_long_log_page_bounded() {
 /// window back to the tail on the next walk.
 #[test]
 fn test_anchor_holds_wide_turn() {
-    use houyicoder_memory::LocalFileBackend;
-    use houyicoder_session::SessionStore;
-
-    let root = std::env::temp_dir().join(format!(
+    let root = temp_dir().join(format!(
         "houyi_history_anchor_wide_{}_{}",
         SessionId::new(),
-        std::process::id()
+        id()
     ));
-    std::fs::create_dir_all(&root).expect("create temp root");
+    create_dir_all(&root).expect("create temp root");
     let store = SessionStore::new(Box::new(LocalFileBackend::new(root)));
-    let rt = tokio::runtime::Runtime::new().expect("test runtime");
+    let rt = Runtime::new().expect("test runtime");
     let session = SessionId::new();
     let mut events = vec![SessionLogEntry {
         session,
@@ -645,7 +645,7 @@ fn test_anchor_holds_wide_turn() {
     for event in events {
         rt.block_on(store.append(event)).expect("append");
     }
-    let history = SessionHistory::new(std::sync::Arc::new(store), session);
+    let history = SessionHistory::new(Arc::new(store), session);
     let page = history.turns_before(history.log_size(), 2, PAGE_MAX_BYTES);
     let anchor = page
         .oldest_anchor
@@ -663,18 +663,15 @@ fn test_anchor_holds_wide_turn() {
 /// with one turn before the clear so the head read has to walk back to find the
 /// epoch. Written directly: this measures the read, not the writer.
 fn far_clear_history() -> (SessionHistory, EventId) {
-    use houyicoder_memory::LocalFileBackend;
-    use houyicoder_session::SessionStore;
-
-    let root = std::env::temp_dir().join(format!(
+    let root = temp_dir().join(format!(
         "houyi_history_far_clear_{}_{}",
         SessionId::new(),
-        std::process::id()
+        id()
     ));
-    std::fs::create_dir_all(&root).expect("create temp root");
+    create_dir_all(&root).expect("create temp root");
     let session = SessionId::new();
     let log = root.join(session.to_string()).join("log.jsonl");
-    std::fs::create_dir_all(log.parent().expect("log parent")).expect("mkdir session");
+    create_dir_all(log.parent().expect("log parent")).expect("mkdir session");
     let mut body = String::with_capacity(20 * 1024 * 1024);
     let before = SessionLogEntry {
         session,
@@ -707,14 +704,14 @@ fn far_clear_history() -> (SessionHistory, EventId) {
         body.push_str(&serde_json::to_string(&entry).expect("serialize"));
         body.push('\n');
     }
-    std::fs::write(&log, body).expect("write log");
+    write(&log, body).expect("write log");
     assert!(
-        std::fs::metadata(&log).expect("stat").len() > 8 * 1024 * 1024,
+        metadata(&log).expect("stat").len() > 8 * 1024 * 1024,
         "the clear has to sit beyond one scan chunk for this to prove anything"
     );
 
     let store = SessionStore::new(Box::new(LocalFileBackend::new(root)));
-    let history = SessionHistory::new(std::sync::Arc::new(store), session);
+    let history = SessionHistory::new(Arc::new(store), session);
     (history, clear_id)
 }
 
@@ -749,17 +746,14 @@ fn test_head_page_far_clear() {
 /// must not keep reading a long log for a page that will be dropped.
 #[test]
 fn test_head_page_cancelled() {
-    use houyicoder_memory::LocalFileBackend;
-    use houyicoder_session::SessionStore;
-
-    let root = std::env::temp_dir().join(format!(
+    let root = temp_dir().join(format!(
         "houyi_history_head_cancel_{}_{}",
         SessionId::new(),
-        std::process::id()
+        id()
     ));
-    std::fs::create_dir_all(&root).expect("create temp root");
+    create_dir_all(&root).expect("create temp root");
     let store = SessionStore::new(Box::new(LocalFileBackend::new(root)));
-    let rt = tokio::runtime::Runtime::new().expect("test runtime");
+    let rt = Runtime::new().expect("test runtime");
     let session = SessionId::new();
     for i in 0..3u64 {
         rt.block_on(store.append(SessionLogEntry {
@@ -773,8 +767,8 @@ fn test_head_page_cancelled() {
         }))
         .expect("append");
     }
-    let history = SessionHistory::new(std::sync::Arc::new(store), session);
-    let cancelled = std::sync::atomic::AtomicBool::new(true);
+    let history = SessionHistory::new(Arc::new(store), session);
+    let cancelled = AtomicBool::new(true);
     let page = history.head_turns(None, 3, PAGE_MAX_BYTES, &cancelled);
     assert!(
         page.events.is_empty(),
@@ -792,7 +786,7 @@ fn test_head_page_cancelled() {
 fn test_head_page_cancel_walk() {
     let (history, clear_id) = far_clear_history();
     let (_, _, before) = history.read_stats();
-    let cancelled = std::sync::atomic::AtomicBool::new(true);
+    let cancelled = AtomicBool::new(true);
     let page = history.head_turns(Some(clear_id), 3, PAGE_MAX_BYTES, &cancelled);
     assert!(
         page.events.is_empty(),
@@ -918,12 +912,11 @@ struct MeasurementFixtureState {
 /// Serialize one fixture event as a JSONL line, advancing the generator
 /// state.
 fn write_measurement_event(
-    out: &mut std::io::BufWriter<std::fs::File>,
+    out: &mut BufWriter<File>,
     state: &mut MeasurementFixtureState,
     sid: SessionId,
     event: SessionEvent,
 ) {
-    use std::io::Write;
     let entry = SessionLogEntry {
         id: EventId::new(),
         session: sid,
@@ -942,7 +935,7 @@ fn write_measurement_event(
 /// One production-shaped turn: a start, a prompt, reasoning, a tool call and
 /// its result, and the answer.
 fn write_measurement_turn(
-    out: &mut std::io::BufWriter<std::fs::File>,
+    out: &mut BufWriter<File>,
     state: &mut MeasurementFixtureState,
     sid: SessionId,
     turn: usize,
@@ -1010,13 +1003,11 @@ fn write_measurement_turn(
 /// The event shape matches the TUI crate's large-fixture seeder, so the
 /// index-build measurement and the page-up measurement compare over the same
 /// turn layout; a change here must be mirrored there.
-fn seed_measurement_log(root: &std::path::Path, sid: SessionId, target_bytes: u64) -> (u64, usize) {
-    use std::io::Write;
-
+fn seed_measurement_log(root: &Path, sid: SessionId, target_bytes: u64) -> (u64, usize) {
     let dir = root.join(sid.to_string());
-    std::fs::create_dir_all(&dir).expect("mkdir session dir");
-    let file = std::fs::File::create(dir.join("log.jsonl")).expect("create log");
-    let mut out = std::io::BufWriter::with_capacity(1 << 20, file);
+    create_dir_all(&dir).expect("mkdir session dir");
+    let file = File::create(dir.join("log.jsonl")).expect("create log");
+    let mut out = BufWriter::with_capacity(1 << 20, file);
 
     let mut state = MeasurementFixtureState {
         depth_bytes: 0,
@@ -1040,8 +1031,8 @@ fn seed_measurement_log(root: &std::path::Path, sid: SessionId, target_bytes: u6
     reason = "measurement sampling of the test process, not an engine command"
 )]
 fn self_rss_kb() -> Option<u64> {
-    let out = std::process::Command::new("ps")
-        .args(["-o", "rss=", "-p", &std::process::id().to_string()])
+    let out = Command::new("ps")
+        .args(["-o", "rss=", "-p", &id().to_string()])
         .output()
         .ok()?;
     String::from_utf8_lossy(&out.stdout)
@@ -1066,16 +1057,16 @@ struct IndexBuildRun {
 impl IndexBuildRun {
     /// Seed a fixture of the target size under root and build the whole
     /// index, timing every chunk.
-    fn measure(root: &std::path::Path, sid: SessionId, target: u64) -> Self {
+    fn measure(root: &Path, sid: SessionId, target: u64) -> Self {
         let (log_bytes, event_count) = seed_measurement_log(root, sid, target);
         let store = SessionStore::new(Box::new(LocalFileBackend::new(root.to_path_buf())));
-        let history = SessionHistory::new(std::sync::Arc::new(store), sid);
+        let history = SessionHistory::new(Arc::new(store), sid);
 
         let rss_before_kb = self_rss_kb();
-        let build_start = std::time::Instant::now();
+        let build_start = Instant::now();
         let mut chunk_ms: Vec<f64> = Vec::new();
         let progress = loop {
-            let step = std::time::Instant::now();
+            let step = Instant::now();
             let p = history.index_chunk();
             chunk_ms.push(step.elapsed().as_secs_f64() * 1000.0);
             if p.done {
@@ -1102,9 +1093,7 @@ impl IndexBuildRun {
     /// Correctness rides along with the timing: the index must count every
     /// event, stay monotonic in byte offset, and land each spot-checked
     /// offset on a parseable event line.
-    fn verify(&self, root: &std::path::Path) {
-        use std::io::{BufRead, Seek, SeekFrom};
-
+    fn verify(&self, root: &Path) {
         let counted = self.history.event_count().expect("index done");
         assert_eq!(counted, self.event_count, "every event indexed");
 
@@ -1114,11 +1103,11 @@ impl IndexBuildRun {
             assert!(off >= prev, "offsets monotonic at {i}");
             prev = off;
         }
-        let file = std::fs::File::open(root.join(self.sid.to_string()).join("log.jsonl"))
-            .expect("reopen log");
+        let file =
+            File::open(root.join(self.sid.to_string()).join("log.jsonl")).expect("reopen log");
         for i in [0usize, counted / 2, counted - 1] {
             let off = self.history.byte_at(i).expect("offset covered");
-            let mut reader = std::io::BufReader::new(&file);
+            let mut reader = BufReader::new(&file);
             reader.seek(SeekFrom::Start(off)).expect("seek");
             let mut line = String::new();
             reader.read_line(&mut line).expect("read line");
@@ -1130,7 +1119,7 @@ impl IndexBuildRun {
     }
 
     fn offsets_bytes(&self) -> usize {
-        self.event_count * std::mem::size_of::<u64>()
+        self.event_count * size_of::<u64>()
     }
 
     fn chunk_stats(&self) -> (f64, f64) {
@@ -1176,11 +1165,10 @@ impl IndexBuildRun {
 #[test]
 #[ignore = "measurement workload; run via the history benchmark target"]
 fn test_index_build_baseline() {
-    let run_id = std::env::var("HOUYI_BENCH_RUN_ID")
-        .unwrap_or_else(|_| format!("adhoc-{}", std::process::id()));
-    let sha = std::env::var("HOUYI_GIT_SHA").unwrap_or_else(|_| "unknown".into());
-    let run_dir = std::path::Path::new("target/measurements/history-index").join(&run_id);
-    std::fs::create_dir_all(&run_dir).expect("measurements dir");
+    let run_id = var("HOUYI_BENCH_RUN_ID").unwrap_or_else(|_| format!("adhoc-{}", id()));
+    let sha = var("HOUYI_GIT_SHA").unwrap_or_else(|_| "unknown".into());
+    let run_dir = Path::new("target/measurements/history-index").join(&run_id);
+    create_dir_all(&run_dir).expect("measurements dir");
 
     let sizes = [16u64 * 1024 * 1024, 64 * 1024 * 1024];
     let mut rows = String::from(
@@ -1188,16 +1176,13 @@ fn test_index_build_baseline() {
     );
 
     for target in sizes {
-        let root = std::env::temp_dir().join(format!(
-            "houyi_index_measure_{target}_{}",
-            std::process::id()
-        ));
-        std::fs::create_dir_all(&root).expect("fixture root");
+        let root = temp_dir().join(format!("houyi_index_measure_{target}_{}", id()));
+        create_dir_all(&root).expect("fixture root");
         let run = IndexBuildRun::measure(&root, SessionId::new(), target);
         run.verify(&root);
         rows.push_str(&run.csv_row());
         println!("{}", run.report_line());
-        drop(std::fs::remove_dir_all(&root));
+        drop(remove_dir_all(&root));
     }
 
     let profile = if cfg!(debug_assertions) {
@@ -1205,17 +1190,16 @@ fn test_index_build_baseline() {
     } else {
         "release"
     };
-    std::fs::write(
+    write(
         run_dir.join("meta.txt"),
         format!(
             "sha {sha}\nrun_id {run_id}\nprofile {profile}\nos {} {}\nindex_chunk_bytes \
              {INDEX_CHUNK_BYTES}\nsizes 16MiB 64MiB\n",
-            std::env::consts::OS,
-            std::env::consts::ARCH
+            OS, ARCH
         ),
     )
     .expect("write meta");
-    std::fs::write(run_dir.join("index_build.csv"), &rows).expect("write rows");
+    write(run_dir.join("index_build.csv"), &rows).expect("write rows");
     println!("history index baseline ({})", run_dir.display());
     print!("{rows}");
 }

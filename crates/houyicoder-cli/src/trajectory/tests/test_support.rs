@@ -14,10 +14,12 @@ use houyicoder_context::{
     ReverseRead, SessionId, SessionLogEntry,
 };
 use houyicoder_memory::LocalFileBackend;
+use std::path::PathBuf;
+use std::pin::Pin;
 
 /// The future type the backend trait spells, without depending on the crate
 /// that names its alias.
-type PFut<'a, T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;
+type PFut<'a, T> = Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;
 
 /// A file backend whose first range read waits for the test, so an append or a
 /// window move can land while a read is in flight.
@@ -36,7 +38,7 @@ pub(super) struct GatedRangeBackend {
 /// know a range read has started, send on the sender (or drop it) to let the
 /// read finish.
 pub(super) fn gated_range_backend(
-    root: std::path::PathBuf,
+    root: PathBuf,
 ) -> (GatedRangeBackend, mpsc::Receiver<()>, mpsc::Sender<()>) {
     let (entered_tx, entered_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel();

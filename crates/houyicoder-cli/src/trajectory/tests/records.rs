@@ -2,6 +2,7 @@
 //! memory rows, hook verdicts, and call numbering.
 
 use super::super::view::*;
+use houyicoder_context::HookVerdictKind;
 use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
 use houyicoder_tui::view::trajectory_pane::{RecordOutcome, TrajectoryRecordKind, TrajectoryRow};
 
@@ -388,7 +389,7 @@ fn test_hook_verdict_neutral() {
             110,
             SessionEvent::HookSignal {
                 event: Default::default(),
-                verdict: houyicoder_context::HookVerdictKind::Observe,
+                verdict: HookVerdictKind::Observe,
                 error: None,
                 reason: "noted".into(),
                 hook_name: "audit".into(),
@@ -402,7 +403,7 @@ fn test_hook_verdict_neutral() {
             120,
             SessionEvent::HookSignal {
                 event: Default::default(),
-                verdict: houyicoder_context::HookVerdictKind::Deny,
+                verdict: HookVerdictKind::Deny,
                 error: None,
                 reason: "no backticks".into(),
                 hook_name: "style".into(),

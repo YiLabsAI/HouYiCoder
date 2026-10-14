@@ -48,7 +48,28 @@ const MARKER_THROTTLE_SECS: u64 = 24 * 60 * 60;
 // ceilings below are sweep/cleanup-only and stay here.
 const SNAPSHOT_TTL_SECS: u64 = 7 * 24 * 60 * 60;
 const DEBUG_MAX_BYTES: u64 = 10 * 1024 * 1024;
+#[cfg(test)]
+use crate::session_lock::SessionLock;
+use houyicoder_service::composition::session_log_root;
 use houyicoder_service::session_prune::EMPTY_TTL_SECS;
+use std::env::current_dir;
+#[cfg(test)]
+use std::env::temp_dir;
+use std::fs::File;
+use std::fs::create_dir_all;
+use std::fs::metadata;
+#[cfg(test)]
+use std::fs::read;
+use std::fs::read_dir;
+#[cfg(test)]
+use std::fs::remove_dir_all;
+use std::fs::write;
+#[cfg(test)]
+use std::process::id;
+#[cfg(test)]
+use std::sync::atomic::{AtomicU64, Ordering};
+use tokio::task::spawn_blocking;
+use tokio::time::sleep;
 
 /// Fire-and-forget: after a 10-minute delay the prune runs on a
 /// spawn_blocking thread. Call from a long-lived entry's runtime context
@@ -62,8 +83,8 @@ pub fn start_background_housekeeping(
     let home = config_home();
     let shell_snapshots = home.join("shell-snapshots");
     tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_secs(DELAY_SECS)).await;
-        tokio::task::spawn_blocking(move || {
+        sleep(Duration::from_secs(DELAY_SECS)).await;
+        spawn_blocking(move || {
             run_once(
                 &home,
                 &sessions_root,
@@ -164,10 +185,10 @@ fn run_once(
 /// Drop releases. Unix-only (flock is a unix primitive); a non-unix build
 /// has no cross-process lock (best-effort, single-process).
 #[cfg(unix)]
-fn acquire_prune_lock(home: &Path) -> Option<Flock<std::fs::File>> {
+fn acquire_prune_lock(home: &Path) -> Option<Flock<File>> {
     let path = home.join(".prune.lock");
     if let Some(parent) = path.parent() {
-        let _r = std::fs::create_dir_all(parent);
+        let _r = create_dir_all(parent);
     }
     let file = match OpenOptions::new()
         .create(true)
@@ -189,7 +210,7 @@ fn acquire_prune_lock(_home: &Path) -> Option<()> {
 
 /// True if the marker was written less than 24h ago (throttle).
 fn marker_throttled(path: &Path) -> bool {
-    let Ok(meta) = std::fs::metadata(path) else {
+    let Ok(meta) = metadata(path) else {
         return false;
     };
     let Ok(modified) = meta.modified() else {
@@ -213,9 +234,9 @@ fn write_marker(path: &Path, report: &PruneReport, prunable: usize) {
         "prunable": prunable,
     });
     if let Some(parent) = path.parent() {
-        let _r = std::fs::create_dir_all(parent);
+        let _r = create_dir_all(parent);
     }
-    if std::fs::write(path, body.to_string()).is_err() {
+    if write(path, body.to_string()).is_err() {
         tracing::warn!("housekeeping: could not write marker {path:?}");
     }
 }
@@ -224,8 +245,8 @@ fn write_marker(path: &Path, report: &PruneReport, prunable: usize) {
 /// path derived from the cwd. Call from a long-lived entry's runtime
 /// context (inside block_on or a runtime spawn) after the bundle is ready.
 pub fn fire_after_bundle(session: SessionId) {
-    let root = houyicoder_service::composition::session_log_root();
-    let debug = std::env::current_dir()
+    let root = session_log_root();
+    let debug = current_dir()
         .unwrap_or_default()
         .join(".houyicoder")
         .join("debug.log");
@@ -247,8 +268,7 @@ pub fn fire_after_bundle(session: SessionId) {
 /// (a session resumed between this scan and the apply is caught there).
 #[cfg(unix)]
 pub(crate) fn scan_lock_held_sessions(sessions_root: &Path) -> Vec<SessionId> {
-    use houyicoder_context::SessionId;
-    let Ok(entries) = std::fs::read_dir(sessions_root) else {
+    let Ok(entries) = read_dir(sessions_root) else {
         return Vec::new();
     };
     let mut held = Vec::new();
@@ -294,7 +314,7 @@ pub(crate) fn scan_lock_held_sessions(_sessions_root: &Path) -> Vec<SessionId> {
 /// separate functions rather than one with a create flag because folding
 /// them together is what hid the missing create from review once already.
 #[cfg(unix)]
-fn probe_session_lock(lock_path: &Path) -> Option<Flock<std::fs::File>> {
+fn probe_session_lock(lock_path: &Path) -> Option<Flock<File>> {
     let file = OpenOptions::new().write(true).open(lock_path).ok()?;
     Flock::lock(file, FlockArg::LockExclusiveNonblock).ok()
 }
@@ -311,7 +331,7 @@ fn probe_session_lock(lock_path: &Path) -> Option<Flock<std::fs::File>> {
 /// None means the lock is held by a live process, or the file could not be
 /// created or opened. All three protect the session (fail-closed).
 #[cfg(unix)]
-fn acquire_delete_lock(session_dir: &Path) -> Option<Flock<std::fs::File>> {
+fn acquire_delete_lock(session_dir: &Path) -> Option<Flock<File>> {
     // truncate(false) on purpose: the open happens before the flock, so it
     // can land on a file a live session holds, and rewriting another
     // process's lock file is no business of a probe. Nothing reads the
@@ -370,7 +390,7 @@ pub(crate) fn build_prune_context(
 /// acquire_prune_lock so the cleanup subcommand does not name the Flock
 /// type directly.
 #[cfg(unix)]
-pub(crate) fn try_prune_lock(home: &Path) -> Option<Flock<std::fs::File>> {
+pub(crate) fn try_prune_lock(home: &Path) -> Option<Flock<File>> {
     acquire_prune_lock(home)
 }
 
@@ -454,12 +474,11 @@ mod tests {
     use std::path::PathBuf;
 
     fn temp_root() -> PathBuf {
-        use std::sync::atomic::{AtomicU64, Ordering};
         static SEQ: AtomicU64 = AtomicU64::new(0);
         let n = SEQ.fetch_add(1, Ordering::Relaxed);
-        let p = std::env::temp_dir().join(format!("housekeeping-{n}-{}", std::process::id()));
-        let _r = std::fs::remove_dir_all(&p);
-        std::fs::create_dir_all(&p).unwrap();
+        let p = temp_dir().join(format!("housekeeping-{n}-{}", id()));
+        let _r = remove_dir_all(&p);
+        create_dir_all(&p).unwrap();
         p
     }
 
@@ -468,10 +487,10 @@ mod tests {
     /// live process has ever opened does not have one, which is the case the
     /// delete-time acquire has to create.
     fn plan_with_session(dir: &Path, with_lock: bool) -> PrunePlan {
-        std::fs::create_dir_all(dir).unwrap();
-        std::fs::write(dir.join("log.jsonl"), b"[]").unwrap();
+        create_dir_all(dir).unwrap();
+        write(dir.join("log.jsonl"), b"[]").unwrap();
         if with_lock {
-            std::fs::write(dir.join("session.lock"), b"").unwrap();
+            write(dir.join("session.lock"), b"").unwrap();
         }
         PrunePlan {
             entries: vec![PruneEntry {
@@ -497,7 +516,7 @@ mod tests {
         assert_eq!(report.removed, 1, "free session removed");
         assert_eq!(skipped, 0, "nothing skipped");
         assert!(!sid_dir.exists(), "the directory is gone");
-        let _r = std::fs::remove_dir_all(&root);
+        let _r = remove_dir_all(&root);
     }
 
     /// A session whose lock a live process holds survives, and the skip is
@@ -520,7 +539,7 @@ mod tests {
         assert_eq!(report.removed, 0, "a held session is not deleted");
         assert_eq!(skipped, 1, "the skip is counted, not silently dropped");
         assert!(sid_dir.exists(), "the held session survives");
-        let _r = std::fs::remove_dir_all(&root);
+        let _r = remove_dir_all(&root);
     }
 
     /// The property the whole lock exists for: while the prune holds a
@@ -538,14 +557,14 @@ mod tests {
         let root = temp_root();
         let sid_str = "cccccccc-cccc-cccc-cccc-cccccccccccc";
         let sid_dir = root.join(sid_str);
-        std::fs::create_dir_all(&sid_dir).unwrap();
-        std::fs::write(sid_dir.join("log.jsonl"), b"[]").unwrap();
+        create_dir_all(&sid_dir).unwrap();
+        write(sid_dir.join("log.jsonl"), b"[]").unwrap();
         assert!(
             !sid_dir.join("session.lock").exists(),
             "the fixture must start with no lock file for this to mean anything"
         );
         let guard = acquire_delete_lock(&sid_dir).expect("prune acquires the delete lock");
-        let resumed = crate::session_lock::SessionLock::acquire(sid_str, &root);
+        let resumed = SessionLock::acquire(sid_str, &root);
         assert!(
             resumed.is_err(),
             "a resume started the session the prune is about to delete"
@@ -553,10 +572,10 @@ mod tests {
         drop(guard);
         // Once the prune releases, a resume is free to take the session again.
         assert!(
-            crate::session_lock::SessionLock::acquire(sid_str, &root).is_ok(),
+            SessionLock::acquire(sid_str, &root).is_ok(),
             "the lock must not outlive the delete it guards"
         );
-        let _r = std::fs::remove_dir_all(&root);
+        let _r = remove_dir_all(&root);
     }
 
     /// The sweep calls the descriptor repair over the store it sweeps: a
@@ -569,7 +588,7 @@ mod tests {
         let sessions = temp_root();
         let sid = SessionId::new();
         let dir = sessions.join(sid.to_string());
-        std::fs::create_dir_all(&dir).unwrap();
+        create_dir_all(&dir).unwrap();
         let head = SessionLogEntry {
             id: EventId::new(),
             session: sid,
@@ -581,7 +600,7 @@ mod tests {
             },
         };
         let line = serde_json::to_string(&head).unwrap();
-        std::fs::write(dir.join(LOG_FILE), format!("{line}\n")).unwrap();
+        write(dir.join(LOG_FILE), format!("{line}\n")).unwrap();
 
         run_once(
             &home,
@@ -591,7 +610,7 @@ mod tests {
             &SessionId::new(),
         );
 
-        let body = std::fs::read(dir.join(DESCRIPTOR_FILE))
+        let body = read(dir.join(DESCRIPTOR_FILE))
             .expect("the sweep wrote the descriptor the child's log implies");
         let descriptor: SessionDescriptor = serde_json::from_slice(&body).unwrap();
         assert_eq!(
@@ -607,7 +626,7 @@ mod tests {
             descriptor.created_at, 1_700_000_042,
             "created at the second the delegation was recorded"
         );
-        let _r = std::fs::remove_dir_all(&home);
-        let _r = std::fs::remove_dir_all(&sessions);
+        let _r = remove_dir_all(&home);
+        let _r = remove_dir_all(&sessions);
     }
 }

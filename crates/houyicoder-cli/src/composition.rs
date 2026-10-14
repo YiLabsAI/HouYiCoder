@@ -35,6 +35,7 @@ use crate::session_catalog::DescriptorSessionCatalog;
 use crate::session_history::SessionHistory;
 use crate::session_log_snapshot::SessionLogSnapshot;
 use crate::trajectory::SessionLogTrajectory;
+use std::env::current_dir;
 
 /// A wired TUI bundle, the frontend startup policy the TUI applies to its Ui
 /// and Input owners, and the host lifecycle owner for the session's background
@@ -266,7 +267,7 @@ pub(crate) fn start_local_server(
     // unacknowledged project path asks the TUI client once (the trust card),
     // persists the answer, then enters the frame loop. None when the cwd
     // cannot be read — no prompt fires.
-    if let Ok(cwd) = std::env::current_dir() {
+    if let Ok(cwd) = current_dir() {
         server = server.with_project_path(cwd);
     }
     // Attach the descriptor so /status renders the identity fields (version /

@@ -15,6 +15,7 @@ use houyicoder_tui::view::trajectory_pane::{
     EventTiming, EventUsage, RecordOutcome, TrajectoryRecord, TrajectoryRecordKind, TrajectoryTurn,
     TurnBoundary,
 };
+use std::mem::take;
 
 pub(super) mod dispatch;
 
@@ -616,7 +617,7 @@ impl TurnBuilder {
     ) -> Option<(TrajectoryTurn, TrajectoryTurnKey, Vec<TrajectoryRecord>)> {
         let turn = self.snapshot(n)?;
         let key = self.key.take()?;
-        let records = std::mem::take(&mut self.records);
+        let records = take(&mut self.records);
         self.first_ts = None;
         Some((turn, key, records))
     }

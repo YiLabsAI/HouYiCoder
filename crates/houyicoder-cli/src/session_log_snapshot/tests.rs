@@ -7,12 +7,27 @@
 use super::*;
 use crate::session_history::LOOKBACK_STEP_BYTES;
 use houyicoder_context::{EventId, SessionEvent};
+use houyicoder_memory::LocalFileBackend;
 use houyicoder_protocol::envelope::{DurableEventId, EventSeq};
+use houyicoder_session::SessionStore;
 use houyicoder_tui::records::TranscriptLine;
 use houyicoder_tui::row_id::RowId;
 use houyicoder_tui::transcript::{
     SequencedFrame, transcript_from_frames, transcript_from_frames_at,
 };
+use std::env::temp_dir;
+use std::env::var;
+use std::fs::create_dir_all;
+use std::fs::remove_dir_all;
+use std::fs::write;
+#[cfg(unix)]
+use std::os::unix::fs::symlink;
+use std::path::Path;
+use std::path::PathBuf;
+use std::process::id;
+use std::sync::Arc;
+use std::time::Instant;
+use tokio::runtime::Runtime;
 
 fn ev(event: SessionEvent) -> SessionLogEntry {
     SessionLogEntry {
@@ -347,7 +362,7 @@ fn test_window_mid_turn_row() {
         "a window starting mid-turn derives the same row: {:?}",
         mid.lines
     );
-    std::fs::remove_dir_all(&root).ok();
+    remove_dir_all(&root).ok();
 }
 
 /// What the summary row of a fold says: the reasoning it gathered and
@@ -408,7 +423,7 @@ fn test_window_at_record_row() {
         Some("step 0step 1step 2step 3step 4step 5"),
         "the row carries the turn's reasoning, not the window's"
     );
-    std::fs::remove_dir_all(&root).ok();
+    remove_dir_all(&root).ok();
 }
 
 /// A turn longer than one lookback step that carries a mid-turn message. The
@@ -480,7 +495,7 @@ fn test_window_long_turn_row() {
         "the row reaches the turn's opening, past the mid-turn message: {} bytes",
         reasoning.len()
     );
-    std::fs::remove_dir_all(&root).ok();
+    remove_dir_all(&root).ok();
 }
 
 /// The same turn read twice, once by the whole-log load and once by a window
@@ -580,7 +595,7 @@ fn test_turn_names_durable() {
         at_record.last(),
         "the whole log and the window name the same turn the same: {whole:?} vs {at_record:?}"
     );
-    std::fs::remove_dir_all(&root).ok();
+    remove_dir_all(&root).ok();
 }
 
 /// A turn whose reasoning alone runs deeper than eight lookback steps, the
@@ -653,7 +668,7 @@ fn test_lookback_finds_opener() {
         vec![name],
         "the window names the row by the closing event: {window_names:?}"
     );
-    std::fs::remove_dir_all(&root).ok();
+    remove_dir_all(&root).ok();
 }
 
 /// A turn the log carries no completion record for is closed by the message
@@ -748,7 +763,7 @@ fn test_names_durable_without_record() {
         vec![format!("e{r2}.0")],
         "a window starting at the second closing message keeps the name: {at_third:?}"
     );
-    std::fs::remove_dir_all(&root).ok();
+    remove_dir_all(&root).ok();
 }
 
 #[test]
@@ -772,27 +787,23 @@ fn test_audit_events() {
 /// temp root, appending the given events. For the real-backend acceptance
 /// tests (parity, multibyte, large-log budget) that must exercise the
 /// byte-window + reverse-read + index paths on disk, not the mock.
-fn bridge_with_log(
-    events: &[SessionLogEntry],
-) -> (SessionLogSnapshot, SessionId, std::path::PathBuf) {
-    use houyicoder_memory::LocalFileBackend;
-    use houyicoder_session::SessionStore;
-    let root = std::env::temp_dir().join(format!(
+fn bridge_with_log(events: &[SessionLogEntry]) -> (SessionLogSnapshot, SessionId, PathBuf) {
+    let root = temp_dir().join(format!(
         "houyi_bridge_acceptance_{}_{}",
         SessionId::new(),
-        std::process::id()
+        id()
     ));
-    std::fs::create_dir_all(&root).expect("create temp root");
+    create_dir_all(&root).expect("create temp root");
     let backend = LocalFileBackend::new(root.clone());
     let store = SessionStore::new(Box::new(backend));
     // SessionStore.append drives a tokio Mutex, so it needs a tokio runtime
     // (pollster cannot drive it); block_on a fresh runtime.
-    let rt = tokio::runtime::Runtime::new().expect("test runtime");
+    let rt = Runtime::new().expect("test runtime");
     for ev in events {
         rt.block_on(store.append(ev.clone())).expect("append");
     }
     let session = events.first().map(|e| e.session).unwrap_or_default();
-    let snap = SessionLogSnapshot::new(std::sync::Arc::new(store), session);
+    let snap = SessionLogSnapshot::new(Arc::new(store), session);
     (snap, session, root)
 }
 
@@ -833,7 +844,7 @@ fn test_window_matches_load_render() {
     let win_text: Vec<String> = win.lines.iter().map(|l| l.render()).collect();
     assert_eq!(load_text, win_text, "load vs window render parity");
     assert!(!win_text.is_empty());
-    std::fs::remove_dir_all(&root).ok();
+    remove_dir_all(&root).ok();
 }
 
 /// A multi-byte UTF-8 sequence is preserved across a window boundary: the
@@ -886,7 +897,7 @@ fn test_window_safe_on_multibyte() {
         joined_rev.contains('🦀'),
         "reverse tail keeps the multibyte: {joined_rev}"
     );
-    std::fs::remove_dir_all(&root).ok();
+    remove_dir_all(&root).ok();
 }
 
 /// The lazy index does not cover the whole log until G completes: byte_at
@@ -924,7 +935,7 @@ fn test_index_builds_bounded_chunks() {
         snap.event_count().is_some(),
         "event_count answers after the build"
     );
-    std::fs::remove_dir_all(&root).ok();
+    remove_dir_all(&root).ok();
 }
 
 /// Real-machine budget on a large log: enter (tail_window) actually
@@ -940,30 +951,22 @@ fn test_index_builds_bounded_chunks() {
 #[ignore]
 // too_many_lines: a budget benchmark -- setup, measure, assert in one body.
 // Splitting obscures the measured region.
-#[expect(clippy::too_many_lines, reason = "long by design, kept whole")]
 fn test_large_log_budget() {
-    use houyicoder_memory::LocalFileBackend;
-    use houyicoder_session::SessionStore;
-    let root = std::env::temp_dir().join(format!(
-        "houyi_large_budget_{}_{}",
-        SessionId::new(),
-        std::process::id()
-    ));
+    let root = temp_dir().join(format!("houyi_large_budget_{}_{}", SessionId::new(), id()));
     let session = SessionId::new();
     let session_dir = root.join(format!("{session}"));
-    std::fs::create_dir_all(&session_dir).expect("create session dir");
+    create_dir_all(&session_dir).expect("create session dir");
     let log_path = session_dir.join("log.jsonl");
 
     const NEEDLE: &str = "BUDGETNEEDLE";
-    let real_log = std::env::var("HOUYICODER_LARGE_LOG").ok();
+    let real_log = var("HOUYICODER_LARGE_LOG").ok();
     let using_real = real_log
         .as_ref()
-        .map(|p| std::path::Path::new(p).exists())
+        .map(|p| Path::new(p).exists())
         .unwrap_or(false);
     if using_real {
         #[cfg(unix)]
-        std::os::unix::fs::symlink(real_log.as_deref().unwrap(), &log_path)
-            .expect("symlink the large log");
+        symlink(real_log.as_deref().unwrap(), &log_path).expect("symlink the large log");
     } else {
         // Synthetic local-format log just over the threshold: ~520 events
         // with a ~32 KB body each ~ 16+ MB. The last event carries the
@@ -986,11 +989,11 @@ fn test_large_log_budget() {
             line.push(b'\n');
             buf.extend_from_slice(&line);
         }
-        std::fs::write(&log_path, buf).expect("write synthetic log");
+        write(&log_path, buf).expect("write synthetic log");
     }
     let backend = LocalFileBackend::new(root.clone());
     let store = SessionStore::new(Box::new(backend));
-    let snap = SessionLogSnapshot::new(std::sync::Arc::new(store), session);
+    let snap = SessionLogSnapshot::new(Arc::new(store), session);
 
     let total = snap.log_size();
     assert!(
@@ -999,7 +1002,7 @@ fn test_large_log_budget() {
     );
 
     // Enter (tail window): one 256 KB reverse read + parse + project.
-    let t0 = std::time::Instant::now();
+    let t0 = Instant::now();
     let tail = snap.tail_window(WINDOW_MAX_BYTES);
     let enter_ms = t0.elapsed().as_millis();
     assert!(
@@ -1034,14 +1037,14 @@ fn test_large_log_budget() {
     );
 
     // One older-window scan (window_before): bounded read + parse + project < 100 ms.
-    let t0 = std::time::Instant::now();
+    let t0 = Instant::now();
     let _scan = snap.window_before(tail.start_offset, WINDOW_MAX_BYTES);
     let scan_ms = t0.elapsed().as_millis();
     assert!(scan_ms < 100, "window_before < 100ms (took {scan_ms}ms)");
 
     // Full index build: completes in a bounded number of chunks (no freeze
     // -- one chunk per frame in production; here we drain to done).
-    let t0 = std::time::Instant::now();
+    let t0 = Instant::now();
     let mut steps = 0u32;
     let progress = loop {
         let p = snap.index_chunk();
@@ -1065,7 +1068,7 @@ fn test_large_log_budget() {
         "large_log_budget: log {total} bytes ({}), enter {enter_ms}ms, scan {scan_ms}ms, index {steps} chunks {build_s:.1}s ({idx_bytes}B)",
         if using_real { "real" } else { "synthetic" }
     );
-    let _removed = std::fs::remove_dir_all(&root);
+    let _removed = remove_dir_all(&root);
 }
 
 /// The rows a scroll back reads are the rows the whole-log load renders, in
@@ -1114,5 +1117,5 @@ fn test_scroll_back_parity() {
         "the walk crossed more than one window, or this checks nothing"
     );
     assert_eq!(walked, load, "the walk renders the load's rows");
-    std::fs::remove_dir_all(&root).ok();
+    remove_dir_all(&root).ok();
 }

@@ -10,6 +10,7 @@ use std::env::{current_exe, var};
 use std::fs::{create_dir_all, read_dir, remove_dir_all, remove_file, write};
 use std::io::BufRead;
 use std::io::BufReader;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::process::{Command, id as process_id};
@@ -677,7 +678,6 @@ fn test_second_process_refused() {
             }
         }
         if !held && let Some(mut stderr_pipe) = child.stderr.take() {
-            use std::io::Read;
             drop(stderr_pipe.read_to_string(&mut child_err));
         }
     }

@@ -14,6 +14,7 @@ use houyicoder_tui::view::trajectory_pane::{
 
 use super::super::view::{CallIndex, fmt_bytes, preview, result_failed};
 use super::TurnBuilder;
+use std::mem::take;
 
 /// Open or close turns. Returns true when the event was a turn boundary, so
 /// the caller does not also fold it in as turn content.
@@ -79,7 +80,7 @@ pub(in crate::trajectory) fn apply_turn_boundary(
                 records.push(entry);
             }
             *n += 1;
-            builder.reset(ev, text.clone(), std::mem::take(pending_boundary));
+            builder.reset(ev, text.clone(), take(pending_boundary));
             let record = builder.record(TrajectoryRecordKind::Context, None, preview(text), ev.ts);
             let index = builder.push(record);
             builder.set_input(index, text.clone());
@@ -101,7 +102,7 @@ pub(in crate::trajectory) fn apply_turn_boundary(
             // open a turn so those records have a home.
             if !builder.is_open() {
                 *n += 1;
-                builder.reset(ev, String::new(), std::mem::take(pending_boundary));
+                builder.reset(ev, String::new(), take(pending_boundary));
             }
             builder.open_model_call(None, ev.ts);
         }

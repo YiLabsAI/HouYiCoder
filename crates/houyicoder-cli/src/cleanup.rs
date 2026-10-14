@@ -7,8 +7,19 @@
 //! keeps a backlog that plan_all reports in the tens of thousands to a
 //! screen, where the per-entry list would flood it.
 
+use crate::housekeeping::apply_prune_locked;
+use crate::housekeeping::build_prune_context;
+use crate::housekeeping::try_prune_lock;
+use houyicoder_service::composition::session_log_root;
+use houyicoder_service::session_prune::plan_all;
 use houyicoder_service::session_prune::{PruneEntry, PruneKind, PrunePlan, PruneReason};
 use houyicoder_service::session_repair::{DescriptorRepair, repair_child_descriptors};
+use std::env::current_dir;
+use std::io::IsTerminal;
+use std::io::stdin;
+use std::io::stdout;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 /// What the apply path says about the repair it ran: nothing when the store
 /// needed none, the count when some were written, and the failures alongside
@@ -56,22 +67,22 @@ pub(crate) fn run_cleanup(
     verbose: bool,
     yes: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let sessions_root = houyicoder_service::composition::session_log_root();
+    let sessions_root = session_log_root();
     let shell_snapshots = houyicoder_config::config_home().join("shell-snapshots");
-    let debug_log = std::env::current_dir()
+    let debug_log = current_dir()
         .unwrap_or_default()
         .join(".houyicoder")
         .join("debug.log");
     // No current session for a standalone cleanup invocation — the
     // protected set is just the lock-held sessions from the probe.
-    let (policy, targets, _threshold) = crate::housekeeping::build_prune_context(
+    let (policy, targets, _threshold) = build_prune_context(
         &sessions_root,
         &shell_snapshots,
         Some(&debug_log),
         None,
         &houyicoder_config::config_home(),
     );
-    let plan = houyicoder_service::session_prune::plan_all(&targets, &policy);
+    let plan = plan_all(&targets, &policy);
     if plan.entries.is_empty() {
         println!("Nothing to prune.");
         return Ok(());
@@ -94,7 +105,7 @@ pub(crate) fn run_cleanup(
     // paths never delete concurrently. A held lock is not an error here --
     // the user re-runs when the sweep is done. The guard lives until the
     // end of this scope, so apply_prune runs under the lock.
-    let _guard = match crate::housekeeping::try_prune_lock(&houyicoder_config::config_home()) {
+    let _guard = match try_prune_lock(&houyicoder_config::config_home()) {
         Some(g) => g,
         None => {
             println!(
@@ -116,7 +127,7 @@ pub(crate) fn run_cleanup(
     // Each session is deleted while this process holds that session's lock,
     // so a session resumed between the plan above and the delete below is
     // held out instead of deleted underneath the resume.
-    let (report, skipped) = crate::housekeeping::apply_prune_locked(&plan);
+    let (report, skipped) = apply_prune_locked(&plan);
     println!(
         "Removed {}, truncated {} logs, {} skipped (live), errors {}.",
         report.removed, report.truncated, skipped, report.errors
@@ -150,8 +161,8 @@ fn print_prune_summary(plan: &PrunePlan) {
             }
         }
     }
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
     let mut oldest: Vec<_> = plan.entries.iter().collect();
@@ -191,15 +202,14 @@ fn format_prune_entry(entry: &PruneEntry) -> String {
 /// The typed-confirmation gate for --apply. Reads stdin at the call site so
 /// the pure judgment (confirm_granted) is unit-testable.
 fn confirm_apply(n: usize) -> bool {
-    use std::io::IsTerminal;
-    if !std::io::stdin().is_terminal() {
+    if !stdin().is_terminal() {
         println!("--apply needs --yes when stdin is not a terminal (non-interactive).");
         return false;
     }
     print!("About to remove {n} entries. Type y or yes to proceed: ");
-    std::io::Write::flush(&mut std::io::stdout()).ok();
+    std::io::Write::flush(&mut stdout()).ok();
     let mut line = String::new();
-    if std::io::stdin().read_line(&mut line).is_err() {
+    if stdin().read_line(&mut line).is_err() {
         return false;
     }
     confirm_granted(&line)
@@ -213,103 +223,4 @@ pub(crate) fn confirm_granted(answer: &str) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The apply path says what the repair did only when it did something,
-    /// and never hides a failure behind a zero count.
-    #[test]
-    fn test_repair_summary_reads() {
-        assert_eq!(repair_summary(DescriptorRepair::default()), None);
-        assert_eq!(
-            repair_summary(DescriptorRepair {
-                written: 3,
-                failed: 0
-            })
-            .as_deref(),
-            Some("Repaired 3 child descriptors.")
-        );
-        assert_eq!(
-            repair_summary(DescriptorRepair {
-                written: 3,
-                failed: 2
-            })
-            .as_deref(),
-            Some("Repaired 3 child descriptors, 2 failed.")
-        );
-    }
-
-    #[test]
-    fn test_confirm_granted_yes() {
-        assert!(confirm_granted("yes"));
-        assert!(confirm_granted("y"));
-        assert!(confirm_granted("  yes  \n"));
-        assert!(confirm_granted("Y"));
-        assert!(confirm_granted("YES"));
-    }
-
-    #[test]
-    fn test_confirm_refuses_non_yes() {
-        assert!(!confirm_granted(""));
-        assert!(!confirm_granted("no"));
-        assert!(!confirm_granted("yes please"));
-        assert!(!confirm_granted("n"));
-    }
-
-    /// The summary and the verbose list must read human-readable kind + cause
-    /// labels, not the Debug enum names. A user scanning either view sees the
-    /// cause in plain words, not an internal rule id. Pins the regression after
-    /// the label helpers replaced the former Debug formatting of the variants.
-    #[test]
-    fn test_prune_labels_readable() {
-        use houyicoder_service::session_prune::{PruneAction, PruneEntry, PruneKind, PruneReason};
-        let plan = PrunePlan {
-            entries: vec![
-                PruneEntry {
-                    path: "/old/abc".into(),
-                    kind: PruneKind::Session,
-                    reason: PruneReason::Ttl,
-                    last_active: 0,
-                    action: PruneAction::RemoveDir,
-                },
-                PruneEntry {
-                    path: "/idle/def".into(),
-                    kind: PruneKind::Session,
-                    reason: PruneReason::EmptyTtl,
-                    last_active: 0,
-                    action: PruneAction::RemoveDir,
-                },
-            ],
-            kept: 3,
-        };
-        for entry in &plan.entries {
-            let line = format_prune_entry(entry);
-            assert!(
-                !line.contains("Ttl")
-                    && !line.contains("EmptyTtl")
-                    && !line.contains("CapOverflow"),
-                "verbose entry must not leak Debug enum names: {line}"
-            );
-            assert!(
-                line.contains(kind_label(entry.kind)) && line.contains(reason_label(entry.reason)),
-                "verbose entry must use the shared labels: {line}"
-            );
-        }
-        assert_eq!(kind_label(PruneKind::Session), "session");
-        assert_eq!(reason_label(PruneReason::Ttl), "expired");
-        assert_eq!(reason_label(PruneReason::EmptyTtl), "idle (empty)");
-        assert_eq!(reason_label(PruneReason::CapOverflow), "over retention cap");
-
-        // Summary line: the same labels in the one-screen view format.
-        let line = format_summary_count(5, PruneKind::Session, PruneReason::Ttl);
-        assert_eq!(line, "  5 session · expired");
-        assert!(
-            !line.contains("Ttl") && !line.contains("Session"),
-            "summary line must not leak Debug enum names: {line}"
-        );
-        assert_eq!(
-            format_summary_count(3, PruneKind::Session, PruneReason::EmptyTtl),
-            "  3 session · idle (empty)"
-        );
-    }
-}
+mod tests;

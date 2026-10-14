@@ -11,6 +11,7 @@ use super::{
     DurableWatermark, MAX_READ_RETRIES, PageRead, RESIDENT_PAGES, ResidentPage,
     SessionLogTrajectory, TrajectoryState, TurnPage,
 };
+use std::sync::mpsc::TryRecvError;
 
 /// A page as the window keeps it: the fragment before its first turn dropped,
 /// and its rows folded once.
@@ -234,8 +235,8 @@ impl SessionLogTrajectory {
                 }
                 Self::drop_view(state);
             }
-            Err(std::sync::mpsc::TryRecvError::Empty) => {}
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+            Err(TryRecvError::Empty) => {}
+            Err(TryRecvError::Disconnected) => {
                 // The worker went away without sending. One such read is
                 // retried rather than reported: a transient failure must not
                 // leave the pane unusable for the rest of the session. A run of

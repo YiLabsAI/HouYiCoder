@@ -14,6 +14,7 @@ use tokio::runtime::Handle;
 use tokio::task::JoinHandle;
 
 use crate::session_lock::SessionLock;
+use std::mem::take;
 
 /// A host lifecycle owner holding the session's exclusive lock. The
 /// lock outlives every writer the host owns: releasing the lease joins
@@ -196,7 +197,7 @@ pub(crate) fn release_all(host_slot: &HostLeaseSlot) {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let current = scope.current.take();
-        let pending = std::mem::take(&mut scope.pending);
+        let pending = take(&mut scope.pending);
         (current, pending)
     };
     if let Some(lease) = current {

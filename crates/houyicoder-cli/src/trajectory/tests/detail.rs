@@ -5,13 +5,26 @@ use super::super::reader::SessionLogTrajectory;
 use super::super::view::records_of;
 use super::paging::{disk_reader, disk_reader_at, pump, reader_of};
 use super::test_support::gated_range_backend;
+use houyicoder_context::{
+    CheckpointId, CheckpointManifest, ContextBackend, ContextError, LogRangeRead, ReverseRead,
+};
 use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
+use houyicoder_memory::InMemoryBackend;
+use houyicoder_memory::LocalFileBackend;
 use houyicoder_session::SessionStore;
 use houyicoder_tui::state::{TrajectoryDrill, TrajectoryTurnKey};
 use houyicoder_tui::view::trajectory_pane::{
     TrajectoryDetailState, TrajectoryDetailView, TrajectoryLog as _, TrajectoryRow, TrajectoryTurn,
 };
+use std::env::temp_dir;
+use std::fs::create_dir_all;
+use std::fs::write;
+use std::pin::Pin;
+use std::process::id;
 use std::sync::Arc;
+use std::thread::sleep;
+use std::time::Duration;
+use tokio::runtime::Runtime;
 /// A drill reads the same records the list used to carry: the detail is the
 /// turn's records, read from the bytes its key names.
 #[test]
@@ -64,7 +77,7 @@ fn pump_detail(
         if detail.state != TrajectoryDetailState::Loading {
             return detail;
         }
-        std::thread::sleep(std::time::Duration::from_millis(5));
+        sleep(Duration::from_millis(5));
     }
     panic!("the detail never landed");
 }
@@ -114,7 +127,7 @@ fn test_detail_switch_keeps_none() {
 #[test]
 fn test_detail_wide_opening_fails() {
     let (store, reader, sid) = disk_reader(3);
-    let rt = tokio::runtime::Runtime::new().expect("test runtime");
+    let rt = Runtime::new().expect("test runtime");
     let wide_id = EventId::new();
     rt.block_on(store.append(SessionLogEntry {
         id: wide_id,
@@ -151,13 +164,9 @@ fn test_detail_wide_opening_fails() {
 /// A reader whose page reads work and whose detail reads panic: the window
 /// loads, and a drill's worker dies without answering.
 fn detail_panicking_reader() -> SessionLogTrajectory {
-    use houyicoder_context::{
-        CheckpointId, CheckpointManifest, ContextBackend, ContextError, LogRangeRead, ReverseRead,
-    };
+    type PFut<'a, T> = Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;
 
-    type PFut<'a, T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;
-
-    struct PanicDetail(houyicoder_memory::LocalFileBackend);
+    struct PanicDetail(LocalFileBackend);
 
     impl ContextBackend for PanicDetail {
         fn append(&self, event: SessionLogEntry) -> PFut<'_, Result<EventId, ContextError>> {
@@ -209,17 +218,13 @@ fn detail_panicking_reader() -> SessionLogTrajectory {
         }
     }
 
-    let root = std::env::temp_dir().join(format!(
-        "houyi_detail_panic_{}_{}",
-        SessionId::new(),
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&root).expect("create temp root");
+    let root = temp_dir().join(format!("houyi_detail_panic_{}_{}", SessionId::new(), id()));
+    create_dir_all(&root).expect("create temp root");
     let store = Arc::new(SessionStore::new(Box::new(PanicDetail(
-        houyicoder_memory::LocalFileBackend::new(root),
+        LocalFileBackend::new(root),
     ))));
     let sid = SessionId::new();
-    let rt = tokio::runtime::Runtime::new().expect("test runtime");
+    let rt = Runtime::new().expect("test runtime");
     for i in 0..3u64 {
         rt.block_on(store.append(SessionLogEntry {
             id: EventId::new(),
@@ -278,7 +283,7 @@ fn test_detail_stale_after_clear() {
     reader.request_detail(&drill_of(&turn));
     drop(pump_detail(&reader, &turn.key));
 
-    let rt = tokio::runtime::Runtime::new().expect("test runtime");
+    let rt = Runtime::new().expect("test runtime");
     let before = store.trajectory_head(sid).revision.epoch_event_id;
     // A clear is a mirror reset followed by the boundary event, which is what
     // makes the boundary the new epoch's first durable event.
@@ -305,7 +310,7 @@ fn test_detail_stale_after_clear() {
         if seen == TrajectoryDetailState::Stale {
             break;
         }
-        std::thread::sleep(std::time::Duration::from_millis(5));
+        sleep(Duration::from_millis(5));
     }
     assert_eq!(
         seen,
@@ -319,7 +324,7 @@ fn test_detail_stale_after_clear() {
 #[test]
 fn test_detail_truncated() {
     let (store, reader, sid) = disk_reader(1);
-    let rt = tokio::runtime::Runtime::new().expect("test runtime");
+    let rt = Runtime::new().expect("test runtime");
     for i in 0..4u64 {
         rt.block_on(store.append(SessionLogEntry {
             id: EventId::new(),
@@ -391,11 +396,9 @@ fn test_detail_survives_disk_eviction() {
 /// answers with is the one it built rather than a fresh fold.
 #[test]
 fn test_detail_mirror_caches() {
-    let store = Arc::new(SessionStore::new(Box::new(
-        houyicoder_memory::InMemoryBackend::new(),
-    )));
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let sid = SessionId::new();
-    let rt = tokio::runtime::Runtime::new().expect("test runtime");
+    let rt = Runtime::new().expect("test runtime");
     for i in 0..3u64 {
         rt.block_on(store.append(SessionLogEntry {
             id: EventId::new(),
@@ -435,7 +438,7 @@ fn test_detail_mirror_caches() {
         );
         assert_eq!(detail.turn.as_ref().map(|turn| turn.n), Some(turn.n));
         assert!(
-            std::sync::Arc::ptr_eq(&first, &detail),
+            Arc::ptr_eq(&first, &detail),
             "the cached view is served, not folded again"
         );
     }
@@ -508,7 +511,7 @@ fn test_detail_stale_anchor_refused() {
         body.push_str(&serde_json::to_string(&entry).expect("serialize"));
         body.push('\n');
     }
-    std::fs::write(root.join(sid.to_string()).join("log.jsonl"), body).expect("rewrite the log");
+    write(root.join(sid.to_string()).join("log.jsonl"), body).expect("rewrite the log");
     store.reset_trajectory(sid);
 
     reader.request_detail(&drill_of(&turn));
@@ -529,16 +532,12 @@ fn test_detail_stale_anchor_refused() {
 /// the drill named.
 #[test]
 fn test_detail_in_flight_eviction() {
-    let root = std::env::temp_dir().join(format!(
-        "houyi_detail_gate_{}_{}",
-        SessionId::new(),
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&root).expect("create temp root");
+    let root = temp_dir().join(format!("houyi_detail_gate_{}_{}", SessionId::new(), id()));
+    create_dir_all(&root).expect("create temp root");
     let (backend, entered_rx, release_tx) = gated_range_backend(root);
     let store = Arc::new(SessionStore::new(Box::new(backend)));
     let sid = SessionId::new();
-    let rt = tokio::runtime::Runtime::new().expect("test runtime");
+    let rt = Runtime::new().expect("test runtime");
     for i in 0..300u64 {
         rt.block_on(store.append(SessionLogEntry {
             id: EventId::new(),
@@ -564,7 +563,7 @@ fn test_detail_in_flight_eviction() {
 
     reader.request_detail(&drill_of(&oldest));
     entered_rx
-        .recv_timeout(std::time::Duration::from_secs(5))
+        .recv_timeout(Duration::from_secs(5))
         .expect("the detail read starts");
     // The window walks away while the read is in flight.
     reader.load_older();

@@ -10,11 +10,17 @@ use super::turns::{self, FoldMode};
 
 use houyicoder_context::{SessionEvent, SessionLogEntry};
 use houyicoder_core::agent::multi_agent::aggregate_subagent_usage;
+use houyicoder_protocol::tool::tool_result_failed;
 use houyicoder_tui::state::TrajectoryTurnKey;
 use houyicoder_tui::view::trajectory_pane::{
     SessionTiming, SubagentUsage, TrajectoryRecord, TrajectoryRow, TrajectoryTurn, TrajectoryView,
     TrajectoryViewState, TurnBoundary,
 };
+use serde_json::Value;
+use std::mem::take;
+use turns::TurnBuilder;
+use turns::dispatch::apply_turn_boundary;
+use turns::dispatch::apply_turn_content;
 
 /// Which tool a call id invoked, and with what input, so a later ToolResult
 /// can be judged against the call that produced it. Built from the ToolCall
@@ -24,7 +30,7 @@ use houyicoder_tui::view::trajectory_pane::{
 /// whole payload the model sent (a write call carries the entire file body),
 /// and the index exists only during view assembly, so copying
 /// them would duplicate the session's writes for no gain.
-pub(super) type CallIndex = HashMap<String, (String, serde_json::Value)>;
+pub(super) type CallIndex = HashMap<String, (String, Value)>;
 
 /// One line of preview text for an event (truncated so the L1 row stays one
 /// line). The L2 detail carries the full content separately.
@@ -121,8 +127,8 @@ const DELEGATION_TOOL: &str = "agent";
 /// it red, and the pane's failure total could read zero for a session in
 /// which every command failed. The shared rule also carries the semantic-exit
 /// exception, so grep finding no matches stays a success in both places.
-pub(super) fn result_failed(output: &serde_json::Value, call_id: &str, calls: &CallIndex) -> bool {
-    let null = serde_json::Value::Null;
+pub(super) fn result_failed(output: &Value, call_id: &str, calls: &CallIndex) -> bool {
+    let null = Value::Null;
     let (tool, input) = match calls.get(call_id) {
         Some((t, i)) => (t.as_str(), i),
         // No matching call (a result whose call frame is outside this log
@@ -130,7 +136,7 @@ pub(super) fn result_failed(output: &serde_json::Value, call_id: &str, calls: &C
         // the plain error-or-success case.
         None => ("", &null),
     };
-    houyicoder_protocol::tool::tool_result_failed(output, tool, input)
+    tool_result_failed(output, tool, input)
 }
 
 fn build_summary(
@@ -331,7 +337,7 @@ pub(crate) struct PageAccumulator {
     /// The turns already closed, in order.
     turns: Vec<TrajectoryTurn>,
     /// The turn still being appended to, if any.
-    open: turns::TurnBuilder,
+    open: TurnBuilder,
     /// The number the next turn opened here carries.
     next_number: usize,
     pending_boundaries: Vec<TurnBoundary>,
@@ -363,7 +369,7 @@ impl PageAccumulator {
     ) -> Self {
         let mut accumulator = Self {
             turns: Vec::new(),
-            open: turns::TurnBuilder::new(mode),
+            open: TurnBuilder::new(mode),
             next_number: first_turn.saturating_sub(1),
             pending_boundaries: Vec::new(),
             first_usage: None,
@@ -394,7 +400,7 @@ impl PageAccumulator {
             }
         }
         for ev in events {
-            if turns::dispatch::apply_turn_boundary(
+            if apply_turn_boundary(
                 &mut self.open,
                 ev,
                 &mut self.turns,
@@ -410,7 +416,7 @@ impl PageAccumulator {
             // that event's id as its identity.
             if !self.open.is_open() {
                 self.next_number += 1;
-                let boundaries = std::mem::take(&mut self.pending_boundaries);
+                let boundaries = take(&mut self.pending_boundaries);
                 self.open.open(ev, boundaries);
             }
             if self.first_usage.is_none()
@@ -419,7 +425,7 @@ impl PageAccumulator {
             {
                 self.first_usage = Some((model.clone(), ev.ts));
             }
-            turns::dispatch::apply_turn_content(&mut self.open, ev, &self.calls, &self.spawned);
+            apply_turn_content(&mut self.open, ev, &self.calls, &self.spawned);
         }
     }
 
