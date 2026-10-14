@@ -1,16 +1,20 @@
-use crate::records::TranscriptLine;
-use crate::rows::slots_key::SlotsKey;
-use crate::test_harness::render_text;
-use crate::test_harness::working_app;
 use houyicoder_protocol::envelope::RequestId;
+use ratatui::layout::Rect;
+
+use crate::brief::tool_call_brief;
+use crate::records::{ToolOutcome, TranscriptLine};
+use crate::rows::slots_key::SlotsKey;
+use crate::test_harness::{attach_connection, render_text, working_app};
+
+use super::super::tail_rows::build_tail_rows;
 
 fn bash_call(command: &str) -> TranscriptLine {
     TranscriptLine::Tool {
         name: "bash".into(),
         tool: "bash".into(),
-        status: crate::brief::tool_call_brief("bash", &serde_json::json!({ "command": command })),
+        status: tool_call_brief("bash", &serde_json::json!({ "command": command })),
         invocation: command.into(),
-        outcome: crate::records::ToolOutcome::Success,
+        outcome: ToolOutcome::Success,
         call_id: "c1".into(),
         body: String::new(),
         is_diff: false,
@@ -23,7 +27,7 @@ fn bash_result() -> TranscriptLine {
         tool: "bash".into(),
         status: String::new(),
         invocation: String::new(),
-        outcome: crate::records::ToolOutcome::Success,
+        outcome: ToolOutcome::Success,
         call_id: "c1".into(),
         body: String::new(),
         is_diff: false,
@@ -203,7 +207,7 @@ fn test_steer_echo_renders() {
     use crate::agent_message::FleetEntry;
     use crate::records::TeammateView;
     let mut app = working_app();
-    crate::test_harness::attach_connection(&mut app);
+    attach_connection(&mut app);
     app.sessions
         .current
         .capabilities
@@ -286,7 +290,7 @@ fn test_spinner_keeps_blank_above() {
 #[test]
 fn test_view_hides_tail() {
     use crate::records::TeammateView;
-    let mut app = crate::test_harness::working_app();
+    let mut app = working_app();
     app.start_run_for_test(0);
     {
         let p = app.run_progress_mut().expect("active run");
@@ -297,11 +301,7 @@ fn test_view_hides_tail() {
         child_sid: "c1".into(),
         ..Default::default()
     });
-    let live = super::super::tail_rows::build_tail_rows(
-        ratatui::layout::Rect::new(0, 0, 80, 24),
-        &app,
-        false,
-    );
+    let live = build_tail_rows(Rect::new(0, 0, 80, 24), &app, false);
     assert!(
         live.is_empty(),
         "live rows must be empty in teammate view, got {} rows: {:?}",

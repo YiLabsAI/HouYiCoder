@@ -6,18 +6,22 @@
 
 #![cfg(test)]
 
+use std::thread;
+use std::time::Duration;
+
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
+use houyicoder_protocol::envelope::RequestId;
+use houyicoder_protocol::extension::ENTITLEMENT_TOOL;
+use houyicoder_protocol::frontend::permission::{PermissionEffect, PermissionMode};
 
 use crate::agent_message::{ServerEvent, ServerResponse, SessionMessage};
 use crate::composition;
 use crate::composition::build_app_for_test;
-use crate::keys::handle_working;
+use crate::keys::{approval_scope, handle_working};
 use crate::pending_prompt::PendingPrompt;
 use crate::records::{Approval, TranscriptLine};
 use crate::state::{App, Pane, PermissionInput, Screen};
 use crate::test_harness::{connection_lost_app, render_text};
-use houyicoder_protocol::envelope::RequestId;
-use houyicoder_protocol::extension::ENTITLEMENT_TOOL;
 
 fn app() -> App {
     let mut app = composition::app();
@@ -117,7 +121,7 @@ fn pump_rules(app: &mut App) {
         {
             break;
         }
-        std::thread::sleep(std::time::Duration::from_millis(10));
+        thread::sleep(Duration::from_millis(10));
     }
 }
 
@@ -160,8 +164,7 @@ fn test_status_bar_renders_mode() {
     // confirm the current mode label lands in the bottom status line.
     let mut app = build_app_for_test(None);
     app.ui.navigation.screen = Screen::Working;
-    app.sessions.current.capabilities.permission.mode_cache =
-        Some(houyicoder_protocol::frontend::permission::PermissionMode::Auto);
+    app.sessions.current.capabilities.permission.mode_cache = Some(PermissionMode::Auto);
     let text = render_text(&app, 100, 28);
     assert!(
         text.contains("auto mode on"),
@@ -174,8 +177,7 @@ fn test_status_bar_renders_manual() {
     // Manual mode shows the pause-glyph label in the status bar.
     let mut app = build_app_for_test(None);
     app.ui.navigation.screen = Screen::Working;
-    app.sessions.current.capabilities.permission.mode_cache =
-        Some(houyicoder_protocol::frontend::permission::PermissionMode::Manual);
+    app.sessions.current.capabilities.permission.mode_cache = Some(PermissionMode::Manual);
     let text = render_text(&app, 100, 28);
     assert!(
         text.contains("manual mode on"),
@@ -271,7 +273,7 @@ fn test_entitlement_r_rejects() {
 #[test]
 fn test_entitlement_scope_always() {
     let approval = entitlement_approval();
-    assert_eq!(crate::keys::approval_scope(&approval), "always");
+    assert_eq!(approval_scope(&approval), "always");
 }
 
 fn entitlement_approval() -> Approval {
@@ -595,13 +597,7 @@ fn test_permission_add_submode_flow() {
         .permission
         .rules_cache
         .iter()
-        .any(|r| {
-            r.action == "bash"
-                && matches!(
-                    r.effect,
-                    houyicoder_protocol::frontend::permission::PermissionEffect::Allow
-                )
-        });
+        .any(|r| r.action == "bash" && matches!(r.effect, PermissionEffect::Allow));
     assert!(
         added,
         "rule landed in cache: {:?}",
