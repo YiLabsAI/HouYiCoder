@@ -1,5 +1,7 @@
 use super::*;
 
+mod clipboard;
+
 fn rect(x: u16, y: u16, w: u16, h: u16) -> Rect {
     Rect::new(x, y, w, h)
 }

@@ -263,3 +263,8 @@ impl AskQuestion {
         input
     }
 }
+
+/// The card's own tests. Crate-visible because a sibling test builds a card
+/// through the same fixtures rather than restating them.
+#[cfg(test)]
+pub(crate) mod tests;

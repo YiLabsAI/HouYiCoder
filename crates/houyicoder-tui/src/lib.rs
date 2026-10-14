@@ -71,55 +71,24 @@ mod activity_indicator_tests;
 #[cfg(test)]
 mod artifact_tests;
 #[cfg(test)]
-mod ask_question_render_tests;
-#[cfg(test)]
-mod ask_question_tests;
-#[cfg(test)]
-mod development_cycle_tests;
-#[cfg(test)]
-mod export_command_tests;
-#[cfg(test)]
 mod frame_timing;
 #[cfg(test)]
 mod history_read_tests;
 #[cfg(test)]
 mod jump_to_bottom_tests;
 #[cfg(test)]
-mod memory_pane_tests;
-#[cfg(test)]
 mod paste_submit_tests;
 #[cfg(test)]
 mod permission_render_tests;
 #[cfg(test)]
-mod permission_tests;
-#[cfg(test)]
 mod queue_sync_tests;
-#[cfg(test)]
-mod queue_view_tests;
 #[cfg(test)]
 mod render_invariant_tests;
 #[path = "resume_picker_tests.rs"]
 mod resume_picker_tests;
-#[cfg(test)]
-#[path = "scroll_tests.rs"]
-mod scroll_tests;
-#[cfg(test)]
-mod selection_clipboard_tests;
-#[cfg(test)]
-mod slash_command_tests;
-#[cfg(test)]
-mod snapshot_render_tests;
-#[cfg(test)]
-mod spec_transition_tests;
-#[cfg(test)]
-mod teammate_scroll_tests;
-#[cfg(test)]
-mod teammate_view_tests;
 #[cfg(test)]
 mod test_harness;
 #[cfg(test)]
 mod todolist_verify_tests;
 #[cfg(test)]
 mod transcript_rebuild_tests;
-#[cfg(test)]
-mod viewport_tests;

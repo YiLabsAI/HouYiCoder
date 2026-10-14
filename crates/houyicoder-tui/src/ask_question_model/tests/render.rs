@@ -5,7 +5,7 @@
 
 use serde_json::json;
 
-use crate::ask_question_tests::{multi_input, single_input, two_question_input};
+use crate::ask_question_model::tests::card::{multi_input, single_input, two_question_input};
 use crate::pending_prompt::PendingPrompt;
 use crate::records::AskQuestion;
 use houyicoder_protocol::envelope::RequestId;

@@ -1,7 +1,8 @@
-//! Hooks command tests split from scroll_tests.rs for file-size.
+//! The /hooks command: its sub-commands and the pane it opens.
 
-use super::working;
 use houyicoder_protocol::envelope::RequestId;
+
+use crate::test_harness::{render_text, working_app};
 
 /// /hooks opens the Hooks pane (a live view, not a transcript system line) +
 /// requests the hook list when a runner is connected.
@@ -20,7 +21,7 @@ fn test_hooks_opens_pane_connected() {
 /// list row).
 #[test]
 fn test_opens_pane_no_runner() {
-    let mut app = working();
+    let mut app = working_app();
     app.run_command(houyicoder_protocol::frontend::SlashCommand::Hooks);
     assert_eq!(app.ui.navigation.pane, crate::state::Pane::Hooks);
     assert!(app.sessions.current.capabilities.hooks.entries.is_empty());
@@ -31,7 +32,7 @@ fn test_opens_pane_no_runner() {
 fn test_hooks_result_stores_entries() {
     use crate::agent_message::{ServerResponse, SessionMessage};
     use houyicoder_protocol::frontend::hooks::HookEntry;
-    let mut app = working();
+    let mut app = working_app();
     app.handle_agent_message(SessionMessage::Response {
         request: RequestId(1),
         response: ServerResponse::Hooks {
@@ -72,7 +73,7 @@ fn test_hooks_result_stores_entries() {
 fn test_hooks_pane_list_detail() {
     use crate::agent_message::{ServerResponse, SessionMessage};
     use houyicoder_protocol::frontend::hooks::HookEntry;
-    let mut app = working();
+    let mut app = working_app();
     app.ui.navigation.pane = crate::state::Pane::Hooks;
     app.handle_agent_message(SessionMessage::Response {
         request: RequestId(2),
@@ -105,7 +106,7 @@ fn test_hooks_pane_list_detail() {
             ],
         },
     });
-    let out = super::render(&app);
+    let out = render_text(&app, 100, 28);
     assert!(
         out.contains("1 hooks configured"),
         "subtitle counts configured (non-framework) hooks: {out}"
@@ -122,7 +123,7 @@ fn test_hooks_pane_list_detail() {
     }
     app.ui.hooks_pane.level.set(1);
     app.ui.hooks_pane.sel.set(0);
-    let detail = super::render(&app);
+    let detail = render_text(&app, 100, 28);
     assert!(
         detail.contains("Input to command is JSON"),
         "detail shows the event description: {detail}"
@@ -143,7 +144,7 @@ fn hkey(c: KeyCode) -> KeyEvent {
 
 #[test]
 fn test_hooks_esc_to_list() {
-    let mut app = working();
+    let mut app = working_app();
     app.ui.navigation.pane = crate::state::Pane::Hooks;
     app.ui.hooks_pane.level.set(1);
     crate::keys::handle_working(&mut app, hkey(KeyCode::Esc));
@@ -161,7 +162,7 @@ fn test_hooks_esc_to_list() {
 
 #[test]
 fn test_hooks_esc_exits() {
-    let mut app = working();
+    let mut app = working_app();
     app.ui.navigation.pane = crate::state::Pane::Hooks;
     app.ui.hooks_pane.level.set(0);
     crate::keys::handle_working(&mut app, hkey(KeyCode::Esc));
@@ -174,7 +175,7 @@ fn test_hooks_esc_exits() {
 
 #[test]
 fn test_hooks_up_moves() {
-    let mut app = working();
+    let mut app = working_app();
     app.ui.navigation.pane = crate::state::Pane::Hooks;
     app.ui.hooks_pane.level.set(0);
     app.ui.hooks_pane.sel.set(2);
@@ -184,7 +185,7 @@ fn test_hooks_up_moves() {
 
 #[test]
 fn test_hooks_down_clamps() {
-    let mut app = working();
+    let mut app = working_app();
     app.ui.navigation.pane = crate::state::Pane::Hooks;
     app.ui.hooks_pane.level.set(0);
     app.ui.hooks_pane.sel.set(0);
@@ -198,7 +199,7 @@ fn test_hooks_down_clamps() {
 
 #[test]
 fn test_hooks_enter_detail() {
-    let mut app = working();
+    let mut app = working_app();
     app.ui.navigation.pane = crate::state::Pane::Hooks;
     app.ui.hooks_pane.level.set(0);
     crate::keys::handle_working(&mut app, hkey(KeyCode::Enter));

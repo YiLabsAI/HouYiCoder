@@ -152,3 +152,6 @@ impl TranscriptSnapshot for NoTranscriptSnapshot {
         None
     }
 }
+
+#[cfg(test)]
+mod tests;

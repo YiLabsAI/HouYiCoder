@@ -294,3 +294,6 @@ fn age_label(mtime_secs: u64) -> String {
         _ => format!("{}d ago", age / 86_400),
     }
 }
+
+#[cfg(test)]
+mod tests;

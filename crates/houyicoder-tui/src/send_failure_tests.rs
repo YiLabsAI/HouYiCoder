@@ -199,7 +199,7 @@ fn test_verdict_refused() {
 /// waiting, so the answer must not vanish when its verdict cannot ship.
 #[test]
 fn test_question_verdict_refused() {
-    use crate::ask_question_tests::single_input;
+    use crate::ask_question_model::tests::card::single_input;
     use crate::records::AskQuestion;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -227,7 +227,7 @@ fn test_question_verdict_refused() {
 /// verdict, so it must not vanish the card when that verdict cannot ship.
 #[test]
 fn test_question_cancel_refused() {
-    use crate::ask_question_tests::single_input;
+    use crate::ask_question_model::tests::card::single_input;
     use crate::records::AskQuestion;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 

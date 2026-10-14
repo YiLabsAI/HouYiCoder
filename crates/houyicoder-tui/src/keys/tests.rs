@@ -1886,6 +1886,7 @@ fn test_ctrl_o_follows_cursor() {
 }
 
 mod agents_pane;
+mod permission;
 
 /// The pane's contract says an ordinary character key is not intercepted: it
 /// closes the pane and lands in the input box, which is visible by then. The

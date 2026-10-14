@@ -140,3 +140,5 @@ fn test_stage_keeps_the_caches() {
         "the slot cache survives the frame swap"
     );
 }
+
+mod viewport;

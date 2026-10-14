@@ -575,7 +575,7 @@ fn test_legacy_search_definitions_gone() {
             let Some(name) = p.file_name().and_then(|n| n.to_str()) else {
                 continue;
             };
-            if !name.ends_with(".rs") || name == "scroll_tests.rs" {
+            if !name.ends_with(".rs") || name == "scrolling.rs" {
                 continue;
             }
             let Ok(src) = fs::read_to_string(&p) else {
@@ -813,7 +813,3 @@ fn test_search_input_edits_buffer() {
         render(&app)
     );
 }
-
-#[cfg(test)]
-#[path = "hooks_tests.rs"]
-mod hooks_tests;

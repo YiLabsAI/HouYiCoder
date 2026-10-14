@@ -37,3 +37,6 @@ impl App {
         Some(previous)
     }
 }
+
+#[cfg(test)]
+mod tests;

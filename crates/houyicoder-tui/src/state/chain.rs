@@ -55,3 +55,6 @@ impl App {
                 .all(|h| h.approved == Verdict::Approved)
     }
 }
+
+#[cfg(test)]
+mod tests;

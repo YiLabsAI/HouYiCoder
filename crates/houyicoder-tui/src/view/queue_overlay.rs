@@ -107,3 +107,6 @@ pub(super) fn draw_strip(f: &mut Frame, area: Rect, app: &App) {
     }
     f.render_widget(Paragraph::new(lines), area);
 }
+
+#[cfg(test)]
+mod tests;

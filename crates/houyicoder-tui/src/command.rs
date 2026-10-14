@@ -693,3 +693,6 @@ fn parse_stage_name(name: &str) -> Option<Stage> {
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod tests;
