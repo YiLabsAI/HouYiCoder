@@ -3,7 +3,8 @@
 
 Locks the detector's positive and negative cases (a module-scope use is not
 a finding, a use in a nested block inside a function is) and both directions
-of the ratchet's pure verdict.
+of the ratchet's pure verdict. The shared runner prints one verdict line, so
+a case name is the failure label rather than its own output.
 """
 import json
 import subprocess
@@ -31,14 +32,6 @@ DEEP_FOUR_ONCE = 'fn a() { let x = houyicoder_protocol::frontend::permission::Pe
 ONE_SEPARATOR = 'fn a() { let x = Screen::Working; let y = Screen::Focus; }\n'
 
 
-def check(name, got, want):
-    if got != want:
-        print(f"FAIL {name}: got {got}, want {want}")
-        return False
-    print(f"ok  {name}")
-    return True
-
-
 def _hook_verdict(new_string):
     """Run the write-time hook on one Edit payload and report its exit code."""
     payload = json.dumps(
@@ -56,52 +49,97 @@ def _hook_verdict(new_string):
     return proc.returncode
 
 
-def main() -> int:
-    ok = True
-    ok &= check("module scope use is allowed", len(list(inline_use_violations(MODULE_SCOPE))), 0)
-    ok &= check("use in a function is a finding", len(list(inline_use_violations(IN_FN))), 1)
-    ok &= check("use in a nested block is a finding", len(list(inline_use_violations(IN_NESTED))), 1)
-    ok &= check("a brace inside a string does not hide the body", len(list(inline_use_violations(BRACE_IN_STRING))), 1)
-    ok &= check("a pub(crate) fn body is seen", len(list(inline_use_violations(PUB_CRATE_FN))), 1)
-    ok &= check("a pub unsafe fn body is seen", len(list(inline_use_violations(PUB_UNSAFE_FN))), 1)
-    ok &= check("a body opening after a multi-line signature is seen", len(list(inline_use_violations(MULTILINE_SIG))), 1)
-    ok &= check("a lifetime is not read as a char literal", len(list(inline_use_violations(LIFETIME_SIG))), 1)
-    ok &= check("a one-line body is seen", len(list(inline_use_violations(ONE_LINE_FN))), 1)
-    ok &= check("a char literal before the use does not hide it", len(list(inline_use_violations(CHAR_THEN_USE))), 1)
-    ok &= check(
-        "two variants of one type group into one import",
-        repeated_deep_paths(PATH_TWICE),
-        {"crate::state::Screen": 2},
-    )
-    ok &= check(
-        "module::Type::Variant repeated is caught so Type is imported",
-        repeated_deep_paths(MOD_TYPE_VARIANT_TWICE),
-        {"mpsc::TryRecvError": 2},
-    )
-    ok &= check("a path used once is allowed", repeated_deep_paths(PATH_ONCE), {})
-    ok &= check(
-        "a 4-segment deep path is caught even once",
-        repeated_deep_paths(DEEP_FOUR_ONCE),
-        {"houyicoder_protocol::frontend::permission::PermissionMode": 1},
-    )
-    ok &= check("one separator is allowed", repeated_deep_paths(ONE_SEPARATOR), {})
-    ok &= check("ratchet holds at the baseline", evaluate(["x"], ["y"], 1, 1), 0)
-    ok &= check("ratchet blocks growth", evaluate(["x", "y"], ["y"], 1, 1), 1)
-    ok &= check("ratchet blocks growth of paths", evaluate(["x"], ["y", "z"], 1, 1), 1)
-    ok &= check("the hook refuses a write with a local import", _hook_verdict(IN_FN), 2)
-    ok &= check("the hook refuses a write with a deep path", _hook_verdict(DEEP_FOUR_ONCE), 2)
-    ok &= check("the hook allows a write with a module-scope import", _hook_verdict(MODULE_SCOPE), 0)
-    ok &= check(
-        "the hook counts a repeated pair once, not once per use",
-        evaluate(["x"], ["p", "q"], 1, 1),
-        1,
-    )
-    if not ok:
-        print("FAIL test_rust_imports")
-        return 1
-    print("PASS test_rust_imports")
-    return 0
+def test_module_scope_use_is_allowed():
+    assert len(list(inline_use_violations(MODULE_SCOPE))) == 0
+
+
+def test_use_in_a_function_is_a_finding():
+    assert len(list(inline_use_violations(IN_FN))) == 1
+
+
+def test_use_in_a_nested_block_is_a_finding():
+    assert len(list(inline_use_violations(IN_NESTED))) == 1
+
+
+def test_brace_in_a_string_does_not_hide_the_body():
+    assert len(list(inline_use_violations(BRACE_IN_STRING))) == 1
+
+
+def test_pub_crate_fn_body_is_seen():
+    assert len(list(inline_use_violations(PUB_CRATE_FN))) == 1
+
+
+def test_pub_unsafe_fn_body_is_seen():
+    assert len(list(inline_use_violations(PUB_UNSAFE_FN))) == 1
+
+
+def test_body_opening_after_a_multiline_signature_is_seen():
+    assert len(list(inline_use_violations(MULTILINE_SIG))) == 1
+
+
+def test_a_lifetime_is_not_read_as_a_char_literal():
+    assert len(list(inline_use_violations(LIFETIME_SIG))) == 1
+
+
+def test_a_one_line_body_is_seen():
+    assert len(list(inline_use_violations(ONE_LINE_FN))) == 1
+
+
+def test_a_char_literal_before_the_use_does_not_hide_it():
+    assert len(list(inline_use_violations(CHAR_THEN_USE))) == 1
+
+
+def test_two_variants_of_one_type_group_into_one_import():
+    assert repeated_deep_paths(PATH_TWICE) == {"crate::state::Screen": 2}
+
+
+def test_module_type_variant_repeated_is_caught():
+    assert repeated_deep_paths(MOD_TYPE_VARIANT_TWICE) == {"mpsc::TryRecvError": 2}
+
+
+def test_a_path_used_once_is_allowed():
+    assert repeated_deep_paths(PATH_ONCE) == {}
+
+
+def test_a_four_segment_deep_path_is_caught_even_once():
+    assert repeated_deep_paths(DEEP_FOUR_ONCE) == {
+        "houyicoder_protocol::frontend::permission::PermissionMode": 1
+    }
+
+
+def test_one_separator_is_allowed():
+    assert repeated_deep_paths(ONE_SEPARATOR) == {}
+
+
+def test_ratchet_holds_at_the_baseline():
+    assert evaluate(["x"], ["y"], 1, 1) == 0
+
+
+def test_ratchet_blocks_growth():
+    assert evaluate(["x", "y"], ["y"], 1, 1) == 1
+
+
+def test_ratchet_blocks_growth_of_paths():
+    assert evaluate(["x"], ["y", "z"], 1, 1) == 1
+
+
+def test_the_hook_refuses_a_write_with_a_local_import():
+    assert _hook_verdict(IN_FN) == 2
+
+
+def test_the_hook_refuses_a_write_with_a_deep_path():
+    assert _hook_verdict(DEEP_FOUR_ONCE) == 2
+
+
+def test_the_hook_allows_a_write_with_a_module_scope_import():
+    assert _hook_verdict(MODULE_SCOPE) == 0
+
+
+def test_the_hook_counts_a_repeated_pair_once():
+    assert evaluate(["x"], ["p", "q"], 1, 1) == 1
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    from test_runner import run
+
+    sys.exit(run("rust-imports", dict(globals())))

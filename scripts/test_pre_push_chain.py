@@ -191,7 +191,6 @@ def test_both_guards_run():
             "repo:refs/heads/dev aaa bbb refs/heads/main ccc ddd:args=origin url"
         )
         assert chain.seen() == expected, f"replayed stdin mismatch:\n{chain.seen()}"
-    print("ok  chain: both guards run, each handed the same ref list and arguments")
 
 
 def test_refusal_stops_chain():
@@ -204,7 +203,6 @@ def test_refusal_stops_chain():
         assert chain.seen() == (
             "local:refs/heads/dev aaa bbb refs/heads/main ccc ddd:args=origin url"
         ), f"the chain continued past a refusal:\n{chain.seen()}"
-    print("ok  refusal: a guard that objects fails the push and stops the chain")
 
 
 def test_no_guards_noop():
@@ -213,7 +211,6 @@ def test_no_guards_noop():
         proc = chain.run()
         assert proc.returncode == 0, f"exit {proc.returncode} with no guards installed"
         assert not chain.log.read_text(encoding="utf-8"), "a guard ran that was not there"
-    print("ok  no-op: a hook slot with nothing to chain pushes")
 
 
 def test_dangling_guard_fails():
@@ -225,7 +222,6 @@ def test_dangling_guard_fails():
         assert "symlink with no target" in proc.stderr, (
             f"the refusal did not say why:\n{proc.stderr}"
         )
-    print("ok  dangling: a guard that cannot run refuses instead of passing")
 
 
 def test_empty_refs_reach():
@@ -238,7 +234,6 @@ def test_empty_refs_reach():
         assert chain.seen() == "local::args=origin url repo::args=origin url", (
             f"guards skipped on empty stdin:\n{chain.seen()}"
         )
-    print("ok  empty: a push with no ref list still runs both guards")
 
 
 def test_python_guard_runs():
@@ -260,7 +255,6 @@ def test_python_guard_runs():
         assert chain.seen() == "python:refs/heads/dev aaa bbb refs/heads/main ccc ddd", (
             f"a non-shell guard did not run as itself:\n{chain.seen()}"
         )
-    print("ok  interpreter: a guard git ran by shebang still runs under the chain")
 
 
 def test_chained_copy_refuses():
@@ -285,7 +279,6 @@ def test_chained_copy_refuses():
         assert "should-never-run" not in chain.seen(), (
             f"the chain ran the copy instead of refusing:\n{chain.seen()}"
         )
-    print("ok  recursion: a copy of the chain beside itself refuses the push")
 
 
 def test_marker_mention_runs():
@@ -312,7 +305,6 @@ def test_marker_mention_runs():
             "mentions:refs/heads/dev aaa bbb refs/heads/main ccc ddd "
             "repo:refs/heads/dev aaa bbb refs/heads/main ccc ddd:args=origin url"
         ), f"a guard that mentions the marker was refused or skipped:\n{chain.seen()}"
-    print("ok  marker in body: a guard that looks for the marker still runs")
 
 
 def installer_single_guard_wrapper() -> str:
@@ -345,7 +337,6 @@ def test_scripts_agree():
     assert installer_single_guard_wrapper() == SINGLE_GUARD_WRAPPER, (
         "the installer no longer recognises the wrapper text this suite lays down"
     )
-    print("ok  agreement: both scripts read the same marker line and wrapper text")
 
 
 # ------------------------------------------------------------ installer side
@@ -455,8 +446,6 @@ def test_slot_classification():
                 assert row.says in proc.stdout, (
                     f"{where}the message does not say what it did:\n{proc.stdout}"
                 )
-        print(f"ok  classify: {row.name} — chain in slot, occupant at "
-              f"{row.occupant_at or 'nothing'}")
 
 
 def test_symlinked_guard_kept():
@@ -475,7 +464,6 @@ def test_symlinked_guard_kept():
         assert install.kept().resolve() == source.resolve(), (
             "the kept guard no longer points at its own source"
         )
-    print("ok  symlink: a linked guard keeps pointing at the file that updates it")
 
 
 def test_link_at_chain():
@@ -497,7 +485,6 @@ def test_link_at_chain():
         assert "keeping the symlink" in proc.stdout, (
             f"the install did not say what it decided:\n{proc.stdout}"
         )
-    print("ok  linked slot: a symlink at the chain is kept, not copied over")
 
 
 def test_link_at_wrapper():
@@ -521,7 +508,6 @@ def test_link_at_wrapper():
         assert wrapper.read_text(encoding="utf-8") == SINGLE_GUARD_WRAPPER, (
             "the file the link reached was written through"
         )
-    print("ok  linked wrapper: a link at the old wrapper is set aside, not chained")
 
 
 def test_wrapper_beside_chain():
@@ -541,7 +527,6 @@ def test_wrapper_beside_chain():
         assert install.replaced().read_text(encoding="utf-8") == SINGLE_GUARD_WRAPPER, (
             "the wrapper that was set aside was not kept"
         )
-    print("ok  wrapper aside: a wrapper beside the chain is set aside, not chained")
 
 
 def test_wrapper_beside_foreign():
@@ -565,7 +550,6 @@ def test_wrapper_beside_foreign():
         assert install.replaced().read_text(encoding="utf-8") == SINGLE_GUARD_WRAPPER, (
             "the wrapper that sat beside the slot was not set aside"
         )
-    print("ok  beside foreign: the slot's guard is kept and the wrapper set aside")
 
 
 def test_directory_refused():
@@ -585,7 +569,6 @@ def test_directory_refused():
         assert "hook installed" not in proc.stdout, (
             f"the installer reported success over a slot it refused:\n{proc.stdout}"
         )
-    print("ok  directory: a slot holding a directory is refused, not installed beside")
 
 
 def test_two_guards_refused():
@@ -600,7 +583,6 @@ def test_two_guards_refused():
         assert "already holds one" in proc.stderr, (
             f"the refusal did not say why:\n{proc.stderr}"
         )
-    print("ok  two guards: an ambiguous slot is refused with both guards intact")
 
 
 def test_chain_aside_refused():
@@ -614,7 +596,6 @@ def test_chain_aside_refused():
         assert "is itself an installed chain" in proc.stderr, (
             f"the refusal did not say why:\n{proc.stderr}"
         )
-    print("ok  recursion: a chain already moved aside is refused, not chained")
 
 
 def test_reinstall_leaves_guard():
@@ -629,7 +610,6 @@ def test_reinstall_leaves_guard():
         assert install.kept().read_text(encoding="utf-8") == "#!/bin/sh\nexit 0\n", (
             "a reinstall disturbed the guard it had already moved aside"
         )
-    print("ok  reinstall: a second run neither nests the chain nor touches the guard")
 
 
 def test_removal_hint_guard():
@@ -642,7 +622,6 @@ def test_removal_hint_guard():
             "the hint tells the reader to remove the chain and never mentions "
             f"the guard it moved aside:\n{proc.stdout}"
         )
-    print("ok  removal: the hint says where the guard it moved aside went")
 
 
 def test_failed_move_reports():
@@ -667,7 +646,6 @@ def test_failed_move_reports():
         )
         assert install.slot_text() == foreign, "the guard in the slot changed"
         assert not install.kept().exists(), "a local guard appeared where the move failed"
-    print("ok  failed move: an install that cannot move the guard aside says so")
 
 
 def test_precommit_slot_fails():
@@ -685,7 +663,6 @@ def test_precommit_slot_fails():
         assert "pre-commit hook installed" not in proc.stdout, (
             f"the installer reported a pre-commit hook over a directory:\n{proc.stdout}"
         )
-    print("ok  pre-commit: a hook write that cannot land fails the install")
 
 
 def test_failed_install_reports():
@@ -705,38 +682,12 @@ def test_failed_install_reports():
         assert "pre-push hook installed" not in proc.stdout, (
             f"the installer reported success over an empty slot:\n{proc.stdout}"
         )
-    print("ok  failure: an install that cannot write the slot says so")
-
-
-def main() -> int:
-    test_both_guards_run()
-    test_refusal_stops_chain()
-    test_no_guards_noop()
-    test_dangling_guard_fails()
-    test_empty_refs_reach()
-    test_python_guard_runs()
-    test_chained_copy_refuses()
-    test_marker_mention_runs()
-    test_scripts_agree()
-    test_slot_classification()
-    test_symlinked_guard_kept()
-    test_link_at_chain()
-    test_link_at_wrapper()
-    test_wrapper_beside_chain()
-    test_wrapper_beside_foreign()
-    test_directory_refused()
-    test_two_guards_refused()
-    test_chain_aside_refused()
-    test_reinstall_leaves_guard()
-    test_removal_hint_guard()
-    test_failed_move_reports()
-    test_precommit_slot_fails()
-    test_failed_install_reports()
-    print("PASS test_pre_push_chain")
-    return 0
 
 
 if __name__ == "__main__":
+    from test_runner import run
+
+    sys.exit(run("pre-push-chain", dict(globals())))
     try:
         sys.exit(main())
     except AssertionError as failure:
