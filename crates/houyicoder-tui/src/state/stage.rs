@@ -1,8 +1,7 @@
-//! Guided-workflow stage state on App: stage transitions, the plan-mode
-//! toggle, and the two manual viewport exits (Scroll and Focus). The
-//! stage-to-viewport auto-sync lives on Ui, where the viewport and overlays
-//! are owned. Split from App so the workflow state machine is one cohesive
-//! unit rather than scattered App methods.
+//! Stage transitions and the two manual viewport exits (Scroll and Focus) on
+//! App. The stage, its history, and the spec strip step are one value and move
+//! inside Workflow; what stays here is the half that crosses owners — syncing
+//! the viewport the new stage implies.
 
 use crate::state::{App, Stage, ViewportMode};
 
@@ -12,9 +11,7 @@ impl App {
     /// syncs the viewport to the new stage (implement and verify fold into
     /// Focus).
     pub fn set_stage(&mut self, stage: Stage) {
-        self.workflow.stage_history.push(self.workflow.stage);
-        self.workflow.stage = stage;
-        self.workflow.spec_ctx.step = stage.label().to_string();
+        self.workflow.enter(stage);
         self.ui.sync_viewport_to_stage(stage);
     }
 
@@ -35,13 +32,8 @@ impl App {
     /// the restored stage when there was something to rewind to. Also syncs the
     /// viewport so rewinding from Focus back to design unfolds to Working.
     pub fn rewind_stage(&mut self) -> Option<Stage> {
-        if self.workflow.stage_history.is_empty() {
-            return None;
-        }
-        let prev = self.workflow.stage_history.pop().expect("non-empty");
-        self.workflow.stage = prev;
-        self.workflow.spec_ctx.step = prev.label().to_string();
-        self.ui.sync_viewport_to_stage(prev);
-        Some(prev)
+        let previous = self.workflow.rewind()?;
+        self.ui.sync_viewport_to_stage(previous);
+        Some(previous)
     }
 }

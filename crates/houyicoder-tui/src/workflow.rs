@@ -48,3 +48,34 @@ pub(crate) struct Workflow {
     /// True while a canned replay indicator is on screen.
     pub(crate) replaying: bool,
 }
+
+impl Workflow {
+    /// Move to a new stage, remembering the one it leaves so a rewind can
+    /// return to it. The spec strip's step follows the stage: the two are one
+    /// value to a reader, so a transition sets both here. The viewport the new
+    /// stage implies is the Ui's to sync, which is why that half stays with
+    /// App.
+    pub(crate) fn enter(&mut self, stage: Stage) {
+        self.stage_history.push(self.stage);
+        self.stage = stage;
+        self.spec_ctx.step = stage.label().to_string();
+    }
+
+    /// Return to the stage the chain came from, or None when it is at the
+    /// start of the history.
+    pub(crate) fn rewind(&mut self) -> Option<Stage> {
+        let previous = self.stage_history.pop()?;
+        self.stage = previous;
+        self.spec_ctx.step = previous.label().to_string();
+        Some(previous)
+    }
+
+    /// Reset to a stage without recording the move: the history is dropped, so
+    /// a rewind after a reset has nothing to return to. The step follows the
+    /// stage, as it does on a transition.
+    pub(crate) fn reset_to(&mut self, stage: Stage) {
+        self.stage = stage;
+        self.spec_ctx.step = stage.label().to_string();
+        self.stage_history.clear();
+    }
+}

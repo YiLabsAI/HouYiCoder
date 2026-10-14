@@ -3,12 +3,15 @@
 //! replay the applied change. Editing and review occur in one surface, with no
 //! external editor.
 
+use std::fs::remove_file;
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use houyicoder_protocol::frontend::SlashCommand;
 
+use crate::artifact::ArtifactSession;
 use crate::composition;
 use crate::keys::handle_working;
-use crate::state::{App, Pane, Screen, ViewportMode};
+use crate::state::{App, Pane, Screen, TranscriptLine, ViewportMode};
 use crate::test_harness::render_text;
 
 fn key(code: KeyCode) -> KeyEvent {
@@ -62,6 +65,54 @@ fn test_artifact_load_missing() {
     assert_eq!(app.ui.navigation.pane, Pane::Artifact);
     // The canned stub keeps the pane usable when the file cannot be read.
     assert!(app.workflow.artifact.current_lines().len() > 1);
+}
+
+/// With no path the pane opens the canned stub, which no file backs. The pane
+/// title and the system line both say so rather than naming a document that
+/// does not exist.
+#[test]
+fn test_artifact_opens_stub() {
+    let mut app = working_app();
+    app.ui.input.editor.set("/artifact".to_string());
+    app.submit_input();
+
+    assert_eq!(app.ui.navigation.pane, Pane::Artifact);
+    assert_eq!(app.workflow.artifact.file_path(), None, "no file backs it");
+    let out = render_text(&app, 100, 28);
+    assert!(
+        out.contains("(canned stub)"),
+        "the pane title names the stub:\n{out}"
+    );
+    assert!(
+        !out.contains("loop-artifacts"),
+        "no path that does not exist is shown:\n{out}"
+    );
+    assert!(
+        matches!(app.sessions.current.transcript.last(),
+            Some(TranscriptLine::System(s)) if s.contains("canned stub")),
+        "the line says which document opened: {:?}",
+        app.sessions.current.transcript.last()
+    );
+}
+
+/// A save with no path writes back to the loaded file; on the stub there is
+/// none, so the command says what it needs instead of writing a file named
+/// after the stub's label.
+#[test]
+fn test_artifact_save_stub_needs() {
+    let mut app = working_app();
+    app.ui.input.editor.set("/artifact".to_string());
+    app.submit_input();
+    app.ui.input.editor.set("/artifact-save".to_string());
+    app.submit_input();
+
+    // The pane covers the transcript, so the line is asserted where it lands.
+    assert!(
+        matches!(app.sessions.current.transcript.last(),
+            Some(TranscriptLine::System(s)) if s.contains("pass a path")),
+        "the save says a path is needed: {:?}",
+        app.sessions.current.transcript.last()
+    );
 }
 
 #[test]
@@ -120,7 +171,7 @@ fn test_nl_note_skips_proposal() {
     assert!(app.workflow.artifact.pending_proposal().is_none());
     assert_eq!(app.workflow.artifact.annotation_count(), 1);
     assert!(matches!(app.sessions.current.transcript.last(),
-        Some(crate::state::TranscriptLine::System(s)) if s.contains("natural-language")));
+        Some(TranscriptLine::System(s)) if s.contains("natural-language")));
 }
 
 #[test]
@@ -270,7 +321,7 @@ fn test_artifact_save_command_writes() {
         "{}/houyicoder_artifact_save_test.md",
         env!("CARGO_MANIFEST_DIR")
     );
-    drop(std::fs::remove_file(&path));
+    drop(remove_file(&path));
     let mut app = working_app();
     app.ui.navigation.pane = Pane::Artifact;
     app.ui.input.editor.clear();
@@ -280,14 +331,14 @@ fn test_artifact_save_command_writes() {
     handle_working(&mut app, key(KeyCode::Char('a')));
     app.ui.input.editor.set(format!("/artifact-save {path}"));
     app.submit_input();
-    let reloaded = crate::state::ArtifactSession::load(&path).expect("saved file loads back");
+    let reloaded = ArtifactSession::load(&path).expect("saved file loads back");
     assert!(
         reloaded
             .current_lines()
             .contains(&"saved content".to_string()),
         "applied edit persisted to disk"
     );
-    drop(std::fs::remove_file(&path));
+    drop(remove_file(&path));
 }
 
 #[test]

@@ -9,7 +9,7 @@ mod placeholder;
 mod switch;
 mod worktree;
 pub use app_default::app;
-pub use placeholder::*;
+pub use placeholder::{context_view, failing_checks, help_text, release_notes};
 pub use worktree::{WorktreeEntry, parse_worktrees};
 
 use crate::agent_message::SessionMessage;

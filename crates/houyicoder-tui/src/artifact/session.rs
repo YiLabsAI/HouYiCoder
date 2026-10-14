@@ -112,6 +112,9 @@ pub struct AppliedChange {
 #[derive(Debug, Clone)]
 pub struct ArtifactSession {
     path: String,
+    /// Whether a file backs this session. A loaded document has one; the
+    /// canned stub does not, so saving it back needs a path from the user.
+    from_disk: bool,
     base_lines: Vec<String>,
     annotations: Vec<Annotation>,
     proposed: Option<ProposedChange>,
@@ -377,6 +380,7 @@ impl ArtifactSession {
         let base_lines: Vec<String> = content.lines().map(String::from).collect();
         Ok(Self {
             path: path.to_string(),
+            from_disk: true,
             base_lines,
             annotations: Vec::new(),
             proposed: None,
@@ -394,9 +398,17 @@ impl ArtifactSession {
         fs::write(path, content).map_err(TuiError::from)
     }
 
+    /// The path this session was loaded from, or None for the canned stub,
+    /// which no file backs. A caller saving without a path needs one of these.
+    pub fn file_path(&self) -> Option<&str> {
+        self.from_disk.then_some(self.path.as_str())
+    }
+
     /// Canned session for the stub App (no file IO). Used before the user
     /// opens a real document. Content matches the strategy draft so the pane
-    /// opens on a real multi-section document on first launch.
+    /// opens on a real multi-section document on first launch. The path is a
+    /// label, not a file: nothing on disk backs it, so it says so rather than
+    /// naming a document that does not exist.
     pub fn stub() -> Self {
         let raw = "# houyicoder strategy
 ## 1. diagnosis
@@ -410,7 +422,8 @@ provider absorbs single-feature leads in 6-24mo
 lead comes from integrated composition, not any one feature";
         let base_lines: Vec<String> = raw.lines().map(String::from).collect();
         Self {
-            path: "docs/loop-artifacts/00-ten-pillars.md".to_string(),
+            path: "(canned stub)".to_string(),
+            from_disk: false,
             base_lines,
             annotations: Vec::new(),
             proposed: None,
@@ -427,6 +440,7 @@ lead comes from integrated composition, not any one feature";
     pub fn from_lines(lines: &[&str]) -> Self {
         Self {
             path: "test".to_string(),
+            from_disk: false,
             base_lines: lines.iter().map(|s| s.to_string()).collect(),
             annotations: Vec::new(),
             proposed: None,

@@ -7,13 +7,16 @@
 
 use std::time::Instant;
 
+use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::frontend::SlashCommand;
 use houyicoder_protocol::frontend::status::StatusSnapshot;
 
 use crate::composition;
 use crate::input::queue::{InputItem, is_state_changing};
+use crate::records::{ContextDrillDown, ContextView};
 use crate::run_control::ClientCommand;
 use crate::state::{App, ArtifactSession, Pane, Screen, Stage, TranscriptLine, pane_for_stage};
+use crate::view::export_log::write_atomic_0600;
 
 mod debug;
 mod memory;
@@ -27,190 +30,66 @@ mod permission;
 pub(crate) mod render;
 mod worktree;
 
-/// The default document the artifact pane opens when no path is given: the
-/// strategy draft itself, so the pane opens on a real multi-section document.
-const DEFAULT_ARTIFACT_PATH: &str = "docs/loop-artifacts/00-ten-pillars.md";
-
 impl App {
     /// Execute a slash command. The guided-chain commands (/spec /plan
     /// /implement /review /verify) open their pane and enter the drafting
     /// stage; approval (a) inside the pane advances to the next stage. The
     /// other commands produce visible output (a pane switch or a real
-    /// multi-line system entry), not a one-line placeholder.
-    #[expect(clippy::too_many_lines, reason = "long by design, kept whole")]
+    /// multi-line system entry), not a one-line placeholder. The pane family
+    /// lives in open_pane_command.
     pub(crate) fn run_command(&mut self, cmd: SlashCommand) {
-        use SlashCommand as C;
         match cmd {
-            C::Exit => self.ui.quit = true,
-            C::Login => self.ui.navigation.screen = Screen::Login,
-            C::Console => self.ui.navigation.screen = Screen::Console,
-            C::Clear => self.clear_session(),
-            C::Init => self.enter_stage(Stage::Design, Pane::Spec, "initializing project spec"),
-            C::Spec => self.enter_stage(Stage::Design, Pane::Spec, "drafting design (spec)"),
-            C::Plan => self.enter_stage(Stage::Design, Pane::Plan, "drafting design (plan)"),
-            C::Implement => self.enter_stage(Stage::Implementing, Pane::Diff, "implementing"),
-            C::Review => self.enter_stage(Stage::Verify, Pane::Review, "verifying: agent review"),
-            C::Verify => self.enter_stage(Stage::Verify, Pane::Verify, "verifying: machine check"),
-            C::Graph => {
-                self.ui.navigation.pane = Pane::Graph;
-                self.system_line("graph: showing impact_set result in the graph pane");
+            SlashCommand::Exit => self.ui.quit = true,
+            SlashCommand::Login => self.ui.navigation.screen = Screen::Login,
+            SlashCommand::Console => self.ui.navigation.screen = Screen::Console,
+            SlashCommand::Clear => self.clear_session(),
+            SlashCommand::Init => {
+                self.enter_stage(Stage::Design, Pane::Spec, "initializing project spec")
             }
-            C::Diff => {
-                self.ui.navigation.pane = Pane::Diff;
-                self.system_line("diff: showing changes in the diff pane");
+            SlashCommand::Spec => {
+                self.enter_stage(Stage::Design, Pane::Spec, "drafting design (spec)")
             }
-            C::Agents => {
-                self.ui.navigation.pane = Pane::Agents;
-                self.refresh_agents();
-                if let Some(s) = self.sessions.current.connection.as_ref() {
-                    match s.next_request_id() {
-                        Ok(req_id) => {
-                            self.enqueue_refresh(ClientCommand::AgentsQuery { req_id });
-                        }
-                        Err(_) => self.note_request_id_exhausted(),
-                    }
-                }
+            SlashCommand::Plan => {
+                self.enter_stage(Stage::Design, Pane::Plan, "drafting design (plan)")
             }
-            C::Model => {
-                self.open_model_pane();
+            SlashCommand::Implement => {
+                self.enter_stage(Stage::Implementing, Pane::Diff, "implementing")
             }
-            C::Sandbox => self.system_line(render::render_sandbox(
+            SlashCommand::Review => {
+                self.enter_stage(Stage::Verify, Pane::Review, "verifying: agent review")
+            }
+            SlashCommand::Verify => {
+                self.enter_stage(Stage::Verify, Pane::Verify, "verifying: machine check")
+            }
+            SlashCommand::Graph
+            | SlashCommand::Diff
+            | SlashCommand::Agents
+            | SlashCommand::Context
+            | SlashCommand::Status
+            | SlashCommand::Trajectory
+            | SlashCommand::Tools
+            | SlashCommand::Skills
+            | SlashCommand::Hooks
+            | SlashCommand::Memory => self.open_pane_command(cmd),
+            SlashCommand::Model => self.open_model_pane(),
+            SlashCommand::Sandbox => self.system_line(render::render_sandbox(
                 &self.snapshot_or_stub(),
                 &self.sessions.current.sandbox,
             )),
-            C::Permission => self.open_permission_pane(),
-            C::Context => {
-                // Render immediately from the cache (no "fetching from
-                // server" placeholder); a background ContextQuery refreshes
-                // it — the ContextResult replaces this grid with fresh data.
-                // No cache yet (first /context on a fresh session): the
-                // server's prospective breakdown fills it on the first reply.
-                let status = &self.sessions.current.capabilities.status;
-                if let Some(breakdown) = status.context_cache.clone() {
-                    let suggestions = crate::composition::suggestions_for(&breakdown);
-                    let view = crate::records::ContextView {
-                        breakdown,
-                        drill: crate::records::ContextDrillDown::default(),
-                        suggestions,
-                    };
-                    self.push_transcript_line(TranscriptLine::ContextGrid(view));
-                } else if self.sessions.current.connection.is_none() {
-                    self.push_transcript_line(TranscriptLine::ContextGrid(
-                        composition::context_view(),
-                    ));
-                }
-                if let Some(s) = self.sessions.current.connection.as_ref() {
-                    match s.next_request_id() {
-                        Ok(req_id) => {
-                            self.enqueue_refresh(ClientCommand::ContextQuery { req_id });
-                        }
-                        Err(_) => self.note_request_id_exhausted(),
-                    }
-                }
-            }
-            C::Status => {
-                // Open the Status pane (the shared Pane template: transcript
-                // tail above, status fields below). A wired session also
-                // requests a fresh status poll so the cache is current on
-                // open; the reply updates the cache + the pane re-renders,
-                // not a transcript text dump. The stub path renders from
-                // snapshot_or_stub the pane content reads.
-                self.ui.navigation.pane = Pane::Status;
-                if let Some(s) = self.sessions.current.connection.as_ref() {
-                    match s.next_request_id() {
-                        Ok(req_id) => {
-                            // Set the pending flag only after the enqueue accepts
-                            // the command, so a closed driver does not leave a
-                            // flag that waits on a reply that never comes. A
-                            // refused enqueue stays quiet: the ConnectionLost
-                            // event announces the loss.
-                            let status = &mut self.sessions.current.capabilities.status;
-                            if s.enqueue(ClientCommand::StatusQuery { req_id }).is_ok() {
-                                status.mark_command_pending();
-                            }
-                        }
-                        Err(_) => self.note_request_id_exhausted(),
-                    }
-                }
-            }
-            C::Trajectory => {
-                self.ui.navigation.pane = Pane::Trajectory;
-                self.ui.trajectory.set_level(0);
-                self.ui.trajectory.set_turn_idx(0);
-                // No turn is selected yet: the pane opens on the tail and
-                // follows it until the user picks a row.
-                self.ui.trajectory.clear_selection();
-                self.ui.trajectory.clear_drill();
-                // Initialize cursor to tail; draw_content will clamp and persist
-                // it to the active row count on first render.
-                self.ui.trajectory.set_cursor(usize::MAX);
-            }
-            C::Tools => {
-                self.ui.navigation.pane = Pane::Tools;
-                if let Some(s) = self.sessions.current.connection.as_ref() {
-                    match s.next_request_id() {
-                        Ok(req_id) => {
-                            self.enqueue_refresh(ClientCommand::ToolListQuery { req_id });
-                        }
-                        Err(_) => self.note_request_id_exhausted(),
-                    }
-                }
-            }
-            C::Skills => {
-                self.ui.navigation.pane = Pane::Skills;
-                if let Some(s) = self.sessions.current.connection.as_ref() {
-                    match s.next_request_id() {
-                        Ok(req_id) => {
-                            self.enqueue_refresh(ClientCommand::SkillsQuery { req_id });
-                        }
-                        Err(_) => self.note_request_id_exhausted(),
-                    }
-                }
-            }
-            C::Hooks => {
-                self.ui.navigation.pane = Pane::Hooks;
-                if let Some(s) = self.sessions.current.connection.as_ref() {
-                    match s.next_request_id() {
-                        Ok(req_id) => {
-                            self.enqueue_refresh(ClientCommand::HooksQuery { req_id });
-                        }
-                        Err(_) => self.note_request_id_exhausted(),
-                    }
-                }
-            }
-            C::Memory => {
-                self.ui.navigation.pane = Pane::Memory;
-                self.ui.memory.close_detail();
-                if let Some(s) = self.sessions.current.connection.as_ref() {
-                    match s.next_request_id() {
-                        Ok(req_id) => {
-                            self.enqueue_refresh(ClientCommand::MemoryListQuery { req_id });
-                        }
-                        Err(_) => self.note_request_id_exhausted(),
-                    }
-                }
-                if let Some(s) = self.sessions.current.connection.as_ref() {
-                    match s.next_request_id() {
-                        Ok(req_id) => {
-                            self.enqueue_refresh(ClientCommand::MemoryToggleStateQuery { req_id });
-                        }
-                        Err(_) => self.note_request_id_exhausted(),
-                    }
-                }
-            }
-            C::Rewind => self.rewind(),
-            C::Replay => {
+            SlashCommand::Permission => self.open_permission_pane(),
+            SlashCommand::Rewind => self.rewind(),
+            SlashCommand::Replay => {
                 self.workflow.replaying = true;
                 self.system_line("replay: entering replay mode (canned indicator on)");
             }
-            C::ReleaseNotes => self.system_line(composition::release_notes()),
-            C::Help => self.system_line(composition::help_text()),
-            C::Worktree => {
+            SlashCommand::ReleaseNotes => self.system_line(composition::release_notes()),
+            SlashCommand::Help => self.system_line(composition::help_text()),
+            SlashCommand::Worktree => {
                 self.ui.navigation.pane = Pane::Worktree;
                 self.refresh_worktrees();
             }
-            C::Compact => self.run_compact(),
-            C::Undo => {
+            SlashCommand::Compact => self.run_compact(),
+            SlashCommand::Undo => {
                 let Some(s) = self.sessions.current.connection.as_ref() else {
                     self.system_line("undo: not connected");
                     return;
@@ -228,10 +107,116 @@ impl App {
             // Palette-registered local commands. The argless select form (and
             // any direct run_command call) delegates to the string dispatcher;
             // arg-bearing forms typed in the input box are caught there first
-            // by submit_input, so this arm only fires on the argless path.
-            C::Search | C::Export | C::Resume | C::Debug => {
+            // by submit_input, so the palette reaches it only for the bare name.
+            SlashCommand::Search
+            | SlashCommand::Export
+            | SlashCommand::Resume
+            | SlashCommand::Debug => {
                 self.run_tui_local_command(cmd.name().trim_start_matches('/'));
             }
+        }
+    }
+
+    /// Open the pane a command belongs to and, on a connected session, ask the
+    /// server to fill it. The pane opens either way: a stub session shows the
+    /// empty pane rather than swallowing the command.
+    fn open_pane_command(&mut self, cmd: SlashCommand) {
+        match cmd {
+            SlashCommand::Graph => {
+                self.ui.navigation.pane = Pane::Graph;
+                self.system_line("graph: showing impact_set result in the graph pane");
+            }
+            SlashCommand::Diff => {
+                self.ui.navigation.pane = Pane::Diff;
+                self.system_line("diff: showing changes in the diff pane");
+            }
+            SlashCommand::Agents => {
+                self.ui.navigation.pane = Pane::Agents;
+                self.refresh_agents();
+                self.refresh_query(|req_id| ClientCommand::AgentsQuery { req_id });
+            }
+            SlashCommand::Context => {
+                // Render from the cache first so the grid appears without a
+                // "fetching" placeholder; the query's reply replaces it.
+                let status = &self.sessions.current.capabilities.status;
+                if let Some(breakdown) = status.context_cache.clone() {
+                    let suggestions = composition::suggestions_for(&breakdown);
+                    let view = ContextView {
+                        breakdown,
+                        drill: ContextDrillDown::default(),
+                        suggestions,
+                    };
+                    self.push_transcript_line(TranscriptLine::ContextGrid(view));
+                } else if self.sessions.current.connection.is_none() {
+                    self.push_transcript_line(TranscriptLine::ContextGrid(
+                        composition::context_view(),
+                    ));
+                }
+                self.refresh_query(|req_id| ClientCommand::ContextQuery { req_id });
+            }
+            SlashCommand::Status => {
+                // The shared pane template: transcript tail above, status
+                // fields below. The pending flag is set only after the enqueue
+                // accepts, so a closed driver leaves no flag waiting on a reply
+                // that never comes; ConnectionLost announces the loss.
+                self.ui.navigation.pane = Pane::Status;
+                let Some(s) = self.sessions.current.connection.as_ref() else {
+                    return;
+                };
+                match s.next_request_id() {
+                    Ok(req_id) => {
+                        let status = &mut self.sessions.current.capabilities.status;
+                        if s.enqueue(ClientCommand::StatusQuery { req_id }).is_ok() {
+                            status.mark_command_pending();
+                        }
+                    }
+                    Err(_) => self.note_request_id_exhausted(),
+                }
+            }
+            SlashCommand::Trajectory => {
+                self.ui.navigation.pane = Pane::Trajectory;
+                self.ui.trajectory.set_level(0);
+                self.ui.trajectory.set_turn_idx(0);
+                // No turn is selected yet: the pane opens on the tail and
+                // follows it until the user picks a row.
+                self.ui.trajectory.clear_selection();
+                self.ui.trajectory.clear_drill();
+                // The cursor starts at the tail; the draw clamps it to the
+                // active row count on first render.
+                self.ui.trajectory.set_cursor(usize::MAX);
+            }
+            SlashCommand::Tools => {
+                self.ui.navigation.pane = Pane::Tools;
+                self.refresh_query(|req_id| ClientCommand::ToolListQuery { req_id });
+            }
+            SlashCommand::Skills => {
+                self.ui.navigation.pane = Pane::Skills;
+                self.refresh_query(|req_id| ClientCommand::SkillsQuery { req_id });
+            }
+            SlashCommand::Hooks => {
+                self.ui.navigation.pane = Pane::Hooks;
+                self.refresh_query(|req_id| ClientCommand::HooksQuery { req_id });
+            }
+            SlashCommand::Memory => {
+                self.ui.navigation.pane = Pane::Memory;
+                self.ui.memory.close_detail();
+                self.refresh_query(|req_id| ClientCommand::MemoryListQuery { req_id });
+                self.refresh_query(|req_id| ClientCommand::MemoryToggleStateQuery { req_id });
+            }
+            _ => {}
+        }
+    }
+
+    /// Issue a refresh query on the live connection, or note that the request
+    /// ids ran out. A session with no connection has nothing to ask, and the
+    /// pane it opened still shows what it has.
+    fn refresh_query(&mut self, query: impl FnOnce(RequestId) -> ClientCommand) {
+        let Some(s) = self.sessions.current.connection.as_ref() else {
+            return;
+        };
+        match s.next_request_id() {
+            Ok(req_id) => self.enqueue_refresh(query(req_id)),
+            Err(_) => self.note_request_id_exhausted(),
         }
     }
 
@@ -245,7 +230,6 @@ impl App {
     /// owner-isolated. Reports the path + byte count so the user knows it
     /// landed without opening the file.
     pub(crate) fn run_export(&mut self, path: Option<&str>) {
-        use crate::view::export_log::write_atomic_0600;
         if self.sessions.current.connection.is_none() {
             self.system_line("export: not connected");
             return;
@@ -361,8 +345,7 @@ impl App {
         // Host state invalidation is decoupled from id generation.
         self.ui.input.queue.demote_to_parked();
         self.system_line("session archived, new session started");
-        self.workflow.stage = Stage::Idle;
-        self.workflow.spec_ctx.step = Stage::Idle.label().to_string();
+        self.workflow.reset_to(Stage::Idle);
         self.ui.navigation.pane = Pane::Transcript;
         self.reset_chain_state();
         self.ui.sync_viewport_to_stage(Stage::Idle);
@@ -547,22 +530,12 @@ impl App {
         );
     }
 
-    /// Parse and run a TUI-local slash command. These commands live entirely
-    /// in the TUI (no server round-trip). Search is registered in
-    /// the SlashCommand palette (discoverable when the user types /); the
-    /// /permissions subcommands (add / del / list / view / git) and the
-    /// /artifact + /artifact-save document commands stay string-only on
-    /// purpose — arg-bearing forms that the palette's argless select path
-    /// cannot carry. This function is the arg
-    /// dispatcher: it parses the full input string (including arguments and
-    /// subcommands) that the palette's argless select path cannot carry.
-    /// Returns true when the input matched a local command; false to fall
-    /// through to protocol SlashCommand::parse.
-    ///
-    /// The argless palette-select form delegates here from run_command; the
-    /// arg-bearing forms typed in the input box are caught here first by
-    /// submit_input (before SlashCommand::parse), so SlashCommand::parse
-    /// never produces these variants from a typed command.
+    /// Parse and run a TUI-local slash command: the arg dispatcher for the
+    /// commands that live entirely in the TUI, which the palette's argless
+    /// select path cannot carry. Returns true when the input matched; false to
+    /// fall through to SlashCommand::parse. The argless palette-select form
+    /// delegates here from run_command; the arg-bearing forms typed in the
+    /// input box reach here first from submit_input.
     pub(crate) fn run_tui_local_command(&mut self, name: &str) -> bool {
         // /resume (no arg): open the session picker. /resume <id|name>:
         // direct switch to that session. Word-boundary so /resumefoo is not
@@ -575,13 +548,9 @@ impl App {
         if self.run_permission_command(name) {
             return true;
         }
-        // /search <query>: word-boundary match so /searchalot is NOT swallowed
-        // as /search alot (it falls through to the model as a message). Follows
-        // the /permissions word-boundary convention. Enters the full-screen verbose search
-        // view (Scroll mode + verbose + the query). --all is recognized but
-        // full-history search is not wired into this view yet -- say so rather
-        // than silently degrading (the user asked for MORE, silent less is
-        // worse than an error), then search the in-memory window.
+        // /search <query>: word-boundary match, so /searchalot falls through
+        // to the model as a message. Enters the full-screen verbose search
+        // view. --all says so rather than silently searching less than asked.
         if name == "search" || name.starts_with("search ") {
             let rest = name.strip_prefix("search ").unwrap_or("").trim();
             let (all, query) = match rest.strip_prefix("--all").map(str::trim_start) {
@@ -636,9 +605,21 @@ impl App {
         {
             return self.run_memory_subcommand(rest.trim());
         }
-        // /artifact-save [path]: persist the current (post-edit) document to
-        // disk. Writes to the loaded path by default, or the given path. No
-        // auto-save: explicit only. TUI-local (not in the protocol palette).
+        if self.run_artifact_command(name) {
+            return true;
+        }
+        false
+    }
+
+    /// /artifact [path] and /artifact-save [path]: the document commands.
+    /// /artifact opens the inline-review pane, loading the given path or the
+    /// canned stub when none is given; /artifact-save writes the edited
+    /// document back. Both are TUI-local, and neither is in the protocol
+    /// palette, so they only arrive here as typed input.
+    fn run_artifact_command(&mut self, name: &str) -> bool {
+        // /artifact-save [path]: an explicit path wins; with none, the
+        // document is written back to the file it was loaded from, and the
+        // stub has none to write to. No auto-save: explicit only.
         if name == "artifact-save" || name.starts_with("artifact-save ") {
             if self.ui.navigation.pane != Pane::Artifact {
                 self.system_line("artifact-save: open an artifact first (/artifact <path>)");
@@ -646,7 +627,13 @@ impl App {
             }
             let arg = name.strip_prefix("artifact-save").unwrap_or("").trim();
             let path = if arg.is_empty() {
-                self.workflow.artifact.path().to_string()
+                match self.workflow.artifact.file_path() {
+                    Some(loaded) => loaded.to_string(),
+                    None => {
+                        self.system_line("artifact-save: pass a path; the stub has no file");
+                        return true;
+                    }
+                }
             } else {
                 arg.to_string()
             };
@@ -657,32 +644,33 @@ impl App {
             }
             return true;
         }
-        // /artifact [path]: open the inline-review pane and load the document
-        // from disk. TUI-local (not in the protocol palette). Falls back to the
-        // canned stub when the path cannot be read. Always opens in Working
-        // mode: artifact editing needs the input box, and Focus mode hides it
+        // /artifact [path]: a path loads that document; no path opens the
+        // canned stub, which is not a file, so the pane names it as a stub
+        // rather than a path nothing backs. Always opens in Working mode:
+        // artifact editing needs the input box, and Focus mode hides it
         // (which would dead-end the c/o/d keys).
         if name == "artifact" || name.starts_with("artifact ") {
             let arg = name.strip_prefix("artifact").unwrap_or("").trim();
-            let path = if arg.is_empty() {
-                DEFAULT_ARTIFACT_PATH
+            if arg.is_empty() {
+                self.workflow.artifact = ArtifactSession::stub();
+                self.ui.navigation.pane = Pane::Artifact;
+                self.system_line("artifact: canned stub (pass a path to open a file)");
             } else {
-                arg
-            };
-            match ArtifactSession::load(path) {
-                Ok(session) => {
-                    self.workflow.artifact = session;
-                    self.ui.navigation.pane = Pane::Artifact;
-                    self.system_line(format!(
-                        "artifact: opened {} (c=replace o=insert d=delete i=nl; a/r=review)",
-                        self.workflow.artifact.path()
-                    ));
-                }
-                Err(_) => {
-                    self.ui.navigation.pane = Pane::Artifact;
-                    self.system_line(format!(
-                        "artifact: could not read {path}, showing canned stub"
-                    ));
+                match ArtifactSession::load(arg) {
+                    Ok(session) => {
+                        self.workflow.artifact = session;
+                        self.ui.navigation.pane = Pane::Artifact;
+                        self.system_line(format!(
+                            "artifact: opened {} (c=replace o=insert d=delete i=nl; a/r=review)",
+                            self.workflow.artifact.path()
+                        ));
+                    }
+                    Err(_) => {
+                        self.ui.navigation.pane = Pane::Artifact;
+                        self.system_line(format!(
+                            "artifact: could not read {arg}, showing canned stub"
+                        ));
+                    }
                 }
             }
             self.fold_to_working();

@@ -8,7 +8,8 @@ use crate::state::{App, Divergence, Verdict};
 impl App {
     /// Reset the guided-chain working state to a fresh draft: hunks back to
     /// Pending, findings back to Pending, audit trail cleared, clause statuses
-    /// reset, artifact approvals cleared, history cleared, replaying off.
+    /// reset, artifact approvals cleared, replaying off. The stage and its
+    /// history belong to Workflow, which resets them itself.
     pub fn reset_chain_state(&mut self) {
         for h in &mut self.workflow.diff.hunks {
             h.approved = Verdict::Pending;
@@ -24,7 +25,6 @@ impl App {
         }
         self.workflow.spec_artifact.approved = false;
         self.workflow.plan_artifact.approved = false;
-        self.workflow.stage_history.clear();
         self.workflow.replaying = false;
     }
 

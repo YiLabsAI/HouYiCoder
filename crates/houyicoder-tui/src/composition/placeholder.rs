@@ -1,25 +1,12 @@
-//! Canned content for the no-runner path: demo transcript slices, help/cost
-//! text, and the /context view payload. Used by Login/Console and the
-//! fallback commands so the surfaces render faithfully before a real runner
-//! is wired. Real shared logic (suggestions_for) stays in the parent.
+//! Canned content for the no-runner path: help/cost text and the /context
+//! view payload. Used by Login/Console and the fallback commands so those
+//! screens render faithfully before a real runner is connected. Real shared
+//! logic (suggestions_for) stays in the parent.
 
-use crate::state::TranscriptLine;
+use houyicoder_protocol::frontend::SlashCommand;
+use houyicoder_protocol::frontend::context::stub_breakdown;
 
-pub fn archived_transcript() -> Vec<TranscriptLine> {
-    vec![
-        TranscriptLine::System("resumed session #sess-archived-042 (canned reload)".to_string()),
-        TranscriptLine::User("refactor the spec strip to be monochrome".into()),
-        TranscriptLine::Agent("read status.rs and the strip clause line".into()),
-        TranscriptLine::Read {
-            path: "src/view/status.rs".to_string(),
-        },
-        TranscriptLine::Edit {
-            path: "src/view/status.rs".to_string(),
-            summary: "replaced green/yellow/red chips with dim symbols".into(),
-        },
-        TranscriptLine::System("checkpoint reached (canned)".into()),
-    ]
-}
+use crate::records::{ContextDrillDown, ContextView};
 
 pub fn release_notes() -> String {
     "what's new (canned)\n  - spec strip is now monochrome (one Cyan accent)\n  - per-change evidence diff with approve/reject\n  - inline slash palette (no full-screen popup)\n  - /rewind pops the last stage transition\n  - /resume loads an archived session".into()
@@ -27,7 +14,7 @@ pub fn release_notes() -> String {
 
 pub fn help_text() -> String {
     let mut s = String::from("commands (press / to open the palette):\n");
-    for cmd in houyicoder_protocol::frontend::SlashCommand::ALL {
+    for cmd in SlashCommand::ALL {
         s.push_str(&format!("  {:<16} {}\n", cmd.name(), cmd.help()));
     }
     s
@@ -42,13 +29,12 @@ pub fn failing_checks() -> Vec<String> {
 }
 
 /// /context view built from the stub breakdown so the inline block renders
-/// the real layout before the analyzer is wired. The drill-down is empty,
-/// matching every wired path (the server reply and the cache fast-path both
-/// serve a default drill until real drill data lands): a canned view must
+/// the real layout before the analyzer is connected. The drill-down is empty,
+/// matching every connected path (the server reply and the cache fast-path
+/// both serve a default drill until real drill data lands): a canned view must
 /// not fabricate memory files or skills that look like live telemetry.
-pub fn context_view() -> crate::records::ContextView {
-    use crate::records::{ContextDrillDown, ContextView};
-    let breakdown = houyicoder_protocol::frontend::context::stub_breakdown();
+pub fn context_view() -> ContextView {
+    let breakdown = stub_breakdown();
     let suggestions = super::suggestions_for(&breakdown);
     ContextView {
         breakdown,
