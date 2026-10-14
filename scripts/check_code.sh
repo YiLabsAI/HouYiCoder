@@ -113,6 +113,7 @@ SCRIPT_TESTS=(
   test_module_dead_code.py
   test_run_tests_timeout.py
   test_harness_routing.py
+  test_rust_imports.py
   test_pre_push_chain.py
 )
 for script_test in "${SCRIPT_TESTS[@]}"; do
@@ -122,6 +123,7 @@ run_check "rust-naming" python3 scripts/check_rust_naming.py $RS_FILES
 run_check "struct-fields" python3 scripts/check_struct_fields.py
 run_check "app-mut-borrows" python3 scripts/check_app_mut_borrows.py
 run_check "dead-code-ratchet" python3 scripts/check_module_dead_code.py
+run_check "rust-imports" python3 scripts/check_rust_imports.py
 run_check "comment-block-length" python3 scripts/check_comment_block_length.py
 if [ -f scripts/check_judgment_refs.py ]; then
   run_check "judgment-refs" python3 scripts/check_judgment_refs.py

@@ -18,6 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from rules.comments import line_violations  # noqa: E402
+from rules.imports import inline_use_violations  # noqa: E402
 from rules.naming import (  # noqa: E402
     JARGON,
     TEST_NAME_LEN_HARD,
@@ -149,6 +150,15 @@ def main():
     elif tool == "NotebookEdit":
         chunks.append(ti.get("new_source", ""))
     seen = set()
+    # The lines already on disk, so a carried-over local import is not
+    # reported as a new one.
+    existing_lines = set()
+    try:
+        existing_lines = {
+            line.strip() for line in Path(path).read_text(encoding="utf-8").splitlines()
+        }
+    except OSError:
+        pass
     for chunk in chunks:
         if is_rs:
             for line in chunk.splitlines():
@@ -170,6 +180,20 @@ def main():
                     continue
                 seen.add(key)
                 print(f"blocked write to {path}: {message}\n  -> {preview}", file=sys.stderr)
+            for lineno, line in inline_use_violations(chunk):
+                if line in existing_lines:
+                    # A rewrite or a move that carries a pre-existing local
+                    # import over is not a new one; the ratchet counts those.
+                    continue
+                rule = (
+                    "a use statement inside a function body; move it to the "
+                    "module's import block"
+                )
+                key = (rule, line)
+                if key in seen:
+                    continue
+                seen.add(key)
+                print(f"blocked write to {path}: {rule}\n  -> {line}", file=sys.stderr)
         if is_baseline_py:
             for message, line in _baseline_comment_violation(chunk):
                 key = (message, line)
