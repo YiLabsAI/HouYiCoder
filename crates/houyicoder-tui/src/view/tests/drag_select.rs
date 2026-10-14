@@ -9,13 +9,18 @@ use std::sync::{Arc, Mutex};
 
 use crate::app::handle_mouse;
 use crate::composition;
+use crate::pending_prompt::PendingPrompt;
+use crate::records::Approval;
+use crate::records::{ToolOutcome, TranscriptLine};
 use crate::selection::RecordingClipboard;
+use crate::state::App;
 use crate::state::Screen;
 use crate::test_harness::{render_buffer, render_text};
+use houyicoder_protocol::envelope::RequestId;
 
 /// App with n numbered system lines, rendered once so rect/rows/scroll cells
 /// are published. Returns the app plus the clipboard capture handle.
-fn app_with_lines(n: usize) -> (crate::state::App, Arc<Mutex<Vec<String>>>) {
+fn app_with_lines(n: usize) -> (App, Arc<Mutex<Vec<String>>>) {
     let mut app = composition::app();
     app.ui.navigation.screen = Screen::Working;
     for i in 0..n {
@@ -30,14 +35,14 @@ fn app_with_lines(n: usize) -> (crate::state::App, Arc<Mutex<Vec<String>>>) {
 }
 
 /// Screen row of the all-rows index under the current scroll offset.
-fn screen_y(app: &crate::state::App, ri: usize) -> u16 {
+fn screen_y(app: &App, ri: usize) -> u16 {
     let rect = app.ui.frame.layout.transcript_rect.get();
     let top = app.whole_scroll().top_offset();
     rect.y + (ri.saturating_sub(top)) as u16
 }
 
 /// Index into last_all_rows of the row containing the needle.
-fn row_index(app: &crate::state::App, needle: &str) -> usize {
+fn row_index(app: &App, needle: &str) -> usize {
     app.ui
         .frame
         .layout
@@ -249,7 +254,6 @@ fn test_copy_tracks_shifted_content() {
 /// in the thinking set.
 #[test]
 fn test_click_thoughtfor_expands_one() {
-    use crate::records::TranscriptLine;
     let mut app = composition::app();
     app.ui.navigation.screen = Screen::Working;
     let r1 = "reasoning for turn one".to_string();
@@ -324,7 +328,6 @@ fn test_click_thoughtfor_expands_one() {
 /// gesture. Now the counter skips None rows (they carry no "ctrl+o" hint).
 #[test]
 fn test_click_thoughtfor_none_reasoning() {
-    use crate::records::TranscriptLine;
     let mut app = composition::app();
     app.ui.navigation.screen = Screen::Working;
     app.sessions.current.transcript = vec![
@@ -392,7 +395,6 @@ fn test_click_thoughtfor_none_reasoning() {
 /// the draw published, which a row carries exactly when it offers a toggle.
 #[test]
 fn test_click_thought_no_duration() {
-    use crate::records::TranscriptLine;
     let mut app = composition::app();
     app.ui.navigation.screen = Screen::Working;
     app.sessions.current.transcript = vec![
@@ -480,7 +482,6 @@ fn test_click_thought_no_duration() {
 /// to the visible row's turn_id.
 #[test]
 fn test_click_thoughtfor_scrolled_off() {
-    use crate::records::TranscriptLine;
     let mut app = composition::app();
     app.ui.navigation.screen = Screen::Working;
     let mut transcript = vec![
@@ -554,7 +555,6 @@ fn test_click_thoughtfor_scrolled_off() {
 /// text collides, and one click would expand both rows.
 #[test]
 fn test_same_reason_thoughts_independent() {
-    use crate::records::TranscriptLine;
     let mut app = composition::app();
     app.ui.navigation.screen = Screen::Working;
     let shared = "the model reasoned the same way twice".to_string();
@@ -609,8 +609,7 @@ fn test_same_reason_thoughts_independent() {
 
 /// Helper: an app whose transcript has a foldable two-call group that
 /// collapses to one summary. Returns the app rendered once (collapsed state).
-fn app_with_fold_group() -> crate::state::App {
-    use crate::records::{ToolOutcome, TranscriptLine};
+fn app_with_fold_group() -> App {
     let mut app = composition::app();
     app.ui.navigation.screen = Screen::Working;
     let tcall = |cid: &str, name: &str, brief: &str, oc: ToolOutcome| TranscriptLine::Tool {
@@ -651,7 +650,7 @@ fn app_with_fold_group() -> crate::state::App {
 /// A clean click is Down + Up at the same cell: the toggle is dispatched on
 /// release, so a press alone no longer expands (a press always starts a
 /// selection now, so the summary text is drag-selectable).
-fn expand_first_group(app: &mut crate::state::App) -> String {
+fn expand_first_group(app: &mut App) -> String {
     let fold_ri = app
         .ui
         .frame
@@ -674,7 +673,7 @@ fn expand_first_group(app: &mut crate::state::App) -> String {
 
 /// Map a visible fold-row index (into the visible fold keys) back to its
 /// last_all_rows index so screen_y can place it on screen.
-fn fold_ri_to_all_rows_index(app: &crate::state::App, fold_ri: usize) -> usize {
+fn fold_ri_to_all_rows_index(app: &App, fold_ri: usize) -> usize {
     let top = app.whole_scroll().top_offset();
     top + fold_ri
 }
@@ -882,9 +881,6 @@ fn test_expanded_block_paints_gray() {
 /// resets to zero so clicks route to the transcript, not stale rows.
 #[test]
 fn test_approval_drag_resets() {
-    use crate::pending_prompt::PendingPrompt;
-    use crate::records::Approval;
-    use houyicoder_protocol::envelope::RequestId;
     let mut app = composition::app();
     app.ui.navigation.screen = Screen::Working;
     app.sessions.current.prompt = Some(PendingPrompt::approval_card(

@@ -380,3 +380,6 @@ fn grouped_lines(
     }
     lines
 }
+
+#[cfg(test)]
+mod tests;

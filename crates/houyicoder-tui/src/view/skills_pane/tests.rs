@@ -1,18 +1,19 @@
 //! Skills pane rendering tests.
 
-use crossterm::event::KeyCode;
+use crossterm::event::{KeyCode, KeyModifiers};
 use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::frontend::skills::{SkillEntry, SkillUsage};
 
 use crate::composition;
 use crate::state::{Pane, Screen};
+use crossterm::event::KeyEvent;
 
 fn render(app: &crate::state::App, w: u16, h: u16) -> String {
     crate::test_harness::render_text(app, w, h)
 }
 
-fn key(code: KeyCode) -> crossterm::event::KeyEvent {
-    crossterm::event::KeyEvent::new(code, crossterm::event::KeyModifiers::NONE)
+fn key(code: KeyCode) -> KeyEvent {
+    KeyEvent::new(code, KeyModifiers::NONE)
 }
 
 #[test]

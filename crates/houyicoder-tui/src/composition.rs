@@ -583,4 +583,4 @@ pub fn suggestions_for(breakdown: &ContextBreakdown) -> Vec<ContextSuggestion> {
 }
 
 #[cfg(test)]
-mod session_switch_tests;
+mod tests;

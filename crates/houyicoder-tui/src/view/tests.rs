@@ -142,4 +142,7 @@ fn test_status_bar_is_contextual() {
     );
 }
 
+mod drag_copy;
+mod drag_select;
 mod invariants;
+mod pane_select;

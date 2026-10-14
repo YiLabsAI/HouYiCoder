@@ -9,10 +9,6 @@ pub mod capability;
 pub mod components;
 pub mod console;
 pub mod context_view;
-#[cfg(test)]
-pub mod drag_copy_tests;
-#[cfg(test)]
-pub mod drag_select_tests;
 pub mod export_log;
 pub mod hooks_pane;
 pub mod input_bar;
@@ -24,16 +20,12 @@ pub mod model_pane;
 pub mod navigation;
 pub mod palette;
 pub mod pane;
-#[cfg(test)]
-pub mod pane_select_tests;
 pub mod queue_overlay;
 pub mod queue_pane;
 pub mod relative_time;
 pub mod resume_picker;
 pub mod skill_picker;
 pub mod skills_pane;
-#[cfg(test)]
-mod skills_pane_tests;
 pub mod spinner;
 pub mod status;
 pub mod teammate_view;

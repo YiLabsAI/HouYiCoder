@@ -1,8 +1,8 @@
 //! Drag-select and copy inside a slash-command pane. The transcript path is
-//! covered by drag_select_tests; these pin that a pane (/memory here, the
+//! covered by the drag_select suite; these pin that a pane (/memory here, the
 //! shared template for /permissions and /search) publishes its own rows and
 //! that a drag in it copies the pane text rather than the transcript's. The
-//! fixtures follow drag_select_tests: a recording clipboard over a real
+//! fixtures follow that suite: a recording clipboard over a real
 //! handle_mouse on a real render.
 
 use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex};
 use crate::app::handle_mouse;
 use crate::composition;
 use crate::selection::RecordingClipboard;
+use crate::state::App;
 use crate::state::Screen;
 use crate::test_harness::{render_buffer, render_text, working_app};
 use houyicoder_protocol::frontend::SlashCommand;
@@ -25,7 +26,7 @@ fn mouse(kind: MouseEventKind, column: u16, row: u16) -> MouseEvent {
     }
 }
 
-fn memory_app() -> (crate::state::App, Arc<Mutex<Vec<String>>>) {
+fn memory_app() -> (App, Arc<Mutex<Vec<String>>>) {
     let mut app = composition::app();
     app.ui.navigation.screen = Screen::Working;
     app.run_command(SlashCommand::Memory);
@@ -41,7 +42,7 @@ fn memory_app() -> (crate::state::App, Arc<Mutex<Vec<String>>>) {
 /// its screen y. The memory pane stashes one (tag, text) per rendered row via
 /// stash_pane_rows, so the index maps straight to a screen row offset from
 /// pane_rect.y.
-fn pane_row(app: &crate::state::App, needle: &str) -> (usize, u16) {
+fn pane_row(app: &App, needle: &str) -> (usize, u16) {
     let prect = app.ui.frame.layout.pane_rect.get();
     let rows = app.ui.frame.layout.last_pane_rows.borrow();
     let ri = rows

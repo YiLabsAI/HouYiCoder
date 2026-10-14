@@ -1,4 +1,4 @@
-use super::*;
+use super::super::*;
 use crate::agent_message::ConnectionEvent;
 use crate::fold::DisplaySlot;
 use crate::input::queue::InputItem;
@@ -9,9 +9,18 @@ use crate::records::TranscriptLine;
 use crate::row_id::RowId;
 use crate::state::history_read::HistoryReadOutcome;
 use crate::state::transcript::DiskFront;
+use crate::todo_view::{TodoStatus, TodoView};
 use crate::transcript::{SequencedFrame, TranscriptFrame};
 use houyicoder_protocol::envelope::RequestId;
+use houyicoder_protocol::frontend::SessionId;
+use houyicoder_protocol::frontend::run::ContentBlock;
+use houyicoder_protocol::frontend::session_update::ContentChunk;
+use houyicoder_protocol::frontend::session_update::SessionUpdate;
+use houyicoder_service::composition::BuildRunnerOptions;
+use houyicoder_service::composition::build_runner;
+use std::env::temp_dir;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 /// The resolved target carried by a queued /resume Command at the head.
 fn queued_target(app: &App) -> Option<String> {
@@ -32,14 +41,12 @@ fn enqueue_resume_target(app: &mut App, target: &str) {
 }
 
 fn test_bundle() -> (RunnerBundle, FrontendStartup) {
-    let bundle = houyicoder_service::composition::build_runner(
-        houyicoder_service::composition::BuildRunnerOptions::default(),
-    );
+    let bundle = build_runner(BuildRunnerOptions::default());
     let runner = bundle.runner;
     let session = bundle.session;
     let gate = bundle.gate;
     let append_notify = bundle.append_notify;
-    let wire_session = houyicoder_protocol::frontend::SessionId(session.to_string());
+    let wire_session = SessionId(session.to_string());
     let (tx, rx) = mpsc::channel::<SessionMessage>();
     let (runner, client, startup_warnings) =
         start_local_server(runner, session, gate, append_notify, None);
@@ -59,7 +66,7 @@ fn test_bundle() -> (RunnerBundle, FrontendStartup) {
         FrontendStartup {
             skip_login: false,
             startup_warnings,
-            history_path: std::env::temp_dir().join("houyi-history-swap-test.jsonl"),
+            history_path: temp_dir().join("houyi-history-swap-test.jsonl"),
         },
     )
 }
@@ -76,14 +83,12 @@ fn test_app() -> App {
 /// Like test_bundle but returns the server task's JoinHandle so a test can
 /// assert the serve loop exited after the session is torn down.
 fn test_bundle_tracked() -> ((RunnerBundle, FrontendStartup), tokio::task::JoinHandle<()>) {
-    let bundle = houyicoder_service::composition::build_runner(
-        houyicoder_service::composition::BuildRunnerOptions::default(),
-    );
+    let bundle = build_runner(BuildRunnerOptions::default());
     let runner = bundle.runner;
     let session = bundle.session;
     let gate = bundle.gate;
     let append_notify = bundle.append_notify;
-    let wire_session = houyicoder_protocol::frontend::SessionId(session.to_string());
+    let wire_session = SessionId(session.to_string());
     let (tx, rx) = mpsc::channel::<SessionMessage>();
     let (runner, client, serve, startup_warnings) =
         start_local_server_tracked(runner, session, gate, append_notify, None);
@@ -104,7 +109,7 @@ fn test_bundle_tracked() -> ((RunnerBundle, FrontendStartup), tokio::task::JoinH
             FrontendStartup {
                 skip_login: false,
                 startup_warnings,
-                history_path: std::env::temp_dir().join("houyi-history-swap2-test.jsonl"),
+                history_path: temp_dir().join("houyi-history-swap2-test.jsonl"),
             },
         ),
         serve,
@@ -121,15 +126,11 @@ fn test_switch_session_resets_view() {
     app.sessions
         .current
         .transcript
-        .push_frame(TranscriptFrame::Session(
-            houyicoder_protocol::frontend::session_update::SessionUpdate::UserMessageChunk(
-                houyicoder_protocol::frontend::session_update::ContentChunk::new(
-                    houyicoder_protocol::frontend::run::ContentBlock::Text {
-                        text: "old frame".into(),
-                    },
-                ),
-            ),
-        ));
+        .push_frame(TranscriptFrame::Session(SessionUpdate::UserMessageChunk(
+            ContentChunk::new(ContentBlock::Text {
+                text: "old frame".into(),
+            }),
+        )));
     let (new_bundle, new_startup) = test_bundle();
     let new_sid = new_bundle.session.0.clone();
     let new_warning_count = new_startup.startup_warnings.len();
@@ -500,7 +501,6 @@ fn test_resume_precedes_queued_message() {
 /// is NOT in this set: it is carried across (see swap_carries_pending).
 #[test]
 fn test_clears_session_local_state() {
-    use crate::todo_view::{TodoStatus, TodoView};
     let mut app = test_app();
     // Populate with old-session residue.
     app.sessions.current.todos.items.push(TodoView {
@@ -612,7 +612,7 @@ fn test_tears_down_old_server() {
         .connection
         .as_mut()
         .expect("session")
-        .poll_startup(std::time::Duration::from_secs(5))
+        .poll_startup(Duration::from_secs(5))
         .expect("the handshake result arrives");
     assert!(
         matches!(msg, SessionMessage::Connection(ConnectionEvent::Ready)),
@@ -630,7 +630,7 @@ fn test_tears_down_old_server() {
     // The teardown chain is async on the shared runtime; poll for completion.
     let mut tries = 0;
     while !old_serve.is_finished() && tries < 200 {
-        std::thread::sleep(std::time::Duration::from_millis(10));
+        std::thread::sleep(Duration::from_millis(10));
         tries += 1;
     }
     assert!(

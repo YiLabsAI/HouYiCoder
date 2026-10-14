@@ -1,6 +1,6 @@
 //! Pure-logic tests for the shared selection free functions. The cross-layer
 //! gesture tests (drive handle_mouse over a real render) live in
-//! src/view/pane_select_tests.rs and src/view/drag_select_tests.rs.
+//! view/tests/pane_select.rs and view/tests/drag_select.rs.
 
 use std::time::Instant;
 
