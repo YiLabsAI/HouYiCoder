@@ -15,11 +15,4 @@ pub struct NoToolProgress;
 impl ToolProgressReporter for NoToolProgress {}
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_reporter_supports_trait_objects() {
-        let _reporter: Box<dyn ToolProgressReporter> = Box::new(NoToolProgress);
-    }
-}
+mod tests;
