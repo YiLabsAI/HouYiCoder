@@ -82,45 +82,4 @@ pub fn write_atomic_0600(path: &Path, bytes: &[u8]) -> io::Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_write_round_trips_bytes() {
-        let dir = std::env::temp_dir();
-        let path = dir.join("houyi_export_test_roundtrip.json");
-        std::fs::remove_file(&path).ok();
-        let payload = b"{\"hello\":\"world\"}";
-        write_atomic_0600(&path, payload).expect("write");
-        let read = std::fs::read(&path).expect("read");
-        assert_eq!(read, payload);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mode = std::fs::metadata(&path)
-                .expect("metadata")
-                .permissions()
-                .mode();
-            assert_eq!(
-                mode & 0o777,
-                0o600,
-                "export file must be 0o600 (owner-only)"
-            );
-        }
-        std::fs::remove_file(&path).ok();
-    }
-
-    #[test]
-    fn test_write_atomic_replaces_existing() {
-        // A second write to the same path replaces the first content; the
-        // temp-then-rename path must not leave the old bytes visible.
-        let dir = std::env::temp_dir();
-        let path = dir.join("houyi_export_test_replace.json");
-        std::fs::remove_file(&path).ok();
-        write_atomic_0600(&path, b"first").expect("write 1");
-        write_atomic_0600(&path, b"second").expect("write 2");
-        let read = std::fs::read(&path).expect("read");
-        assert_eq!(read, b"second");
-        std::fs::remove_file(&path).ok();
-    }
-}
+mod tests;

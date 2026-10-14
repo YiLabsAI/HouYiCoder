@@ -1,0 +1,105 @@
+use super::super::handle_working;
+use crate::input::InputField;
+use crate::state::enums::StatusTab;
+use crate::state::{App, Pane, Screen, ViewportMode};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+fn key(code: KeyCode) -> KeyEvent {
+    KeyEvent::new(code, KeyModifiers::NONE)
+}
+
+/// A working app parked on the /status Status tab with an empty input box,
+/// the state the e key opens the editor from.
+fn status_tab_app() -> App {
+    let mut app = crate::test_harness::working_app();
+    app.ui.navigation.screen = Screen::Working;
+    app.ui.navigation.viewport = ViewportMode::Working;
+    app.ui.navigation.pane = Pane::Status;
+    app.ui.navigation.status_tab = StatusTab::Status;
+    app
+}
+
+/// The e key on the Status tab opens the inline name editor.
+#[test]
+fn test_e_opens_editor() {
+    let mut app = status_tab_app();
+    handle_working(&mut app, key(KeyCode::Char('e')));
+    assert!(
+        app.ui.navigation.status_name_edit.is_some(),
+        "editor opened"
+    );
+}
+
+/// e while editing does NOT open a second editor (the routing block
+/// intercepts it first); it inserts 'e' into the buffer like any other char.
+#[test]
+fn test_e_inserts_while_editing() {
+    let mut app = status_tab_app();
+    app.ui.navigation.status_name_edit = Some(InputField::new());
+    handle_working(&mut app, key(KeyCode::Char('e')));
+    assert_eq!(
+        app.ui.navigation.status_name_edit.as_ref().unwrap().value(),
+        "e",
+        "e while editing types into the buffer, not opens a new editor"
+    );
+}
+
+/// Typing while the editor is open routes chars into the buffer, not the
+/// generic input box or tab cycling.
+#[test]
+fn test_chars_edit_buffer() {
+    let mut app = status_tab_app();
+    app.ui.navigation.status_name_edit = Some(InputField::new());
+    handle_working(&mut app, key(KeyCode::Char('h')));
+    handle_working(&mut app, key(KeyCode::Char('i')));
+    let field = app
+        .ui
+        .navigation
+        .status_name_edit
+        .as_ref()
+        .expect("editor open");
+    assert_eq!(field.value(), "hi", "chars landed in the buffer");
+}
+
+/// Backspace deletes from the buffer while editing.
+#[test]
+fn test_backspace_edits_buffer() {
+    let mut app = status_tab_app();
+    let mut f = InputField::new();
+    f.insert_str("ab");
+    app.ui.navigation.status_name_edit = Some(f);
+    handle_working(&mut app, key(KeyCode::Backspace));
+    assert_eq!(
+        app.ui.navigation.status_name_edit.as_ref().unwrap().value(),
+        "a",
+        "backspace trimmed"
+    );
+}
+
+/// Esc cancels the editor: no request shipped, the buffer is dropped.
+#[test]
+fn test_esc_cancels_editor() {
+    let mut app = status_tab_app();
+    app.ui.navigation.status_name_edit = Some(InputField::new());
+    handle_working(&mut app, key(KeyCode::Esc));
+    assert!(
+        app.ui.navigation.status_name_edit.is_none(),
+        "editor closed on Esc"
+    );
+}
+
+/// Enter commits: while disconnected, the commit reports not connected
+/// + drops the editor (does not panic).
+#[test]
+fn test_enter_commits_no_session() {
+    let mut app = status_tab_app();
+    app.sessions.current.connection = None;
+    let mut f = InputField::new();
+    f.insert_str("x");
+    app.ui.navigation.status_name_edit = Some(f);
+    handle_working(&mut app, key(KeyCode::Enter));
+    assert!(
+        app.ui.navigation.status_name_edit.is_none(),
+        "editor closed on commit"
+    );
+}

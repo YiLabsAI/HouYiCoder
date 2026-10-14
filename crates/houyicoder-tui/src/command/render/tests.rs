@@ -241,3 +241,4 @@ fn test_trajectory_empty_both() {
     let out = render_trajectory_wire(&[], &[]);
     assert!(out.contains("no events"), "{out}");
 }
+mod status;

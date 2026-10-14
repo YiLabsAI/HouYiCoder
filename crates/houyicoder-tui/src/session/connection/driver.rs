@@ -747,17 +747,4 @@ pub(crate) fn kill_child_notification(child_sid: &str) -> AcpNotification {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::UnknownReportBudget;
-
-    #[test]
-    fn test_unknown_report_budget_spends() {
-        // The bound's false branch has no other observable: the driver's
-        // only report for a dropped notification is a diagnostic line.
-        let mut budget = UnknownReportBudget::new();
-        for _ in 0..UnknownReportBudget::LIMIT {
-            assert!(budget.grant());
-        }
-        assert!(!budget.grant());
-    }
-}
+mod tests;
