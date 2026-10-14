@@ -31,9 +31,9 @@ const MAX_AGENT_MESSAGES_PER_POLL: usize = 4096;
 /// rejoin the pair; an idle channel ends the lookahead at once.
 const DELIVERY_MARK_LOOKAHEAD: usize = 4;
 
-#[path = "run_control/history_read.rs"]
+// The 2018 layout resolves both to this file's own directory, so the
+// explicit path attributes only restated it.
 mod history_read;
-#[path = "run_control/transcript_rebuild.rs"]
 mod transcript_rebuild;
 
 pub use crate::agent_message::ClientCommand;

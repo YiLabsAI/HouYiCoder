@@ -633,5 +633,4 @@ fn build_slots_rows(area: Rect, app: &App) -> RowSet {
 }
 
 #[cfg(test)]
-#[path = "transcript_tests.rs"]
 mod tests;

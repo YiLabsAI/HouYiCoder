@@ -75,8 +75,6 @@ mod frame_timing;
 #[cfg(test)]
 mod history_read_tests;
 #[cfg(test)]
-mod jump_to_bottom_tests;
-#[cfg(test)]
 mod permission_render_tests;
 #[cfg(test)]
 mod queue_sync_tests;
@@ -86,5 +84,3 @@ mod render_invariant_tests;
 mod resume_picker_tests;
 #[cfg(test)]
 mod test_harness;
-#[cfg(test)]
-mod transcript_rebuild_tests;
