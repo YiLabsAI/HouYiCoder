@@ -1,6 +1,5 @@
-//! Drag-to-select then explicit Ctrl+C copy flow tests, split from
-//! working_tests.rs for the file-size gate. Copy is explicit (no auto-copy
-//! on release); the selection persists after release and Ctrl+C copies it.
+//! Drag-to-select then explicit Ctrl+C copy flow tests. Copy is explicit (no
+//! auto-copy on release); the selection persists after release and Ctrl+C copies it.
 
 use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 

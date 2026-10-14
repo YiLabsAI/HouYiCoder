@@ -4,6 +4,7 @@
 //! Requests and events cross the wire protocol through the client; runtime
 //! engine types and shared engine state do not enter this crate.
 
+mod agent_dispatch;
 pub mod agent_message;
 pub mod app;
 pub mod approval;

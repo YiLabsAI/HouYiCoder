@@ -1208,3 +1208,7 @@ fn test_thought_row_subsecond_draw() {
         "the row must not claim the turn took no time:\n{out}"
     );
 }
+
+mod bash_progress;
+
+mod highlight;

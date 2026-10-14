@@ -600,3 +600,5 @@ fn test_empty_grid_renders_row() {
     assert_eq!(rows.len(), 1, "empty grid yields a single no-data row");
     assert!(rows[0].0.contains("no data yet"));
 }
+
+mod command;

@@ -1,7 +1,6 @@
 //! Progressive resume-resolution tests for poll_agent: the per-frame
 //! resolver fills in picker row titles + last-active lazily, a few rows per
 //! frame, so opening /resume never waits on the expensive per-row reads.
-//! Split out of run_control_tests.rs on size grounds.
 use crate::composition;
 use crate::resume_picker::{SessionCatalog, SessionRow};
 use crate::state::Pane;

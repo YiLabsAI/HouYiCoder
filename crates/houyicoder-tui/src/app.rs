@@ -649,5 +649,4 @@ pub(crate) fn handle_key(app: &mut App, k: KeyEvent) {
 }
 
 #[cfg(test)]
-#[path = "app_tests.rs"]
-mod app_tests;
+mod tests;

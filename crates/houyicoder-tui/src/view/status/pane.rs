@@ -15,11 +15,8 @@ use ratatui::{
     widgets::Paragraph,
 };
 use unicode_segmentation::UnicodeSegmentation;
-use unicode_width::UnicodeWidthStr;
 
-use crate::command::render::{
-    field, format_tokens, permission_mode_label, render_breaker_line, render_status,
-};
+use crate::command::render::{field, permission_mode_label, render_breaker_line, render_status};
 use crate::state::{App, enums::StatusTab};
 use crate::view::navigation::{key_hint, tab_header};
 
@@ -173,9 +170,7 @@ fn render_config(app: &App) -> String {
     s.trim_end().to_string()
 }
 
-#[path = "usage.rs"]
-mod usage;
-use usage::render_usage;
+use super::usage::render_usage;
 
 #[cfg(test)]
 mod tests {

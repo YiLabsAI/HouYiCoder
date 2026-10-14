@@ -359,5 +359,4 @@ fn fmt_tokens(n: u32) -> String {
 }
 
 #[cfg(test)]
-#[path = "context_view_tests.rs"]
 mod tests;

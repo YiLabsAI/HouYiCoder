@@ -1,7 +1,7 @@
-//! Regression tests for the jump-to-bottom label: a bright overlay on the
-//! transcript's bottom row while the user is scrolled back from the tail,
-//! showing the agent turns that landed since the scroll-away snapshot. Each
-//! test states the invariant it pins.
+//! Reading the scrollback: the rows above the viewport, the turns that land
+//! while the reader is scrolled back, the label that offers a return to the
+//! tail, and the wheel that moves the viewport. Each test states the
+//! invariant it pins.
 
 use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use houyicoder_protocol::frontend::run::ContentBlock;

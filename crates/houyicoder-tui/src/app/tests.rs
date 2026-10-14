@@ -1,6 +1,5 @@
-//! Tests split out of app.rs so that file stays under the size gate.
-//! Child module of app (declared via #[path] in app.rs), so use super::*
-//! reaches app private items the same way the inline mod tests did.
+//! The app module's own tests. A child of app, so use super::* reaches the
+//! private items the inline test module reached before.
 use super::*;
 use crate::agent_message::{ConnectionEvent, SessionMessage};
 use crate::records::TranscriptLine;

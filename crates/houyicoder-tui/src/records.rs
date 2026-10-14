@@ -730,5 +730,4 @@ pub struct SpecContext {
 }
 
 #[cfg(test)]
-#[path = "records_tests.rs"]
-mod records_tests;
+mod tests;

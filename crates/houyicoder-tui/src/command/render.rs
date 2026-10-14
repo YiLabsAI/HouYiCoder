@@ -692,5 +692,4 @@ pub(crate) fn render_permission_rules_wire(rules: &[PermissionRule]) -> String {
 }
 
 #[cfg(test)]
-#[path = "render_tests.rs"]
 mod tests;

@@ -453,5 +453,4 @@ fn diff_preview(tool: &str, input: &Value) -> Option<Vec<Line<'static>>> {
 }
 
 #[cfg(test)]
-#[path = "approval_tests.rs"]
 mod tests;

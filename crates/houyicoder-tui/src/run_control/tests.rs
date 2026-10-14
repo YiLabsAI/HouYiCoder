@@ -1055,14 +1055,6 @@ fn test_git_ops_ships_connected() {
     )));
 }
 
-#[cfg(test)]
-#[path = "run_control_compact_tests.rs"]
-mod compact_tests;
-
-#[cfg(test)]
-#[path = "run_control_resume_tests.rs"]
-mod resume_progressive_tests;
-
 /// The idle poll seeds mode_cache on the first tick (mode_cache starts None)
 /// so the status-bar label renders from session start. Exercises the idle
 /// branch + the request_permission_mode send without asserting on the wire.
@@ -1325,33 +1317,11 @@ fn test_batch_keeps_identity() {
     );
 }
 
-#[cfg(test)]
-#[path = "interrupted_turn_tests.rs"]
-mod interrupted_turn_tests;
-#[cfg(test)]
-#[path = "run_control_stream_tests.rs"]
-mod run_control_stream_tests;
+mod send_failure;
 
-#[cfg(test)]
-#[path = "context_command_tests.rs"]
-mod context_command_tests;
-
-#[cfg(test)]
-#[path = "run_lifecycle_tests.rs"]
-mod run_lifecycle_tests;
-
-#[cfg(test)]
-#[path = "subagent_fetch_tests.rs"]
-mod subagent_fetch_tests;
-
-#[cfg(test)]
-#[path = "cursor_priority_tests.rs"]
-mod cursor_priority_tests;
-
-#[cfg(test)]
-#[path = "approval_render_tests.rs"]
-mod approval_render_tests;
-
-#[cfg(test)]
-#[path = "trust_prompt_tests.rs"]
-mod trust_prompt_tests;
+mod approval_render;
+mod compact;
+mod interrupted_turn;
+mod lifecycle;
+mod resume;
+mod stream;

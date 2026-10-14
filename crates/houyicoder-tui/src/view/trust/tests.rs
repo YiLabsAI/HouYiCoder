@@ -4,7 +4,7 @@ use crate::agent_message::{ServerRequest, SessionMessage};
 use crate::composition;
 use crate::pending_prompt::PendingPrompt;
 use crate::state::{Screen, TrustChoice};
-use crate::test_harness::TransportEvent;
+use crate::test_harness::{TransportEvent, render_text};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::frontend::trust::TrustPrompt;
@@ -227,5 +227,101 @@ fn test_loss_unblocks_exit() {
     assert!(
         app.ui.quit,
         "second Ctrl+D exits after loss cleared the trust card"
+    );
+}
+
+/// A pending trust ask renders the project path + the two-button prompt,
+/// so the user sees which folder is asking + how to answer.
+#[test]
+fn test_renders_trust_prompt() {
+    let mut app = composition::app();
+    app.ui.navigation.screen = Screen::Working;
+    app.sessions.current.prompt = Some(PendingPrompt::trust_ask(
+        RequestId(1),
+        TrustPrompt {
+            project_path: "/home/alice/proj".into(),
+            risks: Vec::new(),
+        },
+    ));
+    let out = render_text(&app, 80, 24);
+    assert!(
+        out.contains("Trust this workspace?"),
+        "title missing:\n{out}"
+    );
+    assert!(
+        out.contains("/home/alice/proj"),
+        "project path missing:\n{out}"
+    );
+    assert!(
+        out.contains("Yes, I trust this folder"),
+        "accept hint missing:\n{out}"
+    );
+    assert!(out.contains("No, exit"), "decline hint missing:\n{out}");
+    assert!(out.contains("› Yes, I trust this folder"));
+    app.set_trust_choice(TrustChoice::Exit);
+    let out = render_text(&app, 80, 24);
+    assert!(out.contains("› No, exit"));
+}
+
+#[test]
+fn test_long_path_stays_single() {
+    let mut app = composition::app();
+    app.sessions.current.prompt = Some(PendingPrompt::trust_ask(
+        RequestId(1),
+        TrustPrompt {
+            project_path: "/a/very/long/workspace/path/that/cannot/fit/target-repository".into(),
+            risks: Vec::new(),
+        },
+    ));
+    let out = render_text(&app, 40, 18);
+    assert!(out.contains('…'), "long path is visibly truncated: {out}");
+    assert!(
+        out.contains("target-repository"),
+        "path tail survives: {out}"
+    );
+    assert_eq!(
+        out.lines()
+            .filter(|line| line.contains("target-repository"))
+            .count(),
+        1,
+        "path stays on one row: {out}"
+    );
+}
+
+/// No pending trust ask: draw is a no-op (the common case), so the
+/// trust banner must not appear.
+#[test]
+fn test_no_render_without_ask() {
+    let mut app = composition::app();
+    app.ui.navigation.screen = Screen::Working;
+    let out = render_text(&app, 80, 24);
+    assert!(
+        !out.contains("Trust this workspace?"),
+        "trust banner must not render with no ask pending:\n{out}"
+    );
+}
+
+/// While a trust ask is pending, the main view is not drawn — trust is
+/// the sole setup screen, not a popup over a live chat. The working
+/// surface input placeholder is absent; only the banner renders.
+#[test]
+fn test_trust_is_sole_screen() {
+    let mut app = composition::app();
+    app.ui.navigation.screen = Screen::Working;
+    app.sessions.current.prompt = Some(PendingPrompt::trust_ask(
+        RequestId(1),
+        TrustPrompt {
+            project_path: "/home/alice/proj".into(),
+            risks: Vec::new(),
+        },
+    ));
+    let out = render_text(&app, 80, 24);
+    assert!(
+        out.contains("Trust this workspace?"),
+        "banner present:\n{out}"
+    );
+    assert!(
+        !out.contains("let's build"),
+        "main view must not draw while trust pending:\n{out}"
     );
 }

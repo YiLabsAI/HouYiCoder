@@ -5,6 +5,7 @@
 //! mode. Spec id/title and per-clause divergence live inside the spec pane.
 
 pub mod pane;
+mod usage;
 
 use ratatui::{
     Frame,

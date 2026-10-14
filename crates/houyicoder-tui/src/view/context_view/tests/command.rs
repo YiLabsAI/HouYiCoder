@@ -1,6 +1,19 @@
-//! /context command tests split from run_control_tests.rs for the file-size
-//! gate. The /context cache fast-path + the ContextResult grid landing.
-use super::*;
+//! /context command tests: the /context cache fast-path + the ContextResult
+//! grid landing.
+
+use std::sync::Arc;
+
+use houyicoder_core::agent::ToolRegistry;
+use houyicoder_protocol::envelope::RequestId;
+use houyicoder_protocol::frontend::SlashCommand;
+use houyicoder_protocol::frontend::context::stub_breakdown;
+
+use crate::agent_message::{ServerResponse, SessionMessage};
+use crate::records::TranscriptLine;
+use houyicoder_provider::FakeProvider;
+
+use crate::run_control::tests::app_with_provider;
+use crate::state::App;
 
 /// The second /context draws the cached grid at once and then swaps its payload
 /// for the reply grid in place, so the transcript holds one grid either way. A
@@ -9,8 +22,6 @@ use super::*;
 /// place of the one drawn before the line arrived.
 #[test]
 fn test_second_context_one_grid() {
-    use houyicoder_protocol::frontend::SlashCommand;
-    use houyicoder_protocol::frontend::context::stub_breakdown;
     let provider = Arc::new(FakeProvider::new(vec![]));
     let mut app = app_with_provider(provider, ToolRegistry::new());
     app.ui.navigation.screen = crate::state::Screen::Working;
@@ -74,7 +85,6 @@ fn test_second_context_one_grid() {
 /// (①). This is the default-gate integration test for dispatch→wire→render.
 #[test]
 fn test_context_cache_renders_repeat() {
-    use houyicoder_protocol::frontend::SlashCommand;
     let provider = Arc::new(FakeProvider::new(vec![]));
     let mut app = app_with_provider(provider, ToolRegistry::new());
     app.run_command(SlashCommand::Context);
@@ -149,7 +159,6 @@ fn test_context_cache_renders_repeat() {
 /// stack is empty on a fresh session, so the reply is "nothing to undo".
 #[test]
 fn test_undo_ships_connected() {
-    use houyicoder_protocol::frontend::SlashCommand;
     let provider = Arc::new(FakeProvider::new(vec![]));
     let mut app = app_with_provider(provider, ToolRegistry::new());
     app.run_command(SlashCommand::Undo);

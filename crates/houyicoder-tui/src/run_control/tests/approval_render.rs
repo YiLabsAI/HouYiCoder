@@ -1,6 +1,5 @@
-//! Option-3 (always-allow) duplicate-render regression tests, split from
-//! run_control_tests.rs for the file-size gate. Uses the parent module's
-//! scripted-provider helpers to drive the real runner through the
+//! Option-3 (always-allow) duplicate-render regression tests. Uses the
+//! tests module's scripted-provider helpers to drive the real runner through the
 //! GuardedTool + Default gate, with a multi-line-stdout tool so the result
 //! row exercises the collapse path.
 

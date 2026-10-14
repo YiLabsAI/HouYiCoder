@@ -1,5 +1,4 @@
-//! Bash chip progress render + dispatch tests, split from working_tests.rs +
-//! agent_dispatch.rs so those files stay under the file-size gate.
+//! Bash chip progress render and dispatch.
 
 use crate::agent_message::{ServerEvent, SessionMessage};
 use crate::composition;

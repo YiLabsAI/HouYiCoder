@@ -1,4 +1,4 @@
-use super::transcript::highlighted_line;
+use crate::view::working::transcript::highlighted_line;
 
 #[test]
 fn test_highlighted_no_query_white() {

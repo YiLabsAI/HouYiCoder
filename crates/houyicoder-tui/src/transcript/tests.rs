@@ -1040,3 +1040,9 @@ fn test_old_log_fallback_rows() {
         .collect();
     assert_eq!(ms, vec![None, None], "one row per turn: {lines:?}");
 }
+
+mod reattach;
+
+mod silent;
+
+mod acpx;

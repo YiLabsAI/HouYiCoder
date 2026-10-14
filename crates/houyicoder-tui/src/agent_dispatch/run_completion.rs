@@ -4,8 +4,8 @@
 
 use houyicoder_protocol::frontend::run::{RunOutcome, RunResult};
 
-use super::super::should_preserve_interrupted_turn;
 use crate::records::TranscriptLine;
+use crate::run_control::should_preserve_interrupted_turn;
 use crate::transcript::FrontendRow;
 
 impl super::App {

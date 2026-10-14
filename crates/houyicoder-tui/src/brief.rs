@@ -365,5 +365,4 @@ pub(crate) fn result_summary(tool: &str, output: &Value) -> Option<String> {
 }
 
 #[cfg(test)]
-#[path = "brief_tests.rs"]
 mod tests;

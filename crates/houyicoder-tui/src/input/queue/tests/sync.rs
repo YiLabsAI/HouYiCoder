@@ -4,7 +4,7 @@
 #![cfg(test)]
 
 use crate::input::queue::InputItem;
-use crate::run_control::run_control_tests::app_with_provider;
+use crate::run_control::tests::app_with_provider;
 use houyicoder_core::agent::ToolRegistry;
 use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::frontend::run::{ContentBlock, RunOutcome, RunResult, StopReason};

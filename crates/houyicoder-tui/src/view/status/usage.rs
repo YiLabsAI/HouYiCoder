@@ -1,8 +1,12 @@
 //! The Usage sub-tab: cumulative token and cache totals, the session's
 //! latency summary, delegated work, and the per-model breakdown.
 
-use super::*;
+use unicode_width::UnicodeWidthStr;
+
+use crate::command::render::{field, format_tokens};
 use crate::view::relative_time::span_label;
+
+use super::*;
 
 /// The Usage tab's latency rows, read from the same typed summary the
 /// trajectory pane reads: one computation, two surfaces, so the two cannot
@@ -158,5 +162,4 @@ pub(super) fn render_usage(app: &App) -> String {
 }
 
 #[cfg(test)]
-#[path = "usage_tests.rs"]
-mod usage_tests;
+mod tests;

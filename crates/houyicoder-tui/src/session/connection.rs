@@ -239,5 +239,4 @@ impl SessionConnection {
 }
 
 #[cfg(test)]
-#[path = "connection_tests.rs"]
-mod connection_tests;
+mod tests;

@@ -582,17 +582,4 @@ impl<'a, F: AsRef<TranscriptFrame>> LineBuilder<'a, F> {
 }
 
 #[cfg(test)]
-#[path = "transcript_tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "transcript_reattach_tests.rs"]
-mod reattach_tests;
-
-#[cfg(test)]
-#[path = "transcript_silent_tests.rs"]
-mod silent_tests;
-
-#[cfg(test)]
-#[path = "transcript_acpx_tests.rs"]
-mod acpx_tests;

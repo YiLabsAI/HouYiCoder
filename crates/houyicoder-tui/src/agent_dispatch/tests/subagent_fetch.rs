@@ -1,10 +1,17 @@
 //! End-to-end wiring tests for on-demand child transcript fetches.
 //! Expansion requests the child log and replaces the matching folded rows
 //! with the folded transcript.
-use super::*;
-use crate::records::TranscriptLine;
-use crate::test_harness::{connected_app_events, wait_for_request};
+
+use std::sync::Arc;
+
+use houyicoder_core::agent::ToolRegistry;
 use houyicoder_protocol::frontend::FrontendRequest;
+
+use crate::records::TranscriptLine;
+use houyicoder_provider::FakeProvider;
+
+use crate::run_control::tests::app_with_provider;
+use crate::test_harness::{connected_app_events, wait_for_request};
 
 /// A first expand of an unloaded Subagent line fires the fetch over the wire.
 /// For a sid the store has no log for, the server returns an empty frame list

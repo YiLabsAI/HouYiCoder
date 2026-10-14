@@ -161,3 +161,5 @@ fn test_open_pane_keeps_notice() {
         .count();
     assert_eq!(closed_lines, 2, "a closed pane also lands the notice");
 }
+
+mod subagent_fetch;

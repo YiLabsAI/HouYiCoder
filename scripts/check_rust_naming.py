@@ -126,7 +126,7 @@ _FILE_QUALIFIER_BASELINE: frozenset[str] = frozenset({
 # directory form (X.rs + X/tests.rs, declared as #[cfg(test)] mod tests;).
 # Convert a module when you touch it: the count only ever ratchets down, so
 # lower this number in the same commit that converts a pair.
-_FLAT_TEST_PEER_BASELINE = 128
+_FLAT_TEST_PEER_BASELINE = 98
 _FLAT_TEST_PEER_PATH_RE = re.compile(r'#\[path\s*=\s*"[^"]*_tests\.rs"\]')
 
 

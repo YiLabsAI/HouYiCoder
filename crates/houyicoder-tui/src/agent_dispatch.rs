@@ -1,10 +1,8 @@
 //! Maps inbound agent messages to application state transitions.
 //! Run completion is delegated so this module remains focused on dispatch.
 
-#[path = "agent_dispatch/run_completion.rs"]
 mod run_completion;
 
-#[path = "agent_dispatch/memory.rs"]
 mod memory;
 
 use std::iter;
@@ -740,5 +738,4 @@ fn frame_log_msg(frame: &TranscriptFrame) -> Option<String> {
 }
 
 #[cfg(test)]
-#[path = "agent_dispatch/tests.rs"]
 mod tests;

@@ -1,5 +1,5 @@
 //! Real-binary PTY tests for the /context command surface. The unit layer
-//! (context_view.rs inline tests + context_command_tests.rs) asserts on App
+//! (view/context_view/tests.rs) asserts on App
 //! state + wire struct fields; this layer drives the real houyi binary through
 //! a real terminal so the rendered byte stream the user actually sees is
 //! pinned: every section is present, the legend carries the model/window/pct

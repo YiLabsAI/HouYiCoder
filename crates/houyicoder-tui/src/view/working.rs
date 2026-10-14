@@ -723,11 +723,4 @@ fn draw_model_pane(f: &mut Frame, area: Rect, app: &App) {
 const WORKTREE_PANE_HEIGHT: u16 = 14;
 
 #[cfg(test)]
-#[path = "working_tests.rs"]
 mod tests;
-#[cfg(test)]
-#[path = "working_bash_progress_tests.rs"]
-mod working_bash_progress_tests;
-#[cfg(test)]
-#[path = "working_highlight_tests.rs"]
-mod working_highlight_tests;

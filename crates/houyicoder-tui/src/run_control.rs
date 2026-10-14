@@ -307,7 +307,7 @@ impl App {
     /// Present a wire permission request and retain its request identifier.
     /// Question tools use the interactive question card; others use the
     /// generic approval card.
-    fn raise_agent_approval(&mut self, ask: ApprovalRequest, req_id: RequestId) {
+    pub(crate) fn raise_agent_approval(&mut self, ask: ApprovalRequest, req_id: RequestId) {
         let call_id = ask.call_id.clone();
         let tool = ask.tool_name.clone();
         // Pause the spinner while the run waits on the human verdict.
@@ -362,7 +362,7 @@ impl App {
 
     /// Select the initial approval choice. A remembered verdict wins;
     /// automatic mode and the default both select one-time approval.
-    fn initial_cursor(&self, tool: &str) -> usize {
+    pub(crate) fn initial_cursor(&self, tool: &str) -> usize {
         let permission = &self.sessions.current.capabilities.permission;
         if let Some(kind) = permission.sticky_choices.get(tool) {
             return Approval::index_for_kind(*kind);
@@ -511,7 +511,7 @@ impl App {
     /// own published total, not the active surface's count: the frames and
     /// transcript lengths are the parent's, and a child view on screen would
     /// otherwise mix parent state with a child-derived top.
-    fn debug_render_done<F: AsRef<TranscriptFrame>>(&self, frames: &[F]) {
+    pub(crate) fn debug_render_done<F: AsRef<TranscriptFrame>>(&self, frames: &[F]) {
         if std::env::var("HICODER_DEBUG_RENDER").is_err() {
             return;
         }
@@ -650,7 +650,7 @@ fn clear_interruption_markers(frames: &mut Vec<SequencedFrame>) {
 /// Whether an interrupted turn must remain submitted. Assistant output, tool
 /// calls, and reasoning preserve the turn; a user-only turn may be restored.
 /// Missing user context preserves the turn conservatively.
-fn should_preserve_interrupted_turn<F: AsRef<TranscriptFrame>>(frames: &[F]) -> bool {
+pub(crate) fn should_preserve_interrupted_turn<F: AsRef<TranscriptFrame>>(frames: &[F]) -> bool {
     let Some(start) = frames.iter().rposition(|sf| {
         matches!(
             sf.as_ref(),
@@ -669,13 +669,5 @@ fn should_preserve_interrupted_turn<F: AsRef<TranscriptFrame>>(frames: &[F]) -> 
     })
 }
 
-#[path = "agent_dispatch.rs"]
-mod agent_dispatch;
-
 #[cfg(test)]
-#[path = "run_control_tests.rs"]
-pub(crate) mod run_control_tests;
-
-#[cfg(test)]
-#[path = "send_failure_tests.rs"]
-mod send_failure_tests;
+pub(crate) mod tests;

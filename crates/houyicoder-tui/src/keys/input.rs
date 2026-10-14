@@ -531,5 +531,4 @@ fn fleet_empty(app: &App) -> bool {
 }
 
 #[cfg(test)]
-#[path = "input_tests.rs"]
 mod tests;

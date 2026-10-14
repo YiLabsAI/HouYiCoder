@@ -608,3 +608,5 @@ fn test_entitlement_detail_multibyte_safe() {
     // Must not panic — that is the entire assertion.
     let _lines = super::entitlement_detail(&args, serde_json::from_str(&args).ok().as_ref());
 }
+
+mod cursor_priority;

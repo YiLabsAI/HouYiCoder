@@ -678,9 +678,4 @@ impl crate::state::App {
 }
 
 #[cfg(test)]
-#[path = "fold_tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "fold_group_tests.rs"]
-mod fold_group_tests;
