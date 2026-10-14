@@ -764,17 +764,4 @@ impl Drop for BreakerSpanGuard {
 }
 
 #[cfg(test)]
-#[path = "seatbelt_tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "seatbelt_narrow_write_tests.rs"]
-mod narrow_write_tests;
-
-#[cfg(test)]
-#[path = "seatbelt_git_config_tests.rs"]
-mod git_config_tests;
-
-#[cfg(test)]
-#[path = "seatbelt_exec_tests.rs"]
-mod exec_tests;

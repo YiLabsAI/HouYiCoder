@@ -115,5 +115,4 @@ fn allow_unix_socket_rules(sockets: &UnixSockets) -> String {
 }
 
 #[cfg(test)]
-#[path = "network_tests.rs"]
-mod network_tests;
+mod tests;

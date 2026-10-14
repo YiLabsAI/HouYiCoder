@@ -15,10 +15,26 @@ use houyicoder_api::sandbox::{
 use houyicoder_async::PFut;
 use houyicoder_context::{ExecConfig, ExecResult, SandboxError};
 use houyicoder_resilience::resource_breaker::ResourceBreaker;
+use nix::sys::signal::Signal;
+use nix::sys::signal::kill;
+use nix::unistd::Pid;
+use std::env::current_exe;
+use std::env::temp_dir;
+use std::env::var_os;
 use std::ffi::OsString;
+use std::fs::create_dir;
+use std::fs::create_dir_all;
+use std::fs::remove_dir_all;
 use std::path::{Path, PathBuf};
+use std::process::Output;
+use std::process::Stdio;
+use std::process::id;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
+use tokio::time::timeout;
 
 /// File name of the fence helper, located beside the daemon executable.
 const HELPER_BIN: &str = "houyicoder-sandbox-helper";
@@ -46,13 +62,12 @@ pub struct LinuxLandlockSession {
 fn session_tmpdir() -> Result<PathBuf, SandboxError> {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let n = COUNTER.fetch_add(1, Ordering::SeqCst);
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    let dir =
-        std::env::temp_dir().join(format!("houyicoder-tmp-{}-{n}-{nanos}", std::process::id()));
-    std::fs::create_dir(&dir)?;
+    let dir = temp_dir().join(format!("houyicoder-tmp-{}-{n}-{nanos}", id()));
+    create_dir(&dir)?;
     dunce::canonicalize(&dir).map_err(|e| SandboxError::Io(format!("tmpdir canonicalize: {e}")))
 }
 
@@ -78,15 +93,15 @@ impl LinuxLandlockSession {
     /// Create a session rooted at a fresh temp dir this session owns. Drop
     /// removes it. Used by tests and as a fallback when no cwd is available.
     pub fn new() -> Result<Self, SandboxError> {
-        let workspace = std::env::temp_dir().join(format!(
+        let workspace = temp_dir().join(format!(
             "houyicoder-sandbox-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
+            id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
                 .map(|d| d.as_nanos())
                 .unwrap_or(0)
         ));
-        std::fs::create_dir_all(&workspace)?;
+        create_dir_all(&workspace)?;
         let fence = probe_fence(&workspace);
         Ok(Self {
             workspace,
@@ -117,10 +132,10 @@ impl LinuxLandlockSession {
     /// the directory of the running executable, then one level up (build and
     /// test layouts place the daemon in a deps directory below the helper).
     fn helper_path() -> Option<PathBuf> {
-        if let Some(path) = std::env::var_os("HOUYICODER_SANDBOX_HELPER") {
+        if let Some(path) = var_os("HOUYICODER_SANDBOX_HELPER") {
             return Some(PathBuf::from(path));
         }
-        let deps = std::env::current_exe().ok()?.parent()?.to_path_buf();
+        let deps = current_exe().ok()?.parent()?.to_path_buf();
         let sibling = deps.join(HELPER_BIN);
         if sibling.is_file() {
             return Some(sibling);
@@ -193,7 +208,7 @@ impl LinuxLandlockSession {
         command: String,
         config: ExecConfig,
     ) -> Result<ExecResult, SandboxError> {
-        let wall = std::time::Duration::from_millis(config.wall_timeout_ms);
+        let wall = Duration::from_millis(config.wall_timeout_ms);
         let helper = if matches!(self.fence, FenceStatus::Enforced) {
             Self::helper_path()
         } else {
@@ -224,8 +239,8 @@ impl LinuxLandlockSession {
         cmd.env("TMPDIR", &tmpdir_str)
             .env("TMPPREFIX", format!("{tmpdir_str}/zsh"))
             .current_dir(&self.workspace)
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
             .kill_on_drop(true);
         cmd.process_group(0);
         let child = cmd
@@ -237,7 +252,7 @@ impl LinuxLandlockSession {
         // dropped future would leave grandchildren running.
         let pgid = child.id().unwrap_or(0) as i32;
         let _tree_guard = TreeKillGuard { pgid };
-        let outcome = tokio::time::timeout(wall, child.wait_with_output()).await;
+        let outcome = timeout(wall, child.wait_with_output()).await;
         match outcome {
             Ok(Ok(output)) => Ok(exec_result_from_output(output)),
             Ok(Err(e)) => Err(SandboxError::Io(format!("wait: {e}"))),
@@ -253,7 +268,7 @@ impl LinuxLandlockSession {
 /// exec_inner so the stream and exit-code mapping is testable without a
 /// spawn: a signal death reports a None code, and the lossy conversion is
 /// what every caller sees.
-fn exec_result_from_output(output: std::process::Output) -> ExecResult {
+fn exec_result_from_output(output: Output) -> ExecResult {
     ExecResult {
         stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
         stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
@@ -271,10 +286,7 @@ struct TreeKillGuard {
 impl Drop for TreeKillGuard {
     fn drop(&mut self) {
         if self.pgid > 0 {
-            let _ = nix::sys::signal::kill(
-                nix::unistd::Pid::from_raw(-self.pgid),
-                nix::sys::signal::Signal::SIGKILL,
-            );
+            let _ = kill(Pid::from_raw(-self.pgid), Signal::SIGKILL);
         }
     }
 }
@@ -288,11 +300,11 @@ impl Default for LinuxLandlockSession {
 impl Drop for LinuxLandlockSession {
     fn drop(&mut self) {
         if self.owned {
-            let _result = std::fs::remove_dir_all(&self.workspace);
+            let _result = remove_dir_all(&self.workspace);
         }
         // The scratch dir is always created by this session, so it is always
         // removed here. Best-effort; never panic.
-        let _result = std::fs::remove_dir_all(&self.tmpdir);
+        let _result = remove_dir_all(&self.tmpdir);
     }
 }
 
@@ -464,204 +476,4 @@ impl Containment for LinuxLandlockSession {
 }
 
 #[cfg(test)]
-mod tests {
-    // Construction probes the fence helper but never fences this process, so
-    // these tests run on any Linux host regardless of kernel support: the
-    // probe answer depends on the kernel, the resolver, grant and coverage
-    // behavior do not.
-
-    use super::*;
-    use std::fs;
-    use std::os::unix::process::ExitStatusExt;
-    use std::process::{ExitStatus, Output};
-
-    fn unique_dir(tag: &str) -> PathBuf {
-        std::env::temp_dir().join(format!(
-            "houyicoder-linux-{tag}-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
-        ))
-    }
-
-    #[test]
-    fn test_session_constructs_workspace() {
-        let session = LinuxLandlockSession::new().expect("session");
-        assert!(session.workspace.exists());
-        assert!(session.workspace.is_dir());
-        assert!(session.tmpdir.is_dir());
-    }
-
-    #[test]
-    fn test_absolute_path_rejected() {
-        let session = LinuxLandlockSession::new().expect("session");
-        let resolved = session.resolve("/etc/passwd");
-        assert!(matches!(resolved, Err(SandboxError::PathTraversal(_))));
-    }
-
-    #[test]
-    fn test_granted_dir_admitted() {
-        let session = LinuxLandlockSession::new().expect("session");
-        let granted = unique_dir("grant");
-        fs::create_dir_all(&granted).expect("create granted dir");
-        let target = granted.join("notes.txt");
-        fs::write(&target, "x").expect("write target");
-        let granted_str = granted.to_str().expect("granted str");
-        let target_str = target.to_str().expect("target str");
-
-        session.add_working_dir(granted_str).expect("grant");
-        let resolved = session.resolve_write(target_str).expect("admitted");
-        let canonical_granted = dunce::canonicalize(&granted).expect("canonical granted");
-        assert!(resolved.starts_with(canonical_granted));
-
-        session.remove_working_dir(granted_str);
-        let revoked = session.resolve_write(target_str);
-        assert!(matches!(revoked, Err(SandboxError::PathTraversal(_))));
-
-        let _cleanup = fs::remove_dir_all(&granted);
-    }
-
-    #[test]
-    fn test_scratch_dir_admitted() {
-        let session = LinuxLandlockSession::new().expect("session");
-        let target = session.tmpdir.join("scratch.txt");
-        let target_str = target.to_str().expect("target str");
-        let resolved = session.resolve_write(target_str).expect("scratch admitted");
-        assert!(resolved.starts_with(&session.tmpdir));
-    }
-
-    #[test]
-    fn test_coverage_lists_grants() {
-        let mut session = LinuxLandlockSession::new().expect("session");
-        session.fence = FenceStatus::Enforced;
-        let granted = unique_dir("coverage");
-        fs::create_dir_all(&granted).expect("create granted dir");
-        let granted_str = granted.to_str().expect("granted str");
-        session.add_working_dir(granted_str).expect("grant");
-
-        match session.coverage() {
-            Coverage::Fenced { writable_roots } => {
-                assert!(
-                    writable_roots.iter().any(|r| r == &session.workspace),
-                    "the workspace must be a fenced root: {writable_roots:?}"
-                );
-                let canonical = dunce::canonicalize(&granted).expect("canonical granted");
-                assert!(
-                    writable_roots.contains(&canonical),
-                    "every write grant must be a fenced root: {writable_roots:?}"
-                );
-                assert!(
-                    !writable_roots.contains(&session.tmpdir),
-                    "the scratch dir is not a user-authorized root: {writable_roots:?}"
-                );
-            }
-            other => panic!("an enforced fence must report fenced coverage: {other:?}"),
-        }
-
-        session.remove_working_dir(granted_str);
-        match session.coverage() {
-            Coverage::Fenced { writable_roots } => {
-                assert_eq!(writable_roots, vec![session.workspace.clone()]);
-            }
-            other => panic!("revoking a grant must not unfence: {other:?}"),
-        }
-        let _cleanup = fs::remove_dir_all(&granted);
-    }
-
-    #[test]
-    fn test_coverage_unfenced() {
-        let mut session = LinuxLandlockSession::new().expect("session");
-        session.fence = FenceStatus::Failed("probe".into());
-        assert!(matches!(session.coverage(), Coverage::Unfenced));
-        session.fence = FenceStatus::NotEnforced;
-        assert!(matches!(session.coverage(), Coverage::Unfenced));
-    }
-
-    /// The argv is the kernel grant set: the workspace and scratch dir come
-    /// first as write grants, runtime grants follow in flag pairs by kind,
-    /// and the command sits alone after the separator.
-    #[test]
-    fn test_helper_argv_grants() {
-        let session = LinuxLandlockSession::new().expect("session");
-        let write_dir = unique_dir("argv-write");
-        fs::create_dir_all(&write_dir).expect("create write dir");
-        let read_dir = unique_dir("argv-read");
-        fs::create_dir_all(&read_dir).expect("create read dir");
-        session
-            .add_working_dir(write_dir.to_str().expect("write str"))
-            .expect("grant write");
-        session
-            .add_reading_dir(read_dir.to_str().expect("read str"))
-            .expect("grant read");
-
-        let argv = session.helper_argv("touch x");
-        let canonical_write = dunce::canonicalize(&write_dir).expect("canonical write");
-        let canonical_read = dunce::canonicalize(&read_dir).expect("canonical read");
-        let expected: Vec<OsString> = vec![
-            "--write".into(),
-            session.workspace.as_os_str().to_os_string(),
-            "--write".into(),
-            session.tmpdir.as_os_str().to_os_string(),
-            "--write".into(),
-            canonical_write.into_os_string(),
-            "--read".into(),
-            canonical_read.into_os_string(),
-            "--".into(),
-            "touch x".into(),
-        ];
-        assert_eq!(argv, expected, "argv must carry the full grant set");
-
-        let _cleanup = fs::remove_dir_all(&write_dir);
-        let _cleanup = fs::remove_dir_all(&read_dir);
-    }
-
-    /// Every word of the helper protocol, including the ones a healthy host
-    /// never sees: an unrecognized word must land in Failed carrying the
-    /// reason, never be mistaken for a working fence.
-    #[cfg(feature = "enforce")]
-    #[test]
-    fn test_probe_word_mapping() {
-        assert!(matches!(
-            fence_from_probe("enforced\n"),
-            FenceStatus::Enforced
-        ));
-        assert!(matches!(
-            fence_from_probe("enforced-partial"),
-            FenceStatus::Enforced
-        ));
-        assert!(matches!(
-            fence_from_probe("not-enforced"),
-            FenceStatus::NotEnforced
-        ));
-        assert!(matches!(
-            fence_from_probe("unavailable"),
-            FenceStatus::Unavailable
-        ));
-        match fence_from_probe("failed:abi too old") {
-            FenceStatus::Failed(reason) => assert_eq!(reason, "abi too old"),
-            other => panic!("a failed probe must carry its reason: {other:?}"),
-        }
-        match fence_from_probe("garbage") {
-            FenceStatus::Failed(reason) => assert_eq!(reason, "garbage"),
-            other => panic!("an unknown word must land in Failed: {other:?}"),
-        }
-    }
-
-    /// The stream and exit-code mapping every caller sees. The raw wait
-    /// status carries the exit code in its upper bits; a signal death would
-    /// report None instead, which the Option in the answer preserves.
-    #[test]
-    fn test_output_maps_result() {
-        let output = Output {
-            status: ExitStatus::from_raw(3 << 8),
-            stdout: b"out".to_vec(),
-            stderr: b"err".to_vec(),
-        };
-        let result = exec_result_from_output(output);
-        assert_eq!(result.stdout, "out");
-        assert_eq!(result.stderr, "err");
-        assert_eq!(result.exit_code, Some(3));
-    }
-}
+mod tests;

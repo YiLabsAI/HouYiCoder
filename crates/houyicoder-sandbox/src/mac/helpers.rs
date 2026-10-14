@@ -8,6 +8,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use houyicoder_context::SandboxError;
+use nix::sys::signal::Signal;
+use nix::sys::signal::kill;
+use nix::unistd::Pid;
+use std::env::temp_dir;
+use std::fs::create_dir;
+use std::process::Command;
+use std::process::id;
+use std::sync::Arc;
 
 /// Counter for unique temp-dir names within this process.
 pub(super) static COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -22,9 +30,9 @@ pub(super) fn mkdtemp(prefix: &str) -> Result<PathBuf, SandboxError> {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    let mut path = std::env::temp_dir();
-    path.push(format!("{prefix}-{}-{n}-{nanos}", std::process::id()));
-    std::fs::create_dir(&path)?;
+    let mut path = temp_dir();
+    path.push(format!("{prefix}-{}-{n}-{nanos}", id()));
+    create_dir(&path)?;
     Ok(path)
 }
 
@@ -33,10 +41,7 @@ pub(super) fn mkdtemp(prefix: &str) -> Result<PathBuf, SandboxError> {
 /// survive a direct child.kill() but not a killpg.
 pub(super) fn kill_process_group(pgid: i32) {
     if pgid > 0 {
-        let _ = nix::sys::signal::kill(
-            nix::unistd::Pid::from_raw(-pgid),
-            nix::sys::signal::Signal::SIGKILL,
-        );
+        let _ = kill(Pid::from_raw(-pgid), Signal::SIGKILL);
     }
 }
 
@@ -63,7 +68,7 @@ pub(super) fn tree_cpu_secs(pgid: i32) -> u64 {
     if pgid <= 0 {
         return 0;
     }
-    let out = match std::process::Command::new("ps")
+    let out = match Command::new("ps")
         .arg("-A")
         .arg("-o")
         .arg("pgid=")
@@ -111,10 +116,10 @@ fn parse_cputime_secs(s: &str) -> u64 {
 /// exit path (Ok, Err, wall-timeout, future-drop/cancel) keeps the count
 /// balanced. A cancel between the fetch_add and this guard's drop is the one
 /// leak window — acceptable for the best-effort worktree-enter gate.
-pub(super) struct ExecCountGuard(pub(super) std::sync::Arc<std::sync::atomic::AtomicU64>);
+pub(super) struct ExecCountGuard(pub(super) Arc<AtomicU64>);
 
 impl Drop for ExecCountGuard {
     fn drop(&mut self) {
-        self.0.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+        self.0.fetch_sub(1, Ordering::SeqCst);
     }
 }

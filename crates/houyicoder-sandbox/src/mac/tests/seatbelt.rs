@@ -6,10 +6,28 @@
 
 #![allow(clippy::disallowed_methods)]
 
-use super::*;
+use super::super::*;
 use crate::{ProfileSpec, render};
+use houyicoder_api::sandbox::Egress;
+use houyicoder_api::sandbox::FenceStatus;
+use houyicoder_api::sandbox::SandboxSession;
+use houyicoder_api::sandbox::{Containment, Coverage, SideEffect};
+use houyicoder_api::skill::grant::is_denied;
 use houyicoder_resilience::BreakerState;
 use houyicoder_resilience::resource_breaker::{ResourceBreakerConfig, TripReason};
+use std::env::temp_dir;
+use std::env::var;
+use std::fs::canonicalize;
+use std::fs::create_dir;
+use std::fs::create_dir_all;
+use std::fs::remove_dir_all;
+use std::fs::write;
+use std::path::PathBuf;
+use std::process::Command;
+use std::process::id;
+use std::sync::atomic::Ordering;
+use std::time::Duration;
+use tokio::time::sleep;
 
 #[tokio::test]
 async fn test_breaker_open_refuses_spawn() {
@@ -161,11 +179,7 @@ fn test_discover_authorizable_ok() {
     // Result is host-dependent (log content varies); verify the deny-list
     // is applied so no Apple system service ever surfaces.
     let authorizable = s.discover_authorizable();
-    assert!(
-        authorizable
-            .iter()
-            .all(|s| !houyicoder_api::skill::grant::is_denied(s))
-    );
+    assert!(authorizable.iter().all(|s| !is_denied(s)));
 }
 
 #[test]
@@ -304,8 +318,8 @@ async fn test_cancel_aborts_process_tree() {
     // Poll for the grandchildren to appear (10ms ticks up to 2s) — event driven, not a fixed sleep. The spawn + fork takes ~10-50ms; a fixed 1s sleep wasted 950ms every run.
     let mut started = false;
     for _ in 0..200 {
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        let pgrep = std::process::Command::new("pgrep")
+        sleep(Duration::from_millis(10)).await;
+        let pgrep = Command::new("pgrep")
             .arg("-lf")
             .arg("sleep 100")
             .output()
@@ -324,8 +338,8 @@ async fn test_cancel_aborts_process_tree() {
     let mut leftover = String::new();
     let mut reaped = false;
     for _ in 0..50 {
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        let pgrep = std::process::Command::new("pgrep")
+        sleep(Duration::from_millis(100)).await;
+        let pgrep = Command::new("pgrep")
             .arg("-lf")
             .arg("sleep 100")
             .output()
@@ -359,8 +373,8 @@ async fn test_timeout_kills_orphan_tree() {
     let mut reaped = false;
     let mut leftover = String::new();
     for _ in 0..200 {
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        let pgrep = std::process::Command::new("pgrep")
+        sleep(Duration::from_millis(10)).await;
+        let pgrep = Command::new("pgrep")
             .arg("-lf")
             .arg("sleep 1000")
             .output()
@@ -382,14 +396,13 @@ fn test_working_dir_round_trips() {
     // add_working_dir canonicalizes + dedups + rejects non-directories; the
     // list round-trips through working_dirs; remove drops by canonical path.
     // No sandbox-exec exercised — this is the state-mutation surface the /permissions Workspace verbs drive; the fence re-derivation on exec is covered by the render_profile additional-dirs test.
-    use houyicoder_api::sandbox::SandboxSession;
     let s = MacSeatbeltSession::new().expect("session");
-    let tmp = std::env::temp_dir().join(format!(
+    let tmp = temp_dir().join(format!(
         "hcs-add-dir-{}-{}",
-        std::process::id(),
-        COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+        id(),
+        COUNTER.fetch_add(1, Ordering::SeqCst)
     ));
-    std::fs::create_dir(&tmp).expect("mkdir");
+    create_dir(&tmp).expect("mkdir");
     // Add is idempotent — the list keeps one entry, not two.
     s.add_working_dir(tmp.to_str().unwrap()).expect("add once");
     s.add_working_dir(tmp.to_str().unwrap())
@@ -402,7 +415,7 @@ fn test_working_dir_round_trips() {
     );
     // A file (not a directory) is rejected.
     let file = tmp.join("not-a-dir");
-    std::fs::write(&file, b"x").expect("write file");
+    write(&file, b"x").expect("write file");
     assert!(
         s.add_working_dir(file.to_str().unwrap()).is_err(),
         "a file path is not a working dir"
@@ -415,7 +428,7 @@ fn test_working_dir_round_trips() {
     // Remove drops by canonical path; the list empties.
     s.remove_working_dir(tmp.to_str().unwrap());
     assert!(s.working_dirs().is_empty(), "remove empties the list");
-    std::fs::remove_dir_all(&tmp).ok();
+    remove_dir_all(&tmp).ok();
 }
 
 #[test]
@@ -423,7 +436,6 @@ fn test_profile_includes_added_dir() {
     // The exec-time profile rebuild lands a runtime-added dir in the
     // allow-back (read + write). No sandbox-exec exercised — the helper is
     // split out so the re-derivation is unit-testable.
-    use houyicoder_api::sandbox::SandboxSession;
     let s = MacSeatbeltSession::new().expect("session");
     // Empty: the pre-rendered profile is reused (no additional subpath).
     let empty = s.current_profile();
@@ -431,19 +443,19 @@ fn test_profile_includes_added_dir() {
         !empty.contains("(subpath \"/tmp/extra-dir-xyz\")"),
         "empty profile has no added dir: {empty}"
     );
-    let tmp = std::env::temp_dir().join(format!(
+    let tmp = temp_dir().join(format!(
         "hcs-profile-{}-{}",
-        std::process::id(),
-        COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+        id(),
+        COUNTER.fetch_add(1, Ordering::SeqCst)
     ));
-    std::fs::create_dir(&tmp).expect("mkdir");
+    create_dir(&tmp).expect("mkdir");
     s.add_working_dir(tmp.to_str().unwrap()).expect("add");
     let with_dir = s.current_profile();
     assert!(
         with_dir.contains(tmp.to_str().unwrap()),
         "profile includes the added dir subpath: {with_dir}"
     );
-    std::fs::remove_dir_all(&tmp).ok();
+    remove_dir_all(&tmp).ok();
 }
 
 #[test]
@@ -456,7 +468,7 @@ fn test_session_denies_network() {
 #[test]
 fn test_posture_reaches_profile() {
     let mut policy = NetworkPolicy::contained();
-    policy.egress = houyicoder_api::sandbox::Egress::Unrestricted;
+    policy.egress = Egress::Unrestricted;
     let s = MacSeatbeltSession::new()
         .expect("session")
         .with_network(policy);
@@ -472,18 +484,17 @@ fn test_rerender_keeps_posture() {
     // narrowed. If only the cached path carried the posture, opening the fence
     // would appear to work until the user added a directory, at which point the
     // fence would silently close again mid-session. Both paths must agree.
-    use houyicoder_api::sandbox::SandboxSession;
     let mut policy = NetworkPolicy::contained();
-    policy.egress = houyicoder_api::sandbox::Egress::Unrestricted;
+    policy.egress = Egress::Unrestricted;
     let s = MacSeatbeltSession::new()
         .expect("session")
         .with_network(policy);
-    let tmp = std::env::temp_dir().join(format!(
+    let tmp = temp_dir().join(format!(
         "hcs-net-{}-{}",
-        std::process::id(),
-        COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+        id(),
+        COUNTER.fetch_add(1, Ordering::SeqCst)
     ));
-    std::fs::create_dir(&tmp).expect("mkdir");
+    create_dir(&tmp).expect("mkdir");
     s.add_working_dir(tmp.to_str().unwrap()).expect("add");
     let p = s.current_profile();
     assert!(
@@ -494,7 +505,7 @@ fn test_rerender_keeps_posture() {
         p.contains("(allow network*)"),
         "the re-render must carry the session posture: {p}"
     );
-    std::fs::remove_dir_all(&tmp).ok();
+    remove_dir_all(&tmp).ok();
 }
 
 /// Live fence-extension proof: a dir added via add_working_dir must actually
@@ -510,18 +521,17 @@ fn test_rerender_keeps_posture() {
 #[tokio::test]
 #[ignore]
 async fn test_added_dir_accessible() {
-    use houyicoder_api::sandbox::SandboxSession;
     let s = MacSeatbeltSession::new().expect("session");
     // Under HOME (not /tmp, which the fence broadly allows) so the write-deny
     // before add is load-bearing.
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
-    let tmp = std::path::PathBuf::from(home).join(format!(
+    let home = var("HOME").unwrap_or_else(|_| "/tmp".into());
+    let tmp = PathBuf::from(home).join(format!(
         "houyi-dir-effect-{}-{}",
-        std::process::id(),
-        COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+        id(),
+        COUNTER.fetch_add(1, Ordering::SeqCst)
     ));
-    std::fs::create_dir(&tmp).expect("mkdir");
-    std::fs::write(tmp.join("secret.txt"), b"42").expect("write");
+    create_dir(&tmp).expect("mkdir");
+    write(tmp.join("secret.txt"), b"42").expect("write");
     let path = tmp.join("secret.txt");
     let path_str = path.to_str().unwrap().to_string();
 
@@ -558,24 +568,23 @@ async fn test_added_dir_accessible() {
         "the appended content reaches the file: {}",
         after_read.stdout
     );
-    std::fs::remove_dir_all(&tmp).ok();
+    remove_dir_all(&tmp).ok();
 }
 
 /// A read-only runtime grant must not widen either host or kernel writes.
 #[tokio::test]
 #[ignore]
 async fn test_read_dir_denies_write() {
-    use houyicoder_api::sandbox::SandboxSession;
     let session = MacSeatbeltSession::new().expect("session");
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
-    let dir = std::path::PathBuf::from(home).join(format!(
+    let home = var("HOME").unwrap_or_else(|_| "/tmp".into());
+    let dir = PathBuf::from(home).join(format!(
         "houyi-read-effect-{}-{}",
-        std::process::id(),
-        COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+        id(),
+        COUNTER.fetch_add(1, Ordering::SeqCst)
     ));
-    std::fs::create_dir(&dir).expect("mkdir");
+    create_dir(&dir).expect("mkdir");
     let file = dir.join("note.txt");
-    std::fs::write(&file, b"42").expect("seed file");
+    write(&file, b"42").expect("seed file");
     session.add_reading_dir(dir.to_str().unwrap()).unwrap();
     assert_eq!(
         session.read_file(file.to_str().unwrap(), 16).await.unwrap(),
@@ -597,7 +606,7 @@ async fn test_read_dir_denies_write() {
             .unwrap_or(false),
         "kernel writes must reject a read-only grant: {result:?}"
     );
-    std::fs::remove_dir_all(dir).ok();
+    remove_dir_all(dir).ok();
 }
 
 /// Spike (Slice -1, go/no-go gate for the worktree feature): prove the
@@ -644,21 +653,15 @@ async fn test_read_dir_denies_write() {
 #[tokio::test]
 #[ignore]
 async fn test_narrow_fence_git_works() {
-    let parent = std::env::temp_dir().join(format!(
+    let parent = temp_dir().join(format!(
         "houyi-spike-narrow-{}-{}",
-        std::process::id(),
-        COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+        id(),
+        COUNTER.fetch_add(1, Ordering::SeqCst)
     ));
-    std::fs::create_dir_all(&parent).expect("mkdir parent");
+    create_dir_all(&parent).expect("mkdir parent");
     let repo = parent.join("repo");
-    std::fs::create_dir_all(&repo).expect("mkdir repo");
-    let run = |args: &[&str]| {
-        std::process::Command::new("git")
-            .arg("-C")
-            .arg(&repo)
-            .args(args)
-            .status()
-    };
+    create_dir_all(&repo).expect("mkdir repo");
+    let run = |args: &[&str]| Command::new("git").arg("-C").arg(&repo).args(args).status();
     assert!(run(&["init", "-q"]).unwrap().success(), "git init");
     let _ = run(&["config", "user.email", "spike@x"]).unwrap();
     let _ = run(&["config", "user.name", "spike"]).unwrap();
@@ -678,10 +681,10 @@ async fn test_narrow_fence_git_works() {
     );
     // Render the worktree profile: fence=worktree + .git allow-back (canonical
     // to the realpath, amendment 1) + read-allow .git/config (amendment 2).
-    let tmpdir = std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".into());
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/Users/unknown".into());
-    let stag = format!("houyi-spike-{}", std::process::id());
-    let repo_git_c = std::fs::canonicalize(repo.join(".git")).expect("canonicalize .git");
+    let tmpdir = var("TMPDIR").unwrap_or_else(|_| "/tmp".into());
+    let home = var("HOME").unwrap_or_else(|_| "/Users/unknown".into());
+    let stag = format!("houyi-spike-{}", id());
+    let repo_git_c = canonicalize(repo.join(".git")).expect("canonicalize .git");
     let git_common = repo_git_c.to_string_lossy().into_owned();
     let mut profile =
         render(&ProfileSpec::new(&wt, &tmpdir, &home, &stag).with_additional(&[&git_common]));
@@ -696,7 +699,7 @@ async fn test_narrow_fence_git_works() {
     // No environment workaround: git reads its real system and home config
     // here. If either read regresses to a denial, git fatals and this fails,
     // which is the point of asserting the unmodified path.
-    let fix = std::process::Command::new("sandbox-exec")
+    let fix = Command::new("sandbox-exec")
         .arg("-p")
         .arg(&profile)
         .arg("--")
@@ -720,7 +723,7 @@ async fn test_narrow_fence_git_works() {
         "log must show the spike-fix commit: {}",
         String::from_utf8_lossy(&fix.stdout)
     );
-    std::fs::remove_dir_all(&parent).ok();
+    remove_dir_all(&parent).ok();
 }
 
 /// Narrow state round-trip (no sandbox-exec): build a session fenced to a
@@ -731,22 +734,15 @@ async fn test_narrow_fence_git_works() {
 /// state mutation; the profile binds only at exec).
 #[tokio::test]
 async fn test_narrow_state_round_trip() {
-    use houyicoder_api::sandbox::SandboxSession;
-    let parent = std::env::temp_dir().join(format!(
+    let parent = temp_dir().join(format!(
         "houyi-narrow-state-{}-{}",
-        std::process::id(),
-        COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+        id(),
+        COUNTER.fetch_add(1, Ordering::SeqCst)
     ));
-    std::fs::create_dir_all(&parent).expect("mkdir parent");
+    create_dir_all(&parent).expect("mkdir parent");
     let repo = parent.join("repo");
-    std::fs::create_dir_all(&repo).expect("mkdir repo");
-    let run = |args: &[&str]| {
-        std::process::Command::new("git")
-            .arg("-C")
-            .arg(&repo)
-            .args(args)
-            .status()
-    };
+    create_dir_all(&repo).expect("mkdir repo");
+    let run = |args: &[&str]| Command::new("git").arg("-C").arg(&repo).args(args).status();
     assert!(run(&["init", "-q"]).unwrap().success(), "git init");
     let _ = run(&["config", "user.email", "t@x"]).unwrap();
     let _ = run(&["config", "user.name", "t"]).unwrap();
@@ -760,7 +756,7 @@ async fn test_narrow_state_round_trip() {
         .join(".houyicoder")
         .join("worktrees")
         .join("test-narrow");
-    std::fs::create_dir_all(wt.parent().unwrap()).expect("mkdir worktree parent");
+    create_dir_all(wt.parent().unwrap()).expect("mkdir worktree parent");
     assert!(
         run(&["worktree", "add", &wt.to_string_lossy(), "-q"])
             .unwrap()
@@ -796,12 +792,11 @@ async fn test_narrow_state_round_trip() {
         s.workspace_root().as_ref(),
         repo.canonicalize().unwrap().as_path()
     );
-    std::fs::remove_dir_all(&parent).ok();
+    remove_dir_all(&parent).ok();
 }
 
 #[test]
 fn test_containment_fenced_blocks_egress() {
-    use houyicoder_api::sandbox::{Containment, Coverage, SideEffect};
     let s = MacSeatbeltSession::new().unwrap();
     let ws = s.workspace_root();
     match s.coverage() {
@@ -831,7 +826,6 @@ fn test_as_containment_returns_some() {
 #[tokio::test]
 #[ignore]
 async fn test_login_snapshot_restores_path() {
-    use houyicoder_api::sandbox::SandboxSession;
     let s = MacSeatbeltSession::new().expect("session");
     // The login PATH should contain a directory the minimal non-login PATH
     // does not — /usr/bin is in both, but the user's homebrew or /etc/paths.d
@@ -861,20 +855,19 @@ async fn test_login_snapshot_restores_path() {
 /// omission cannot come back silently.
 #[test]
 fn test_fence_status_reports_enforced() {
-    use houyicoder_api::sandbox::{FenceStatus, SandboxSession};
-    let root = std::env::temp_dir().join(format!(
+    let root = temp_dir().join(format!(
         "houyi-fence-status-{}-{}",
-        std::process::id(),
-        COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+        id(),
+        COUNTER.fetch_add(1, Ordering::SeqCst)
     ));
-    std::fs::create_dir_all(&root).expect("mkdir root");
+    create_dir_all(&root).expect("mkdir root");
     let s = MacSeatbeltSession::new_in_cwd(&root).expect("session");
     assert_eq!(
         s.fence_status(),
         FenceStatus::Enforced,
         "a live seatbelt session must not report the trait default"
     );
-    std::fs::remove_dir_all(&root).ok();
+    remove_dir_all(&root).ok();
 }
 
 /// set_extra_mach_services adds an allow mach-lookup line, and clear
@@ -882,13 +875,12 @@ fn test_fence_status_reports_enforced() {
 /// next profile query.
 #[test]
 fn test_mach_services_lifecycle() {
-    use houyicoder_api::sandbox::SandboxSession;
-    let root = std::env::temp_dir().join(format!(
+    let root = temp_dir().join(format!(
         "houyi-mach-{}-{}",
-        std::process::id(),
-        COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+        id(),
+        COUNTER.fetch_add(1, Ordering::SeqCst)
     ));
-    std::fs::create_dir_all(&root).expect("mkdir root");
+    create_dir_all(&root).expect("mkdir root");
     let s = MacSeatbeltSession::new_in_cwd(&root).expect("session");
     assert!(
         !s.current_profile().contains("test.dummy.xpc"),
@@ -905,7 +897,7 @@ fn test_mach_services_lifecycle() {
         !s.current_profile().contains("test.dummy.xpc"),
         "clear removes the service"
     );
-    std::fs::remove_dir_all(&root).ok();
+    remove_dir_all(&root).ok();
 }
 
 #[test]
@@ -918,7 +910,7 @@ fn test_app_launch_default_off() {
         !p.contains("coreservicesd"),
         "base has no coreservicesd: {p}"
     );
-    std::fs::remove_dir_all(&root).ok();
+    remove_dir_all(&root).ok();
 }
 
 #[test]
@@ -941,7 +933,7 @@ fn test_clear_skill_grants_resets() {
         !s.current_profile().contains("coreservicesd"),
         "clear_skill_grants drops mach services"
     );
-    std::fs::remove_dir_all(&root).ok();
+    remove_dir_all(&root).ok();
 }
 
 #[test]
@@ -954,7 +946,7 @@ fn test_mach_services_replace() {
     assert!(!p.contains("a.b.c"), "prior skill service removed: {p}");
     assert_eq!(p.matches("d.e.f").count(), 1, "dedup: {p}");
     assert!(p.contains("g.h.i"), "current skill service present: {p}");
-    std::fs::remove_dir_all(&root).ok();
+    remove_dir_all(&root).ok();
 }
 
 #[test]
@@ -967,5 +959,5 @@ fn test_app_launch_or_accumulate() {
     s.clear_skill_grants();
     let p2 = s.current_profile();
     assert!(!p2.contains("(allow lsopen)"), "reset after clear: {p2}");
-    std::fs::remove_dir_all(&root).ok();
+    remove_dir_all(&root).ok();
 }

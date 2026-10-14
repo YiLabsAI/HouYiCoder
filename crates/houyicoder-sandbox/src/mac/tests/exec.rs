@@ -9,8 +9,11 @@
 
 #![allow(clippy::disallowed_methods)]
 
-use super::*;
+use super::super::*;
 use houyicoder_context::ExecConfig;
+use std::fs::create_dir;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicI64, Ordering};
 
 /// A quoted heredoc executes (its body is not flattened by the command
 /// wrapping). Pins the eval single-quote wrap against the prior Rust Debug
@@ -77,7 +80,7 @@ async fn test_writes_to_tmpdir() {
 #[tokio::test]
 async fn test_glob_for_basename_nonempty() {
     let s = MacSeatbeltSession::new().unwrap();
-    std::fs::create_dir(s.workspace.join("adir")).expect("mkdir subdir");
+    create_dir(s.workspace.join("adir")).expect("mkdir subdir");
     let out = s
         .exec_with_config(
             "for d in */; do basename \"$d\"; done",
@@ -103,8 +106,6 @@ async fn test_glob_for_basename_nonempty() {
 /// the G8b-lines streaming branch in exec_inner.
 #[tokio::test]
 async fn test_exec_streaming_counts_lines() {
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicI64, Ordering};
     let s = MacSeatbeltSession::new().unwrap();
     let counter = Arc::new(AtomicI64::new(-1));
     let out = s

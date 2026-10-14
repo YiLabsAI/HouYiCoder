@@ -9,28 +9,29 @@
 
 #![allow(clippy::disallowed_methods)]
 
-use super::*;
+use super::super::*;
+use std::env::temp_dir;
+use std::env::var;
+use std::fs::create_dir_all;
+use std::fs::remove_dir_all;
+use std::process::Command;
+use std::process::id;
+use std::sync::atomic::Ordering;
 
 /// The fence lets git log read .git/config. If .git/config is
 /// read-denied, git log fatals. Pins the write-only config posture.
 #[tokio::test]
 #[ignore]
 async fn test_git_config_read_works() {
-    let parent = std::env::temp_dir().join(format!(
+    let parent = temp_dir().join(format!(
         "houyi-mainrepo-{}-{}",
-        std::process::id(),
-        COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+        id(),
+        COUNTER.fetch_add(1, Ordering::SeqCst)
     ));
-    std::fs::create_dir_all(&parent).expect("mkdir parent");
+    create_dir_all(&parent).expect("mkdir parent");
     let repo = parent.join("repo");
-    std::fs::create_dir_all(&repo).expect("mkdir repo");
-    let run = |args: &[&str]| {
-        std::process::Command::new("git")
-            .arg("-C")
-            .arg(&repo)
-            .args(args)
-            .status()
-    };
+    create_dir_all(&repo).expect("mkdir repo");
+    let run = |args: &[&str]| Command::new("git").arg("-C").arg(&repo).args(args).status();
     assert!(run(&["init", "-q"]).unwrap().success(), "git init");
     let _ = run(&["config", "user.email", "spike@x"]).unwrap();
     let _ = run(&["config", "user.name", "spike"]).unwrap();
@@ -43,11 +44,11 @@ async fn test_git_config_read_works() {
     // Default (non-worktree) profile: fence is the repo, no manual
     // .git/config read-allow. A read deny on .git/config makes git log
     // fatal here.
-    let tmpdir = std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".into());
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/Users/unknown".into());
-    let stag = format!("houyi-mainrepo-{}", std::process::id());
+    let tmpdir = var("TMPDIR").unwrap_or_else(|_| "/tmp".into());
+    let home = var("HOME").unwrap_or_else(|_| "/Users/unknown".into());
+    let stag = format!("houyi-mainrepo-{}", id());
     let profile = render(&ProfileSpec::new(&repo, &tmpdir, &home, &stag));
-    let out = std::process::Command::new("sandbox-exec")
+    let out = Command::new("sandbox-exec")
         .arg("-p")
         .arg(&profile)
         .arg("--")
@@ -67,5 +68,5 @@ async fn test_git_config_read_works() {
         "log must show the init commit: {}",
         String::from_utf8_lossy(&out.stdout)
     );
-    std::fs::remove_dir_all(&parent).ok();
+    remove_dir_all(&parent).ok();
 }
