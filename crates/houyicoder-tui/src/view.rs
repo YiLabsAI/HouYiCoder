@@ -12,7 +12,7 @@ pub mod context_view;
 #[cfg(test)]
 pub mod drag_copy_tests;
 #[cfg(test)]
-pub mod drag_select_bug_tests;
+pub mod drag_select_tests;
 pub mod export_log;
 pub mod hooks_pane;
 pub mod input_bar;

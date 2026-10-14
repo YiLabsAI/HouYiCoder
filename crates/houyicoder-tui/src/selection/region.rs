@@ -25,7 +25,9 @@ use ratatui::{
     style::Color,
 };
 
+use crate::renderer::PreparedFrame;
 use crate::selection::{self, ClipboardWriter, Selection, extract_text, is_non_selectable};
+use crate::selections::Selections;
 use crate::state::App;
 
 // ---- shared free functions (pure: no App) -------------------------------
@@ -33,7 +35,7 @@ use crate::state::App;
 /// Apply a click to a selection by multi-click count: char / word / line.
 /// Pure over the selection + its row stash + rect; the surface owns the
 /// mouse→content mapping and any pre-click interaction (fold toggle).
-pub fn apply_click(
+pub(crate) fn apply_click(
     sel: &mut Selection,
     rows: &[(u8, String)],
     rect: Rect,
@@ -51,7 +53,7 @@ pub fn apply_click(
 /// Extend a drag focus: promote a blank-anchor drag to a word span, then
 /// extend the span or update the char-mode focus. Pure over selection + rows
 /// + rect; the surface owns cursor bookkeeping and edge auto-scroll.
-pub fn extend_drag(
+pub(crate) fn extend_drag(
     sel: &mut Selection,
     rows: &[(u8, String)],
     rect: Rect,
@@ -72,7 +74,7 @@ pub fn extend_drag(
 /// distinguishes the transcript (keep the highlight after copy) from a pane
 /// (clear on release, since pane content rebuilds each frame and a stale
 /// highlight would not track the rows).
-pub fn finish_release(
+pub(crate) fn finish_release(
     sel: &mut Selection,
     rect: Rect,
     rows: &[(u8, String)],
@@ -107,7 +109,7 @@ pub fn finish_release(
 /// the stale one-cell selection would otherwise extend into scrolled content.
 /// A real drag (anchor != focus) is left alone so the user can scroll while
 /// holding an active selection.
-pub fn clear_stale_click(sel: &mut Selection) {
+pub(crate) fn clear_stale_click(sel: &mut Selection) {
     if sel.is_dragging && sel.is_click_only() && sel.span_origin.is_none() {
         sel.clear();
     }
@@ -131,9 +133,16 @@ pub(crate) fn last_visible_content_row(rect: Rect, total: usize, scroll_top: usi
 /// and includes blank rows below the content tail), then map the screen row
 /// through the current scroll offset. The column stays in screen space
 /// (columns map 1:1 to content; there is no horizontal scroll).
-pub(crate) fn transcript_mouse_to_content(app: &App, rect: Rect, x: u16, y: u16) -> (u16, usize) {
-    let total = app.active_scroll().total.get();
-    let scroll_top = app.active_scroll().top_offset();
+pub(crate) fn transcript_mouse_to_content(
+    frame: &PreparedFrame,
+    scroll_top: usize,
+    x: u16,
+    y: u16,
+) -> (u16, usize) {
+    let rect = frame.layout.transcript_rect.get();
+    // The rows the frame drew are the total: the same set the hit test maps
+    // into, so the clamp cannot disagree with the drawing.
+    let total = frame.layout.last_all_rows.borrow().len();
     let col = x.clamp(rect.x, rect.x + rect.width.saturating_sub(1));
     let last_content = last_visible_content_row(rect, total, scroll_top);
     let row = y
@@ -159,11 +168,52 @@ pub(crate) fn pane_mouse_to_content(rect: Rect, x: u16, y: u16) -> (u16, usize) 
 /// its row stash (a RefCell guard), its screen rect, and the clipboard writer.
 /// Returned by Region::parts so a default trait method can drive the shared
 /// free functions without holding &mut self and &self at once.
-pub struct RegionParts<'a> {
+pub(crate) struct RegionParts<'a> {
     pub sel: &'a mut Selection,
     pub rows: Ref<'a, Vec<(u8, String)>>,
     pub rect: Rect,
     pub clipboard: &'a dyn ClipboardWriter,
+}
+
+/// Everything a selection leaf may read: the four per-region selections (a
+/// leaf takes its own), the last successfully drawn frame, the transcript's
+/// current top display row, and the clipboard port. No App handle, so a leaf
+/// cannot reach domain state even by accident; the effects a gesture asks for
+/// come back as a RegionIntent for the router to perform.
+///
+/// The top is the live offset rather than the one the frame was drawn from:
+/// an edge scroll moves it and the same gesture then maps through the new
+/// value, so the focus row is the one the next render will show under the
+/// cursor.
+pub(crate) struct RegionView<'a> {
+    pub selections: &'a mut Selections,
+    pub frame: &'a PreparedFrame,
+    pub scroll_top: usize,
+    pub clipboard: &'a dyn ClipboardWriter,
+}
+
+/// What a gesture asks the router to do beyond the shared mechanics. The leaf
+/// cannot perform these itself: they change state the render pass publishes
+/// (folds, expansion, the scroll offset) or raise a notice, and the router
+/// owns that coordination.
+#[derive(Debug)]
+pub(crate) enum RegionIntent {
+    /// The gesture only moved the selection.
+    None,
+    /// Toggle the fold group whose summary is the visible row.
+    ToggleFold(usize),
+    /// Toggle the delegation expansion on the visible row.
+    ToggleSubagent(usize),
+    /// Toggle the thinking block on the visible row, when it offers one.
+    ToggleThinking(usize),
+    /// Collapse whatever expanded block contains the selection anchor.
+    CollapseUnderAnchor,
+    /// Scroll one line up (edge auto-scroll during a drag).
+    ScrollUp,
+    /// Scroll one line down.
+    ScrollDown,
+    /// Raise the copy notice for the text a release copied.
+    Copied(String),
 }
 
 /// A draggable, copyable text surface. The transcript and each slash-command
@@ -173,7 +223,7 @@ pub struct RegionParts<'a> {
 /// overrides only what it genuinely does differently (the transcript adds
 /// fold/thinking click intercepts, edge auto-scroll, and a clean-click
 /// collapse guard; a pure-selection pane overrides nothing).
-pub trait Region {
+pub(crate) trait Region {
     /// One-shot borrow of the disjoint fields the default mechanics need.
     fn parts(&mut self) -> RegionParts<'_>;
     /// Map a screen cell to this surface's content space. &self only; call
@@ -192,36 +242,47 @@ pub trait Region {
     /// via finish_release, NOT handle_up — a surface's handle_up may
     /// carry a clean-click collapse guard that must not fire on a lost
     /// release), then on_click + apply_click.
-    fn handle_down(&mut self, x: u16, y: u16) {
+    fn handle_down(&mut self, x: u16, y: u16) -> RegionIntent {
         down_body(self, x, y);
+        RegionIntent::None
     }
-    fn handle_drag(&mut self, x: u16, y: u16) {
+    fn handle_drag(&mut self, x: u16, y: u16) -> RegionIntent {
         drag_body(self, x, y);
+        RegionIntent::None
     }
-    fn handle_up(&mut self) {
+    /// The release mechanics: finish the gesture, copy what was selected.
+    /// A surface that intercepts a clean click for a toggle calls this when
+    /// no toggle applied, so the click still clears its caret.
+    fn release(&mut self) -> RegionIntent {
         let persist = self.persist();
         let p = self.parts();
-        let _text = finish_release(p.sel, p.rect, &p.rows, p.clipboard, persist);
+        match finish_release(p.sel, p.rect, &p.rows, p.clipboard, persist) {
+            Some(text) => RegionIntent::Copied(text),
+            None => RegionIntent::None,
+        }
     }
-    fn handle_moved(&mut self) {
-        self.handle_up();
+    fn handle_up(&mut self) -> RegionIntent {
+        self.release()
+    }
+    fn handle_moved(&mut self) -> RegionIntent {
+        self.handle_up()
     }
 
     /// Copy the current selection without finishing or clearing it (the
     /// ctrl+C path). No-op when there is no range. The highlight stays as an
     /// independent visual affordance — it clears on Esc or the next click,
     /// not on copy. Returns the copied text so the caller can show a toast.
-    fn copy_current(&mut self) -> Option<String> {
+    fn copy_current(&mut self) -> RegionIntent {
         let p = self.parts();
         if !p.sel.has_selection() {
-            return None;
+            return RegionIntent::None;
         }
         let text = extract_text(&p.rows, p.rect, p.sel);
         if text.trim().is_empty() {
-            return None;
+            return RegionIntent::None;
         }
         p.clipboard.write(&text);
-        Some(text)
+        RegionIntent::Copied(text)
     }
 }
 
@@ -255,137 +316,114 @@ fn drag_body<S: Region + ?Sized>(s: &mut S, x: u16, y: u16) {
     extend_drag(p.sel, &p.rows, p.rect, col, cr);
 }
 
+/// The edge auto-scroll a drag onto the transcript's top or bottom row asks
+/// for, or None when the drag is inside the viewport. Pure over the drawn
+/// rect: the router applies it BEFORE the drag body so the focus row is
+/// mapped through the post-scroll offset and matches what the next render
+/// shows under the cursor.
+pub(crate) fn edge_scroll_intent(rect: Rect, y: u16) -> RegionIntent {
+    if rect.height == 0 {
+        RegionIntent::None
+    } else if y <= rect.y {
+        RegionIntent::ScrollUp
+    } else if y >= rect.y + rect.height.saturating_sub(1) {
+        RegionIntent::ScrollDown
+    } else {
+        RegionIntent::None
+    }
+}
+
 // ---- the transcript surface ----------------------------------------------
 
 /// The transcript selection surface: content-space, scrollable, with rich
 /// click interaction (fold toggle, thinking-toggle, clean-click collapse) and
 /// edge auto-scroll. Overrides the three gesture methods to layer those on the
 /// shared mechanics; persist is true so the highlight survives a copy.
-pub struct TranscriptRegion<'a> {
-    pub app: &'a mut App,
+pub(crate) struct TranscriptRegion<'a> {
+    pub view: RegionView<'a>,
 }
 
 impl Region for TranscriptRegion<'_> {
     fn parts(&mut self) -> RegionParts<'_> {
-        let rows = self.app.ui.frame.layout.last_all_rows.borrow();
+        let layout = &self.view.frame.layout;
+        let rows = layout.last_all_rows.borrow();
         RegionParts {
-            sel: &mut self.app.ui.selection.transcript,
+            sel: &mut self.view.selections.transcript,
             rows,
-            rect: self.app.ui.frame.layout.transcript_rect.get(),
-            clipboard: self.app.ui.clipboard.as_ref(),
+            rect: layout.transcript_rect.get(),
+            clipboard: self.view.clipboard,
         }
     }
     fn to_content(&self, x: u16, y: u16) -> (u16, usize) {
-        let rect = self.app.ui.frame.layout.transcript_rect.get();
-        transcript_mouse_to_content(self.app, rect, x, y)
+        transcript_mouse_to_content(self.view.frame, self.view.scroll_top, x, y)
     }
     fn persist(&self) -> bool {
         true
     }
     fn is_dragging(&self) -> bool {
-        self.app.ui.selection.transcript.is_dragging
+        self.view.selections.transcript.is_dragging
     }
 
     /// Press always starts a selection (the shared down body): a fold,
     /// subagent, or thought toggle is decided on release, not here, so a drag
     /// can select the summary text instead of being swallowed by the toggle.
     /// The clean-click toggle dispatch lives in handle_up.
-    fn handle_down(&mut self, x: u16, y: u16) {
+    fn handle_down(&mut self, x: u16, y: u16) -> RegionIntent {
         down_body(self, x, y);
+        RegionIntent::None
     }
 
-    /// Edge auto-scroll one line per drag event (reaches the top/bottom of
-    /// the transcript), then the shared drag body — which re-maps to content
-    /// through the POST-scroll offset so the focus row matches what the next
-    /// render shows under the cursor.
-    fn handle_drag(&mut self, x: u16, y: u16) {
-        if !self.app.ui.selection.transcript.is_dragging {
-            return;
-        }
-        let rect = self.app.ui.frame.layout.transcript_rect.get();
-        if rect.height > 0 {
-            if y <= rect.y {
-                self.app.scroll_transcript_line_up(1);
-            } else if y >= rect.y + rect.height.saturating_sub(1) {
-                self.app.scroll_transcript_line_down(1);
-            }
-        }
-        drag_body(self, x, y);
-    }
-
-    /// A clean click (no drag motion) toggles a fold/subagent/thought row, or
-    /// collapses an expanded block when the click lands on its content; a real
-    /// drag copies (drag wins over toggle). Reads the anchor row's tag to
-    /// decide, the way collapse_expanded_under_anchor does. The guard runs
-    /// before parts because the toggles need &mut App wholesale; parts would
-    /// split-borrow the App fields.
-    fn handle_up(&mut self) {
-        let clean = !self.app.ui.selection.transcript.drag_moved
-            && self.app.ui.selection.transcript.is_click_only()
-            && self.app.ui.selection.transcript.span_origin.is_none();
+    /// A clean click (no drag motion) asks for a fold/subagent/thought toggle,
+    /// or a collapse when it lands on an expanded block's content; a real drag
+    /// copies (drag wins over toggle). The leaf only names the effect: the
+    /// row's tag, fold key, and turn handle decide which, and the router
+    /// performs it on the state the render pass publishes.
+    fn handle_up(&mut self) -> RegionIntent {
+        let sel = &self.view.selections.transcript;
+        let clean = !sel.drag_moved && sel.is_click_only() && sel.span_origin.is_none();
         if clean {
-            // Read the anchor row's tag, fold key, and turn handle, then drop
-            // the borrows before the &mut App toggle calls.
-            let target = (|| {
-                let ri = self.app.anchor_visible_row()?;
-                let tag = self
-                    .app
-                    .ui
-                    .frame
-                    .layout
+            let layout = &self.view.frame.layout;
+            let target = self.anchor_visible_row().map(|ri| {
+                let tag = layout
                     .last_transcript_rows
                     .borrow()
                     .get(ri)
                     .map(|(t, _)| *t)
                     .unwrap_or(selection::TAG_PLAIN);
-                let keys = self.app.ui.frame.keys.borrow();
-                let fold_key = keys.fold_key_at(ri);
-                let turn_id = keys.turn_id_at(ri);
-                Some((ri, tag, fold_key, turn_id))
-            })();
+                let keys = self.view.frame.keys.borrow();
+                (ri, tag, keys.fold_key_at(ri), keys.turn_id_at(ri))
+            });
             if let Some((ri, tag, fold_key, turn_id)) = target {
                 if tag == selection::TAG_FOLD {
-                    self.app.toggle_fold_at_row(ri);
-                    self.app.ui.selection.transcript.last_click = None;
-                    self.app.ui.selection.transcript.clear();
-                    return;
+                    return RegionIntent::ToggleFold(ri);
                 }
                 if fold_key.is_some() {
-                    self.app.toggle_subagent_expand_at_row(ri);
-                    self.app.ui.selection.transcript.last_click = None;
-                    self.app.ui.selection.transcript.clear();
-                    return;
+                    return RegionIntent::ToggleSubagent(ri);
                 }
                 // A row publishes a turn handle exactly when it offers a
                 // toggle, so the handle is the row's shape. Matching the
                 // rendered text instead missed every summary whose duration
                 // is unknown, because that text names a duration the row
                 // cannot state.
-                if turn_id.is_some() && self.app.toggle_thinking_expand_at_row(ri) {
-                    self.app.ui.selection.transcript.last_click = None;
-                    self.app.ui.selection.transcript.clear();
-                    return;
+                if turn_id.is_some() {
+                    return RegionIntent::ToggleThinking(ri);
                 }
             }
-            if self.app.collapse_expanded_under_anchor() {
-                self.app.ui.selection.transcript.last_click = None;
-                return;
-            }
+            return RegionIntent::CollapseUnderAnchor;
         }
-        // Scope p so its split-borrows of app fields (selection, clipboard,
-        // rows) release before we touch app.ui.notifications (a different
-        // field).
-        let copied = {
-            let p = self.parts();
-            finish_release(p.sel, p.rect, &p.rows, p.clipboard, true)
-        };
-        if let Some(text) = copied {
-            let path = crate::selection::get_clipboard_path();
-            self.app
-                .ui
-                .notifications
-                .add(crate::notifications::copy_toast(&text, path));
-        }
+        self.release()
+    }
+}
+
+impl TranscriptRegion<'_> {
+    /// The visible row the selection anchor sits on, or None when it scrolled
+    /// off. Maps through the same top the caller's gesture used, so the row it
+    /// names is the one that top was applied to.
+    fn anchor_visible_row(&self) -> Option<usize> {
+        let (_, content_row) = self.view.selections.transcript.anchor?;
+        let ri = content_row.checked_sub(self.view.scroll_top)?;
+        let height = self.view.frame.layout.transcript_rect.get().height as usize;
+        (ri < height).then_some(ri)
     }
 }
 
@@ -395,25 +433,26 @@ impl Region for TranscriptRegion<'_> {
 /// scroll), pure selection. Implements only parts, to_content, and
 /// is_dragging — all gesture mechanics come from the trait defaults. A
 /// future artifact or approval-args pane is a peer of this.
-pub struct PaneRegion<'a> {
-    pub app: &'a mut App,
+pub(crate) struct PaneRegion<'a> {
+    pub view: RegionView<'a>,
 }
 
 impl Region for PaneRegion<'_> {
     fn parts(&mut self) -> RegionParts<'_> {
-        let rows = self.app.ui.frame.layout.last_pane_rows.borrow();
+        let layout = &self.view.frame.layout;
+        let rows = layout.last_pane_rows.borrow();
         RegionParts {
-            sel: &mut self.app.ui.selection.pane,
+            sel: &mut self.view.selections.pane,
             rows,
-            rect: self.app.ui.frame.layout.pane_rect.get(),
-            clipboard: self.app.ui.clipboard.as_ref(),
+            rect: layout.pane_rect.get(),
+            clipboard: self.view.clipboard,
         }
     }
     fn to_content(&self, x: u16, y: u16) -> (u16, usize) {
-        pane_mouse_to_content(self.app.ui.frame.layout.pane_rect.get(), x, y)
+        pane_mouse_to_content(self.view.frame.layout.pane_rect.get(), x, y)
     }
     fn is_dragging(&self) -> bool {
-        self.app.ui.selection.pane.is_dragging
+        self.view.selections.pane.is_dragging
     }
 }
 
@@ -422,25 +461,26 @@ impl Region for PaneRegion<'_> {
 /// uses persist=false (the card rebuilds each frame; a stale highlight
 /// would not track the rows). Mirrors PaneRegion; the only difference is
 /// which rect/rows/selection it binds.
-pub struct ApprovalSelection<'a> {
-    pub app: &'a mut App,
+pub(crate) struct ApprovalSelection<'a> {
+    pub view: RegionView<'a>,
 }
 
 impl Region for ApprovalSelection<'_> {
     fn parts(&mut self) -> RegionParts<'_> {
-        let rows = self.app.ui.frame.layout.last_approval_rows.borrow();
+        let layout = &self.view.frame.layout;
+        let rows = layout.last_approval_rows.borrow();
         RegionParts {
-            sel: &mut self.app.ui.selection.approval,
+            sel: &mut self.view.selections.approval,
             rows,
-            rect: self.app.ui.frame.layout.approval_rect.get(),
-            clipboard: self.app.ui.clipboard.as_ref(),
+            rect: layout.approval_rect.get(),
+            clipboard: self.view.clipboard,
         }
     }
     fn to_content(&self, x: u16, y: u16) -> (u16, usize) {
-        pane_mouse_to_content(self.app.ui.frame.layout.approval_rect.get(), x, y)
+        pane_mouse_to_content(self.view.frame.layout.approval_rect.get(), x, y)
     }
     fn is_dragging(&self) -> bool {
-        self.app.ui.selection.approval.is_dragging
+        self.view.selections.approval.is_dragging
     }
 }
 
@@ -451,25 +491,26 @@ impl Region for ApprovalSelection<'_> {
 /// read back from the frame buffer (see stash_status_rows) so the copyable
 /// text is exactly what the bar drew. The highlight clears on release
 /// (persist = false) because the bar rebuilds each frame.
-pub struct StatusRegion<'a> {
-    pub app: &'a mut App,
+pub(crate) struct StatusRegion<'a> {
+    pub view: RegionView<'a>,
 }
 
 impl Region for StatusRegion<'_> {
     fn parts(&mut self) -> RegionParts<'_> {
-        let rows = self.app.ui.frame.layout.last_status_rows.borrow();
+        let layout = &self.view.frame.layout;
+        let rows = layout.last_status_rows.borrow();
         RegionParts {
-            sel: &mut self.app.ui.selection.status,
+            sel: &mut self.view.selections.status,
             rows,
-            rect: self.app.ui.frame.layout.status_rect.get(),
-            clipboard: self.app.ui.clipboard.as_ref(),
+            rect: layout.status_rect.get(),
+            clipboard: self.view.clipboard,
         }
     }
     fn to_content(&self, x: u16, y: u16) -> (u16, usize) {
-        pane_mouse_to_content(self.app.ui.frame.layout.status_rect.get(), x, y)
+        pane_mouse_to_content(self.view.frame.layout.status_rect.get(), x, y)
     }
     fn is_dragging(&self) -> bool {
-        self.app.ui.selection.status.is_dragging
+        self.view.selections.status.is_dragging
     }
 }
 
@@ -548,15 +589,13 @@ pub(crate) fn edge_scroll_if_at_edge(app: &mut App) -> bool {
     if rect.height == 0 {
         return false;
     }
-    let bottom = rect.y + rect.height.saturating_sub(1);
-    if cy <= rect.y {
-        app.scroll_transcript_line_up(1);
-    } else if cy >= bottom {
-        app.scroll_transcript_line_down(1);
-    } else {
-        return false;
+    match edge_scroll_intent(rect, cy) {
+        RegionIntent::ScrollUp => app.scroll_transcript_line_up(1),
+        RegionIntent::ScrollDown => app.scroll_transcript_line_down(1),
+        _ => return false,
     }
-    let (col, content_row) = transcript_mouse_to_content(app, rect, cx, cy);
+    let top = app.active_scroll().top_offset();
+    let (col, content_row) = transcript_mouse_to_content(&app.ui.frame, top, cx, cy);
     let rows = app.ui.frame.layout.last_all_rows.borrow();
     extend_drag(
         &mut app.ui.selection.transcript,

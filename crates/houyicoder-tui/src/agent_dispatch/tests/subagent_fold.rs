@@ -216,10 +216,20 @@ fn test_click_subagent_head_expands() {
         !app.ui.transcript_view.expanded.subagents.contains("c1"),
         "starts collapsed"
     );
+    // The gesture names the effect and the apply layer performs it. This
+    // drives both halves so the assertion covers the toggle the leaf decided,
+    // not the leaf's return value alone.
     {
-        let mut region = TranscriptRegion { app: &mut app };
-        region.handle_down(rect.x, rect.y);
-        region.handle_up();
+        let intent = TranscriptRegion {
+            view: app.region_view(),
+        }
+        .handle_down(rect.x, rect.y);
+        app.apply_region_intent(intent);
+        let intent = TranscriptRegion {
+            view: app.region_view(),
+        }
+        .handle_up();
+        app.apply_region_intent(intent);
     }
     assert!(
         app.ui.transcript_view.expanded.subagents.contains("c1"),
@@ -229,10 +239,20 @@ fn test_click_subagent_head_expands() {
     // Toggle symmetry: a second click on the (still-head) row collapses.
     let _out = crate::test_harness::render_text(&app, 80, 24);
     let rect = app.ui.frame.layout.transcript_rect.get();
+    // The gesture names the effect and the apply layer performs it. This
+    // drives both halves so the assertion covers the toggle the leaf decided,
+    // not the leaf's return value alone.
     {
-        let mut region = TranscriptRegion { app: &mut app };
-        region.handle_down(rect.x, rect.y);
-        region.handle_up();
+        let intent = TranscriptRegion {
+            view: app.region_view(),
+        }
+        .handle_down(rect.x, rect.y);
+        app.apply_region_intent(intent);
+        let intent = TranscriptRegion {
+            view: app.region_view(),
+        }
+        .handle_up();
+        app.apply_region_intent(intent);
     }
     assert!(
         !app.ui.transcript_view.expanded.subagents.contains("c1"),

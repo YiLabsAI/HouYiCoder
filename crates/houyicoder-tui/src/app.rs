@@ -22,8 +22,8 @@ use crate::notifications::{NotifKind, Notification, copy_toast};
 use crate::run_control::ClientCommand;
 use crate::selection::get_clipboard_path;
 use crate::selection::region::{
-    ApprovalSelection, PaneRegion, Region, StatusRegion, TranscriptRegion, clear_stale_click,
-    edge_scroll_if_at_edge, paint_overlay,
+    ApprovalSelection, PaneRegion, Region, RegionIntent, RegionView, StatusRegion,
+    TranscriptRegion, clear_stale_click, edge_scroll_if_at_edge, edge_scroll_intent, paint_overlay,
 };
 use crate::state::{App, Pane, Screen, ViewportMode};
 use crate::terminal_guard::{
@@ -241,19 +241,31 @@ pub(crate) fn handle_mouse(app: &mut App, m: MouseEvent) {
             // Each surface manages its own drag lifecycle.
             let prect = app.ui.frame.layout.pane_rect.get();
             if prect.width > 0 && prect.height > 0 && in_rect(prect, m.column, m.row) {
-                PaneRegion { app: &mut *app }.handle_down(m.column, m.row);
+                let intent = PaneRegion {
+                    view: app.region_view(),
+                }
+                .handle_down(m.column, m.row);
+                app.apply_region_intent(intent);
                 return;
             }
             // Status chrome owns selection before the transcript beneath it.
             let srect = app.ui.frame.layout.status_rect.get();
             if srect.width > 0 && srect.height > 0 && in_rect(srect, m.column, m.row) {
-                StatusRegion { app: &mut *app }.handle_down(m.column, m.row);
+                let intent = StatusRegion {
+                    view: app.region_view(),
+                }
+                .handle_down(m.column, m.row);
+                app.apply_region_intent(intent);
                 return;
             }
             // Approval cards retain a local copyable selection.
             let arect = app.ui.frame.layout.approval_rect.get();
             if arect.width > 0 && arect.height > 0 && in_rect(arect, m.column, m.row) {
-                ApprovalSelection { app: &mut *app }.handle_down(m.column, m.row);
+                let intent = ApprovalSelection {
+                    view: app.region_view(),
+                }
+                .handle_down(m.column, m.row);
+                app.apply_region_intent(intent);
                 return;
             }
             // Fleet hit-testing returns an action before mutating App.
@@ -277,7 +289,11 @@ pub(crate) fn handle_mouse(app: &mut App, m: MouseEvent) {
                 // Byte-window browsing does not share transcript selection
                 // coordinates, so clicks do not start a drag.
                 if !app.window_browsing() {
-                    TranscriptRegion { app: &mut *app }.handle_down(m.column, m.row);
+                    let intent = TranscriptRegion {
+                        view: app.region_view(),
+                    }
+                    .handle_down(m.column, m.row);
+                    app.apply_region_intent(intent);
                 }
             } else {
                 app.ui.selection.transcript.clear();
@@ -288,46 +304,99 @@ pub(crate) fn handle_mouse(app: &mut App, m: MouseEvent) {
         }
         MouseEventKind::Drag(MouseButton::Left) => {
             if app.ui.selection.pane.is_dragging {
-                PaneRegion { app: &mut *app }.handle_drag(m.column, m.row);
+                let intent = PaneRegion {
+                    view: app.region_view(),
+                }
+                .handle_drag(m.column, m.row);
+                app.apply_region_intent(intent);
             } else if app.ui.selection.status.is_dragging {
-                StatusRegion { app: &mut *app }.handle_drag(m.column, m.row);
+                let intent = StatusRegion {
+                    view: app.region_view(),
+                }
+                .handle_drag(m.column, m.row);
+                app.apply_region_intent(intent);
             } else if app.ui.selection.approval.is_dragging {
-                ApprovalSelection { app: &mut *app }.handle_drag(m.column, m.row);
+                let intent = ApprovalSelection {
+                    view: app.region_view(),
+                }
+                .handle_drag(m.column, m.row);
+                app.apply_region_intent(intent);
             } else if app.ui.selection.transcript.is_dragging {
-                TranscriptRegion { app: &mut *app }.handle_drag(m.column, m.row);
+                // Edge auto-scroll first: the drag body maps the focus
+                // through the post-scroll offset, so the row it lands on is
+                // the one the next render shows under the cursor.
+                let rect = app.ui.frame.layout.transcript_rect.get();
+                app.apply_region_intent(edge_scroll_intent(rect, m.row));
+                let intent = TranscriptRegion {
+                    view: app.region_view(),
+                }
+                .handle_drag(m.column, m.row);
+                app.apply_region_intent(intent);
             }
         }
         MouseEventKind::Moved => {
             // Motion without a pressed button closes any drag whose release
             // was lost. Multiple surfaces may still carry stale drag state.
             if app.ui.selection.pane.is_dragging {
-                PaneRegion { app: &mut *app }.handle_moved();
+                let intent = PaneRegion {
+                    view: app.region_view(),
+                }
+                .handle_moved();
+                app.apply_region_intent(intent);
             }
             if app.ui.selection.status.is_dragging {
-                StatusRegion { app: &mut *app }.handle_moved();
+                let intent = StatusRegion {
+                    view: app.region_view(),
+                }
+                .handle_moved();
+                app.apply_region_intent(intent);
             }
             if app.ui.selection.approval.is_dragging {
-                ApprovalSelection { app: &mut *app }.handle_moved();
+                let intent = ApprovalSelection {
+                    view: app.region_view(),
+                }
+                .handle_moved();
+                app.apply_region_intent(intent);
             }
             if app.ui.selection.transcript.is_dragging {
-                TranscriptRegion { app: &mut *app }.handle_moved();
+                let intent = TranscriptRegion {
+                    view: app.region_view(),
+                }
+                .handle_moved();
+                app.apply_region_intent(intent);
             }
         }
         MouseEventKind::Up(MouseButton::Left) => {
             if app.ui.selection.pane.is_dragging {
-                PaneRegion { app: &mut *app }.handle_up();
+                let intent = PaneRegion {
+                    view: app.region_view(),
+                }
+                .handle_up();
+                app.apply_region_intent(intent);
                 return;
             }
             if app.ui.selection.status.is_dragging {
-                StatusRegion { app: &mut *app }.handle_up();
+                let intent = StatusRegion {
+                    view: app.region_view(),
+                }
+                .handle_up();
+                app.apply_region_intent(intent);
                 return;
             }
             if app.ui.selection.approval.is_dragging {
-                ApprovalSelection { app: &mut *app }.handle_up();
+                let intent = ApprovalSelection {
+                    view: app.region_view(),
+                }
+                .handle_up();
+                app.apply_region_intent(intent);
                 return;
             }
             if app.ui.selection.transcript.is_dragging {
-                TranscriptRegion { app: &mut *app }.handle_up();
+                let intent = TranscriptRegion {
+                    view: app.region_view(),
+                }
+                .handle_up();
+                app.apply_region_intent(intent);
             }
         }
         MouseEventKind::ScrollUp => {
@@ -404,6 +473,77 @@ pub(crate) fn apply_selection_overlay(f: &mut Frame, app: &App) {
     }
 }
 
+impl App {
+    /// The pieces a selection leaf may read: the four selections, the last
+    /// published frame, the transcript's current top display row, and the
+    /// clipboard port. Handing a leaf this instead of the App is what keeps a
+    /// gesture from reaching domain state; the effects it asks for come back
+    /// as a RegionIntent. The top is the live offset, so a gesture that
+    /// scrolled first maps through the value it just moved.
+    pub(crate) fn region_view(&mut self) -> RegionView<'_> {
+        let scroll_top = self.active_scroll().top_offset();
+        RegionView {
+            selections: &mut self.ui.selection,
+            frame: &self.ui.frame,
+            scroll_top,
+            clipboard: self.ui.clipboard.as_ref(),
+        }
+    }
+
+    /// Perform what a gesture asked for. The leaf decided which row it acted
+    /// on from the published frame; this is where the domain state changes
+    /// and where a copy raises its notice.
+    pub(crate) fn apply_region_intent(&mut self, intent: RegionIntent) {
+        match intent {
+            RegionIntent::None => {}
+            RegionIntent::ToggleFold(ri) => {
+                self.toggle_fold_at_row(ri);
+                self.clear_transcript_click();
+            }
+            RegionIntent::ToggleSubagent(ri) => {
+                self.toggle_subagent_expand_at_row(ri);
+                self.clear_transcript_click();
+            }
+            // A row publishes a turn handle exactly when it offers a toggle,
+            // but the toggle can still decline (the block is not there any
+            // more). It then falls through to the collapse, which falls
+            // through to the release, the way one click always did.
+            RegionIntent::ToggleThinking(ri) => {
+                if self.toggle_thinking_expand_at_row(ri) {
+                    self.clear_transcript_click();
+                } else {
+                    self.apply_region_intent(RegionIntent::CollapseUnderAnchor);
+                }
+            }
+            RegionIntent::CollapseUnderAnchor => {
+                if self.collapse_expanded_under_anchor() {
+                    self.ui.selection.transcript.last_click = None;
+                } else {
+                    let intent = TranscriptRegion {
+                        view: self.region_view(),
+                    }
+                    .release();
+                    self.apply_region_intent(intent);
+                }
+            }
+            RegionIntent::ScrollUp => self.scroll_transcript_line_up(1),
+            RegionIntent::ScrollDown => self.scroll_transcript_line_down(1),
+            RegionIntent::Copied(text) => {
+                self.ui
+                    .notifications
+                    .add(copy_toast(&text, get_clipboard_path()));
+            }
+        }
+    }
+
+    /// A toggle consumed the click: it must not also read as a fresh click on
+    /// the next press.
+    fn clear_transcript_click(&mut self) {
+        self.ui.selection.transcript.last_click = None;
+        self.ui.selection.transcript.clear();
+    }
+}
+
 /// Dispatch a key to the right handler based on screen and overlays.
 pub(crate) fn handle_key(app: &mut App, k: KeyEvent) {
     if app.pending_trust().is_some() {
@@ -414,11 +554,11 @@ pub(crate) fn handle_key(app: &mut App, k: KeyEvent) {
     // otherwise no-op. It never quits -- the panic key is not an exit.
     if k.modifiers.contains(KeyModifiers::CONTROL) && k.code == KeyCode::Char('c') {
         if app.ui.selection.transcript.has_selection() {
-            let copied = TranscriptRegion { app: &mut *app }.copy_current();
-            if let Some(text) = copied {
-                let path = get_clipboard_path();
-                app.ui.notifications.add(copy_toast(&text, path));
+            let intent = TranscriptRegion {
+                view: app.region_view(),
             }
+            .copy_current();
+            app.apply_region_intent(intent);
             return;
         }
         if app.agent_busy() {

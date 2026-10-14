@@ -1,12 +1,13 @@
-//! Regression tests for drag-selection bugs: a completed drag must not feed
-//! the multi-click chain, edge auto-scroll during a drag must move one line
-//! (not a page), and the highlight plus copy must track content rows when
-//! the viewport shifts between mouse events (tail-follow append).
+//! Regression tests for drag selection: a completed drag must not feed the
+//! multi-click chain, edge auto-scroll during a drag must move one line (not
+//! a page), and the highlight plus copy must track content rows when the
+//! viewport shifts between mouse events (tail-follow append).
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::style::Color;
 use std::sync::{Arc, Mutex};
 
+use crate::app::handle_mouse;
 use crate::composition;
 use crate::selection::RecordingClipboard;
 use crate::state::Screen;
@@ -77,22 +78,22 @@ fn test_redrag_stays_char_mode() {
     let y = screen_y(&app, row_index(&app, "alpha"));
     let x0 = rect.x + 8;
     // First gesture: press, drag right, release. A real drag.
-    crate::app::handle_mouse(
+    handle_mouse(
         &mut app,
         mouse(MouseEventKind::Down(MouseButton::Left), x0, y),
     );
-    crate::app::handle_mouse(
+    handle_mouse(
         &mut app,
         mouse(MouseEventKind::Drag(MouseButton::Left), x0 + 4, y),
     );
-    crate::app::handle_mouse(
+    handle_mouse(
         &mut app,
         mouse(MouseEventKind::Up(MouseButton::Left), x0 + 4, y),
     );
     // Second gesture right away at the same cell (within the multi-click
     // window). It must be a fresh char-mode drag: no word/line span, anchor
     // exactly at the press column.
-    crate::app::handle_mouse(
+    handle_mouse(
         &mut app,
         mouse(MouseEventKind::Down(MouseButton::Left), x0, y),
     );
@@ -100,7 +101,7 @@ fn test_redrag_stays_char_mode() {
         app.ui.selection.transcript.span_origin.is_none(),
         "press after a completed drag must not escalate to word-select"
     );
-    crate::app::handle_mouse(
+    handle_mouse(
         &mut app,
         mouse(MouseEventKind::Drag(MouseButton::Left), x0 + 2, y),
     );
@@ -123,7 +124,7 @@ fn test_edge_drag_scrolls_line() {
     let _out = render_text(&app, 80, 24);
     assert_eq!(app.whole_scroll().top_offset(), 10);
     // Press mid-viewport, then drag onto the top edge row.
-    crate::app::handle_mouse(
+    handle_mouse(
         &mut app,
         mouse(
             MouseEventKind::Down(MouseButton::Left),
@@ -132,7 +133,7 @@ fn test_edge_drag_scrolls_line() {
         ),
     );
     assert_eq!(app.ui.selection.transcript.anchor.map(|(_, r)| r), Some(13));
-    crate::app::handle_mouse(
+    handle_mouse(
         &mut app,
         mouse(MouseEventKind::Drag(MouseButton::Left), rect.x + 2, rect.y),
     );
@@ -164,15 +165,15 @@ fn test_overlay_tracks_shifted_content() {
         y > rect.y && y < rect.y + rect.height.saturating_sub(1),
         "target row must be visible and off the scroll edges (y={y})"
     );
-    crate::app::handle_mouse(
+    handle_mouse(
         &mut app,
         mouse(MouseEventKind::Down(MouseButton::Left), rect.x, y),
     );
-    crate::app::handle_mouse(
+    handle_mouse(
         &mut app,
         mouse(MouseEventKind::Drag(MouseButton::Left), rect.x + 6, y),
     );
-    crate::app::handle_mouse(
+    handle_mouse(
         &mut app,
         mouse(MouseEventKind::Up(MouseButton::Left), rect.x + 6, y),
     );
@@ -209,15 +210,15 @@ fn test_copy_tracks_shifted_content() {
         y > rect.y && y < rect.y + rect.height.saturating_sub(1),
         "target row must be visible and off the scroll edges (y={y})"
     );
-    crate::app::handle_mouse(
+    handle_mouse(
         &mut app,
         mouse(MouseEventKind::Down(MouseButton::Left), rect.x, y),
     );
-    crate::app::handle_mouse(
+    handle_mouse(
         &mut app,
         mouse(MouseEventKind::Drag(MouseButton::Left), rect.x + 20, y),
     );
-    crate::app::handle_mouse(
+    handle_mouse(
         &mut app,
         mouse(MouseEventKind::Up(MouseButton::Left), rect.x + 20, y),
     );
@@ -242,10 +243,10 @@ fn test_copy_tracks_shifted_content() {
 
 /// Regression: clicking ONE ThoughtFor row must expand ONLY that one's
 /// reasoning, not every ThoughtFor in the transcript. The hint text says
-/// "ctrl+o to expand" but a click also toggles (both inputs expand/collapse);
-/// the bug was that one click expanded all of them. Set up two ThoughtFor
-/// rows with distinct reasoning, click the first, and assert only the
-/// first's reasoning key lands in the thinking set.
+/// "ctrl+o to expand" but a click also toggles (both inputs expand and
+/// collapse), so one click must not expand them all. Two ThoughtFor rows with
+/// distinct reasoning, click the first, and only its reasoning key may land
+/// in the thinking set.
 #[test]
 fn test_click_thoughtfor_expands_one() {
     use crate::records::TranscriptLine;
@@ -284,11 +285,11 @@ fn test_click_thoughtfor_expands_one() {
     let y = rect.y + ri as u16;
     let x = rect.x;
     // Click (Down + Up) the first ThoughtFor row.
-    crate::app::handle_mouse(
+    handle_mouse(
         &mut app,
         mouse(MouseEventKind::Down(MouseButton::Left), x, y),
     );
-    crate::app::handle_mouse(&mut app, mouse(MouseEventKind::Up(MouseButton::Left), x, y));
+    handle_mouse(&mut app, mouse(MouseEventKind::Up(MouseButton::Left), x, y));
     assert_eq!(
         app.ui.transcript_view.expanded.thinking.len(),
         1,
@@ -358,11 +359,11 @@ fn test_click_thoughtfor_none_reasoning() {
     drop(rows);
     let y = rect.y + ri as u16;
     let x = rect.x;
-    crate::app::handle_mouse(
+    handle_mouse(
         &mut app,
         mouse(MouseEventKind::Down(MouseButton::Left), x, y),
     );
-    crate::app::handle_mouse(&mut app, mouse(MouseEventKind::Up(MouseButton::Left), x, y));
+    handle_mouse(&mut app, mouse(MouseEventKind::Up(MouseButton::Left), x, y));
     assert!(
         app.ui
             .transcript_view
@@ -424,11 +425,11 @@ fn test_click_thought_no_duration() {
         .expect("the unmeasured summary row rendered with its hint");
     let x = rect.x;
     let y = rect.y + ri as u16;
-    crate::app::handle_mouse(
+    handle_mouse(
         &mut app,
         mouse(MouseEventKind::Down(MouseButton::Left), x, y),
     );
-    crate::app::handle_mouse(&mut app, mouse(MouseEventKind::Up(MouseButton::Left), x, y));
+    handle_mouse(&mut app, mouse(MouseEventKind::Up(MouseButton::Left), x, y));
     assert!(
         app.ui
             .transcript_view
@@ -452,11 +453,11 @@ fn test_click_thought_no_duration() {
         .position(|(_, t)| t.contains("Thought for 4s"))
         .expect("the second summary row rendered");
     let y = rect.y + ri as u16;
-    crate::app::handle_mouse(
+    handle_mouse(
         &mut app,
         mouse(MouseEventKind::Down(MouseButton::Left), x, y),
     );
-    crate::app::handle_mouse(&mut app, mouse(MouseEventKind::Up(MouseButton::Left), x, y));
+    handle_mouse(&mut app, mouse(MouseEventKind::Up(MouseButton::Left), x, y));
     assert!(
         !app.ui
             .transcript_view
@@ -522,11 +523,11 @@ fn test_click_thoughtfor_scrolled_off() {
     drop(rows);
     let y = rect.y + ri as u16;
     let x = rect.x;
-    crate::app::handle_mouse(
+    handle_mouse(
         &mut app,
         mouse(MouseEventKind::Down(MouseButton::Left), x, y),
     );
-    crate::app::handle_mouse(&mut app, mouse(MouseEventKind::Up(MouseButton::Left), x, y));
+    handle_mouse(&mut app, mouse(MouseEventKind::Up(MouseButton::Left), x, y));
     assert!(
         app.ui
             .transcript_view
@@ -547,11 +548,10 @@ fn test_click_thoughtfor_scrolled_off() {
     );
 }
 
-/// Regression: two ThoughtFor rows with the SAME reasoning text (two turns
-/// happened to produce identical reasoning) must still expand independently.
-/// The bug: the thinking set is keyed by reasoning text, so clicking one
-/// expanded BOTH (the shared key made both rows' render check true). Keying
-/// by reasoning text collides; each ThoughtFor needs its own identity.
+/// Two ThoughtFor rows with the same reasoning text (two turns happened to
+/// produce identical reasoning) must still expand independently. The thinking
+/// set is keyed by row identity rather than reasoning text: keying by the
+/// text collides, and one click would expand both rows.
 #[test]
 fn test_same_reason_thoughts_independent() {
     use crate::records::TranscriptLine;
@@ -587,11 +587,11 @@ fn test_same_reason_thoughts_independent() {
     drop(rows);
     let y = rect.y + ri as u16;
     let x = rect.x;
-    crate::app::handle_mouse(
+    handle_mouse(
         &mut app,
         mouse(MouseEventKind::Down(MouseButton::Left), x, y),
     );
-    crate::app::handle_mouse(&mut app, mouse(MouseEventKind::Up(MouseButton::Left), x, y));
+    handle_mouse(&mut app, mouse(MouseEventKind::Up(MouseButton::Left), x, y));
     // After clicking the FIRST ThoughtFor, only the first should show
     // expanded. Render + assert the second's hint still says "expand".
     let out = render_text(&app, 80, 24);
@@ -663,11 +663,11 @@ fn expand_first_group(app: &mut crate::state::App) -> String {
         .expect("a fold summary row exists");
     let rect = app.ui.frame.layout.transcript_rect.get();
     let y = screen_y(app, fold_ri_to_all_rows_index(app, fold_ri));
-    crate::app::handle_mouse(
+    handle_mouse(
         app,
         mouse(MouseEventKind::Down(MouseButton::Left), rect.x, y),
     );
-    crate::app::handle_mouse(app, mouse(MouseEventKind::Up(MouseButton::Left), rect.x, y));
+    handle_mouse(app, mouse(MouseEventKind::Up(MouseButton::Left), rect.x, y));
     let _out = render_text(app, 80, 24);
     "c1#0".to_string()
 }
@@ -697,11 +697,11 @@ fn test_click_body_collapses_group() {
     let rect = app.ui.frame.layout.transcript_rect.get();
     let y = screen_y(&app, body_ri);
     // Clean click: Down + Up at the same cell (no drag motion).
-    crate::app::handle_mouse(
+    handle_mouse(
         &mut app,
         mouse(MouseEventKind::Down(MouseButton::Left), rect.x, y),
     );
-    crate::app::handle_mouse(
+    handle_mouse(
         &mut app,
         mouse(MouseEventKind::Up(MouseButton::Left), rect.x, y),
     );
@@ -729,15 +729,15 @@ fn test_drag_expanded_block_copies() {
     let rect = app.ui.frame.layout.transcript_rect.get();
     let y = screen_y(&app, body_ri);
     // A real drag: press, move right, release at a different column.
-    crate::app::handle_mouse(
+    handle_mouse(
         &mut app,
         mouse(MouseEventKind::Down(MouseButton::Left), rect.x, y),
     );
-    crate::app::handle_mouse(
+    handle_mouse(
         &mut app,
         mouse(MouseEventKind::Drag(MouseButton::Left), rect.x + 6, y),
     );
-    crate::app::handle_mouse(
+    handle_mouse(
         &mut app,
         mouse(MouseEventKind::Up(MouseButton::Left), rect.x + 6, y),
     );
@@ -766,19 +766,19 @@ fn test_drag_return_keeps_group() {
     let y = screen_y(&app, body_ri);
     let x0 = rect.x + 2;
     // Press on the body row, drag right, drag back to the start cell, release.
-    crate::app::handle_mouse(
+    handle_mouse(
         &mut app,
         mouse(MouseEventKind::Down(MouseButton::Left), x0, y),
     );
-    crate::app::handle_mouse(
+    handle_mouse(
         &mut app,
         mouse(MouseEventKind::Drag(MouseButton::Left), x0 + 4, y),
     );
-    crate::app::handle_mouse(
+    handle_mouse(
         &mut app,
         mouse(MouseEventKind::Drag(MouseButton::Left), x0, y),
     );
-    crate::app::handle_mouse(
+    handle_mouse(
         &mut app,
         mouse(MouseEventKind::Up(MouseButton::Left), x0, y),
     );
@@ -812,15 +812,15 @@ fn test_drag_fold_summary_copies() {
     let y = screen_y(&app, fold_ri_to_all_rows_index(&app, fold_ri));
     let x0 = rect.x;
     // A real drag: press on the summary, move right, release.
-    crate::app::handle_mouse(
+    handle_mouse(
         &mut app,
         mouse(MouseEventKind::Down(MouseButton::Left), x0, y),
     );
-    crate::app::handle_mouse(
+    handle_mouse(
         &mut app,
         mouse(MouseEventKind::Drag(MouseButton::Left), x0 + 6, y),
     );
-    crate::app::handle_mouse(
+    handle_mouse(
         &mut app,
         mouse(MouseEventKind::Up(MouseButton::Left), x0 + 6, y),
     );
@@ -913,7 +913,7 @@ fn test_approval_drag_resets() {
     );
 
     // Drag in the card starts an approval selection.
-    crate::app::handle_mouse(
+    handle_mouse(
         &mut app,
         mouse(MouseEventKind::Down(MouseButton::Left), arect.x, arect.y),
     );
@@ -921,7 +921,7 @@ fn test_approval_drag_resets() {
         app.ui.selection.approval.is_dragging,
         "down in card starts approval drag"
     );
-    crate::app::handle_mouse(
+    handle_mouse(
         &mut app,
         mouse(
             MouseEventKind::Drag(MouseButton::Left),
@@ -929,7 +929,7 @@ fn test_approval_drag_resets() {
             arect.y,
         ),
     );
-    crate::app::handle_mouse(
+    handle_mouse(
         &mut app,
         mouse(MouseEventKind::Up(MouseButton::Left), arect.x + 5, arect.y),
     );
@@ -947,5 +947,36 @@ fn test_approval_drag_resets() {
         (stale.width, stale.height),
         (0, 0),
         "approval rect zeroed after dismissal: {stale:?}"
+    );
+}
+
+/// A motion event with no button closes a drag whose release was lost, and the
+/// transcript's stale clean click goes with it. The old code ran the release
+/// from inside the leaf; the intent model means the router must apply what the
+/// leaf returns, so this drives the real mouse path.
+#[test]
+fn test_moved_closes_stale_click() {
+    let (mut app, _captured) = app_with_lines(40);
+    let rect = app.ui.frame.layout.transcript_rect.get();
+    handle_mouse(
+        &mut app,
+        mouse(MouseEventKind::Down(MouseButton::Left), rect.x + 2, rect.y),
+    );
+    assert!(
+        app.ui.selection.transcript.is_dragging,
+        "the press started a drag"
+    );
+
+    handle_mouse(&mut app, mouse(MouseEventKind::Moved, rect.x + 2, rect.y));
+
+    // A press alone leaves focus unset, so has_selection is already false; the
+    // anchor and the drag flag are what the lost-release recovery clears.
+    assert!(
+        app.ui.selection.transcript.anchor.is_none(),
+        "a lost release clears the click-only drag"
+    );
+    assert!(
+        !app.ui.selection.transcript.is_dragging,
+        "and ends the drag"
     );
 }
