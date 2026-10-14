@@ -1,14 +1,15 @@
 //! Tests for this module.
 
 use super::*;
+use houyicoder_context::{NameSource, SessionProvenance as ContextProvenance};
 
 fn descriptor(
     name: Option<&str>,
-    provenance: houyicoder_context::SessionProvenance,
+    provenance: ContextProvenance,
 ) -> houyicoder_context::SessionDescriptor {
     houyicoder_context::SessionDescriptor {
         name: name.map(str::to_string),
-        name_source: houyicoder_context::NameSource::User,
+        name_source: NameSource::User,
         cwd: "/work/app".to_string(),
         model: "glm-5".to_string(),
         provenance,
@@ -20,7 +21,7 @@ fn descriptor(
 
 #[test]
 fn test_spawned_by_carries_parent() {
-    let p = houyicoder_context::SessionProvenance::SpawnedBy {
+    let p = ContextProvenance::SpawnedBy {
         parent_session_id: "parent-1".into(),
         subagent_type: "explore".into(),
         task_id: "task-7".into(),
@@ -42,10 +43,7 @@ fn test_spawned_by_carries_parent() {
 
 #[test]
 fn test_fresh_provenance_carries_name() {
-    let source = descriptor(
-        Some("fix bug"),
-        houyicoder_context::SessionProvenance::Fresh,
-    );
+    let source = descriptor(Some("fix bug"), ContextProvenance::Fresh);
     let w = map_session_descriptor(&source);
     assert_eq!(w.name.as_deref(), Some("fix bug"));
     assert_eq!(w.cwd, "/work/app");
@@ -55,7 +53,7 @@ fn test_fresh_provenance_carries_name() {
 
 #[test]
 fn test_forked_provenance_carries_origin() {
-    let p = houyicoder_context::SessionProvenance::ForkedFrom {
+    let p = ContextProvenance::ForkedFrom {
         from_sid: "sess-aaa".into(),
         from_seq: Some(7),
     };
@@ -71,7 +69,7 @@ fn test_forked_provenance_carries_origin() {
 
 #[test]
 fn test_resumed_provenance_carries_source() {
-    let p = houyicoder_context::SessionProvenance::ResumedFromExport {
+    let p = ContextProvenance::ResumedFromExport {
         source_session_id: "sess-orig".into(),
     };
     let w = map_session_descriptor(&descriptor(None, p));

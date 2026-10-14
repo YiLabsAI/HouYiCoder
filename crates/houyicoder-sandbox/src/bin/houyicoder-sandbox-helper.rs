@@ -6,6 +6,16 @@
 //! its descendants, the daemon is never restricted, and exec preserves the
 //! process group so the parent's group-kill semantics pass through.
 
+#[cfg(target_os = "linux")]
+use std::env::args;
+#[cfg(all(target_os = "linux", debug_assertions))]
+use std::env::var;
+#[cfg(target_os = "linux")]
+use std::os::unix::process::CommandExt;
+#[cfg(target_os = "linux")]
+use std::process::Command;
+use std::process::exit;
+
 /// The parsed command line.
 #[cfg(target_os = "linux")]
 struct ParsedArgs {
@@ -20,7 +30,7 @@ fn main() {
     match parse_args() {
         Err(message) => {
             eprintln!("sandbox-helper: {message}");
-            std::process::exit(2);
+            exit(2);
         }
         Ok(parsed) => run(parsed),
     }
@@ -40,7 +50,7 @@ fn parse_args() -> Result<ParsedArgs, String> {
         writes: Vec::new(),
         command: None,
     };
-    let mut argv = std::env::args().skip(1);
+    let mut argv = args().skip(1);
     while let Some(arg) = argv.next() {
         match arg.as_str() {
             "--probe" => parsed.probe = true,
@@ -78,7 +88,7 @@ fn run(parsed: ParsedArgs) {
     // never be unfenced through the environment. Audit lines go to stderr,
     // which the daemon captures into the command's stderr: never silent.
     #[cfg(debug_assertions)]
-    let skipped = std::env::var("HOUYICODER_SANDBOX_NO_ENFORCE").is_ok_and(|v| v == "1");
+    let skipped = var("HOUYICODER_SANDBOX_NO_ENFORCE").is_ok_and(|v| v == "1");
     #[cfg(not(debug_assertions))]
     let skipped = false;
     let outcome = if skipped {
@@ -118,7 +128,7 @@ fn run(parsed: ParsedArgs) {
             eprintln!(
                 "sandbox-helper audit: landlock apply failed: {reason}; refusing to run unfenced"
             );
-            std::process::exit(1);
+            exit(1);
         }
     }
     let command = parsed.command.expect("command checked in parse_args");
@@ -127,23 +137,24 @@ fn run(parsed: ParsedArgs) {
 
 #[cfg(target_os = "linux")]
 fn exec_shell(command: &str) -> ! {
-    use std::os::unix::process::CommandExt;
     // exec replaces this process image: nothing is spawned, so the process
     // spawn chokepoint does not apply — there is no child to fence or audit.
     #[expect(
         clippy::disallowed_methods,
         reason = "exec replaces this image; no child is spawned"
     )]
-    let error = std::process::Command::new("/bin/sh")
-        .arg("-c")
-        .arg(command)
-        .exec();
+    let error = Command::new("/bin/sh").arg("-c").arg(command).exec();
     eprintln!("sandbox-helper: exec failed: {error}");
-    std::process::exit(127);
+    exit(127);
 }
 
 #[cfg(all(target_os = "linux", feature = "enforce"))]
 mod fence {
+    use landlock::{
+        ABI, Access, AccessFs, Ruleset, RulesetAttr, RulesetCreatedAttr, RulesetStatus,
+        path_beneath_rules,
+    };
+
     /// What the ruleset application reported back.
     pub enum Outcome {
         Enforced,
@@ -160,11 +171,6 @@ mod fence {
     /// reports NotEnforced and a refused ruleset reports Failed; neither
     /// aborts the command, and the caller's audit line keeps the gap visible.
     pub fn apply(reads: &[String], writes: &[String]) -> Outcome {
-        use landlock::{
-            ABI, Access, AccessFs, Ruleset, RulesetAttr, RulesetCreatedAttr, RulesetStatus,
-            path_beneath_rules,
-        };
-
         // System read-only tree: the shell, the dynamic linker, shared libs,
         // config, process and sysfs views. from_read includes Execute so
         // binaries under these trees can run; the device files the runtime
@@ -234,5 +240,5 @@ mod fence {
 #[cfg(not(target_os = "linux"))]
 fn main() {
     eprintln!("sandbox-helper: the landlock fence helper is linux-only");
-    std::process::exit(2);
+    exit(2);
 }

@@ -22,8 +22,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from rules.imports import inline_use_violations, repeated_deep_paths  # noqa: E402
 
 # Both counted over crates/*/src. Lower each in the commit that cleans files.
-_INLINE_USE_BASELINE = 22
-_REPEATED_PATH_BASELINE = 54
+_INLINE_USE_BASELINE = 0
+_REPEATED_PATH_BASELINE = 0
 _INLINE_USE_RULE = (
     "a use statement inside a function body; move it to the module's import block"
 )

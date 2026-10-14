@@ -6,6 +6,12 @@
 //! parent tests module.
 
 use super::*;
+use futures::stream::pending;
+use houyicoder_permission::ModeGate;
+use houyicoder_protocol::acp_wire::AcpNotification;
+use houyicoder_protocol::frontend::{FrontendEvent, SessionId as WireSessionId};
+use houyicoder_protocol::llm::LlmEvent;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::Notify;
 
 /// A provider whose first stream is pending (the run hangs mid-stream so a
@@ -15,14 +21,14 @@ use tokio::sync::Notify;
 /// interrupt did not clear the server queue.
 struct HangFirstThenScript {
     responses: Mutex<VecDeque<CompletionResponse>>,
-    hung: std::sync::atomic::AtomicBool,
+    hung: AtomicBool,
     entered: Arc<Notify>,
 }
 impl HangFirstThenScript {
     fn new(responses: Vec<CompletionResponse>, entered: Arc<Notify>) -> Self {
         Self {
             responses: Mutex::new(responses.into_iter().collect()),
-            hung: std::sync::atomic::AtomicBool::new(false),
+            hung: AtomicBool::new(false),
             entered,
         }
     }
@@ -37,16 +43,13 @@ impl ModelProvider for HangFirstThenScript {
     fn capabilities(&self) -> ModelCapabilities {
         ModelCapabilities::default()
     }
-    fn stream(
-        &self,
-        _req: CompletionRequest,
-    ) -> PStream<'_, Result<houyicoder_protocol::llm::LlmEvent, ProviderError>> {
-        let first = !self.hung.swap(true, std::sync::atomic::Ordering::SeqCst);
+    fn stream(&self, _req: CompletionRequest) -> PStream<'_, Result<LlmEvent, ProviderError>> {
+        let first = !self.hung.swap(true, Ordering::SeqCst);
         if first {
             self.entered.notify_one();
             // Pure pending: the run stays mid-stream until the cancel fires
             // the run token, which makes model_call_stream return None.
-            return Box::pin(futures::stream::pending());
+            return Box::pin(pending());
         }
         let r = self
             .responses
@@ -106,7 +109,7 @@ async fn test_inject_cancel_run_clear() {
             ..RunnerConfig::default()
         },
     ));
-    let gate: Arc<dyn houyicoder_permission::ModeGate> = Arc::new(DefaultModeGate::new());
+    let gate: Arc<dyn ModeGate> = Arc::new(DefaultModeGate::new());
     let event_sequencer = EventSequencer::new();
     let host = Arc::new(SessionHost::new(SessionLeaseStore::new()));
     host.insert(
@@ -114,7 +117,7 @@ async fn test_inject_cancel_run_clear() {
         runner.clone(),
         event_sequencer,
         gate,
-        std::sync::Arc::new(tokio::sync::Notify::new()),
+        Arc::new(Notify::new()),
     );
 
     let (client_tx, server_rx) = mpsc::channel::<String>(8);
@@ -136,7 +139,7 @@ async fn test_inject_cancel_run_clear() {
         .send_request(
             run1_id,
             FrontendRequest::MessageSend {
-                session_id: houyicoder_protocol::frontend::SessionId::new(session.to_string()),
+                session_id: WireSessionId::new(session.to_string()),
                 content: vec![ContentBlock::Text {
                     text: "go".to_string(),
                 }],
@@ -149,7 +152,7 @@ async fn test_inject_cancel_run_clear() {
     // Inject mid-run: the mid-run select enqueues the text for the next turn
     // boundary (which the abort never reaches).
     client
-        .send_notification(houyicoder_protocol::acp_wire::AcpNotification::new(
+        .send_notification(AcpNotification::new(
             "session/inject",
             serde_json::json!({ "sessionId": session.to_string(), "text": "orphan note" }),
         ))
@@ -158,7 +161,7 @@ async fn test_inject_cancel_run_clear() {
     // Cancel: abort the run. The drive loop's model_call_stream returns None
     // -> Interrupted, without reaching the turn-2 drain.
     client
-        .send_notification(houyicoder_protocol::acp_wire::AcpNotification::new(
+        .send_notification(AcpNotification::new(
             "session/cancel",
             serde_json::json!({ "sessionId": session.to_string() }),
         ))
@@ -185,7 +188,7 @@ async fn test_inject_cancel_run_clear() {
         .send_request(
             run2_id,
             FrontendRequest::MessageSend {
-                session_id: houyicoder_protocol::frontend::SessionId::new(session.to_string()),
+                session_id: WireSessionId::new(session.to_string()),
                 content: vec![ContentBlock::Text {
                     text: "again".to_string(),
                 }],
@@ -201,7 +204,7 @@ async fn test_inject_cancel_run_clear() {
             ServerFrame::Event(ev) => {
                 if matches!(
                     ev.payload,
-                    houyicoder_protocol::frontend::FrontendEvent::QueuedInputCommitted {
+                    FrontendEvent::QueuedInputCommitted {
                         ref inputs
                     } if inputs.iter().any(|input| input.text == "orphan note")
                 ) {
@@ -249,7 +252,7 @@ async fn test_inject_reset_run_clear() {
     // Inject while no run is active: the between-runs loop enqueues it for
     // the next run.
     client
-        .send_notification(houyicoder_protocol::acp_wire::AcpNotification::new(
+        .send_notification(AcpNotification::new(
             "session/inject",
             serde_json::json!({ "sessionId": session.to_string(), "text": "pre-clear note" }),
         ))
@@ -263,7 +266,7 @@ async fn test_inject_reset_run_clear() {
         .send_request(
             reset_id,
             FrontendRequest::SessionReset {
-                session_id: houyicoder_protocol::frontend::SessionId::new(session.to_string()),
+                session_id: WireSessionId::new(session.to_string()),
             },
         )
         .await
@@ -283,7 +286,7 @@ async fn test_inject_reset_run_clear() {
         .send_request(
             req_id,
             FrontendRequest::MessageSend {
-                session_id: houyicoder_protocol::frontend::SessionId::new(session.to_string()),
+                session_id: WireSessionId::new(session.to_string()),
                 content: vec![ContentBlock::Text {
                     text: "go".to_string(),
                 }],
@@ -299,7 +302,7 @@ async fn test_inject_reset_run_clear() {
             ServerFrame::Event(ev) => {
                 if matches!(
                     ev.payload,
-                    houyicoder_protocol::frontend::FrontendEvent::QueuedInputCommitted {
+                    FrontendEvent::QueuedInputCommitted {
                         ref inputs
                     } if inputs.iter().any(|input| input.text == "pre-clear note")
                 ) {

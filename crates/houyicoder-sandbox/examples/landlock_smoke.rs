@@ -7,25 +7,34 @@
 //! when the kernel reports no enforcement, and exits non-zero on failure.
 
 #[cfg(target_os = "linux")]
+use houyicoder_api::sandbox::{FenceStatus, SandboxSession};
+#[cfg(target_os = "linux")]
+use houyicoder_sandbox::LinuxLandlockSession;
+#[cfg(target_os = "linux")]
+use std::env::var;
+#[cfg(target_os = "linux")]
+use std::fs;
+#[cfg(target_os = "linux")]
+use std::path::PathBuf;
+#[cfg(target_os = "linux")]
+use std::process::{self, exit, id};
+#[cfg(target_os = "linux")]
+use std::time::{SystemTime, UNIX_EPOCH};
+
+#[cfg(target_os = "linux")]
 fn fail(message: &str) -> ! {
     eprintln!("FAIL: {message}");
-    std::process::exit(1);
+    exit(1);
 }
 
 #[cfg(target_os = "linux")]
 #[tokio::main]
 async fn main() {
-    use houyicoder_api::sandbox::{FenceStatus, SandboxSession};
-    use std::fs;
-    use std::path::PathBuf;
-    use std::process;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
     // With the hatch set the helper never fences, so every probe below would
     // look unfenced and the smoke would report SKIP -- indistinguishable from
     // a kernel with no Landlock. This binary is the only check of the real
     // fence, so refuse.
-    if std::env::var("HOUYICODER_SANDBOX_NO_ENFORCE").is_ok_and(|v| v == "1") {
+    if var("HOUYICODER_SANDBOX_NO_ENFORCE").is_ok_and(|v| v == "1") {
         eprintln!(
             "FAIL: HOUYICODER_SANDBOX_NO_ENFORCE=1 disables the fence this binary verifies; unset it and re-run"
         );
@@ -36,7 +45,7 @@ async fn main() {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    let pid = std::process::id();
+    let pid = id();
 
     // Probes outside the future workspace, created before any fence exists.
     // They are siblings of the workspace under /tmp, which the ruleset never
@@ -53,8 +62,7 @@ async fn main() {
         let _result = fs::remove_dir_all(&granted);
     };
 
-    let session =
-        houyicoder_sandbox::LinuxLandlockSession::new().expect("construct landlock session");
+    let session = LinuxLandlockSession::new().expect("construct landlock session");
     let status = session.fence_status();
     if !matches!(status, FenceStatus::Enforced) {
         eprintln!(

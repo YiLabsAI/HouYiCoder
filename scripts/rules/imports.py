@@ -289,9 +289,19 @@ def repeated_deep_paths(text):
             defined.add(m.group(1))
     # A local binding or parameter of the same name shadows the free function
     # the chain names, so importing it would change what the call resolves to.
-    for m in re.finditer(r"\b(?:let\s+(?:mut\s+)?|fn\s+\w+\([^)]*\b)([a-z_][a-z0-9_]*)\b", text):
+    for m in re.finditer(
+        r"\b(?:let\s+(?:mut\s+)?|Some\(|Ok\(|Err\(|fn\s+\w+\([^)]*\b)([a-z_][a-z0-9_]*)\b",
+        text,
+    ):
         defined.add(m.group(1))
     globs = {v for k, vs in by_name.items() if k.startswith("<glob ") for v in vs}
+    # A glob covers the parent module of the chain it names, and a bare
+    # `use super::*;` covers every name the parent module re-exports: a chain
+    # whose bare name that glob may already provide stays qualified, because
+    # importing it would shadow whatever the glob brought in.
+    parent_glob = bool(
+        re.search(r"(?m)^\s*(?:pub(?:\([^)]*\))?\s+)?use\s+super::\*;", text)
+    )
     return {
         chain: n
         for chain, n in counts.items()
@@ -300,4 +310,5 @@ def repeated_deep_paths(text):
         and not any(
             chain.rsplit("::", 1)[0].endswith(g.rsplit("::", 1)[-1]) for g in globs
         )
+        and not (parent_glob and chain.rsplit("::", 1)[-1][:1].isupper())
     }

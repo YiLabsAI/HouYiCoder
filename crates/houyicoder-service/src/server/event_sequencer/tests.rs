@@ -1,7 +1,13 @@
 //! Tests for this module.
 
 use super::*;
-use houyicoder_context as context;
+use agent_event::{
+    MemoryChangeCausality as AgentCausality, MemoryChangeOrigin as AgentOrigin,
+    MemoryOperation as AgentOperation,
+};
+use houyicoder_context::MemoryChangeId;
+use std::sync::mpsc::channel;
+use std::thread::spawn;
 
 fn line(text: &str) -> FrontendEvent {
     FrontendEvent::SystemLine {
@@ -92,27 +98,27 @@ fn test_replay_resumes_after_seq() {
 #[test]
 fn test_memory_event_carries_fields() {
     let sequencer = EventSequencer::new();
-    let id = context::MemoryChangeId::new();
+    let id = MemoryChangeId::new();
     EventHandler::<MemoryChangedEvent>::handle(
         &sequencer,
         MemoryChangedEvent {
             id,
-            origin: agent_event::MemoryChangeOrigin::AutoDream,
-            causality: agent_event::MemoryChangeCausality::PreviousTurn,
+            origin: AgentOrigin::AutoDream,
+            causality: AgentCausality::PreviousTurn,
             changes: vec![
                 agent_event::MemoryChange {
                     key: "build-gate".into(),
-                    operation: agent_event::MemoryOperation::Promoted,
+                    operation: AgentOperation::Promoted,
                     scope: MemoryScope::Project,
                 },
                 agent_event::MemoryChange {
                     key: "tone".into(),
-                    operation: agent_event::MemoryOperation::Updated,
+                    operation: AgentOperation::Updated,
                     scope: MemoryScope::User,
                 },
                 agent_event::MemoryChange {
                     key: "ledger".into(),
-                    operation: agent_event::MemoryOperation::Created,
+                    operation: AgentOperation::Created,
                     scope: MemoryScope::Auto,
                 },
             ],
@@ -230,9 +236,9 @@ fn test_status_coalescing_preserves_order() {
 fn test_snapshot_blocks_causal_delta() {
     let sequencer = EventSequencer::new();
     let sequencer_for_load = sequencer.clone();
-    let (snapshot_tx, snapshot_rx) = std::sync::mpsc::channel();
-    let (release_tx, release_rx) = std::sync::mpsc::channel();
-    let sequencing = std::thread::spawn(move || {
+    let (snapshot_tx, snapshot_rx) = channel();
+    let (release_tx, release_rx) = channel();
+    let sequencing = spawn(move || {
         sequencer_for_load.sequence_available(|_| {
             snapshot_tx.send(()).expect("snapshot entered");
             release_rx.recv().expect("snapshot released");
@@ -242,8 +248,8 @@ fn test_snapshot_blocks_causal_delta() {
     snapshot_rx.recv().expect("snapshot started");
 
     let producer = sequencer.clone();
-    let (attempt_tx, attempt_rx) = std::sync::mpsc::channel();
-    let enqueue = std::thread::spawn(move || {
+    let (attempt_tx, attempt_rx) = channel();
+    let enqueue = spawn(move || {
         attempt_tx.send(()).expect("enqueue attempted");
         producer.enqueue_ephemeral(line("delta"));
     });

@@ -115,6 +115,11 @@ def test_a_name_already_imported_from_another_chain_is_left_qualified():
     assert repeated_deep_paths(imported_and_other) == {}
 
 
+def test_a_chain_a_super_glob_already_covers_is_left_qualified():
+    supers = "use super::*;\nfn a() { let _ = crate::other::Widget::new(); }\n"
+    assert repeated_deep_paths(supers) == {}
+
+
 def test_a_chain_a_glob_already_covers_is_left_qualified():
     globbed = "pub use run::*;\nfn a() { let _ = crate::frontend::run::Widget::new(); }\n"
     assert repeated_deep_paths(globbed) == {}

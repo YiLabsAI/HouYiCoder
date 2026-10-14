@@ -34,8 +34,29 @@ use houyicoder_api::sandbox::{
 use houyicoder_async::PFut;
 use houyicoder_context::{ExecConfig, ExecResult, SandboxError};
 use houyicoder_resilience::resource_breaker::ResourceBreaker;
+use std::env::temp_dir;
+#[cfg(all(target_os = "windows", feature = "enforce", debug_assertions))]
+use std::env::var;
+#[cfg(all(target_os = "windows", feature = "enforce"))]
+use std::ffi::c_void;
+use std::fs::{create_dir_all, remove_dir_all};
 use std::path::{Path, PathBuf};
+use std::process::{Stdio, id};
 use std::sync::Arc;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tokio::process::Child;
+use tokio::process::Command;
+use tokio::time::timeout;
+#[cfg(all(target_os = "windows", feature = "enforce"))]
+use windows::Win32::Foundation::HANDLE;
+#[cfg(all(target_os = "windows", feature = "enforce"))]
+use windows::Win32::System::JobObjects::{
+    JOB_OBJECT_LIMIT_JOB_MEMORY, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    JOB_OBJECT_LIMIT_PROCESS_MEMORY, JOB_OBJECT_LIMIT_PROCESS_TIME,
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+};
+#[cfg(all(target_os = "windows", feature = "enforce"))]
+use windows::Win32::System::Threading::{PROCESS_SET_QUOTA, PROCESS_TERMINATE};
 
 /// A Windows sandbox session. The workspace is the user's project dir (Guarded
 /// mode) or a temp dir. Drop leaves the workspace untouched when not owned.
@@ -79,16 +100,16 @@ impl WindowsJobSession {
     /// Create a session rooted at a fresh temp dir this session owns. Drop
     /// removes it. Used by tests and as a fallback when no cwd is available.
     pub fn new() -> Result<Self, SandboxError> {
-        let mut workspace = std::env::temp_dir();
+        let mut workspace = temp_dir();
         workspace.push(format!(
             "houyicoder-sandbox-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
+            id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
                 .map(|d| d.as_nanos())
                 .unwrap_or(0)
         ));
-        std::fs::create_dir_all(&workspace)?;
+        create_dir_all(&workspace)?;
         let (job_handle, fence) = apply_fence();
         Ok(Self {
             workspace,
@@ -151,7 +172,7 @@ impl Drop for WindowsJobSession {
             close_job_handle(raw);
         }
         if self.owned {
-            let _result = std::fs::remove_dir_all(&self.workspace);
+            let _result = remove_dir_all(&self.workspace);
         }
     }
 }
@@ -164,18 +185,12 @@ impl Drop for WindowsJobSession {
 
 #[cfg(all(target_os = "windows", feature = "enforce"))]
 fn apply_fence() -> (Option<usize>, FenceStatus) {
-    use windows::Win32::System::JobObjects::{
-        JOB_OBJECT_LIMIT_JOB_MEMORY, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-        JOB_OBJECT_LIMIT_PROCESS_MEMORY, JOB_OBJECT_LIMIT_PROCESS_TIME,
-        JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-    };
-
     // Test-suite escape hatch, debug builds only (see the linux backend). The
     // job caps CPU and memory for assigned children and reaps the tree on handle
     // close, so a test spawning helpers can be killed by a fence it never asked
     // for. One env var covers every platform fence.
     #[cfg(debug_assertions)]
-    if std::env::var("HOUYICODER_SANDBOX_NO_ENFORCE").is_ok_and(|v| v == "1") {
+    if var("HOUYICODER_SANDBOX_NO_ENFORCE").is_ok_and(|v| v == "1") {
         tracing::warn!(
             "sandbox audit: job object enforcement skipped via HOUYICODER_SANDBOX_NO_ENFORCE (test builds only); running unfenced"
         );
@@ -225,8 +240,7 @@ fn apply_fence() -> (Option<usize>, FenceStatus) {
 
 #[cfg(all(target_os = "windows", feature = "enforce"))]
 fn close_job_handle(raw: usize) {
-    use windows::Win32::Foundation::HANDLE;
-    let handle = HANDLE(raw as *mut std::ffi::c_void);
+    let handle = HANDLE(raw as *mut c_void);
     // Best-effort; never propagate a kernel close failure into Drop panic.
     drop(ffi::close_handle(handle));
 }
@@ -254,10 +268,13 @@ fn close_job_handle(_raw: usize) {}
     reason = "Windows FFI: Job Object kernel handle + raw pointer calls"
 )]
 mod ffi {
-    use windows::Win32::Foundation::HANDLE;
+    use std::ffi::c_void;
+    use std::mem::{size_of, zeroed};
+    use windows::Win32::Foundation::{CloseHandle, HANDLE};
     use windows::Win32::System::JobObjects::{
         AssignProcessToJobObject, CreateJobObjectW, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-        JOBOBJECTINFOCLASS, SetInformationJobObject,
+        JOBOBJECTINFOCLASS, JobObjectExtendedLimitInformation, QueryInformationJobObject,
+        SetInformationJobObject,
     };
     use windows::Win32::System::Threading::{OpenProcess, PROCESS_ACCESS_RIGHTS};
     use windows::core::PCWSTR;
@@ -273,17 +290,9 @@ mod ffi {
         job: HANDLE,
         info: &JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
     ) -> windows::core::Result<()> {
-        let info_class: JOBOBJECTINFOCLASS =
-            windows::Win32::System::JobObjects::JobObjectExtendedLimitInformation;
-        let len = std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32;
-        unsafe {
-            SetInformationJobObject(
-                job,
-                info_class,
-                info as *const _ as *const std::ffi::c_void,
-                len,
-            )
-        }
+        let info_class: JOBOBJECTINFOCLASS = JobObjectExtendedLimitInformation;
+        let len = size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32;
+        unsafe { SetInformationJobObject(job, info_class, info as *const _ as *const c_void, len) }
     }
 
     pub fn assign_process(job: HANDLE, child: HANDLE) -> windows::core::Result<()> {
@@ -299,25 +308,22 @@ mod ffi {
     }
 
     pub fn close_handle(handle: HANDLE) -> windows::core::Result<()> {
-        unsafe { windows::Win32::Foundation::CloseHandle(handle) }
+        unsafe { CloseHandle(handle) }
     }
 
     pub fn query_extended_limits(
         job: HANDLE,
     ) -> windows::core::Result<JOBOBJECT_EXTENDED_LIMIT_INFORMATION> {
-        use windows::Win32::System::JobObjects::{
-            JobObjectExtendedLimitInformation, QueryInformationJobObject,
-        };
         let info_class: JOBOBJECTINFOCLASS = JobObjectExtendedLimitInformation;
         // zeroed is safe here: the struct is plain old data and the kernel
         // overwrites every field on a successful query.
-        let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
-        let len = std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32;
+        let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { zeroed() };
+        let len = size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32;
         unsafe {
             QueryInformationJobObject(
                 Some(job),
                 info_class,
-                &mut info as *mut _ as *mut std::ffi::c_void,
+                &mut info as *mut _ as *mut c_void,
                 len,
                 None,
             )
@@ -349,10 +355,8 @@ impl WindowsJobSession {
     /// when construction degraded to a no-op fence (no job handle). Used by
     /// the smoke binary to assert the fence landed on the kernel object.
     pub fn job_limits(&self) -> Option<Result<JobLimits, String>> {
-        use windows::Win32::Foundation::HANDLE;
-        use windows::Win32::System::JobObjects::JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
         let raw = self.job_handle?;
-        let job = HANDLE(raw as *mut std::ffi::c_void);
+        let job = HANDLE(raw as *mut c_void);
         Some(
             ffi::query_extended_limits(job)
                 .map(|info| JobLimits {
@@ -388,7 +392,7 @@ impl SandboxSession for WindowsJobSession {
     ) -> PFut<'_, Result<ExecResult, SandboxError>> {
         let cwd = self.workspace.clone();
         let command = command.to_string();
-        let wall = std::time::Duration::from_millis(config.wall_timeout_ms);
+        let wall = Duration::from_millis(config.wall_timeout_ms);
         let job_raw = self.job_handle;
         Box::pin(async move {
             let _ = (config.cpu_secs, config.as_bytes, config.nproc);
@@ -398,18 +402,18 @@ impl SandboxSession for WindowsJobSession {
                     config.wall_timeout_ms
                 );
             }
-            let mut cmd = tokio::process::Command::new("cmd");
+            let mut cmd = Command::new("cmd");
             cmd.arg("/C")
                 .arg(&command)
                 .current_dir(&cwd)
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
                 .kill_on_drop(true);
             let child = cmd
                 .spawn()
                 .map_err(|e| SandboxError::SandboxUnavailable(format!("spawn: {e}")))?;
             assign_if_fenced(job_raw, &child);
-            let outcome = tokio::time::timeout(wall, child.wait_with_output()).await;
+            let outcome = timeout(wall, child.wait_with_output()).await;
             match outcome {
                 Ok(Ok(output)) => Ok(ExecResult {
                     stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
@@ -425,8 +429,8 @@ impl SandboxSession for WindowsJobSession {
         })
     }
 
-    fn workspace_root(&self) -> std::sync::Arc<std::path::Path> {
-        std::sync::Arc::from(self.workspace.clone())
+    fn workspace_root(&self) -> Arc<Path> {
+        Arc::from(self.workspace.clone())
     }
 
     fn resolve(&self, path: &str) -> Result<PathBuf, SandboxError> {
@@ -476,7 +480,7 @@ impl SandboxSession for WindowsJobSession {
 /// under the wall-timeout plus kill_on_drop only, with an audit line so the
 /// gap is visible.
 #[cfg(all(target_os = "windows", feature = "enforce"))]
-fn assign_if_fenced(job_raw: Option<usize>, child: &tokio::process::Child) {
+fn assign_if_fenced(job_raw: Option<usize>, child: &Child) {
     let Some(raw) = job_raw else { return };
     let Some(pid) = child.id() else { return };
     if let Err(e) = assign_child_to_job(raw, pid) {
@@ -485,13 +489,10 @@ fn assign_if_fenced(job_raw: Option<usize>, child: &tokio::process::Child) {
 }
 
 #[cfg(not(all(target_os = "windows", feature = "enforce")))]
-fn assign_if_fenced(_job_raw: Option<usize>, _child: &tokio::process::Child) {}
+fn assign_if_fenced(_job_raw: Option<usize>, _child: &Child) {}
 
 #[cfg(all(target_os = "windows", feature = "enforce"))]
 fn assign_child_to_job(job_raw: usize, pid: u32) -> Result<(), String> {
-    use windows::Win32::Foundation::HANDLE;
-    use windows::Win32::System::Threading::{PROCESS_SET_QUOTA, PROCESS_TERMINATE};
-
     // Open the child by pid with the access rights AssignProcessToJobObject
     // needs (PROCESS_SET_QUOTA) plus PROCESS_TERMINATE so a future
     // TerminateJobObject path can kill the child through the job. The handle
@@ -499,7 +500,7 @@ fn assign_child_to_job(job_raw: usize, pid: u32) -> Result<(), String> {
     let access = PROCESS_SET_QUOTA | PROCESS_TERMINATE;
     let child = ffi::open_process(access, false, pid)
         .map_err(|e| format!("open child process {pid}: {e}"))?;
-    let job = HANDLE(job_raw as *mut std::ffi::c_void);
+    let job = HANDLE(job_raw as *mut c_void);
     let result =
         ffi::assign_process(job, child).map_err(|e| format!("assign pid {pid} to job: {e}"));
     drop(ffi::close_handle(child));

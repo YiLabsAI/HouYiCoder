@@ -14,13 +14,18 @@
 //! exits non-zero on an unexpected result.
 
 #[cfg(target_os = "windows")]
-fn main() {
-    use std::process;
+use houyicoder_sandbox::WindowsJobSession;
+#[cfg(target_os = "windows")]
+use std::env::var;
+#[cfg(target_os = "windows")]
+use std::process;
 
+#[cfg(target_os = "windows")]
+fn main() {
     // With the hatch set no job is created, so job_limits returns None and the
     // smoke would report SKIP -- indistinguishable from a real creation failure.
     // This binary is the only check of the real fence, so refuse.
-    if std::env::var("HOUYICODER_SANDBOX_NO_ENFORCE").is_ok_and(|v| v == "1") {
+    if var("HOUYICODER_SANDBOX_NO_ENFORCE").is_ok_and(|v| v == "1") {
         eprintln!(
             "FAIL: HOUYICODER_SANDBOX_NO_ENFORCE=1 disables the fence this binary verifies; unset it and re-run"
         );
@@ -29,8 +34,7 @@ fn main() {
 
     // Construction applies the Job Object fence to this process. The
     // workspace is a fresh temp dir the session owns and removes on Drop.
-    let session =
-        houyicoder_sandbox::WindowsJobSession::new().expect("construct job object session");
+    let session = WindowsJobSession::new().expect("construct job object session");
 
     // A None return means construction degraded to a no-op (Job Object
     // creation failed); the session already emitted an audit line, so SKIP.

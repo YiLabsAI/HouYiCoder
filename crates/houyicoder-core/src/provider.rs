@@ -13,6 +13,7 @@ pub(crate) mod test_support {
         CompletionRequest, CompletionResponse, LlmEvent, ModelCapabilities, OutputItem,
         ProviderError, Usage,
     };
+    use std::sync::atomic::{AtomicU32, Ordering};
 
     /// Deterministic fake provider (no LLM): returns a programmed sequence of
     /// canned responses, repeating the last forever. A single-element sequence
@@ -23,7 +24,7 @@ pub(crate) mod test_support {
     #[derive(Debug)]
     pub(crate) struct FakeProvider {
         responses: Vec<CompletionResponse>,
-        call: std::sync::atomic::AtomicU32,
+        call: AtomicU32,
     }
 
     impl FakeProvider {
@@ -36,7 +37,7 @@ pub(crate) mod test_support {
         pub(crate) fn new(responses: Vec<CompletionResponse>) -> Self {
             Self {
                 responses,
-                call: std::sync::atomic::AtomicU32::new(0),
+                call: AtomicU32::new(0),
             }
         }
 
@@ -53,7 +54,6 @@ pub(crate) mod test_support {
         }
 
         fn next_response(&self) -> CompletionResponse {
-            use std::sync::atomic::Ordering;
             if self.responses.is_empty() {
                 panic!("FakeProvider called with no responses queued");
             }
