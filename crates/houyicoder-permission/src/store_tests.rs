@@ -1,9 +1,17 @@
+use std::env;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process;
+use std::sync::Arc;
+
+use serde_json::Value;
+
 use super::*;
 use crate::decision::Outcome;
 use crate::gate::{DefaultModeGate, ModeGate};
 use crate::mode::ToolRequest;
 use crate::rule::{Effect, Rule, RuleContent};
-use serde_json::Value;
+use crate::store::{RuleStore, Scope, StoreError};
 
 fn tmp_store(dir: &Path, name: &str) -> FileRuleStore {
     let root = dir.join(name);
@@ -33,7 +41,6 @@ fn test_file_store_round_trip() {
 
 #[test]
 fn test_store_union_across_scopes() {
-    use crate::store::Scope;
     let dir = tempdir();
     let store = tmp_store(&dir, "b");
     // One allow rule in each scope (scope rides on the rule now, not the
@@ -77,9 +84,34 @@ fn test_remove_drops_action() {
     assert_eq!(loaded[0].action, "edit");
 }
 
+/// Clearing the rules keeps the directory authorizations. The two live in
+/// one envelope, and a clear that rewrote the file from empty would drop the
+/// sandbox grants the user made.
+#[test]
+fn test_clear_preserves_directories() {
+    let dir = tempdir();
+    let workspace = dir.join("workspace");
+    fs::create_dir_all(&workspace).unwrap();
+    let store = tmp_store(&dir, "clear-dirs");
+    store
+        .add(&Rule::new("bash", Effect::Allow).unwrap())
+        .unwrap();
+    store
+        .add_directory(&workspace, Scope::Project)
+        .expect("add_directory");
+
+    store.clear().expect("clear");
+
+    assert!(store.load().is_empty(), "the rules are gone");
+    assert_eq!(
+        store.load_directories(),
+        vec![dunce::canonicalize(&workspace).unwrap_or(workspace)],
+        "the directory grant survives the clear"
+    );
+}
+
 #[test]
 fn test_clear_wipes_write_scope() {
-    use crate::store::Scope;
     let dir = tempdir();
     let store = tmp_store(&dir, "d");
     store
@@ -103,7 +135,7 @@ fn test_clear_wipes_write_scope() {
 #[test]
 fn test_gate_persists_allow_rule() {
     let dir = tempdir();
-    let store = std::sync::Arc::new(tmp_store(&dir, "e")) as std::sync::Arc<dyn RuleStore>;
+    let store = Arc::new(tmp_store(&dir, "e")) as Arc<dyn RuleStore>;
     let gate = DefaultModeGate::new_without_builtins().with_store(store.clone());
     let rule =
         Rule::with_content("bash", RuleContent::Prefix("npm".into()), Effect::Allow).unwrap();
@@ -135,7 +167,7 @@ fn test_gate_persists_allow_rule() {
 #[test]
 fn test_gate_persists_deny() {
     let dir = tempdir();
-    let store = std::sync::Arc::new(tmp_store(&dir, "f")) as std::sync::Arc<dyn RuleStore>;
+    let store = Arc::new(tmp_store(&dir, "f")) as Arc<dyn RuleStore>;
     let gate = DefaultModeGate::new_without_builtins().with_store(store.clone());
     // A rule is an always-X directive, not a one-time verdict, so EVERY effect
     // (allow/deny/ask) persists to its chosen scope. The store holds the
@@ -150,9 +182,8 @@ fn test_remove_rule_deletes_store() {
     // scope (symmetric with add), so a deleted rule does NOT re-hydrate from
     // the store on a fresh gate. Regression for the asymmetry where remove
     // hit write_scope (project) while a user-scope rule survived.
-    use crate::store::Scope;
     let dir = tempdir();
-    let store = std::sync::Arc::new(tmp_store(&dir, "g")) as std::sync::Arc<dyn RuleStore>;
+    let store = Arc::new(tmp_store(&dir, "g")) as Arc<dyn RuleStore>;
     let gate = DefaultModeGate::new_without_builtins().with_store(store.clone());
     // A rule persisted to USER scope (not the store's project write_scope).
     gate.add_rule(
@@ -182,9 +213,8 @@ fn test_remove_keeps_sibling() {
     // action sibling (the old remove-by-action wiped the whole family +
     // left memory/disk divergent). Two same-action rules: remove one, the
     // other survives in memory AND on disk.
-    use crate::rule::RuleContent;
     let dir = tempdir();
-    let store = std::sync::Arc::new(tmp_store(&dir, "h")) as std::sync::Arc<dyn RuleStore>;
+    let store = Arc::new(tmp_store(&dir, "h")) as Arc<dyn RuleStore>;
     let gate = DefaultModeGate::new_without_builtins().with_store(store.clone());
     gate.add_rule(
         Rule::with_content("bash", RuleContent::Prefix("npm".into()), Effect::Allow).unwrap(),
@@ -215,24 +245,24 @@ fn test_remove_keeps_sibling() {
 /// memory Vec no longer holds it); the disk write failed so it would
 /// re-hydrate on restart — the eprintln surfaces that signal.
 struct FailingStore;
-impl crate::store::RuleStore for FailingStore {
+impl RuleStore for FailingStore {
     fn load(&self) -> Vec<Rule> {
         Vec::new()
     }
-    fn add(&self, _rule: &Rule) -> Result<(), crate::store::StoreError> {
+    fn add(&self, _rule: &Rule) -> Result<(), StoreError> {
         Ok(())
     }
-    fn remove(&self, _rule: &Rule) -> Result<(), crate::store::StoreError> {
-        Err(crate::store::StoreError::Io)
+    fn remove(&self, _rule: &Rule) -> Result<(), StoreError> {
+        Err(StoreError::Io)
     }
-    fn clear(&self) -> Result<(), crate::store::StoreError> {
+    fn clear(&self) -> Result<(), StoreError> {
         Ok(())
     }
 }
 
 #[test]
 fn test_remove_rule_persist_failure() {
-    let store = std::sync::Arc::new(FailingStore) as std::sync::Arc<dyn crate::store::RuleStore>;
+    let store = Arc::new(FailingStore) as Arc<dyn RuleStore>;
     let gate = DefaultModeGate::new_without_builtins().with_store(store);
     gate.add_rule(Rule::new("bash", Effect::Allow).unwrap());
     assert_eq!(gate.rules().len(), 1);
@@ -252,14 +282,13 @@ fn test_load_stamps_scope_file() {
     // must stamp the scope from the FILE it was read from, so remove_rule
     // finds it in user.json (not project) + deletes it — otherwise the rule
     // is silent-unremovable (no match in project → no-op Ok → re-hydrate).
-    use crate::store::Scope;
     let dir = tempdir();
     let file_store = tmp_store(&dir, "i");
     // Write a bare legacy rule (no scope field) straight to user.json.
     let user_path = file_store.path_for(Scope::User).to_path_buf();
-    std::fs::create_dir_all(user_path.parent().unwrap()).ok();
-    std::fs::write(&user_path, r#"[{"action":"bash","effect":"Allow"}]"#).unwrap();
-    let store = std::sync::Arc::new(file_store) as std::sync::Arc<dyn RuleStore>;
+    fs::create_dir_all(user_path.parent().unwrap()).ok();
+    fs::write(&user_path, r#"[{"action":"bash","effect":"Allow"}]"#).unwrap();
+    let store = Arc::new(file_store) as Arc<dyn RuleStore>;
     let gate = DefaultModeGate::new_without_builtins().with_store(store.clone());
     let loaded = gate.rules();
     assert_eq!(loaded.len(), 1);
@@ -295,16 +324,15 @@ fn test_gate_without_store_unchanged() {
 /// not re-hydrate.
 #[test]
 fn test_directory_persists_and_hydrates() {
-    use crate::store::Scope;
     let dir = tempdir();
-    let store = std::sync::Arc::new(tmp_store(&dir, "dirp")) as std::sync::Arc<dyn RuleStore>;
-    let target = std::env::temp_dir().join(format!("houyi-dir-target-{}", std::process::id()));
-    std::fs::create_dir_all(&target).expect("mkdir target");
+    let store = Arc::new(tmp_store(&dir, "dirp")) as Arc<dyn RuleStore>;
+    let target = env::temp_dir().join(format!("houyi-dir-target-{}", process::id()));
+    fs::create_dir_all(&target).expect("mkdir target");
     store
         .add_directory(&target, Scope::Project)
         .expect("add_directory");
     // A fresh store pointing at the same files hydrates the directory.
-    let store2 = std::sync::Arc::new(tmp_store(&dir, "dirp")) as std::sync::Arc<dyn RuleStore>;
+    let store2 = Arc::new(tmp_store(&dir, "dirp")) as Arc<dyn RuleStore>;
     let dirs = store2.load_directories();
     let canonical = dunce::canonicalize(&target).expect("canonicalize target");
     assert!(
@@ -316,12 +344,12 @@ fn test_directory_persists_and_hydrates() {
     store2
         .remove_directory(&target, Scope::Project)
         .expect("remove");
-    let store3 = std::sync::Arc::new(tmp_store(&dir, "dirp")) as std::sync::Arc<dyn RuleStore>;
+    let store3 = Arc::new(tmp_store(&dir, "dirp")) as Arc<dyn RuleStore>;
     assert!(
         store3.load_directories().is_empty(),
         "removed directory must not re-hydrate"
     );
-    std::fs::remove_dir_all(&target).ok();
+    fs::remove_dir_all(&target).ok();
 }
 
 /// A directory an older writer persisted in the Windows verbatim form
@@ -333,8 +361,8 @@ fn test_directory_persists_and_hydrates() {
 fn test_verbatim_dir_simplifies() {
     let dir = tempdir();
     let root = dir.join("legacy");
-    std::fs::create_dir_all(&root).expect("legacy root");
-    std::fs::write(
+    fs::create_dir_all(&root).expect("legacy root");
+    fs::write(
         root.join("project.json"),
         r#"{"version":2,"rules":[],"directories":["\\\\?\\C:\\houyi-legacy-dir"],"read_directories":[]}"#,
     )
@@ -350,14 +378,12 @@ fn test_verbatim_dir_simplifies() {
 
 #[test]
 fn test_read_directory_round_trip() {
-    use crate::store::Scope;
     let dir = tempdir();
-    let target = std::env::temp_dir().join(format!("houyi-read-dir-{}", std::process::id()));
-    std::fs::create_dir_all(&target).unwrap();
-    let store = std::sync::Arc::new(tmp_store(&dir, "read-dir")) as std::sync::Arc<dyn RuleStore>;
+    let target = env::temp_dir().join(format!("houyi-read-dir-{}", process::id()));
+    fs::create_dir_all(&target).unwrap();
+    let store = Arc::new(tmp_store(&dir, "read-dir")) as Arc<dyn RuleStore>;
     store.add_read_directory(&target, Scope::Local).unwrap();
-    let reloaded =
-        std::sync::Arc::new(tmp_store(&dir, "read-dir")) as std::sync::Arc<dyn RuleStore>;
+    let reloaded = Arc::new(tmp_store(&dir, "read-dir")) as Arc<dyn RuleStore>;
     assert_eq!(reloaded.load_read_directories().len(), 1);
     assert!(reloaded.load_directories().is_empty());
     reloaded.add_directory(&target, Scope::Local).unwrap();
@@ -365,7 +391,7 @@ fn test_read_directory_round_trip() {
     assert_eq!(reloaded.load_directories().len(), 1);
     reloaded.remove_directory(&target, Scope::Local).unwrap();
     assert!(reloaded.load_directories().is_empty());
-    std::fs::remove_dir_all(target).ok();
+    fs::remove_dir_all(target).ok();
 }
 
 /// Adding the same directory twice is idempotent (one entry, not two), and
@@ -374,11 +400,10 @@ fn test_read_directory_round_trip() {
 /// add_directory / remove_directory.
 #[test]
 fn test_add_idempotent_remove_absent() {
-    use crate::store::Scope;
     let dir = tempdir();
-    let store = std::sync::Arc::new(tmp_store(&dir, "diridem")) as std::sync::Arc<dyn RuleStore>;
-    let target = std::env::temp_dir().join(format!("houyi-dir-idem-{}", std::process::id()));
-    std::fs::create_dir_all(&target).expect("mkdir");
+    let store = Arc::new(tmp_store(&dir, "diridem")) as Arc<dyn RuleStore>;
+    let target = env::temp_dir().join(format!("houyi-dir-idem-{}", process::id()));
+    fs::create_dir_all(&target).expect("mkdir");
     store.add_directory(&target, Scope::Project).unwrap();
     store.add_directory(&target, Scope::Project).unwrap();
     assert_eq!(
@@ -387,14 +412,14 @@ fn test_add_idempotent_remove_absent() {
         "duplicate add is idempotent"
     );
     // Removing a directory that was never added is a no-op.
-    let absent = std::env::temp_dir().join(format!("houyi-dir-absent-{}", std::process::id()));
+    let absent = env::temp_dir().join(format!("houyi-dir-absent-{}", process::id()));
     store.remove_directory(&absent, Scope::Project).unwrap();
     assert_eq!(
         store.load_directories().len(),
         1,
         "remove-absent is a no-op"
     );
-    std::fs::remove_dir_all(&target).ok();
+    fs::remove_dir_all(&target).ok();
 }
 
 /// The trait default directory methods (load_directories=empty,
@@ -403,31 +428,26 @@ fn test_add_idempotent_remove_absent() {
 /// the rehydrate path — the defaults must be inert.
 #[test]
 fn test_directory_default_methods_inert() {
-    use crate::store::Scope;
-    let store = std::sync::Arc::new(FailingStore) as std::sync::Arc<dyn RuleStore>;
+    let store = Arc::new(FailingStore) as Arc<dyn RuleStore>;
     assert!(store.load_directories().is_empty());
+    assert!(store.add_directory(Path::new("/x"), Scope::Project).is_ok());
     assert!(
         store
-            .add_directory(std::path::Path::new("/x"), Scope::Project)
-            .is_ok()
-    );
-    assert!(
-        store
-            .remove_directory(std::path::Path::new("/x"), Scope::Project)
+            .remove_directory(Path::new("/x"), Scope::Project)
             .is_ok()
     );
 }
 
 fn tempdir() -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
+    let dir = env::temp_dir().join(format!(
         "houyicoder-permission-{}-{}",
-        std::process::id(),
+        process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos()
     ));
-    std::fs::create_dir_all(&dir).expect("tempdir");
+    fs::create_dir_all(&dir).expect("tempdir");
     dir
 }
 
@@ -483,7 +503,6 @@ fn test_remove_absent_is_noop() {
     // Covers the no-match early-return (the skip path that must not touch the
     // file, same reasoning as the add no-op skip — no needless rename churn
     // racing a concurrent reader).
-    use crate::store::Scope;
     let dir = tempdir();
     let store = tmp_store(&dir, "rmabsent");
     // (a) Remove from a file that does not exist yet -> Ok, no file created.

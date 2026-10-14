@@ -411,7 +411,15 @@ impl RuleStore for FileRuleStore {
     }
 
     fn clear(&self) -> Result<(), StoreError> {
-        self.write_envelope_unlocked(self.write_scope, &PermissionsFile::empty())
+        let _guard = self.lock.lock().expect("rule store lock");
+        // Empty the rules but keep the envelope's other members: the
+        // directory authorizations are the user's sandbox grants, and
+        // overwriting the whole file would drop them. The read-modify-write
+        // under the lock is the same shape add and remove use, so a clear
+        // cannot race a concurrent add and lose its rule.
+        let mut env = self.read_envelope(self.write_scope);
+        env.rules.clear();
+        self.write_envelope_unlocked(self.write_scope, &env)
     }
 
     fn load_directories(&self) -> Vec<PathBuf> {
