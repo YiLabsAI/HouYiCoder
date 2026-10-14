@@ -3,11 +3,12 @@
 //! Per-platform backends behind one SandboxSession trait:
 //! - macOS Seatbelt via sandbox-exec: a real kernel-level fence (deny
 //!   default, allow workspace + system binaries, deny egress by default).
-//! - Linux Landlock: a per-spawn path fence applied by a helper binary the
-//!   session spawns for every command; hosts where the helper or the kernel
-//!   fence is unavailable degrade to an audited resolver-only boundary. The
-//!   helper must be installed beside the daemon; HOUYICODER_SANDBOX_HELPER
-//!   overrides discovery, and a missing helper reports a failed fence.
+//! - Linux Landlock: a per-spawn path fence applied by a sibling binary the
+//!   session spawns for every command; hosts where the fence binary or the
+//!   kernel fence is unavailable degrade to an audited resolver-only
+//!   boundary. The binary must be installed beside the daemon;
+//!   HOUYICODER_SANDBOX_HELPER overrides discovery, and a missing one
+//!   reports a failed fence.
 //! - Windows Job Object: fences the spawned tree's CPU time, memory commit
 //!   and lifetime (kill on close), but carries no path primitive, so its
 //!   coverage stays Unfenced and the resolver remains the boundary.

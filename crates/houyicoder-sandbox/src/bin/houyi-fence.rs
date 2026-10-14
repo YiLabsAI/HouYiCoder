@@ -1,6 +1,6 @@
 //! Per-spawn Landlock fence applicator for the Linux sandbox.
 //!
-//! The daemon spawns this helper for every sandboxed command and fence
+//! The daemon spawns this binary for every sandboxed command and fence
 //! probe. It applies a Landlock ruleset to itself, then replaces its own
 //! image with the shell running the command: the fence covers the shell and
 //! its descendants, the daemon is never restricted, and exec preserves the
@@ -29,7 +29,7 @@ struct ParsedArgs {
 fn main() {
     match parse_args() {
         Err(message) => {
-            eprintln!("sandbox-helper: {message}");
+            eprintln!("houyi-fence: {message}");
             exit(2);
         }
         Ok(parsed) => run(parsed),
@@ -84,7 +84,7 @@ fn parse_args() -> Result<ParsedArgs, String> {
 /// process-group kill is the resource fence until a per-tree budget exists.
 #[cfg(target_os = "linux")]
 fn run(parsed: ParsedArgs) {
-    // Test-suite escape hatch, debug builds only so a release helper can
+    // Test-suite escape hatch, debug builds only so a release build can
     // never be unfenced through the environment. Audit lines go to stderr,
     // which the daemon captures into the command's stderr: never silent.
     #[cfg(debug_assertions)]
@@ -109,15 +109,15 @@ fn run(parsed: ParsedArgs) {
     match outcome {
         fence::Outcome::Enforced => {}
         fence::Outcome::EnforcedPartial => eprintln!(
-            "sandbox-helper audit: landlock enforced with a degraded kernel ABI; some filesystem rights are not restricted"
+            "houyi-fence audit: landlock enforced with a degraded kernel ABI; some filesystem rights are not restricted"
         ),
         fence::Outcome::NotEnforced => eprintln!(
-            "sandbox-helper audit: landlock supported but ruleset not enforced; running unfenced"
+            "houyi-fence audit: landlock supported but ruleset not enforced; running unfenced"
         ),
         fence::Outcome::Unavailable => {
             if skipped {
                 eprintln!(
-                    "sandbox-helper audit: landlock enforcement skipped via HOUYICODER_SANDBOX_NO_ENFORCE (debug builds only); running unfenced"
+                    "houyi-fence audit: landlock enforcement skipped via HOUYICODER_SANDBOX_NO_ENFORCE (debug builds only); running unfenced"
                 );
             }
         }
@@ -126,7 +126,7 @@ fn run(parsed: ParsedArgs) {
             // construction, so a spawn that cannot apply it must not run the
             // command unfenced. The audit line reaches the captured stderr.
             eprintln!(
-                "sandbox-helper audit: landlock apply failed: {reason}; refusing to run unfenced"
+                "houyi-fence audit: landlock apply failed: {reason}; refusing to run unfenced"
             );
             exit(1);
         }
@@ -144,7 +144,7 @@ fn exec_shell(command: &str) -> ! {
         reason = "exec replaces this image; no child is spawned"
     )]
     let error = Command::new("/bin/sh").arg("-c").arg(command).exec();
-    eprintln!("sandbox-helper: exec failed: {error}");
+    eprintln!("houyi-fence: exec failed: {error}");
     exit(127);
 }
 
@@ -239,6 +239,6 @@ mod fence {
 
 #[cfg(not(target_os = "linux"))]
 fn main() {
-    eprintln!("sandbox-helper: the landlock fence helper is linux-only");
+    eprintln!("houyi-fence: the linux fence is all this binary does");
     exit(2);
 }

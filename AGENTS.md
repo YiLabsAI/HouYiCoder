@@ -233,7 +233,8 @@ the ones whose fix is not obvious from the message alone.
   times. A qualified path stays qualified when an import would collide or
   pick the wrong item: a name the file defines itself, a local binding or
   parameter of that name, one that two chains share, one the prelude already
-  provides, and one a glob import in the same file already brings in.
+  provides, and one a bare `use super::*;` in the same file may already
+  provide. The detector lives in scripts/rules/imports.py.
 - Do not enforce a mechanical `::` depth limit or create vague aliases; both
   hide rather than clarify ownership.
 

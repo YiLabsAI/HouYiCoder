@@ -120,11 +120,6 @@ def test_a_chain_a_super_glob_already_covers_is_left_qualified():
     assert repeated_deep_paths(supers) == {}
 
 
-def test_a_chain_a_glob_already_covers_is_left_qualified():
-    globbed = "pub use run::*;\nfn a() { let _ = crate::frontend::run::Widget::new(); }\n"
-    assert repeated_deep_paths(globbed) == {}
-
-
 def test_a_local_binding_of_the_same_name_keeps_the_chain_qualified():
     shadowed = "fn a() { let id = 7; let _ = std::process::id(); let _ = id; }\n"
     assert repeated_deep_paths(shadowed) == {}

@@ -1,5 +1,5 @@
 //! Landlock smoke binary. Constructs a Linux sandbox session, which probes
-//! the fence helper, then drives real commands through exec and asserts the
+//! the fence binary, then drives real commands through exec and asserts the
 //! kernel denies paths outside the grant set while the workspace and a
 //! runtime-granted directory stay writable, and that revoking the grant
 //! takes effect on the next spawn. Built only when the enforce feature is
@@ -30,7 +30,7 @@ fn fail(message: &str) -> ! {
 #[cfg(target_os = "linux")]
 #[tokio::main]
 async fn main() {
-    // With the hatch set the helper never fences, so every probe below would
+    // With the hatch set the fence binary never fences, so every probe below would
     // look unfenced and the smoke would report SKIP -- indistinguishable from
     // a kernel with no Landlock. This binary is the only check of the real
     // fence, so refuse.
@@ -66,7 +66,7 @@ async fn main() {
     let status = session.fence_status();
     if !matches!(status, FenceStatus::Enforced) {
         eprintln!(
-            "SKIP: fence not enforced ({status:?}): kernel lacks landlock or the helper is missing"
+            "SKIP: fence not enforced ({status:?}): kernel lacks landlock or the fence binary is missing"
         );
         cleanup();
         return;
@@ -106,7 +106,7 @@ async fn main() {
     }
     eprintln!("PASS: workspace-internal write allowed");
 
-    // A runtime grant reaches the next spawn: the helper receives the live
+    // A runtime grant reaches the next spawn: the fence binary receives the live
     // grant set in argv, so a directory added after construction is writable
     // immediately and, once revoked, denied again on the spawn after that.
     let granted_str = granted.to_str().expect("granted dir is utf-8");

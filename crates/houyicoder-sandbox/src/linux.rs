@@ -1,9 +1,9 @@
-//! Linux sandbox session: a per-spawn Landlock fence via a helper binary.
+//! Linux sandbox session: a per-spawn Landlock fence via a sibling binary.
 //!
-//! Each exec spawns the fence helper beside the daemon, passes the live
-//! grant set in argv, and the helper applies a Landlock ruleset to itself
+//! Each exec spawns the fence binary beside the daemon, passes the live
+//! grant set in argv, and the binary applies a Landlock ruleset to itself
 //! before exec-ing the command shell: the fence covers the spawned tree
-//! only, never the daemon. Construction probes the helper for FenceStatus;
+//! only, never the daemon. Construction probes the fence binary for FenceStatus;
 //! unfenced, exec runs directly with an audit line and the path resolver
 //! remains the boundary.
 
@@ -36,12 +36,12 @@ use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 use tokio::time::timeout;
 
-/// File name of the fence helper, located beside the daemon executable.
-const HELPER_BIN: &str = "houyicoder-sandbox-helper";
+/// File name of the fence binary, located beside the daemon executable.
+const FENCE_BIN: &str = "houyi-fence";
 
 /// A Linux sandbox session. The workspace is the user's project dir (Guarded
 /// mode) or a temp dir this session owns; Drop removes only an owned one.
-/// The fence lives in the spawned helper, so the daemon itself is never
+/// The fence lives in the spawned binary, so the daemon itself is never
 /// restricted and directory grants given mid-session reach the next command.
 pub struct LinuxLandlockSession {
     workspace: PathBuf,
@@ -75,8 +75,8 @@ impl LinuxLandlockSession {
     /// Create a session rooted at the user's project dir. The dir is
     /// canonicalized through dunce so symlinks do not trip the path
     /// resolver. The user's directory is never removed on Drop. Construction
-    /// probes the helper once; the status answers fence_status and decides
-    /// whether exec routes through the helper or runs with an audit line.
+    /// probes the fence binary once; the status answers fence_status and decides
+    /// whether exec routes through the fence binary or runs with an audit line.
     pub fn new_in_cwd(cwd: &Path) -> Result<Self, SandboxError> {
         let workspace = dunce::canonicalize(cwd)
             .map_err(|e| SandboxError::Io(format!("cwd canonicalize: {e}")))?;
@@ -128,19 +128,19 @@ impl LinuxLandlockSession {
         self
     }
 
-    /// Locate the fence helper: an explicit environment override wins, then
+    /// Locate the fence binary: an explicit environment override wins, then
     /// the directory of the running executable, then one level up (build and
-    /// test layouts place the daemon in a deps directory below the helper).
-    fn helper_path() -> Option<PathBuf> {
+    /// test layouts place the daemon in a deps directory below the fence binary).
+    fn fence_path() -> Option<PathBuf> {
         if let Some(path) = var_os("HOUYICODER_SANDBOX_HELPER") {
             return Some(PathBuf::from(path));
         }
         let deps = current_exe().ok()?.parent()?.to_path_buf();
-        let sibling = deps.join(HELPER_BIN);
+        let sibling = deps.join(FENCE_BIN);
         if sibling.is_file() {
             return Some(sibling);
         }
-        let upper = deps.parent()?.join(HELPER_BIN);
+        let upper = deps.parent()?.join(FENCE_BIN);
         if upper.is_file() {
             return Some(upper);
         }
@@ -169,13 +169,13 @@ impl LinuxLandlockSession {
         )))
     }
 
-    /// The fence helper argv for one command: the workspace and the session
+    /// The fence binary argv for one command: the workspace and the session
     /// scratch dir as write grants, every runtime write grant, every read-only
     /// grant, then the command after the separator. Split out of exec_inner so
     /// the argv shape is testable without a spawn: this list IS the kernel
     /// grant set, and a path the resolver admits but this list omits would be
     /// fenced away at spawn time.
-    fn helper_argv(&self, command: &str) -> Vec<OsString> {
+    fn fence_argv(&self, command: &str) -> Vec<OsString> {
         let mut argv: Vec<OsString> = vec![
             "--write".into(),
             self.workspace.as_os_str().to_os_string(),
@@ -195,11 +195,11 @@ impl LinuxLandlockSession {
         argv
     }
 
-    /// Run one command. Fenced, the helper is spawned with the live grant
+    /// Run one command. Fenced, the fence binary is spawned with the live grant
     /// set in argv; unfenced, the shell is spawned directly after an audit
     /// line. Both paths share the cwd, the pipes, the scratch TMPDIR, the
     /// process group, kill_on_drop and the wall timeout. The cpu, address
-    /// space and process count budgets are not passed to the helper: their
+    /// space and process count budgets are not passed to the fence binary: their
     /// per-spawn rlimit semantics are per user, not per tree, so the wall
     /// timeout plus the group kill below are the resource fence here.
     #[expect(clippy::disallowed_methods, reason = "infra spawn, not model-driven")]
@@ -209,15 +209,15 @@ impl LinuxLandlockSession {
         config: ExecConfig,
     ) -> Result<ExecResult, SandboxError> {
         let wall = Duration::from_millis(config.wall_timeout_ms);
-        let helper = if matches!(self.fence, FenceStatus::Enforced) {
-            Self::helper_path()
+        let fence = if matches!(self.fence, FenceStatus::Enforced) {
+            Self::fence_path()
         } else {
             None
         };
-        let mut cmd = match helper {
-            Some(helper) => {
-                let mut cmd = tokio::process::Command::new(helper);
-                cmd.args(self.helper_argv(&command));
+        let mut cmd = match fence {
+            Some(fence) => {
+                let mut cmd = tokio::process::Command::new(fence);
+                cmd.args(self.fence_argv(&command));
                 cmd
             }
             None => {
@@ -308,10 +308,10 @@ impl Drop for LinuxLandlockSession {
     }
 }
 
-/// Map the helper probe's answer word onto the fence status. Split out of
-/// probe_fence so every branch of the helper protocol is testable without a
-/// Linux host or a spawned helper: the word set is the contract between the
-/// daemon and the helper binary, and an unrecognized word must land in
+/// Map the fence binary probe's answer word onto the fence status. Split out of
+/// probe_fence so every branch of the fence binary protocol is testable without a
+/// Linux host or a spawned fence_bin: the word set is the contract between the
+/// daemon and the fence binary binary, and an unrecognized word must land in
 /// Failed with the reason, never be mistaken for a working fence.
 #[cfg(feature = "enforce")]
 fn fence_from_probe(word: &str) -> FenceStatus {
@@ -341,18 +341,18 @@ fn fence_from_probe(word: &str) -> FenceStatus {
     }
 }
 
-/// Ask the helper whether it can enforce on this kernel. The answer maps one
-/// to one onto FenceStatus; a missing helper, a refused spawn or a non-zero
+/// Ask the fence binary whether it can enforce on this kernel. The answer maps one
+/// to one onto FenceStatus; a missing fence_bin, a refused spawn or a non-zero
 /// exit all land in Failed so the composition root surfaces the gap instead
 /// of silently degrading.
 #[cfg(feature = "enforce")]
 fn probe_fence(workspace: &Path) -> FenceStatus {
-    let Some(helper) = LinuxLandlockSession::helper_path() else {
-        tracing::warn!("sandbox audit: fence helper not found beside the daemon; running unfenced");
-        return FenceStatus::Failed("fence helper not found".into());
+    let Some(fence_bin) = LinuxLandlockSession::fence_path() else {
+        tracing::warn!("sandbox audit: fence binary not found beside the daemon; running unfenced");
+        return FenceStatus::Failed("fence binary not found".into());
     };
     #[expect(clippy::disallowed_methods, reason = "infra spawn, not model-driven")]
-    let probe = std::process::Command::new(&helper)
+    let probe = std::process::Command::new(&fence_bin)
         .arg("--probe")
         .arg("--write")
         .arg(workspace)
@@ -363,11 +363,11 @@ fn probe_fence(workspace: &Path) -> FenceStatus {
         }
         Ok(output) => {
             let reason = format!("probe exited with {}", output.status);
-            tracing::warn!("sandbox audit: fence helper probe failed: {reason}; running unfenced");
+            tracing::warn!("sandbox audit: fence binary probe failed: {reason}; running unfenced");
             FenceStatus::Failed(reason)
         }
         Err(e) => {
-            tracing::warn!("sandbox audit: fence helper probe spawn failed: {e}; running unfenced");
+            tracing::warn!("sandbox audit: fence binary probe spawn failed: {e}; running unfenced");
             FenceStatus::Failed(format!("probe spawn: {e}"))
         }
     }
@@ -443,7 +443,7 @@ impl SandboxSession for LinuxLandlockSession {
 
 /// Map fence state and grant lists onto the coverage answer. Split out of
 /// the trait impl so the mapping is testable without a live fence: the roots
-/// a Fenced answer certifies must equal the grant set the next helper spawn
+/// a Fenced answer certifies must equal the grant set the next fence_bin spawn
 /// receives in argv. The session scratch dir is granted too but is not a
 /// user-authorized root, so it is not listed.
 fn coverage_for(fence: &FenceStatus, workspace: &Path, dirs: &RuntimeDirs) -> Coverage {
@@ -460,7 +460,7 @@ fn coverage_for(fence: &FenceStatus, workspace: &Path, dirs: &RuntimeDirs) -> Co
 
 impl Containment for LinuxLandlockSession {
     /// Fenced, the writable roots are the workspace plus every runtime write
-    /// grant; the next helper spawn receives these plus the session scratch
+    /// grant; the next fence_bin spawn receives these plus the session scratch
     /// dir, so the certified set is never wider than the kernel grant set.
     /// Unfenced, the gate keeps asking for consent because the resolver is
     /// the only boundary. The answer certifies path containment only: this

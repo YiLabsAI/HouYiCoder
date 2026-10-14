@@ -13,7 +13,7 @@ path = "tests/sandbox_all.rs"
 path = "src/lib.rs"
 
 [features]
-# Default-on marker. When enabled AND the host is Linux, the fence helper
+# Default-on marker. When enabled AND the host is Linux, the fence binary
 # binary applies a real Landlock ruleset to itself before exec-ing each
 # command (the landlock crate is a pure-Rust, safe wrapper over the Landlock
 # syscalls). Turning it off, or building for a non-Linux target, leaves the

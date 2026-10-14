@@ -28,19 +28,30 @@ pub mod verdict;
 use crate::frontend::debug::DebugLevel;
 use crate::frontend::model::SpeedMode;
 use crate::llm::EffortLevel;
-pub use compact::*;
-pub use context::*;
+pub use compact::CompactReply;
+pub use context::{CategoryBreakdown, ContextBreakdown, GridCell, build_grid, stub_breakdown};
 pub use event::FrontendEvent;
-pub use evidence::*;
-pub use memory::*;
-pub use permission::*;
+pub use evidence::{
+    AuditEntry, Divergence, Hunk, HunkEvidence, ReviewFinding, SpecClause, audit_entry,
+};
+pub use memory::{
+    MemoryChange, MemoryChangeCausality, MemoryChangeId, MemoryChangeOrigin, MemoryChangeScope,
+    MemoryDetail, MemoryOperation, MemorySummaryEntry, MemoryToggleWhich, ToggleState,
+};
+pub use permission::{
+    AllowReason, AskReason, AskSource, DenyReason, DenySource, PermissionDecisionEntry,
+    PermissionEffect, PermissionMode, PermissionRule, PermissionRuleContent, RuleDestination,
+};
 pub use queue::{PendingInputId, QueuedInput};
-pub use run::*;
+pub use run::{
+    ApprovalDecision, ApprovalRequest, ContentBlock, DelegationSource, RunError, RunOutcome,
+    RunResult, StopReason,
+};
 use std::collections::HashSet;
 use std::fmt::Display;
 use std::fmt::Formatter;
 pub use trajectory::TrajectoryEntry;
-pub use trust::*;
+pub use trust::{TrustAccept, TrustPrompt, TrustRisk};
 pub use verdict::Verdict;
 
 /// A wire session id, carried by run verbs (MessageSend, RunCancel) so a

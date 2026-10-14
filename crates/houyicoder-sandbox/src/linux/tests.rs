@@ -1,4 +1,4 @@
-// Construction probes the fence helper but never fences this process, so
+// Construction probes the fence binary but never fences this process, so
 // these tests run on any Linux host regardless of kernel support: the
 // probe answer depends on the kernel, the resolver, grant and coverage
 // behavior do not.
@@ -120,7 +120,7 @@ fn test_coverage_unfenced() {
 /// first as write grants, runtime grants follow in flag pairs by kind,
 /// and the command sits alone after the separator.
 #[test]
-fn test_helper_argv_grants() {
+fn test_fence_argv_grants() {
     let session = LinuxLandlockSession::new().expect("session");
     let write_dir = unique_dir("argv-write");
     fs::create_dir_all(&write_dir).expect("create write dir");
@@ -133,7 +133,7 @@ fn test_helper_argv_grants() {
         .add_reading_dir(read_dir.to_str().expect("read str"))
         .expect("grant read");
 
-    let argv = session.helper_argv("touch x");
+    let argv = session.fence_argv("touch x");
     let canonical_write = dunce::canonicalize(&write_dir).expect("canonical write");
     let canonical_read = dunce::canonicalize(&read_dir).expect("canonical read");
     let expected: Vec<OsString> = vec![
@@ -154,7 +154,7 @@ fn test_helper_argv_grants() {
     let _cleanup = fs::remove_dir_all(&read_dir);
 }
 
-/// Every word of the helper protocol, including the ones a healthy host
+/// Every word of the fence binary protocol, including the ones a healthy host
 /// never sees: an unrecognized word must land in Failed carrying the
 /// reason, never be mistaken for a working fence.
 #[cfg(feature = "enforce")]
@@ -200,4 +200,19 @@ fn test_output_maps_result() {
     assert_eq!(result.stdout, "out");
     assert_eq!(result.stderr, "err");
     assert_eq!(result.exit_code, Some(3));
+}
+
+/// The fence binary the daemon looks for must be the artifact this crate
+/// builds: the name is a file name joined onto the daemon's directory, so a
+/// mismatch degrades every command to an unfenced run with only an audit
+/// line. Pin the constant to the file on disk so a rename cannot drift.
+#[test]
+fn test_fence_bin_matches_artifact() {
+    let bin = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src/bin")
+        .join(format!("{FENCE_BIN}.rs"));
+    assert!(
+        bin.is_file(),
+        "FENCE_BIN must name a binary in src/bin: {bin:?} is missing"
+    );
 }

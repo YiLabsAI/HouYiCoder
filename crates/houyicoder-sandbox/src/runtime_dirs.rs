@@ -1,7 +1,7 @@
 //! Runtime directory grants shared by the platform sessions: the dirs the
 //! user authorized beyond the workspace root, canonicalized through dunce so
 //! Windows and Unix compare in one form. Each backend re-derives its fence
-//! from this state at the next spawn (macOS profile render, Linux helper
+//! from this state at the next spawn (macOS profile render, Linux fence
 //! argv) or admits paths against it (Windows resolver).
 
 use std::path::{Path, PathBuf};
