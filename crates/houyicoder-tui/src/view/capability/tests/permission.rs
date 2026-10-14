@@ -5,23 +5,26 @@
 
 #![cfg(test)]
 
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
+
 use crate::composition;
-use crate::state::{App, Pane};
-use crate::test_harness::render_text;
+use crate::keys::handle_working;
+use crate::state::{App, Pane, PermissionTab, Screen};
+use crate::test_harness::{render_buffer, render_text};
 
 fn app() -> App {
     let mut app = composition::app();
-    app.ui.navigation.screen = crate::state::Screen::Working;
+    app.ui.navigation.screen = Screen::Working;
     app.ui.navigation.pane = Pane::Transcript;
     app
 }
 
-fn key_press(code: ratatui::crossterm::event::KeyCode) -> ratatui::crossterm::event::KeyEvent {
-    ratatui::crossterm::event::KeyEvent {
+fn key_press(code: KeyCode) -> KeyEvent {
+    KeyEvent {
         code,
-        modifiers: ratatui::crossterm::event::KeyModifiers::NONE,
-        kind: ratatui::crossterm::event::KeyEventKind::Press,
-        state: ratatui::crossterm::event::KeyEventState::NONE,
+        modifiers: KeyModifiers::NONE,
+        kind: KeyEventKind::Press,
+        state: KeyEventState::NONE,
     }
 }
 
@@ -48,7 +51,7 @@ fn test_permission_tab_filters_rules() {
         rule("edit", PermissionEffect::Ask, None),
     ];
     // Allow tab: npm rule only.
-    app.ui.permission_pane.tab = crate::state::PermissionTab::Allow;
+    app.ui.permission_pane.tab = PermissionTab::Allow;
     let text = render_text(&app, 80, 24);
     assert!(
         text.contains("Bash(npm"),
@@ -59,7 +62,7 @@ fn test_permission_tab_filters_rules() {
         "Allow tab hides the deny rule: {text}"
     );
     // Deny tab: rm rule only.
-    app.ui.permission_pane.tab = crate::state::PermissionTab::Deny;
+    app.ui.permission_pane.tab = PermissionTab::Deny;
     let text = render_text(&app, 80, 24);
     assert!(
         text.contains("Bash(rm"),
@@ -70,7 +73,7 @@ fn test_permission_tab_filters_rules() {
         "Deny tab hides the allow rule: {text}"
     );
     // Ask tab: tool-level rule renders as "Edit" (no content).
-    app.ui.permission_pane.tab = crate::state::PermissionTab::Ask;
+    app.ui.permission_pane.tab = PermissionTab::Ask;
     let text = render_text(&app, 80, 24);
     assert!(text.contains("Edit"), "Ask tab shows the edit rule: {text}");
     assert!(
@@ -106,25 +109,25 @@ fn test_permission_cursor_recent_tab() {
             ..Default::default()
         },
     ];
-    let key = |code: ratatui::crossterm::event::KeyCode| ratatui::crossterm::event::KeyEvent {
+    let key = |code: KeyCode| KeyEvent {
         code,
-        modifiers: ratatui::crossterm::event::KeyModifiers::NONE,
-        kind: ratatui::crossterm::event::KeyEventKind::Press,
-        state: ratatui::crossterm::event::KeyEventState::NONE,
+        modifiers: KeyModifiers::NONE,
+        kind: KeyEventKind::Press,
+        state: KeyEventState::NONE,
     };
     // Down moves the cursor to row 1; Up moves it back to 0 (saturating).
-    crate::keys::handle_working(&mut app, key(ratatui::crossterm::event::KeyCode::Down));
+    handle_working(&mut app, key(KeyCode::Down));
     assert_eq!(app.ui.permission_pane.cursor, 1);
-    crate::keys::handle_working(&mut app, key(ratatui::crossterm::event::KeyCode::Down));
+    handle_working(&mut app, key(KeyCode::Down));
     assert_eq!(
         app.ui.permission_pane.cursor, 2,
         "cursor keeps growing; render clamps"
     );
-    crate::keys::handle_working(&mut app, key(ratatui::crossterm::event::KeyCode::Up));
+    handle_working(&mut app, key(KeyCode::Up));
     assert_eq!(app.ui.permission_pane.cursor, 1);
-    crate::keys::handle_working(&mut app, key(ratatui::crossterm::event::KeyCode::Up));
+    handle_working(&mut app, key(KeyCode::Up));
     assert_eq!(app.ui.permission_pane.cursor, 0);
-    crate::keys::handle_working(&mut app, key(ratatui::crossterm::event::KeyCode::Up));
+    handle_working(&mut app, key(KeyCode::Up));
     assert_eq!(
         app.ui.permission_pane.cursor, 0,
         "saturating sub stops at 0"
@@ -142,7 +145,7 @@ fn test_permission_cursor_recent_tab() {
     );
 
     // Recently-denied tab: empty verdicts show the placeholder.
-    app.ui.permission_pane.tab = crate::state::PermissionTab::Recent;
+    app.ui.permission_pane.tab = PermissionTab::Recent;
     let text = render_text(&app, 80, 24);
     assert!(
         text.contains("no recent denials"),
@@ -202,16 +205,10 @@ fn test_permission_search_submode_filters() {
         },
     ];
     app.ui.permission_pane.tab = PermissionTab::Allow;
-    crate::keys::handle_working(
-        &mut app,
-        key_press(ratatui::crossterm::event::KeyCode::Char('s')),
-    );
+    handle_working(&mut app, key_press(KeyCode::Char('s')));
     assert_eq!(app.ui.permission_pane.input, PermissionInput::Search);
     for c in "npm".chars() {
-        crate::keys::handle_working(
-            &mut app,
-            key_press(ratatui::crossterm::event::KeyCode::Char(c)),
-        );
+        handle_working(&mut app, key_press(KeyCode::Char(c)));
     }
     let text = render_text(&app, 100, 28);
     assert!(
@@ -223,10 +220,7 @@ fn test_permission_search_submode_filters() {
         "search hides the non-matching rule: {text}"
     );
     // Enter ends search; Esc after that clears the query and exits search.
-    crate::keys::handle_working(
-        &mut app,
-        key_press(ratatui::crossterm::event::KeyCode::Enter),
-    );
+    handle_working(&mut app, key_press(KeyCode::Enter));
     assert_eq!(app.ui.permission_pane.input, PermissionInput::None);
 }
 
@@ -280,7 +274,7 @@ fn test_permission_workspace_cursor_clamps() {
         .collect();
     // Cursor set past the dirs list — must clamp to the last dir (index 1).
     app.ui.permission_pane.cursor = 4;
-    let buf = crate::test_harness::render_buffer(&app, 80, 24);
+    let buf = render_buffer(&app, 80, 24);
     // Partial cell-style match: ratatui composes bg(Reset)/underline_color(Reset)
     // into the stored style, so a full Style == comparison never matches.
     let is_cyan_bold =
@@ -362,7 +356,7 @@ fn test_workspace_nav_two_dirs() {
         vec!["/tmp/a".into(), "/tmp/b".into()];
 
     let scan = |app: &App| -> (bool, bool) {
-        let buf = crate::test_harness::render_buffer(app, 80, 24);
+        let buf = render_buffer(app, 80, 24);
         let mut a = false;
         let mut b = false;
         for y in 0..buf.area.height {
@@ -415,40 +409,22 @@ fn test_destination_arrows_match_direction() {
         _ => unreachable!(),
     };
     // Right moves visually right: project -> user -> local -> (wrap) project.
-    crate::keys::handle_working(
-        &mut app,
-        key_press(ratatui::crossterm::event::KeyCode::Right),
-    );
+    handle_working(&mut app, key_press(KeyCode::Right));
     assert_eq!(dest(&app), RuleDestination::User, "Right: project -> user");
-    crate::keys::handle_working(
-        &mut app,
-        key_press(ratatui::crossterm::event::KeyCode::Right),
-    );
+    handle_working(&mut app, key_press(KeyCode::Right));
     assert_eq!(dest(&app), RuleDestination::Local, "Right: user -> local");
-    crate::keys::handle_working(
-        &mut app,
-        key_press(ratatui::crossterm::event::KeyCode::Right),
-    );
+    handle_working(&mut app, key_press(KeyCode::Right));
     assert_eq!(
         dest(&app),
         RuleDestination::Project,
         "Right: local -> project (wrap)"
     );
     // Left moves visually left: project -> local -> user -> (wrap) project.
-    crate::keys::handle_working(
-        &mut app,
-        key_press(ratatui::crossterm::event::KeyCode::Left),
-    );
+    handle_working(&mut app, key_press(KeyCode::Left));
     assert_eq!(dest(&app), RuleDestination::Local, "Left: project -> local");
-    crate::keys::handle_working(
-        &mut app,
-        key_press(ratatui::crossterm::event::KeyCode::Left),
-    );
+    handle_working(&mut app, key_press(KeyCode::Left));
     assert_eq!(dest(&app), RuleDestination::User, "Left: local -> user");
-    crate::keys::handle_working(
-        &mut app,
-        key_press(ratatui::crossterm::event::KeyCode::Left),
-    );
+    handle_working(&mut app, key_press(KeyCode::Left));
     assert_eq!(
         dest(&app),
         RuleDestination::Project,

@@ -43,8 +43,8 @@ Checks .rs files (pass files as args; no args = all crates/**/*.rs):
    repeats the X concept twice) and lets the file tree show the subsystem.
    The pair is matched by longest existing parent stem (so markdown_memory_io.rs
    is a child of markdown_memory.rs, not of a nonexistent markdown.rs), and
-   both _tests.rs peers are excluded here -- the flat test peer has its own
-   rule (9) and its own count ratchet, because it is the test layout question,
+   both _tests.rs peers are excluded here -- the flat test peer is a separate
+   check with its own count ratchet, because it is the test layout question,
    not a source hierarchy. Integration tests (tests/) are excluded entirely --
    each .rs there is its own binary, not a module.
 

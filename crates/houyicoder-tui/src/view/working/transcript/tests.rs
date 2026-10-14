@@ -310,4 +310,4 @@ fn test_view_hides_tail() {
     );
 }
 
-mod jump;
+mod jump_to_bottom;

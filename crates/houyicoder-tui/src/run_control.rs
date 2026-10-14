@@ -31,8 +31,6 @@ const MAX_AGENT_MESSAGES_PER_POLL: usize = 4096;
 /// rejoin the pair; an idle channel ends the lookahead at once.
 const DELIVERY_MARK_LOOKAHEAD: usize = 4;
 
-// The 2018 layout resolves both to this file's own directory, so the
-// explicit path attributes only restated it.
 mod history_read;
 mod transcript_rebuild;
 
