@@ -4,7 +4,7 @@
 //! so it does not exercise the defaults. FsStub here inherits the defaults
 //! against a real temp dir, covering the default bodies' branches (roundtrip,
 //! max_bytes truncation, traversal reject, list/exists, nested-dir create).
-use super::*;
+use super::super::*;
 
 struct FsStub {
     ws: PathBuf,

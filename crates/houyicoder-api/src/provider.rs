@@ -7,6 +7,9 @@ use houyicoder_async::{PFut, PStream};
 use houyicoder_protocol::llm::{
     CompletionRequest, CompletionResponse, LlmEvent, ModelCapabilities, OutputItem, ProviderError,
 };
+use std::env::var;
+use std::time::Duration;
+use tokio::time::sleep;
 
 /// The provider-agnostic LLM seam. Object-safe (PFut) so the loop holds
 /// Box<dyn ModelProvider> and swaps an OpenAI-compatible, local, or stub
@@ -57,7 +60,7 @@ pub fn stream_from_response(
     // for dev/test, so a delay knob is an honest test affordance, not a
     // feature. The const lives in the config crate; the api crate cannot
     // depend on it (dep-graph), so the literal mirrors the canonical name.
-    let delay_ms = std::env::var("HOUYICODER_TEST_STUB_DELAY_MS")
+    let delay_ms = var("HOUYICODER_TEST_STUB_DELAY_MS")
         .ok()
         .and_then(|s| s.parse::<u64>().ok())
         .filter(|ms| *ms > 0);
@@ -77,7 +80,7 @@ pub fn stream_from_response(
                             // Delay the first delta so interruption tests have
                             // a deterministic window before assistant output.
                             if let Some(ms) = delay_ms {
-                                tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
+                                sleep(Duration::from_millis(ms)).await;
                             }
                             yield Ok(LlmEvent::TextDelta { id: id.clone(), text: chunk });
                         }

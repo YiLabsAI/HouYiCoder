@@ -1,4 +1,4 @@
-use super::{
+use super::super::{
     BoundaryAccess, Containment, Coverage, SideEffect, WorktreeFenceGuard, boundary_grants_for,
     normalize_tool_path, path_args_for_boundary,
 };

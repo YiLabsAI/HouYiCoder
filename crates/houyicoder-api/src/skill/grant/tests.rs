@@ -1,10 +1,15 @@
 use super::*;
+use crate::skill::GrantSubject;
+use crate::skill::ProjectIdentity;
+use crate::skill::SkillFamily;
+use crate::skill::SkillProvenance;
+use crate::skill::SkillSource;
+use std::sync::atomic::AtomicU32;
 
 /// A unique temp directory + skill-grants.json path for one test.
 /// Uses pid + atomic counter so parallel tests in the same process
 /// do not collide, and never touches the real user home directory.
 fn fresh_grant_path() -> PathBuf {
-    use std::sync::atomic::AtomicU32;
     static SEQ: AtomicU32 = AtomicU32::new(0);
     let n = SEQ.fetch_add(1, Ordering::Relaxed);
     let dir = env::temp_dir().join(format!("houyi-skill-grant-{}-{n}", process::id()));
@@ -25,23 +30,18 @@ fn fresh_store() -> SkillGrantStore {
 
 /// A store backed by a fresh temp path pre-loaded from a specific
 /// file content (for corrupt-file tests etc.).
-fn user_source() -> crate::skill::SkillSource {
-    crate::skill::SkillSource::new(
-        crate::skill::SkillFamily::Houyi,
-        crate::skill::SkillProvenance::UserHome,
-    )
+fn user_source() -> SkillSource {
+    SkillSource::new(SkillFamily::Houyi, SkillProvenance::UserHome)
 }
 
-fn user_subject(skill: &str) -> crate::skill::GrantSubject {
+fn user_subject(skill: &str) -> GrantSubject {
     user_source().grant_subject(skill)
 }
 
-fn project_source(root: &str) -> crate::skill::SkillSource {
-    crate::skill::SkillSource::new(
-        crate::skill::SkillFamily::Houyi,
-        crate::skill::SkillProvenance::Project(crate::skill::ProjectIdentity::from_canonical_root(
-            Path::new(root),
-        )),
+fn project_source(root: &str) -> SkillSource {
+    SkillSource::new(
+        SkillFamily::Houyi,
+        SkillProvenance::Project(ProjectIdentity::from_canonical_root(Path::new(root))),
     )
 }
 
@@ -267,10 +267,7 @@ fn test_resolve_profile_hit() {
         "ego-browser profile declares its bootstrap mach service"
     );
     assert!(allow_launch, "ego-browser profile grants app launch");
-    let ecosystem = crate::skill::SkillSource::new(
-        crate::skill::SkillFamily::Agents,
-        crate::skill::SkillProvenance::UserHome,
-    );
+    let ecosystem = SkillSource::new(SkillFamily::Agents, SkillProvenance::UserHome);
     let (mach, allow_launch) =
         resolve_entitlements(None, "ego-browser", Some(&ecosystem), &[], false);
     assert_eq!(mach, vec!["com.citrolabs.ego.lite.ego-browser"]);
@@ -332,8 +329,6 @@ fn test_resolve_untrusted_no_store() {
 
 #[test]
 fn test_profile_ignores_frontmatter() {
-    use crate::skill::{SkillFamily, SkillProvenance, SkillSource};
-
     let store = fresh_store();
     let source = SkillSource::new(SkillFamily::ClaudeEco, SkillProvenance::UserHome);
     let frontmatter = vec!["attacker.declared.svc".to_string()];
@@ -348,8 +343,6 @@ fn test_profile_ignores_frontmatter() {
 
 #[test]
 fn test_grants_isolate_provenance() {
-    use crate::skill::{ProjectIdentity, SkillFamily, SkillProvenance, SkillSource};
-
     let store = fresh_store();
     let user = SkillSource::new(SkillFamily::Agents, SkillProvenance::UserHome);
     let project = SkillSource::new(
@@ -370,8 +363,6 @@ fn test_grants_isolate_provenance() {
 
 #[test]
 fn test_projects_isolate_grants() {
-    use crate::skill::{GrantSubject, ProjectIdentity, SkillFamily, SkillProvenance, SkillSource};
-
     let one = SkillSource::new(
         SkillFamily::Houyi,
         SkillProvenance::Project(ProjectIdentity::from_canonical_root(Path::new("/repo/one"))),
@@ -388,8 +379,6 @@ fn test_projects_isolate_grants() {
 #[cfg(windows)]
 #[test]
 fn test_project_identity_folds_case() {
-    use crate::skill::ProjectIdentity;
-
     assert_eq!(
         ProjectIdentity::from_canonical_root(Path::new(r"C:\Repo")),
         ProjectIdentity::from_canonical_root(Path::new(r"c:\repo"))
@@ -398,8 +387,6 @@ fn test_project_identity_folds_case() {
 
 #[test]
 fn test_subject_rejects_forgery() {
-    use crate::skill::GrantSubject;
-
     for value in [
         serde_json::json!({"skill":"../x", "kind":"user_home", "identity":null}),
         serde_json::json!({"skill":"shared", "kind":"project", "identity":"short"}),

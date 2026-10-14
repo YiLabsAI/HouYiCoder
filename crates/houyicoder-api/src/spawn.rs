@@ -3,7 +3,12 @@
 //! a tool cannot see, so the spawn contract stays neutral here: the
 //! engine adapts these types to its full request and child handle.
 
+use crate::tool::ToolCtx;
 use houyicoder_async::PFut;
+use houyicoder_context::SessionId;
+use houyicoder_protocol::llm::Usage;
+#[cfg(test)]
+use std::sync::Arc;
 
 /// The running agent's identity, threaded through ToolCtx so the agent
 /// tool can enforce the recursion guard and fork-recursion check without
@@ -84,7 +89,7 @@ pub struct SpawnOutcome {
     /// follow-up reads. None for a background child.
     pub result_ref: Option<String>,
     /// The child's cumulative token usage. None for a background child.
-    pub usage: Option<houyicoder_protocol::llm::Usage>,
+    pub usage: Option<Usage>,
 }
 
 impl SpawnOutcome {
@@ -93,7 +98,7 @@ impl SpawnOutcome {
         child_session_id: impl Into<String>,
         status: impl Into<String>,
         summary: impl Into<String>,
-        usage: houyicoder_protocol::llm::Usage,
+        usage: Usage,
     ) -> Self {
         let child = child_session_id.into();
         Self {
@@ -165,11 +170,8 @@ pub trait SpawnHandle: Send + Sync {
     /// completion reaches the parent later as a pending notification on the
     /// next parent turn. Either way the outcome carries only the child
     /// session id; the engine keeps the runner and cancel token.
-    fn spawn(
-        &self,
-        ctx: &crate::tool::ToolCtx,
-        args: SpawnArgs,
-    ) -> PFut<'_, Result<SpawnOutcome, SpawnFailure>>;
+    fn spawn(&self, ctx: &ToolCtx, args: SpawnArgs)
+    -> PFut<'_, Result<SpawnOutcome, SpawnFailure>>;
 
     /// Route a steering text into a running child's inbox. The child's drive
     /// loop drains it at the next turn boundary. The default returns Err (no
@@ -241,7 +243,7 @@ pub trait SpawnHandle: Send + Sync {
     /// consumer wires those.
     fn spawn_system(
         &self,
-        _parent_sid: houyicoder_context::SessionId,
+        _parent_sid: SessionId,
         _hook: &str,
         _args: SpawnArgs,
     ) -> PFut<'_, Result<SpawnOutcome, SpawnFailure>> {
@@ -258,7 +260,7 @@ mod tests {
     impl SpawnHandle for NoSpawn {
         fn spawn(
             &self,
-            _ctx: &crate::tool::ToolCtx,
+            _ctx: &ToolCtx,
             _args: SpawnArgs,
         ) -> PFut<'_, Result<SpawnOutcome, SpawnFailure>> {
             Box::pin(async { Err(SpawnFailure::Recursive) })
@@ -271,7 +273,7 @@ mod tests {
         let args = SpawnArgs::new("explore", "find auth", "find auth");
         assert_eq!(args.isolation, "none");
         assert!(!args.run_in_background);
-        let ctx = crate::tool::ToolCtx::new("c1");
+        let ctx = ToolCtx::new("c1");
         let outcome = handle.spawn(&ctx, args).await;
         assert!(matches!(outcome, Err(SpawnFailure::Recursive)));
     }
@@ -284,7 +286,7 @@ mod tests {
         let handle: Box<dyn SpawnHandle> = Box::new(NoSpawn);
         let args = SpawnArgs::new("explore", "review", "review");
         let outcome = handle
-            .spawn_system(houyicoder_context::SessionId::new(), "review_gate", args)
+            .spawn_system(SessionId::new(), "review_gate", args)
             .await;
         assert!(
             matches!(outcome, Err(SpawnFailure::Recursive)),
@@ -302,13 +304,12 @@ mod tests {
 
     #[test]
     fn test_toolctx_carries_spawn_context() {
-        use crate::tool::ToolCtx;
         let identity = AgentIdentity {
             subagent_type: Some("explore".to_string()),
             depth: 1,
             parent_session_id: Some("parent-sid".to_string()),
         };
-        let handle: std::sync::Arc<dyn SpawnHandle> = std::sync::Arc::new(NoSpawn);
+        let handle: Arc<dyn SpawnHandle> = Arc::new(NoSpawn);
         let ctx = ToolCtx::new("call-1")
             .with_agent_identity(identity)
             .with_spawn_handle(handle);
