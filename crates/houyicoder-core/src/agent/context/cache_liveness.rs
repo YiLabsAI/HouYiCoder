@@ -46,14 +46,20 @@ impl Runner {
     /// Stamp the cached-prefix state with a completed API turn's wall clock
     /// and observed cache-read tokens. The cache is live while these stay
     /// fresh, so the serve path's retention policy holds per-block decisions
-    /// stable.
+    /// stable. When the provider did not report a cache-read count, only the
+    /// timestamp advances — the unknown zero must not overwrite a previously
+    /// reported hit and kill liveness.
     pub(crate) fn record_turn_cache(&self, usage: &Usage) {
         let now_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
-        self.cached_prefix
-            .record_turn(now_ms, usage.cache_read_input_tokens as u64);
+        if usage.provenance.cache_read_reported {
+            self.cached_prefix
+                .record_turn(now_ms, usage.cache_read_input_tokens as u64);
+        } else {
+            self.cached_prefix.touch_timestamp(now_ms);
+        }
     }
 
     /// A shared handle to the cached-prefix state. The serve path's retention
@@ -112,6 +118,14 @@ impl CachedPrefixState {
     /// after a compaction clears the baseline).
     pub fn last_cache_read_tokens(&self) -> u64 {
         self.last_cache_read_tokens.load(Ordering::Relaxed)
+    }
+
+    /// Advance the completion timestamp without altering the cache-read count.
+    /// Used when a provider did not report a cache-read field: the unknown zero
+    /// must not overwrite a previously reported hit, but the clock stays fresh
+    /// so the TTL window does not expire on an unknowable reading.
+    pub fn touch_timestamp(&self, now_ms: u64) {
+        self.last_completion_ts.store(now_ms, Ordering::Relaxed);
     }
 
     /// Whether the cached prefix is live: the last turn hit the cache (nonzero

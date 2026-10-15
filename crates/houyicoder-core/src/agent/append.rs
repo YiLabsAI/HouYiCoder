@@ -625,24 +625,30 @@ impl Runner {
         // provider adapter). Records a durable event (not internal-only
         // telemetry) so /trajectory can surface it.
         let current = usage.cache_read_input_tokens as u64;
-        let cause = match self.cache_prev_read.lock() {
-            Ok(mut prev) => {
-                let p = *prev;
-                let cause = if p.is_some_and(|v| v > 0 && current < v / 2) {
-                    if self.cache_compact_flag.load(Ordering::Relaxed) {
-                        Some("compact")
-                    } else if self.cache_model_switch_flag.load(Ordering::Relaxed) {
-                        Some("model-switch")
+        // An unreported cache-read count is unknown — the 0 must not
+        // trigger a break against a previously reported hit.
+        let cause = if usage.provenance.cache_read_reported {
+            match self.cache_prev_read.lock() {
+                Ok(mut prev) => {
+                    let p = *prev;
+                    let cause = if p.is_some_and(|v| v > 0 && current < v / 2) {
+                        if self.cache_compact_flag.load(Ordering::Relaxed) {
+                            Some("compact")
+                        } else if self.cache_model_switch_flag.load(Ordering::Relaxed) {
+                            Some("model-switch")
+                        } else {
+                            Some("unknown")
+                        }
                     } else {
-                        Some("unknown")
-                    }
-                } else {
-                    None
-                };
-                *prev = Some(current);
-                cause
+                        None
+                    };
+                    *prev = Some(current);
+                    cause
+                }
+                Err(_) => None,
             }
-            Err(_) => None,
+        } else {
+            None
         };
         self.cache_compact_flag.store(false, Ordering::Relaxed);
         self.cache_model_switch_flag.store(false, Ordering::Relaxed);

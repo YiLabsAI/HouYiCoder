@@ -6,7 +6,7 @@
 use super::*;
 use houyicoder_context::SessionEvent;
 use houyicoder_protocol::llm::{CompletionResponse, ModelCapabilities, OutputItem, ProviderError};
-use houyicoder_protocol::llm::{LlmEvent, Usage};
+use houyicoder_protocol::llm::{LlmEvent, Usage, UsageProvenance};
 
 use super::compaction::CompactionSuppression;
 use super::{GuardedTool, runner_with};
@@ -335,6 +335,11 @@ async fn test_cache_break_compact_attribution() {
     let high = Usage {
         cache_read_input_tokens: 5000,
         input_tokens: 5000,
+        provenance: UsageProvenance {
+            input_reported: true,
+            cache_read_reported: true,
+            ..UsageProvenance::default()
+        },
         ..Usage::default()
     };
     runner
@@ -344,8 +349,16 @@ async fn test_cache_break_compact_attribution() {
     // Simulate a compact since the previous response.
     runner.cache_compact_flag.store(true, Ordering::Relaxed);
     // Next turn: cache_read dropped to 0 (the compact rewrote the prefix).
+    let zero = Usage {
+        provenance: UsageProvenance {
+            input_reported: true,
+            cache_read_reported: true,
+            ..UsageProvenance::default()
+        },
+        ..Usage::default()
+    };
     runner
-        .append_turn_usage(session, "test", &Usage::default(), false, None)
+        .append_turn_usage(session, "test", &zero, false, None)
         .await
         .unwrap();
     let events = runner.store().replay(session).await.unwrap();
@@ -376,6 +389,11 @@ async fn test_cache_break_model_switch() {
     let high = Usage {
         cache_read_input_tokens: 8000,
         input_tokens: 8000,
+        provenance: UsageProvenance {
+            input_reported: true,
+            cache_read_reported: true,
+            ..UsageProvenance::default()
+        },
         ..Usage::default()
     };
     runner
@@ -385,8 +403,16 @@ async fn test_cache_break_model_switch() {
     runner
         .cache_model_switch_flag
         .store(true, Ordering::Relaxed);
+    let zero = Usage {
+        provenance: UsageProvenance {
+            input_reported: true,
+            cache_read_reported: true,
+            ..UsageProvenance::default()
+        },
+        ..Usage::default()
+    };
     runner
-        .append_turn_usage(session, "test", &Usage::default(), false, None)
+        .append_turn_usage(session, "test", &zero, false, None)
         .await
         .unwrap();
     let events = runner.store().replay(session).await.unwrap();
@@ -412,6 +438,11 @@ async fn test_cache_break_no_drop() {
     let high = Usage {
         cache_read_input_tokens: 5000,
         input_tokens: 5000,
+        provenance: UsageProvenance {
+            input_reported: true,
+            cache_read_reported: true,
+            ..UsageProvenance::default()
+        },
         ..Usage::default()
     };
     runner
@@ -429,6 +460,54 @@ async fn test_cache_break_no_drop() {
             .iter()
             .all(|e| !matches!(&e.event, SessionEvent::CacheBreak { .. })),
         "no CacheBreak when cache_read does not drop"
+    );
+}
+
+#[tokio::test]
+async fn test_cache_break_unknown() {
+    // A sharp drop with neither the compact nor the model-switch flag set is
+    // attributed to "unknown" — the break is real but its cause is not.
+    let runner = runner_with_overflow(
+        Arc::new(OverflowThenSucceedProvider::new(0, "x")),
+        ToolRegistry::new(),
+    );
+    let session = SessionId::new();
+    let high = Usage {
+        cache_read_input_tokens: 8000,
+        input_tokens: 8000,
+        provenance: UsageProvenance {
+            input_reported: true,
+            cache_read_reported: true,
+            ..UsageProvenance::default()
+        },
+        ..Usage::default()
+    };
+    runner
+        .append_turn_usage(session, "test", &high, false, None)
+        .await
+        .unwrap();
+    // Next turn: cache_read dropped to 0, no flag set since the last response.
+    let zero = Usage {
+        provenance: UsageProvenance {
+            input_reported: true,
+            cache_read_reported: true,
+            ..UsageProvenance::default()
+        },
+        ..Usage::default()
+    };
+    runner
+        .append_turn_usage(session, "test", &zero, false, None)
+        .await
+        .unwrap();
+    let events = runner.store().replay(session).await.unwrap();
+    assert!(
+        events.iter().any(|e| {
+            matches!(
+                &e.event,
+                SessionEvent::CacheBreak { cause } if cause == "unknown"
+            )
+        }),
+        "drop with no flag attributes to unknown"
     );
 }
 

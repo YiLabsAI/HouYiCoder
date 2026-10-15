@@ -107,3 +107,30 @@ fn test_live_uses_conservative_band() {
     let d = policy.decide(&ctx(4, Some("h1"), 1_100));
     assert_eq!(d, RetentionDecision::Materialize);
 }
+
+/// When the provider did not report a cache-read count, touch_timestamp
+/// advances the clock without zeroing a previously reported hit. The liveness
+/// state is preserved — an unreported reading is unknown, not a confirmed
+/// cache miss.
+#[test]
+fn test_touch_timestamp_preserves_liveness() {
+    let s = CachedPrefixState::new();
+    // A reported turn: cache hit at 800, clock at 1_000.
+    s.record_turn(1_000, 800);
+    assert_eq!(s.last_cache_read_tokens(), 800);
+    assert!(s.cache_alive_at(1_001, CACHE_TTL_MS));
+    // An unreported turn comes in — only the clock advances, cache_read
+    // stays at the last reported value so the prefix stays live.
+    s.touch_timestamp(2_000);
+    assert_eq!(s.last_cache_read_tokens(), 800, "cache-read preserved");
+    assert!(
+        s.cache_alive_at(2_001, CACHE_TTL_MS),
+        "still alive after touch: cache-read unchanged"
+    );
+    // A real miss (zero cache_read from record_turn) should still kill liveness.
+    s.record_turn(2_100, 0);
+    assert!(
+        !s.cache_alive_at(2_101, CACHE_TTL_MS),
+        "confirmed miss kills liveness"
+    );
+}
