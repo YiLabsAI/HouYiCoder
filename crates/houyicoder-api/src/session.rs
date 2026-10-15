@@ -81,7 +81,8 @@ impl SubagentUsage {
             total_tokens: input_tokens.saturating_add(output_tokens),
             non_cached_input_tokens: clamp(
                 self.input_tokens
-                    .saturating_sub(self.cache_read_input_tokens),
+                    .saturating_sub(self.cache_read_input_tokens)
+                    .saturating_sub(self.cache_write_input_tokens),
             ),
             cache_read_input_tokens: clamp(self.cache_read_input_tokens),
             cache_write_input_tokens: clamp(self.cache_write_input_tokens),

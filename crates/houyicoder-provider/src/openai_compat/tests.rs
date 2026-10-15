@@ -534,6 +534,79 @@ fn test_parse_usage_none() {
     );
 }
 
+/// DeepSeek reports prompt_cache_hit_tokens and prompt_cache_miss_tokens at
+/// the usage root; cached_tokens may appear under prompt_tokens_details
+/// alongside them. When only the root-level fields are present, the parser
+/// falls back to prompt_cache_hit_tokens for the cache-read count, and
+/// non_cached is the miss remainder so the identity holds.
+#[test]
+fn test_parse_usage_deepseek_fold() {
+    let u = json!({
+        "prompt_tokens": 1000,
+        "completion_tokens": 40,
+        "total_tokens": 1040,
+        "prompt_cache_hit_tokens": 700,
+        "prompt_cache_miss_tokens": 300
+    });
+    let usage = parse_usage(Some(&u));
+    assert_eq!(usage.input_tokens, 1000);
+    assert_eq!(usage.cache_read_input_tokens, 700);
+    assert_eq!(usage.non_cached_input_tokens, 300, "1000 - 700 cached");
+    // Material identity, not a constant-true fallback.
+    assert_eq!(
+        usage.non_cached_input_tokens as u64
+            + usage.cache_read_input_tokens as u64
+            + usage.cache_write_input_tokens as u64,
+        usage.input_tokens as u64,
+        "non_cached + cache_read + cache_write = input"
+    );
+    // cache_read parsed from the DeepSeek fallback key.
+    assert_eq!(
+        usage.provenance,
+        UsageProvenance {
+            input_reported: true,
+            cache_read_reported: true,
+            cache_write_reported: false,
+        }
+    );
+    assert_eq!(usage.cache_hit_rate(), Some(0.7));
+}
+
+/// When a gateway relays Anthropic's cache_creation_input_tokens through the
+/// usage object, cache_write is parsed and subtracted from non_cached so the
+/// identity holds. Without it, non_cached would silently absorb the write.
+#[test]
+fn test_parse_usage_cache_creation() {
+    let u = json!({
+        "prompt_tokens": 3000,
+        "completion_tokens": 80,
+        "total_tokens": 3080,
+        "prompt_tokens_details": {"cached_tokens": 1800},
+        "cache_creation_input_tokens": 200
+    });
+    let usage = parse_usage(Some(&u));
+    assert_eq!(usage.input_tokens, 3000);
+    assert_eq!(usage.cache_read_input_tokens, 1800);
+    assert_eq!(usage.cache_write_input_tokens, 200);
+    // non_cached = input - cache_read - cache_write
+    assert_eq!(usage.non_cached_input_tokens, 1000);
+    assert_eq!(
+        usage.non_cached_input_tokens as u64
+            + usage.cache_read_input_tokens as u64
+            + usage.cache_write_input_tokens as u64,
+        usage.input_tokens as u64,
+        "non_cached + cache_read + cache_write = input"
+    );
+    assert_eq!(
+        usage.provenance,
+        UsageProvenance {
+            input_reported: true,
+            cache_read_reported: true,
+            cache_write_reported: true,
+        }
+    );
+}
+
 /// An abnormal close (the byte stream ended without an explicit
 /// finish_reason) must signal a mid-text cut when text was in flight, so the
 /// engine's length-recovery re-calls for the tail rather than silently

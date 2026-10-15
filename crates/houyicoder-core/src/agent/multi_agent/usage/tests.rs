@@ -114,3 +114,31 @@ fn test_empty_delegation_neutral() {
         "a childless fold keeps the session's own cache rate"
     );
 }
+
+/// When a subagent return carries cache_write (>0), to_usage subtracts both
+/// cache_read and cache_write from input so non_cached does not silently
+/// absorb the write tokens. The assertion against a hard-coded total
+/// (1000 = 500 + 200 + 300) avoids the constant-true trap.
+#[test]
+fn test_to_usage_subtracts_write() {
+    let s = SubagentUsage {
+        calls: 1,
+        input_tokens: 1000,
+        cache_read_input_tokens: 500,
+        cache_write_input_tokens: 200,
+        ..Default::default()
+    };
+    let u = s.to_usage();
+    assert_eq!(u.input_tokens, 1000);
+    assert_eq!(u.cache_read_input_tokens, 500);
+    assert_eq!(u.cache_write_input_tokens, 200);
+    // non_cached = 1000 - 500 - 200 = 300
+    assert_eq!(u.non_cached_input_tokens, 300);
+    assert_eq!(
+        u.non_cached_input_tokens as u64
+            + u.cache_read_input_tokens as u64
+            + u.cache_write_input_tokens as u64,
+        u.input_tokens as u64,
+        "non_cached + cache_read + cache_write = input"
+    );
+}

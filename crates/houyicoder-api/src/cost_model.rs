@@ -43,11 +43,11 @@ impl ProviderCost {
 
 /// A per-provider cost model. The cost() rates drive the breakeven + clear-
 /// at-least derivation; effective_input_tokens normalizes split vs subset
-/// accounting so cache is never double-counted. The split model reports
-/// input_tokens as the uncached remainder with cache fields
-/// alongside (Anthropic); the subset model folds cache into
-/// input_tokens (OpenAI). The default effective_input_tokens
-/// matches the standalone normalizer the pre-flight floor uses.
+/// accounting so cache is never double-counted. In the split model non_cached +
+/// cache_read + cache_write = input_tokens (Anthropic accounting); the subset
+/// model folds only cache_read into input_tokens without a separate cache_write
+/// (OpenAI). The default effective_input_tokens matches the standalone
+/// normalizer the pre-flight floor uses.
 pub trait CostModelProvider: Send + Sync {
     /// The relative token-cost rates for this provider.
     fn cost(&self) -> ProviderCost;
