@@ -1158,3 +1158,69 @@ fn test_loss_during_cancelling_settles() {
         "the approval prompt clears on settle"
     );
 }
+
+/// /clear drops the cached breakdown and the occupancy the gauge shows: both
+/// describe the session being archived. Without the drop, the next /context
+/// paints the archived numbers before its reply lands and the gauge keeps
+/// reporting the old footprint until a poll happens to refresh it.
+#[test]
+fn test_clear_drops_context_cache() {
+    let resp = CompletionResponse {
+        output: vec![OutputItem::Text {
+            text: "done".into(),
+        }],
+        usage: Usage {
+            input_tokens: 12_400,
+            output_tokens: 9_100,
+            total_tokens: 21_500,
+            ..Usage::default()
+        },
+        model: "test".into(),
+    };
+    let p = Arc::new(FakeProvider::new(vec![resp]));
+    let mut app = app_with_provider(p, ToolRegistry::new());
+    app.spawn_run("go".into());
+    assert!(
+        pump_until(&mut app, 200, |a| !a.agent_busy()),
+        "the run settles"
+    );
+    // A /context fills the cache the fast path renders from, and the periodic
+    // poll fills the snapshot whose occupancy the gauge reads.
+    app.run_command(SlashCommand::Context);
+    assert!(
+        pump_until(&mut app, 200, |a| a
+            .sessions
+            .current
+            .capabilities
+            .status
+            .context_cache
+            .is_some()),
+        "the context reply fills the cache"
+    );
+    assert!(
+        pump_until(&mut app, 200, |a| a
+            .sessions
+            .current
+            .capabilities
+            .status
+            .status_cache
+            .as_ref()
+            .is_some_and(|s| s.context_used_tokens.is_some())),
+        "the poll reports an occupancy after the run"
+    );
+
+    app.run_command(SlashCommand::Clear);
+    let status = &app.sessions.current.capabilities.status;
+    assert!(
+        status.context_cache.is_none(),
+        "the archived breakdown is dropped at the session boundary"
+    );
+    assert!(
+        status
+            .status_cache
+            .as_ref()
+            .is_none_or(|s| s.context_used_tokens.is_none()),
+        "the gauge stops reporting the archived footprint: {:?}",
+        status.status_cache.as_ref().map(|s| s.context_used_tokens)
+    );
+}

@@ -254,11 +254,10 @@ fn legend_rows(bd: &ContextBreakdown, pct: f64) -> Vec<Vec<Span<'static>>> {
     rows
 }
 
-/// The project memory file rows: a bold header plus dim suffix, then one
-/// tree-glyph row per file (path + tokens). These are the files the index
-/// reads (CLAUDE.md and friends), which is a different quantity from the
-/// grid's Memory category: that one counts recalled memory entries carried
-/// in the message stream. Empty when no project memory file was found.
+/// The memory source rows: a bold header plus dim suffix, then one tree-glyph
+/// row per source (label + tokens). A source is a project memory file or a
+/// stored memory, not a recalled entry (see the grid's Memory category). Empty
+/// when there is no memory file and no stored memory.
 fn memory_rows(files: &[ContextFileEntry]) -> Vec<Vec<Span<'static>>> {
     if files.is_empty() {
         return Vec::new();
@@ -273,7 +272,7 @@ fn memory_rows(files: &[ContextFileEntry]) -> Vec<Vec<Span<'static>>> {
     for file in files {
         rows.push(vec![
             Span::styled("\u{2514} ", dim),
-            Span::styled(format!("{}: ", file.path), dim),
+            Span::styled(format!("{}: ", file.label), dim),
             Span::styled(format!("{} tokens", fmt_tokens(file.tokens)), dim),
         ]);
     }

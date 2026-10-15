@@ -35,7 +35,7 @@ fn working_app_with_drill() -> App {
         breakdown,
         drill: ContextDrillDown {
             memory_files: vec![ContextFileEntry {
-                path: "~/.houyicoder/memory/MEMORY.md".to_string(),
+                label: "~/.houyicoder/memory/MEMORY.md".to_string(),
                 tokens: 6_600,
             }],
             skills: vec![ContextSkillEntry {
@@ -621,7 +621,7 @@ mod command;
 fn test_drill_reads_the_wire() {
     let mut bd = base_breakdown();
     bd.memory_files = vec![WireFileEntry {
-        path: "~/.houyicoder/memory/MEMORY.md".to_string(),
+        label: "~/.houyicoder/memory/MEMORY.md".to_string(),
         tokens: 6_600,
     }];
     bd.skills = vec![WireSkillEntry {
@@ -631,7 +631,10 @@ fn test_drill_reads_the_wire() {
     }];
     let drill = ContextDrillDown::from_breakdown(&bd);
     assert_eq!(drill.memory_files.len(), 1, "memory rows read off the wire");
-    assert_eq!(drill.memory_files[0].path, "~/.houyicoder/memory/MEMORY.md");
+    assert_eq!(
+        drill.memory_files[0].label,
+        "~/.houyicoder/memory/MEMORY.md"
+    );
     assert_eq!(drill.skills.len(), 1, "skill rows read off the wire");
     assert_eq!(drill.skills[0].source, "Built-in");
 

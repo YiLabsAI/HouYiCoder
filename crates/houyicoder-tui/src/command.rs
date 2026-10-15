@@ -334,6 +334,16 @@ impl App {
         permission.verdict_cursor = 0;
         permission.verdict_log_cache.clear();
         self.sessions.current.todos.clear();
+        // The cached breakdown and the occupancy the gauge shows describe the
+        // session being archived, not the fresh one. A /context would paint the
+        // archived numbers before its reply lands, and the gauge would keep
+        // reporting the old footprint until the next poll: drop both at the
+        // boundary, and let the fresh session fill them from its own replies.
+        let status = &mut self.sessions.current.capabilities.status;
+        status.context_cache = None;
+        if let Some(snapshot) = status.status_cache.as_mut() {
+            snapshot.context_used_tokens = None;
+        }
         // Reset the server's cumulative usage tally + audit trajectory so
         // /context reflects the new session only. Fire-and-forget: the host
         // clears its local view in parallel, and a refused enqueue stays

@@ -40,13 +40,19 @@ pub struct GridCell {
     pub fullness: f32,
 }
 
-/// One memory-file row in the /context drill-down, wire form: the file the
-/// memory index loaded and the tokens it costs.
+/// One memory-source row in the /context drill-down, wire form: a project
+/// memory file or a stored memory, with the tokens it costs.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ContextFileEntry {
-    /// Display path of the memory file the index read.
-    pub path: String,
+    /// What to show for this row: a project memory file path, or the key of a
+    /// stored memory whose index line the system prompt carries.
+    ///
+    /// Named path while a row could only be a file. A renamed field cannot
+    /// degrade on its own, so the old name stays readable rather than forcing a
+    /// version bump for a same-build peer.
+    #[serde(alias = "path")]
+    pub label: String,
     /// Tokens that file occupies in the window.
     pub tokens: u32,
 }
@@ -83,11 +89,11 @@ pub struct ContextBreakdown {
     pub grid: Vec<Vec<GridCell>>,
     /// Flat cell index of the cache breakpoint (cached prefix before it).
     pub cache_breakpoint: Option<usize>,
-    /// The project memory files the index reads (CLAUDE.md and friends), for
-    /// the drill-down. This is not the grid's Memory category, which counts
-    /// recalled entries carried in the message stream. Empty before the first
-    /// measurement; the frontend renders the rows the analyzer supplies rather
-    /// than synthesizing them from a pane cache.
+    /// The memory sources the request pays for: the project memory files the
+    /// index reads (CLAUDE.md and friends) and the stored memories it carries a
+    /// line each for. Not the grid's Memory category, which counts recalled
+    /// entries in the message stream. Empty before the first measurement; the
+    /// frontend renders what the analyzer supplies, never a pane cache.
     #[serde(default)]
     pub memory_files: Vec<ContextFileEntry>,
     /// The skills the registry exposes, for the drill-down. Empty when no

@@ -258,3 +258,88 @@ fn test_memory_index_respects_gate() {
     );
     drop(remove_dir_all(&root));
 }
+
+/// The /context drill-down lists the stored memories the frozen prompt index
+/// carries, and stops listing them once the gate is off: a row is a cost the
+/// request pays, so it follows the index rather than the live store.
+///
+/// The index is held across turns for a cache-stable prefix, so a memory
+/// written after the freeze reaches the prompt only at the next refresh point.
+/// The row must not appear before then, or the view would report a cost this
+/// request does not carry.
+#[test]
+fn test_drill_lists_stored_memories() {
+    let root = temp_dir().join(format!("mem-drill-{}-{}", id(), line!()));
+    drop(remove_dir_all(&root));
+    fs::create_dir_all(&root).expect("mkdir store");
+    let memory: Arc<dyn MemoryProvider> = Arc::new(MarkdownMemoryProvider::new(root.clone()));
+    memory
+        .add(MemoryEntry::new(
+            "drill-key",
+            "a description the prompt carries",
+            MemorySource::Project,
+        ))
+        .unwrap();
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let mut runtime = MemoryRuntime::new(store.clone());
+    runtime.install_provider(memory.clone());
+    // A cwd holding no project memory file, so a stored memory is the only
+    // source row the drill can produce.
+    let cwd = temp_dir().join(format!("mem-drill-cwd-{}-{}", id(), line!()));
+    drop(remove_dir_all(&cwd));
+    fs::create_dir_all(&cwd).expect("mkdir cwd");
+    let runner = Runner::new(
+        store,
+        Arc::new(FakeProvider::new(vec![])),
+        ToolRegistry::new(),
+        RunnerConfig::default(),
+    )
+    .with_cwd(cwd.clone())
+    .install_memory(runtime);
+
+    let has_key = |rows: &[houyicoder_protocol::frontend::context::ContextFileEntry]| {
+        rows.iter().any(|row| row.label == "drill-key")
+    };
+    let (sources, _skills) = runner.context_drill();
+    let row = sources
+        .iter()
+        .find(|row| row.label == "drill-key")
+        .expect("the stored memory has a row");
+    assert!(
+        row.tokens > 0,
+        "the row reports what the index line costs the prompt"
+    );
+
+    // Written after the freeze: the prompt does not carry its line yet, so the
+    // row must not claim the cost.
+    memory
+        .add(MemoryEntry::new(
+            "written-later",
+            "not in the frozen index yet",
+            MemorySource::Project,
+        ))
+        .unwrap();
+    let (frozen, _skills) = runner.context_drill();
+    assert!(
+        !frozen.iter().any(|row| row.label == "written-later"),
+        "a memory written after the freeze costs this request nothing: {frozen:?}"
+    );
+
+    // Past the refresh point the index carries it, so the row appears.
+    runner.memory.invalidate_index_snapshot();
+    let (refreshed, _skills) = runner.context_drill();
+    assert!(
+        refreshed.iter().any(|row| row.label == "written-later"),
+        "the refresh point brings the new memory into the index: {refreshed:?}"
+    );
+
+    // Gate off injects no index at all, so no stored memory costs anything.
+    runner.set_auto_memory(false);
+    let (gated, _skills) = runner.context_drill();
+    assert!(
+        !has_key(&gated) && !gated.iter().any(|row| row.label == "written-later"),
+        "gate off injects no index, so the memories cost the request nothing: {gated:?}"
+    );
+    drop(remove_dir_all(&root));
+    drop(remove_dir_all(&cwd));
+}

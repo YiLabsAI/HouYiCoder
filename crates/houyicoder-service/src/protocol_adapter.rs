@@ -240,7 +240,7 @@ pub(crate) fn map_context_breakdown(
             .memory_files
             .iter()
             .map(|f| ProtocolContextFileEntry {
-                path: f.path.clone(),
+                label: f.label.clone(),
                 tokens: f.tokens,
             })
             .collect(),

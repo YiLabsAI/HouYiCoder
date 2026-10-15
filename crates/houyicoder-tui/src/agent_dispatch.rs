@@ -520,8 +520,8 @@ impl App {
     /// message, so the proportional grid, legend, and suggestions all
     /// render. The breakdown is cached so the next /context renders
     /// immediately; a fresh ContextQuery refreshes it in the background.
-    /// Drill-down (memory files, skills) is empty until the server ships
-    /// those sections; the grid itself is honest data from the breakdown.
+    /// The drill-down rows (memory sources, skills) come from the breakdown the
+    /// server measured; the grid is the same breakdown's categories.
     fn apply_context_breakdown(&mut self, breakdown: ContextBreakdown) {
         self.sessions.current.capabilities.status.context_cache = Some(breakdown.clone());
         let suggestions = suggestions_for(&breakdown);

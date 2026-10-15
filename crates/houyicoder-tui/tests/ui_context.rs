@@ -14,8 +14,8 @@
 #![allow(clippy::unwrap_in_result)]
 
 use crate::common::{
-    self, PtySession, RENDER_TIMEOUT, fresh_temp_dir, pty_session, pty_session_in_dir,
-    run_slash_command,
+    self, Key, PtySession, RENDER_TIMEOUT, fresh_temp_dir, pty_session, pty_session_in_dir,
+    pty_session_with_home, run_slash_command,
 };
 use std::fs;
 
@@ -184,6 +184,103 @@ fn test_context_renders_drilldown_rows() {
     assert!(
         s.wait_for("release-check", RENDER_TIMEOUT),
         "the project skill row missing:\n{}",
+        s.output()
+    );
+}
+
+/// The /context view across a session's life: before any turn, after a turn,
+/// and after a clear.
+#[test]
+#[ignore]
+fn test_context_lifecycle_rows() {
+    let dir = fresh_temp_dir("ctx-life");
+    let home = fresh_temp_dir("ctx-life-home");
+    // The composition root walks up from the cwd to the nearest Cargo.toml for
+    // the workspace, so the project fixtures need one to be seen at all.
+    fs::write(dir.join("Cargo.toml"), "[package]\nname = \"ctx-life\"\n")
+        .expect("seed the manifest");
+    fs::write(
+        dir.join("AGENTS.md"),
+        "# Project rules\nKeep the release notes short.\n",
+    )
+    .expect("seed the project memory file");
+    let skill_dir = dir.join(".houyicoder/skills/release-check");
+    fs::create_dir_all(&skill_dir).expect("seed the project skill dir");
+    fs::write(
+        skill_dir.join("SKILL.md"),
+        "---\nname: release-check\ndescription: Check the release checklist before tagging.\n---\n\nbody\n",
+    )
+    .expect("seed the project skill");
+    // A stored memory in the project scope: what /memory lists, and what the
+    // system prompt index carries one line for.
+    let memory_dir = dir.join(".houyicoder/memory");
+    fs::create_dir_all(&memory_dir).expect("seed the memory root");
+    fs::write(
+        memory_dir.join("onboarding-notes.md"),
+        "---\nname: onboarding-notes\ndescription: How this project is set up\nsource: Project\norigin: Manual\n---\nHow this project is set up.\n",
+    )
+    .expect("seed the stored memory");
+
+    let mut s = pty_session_with_home(dir, home, common::ONE_REPLY_SCRIPT);
+
+    // Before any turn has run: the prospective measurement must report the real
+    // tool schemas rather than a zero the first turn then contradicts, and the
+    // drill-down must carry the project file, the stored memory, and the
+    // project skill.
+    run_slash_command(&mut s, "context");
+    for marker in [
+        "System prompt:",
+        "System tools:",
+        "AGENTS.md",
+        "onboarding-notes",
+        "release-check",
+    ] {
+        assert!(
+            s.wait_for_screen(marker, RENDER_TIMEOUT),
+            "first open is missing {marker}:\n{}",
+            s.screen().contents()
+        );
+    }
+    assert!(
+        !s.screen().contents().contains("Messages:"),
+        "no turn has run, so there is no messages row:\n{}",
+        s.screen().contents()
+    );
+
+    // After a turn: the status bar carries the occupancy, and the measured
+    // breakdown reports the message row the prospective view cannot.
+    s.send_str("hello");
+    s.send_key(&Key::Enter);
+    assert!(
+        s.wait_for_screen("% context used", RENDER_TIMEOUT),
+        "the status bar reports the measured occupancy:\n{}",
+        s.screen().contents()
+    );
+    run_slash_command(&mut s, "context");
+    assert!(
+        s.wait_for_screen("Messages:", RENDER_TIMEOUT),
+        "a turn ran, so the messages row reports its size:\n{}",
+        s.screen().contents()
+    );
+
+    // After the session is archived: the fresh session reports the prospective
+    // view again, so the archived session's message row is gone.
+    run_slash_command(&mut s, "clear");
+    assert!(
+        s.wait_for_screen("session archived, new session started", RENDER_TIMEOUT),
+        "clear archives the session:\n{}",
+        s.screen().contents()
+    );
+    s.clear_output();
+    run_slash_command(&mut s, "context");
+    assert!(
+        s.wait_for("System tools:", RENDER_TIMEOUT),
+        "the fresh session still measures the tool schemas:\n{}",
+        s.output()
+    );
+    assert!(
+        !s.output().contains("Messages:"),
+        "the archived session's messages row must not survive the clear:\n{}",
         s.output()
     );
 }

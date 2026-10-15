@@ -12,10 +12,10 @@ use crate::scroll::TranscriptScroll;
 use crate::toggle_hint::ToggleHint;
 use crate::view::relative_time::turn_span_label;
 
-/// Drill-down rows under the /context grid: per-file memory and per-skill
-/// footprints. These drill-down rows list in two sections below the grid;
-/// the analyzer supplies them over the wire, so the renderer never invents
-/// rows from a pane cache of its own.
+/// Drill-down rows under the /context grid: per-source memory and per-skill
+/// footprints. A memory source is a project memory file or a stored memory.
+/// These rows list in two sections below the grid; the analyzer supplies them
+/// over the wire, so the renderer never invents rows from a pane cache.
 #[derive(Debug, Clone, Default)]
 pub struct ContextDrillDown {
     pub memory_files: Vec<ContextFileEntry>,
@@ -31,7 +31,7 @@ impl ContextDrillDown {
                 .memory_files
                 .iter()
                 .map(|f| ContextFileEntry {
-                    path: f.path.clone(),
+                    label: f.label.clone(),
                     tokens: f.tokens,
                 })
                 .collect(),
@@ -48,11 +48,11 @@ impl ContextDrillDown {
     }
 }
 
-/// One project memory-file row: display path + token count. The file the
-/// index reads, not a recalled entry (see the grid's Memory category).
+/// One memory-source row: a project memory file path or a stored memory key,
+/// with the tokens it costs.
 #[derive(Debug, Clone)]
 pub struct ContextFileEntry {
-    pub path: String,
+    pub label: String,
     pub tokens: u32,
 }
 
@@ -568,7 +568,7 @@ fn context_grid_text(view: &ContextView) -> String {
     if !view.drill.memory_files.is_empty() {
         s.push_str("  Memory files\n");
         for f in &view.drill.memory_files {
-            s.push_str(&format!("  \u{2514} {}: {} tokens\n", f.path, f.tokens));
+            s.push_str(&format!("  \u{2514} {}: {} tokens\n", f.label, f.tokens));
         }
     }
     if !view.drill.skills.is_empty() {

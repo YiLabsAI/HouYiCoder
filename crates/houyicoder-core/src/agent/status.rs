@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 use houyicoder_protocol::llm::Usage;
 use houyicoder_resilience::BreakerState;
 
-use super::memory::MemoryGateState;
+use super::memory::{MemoryGateState, index_line};
 use super::model_window::resolve_capabilities;
 use super::prompt::memory_file_paths;
 use crate::agent::ContextMeasurement;
@@ -373,6 +373,13 @@ impl Runner {
         self.memory.list()
     }
 
+    /// The memories the frozen system prompt index was built from. The context
+    /// view costs each memory from this set rather than the live store, since
+    /// the frozen set is what the request pays for until the next refresh.
+    pub fn memory_index_entries(&self) -> Vec<houyicoder_context::MemorySummary> {
+        self.memory.index_entries()
+    }
+
     /// Fetch the full body of one memory by key, for /memory <key>. None when
     /// no provider is configured or the key is absent.
     pub fn memory_show(&self, key: &str) -> Option<houyicoder_context::MemoryEntry> {
@@ -435,24 +442,39 @@ impl Runner {
             .measurement
     }
 
-    /// The /context drill-down rows: the project memory files the index
-    /// reads (CLAUDE.md and friends, which is a different quantity from the
-    /// grid's recalled-memory category) and the skills the registry exposes,
-    /// each with the tokens it costs. The frontend renders these rows as
-    /// reported; it does not synthesize them from a pane cache, which may be
-    /// empty or hold placeholders.
+    /// The /context drill-down rows: the memory sources the request pays for
+    /// and the skills the registry exposes, each with the tokens it costs. A
+    /// memory source is a project memory file (the AGENTS.md family the index
+    /// reads) or a stored memory, which reaches the prompt as one index line.
+    /// This is a different quantity from the grid's Memory category, which
+    /// counts recalled entries carried in the message stream. The frontend
+    /// renders these rows as reported; it does not synthesize them from a pane
+    /// cache, which may be empty or hold placeholders.
     pub fn context_drill(&self) -> (Vec<ContextFileEntry>, Vec<ContextSkillEntry>) {
         let tokenizer = self.context_builder.tokenizer();
         let cwd = self.cwd();
-        let files = memory_file_paths(&cwd)
+        let mut sources: Vec<ContextFileEntry> = memory_file_paths(&cwd)
             .into_iter()
             .map(|path| ContextFileEntry {
-                path: path.to_string_lossy().into_owned(),
+                label: path.to_string_lossy().into_owned(),
                 tokens: read_to_string(&path)
                     .map(|text| tokenizer.count(&text))
                     .unwrap_or(0),
             })
             .collect();
+        // A stored memory costs one index line, and only while the gate injects
+        // that index at all. The rows come from the frozen index, not the live
+        // store: a memory written after the freeze reaches the prompt only at
+        // the next refresh point, so counting it now would overstate this
+        // request's cost.
+        sources.extend(
+            self.memory_index_entries()
+                .into_iter()
+                .map(|summary| ContextFileEntry {
+                    label: summary.key.clone(),
+                    tokens: tokenizer.count(&index_line(&summary)),
+                }),
+        );
         let skills = self
             .skills_snapshot()
             .into_iter()
@@ -465,7 +487,7 @@ impl Runner {
                 }
             })
             .collect();
-        (files, skills)
+        (sources, skills)
     }
 
     /// The directory the context builder reads for project memory files.
