@@ -96,6 +96,9 @@ fn test_agent_merges_spawn_return() {
                 cache_read_input_tokens: 17000,
                 cache_write_input_tokens: 0,
                 reasoning_tokens: 100,
+                input_reported: true,
+                cache_read_reported: true,
+                cache_write_reported: true,
             },
         ),
     ];
@@ -293,6 +296,9 @@ fn test_delegation_hides_tool_call() {
                 cache_read_input_tokens: 0,
                 cache_write_input_tokens: 0,
                 reasoning_tokens: 0,
+                input_reported: true,
+                cache_read_reported: true,
+                cache_write_reported: true,
             },
         ),
     ];
@@ -487,6 +493,9 @@ fn test_delegation_legacy_hides_tool() {
                 cache_read_input_tokens: 0,
                 cache_write_input_tokens: 0,
                 reasoning_tokens: 0,
+                input_reported: true,
+                cache_read_reported: true,
+                cache_write_reported: true,
             },
         ),
     ];
@@ -537,6 +546,9 @@ fn test_agent_return_shown() {
                 cache_read_input_tokens: 0,
                 cache_write_input_tokens: 0,
                 reasoning_tokens: 0,
+                input_reported: true,
+                cache_read_reported: true,
+                cache_write_reported: true,
             },
         ),
     ];
@@ -588,6 +600,9 @@ fn test_agent_unknown_status() {
                 cache_read_input_tokens: 0,
                 cache_write_input_tokens: 0,
                 reasoning_tokens: 0,
+                input_reported: true,
+                cache_read_reported: true,
+                cache_write_reported: true,
             },
         ),
     ];

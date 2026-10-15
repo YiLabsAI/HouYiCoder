@@ -276,6 +276,9 @@ pub async fn record_subagent_return(
             cache_read_input_tokens: usage.cache_read_input_tokens as u64,
             cache_write_input_tokens: usage.cache_write_input_tokens as u64,
             reasoning_tokens: usage.reasoning_tokens as u64,
+            input_reported: usage.provenance.input_reported,
+            cache_read_reported: usage.provenance.cache_read_reported,
+            cache_write_reported: usage.provenance.cache_write_reported,
         },
     );
     store

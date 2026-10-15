@@ -26,6 +26,9 @@ fn child_return(input: u64, output: u64, cache_read: u64) -> SessionEvent {
         cache_read_input_tokens: cache_read,
         cache_write_input_tokens: 0,
         reasoning_tokens: 0,
+        input_reported: true,
+        cache_read_reported: true,
+        cache_write_reported: true,
     }
 }
 

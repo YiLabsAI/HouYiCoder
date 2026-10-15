@@ -144,6 +144,9 @@ fn test_leading_partial_turn_unknown() {
             cache_read_input_tokens: 0,
             cache_write_input_tokens: 0,
             reasoning_tokens: 0,
+            input_reported: true,
+            cache_read_reported: true,
+            cache_write_reported: true,
         },
     )];
     let summary = fold(&events);
@@ -440,6 +443,9 @@ fn test_unmeasured_child_breaks_totals() {
                 cache_read_input_tokens: 0,
                 cache_write_input_tokens: 0,
                 reasoning_tokens: 0,
+                input_reported: false,
+                cache_read_reported: false,
+                cache_write_reported: false,
             },
         ),
         entry(30, SessionEvent::RunCompleted { ms: Some(1) }),
@@ -466,6 +472,9 @@ fn test_delegated_usage_folds() {
             cache_read_input_tokens: 80,
             cache_write_input_tokens: 0,
             reasoning_tokens: 0,
+            input_reported: true,
+            cache_read_reported: true,
+            cache_write_reported: true,
         },
     )];
     let summary = fold(&events);
@@ -488,6 +497,9 @@ fn test_unmeasured_child_flagged() {
             cache_read_input_tokens: 0,
             cache_write_input_tokens: 0,
             reasoning_tokens: 0,
+            input_reported: false,
+            cache_read_reported: false,
+            cache_write_reported: false,
         },
     )];
     assert!(fold(&events).usage.subagent_unmeasured);

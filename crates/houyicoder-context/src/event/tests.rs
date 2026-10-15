@@ -72,12 +72,82 @@ fn test_subagent_return_round_trip() {
             cache_read_input_tokens: 0,
             cache_write_input_tokens: 0,
             reasoning_tokens: 0,
+            input_reported: true,
+            cache_read_reported: true,
+            cache_write_reported: true,
         },
     );
     let json = serde_json::to_string(&e).expect("serialize");
     let back: SessionLogEntry = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(back, e);
     assert!(json.contains("\"type\":\"SubagentReturn\""));
+}
+
+/// A log written before the provenance flags existed must still deserialize
+/// (each is #[serde(default)]), degrading the child's cache account to unknown
+/// rather than failing or reading its zero cache-read as a reported miss.
+/// Strip the three keys and confirm they default to unreported.
+#[test]
+fn test_subagent_return_old_log() {
+    let s = SessionId::new();
+    let e = event(
+        s,
+        EventId::new(),
+        SessionEvent::SubagentReturn {
+            child_session_id: "child-3".into(),
+            status: "completed".into(),
+            summary: "done".into(),
+            result_ref: "child-3".into(),
+            input_tokens: 100,
+            output_tokens: 20,
+            cache_read_input_tokens: 0,
+            cache_write_input_tokens: 0,
+            reasoning_tokens: 0,
+            input_reported: true,
+            cache_read_reported: true,
+            cache_write_reported: true,
+        },
+    );
+    let json = serde_json::to_string(&e).expect("serialize");
+    // Strip the three provenance keys so the JSON looks like a pre-provenance
+    // log line.
+    let value = serde_json::from_str::<Value>(&json).expect("parse");
+    let kind = value
+        .get("event")
+        .and_then(Value::as_object)
+        .expect("event object");
+    let mut kind_obj = kind.clone();
+    kind_obj.remove("input_reported");
+    kind_obj.remove("cache_read_reported");
+    kind_obj.remove("cache_write_reported");
+    let mut wrapped = Map::new();
+    if let Value::Object(top) = value {
+        for (k, v) in top {
+            if k == "event" {
+                wrapped.insert("event".into(), Value::Object(kind_obj.clone()));
+            } else {
+                wrapped.insert(k, v);
+            }
+        }
+    }
+    let old = serde_json::to_string(&Value::Object(wrapped)).expect("re-serialize");
+    let back: SessionLogEntry = serde_json::from_str(&old).expect("old log deserializes");
+    match back.event {
+        SessionEvent::SubagentReturn {
+            input_tokens,
+            input_reported,
+            cache_read_reported,
+            cache_write_reported,
+            ..
+        } => {
+            assert_eq!(input_tokens, 100, "the token fields survive");
+            assert!(
+                !input_reported && !cache_read_reported && !cache_write_reported,
+                "missing provenance flags default to unreported"
+            );
+        }
+        other => panic!("expected SubagentReturn, got {other:?}"),
+    }
 }
 
 #[test]

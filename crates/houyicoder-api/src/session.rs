@@ -16,7 +16,7 @@ use houyicoder_protocol::llm::{Usage, UsageProvenance};
 use std::path::PathBuf;
 
 /// The delegated usage a session's children reported in durable returns.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SubagentUsage {
     /// Children that reached a terminal, whether or not they reported usage.
     pub calls: usize,
@@ -27,6 +27,25 @@ pub struct SubagentUsage {
     pub cache_read_input_tokens: u64,
     pub cache_write_input_tokens: u64,
     pub reasoning_tokens: u64,
+    /// The AND-fold of every child's reported-field provenance. Seeded to
+    /// all-reported (the merge identity) so a childless record stays complete
+    /// and the first child that did not report a field dilutes it to unknown.
+    pub provenance: UsageProvenance,
+}
+
+impl Default for SubagentUsage {
+    fn default() -> Self {
+        Self {
+            calls: 0,
+            unmeasured_calls: 0,
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_read_input_tokens: 0,
+            cache_write_input_tokens: 0,
+            reasoning_tokens: 0,
+            provenance: UsageProvenance::ALL_REPORTED,
+        }
+    }
 }
 
 impl SubagentUsage {
@@ -39,6 +58,9 @@ impl SubagentUsage {
             cache_read_input_tokens,
             cache_write_input_tokens,
             reasoning_tokens,
+            input_reported,
+            cache_read_reported,
+            cache_write_reported,
             ..
         } = event
         else {
@@ -62,15 +84,19 @@ impl SubagentUsage {
             .cache_write_input_tokens
             .saturating_add(*cache_write_input_tokens);
         self.reasoning_tokens = self.reasoning_tokens.saturating_add(*reasoning_tokens);
+        self.provenance = self.provenance.merge(UsageProvenance {
+            input_reported: *input_reported,
+            cache_read_reported: *cache_read_reported,
+            cache_write_reported: *cache_write_reported,
+        });
     }
 
-    /// Convert the totals to the provider usage shape used by status. A
-    /// zero-call record is the additive identity: its provenance is
-    /// all-reported so folding it into a session's own usage leaves that
-    /// usage's completeness untouched (an AND-fold diluted by all-unreported
-    /// would make every childless session's cache rate read unknown). A
-    /// measured record stays all-unreported until child provenance flows
-    /// through, so a combined rate reads unknown rather than a silent guess.
+    /// Convert the totals to the provider usage shape used by status. The
+    /// provenance is the AND-fold recorded from the children: a childless
+    /// record keeps the all-reported identity, so folding it into a session's
+    /// own usage leaves that usage's completeness untouched, while a record
+    /// holding a child that did not report a field reads unknown rather than
+    /// a silent guess.
     pub fn to_usage(self) -> Usage {
         let clamp = |v: u64| v.min(u32::MAX as u64) as u32;
         let input_tokens = clamp(self.input_tokens);
@@ -87,11 +113,7 @@ impl SubagentUsage {
             cache_read_input_tokens: clamp(self.cache_read_input_tokens),
             cache_write_input_tokens: clamp(self.cache_write_input_tokens),
             reasoning_tokens: clamp(self.reasoning_tokens),
-            provenance: if self.calls == 0 {
-                UsageProvenance::ALL_REPORTED
-            } else {
-                UsageProvenance::default()
-            },
+            provenance: self.provenance,
         }
     }
 }

@@ -457,7 +457,9 @@ pub enum SessionEvent {
     /// parent model reads; result_ref points at the child log for the full
     /// transcript; the usage fields mirror TurnUsage so the parent can
     /// reattribute the child's token cost without importing the provider
-    /// Usage type (keeps context a leaf).
+    /// Usage type (keeps context a leaf). The three reported flags mirror
+    /// UsageProvenance for the same leaf reason: the parent folds the child's
+    /// cache-account completeness into its own rather than re-deriving it.
     #[serde(rename = "SubagentReturn")]
     SubagentReturn {
         child_session_id: String,
@@ -476,6 +478,18 @@ pub enum SessionEvent {
         cache_write_input_tokens: u64,
         #[serde(default)]
         reasoning_tokens: u64,
+        /// Whether the child's endpoint reported the inclusive input total.
+        /// Defaults to false so a log that predates the field reads as unknown
+        /// rather than as a complete zero; the other two flags default the
+        /// same way.
+        #[serde(default)]
+        input_reported: bool,
+        /// Whether the child's endpoint reported the cache-read count.
+        #[serde(default)]
+        cache_read_reported: bool,
+        /// Whether the child's endpoint reported the cache-write count.
+        #[serde(default)]
+        cache_write_reported: bool,
     },
     /// This session was delegated to by the named parent: the child side of
     /// the delegation boundary, written as the child session's first durable

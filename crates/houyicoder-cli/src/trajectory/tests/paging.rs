@@ -323,6 +323,9 @@ fn test_subagent_usage_summed() {
                 cache_read_input_tokens: cache,
                 cache_write_input_tokens: 0,
                 reasoning_tokens: 0,
+                input_reported: true,
+                cache_read_reported: true,
+                cache_write_reported: true,
             },
         )
     };
@@ -411,6 +414,9 @@ fn test_subagent_usage_parent_unknown() {
                 cache_read_input_tokens: 170_000,
                 cache_write_input_tokens: 0,
                 reasoning_tokens: 0,
+                input_reported: true,
+                cache_read_reported: true,
+                cache_write_reported: true,
             },
         ),
     ];
@@ -466,6 +472,9 @@ fn test_subagent_usage_unmeasured_unknown() {
                 cache_read_input_tokens: 0,
                 cache_write_input_tokens: 0,
                 reasoning_tokens: 0,
+                input_reported: false,
+                cache_read_reported: false,
+                cache_write_reported: false,
             },
         ),
     ];
@@ -516,6 +525,9 @@ fn test_subagent_usage_unknown() {
                 cache_read_input_tokens: 0,
                 cache_write_input_tokens: 0,
                 reasoning_tokens: 0,
+                input_reported: false,
+                cache_read_reported: false,
+                cache_write_reported: false,
             },
         ),
     ];

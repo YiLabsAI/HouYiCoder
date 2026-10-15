@@ -28,6 +28,28 @@ fn child_return(input: u64, output: u64, cache_read: u64) -> SessionEvent {
         cache_read_input_tokens: cache_read,
         cache_write_input_tokens: 0,
         reasoning_tokens: 0,
+        input_reported: true,
+        cache_read_reported: true,
+        cache_write_reported: true,
+    }
+}
+
+/// A child whose endpoint reported the input total but not the cache-read
+/// count, so its zero cache-read is unknown rather than a confirmed miss.
+fn child_return_read_unreported(input: u64, output: u64) -> SessionEvent {
+    SessionEvent::SubagentReturn {
+        child_session_id: "child".into(),
+        status: "completed".into(),
+        summary: String::new(),
+        result_ref: String::new(),
+        input_tokens: input,
+        output_tokens: output,
+        cache_read_input_tokens: 0,
+        cache_write_input_tokens: 0,
+        reasoning_tokens: 0,
+        input_reported: true,
+        cache_read_reported: false,
+        cache_write_reported: false,
     }
 }
 
@@ -141,4 +163,40 @@ fn test_to_usage_subtracts_write() {
         u.input_tokens as u64,
         "non_cached + cache_read + cache_write = input"
     );
+}
+
+/// A child whose endpoint did not report the cache-read count folds an unknown
+/// into the parent's merged provenance, so the combined cache hit rate reads
+/// unknown rather than a misleading 0% built from the child's zero cache-read.
+#[test]
+fn test_unreported_child_rate_unknown() {
+    let events = vec![entry(child_return_read_unreported(100, 20))];
+    let usage = aggregate_subagent_usage(&events).to_usage();
+    assert!(
+        usage.provenance.input_reported,
+        "the child did report its input total"
+    );
+    assert!(
+        !usage.provenance.cache_read_reported,
+        "the unreported cache-read dilutes the merged provenance"
+    );
+    assert_eq!(
+        usage.cache_hit_rate(),
+        None,
+        "an incomplete cache account reads unknown, not 0%"
+    );
+}
+
+/// The complement: children that all report keep the merged rate computable,
+/// so the AND-fold is not constant-unknown. One reported child yields its own
+/// hit rate (80 of 100 input tokens came from the cache).
+#[test]
+fn test_reported_children_keep_rate() {
+    let events = vec![entry(child_return(100, 20, 80))];
+    let usage = aggregate_subagent_usage(&events).to_usage();
+    assert!(
+        usage.provenance.cache_account_complete(),
+        "every child reported, so the merged account is complete"
+    );
+    assert_eq!(usage.cache_hit_rate(), Some(0.8));
 }
