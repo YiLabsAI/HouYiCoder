@@ -3,9 +3,9 @@
 //! from composition.rs on the per-file size gate, same reasoning as the
 //! startup-warnings module beside it.
 
-use crate::session_prune::EMPTY_TTL_SECS;
-use crate::session_prune::PrunePolicy;
-use crate::session_prune::store_backlog_notice;
+use crate::lifecycle::prune::EMPTY_TTL_SECS;
+use crate::lifecycle::prune::PrunePolicy;
+use crate::lifecycle::prune::store_backlog_notice;
 use houyicoder_config::retention::load_retention;
 use houyicoder_context::SessionId;
 use std::path::PathBuf;

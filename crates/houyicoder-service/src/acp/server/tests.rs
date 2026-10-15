@@ -35,8 +35,8 @@ use tokio::sync::{Notify, oneshot};
 use tokio::task::JoinHandle;
 
 use super::AcpServer;
-use crate::acp_adapter::AcpAdapter;
-use crate::acp_serve::AcpIo;
+use crate::acp::adapter::AcpAdapter;
+use crate::acp::carrier::AcpIo;
 use crate::lifecycle::SessionLeaseStore;
 use tokio::time::timeout;
 

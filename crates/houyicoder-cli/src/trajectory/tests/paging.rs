@@ -6,7 +6,7 @@ use super::super::reader::{
 };
 use super::super::view::build_view;
 use super::test_support::gated_range_backend;
-use crate::session_history::SessionHistory;
+use crate::session::history::SessionHistory;
 use futures::executor::block_on;
 use houyicoder_api::session::SessionLog;
 use houyicoder_context::{

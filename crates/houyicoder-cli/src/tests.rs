@@ -34,7 +34,7 @@ use tokio::runtime::Builder;
 use crate::composition::start_local_server;
 use crate::detach::{is_session_live, session_socket, sessions_dir};
 use crate::local_host::{HostLease, HostLeaseScope, HostLeaseSlot};
-use crate::session_lock::{LockError, SessionLock};
+use crate::session::lock::{LockError, SessionLock};
 
 // ── parse_args: default + mode flags ──────────────────────────────
 

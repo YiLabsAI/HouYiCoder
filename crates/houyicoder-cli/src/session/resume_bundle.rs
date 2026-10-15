@@ -16,7 +16,7 @@ use std::sync::Arc;
 /// log + descriptor; the engine reads the history via backend replay on the
 /// next run. Wires the same TUI bundle the fresh path uses, with the model
 /// restored from the descriptor.
-pub(super) fn build_bundle_for_resume_sid(
+pub(crate) fn build_bundle_for_resume_sid(
     sid: houyicoder_context::SessionId,
     project: Option<String>,
     provider: ResolvedProvider,
@@ -45,7 +45,7 @@ pub(super) fn build_bundle_for_resume_sid(
 /// --fork-session). Mints a new sid seeded from the source's durable events
 /// with ForkedFrom provenance; the source is untouched. skip_login lands on
 /// the working screen directly.
-pub(super) fn build_bundle_for_fork(
+pub(crate) fn build_bundle_for_fork(
     source_sid: houyicoder_context::SessionId,
     project: Option<String>,
     provider: ResolvedProvider,

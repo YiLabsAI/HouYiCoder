@@ -28,7 +28,7 @@ use tokio::time::{sleep, timeout};
 
 use super::*;
 use crate::local_host::{HostLease, HostLeaseScope, HostLeaseSlot, release_all};
-use crate::session_lock::SessionLock;
+use crate::session::lock::SessionLock;
 
 fn temp_root() -> PathBuf {
     static SEQ: AtomicU64 = AtomicU64::new(0);

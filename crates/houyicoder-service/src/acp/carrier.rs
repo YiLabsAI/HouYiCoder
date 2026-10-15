@@ -20,7 +20,7 @@ use houyicoder_protocol::acp_wire::{
     AcpError, AcpErrorCode, AcpNotification, AcpRequest, AcpRequestId, AcpResponse, JsonRpcVersion,
 };
 
-use crate::acp_adapter::AcpAdapter;
+use crate::acp::adapter::AcpAdapter;
 
 /// The raw frame I/O for the ACP carrier (in-memory mode A). One half of the
 /// channel pair the composition root mints; the other half goes to the

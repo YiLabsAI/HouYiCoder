@@ -35,7 +35,7 @@ use tokio::task::yield_now;
 
 use super::*;
 use crate::composition::start_local_server;
-use crate::session_lock::{LockError, SessionLock};
+use crate::session::lock::{LockError, SessionLock};
 use futures::stream::once;
 use std::process::Command;
 

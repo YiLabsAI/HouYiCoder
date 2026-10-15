@@ -81,7 +81,7 @@ CRATES = ROOT / "crates"
 # listener only runs in detached mode, where this process has no TUI.
 _CONSOLE_OK: dict[str, int] = {
     "crates/houyicoder-cli/src/cli_args.rs": 1,
-    "crates/houyicoder-cli/src/cleanup.rs": 13,
+    "crates/houyicoder-cli/src/session/cleanup.rs": 13,
     "crates/houyicoder-cli/src/main.rs": 13,
     "crates/houyicoder-loader/src/main.rs": 2,
     "crates/houyicoder-service/src/uds.rs": 2,

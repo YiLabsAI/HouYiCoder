@@ -1,5 +1,5 @@
 use super::*;
-use houyicoder_service::session_prune::{PruneAction, PruneEntry, PruneKind, PruneReason};
+use houyicoder_service::lifecycle::prune::{PruneAction, PruneEntry, PruneKind, PruneReason};
 
 /// The apply path says what the repair did only when it did something,
 /// and never hides a failure behind a zero count.

@@ -17,7 +17,7 @@ use super::super::turns::FoldMode;
 use super::super::view::fold_rows;
 use super::TrajectoryState;
 
-use crate::session_history::{SessionHistory, is_user_input};
+use crate::session::history::{SessionHistory, is_user_input};
 use std::sync::mpsc::Receiver;
 use std::sync::mpsc::TryRecvError;
 use std::sync::mpsc::channel;

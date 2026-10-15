@@ -30,10 +30,10 @@ use houyicoder_tui::view::export_log::ExportLog;
 use houyicoder_tui::view::trajectory_pane::TrajectoryLog;
 use tokio::sync::Notify;
 
-use crate::housekeeping;
-use crate::session_catalog::DescriptorSessionCatalog;
-use crate::session_history::SessionHistory;
-use crate::session_log_snapshot::SessionLogSnapshot;
+use crate::session::catalog::DescriptorSessionCatalog;
+use crate::session::history::SessionHistory;
+use crate::session::housekeeping::fire_after_bundle;
+use crate::session::log_snapshot::SessionLogSnapshot;
 use crate::trajectory::SessionLogTrajectory;
 use std::env::current_dir;
 
@@ -294,7 +294,7 @@ pub(crate) fn start_local_server(
     // with the process. A short session that exits before 10min simply
     // does not prune this run.
     runtime.spawn(async move {
-        housekeeping::fire_after_bundle(session);
+        fire_after_bundle(session);
     });
     // Ask the provider which model ids it serves and cache them for catalog
     // existence validation. A no-op for the stub provider; a /v1/models fetch

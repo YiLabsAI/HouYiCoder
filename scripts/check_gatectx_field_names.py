@@ -40,7 +40,7 @@ BLOCKED_STEMS = ("containment", "sandbox", "fenced", "network")
 # holds the Containment handle + auto_allow switch for post_transform, which
 # runs after the pipeline and is the authority the contract designates.
 TARGETS = [
-    ("GateCtx", ROOT / "crates/houyicoder-permission/src/pipeline/mod.rs"),
+    ("GateCtx", ROOT / "crates/houyicoder-permission/src/pipeline.rs"),
 ]
 
 

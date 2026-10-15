@@ -7,13 +7,13 @@
 //! keeps a backlog that plan_all reports in the tens of thousands to a
 //! screen, where the per-entry list would flood it.
 
-use crate::housekeeping::apply_prune_locked;
-use crate::housekeeping::build_prune_context;
-use crate::housekeeping::try_prune_lock;
+use crate::session::housekeeping::apply_prune_locked;
+use crate::session::housekeeping::build_prune_context;
+use crate::session::housekeeping::try_prune_lock;
 use houyicoder_service::composition::session_log_root;
-use houyicoder_service::session_prune::plan_all;
-use houyicoder_service::session_prune::{PruneEntry, PruneKind, PrunePlan, PruneReason};
-use houyicoder_service::session_repair::{DescriptorRepair, repair_child_descriptors};
+use houyicoder_service::lifecycle::prune::plan_all;
+use houyicoder_service::lifecycle::prune::{PruneEntry, PruneKind, PrunePlan, PruneReason};
+use houyicoder_service::lifecycle::repair::{DescriptorRepair, repair_child_descriptors};
 use std::env::current_dir;
 use std::error::Error;
 use std::io::IsTerminal;

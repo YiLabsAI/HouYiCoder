@@ -5,7 +5,7 @@
 //! mid-turn) live here, not in the module that implements the port.
 
 use super::*;
-use crate::session_history::LOOKBACK_STEP_BYTES;
+use crate::session::history::LOOKBACK_STEP_BYTES;
 use houyicoder_context::{EventId, SessionEvent};
 use houyicoder_memory::LocalFileBackend;
 use houyicoder_protocol::envelope::{DurableEventId, EventSeq};

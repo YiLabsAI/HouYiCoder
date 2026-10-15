@@ -13,7 +13,7 @@ use houyicoder_tui::composition::shared_runtime;
 use tokio::runtime::Handle;
 use tokio::task::JoinHandle;
 
-use crate::session_lock::SessionLock;
+use crate::session::lock::SessionLock;
 use std::mem::take;
 
 /// A host lifecycle owner holding the session's exclusive lock. The

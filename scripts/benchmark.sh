@@ -49,7 +49,7 @@ case "$BENCHMARK" in
             --release -- --ignored --nocapture --test-threads 1
         run env HOUYI_GIT_SHA="$HISTORY_SHA" HOUYI_BENCH_RUN_ID="$HISTORY_RUN_ID" \
             "$CARGO" test -p houyicoder-cli --release --bin houyi \
-            session_history::tests::test_index_build_baseline \
+            session::history::tests::test_index_build_baseline \
             -- --ignored --nocapture
         ;;
     "")

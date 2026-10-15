@@ -18,7 +18,7 @@ use houyicoder_tui::view::trajectory_pane::{
 };
 
 use super::view::PageAccumulator;
-use crate::session_history::{PAGE_MAX_BYTES, SessionHistory, TurnAnchor, TurnPage};
+use crate::session::history::{PAGE_MAX_BYTES, SessionHistory, TurnAnchor, TurnPage};
 
 mod detail;
 mod drain;

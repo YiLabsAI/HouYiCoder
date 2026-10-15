@@ -4,7 +4,7 @@
 //! retention engine produces, so the two change for different reasons.
 
 use super::*;
-use crate::session_prune::GAP_PRECISE_MAX_DIRS;
+use crate::lifecycle::prune::GAP_PRECISE_MAX_DIRS;
 
 /// The count bounds the user's own sessions: a child has a log and a descriptor
 /// like any other session, but reporting it would name a store size the user

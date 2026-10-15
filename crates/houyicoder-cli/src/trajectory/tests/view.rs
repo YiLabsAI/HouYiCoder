@@ -5,7 +5,7 @@ use super::super::reader::ResidentPage;
 use super::super::reader::window_view::seam_rows;
 use super::super::turns::FoldMode;
 use super::super::view::*;
-use crate::session_history::TurnPage;
+use crate::session::history::TurnPage;
 use houyicoder_context::CheckpointId;
 use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
 use houyicoder_tui::view::trajectory_pane::{

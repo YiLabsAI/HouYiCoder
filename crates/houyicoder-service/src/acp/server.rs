@@ -17,8 +17,8 @@
 
 use std::sync::Arc;
 
-use crate::acp_adapter::AcpAdapter;
-use crate::acp_serve::AcpIo;
+use crate::acp::adapter::AcpAdapter;
+use crate::acp::carrier::AcpIo;
 use crate::protocol_adapter::{
     acp_permission_response_to_decision, approval_to_acp_permission, map_run_error, map_run_result,
     map_session_update,

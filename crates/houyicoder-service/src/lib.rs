@@ -16,9 +16,7 @@
 
 #![allow(dead_code)] // crate root re-exports service modules consumed by other crates; locally unused
 
-pub mod acp_adapter;
-pub mod acp_serve;
-pub mod acp_server;
+pub mod acp;
 pub mod agent_registry;
 pub mod composition;
 pub mod diagnostics;
@@ -26,8 +24,6 @@ pub mod lifecycle;
 pub mod protocol_adapter;
 pub mod sandbox_policy;
 pub mod server;
-pub mod session_prune;
-pub mod session_repair;
 #[cfg(unix)]
 pub mod uds;
 

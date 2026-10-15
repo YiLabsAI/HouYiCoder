@@ -33,13 +33,15 @@ use std::os::unix::fs::OpenOptionsExt;
 
 use houyicoder_config::{config_home, retention};
 use houyicoder_context::SessionId;
-use houyicoder_service::session_prune::{self, PrunePlan, PrunePolicy, PruneReport, PruneTargets};
-use houyicoder_service::session_repair::repair_child_descriptors;
+use houyicoder_service::lifecycle::prune::{
+    self, PrunePlan, PrunePolicy, PruneReport, PruneTargets,
+};
+use houyicoder_service::lifecycle::repair::repair_child_descriptors;
 // PruneKind is read only by the flock-guarded apply path, which exists on
 // unix alone. Importing it unconditionally is an unused import everywhere
 // else, and unused imports are denied.
 #[cfg(unix)]
-use houyicoder_service::session_prune::PruneKind;
+use houyicoder_service::lifecycle::prune::PruneKind;
 
 const DELAY_SECS: u64 = 10 * 60;
 const MARKER_THROTTLE_SECS: u64 = 24 * 60 * 60;
@@ -49,9 +51,9 @@ const MARKER_THROTTLE_SECS: u64 = 24 * 60 * 60;
 const SNAPSHOT_TTL_SECS: u64 = 7 * 24 * 60 * 60;
 const DEBUG_MAX_BYTES: u64 = 10 * 1024 * 1024;
 #[cfg(test)]
-use crate::session_lock::SessionLock;
+use crate::session::lock::SessionLock;
 use houyicoder_service::composition::session_log_root;
-use houyicoder_service::session_prune::EMPTY_TTL_SECS;
+use houyicoder_service::lifecycle::prune::EMPTY_TTL_SECS;
 use std::env::current_dir;
 #[cfg(test)]
 use std::env::temp_dir;
@@ -144,7 +146,7 @@ fn run_once(
         home,
     );
 
-    let plan = session_prune::plan_all(&targets, &policy);
+    let plan = prune::plan_all(&targets, &policy);
     let threshold = threshold_raw as usize;
     if plan.len() >= threshold {
         // Skip auto-apply: the plan is too large to delete blindly (a 50k
@@ -446,7 +448,7 @@ pub(crate) fn apply_prune_locked(plan: &PrunePlan) -> (PruneReport, usize) {
             entries: vec![entry.clone()],
             kept: 0,
         };
-        let r = session_prune::apply_prune(&one);
+        let r = prune::apply_prune(&one);
         report.removed += r.removed;
         report.truncated += r.truncated;
         report.errors += r.errors;
@@ -456,7 +458,7 @@ pub(crate) fn apply_prune_locked(plan: &PrunePlan) -> (PruneReport, usize) {
 
 #[cfg(not(unix))]
 pub(crate) fn apply_prune_locked(plan: &PrunePlan) -> (PruneReport, usize) {
-    (session_prune::apply_prune(plan), 0)
+    (prune::apply_prune(plan), 0)
 }
 
 // Every test here drives the flock-based delete lock, so the module as a
@@ -470,7 +472,7 @@ mod tests {
     use houyicoder_context::{
         EventId, SessionDescriptor, SessionEvent, SessionLogEntry, SessionProvenance,
     };
-    use houyicoder_service::session_prune::{PruneAction, PruneEntry, PruneReason};
+    use houyicoder_service::lifecycle::prune::{PruneAction, PruneEntry, PruneReason};
     use std::path::PathBuf;
 
     fn temp_root() -> PathBuf {

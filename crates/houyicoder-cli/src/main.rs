@@ -35,25 +35,24 @@ use houyicoder_service::composition::session_log_root;
 use houyicoder_tui::agent_message::SessionMessage;
 use houyicoder_tui::composition::{FrontendStartup, RunnerBundle, shared_runtime};
 
-mod cleanup;
 mod cli_args;
 mod composition;
 #[cfg(unix)]
 mod detach;
 mod export_view;
-mod housekeeping;
 mod local_host;
-mod resume_bundle;
-mod session_catalog;
-mod session_history;
-mod session_lock;
-mod session_log_snapshot;
+mod session;
 mod trajectory;
 
 pub(crate) use cli_args::{CliCommand, parse_args, print_help};
 pub(crate) use composition::{WiredBundle, assemble_bundle, build_bundle, build_bundle_for_resume};
 pub(crate) use local_host::{HostLease, HostLeaseScope, HostLeaseSlot, LeaseScopeGuard};
 
+use crate::session::cleanup::run_cleanup;
+use crate::session::housekeeping::fire_after_bundle;
+use crate::session::lock::{LockError, SessionLock};
+use crate::session::resume_bundle::build_bundle_for_fork;
+use crate::session::resume_bundle::build_bundle_for_resume_sid;
 use futures::StreamExt;
 use futures::channel::mpsc;
 use houyicoder_client::{Client, UdsTransport};
@@ -63,9 +62,9 @@ use houyicoder_permission::FileRuleStore;
 use houyicoder_permission::ModeGate;
 use houyicoder_protocol::acpx::AcpxCapabilities;
 use houyicoder_service::CancellationToken;
-use houyicoder_service::acp_adapter::AcpAdapter;
-use houyicoder_service::acp_serve::AcpIo;
-use houyicoder_service::acp_server::AcpServer;
+use houyicoder_service::acp::adapter::AcpAdapter;
+use houyicoder_service::acp::carrier::AcpIo;
+use houyicoder_service::acp::server::AcpServer;
 use houyicoder_service::composition::BuildRunnerOptions;
 use houyicoder_service::composition::ResolvedProvider;
 use houyicoder_service::composition::SessionHost;
@@ -78,7 +77,6 @@ use houyicoder_service::lifecycle::SessionLeaseStore;
 use houyicoder_service::server::EventSequencer;
 use houyicoder_service::uds;
 use houyicoder_tui::app::run_with_runner;
-use session_lock::{LockError, SessionLock};
 use std::fs::remove_file;
 use std::io::stdin;
 use std::io::stdout;
@@ -170,7 +168,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             apply,
             verbose,
             yes,
-        } => cleanup::run_cleanup(apply, verbose, yes),
+        } => run_cleanup(apply, verbose, yes),
     }
 }
 
@@ -198,7 +196,7 @@ fn run_resume(value: String, project: Option<String>, fork: bool) -> Result<(), 
     } else if let Some(sid) = houyicoder_context::SessionId::from_display_string(&value) {
         let (bundle, startup, lease) = if fork {
             let (bundle, startup, host, runner) =
-                resume_bundle::build_bundle_for_fork(sid, project.clone(), provider.clone())?;
+                build_bundle_for_fork(sid, project.clone(), provider.clone())?;
             acquire_fresh_lease(bundle, startup, host, Some(runner))?
         } else {
             build_lease_for_existing_sid(sid, project.clone(), provider.clone())?
@@ -232,7 +230,7 @@ fn run_continue(project: Option<String>, fork: bool) -> Result<(), Box<dyn Error
     let provider = resolve_provider(project.as_deref());
     let (bundle, startup, lease) = if fork {
         let (bundle, startup, host, runner) =
-            resume_bundle::build_bundle_for_fork(sid, project.clone(), provider.clone())?;
+            build_bundle_for_fork(sid, project.clone(), provider.clone())?;
         acquire_fresh_lease(bundle, startup, host, Some(runner))?
     } else {
         build_lease_for_existing_sid(sid, project.clone(), provider.clone())?
@@ -326,8 +324,7 @@ fn build_lease_for_existing_sid_at(
     sessions_root: &Path,
 ) -> Result<(RunnerBundle, FrontendStartup, HostLease), Box<dyn Error>> {
     let lock = admit_existing_sid(&sid, sessions_root)?;
-    let (bundle, startup, host, runner) =
-        resume_bundle::build_bundle_for_resume_sid(sid, project, provider)?;
+    let (bundle, startup, host, runner) = build_bundle_for_resume_sid(sid, project, provider)?;
     let sid_str = bundle.session.0.clone();
     let lease = HostLease::holding(host, lock, sid_str, Some(runner));
     Ok((bundle, startup, lease))
@@ -400,7 +397,7 @@ fn run_serve(
         bundle.append_notify,
     );
     runtime.block_on(async move {
-        housekeeping::fire_after_bundle(session);
+        fire_after_bundle(session);
         if let Err(e) = uds::listen_uds(host, session, &socket_path).await {
             eprintln!("uds listener exited: {e}");
         }
@@ -506,7 +503,7 @@ fn run_acp_stdio(
     // stdin; the buffered outbound frames drain to stdout after.
     let runtime = Builder::new_multi_thread().enable_all().build()?;
     runtime.block_on(async move {
-        housekeeping::fire_after_bundle(session);
+        fire_after_bundle(session);
         let server = AcpServer::new(adapter, runner, session);
         drop(server.serve(&mut io).await);
         // serve borrows io by reference, so io (which holds the outbound
@@ -600,8 +597,7 @@ fn build_bundle_for_target(
             )));
         }
         let lock = admit_existing_sid(&sid, &sessions_root)?;
-        let (bundle, startup, host, runner) =
-            resume_bundle::build_bundle_for_resume_sid(sid, project, provider)?;
+        let (bundle, startup, host, runner) = build_bundle_for_resume_sid(sid, project, provider)?;
         (bundle, startup, host, runner, lock)
     } else {
         return Err(Box::<dyn Error>::from(format!(

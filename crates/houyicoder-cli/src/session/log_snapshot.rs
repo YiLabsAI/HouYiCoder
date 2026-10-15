@@ -34,7 +34,7 @@ use houyicoder_tui::transcript::snapshot::{
 };
 use houyicoder_tui::transcript::{TranscriptFrame, bounds_turn_in, transcript_from_named_frames};
 
-use crate::session_history::{EventWindow, LocatedEvent, SessionHistory};
+use crate::session::history::{EventWindow, LocatedEvent, SessionHistory};
 
 /// The window read budget: 256 KB per screen (~70 events at 3.6 KB avg).
 #[cfg(test)]

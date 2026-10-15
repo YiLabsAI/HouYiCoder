@@ -10,7 +10,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-use crate::session_repair::repair_child_descriptors;
+use crate::lifecycle::repair::repair_child_descriptors;
 
 use fs::FileTimes;
 use fs::OpenOptions;
