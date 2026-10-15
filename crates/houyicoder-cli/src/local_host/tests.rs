@@ -311,8 +311,11 @@ impl ModelProvider for GateProvider {
 /// The release task holds the session lock until a child's worktree cleanup
 /// is complete: while the child is still running in its worktree, a second
 /// acquire reports the lock held; only after cleanup removes the worktree and
-/// the finalize tail completes does the unlock happen.
-#[cfg(unix)]
+/// the finalize tail completes does the unlock happen. A worktree spawn
+/// needs the sandbox to narrow its fence at runtime, which only the seatbelt
+/// backend implements today; on other platforms the spawn is refused before
+/// the lease path this test covers ever runs.
+#[cfg(target_os = "macos")]
 #[test]
 fn test_release_waits_worktree_cleanup() {
     let runtime = Builder::new_current_thread()

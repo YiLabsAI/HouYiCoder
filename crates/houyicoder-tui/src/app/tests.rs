@@ -21,6 +21,7 @@ use houyicoder_protocol::frontend::memory::MemoryToggleWhich;
 use houyicoder_protocol::frontend::{FrontendRequest, LoginMode, SessionId, SlashCommand};
 use std::sync::mpsc::channel;
 use std::thread::sleep;
+use std::thread::yield_now;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -962,14 +963,12 @@ fn test_connection_status_disconnected() {
 #[test]
 fn test_poll_closed_distinct() {
     let mut app = connection_lost_app();
-    // The fixture consumed the death announcement; the channel is exhausted.
-    let outcome = app
-        .sessions
-        .current
-        .connection
-        .as_mut()
-        .expect("session")
-        .poll();
+    // The fixture consumed the death announcement. The driver task still
+    // holds the channel's sender for the few instructions between that
+    // send and its exit, so poll may briefly read Empty before the sender
+    // drops; wait for the drop instead of assuming it already happened.
+    let connection = app.sessions.current.connection.as_mut().expect("session");
+    let outcome = poll_until_closed(connection, Duration::from_secs(5));
     assert!(
         matches!(outcome, PollOutcome::Closed),
         "an exhausted channel reports Closed, not Idle: {outcome:?}"
@@ -1075,4 +1074,23 @@ fn test_closed_settles_loss() {
         after_loss,
         "a repeat closed observation does not settle again"
     );
+}
+
+/// Poll until the channel reports Closed, or fail after the bound. The
+/// driver task drops its sender a few instructions after the death message,
+/// so a poll right after the latch can still read Empty; waiting on that
+/// drop is the effect, not a sleep.
+fn poll_until_closed(connection: &mut SessionConnection, bound: Duration) -> PollOutcome {
+    let start = Instant::now();
+    loop {
+        let outcome = connection.poll();
+        if !matches!(outcome, PollOutcome::Idle) {
+            return outcome;
+        }
+        assert!(
+            start.elapsed() < bound,
+            "the driver's sender did not drop within the bound"
+        );
+        yield_now();
+    }
 }

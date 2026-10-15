@@ -53,8 +53,11 @@ pub struct SessionLock {
 pub struct SessionLock;
 
 /// A lock acquisition failure: the lock dir could not be created, the lock
-/// file could not be opened, or another process holds the lock.
+/// file could not be opened, or another process holds the lock. Only the
+/// unix acquire constructs these; the no-op platform never fails, but the
+/// variants stay part of the type so callers match them everywhere.
 #[derive(Debug)]
+#[cfg_attr(not(unix), allow(dead_code))]
 pub enum LockError {
     Io(String),
     HeldByOther(String),
