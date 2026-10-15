@@ -1,8 +1,9 @@
 use super::*;
+use crate::state::history_read::HistoryReadPoll;
 use crate::state::history_read::HistoryReads;
 use crate::state::transcript::DiskFront;
 use crate::transcript::snapshot::IndexProgress;
-use crate::transcript::snapshot::{NoTranscriptSnapshot, SnapshotLoad, WindowLoad};
+use crate::transcript::snapshot::{NoTranscriptSnapshot, ReadError, SnapshotLoad, WindowLoad};
 use std::sync::Mutex;
 use std::sync::atomic::AtomicU64;
 use std::sync::mpsc;
@@ -25,11 +26,11 @@ impl TranscriptSnapshot for FixedWindow {
     fn window(&self, anchor: u64, max_bytes: u64) -> WindowLoad {
         self.empty.window(anchor, max_bytes)
     }
-    fn tail_window(&self, max_bytes: u64) -> WindowLoad {
+    fn tail_window(&self, max_bytes: u64) -> Result<WindowLoad, ReadError> {
         self.empty.tail_window(max_bytes)
     }
-    fn window_before(&self, _from_byte: u64, _max_bytes: u64) -> WindowLoad {
-        self.window.clone()
+    fn window_before(&self, _from_byte: u64, _max_bytes: u64) -> Result<WindowLoad, ReadError> {
+        Ok(self.window.clone())
     }
     fn index_chunk(&self) -> IndexProgress {
         self.empty.index_chunk()
@@ -63,7 +64,10 @@ fn test_fixed_window_older_only() {
     assert_eq!(source.log_size(), 0, "no log size of its own");
     assert!(source.load(1024).lines.is_empty(), "no whole-log load");
     assert!(source.window(0, 1024).lines.is_empty(), "no forward window");
-    assert!(source.tail_window(1024).lines.is_empty(), "no tail window");
+    assert!(
+        source.tail_window(1024).unwrap().lines.is_empty(),
+        "no tail window"
+    );
     assert!(!source.index_chunk().done, "no index");
     assert!(source.byte_at(0).is_none(), "no offsets");
     assert!(source.event_count().is_none(), "no event count");
@@ -76,7 +80,7 @@ fn test_fixed_window_older_only() {
 fn test_before_refuses_gap() {
     let source = window_ending_at(5005);
     assert!(
-        read_log_before(&source, 5000).is_none(),
+        read_log_before(&source, 5000).unwrap().is_none(),
         "a window ending past the anchor is refused"
     );
 }
@@ -87,7 +91,7 @@ fn test_before_refuses_gap() {
 fn test_before_takes_matching_window() {
     let source = window_ending_at(5000);
     assert!(
-        read_log_before(&source, 5000).is_some(),
+        read_log_before(&source, 5000).unwrap().is_some(),
         "a window ending at the anchor is the one the walk takes"
     );
 }
@@ -144,10 +148,10 @@ impl TranscriptSnapshot for SteppingWindow {
     fn window(&self, anchor: u64, max_bytes: u64) -> WindowLoad {
         self.empty.window(anchor, max_bytes)
     }
-    fn tail_window(&self, max_bytes: u64) -> WindowLoad {
+    fn tail_window(&self, max_bytes: u64) -> Result<WindowLoad, ReadError> {
         self.empty.tail_window(max_bytes)
     }
-    fn window_before(&self, from_byte: u64, _max_bytes: u64) -> WindowLoad {
+    fn window_before(&self, from_byte: u64, _max_bytes: u64) -> Result<WindowLoad, ReadError> {
         let call = self.calls.fetch_add(1, Ordering::Relaxed) + 1;
         if self.stop_at == Some(call) {
             self.reads
@@ -156,13 +160,13 @@ impl TranscriptSnapshot for SteppingWindow {
                 .invalidate();
         }
         let start = from_byte.saturating_sub(self.step);
-        WindowLoad {
+        Ok(WindowLoad {
             lines: vec![TranscriptLine::User(format!("row at {start}"))],
             start_offset: start,
             next_offset: from_byte,
             skipped: 0,
             bytes_total: self.log_size,
-        }
+        })
     }
     fn index_chunk(&self) -> IndexProgress {
         self.empty.index_chunk()
@@ -191,7 +195,10 @@ fn test_stepping_window_older_only() {
     assert_eq!(source.log_size(), 5000, "the size the walk starts from");
     assert!(source.load(1024).lines.is_empty(), "no whole-log load");
     assert!(source.window(0, 1024).lines.is_empty(), "no forward window");
-    assert!(source.tail_window(1024).lines.is_empty(), "no tail window");
+    assert!(
+        source.tail_window(1024).unwrap().lines.is_empty(),
+        "no tail window"
+    );
     assert!(!source.index_chunk().done, "no index");
     assert!(source.byte_at(0).is_none(), "no offsets");
     assert!(source.event_count().is_none(), "no event count");
@@ -264,4 +271,185 @@ fn test_walk_reaches_start() {
         "a completed walk reports that the log ran out: {outcome:?}"
     );
     assert_eq!(source.calls(), 5, "the walk read the whole log");
+}
+
+/// Answers each older-window read with the scripted window ending at the
+/// offset the walk asked about.
+struct ScriptedWindows {
+    empty: NoTranscriptSnapshot,
+    windows: Vec<WindowLoad>,
+}
+
+impl TranscriptSnapshot for ScriptedWindows {
+    fn log_size(&self) -> u64 {
+        self.windows.first().map_or(0, |w| w.next_offset)
+    }
+    fn load(&self, max_bytes: u64) -> SnapshotLoad {
+        self.empty.load(max_bytes)
+    }
+    fn window(&self, anchor: u64, max_bytes: u64) -> WindowLoad {
+        self.empty.window(anchor, max_bytes)
+    }
+    fn tail_window(&self, max_bytes: u64) -> Result<WindowLoad, ReadError> {
+        self.empty.tail_window(max_bytes)
+    }
+    fn window_before(&self, from_byte: u64, _max_bytes: u64) -> Result<WindowLoad, ReadError> {
+        Ok(self
+            .windows
+            .iter()
+            .find(|w| w.next_offset == from_byte)
+            .cloned()
+            .unwrap_or_default())
+    }
+    fn index_chunk(&self) -> IndexProgress {
+        self.empty.index_chunk()
+    }
+    fn byte_at(&self, event_idx: usize) -> Option<u64> {
+        self.empty.byte_at(event_idx)
+    }
+    fn event_count(&self) -> Option<usize> {
+        self.empty.event_count()
+    }
+}
+
+/// The first window a tail walk reads can hold nothing older than the front's
+/// oldest row, so the walk continues and returns the next window whole.
+#[test]
+fn test_tail_walks_past_overlap() {
+    let overlap_window = WindowLoad {
+        lines: vec![
+            TranscriptLine::User("A".into()),
+            TranscriptLine::User("B".into()),
+            TranscriptLine::User("C".into()),
+        ],
+        start_offset: 2000,
+        next_offset: 3000,
+        skipped: 0,
+        bytes_total: 3000,
+    };
+    let older = WindowLoad {
+        lines: vec![TranscriptLine::User("D".into())],
+        start_offset: 1000,
+        next_offset: 2000,
+        skipped: 0,
+        bytes_total: 3000,
+    };
+    let source: Arc<dyn TranscriptSnapshot> = Arc::new(ScriptedWindows {
+        empty: NoTranscriptSnapshot,
+        windows: vec![overlap_window, older],
+    });
+    let job = ReadJob::Tail {
+        source,
+        front: vec![
+            TranscriptLine::User("A".into()).render(),
+            TranscriptLine::User("B".into()).render(),
+            TranscriptLine::User("C".into()).render(),
+        ],
+    };
+    let stop = AtomicBool::new(false);
+    match job.run(&stop) {
+        Some(HistoryReadOutcome::Rows(result)) => {
+            assert_eq!(result.anchor, 1000, "the older window's start anchors it");
+            assert_eq!(result.rows.len(), 1, "the whole older window is the answer");
+        }
+        other => panic!("the walk returned the window below the overlap: {other:?}"),
+    }
+}
+
+/// An older-window read that either fails or comes back empty — the two
+/// answers a caller must not collapse.
+struct InjectedWindow {
+    empty: NoTranscriptSnapshot,
+    failure: Option<ReadError>,
+}
+
+impl TranscriptSnapshot for InjectedWindow {
+    fn log_size(&self) -> u64 {
+        5000
+    }
+    fn load(&self, max_bytes: u64) -> SnapshotLoad {
+        self.empty.load(max_bytes)
+    }
+    fn window(&self, anchor: u64, max_bytes: u64) -> WindowLoad {
+        self.empty.window(anchor, max_bytes)
+    }
+    fn tail_window(&self, max_bytes: u64) -> Result<WindowLoad, ReadError> {
+        self.empty.tail_window(max_bytes)
+    }
+    fn window_before(&self, _from_byte: u64, _max_bytes: u64) -> Result<WindowLoad, ReadError> {
+        match self.failure.clone() {
+            Some(e) => Err(e),
+            None => Ok(WindowLoad::default()),
+        }
+    }
+    fn index_chunk(&self) -> IndexProgress {
+        self.empty.index_chunk()
+    }
+    fn byte_at(&self, event_idx: usize) -> Option<u64> {
+        self.empty.byte_at(event_idx)
+    }
+    fn event_count(&self) -> Option<usize> {
+        self.empty.event_count()
+    }
+}
+
+/// Run a tail read through the dispatch, the channel, and the owner's poll
+/// the production loop uses.
+fn injected_tail_read(
+    failure: Option<ReadError>,
+) -> (HistoryReadOutcome, Arc<Mutex<HistoryReads>>) {
+    let reads = Arc::new(Mutex::new(HistoryReads::default()));
+    let source: Arc<dyn TranscriptSnapshot> = Arc::new(InjectedWindow {
+        empty: NoTranscriptSnapshot,
+        failure,
+    });
+    let (tx, rx) = mpsc::channel::<HistoryReadOutcome>();
+    let lease =
+        reads
+            .lock()
+            .expect("the owner is not poisoned")
+            .dispatch(0, DiskFront::Unloaded, rx);
+    let job = ReadJob::Tail {
+        source,
+        front: vec!["the row the view starts at".to_string()],
+    };
+    job.run_and_send(tx, lease.stop());
+    // The send already happened; the poll finds it ready.
+    let pending = reads
+        .lock()
+        .expect("the owner is not poisoned")
+        .take()
+        .expect("the dispatched read is on file");
+    let outcome = match pending.poll() {
+        HistoryReadPoll::Ready(outcome) => outcome,
+        HistoryReadPoll::Pending => panic!("the worker already sent its outcome"),
+        HistoryReadPoll::Disconnected => panic!("the worker left without sending"),
+    };
+    (outcome, reads)
+}
+
+/// A failed window read is not the log's end: the outcome reports a failed
+/// read and the worker's slot is freed.
+#[test]
+fn test_failed_read_stays_open() {
+    let (outcome, reads) = injected_tail_read(Some(ReadError::Io));
+    assert!(
+        matches!(outcome, HistoryReadOutcome::ReadFailed),
+        "a failed window read is not the log's end: {outcome:?}"
+    );
+    assert_eq!(
+        reads.lock().expect("the owner is not poisoned").running(),
+        0,
+        "the failed read's worker freed its slot"
+    );
+}
+
+/// An empty window still means the log's end.
+#[test]
+fn test_empty_window_exhausts() {
+    let (outcome, _) = injected_tail_read(None);
+    assert!(
+        matches!(outcome, HistoryReadOutcome::Exhausted),
+        "an empty window is the log's end: {outcome:?}"
+    );
 }

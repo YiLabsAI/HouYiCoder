@@ -85,7 +85,7 @@ fn test_reverse_read_newest_first() {
         .unwrap();
     }
     let total = b.log_size(s);
-    let r = b.read_lines_reverse(s, total, 1 << 20);
+    let r = b.read_lines_reverse(s, total, 1 << 20).unwrap();
     assert_eq!(r.next_from, None, "BOF reached");
     assert_eq!(r.lines.len(), 5, "all 5 lines: {:?}", r.lines);
     assert!(
@@ -123,7 +123,7 @@ fn test_reverse_read_multibyte_safe() {
     )))
     .unwrap();
     let total = b.log_size(s);
-    let r = b.read_lines_reverse(s, total, 1 << 20);
+    let r = b.read_lines_reverse(s, total, 1 << 20).unwrap();
     assert_eq!(r.lines.len(), 1);
     let text = &r.lines[0].1;
     assert!(
@@ -134,8 +134,9 @@ fn test_reverse_read_multibyte_safe() {
     fs::remove_dir_all(&root).ok();
 }
 
-/// An in-memory backend has no on-disk log, so the windowed reads return
-/// empty defaults (the trait's default impls). Covers the default bodies.
+/// An in-memory backend has no on-disk log, so the reverse read is
+/// unsupported rather than empty: empty would read as the log's end and
+/// latch the caller's view closed. Covers the trait's default body.
 #[test]
 fn test_in_memory_default_reads() {
     let b = InMemoryBackend::new();
@@ -145,10 +146,9 @@ fn test_in_memory_default_reads() {
     assert_eq!(r.bytes_total, 0);
     let r2 = b.read_lines_reverse(s, 0, 1024);
     assert!(
-        r2.lines.is_empty(),
-        "InMemoryBackend reverse default is empty"
+        matches!(r2, Err(ContextError::Unsupported)),
+        "InMemoryBackend reverse default is unsupported, not an empty read"
     );
-    assert_eq!(r2.next_from, None);
 }
 
 /// Error paths: a cold session (no log file) returns empty + zero total;
@@ -174,11 +174,14 @@ fn test_range_read_error_paths() {
     let past = b.read_log_range(s, total + 100, 1024);
     assert!(past.lines.is_empty(), "past EOF: no lines");
     assert_eq!(past.bytes_total, total, "past EOF: total still set");
-    // Reverse read on a cold session also returns empty.
+    // An unopenable log is a read failure, not the log's end: empty is what
+    // a zero size already said before the read.
     let cold_session = SessionId::new();
     let rev = b.read_lines_reverse(cold_session, 0, 1024);
-    assert!(rev.lines.is_empty(), "cold reverse: no lines");
-    assert_eq!(rev.next_from, None);
+    assert!(
+        matches!(rev, Err(ContextError::Io)),
+        "cold reverse: an unopenable log is a read failure"
+    );
     fs::remove_dir_all(&root).ok();
 }
 
@@ -505,7 +508,7 @@ fn test_reverse_read_no_newline() {
     )))
     .unwrap();
     let total = b.log_size(s);
-    let r = b.read_lines_reverse(s, total, 1 << 20);
+    let r = b.read_lines_reverse(s, total, 1 << 20).unwrap();
     assert_eq!(r.next_from, None, "BOF reached");
     assert_eq!(r.lines.len(), 1, "the lineless content yields one row");
     assert!(
@@ -528,7 +531,7 @@ fn test_reverse_read_empty_file() {
     let log = b.log_path(s);
     fs::create_dir_all(log.parent().unwrap()).expect("create session dir");
     File::create(&log).expect("create empty log");
-    let r = b.read_lines_reverse(s, 0, 1 << 20);
+    let r = b.read_lines_reverse(s, 0, 1 << 20).unwrap();
     assert!(r.lines.is_empty(), "empty file yields no lines");
     assert_eq!(r.next_from, None, "BOF (size 0)");
     // Forward range on the empty file is also empty.

@@ -532,30 +532,31 @@ impl ContextBackend for LocalFileBackend {
         session: SessionId,
         from_byte: u64,
         max_bytes: u64,
-    ) -> ReverseRead {
+    ) -> Result<ReverseRead, ContextError> {
         // Backward whole-line read: take the newest max_bytes of the log as one
         // window and split it into lines. A window edge can fall inside a line,
         // so the byte either side of the window is read to learn whether the
         // segments at its ends are lines the log shows whole. The bytes stay
         // raw, so a multi-byte UTF-8 sequence never meets a split inside it.
         let log = self.log_path(session);
-        let Ok(mut f) = File::open(&log) else {
-            return ReverseRead::default();
-        };
-        let size = f.metadata().map(|m| m.len()).unwrap_or(0);
+        // An unopenable log is an error, not empty: empty reads as the log's
+        // end and would latch the caller's view closed.
+        let mut f = File::open(&log).map_err(|_| ContextError::Io)?;
+        let size = f
+            .metadata()
+            .map(|m| m.len())
+            .map_err(|_| ContextError::Io)?;
         if size == 0 {
-            return ReverseRead::default();
+            return Ok(ReverseRead::default());
         }
         let from_byte = from_byte.min(size);
         // One byte at the least, so the window's start sits below the read's
         // boundary and a walk over the log always moves down.
         let start = from_byte.saturating_sub(max_bytes.max(1));
         let mut bytes = vec![0u8; (from_byte - start) as usize];
-        if f.seek(SeekFrom::Start(start)).is_err() || f.read_exact(&mut bytes).is_err() {
-            // The window is lost, not the walk: the batch comes back empty and
-            // the resume point below this read carries the walk on.
-            bytes.clear();
-        }
+        f.seek(SeekFrom::Start(start))
+            .map_err(|_| ContextError::Io)?;
+        f.read_exact(&mut bytes).map_err(|_| ContextError::Io)?;
         let window = LogWindow {
             bytes: &bytes,
             start,
@@ -583,11 +584,11 @@ impl ContextBackend for LocalFileBackend {
                 .filter(|end| *end < from_byte);
             Some(past_line.unwrap_or(start))
         };
-        ReverseRead {
+        Ok(ReverseRead {
             lines: whole.lines,
             newest_line_returned: whole.newest_line_returned,
             next_from,
-        }
+        })
     }
     fn write_checkpoint(
         &self,

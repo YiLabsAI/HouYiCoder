@@ -207,15 +207,25 @@ pub trait ContextBackend: Send + Sync {
     /// byte is left over, so a walk in reads smaller than the log gives each
     /// line back once, whole. newest_line_returned reports whether the batch
     /// reached the log's newest line at or below from_byte. The lazy offset
-    /// index and the window lookback both build on this. Default empty (no
-    /// on-disk log).
+    /// index and the window lookback both build on this.
+    ///
+    /// Three outcomes a caller must keep apart. An empty batch with next_from
+    /// None is the log's end: the byte range held no whole line, or the walk
+    /// reached BOF, and the caller latches the front closed. An Err of Io is a
+    /// read that failed against a log the backend does hold: the caller must
+    /// not latch the front closed as if the log had ended, but leave it open
+    /// for a retry after a cooldown. An Err of Unsupported is a backend with no
+    /// byte-addressable log (an in-memory store): the caller has no disk
+    /// window to read, which is not a failure to retry. The default returns
+    /// Unsupported, because a backend that does not override this has no byte
+    /// log to read.
     fn read_lines_reverse(
         &self,
         _session: SessionId,
         _from_byte: u64,
         _max_bytes: u64,
-    ) -> ReverseRead {
-        ReverseRead::default()
+    ) -> Result<ReverseRead, ContextError> {
+        Err(ContextError::Unsupported)
     }
 
     /// The sessions root this backend persists under, for cross-session

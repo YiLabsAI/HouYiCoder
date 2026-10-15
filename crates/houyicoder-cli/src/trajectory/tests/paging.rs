@@ -1247,7 +1247,12 @@ fn panicking_reader() -> SessionLogTrajectory {
             4096
         }
 
-        fn read_lines_reverse(&self, _session: SessionId, _from: u64, _max: u64) -> ReverseRead {
+        fn read_lines_reverse(
+            &self,
+            _session: SessionId,
+            _from: u64,
+            _max: u64,
+        ) -> Result<ReverseRead, ContextError> {
             panic!("this log read is broken")
         }
     }

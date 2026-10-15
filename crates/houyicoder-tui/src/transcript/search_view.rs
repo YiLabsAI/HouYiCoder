@@ -70,7 +70,10 @@ impl App {
         let loaded = self.sessions.persistence.snapshot.as_ref().map(|snap| {
             let log_bytes = snap.log_size();
             if log_bytes > SEARCH_LOG_THRESHOLD {
-                let w = snap.tail_window(WINDOW_MAX_BYTES);
+                let w = snap.tail_window(WINDOW_MAX_BYTES).unwrap_or_else(|e| {
+                    tracing::warn!("search tail window read failed: {e:?}");
+                    WindowLoad::default()
+                });
                 Loaded::Over { log_bytes, w }
             } else {
                 let load = snap.load(SEARCH_LOG_THRESHOLD);
@@ -231,7 +234,13 @@ impl App {
             if anchor == 0 {
                 return; // BOF: no older window.
             }
-            let w = snap.window_before(anchor, WINDOW_MAX_BYTES);
+            let w = match snap.window_before(anchor, WINDOW_MAX_BYTES) {
+                Ok(w) => w,
+                Err(e) => {
+                    tracing::warn!("search older window read failed: {e:?}");
+                    return;
+                }
+            };
             if w.lines.is_empty() || w.start_offset == anchor {
                 return; // no progress (corrupt/empty) -- stop.
             }

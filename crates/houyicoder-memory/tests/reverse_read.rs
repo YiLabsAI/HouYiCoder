@@ -10,6 +10,7 @@ use std::fs::OpenOptions;
 use std::fs::create_dir_all;
 use std::fs::metadata;
 use std::fs::remove_dir_all;
+use std::fs::remove_file;
 use std::path::PathBuf;
 
 fn temp_root() -> PathBuf {
@@ -40,7 +41,7 @@ fn walk(b: &LocalFileBackend, s: SessionId, budget: u64) -> (Vec<(u64, String)>,
     let mut seen: Vec<(u64, String)> = Vec::new();
     let mut reads = 0;
     while from > 0 {
-        let r = b.read_lines_reverse(s, from, budget);
+        let r = b.read_lines_reverse(s, from, budget).unwrap();
         reads += 1;
         seen.extend(r.lines);
         match r.next_from {
@@ -112,7 +113,7 @@ fn test_reverse_ends_on_line() {
     assert!(envelope < 65536, "the line's own bytes fit in one read");
     append(&b, s, "y".repeat((65536 - envelope) as usize));
     let total = b.log_size(s);
-    let r = b.read_lines_reverse(s, total, 65536);
+    let r = b.read_lines_reverse(s, total, 65536).unwrap();
     assert_eq!(r.lines.len(), 1, "the read holds the whole last line");
     assert!(
         r.lines[0].1.contains("yyyyyyyyyy"),
@@ -129,7 +130,7 @@ fn test_reverse_ends_on_line() {
         "the read reached the log's newest line"
     );
     assert_eq!(r.next_from, Some(head), "the next read starts at its head");
-    let rest = b.read_lines_reverse(s, head, 65536);
+    let rest = b.read_lines_reverse(s, head, 65536).unwrap();
     assert_eq!(rest.lines.len(), 1, "the line before it: {:?}", rest.lines);
     assert!(rest.lines[0].1.contains("xxxx"), "the probe line");
     assert_eq!(rest.next_from, None, "the first line ends the walk");
@@ -150,7 +151,7 @@ fn test_reverse_wide_last_line() {
     // Wider than the 64 KB the reader walks per chunk.
     append(&b, s, "z".repeat(100_000));
     let truth = b.read_log_range(s, 0, 4096);
-    let first = b.read_lines_reverse(s, b.log_size(s), 65536);
+    let first = b.read_lines_reverse(s, b.log_size(s), 65536).unwrap();
     assert!(
         first.lines.is_empty(),
         "the read stops on the wide line's bytes: {:?}",
@@ -190,7 +191,7 @@ fn test_reverse_wide_first_line() {
     // holds no line at all, and reports that much: a caller taking the batch's
     // first line for the log's newest would find nothing there, and the log
     // holds no newer line below the boundary either.
-    let inside = b.read_lines_reverse(s, 65536, 65536);
+    let inside = b.read_lines_reverse(s, 65536, 65536).unwrap();
     assert!(
         inside.lines.is_empty(),
         "no line ends below the boundary: {:?}",
@@ -232,7 +233,7 @@ fn test_reverse_unterminated_tail() {
     let f = OpenOptions::new().write(true).open(&path).unwrap();
     f.set_len(size - 5).unwrap();
     let torn = metadata(&path).unwrap().len();
-    let r = b.read_lines_reverse(s, torn, 65536);
+    let r = b.read_lines_reverse(s, torn, 65536).unwrap();
     assert_eq!(r.lines.len(), 1, "the line before the tail: {:?}", r.lines);
     assert!(
         r.lines[0].1.contains("first"),
@@ -262,7 +263,7 @@ fn test_reverse_line_end_boundary() {
     // The log's last byte is the terminator the writer puts after its last
     // line, and the line that terminator ends is the newest line of the log at
     // or below it.
-    let r = b.read_lines_reverse(s, total - 1, 65536);
+    let r = b.read_lines_reverse(s, total - 1, 65536).unwrap();
     assert_eq!(r.lines.len(), 2, "both lines: {:?}", r.lines.len());
     assert!(
         r.lines[0].1.contains("second"),
@@ -272,6 +273,24 @@ fn test_reverse_line_end_boundary() {
     assert!(
         r.newest_line_returned,
         "the read reached the newest line at the boundary"
+    );
+    remove_dir_all(&root).ok();
+}
+
+/// A log that cannot be opened is a read failure, not an empty log: empty
+/// reads as the log's end.
+#[test]
+fn test_unreadable_log_reports_error() {
+    let root = temp_root();
+    let b = LocalFileBackend::new(root.clone());
+    let s = SessionId::new();
+    append(&b, s, "line".into());
+    let size = b.log_size(s);
+    remove_file(root.join(format!("{s}")).join("log.jsonl")).expect("remove the log");
+    let read = b.read_lines_reverse(s, size, 65536);
+    assert!(
+        read.is_err(),
+        "an unopenable log is a read failure, not an empty one"
     );
     remove_dir_all(&root).ok();
 }

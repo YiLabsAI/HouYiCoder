@@ -501,3 +501,35 @@ fn test_scrollback_without_rows() {
     assert_eq!(app.transcript().disk_row_count(), 0);
     assert_eq!(app.transcript().disk_front(), DiskFront::Unloaded);
 }
+
+/// A read that fails does not latch the front closed the way a true end does:
+/// the front stays where it was, the cooldown holds off the next dispatch,
+/// and the failure surfaces as a notice instead of silence.
+#[test]
+fn test_failed_read_front_open() {
+    let mut app = drained_app();
+    let shown = app.transcript().len();
+    app.sessions.persistence.snapshot = Some(failing_log_source());
+
+    app.whole_scroll_mut().jump_to(0);
+    app.load_older_frames();
+    pump_history_read_blocking(&mut app, Duration::from_secs(5));
+
+    assert_eq!(app.transcript().len(), shown, "the view is untouched");
+    assert_eq!(
+        app.transcript().disk_front(),
+        DiskFront::Unloaded,
+        "a failed read does not latch the front closed"
+    );
+    assert!(
+        !app.sessions.current.history_reads.may_dispatch(),
+        "the cooldown holds off the next dispatch"
+    );
+    assert!(
+        app.ui
+            .notifications
+            .current()
+            .is_some_and(|n| n.key == "history-read-failed"),
+        "the failure surfaced as a notice"
+    );
+}

@@ -90,7 +90,12 @@ impl ContextBackend for GatedRangeBackend {
     fn log_size(&self, session: SessionId) -> u64 {
         self.inner.log_size(session)
     }
-    fn read_lines_reverse(&self, session: SessionId, from: u64, max: u64) -> ReverseRead {
+    fn read_lines_reverse(
+        &self,
+        session: SessionId,
+        from: u64,
+        max: u64,
+    ) -> Result<ReverseRead, ContextError> {
         self.inner.read_lines_reverse(session, from, max)
     }
     fn read_log_range(&self, session: SessionId, from: u64, max: u64) -> LogRangeRead {

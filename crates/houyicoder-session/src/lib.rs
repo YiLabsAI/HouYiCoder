@@ -32,7 +32,7 @@ use houyicoder_api::session::TrajectoryHead;
 use houyicoder_async::PFut;
 use houyicoder_context::{
     CheckpointId, CheckpointManifest, ContextBackend, ContextError, ContextSnapshot, EventId,
-    PrevHash, SessionEvent, SessionId, SessionLogEntry,
+    PrevHash, ReverseRead, SessionEvent, SessionId, SessionLogEntry,
 };
 use sha2::{Digest, Sha256};
 
@@ -349,7 +349,15 @@ impl SessionStore {
         const COLD_REVERSE_BYTES: u64 = 1_048_576;
         let rr = self
             .backend
-            .read_lines_reverse(session, u64::MAX, COLD_REVERSE_BYTES);
+            .read_lines_reverse(session, u64::MAX, COLD_REVERSE_BYTES)
+            .unwrap_or_else(|e| {
+                // An in-memory backend reports Unsupported (no byte log), and a
+                // disk read can fail; the reverse-read is an optimization, so
+                // either falls back to the canonical replay path rather than
+                // failing the hash. Replay surfaces a real IO failure itself.
+                tracing::warn!("cold reverse-read fell back to replay: {e}");
+                ReverseRead::default()
+            });
         // The batch holds whole lines newest first, and the read reports whether
         // it reached the log's last line: a line no window of the read holds
         // never comes back, and the older line the batch starts with instead

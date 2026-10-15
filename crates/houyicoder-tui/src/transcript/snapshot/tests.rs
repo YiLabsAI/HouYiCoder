@@ -345,11 +345,11 @@ fn test_no_snapshot_answers_empty() {
     assert!(source.load(1024).lines.is_empty(), "load is empty");
     assert!(source.window(0, 1024).lines.is_empty(), "window is empty");
     assert!(
-        source.tail_window(1024).lines.is_empty(),
+        source.tail_window(1024).unwrap().lines.is_empty(),
         "tail_window is empty"
     );
     assert!(
-        source.window_before(512, 1024).lines.is_empty(),
+        source.window_before(512, 1024).unwrap().lines.is_empty(),
         "window_before is empty"
     );
     let progress = source.index_chunk();

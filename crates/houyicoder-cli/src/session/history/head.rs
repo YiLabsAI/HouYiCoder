@@ -151,6 +151,14 @@ impl SessionHistory {
                 .session_log
                 .backend()
                 .read_lines_reverse(self.session_id, from, step);
+            let rev = match rev {
+                Ok(r) => r,
+                Err(e) => {
+                    // A failure stops the walk at what it reached.
+                    tracing::warn!("epoch-start reverse-read stopped on failure: {e}");
+                    break;
+                }
+            };
             let fwd: Vec<(u64, String)> = rev.lines.iter().rev().cloned().collect();
             let (events, _) = parse_lines(&fwd);
             if let Some(found) = events

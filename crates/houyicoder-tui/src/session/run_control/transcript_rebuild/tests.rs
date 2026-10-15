@@ -19,7 +19,9 @@ use crate::state::{App, Screen};
 use crate::test_harness::MockSnapshot;
 use crate::todo_view::TodoStatus;
 use crate::transcript::TranscriptFrame;
-use crate::transcript::snapshot::WindowLoad;
+use crate::transcript::snapshot::{
+    IndexProgress, ReadError, SnapshotLoad, TranscriptSnapshot, WindowLoad,
+};
 use houyicoder_protocol::acpx::{AcpxMethod, AcpxNotification};
 use houyicoder_protocol::frontend::run::ContentBlock;
 use houyicoder_protocol::frontend::session_update::{
@@ -181,6 +183,45 @@ fn log_source(windows: Vec<WindowLoad>) -> Arc<MockSnapshot> {
         index_steps: 0,
         index_calls: AtomicU32::new(0),
     })
+}
+
+/// A source whose older-window reads fail, delegating everything else.
+struct FailingWindows {
+    inner: Arc<MockSnapshot>,
+}
+
+/// A log source every window read of which fails with an IO error.
+fn failing_log_source() -> Arc<FailingWindows> {
+    Arc::new(FailingWindows {
+        inner: log_source(Vec::new()),
+    })
+}
+
+impl TranscriptSnapshot for FailingWindows {
+    fn log_size(&self) -> u64 {
+        self.inner.log_size()
+    }
+    fn load(&self, max_bytes: u64) -> SnapshotLoad {
+        self.inner.load(max_bytes)
+    }
+    fn window(&self, anchor: u64, max_bytes: u64) -> WindowLoad {
+        self.inner.window(anchor, max_bytes)
+    }
+    fn tail_window(&self, max_bytes: u64) -> Result<WindowLoad, ReadError> {
+        self.inner.tail_window(max_bytes)
+    }
+    fn window_before(&self, _from_byte: u64, _max_bytes: u64) -> Result<WindowLoad, ReadError> {
+        Err(ReadError::Io)
+    }
+    fn index_chunk(&self) -> IndexProgress {
+        self.inner.index_chunk()
+    }
+    fn byte_at(&self, event_idx: usize) -> Option<u64> {
+        self.inner.byte_at(event_idx)
+    }
+    fn event_count(&self) -> Option<usize> {
+        self.inner.event_count()
+    }
 }
 /// Every row the view holds prints once: an overlap that kept the rows the tail
 /// read repeats would show them twice, one that cut short would lose them.

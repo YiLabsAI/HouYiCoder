@@ -6,12 +6,14 @@
 
 use std::ops::Range;
 use std::sync::mpsc;
+use std::time::Duration;
 
 use super::history_read::{OVERLAP_FRONT_ROWS, ReadJob};
 use super::{MAX_REBUILD_FRAMES, PREPEND_BATCH};
 use crate::composition::shared_runtime;
 use crate::fold::last_turn_boundary;
 use crate::fold::{compute_fold_groups, fold_groups_in};
+use crate::notifications::{NotifKind, Notification};
 use crate::records::TranscriptLine;
 use crate::row_id::RowId;
 use crate::scroll::VIEWABLE_SCROLLBACK_CAP;
@@ -567,6 +569,7 @@ impl App {
             HistoryReadOutcome::Exhausted => {
                 let transcript = &mut self.sessions.current.transcript;
                 transcript.set_disk_front(DiskFront::Stopped);
+                self.sessions.current.history_reads.record_read_success();
             }
             HistoryReadOutcome::Rows(result) => {
                 let count = result.rows.len();
@@ -577,6 +580,18 @@ impl App {
                 self.whole_scroll_mut().set_raw_top(cur + count);
                 self.rebuild_transcript();
                 self.bump_transcript_version();
+                self.sessions.current.history_reads.record_read_success();
+            }
+            HistoryReadOutcome::ReadFailed => {
+                // The front stays open for a retry after the cooldown; the
+                // failure surfaces as a visible notice.
+                tracing::warn!("history read failed; front stays open for a retry");
+                self.sessions.current.history_reads.record_read_failure();
+                self.ui.notifications.add(Notification::immediate(
+                    "history-read-failed",
+                    NotifKind::text("older rows unreadable — retrying shortly"),
+                    Duration::from_millis(4000),
+                ));
             }
         }
     }

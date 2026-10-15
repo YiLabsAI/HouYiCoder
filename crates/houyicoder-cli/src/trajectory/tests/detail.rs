@@ -210,7 +210,12 @@ fn detail_panicking_reader() -> SessionLogTrajectory {
         fn log_size(&self, session: SessionId) -> u64 {
             self.0.log_size(session)
         }
-        fn read_lines_reverse(&self, session: SessionId, from: u64, max: u64) -> ReverseRead {
+        fn read_lines_reverse(
+            &self,
+            session: SessionId,
+            from: u64,
+            max: u64,
+        ) -> Result<ReverseRead, ContextError> {
             self.0.read_lines_reverse(session, from, max)
         }
         fn read_log_range(&self, _session: SessionId, _from: u64, _max: u64) -> LogRangeRead {

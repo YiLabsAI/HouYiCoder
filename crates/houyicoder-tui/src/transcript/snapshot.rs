@@ -48,6 +48,14 @@ pub struct WindowLoad {
     pub bytes_total: u64,
 }
 
+/// An IO failure reading a window from the durable log. Unlike an empty
+/// window, which means the log holds nothing older, this leaves the disk
+/// front open for a retry.
+#[derive(Debug, Clone)]
+pub enum ReadError {
+    Io,
+}
+
 /// How much of the event-byte-offset index is built. The G key triggers a
 /// full build (reverse-reading the whole log); until then the index only
 /// covers what the user has scrolled to (lazy, like less).
@@ -95,16 +103,18 @@ pub trait TranscriptSnapshot: Send + Sync {
     /// range they span. For opening an over-threshold log at the tail (the
     /// most recent discussion lands in view). start_offset is where the
     /// oldest line begins (scroll older from here); next_offset equals the
-    /// file size (past EOF -- nothing newer).
-    fn tail_window(&self, max_bytes: u64) -> WindowLoad;
+    /// file size (past EOF -- nothing newer). An Err is an IO failure; an
+    /// empty Ok is a true empty tail.
+    fn tail_window(&self, max_bytes: u64) -> Result<WindowLoad, ReadError>;
 
     /// The events immediately OLDER than from_byte: reverse-read the lines
     /// ending at from_byte, return them in forward (oldest-first) order with
     /// their byte range. For the n=older scan: when the current window has no
     /// older match, load the prior window here. start_offset is where the
     /// oldest line begins (continue older from here); next_offset is where
-    /// this window ends (== from_byte, the newer window's start).
-    fn window_before(&self, from_byte: u64, max_bytes: u64) -> WindowLoad;
+    /// this window ends (== from_byte, the newer window's start). An Err is an
+    /// IO failure, not the log's end.
+    fn window_before(&self, from_byte: u64, max_bytes: u64) -> Result<WindowLoad, ReadError>;
 
     /// Build the next chunk of the event-byte-offset index (for the G full
     /// scan, or lazily as the user scrolls). Called per frame; returns
@@ -136,11 +146,11 @@ impl TranscriptSnapshot for NoTranscriptSnapshot {
     fn window(&self, _anchor: u64, _max_bytes: u64) -> WindowLoad {
         WindowLoad::default()
     }
-    fn tail_window(&self, _max_bytes: u64) -> WindowLoad {
-        WindowLoad::default()
+    fn tail_window(&self, _max_bytes: u64) -> Result<WindowLoad, ReadError> {
+        Ok(WindowLoad::default())
     }
-    fn window_before(&self, _from_byte: u64, _max_bytes: u64) -> WindowLoad {
-        WindowLoad::default()
+    fn window_before(&self, _from_byte: u64, _max_bytes: u64) -> Result<WindowLoad, ReadError> {
+        Ok(WindowLoad::default())
     }
     fn index_chunk(&self) -> IndexProgress {
         IndexProgress::default()

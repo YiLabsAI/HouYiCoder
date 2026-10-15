@@ -193,8 +193,8 @@ ACTIVE_OWNERS = {
         "fields": 12,
     },
     "crates/houyicoder-tui/src/transcript/history_state.rs:HistoryReads": {
-        # The pending-read record, the workers holding a slot, and the generation that invalidates them.
-        "fields": 3,
+        # The pending-read record, the workers holding a slot, the generation that invalidates them, and the retry deadline a failed read sets.
+        "fields": 4,
     },
     "crates/houyicoder-tui/src/transcript/parked_view_states.rs:ParkedViewStates": {
         # Expansion sets parked for the views that are not on screen.

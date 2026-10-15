@@ -172,4 +172,30 @@ fn test_running_counts_workers() {
     assert_eq!(reads.running(), 0, "the worker leaving frees the slot");
 }
 
+/// A failed read holds off the next dispatch for the cooldown window, no
+/// longer: a landing read or an invalidation clears the hold early.
+#[test]
+fn test_read_failure_holds_cooldown() {
+    let mut reads = HistoryReads::default();
+    reads.record_read_failure();
+    assert!(
+        !reads.may_dispatch(),
+        "a failed read holds off the next dispatch"
+    );
+    reads.expire_read_cooldown();
+    assert!(
+        reads.may_dispatch(),
+        "the retry is allowed once the cooldown elapses"
+    );
+    reads.record_read_failure();
+    reads.record_read_success();
+    assert!(reads.may_dispatch(), "a read that lands clears the hold");
+    reads.record_read_failure();
+    reads.invalidate();
+    assert!(
+        reads.may_dispatch(),
+        "a new history starts with no hold from the dropped one"
+    );
+}
+
 mod events;

@@ -8,7 +8,9 @@
 use std::sync::{Arc, Mutex};
 
 use houyicoder_api::session::SessionLog;
-use houyicoder_context::{EventId, LenientRead, SessionEvent, SessionId, SessionLogEntry};
+use houyicoder_context::{
+    ContextError, EventId, LenientRead, SessionEvent, SessionId, SessionLogEntry,
+};
 use std::mem::take;
 #[cfg(test)]
 use std::sync::atomic::AtomicU64;
@@ -195,7 +197,6 @@ impl TurnPage {
     }
 }
 
-/// A typed reader over one session's durable log.
 /// What a history reader actually asked the disk for.
 ///
 /// A page's cost is claimed to be bounded, and a draw's is claimed to be zero.
@@ -212,6 +213,7 @@ pub(crate) struct ReadStats {
     pub requested_bytes: AtomicU64,
 }
 
+/// A typed reader over one session's durable log.
 pub(crate) struct SessionHistory {
     session_log: Arc<dyn SessionLog>,
     session_id: SessionId,
@@ -280,26 +282,26 @@ impl SessionHistory {
 
     /// The newest events the log holds, as a window: the tail read is
     /// anchored at EOF and bounded by max_bytes.
-    pub(crate) fn tail_window(&self, max_bytes: u64) -> EventWindow {
+    pub(crate) fn tail_window(&self, max_bytes: u64) -> Result<EventWindow, ContextError> {
         let total = self.log_size();
         if total == 0 {
-            return EventWindow {
+            return Ok(EventWindow {
                 bytes_total: 0,
                 ..EventWindow::default()
-            };
+            });
         }
         // One reverse read from EOF: the newest batch, newest-first. Reverse
         // to forward order so a consumer renders top-down.
         self.note_window_read(max_bytes.min(total));
-        let rev = self
-            .session_log
-            .backend()
-            .read_lines_reverse(self.session_id, total, max_bytes);
+        let rev =
+            self.session_log
+                .backend()
+                .read_lines_reverse(self.session_id, total, max_bytes)?;
         let fwd: Vec<(u64, String)> = rev.lines.into_iter().rev().collect();
         let lines_start_offset = fwd.first().map(|(o, _)| *o).unwrap_or(total);
         let lines_read = fwd.len();
         let (events, skipped) = parse_lines(&fwd);
-        EventWindow {
+        Ok(EventWindow {
             events,
             lines_start_offset,
             lines_read,
@@ -307,35 +309,39 @@ impl SessionHistory {
             next_offset: total,
             bytes_total: total,
             skipped,
-        }
+        })
     }
 
     /// The events immediately OLDER than from_byte, in forward order.
-    pub(crate) fn window_before(&self, from_byte: u64, max_bytes: u64) -> EventWindow {
+    pub(crate) fn window_before(
+        &self,
+        from_byte: u64,
+        max_bytes: u64,
+    ) -> Result<EventWindow, ContextError> {
         let total = self.log_size();
         if from_byte == 0 || total == 0 {
-            return EventWindow {
+            return Ok(EventWindow {
                 bytes_total: total,
                 ..EventWindow::default()
-            };
+            });
         }
         self.note_window_read(max_bytes.min(from_byte));
         let rev =
             self.session_log
                 .backend()
-                .read_lines_reverse(self.session_id, from_byte, max_bytes);
+                .read_lines_reverse(self.session_id, from_byte, max_bytes)?;
         let fwd: Vec<(u64, String)> = rev.lines.into_iter().rev().collect();
         let lines_start_offset = fwd.first().map(|(o, _)| *o).unwrap_or(0);
         let lines_read = fwd.len();
         let (events, skipped) = parse_lines(&fwd);
-        EventWindow {
+        Ok(EventWindow {
             events,
             lines_start_offset,
             lines_read,
             next_offset: from_byte,
             bytes_total: total,
             skipped,
-        }
+        })
     }
 
     /// The events starting at a byte anchor, in forward order.
@@ -381,19 +387,45 @@ impl SessionHistory {
         }
     }
 
-    /// The newest complete turns, read backwards from the end of the log.
-    ///
-    /// A page is a count of turns, not a byte budget: one turn can be larger
-    /// than any fixed window, and a window can hold hundreds of short turns.
-    /// The read walks back until it has seen one more turn than it keeps, so
-    /// the oldest turn it returns is whole. max_bytes bounds the walk; when
-    /// it runs out the oldest turn is cut, and the page says so rather than
-    /// presenting a fragment as a turn.
+    /// One backward batch of a page walk. The step doubles until a read holds
+    /// a line, since one event can be wider than a step. Returns the window
+    /// and the bytes it spent. A read failure returns an empty batch, not the
+    /// log's end.
+    fn page_batch(&self, anchor: u64, budget: u64, io_bytes: u64) -> (EventWindow, u64) {
+        let mut step = PAGE_STEP_BYTES.min(budget);
+        let mut spent = 0u64;
+        loop {
+            let attempt = step
+                .min(anchor)
+                .min(PAGE_READ_MAX_BYTES.saturating_sub(io_bytes + spent));
+            if attempt == 0 {
+                return (EventWindow::default(), spent);
+            }
+            spent += attempt;
+            let window = match self.window_before(anchor, attempt) {
+                Ok(w) => w,
+                Err(e) => {
+                    tracing::warn!("page reverse-read stopped on failure: {e}");
+                    return (EventWindow::default(), spent);
+                }
+            };
+            if window.lines_read > 0 {
+                return (window, spent);
+            }
+            if step >= budget || step >= anchor || io_bytes + spent >= PAGE_READ_MAX_BYTES {
+                return (window, spent);
+            }
+            step = step.saturating_mul(2).min(budget);
+        }
+    }
+
     /// The complete turns immediately older than a byte anchor.
     ///
-    /// The walk stops at the log's start and at a context clear, because a
-    /// cleared session's trajectory is what came after the clear: reading past
-    /// it would show turns the session no longer counts.
+    /// A page counts turns, not bytes: the walk reads back until it has seen
+    /// one more turn than it keeps, so the oldest kept turn is whole. When
+    /// max_bytes runs out the oldest turn is cut and the page says so. The
+    /// walk also stops at the log's start and at a context clear, whose older
+    /// turns the session no longer counts.
     pub(crate) fn turns_before(
         &self,
         from_byte: u64,
@@ -418,32 +450,8 @@ impl SessionHistory {
         // oldest kept turn begins, so the page can start there.
         let wanted = page_turns + 1;
         while opened < wanted && anchor > 0 && budget > 0 && io_bytes < PAGE_READ_MAX_BYTES {
-            // A single event can be wider than one step, and a reverse read
-            // whose budget cannot reach a line's start returns nothing, so the
-            // step doubles until it holds a line or the budgets are spent. A
-            // batch whose lines all failed to parse still counts as read, so
-            // the walk moves past it instead of growing the step forever.
-            let mut step = PAGE_STEP_BYTES.min(budget);
-            let window = loop {
-                // Clamped before the read, not after: the disk budget is what
-                // bounds the walk, so an attempt that would cross it is not
-                // made at all.
-                let attempt = step
-                    .min(anchor)
-                    .min(PAGE_READ_MAX_BYTES.saturating_sub(io_bytes));
-                if attempt == 0 {
-                    break EventWindow::default();
-                }
-                io_bytes = io_bytes.saturating_add(attempt);
-                let window = self.window_before(anchor, attempt);
-                if window.lines_read > 0 {
-                    break window;
-                }
-                if step >= budget || step >= anchor || io_bytes >= PAGE_READ_MAX_BYTES {
-                    break window;
-                }
-                step = step.saturating_mul(2).min(budget);
-            };
+            let (window, spent) = self.page_batch(anchor, budget, io_bytes);
+            io_bytes = io_bytes.saturating_add(spent);
             if window.lines_read == 0 || window.lines_start_offset >= anchor {
                 // Nothing left to parse, or no progress: stop rather than read
                 // the same bytes again.
@@ -537,7 +545,15 @@ impl SessionHistory {
         let mut newest_first: Vec<LocatedEvent> = Vec::new();
         while from > 0 && budget > 0 {
             let step = budget.min(LOOKBACK_STEP_BYTES);
-            let rev = backend.read_lines_reverse(self.session_id, from, step);
+            let rev = match backend.read_lines_reverse(self.session_id, from, step) {
+                Ok(r) => r,
+                Err(e) => {
+                    // A failure folds the window against what was gathered,
+                    // not what the log's end would mean.
+                    tracing::warn!("lookback reverse-read stopped on failure: {e}");
+                    break;
+                }
+            };
             budget -= step;
             let fwd: Vec<(u64, String)> = rev.lines.iter().rev().cloned().collect();
             let (events, _) = parse_lines(&fwd);
@@ -602,7 +618,18 @@ impl SessionHistory {
             };
         }
         let from = idx.next_from.unwrap_or(idx.total_bytes);
-        let rev = backend.read_lines_reverse(self.session_id, from, INDEX_CHUNK_BYTES);
+        let rev = match backend.read_lines_reverse(self.session_id, from, INDEX_CHUNK_BYTES) {
+            Ok(r) => r,
+            Err(e) => {
+                // A stall without advancing: the next call retries.
+                tracing::warn!("index reverse-read stalled on failure: {e}");
+                return HistoryIndexProgress {
+                    indexed_bytes: idx.built_from_tail,
+                    total_bytes: idx.total_bytes,
+                    done: idx.done,
+                };
+            }
+        };
         // Collect event byte offsets from the reverse batch (newest-first),
         // then prepend so the index stays in forward order.
         let mut batch_offsets: Vec<u64> = Vec::new();

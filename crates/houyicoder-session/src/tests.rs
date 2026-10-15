@@ -995,7 +995,10 @@ async fn test_prev_hash_reads_raw() {
     .await;
     store.last_hashes.lock().unwrap().clear();
     let cold = store.compute_prev_hash(sid).await.unwrap();
-    let rr = store.backend().read_lines_reverse(sid, u64::MAX, 1_048_576);
+    let rr = store
+        .backend()
+        .read_lines_reverse(sid, u64::MAX, 1_048_576)
+        .unwrap();
     let last_line = rr.lines.first().expect("last line").1.clone();
     assert_eq!(
         cold,
@@ -1028,7 +1031,10 @@ async fn test_prev_hash_survives_drift() {
     let store = SessionStore::new(Box::new(LocalFileBackend::new(root.clone())));
     let sid = SessionId::new();
     drop(appended_event(&store, sid, SessionEvent::UserInput { text: "a".into() }).await);
-    let rr = store.backend().read_lines_reverse(sid, u64::MAX, 1_048_576);
+    let rr = store
+        .backend()
+        .read_lines_reverse(sid, u64::MAX, 1_048_576)
+        .unwrap();
     let orig_line = rr.lines.first().expect("last line").1.clone();
     // Insert an unknown field a prior binary's schema carried; the current
     // schema ignores it on parse, re-serialization omits it.

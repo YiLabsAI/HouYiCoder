@@ -25,7 +25,9 @@ use crate::composition::shared_runtime;
 use crate::records::TranscriptLine;
 use crate::session::SessionConnection;
 use crate::state::{App, Screen};
-use crate::transcript::snapshot::{IndexProgress, SnapshotLoad, TranscriptSnapshot, WindowLoad};
+use crate::transcript::snapshot::{
+    IndexProgress, ReadError, SnapshotLoad, TranscriptSnapshot, WindowLoad,
+};
 use crate::view::draw;
 use houyicoder_protocol::envelope::ClientFrame;
 use houyicoder_protocol::envelope::RequestEnvelope;
@@ -129,17 +131,17 @@ impl TranscriptSnapshot for MockSnapshot {
             truncated: self.truncated,
         }
     }
-    fn tail_window(&self, _max_bytes: u64) -> WindowLoad {
+    fn tail_window(&self, _max_bytes: u64) -> Result<WindowLoad, ReadError> {
         if let Some(last) = self.windows.last() {
-            return last.clone();
+            return Ok(last.clone());
         }
-        WindowLoad {
+        Ok(WindowLoad {
             lines: self.window_lines.clone(),
             start_offset: self.window_start,
             next_offset: self.log_bytes,
             skipped: 0,
             bytes_total: self.log_bytes,
-        }
+        })
     }
     fn window(&self, anchor: u64, _max_bytes: u64) -> WindowLoad {
         if !self.windows.is_empty() {
@@ -147,11 +149,11 @@ impl TranscriptSnapshot for MockSnapshot {
         }
         WindowLoad::default()
     }
-    fn window_before(&self, from_byte: u64, _max_bytes: u64) -> WindowLoad {
+    fn window_before(&self, from_byte: u64, _max_bytes: u64) -> Result<WindowLoad, ReadError> {
         if !self.windows.is_empty() {
-            return self.win_before(from_byte);
+            return Ok(self.win_before(from_byte));
         }
-        WindowLoad::default()
+        Ok(WindowLoad::default())
     }
     fn index_chunk(&self) -> IndexProgress {
         let n = self.index_calls.load(Ordering::Relaxed) + 1;

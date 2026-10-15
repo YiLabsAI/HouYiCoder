@@ -16,6 +16,7 @@
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, mpsc};
+use std::time::{Duration, Instant};
 
 use crate::records::TranscriptLine;
 use crate::state::transcript::DiskFront;
@@ -34,6 +35,10 @@ use std::fmt::Result;
 /// at the dispatch point, against a count of the workers holding a slot rather
 /// than of the records the owner keeps.
 pub(crate) const HISTORY_READ_WORKER_BUDGET: usize = 1;
+
+/// How long a failed read holds off the next dispatch: without it, a scroll
+/// that keeps asking re-spawns the read every frame for nothing.
+const READ_RETRY_COOLDOWN: Duration = Duration::from_secs(3);
 
 /// The handle a worker watches to learn it is no longer wanted.
 ///
@@ -101,12 +106,16 @@ pub(crate) struct HistoryReadResult {
     pub anchor: u64,
 }
 
-/// What a background read returned: rows to prepend, or that the log holds
-/// nothing older to show.
+/// What a background read returned: rows to prepend, that the log holds
+/// nothing older to show, or that the read failed and the front stays open for
+/// a retry.
 #[derive(Debug)]
 pub(crate) enum HistoryReadOutcome {
     Rows(HistoryReadResult),
     Exhausted,
+    /// An IO failure reading the log. Unlike Exhausted, the log may yet hold
+    /// older rows: the front stays open and a retry follows the cooldown.
+    ReadFailed,
 }
 
 /// A dispatched history read, stamped with everything the apply side needs to
@@ -204,6 +213,8 @@ pub struct HistoryReads {
     /// so the budget reads what is executing rather than what the record above
     /// still names.
     active: Arc<AtomicUsize>,
+    /// When a failed read next allows a retry; None when no cooldown holds.
+    retry_after: Option<Instant>,
 }
 
 impl HistoryReads {
@@ -239,7 +250,33 @@ impl HistoryReads {
     /// worker may already have left and freed the budget, which is why the
     /// count alone cannot answer this.
     pub(crate) fn may_dispatch(&self) -> bool {
-        self.running() < HISTORY_READ_WORKER_BUDGET && !self.holds_pending()
+        self.running() < HISTORY_READ_WORKER_BUDGET
+            && !self.holds_pending()
+            && !self.in_read_cooldown()
+    }
+
+    /// Whether the cooldown from a prior failure still holds.
+    fn in_read_cooldown(&self) -> bool {
+        match self.retry_after {
+            Some(deadline) => Instant::now() < deadline,
+            None => false,
+        }
+    }
+
+    /// Hold off the next dispatch for the cooldown window.
+    pub(crate) fn record_read_failure(&mut self) {
+        self.retry_after = Some(Instant::now() + READ_RETRY_COOLDOWN);
+    }
+
+    /// Clear any cooldown a prior failure set.
+    pub(crate) fn record_read_success(&mut self) {
+        self.retry_after = None;
+    }
+
+    /// Expire the cooldown without waiting, for tests.
+    #[cfg(test)]
+    pub(crate) fn expire_read_cooldown(&mut self) {
+        self.retry_after = Some(Instant::now() - READ_RETRY_COOLDOWN);
     }
 
     /// Record a dispatched read, stamped with the current epoch and the
@@ -318,6 +355,8 @@ impl HistoryReads {
     pub(crate) fn invalidate(&mut self) {
         self.epoch = self.epoch.wrapping_add(1);
         self.pending = None;
+        // A new generation starts with no cooldown.
+        self.retry_after = None;
     }
 }
 

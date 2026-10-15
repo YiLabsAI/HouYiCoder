@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use crate::records::TranscriptLine;
 use crate::scroll::WINDOW_MAX_BYTES;
 use crate::state::history_read::{HistoryReadOutcome, HistoryReadResult};
-use crate::transcript::snapshot::TranscriptSnapshot;
+use crate::transcript::snapshot::{ReadError, TranscriptSnapshot};
 use std::sync::mpsc::Sender;
 
 /// Byte budget of one older-row read from the session log, and of each window
@@ -63,8 +63,11 @@ impl ReadJob {
             return None;
         }
         Some(match read {
-            Some((rows, anchor)) => HistoryReadOutcome::Rows(HistoryReadResult { rows, anchor }),
-            None => HistoryReadOutcome::Exhausted,
+            Ok(Some((rows, anchor))) => {
+                HistoryReadOutcome::Rows(HistoryReadResult { rows, anchor })
+            }
+            Ok(None) => HistoryReadOutcome::Exhausted,
+            Err(ReadError::Io) => HistoryReadOutcome::ReadFailed,
         })
     }
 
@@ -91,7 +94,7 @@ fn read_log_tail(
     source: &dyn TranscriptSnapshot,
     front: &[String],
     stop: &AtomicBool,
-) -> Option<(Vec<TranscriptLine>, u64)> {
+) -> Result<Option<(Vec<TranscriptLine>, u64)>, ReadError> {
     let mut anchor = source.log_size();
     let mut walked: u64 = 0;
     // The rows of the window read before this one that sit just after this
@@ -106,28 +109,28 @@ fn read_log_tail(
         // and this thread cannot interrupt it, so the flag bounds how many more
         // windows the walk spends and one is the worst case.
         if stop.load(Ordering::Relaxed) {
-            return None;
+            return Ok(None);
         }
-        let window = source.window_before(anchor, LOG_WINDOW_BYTES);
+        let window = source.window_before(anchor, LOG_WINDOW_BYTES)?;
         // A window that does not end where it was asked to would leave a gap
         // between it and the rows already read, so the walk stops instead. One
         // that does not begin below the anchor would leave the walk standing
         // still, so it stops too.
         if window.lines.is_empty() || window.next_offset != anchor {
-            return None;
+            return Ok(None);
         }
         if window.start_offset >= anchor {
-            return None;
+            return Ok(None);
         }
         walked += anchor - window.start_offset;
         if past_overlap {
-            return Some((window.lines, window.start_offset));
+            return Ok(Some((window.lines, window.start_offset)));
         }
         if let Some(cut) = overlap_cut(&window.lines, &newer, front) {
             if cut > 0 {
                 let mut rows = window.lines;
                 rows.truncate(cut);
-                return Some((rows, window.start_offset));
+                return Ok(Some((rows, window.start_offset)));
             }
             past_overlap = true;
         }
@@ -139,22 +142,23 @@ fn read_log_tail(
             .collect();
         anchor = window.start_offset;
     }
-    None
+    Ok(None)
 }
 
 /// Read the rows the log holds older than a byte offset, which the previous
 /// window's own start gives. None when the log holds nothing older, or when
 /// the window does not end at that offset or does not begin below it — the
 /// next read starts where this one did, which would read the same rows again.
+/// An Err is an IO failure the caller retries, not the log's end.
 fn read_log_before(
     source: &dyn TranscriptSnapshot,
     anchor: u64,
-) -> Option<(Vec<TranscriptLine>, u64)> {
-    let window = source.window_before(anchor, LOG_WINDOW_BYTES);
+) -> Result<Option<(Vec<TranscriptLine>, u64)>, ReadError> {
+    let window = source.window_before(anchor, LOG_WINDOW_BYTES)?;
     if window.lines.is_empty() || window.next_offset != anchor || window.start_offset >= anchor {
-        return None;
+        return Ok(None);
     }
-    Some((window.lines, window.start_offset))
+    Ok(Some((window.lines, window.start_offset)))
 }
 
 /// How many of the rows read from the log to keep: the ones older than the row

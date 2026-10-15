@@ -876,7 +876,7 @@ fn test_window_safe_on_multibyte() {
     // Forward window from 0 + reverse tail window both must keep the
     // multibyte char intact (no corruption across chunk edges).
     let fwd = snap.window(0, 1 << 20);
-    let rev = snap.tail_window(1 << 20);
+    let rev = snap.tail_window(1 << 20).unwrap();
     let joined_fwd: String = fwd
         .lines
         .iter()
@@ -949,8 +949,6 @@ fn test_index_builds_bounded_chunks() {
 /// be empty there -- the content assertions are skipped in that mode).
 #[test]
 #[ignore]
-// too_many_lines: a budget benchmark -- setup, measure, assert in one body.
-// Splitting obscures the measured region.
 fn test_large_log_budget() {
     let root = temp_dir().join(format!("houyi_large_budget_{}_{}", SessionId::new(), id()));
     let session = SessionId::new();
@@ -960,10 +958,7 @@ fn test_large_log_budget() {
 
     const NEEDLE: &str = "BUDGETNEEDLE";
     let real_log = var("HOUYICODER_LARGE_LOG").ok();
-    let using_real = real_log
-        .as_ref()
-        .map(|p| Path::new(p).exists())
-        .unwrap_or(false);
+    let using_real = real_log.as_deref().is_some_and(|p| Path::new(p).exists());
     if using_real {
         #[cfg(unix)]
         symlink(real_log.as_deref().unwrap(), &log_path).expect("symlink the large log");
@@ -1003,7 +998,7 @@ fn test_large_log_budget() {
 
     // Enter (tail window): one 256 KB reverse read + parse + project.
     let t0 = Instant::now();
-    let tail = snap.tail_window(WINDOW_MAX_BYTES);
+    let tail = snap.tail_window(WINDOW_MAX_BYTES).unwrap();
     let enter_ms = t0.elapsed().as_millis();
     assert!(
         enter_ms < 300,
@@ -1037,8 +1032,9 @@ fn test_large_log_budget() {
     );
 
     // One older-window scan (window_before): bounded read + parse + project < 100 ms.
+    let older = tail.start_offset;
     let t0 = Instant::now();
-    let _scan = snap.window_before(tail.start_offset, WINDOW_MAX_BYTES);
+    let _scan = snap.window_before(older, WINDOW_MAX_BYTES).unwrap();
     let scan_ms = t0.elapsed().as_millis();
     assert!(scan_ms < 100, "window_before < 100ms (took {scan_ms}ms)");
 
@@ -1101,7 +1097,7 @@ fn test_scroll_back_parity() {
     let mut windows = 0usize;
     let mut anchor = snap.log_size();
     while anchor > 0 {
-        let window = snap.window_before(anchor, 1024);
+        let window = snap.window_before(anchor, 1024).unwrap();
         if window.lines.is_empty() {
             break;
         }

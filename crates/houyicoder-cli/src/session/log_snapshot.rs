@@ -24,13 +24,13 @@ use std::sync::Arc;
 use houyicoder_api::session::SessionLog;
 #[cfg(test)]
 use houyicoder_context::SessionId;
-use houyicoder_context::{SessionEvent, SessionLogEntry};
+use houyicoder_context::{ContextError, SessionEvent, SessionLogEntry};
 use houyicoder_protocol::envelope::DurableEventId;
 use houyicoder_service::protocol_adapter::{map_acpx_notification, map_session_update};
 use houyicoder_tui::records::TranscriptLine;
 use houyicoder_tui::row_id::RowId;
 use houyicoder_tui::transcript::snapshot::{
-    IndexProgress, SnapshotLoad, TranscriptSnapshot, WindowLoad,
+    IndexProgress, ReadError, SnapshotLoad, TranscriptSnapshot, WindowLoad,
 };
 use houyicoder_tui::transcript::{TranscriptFrame, bounds_turn_in, transcript_from_named_frames};
 
@@ -181,27 +181,44 @@ impl TranscriptSnapshot for SessionLogSnapshot {
         }
     }
 
-    fn tail_window(&self, max_bytes: u64) -> WindowLoad {
-        let window = self.history.tail_window(max_bytes);
-        let (lines, skipped) = self.render_window(&window);
-        WindowLoad {
-            lines,
-            start_offset: window.lines_start_offset,
-            next_offset: window.next_offset,
-            skipped,
-            bytes_total: window.bytes_total,
+    fn tail_window(&self, max_bytes: u64) -> Result<WindowLoad, ReadError> {
+        match self.history.tail_window(max_bytes) {
+            Ok(window) => {
+                let (lines, skipped) = self.render_window(&window);
+                Ok(WindowLoad {
+                    lines,
+                    start_offset: window.lines_start_offset,
+                    next_offset: window.next_offset,
+                    skipped,
+                    bytes_total: window.bytes_total,
+                })
+            }
+            Err(ContextError::Io) => Err(ReadError::Io),
+            Err(other) => {
+                // No window to render and nothing to retry.
+                tracing::warn!("tail window unavailable: {other}");
+                Ok(WindowLoad::default())
+            }
         }
     }
 
-    fn window_before(&self, from_byte: u64, max_bytes: u64) -> WindowLoad {
-        let window = self.history.window_before(from_byte, max_bytes);
-        let (lines, skipped) = self.render_window(&window);
-        WindowLoad {
-            lines,
-            start_offset: window.lines_start_offset,
-            next_offset: window.next_offset,
-            skipped,
-            bytes_total: window.bytes_total,
+    fn window_before(&self, from_byte: u64, max_bytes: u64) -> Result<WindowLoad, ReadError> {
+        match self.history.window_before(from_byte, max_bytes) {
+            Ok(window) => {
+                let (lines, skipped) = self.render_window(&window);
+                Ok(WindowLoad {
+                    lines,
+                    start_offset: window.lines_start_offset,
+                    next_offset: window.next_offset,
+                    skipped,
+                    bytes_total: window.bytes_total,
+                })
+            }
+            Err(ContextError::Io) => Err(ReadError::Io),
+            Err(other) => {
+                tracing::warn!("window-before unavailable: {other}");
+                Ok(WindowLoad::default())
+            }
         }
     }
 
