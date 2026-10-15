@@ -96,7 +96,7 @@ def main() -> int:
         failures.append(f"over baseline: must fire, got {errs}")
 
     # 4. _check_dir_layout: catches unlisted top-level modules, X/X.rs stutter,
-    # and new mod.rs files over baseline.
+    # and any unapproved mod.rs file even when total mod.rs count is 1.
     root = _make_tree({
         "houyicoder-tui/src/lib.rs": "//! ok\n",
         "houyicoder-tui/src/stray_flat.rs": "//! unlisted\n",
@@ -107,15 +107,25 @@ def main() -> int:
     _check_dir_layout(
         layout_errs,
         root=root,
-        mod_rs_baseline=0,
+        allowed_mod_rs=frozenset(),
         allowed_top={"crates/houyicoder-tui/src": frozenset({"lib", "session", "view"})},
     )
     if not any("stray_flat" in e for e in layout_errs):
         failures.append(f"unlisted top-level module must fire, got {layout_errs}")
     if not any("self-stutter (session/session.rs)" in e for e in layout_errs):
         failures.append(f"X/X.rs self-stutter must fire, got {layout_errs}")
-    if not any("production mod.rs files: 1 (baseline 0)" in e for e in layout_errs):
-        failures.append(f"mod.rs over baseline must fire, got {layout_errs}")
+    if not any("unexpected production mod.rs file" in e for e in layout_errs):
+        failures.append(f"unapproved mod.rs must fire, got {layout_errs}")
+
+    # 5. _check_flat_test_peer catches inline mod tests even with stacked
+    # attributes (#[expect(...)]) or compound cfg (#[cfg(all(test, unix))]).
+    root = _make_tree({
+        "crate/src/stacked.rs": '#[cfg(test)]\n#[expect(clippy::all, reason = "ok")]\nmod tests {\n}\n',
+        "crate/src/compound.rs": "#[cfg(all(test, unix))]\nmod tests {\n}\n",
+    })
+    errs = _errs(root, 0)
+    if not any("inline #[cfg(test)] mod blocks: 2" in e for e in errs):
+        failures.append(f"stacked/compound inline test mods must both count, got {errs}")
 
     if failures:
         for f in failures:

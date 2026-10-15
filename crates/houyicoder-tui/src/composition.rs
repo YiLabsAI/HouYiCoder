@@ -5,7 +5,7 @@
 //! from real SessionLogEntries, and approvals come from real Interruptions.
 
 pub(crate) mod terminal_guard;
-pub mod terminal_title;
+pub(crate) mod terminal_title;
 
 mod app_default;
 mod placeholder;

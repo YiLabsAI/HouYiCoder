@@ -24,7 +24,7 @@ use std::fs::metadata;
 /// is not expressible as an rg --glob, so the caller falls back to the
 /// in-process traversal; Err surfaces a real rg failure. The returned pair
 /// matches glob_files: (relativized filenames, truncated flag).
-pub(crate) async fn try_run_glob_subprocess(
+pub(super) async fn try_run_glob_subprocess(
     root: &Path,
     base: &Path,
     pattern: &str,

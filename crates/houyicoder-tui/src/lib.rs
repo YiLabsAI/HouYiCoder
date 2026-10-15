@@ -5,7 +5,7 @@
 //! engine types and shared engine state do not enter this crate.
 
 pub mod app;
-pub mod command;
+pub(crate) mod command;
 pub mod composition;
 pub mod input;
 pub mod keys;
@@ -13,7 +13,7 @@ pub mod session;
 pub mod transcript;
 pub mod ui;
 pub mod view;
-pub(crate) mod workflow;
+pub mod workflow;
 
 #[cfg(feature = "bench")]
 pub mod bench_api;
@@ -24,18 +24,19 @@ mod frame_timing;
 mod test_harness;
 
 pub use app::state;
-pub(crate) use composition::terminal_guard;
-pub use composition::terminal_title;
-pub use input::{history, palette, paste};
-pub use session::{
-    agent_message, approval, ask_question_model, pending_prompt, run_control, run_state, todo_view,
+pub(crate) use composition::{terminal_guard, terminal_title};
+pub(crate) use input::palette;
+pub use input::{history, paste};
+pub use session::{agent_message, pending_prompt};
+pub(crate) use session::{
+    ask_question_model, model_receipt, run_control, run_metrics, run_state, sessions, todo_view,
 };
-pub(crate) use session::{model_receipt, run_metrics, sessions};
-pub use transcript::{
-    brief, fold, git_op, markdown, records, redaction, result_body, row_id, scroll,
+pub(crate) use transcript::{brief, fold, git_op, markdown, scroll};
+pub use transcript::{records, redaction, result_body, row_id};
+pub(crate) use ui::{
+    layout_feedback, layout_snapshot, notifications, renderer, rows, selections, toggle_hint,
 };
-pub(crate) use ui::{layout_feedback, layout_snapshot, renderer, rows, selections, toggle_hint};
-pub use ui::{notifications, render_cache, selection};
+pub use ui::{render_cache, selection};
 pub use view::console::state as console_state;
 pub use view::resume_picker::state as resume_picker;
 pub(crate) use view::{

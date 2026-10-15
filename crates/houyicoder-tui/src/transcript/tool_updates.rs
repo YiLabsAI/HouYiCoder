@@ -12,11 +12,11 @@ use std::collections::HashMap;
 
 /// A resolved tool update awaiting pairing with its call: the call id, the
 /// outcome the result row colors by, and the raw output the body reads.
-pub(crate) type PendingUpdate = (String, Option<ToolOutcome>, Option<Value>);
+pub(super) type PendingUpdate = (String, Option<ToolOutcome>, Option<Value>);
 
 /// The title and raw input a ToolCall frame carries, keyed by call id so an
 /// orphan result can still name its tool. First-write is fine for orphans.
-pub(crate) type ToolRegistry = HashMap<String, (String, Option<Value>)>;
+pub(super) type ToolRegistry = HashMap<String, (String, Option<Value>)>;
 
 /// Resolve each tool call's outcome + output from its matching ToolCallUpdate
 /// (by tool_call_id) so the call chip colors by outcome and the result row
@@ -29,7 +29,7 @@ pub(crate) type ToolRegistry = HashMap<String, (String, Option<Value>)>;
 /// update. The tools map stays a HashMap: the call row reads the title + input
 /// from the ToolCall frame itself, and tools only names the tool for an
 /// orphan result (no call frame in the stream), where first-write is fine.
-pub(crate) fn collect_tool_updates<F: AsRef<TranscriptFrame>>(
+pub(super) fn collect_tool_updates<F: AsRef<TranscriptFrame>>(
     frames: &[F],
 ) -> (Vec<PendingUpdate>, ToolRegistry) {
     let mut updates: Vec<PendingUpdate> = Vec::new();

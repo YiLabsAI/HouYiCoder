@@ -12,10 +12,10 @@ use std::io::sink;
 /// A stub launcher that returns non-JSON stdout plus an exit code and
 /// stderr, simulating a shell-style hook that uses the exit-code contract
 /// (exit 2 = Deny, exit 0 = Allow) rather than the JSON verdict shape.
-pub(crate) struct ExitCodeLauncher {
-    pub(crate) exit_code: i32,
-    pub(crate) stdout: String,
-    pub(crate) stderr: String,
+pub(super) struct ExitCodeLauncher {
+    pub(super) exit_code: i32,
+    pub(super) stdout: String,
+    pub(super) stderr: String,
 }
 
 impl ProcessLauncher for ExitCodeLauncher {

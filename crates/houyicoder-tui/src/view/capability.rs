@@ -673,11 +673,11 @@ fn draw_tools(f: &mut Frame, area: Rect, app: &App) {
     render_lines(f, area, block, lines);
 }
 
-pub(crate) fn titled_block(app: &App, base: &str) -> Block<'static> {
+pub(super) fn titled_block(app: &App, base: &str) -> Block<'static> {
     focus_titled_block(app, base)
 }
 
-pub(crate) fn render_lines(f: &mut Frame, area: Rect, block: Block, lines: Vec<Line>) {
+pub(super) fn render_lines(f: &mut Frame, area: Rect, block: Block, lines: Vec<Line>) {
     f.render_widget(
         Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false }),
         block.inner(area),

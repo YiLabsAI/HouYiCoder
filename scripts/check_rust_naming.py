@@ -64,7 +64,13 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from rules.naming import JARGON, TEST_NAME_LEN_HARD, TEST_UNDERSCORE_CAP  # noqa: E402
+from rules.naming import (  # noqa: E402
+    ALLOWED_MOD_RS,
+    ALLOWED_TOP_MODULES,
+    JARGON,
+    TEST_NAME_LEN_HARD,
+    TEST_UNDERSCORE_CAP,
+)
 
 # A test attribute: #[test] or #[tokio::test] (optionally with args, e.g.
 # #[tokio::test(flavor = "multi_thread")]). Matched anywhere on the line so
@@ -130,41 +136,17 @@ _FILE_QUALIFIER_BASELINE: frozenset[str] = frozenset({
 _FLAT_TEST_PEER_BASELINE = 0
 _FLAT_TEST_PEER_PATH_RE = re.compile(r'#\[path\s*=\s*"[^"]*_tests\.rs"\]')
 _INLINE_TEST_MOD_BASELINE = 0
-_INLINE_TEST_MOD_RE = re.compile(r"(?m)^#\[cfg\(test\)\]\s*\nmod\s+[a-z_]+\s*\{")
-_MOD_RS_BASELINE = 4
-
-# Top-level module whitelist for the four core crates (002 §6.3–§6.4).
-# Adding a new top-level domain (such as mcp/) is an explicit architectural
-# decision: add its stem here and document the domain in 002 §6.4.
-_ALLOWED_TOP_MODULES: dict[str, frozenset[str]] = {
-    "crates/houyicoder-tui/src": frozenset({
-        "lib", "app", "command", "composition", "input", "keys", "session",
-        "transcript", "ui", "view", "workflow", "bench_api", "frame_timing",
-        "test_harness",
-    }),
-    "crates/houyicoder-core/src": frozenset({
-        "lib", "agent", "observability", "provider", "snapshot",
-    }),
-    "crates/houyicoder-core/src/agent": frozenset({
-        "append", "builder", "compaction", "context", "exports", "hook",
-        "inference", "memory", "multi_agent", "runner_config", "skill",
-        "status", "tests", "tools", "turn", "worktree",
-    }),
-    "crates/houyicoder-service/src": frozenset({
-        "lib", "acp", "agent_registry", "composition", "diagnostics",
-        "lifecycle", "protocol_adapter", "sandbox_policy", "server", "uds",
-    }),
-    "crates/houyicoder-cli/src": frozenset({
-        "main", "cli_args", "composition", "detach", "export_view",
-        "local_host", "session", "tests", "trajectory",
-    }),
-}
+_INLINE_TEST_MOD_RE = re.compile(
+    r"(?m)^#\[cfg\([^\n]*\btest\b[^\n]*\)\]\s*(?:#\[[^\]]+\]\s*)*mod\s+[a-z_]+\s*\{"
+)
+_ALLOWED_MOD_RS = ALLOWED_MOD_RS
+_ALLOWED_TOP_MODULES = ALLOWED_TOP_MODULES
 
 
 def _check_dir_layout(
     errors: list[str],
     root: Path = Path("crates"),
-    mod_rs_baseline: int = _MOD_RS_BASELINE,
+    allowed_mod_rs: frozenset[str] = _ALLOWED_MOD_RS,
     allowed_top: dict[str, frozenset[str]] = _ALLOWED_TOP_MODULES,
 ) -> None:
     """Enforce the package-internal directory layout rules (002 §6.3):
@@ -172,8 +154,8 @@ def _check_dir_layout(
        explicit domain whitelist (no ad-hoc flat files at src/ or src/agent/).
     2. No module self-stutter (X/X.rs) under crates/*/src/ -- the Rust 2018
        entry file sits at X.rs beside X/.
-    3. Production mod.rs count under crates/*/src/ may not exceed the baseline
-       (use X.rs + X/ instead of creating new mod.rs files).
+    3. Production mod.rs files under crates/*/src/ must belong to the explicit
+       legacy set (use X.rs + X/ instead of creating new mod.rs files).
     """
     for rel_dir, allowed in allowed_top.items():
         d = root / rel_dir.removeprefix("crates/")
@@ -190,25 +172,31 @@ def _check_dir_layout(
                     f"its owning domain directory (002 §6.4) or register a new "
                     f"top-level domain explicitly"
                 )
-    mod_rs_files: list[str] = []
+    seen_mod_rs: set[str] = set()
     for p in sorted(root.rglob("*.rs")):
         posix = p.as_posix()
         if "/target/" in posix or "/src/" not in posix:
             continue
+        rel = "crates/" + p.relative_to(root).as_posix()
         if p.name == "mod.rs":
-            mod_rs_files.append(posix)
+            seen_mod_rs.add(rel)
+            if rel not in allowed_mod_rs:
+                errors.append(
+                    f"{rel}: unexpected production mod.rs file (not in "
+                    f"ALLOWED_MOD_RS). Use the Rust 2018 form X.rs + X/ instead"
+                )
         elif p.stem == p.parent.name:
             errors.append(
                 f"{posix}: module self-stutter ({p.parent.name}/{p.name}); "
                 f"put the module entry at {p.parent.as_posix()}.rs beside "
                 f"{p.parent.as_posix()}/"
             )
-    if len(mod_rs_files) > mod_rs_baseline:
-        errors.append(
-            f"production mod.rs files: {len(mod_rs_files)} (baseline "
-            f"{mod_rs_baseline}). Use the Rust 2018 form X.rs + X/ instead of "
-            f"adding a new mod.rs: " + ", ".join(mod_rs_files)
-        )
+    if root == Path("crates"):
+        for stale in sorted(allowed_mod_rs - seen_mod_rs):
+            errors.append(
+                f"{stale}: stale ALLOWED_MOD_RS entry -- file no longer on disk; "
+                f"remove it from rules/naming.py"
+            )
 
 
 def _check_flat_test_peer(

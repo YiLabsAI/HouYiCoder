@@ -76,30 +76,31 @@ LCOV="$(python3 scripts/cov_lcov.py --lcov-path 2>/dev/null || echo "$COV_DIR/ho
 # Single-runner assumption: COV_DIR belongs to this worktree, so this delete
 # can only hit a concurrent run in this same worktree, or one pointed here by
 # HOUYICODER_COV_DIR.
-find "$COV_DIR" -name '*.profraw' -delete 2>/dev/null || true
-# --locked: this runs as its own CI job in parallel with the lint/test jobs,
-# so it cannot rely on an earlier `cargo check --locked` in the same job to
-# catch a stale Cargo.lock -- pin the dependency set here too.
-# Two instrumented runs, one merged report: --no-report keeps each run's
-# samples for the final report to merge (the documented multi-run pattern),
-# and the report excludes each crate's tests/ directory plus src/bin/ so
-# neither the integration binary's own sources nor the incidentally built
-# helper bin enter the lcov. The regex is anchored to the crate root on
-# purpose: directory-form unit-test modules under src/ stay in the report
-# exactly as the lib-only run always had them.
-cargo llvm-cov --locked --no-cfg-coverage --no-report --lib --workspace
-cargo llvm-cov --locked --no-cfg-coverage --no-report \
-  -p houyicoder-sandbox --test sandbox_all
-cargo llvm-cov report --lcov --output-path "$LCOV" \
-  --ignore-filename-regex 'crates/[^/]+/(tests|src/bin)/'
+run_cov() {
+  find "$COV_DIR" -name '*.profraw' -delete 2>/dev/null || true
+  cargo llvm-cov --locked --no-cfg-coverage --no-report --lib --workspace
+  cargo llvm-cov --locked --no-cfg-coverage --no-report \
+    -p houyicoder-sandbox --test sandbox_all
+  cargo llvm-cov report --lcov --output-path "$LCOV" \
+    --ignore-filename-regex 'crates/[^/]+/(tests|src/bin)/'
+}
+
+run_cov
 
 # Stale-mapping guard: the line table is baked into the instrumented binary, so
-# a binary older than the last edit attributes every number to the wrong code.
-# check() is the sole decider for all three outcomes (missing file / stale /
-# clean) -- calling it unconditionally, not under [ -f ], is what keeps a report
-# that produced no file from silently skipping the guard and letting the
-# comparison below print a misleading percentage.
-if ! python3 scripts/cov_lcov.py --check "$LCOV"; then
+# a binary older than the last edit or a leftover object from a moved file
+# attributes numbers to the wrong code. If stale (exit 2), wipe leftover
+# instrumented objects and rebuild once before failing.
+rc=0
+python3 scripts/cov_lcov.py --check "$LCOV" || rc=$?
+if [ "$rc" -eq 2 ]; then
+  echo "warn: stale coverage objects detected; cleaning $COV_DIR and rebuilding once..." >&2
+  cargo llvm-cov clean --workspace
+  run_cov
+  rc=0
+  python3 scripts/cov_lcov.py --check "$LCOV" || rc=$?
+fi
+if [ "$rc" -ne 0 ]; then
   rm -f "$LCOV"
   exit 1
 fi

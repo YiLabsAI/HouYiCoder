@@ -9,7 +9,7 @@ use std::cmp::max;
 /// Rows granted to each pinned strip. A strip given one row renders its
 /// one-line summary; zero means it is not drawn at all.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) struct FooterRows {
+pub(super) struct FooterRows {
     pub queue: u16,
     pub fleet: u16,
 }
@@ -27,7 +27,7 @@ fn transcript_floor(total_h: u16) -> u16 {
 /// and nothing else displays it, while a delegation's progress is also in the
 /// transcript and in the agents pane. So the queue keeps a row even when the
 /// budget runs out, and the fleet is the one that can reach zero.
-pub(crate) fn allocate(total_h: u16, input_h: u16, queue_want: u16, fleet_want: u16) -> FooterRows {
+pub(super) fn allocate(total_h: u16, input_h: u16, queue_want: u16, fleet_want: u16) -> FooterRows {
     if queue_want == 0 && fleet_want == 0 {
         return FooterRows { queue: 0, fleet: 0 };
     }

@@ -28,7 +28,7 @@ pub struct RecordedCompaction {
 /// Persist the manifest and its boundary events. The token counts bracket the
 /// fold and are carried on the boundary so a reader sees what it reclaimed
 /// without re-measuring the span.
-pub(crate) async fn record_compaction(
+pub(super) async fn record_compaction(
     store: &dyn SessionLog,
     session: SessionId,
     manifest: &CheckpointManifest,

@@ -135,7 +135,7 @@ fn split_card(area: Rect, two_option: bool, args_height: u16, reason_height: u16
         .split(area)
 }
 
-pub(crate) fn card_height(a: &Approval, width: u16) -> u16 {
+pub(super) fn card_height(a: &Approval, width: u16) -> u16 {
     let fixed = if a.two_option_card() { 6 } else { 7 };
     fixed + args_height(a, width) + reason_height(a, width)
 }

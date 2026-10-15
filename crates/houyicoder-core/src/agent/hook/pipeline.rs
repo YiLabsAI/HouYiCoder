@@ -420,7 +420,7 @@ impl Runner {
     /// Fire PostToolUse (success) or PostToolUseFailure (error) after a tool
     /// ran. Non-blocking: observations are recorded, triggers fire
     /// downstream. A hook error here is logged, never panics the run.
-    pub(crate) async fn fire_post_tool_use(
+    pub(super) async fn fire_post_tool_use(
         &self,
         session: SessionId,
         _id: &str,
@@ -479,7 +479,7 @@ impl Runner {
 
     /// Whether a hook registry is wired (the runner fires hooks at runtime).
     #[cfg(test)]
-    pub(crate) fn hooks_wired(&self) -> bool {
+    pub(super) fn hooks_wired(&self) -> bool {
         self.hooks.is_some()
     }
 }

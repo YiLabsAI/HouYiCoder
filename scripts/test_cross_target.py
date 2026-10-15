@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from check_cross_target import _BUILD_SCRIPT_RE, _ERROR_RE, gated_crates  # noqa: E402
+from check_cross_target import _BUILD_SCRIPT_RE, _ERROR_RE, error_count, gated_crates  # noqa: E402
 
 RUSTC_ERROR = """error[E0425]: cannot find type `Mutex` in this scope
   --> crates/houyicoder-tui/src/selection/linux.rs:15:20
@@ -51,6 +51,17 @@ def test_gated_crates_finds_a_cfg_gated_source(tmp_path=None):
         '#[cfg(target_os = "linux")]\npub fn b() {}\n'
     )
     assert gated_crates(root) == ["gated"]
+
+
+def test_nonzero_exit_without_error_code_still_counts():
+    import subprocess
+    from unittest.mock import patch
+
+    with patch(
+        "check_cross_target.subprocess.run",
+        return_value=subprocess.CompletedProcess([], 101, "", "error: unused import: `Foo`\n"),
+    ):
+        assert error_count("example", "x86_64-unknown-linux-gnu", Path(".")) == 2
 
 
 if __name__ == "__main__":

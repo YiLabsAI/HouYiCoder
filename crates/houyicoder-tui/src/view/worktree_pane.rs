@@ -25,7 +25,7 @@ use std::path::Path;
 /// boundary is stable for mouse selection.
 const PATH_WIDTH: usize = 32;
 
-pub(crate) fn draw_content(f: &mut Frame, area: Rect, app: &App) {
+pub(super) fn draw_content(f: &mut Frame, area: Rect, app: &App) {
     let entries = &app.sessions.current.capabilities.worktree.entries;
     let n = entries.len();
     // Level 1 detail (Enter on the list opens this).

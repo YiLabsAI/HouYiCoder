@@ -20,6 +20,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from rules.comments import line_violations  # noqa: E402
 from rules.imports import inline_use_violations, repeated_deep_paths  # noqa: E402
 from rules.naming import (  # noqa: E402
+    ALLOWED_MOD_RS,
+    ALLOWED_TOP_MODULES,
     JARGON,
     TEST_NAME_LEN_HARD,
     TEST_UNDERSCORE_CAP,
@@ -81,10 +83,9 @@ def _test_name_violations(text: str):
 
 
 def _file_name_violation(path: str):
-    """Yield (rule, basename) for test file names that violate (e.g. a new
-    file written as foo_tests2.rs). Numbered suffixes are meaningless; use a
-    descriptive scenario name per the sibling-test convention."""
-    base = Path(path).name
+    """Yield (rule, basename) for test file names and directory layout rules."""
+    p = Path(path)
+    base = p.name
     if _NUMBERED_TEST_FILE.search(base):
         yield (
             f"numbered test file name '{base}'; use a descriptive scenario name",
@@ -99,6 +100,36 @@ def _file_name_violation(path: str):
             f"instead of ad-hoc terms",
             base,
         )
+    posix = p.as_posix()
+    idx = posix.find("crates/")
+    if idx >= 0:
+        rel = posix[idx:]
+        parent_rel = str(Path(rel).parent).replace("\\", "/")
+        if parent_rel in ALLOWED_TOP_MODULES:
+            stem = Path(rel).stem
+            if stem not in ALLOWED_TOP_MODULES[parent_rel]:
+                yield (
+                    f"top-level module '{stem}' is not in ALLOWED_TOP_MODULES[{parent_rel!r}]; "
+                    f"place the file inside its owning domain directory",
+                    rel,
+                )
+        if "/src/" in rel:
+            if base == "mod.rs" and rel not in ALLOWED_MOD_RS:
+                yield (
+                    "unexpected production mod.rs file; use the Rust 2018 form X.rs + X/",
+                    rel,
+                )
+            elif p.stem == p.parent.name:
+                yield (
+                    f"module self-stutter ({p.parent.name}/{base}); put the entry at "
+                    f"{p.parent.name}.rs beside {p.parent.name}/",
+                    rel,
+                )
+            elif base.endswith("_tests.rs"):
+                yield (
+                    "flat *_tests.rs file in src/; use X/tests.rs instead",
+                    rel,
+                )
 
 
 def _comment_density_violations(text: str):

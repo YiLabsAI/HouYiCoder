@@ -21,7 +21,7 @@ use std::cmp::min;
 /// empty. What it actually gets comes from the shared footer budget, which
 /// weighs it against the other strips; with one row the strip draws its
 /// one-line summary.
-pub(crate) fn strip_want(app: &App) -> u16 {
+pub(super) fn strip_want(app: &App) -> u16 {
     let n = app
         .ui
         .input
@@ -53,7 +53,7 @@ fn preview_text(text: &str, width: usize) -> String {
 /// (orphaned by an interrupt), and the type cannot tell those apart.
 /// Gate open (busy or clean idle): head Message -> "→ next", non-head ->
 /// "· queued". Gate closed (idle after a non-final end): all -> "⏸ held".
-pub(crate) fn draw_strip(f: &mut Frame, area: Rect, app: &App) {
+pub(super) fn draw_strip(f: &mut Frame, area: Rect, app: &App) {
     let items: Vec<_> = app
         .ui
         .input

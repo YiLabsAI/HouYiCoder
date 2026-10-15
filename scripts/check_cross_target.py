@@ -76,7 +76,9 @@ def error_count(crate: str, target: str, root: Path) -> int | None:
     as in a test module, and a test-only one is invisible to `--lib`.
     """
     total = 0
-    for scope in (["--lib"], ["--tests"]):
+    has_lib = (root / "crates" / crate / "src" / "lib.rs").is_file()
+    first_scope = ["--lib"] if has_lib else ["--bins"]
+    for scope in (first_scope, ["--tests"]):
         out = subprocess.run(
             ["cargo", "check", "-p", crate, *scope, "--target", target],
             capture_output=True,
@@ -85,7 +87,11 @@ def error_count(crate: str, target: str, root: Path) -> int | None:
         )
         if _BUILD_SCRIPT_RE.search(out.stderr) and not _ERROR_RE.search(out.stderr):
             return None
-        total += len(_ERROR_RE.findall(out.stderr))
+        coded = len(_ERROR_RE.findall(out.stderr))
+        if coded > 0:
+            total += coded
+        elif out.returncode != 0:
+            total += 1
     return total
 
 

@@ -12,7 +12,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::state::App;
 
-pub(crate) fn handle_scroll(app: &mut App, k: KeyEvent) {
+pub(super) fn handle_scroll(app: &mut App, k: KeyEvent) {
     if app.ui.transcript_view.search_input_mode() {
         handle_search_input(app, k);
         return;

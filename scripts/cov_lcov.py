@@ -176,6 +176,7 @@ def stale_mapping_evidence(executable: dict, root: Path = ROOT) -> list[str]:
         try:
             total = len(src.read_text(encoding="utf-8").splitlines())
         except OSError:
+            evidence.append(f"{path}: file in coverage report no longer exists on disk")
             continue
         for ln in sorted(lines):
             if ln > total:

@@ -12,10 +12,10 @@
 //! line_count to size the input box and render wrapped content.
 
 pub mod history;
-pub mod palette;
+pub(crate) mod palette;
 pub mod paste;
 
-pub(crate) mod queue;
+pub mod queue;
 
 use std::mem::take;
 use std::path::PathBuf;

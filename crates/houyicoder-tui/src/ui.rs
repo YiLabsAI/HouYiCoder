@@ -14,7 +14,7 @@ pub(crate) mod counts;
 pub mod enums;
 pub(crate) mod layout_feedback;
 pub(crate) mod layout_snapshot;
-pub mod notifications;
+pub(crate) mod notifications;
 pub mod render_cache;
 pub(crate) mod renderer;
 pub(crate) mod rows;

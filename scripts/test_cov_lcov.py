@@ -111,6 +111,10 @@ def main() -> int:
     exe_clean = {REAL_SRC: {last: True}}
     if stale_mapping_evidence(exe_clean):
         failures.append("evidence() invented evidence for an in-range line")
+    exe_moved = {"crates/houyicoder-core/src/agent/removed_module.rs": {1: False}}
+    ev_moved = stale_mapping_evidence(exe_moved)
+    if not ev_moved or "no longer exists on disk" not in ev_moved[0]:
+        failures.append(f"evidence() must flag moved/deleted source file: {ev_moved}")
 
     # 3. missing file -> exit 1 + diagnostic.
     missing = Path(tempfile.gettempdir()) / "nonexistent_cov_lcov_test.lcov"

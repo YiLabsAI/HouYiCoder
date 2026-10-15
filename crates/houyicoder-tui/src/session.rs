@@ -5,15 +5,15 @@
 
 pub(crate) mod agent_dispatch;
 pub mod agent_message;
-pub mod approval;
-pub mod ask_question_model;
+pub(crate) mod approval;
+pub(crate) mod ask_question_model;
 pub(crate) mod model_receipt;
 pub mod pending_prompt;
-pub mod run_control;
+pub(crate) mod run_control;
 pub(crate) mod run_metrics;
-pub mod run_state;
+pub(crate) mod run_state;
 pub(crate) mod sessions;
-pub mod todo_view;
+pub(crate) mod todo_view;
 
 use std::cell::Cell;
 
