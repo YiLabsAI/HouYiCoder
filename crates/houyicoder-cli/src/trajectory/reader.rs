@@ -222,7 +222,7 @@ pub struct SessionLogTrajectory {
 impl SessionLogTrajectory {
     /// Build a reader over a history reader the caller already owns, so the
     /// transcript snapshot and this view share one set of byte windows and one
-    /// offset index.
+    /// route to the log's sidecar index.
     pub fn with_history(
         history: Arc<SessionHistory>,
         session_log: Arc<dyn SessionLog>,

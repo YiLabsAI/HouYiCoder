@@ -10,8 +10,8 @@ use houyicoder_context::EventId;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::{
-    EventWindow, INDEX_CHUNK_BYTES, LocatedEvent, MAX_READABLE_LINE_BYTES, PAGE_STEP_BYTES,
-    SessionHistory, TurnPage, is_user_input, parse_lines,
+    EventWindow, INDEX_CHUNK_BYTES, LocatedEvent, PAGE_STEP_BYTES, SessionHistory, TurnPage,
+    is_user_input, parse_lines,
 };
 
 impl SessionHistory {
@@ -126,17 +126,18 @@ impl SessionHistory {
     /// flag: a walk nobody waits for stops at the next chunk rather than
     /// reading a whole long log for a page that will be dropped.
     fn epoch_start_offset(&self, epoch: Option<EventId>, cancel: &AtomicBool) -> Option<u64> {
-        // A start the index has scanned, or one an earlier walk remembered, is
-        // answered without reading the log. The offset alone is not enough to
-        // trust: the bytes at it must still be the event that began the
-        // history, since a log rewritten under it would otherwise answer with
-        // another history's start.
+        // A start the scan has seen, one an earlier walk remembered, or the
+        // log's first byte confirmed by its sidecar index is answered without
+        // reading the log. The offset alone is not enough to trust: the bytes
+        // at it must still be the event that began the history, since a log
+        // rewritten under it would otherwise answer with another history's
+        // start.
         if let Some(offset) = self.known_epoch_start(epoch)
             && self.offset_holds(offset, epoch)
         {
             return Some(offset);
         }
-        let first = self.first_event()?;
+        let first = self.probe_first_event(0)?;
         if epoch.is_none_or(|id| id == first.entry.id) {
             return Some(first.byte_offset);
         }
@@ -196,25 +197,5 @@ impl SessionHistory {
             .events
             .first()
             .is_some_and(|event| event.entry.id == id)
-    }
-
-    /// The log's first complete event, read without walking the whole line.
-    ///
-    /// A first line wider than one read step yields no complete line, so the
-    /// step doubles until it holds one. The read itself is capped, so a line
-    /// wider than that cap cannot be named this way: None means the first
-    /// event is unreadable, not that the log is empty.
-    fn first_event(&self) -> Option<LocatedEvent> {
-        let mut step = PAGE_STEP_BYTES;
-        loop {
-            let window = self.window(0, step);
-            if let Some(event) = window.events.first() {
-                return Some(event.clone());
-            }
-            if window.lines_read > 0 || step >= MAX_READABLE_LINE_BYTES {
-                return None;
-            }
-            step = step.saturating_mul(2);
-        }
     }
 }

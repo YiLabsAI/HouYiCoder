@@ -75,16 +75,17 @@ pub enum ReadError {
     Io,
 }
 
-/// How much of the event-byte-offset index is built. The G key triggers a
-/// full build (reverse-reading the whole log); until then the index only
-/// covers what the user has scrolled to (lazy, like less).
+/// How far the reverse scan of the log has gotten. The G key triggers a full
+/// scan: it discovers where each history began and gives the log's sidecar
+/// offset index its one check and rebuild. Offset queries answer from the
+/// sidecar whether or not the scan has run.
 #[derive(Debug, Default, Clone)]
 pub struct IndexProgress {
-    /// Bytes of the log indexed so far (from the tail backward).
+    /// Bytes of the log the reverse scan has read (from the tail backward).
     pub indexed_bytes: u64,
     /// Total log file size.
     pub total_bytes: u64,
-    /// True when the full index is built.
+    /// True when the scan reached the beginning of the log.
     pub done: bool,
 }
 
@@ -95,9 +96,10 @@ pub struct IndexProgress {
 ///
 /// The trait evolves load (read-whole, for logs under the threshold) into
 /// window (byte-anchored screen reads, for logs over the threshold) -- same
-/// position, not a parallel path. The lazy offset index (index_chunk +
-/// byte_at) lets the windowed view seek to any scroll position without
-/// reading the prefix; G triggers a full build with progress.
+/// position, not a parallel path. The log's sidecar offset index (byte_at)
+/// lets the windowed view seek to any scroll position without reading the
+/// prefix; G triggers a full scan with progress, which discovers the history
+/// epochs and gives the sidecar its one rebuild when it is refused.
 pub trait TranscriptSnapshot: Send + Sync {
     /// The raw on-disk log size in bytes. Cheap stat the TUI uses to pick
     /// the read-whole path vs the degrade hint, without loading first.
@@ -135,16 +137,20 @@ pub trait TranscriptSnapshot: Send + Sync {
     /// IO failure, not the log's end.
     fn window_before(&self, from_byte: u64, max_bytes: u64) -> Result<WindowLoad, ReadError>;
 
-    /// Build the next chunk of the event-byte-offset index (for the G full
+    /// Run the next chunk of the log's full reverse scan (for the G full
     /// scan, or lazily as the user scrolls). Called per frame; returns
-    /// progress so the status bar shows indexing percent. No-op when done.
+    /// progress so the status bar shows scan percent. No-op when done. The
+    /// scan discovers where histories began and checks the log's sidecar
+    /// offset index; record offsets come from that index, not from the scan.
     fn index_chunk(&self) -> IndexProgress;
 
-    /// The byte offset of the event at event_idx (from the index). None if
-    /// the index does not cover that position yet.
+    /// The byte offset of the event at event_idx, from the log's sidecar
+    /// offset index. None when the index is missing or refused against the
+    /// log, which degrades a seek to a walk rather than answering it wrong.
     fn byte_at(&self, event_idx: usize) -> Option<u64>;
 
-    /// The total event count (from the index). None if not yet built.
+    /// The total event count, from the log's sidecar offset index and a
+    /// bounded walk past its last entry. None under the same conditions.
     fn event_count(&self) -> Option<usize>;
 }
 

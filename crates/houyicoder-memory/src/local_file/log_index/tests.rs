@@ -13,6 +13,9 @@ use houyicoder_context::{
 use super::SessionWriteState;
 use crate::local_file::LocalFileBackend;
 use std::env::temp_dir;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread;
 
 fn temp_root() -> PathBuf {
     let dir = temp_dir().join(format!("houyicoder_log_index_test_{}", SessionId::new()));
@@ -434,14 +437,14 @@ fn test_torn_tail_counted() {
 
 /// A log the scan cannot read leaves no index behind, rather than an empty one.
 /// Reading stopped short of the log's end, so the ordinal the next record would
-/// be given is short of the one it really has, and a header covering none of the
-/// log would say the scan had finished. Both are answered by rebuilding, so the
-/// file is left holding the placeholder a rebuild starts with and a reader
-/// refuses.
+/// be given is short of the one it really has, and a header covering none of
+/// the log would say the scan had finished. The state the pass leaves keeps
+/// publishing nothing, so the ids it did see still dedup the appends they
+/// cover.
 ///
 /// A directory answers an open and then refuses a read, which is how a log path
 /// becomes unreadable without injecting a fault. Unix only: elsewhere the open
-/// itself fails, and the scan returns before it can degrade anything.
+/// itself fails, and the scan refuses the same way before reading anything.
 #[cfg(unix)]
 #[test]
 fn test_unreadable_log_degrades() {
@@ -450,12 +453,120 @@ fn test_unreadable_log_degrades() {
     let index = root.join(INDEX_FILE);
     fs::create_dir_all(&log).expect("put a directory where the log goes");
 
-    drop(SessionWriteState::cold_scan(&log, index.clone(), 24));
-    let log_len = fs::metadata(&log).expect("the path exists").len();
+    let outcome = SessionWriteState::scan(&log, index.clone(), 24);
     assert!(
-        LogIndex::load(&index, log_len, None).is_none(),
-        "a scan that could not read the log publishes nothing"
+        !outcome.completed,
+        "a log that refuses the pass is not read whole"
     );
+    let mut state = outcome.state;
+    state.record_durable(EventId::new(), 64);
+    assert!(
+        !index.exists(),
+        "a scan that could not read the log publishes nothing, and the state it leaves publishes nothing after"
+    );
+    fs::remove_dir_all(&root).ok();
+}
+
+/// A rebuild that cannot read the log replaces nothing: the index a previous
+/// pass published stays byte for byte, and the warm write state still knows
+/// the records that landed. A rebuild used to start by clearing the index
+/// file, so a log that went unreadable between two good passes cost the index
+/// the earlier pass had built, and the empty state it installed cost the
+/// dedup its ids.
+///
+/// Unix only: a directory answers an open and then refuses a read, which is
+/// how a log path becomes unreadable without injecting a fault.
+#[cfg(unix)]
+#[test]
+fn test_blocked_rebuild_keeps_state() {
+    let root = temp_root();
+    let session = SessionId::new();
+    let backend = LocalFileBackend::new(root.clone());
+    let entry = record(session, EventId::new(), "written once");
+    pollster::block_on(backend.append(entry.clone())).expect("the append lands");
+    let dir = session_dir(&root, session);
+    let index = dir.join(INDEX_FILE);
+    let before = fs::read(&index).expect("the append published an index");
+    fs::remove_file(dir.join(LOG_FILE)).expect("remove the log");
+    fs::create_dir_all(dir.join(LOG_FILE)).expect("block the path with a directory");
+
+    assert!(
+        !backend.rebuild_log_index(session),
+        "a log the pass cannot read rebuilds nothing"
+    );
+    assert_eq!(
+        fs::read(&index).expect("the index still exists"),
+        before,
+        "the refused rebuild left the published index untouched"
+    );
+    // The warm state survived: dedup still knows the record, and knowing it
+    // is what keeps the replay from ever touching the blocked log path.
+    pollster::block_on(backend.append(entry.clone())).expect("the repeat stays a no-op");
+    fs::remove_dir_all(&root).ok();
+}
+
+/// Appends and rebuilds run under one write-state lock, so a rebuild cannot
+/// replace the state between an append extending the log and the append
+/// accounting for it: no record is lost to dedup, none is duplicated in the
+/// log, and the index still answers afterwards. The rebuild loops against the
+/// appends rather than running once, so the interleaving is not left to
+/// timing luck.
+#[test]
+fn test_rebuild_concurrent_appends() {
+    let root = temp_root();
+    let session = SessionId::new();
+    let backend = Arc::new(LocalFileBackend::new(root.clone()));
+    let entries: Vec<SessionLogEntry> = (0..32)
+        .map(|i| record(session, EventId::new(), &format!("record {i}")))
+        .collect();
+    let done = Arc::new(AtomicBool::new(false));
+    thread::scope(|scope| {
+        let appender = {
+            let backend = Arc::clone(&backend);
+            let entries = entries.clone();
+            let done = Arc::clone(&done);
+            scope.spawn(move || {
+                for entry in &entries {
+                    pollster::block_on(backend.append(entry.clone())).expect("the append lands");
+                }
+                done.store(true, Ordering::Release);
+            })
+        };
+        let rebuilder = {
+            let backend = Arc::clone(&backend);
+            let done = Arc::clone(&done);
+            scope.spawn(move || {
+                while backend.log_size(session) == 0 && !done.load(Ordering::Acquire) {
+                    thread::yield_now();
+                }
+                loop {
+                    backend.rebuild_log_index(session);
+                    if done.load(Ordering::Acquire) {
+                        break;
+                    }
+                    thread::yield_now();
+                }
+            })
+        };
+        appender.join().expect("the appends finish");
+        rebuilder.join().expect("the rebuilds finish");
+    });
+
+    let dir = session_dir(&root, session);
+    let expected: Vec<EventId> = entries.iter().map(|entry| entry.id).collect();
+    assert_eq!(record_ids(&dir.join(LOG_FILE)), expected);
+    let loaded = LogIndex::load(
+        &dir.join(INDEX_FILE),
+        backend.log_size(session),
+        Some(expected[0]),
+    )
+    .expect("the index a hammered rebuild leaves is readable");
+    assert_entries_hold(&loaded, &dir.join(LOG_FILE));
+    // Dedup survived every replacement: replaying a record the run landed
+    // extends nothing.
+    let len = backend.log_size(session);
+    pollster::block_on(backend.append(entries[0].clone())).expect("the replay is a no-op");
+    assert_eq!(backend.log_size(session), len, "the log did not grow");
     fs::remove_dir_all(&root).ok();
 }
 
@@ -497,5 +608,122 @@ fn test_append_survives_bad_index() {
     let id = append_once(&backend, session, "written anyway");
     assert!(backend.log_size(session) > 0, "the record reached the log");
     assert_eq!(record_ids(&dir.join(LOG_FILE)), vec![id]);
+    fs::remove_dir_all(&root).ok();
+}
+
+/// The backend answers an offset query from the index its own appends
+/// maintain: the first record is always a sample, so even a log far shorter
+/// than the interval has a floor for every position, and the walk from there
+/// is the querying reader's job rather than the backend's.
+#[test]
+fn test_floor_queries_live_index() {
+    let root = temp_root();
+    let session = SessionId::new();
+    let backend = LocalFileBackend::new(root.clone());
+    let first = append_once(&backend, session, "the first record");
+    append_once(&backend, session, "the second record");
+
+    let entry = backend
+        .log_index_floor(session, 0)
+        .expect("a live index answers");
+    assert_eq!(entry.event, first);
+    assert_eq!(entry.ordinal, 0);
+    assert_eq!(entry.offset, 0);
+    assert_eq!(
+        backend.log_index_floor(session, u64::MAX),
+        Some(entry),
+        "the last entry covers every position past it"
+    );
+    fs::remove_dir_all(&root).ok();
+}
+
+/// A session with no log has no index to query: the answer is None rather
+/// than an error, which is what a querying reader degrades on.
+#[test]
+fn test_floor_missing_log_none() {
+    let root = temp_root();
+    let backend = LocalFileBackend::new(root.clone());
+    assert_eq!(backend.log_index_floor(SessionId::new(), 0), None);
+    fs::remove_dir_all(&root).ok();
+}
+
+/// An index file holding something other than an index is refused without
+/// being read as one, and the rebuild replaces it from the log: queries
+/// degrade while the file is foreign and answer again afterwards.
+#[test]
+fn test_rebuild_restores_queries() {
+    let root = temp_root();
+    let session = SessionId::new();
+    let backend = LocalFileBackend::new(root.clone());
+    let first = append_once(&backend, session, "the first record");
+    append_once(&backend, session, "the second record");
+    let dir = session_dir(&root, session);
+    fs::write(dir.join(INDEX_FILE), b"not an index at all").expect("corrupt the index");
+
+    assert_eq!(backend.log_index_floor(session, 0), None);
+    assert!(backend.rebuild_log_index(session), "the rebuild validates");
+    let entry = backend
+        .log_index_floor(session, 0)
+        .expect("the rebuilt index answers");
+    assert_eq!(entry.event, first);
+    assert_eq!(entry.ordinal, 0);
+    fs::remove_dir_all(&root).ok();
+}
+
+/// A log written without an index, whether seeded directly or left by a
+/// build older than the sidecar, is indexed by the rebuild path: queries
+/// answer from the file the streaming pass leaves.
+#[test]
+fn test_rebuild_indexes_direct_log() {
+    let root = temp_root();
+    let session = SessionId::new();
+    let backend = LocalFileBackend::new(root.clone());
+    let dir = session_dir(&root, session);
+    fs::create_dir_all(&dir).expect("create the session dir");
+    let first = EventId::new();
+    let mut lines = String::new();
+    for id in [first, EventId::new()] {
+        let text =
+            serde_json::to_string(&record(session, id, "a record")).expect("serialize the record");
+        lines.push_str(&text);
+        lines.push('\n');
+    }
+    fs::write(dir.join(LOG_FILE), lines).expect("write the log");
+
+    assert_eq!(backend.log_index_floor(session, 0), None);
+    assert!(backend.rebuild_log_index(session));
+    let entry = backend
+        .log_index_floor(session, 0)
+        .expect("the index answers");
+    assert_eq!(entry.event, first);
+    assert_eq!(entry.ordinal, 0);
+    assert_eq!(entry.offset, 0);
+    fs::remove_dir_all(&root).ok();
+}
+
+/// The rebuild keeps what the write state exists for: the id set comes out
+/// of the same streaming pass as the index, so a record already in the log
+/// stays deduped afterwards and a new record extends both halves.
+#[test]
+fn test_rebuild_keeps_dedup() {
+    let root = temp_root();
+    let session = SessionId::new();
+    let backend = LocalFileBackend::new(root.clone());
+    let entry = record(session, EventId::new(), "written once");
+    pollster::block_on(backend.append(entry.clone())).expect("the append lands");
+    let log_len = backend.log_size(session);
+    assert!(backend.rebuild_log_index(session));
+
+    pollster::block_on(backend.append(entry.clone())).expect("the repeat is a no-op");
+    assert_eq!(backend.log_size(session), log_len, "the log did not grow");
+    append_once(&backend, session, "and a new record");
+    assert!(backend.log_size(session) > log_len, "the new record landed");
+    let floor = backend
+        .log_index_floor(session, 1)
+        .expect("the index answers past the first record");
+    assert_eq!(
+        floor.ordinal, 0,
+        "a log shorter than the interval samples once, and the walk covers the rest"
+    );
     fs::remove_dir_all(&root).ok();
 }

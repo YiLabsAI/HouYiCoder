@@ -3,7 +3,10 @@
 //! turn is reported rather than presented as whole.
 
 use super::*;
-use houyicoder_context::{EventId, SessionEvent, SessionLogEntry};
+use houyicoder_context::{
+    EventId, LogIndex, SessionEvent, SessionLogEntry,
+    session_class::{INDEX_FILE, LOG_FILE},
+};
 use houyicoder_memory::LocalFileBackend;
 use houyicoder_session::SessionStore;
 use std::env::consts::ARCH;
@@ -20,7 +23,6 @@ use std::io::BufReader;
 use std::io::BufWriter;
 use std::io::Write;
 use std::io::{BufRead, Seek, SeekFrom};
-use std::mem::size_of;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
@@ -1006,7 +1008,7 @@ fn write_measurement_turn(
 fn seed_measurement_log(root: &Path, sid: SessionId, target_bytes: u64) -> (u64, usize) {
     let dir = root.join(sid.to_string());
     create_dir_all(&dir).expect("mkdir session dir");
-    let file = File::create(dir.join("log.jsonl")).expect("create log");
+    let file = File::create(dir.join(LOG_FILE)).expect("create log");
     let mut out = BufWriter::with_capacity(1 << 20, file);
 
     let mut state = MeasurementFixtureState {
@@ -1041,8 +1043,9 @@ fn self_rss_kb() -> Option<u64> {
         .ok()
 }
 
-/// One index build over one fixture size: the timed chunks, the resident-set
-/// delta across the build, and the finished index for verification.
+/// One scan-and-rebuild run over one fixture size: the timed chunks, the
+/// resident-set delta across the build, the sidecar file size, and the
+/// finished state for verification.
 struct IndexBuildRun {
     history: SessionHistory,
     sid: SessionId,
@@ -1052,11 +1055,14 @@ struct IndexBuildRun {
     build_ms: f64,
     rss_before_kb: Option<u64>,
     rss_after_kb: Option<u64>,
+    index_file_bytes: u64,
 }
 
 impl IndexBuildRun {
-    /// Seed a fixture of the target size under root and build the whole
-    /// index, timing every chunk.
+    /// Seed a fixture of the target size under root and run the whole scan,
+    /// timing every chunk. The fixture is written without a sidecar, so the
+    /// first chunk carries the one streaming rebuild that makes offset
+    /// queries answer; later chunks are the epoch scan alone.
     fn measure(root: &Path, sid: SessionId, target: u64) -> Self {
         let (log_bytes, event_count) = seed_measurement_log(root, sid, target);
         let store = SessionStore::new(Box::new(LocalFileBackend::new(root.to_path_buf())));
@@ -1075,9 +1081,12 @@ impl IndexBuildRun {
         };
         let build_ms = build_start.elapsed().as_secs_f64() * 1000.0;
         let rss_after_kb = self_rss_kb();
+        let index_file_bytes = metadata(root.join(sid.to_string()).join(INDEX_FILE))
+            .map(|m| m.len())
+            .unwrap_or(0);
 
-        assert_eq!(progress.total_bytes, log_bytes, "index covered the log");
-        assert_eq!(progress.indexed_bytes, log_bytes, "index reached the head");
+        assert_eq!(progress.total_bytes, log_bytes, "scan covered the log");
+        assert_eq!(progress.indexed_bytes, log_bytes, "scan reached the head");
         Self {
             history,
             sid,
@@ -1087,39 +1096,71 @@ impl IndexBuildRun {
             build_ms,
             rss_before_kb,
             rss_after_kb,
+            index_file_bytes,
         }
     }
 
-    /// Correctness rides along with the timing: the index must count every
-    /// event, stay monotonic in byte offset, and land each spot-checked
-    /// offset on a parseable event line.
+    /// Correctness rides along with the timing. The count must equal the
+    /// fixture's truth; every sidecar entry must answer with its own offset;
+    /// positions either side of an entry must land on parseable lines; and
+    /// stride positions across the log must stay monotonic and parseable.
+    /// An exhaustive sweep is what the resident offset table could afford;
+    /// a sidecar query walks from its covering entry, so the net samples the
+    /// walk at the boundaries where it restarts instead of paying the log
+    /// per position.
     fn verify(&self, root: &Path) {
-        let counted = self.history.event_count().expect("index done");
-        assert_eq!(counted, self.event_count, "every event indexed");
+        let dir = root.join(self.sid.to_string());
+        let counted = self.history.event_count().expect("the count answers");
+        assert_eq!(counted, self.event_count, "every event counted");
 
+        let file = File::open(dir.join(LOG_FILE)).expect("reopen log");
+        let mut first_line = String::new();
+        BufReader::new(&file)
+            .read_line(&mut first_line)
+            .expect("read the first line");
+        let first_id = parse_event(&first_line).expect("the first line parses").id;
+        let index = LogIndex::load(&dir.join(INDEX_FILE), self.log_bytes, Some(first_id))
+            .expect("the sidecar loads against the log");
+        assert!(
+            index.entries.len() >= 2,
+            "the fixture spans several entries: {}",
+            index.entries.len()
+        );
+
+        for entry in &index.entries {
+            let ordinal = usize::try_from(entry.ordinal).expect("ordinal fits");
+            assert_eq!(
+                self.history.byte_at(ordinal),
+                Some(entry.offset),
+                "entry {ordinal} answers with its own offset"
+            );
+            let neighbors = [ordinal + 1, ordinal.saturating_sub(1)];
+            for probe in neighbors.into_iter().filter(|p| *p < counted) {
+                let off = self
+                    .history
+                    .byte_at(probe)
+                    .unwrap_or_else(|| panic!("position {probe} beside entry {ordinal} answers"));
+                assert_parseable(&file, off, probe);
+            }
+        }
         let mut prev = 0u64;
-        for i in 0..counted {
-            let off = self.history.byte_at(i).expect("offset covered");
+        for i in (0..counted).step_by(997) {
+            let off = self
+                .history
+                .byte_at(i)
+                .unwrap_or_else(|| panic!("stride position {i} answers"));
             assert!(off >= prev, "offsets monotonic at {i}");
             prev = off;
+            assert_parseable(&file, off, i);
         }
-        let file =
-            File::open(root.join(self.sid.to_string()).join("log.jsonl")).expect("reopen log");
-        for i in [0usize, counted / 2, counted - 1] {
-            let off = self.history.byte_at(i).expect("offset covered");
-            let mut reader = BufReader::new(&file);
-            reader.seek(SeekFrom::Start(off)).expect("seek");
-            let mut line = String::new();
-            reader.read_line(&mut line).expect("read line");
-            assert!(
-                parse_event(&line).is_some(),
-                "offset for event {i} lands on a parseable line"
-            );
-        }
-    }
-
-    fn offsets_bytes(&self) -> usize {
-        self.event_count * size_of::<u64>()
+        // The last record is the one position no entry or stride may skip:
+        // an off-by-one at the log's end hides behind every earlier answer.
+        let off = self
+            .history
+            .byte_at(counted - 1)
+            .expect("the last position answers");
+        assert!(off >= prev, "offsets monotonic at the last position");
+        assert_parseable(&file, off, counted - 1);
     }
 
     fn chunk_stats(&self) -> (f64, f64) {
@@ -1139,7 +1180,7 @@ impl IndexBuildRun {
             self.build_ms,
             rss_text(self.rss_before_kb),
             rss_text(self.rss_after_kb),
-            self.offsets_bytes(),
+            self.index_file_bytes,
         )
     }
 
@@ -1148,20 +1189,32 @@ impl IndexBuildRun {
         let rss_text = |r: Option<u64>| r.map(|v| v.to_string()).unwrap_or_else(|| "na".into());
         format!(
             "index build {} bytes: {} chunks, {:.1} ms total, p50 {p50:.1} ms, max {max:.1} ms, \
-             rss {} -> {} KiB, offsets {} bytes",
+             rss {} -> {} KiB, sidecar {} bytes",
             self.log_bytes,
             self.chunk_ms.len(),
             self.build_ms,
             rss_text(self.rss_before_kb),
             rss_text(self.rss_after_kb),
-            self.offsets_bytes(),
+            self.index_file_bytes,
         )
     }
 }
 
-/// Baseline for the history index build: chunk times for 16 MiB and 64 MiB
-/// logs, the resident-set delta across the build, and the analytical memory
-/// of the finished offset table.
+/// The offset at a position must land on a line the log's own parser reads.
+fn assert_parseable(file: &File, off: u64, i: usize) {
+    let mut reader = BufReader::new(file);
+    reader.seek(SeekFrom::Start(off)).expect("seek");
+    let mut line = String::new();
+    reader.read_line(&mut line).expect("read line");
+    assert!(
+        parse_event(&line).is_some(),
+        "offset for event {i} lands on a parseable line"
+    );
+}
+
+/// Baseline for the history scan and sidecar rebuild: chunk times for 16 MiB
+/// and 64 MiB logs, the resident-set delta across the build, and the size of
+/// the sidecar index file the rebuild leaves beside the log.
 #[test]
 #[ignore = "measurement workload; run via the history benchmark target"]
 fn test_index_build_baseline() {
@@ -1172,7 +1225,7 @@ fn test_index_build_baseline() {
 
     let sizes = [16u64 * 1024 * 1024, 64 * 1024 * 1024];
     let mut rows = String::from(
-        "log_bytes,event_count,chunks,build_ms,chunk_ms_p50,chunk_ms_max,rss_before_kb,rss_after_kb,offsets_bytes\n",
+        "log_bytes,event_count,chunks,build_ms,chunk_ms_p50,chunk_ms_max,rss_before_kb,rss_after_kb,index_file_bytes\n",
     );
 
     for target in sizes {

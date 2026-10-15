@@ -4,7 +4,9 @@
 
 use houyicoder_async::PFut;
 
-use crate::{BlockHash, CheckpointId, CheckpointManifest, EventId, SessionId, SessionLogEntry};
+use crate::{
+    BlockHash, CheckpointId, CheckpointManifest, EventId, LogIndexEntry, SessionId, SessionLogEntry,
+};
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::path::Path;
@@ -206,8 +208,8 @@ pub trait ContextBackend: Send + Sync {
     /// where a walk resumes: None at BOF, else the boundary below which no
     /// byte is left over, so a walk in reads smaller than the log gives each
     /// line back once, whole. newest_line_returned reports whether the batch
-    /// reached the log's newest line at or below from_byte. The lazy offset
-    /// index and the window lookback both build on this.
+    /// reached the log's newest line at or below from_byte. The epoch scan
+    /// and the window lookback both build on this.
     ///
     /// Three outcomes a caller must keep apart. An empty batch with next_from
     /// None is the log's end: the byte range held no whole line, or the walk
@@ -226,6 +228,25 @@ pub trait ContextBackend: Send + Sync {
         _max_bytes: u64,
     ) -> Result<ReverseRead, ContextError> {
         Err(ContextError::Unsupported)
+    }
+
+    /// The offset-index entry covering a record position: the sampled record
+    /// with the largest ordinal at or below the one asked for, from which a
+    /// forward walk reaches it. None when the backend keeps no index on disk,
+    /// or when the index fails its checks against the log (missing, corrupt,
+    /// or built over a log that was shortened or replaced). A query then
+    /// degrades to a walk or to no answer, never to a wrong offset.
+    fn log_index_floor(&self, _session: SessionId, _ordinal: u64) -> Option<LogIndexEntry> {
+        None
+    }
+
+    /// Rebuild a session's offset index from its log in one streaming pass.
+    /// Called on a background scan when the index is missing or refused, not
+    /// on a query path. True reports that index queries can be answered
+    /// after the call, or that the log holds no record to index. Default
+    /// rebuilds nothing and answers false (a backend with no on-disk index).
+    fn rebuild_log_index(&self, _session: SessionId) -> bool {
+        false
     }
 
     /// The sessions root this backend persists under, for cross-session

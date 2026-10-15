@@ -15,7 +15,8 @@
 //! entry records where one record starts; a reader looking for a record that
 //! falls between two entries walks forward from the earlier one.
 
-use std::fs;
+use std::fs::File;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
 use crate::ids::EventId;
@@ -31,10 +32,10 @@ pub const HEADER_LEN: u64 = 44;
 /// Bytes in one index entry.
 pub const ENTRY_LEN: u64 = 32;
 
-/// The largest index file read into memory. An index holds one entry per
-/// sampled interval, so this bound is reached only by a log measured in
-/// tebibytes. It exists to cap a read of a file that has been filled with
-/// something other than entries.
+/// The largest index file accepted. An index holds one entry per sampled
+/// interval, so this bound is reached only by a log measured in tebibytes. It
+/// exists to refuse a file that has been filled with something other than
+/// entries before any of it is read.
 const MAX_INDEX_FILE_BYTES: u64 = 256 * 1024 * 1024;
 
 /// The first eight bytes of an index file. A file that does not start with
@@ -204,7 +205,7 @@ pub struct LogIndex {
 }
 
 impl LogIndex {
-    /// Read an index file and check it against the log beside it.
+    /// Read an index file whole and check it against the log beside it.
     ///
     /// None when the file is missing, unreadable, larger than an index can be,
     /// not an index at all, holding a version this build cannot read or an
@@ -216,25 +217,114 @@ impl LogIndex {
     ///
     /// A covered length below the log's real length is normal rather than a
     /// refusal: the index is built while the log is still growing.
+    ///
+    /// Holding every entry in memory is what a whole-file check costs; a query
+    /// for one position opens a LogIndexReader instead, which runs the same
+    /// checks and then reads the few entries it probes.
     pub fn load(path: &Path, log_len: u64, log_first_event: Option<EventId>) -> Option<Self> {
-        // Checked on the directory entry, so a file filled with something other
-        // than entries is refused without first being copied into memory.
-        if fs::metadata(path).ok()?.len() > MAX_INDEX_FILE_BYTES {
-            return None;
-        }
-        let bytes = fs::read(path).ok()?;
-        let header = LogIndexHeader::decode(&bytes)?;
-        if header.covered_len > log_len {
-            return None;
-        }
-        if header.first_event != log_first_event {
-            return None;
-        }
-        let count = entry_count(bytes.len() as u64)?;
-        let entries = (0..count)
-            .map(|n| entry_at(&bytes, n))
+        let mut reader = LogIndexReader::open(path, log_len, log_first_event)?;
+        let header = reader.header();
+        let entries = (0..reader.entry_count())
+            .map(|n| reader.entry(n))
             .collect::<Option<Vec<_>>>()?;
         Some(Self { header, entries })
+    }
+}
+
+/// An index file open for queries: the header checked once against the log it
+/// claims to describe, and entries read one at a time by position.
+///
+/// A query probes a handful of entries, so what stays resident is the header
+/// and one entry whatever the file holds. The entry count is derived from the
+/// file length at open, which keeps a search over the ordinals inside the
+/// entries that existed then: a writer appending while a query runs extends
+/// the file, and the new tail stays invisible to this reader instead of
+/// shifting the ground mid-search.
+pub struct LogIndexReader {
+    file: File,
+    header: LogIndexHeader,
+    count: u64,
+}
+
+impl LogIndexReader {
+    /// Open an index file and run the whole-file checks LogIndex::load
+    /// documents. None on any refusal; nothing is repaired.
+    pub fn open(path: &Path, log_len: u64, log_first_event: Option<EventId>) -> Option<Self> {
+        // Checked on the open file's length, so a file filled with something
+        // other than entries is refused before any of it is read.
+        let mut file = File::open(path).ok()?;
+        let file_len = file.metadata().ok()?.len();
+        if file_len > MAX_INDEX_FILE_BYTES {
+            return None;
+        }
+        let mut head = [0u8; HEADER_LEN as usize];
+        file.read_exact(&mut head).ok()?;
+        let header = LogIndexHeader::decode(&head)?;
+        if header.covered_len > log_len || header.first_event != log_first_event {
+            return None;
+        }
+        let count = entry_count(file_len)?;
+        Some(Self {
+            file,
+            header,
+            count,
+        })
+    }
+
+    /// The header the file carried, which the open already checked.
+    pub fn header(&self) -> LogIndexHeader {
+        self.header
+    }
+
+    /// How many whole entries the file held at open. A torn tail is not among
+    /// them, and an entry appended after the open is not either.
+    pub fn entry_count(&self) -> u64 {
+        self.count
+    }
+
+    /// Decode the entry n entries into the file. None past the count the open
+    /// derived, and None when the read itself fails: a query then degrades
+    /// rather than answer from bytes it could not read.
+    pub fn entry(&mut self, n: u64) -> Option<LogIndexEntry> {
+        if n >= self.count {
+            return None;
+        }
+        let start = HEADER_LEN.checked_add(n.checked_mul(ENTRY_LEN)?)?;
+        let mut buf = [0u8; ENTRY_LEN as usize];
+        self.file.seek(SeekFrom::Start(start)).ok()?;
+        self.file.read_exact(&mut buf).ok()?;
+        LogIndexEntry::decode(&buf)
+    }
+
+    /// The entry with the largest ordinal at or below the target: the sample a
+    /// forward walk to the wanted record starts from. None when the file holds
+    /// no entry.
+    ///
+    /// Entries are sampled forward through the log, so ordinals rise with
+    /// position, which is what the binary search reads. A file whose ordinals
+    /// do not rise has been corrupted, and the search lands on an entry whose
+    /// bytes the caller then checks against the log: the refusal that check
+    /// returns degrades the query instead of answering a wrong offset.
+    pub fn floor_by_ordinal(&mut self, target: u64) -> Option<LogIndexEntry> {
+        if self.count == 0 {
+            return None;
+        }
+        // The answer stays inside [low, high): entry 0 covers every target
+        // because the first record is always a sample, so low is a floor once
+        // the window is one wide.
+        let mut low = 0u64;
+        let mut high = self.count;
+        while high - low > 1 {
+            let mid = low + (high - low) / 2;
+            let entry = self.entry(mid)?;
+            if entry.ordinal <= target {
+                low = mid;
+            } else {
+                high = mid;
+            }
+        }
+        let entry = self.entry(low)?;
+        (entry.ordinal <= target).then_some(entry)
     }
 }
 

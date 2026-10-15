@@ -61,12 +61,13 @@ mod ids;
 pub use ids::{AgentId, BlockHash, CheckpointId, EventId, MemoryChangeId, PrevHash, SessionId};
 
 /// The on-disk contract of a session log's offset index: the header, the
-/// fixed-size entries, the length arithmetic a reader bounds itself by, and the
-/// checks a file has to pass to be read at all.
+/// fixed-size entries, the length arithmetic a reader bounds itself by, the
+/// checks a file has to pass to be read at all, and the seeked reader a
+/// single-position query opens.
 mod log_index;
 pub use log_index::{
-    ENTRY_LEN, HEADER_LEN, LogIndex, LogIndexEntry, LogIndexHeader, SAMPLE_INTERVAL_BYTES,
-    entry_at, entry_count, readable_len,
+    ENTRY_LEN, HEADER_LEN, LogIndex, LogIndexEntry, LogIndexHeader, LogIndexReader,
+    SAMPLE_INTERVAL_BYTES, entry_at, entry_count, readable_len,
 };
 
 /// The append-only log's wire types (SessionLogEntry + the vocabulary of what a

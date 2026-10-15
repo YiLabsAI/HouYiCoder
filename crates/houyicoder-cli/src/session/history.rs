@@ -1,9 +1,11 @@
-//! The typed reader of a session's durable log: byte-anchored windows, a lazy
-//! offset index, and a bounded turn lookback.
+//! The typed reader of a session's durable log: byte-anchored windows, a
+//! history-epoch scan, and a bounded turn lookback.
 //!
 //! A consumer folds the events it receives into its own view types. This
 //! layer never renders, and it never holds the whole log: every read is
-//! anchored to a byte offset and bounded by a budget.
+//! anchored to a byte offset and bounded by a budget. Record offsets are
+//! answered from the index the log carries beside it, so no per-record table
+//! lives in memory either.
 
 use std::sync::{Arc, Mutex};
 
@@ -11,7 +13,6 @@ use houyicoder_api::session::SessionLog;
 use houyicoder_context::{
     ContextError, EventId, LenientRead, SessionEvent, SessionId, SessionLogEntry,
 };
-use std::mem::take;
 #[cfg(test)]
 use std::sync::atomic::AtomicU64;
 #[cfg(test)]
@@ -20,9 +21,11 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering::Relaxed;
 
 mod head;
+pub(crate) mod log_index;
 
-/// The reverse-read chunk for the lazy index: 4 MB per index_chunk call.
-/// At 60 fps this completes a 310 MB / 90k-event log in ~1.5 s (77 chunks).
+/// One reverse-read chunk of the epoch scan: the scan reads the log backward
+/// by this much per call. At 60 fps this completes a 310 MB / 90k-event scan
+/// in ~1.5 s (77 chunks).
 const INDEX_CHUNK_BYTES: u64 = 4 * 1024 * 1024;
 
 /// One reverse-read step of the turn lookback: the log ahead of a window is
@@ -42,39 +45,47 @@ pub(crate) const LOOKBACK_STEP_BYTES: u64 = 64 * 1024;
 /// probe cannot parse.
 const LOOKBACK_MAX_BYTES: u64 = 8 * 1024 * 1024;
 
-/// The lazy event-byte-offset index. Built by reverse-reading from the
-/// tail (EOF) toward BOF, prepending each batch so offsets stay in
-/// forward (oldest-first) order. Until done, only the tail events are
-/// indexed; byte_at returns None for un-indexed positions.
+/// The state of the reverse scan that discovers where histories began.
+///
+/// The scan reads the log backward from EOF a chunk at a time, records every
+/// clear it passes, and reports progress to whoever asked for the full scan.
+/// Record offsets do not live here: they are answered from the index the log
+/// carries beside it, so this state stays the same size over any log.
 #[derive(Default)]
-struct OffsetIndex {
-    /// Byte offsets of events in FORWARD order (oldest first).
-    offsets: Vec<u64>,
+struct EpochScan {
     /// Where each history began, by the event that began it, newest first.
     ///
     /// A clear starts a new history, and the walk that finds it reads the log
-    /// backwards a chunk at a time. The scan the index already runs passes over
-    /// those events, so it records them: a caller that asks where a history
-    /// began can look here instead of walking the log again.
+    /// backwards a chunk at a time. The scan already passes over those events,
+    /// so it records them: a caller that asks where a history began can look
+    /// here instead of walking the log again.
     epoch_starts: Vec<(EventId, u64)>,
     /// How many bytes from the tail have been read.
     built_from_tail: u64,
     /// Total log file size.
     total_bytes: u64,
-    /// True when the reverse read reached BOF (the index is complete).
+    /// True when the reverse read reached BOF (the scan is complete).
     done: bool,
     /// Where the next reverse-read continues from (None at BOF).
     next_from: Option<u64>,
+    /// Whether the log's sidecar index has had its one check. The check runs
+    /// on the first scan chunk, which a worker asks for, rather than on a
+    /// query path, and a log whose index is missing or refused takes its one
+    /// streaming rebuild there. One check per scan, not per chunk: a log
+    /// whose rebuild was refused would pay the whole streaming pass again on
+    /// every chunk, and a transient failure gets its retry from the next
+    /// reader built over the log anyway.
+    sidecar_checked: bool,
 }
 
-/// How much of the event-byte-offset index is built.
+/// How far the epoch scan's reverse read has gotten.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct HistoryIndexProgress {
-    /// Bytes of the log indexed so far (from the tail backward).
+    /// Bytes of the log the reverse scan has read (from the tail backward).
     pub indexed_bytes: u64,
     /// Total log file size.
     pub total_bytes: u64,
-    /// True when the full index is built.
+    /// True when the scan reached the beginning of the log.
     pub done: bool,
 }
 
@@ -223,7 +234,7 @@ pub(crate) struct SessionHistory {
     byte_windows: bool,
     #[cfg(test)]
     stats: ReadStats,
-    index: Mutex<OffsetIndex>,
+    scan: Mutex<EpochScan>,
 }
 
 impl SessionHistory {
@@ -235,7 +246,7 @@ impl SessionHistory {
             byte_windows,
             #[cfg(test)]
             stats: ReadStats::default(),
-            index: Mutex::new(OffsetIndex::default()),
+            scan: Mutex::new(EpochScan::default()),
         }
     }
 
@@ -370,18 +381,29 @@ impl SessionHistory {
     /// it were the turn it named would show the wrong history. The id is what
     /// makes the offset checkable, which is why an anchor carries both.
     pub(crate) fn anchor_holds(&self, anchor: TurnAnchor) -> bool {
-        // The line at the anchor can be wider than one step, and a read whose
-        // budget cannot reach its end returns nothing, so the step doubles
-        // until it holds a line or the read is capped. Without this a wide
-        // turn would read as a stale anchor and drop the window to the tail.
+        self.probe_first_event(anchor.byte_offset)
+            .is_some_and(|event| {
+                is_user_input(&event.entry) && event.entry.id == anchor.user_input_id
+            })
+    }
+
+    /// The first complete event at an offset, read without walking the whole
+    /// line.
+    ///
+    /// The record at the offset can be wider than one read step, and a read
+    /// whose budget cannot reach a line's start returns nothing, so the step
+    /// doubles until one holds a line. The read itself is capped, so a line
+    /// wider than that cap cannot be named this way: None means the record at
+    /// this offset is unreadable, not that the log holds none.
+    fn probe_first_event(&self, offset: u64) -> Option<LocatedEvent> {
         let mut step = PAGE_STEP_BYTES;
         loop {
-            let window = self.window(anchor.byte_offset, step);
+            let window = self.window(offset, step);
             if let Some(event) = window.events.first() {
-                return is_user_input(&event.entry) && event.entry.id == anchor.user_input_id;
+                return Some(event.clone());
             }
             if window.lines_read > 0 || step >= MAX_READABLE_LINE_BYTES {
-                return false;
+                return None;
             }
             step = step.saturating_mul(2);
         }
@@ -568,8 +590,6 @@ impl SessionHistory {
         newest_first
     }
 
-    /// Build the next chunk of the event-byte-offset index. Called per frame
-    /// while a full scan is asked for; a no-op once complete.
     /// Remember where a history began, once a walk has found it.
     ///
     /// A walk that finds the clear has paid for the answer, so the next reader
@@ -577,107 +597,101 @@ impl SessionHistory {
     /// entry is a byte offset with the id that makes it meaningful, so a log
     /// rewritten under it is refused rather than read as another history.
     pub(crate) fn remember_epoch_start(&self, epoch: EventId, offset: u64) {
-        let Ok(mut idx) = self.index.lock() else {
+        let Ok(mut scan) = self.scan.lock() else {
             return;
         };
-        if idx.epoch_starts.iter().any(|(event, _)| *event == epoch) {
+        if scan.epoch_starts.iter().any(|(event, _)| *event == epoch) {
             return;
         }
-        idx.epoch_starts.push((epoch, offset));
+        scan.epoch_starts.push((epoch, offset));
     }
 
     /// The byte where a history began, if it is known.
     ///
     /// The event that began an epoch is the newest clear before it, and a clear
-    /// is where a walk stops. A start the index has seen, or one a walk has
-    /// remembered, is answered from here: the walk is for what neither knows.
+    /// is where a walk stops. A start the scan has seen, one a walk has
+    /// remembered, or the log's own first byte once its sidecar index confirms
+    /// a record is answered from here; the walk is for what none of them knows.
     fn known_epoch_start(&self, epoch: Option<EventId>) -> Option<u64> {
-        let idx = self.index.lock().ok()?;
         match epoch {
-            // The history the log itself began in starts at the first byte.
-            None => idx.offsets.first().map(|_| 0),
-            Some(id) => idx
-                .epoch_starts
-                .iter()
-                .find(|(event, _)| *event == id)
-                .map(|(_, offset)| *offset),
+            // The history the log itself began in starts at the first byte,
+            // once the sidecar index says the log holds a record. A log with
+            // no index to ask falls through to the head walk, which reads the
+            // first event off the log directly.
+            None => self
+                .session_log
+                .backend()
+                .log_index_floor(self.session_id, 0)
+                .map(|_| 0),
+            Some(id) => {
+                let scan = self.scan.lock().ok()?;
+                scan.epoch_starts
+                    .iter()
+                    .find(|(event, _)| *event == id)
+                    .map(|(_, offset)| *offset)
+            }
         }
     }
 
+    /// Run the next chunk of the reverse scan for history epochs. Called per
+    /// frame while a full scan is asked for; a no-op once complete. The first
+    /// chunk also gives the log's sidecar index its one check and, when the
+    /// index is missing or refused, its one streaming rebuild: offset queries
+    /// answer from that index, and the rebuild belongs on the worker that
+    /// asked for the scan, never on a query path.
     pub(crate) fn index_chunk(&self) -> HistoryIndexProgress {
-        let mut idx = self.index.lock().expect("index mutex poisoned");
+        let mut scan = self.scan.lock().expect("scan mutex poisoned");
         let backend = self.session_log.backend();
-        if idx.total_bytes == 0 {
-            idx.total_bytes = backend.log_size(self.session_id);
+        if scan.total_bytes == 0 {
+            scan.total_bytes = backend.log_size(self.session_id);
         }
-        if idx.done || idx.total_bytes == 0 {
+        if !scan.sidecar_checked {
+            scan.sidecar_checked = true;
+            if scan.total_bytes > 0
+                && backend.log_index_floor(self.session_id, 0).is_none()
+                && !backend.rebuild_log_index(self.session_id)
+            {
+                tracing::warn!(
+                    "the log's offset index refused a rebuild, so offset queries answer nothing"
+                );
+            }
+        }
+        if scan.done || scan.total_bytes == 0 {
             return HistoryIndexProgress {
-                indexed_bytes: idx.built_from_tail,
-                total_bytes: idx.total_bytes,
-                done: idx.done,
+                indexed_bytes: scan.built_from_tail,
+                total_bytes: scan.total_bytes,
+                done: scan.done,
             };
         }
-        let from = idx.next_from.unwrap_or(idx.total_bytes);
+        let from = scan.next_from.unwrap_or(scan.total_bytes);
         let rev = match backend.read_lines_reverse(self.session_id, from, INDEX_CHUNK_BYTES) {
             Ok(r) => r,
             Err(e) => {
                 // A stall without advancing: the next call retries.
                 tracing::warn!("index reverse-read stalled on failure: {e}");
                 return HistoryIndexProgress {
-                    indexed_bytes: idx.built_from_tail,
-                    total_bytes: idx.total_bytes,
-                    done: idx.done,
+                    indexed_bytes: scan.built_from_tail,
+                    total_bytes: scan.total_bytes,
+                    done: scan.done,
                 };
             }
         };
-        // Collect event byte offsets from the reverse batch (newest-first),
-        // then prepend so the index stays in forward order.
-        let mut batch_offsets: Vec<u64> = Vec::new();
-        let mut batch_epochs: Vec<(EventId, u64)> = Vec::new();
-        for (offset, line) in &rev.lines {
-            if let Some(entry) = parse_event(line) {
-                batch_offsets.push(*offset);
-                if matches!(entry.event, SessionEvent::ContextCleared { .. }) {
-                    batch_epochs.push((entry.id, *offset));
-                }
-            }
-        }
-        // The scan is newest-first, so the batch's own finds are too.
-        idx.epoch_starts.extend(batch_epochs);
-        batch_offsets.reverse();
-        let mut offsets = take(&mut idx.offsets);
-        batch_offsets.extend_from_slice(&offsets);
-        offsets = batch_offsets;
-        idx.offsets = offsets;
-        idx.built_from_tail = idx.total_bytes - rev.next_from.unwrap_or(0);
-        idx.next_from = rev.next_from;
+        // The batch is newest-first, so the scan's epoch table stays that way.
+        let batch_epochs = rev.lines.iter().filter_map(|(offset, line)| {
+            parse_event(line)
+                .filter(|entry| matches!(entry.event, SessionEvent::ContextCleared { .. }))
+                .map(|entry| (entry.id, *offset))
+        });
+        scan.epoch_starts.extend(batch_epochs);
+        scan.built_from_tail = scan.total_bytes - rev.next_from.unwrap_or(0);
+        scan.next_from = rev.next_from;
         if rev.next_from.is_none() {
-            idx.done = true;
+            scan.done = true;
         }
         HistoryIndexProgress {
-            indexed_bytes: idx.built_from_tail,
-            total_bytes: idx.total_bytes,
-            done: idx.done,
-        }
-    }
-
-    /// The byte offset of the event at event_idx, once the index covers it.
-    pub(crate) fn byte_at(&self, event_idx: usize) -> Option<u64> {
-        let idx = self.index.lock().expect("index mutex poisoned");
-        if idx.done {
-            idx.offsets.get(event_idx).copied()
-        } else {
-            None
-        }
-    }
-
-    /// The total event count, once the index is complete.
-    pub(crate) fn event_count(&self) -> Option<usize> {
-        let idx = self.index.lock().expect("index mutex poisoned");
-        if idx.done {
-            Some(idx.offsets.len())
-        } else {
-            None
+            indexed_bytes: scan.built_from_tail,
+            total_bytes: scan.total_bytes,
+            done: scan.done,
         }
     }
 }

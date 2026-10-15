@@ -14,9 +14,10 @@
 //! Run state is what the two paths cannot share: this one reads a log written
 //! by another process, so a turn that no record closes stays open here.
 //!
-//! The byte windows, the lazy offset index, and the turn lookback belong to
-//! SessionHistory; this type only renders what that reader returns. The G
-//! key in the search view triggers a full index build with progress.
+//! The byte windows, the sidecar offset queries, and the turn lookback belong
+//! to SessionHistory; this type only renders what that reader returns. The G
+//! key in the search view triggers a full epoch scan with progress, which
+//! gives the sidecar index its one check and rebuild.
 
 use std::sync::Arc;
 
@@ -58,7 +59,8 @@ impl SessionLogSnapshot {
 
     /// Build the snapshot over a history reader the caller already owns, so
     /// the transcript and the trajectory share one set of byte windows and one
-    /// offset index instead of each walking the log on its own.
+    /// route to the log's sidecar index instead of each walking the log on its
+    /// own.
     pub fn with_history(history: Arc<SessionHistory>) -> Self {
         Self { history }
     }

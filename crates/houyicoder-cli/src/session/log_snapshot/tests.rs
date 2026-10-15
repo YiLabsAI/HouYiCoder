@@ -5,8 +5,15 @@
 //! mid-turn) live here, not in the module that implements the port.
 
 use super::*;
-use crate::session::history::LOOKBACK_STEP_BYTES;
-use houyicoder_context::{EventId, SessionEvent};
+use crate::session::history::{
+    LOOKBACK_STEP_BYTES, MAX_READABLE_LINE_BYTES, log_index::INDEX_WALK_MAX_BYTES,
+};
+use houyicoder_async::PFut;
+use houyicoder_context::{
+    BlockHash, CheckpointId, CheckpointManifest, ContextBackend, EventId, LenientRead, LogIndex,
+    LogIndexEntry, LogIndexHeader, LogRangeRead, ReverseRead, SAMPLE_INTERVAL_BYTES, SessionEvent,
+    session_class::{INDEX_FILE, LOG_FILE},
+};
 use houyicoder_memory::LocalFileBackend;
 use houyicoder_protocol::envelope::{DurableEventId, EventSeq};
 use houyicoder_session::SessionStore;
@@ -17,15 +24,20 @@ use houyicoder_tui::transcript::{
 };
 use std::env::temp_dir;
 use std::env::var;
+use std::fs::OpenOptions;
 use std::fs::create_dir_all;
+use std::fs::metadata;
+use std::fs::read_to_string;
 use std::fs::remove_dir_all;
 use std::fs::write;
+use std::io::Write;
 #[cfg(unix)]
 use std::os::unix::fs::symlink;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::id;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Instant;
 use tokio::runtime::Runtime;
 
@@ -65,8 +77,8 @@ fn test_bash_renders_stdout_body() {
     assert!(body.contains("there"), "full stdout in body: {body}");
 }
 
-/// TurnAborted must surface in the snapshot. The shared mapping
-/// closes the drift structurally; this test pins it.
+/// TurnAborted must be visible in the snapshot. The shared mapping
+/// closes the drift structurally.
 #[test]
 fn test_turn_aborted_visible_snapshot() {
     let events = &[ev(SessionEvent::TurnAborted {
@@ -900,9 +912,10 @@ fn test_window_safe_on_multibyte() {
     remove_dir_all(&root).ok();
 }
 
-/// The lazy index does not cover the whole log until G completes: byte_at
-/// returns None for un-indexed positions, then Some after the build. The
-/// full build completes in a bounded number of chunks (no infinite loop).
+/// The sidecar index the append path maintains answers offsets before any
+/// scan runs, and the scan itself completes in a bounded number of chunks:
+/// it discovers the history epochs and checks the sidecar once, and neither
+/// loops.
 #[test]
 fn test_index_builds_bounded_chunks() {
     let session = SessionId::new();
@@ -918,8 +931,17 @@ fn test_index_builds_bounded_chunks() {
         })
         .collect();
     let (snap, _s, root) = bridge_with_log(&events);
-    // Before the build, byte_at is None (index not done).
-    assert!(snap.byte_at(0).is_none(), "byte_at None before the build");
+    // The append-maintained sidecar answers before any scan runs.
+    assert_eq!(
+        snap.byte_at(0),
+        Some(0),
+        "the sidecar answers the first position"
+    );
+    assert_eq!(
+        snap.event_count(),
+        Some(events.len()),
+        "the count walks from the sidecar"
+    );
     let mut steps = 0u32;
     let progress = loop {
         let p = snap.index_chunk();
@@ -928,25 +950,614 @@ fn test_index_builds_bounded_chunks() {
             break p;
         }
     };
-    assert!(progress.done, "index build completed in {steps} chunks");
+    assert!(progress.done, "scan completed in {steps} chunks");
     assert!(steps <= 1000, "bounded, no infinite loop ({steps} steps)");
-    assert!(snap.byte_at(0).is_some(), "byte_at answers after the build");
-    assert!(
-        snap.event_count().is_some(),
-        "event_count answers after the build"
+    assert_eq!(
+        progress.total_bytes,
+        snap.log_size(),
+        "progress spans the log"
+    );
+    assert_eq!(
+        progress.indexed_bytes, progress.total_bytes,
+        "the scan reached the head"
     );
     remove_dir_all(&root).ok();
 }
 
+/// Every position's offset from the sidecar walk is exactly where that
+/// record's line starts in the log: the parity the resident offset table
+/// used to guarantee, confirmed against the file's own bytes.
+#[test]
+fn test_byte_at_matches_lines() {
+    let session = SessionId::new();
+    let events: Vec<SessionLogEntry> = (0..40)
+        .map(|i| {
+            ev_session(
+                session,
+                EventId::new(),
+                SessionEvent::UserInput {
+                    text: format!("ev {i} padded to a few bytes"),
+                },
+            )
+        })
+        .collect();
+    let (snap, _s, root) = bridge_with_log(&events);
+    let text =
+        read_to_string(root.join(format!("{session}")).join(LOG_FILE)).expect("read the log back");
+    let mut truth: Vec<u64> = Vec::new();
+    let mut at = 0u64;
+    for line in text.lines() {
+        truth.push(at);
+        at += line.len() as u64 + 1;
+    }
+    assert_eq!(truth.len(), events.len(), "one line per appended record");
+    for (i, offset) in truth.iter().enumerate() {
+        assert_eq!(
+            snap.byte_at(i),
+            Some(*offset),
+            "position {i} lands on its own line"
+        );
+    }
+    assert_eq!(
+        snap.byte_at(events.len()),
+        None,
+        "past the last record there is no offset"
+    );
+    assert_eq!(snap.event_count(), Some(events.len()));
+    remove_dir_all(&root).ok();
+}
+
+/// A log wider than one sampling interval holds several index entries, and
+/// each position walks from the entry covering it: at an entry's own ordinal
+/// the walk is empty, and positions either side of every boundary match the
+/// file's own bytes. The log is written without its sidecar, so the scan's
+/// one rebuild has to make the queries answer first.
+#[test]
+fn test_byte_at_crosses_entries() {
+    let root = temp_dir().join(format!("houyi_entry_walk_{}_{}", SessionId::new(), id()));
+    let session = SessionId::new();
+    let dir = root.join(format!("{session}"));
+    create_dir_all(&dir).expect("create session dir");
+    // About 6000 records of a few hundred bytes each: the log spans several
+    // sampling intervals, so the index holds several entries to walk from.
+    let events: Vec<SessionLogEntry> = (0..6000)
+        .map(|i| {
+            ev_session(
+                session,
+                EventId::new(),
+                SessionEvent::UserInput {
+                    text: format!("ev {i} padded so one record is a few hundred bytes wide"),
+                },
+            )
+        })
+        .collect();
+    let mut text = String::new();
+    let mut truth: Vec<u64> = Vec::new();
+    for ev in &events {
+        truth.push(text.len() as u64);
+        text.push_str(&serde_json::to_string(ev).expect("serialize event"));
+        text.push('\n');
+    }
+    write(dir.join(LOG_FILE), &text).expect("write the log");
+
+    let backend = LocalFileBackend::new(root.clone());
+    let store = SessionStore::new(Box::new(backend));
+    let snap = SessionLogSnapshot::new(Arc::new(store), session);
+    // A log written without its sidecar answers nothing until the scan runs.
+    assert!(snap.byte_at(0).is_none(), "no sidecar yet, no answer");
+    assert!(snap.index_chunk().done, "one chunk covers this log");
+    assert_eq!(
+        snap.byte_at(0),
+        Some(0),
+        "the scan's rebuild made queries answer"
+    );
+
+    let loaded = LogIndex::load(&dir.join(INDEX_FILE), text.len() as u64, Some(events[0].id))
+        .expect("the rebuild published a valid index");
+    assert!(
+        loaded.entries.len() >= 2,
+        "the log spans several entries: {}",
+        loaded.entries.len()
+    );
+    for entry in &loaded.entries {
+        let ordinal = usize::try_from(entry.ordinal).expect("ordinal fits");
+        assert_eq!(
+            snap.byte_at(ordinal),
+            Some(truth[ordinal]),
+            "an entry answers with its own offset"
+        );
+        let neighbors = [ordinal + 1, ordinal.saturating_sub(1)];
+        for probe in neighbors.into_iter().filter(|p| *p < events.len()) {
+            assert_eq!(
+                snap.byte_at(probe),
+                Some(truth[probe]),
+                "position {probe} beside an entry walks to its own line"
+            );
+        }
+    }
+    // Positions far from any entry still walk from the entry covering them.
+    for i in (0..events.len()).step_by(997) {
+        assert_eq!(snap.byte_at(i), Some(truth[i]), "stride position {i}");
+    }
+    assert_eq!(
+        snap.event_count(),
+        Some(events.len()),
+        "the count walks from the last entry to the log's end"
+    );
+    remove_dir_all(&root).ok();
+}
+
+/// An index whose header checks out but whose entry does not describe the
+/// log's bytes is refused: a query degrades to None rather than answering
+/// with an offset that names the wrong record or lands inside one.
+#[test]
+fn test_byte_at_refuses_mismatch() {
+    let session = SessionId::new();
+    let events: Vec<SessionLogEntry> = (0..3)
+        .map(|i| {
+            ev_session(
+                session,
+                EventId::new(),
+                SessionEvent::UserInput {
+                    text: format!("ev {i}"),
+                },
+            )
+        })
+        .collect();
+    let (snap, _s, root) = bridge_with_log(&events);
+    let index_path = root.join(format!("{session}")).join(INDEX_FILE);
+    let header = LogIndexHeader {
+        interval: SAMPLE_INTERVAL_BYTES,
+        first_event: Some(events[0].id),
+        covered_len: snap.log_size(),
+    };
+
+    // A valid header over an entry naming an event the log does not hold.
+    let foreign = LogIndexEntry {
+        event: EventId::new(),
+        ordinal: 0,
+        offset: 0,
+    };
+    let mut bytes = header.encode().to_vec();
+    bytes.extend_from_slice(&foreign.encode());
+    write(&index_path, &bytes).expect("write the foreign index");
+    assert!(
+        snap.byte_at(0).is_none(),
+        "an entry naming another event is refused"
+    );
+    assert!(
+        snap.event_count().is_none(),
+        "the count degrades together with its entry"
+    );
+
+    // The right event at an offset inside its line: the bytes at the offset
+    // are not the record the entry names.
+    let shifted = LogIndexEntry {
+        event: events[0].id,
+        ordinal: 0,
+        offset: 3,
+    };
+    let mut bytes = header.encode().to_vec();
+    bytes.extend_from_slice(&shifted.encode());
+    write(&index_path, &bytes).expect("write the shifted index");
+    assert!(
+        snap.byte_at(0).is_none(),
+        "an entry pointing inside a record is refused"
+    );
+    remove_dir_all(&root).ok();
+}
+
+/// Text padding that keeps one small record a few hundred bytes wide.
+const SMALL_PAD: usize = 200;
+
+/// Text padding of the one record wider than a read step. The entry check
+/// doubles its step from one read step to two, so the width sits between the
+/// two: one step cannot hold the line, and the doubled step can.
+const WIDE_PAD: usize = 300 * 1024;
+
+/// The second segment of the stale-sidecar fixture: wide enough that the walk
+/// from the index's last entry to the log's end crosses more than one window
+/// read.
+const SEGMENT_TWO_BYTES: u64 = 1400 * 1024;
+
+/// Room the exact fill leaves for its last record, so the padded record stays
+/// a few kilobytes wide.
+const FILL_GUARD_BYTES: u64 = 2048;
+
+/// One record's JSONL line: the event id it carries, and the line's text with
+/// pad filler bytes behind its index label.
+fn record_line(session: SessionId, i: usize, pad: usize) -> (EventId, String) {
+    let entry = ev_session(
+        session,
+        EventId::new(),
+        SessionEvent::UserInput {
+            text: format!("ev {i} {}", "x".repeat(pad)),
+        },
+    );
+    let mut line = serde_json::to_string(&entry).expect("serialize event");
+    line.push('\n');
+    (entry.id, line)
+}
+
+/// Append one small record to the log text, and its id and true offset to the
+/// table the assertions check against.
+fn push_record(text: &mut String, truth: &mut Vec<(EventId, u64)>, session: SessionId) {
+    let (id, line) = record_line(session, truth.len(), SMALL_PAD);
+    truth.push((id, text.len() as u64));
+    text.push_str(&line);
+}
+
+/// Append the bytes text gained since from to the log file, leaving the
+/// sidecar beside it untouched.
+fn append_tail(log: &Path, text: &str, from: usize) {
+    OpenOptions::new()
+        .append(true)
+        .open(log)
+        .expect("reopen the log")
+        .write_all(&text.as_bytes()[from..])
+        .expect("append to the log");
+}
+
+/// A log whose sidecar went stale between two direct writes: the scan's
+/// rebuild indexes the first segment, then the second lands past the index's
+/// covered length without touching it. The record wider than a read step sits
+/// at the second entry's ordinal, so its check has to double the step; the
+/// records past the index's end make every walk cross from one window read
+/// into the next, and stop exactly at the log's end.
+fn stale_sidecar_log() -> (SessionLogSnapshot, Vec<(EventId, u64)>, usize, PathBuf) {
+    let root = temp_dir().join(format!("houyi_stale_walk_{}_{}", SessionId::new(), id()));
+    let session = SessionId::new();
+    let dir = root.join(format!("{session}"));
+    create_dir_all(&dir).expect("create session dir");
+    let log = dir.join(LOG_FILE);
+
+    let mut text = String::new();
+    let mut truth: Vec<(EventId, u64)> = Vec::new();
+    while (text.len() as u64) < SAMPLE_INTERVAL_BYTES {
+        push_record(&mut text, &mut truth, session);
+    }
+    // The first record at or past one interval is the one the rebuild
+    // samples, so the wide record is placed exactly there.
+    let wide_ordinal = truth.len();
+    let (wide_id, wide_line) = record_line(session, wide_ordinal, WIDE_PAD);
+    truth.push((wide_id, text.len() as u64));
+    text.push_str(&wide_line);
+    write(&log, &text).expect("write the first segment");
+    let segment_one_len = text.len();
+
+    let backend = LocalFileBackend::new(root.clone());
+    let store = SessionStore::new(Box::new(backend));
+    let snap = SessionLogSnapshot::new(Arc::new(store), session);
+    assert!(snap.byte_at(0).is_none(), "no sidecar yet, no answer");
+    assert!(
+        snap.index_chunk().done,
+        "one chunk covers the first segment"
+    );
+    assert_eq!(
+        snap.byte_at(0),
+        Some(0),
+        "the scan's rebuild indexed the first segment"
+    );
+
+    while ((text.len() - segment_one_len) as u64) < SEGMENT_TWO_BYTES {
+        push_record(&mut text, &mut truth, session);
+    }
+    append_tail(&log, &text, segment_one_len);
+    (snap, truth, wide_ordinal, root)
+}
+
+/// A walk from a stale index entry crosses from one window read into the
+/// next: the entry's own check doubles its step over a record wider than a
+/// read, the walk counts the records a continuation window holds without
+/// re-skipping its first, and the count ends exactly at the log's end.
+#[test]
+fn test_byte_at_crosses_windows() {
+    let (snap, truth, wide_ordinal, root) = stale_sidecar_log();
+    let last = truth.len() - 1;
+    assert!(
+        truth[last].1 - truth[wide_ordinal].1 > MAX_READABLE_LINE_BYTES,
+        "the walk from the last entry crosses more than one window read"
+    );
+    assert_eq!(
+        snap.byte_at(wide_ordinal),
+        Some(truth[wide_ordinal].1),
+        "the wide record answers after its check doubles the step"
+    );
+    assert_eq!(
+        snap.byte_at(wide_ordinal + 1),
+        Some(truth[wide_ordinal + 1].1),
+        "the walk steps past the entry's own record"
+    );
+    assert_eq!(
+        snap.byte_at(last),
+        Some(truth[last].1),
+        "the walk crosses window reads to the last record"
+    );
+    assert_eq!(
+        snap.event_count(),
+        Some(truth.len()),
+        "the count walks across windows to the log's end"
+    );
+    remove_dir_all(&root).ok();
+}
+
+/// Append records until the log's length is exactly target: small records
+/// while room remains, then one record padded to land on it.
+fn fill_to_exact(
+    text: &mut String,
+    truth: &mut Vec<(EventId, u64)>,
+    session: SessionId,
+    target: u64,
+) {
+    while text.len() as u64 + FILL_GUARD_BYTES < target {
+        push_record(text, truth, session);
+    }
+    let remaining = target - text.len() as u64;
+    let (_, base) = record_line(session, truth.len(), 0);
+    let pad = usize::try_from(
+        remaining
+            .checked_sub(base.len() as u64)
+            .expect("the fill guard left room for the last record"),
+    )
+    .expect("the pad fits a length");
+    let (id, line) = record_line(session, truth.len(), pad);
+    truth.push((id, text.len() as u64));
+    text.push_str(&line);
+}
+
+/// The walk budget's edge. A log filled to exactly the budget answers with a
+/// whole count and a last offset: the walk ends with its cursor at the log's
+/// end, which is the one shape where a spent budget still has an answer. One
+/// record past the budget answers with nothing, because a count that stops
+/// where the budget does would miss it. The exact fill is the subject -- a
+/// log comfortably under the budget proves nothing about the edge.
+#[test]
+#[ignore]
+fn test_count_budget_edge() {
+    let root = temp_dir().join(format!("houyi_budget_edge_{}_{}", SessionId::new(), id()));
+    let session = SessionId::new();
+    let dir = root.join(format!("{session}"));
+    create_dir_all(&dir).expect("create session dir");
+    let log = dir.join(LOG_FILE);
+
+    // One record, so the rebuild indexes exactly one entry at the log's
+    // start and every walk from here pays the whole distance.
+    let mut text = String::new();
+    let mut truth: Vec<(EventId, u64)> = Vec::new();
+    push_record(&mut text, &mut truth, session);
+    write(&log, &text).expect("write the first segment");
+    let first_len = text.len();
+    let backend = LocalFileBackend::new(root.clone());
+    let store = SessionStore::new(Box::new(backend));
+    let snap = SessionLogSnapshot::new(Arc::new(store), session);
+    assert!(snap.index_chunk().done, "one chunk covers this log");
+
+    fill_to_exact(&mut text, &mut truth, session, INDEX_WALK_MAX_BYTES);
+    append_tail(&log, &text, first_len);
+    assert_eq!(
+        snap.event_count(),
+        Some(truth.len()),
+        "a log ending exactly at the budget counts whole"
+    );
+    let last = truth.len() - 1;
+    assert_eq!(
+        snap.byte_at(last),
+        Some(truth[last].1),
+        "the last record sits inside the budget"
+    );
+
+    let over_len = text.len();
+    push_record(&mut text, &mut truth, session);
+    append_tail(&log, &text, over_len);
+    assert!(
+        snap.event_count().is_none(),
+        "a record past the budget hides from the count"
+    );
+    assert!(
+        snap.byte_at(truth.len() - 1).is_none(),
+        "the walk cannot reach past the budget"
+    );
+    remove_dir_all(&root).ok();
+}
+
+/// A backend whose forward window reads stall on command. A stalled read
+/// returns no lines and a cursor that does not move -- the shape a failed
+/// read folds into -- while still reporting the log's real length, which is
+/// what separates a stall from the log's end. One read passes after each
+/// arming, so an entry check succeeds and the walk behind it stalls: the
+/// refusal under test is the walk's, not a check that never ran.
+struct StallingRangeReads {
+    inner: LocalFileBackend,
+    stall: Arc<AtomicBool>,
+    stalled: Arc<AtomicUsize>,
+    passes: AtomicUsize,
+}
+
+impl StallingRangeReads {
+    fn new(root: PathBuf, stall: Arc<AtomicBool>, stalled: Arc<AtomicUsize>) -> Self {
+        Self {
+            inner: LocalFileBackend::new(root),
+            stall,
+            stalled,
+            passes: AtomicUsize::new(0),
+        }
+    }
+}
+
+impl ContextBackend for StallingRangeReads {
+    fn read_log_range(&self, session: SessionId, byte_offset: u64, max_bytes: u64) -> LogRangeRead {
+        if self.stall.load(Ordering::Acquire) {
+            if self.passes.fetch_add(1, Ordering::AcqRel) > 0 {
+                self.stalled.fetch_add(1, Ordering::AcqRel);
+                return LogRangeRead {
+                    next_offset: byte_offset,
+                    bytes_total: self.inner.log_size(session),
+                    ..LogRangeRead::default()
+                };
+            }
+        } else {
+            self.passes.store(0, Ordering::Release);
+        }
+        self.inner.read_log_range(session, byte_offset, max_bytes)
+    }
+
+    fn append(&self, event: SessionLogEntry) -> PFut<'_, Result<EventId, ContextError>> {
+        self.inner.append(event)
+    }
+    fn read_range(
+        &self,
+        session: SessionId,
+        from: Option<EventId>,
+        to: Option<EventId>,
+    ) -> PFut<'_, Result<Vec<SessionLogEntry>, ContextError>> {
+        self.inner.read_range(session, from, to)
+    }
+    fn replay(&self, session: SessionId) -> PFut<'_, Result<Vec<SessionLogEntry>, ContextError>> {
+        self.inner.replay(session)
+    }
+    fn write_checkpoint(
+        &self,
+        manifest: CheckpointManifest,
+    ) -> PFut<'_, Result<CheckpointId, ContextError>> {
+        self.inner.write_checkpoint(manifest)
+    }
+    fn read_checkpoint(
+        &self,
+        id: CheckpointId,
+    ) -> PFut<'_, Result<CheckpointManifest, ContextError>> {
+        self.inner.read_checkpoint(id)
+    }
+    fn list_checkpoints(
+        &self,
+        session: SessionId,
+    ) -> PFut<'_, Result<Vec<CheckpointId>, ContextError>> {
+        self.inner.list_checkpoints(session)
+    }
+    fn block_put(&self, block: Vec<u8>) -> PFut<'_, Result<BlockHash, ContextError>> {
+        self.inner.block_put(block)
+    }
+    fn block_get(&self, hash: &BlockHash) -> PFut<'_, Result<Vec<u8>, ContextError>> {
+        self.inner.block_get(hash)
+    }
+    fn supports_log_windows(&self) -> bool {
+        self.inner.supports_log_windows()
+    }
+    fn log_size(&self, session: SessionId) -> u64 {
+        self.inner.log_size(session)
+    }
+    fn read_log(&self, session: SessionId) -> Result<Vec<SessionLogEntry>, ContextError> {
+        self.inner.read_log(session)
+    }
+    fn read_log_lenient(&self, session: SessionId) -> LenientRead {
+        self.inner.read_log_lenient(session)
+    }
+    fn read_lines_reverse(
+        &self,
+        session: SessionId,
+        from_byte: u64,
+        max_bytes: u64,
+    ) -> Result<ReverseRead, ContextError> {
+        self.inner.read_lines_reverse(session, from_byte, max_bytes)
+    }
+    fn log_index_floor(&self, session: SessionId, ordinal: u64) -> Option<LogIndexEntry> {
+        self.inner.log_index_floor(session, ordinal)
+    }
+    fn rebuild_log_index(&self, session: SessionId) -> bool {
+        self.inner.rebuild_log_index(session)
+    }
+    fn session_log_root(&self) -> Option<&Path> {
+        self.inner.session_log_root()
+    }
+}
+
+/// A count that cannot reach the log's end refuses rather than answering
+/// with what it saw: a stalled read holds a cursor that does not move while
+/// the log's real length says bytes remain, and the records past the stall
+/// are exactly the ones a stopped count would miss. The refusal clears when
+/// the stall does, which is what says the None came from the stall.
+#[test]
+fn test_count_refuses_stall() {
+    let root = temp_dir().join(format!("houyi_stall_{}_{}", SessionId::new(), id()));
+    let session = SessionId::new();
+    create_dir_all(&root).expect("create temp root");
+    let stall = Arc::new(AtomicBool::new(false));
+    let stalled = Arc::new(AtomicUsize::new(0));
+    let backend = StallingRangeReads::new(root.clone(), Arc::clone(&stall), Arc::clone(&stalled));
+    let store = SessionStore::new(Box::new(backend));
+    let rt = Runtime::new().expect("test runtime");
+    for i in 0..40 {
+        rt.block_on(store.append(ev_session(
+            session,
+            EventId::new(),
+            SessionEvent::UserInput {
+                text: format!("ev {i} padded so one record is a few hundred bytes wide"),
+            },
+        )))
+        .expect("append");
+    }
+    let snap = SessionLogSnapshot::new(Arc::new(store), session);
+    assert_eq!(
+        snap.event_count(),
+        Some(40),
+        "the warm sidecar counts before any stall"
+    );
+
+    stall.store(true, Ordering::Release);
+    assert!(
+        snap.event_count().is_none(),
+        "a stalled walk refuses a count"
+    );
+    assert!(stalled.load(Ordering::Acquire) > 0, "the walk stalled");
+
+    stall.store(false, Ordering::Release);
+    assert_eq!(
+        snap.event_count(),
+        Some(40),
+        "the refusal clears with the stall"
+    );
+    remove_dir_all(&root).ok();
+}
+
+/// Prepare the budget fixture's log. HOUYICODER_LARGE_LOG naming an
+/// existing file symlinks that log in and reports the real-log mode;
+/// otherwise a generated local-format log just over the threshold is
+/// written (~520 events of ~32 KB, the last carrying the needle so the
+/// tail window's mapping has to show it).
+fn seed_budget_log(log_path: &Path, session: SessionId, needle: &str) -> bool {
+    let real_log = var("HOUYICODER_LARGE_LOG").ok();
+    if real_log.as_deref().is_some_and(|p| Path::new(p).exists()) {
+        #[cfg(unix)]
+        symlink(real_log.as_deref().unwrap(), log_path).expect("symlink the large log");
+        return true;
+    }
+    let mut buf: Vec<u8> = Vec::with_capacity(17 * 1024 * 1024);
+    for i in 0..520u32 {
+        let text = if i == 519 {
+            format!("{needle} {}", "x".repeat(32 * 1024))
+        } else {
+            "x".repeat(32 * 1024)
+        };
+        let ev = SessionLogEntry {
+            id: EventId::new(),
+            session,
+            ts: i as u64,
+            prev_hash: None,
+            event: SessionEvent::UserInput { text },
+        };
+        let mut line = serde_json::to_vec(&ev).expect("serialize event");
+        line.push(b'\n');
+        buf.extend_from_slice(&line);
+    }
+    write(log_path, buf).expect("write the fixture log");
+    false
+}
+
 /// Real-machine budget on a large log: enter (tail_window) actually
 /// materializes the mapping (lines > 0 + the tail needle renders), the
-/// enter < 300 ms, one window scan < 100 ms, the full index build
-/// completes, and the resident window + index stay bounded. Generates a
-/// synthetic local-format log just over the threshold so the mapping is
-/// real (a foreign-format log would parse-skip to empty, measuring only
-/// the byte mechanism). Set HOUYICODER_LARGE_LOG to a real log path to
-/// additionally stress the byte mechanism on a bigger file (mapping may
-/// be empty there -- the content assertions are skipped in that mode).
+/// enter < 300 ms, one window scan < 100 ms, the scan and sidecar rebuild
+/// complete, and the resident window + sidecar stay bounded. A real log set
+/// through the env var stresses the byte mechanism on a bigger file (its
+/// content assertions are skipped: a foreign-format log parses to empty).
 #[test]
 #[ignore]
 fn test_large_log_budget() {
@@ -954,38 +1565,10 @@ fn test_large_log_budget() {
     let session = SessionId::new();
     let session_dir = root.join(format!("{session}"));
     create_dir_all(&session_dir).expect("create session dir");
-    let log_path = session_dir.join("log.jsonl");
+    let log_path = session_dir.join(LOG_FILE);
 
     const NEEDLE: &str = "BUDGETNEEDLE";
-    let real_log = var("HOUYICODER_LARGE_LOG").ok();
-    let using_real = real_log.as_deref().is_some_and(|p| Path::new(p).exists());
-    if using_real {
-        #[cfg(unix)]
-        symlink(real_log.as_deref().unwrap(), &log_path).expect("symlink the large log");
-    } else {
-        // Synthetic local-format log just over the threshold: ~520 events
-        // with a ~32 KB body each ~ 16+ MB. The last event carries the
-        // needle so the tail window's mapping must surface it.
-        let mut buf: Vec<u8> = Vec::with_capacity(17 * 1024 * 1024);
-        for i in 0..520u32 {
-            let text = if i == 519 {
-                format!("{NEEDLE} {}", "x".repeat(32 * 1024))
-            } else {
-                "x".repeat(32 * 1024)
-            };
-            let ev = SessionLogEntry {
-                id: EventId::new(),
-                session,
-                ts: i as u64,
-                prev_hash: None,
-                event: SessionEvent::UserInput { text },
-            };
-            let mut line = serde_json::to_vec(&ev).expect("serialize event");
-            line.push(b'\n');
-            buf.extend_from_slice(&line);
-        }
-        write(&log_path, buf).expect("write synthetic log");
-    }
+    let using_real = seed_budget_log(&log_path, session, NEEDLE);
     let backend = LocalFileBackend::new(root.clone());
     let store = SessionStore::new(Box::new(backend));
     let snap = SessionLogSnapshot::new(Arc::new(store), session);
@@ -1038,8 +1621,9 @@ fn test_large_log_budget() {
     let scan_ms = t0.elapsed().as_millis();
     assert!(scan_ms < 100, "window_before < 100ms (took {scan_ms}ms)");
 
-    // Full index build: completes in a bounded number of chunks (no freeze
-    // -- one chunk per frame in production; here we drain to done).
+    // The scan (with the sidecar rebuild in its first chunk): completes in a
+    // bounded number of chunks (no freeze -- one chunk per frame in
+    // production; here we drain to done).
     let t0 = Instant::now();
     let mut steps = 0u32;
     let progress = loop {
@@ -1052,17 +1636,27 @@ fn test_large_log_budget() {
     let build_s = t0.elapsed().as_secs_f64();
     assert!(
         progress.done,
-        "full index completed in {steps} chunks / {build_s:.1}s"
+        "scan completed in {steps} chunks / {build_s:.1}s"
     );
-    // The offset index size is event-count x 8 bytes, not the log size.
-    let idx_bytes = snap.event_count().map(|n| n * 8).unwrap_or(0);
+    // The sidecar index is sampled by byte interval, so it stays small: a
+    // header plus one fixed entry per interval, not one slot per event.
+    let idx_bytes = metadata(session_dir.join(INDEX_FILE))
+        .map(|m| m.len())
+        .unwrap_or(0);
     assert!(
-        idx_bytes < 5_000_000,
+        idx_bytes > 0 && idx_bytes < 5_000_000,
         "index bounded ({idx_bytes} bytes), not the {total}-byte log"
     );
+    if !using_real {
+        assert_eq!(
+            snap.event_count(),
+            Some(520),
+            "the count answers from the rebuilt sidecar"
+        );
+    }
     eprintln!(
         "large_log_budget: log {total} bytes ({}), enter {enter_ms}ms, scan {scan_ms}ms, index {steps} chunks {build_s:.1}s ({idx_bytes}B)",
-        if using_real { "real" } else { "synthetic" }
+        if using_real { "real" } else { "generated" }
     );
     let _removed = remove_dir_all(&root);
 }

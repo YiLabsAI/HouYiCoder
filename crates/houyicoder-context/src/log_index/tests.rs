@@ -1,8 +1,8 @@
 //! Tests for the on-disk contract of a session log's offset index.
 
 use super::{
-    ENTRY_LEN, HEADER_LEN, LogIndex, LogIndexEntry, LogIndexHeader, MAX_INDEX_FILE_BYTES,
-    SAMPLE_INTERVAL_BYTES, entry_at, entry_count, readable_len,
+    ENTRY_LEN, HEADER_LEN, LogIndex, LogIndexEntry, LogIndexHeader, LogIndexReader,
+    MAX_INDEX_FILE_BYTES, SAMPLE_INTERVAL_BYTES, entry_at, entry_count, readable_len,
 };
 use crate::ids::EventId;
 use crate::ids::SessionId;
@@ -297,5 +297,101 @@ fn test_empty_log_index_loads() {
     write(&path, &bytes).expect("write the index");
     let loaded = LogIndex::load(&path, 0, None).expect("load the index");
     assert!(loaded.entries.is_empty());
+    remove_file(&path).expect("remove the index");
+}
+
+/// The floor of a position is the entry a forward walk starts from: the
+/// sample at or below it, never the one above. A file with no entry has no
+/// floor, which is a None a caller answers with a walk.
+#[test]
+fn test_reader_floors_by_ordinal() {
+    let path = temp_path("floor");
+    let entries = vec![entry(0), entry(10), entry(20)];
+    let bytes = file_with(
+        LogIndexHeader {
+            interval: SAMPLE_INTERVAL_BYTES,
+            first_event: Some(entries[0].event),
+            covered_len: 40_000,
+        },
+        &entries,
+    );
+    write(&path, &bytes).expect("write the index");
+
+    let mut reader =
+        LogIndexReader::open(&path, 40_000, Some(entries[0].event)).expect("open the index");
+    assert_eq!(reader.entry_count(), 3);
+    assert_eq!(reader.floor_by_ordinal(0), Some(entries[0]));
+    assert_eq!(reader.floor_by_ordinal(5), Some(entries[0]));
+    assert_eq!(reader.floor_by_ordinal(10), Some(entries[1]));
+    assert_eq!(reader.floor_by_ordinal(19), Some(entries[1]));
+    assert_eq!(reader.floor_by_ordinal(25), Some(entries[2]));
+    assert_eq!(reader.floor_by_ordinal(u64::MAX), Some(entries[2]));
+    assert_eq!(reader.entry(3), None, "past the count is no entry");
+    remove_file(&path).expect("remove the index");
+
+    let path = temp_path("floor_empty");
+    let bytes = file_with(
+        LogIndexHeader {
+            interval: SAMPLE_INTERVAL_BYTES,
+            first_event: None,
+            covered_len: 0,
+        },
+        &[],
+    );
+    write(&path, &bytes).expect("write the index");
+    let mut reader = LogIndexReader::open(&path, 0, None).expect("open the index");
+    assert_eq!(reader.entry_count(), 0);
+    assert_eq!(reader.floor_by_ordinal(0), None);
+    remove_file(&path).expect("remove the index");
+}
+
+/// The reader runs the whole-file checks the load documents: an index over a
+/// log that was shortened or replaced is refused at open, before any entry is
+/// read, so a query degrades instead of walking from a wrong position.
+#[test]
+fn test_reader_refuses_stale_file() {
+    let path = temp_path("reader_stale");
+    let first = EventId::new();
+    let bytes = file_with(
+        LogIndexHeader {
+            interval: SAMPLE_INTERVAL_BYTES,
+            first_event: Some(first),
+            covered_len: 4096,
+        },
+        &[entry(0)],
+    );
+    write(&path, &bytes).expect("write the index");
+
+    assert!(LogIndexReader::open(&path, 4096, Some(first)).is_some());
+    assert!(LogIndexReader::open(&path, 4095, Some(first)).is_none());
+    assert!(LogIndexReader::open(&path, 4096, Some(EventId::new())).is_none());
+    assert!(LogIndexReader::open(&path, 4096, None).is_none());
+    remove_file(&path).expect("remove the index");
+    assert!(LogIndexReader::open(&path, 4096, Some(first)).is_none());
+}
+
+/// A torn tail stays invisible to the reader too: the count it derives at
+/// open excludes the part of an entry, so a search never probes it and a
+/// floor past the whole entries lands on the last one.
+#[test]
+fn test_reader_skips_torn_tail() {
+    let path = temp_path("reader_torn");
+    let first = EventId::new();
+    let entries = vec![entry(0), entry(30), entry(60)];
+    let mut bytes = file_with(
+        LogIndexHeader {
+            interval: SAMPLE_INTERVAL_BYTES,
+            first_event: Some(first),
+            covered_len: 40_000,
+        },
+        &entries,
+    );
+    bytes.truncate(bytes.len() - 5);
+    write(&path, &bytes).expect("write the index");
+
+    let mut reader = LogIndexReader::open(&path, 40_000, Some(first)).expect("open the index");
+    assert_eq!(reader.entry_count(), 2);
+    assert_eq!(reader.entry(2), None);
+    assert_eq!(reader.floor_by_ordinal(60), Some(entries[1]));
     remove_file(&path).expect("remove the index");
 }

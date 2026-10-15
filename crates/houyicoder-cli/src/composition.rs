@@ -117,8 +117,9 @@ pub(crate) fn assemble_bundle(
     // snapshot for the search view (read-whole path under the threshold).
     // Shares the same SessionLog as the trajectory and export views (an Arc
     // clone, so each view still takes ownership of its slot).
-    // One reader owns the byte windows and the offset index for this session;
-    // the transcript and the trajectory project what it returns.
+    // One reader owns the byte windows for this session and answers record
+    // offsets from the log's sidecar index; the transcript and the trajectory
+    // render what it returns.
     let history = Arc::new(SessionHistory::new(session_log.clone(), session));
     let snapshot: Option<Arc<dyn TranscriptSnapshot>> =
         Some(Arc::new(SessionLogSnapshot::with_history(history.clone())));
