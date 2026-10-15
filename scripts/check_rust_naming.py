@@ -131,6 +131,84 @@ _FLAT_TEST_PEER_BASELINE = 0
 _FLAT_TEST_PEER_PATH_RE = re.compile(r'#\[path\s*=\s*"[^"]*_tests\.rs"\]')
 _INLINE_TEST_MOD_BASELINE = 0
 _INLINE_TEST_MOD_RE = re.compile(r"(?m)^#\[cfg\(test\)\]\s*\nmod\s+[a-z_]+\s*\{")
+_MOD_RS_BASELINE = 4
+
+# Top-level module whitelist for the four core crates (002 §6.3–§6.4).
+# Adding a new top-level domain (such as mcp/) is an explicit architectural
+# decision: add its stem here and document the domain in 002 §6.4.
+_ALLOWED_TOP_MODULES: dict[str, frozenset[str]] = {
+    "crates/houyicoder-tui/src": frozenset({
+        "lib", "app", "command", "composition", "input", "keys", "session",
+        "transcript", "ui", "view", "workflow", "bench_api", "frame_timing",
+        "test_harness",
+    }),
+    "crates/houyicoder-core/src": frozenset({
+        "lib", "agent", "observability", "provider", "snapshot",
+    }),
+    "crates/houyicoder-core/src/agent": frozenset({
+        "append", "builder", "compaction", "context", "exports", "hook",
+        "inference", "memory", "multi_agent", "runner_config", "skill",
+        "status", "tests", "tools", "turn", "worktree",
+    }),
+    "crates/houyicoder-service/src": frozenset({
+        "lib", "acp", "agent_registry", "composition", "diagnostics",
+        "lifecycle", "protocol_adapter", "sandbox_policy", "server", "uds",
+    }),
+    "crates/houyicoder-cli/src": frozenset({
+        "main", "cli_args", "composition", "detach", "export_view",
+        "local_host", "session", "tests", "trajectory",
+    }),
+}
+
+
+def _check_dir_layout(
+    errors: list[str],
+    root: Path = Path("crates"),
+    mod_rs_baseline: int = _MOD_RS_BASELINE,
+    allowed_top: dict[str, frozenset[str]] = _ALLOWED_TOP_MODULES,
+) -> None:
+    """Enforce the package-internal directory layout rules (002 §6.3):
+    1. Top-level module stems in the governed directories must belong to the
+       explicit domain whitelist (no ad-hoc flat files at src/ or src/agent/).
+    2. No module self-stutter (X/X.rs) under crates/*/src/ -- the Rust 2018
+       entry file sits at X.rs beside X/.
+    3. Production mod.rs count under crates/*/src/ may not exceed the baseline
+       (use X.rs + X/ instead of creating new mod.rs files).
+    """
+    for rel_dir, allowed in allowed_top.items():
+        d = root / rel_dir.removeprefix("crates/")
+        if not d.is_dir():
+            continue
+        for child in sorted(d.iterdir()):
+            if child.name.startswith("."):
+                continue
+            stem = child.stem if child.suffix == ".rs" else child.name
+            if stem not in allowed:
+                errors.append(
+                    f"{child.as_posix()}: top-level module '{stem}' is not in "
+                    f"_ALLOWED_TOP_MODULES[{rel_dir!r}]; place the file inside "
+                    f"its owning domain directory (002 §6.4) or register a new "
+                    f"top-level domain explicitly"
+                )
+    mod_rs_files: list[str] = []
+    for p in sorted(root.rglob("*.rs")):
+        posix = p.as_posix()
+        if "/target/" in posix or "/src/" not in posix:
+            continue
+        if p.name == "mod.rs":
+            mod_rs_files.append(posix)
+        elif p.stem == p.parent.name:
+            errors.append(
+                f"{posix}: module self-stutter ({p.parent.name}/{p.name}); "
+                f"put the module entry at {p.parent.as_posix()}.rs beside "
+                f"{p.parent.as_posix()}/"
+            )
+    if len(mod_rs_files) > mod_rs_baseline:
+        errors.append(
+            f"production mod.rs files: {len(mod_rs_files)} (baseline "
+            f"{mod_rs_baseline}). Use the Rust 2018 form X.rs + X/ instead of "
+            f"adding a new mod.rs: " + ", ".join(mod_rs_files)
+        )
 
 
 def _check_flat_test_peer(
@@ -484,6 +562,7 @@ def main(paths: list[str]) -> int:
     _check_flat_prefix(errors)
     _check_file_qualifiers(errors)
     _check_flat_test_peer(errors)
+    _check_dir_layout(errors)
     _check_naming(errors)
     for w in warns:
         print(f"warn: {w}", file=sys.stderr)

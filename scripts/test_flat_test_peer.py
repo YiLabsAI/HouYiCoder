@@ -32,7 +32,7 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from check_rust_naming import _check_flat_test_peer  # noqa: E402
+from check_rust_naming import _check_dir_layout, _check_flat_test_peer  # noqa: E402
 
 FLAT = '#[cfg(test)]\n#[path = "foo_tests.rs"]\nmod foo_tests;\n'
 DIRECTORY = "#[cfg(test)]\nmod tests;\n"
@@ -94,6 +94,28 @@ def main() -> int:
     errs = _errs(root, 0)
     if not any("flat test peers: 1 (baseline 0)" in e for e in errs):
         failures.append(f"over baseline: must fire, got {errs}")
+
+    # 4. _check_dir_layout: catches unlisted top-level modules, X/X.rs stutter,
+    # and new mod.rs files over baseline.
+    root = _make_tree({
+        "houyicoder-tui/src/lib.rs": "//! ok\n",
+        "houyicoder-tui/src/stray_flat.rs": "//! unlisted\n",
+        "houyicoder-tui/src/session/session.rs": "//! stutter\n",
+        "houyicoder-tui/src/view/mod.rs": "//! new mod.rs\n",
+    })
+    layout_errs: list[str] = []
+    _check_dir_layout(
+        layout_errs,
+        root=root,
+        mod_rs_baseline=0,
+        allowed_top={"crates/houyicoder-tui/src": frozenset({"lib", "session", "view"})},
+    )
+    if not any("stray_flat" in e for e in layout_errs):
+        failures.append(f"unlisted top-level module must fire, got {layout_errs}")
+    if not any("self-stutter (session/session.rs)" in e for e in layout_errs):
+        failures.append(f"X/X.rs self-stutter must fire, got {layout_errs}")
+    if not any("production mod.rs files: 1 (baseline 0)" in e for e in layout_errs):
+        failures.append(f"mod.rs over baseline must fire, got {layout_errs}")
 
     if failures:
         for f in failures:
