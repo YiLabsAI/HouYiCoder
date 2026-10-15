@@ -13,10 +13,12 @@
 
 #[cfg(not(unix))]
 use std::fs::File;
+#[cfg(unix)]
 use std::fs::OpenOptions;
 use std::fs::rename;
 use std::io;
 use std::io::Write;
+#[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 

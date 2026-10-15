@@ -3,6 +3,7 @@ use std::env::temp_dir;
 use std::fs::metadata;
 use std::fs::read;
 use std::fs::remove_file;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
 #[test]

@@ -15,6 +15,7 @@ use std::fs::OpenOptions;
 use std::fs::create_dir_all;
 use std::fs::read_to_string;
 use std::io::Write;
+#[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::PathBuf;
 

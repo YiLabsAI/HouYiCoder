@@ -18,6 +18,7 @@ use std::fs::metadata;
 use std::fs::read_to_string;
 use std::fs::remove_dir;
 use std::fs::remove_file;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
