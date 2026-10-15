@@ -202,6 +202,27 @@ fn tool_renders_chip(title: &str) -> bool {
     title != "todo_write" && title != "AskUserQuestion"
 }
 
+/// The rows a frame-log derivation produced, each with the identity the read
+/// paths match it by. The two vectors run parallel: a row and its identity
+/// are produced together by one walk and consumed together by whichever read
+/// carries them.
+#[derive(Debug, Default, Clone)]
+pub struct NamedRows {
+    pub lines: Vec<TranscriptLine>,
+    pub ids: Vec<RowId>,
+}
+
+#[cfg(test)]
+impl NamedRows {
+    /// Rows named by position: the identity-free fallback a test double uses.
+    /// Every name is local, so the overlap match falls back to text — the
+    /// behavior the text-only match already had.
+    pub fn from_lines(lines: Vec<TranscriptLine>) -> Self {
+        let ids = (0..lines.len() as u64).map(RowId::local).collect();
+        Self { lines, ids }
+    }
+}
+
 /// Rebuild the transcript from the ordered frame log the driver accumulated.
 /// Each SessionUpdate maps to one TranscriptLine; the acpx audit kinds the
 /// transcript surfaces (compaction, summary) become System lines; the
@@ -240,6 +261,7 @@ pub fn transcript_from_frames(
         resident_window(0, log.len(), window),
         newest_open,
     )
+    .lines
 }
 
 /// Derive the rows of a window when the log's first frame sits at an absolute
@@ -248,12 +270,14 @@ pub fn transcript_from_frames(
 /// identity of the frame that closed the turn: the durable entry's own identity
 /// when the frame carries one, else the absolute position, which stays put when
 /// the resident window's front drains, so expand state stays attached to its row.
+/// Every row carries the identity of the frame that produced it, so a read
+/// that joins windows matches rows by identity rather than by text.
 pub fn transcript_from_frames_at(
     log: &[SequencedFrame],
     abs_base: usize,
     window: Range<usize>,
     newest_open: bool,
-) -> Vec<TranscriptLine> {
+) -> NamedRows {
     walk_window(
         log,
         RowNames::Live { log, abs_base },
@@ -276,16 +300,18 @@ fn resident_window(abs_base: usize, log_len: usize, window: Range<usize>) -> Ran
 /// in log order. A turn's summary row takes the identity at the frame that
 /// closed the turn, so the same turn keeps its row identity across reads that
 /// start at different points: a position-based name cannot promise that for a
-/// windowed read, whose positions shift with the window. The reader derives the
-/// identities through the same function the live path uses, so one entry names
-/// one row in both; the window is relative to log and the identities must run
-/// parallel to it.
+/// windowed read, whose positions shift with the window. Every row carries the
+/// identity of the frame that produced it, so a read that joins windows matches
+/// rows by identity rather than by text. The reader derives the identities
+/// through the same function the live path uses, so one entry names one row in
+/// both; the window is relative to log and the identities must run parallel to
+/// it.
 pub fn transcript_from_named_frames<F: AsRef<TranscriptFrame>>(
     log: &[F],
     names: &[RowId],
     window: Range<usize>,
     newest_open: bool,
-) -> Vec<TranscriptLine> {
+) -> NamedRows {
     assert_eq!(
         names.len(),
         log.len(),
@@ -301,14 +327,14 @@ pub fn transcript_from_named_frames<F: AsRef<TranscriptFrame>>(
 }
 
 /// The shared walk behind every entry that derives rows from a frame log:
-/// window is relative to log, and names says where the folded rows take
-/// their identity.
+/// window is relative to log, and names says where each row takes its
+/// identity.
 fn walk_window<'a, F: AsRef<TranscriptFrame>>(
     log: &'a [F],
     names: RowNames<'a>,
     window: Range<usize>,
     newest_open: bool,
-) -> Vec<TranscriptLine> {
+) -> NamedRows {
     let frames = &log[window.clone()];
     let (updates, tools) = collect_tool_updates(frames);
     let mut p = LineBuilder {
@@ -318,12 +344,21 @@ fn walk_window<'a, F: AsRef<TranscriptFrame>>(
         updates,
         tools,
         out: Vec::with_capacity(frames.len()),
+        ids: Vec::with_capacity(frames.len()),
         late_results: Vec::new(),
         fold: TurnFold::new(log, window, names),
     };
     p.run(frames);
     p.finish();
-    p.out
+    debug_assert_eq!(
+        p.out.len(),
+        p.ids.len(),
+        "every derived row carries its identity"
+    );
+    NamedRows {
+        lines: p.out,
+        ids: p.ids,
+    }
 }
 
 /// Build the single result row for a tool call from its output. The body is
@@ -384,11 +419,21 @@ fn tool_result_line(
     }
 }
 
+/// A result whose call frame already passed, awaiting the reposition pass:
+/// the output, the tool it belongs to, and the identity of the update frame
+/// that carried it, which names the row it becomes.
+struct LateResult {
+    row: RowId,
+    call_id: String,
+    tool_name: String,
+    output: Value,
+}
+
 /// The state the walk accumulates while building a window's lines: the
-/// tool-call updates paired in the first pass, the lines emitted so far, the
-/// late-arriving results awaiting reposition, and the turn fold. Held in a
-/// struct so the walk is a sequence of method calls on shared state rather
-/// than one long function body.
+/// tool-call updates paired in the first pass, the lines emitted so far each
+/// beside its identity, the late-arriving results awaiting reposition, and
+/// the turn fold. Held in a struct so the walk is a sequence of method calls
+/// on shared state rather than one long function body.
 struct LineBuilder<'a, F: AsRef<TranscriptFrame>> {
     base: usize,
     at_end: bool,
@@ -396,7 +441,8 @@ struct LineBuilder<'a, F: AsRef<TranscriptFrame>> {
     updates: Vec<PendingUpdate>,
     tools: ToolRegistry,
     out: Vec<TranscriptLine>,
-    late_results: Vec<(String, String, Value)>,
+    ids: Vec<RowId>,
+    late_results: Vec<LateResult>,
     fold: TurnFold<'a, F>,
 }
 
@@ -407,10 +453,11 @@ impl<'a, F: AsRef<TranscriptFrame>> LineBuilder<'a, F> {
     fn run(&mut self, frames: &[F]) {
         for (i, f) in frames.iter().enumerate() {
             let abs = self.base + i;
-            if let Some(row) = self.fold.note(abs, f.as_ref()) {
+            if let Some((row, id)) = self.fold.note(abs, f.as_ref()) {
                 self.out.push(row);
+                self.ids.push(id);
             }
-            self.emit(f.as_ref());
+            self.emit(abs, f.as_ref());
         }
         // The window's last turn. A log written before the completion record
         // existed ends its final turn nowhere else, so this is where that
@@ -420,9 +467,10 @@ impl<'a, F: AsRef<TranscriptFrame>> LineBuilder<'a, F> {
         // running yet yields no summary at all.
         if !self.newest_open
             && self.at_end
-            && let Some(row) = self.fold.close(None)
+            && let Some((row, id)) = self.fold.close(None)
         {
             self.out.push(row);
+            self.ids.push(id);
         }
     }
 
@@ -442,26 +490,38 @@ impl<'a, F: AsRef<TranscriptFrame>> LineBuilder<'a, F> {
         Some((oc, out))
     }
 
-    /// Emit the lines one frame contributes at this log position.
-    fn emit(&mut self, f: &TranscriptFrame) {
+    /// Emit the lines one frame contributes at this log position, each named
+    /// by the identity of the frame that produced it: a frame can yield
+    /// several rows (a call chip beside its result), and they share the
+    /// identity because they share the frame.
+    fn emit(&mut self, abs: usize, f: &TranscriptFrame) {
+        let id = self.fold.name_at(abs);
         match f {
-            TranscriptFrame::Frontend(row) => self.out.push(row.line()),
+            TranscriptFrame::Frontend(row) => {
+                self.out.push(row.line());
+                self.ids.push(id);
+            }
             TranscriptFrame::Session(SessionUpdate::UserMessageChunk(chunk)) => {
                 self.out
                     .push(TranscriptLine::User(chunk_text(chunk).to_string()));
+                self.ids.push(id);
             }
             TranscriptFrame::Session(SessionUpdate::AgentMessageChunk(chunk)) => {
                 let text = chunk_text(chunk);
                 if !text.is_empty() {
                     self.out.push(TranscriptLine::Agent(text.to_string()));
+                    self.ids.push(id);
                 }
             }
             TranscriptFrame::Session(SessionUpdate::AgentThoughtChunk(chunk)) => {
                 self.out.push(TranscriptLine::Thinking {
                     text: chunk_text(chunk).to_string(),
                 });
+                self.ids.push(id);
             }
-            TranscriptFrame::Session(SessionUpdate::ToolCall(tc)) => self.emit_tool_call(tc),
+            TranscriptFrame::Session(SessionUpdate::ToolCall(tc)) => {
+                self.emit_tool_call(tc, &id);
+            }
             TranscriptFrame::Session(SessionUpdate::ToolCallUpdate(upd)) => {
                 // A late-arriving result (its ToolCall frame already passed,
                 // so take_update at the call found nothing then). Updates
@@ -470,9 +530,9 @@ impl<'a, F: AsRef<TranscriptFrame>> LineBuilder<'a, F> {
                 // that detaches the result from its call and lets a thought
                 // interleave between them. Defer; the reposition pass attaches
                 // each late result right after its call row.
-                let id = &upd.tool_call_id.0;
-                if let Some((_, Some(output))) = self.take_update(id) {
-                    let (tool_name, _) = self.tools.get(id).cloned().unwrap_or_default();
+                let call_id = &upd.tool_call_id.0;
+                if let Some((_, Some(output))) = self.take_update(call_id) {
+                    let (tool_name, _) = self.tools.get(call_id).cloned().unwrap_or_default();
                     // todo_write's result is boilerplate and the call row is
                     // skipped, so a late result would orphan. The name comes
                     // from the tools map, which is empty when the call frame
@@ -481,7 +541,12 @@ impl<'a, F: AsRef<TranscriptFrame>> LineBuilder<'a, F> {
                     // raw {"todos":...} row.
                     let orphan_todo = tool_name.is_empty() && output.get("old_todos").is_some();
                     if tool_name != "todo_write" && !orphan_todo {
-                        self.late_results.push((id.clone(), tool_name, output));
+                        self.late_results.push(LateResult {
+                            row: id,
+                            call_id: call_id.clone(),
+                            tool_name,
+                            output,
+                        });
                     }
                 }
             }
@@ -489,6 +554,7 @@ impl<'a, F: AsRef<TranscriptFrame>> LineBuilder<'a, F> {
                 AcpxMethod::ContextCompactionBoundary => {
                     self.out
                         .push(TranscriptLine::System("compaction checkpoint".to_string()));
+                    self.ids.push(id);
                 }
                 AcpxMethod::ContextSummary => {
                     let text = n
@@ -499,6 +565,7 @@ impl<'a, F: AsRef<TranscriptFrame>> LineBuilder<'a, F> {
                         .to_string();
                     self.out
                         .push(TranscriptLine::System(format!("summary: {text}")));
+                    self.ids.push(id);
                 }
                 // Audit-only: the meta-user nudge is a control message the
                 // runner injects (never authored by the human); the verdict is
@@ -521,9 +588,9 @@ impl<'a, F: AsRef<TranscriptFrame>> LineBuilder<'a, F> {
     /// answer row below still renders. The single result row groups under its
     /// call; an agent-tool result (carries agentId) renders as an inline
     /// Subagent fold-group instead of a generic result row.
-    fn emit_tool_call(&mut self, tc: &ToolCall) {
-        let id = &tc.tool_call_id.0;
-        let upd = self.take_update(id);
+    fn emit_tool_call(&mut self, tc: &ToolCall, id: &RowId) {
+        let call_id = &tc.tool_call_id.0;
+        let upd = self.take_update(call_id);
         if tc.title == "todo_write" {
             return;
         }
@@ -539,21 +606,24 @@ impl<'a, F: AsRef<TranscriptFrame>> LineBuilder<'a, F> {
                 status: tool_call_brief(&tc.title, &input),
                 invocation: tool_invocation(&tc.title, &input),
                 outcome,
-                call_id: id.clone(),
+                call_id: call_id.clone(),
                 body: String::new(),
                 is_diff: false,
             });
+            self.ids.push(id.clone());
         }
         if let Some((_, Some(output))) = upd {
             if let Some(sub) = subagent_line(&output, tc.raw_input.as_ref()) {
                 self.out.push(sub);
+                self.ids.push(id.clone());
             } else {
                 self.out.push(tool_result_line(
-                    id,
+                    call_id,
                     &tc.title,
                     &output,
                     tc.raw_input.as_ref(),
                 ));
+                self.ids.push(id.clone());
             }
         }
     }
@@ -569,19 +639,19 @@ impl<'a, F: AsRef<TranscriptFrame>> LineBuilder<'a, F> {
     /// call_id so multiple late results for one call stack in arrival order
     /// without detaching an edit's diff from its call.
     fn finish(&mut self) {
-        for (id, tool_name, output) in take(&mut self.late_results) {
+        for late in take(&mut self.late_results) {
             let mut insert_at: Option<usize> = None;
             for (i, line) in self.out.iter().enumerate() {
                 if let TranscriptLine::Tool { name, call_id, .. } = line
                     && name != "result"
-                    && call_id == &id
+                    && call_id == &late.call_id
                 {
                     let mut j = i + 1;
                     while j < self.out.len()
                         && matches!(
                             &self.out[j],
                             TranscriptLine::Tool { name: nm, call_id: cid, .. }
-                            if nm == "result" && cid == &id
+                            if nm == "result" && cid == &late.call_id
                         )
                     {
                         j += 1;
@@ -594,8 +664,11 @@ impl<'a, F: AsRef<TranscriptFrame>> LineBuilder<'a, F> {
             // the result has no place — drop it rather than stranding it at the
             // tail.
             if let Some(pos) = insert_at {
-                self.out
-                    .insert(pos, tool_result_line(&id, &tool_name, &output, None));
+                self.out.insert(
+                    pos,
+                    tool_result_line(&late.call_id, &late.tool_name, &late.output, None),
+                );
+                self.ids.insert(pos, late.row);
             }
         }
     }

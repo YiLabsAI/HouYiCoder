@@ -20,12 +20,32 @@ use crate::session::SessionConnection;
 use crate::state::App;
 use crate::state::index_read::PendingIndexChunk;
 use crate::test_harness::{MockSnapshot, render_text, working_app};
+use crate::transcript::NamedRows;
 use crate::transcript::snapshot::{
     IndexProgress, NoTranscriptSnapshot, TranscriptSnapshot, WindowLoad,
 };
 
 fn working() -> App {
     working_app()
+}
+
+/// One window holding one row, with the positional identity a source without
+/// durable events names its rows with.
+fn one_line_window(
+    line: TranscriptLine,
+    start_offset: u64,
+    next_offset: u64,
+    bytes_total: u64,
+) -> WindowLoad {
+    let rows = NamedRows::from_lines(vec![line]);
+    WindowLoad {
+        lines: rows.lines,
+        row_ids: rows.ids,
+        start_offset,
+        next_offset,
+        skipped: 0,
+        bytes_total,
+    }
 }
 
 /// A working App whose session holds a receiver-backed connection, so the
@@ -627,27 +647,14 @@ fn test_walks_older_across_windows() {
     let mut app = working();
     let total = 20 * 1024 * 1024u64;
     let windows = vec![
-        WindowLoad {
-            lines: vec![TranscriptLine::User("old needle".into())],
-            start_offset: 0,
-            next_offset: 100,
-            skipped: 0,
-            bytes_total: total,
-        },
-        WindowLoad {
-            lines: vec![TranscriptLine::Agent("mid filler no match".into())],
-            start_offset: 100,
-            next_offset: 200,
-            skipped: 0,
-            bytes_total: total,
-        },
-        WindowLoad {
-            lines: vec![TranscriptLine::User("new needle".into())],
-            start_offset: 200,
-            next_offset: total,
-            skipped: 0,
-            bytes_total: total,
-        },
+        one_line_window(TranscriptLine::User("old needle".into()), 0, 100, total),
+        one_line_window(
+            TranscriptLine::Agent("mid filler no match".into()),
+            100,
+            200,
+            total,
+        ),
+        one_line_window(TranscriptLine::User("new needle".into()), 200, total, total),
     ];
     app.sessions.persistence.snapshot = Some(Arc::new(MockSnapshot {
         lines: Vec::new(),
@@ -687,27 +694,14 @@ fn test_walks_newer_across_windows() {
     let mut app = working();
     let total = 20 * 1024 * 1024u64;
     let windows = vec![
-        WindowLoad {
-            lines: vec![TranscriptLine::User("old needle".into())],
-            start_offset: 0,
-            next_offset: 100,
-            skipped: 0,
-            bytes_total: total,
-        },
-        WindowLoad {
-            lines: vec![TranscriptLine::Agent("mid filler no match".into())],
-            start_offset: 100,
-            next_offset: 200,
-            skipped: 0,
-            bytes_total: total,
-        },
-        WindowLoad {
-            lines: vec![TranscriptLine::User("new needle".into())],
-            start_offset: 200,
-            next_offset: total,
-            skipped: 0,
-            bytes_total: total,
-        },
+        one_line_window(TranscriptLine::User("old needle".into()), 0, 100, total),
+        one_line_window(
+            TranscriptLine::Agent("mid filler no match".into()),
+            100,
+            200,
+            total,
+        ),
+        one_line_window(TranscriptLine::User("new needle".into()), 200, total, total),
     ];
     app.sessions.persistence.snapshot = Some(Arc::new(MockSnapshot {
         lines: Vec::new(),

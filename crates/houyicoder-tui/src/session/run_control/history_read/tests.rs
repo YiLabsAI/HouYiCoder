@@ -1,4 +1,6 @@
 use super::*;
+use crate::records::TranscriptLine;
+use crate::row_id::RowId;
 use crate::state::history_read::HistoryReadPoll;
 use crate::state::history_read::HistoryReads;
 use crate::state::transcript::DiskFront;
@@ -7,6 +9,47 @@ use crate::transcript::snapshot::{NoTranscriptSnapshot, ReadError, SnapshotLoad,
 use std::sync::Mutex;
 use std::sync::atomic::AtomicU64;
 use std::sync::mpsc;
+
+/// One row of a view front with no durable identity, so the overlap match
+/// falls back to rendered text.
+fn text_front(text: &str) -> FrontRow {
+    FrontRow {
+        id: RowId::local(0),
+        text: text.to_string(),
+    }
+}
+
+/// A read window whose rows carry durable identities: one event name and one
+/// user row text per entry, in order.
+fn durable_window(rows: &[(&str, &str)], start_offset: u64, next_offset: u64) -> WindowLoad {
+    WindowLoad {
+        lines: rows
+            .iter()
+            .map(|(_, text)| TranscriptLine::User((*text).into()))
+            .collect(),
+        row_ids: rows.iter().map(|(event, _)| RowId::from(*event)).collect(),
+        start_offset,
+        next_offset,
+        skipped: 0,
+        bytes_total: next_offset,
+    }
+}
+
+/// A view front whose rows carry durable identities: one event name and one
+/// user row text per entry, in order.
+fn durable_front(rows: &[(&str, &str)]) -> Vec<FrontRow> {
+    rows.iter()
+        .map(|(event, text)| FrontRow {
+            id: RowId::from(*event),
+            text: TranscriptLine::User((*text).into()).render(),
+        })
+        .collect()
+}
+
+/// The rendered texts of a read's rows, oldest first.
+fn rendered(rows: &NamedRows) -> Vec<String> {
+    rows.lines.iter().map(|line| line.render()).collect()
+}
 
 /// A source whose older window holds real rows but does not end where the
 /// walk asked. The walk joins each window to the rows it already read on
@@ -44,10 +87,12 @@ impl TranscriptSnapshot for FixedWindow {
 }
 
 fn window_ending_at(next_offset: u64) -> FixedWindow {
+    let rows = NamedRows::from_lines(vec![TranscriptLine::User("older".into())]);
     FixedWindow {
         empty: NoTranscriptSnapshot,
         window: WindowLoad {
-            lines: vec![TranscriptLine::User("older".into())],
+            lines: rows.lines,
+            row_ids: rows.ids,
             start_offset: 100,
             next_offset,
             skipped: 0,
@@ -160,8 +205,10 @@ impl TranscriptSnapshot for SteppingWindow {
                 .invalidate();
         }
         let start = from_byte.saturating_sub(self.step);
+        let rows = NamedRows::from_lines(vec![TranscriptLine::User(format!("row at {start}"))]);
         Ok(WindowLoad {
-            lines: vec![TranscriptLine::User(format!("row at {start}"))],
+            lines: rows.lines,
+            row_ids: rows.ids,
             start_offset: start,
             next_offset: from_byte,
             skipped: 0,
@@ -232,7 +279,7 @@ fn test_invalidate_stops_walk() {
 
     let job = ReadJob::Tail {
         source: snapshot,
-        front: vec!["the row the view starts at".to_string()],
+        front: vec![text_front("the row the view starts at")],
     };
     let outcome = job.run(lease.stop());
 
@@ -262,7 +309,7 @@ fn test_walk_reaches_start() {
 
     let job = ReadJob::Tail {
         source: snapshot,
-        front: vec!["the row the view starts at".to_string()],
+        front: vec![text_front("the row the view starts at")],
     };
     let outcome = job.run(lease.stop());
 
@@ -316,19 +363,23 @@ impl TranscriptSnapshot for ScriptedWindows {
 /// oldest row, so the walk continues and returns the next window whole.
 #[test]
 fn test_tail_walks_past_overlap() {
+    let overlap_rows = NamedRows::from_lines(vec![
+        TranscriptLine::User("A".into()),
+        TranscriptLine::User("B".into()),
+        TranscriptLine::User("C".into()),
+    ]);
     let overlap_window = WindowLoad {
-        lines: vec![
-            TranscriptLine::User("A".into()),
-            TranscriptLine::User("B".into()),
-            TranscriptLine::User("C".into()),
-        ],
+        lines: overlap_rows.lines,
+        row_ids: overlap_rows.ids,
         start_offset: 2000,
         next_offset: 3000,
         skipped: 0,
         bytes_total: 3000,
     };
+    let older_rows = NamedRows::from_lines(vec![TranscriptLine::User("D".into())]);
     let older = WindowLoad {
-        lines: vec![TranscriptLine::User("D".into())],
+        lines: older_rows.lines,
+        row_ids: older_rows.ids,
         start_offset: 1000,
         next_offset: 2000,
         skipped: 0,
@@ -341,18 +392,169 @@ fn test_tail_walks_past_overlap() {
     let job = ReadJob::Tail {
         source,
         front: vec![
-            TranscriptLine::User("A".into()).render(),
-            TranscriptLine::User("B".into()).render(),
-            TranscriptLine::User("C".into()).render(),
+            text_front(&TranscriptLine::User("A".into()).render()),
+            text_front(&TranscriptLine::User("B".into()).render()),
+            text_front(&TranscriptLine::User("C".into()).render()),
         ],
     };
     let stop = AtomicBool::new(false);
     match job.run(&stop) {
         Some(HistoryReadOutcome::Rows(result)) => {
             assert_eq!(result.anchor, 1000, "the older window's start anchors it");
-            assert_eq!(result.rows.len(), 1, "the whole older window is the answer");
+            assert_eq!(
+                result.rows.lines.len(),
+                1,
+                "the whole older window is the answer"
+            );
         }
         other => panic!("the walk returned the window below the overlap: {other:?}"),
+    }
+}
+
+/// A row text the log repeats cannot cut the window at its earliest copy: the
+/// front's rows carry the identities of the newest occurrence, and the cut
+/// keeps the rows older than that occurrence. A text-only match cuts at the
+/// earliest copy and drops the rows between the two.
+#[test]
+fn test_overlap_picks_newest_repeat() {
+    let window = durable_window(
+        &[
+            ("e0", "A"),
+            ("e1", "B"),
+            ("e2", "C"),
+            ("e3", "X"),
+            ("e4", "A"),
+            ("e5", "B"),
+            ("e6", "C"),
+        ],
+        1000,
+        2000,
+    );
+    let source: Arc<dyn TranscriptSnapshot> = Arc::new(ScriptedWindows {
+        empty: NoTranscriptSnapshot,
+        windows: vec![window],
+    });
+    let job = ReadJob::Tail {
+        source,
+        front: durable_front(&[("e4", "A"), ("e5", "B"), ("e6", "C")]),
+    };
+    let stop = AtomicBool::new(false);
+    match job.run(&stop) {
+        Some(HistoryReadOutcome::Rows(result)) => {
+            assert_eq!(result.anchor, 1000, "the window's start anchors it");
+            assert_eq!(
+                rendered(&result.rows),
+                vec!["> A", "> B", "> C", "> X"],
+                "the rows older than the newest occurrence are the answer"
+            );
+            assert_eq!(
+                result.rows.ids,
+                vec![
+                    RowId::from("e0"),
+                    RowId::from("e1"),
+                    RowId::from("e2"),
+                    RowId::from("e3"),
+                ],
+                "the kept rows keep their own identities"
+            );
+        }
+        other => panic!("the walk cut at the newest occurrence: {other:?}"),
+    }
+}
+
+/// An overlap that reaches the end of one window continues into the rows the
+/// walk already read from the window above it, so a front whose first rows sit
+/// at the older window's newest rows still cuts there. A match confined to one
+/// window would cut at the earlier copy of the front's text and hand back rows
+/// the view already shows.
+#[test]
+fn test_overlap_joins_across_windows() {
+    let older = durable_window(
+        &[
+            ("e0", "A"),
+            ("e1", "B"),
+            ("e2", "C"),
+            ("e3", "X"),
+            ("e4", "A"),
+        ],
+        1000,
+        2000,
+    );
+    let newer = durable_window(&[("e5", "B"), ("e6", "C")], 2000, 3000);
+    let source: Arc<dyn TranscriptSnapshot> = Arc::new(ScriptedWindows {
+        empty: NoTranscriptSnapshot,
+        windows: vec![newer, older],
+    });
+    let job = ReadJob::Tail {
+        source,
+        front: durable_front(&[("e4", "A"), ("e5", "B"), ("e6", "C")]),
+    };
+    let stop = AtomicBool::new(false);
+    match job.run(&stop) {
+        Some(HistoryReadOutcome::Rows(result)) => {
+            assert_eq!(result.anchor, 1000, "the older window's start anchors it");
+            assert_eq!(
+                rendered(&result.rows),
+                vec!["> A", "> B", "> C", "> X"],
+                "the rows older than the front's first row are the answer"
+            );
+        }
+        other => panic!("the walk joined the windows at the front's rows: {other:?}"),
+    }
+}
+
+/// Rows whose text agrees with the front's but whose identities name other
+/// events do not match: the entry, not the window, says which row it is, so
+/// the walk refuses the lookalike and reports nothing older rather than
+/// splicing another turn's rows under the view's front.
+#[test]
+fn test_overlap_rejects_mismatched_identity() {
+    let lookalike = durable_window(&[("e0", "A"), ("e1", "B"), ("e2", "C")], 1000, 2000);
+    let oldest = durable_window(&[("e3", "D")], 0, 1000);
+    let source: Arc<dyn TranscriptSnapshot> = Arc::new(ScriptedWindows {
+        empty: NoTranscriptSnapshot,
+        windows: vec![lookalike, oldest],
+    });
+    let job = ReadJob::Tail {
+        source,
+        front: durable_front(&[("f0", "A"), ("f1", "B"), ("f2", "C")]),
+    };
+    let stop = AtomicBool::new(false);
+    match job.run(&stop) {
+        Some(HistoryReadOutcome::Exhausted) => {}
+        other => panic!("no window holds the front's rows: {other:?}"),
+    }
+}
+
+/// A front row with no durable identity falls back to rendered text, so a
+/// view raised in-process still finds its rows in a window the log named.
+#[test]
+fn test_local_front_matches_text() {
+    let window = durable_window(&[("e0", "A"), ("e1", "B"), ("e2", "C")], 1000, 2000);
+    let oldest = durable_window(&[("e3", "D")], 0, 1000);
+    let source: Arc<dyn TranscriptSnapshot> = Arc::new(ScriptedWindows {
+        empty: NoTranscriptSnapshot,
+        windows: vec![window, oldest],
+    });
+    let job = ReadJob::Tail {
+        source,
+        front: vec![
+            text_front(&TranscriptLine::User("A".into()).render()),
+            text_front(&TranscriptLine::User("B".into()).render()),
+            text_front(&TranscriptLine::User("C".into()).render()),
+        ],
+    };
+    let stop = AtomicBool::new(false);
+    match job.run(&stop) {
+        Some(HistoryReadOutcome::Rows(result)) => {
+            assert_eq!(result.anchor, 0, "the oldest window's start anchors it");
+            assert_eq!(
+                rendered(&result.rows),
+                vec!["> D"],
+                "the whole window below the overlap is the answer"
+            );
+        }
+        other => panic!("the text fallback matched the front's rows: {other:?}"),
     }
 }
 
@@ -411,7 +613,7 @@ fn injected_tail_read(
             .dispatch(0, DiskFront::Unloaded, rx);
     let job = ReadJob::Tail {
         source,
-        front: vec!["the row the view starts at".to_string()],
+        front: vec![text_front("the row the view starts at")],
     };
     job.run_and_send(tx, lease.stop());
     // The send already happened; the poll finds it ready.

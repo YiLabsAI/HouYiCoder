@@ -1,5 +1,6 @@
 use super::*;
 use crate::records::TranscriptLine;
+use crate::transcript::NamedRows;
 
 fn subagent(child_sid: &str, rows: Vec<TranscriptLine>) -> TranscriptLine {
     TranscriptLine::Subagent {
@@ -13,10 +14,12 @@ fn subagent(child_sid: &str, rows: Vec<TranscriptLine>) -> TranscriptLine {
 }
 
 fn block(id: u64, lines: Vec<TranscriptLine>) -> Block {
+    let rows = NamedRows::from_lines(lines);
     Block {
         id: BlockId(BlockAnchor::Local(id)),
         frame_range: 0..1,
-        lines,
+        lines: rows.lines,
+        ids: rows.ids,
         revision: 0,
     }
 }

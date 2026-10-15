@@ -164,6 +164,31 @@ pub(super) enum RowNames<'a> {
     EventName(&'a [RowId]),
 }
 
+impl RowNames<'_> {
+    /// The identity of the rows the frame at log position at produces: the
+    /// entry that produced the frame when the read carries one, the absolute
+    /// position otherwise. A degenerate window at the log's end can name a
+    /// position one past the last frame; the nearest identity is the row's
+    /// anchor there, and a position-named row keeps the render going rather
+    /// than failing on a frame that is not there.
+    pub(super) fn name_at(&self, at: usize) -> RowId {
+        match self {
+            RowNames::Live { log, abs_base } => match log.get(at) {
+                Some(sf) => RowId::of(sf.as_ref(), sf.event_id.as_ref(), (*abs_base + at) as u64),
+                None => RowId::local((*abs_base + at) as u64),
+            },
+            RowNames::Position { abs_base } => RowId::local((*abs_base + at) as u64),
+            RowNames::EventName(names) => {
+                let at = at.min(names.len().saturating_sub(1));
+                names
+                    .get(at)
+                    .expect("row names run parallel to the frame log")
+                    .clone()
+            }
+        }
+    }
+}
+
 /// The facts one turn accumulates for its summary row, gathered as the
 /// fold walks that turn's frames. The row is emitted where the turn
 /// ends, so the summary lands under the answer it describes.
@@ -242,9 +267,13 @@ impl<'a, F: AsRef<TranscriptFrame>> TurnFold<'a, F> {
     /// Fold one frame into the open turn. A user message opens a turn and ends
     /// the one before it, unless the log marks it as delivered into that turn;
     /// a completion record ends the turn it followed and carries that run's
-    /// duration. Returns the row for a turn this frame ended, for the caller to
-    /// push where the turn ended.
-    pub(super) fn note(&mut self, abs: usize, frame: &TranscriptFrame) -> Option<TranscriptLine> {
+    /// duration. Returns the row for a turn this frame ended, with its
+    /// identity, for the caller to push where the turn ended.
+    pub(super) fn note(
+        &mut self,
+        abs: usize,
+        frame: &TranscriptFrame,
+    ) -> Option<(TranscriptLine, RowId)> {
         match frame {
             TranscriptFrame::Session(SessionUpdate::UserMessageChunk(_)) => {
                 let closed = if self.delivered_into_turn(abs) {
@@ -302,53 +331,31 @@ impl<'a, F: AsRef<TranscriptFrame>> TurnFold<'a, F> {
         }
     }
 
-    /// Close the open turn and return its row: None when no turn is open, or
-    /// when the turn has nothing to summarize. A plain reply renders no row
-    /// whose expand affordance would lead to nothing.
-    pub(super) fn close(&mut self, ms: Option<u64>) -> Option<TranscriptLine> {
+    /// Close the open turn and return its row with its identity: None when no
+    /// turn is open, or when the turn has nothing to summarize. A plain reply
+    /// renders no row whose expand affordance would lead to nothing.
+    pub(super) fn close(&mut self, ms: Option<u64>) -> Option<(TranscriptLine, RowId)> {
         self.opened_at.take()?;
         if self.reasoning.is_empty() && self.calls == 0 {
             return None;
         }
         let reasoning = (!self.reasoning.is_empty()).then(|| take(&mut self.reasoning));
-        Some(TranscriptLine::ThoughtFor {
-            ms,
-            reasoning,
-            tool_summary: self.tool_summary(),
-            turn_id: self.row_id(),
-        })
+        let id = self.names.name_at(self.ended_at);
+        Some((
+            TranscriptLine::ThoughtFor {
+                ms,
+                reasoning,
+                tool_summary: self.tool_summary(),
+                turn_id: id.clone(),
+            },
+            id,
+        ))
     }
 
-    /// The identity of the closing turn's row: the entry that produced the
-    /// frame ending the turn when there is one, a position-based local name
-    /// otherwise.
-    fn row_id(&self) -> RowId {
-        match &self.names {
-            RowNames::Live { log, abs_base } => {
-                let abs = *abs_base + self.ended_at;
-                match log.get(self.ended_at) {
-                    Some(sf) => RowId::of(sf.as_ref(), sf.event_id.as_ref(), abs as u64),
-                    // A turn only closes after the fold consumed the frame
-                    // that ends it, so ended_at always names a frame here.
-                    // Were that ever to stop holding, a position-named row
-                    // keeps the render going instead of failing on a frame
-                    // that is not there.
-                    None => RowId::local(abs as u64),
-                }
-            }
-            RowNames::Position { abs_base } => RowId::local((*abs_base + self.ended_at) as u64),
-            RowNames::EventName(names) => {
-                // ended_at is a log position and the identities run parallel
-                // to the log. A degenerate empty window at the log's end
-                // would hold a position one past the last frame; the newest
-                // identity is the row's nearest durable anchor there.
-                let at = self.ended_at.min(names.len().saturating_sub(1));
-                names
-                    .get(at)
-                    .expect("row names run parallel to the frame log")
-                    .clone()
-            }
-        }
+    /// The identity of the rows the frame at log position at produces, for
+    /// the walk that emits them beside the fold that names the turns.
+    pub(super) fn name_at(&self, at: usize) -> RowId {
+        self.names.name_at(at)
     }
 
     /// The one-line tool summary, grouped by tool with the most-used first.

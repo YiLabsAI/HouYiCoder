@@ -10,10 +10,11 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use crate::records::TranscriptLine;
 use crate::scroll::WINDOW_MAX_BYTES;
 use crate::state::history_read::{HistoryReadOutcome, HistoryReadResult};
-use crate::transcript::snapshot::{ReadError, TranscriptSnapshot};
+use crate::transcript::NamedRows;
+use crate::transcript::snapshot::{ReadError, TranscriptSnapshot, WindowLoad};
+use crate::transcript::store::FrontRow;
 use std::sync::mpsc::Sender;
 
 /// Byte budget of one older-row read from the session log, and of each window
@@ -36,7 +37,7 @@ const OVERLAP_RUN_ROWS: usize = 3;
 pub(crate) enum ReadJob {
     Tail {
         source: Arc<dyn TranscriptSnapshot>,
-        front: Vec<String>,
+        front: Vec<FrontRow>,
     },
     Before {
         source: Arc<dyn TranscriptSnapshot>,
@@ -92,15 +93,15 @@ impl ReadJob {
 /// the walk at the window it is inside.
 fn read_log_tail(
     source: &dyn TranscriptSnapshot,
-    front: &[String],
+    front: &[FrontRow],
     stop: &AtomicBool,
-) -> Result<Option<(Vec<TranscriptLine>, u64)>, ReadError> {
+) -> Result<Option<(NamedRows, u64)>, ReadError> {
     let mut anchor = source.log_size();
     let mut walked: u64 = 0;
     // The rows of the window read before this one that sit just after this
     // window's newest row: an overlap whose run reaches this window's end
     // continues into them.
-    let mut newer: Vec<TranscriptLine> = Vec::new();
+    let mut newer: Vec<FrontRow> = Vec::new();
     // Set once the walk has passed the overlap row itself, so the next window's
     // rows are all older than it and are the whole result.
     let mut past_overlap = false;
@@ -124,22 +125,21 @@ fn read_log_tail(
         }
         walked += anchor - window.start_offset;
         if past_overlap {
-            return Ok(Some((window.lines, window.start_offset)));
+            let start = window.start_offset;
+            return Ok(Some((window.into_named_rows(), start)));
         }
-        if let Some(cut) = overlap_cut(&window.lines, &newer, front) {
+        let rows = overlap_rows(&window);
+        if let Some(cut) = overlap_cut(&rows, &newer, front) {
             if cut > 0 {
-                let mut rows = window.lines;
-                rows.truncate(cut);
-                return Ok(Some((rows, window.start_offset)));
+                let start = window.start_offset;
+                let mut kept = window.into_named_rows();
+                kept.lines.truncate(cut);
+                kept.ids.truncate(cut);
+                return Ok(Some((kept, start)));
             }
             past_overlap = true;
         }
-        newer = window
-            .lines
-            .iter()
-            .take(OVERLAP_FRONT_ROWS)
-            .cloned()
-            .collect();
+        newer = rows.iter().take(OVERLAP_FRONT_ROWS).cloned().collect();
         anchor = window.start_offset;
     }
     Ok(None)
@@ -153,47 +153,73 @@ fn read_log_tail(
 fn read_log_before(
     source: &dyn TranscriptSnapshot,
     anchor: u64,
-) -> Result<Option<(Vec<TranscriptLine>, u64)>, ReadError> {
+) -> Result<Option<(NamedRows, u64)>, ReadError> {
     let window = source.window_before(anchor, LOG_WINDOW_BYTES)?;
     if window.lines.is_empty() || window.next_offset != anchor || window.start_offset >= anchor {
         return Ok(None);
     }
-    Ok(Some((window.lines, window.start_offset)))
+    let start = window.start_offset;
+    Ok(Some((window.into_named_rows(), start)))
+}
+
+/// The rows of one read window as the overlap match sees them: the identity
+/// the log named each row with, and the rendered text the match falls back to
+/// when either side carries no durable identity.
+fn overlap_rows(window: &WindowLoad) -> Vec<FrontRow> {
+    debug_assert_eq!(
+        window.row_ids.len(),
+        window.lines.len(),
+        "window row identities run parallel to its rows"
+    );
+    window
+        .lines
+        .iter()
+        .zip(&window.row_ids)
+        .map(|(line, id)| FrontRow {
+            id: id.clone(),
+            text: line.render(),
+        })
+        .collect()
 }
 
 /// How many of the rows read from the log to keep: the ones older than the row
 /// the visible transcript starts at. Keeping the rest would print rows the
 /// view already shows. The match is on that row alone, since a match further
-/// into the view says nothing about where the view begins. A row text the log
-/// repeats matches early, so the match must hold for the rows after it, into
-/// the rows just after this window, and the longest run wins. None when the
-/// window does not hold the row.
-fn overlap_cut(
-    loaded: &[TranscriptLine],
-    newer: &[TranscriptLine],
-    front: &[String],
-) -> Option<usize> {
+/// into the view says nothing about where the view begins. A row both sides
+/// name by a durable identity matches on identity alone, so a row text the
+/// log repeats cannot match early; the match must hold for the rows after it,
+/// into the rows just after this window, and the longest run wins, the newest
+/// occurrence when runs tie. None when the window does not hold the row.
+fn overlap_cut(loaded: &[FrontRow], newer: &[FrontRow], front: &[FrontRow]) -> Option<usize> {
     let row = front.first()?;
-    let mut texts: Vec<String> = loaded.iter().map(|line| line.render()).collect();
-    texts.extend(newer.iter().map(|line| line.render()));
     let mut best: Option<(usize, usize)> = None;
-    for (j, text) in texts.iter().enumerate() {
-        if j >= loaded.len() {
-            break;
-        }
-        if text != row {
+    for (j, candidate) in loaded.iter().enumerate() {
+        if !row_agrees(row, candidate) {
             continue;
         }
         let run = front
             .iter()
-            .zip(&texts[j..])
-            .take_while(|(want, got)| want == got)
+            .zip(loaded[j..].iter().chain(newer))
+            .take_while(|(want, got)| row_agrees(want, got))
             .count();
-        if run >= OVERLAP_RUN_ROWS && best.is_none_or(|(best_run, _)| run > best_run) {
+        if run >= OVERLAP_RUN_ROWS && best.is_none_or(|(best_run, _)| run >= best_run) {
             best = Some((run, j));
         }
     }
     best.map(|(_, cut)| cut)
+}
+
+/// Whether a row read from the log is the row the visible front names.
+/// Identity decides when both sides carry a durable one — the same text can
+/// name different turns, and the entry, not the window, says which row it is.
+/// Any other pair falls back to rendered text: a local identity names a
+/// position in one frame log and means nothing in another read.
+fn row_agrees(front: &FrontRow, read: &FrontRow) -> bool {
+    if front.id.is_durable() && read.id.is_durable() {
+        front.id == read.id
+    } else {
+        front.text == read.text
+    }
 }
 
 #[cfg(test)]

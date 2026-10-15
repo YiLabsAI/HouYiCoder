@@ -24,15 +24,19 @@ pub(crate) enum BlockAnchor {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct BlockId(pub BlockAnchor);
 
-/// One turn-level slice of the frame log, with the lines the fold
-/// derived for it and a revision that ticks when its frames change. Rebuild
-/// reuses a block whose id and revision match, carrying its lines and expand
-/// state forward without re-deriving them.
+/// One turn-level slice of the frame log, with the lines the fold derived
+/// for it — each beside the identity of the frame that produced it — and a
+/// revision that ticks when its frames change. Rebuild reuses a block whose
+/// id and revision match, carrying its lines and expand state forward without
+/// re-deriving them.
 #[derive(Debug, Clone)]
 pub(crate) struct Block {
     pub id: BlockId,
     pub frame_range: Range<usize>,
     pub lines: Vec<TranscriptLine>,
+    /// Runs parallel to lines: the identity each derived row carries, which
+    /// an older-row read matches its overlap against.
+    pub ids: Vec<RowId>,
     pub revision: u64,
 }
 

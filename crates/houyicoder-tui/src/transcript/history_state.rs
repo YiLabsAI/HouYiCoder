@@ -18,8 +18,8 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
-use crate::records::TranscriptLine;
 use crate::state::transcript::DiskFront;
+use crate::transcript::NamedRows;
 use mpsc::TryRecvError;
 use std::fmt::Debug;
 use std::fmt::Formatter;
@@ -98,11 +98,11 @@ impl WorkerLease {
     }
 }
 
-/// Rows a background read brought back from the session log, with the byte
-/// offset the next older read ends at.
+/// Rows a background read brought back from the session log, each with its
+/// identity, plus the byte offset the next older read ends at.
 #[derive(Debug)]
 pub(crate) struct HistoryReadResult {
-    pub rows: Vec<TranscriptLine>,
+    pub rows: NamedRows,
     pub anchor: u64,
 }
 

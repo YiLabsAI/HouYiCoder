@@ -29,6 +29,7 @@ use houyicoder_protocol::envelope::DurableEventId;
 use houyicoder_service::protocol_adapter::{map_acpx_notification, map_session_update};
 use houyicoder_tui::records::TranscriptLine;
 use houyicoder_tui::row_id::RowId;
+use houyicoder_tui::transcript::NamedRows;
 use houyicoder_tui::transcript::snapshot::{
     IndexProgress, ReadError, SnapshotLoad, TranscriptSnapshot, WindowLoad,
 };
@@ -107,6 +108,12 @@ impl SessionLogSnapshot {
     fn render_events<'a>(
         events: impl IntoIterator<Item = &'a SessionLogEntry>,
     ) -> Vec<TranscriptLine> {
+        Self::render_named(events).lines
+    }
+
+    /// Render a run of durable events to rows with their identities, the
+    /// shape a window read hands the TUI.
+    fn render_named<'a>(events: impl IntoIterator<Item = &'a SessionLogEntry>) -> NamedRows {
         let (frames, names) = Self::named_frames(events);
         transcript_from_named_frames(&frames, &names, 0..frames.len(), true)
     }
@@ -128,7 +135,7 @@ impl SessionLogSnapshot {
     /// with the turn's opening frame behind its first event, which is what
     /// keeps the summary row the fold derives at the frame that closed the
     /// turn. Only the window's events become rows.
-    fn render_window(&self, window: &EventWindow) -> (Vec<TranscriptLine>, usize) {
+    fn render_window(&self, window: &EventWindow) -> (NamedRows, usize) {
         let ahead = if window.lines_start_offset > 0 {
             self.history
                 .lookback_until(window.lines_start_offset, Self::holds_boundary)
@@ -141,8 +148,8 @@ impl SessionLogSnapshot {
             Self::named_frames(window.events.iter().map(|e| &e.entry));
         frames.extend(window_frames);
         names.extend(window_names);
-        let lines = transcript_from_named_frames(&frames, &names, start..frames.len(), true);
-        (lines, window.skipped)
+        let rows = transcript_from_named_frames(&frames, &names, start..frames.len(), true);
+        (rows, window.skipped)
     }
 }
 
@@ -171,9 +178,10 @@ impl TranscriptSnapshot for SessionLogSnapshot {
 
     fn window(&self, anchor: u64, max_bytes: u64) -> WindowLoad {
         let window = self.history.window(anchor, max_bytes);
-        let (lines, skipped) = self.render_window(&window);
+        let (rows, skipped) = self.render_window(&window);
         WindowLoad {
-            lines,
+            lines: rows.lines,
+            row_ids: rows.ids,
             start_offset: window.lines_start_offset,
             next_offset: window.next_offset,
             skipped,
@@ -184,9 +192,10 @@ impl TranscriptSnapshot for SessionLogSnapshot {
     fn tail_window(&self, max_bytes: u64) -> Result<WindowLoad, ReadError> {
         match self.history.tail_window(max_bytes) {
             Ok(window) => {
-                let (lines, skipped) = self.render_window(&window);
+                let (rows, skipped) = self.render_window(&window);
                 Ok(WindowLoad {
-                    lines,
+                    lines: rows.lines,
+                    row_ids: rows.ids,
                     start_offset: window.lines_start_offset,
                     next_offset: window.next_offset,
                     skipped,
@@ -205,9 +214,10 @@ impl TranscriptSnapshot for SessionLogSnapshot {
     fn window_before(&self, from_byte: u64, max_bytes: u64) -> Result<WindowLoad, ReadError> {
         match self.history.window_before(from_byte, max_bytes) {
             Ok(window) => {
-                let (lines, skipped) = self.render_window(&window);
+                let (rows, skipped) = self.render_window(&window);
                 Ok(WindowLoad {
-                    lines,
+                    lines: rows.lines,
+                    row_ids: rows.ids,
                     start_offset: window.lines_start_offset,
                     next_offset: window.next_offset,
                     skipped,

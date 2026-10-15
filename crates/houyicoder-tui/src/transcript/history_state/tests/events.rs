@@ -11,6 +11,7 @@ use crate::records::TranscriptLine;
 use crate::state::history_read::{HistoryReadOutcome, HistoryReadResult};
 use crate::state::transcript::DiskFront;
 use crate::state::{App, Screen};
+use crate::transcript::NamedRows;
 use crate::transcript::TranscriptFrame;
 use houyicoder_protocol::frontend::SlashCommand;
 use houyicoder_protocol::frontend::run::ContentBlock;
@@ -39,7 +40,7 @@ fn working_app(rows: usize) -> App {
 
 fn landed_rows(text: &str, anchor: u64) -> HistoryReadOutcome {
     HistoryReadOutcome::Rows(HistoryReadResult {
-        rows: vec![TranscriptLine::User(text.into())],
+        rows: NamedRows::from_lines(vec![TranscriptLine::User(text.into())]),
         anchor,
     })
 }
@@ -148,7 +149,7 @@ fn test_tail_return_stales_chain() {
     let mut app = working_app(30);
     let front = app.sessions.current.transcript.frame_window_start();
     app.sessions.current.transcript.prepend_disk_rows(
-        vec![TranscriptLine::User("loaded older".into())],
+        NamedRows::from_lines(vec![TranscriptLine::User("loaded older".into())]),
         4096,
         front,
     );

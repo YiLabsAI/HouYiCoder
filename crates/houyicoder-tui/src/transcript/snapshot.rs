@@ -12,6 +12,8 @@
 //! (load -> window), not a parallel path.
 
 use crate::records::TranscriptLine;
+use crate::row_id::RowId;
+use crate::transcript::NamedRows;
 
 /// What a load returned: the materialized lines, how many log lines were
 /// skipped (corrupt), and whether the load truncated (log over the
@@ -34,6 +36,11 @@ pub struct SnapshotLoad {
 pub struct WindowLoad {
     /// The rendered TranscriptLine rows in this window (forward order).
     pub lines: Vec<TranscriptLine>,
+    /// The identity of each row in lines, in the same order: what an
+    /// older-row read matches the visible front against, so a join between
+    /// two windows lands on the row the entry named rather than on the first
+    /// row whose text agrees. Runs parallel to lines.
+    pub row_ids: Vec<RowId>,
     /// The byte offset where the FIRST line in this window begins. Scrolling
     /// older loads a window ending here; the byte-% position indicator divides
     /// this by the frozen file size.
@@ -46,6 +53,18 @@ pub struct WindowLoad {
     pub skipped: usize,
     /// The total log file size (for the byte-percent position indicator).
     pub bytes_total: u64,
+}
+
+impl WindowLoad {
+    /// The window's rows with their identities, dropping the byte
+    /// coordinates. The shape the history-read walk carries between windows
+    /// and hands to the apply side.
+    pub fn into_named_rows(self) -> NamedRows {
+        NamedRows {
+            lines: self.lines,
+            ids: self.row_ids,
+        }
+    }
 }
 
 /// An IO failure reading a window from the durable log. Unlike an empty

@@ -185,7 +185,7 @@ fn test_disk_rows_shift_folds() {
     assert_eq!(t.fold_groups()[0].start, 1, "the resident pair folds");
 
     let older = vec![bash_call("c0"), bash_result("c0")];
-    t.prepend_disk_rows(older, 4096, 7);
+    t.prepend_disk_rows(NamedRows::from_lines(older), 4096, 7);
     assert_eq!(t.disk_row_count(), 2);
     assert_eq!(t.disk_front(), DiskFront::At(4096));
     assert_eq!(t.disk_rows_front(), 7);
@@ -216,7 +216,11 @@ fn test_disk_rows_release_once() {
         lines.push(TranscriptLine::User("pad".into()));
     }
     let mut t = Transcript::from(lines);
-    t.prepend_disk_rows(vec![TranscriptLine::User("older".into())], 4096, 0);
+    t.prepend_disk_rows(
+        NamedRows::from_lines(vec![TranscriptLine::User("older".into())]),
+        4096,
+        0,
+    );
 
     t.trim_live(true);
     t.clear_disk_rows();

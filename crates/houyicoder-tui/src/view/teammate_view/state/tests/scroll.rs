@@ -13,6 +13,7 @@ use crate::state::Screen;
 use crate::state::history_read::{HistoryReadOutcome, HistoryReadResult};
 use crate::test_harness::MockSnapshot;
 use crate::test_harness::render_text;
+use crate::transcript::NamedRows;
 use crate::transcript::TranscriptFrame;
 use houyicoder_protocol::frontend::run::ContentBlock;
 use houyicoder_protocol::frontend::session_update::{ContentChunk, SessionUpdate};
@@ -231,7 +232,7 @@ fn test_parent_read_spares_child() {
     let parent_top = app.whole_scroll().raw_top();
 
     tx.send(HistoryReadOutcome::Rows(HistoryReadResult {
-        rows: vec![TranscriptLine::User("older parent row".into())],
+        rows: NamedRows::from_lines(vec![TranscriptLine::User("older parent row".into())]),
         anchor: 100,
     }))
     .ok();

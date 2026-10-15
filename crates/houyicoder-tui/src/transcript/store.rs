@@ -11,10 +11,11 @@ use std::cell::Cell;
 
 use crate::fold::{FoldGroup, compute_fold_groups};
 use crate::records::{ContextView, TranscriptLine};
+use crate::row_id::RowId;
 use crate::scroll::bound_scrollback;
 use crate::state::transcript::blocks::TranscriptBlocks;
 use crate::state::{App, CurrentTurnBoundary};
-use crate::transcript::{FrontendRow, SequencedFrame, TranscriptFrame};
+use crate::transcript::{FrontendRow, NamedRows, SequencedFrame, TranscriptFrame};
 use std::slice::Iter;
 
 #[derive(Debug)]
@@ -37,11 +38,11 @@ pub struct Transcript {
     /// rebuild so every render and count pass reads the cache instead of
     /// rescanning the transcript.
     fold_groups: Vec<FoldGroup>,
-    /// Rows read back from the session log, older than the resident front.
-    /// They lead the viewable lines: the rebuild prepends them to the lines
-    /// the blocks derive. Empty while the reader follows the tail, whose
-    /// capped view cannot reach them.
-    disk_rows: Vec<TranscriptLine>,
+    /// Rows read back from the session log, older than the resident front,
+    /// each beside the identity the log named it with. They lead the viewable
+    /// lines: the rebuild prepends them to the lines the blocks derive. Empty
+    /// while the reader follows the tail, whose capped view cannot reach them.
+    disk: NamedRows,
     /// Where the disk rows begin in the session log, and whether the log holds
     /// anything older than them.
     disk_front: DiskFront,
@@ -70,6 +71,15 @@ pub(crate) enum DiskFront {
     Stopped,
 }
 
+/// One row of the visible transcript's front, with the identity the
+/// older-row read matches it by and the rendered text it falls back to when
+/// either side of the match carries no durable identity.
+#[derive(Debug, Clone)]
+pub(crate) struct FrontRow {
+    pub(crate) id: RowId,
+    pub(crate) text: String,
+}
+
 /// Default ceiling on the resident frames' estimated bytes.
 const RESIDENT_BYTE_BUDGET: usize = 8 * 1024 * 1024;
 
@@ -83,7 +93,7 @@ impl Default for Transcript {
             blocks: TranscriptBlocks::default(),
             lines: Vec::new(),
             fold_groups: Vec::new(),
-            disk_rows: Vec::new(),
+            disk: NamedRows::default(),
             disk_front: DiskFront::default(),
             disk_rows_front: 0,
             current_turn: CurrentTurnBoundary::default(),
@@ -282,11 +292,39 @@ impl Transcript {
 
     /// The rows read back from the session log, oldest first.
     pub(crate) fn disk_rows(&self) -> &[TranscriptLine] {
-        &self.disk_rows
+        &self.disk.lines
     }
 
     pub(crate) fn disk_row_count(&self) -> usize {
-        self.disk_rows.len()
+        self.disk.lines.len()
+    }
+
+    /// The first n rows of the visible list, oldest first, with the identity
+    /// an older-row read matches its overlap against. Walks the loaded disk
+    /// rows then the blocks in order — the same assembly a rebuild flattens —
+    /// so the rows returned are the rows the view starts at. The assembly is
+    /// exact right after a rebuild: the scrollback cap cuts the list's head
+    /// only while the reader follows the tail, where no read is dispatched,
+    /// and the first read's own dispatch rebuilds before it captures.
+    pub(crate) fn front_rows(&self, n: usize) -> Vec<FrontRow> {
+        let mut rows: Vec<FrontRow> = Vec::new();
+        let add = |line: &TranscriptLine, id: &RowId, rows: &mut Vec<FrontRow>| {
+            if rows.len() < n {
+                rows.push(FrontRow {
+                    id: id.clone(),
+                    text: line.render(),
+                });
+            }
+        };
+        for (line, id) in self.disk.lines.iter().zip(&self.disk.ids) {
+            add(line, id, &mut rows);
+        }
+        for block in self.blocks.blocks() {
+            for (line, id) in block.lines.iter().zip(&block.ids) {
+                add(line, id, &mut rows);
+            }
+        }
+        rows
     }
 
     /// Where the next older read starts from.
@@ -313,28 +351,24 @@ impl Transcript {
     /// from the loaded rows alone, so a call whose result is the first resident
     /// row folds without it and a group of a run the frame window drained still
     /// reads as closed.
-    pub(crate) fn prepend_disk_rows(
-        &mut self,
-        rows: Vec<TranscriptLine>,
-        anchor: u64,
-        front: usize,
-    ) {
-        if rows.is_empty() {
+    pub(crate) fn prepend_disk_rows(&mut self, rows: NamedRows, anchor: u64, front: usize) {
+        if rows.lines.is_empty() {
             return;
         }
-        let shift = rows.len();
+        let shift = rows.lines.len();
         for group in &mut self.fold_groups {
             group.start += shift;
             group.end += shift;
         }
-        let mut head = compute_fold_groups(&rows, false);
+        let mut head = compute_fold_groups(&rows.lines, false);
         head.append(&mut self.fold_groups);
         self.fold_groups = head;
         self.current_turn.line_index += shift;
-        let mut merged = rows.clone();
+        let mut merged = rows.lines.clone();
         merged.append(&mut self.lines);
         self.lines = merged;
-        self.disk_rows.splice(0..0, rows);
+        self.disk.lines.splice(0..0, rows.lines);
+        self.disk.ids.splice(0..0, rows.ids);
         self.disk_front = DiskFront::At(anchor);
         self.disk_rows_front = front;
     }
@@ -346,11 +380,11 @@ impl Transcript {
     /// list itself was cut, shifting every surviving group too far up.
     /// Returns how many rows were dropped.
     pub(crate) fn clear_disk_rows(&mut self) -> usize {
-        let dropped = self.disk_rows.len();
+        let dropped = self.disk.lines.len();
         if dropped == 0 {
             return 0;
         }
-        self.disk_rows.clear();
+        self.disk = NamedRows::default();
         self.disk_front = DiskFront::Unloaded;
         self.disk_rows_front = 0;
         let cut = dropped.min(self.lines.len());
@@ -390,7 +424,7 @@ impl Transcript {
         self.frame_window_start = 0;
         self.resident_bytes.set(0);
         self.fold_groups.clear();
-        self.disk_rows.clear();
+        self.disk = NamedRows::default();
         self.disk_front = DiskFront::default();
         self.disk_rows_front = 0;
         self.blocks.clear();

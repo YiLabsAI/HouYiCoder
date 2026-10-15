@@ -1,6 +1,7 @@
 use super::*;
 use crate::fold::compute_fold_groups;
 use crate::scroll::VIEWABLE_SCROLLBACK_CAP;
+use crate::transcript::NamedRows;
 
 /// The rows a scroll back to the resident front reads from the session log:
 /// the frames there were drained, so the log is the only source for them. The
@@ -277,6 +278,7 @@ fn test_walk_stops_without_window() {
     let view: Vec<TranscriptLine> = app.transcript().iter().cloned().collect();
     let mut older: Vec<TranscriptLine> = vec![TranscriptLine::User("old 0".into())];
     older.extend(view);
+    let older_rows = NamedRows::from_lines(older);
     app.sessions.persistence.snapshot = Some(Arc::new(MockSnapshot {
         lines: Vec::new(),
         log_bytes: 5000,
@@ -285,7 +287,8 @@ fn test_walk_stops_without_window() {
         window_lines: Vec::new(),
         window_start: 0,
         windows: vec![WindowLoad {
-            lines: older,
+            lines: older_rows.lines,
+            row_ids: older_rows.ids,
             start_offset: 100,
             next_offset: 5005,
             skipped: 0,
@@ -460,7 +463,8 @@ fn test_log_rows_capped() {
     let rows: Vec<TranscriptLine> = (0..VIEWABLE_SCROLLBACK_CAP)
         .map(|i| TranscriptLine::User(format!("older {i}")))
         .collect();
-    app.transcript_mut().prepend_disk_rows(rows, 100, 0);
+    app.transcript_mut()
+        .prepend_disk_rows(NamedRows::from_lines(rows), 100, 0);
     app.whole_scroll_mut().jump_to(0);
     app.sessions.persistence.snapshot = Some(log_source(vec![log_window(
         vec![TranscriptLine::User("even older".into())],

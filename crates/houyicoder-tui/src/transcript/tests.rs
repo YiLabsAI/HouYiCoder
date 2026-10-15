@@ -590,8 +590,8 @@ fn test_fold_names_rows() {
     let names: Vec<RowId> = (0..frames.len())
         .map(|i| RowId::from(format!("e{i}")))
         .collect();
-    let lines = transcript_from_named_frames(&frames, &names, 0..frames.len(), true);
-    let row = thought_row(&lines).expect("the closed turn derives its row");
+    let rows = transcript_from_named_frames(&frames, &names, 0..frames.len(), true);
+    let row = thought_row(&rows.lines).expect("the closed turn derives its row");
     assert_eq!(
         row.turn_id,
         RowId::from("e2"),

@@ -196,7 +196,7 @@ impl App {
                 cur_idx += 1;
                 continue;
             }
-            let lines = transcript_from_frames_at(
+            let rows = transcript_from_frames_at(
                 self.sessions.current.transcript.frames(),
                 self.sessions.current.transcript.frame_window_start(),
                 range.clone(),
@@ -206,7 +206,8 @@ impl App {
             let block = Block {
                 id,
                 frame_range: range.clone(),
-                lines,
+                lines: rows.lines,
+                ids: rows.ids,
                 revision,
             };
             match slot {
@@ -396,6 +397,7 @@ impl App {
             batch_start..from,
             self.sessions.current.run.is_active(),
         )
+        .lines
         .len();
         self.sessions.current.loaded_from_frame.set(batch_start);
         if prepended == 0 {
@@ -450,7 +452,7 @@ impl App {
                 // out would place the loaded rows above history the next
                 // rebuild drops.
                 self.rebuild_transcript();
-                let front = self.front_row_texts();
+                let front = self.transcript().front_rows(OVERLAP_FRONT_ROWS);
                 if front.is_empty() {
                     return;
                 }
@@ -572,7 +574,7 @@ impl App {
                 self.sessions.current.history_reads.record_read_success();
             }
             HistoryReadOutcome::Rows(result) => {
-                let count = result.rows.len();
+                let count = result.rows.lines.len();
                 let transcript = &mut self.sessions.current.transcript;
                 transcript.prepend_disk_rows(result.rows, result.anchor, read.dispatch_front);
                 // Hold the viewport still: the rows landed above it.
@@ -594,18 +596,6 @@ impl App {
                 ));
             }
         }
-    }
-
-    /// The rendered text of the rows the visible transcript starts at. The
-    /// rows read from the log are matched against them to find where the two
-    /// folds overlap.
-    fn front_row_texts(&self) -> Vec<String> {
-        let lines = self.transcript().lines();
-        lines
-            .iter()
-            .take(OVERLAP_FRONT_ROWS)
-            .map(|line| line.render())
-            .collect()
     }
 
     /// Return the first frame in the changing turn. If that boundary would
