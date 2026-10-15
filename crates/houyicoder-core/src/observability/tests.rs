@@ -3,7 +3,7 @@
 use super::evolution::*;
 use super::*;
 use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
-use houyicoder_protocol::llm::Usage;
+use houyicoder_protocol::llm::{Usage, UsageProvenance};
 use std::path::PathBuf;
 
 use crate::agent::HookError;
@@ -29,6 +29,7 @@ fn usage(input: u32, output: u32, cache_read: u32) -> Usage {
         cache_read_input_tokens: cache_read,
         cache_write_input_tokens: 0,
         reasoning_tokens: 0,
+        ..Default::default()
     }
 }
 
@@ -169,6 +170,7 @@ fn test_cost_accumulates_per_model() {
         cache_read_input_tokens: 800,
         cache_write_input_tokens: 100,
         reasoning_tokens: 50,
+        ..Default::default()
     };
     log.record_usage("model-a", &u1, 0, 120, 100, 200_000, 32_768);
     let u2 = Usage {
@@ -179,6 +181,7 @@ fn test_cost_accumulates_per_model() {
         cache_read_input_tokens: 1500,
         cache_write_input_tokens: 200,
         reasoning_tokens: 30,
+        ..Default::default()
     };
     log.record_usage("model-a", &u2, 0, 80, 70, 200_000, 32_768);
     let cost = log.cost();
@@ -208,6 +211,7 @@ fn test_turn_delta_ratios() {
         cache_read_input_tokens: 800,
         cache_write_input_tokens: 100,
         reasoning_tokens: 50,
+        provenance: UsageProvenance::ALL_REPORTED,
     };
     log.start_turn();
     log.record_usage("model-a", &u, 30_000, 50, 50, 200_000, 32_768);

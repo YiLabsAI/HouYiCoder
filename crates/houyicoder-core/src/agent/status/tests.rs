@@ -27,6 +27,7 @@ fn usage(input: u32, output: u32, cache_read: u32) -> Usage {
         cache_read_input_tokens: cache_read,
         cache_write_input_tokens: 0,
         reasoning_tokens: 0,
+        ..Default::default()
     }
 }
 
@@ -51,8 +52,44 @@ fn test_accumulator_reset_clears_tally() {
     acc.record(&usage(100, 50, 0));
     assert_eq!(acc.cumulative().input_tokens, 100);
     acc.reset();
-    assert_eq!(acc.cumulative(), Usage::default());
+    assert_eq!(acc.cumulative().input_tokens, 0, "reset clears the tally");
     assert_eq!(acc.last_input_tokens(), 0);
+}
+
+/// The cumulative cache account is complete only while every folded turn
+/// reported input and cache-read; one unreported part turns the whole tally
+/// unknown rather than a silently partial rate.
+#[test]
+fn test_accumulator_folds_provenance() {
+    let complete = Usage {
+        input_tokens: 1000,
+        cache_read_input_tokens: 800,
+        provenance: UsageProvenance {
+            input_reported: true,
+            cache_read_reported: true,
+            cache_write_reported: false,
+        },
+        ..Default::default()
+    };
+    let unreported = Usage {
+        input_tokens: 500,
+        cache_read_input_tokens: 0,
+        provenance: UsageProvenance {
+            input_reported: true,
+            cache_read_reported: false,
+            cache_write_reported: false,
+        },
+        ..Default::default()
+    };
+    let mut acc = UsageAccumulator::default();
+    acc.record(&complete);
+    assert_eq!(acc.cumulative().cache_hit_rate(), Some(0.8));
+    acc.record(&unreported);
+    assert_eq!(
+        acc.cumulative().cache_hit_rate(),
+        None,
+        "an unreported part makes the total rate unknown"
+    );
 }
 
 #[test]

@@ -15,7 +15,7 @@ pub(crate) mod redundancy;
 
 use std::sync::{Arc, Mutex};
 
-use houyicoder_protocol::llm::Usage;
+use houyicoder_protocol::llm::{Usage, UsageProvenance};
 use houyicoder_resilience::BreakerState;
 
 use crate::agent::ContextMeasurement;
@@ -64,8 +64,8 @@ pub struct StatusSnapshot {
     /// know about the resilience type behind it.
     pub breaker_cool_down: Option<Duration>,
     /// Cumulative provider-reported usage across every turn this runner has
-    /// driven (since the accumulator was last reset). 7-field inclusive totals
-    /// plus the non-overlapping breakdown; see the protocol layer's Usage doc.
+    /// driven (since the accumulator was last reset). Inclusive totals plus the
+    /// non-overlapping breakdown; see the protocol layer's Usage doc.
     pub cumulative_usage: Usage,
     /// The input_tokens of the last response: the provider's own count for the
     /// last call, kept as the billing fact. Occupancy is not derived from it.
@@ -94,7 +94,7 @@ pub struct StatusSnapshot {
 /// and a status snapshot (reader) via an Arc<Mutex>. Tracks the running sum
 /// and the last response's input_tokens so /context can show both the
 /// cumulative tally and the current window footprint in one read.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct UsageAccumulator {
     cumulative: Usage,
     last_input_tokens: u32,
@@ -122,6 +122,10 @@ impl UsageAccumulator {
         self.cumulative.cache_write_input_tokens += turn.cache_write_input_tokens;
         self.cumulative.reasoning_tokens += turn.reasoning_tokens;
         self.last_input_tokens = turn.input_tokens;
+        // The cumulative account is complete only when every folded turn was:
+        // an unreported part hides inside a total that otherwise reads as
+        // reported. The all-reported seed makes the first turn decide.
+        self.cumulative.provenance = self.cumulative.provenance.merge(turn.provenance);
     }
 
     /// Fold one tool execution's outcome into the session tally. ok = the
@@ -180,11 +184,25 @@ impl UsageAccumulator {
     /// user starts a fresh session so the cumulative figure reflects only the
     /// current session, not the runner's whole lifetime.
     pub fn reset(&mut self) {
-        self.cumulative = Usage::default();
-        self.last_input_tokens = 0;
-        self.tool_calls = 0;
-        self.tool_success = 0;
-        self.tool_errors = 0;
+        *self = UsageAccumulator::default();
+    }
+}
+
+impl Default for UsageAccumulator {
+    fn default() -> Self {
+        Self {
+            // Seed the provenance fold with the AND identity: a sum of zero
+            // measured turns is complete, so the first recorded turn decides
+            // whether the tally stays reported or turns unreported.
+            cumulative: Usage {
+                provenance: UsageProvenance::ALL_REPORTED,
+                ..Usage::default()
+            },
+            last_input_tokens: 0,
+            tool_calls: 0,
+            tool_success: 0,
+            tool_errors: 0,
+        }
     }
 }
 

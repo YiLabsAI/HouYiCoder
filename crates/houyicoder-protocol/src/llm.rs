@@ -19,6 +19,55 @@ use std::fmt::Display;
 use std::fmt::Formatter;
 use std::time::Duration;
 
+/// Which token-breakdown fields the source endpoint reported. A field the
+/// endpoint did not emit is unreported (unknown), not zero; a reported field
+/// at zero is a confirmed zero. Carried alongside the u32 values so a missing
+/// cache-read count reads as unknown rather than as a 0% hit rate. Defaults to
+/// all-unreported: a record that predates the field, or one a provider built
+/// without setting provenance, is treated as unreported and excluded from a
+/// steady-state cohort rather than read as a 0% sample.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UsageProvenance {
+    /// Whether the endpoint reported the inclusive input total.
+    pub input_reported: bool,
+    /// Whether the endpoint reported the cache-read count.
+    pub cache_read_reported: bool,
+    /// Whether the endpoint reported the cache-write count. Split-accounting
+    /// providers carry a separate write count; subset-accounting providers do
+    /// not, so this stays false there and is not read as a missing write.
+    pub cache_write_reported: bool,
+}
+
+impl UsageProvenance {
+    /// Every field reported. This is the identity for the merge AND-fold: a
+    /// running total seeded from it stays reported until an unreported part is
+    /// folded in, so the first recorded turn decides the total's completeness.
+    /// A sum of zero measured turns is complete, not unknown.
+    pub const ALL_REPORTED: UsageProvenance = UsageProvenance {
+        input_reported: true,
+        cache_read_reported: true,
+        cache_write_reported: true,
+    };
+
+    /// Whether the cache account is complete enough to compute a trustworthy
+    /// hit rate: input and cache-read both reported. Records below this bar
+    /// yield an unknown rate rather than a misleading 0%.
+    pub fn cache_account_complete(self) -> bool {
+        self.input_reported && self.cache_read_reported
+    }
+
+    /// The merge a combined usage record takes: a field is reported in the sum
+    /// only when every summand reported it, so an unreported part cannot hide
+    /// inside a total that reads as complete.
+    pub fn merge(self, other: UsageProvenance) -> UsageProvenance {
+        UsageProvenance {
+            input_reported: self.input_reported && other.input_reported,
+            cache_read_reported: self.cache_read_reported && other.cache_read_reported,
+            cache_write_reported: self.cache_write_reported && other.cache_write_reported,
+        }
+    }
+}
+
 /// Token usage for one model call. Inclusive totals plus a non-overlapping
 /// breakdown; see the module doc for the invariants.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -42,6 +91,12 @@ pub struct Usage {
     pub cache_write_input_tokens: u32,
     /// Reasoning tokens (a subset of output_tokens).
     pub reasoning_tokens: u32,
+    /// Which breakdown fields the source endpoint reported; a field not
+    /// reported is unknown, not zero. Defaults to all-unreported for records
+    /// that predate the field, so old logs deserialize as unreported and are
+    /// excluded from a steady-state cohort rather than read as 0% samples.
+    #[serde(default)]
+    pub provenance: UsageProvenance,
 }
 
 impl Usage {
@@ -52,13 +107,17 @@ impl Usage {
     }
 
     /// The share of this usage's input that came from the prompt cache, as a
-    /// rate in 0..1. None when no input was reported: a caller then shows the
-    /// value as unknown rather than as a 0% that reads like a cache miss. A
-    /// provider whose cache-read count exceeds its input would push this above
-    /// one, so the rate is clamped to the range it documents.
+    /// rate in 0..1. None when the cache account is incomplete (input or
+    /// cache-read not reported by the endpoint) or no input was reported: a
+    /// caller then shows the value as unknown rather than as a 0% that reads
+    /// like a cache miss. A provider whose cache-read count exceeds its input
+    /// would push this above one, so the rate is clamped to the range it
+    /// documents.
     pub fn cache_hit_rate(&self) -> Option<f64> {
-        (self.input_tokens > 0)
-            .then(|| (self.cache_read_input_tokens as f64 / self.input_tokens as f64).min(1.0))
+        if !self.provenance.cache_account_complete() || self.input_tokens == 0 {
+            return None;
+        }
+        Some((self.cache_read_input_tokens as f64 / self.input_tokens as f64).min(1.0))
     }
 
     /// The same share as a percentage, the unit the panes render. One formula
@@ -85,6 +144,21 @@ impl Usage {
                 .cache_write_input_tokens
                 .saturating_add(other.cache_write_input_tokens),
             reasoning_tokens: self.reasoning_tokens.saturating_add(other.reasoning_tokens),
+            provenance: self.provenance.merge(other.provenance),
+        }
+    }
+
+    /// The additive identity for folding usage records: zero token totals with
+    /// all-fields-reported provenance. A saturating_add against it leaves the
+    /// other record's totals and completeness unchanged, so an accumulator
+    /// seeded from it still reads complete for a zero-turn session and takes
+    /// its completeness from the first recorded turn. A zero-input identity has
+    /// no cache_hit_rate of its own, but unlike the all-unreported default it
+    /// does not dilute the first real record.
+    pub fn identity() -> Self {
+        Self {
+            provenance: UsageProvenance::ALL_REPORTED,
+            ..Self::default()
         }
     }
 }

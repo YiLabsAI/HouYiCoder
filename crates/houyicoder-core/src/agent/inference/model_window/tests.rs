@@ -205,6 +205,7 @@ fn test_split_accounting_sums_cache() {
         cache_read_input_tokens: 2_000,
         cache_write_input_tokens: 500,
         reasoning_tokens: 0,
+        ..Default::default()
     };
     assert_eq!(effective_input_tokens(&usage), 4_000); // 1500 + 2000 + 500
 }
@@ -221,6 +222,7 @@ fn test_subset_accounting_no_double() {
         cache_read_input_tokens: 0,
         cache_write_input_tokens: 0,
         reasoning_tokens: 0,
+        ..Default::default()
     };
     assert_eq!(effective_input_tokens(&usage), 6_000);
 }

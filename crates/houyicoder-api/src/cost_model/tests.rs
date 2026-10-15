@@ -28,6 +28,7 @@ fn test_effective_input_includes_cache() {
         cache_read_input_tokens: 2_000,
         cache_write_input_tokens: 500,
         reasoning_tokens: 0,
+        ..Default::default()
     };
     let model = AnthropicCostModel;
     assert!((model.effective_input_tokens(&usage) - 4_000.0).abs() < 1e-9);
@@ -46,6 +47,7 @@ fn test_subset_no_double_count() {
         cache_read_input_tokens: 0,
         cache_write_input_tokens: 0,
         reasoning_tokens: 0,
+        ..Default::default()
     };
     let model = AnthropicCostModel;
     assert!((model.effective_input_tokens(&usage) - 6_000.0).abs() < 1e-9);

@@ -5,6 +5,7 @@ use houyicoder_context::{SessionEvent, SessionLogEntry};
 use super::{SubagentUsage, aggregate_subagent_usage};
 use houyicoder_context::EventId;
 use houyicoder_context::SessionId;
+use houyicoder_protocol::llm::{Usage, UsageProvenance};
 
 fn entry(event: SessionEvent) -> SessionLogEntry {
     SessionLogEntry {
@@ -88,4 +89,28 @@ fn test_to_usage_maps_totals() {
     assert_eq!(usage.cache_read_input_tokens, 80);
     // Non-cached input is what was processed rather than reused.
     assert_eq!(usage.non_cached_input_tokens, 20);
+}
+
+#[test]
+fn test_empty_delegation_neutral() {
+    // Folding a childless delegation into a session's own usage must leave
+    // it untouched; an all-unreported empty record is the AND-fold's zero and
+    // would silently blank every childless session's cache rate in /status.
+    let own = Usage {
+        input_tokens: 1000,
+        cache_read_input_tokens: 800,
+        provenance: UsageProvenance {
+            input_reported: true,
+            cache_read_reported: true,
+            cache_write_reported: false,
+        },
+        ..Default::default()
+    };
+    let empty = SubagentUsage::default().to_usage();
+    assert_eq!(own.saturating_add(&empty), own);
+    assert_eq!(
+        own.saturating_add(&empty).cache_hit_rate(),
+        Some(0.8),
+        "a childless fold keeps the session's own cache rate"
+    );
 }

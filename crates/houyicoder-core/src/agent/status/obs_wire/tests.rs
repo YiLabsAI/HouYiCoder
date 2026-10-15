@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::observability::MetricsView;
-use houyicoder_protocol::llm::Usage;
+use houyicoder_protocol::llm::{Usage, UsageProvenance};
 
 fn usage(input: u32, cache_read: u32) -> Usage {
     Usage {
@@ -13,6 +13,11 @@ fn usage(input: u32, cache_read: u32) -> Usage {
         cache_read_input_tokens: cache_read,
         cache_write_input_tokens: 0,
         reasoning_tokens: 0,
+        provenance: UsageProvenance {
+            input_reported: true,
+            cache_read_reported: true,
+            cache_write_reported: false,
+        },
     }
 }
 
@@ -60,6 +65,7 @@ fn test_record_turn_estimate_fallback() {
         cache_read_input_tokens: 0,
         cache_write_input_tokens: 0,
         reasoning_tokens: 0,
+        ..Default::default()
     };
     record_turn(&obs, "model-a", &zero_usage, 30_000, 0, 200_000, 32_768);
     let ol = obs.lock().unwrap();
@@ -81,6 +87,7 @@ fn test_record_turn_unknown_fill() {
         cache_read_input_tokens: 0,
         cache_write_input_tokens: 0,
         reasoning_tokens: 0,
+        ..Default::default()
     };
     record_turn(&obs, "model-a", &zero_usage, 0, 0, 200_000, 32_768);
     let ol = obs.lock().unwrap();

@@ -36,8 +36,8 @@ pub(crate) fn permission_effect_label(effect: PermissionEffect) -> &'static str 
     }
 }
 
-/// /context: the precise 7-field cumulative usage from the provider (no
-/// chars/4 estimate), the current window footprint, and the model. Cache and
+/// /context: the precise cumulative usage from the provider (no chars/4
+/// estimate), the current window footprint, and the model. Cache and
 /// reasoning breakdowns are first-class so the cache hit rate and the visible
 /// vs reasoning split are visible at a glance.
 ///

@@ -35,6 +35,7 @@ fn test_snapshots_ol_failures_cost() {
         cache_read_input_tokens: 800,
         cache_write_input_tokens: 0,
         reasoning_tokens: 100,
+        ..Default::default()
     };
     record_turn(&obs, "model-a", &u, 30_000, 500, 200_000, 32_768);
     let redundancy = Mutex::new(RedundancyTracker::new());

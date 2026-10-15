@@ -208,7 +208,7 @@ impl Runner {
             return failed;
         }
         let started = Instant::now();
-        let result = self.drive_loop(session, 0, Usage::default(), &token).await;
+        let result = self.drive_loop(session, 0, Usage::identity(), &token).await;
         self.settle_turn(session, Some(started), &result).await;
         self.emit_run_result(&result);
         // Best-effort fact persistence: failures are logged, not fatal.
@@ -244,7 +244,7 @@ impl Runner {
         // A forked run is a fresh turn: reset the max_turns budget.
         self.reset_user_turn();
         let started = Instant::now();
-        let result = self.drive_loop(session, 0, Usage::default(), &token).await;
+        let result = self.drive_loop(session, 0, Usage::identity(), &token).await;
         self.settle_turn(session, Some(started), &result).await;
         result
     }
@@ -320,7 +320,7 @@ impl Runner {
         // cap, the reported turns, and the convergence reminder all share the
         // per-turn budget rather than the session's accumulated turns.
         let result = self
-            .drive_loop(session, self.user_turn(), Usage::default(), &token)
+            .drive_loop(session, self.user_turn(), Usage::identity(), &token)
             .await;
         self.settle_turn(session, Some(started), &result).await;
         self.emit_run_result(&result);

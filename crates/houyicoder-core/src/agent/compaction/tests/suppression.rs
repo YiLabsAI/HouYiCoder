@@ -311,6 +311,7 @@ async fn test_compact_clears_stale_delta() {
             cache_read_input_tokens: 0,
             cache_write_input_tokens: 0,
             reasoning_tokens: 0,
+            ..Default::default()
         };
         let mut ol = r.observability.lock().unwrap();
         ol.record_usage("test", &usage, 180_000, 120, 100, 200_000, 32_768);

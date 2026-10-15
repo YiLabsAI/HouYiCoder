@@ -759,15 +759,11 @@ impl Runner {
     }
 }
 
-/// Sum usage across turns (inclusive totals add up; breakdown fields add too).
+/// Sum usage across turns. The shared saturating_add folds every field and
+/// AND-merges provenance, so a run whose any turn went unreported reads
+/// unknown rather than a partial rate.
 pub(crate) fn accumulate_usage(total: &mut Usage, turn: &Usage) {
-    total.input_tokens += turn.input_tokens;
-    total.output_tokens += turn.output_tokens;
-    total.total_tokens += turn.total_tokens;
-    total.non_cached_input_tokens += turn.non_cached_input_tokens;
-    total.cache_read_input_tokens += turn.cache_read_input_tokens;
-    total.cache_write_input_tokens += turn.cache_write_input_tokens;
-    total.reasoning_tokens += turn.reasoning_tokens;
+    *total = total.saturating_add(turn);
 }
 
 /// Append configured instructions to the assembled system prompt. An empty

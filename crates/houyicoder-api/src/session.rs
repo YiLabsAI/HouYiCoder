@@ -12,7 +12,7 @@ use houyicoder_context::{
     CheckpointId, CheckpointManifest, ContextBackend, ContextError, ContextSnapshot, EventId,
     SessionEvent, SessionId, SessionLogEntry,
 };
-use houyicoder_protocol::llm::Usage;
+use houyicoder_protocol::llm::{Usage, UsageProvenance};
 use std::path::PathBuf;
 
 /// The delegated usage a session's children reported in durable returns.
@@ -64,7 +64,13 @@ impl SubagentUsage {
         self.reasoning_tokens = self.reasoning_tokens.saturating_add(*reasoning_tokens);
     }
 
-    /// Convert the totals to the provider usage shape used by status.
+    /// Convert the totals to the provider usage shape used by status. A
+    /// zero-call record is the additive identity: its provenance is
+    /// all-reported so folding it into a session's own usage leaves that
+    /// usage's completeness untouched (an AND-fold diluted by all-unreported
+    /// would make every childless session's cache rate read unknown). A
+    /// measured record stays all-unreported until child provenance flows
+    /// through, so a combined rate reads unknown rather than a silent guess.
     pub fn to_usage(self) -> Usage {
         let clamp = |v: u64| v.min(u32::MAX as u64) as u32;
         let input_tokens = clamp(self.input_tokens);
@@ -80,6 +86,11 @@ impl SubagentUsage {
             cache_read_input_tokens: clamp(self.cache_read_input_tokens),
             cache_write_input_tokens: clamp(self.cache_write_input_tokens),
             reasoning_tokens: clamp(self.reasoning_tokens),
+            provenance: if self.calls == 0 {
+                UsageProvenance::ALL_REPORTED
+            } else {
+                UsageProvenance::default()
+            },
         }
     }
 }

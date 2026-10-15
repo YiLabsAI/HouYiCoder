@@ -24,6 +24,7 @@ fn snap_with_data() -> StatusSnapshot {
             cache_read_input_tokens: 700,
             cache_write_input_tokens: 50,
             reasoning_tokens: 30,
+            ..Default::default()
         },
         last_input_tokens: 1000,
         context_used_tokens: Some(1000),

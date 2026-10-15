@@ -1,8 +1,8 @@
 use super::*;
 use crate::http_error::{classify_status, classify_with_body, parse_retry_after};
 use houyicoder_protocol::cache_policy::{BreakpointKind, CacheBreakpoint, CacheHint, CacheTtl};
-use houyicoder_protocol::llm::Usage;
 use houyicoder_protocol::llm::{AssistantToolCall, EffortLevel, ModelSettings, SpeedMode, ToolDef};
+use houyicoder_protocol::llm::{Usage, UsageProvenance};
 use reqwest::header::HeaderMap;
 
 fn req(input: Vec<InputItem>, tools: Vec<ToolDef>) -> CompletionRequest {
@@ -462,6 +462,17 @@ fn test_parse_usage_reasoning() {
     assert_eq!(usage.output_tokens, 80);
     assert_eq!(usage.reasoning_tokens, 30);
     assert_eq!(usage.visible_output_tokens(), 50, "80 - 30 reasoning");
+    // No cached_tokens key: input is reported but the cache-read count is not,
+    // so the hit rate is unknown rather than a misleading 0%.
+    assert_eq!(
+        usage.provenance,
+        UsageProvenance {
+            input_reported: true,
+            cache_read_reported: false,
+            cache_write_reported: false,
+        }
+    );
+    assert_eq!(usage.cache_hit_rate(), None);
 }
 
 #[test]
@@ -481,6 +492,18 @@ fn test_parse_usage_cached() {
     assert_eq!(usage.cache_read_input_tokens, 700);
     assert_eq!(usage.non_cached_input_tokens, 300, "1000 - 700 cached");
     assert_eq!(usage.reasoning_tokens, 0, "no reasoning reported");
+    // prompt_tokens and cached_tokens both reported: the account is complete,
+    // so the hit rate is a real number. The subset model has no separate
+    // cache-write count, so write stays unreported.
+    assert_eq!(
+        usage.provenance,
+        UsageProvenance {
+            input_reported: true,
+            cache_read_reported: true,
+            cache_write_reported: false,
+        }
+    );
+    assert_eq!(usage.cache_hit_rate(), Some(0.7));
 }
 
 #[test]
@@ -493,12 +516,22 @@ fn test_parse_usage_defaults() {
     assert_eq!(usage.cache_read_input_tokens, 0);
     assert_eq!(usage.non_cached_input_tokens, 50);
     assert_eq!(usage.visible_output_tokens(), 12);
+    assert!(
+        !usage.provenance.cache_read_reported,
+        "no cached key means the cache-read count is unreported, not a confirmed zero"
+    );
 }
 
 #[test]
 fn test_parse_usage_none() {
     let usage = parse_usage(None);
     assert_eq!(usage, Usage::default());
+    assert_eq!(usage.provenance, UsageProvenance::default());
+    assert_eq!(
+        usage.cache_hit_rate(),
+        None,
+        "no usage object: unknown, not 0%"
+    );
 }
 
 /// An abnormal close (the byte stream ended without an explicit

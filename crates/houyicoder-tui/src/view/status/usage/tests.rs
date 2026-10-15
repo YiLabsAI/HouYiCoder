@@ -8,7 +8,7 @@ use crate::test_harness::working_app;
 use crate::view::trajectory_pane::TrajectoryDetailView;
 use crate::view::trajectory_pane::{SessionTiming, SubagentUsage, TrajectoryLog, TrajectoryView};
 use houyicoder_protocol::frontend::status::ModelUsageView;
-use houyicoder_protocol::llm::Usage;
+use houyicoder_protocol::llm::{Usage, UsageProvenance};
 use std::sync::Arc;
 
 /// A trajectory source that answers a fixed view and does not page: the Usage
@@ -355,6 +355,11 @@ fn test_usage_cache_share() {
         input_tokens: 1000,
         total_tokens: 1000,
         cache_read_input_tokens: 500,
+        provenance: UsageProvenance {
+            input_reported: true,
+            cache_read_reported: true,
+            cache_write_reported: false,
+        },
         ..Default::default()
     };
     app.sessions.current.capabilities.status.status_cache = Some(snap.clone());

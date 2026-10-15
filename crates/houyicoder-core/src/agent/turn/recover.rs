@@ -47,7 +47,7 @@ impl Runner {
         // session retried after a crash is not permanently capped.
         self.reset_user_turn();
         let started = Instant::now();
-        let result = self.drive_loop(session, 0, Usage::default(), &token).await;
+        let result = self.drive_loop(session, 0, Usage::identity(), &token).await;
         // The re-drive is a drive loop like any other: the turn it ends needs
         // its record and its primary saves noticed, or the frontend has no
         // marker closing the regenerated turn and its summary row would fold

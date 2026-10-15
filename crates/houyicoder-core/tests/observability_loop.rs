@@ -210,8 +210,7 @@ async fn test_trace_substrate_pairs_calls() {
                 total_tokens: 1500,
                 non_cached_input_tokens: 200,
                 cache_read_input_tokens: 800,
-                cache_write_input_tokens: 0,
-                reasoning_tokens: 0,
+                ..Default::default()
             },
             model: "test".into(),
         },
@@ -225,8 +224,7 @@ async fn test_trace_substrate_pairs_calls() {
                 total_tokens: 2100,
                 non_cached_input_tokens: 500,
                 cache_read_input_tokens: 1500,
-                cache_write_input_tokens: 0,
-                reasoning_tokens: 0,
+                ..Default::default()
             },
             model: "test".into(),
         },
@@ -319,6 +317,7 @@ async fn test_trace_substrate_length_retry() {
         cache_read_input_tokens: 800,
         cache_write_input_tokens: 0,
         reasoning_tokens: 0,
+        ..Default::default()
     };
     let final_usage = Usage {
         input_tokens: 4000,
@@ -328,6 +327,7 @@ async fn test_trace_substrate_length_retry() {
         cache_read_input_tokens: 3500,
         cache_write_input_tokens: 0,
         reasoning_tokens: 0,
+        ..Default::default()
     };
     let provider = Arc::new(FakeRawProvider::new(vec![
         vec![

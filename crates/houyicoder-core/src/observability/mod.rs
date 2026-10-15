@@ -196,15 +196,11 @@ pub struct TurnTokenDelta {
     pub reasoning: u64,
     /// Cumulative usage across all turns this session.
     pub cumulative: Usage,
-    /// cache_read_input_tokens / input_tokens. input_tokens is inclusive of
-    /// cache_read (see the Usage struct), so cache_read is not added to the
-    /// denominator — that would double-count and roughly halve the ratio.
-    /// None when input is zero (a streaming proxy that omits usage, or a
-    /// degenerate empty input) so an unknown hit rate is never shown as 0% —
-    /// the same unknown-must-be-None rule as context_pct, since the two sit
-    /// side by side on the status bar. Some(0.0) means "confirmed zero cache
-    /// hit" (real input, no cache), distinct from None. Aligns the OTel
-    /// convention: cache_read.input_tokens SHOULD be in input_tokens.
+    /// The per-turn cache hit ratio, taken from Usage.cache_hit_rate so this
+    /// field never re-derives the formula the status and context panes
+    /// share. Some(0.0) is a confirmed zero hit (real input, no cache); None
+    /// is unknown — input zero, or a cache account the endpoint did not fully
+    /// report — never a plausible-looking 0%.
     pub cache_hit_ratio: Option<f64>,
     /// Current context occupancy: the provider's measured input_tokens over
     /// context_window, clamped to [0.0, 1.0]. Falls back to the local
@@ -412,7 +408,7 @@ impl ObservabilityLog {
             last_report: None,
             errors: Vec::new(),
             cost: CostAccumulator::default(),
-            cumulative_usage: Usage::default(),
+            cumulative_usage: Usage::identity(),
             last_turn_delta: None,
             turn_count: 0,
             call_count: 0,
@@ -516,13 +512,7 @@ impl ObservabilityLog {
             entry.context_window = context_window;
             entry.max_output_tokens = max_output_tokens;
         }
-        self.cumulative_usage.input_tokens += usage.input_tokens;
-        self.cumulative_usage.output_tokens += usage.output_tokens;
-        self.cumulative_usage.total_tokens += usage.total_tokens;
-        self.cumulative_usage.non_cached_input_tokens += usage.non_cached_input_tokens;
-        self.cumulative_usage.cache_read_input_tokens += usage.cache_read_input_tokens;
-        self.cumulative_usage.cache_write_input_tokens += usage.cache_write_input_tokens;
-        self.cumulative_usage.reasoning_tokens += usage.reasoning_tokens;
+        self.cumulative_usage = self.cumulative_usage.saturating_add(usage);
 
         // turn_count is NOT incremented here — start_turn (called at the
         // model_call_stream entry, once per drive-loop iteration) owns the
@@ -532,17 +522,10 @@ impl ObservabilityLog {
         self.call_in_turn += 1;
         let cache_read = usage.cache_read_input_tokens as u64;
         let input = usage.input_tokens as u64;
-        // cache_read is already included in input (Usage.input_tokens is
-        // inclusive of cache-read and cache-write), so the ratio is cache_read
-        // / input — not cache_read / (cache_read + input), which would
-        // double-count and roughly halve the ratio. None when input is zero
-        // (usage omitted / empty input) so an unknown hit rate is not shown
-        // as 0% — same rule as context_pct, the two sit side by side.
-        let cache_hit_ratio = if input > 0 {
-            Some(cache_read as f64 / input as f64)
-        } else {
-            None
-        };
+        // The per-turn ratio is the shared cache_hit_rate accessor, so it is
+        // provenance-gated the same as the status and context panes: None
+        // when input or cache-read went unreported, never a content-free 0%.
+        let cache_hit_ratio = usage.cache_hit_rate();
         // context_pct is the current context occupancy, not cumulative
         // input. The provider's measured input_tokens is primary; the local
         // tiktoken estimate covers providers that omit usage. When both
@@ -624,7 +607,7 @@ impl ObservabilityLog {
         self.last_report = None;
         self.errors.clear();
         self.cost = CostAccumulator::default();
-        self.cumulative_usage = Usage::default();
+        self.cumulative_usage = Usage::identity();
         self.last_turn_delta = None;
         self.turn_count = 0;
         self.call_count = 0;

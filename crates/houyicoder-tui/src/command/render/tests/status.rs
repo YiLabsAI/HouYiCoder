@@ -19,6 +19,7 @@ fn snap(model: &str) -> StatusSnapshot {
             cache_read_input_tokens: 80,
             cache_write_input_tokens: 10,
             reasoning_tokens: 5,
+            ..Default::default()
         },
         last_input_tokens: 100,
         context_window: 200_000,

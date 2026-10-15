@@ -30,6 +30,7 @@ fn usage_response() -> CompletionResponse {
             cache_read_input_tokens: 800,
             cache_write_input_tokens: 50,
             reasoning_tokens: 100,
+            ..Default::default()
         },
         model: "stub-model".into(),
     }
@@ -143,6 +144,7 @@ async fn test_usage_one_per_turn() {
             cache_read_input_tokens: 0,
             cache_write_input_tokens: 0,
             reasoning_tokens: 0,
+            ..Default::default()
         },
         model: "stub-model".into(),
     };
@@ -158,6 +160,7 @@ async fn test_usage_one_per_turn() {
             cache_read_input_tokens: 0,
             cache_write_input_tokens: 0,
             reasoning_tokens: 0,
+            ..Default::default()
         },
         model: "stub-model".into(),
     };
@@ -193,6 +196,7 @@ async fn test_recovery_retry_records_usage() {
         cache_read_input_tokens: 800,
         cache_write_input_tokens: 0,
         reasoning_tokens: 0,
+        ..Default::default()
     };
     let final_usage = Usage {
         input_tokens: 4000,
@@ -202,6 +206,7 @@ async fn test_recovery_retry_records_usage() {
         cache_read_input_tokens: 3500,
         cache_write_input_tokens: 0,
         reasoning_tokens: 0,
+        ..Default::default()
     };
     let p = Arc::new(ScriptRawProvider::new(vec![
         vec![
