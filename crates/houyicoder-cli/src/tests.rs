@@ -6,34 +6,53 @@
 use super::*;
 
 use std::env::temp_dir;
-use std::env::{current_exe, var};
-use std::fs::{create_dir_all, read_dir, remove_dir_all, remove_file, write};
-use std::io::BufRead;
-use std::io::BufReader;
-use std::io::Read;
-use std::path::{Path, PathBuf};
-use std::process::Stdio;
-use std::process::{Command, id as process_id};
+use std::fs::{create_dir_all, remove_dir_all};
+use std::path::PathBuf;
+use std::process::id as process_id;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+#[cfg(unix)]
+use std::env::{current_exe, var};
+#[cfg(unix)]
+use std::fs::{read_dir, remove_file, write};
+#[cfg(unix)]
+use std::io::{BufRead, BufReader, Read};
+#[cfg(unix)]
+use std::path::Path;
+#[cfg(unix)]
+use std::process::{Command, Stdio};
+#[cfg(unix)]
+use std::sync::atomic::AtomicBool;
+#[cfg(unix)]
 use std::sync::mpsc::channel as std_channel;
+#[cfg(unix)]
 use std::thread;
+#[cfg(unix)]
 use std::time::Duration;
 
-use futures::channel::mpsc::channel as async_channel;
-use houyicoder_client::{Client, InProcTransport};
 use houyicoder_context::SessionId;
-use houyicoder_protocol::frontend::SessionId as WireSessionId;
 use houyicoder_service::composition::host_lifecycle::HostLifecycle;
 use houyicoder_service::composition::{
     BuildRunnerOptions, ResolvedProvider, build_runner, resolve_provider,
 };
-use houyicoder_tui::composition::{FrontendStartup, RunnerBundle, shared_runtime};
 use tokio::runtime::Builder;
 
+#[cfg(unix)]
+use futures::channel::mpsc::channel as async_channel;
+#[cfg(unix)]
+use houyicoder_client::{Client, InProcTransport};
+#[cfg(unix)]
+use houyicoder_protocol::frontend::SessionId as WireSessionId;
+#[cfg(unix)]
+use houyicoder_tui::composition::{FrontendStartup, RunnerBundle, shared_runtime};
+
 use crate::composition::start_local_server;
-use crate::detach::{is_session_live, session_socket, sessions_dir};
 use crate::local_host::{HostLease, HostLeaseScope, HostLeaseSlot};
+
+#[cfg(unix)]
+use crate::detach::{is_session_live, session_socket, sessions_dir};
+#[cfg(unix)]
 use crate::session::lock::{LockError, SessionLock};
 
 // ── parse_args: default + mode flags ──────────────────────────────
@@ -590,7 +609,6 @@ fn test_fresh_lock_failure_reclaims() {
 
 /// A per-test temp directory so the held-lock admission does not touch the
 /// global sessions root.
-#[cfg(unix)]
 fn temp_root() -> PathBuf {
     static SEQ: AtomicU64 = AtomicU64::new(0);
     let n = SEQ.fetch_add(1, Ordering::Relaxed);

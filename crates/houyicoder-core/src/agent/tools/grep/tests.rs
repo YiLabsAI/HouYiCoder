@@ -20,8 +20,10 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
+#[cfg(unix)]
 use std::time::Instant;
 use std::time::SystemTime;
+#[cfg(unix)]
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 

@@ -50,27 +50,27 @@ const MARKER_THROTTLE_SECS: u64 = 24 * 60 * 60;
 // ceilings below are sweep/cleanup-only and stay here.
 const SNAPSHOT_TTL_SECS: u64 = 7 * 24 * 60 * 60;
 const DEBUG_MAX_BYTES: u64 = 10 * 1024 * 1024;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 use crate::session::lock::SessionLock;
 use houyicoder_service::composition::session_log_root;
 use houyicoder_service::lifecycle::prune::EMPTY_TTL_SECS;
 use std::env::current_dir;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 use std::env::temp_dir;
 #[cfg(unix)]
 use std::fs::File;
 use std::fs::create_dir_all;
 use std::fs::metadata;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 use std::fs::read;
 #[cfg(unix)]
 use std::fs::read_dir;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 use std::fs::remove_dir_all;
 use std::fs::write;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 use std::process::id;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::task::spawn_blocking;
 use tokio::time::sleep;

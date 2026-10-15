@@ -17,7 +17,7 @@ use nix::errno::Errno;
 use nix::fcntl::Flock;
 #[cfg(unix)]
 use nix::fcntl::FlockArg;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 use std::env::temp_dir;
 use std::error::Error;
 use std::fmt::Display;
@@ -28,15 +28,15 @@ use std::fs::DirBuilder;
 use std::fs::File;
 #[cfg(unix)]
 use std::fs::OpenOptions;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 use std::fs::create_dir_all;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 use std::fs::remove_dir_all;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 use std::fs::write;
 #[cfg(unix)]
 use std::path::PathBuf;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 use std::process::id;
 
 /// An held exclusive lock on a session's session.lock file. Drop releases

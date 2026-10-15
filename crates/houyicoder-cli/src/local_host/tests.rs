@@ -1,25 +1,38 @@
 //! Tests for local host leases, shutdown scopes, and unlock ordering.
 
 use std::env::temp_dir;
-use std::fs::{create_dir_all, read_dir, remove_dir_all};
+#[cfg(target_os = "macos")]
+use std::fs::read_dir;
+use std::fs::{create_dir_all, remove_dir_all};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::process::id as process_id;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+#[cfg(unix)]
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
+#[cfg(target_os = "macos")]
 use houyicoder_api::provider::ModelProvider;
+#[cfg(unix)]
 use houyicoder_api::spawn::SpawnArgs;
+#[cfg(unix)]
 use houyicoder_api::tool::ToolCtx;
-use houyicoder_async::{PFut, PStream};
+#[cfg(unix)]
+use houyicoder_async::PFut;
+#[cfg(target_os = "macos")]
+use houyicoder_async::PStream;
 use houyicoder_client::Client;
+#[cfg(unix)]
 use houyicoder_context::{
     CheckpointId, CheckpointManifest, ContextBackend, ContextError, EventId, SessionEvent,
     SessionId, SessionLogEntry,
 };
 use houyicoder_core::agent::Runner;
 use houyicoder_core::agent::multi_agent::bus_types::AgentBus;
+#[cfg(unix)]
 use houyicoder_memory::InMemoryBackend;
+#[cfg(target_os = "macos")]
 use houyicoder_protocol::llm::{
     CompletionRequest, CompletionResponse, LlmEvent, ModelCapabilities, OutputItem, ProviderError,
     Usage,
@@ -27,16 +40,25 @@ use houyicoder_protocol::llm::{
 use houyicoder_service::composition::host_lifecycle::HostLifecycle;
 use houyicoder_service::composition::{BuildRunnerOptions, ResolvedProvider, build_runner};
 use houyicoder_tui::composition::shared_runtime;
+#[cfg(unix)]
 use tokio::runtime::Builder;
+#[cfg(unix)]
 use tokio::spawn;
+#[cfg(unix)]
 use tokio::sync::Notify;
+#[cfg(unix)]
 use tokio::sync::oneshot::channel;
+#[cfg(unix)]
 use tokio::task::yield_now;
 
 use super::*;
 use crate::composition::start_local_server;
-use crate::session::lock::{LockError, SessionLock};
+#[cfg(unix)]
+use crate::session::lock::LockError;
+use crate::session::lock::SessionLock;
+#[cfg(target_os = "macos")]
 use futures::stream::once;
+#[cfg(target_os = "macos")]
 use std::process::Command;
 
 fn temp_root() -> PathBuf {
@@ -77,12 +99,14 @@ fn test_fixture_roots_isolated() {
 
 /// A backend that parks when SubagentReturn is appended to the parent session
 /// log, standing in for a child driver inside its finalize tail.
+#[cfg(unix)]
 struct LatchingBackend {
     inner: Arc<InMemoryBackend>,
     entered: Arc<Notify>,
     release: Arc<Notify>,
 }
 
+#[cfg(unix)]
 impl ContextBackend for LatchingBackend {
     fn append(&self, event: SessionLogEntry) -> PFut<'_, Result<EventId, ContextError>> {
         if matches!(event.event, SessionEvent::SubagentReturn { .. }) {
@@ -231,7 +255,7 @@ fn test_release_joins_children_first() {
     });
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "macos")]
 fn make_test_repo(tag: &str) -> PathBuf {
     let dir = temp_dir().join(format!("houyi-lease-wt-{}-{tag}", process_id()));
     drop(remove_dir_all(&dir));
@@ -270,11 +294,13 @@ fn make_test_repo(tag: &str) -> PathBuf {
     dir
 }
 
+#[cfg(target_os = "macos")]
 struct GateProvider {
     entered: Arc<Notify>,
     release: Arc<Notify>,
 }
 
+#[cfg(target_os = "macos")]
 impl ModelProvider for GateProvider {
     fn complete(
         &self,
