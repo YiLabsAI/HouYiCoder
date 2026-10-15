@@ -556,12 +556,14 @@ fn build_request_body(req: &CompletionRequest) -> Value {
 }
 
 /// Derive the OpenAI prompt_cache_key from the request's symbolic breakpoints.
-/// When the Auto policy placed a SystemStaticPrefix breakpoint, hash the stable
-/// prefix (instructions + serialized tools) into a short hex label. Returns
-/// None when no breakpoint asks for a cache key (the None policy, or a
-/// provider that skips hints). The hash is deterministic so the same prefix
-/// reuses the cache across turns; a changed system prompt or tool set produces
-/// a new key + a deliberate miss.
+/// When the Auto policy placed a SystemStaticPrefix breakpoint, hash the static
+/// segment of the instructions, everything before dynamic_boundary, plus the
+/// tool names into a short hex label. The cwd-dependent suffix after the
+/// boundary stays out of the hash, so a working-directory change keeps the key
+/// stable and the static prefix reusable. Returns None when no breakpoint asks
+/// for a cache key (the None policy, or a provider that skips hints). The hash
+/// is deterministic so the same static prefix reuses the cache across turns; a
+/// changed static segment or tool set produces a new key and a deliberate miss.
 fn lower_prompt_cache_key(req: &CompletionRequest) -> Option<String> {
     let has_prefix_breakpoint = req
         .cache_breakpoints
@@ -570,8 +572,18 @@ fn lower_prompt_cache_key(req: &CompletionRequest) -> Option<String> {
     if !has_prefix_breakpoint {
         return None;
     }
+    // Hash the static segment only. An offset that was never threaded falls
+    // back to the whole instructions, which is the behavior from before the
+    // offset existed. get(..offset) also yields None for an offset that is out
+    // of range or not a char boundary, so the same fallback keeps the slice
+    // from panicking on a malformed offset.
+    let boundary = req.dynamic_boundary.unwrap_or(req.instructions.len());
+    let static_segment = req
+        .instructions
+        .get(..boundary)
+        .unwrap_or(&req.instructions);
     let mut hasher = DefaultHasher::new();
-    req.instructions.hash(&mut hasher);
+    static_segment.hash(&mut hasher);
     req.tools.iter().for_each(|t| t.name.hash(&mut hasher));
     Some(format!("houyi-{:016x}", hasher.finish()))
 }

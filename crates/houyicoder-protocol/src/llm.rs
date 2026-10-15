@@ -359,6 +359,18 @@ impl SpeedMode {
 pub struct CompletionRequest {
     pub model: String,
     pub instructions: String,
+    /// Byte offset into instructions where the cwd-dependent dynamic suffix
+    /// begins. The provider hashes only the segment before it into the
+    /// prompt-cache key, so a working-directory or environment change confined
+    /// to the suffix keeps the key stable instead of rotating it. The segment
+    /// before the boundary is stable across a cwd change but not byte-identical
+    /// across every turn: the memory index lives there and is rewritten at a
+    /// refresh. None means no boundary was threaded, so the whole instructions
+    /// counts as static and the key behaves as it did before the offset
+    /// existed. The field is optional under serde so a request serialized
+    /// without it reads back None.
+    #[serde(default)]
+    pub dynamic_boundary: Option<usize>,
     pub input: Vec<InputItem>,
     pub tools: Vec<ToolDef>,
     pub settings: ModelSettings,

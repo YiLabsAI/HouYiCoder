@@ -88,6 +88,7 @@ impl Summarizer for LlmSummarizer {
                 let req = CompletionRequest {
                     model: model.clone(),
                     instructions: instructions.clone(),
+                    dynamic_boundary: None,
                     input,
                     tools: Vec::new(),
                     settings: ModelSettings::default(),

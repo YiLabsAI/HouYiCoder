@@ -749,6 +749,60 @@ fn test_boundary_set_without_project() {
     remove_dir_all(&scratch).ok();
 }
 
+/// The assemble path carries the boundary into AssembledContext, so the
+/// request builder threads a real interior offset instead of dropping it. A
+/// zero would collapse every prompt-cache key onto one value; the whole
+/// length would let the cwd suffix rotate it. The memory index lands in the
+/// static prefix, so the cacheable segment survives a working-directory
+/// change and only the project-context suffix diverges.
+#[test]
+fn test_assemble_threads_boundary() {
+    let index = "- [Note](note.md) stable summary";
+    let mut dir_a = temp_dir();
+    dir_a.push(format!("ctx-test-assemble-a-{}", id()));
+    create_dir_all(&dir_a).expect("mkdir a");
+    write(dir_a.join("AGENTS.md"), "# Project A\n\nrules A.").expect("write a");
+    let mut dir_b = temp_dir();
+    dir_b.push(format!("ctx-test-assemble-b-{}", id()));
+    create_dir_all(&dir_b).expect("mkdir b");
+    write(dir_b.join("AGENTS.md"), "# Project B\n\nrules B.").expect("write b");
+
+    let a = ContextBuilder::new()
+        .with_cwd(dir_a.clone())
+        .build_prospective(&[], Some(index));
+    let b = ContextBuilder::new()
+        .with_cwd(dir_b.clone())
+        .build_prospective(&[], Some(index));
+
+    assert!(a.dynamic_boundary > 0, "boundary is interior, not zero");
+    assert!(
+        a.dynamic_boundary < a.system.len(),
+        "boundary precedes the dynamic suffix"
+    );
+    let prefix_a = &a.system[..a.dynamic_boundary];
+    let prefix_b = &b.system[..b.dynamic_boundary];
+    assert_eq!(
+        prefix_a, prefix_b,
+        "static prefix byte-stable across cwds through the assemble path"
+    );
+    assert!(
+        prefix_a.contains("stable summary"),
+        "memory index sits in the static prefix, not the suffix"
+    );
+    assert!(
+        a.system[a.dynamic_boundary..].contains("Project A"),
+        "suffix carries the per-cwd project context"
+    );
+    assert_ne!(
+        a.system[a.dynamic_boundary..],
+        b.system[b.dynamic_boundary..],
+        "dynamic suffix differs per cwd"
+    );
+
+    remove_dir_all(&dir_a).ok();
+    remove_dir_all(&dir_b).ok();
+}
+
 #[test]
 fn test_agent_directory_round_trip() {
     let cb = ContextBuilder::new();

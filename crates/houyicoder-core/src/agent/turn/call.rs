@@ -289,6 +289,10 @@ impl Runner {
             let mut request = CompletionRequest {
                 model: normalize_model_for_api(&active_model),
                 instructions,
+                // The configured instructions append after the dynamic suffix,
+                // so the offset into the assembled system is still where the
+                // suffix begins in the final string.
+                dynamic_boundary: Some(assembled.dynamic_boundary),
                 input: assembled.messages,
                 tools: self.tools.tool_defs(),
                 settings,

@@ -9,6 +9,7 @@ fn req(input: Vec<InputItem>, tools: Vec<ToolDef>) -> CompletionRequest {
     CompletionRequest {
         model: "test-model".into(),
         instructions: "you are a test".into(),
+        dynamic_boundary: None,
         input,
         tools,
         settings: ModelSettings {
@@ -218,6 +219,78 @@ fn test_cache_key_excludes_history() {
     assert_eq!(
         key_with_history, key,
         "input history must not enter the cache-relevant hash"
+    );
+}
+
+/// The cache key hashes only the static segment before dynamic_boundary, so two
+/// requests that share a static prefix but differ in the cwd-dependent dynamic
+/// suffix produce the same key. Before the offset reached the provider the key
+/// hashed the whole instructions and rotated on every cwd change. This asserts
+/// the offline key stability only: whether the endpoint then returns a cache
+/// hit depends on the request-body order and the usage the endpoint reports.
+/// The contrast at the end shows the boundary, not a coincidence, makes the two
+/// equal, since with no offset threaded the differing suffixes rotate the key.
+#[test]
+fn test_cache_key_excludes_dynamic() {
+    let static_segment = "you are a test";
+    let bp = vec![CacheBreakpoint {
+        kind: BreakpointKind::SystemStaticPrefix,
+        hint: CacheHint::Ephemeral(CacheTtl::OneHour),
+    }];
+    let tools = vec![ToolDef {
+        name: "edit".into(),
+        description: "edit a file".into(),
+        input_schema: json!({"type": "object"}),
+    }];
+    // Same static segment, two different working directories in the suffix.
+    let mut a = req(
+        vec![InputItem::User {
+            content: "hi".into(),
+        }],
+        tools.clone(),
+    );
+    a.instructions = format!("{static_segment}\n\ncwd: /workspace/a");
+    a.dynamic_boundary = Some(static_segment.len());
+    a.cache_breakpoints = bp.clone();
+    let mut b = req(
+        vec![InputItem::User {
+            content: "hi".into(),
+        }],
+        tools.clone(),
+    );
+    b.instructions = format!("{static_segment}\n\ncwd: /workspace/b");
+    b.dynamic_boundary = Some(static_segment.len());
+    b.cache_breakpoints = bp.clone();
+
+    let key_a = build_request_body(&a)["prompt_cache_key"]
+        .as_str()
+        .expect("key lowered")
+        .to_string();
+    let key_b = build_request_body(&b)["prompt_cache_key"]
+        .as_str()
+        .expect("key lowered")
+        .to_string();
+    assert_eq!(
+        key_a, key_b,
+        "a cwd change confined to the dynamic suffix keeps the key stable"
+    );
+
+    // Contrast: with no boundary threaded, the whole instructions is the static
+    // segment, so the differing suffixes rotate the key. This is the behavior
+    // the boundary fixes, and it proves the equality above is not trivial.
+    a.dynamic_boundary = None;
+    b.dynamic_boundary = None;
+    let key_a_unbounded = build_request_body(&a)["prompt_cache_key"]
+        .as_str()
+        .expect("key lowered")
+        .to_string();
+    let key_b_unbounded = build_request_body(&b)["prompt_cache_key"]
+        .as_str()
+        .expect("key lowered")
+        .to_string();
+    assert_ne!(
+        key_a_unbounded, key_b_unbounded,
+        "without the boundary the dynamic suffix enters the key"
     );
 }
 
@@ -793,6 +866,7 @@ fn req_with(model: &str, settings: ModelSettings) -> CompletionRequest {
     CompletionRequest {
         model: model.into(),
         instructions: "x".into(),
+        dynamic_boundary: None,
         input: vec![InputItem::User {
             content: "hi".into(),
         }],

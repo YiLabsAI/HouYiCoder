@@ -20,6 +20,7 @@ async fn test_openai_roundtrip() {
     let req = CompletionRequest {
         model,
         instructions: "Reply with exactly: pong".into(),
+        dynamic_boundary: None,
         input: vec![InputItem::User {
             content: "ping".into(),
         }],

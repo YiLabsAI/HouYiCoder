@@ -68,6 +68,11 @@ impl SectionKind {
 #[derive(Debug, Clone, Default)]
 pub struct AssembledContext {
     pub system: String,
+    /// Byte offset into system where the cwd-dependent dynamic suffix begins.
+    /// The static prefix before it is what the prompt-cache key treats as
+    /// stable; carried out of assembly so the request builder can thread it to
+    /// the provider instead of dropping it here.
+    pub dynamic_boundary: usize,
     pub messages: Vec<InputItem>,
     pub measurement: ContextMeasurement,
 }
@@ -415,6 +420,7 @@ impl ContextBuilder {
         };
         AssembledContext {
             system: prompt.text,
+            dynamic_boundary: prompt.dynamic_boundary,
             messages,
             measurement,
         }

@@ -29,6 +29,7 @@ fn request() -> CompletionRequest {
     CompletionRequest {
         model: "test-model".into(),
         instructions: "you are a test agent".into(),
+        dynamic_boundary: None,
         input: vec![InputItem::User {
             content: "hello".into(),
         }],

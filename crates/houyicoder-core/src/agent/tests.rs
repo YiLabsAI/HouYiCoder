@@ -58,9 +58,11 @@ mod abort_boundary;
 #[cfg(test)]
 mod overflow;
 
+#[cfg(test)]
+mod cache_boundary;
+
 // length is pub(crate): turn_usage_emit_tests (a sibling in agent) reuses
-// ScriptRawProvider from it. The other six submodules are private to tests
-// (no cross-module references); length is the only one with an external user.
+// ScriptRawProvider from it.
 #[cfg(test)]
 pub(crate) mod length;
 

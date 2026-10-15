@@ -296,6 +296,7 @@ async fn test_overflow_provider_complete() {
         .complete(CompletionRequest {
             model: "test".into(),
             instructions: String::new(),
+            dynamic_boundary: None,
             input: vec![],
             tools: vec![],
             settings: ModelSettings::default(),
@@ -703,6 +704,7 @@ async fn test_fake_stream_complete() {
         .complete(CompletionRequest {
             model: "test".into(),
             instructions: String::new(),
+            dynamic_boundary: None,
             input: vec![],
             tools: vec![],
             settings: ModelSettings::default(),

@@ -930,6 +930,7 @@ async fn test_main_final_complete_returns() {
         .complete(CompletionRequest {
             model: "test".into(),
             instructions: String::new(),
+            dynamic_boundary: None,
             input: vec![],
             tools: vec![],
             settings: ModelSettings::default(),

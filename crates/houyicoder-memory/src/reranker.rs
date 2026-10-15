@@ -58,6 +58,7 @@ impl MemoryReranker for SemanticReranker {
             let req = CompletionRequest {
                 model,
                 instructions,
+                dynamic_boundary: None,
                 input: vec![InputItem::User { content: input }],
                 tools: Vec::new(),
                 settings: ModelSettings::default(),

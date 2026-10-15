@@ -8,6 +8,7 @@ fn test_fake_returns_canned_text() {
     let req = CompletionRequest {
         model: "test".into(),
         instructions: "you are a test".into(),
+        dynamic_boundary: None,
         input: vec![InputItem::User {
             content: "hi".into(),
         }],
@@ -50,6 +51,7 @@ fn test_request_response_serde_round() {
     let req = CompletionRequest {
         model: "m".into(),
         instructions: "sys".into(),
+        dynamic_boundary: None,
         input: vec![InputItem::User {
             content: "hi".into(),
         }],
@@ -87,6 +89,7 @@ fn stub_req() -> CompletionRequest {
     CompletionRequest {
         model: "test".into(),
         instructions: String::new(),
+        dynamic_boundary: None,
         input: vec![InputItem::User {
             content: "hi".into(),
         }],
@@ -157,6 +160,7 @@ fn test_with_error_propagates() {
     let req = CompletionRequest {
         model: "test".into(),
         instructions: "".into(),
+        dynamic_boundary: None,
         input: vec![],
         tools: vec![],
         settings: ModelSettings::default(),
@@ -169,6 +173,7 @@ fn test_with_error_propagates() {
     let err2 = pollster::block_on(p2.complete(CompletionRequest {
         model: "test".into(),
         instructions: "".into(),
+        dynamic_boundary: None,
         input: vec![],
         tools: vec![],
         settings: ModelSettings::default(),
