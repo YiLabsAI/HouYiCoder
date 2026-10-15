@@ -155,8 +155,8 @@ def _check_flat_test_peer(
         if "/target/" in posix or posix.split("/src/")[0].endswith("/tests"):
             continue
         is_tui_src = "houyicoder-tui/src/" in posix
-        if is_tui_src and p.name.endswith("_tests.rs"):
-            tui_violations.append(f"{posix}: flat *_tests.rs file in tui")
+        if "/src/" in posix and p.name.endswith("_tests.rs"):
+            tui_violations.append(f"{posix}: flat *_tests.rs file in src/")
         text = p.read_text(encoding="utf-8")
         if "/tests/" not in posix:
             for lineno, line in enumerate(text.splitlines(), 1):

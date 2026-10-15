@@ -773,26 +773,6 @@ impl Runner {
     }
 }
 
-#[cfg(test)]
-mod abort_tool_tests;
-#[cfg(test)]
-mod ask_question_tests;
-#[cfg(test)]
-mod budget_pressure_gate_tests;
-#[cfg(test)]
-mod denied_agents_tests;
-#[cfg(test)]
-mod hook_gate_tests;
 mod outcome_counts;
 #[cfg(test)]
-mod run_completion_tests;
-#[cfg(test)]
-mod runner_tests;
-#[cfg(test)]
-mod tool_duration_tests;
-#[cfg(test)]
-mod tool_result_baseline_tests;
-#[cfg(test)]
-mod turn_abort_tests;
-#[cfg(test)]
-mod turn_usage_emit_tests;
+mod tests;

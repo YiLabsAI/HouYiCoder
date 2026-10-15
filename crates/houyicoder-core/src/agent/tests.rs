@@ -29,6 +29,17 @@ use std::process::id;
 use std::sync::Arc;
 use std::sync::Mutex;
 use tokio::task::yield_now;
+pub(super) mod abort_tool;
+mod ask_question;
+mod budget_pressure_gate;
+mod denied_agents;
+mod hook_gate;
+pub(crate) mod run_completion;
+mod tool_duration;
+mod tool_result_baseline;
+mod turn_abort;
+mod turn_usage_emit;
+
 #[cfg(test)]
 mod mid_turn;
 

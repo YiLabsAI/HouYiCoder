@@ -43,8 +43,6 @@ use fs::File;
 use log_index::SessionWriteState;
 
 #[cfg(test)]
-mod log_index_tests;
-#[cfg(test)]
 mod window;
 
 pub struct LocalFileBackend {

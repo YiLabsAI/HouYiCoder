@@ -1,8 +1,8 @@
 //! Extracted abort-during-tool-execution test. Kept in a separate file so
 //! loop_tests.rs stays under the file-size gate.
 
+use super::runner_with;
 use super::*;
-use crate::agent::runner_tests::runner_with;
 use crate::provider::test_support::FakeProvider;
 use houyicoder_api::tool::{Tool, ToolCtx};
 use houyicoder_context::SessionEvent;

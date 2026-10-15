@@ -3,9 +3,9 @@ use crate::agent::ToolRegistry;
 use crate::agent::auto_dream::DreamRunner;
 use crate::agent::memory::{MemoryGates, MemoryRuntime, MutationLog};
 use crate::agent::reward_snapshot::capture_reward_snapshot;
-use crate::agent::run_completion_tests::RefusesResults;
 use crate::agent::runner_config::RunnerConfig;
-use crate::agent::runner_tests::{GuardedTool, approvals_of, guarded_runner, runner_with_cfg0};
+use crate::agent::tests::run_completion::RefusesResults;
+use crate::agent::tests::{GuardedTool, approvals_of, guarded_runner, runner_with_cfg0};
 use crate::agent::{ApprovalDecision, RunOutcome};
 use crate::provider::test_support::FakeProvider;
 use houyicoder_api::agent_event::{

@@ -14,7 +14,7 @@ use crate::agent::Runner;
 use crate::agent::hook::HookPayload;
 use crate::agent::hook::registry::HookRegistry;
 use crate::agent::hook::{Hook, HookContext, HookError, HookEvent, HookSource, HookVerdict};
-use crate::agent::runner_tests::runner_with;
+use crate::agent::tests::runner_with;
 use crate::agent::{RunOutcome, ToolRegistry};
 use crate::provider::test_support::FakeProvider;
 use houyicoder_api::memory::MemoryProvider;

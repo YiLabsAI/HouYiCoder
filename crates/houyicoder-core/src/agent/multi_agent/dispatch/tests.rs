@@ -8,7 +8,7 @@ use houyicoder_async::PFut;
 
 use super::*;
 use crate::agent::ToolRegistry;
-use crate::agent::runner_tests::runner_with;
+use crate::agent::tests::runner_with;
 use crate::provider::test_support::FakeProvider;
 
 /// A handle that accepts nothing, but enough of a wired port that a join

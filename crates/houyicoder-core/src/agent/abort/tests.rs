@@ -3,7 +3,7 @@
 use super::*;
 use crate::agent::RunOutcome;
 use crate::agent::ToolRegistry;
-use crate::agent::runner_tests::runner_with;
+use crate::agent::tests::runner_with;
 use crate::provider::test_support::FakeProvider;
 use houyicoder_context::SessionId;
 use houyicoder_protocol::llm::{CompletionResponse, OutputItem, Usage};

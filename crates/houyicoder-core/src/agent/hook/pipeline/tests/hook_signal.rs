@@ -8,7 +8,7 @@ use houyicoder_protocol::llm::{CompletionResponse, OutputItem, Usage};
 
 use crate::agent::ToolRegistry;
 use crate::agent::hook::{HookError, HookEvent, HookOutcome, HookVerdict};
-use crate::agent::runner_tests::runner_with;
+use crate::agent::tests::runner_with;
 use crate::provider::test_support::FakeProvider;
 use houyicoder_context::{HookErrorKind, HookEventKind, HookVerdictKind};
 

@@ -10,7 +10,7 @@ use houyicoder_context::{
     session_class::{INDEX_FILE, LOG_FILE, session_dir},
 };
 
-use super::log_index::SessionWriteState;
+use super::SessionWriteState;
 use crate::local_file::LocalFileBackend;
 use std::env::temp_dir;
 

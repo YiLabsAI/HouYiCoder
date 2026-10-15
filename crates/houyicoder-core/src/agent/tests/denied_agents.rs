@@ -14,7 +14,7 @@ use houyicoder_context::SessionId;
 use houyicoder_protocol::extension::ToolError;
 use houyicoder_protocol::llm::{CompletionResponse, OutputItem, Usage};
 
-use crate::agent::runner_tests::runner_with;
+use super::runner_with;
 use crate::agent::{ApprovalDecision, RunOutcome, ToolRegistry};
 use crate::provider::test_support::FakeProvider;
 use houyicoder_api::provider::ModelProvider;

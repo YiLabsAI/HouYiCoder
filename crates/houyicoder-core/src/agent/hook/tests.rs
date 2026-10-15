@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use super::CompactTrigger;
 use super::ToolResult;
 use crate::agent::ToolRegistry;
-use crate::agent::runner_tests::runner_with;
+use crate::agent::tests::runner_with;
 use crate::provider::test_support::FakeProvider;
 use houyicoder_api::agent_event::{AgentEventHandlers, UserNoticeEvent};
 use std::sync::{Arc, Mutex};

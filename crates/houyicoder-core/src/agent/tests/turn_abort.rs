@@ -14,7 +14,7 @@ use houyicoder_protocol::llm::{
 };
 use tokio::sync::Notify;
 
-use crate::agent::runner_tests::runner_with;
+use super::runner_with;
 use crate::agent::{RunError, RunOutcome, ToolRegistry};
 use crate::provider::test_support::FakeProvider;
 use futures::StreamExt;

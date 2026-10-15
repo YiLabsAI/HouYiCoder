@@ -10,12 +10,12 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use houyicoder_context::{SessionEvent, SessionId};
 use houyicoder_protocol::llm::{CompletionResponse, OutputItem, Usage};
 
+use super::{GuardedTool, runner_with};
 use crate::agent::Runner;
 use crate::agent::ToolRegistry;
 use crate::agent::hook::{
     Hook, HookContext, HookError, HookEvent, HookRegistry, HookSource, HookVerdict,
 };
-use crate::agent::runner_tests::{GuardedTool, runner_with};
 use crate::agent::{ApprovalDecision, RunOutcome};
 use crate::provider::test_support::FakeProvider;
 

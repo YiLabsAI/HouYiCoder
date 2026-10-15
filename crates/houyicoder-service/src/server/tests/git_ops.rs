@@ -2,7 +2,7 @@
 //! for git ops, durable otherwise) + the ask-before-git toggle reply.
 //! Extracted from server.rs to keep the file under the size gate.
 
-use super::Server;
+use super::super::Server;
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_context::SessionId;
 use houyicoder_core::agent::Runner;

@@ -270,3 +270,6 @@ impl IndexWriter {
         );
     }
 }
+
+#[cfg(test)]
+mod tests;

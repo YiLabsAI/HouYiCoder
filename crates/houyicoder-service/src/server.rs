@@ -678,10 +678,4 @@ pub(crate) fn log_bad_frame(frame: &str, e: &serde_json::Error) {
 }
 
 #[cfg(test)]
-mod git_ops_tests;
-
-#[cfg(test)]
-mod ask_rule_tests;
-
-#[cfg(test)]
-mod connection_failure_tests;
+mod tests;

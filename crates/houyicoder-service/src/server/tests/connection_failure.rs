@@ -6,8 +6,8 @@
 
 #![cfg(test)]
 
-use super::Server;
-use super::frame_carrier::FrameCarrier;
+use super::super::Server;
+use super::super::frame_carrier::FrameCarrier;
 use futures::StreamExt;
 use futures::channel::mpsc;
 use houyicoder_api::tool::{Tool, ToolCtx};
