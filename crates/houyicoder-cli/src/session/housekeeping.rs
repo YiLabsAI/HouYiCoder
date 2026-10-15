@@ -57,11 +57,13 @@ use houyicoder_service::lifecycle::prune::EMPTY_TTL_SECS;
 use std::env::current_dir;
 #[cfg(test)]
 use std::env::temp_dir;
+#[cfg(unix)]
 use std::fs::File;
 use std::fs::create_dir_all;
 use std::fs::metadata;
 #[cfg(test)]
 use std::fs::read;
+#[cfg(unix)]
 use std::fs::read_dir;
 #[cfg(test)]
 use std::fs::remove_dir_all;

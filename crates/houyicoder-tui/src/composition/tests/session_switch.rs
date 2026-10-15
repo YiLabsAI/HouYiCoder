@@ -232,13 +232,16 @@ fn test_switch_drops_pending_read() {
 
 #[test]
 fn test_swap_bumps_transcript_version() {
+    // A fresh session's transcript starts at zero; the switch bumps it once
+    // so no cached render rides across the swap. Asserting the exact count
+    // avoids comparing against the leaving session's count, which depends on
+    // platform-dependent startup notices.
     let mut app = test_app();
-    let v_before = app.sessions.current.transcript.revision();
     app.switch_session(test_bundle().0);
-    assert_ne!(
+    assert_eq!(
         app.sessions.current.transcript.revision(),
-        v_before,
-        "version bumped to invalidate cache"
+        1,
+        "the swapped-in session carries one version bump"
     );
 }
 

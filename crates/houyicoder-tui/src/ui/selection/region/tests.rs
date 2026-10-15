@@ -95,8 +95,8 @@ fn test_scroll_intents_move() {
     assert_eq!(app.whole_scroll().top_offset(), start);
 }
 
-/// A copy intent raises the notice for the text the release copied: the leaf
-/// writes the clipboard and names the effect, the router shows it.
+/// A copy intent raises the notice for the copied text. The wording depends
+/// on the platform's clipboard (copied vs sent), the char count does not.
 #[test]
 fn test_copied_raises_notice() {
     let mut app = rendered_working();
@@ -104,10 +104,7 @@ fn test_copied_raises_notice() {
     app.apply_region_intent(RegionIntent::Copied("hi".into()));
 
     let out = render_text(&app, 80, 24);
-    assert!(
-        out.contains("copied 2 chars"),
-        "the copy notice is shown:\n{out}"
-    );
+    assert!(out.contains("2 chars"), "the copy notice is shown:\n{out}");
 }
 
 /// A toggle intent clears the click it consumed, so the next press is not read

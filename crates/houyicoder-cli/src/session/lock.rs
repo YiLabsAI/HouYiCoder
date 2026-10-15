@@ -5,9 +5,11 @@
 //! Unix holds a real flock; a non-unix build has no flock primitive, so
 //! acquire is a no-op guard and the gap is explicit in the type.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
+#[cfg(unix)]
 use houyicoder_context::SessionId;
+#[cfg(unix)]
 use houyicoder_context::session_class::session_dir;
 #[cfg(unix)]
 use nix::errno::Errno;
@@ -20,8 +22,11 @@ use std::env::temp_dir;
 use std::error::Error;
 use std::fmt::Display;
 use std::fmt::Formatter;
+#[cfg(unix)]
 use std::fs::DirBuilder;
+#[cfg(unix)]
 use std::fs::File;
+#[cfg(unix)]
 use std::fs::OpenOptions;
 #[cfg(test)]
 use std::fs::create_dir_all;
@@ -29,6 +34,8 @@ use std::fs::create_dir_all;
 use std::fs::remove_dir_all;
 #[cfg(test)]
 use std::fs::write;
+#[cfg(unix)]
+use std::path::PathBuf;
 #[cfg(test)]
 use std::process::id;
 

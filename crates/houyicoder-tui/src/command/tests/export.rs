@@ -14,6 +14,7 @@ use crate::test_harness::connected_app;
 use crate::view::export_log::{ExportLog, ExportPayload};
 use std::env::temp_dir;
 use std::fs::create_dir_all;
+#[cfg(unix)]
 use std::fs::metadata;
 use std::fs::read_to_string;
 use std::fs::remove_dir;

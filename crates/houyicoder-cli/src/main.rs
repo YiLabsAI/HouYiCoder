@@ -28,10 +28,12 @@ use std::path::{Path, PathBuf};
 use std::process::exit;
 use std::sync::Arc;
 use std::sync::Mutex;
+#[cfg(unix)]
 use std::sync::mpsc::channel;
 
 use houyicoder_service::composition::host_lifecycle::HostLifecycle;
 use houyicoder_service::composition::session_log_root;
+#[cfg(unix)]
 use houyicoder_tui::agent_message::SessionMessage;
 use houyicoder_tui::composition::{FrontendStartup, RunnerBundle, shared_runtime};
 
@@ -55,18 +57,22 @@ use crate::session::resume_bundle::build_bundle_for_fork;
 use crate::session::resume_bundle::build_bundle_for_resume_sid;
 use futures::StreamExt;
 use futures::channel::mpsc;
+#[cfg(unix)]
 use houyicoder_client::{Client, UdsTransport};
 use houyicoder_context::SessionId;
 use houyicoder_core::agent::Runner;
 use houyicoder_permission::FileRuleStore;
+#[cfg(unix)]
 use houyicoder_permission::ModeGate;
 use houyicoder_protocol::acpx::AcpxCapabilities;
+#[cfg(unix)]
 use houyicoder_service::CancellationToken;
 use houyicoder_service::acp::adapter::AcpAdapter;
 use houyicoder_service::acp::carrier::AcpIo;
 use houyicoder_service::acp::server::AcpServer;
 use houyicoder_service::composition::BuildRunnerOptions;
 use houyicoder_service::composition::ResolvedProvider;
+#[cfg(unix)]
 use houyicoder_service::composition::SessionHost;
 use houyicoder_service::composition::build_runner;
 use houyicoder_service::composition::latest_session_sid;
@@ -74,13 +80,17 @@ use houyicoder_service::composition::resolve_provider;
 use houyicoder_service::composition::workspace_cwd;
 use houyicoder_service::diagnostics::install;
 use houyicoder_service::lifecycle::SessionLeaseStore;
+#[cfg(unix)]
 use houyicoder_service::server::EventSequencer;
+#[cfg(unix)]
 use houyicoder_service::uds;
 use houyicoder_tui::app::run_with_runner;
+#[cfg(unix)]
 use std::fs::remove_file;
 use std::io::stdin;
 use std::io::stdout;
 use std::io::{BufRead, Write};
+#[cfg(unix)]
 use std::process::id;
 use tokio::runtime::Builder;
 

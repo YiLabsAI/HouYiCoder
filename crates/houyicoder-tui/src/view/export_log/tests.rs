@@ -1,5 +1,6 @@
 use super::*;
 use std::env::temp_dir;
+#[cfg(unix)]
 use std::fs::metadata;
 use std::fs::read;
 use std::fs::remove_file;

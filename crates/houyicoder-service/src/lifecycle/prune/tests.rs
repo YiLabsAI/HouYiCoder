@@ -14,6 +14,7 @@ use crate::lifecycle::repair::repair_child_descriptors;
 
 use fs::FileTimes;
 use fs::OpenOptions;
+#[cfg(unix)]
 use fs::Permissions;
 use houyicoder_context::session_class::recent_user_sessions;
 use houyicoder_context::{

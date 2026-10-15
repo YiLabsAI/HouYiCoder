@@ -165,8 +165,9 @@ fn test_status_drag_and_moved() {
 }
 
 /// Releasing a drag in the status bar copies the text it selected and says so.
-/// The notice is the router's job under the intent model, which is what makes
-/// every region report a copy the same way instead of only the transcript.
+/// The notice is the router's job under the intent model, so every region
+/// reports a copy the same way. The wording depends on the platform's
+/// clipboard (copied vs sent), the char count does not.
 #[test]
 fn test_status_release_copies() {
     let mut app = working_app();
@@ -196,7 +197,7 @@ fn test_status_release_copies() {
 
     let out = render_text(&app, 100, 28);
     assert!(
-        out.contains("copied"),
+        out.contains("chars"),
         "the release reports the copy it made:\n{out}"
     );
 }
