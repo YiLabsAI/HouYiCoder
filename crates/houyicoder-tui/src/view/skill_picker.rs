@@ -4,6 +4,8 @@
 //! @skill:name into the input box. Mirrors the slash-palette shape so
 //! the two activation surfaces read as one interaction idiom.
 
+pub(crate) mod state;
+
 use ratatui::{
     Frame,
     layout::Rect,

@@ -7,6 +7,8 @@
 //! log-selector shape (a filtered list, not a modal) at a simplified
 //! density (sid OR title substring, no fuse / no preview / no cross-project).
 
+pub mod state;
+
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},

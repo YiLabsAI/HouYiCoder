@@ -1,5 +1,7 @@
 //! /hooks pane content: a 2-level read-only browser for the hook surface.
 
+pub(crate) mod state;
+
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},

@@ -2,13 +2,13 @@
 //! swap. Opened by Enter on a Subagent fold-group line; closed by
 //! Shift+Up/Down. Esc only interrupts the viewed child's current turn.
 
-use super::App;
-use super::parked_view_states::ChildViewState;
 use crate::agent_message::FleetEntry;
 use crate::notifications::NotifKind;
 use crate::notifications::Notification;
 use crate::records::{TeammateView, TranscriptLine};
 use crate::run_control::ClientCommand;
+use crate::state::App;
+use crate::state::parked_view_states::ChildViewState;
 use houyicoder_protocol::frontend::SessionId;
 use std::time::Duration;
 

@@ -19,7 +19,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 
 ACTIVE_OWNERS = {
-    "crates/houyicoder-tui/src/state.rs:App": {
+    "crates/houyicoder-tui/src/app/state.rs:App": {
         # The shell: the Ui, the sessions aggregate, and the workflow. The budget guards against a new field landing here instead of on the owner that changes with it.
         "fields": 3,
         "mut_app": 44,
@@ -28,14 +28,14 @@ ACTIVE_OWNERS = {
         # The frontend's presentation and interaction state, including the draw pass's quit flag, renderer, and prepared frame.
         "fields": 25,
     },
-    "crates/houyicoder-tui/src/renderer.rs:Renderer": {
+    "crates/houyicoder-tui/src/ui/renderer.rs:Renderer": {
         # The draw pass's reusable caches: the per-line parse cache and the
         # transcript's pre-rendered slot rows. Both outlive a frame and are
         # cleared together on a session switch, so nothing parsed or
         # pre-rendered for the old session rides into the new one.
         "fields": 2,
     },
-    "crates/houyicoder-tui/src/renderer.rs:PreparedFrame": {
+    "crates/houyicoder-tui/src/ui/renderer.rs:PreparedFrame": {
         # The last successfully drawn frame: the measured region rectangles,
         # the feedback dimensions the count and layout paths read back, and
         # the per-row keys the click and Ctrl+O paths resolve against. The
@@ -59,7 +59,7 @@ ACTIVE_OWNERS = {
         # The presented session: identity, connection, run lifecycle, tally, pending ask, restore stash, checklist, capabilities, transcript read state, and transcript.
         "fields": 16,
     },
-    "crates/houyicoder-tui/src/sessions.rs:Sessions": {
+    "crates/houyicoder-tui/src/session/sessions.rs:Sessions": {
         # The presented session, the resumable catalog, and the current session's persistence ports, swapped together.
         "fields": 3,
     },
@@ -99,7 +99,7 @@ ACTIVE_OWNERS = {
         # The child snapshots the host pushes, in first-observed order.
         "fields": 1,
     },
-    "crates/houyicoder-tui/src/fleet/strip_state.rs:FleetStripState": {
+    "crates/houyicoder-tui/src/view/fleet/strip_state.rs:FleetStripState": {
         # The footer fleet strip's selection and the repaint pacing of its live
         # elapsed counters. The geometry one draw produced lives in that
         # frame's layout snapshot, not here.
@@ -113,7 +113,7 @@ ACTIVE_OWNERS = {
         # The model catalog with the applied model, and the commit awaiting its reply.
         "fields": 2,
     },
-    "crates/houyicoder-tui/src/state/model_draft.rs:ModelDraft": {
+    "crates/houyicoder-tui/src/view/model_pane/draft.rs:ModelDraft": {
         # The model pane's draft: focused row, adjusted level and tier, the setting the arrows take, and the dirty flag.
         "fields": 6,
     },
@@ -125,54 +125,54 @@ ACTIVE_OWNERS = {
         # The injected trajectory, snapshot, and export read ports.
         "fields": 3,
     },
-    "crates/houyicoder-tui/src/run_metrics.rs:RunMetrics": {
+    "crates/houyicoder-tui/src/session/run_metrics.rs:RunMetrics": {
         # The cumulative run metrics, reset whole on a session switch.
         "fields": 3,
     },
-    "crates/houyicoder-tui/src/run_state.rs:ToolRuntime": {
+    "crates/houyicoder-tui/src/session/run_state.rs:ToolRuntime": {
         # The per-call tool runtime: which calls are in flight and the bash
         # ticker with the revision the slot cache keys on. One owner because
         # the ticker and its revision have to move together, and a tick only
         # counts for a call the run still tracks.
         "fields": 3,
     },
-    "crates/houyicoder-tui/src/state/index_build.rs:IndexBuild": {
+    "crates/houyicoder-tui/src/transcript/index_build.rs:IndexBuild": {
         # The full-scan index build's progress mirror and the chunk a worker still reads.
         "fields": 5,
     },
-    "crates/houyicoder-tui/src/rows/last_row_keys.rs:LastRowKeys": {
+    "crates/houyicoder-tui/src/ui/rows/last_row_keys.rs:LastRowKeys": {
         # The per-row keys of the last visible window, all taken from one row set in a single replace.
         "fields": 4,
     },
-    "crates/houyicoder-tui/src/rows/display_rows_cache.rs:DisplayRowsCache": {
+    "crates/houyicoder-tui/src/ui/rows/display_rows_cache.rs:DisplayRowsCache": {
         # The cached slot rows and the key they were built for.
         "fields": 2,
     },
-    "crates/houyicoder-tui/src/rows/row_set.rs:RowSet": {
+    "crates/houyicoder-tui/src/ui/rows/row_set.rs:RowSet": {
         # The rows of one view with the metadata each row carries; push and the batch replace are the only writers.
         "fields": 7,
     },
-    "crates/houyicoder-tui/src/permission_pane_state.rs:PermissionPaneState": {
+    "crates/houyicoder-tui/src/view/capability/state.rs:PermissionPaneState": {
         # The permission pane's tab, cursor, input sub-mode, and search buffer.
         "fields": 4,
     },
-    "crates/houyicoder-tui/src/hooks_state.rs:HooksPaneState": {
+    "crates/houyicoder-tui/src/view/hooks_pane/state.rs:HooksPaneState": {
         # The hooks pane's drill level and selection cursor.
         "fields": 2,
     },
-    "crates/houyicoder-tui/src/skill_picker_state.rs:SkillPickerState": {
+    "crates/houyicoder-tui/src/view/skill_picker/state.rs:SkillPickerState": {
         # The skill picker's open flag and list cursor.
         "fields": 2,
     },
-    "crates/houyicoder-tui/src/paste.rs:PendingPaste": {
+    "crates/houyicoder-tui/src/input/paste.rs:PendingPaste": {
         # The bracketed-paste accumulator and the stamp of its last chunk.
         "fields": 2,
     },
-    "crates/houyicoder-tui/src/layout_feedback.rs:LayoutFeedback": {
+    "crates/houyicoder-tui/src/ui/layout_feedback.rs:LayoutFeedback": {
         # The last render's measured dims and the caret position the input method parked.
         "fields": 4,
     },
-    "crates/houyicoder-tui/src/layout_snapshot.rs:LayoutSnapshot": {
+    "crates/houyicoder-tui/src/ui/layout_snapshot.rs:LayoutSnapshot": {
         # The geometry one draw produced: each content region's rectangle
         # beside the rows it rendered, the jump-to-bottom label, the two
         # footer strips' click rects, and the height the footer budget
@@ -180,23 +180,23 @@ ACTIVE_OWNERS = {
         # and rows; the status-bar hint reads the granted height.
         "fields": 13,
     },
-    "crates/houyicoder-tui/src/selections.rs:Selections": {
+    "crates/houyicoder-tui/src/ui/selections.rs:Selections": {
         # The four per-region drag selections, each in its own coordinate space.
         "fields": 4,
     },
-    "crates/houyicoder-tui/src/state/transcript/view.rs:TranscriptViewState": {
+    "crates/houyicoder-tui/src/transcript/view.rs:TranscriptViewState": {
         # One view's scroll, search corpus and query, byte-window, expansion sets, unseen cursor, and presentation revision.
         "fields": 9,
     },
-    "crates/houyicoder-tui/src/state/transcript.rs:Transcript": {
+    "crates/houyicoder-tui/src/transcript/store.rs:Transcript": {
         # The transcript facts: frame log, budget counters, derived lines and fold cache, disk rows, turn boundary, and revision.
         "fields": 12,
     },
-    "crates/houyicoder-tui/src/state/history_read.rs:HistoryReads": {
+    "crates/houyicoder-tui/src/transcript/history_state.rs:HistoryReads": {
         # The pending-read record, the workers holding a slot, and the generation that invalidates them.
         "fields": 3,
     },
-    "crates/houyicoder-tui/src/state/parked_view_states.rs:ParkedViewStates": {
+    "crates/houyicoder-tui/src/transcript/parked_view_states.rs:ParkedViewStates": {
         # Expansion sets parked for the views that are not on screen.
         "fields": 3,
     },

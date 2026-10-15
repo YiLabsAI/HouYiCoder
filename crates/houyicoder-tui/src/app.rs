@@ -1,6 +1,8 @@
 //! Terminal lifecycle, event loop, and top-level input routing.
 //! Screen-specific behavior remains in the view and key modules.
 
+pub mod state;
+
 use crossterm::{
     cursor::{Hide, MoveTo},
     event::{

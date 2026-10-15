@@ -16,7 +16,7 @@ use super::run_native;
 static LINUX_TOOL: Mutex<Option<Option<&'static str>>> = Mutex::new(None);
 
 #[cfg(target_os = "linux")]
-pub(super) fn linux_clipboard_tool(text: &str) -> Option<&'static str> {
+pub(crate) fn linux_clipboard_tool(text: &str) -> Option<&'static str> {
     {
         let cache = LINUX_TOOL.lock().expect("linux tool cache");
         match *cache {

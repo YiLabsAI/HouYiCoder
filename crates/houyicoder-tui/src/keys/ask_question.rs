@@ -19,7 +19,7 @@ use crate::state::App;
 use serde_json::Value;
 
 /// Dispatch a key for the AskUserQuestion card.
-pub(super) fn handle_ask_question(app: &mut App, k: KeyEvent) {
+pub(crate) fn handle_ask_question(app: &mut App, k: KeyEvent) {
     // Other text input mode: typing writes to other_text, Enter submits or
     // advances, Esc returns to the option list. Tab-nav is disabled.
     if app.ask_question().is_some_and(|aq| aq.other_focused) {

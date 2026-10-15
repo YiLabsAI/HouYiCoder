@@ -7,6 +7,8 @@
 //! returns to the list. Tabs, counts, memory switches, and action hints remain
 //! fixed while only the entry region scrolls.
 
+pub(crate) mod state;
+
 use houyicoder_protocol::frontend::memory::{MemoryDetail, MemoryToggleWhich};
 use ratatui::{
     Frame,
@@ -29,7 +31,7 @@ use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
 /// Render the memory list or the selected memory detail.
-pub(super) fn draw_content(f: &mut Frame, area: Rect, app: &App) {
+pub(crate) fn draw_content(f: &mut Frame, area: Rect, app: &App) {
     match app.ui.memory.detail() {
         Some(MemoryDetailState::Loading { key, .. }) => {
             draw_loading(f, area, key);

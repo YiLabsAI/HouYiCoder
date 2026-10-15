@@ -15,12 +15,12 @@ use houyicoder_protocol::frontend::run::ApprovalDecision;
 /// keeps its internal mapping (0=Yes, 1=No, 2=Yes-don't-ask); this array
 /// maps display position to selected value. Used when the server sends no
 /// options (the fallback built-in 3-option set).
-pub(super) const APPROVAL_DISPLAY_ORDER: [usize; APPROVAL_OPTIONS] = [0, 2, 1];
+pub(crate) const APPROVAL_DISPLAY_ORDER: [usize; APPROVAL_OPTIONS] = [0, 2, 1];
 
 /// The number of options the cursor cycles through: the server's offered
 /// list when present, otherwise the built-in set (two when remember is hidden
 /// for a protected-path ask, three otherwise).
-pub(super) fn option_count(a: &Approval) -> usize {
+pub(crate) fn option_count(a: &Approval) -> usize {
     if a.options.is_empty() {
         a.visible_option_count()
     } else {
@@ -42,7 +42,7 @@ pub(crate) fn approval_scope(a: &Approval) -> &'static str {
 /// Advance to the next option. Wraps around. When the server sends no
 /// options, uses the built-in display order (Yes, Yes-don't-ask, No);
 /// when it does, cycles linearly through the dynamic list.
-pub(super) fn approval_next(current: usize, count: usize) -> usize {
+pub(crate) fn approval_next(current: usize, count: usize) -> usize {
     if count == APPROVAL_OPTIONS {
         let pos = APPROVAL_DISPLAY_ORDER
             .iter()
@@ -57,7 +57,7 @@ pub(super) fn approval_next(current: usize, count: usize) -> usize {
 }
 
 /// Advance to the previous option. Wraps around.
-pub(super) fn approval_prev(current: usize, count: usize) -> usize {
+pub(crate) fn approval_prev(current: usize, count: usize) -> usize {
     if count == APPROVAL_OPTIONS {
         let pos = APPROVAL_DISPLAY_ORDER
             .iter()
@@ -78,7 +78,7 @@ pub(super) fn approval_prev(current: usize, count: usize) -> usize {
 /// current call_id; Esc rejects only the current one. The core applies the
 /// single decision and re-interrupts for the next pending approval, so the
 /// next card appears automatically. This is not a reject-all flow.
-pub(super) fn handle_approval(app: &mut App, k: KeyEvent) {
+pub(crate) fn handle_approval(app: &mut App, k: KeyEvent) {
     let Some(a) = app.approval_mut() else {
         return;
     };

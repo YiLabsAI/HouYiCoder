@@ -6,14 +6,14 @@
 
 use std::time::Duration;
 
-use super::App;
-use super::index_read::{INDEX_CHUNK_BUDGET, IndexChunkPoll, PendingIndexChunk};
 use crate::composition::shared_runtime;
 use crate::notifications::{NotifKind, Notification};
 use crate::records::TranscriptLine;
 use crate::scroll::SEARCH_LOG_THRESHOLD;
 use crate::scroll::WINDOW_MAX_BYTES;
+use crate::state::App;
 use crate::state::ViewportMode;
+use crate::state::index_read::{INDEX_CHUNK_BUDGET, IndexChunkPoll, PendingIndexChunk};
 use crate::transcript::snapshot::IndexProgress;
 use crate::transcript::snapshot::{SnapshotLoad, WindowLoad};
 use std::sync::mpsc::channel;

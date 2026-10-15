@@ -9,7 +9,7 @@ use crate::state::App;
 
 /// A turn row with the given number and prompt, and nothing measured. A test
 /// sets the fields it is about on the value it gets back.
-pub(super) fn turn(n: usize, user_input: &str) -> TrajectoryTurn {
+pub(crate) fn turn(n: usize, user_input: &str) -> TrajectoryTurn {
     TrajectoryTurn {
         n,
         key: TrajectoryTurnKey::from_opening_event(&format!("t{n}")),
@@ -32,7 +32,7 @@ pub(super) fn turn(n: usize, user_input: &str) -> TrajectoryTurn {
 
 /// A record of the given kind, with the tool name the pane shows and a measured
 /// span, for tests that read a row or a detail.
-pub(super) fn record_of(kind: TrajectoryRecordKind, output: Option<&str>) -> TrajectoryRecord {
+pub(crate) fn record_of(kind: TrajectoryRecordKind, output: Option<&str>) -> TrajectoryRecord {
     TrajectoryRecord {
         kind,
         name: Some("bash".into()),
@@ -51,7 +51,7 @@ pub(super) fn record_of(kind: TrajectoryRecordKind, output: Option<&str>) -> Tra
 }
 
 /// A settled view over the given rows, with nothing else measured.
-pub(super) fn view(rows: Vec<TrajectoryRow>) -> TrajectoryView {
+pub(crate) fn view(rows: Vec<TrajectoryRow>) -> TrajectoryView {
     TrajectoryView {
         state: TrajectoryViewState::Ready,
         skipped_records: 0,
@@ -75,12 +75,12 @@ pub(super) fn view(rows: Vec<TrajectoryRow>) -> TrajectoryView {
 }
 
 /// A settled view over the given turns, each as its own row.
-pub(super) fn view_of(turns: Vec<TrajectoryTurn>) -> TrajectoryView {
+pub(crate) fn view_of(turns: Vec<TrajectoryTurn>) -> TrajectoryView {
     view(turns.into_iter().map(TrajectoryRow::Turn).collect())
 }
 
 /// A detail holding the given records, ready to render.
-pub(super) fn detail_of_all(records: Vec<TrajectoryRecord>) -> TrajectoryDetailView {
+pub(crate) fn detail_of_all(records: Vec<TrajectoryRecord>) -> TrajectoryDetailView {
     TrajectoryDetailView {
         state: TrajectoryDetailState::Ready,
         turn: Some(turn(1, "ask")),
@@ -90,12 +90,12 @@ pub(super) fn detail_of_all(records: Vec<TrajectoryRecord>) -> TrajectoryDetailV
 }
 
 /// A detail holding one record.
-pub(super) fn detail_of(record: TrajectoryRecord) -> TrajectoryDetailView {
+pub(crate) fn detail_of(record: TrajectoryRecord) -> TrajectoryDetailView {
     detail_of_all(vec![record])
 }
 
 /// A window of turn rows numbered first..=last, over a session of total turns.
-pub(super) fn window_view(
+pub(crate) fn window_view(
     first: usize,
     last: usize,
     total: usize,
@@ -114,7 +114,7 @@ pub(super) fn window_view(
 }
 
 /// A rendered line group's text, spans joined.
-pub(super) fn lines_text(lines: &[Line<'static>]) -> String {
+pub(crate) fn lines_text(lines: &[Line<'static>]) -> String {
     lines
         .iter()
         .flat_map(|l| l.spans.iter())
@@ -124,6 +124,6 @@ pub(super) fn lines_text(lines: &[Line<'static>]) -> String {
 
 /// The turn number the pane is on, for a test that is about the number rather
 /// than about the history it was read in.
-pub(super) fn selected_number(app: &App) -> Option<usize> {
+pub(crate) fn selected_number(app: &App) -> Option<usize> {
     app.ui.trajectory.selection().map(|s| s.number)
 }

@@ -50,7 +50,7 @@ fn ensure_cached_slots(area: Rect, app: &App) {
     }
 }
 
-pub(super) fn draw_transcript(f: &mut Frame, area: Rect, app: &App) {
+pub(crate) fn draw_transcript(f: &mut Frame, area: Rect, app: &App) {
     ensure_cached_slots(area, app);
 
     // Every frame: combine cached slots rows + fresh live rows (live text,

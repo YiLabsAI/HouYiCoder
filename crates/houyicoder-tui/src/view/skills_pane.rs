@@ -5,6 +5,8 @@
 //! The detail pins the skill header and the usage line, and scrolls only
 //! the body, so a long SKILL.md never pushes the invocation cost off screen.
 
+pub(crate) mod state;
+
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},

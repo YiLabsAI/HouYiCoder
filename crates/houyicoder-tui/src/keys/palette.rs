@@ -8,7 +8,7 @@ use crate::state::App;
 
 /// Slash-command palette keys: type to filter, navigate the filtered list,
 /// select, or close. Backspace edits the query; Esc closes.
-pub(super) fn handle_palette(app: &mut App, k: KeyEvent) {
+pub(crate) fn handle_palette(app: &mut App, k: KeyEvent) {
     match k.code {
         KeyCode::Esc => app.close_palette(),
         KeyCode::Up => app.palette_up(),

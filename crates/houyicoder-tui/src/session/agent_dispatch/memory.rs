@@ -19,7 +19,7 @@ impl App {
     /// Apply a memory-list reply. A forget answers with the refreshed list;
     /// the req_id match against a registered action tells it from a plain
     /// refresh, which writes no transcript.
-    pub(super) fn apply_memory_list(
+    pub(crate) fn apply_memory_list(
         &mut self,
         req_id: RequestId,
         entries: Vec<MemorySummaryEntry>,
@@ -38,7 +38,7 @@ impl App {
 
     /// Apply a memory-detail reply: into the pane when the pane asked and the
     /// request is still pending, otherwise rendered as one transcript line.
-    pub(super) fn apply_memory_show(&mut self, req_id: RequestId, entry: Option<MemoryDetail>) {
+    pub(crate) fn apply_memory_show(&mut self, req_id: RequestId, entry: Option<MemoryDetail>) {
         if self.ui.navigation.pane == Pane::Memory && self.ui.memory.is_pending(req_id) {
             let missing = entry.is_none();
             self.ui.memory.apply_detail(req_id, entry);
@@ -59,7 +59,7 @@ impl App {
     /// Apply a toggle-pair reply. A flip and a pane-open read answer with the
     /// same shape; only the req_id a pending toggle was registered under
     /// writes the outcome line.
-    pub(super) fn apply_memory_toggles(&mut self, req_id: RequestId, state: ToggleState) {
+    pub(crate) fn apply_memory_toggles(&mut self, req_id: RequestId, state: ToggleState) {
         let toggled = self
             .sessions
             .current
@@ -88,7 +88,7 @@ impl App {
     /// and Ctrl+O or a click reveals the keys. Keep the keys in the notice so
     /// the detail is reachable in the transcript, matching how a tool-call
     /// group hides its calls behind a summary.
-    pub(super) fn show_memory_changes(
+    pub(crate) fn show_memory_changes(
         &mut self,
         id: &MemoryChangeId,
         origin: MemoryChangeOrigin,
@@ -142,7 +142,7 @@ impl App {
 
     /// Route a failed memory pane mutation: the action context stays in the
     /// outcome line so it says what did not happen instead of a bare error.
-    pub(super) fn memory_failure_line(action: MemoryAction, message: &str) -> String {
+    pub(crate) fn memory_failure_line(action: MemoryAction, message: &str) -> String {
         match action {
             MemoryAction::Toggle { which } => {
                 format!("couldn't toggle {} — {message}", toggle_label(which))

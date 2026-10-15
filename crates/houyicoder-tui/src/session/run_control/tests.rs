@@ -126,7 +126,7 @@ pub(crate) fn app_with_provider_and_tx(
 }
 
 /// A guarded tool that requires approval, for the Interruption path.
-pub(super) struct Guarded;
+pub(crate) struct Guarded;
 impl Tool for Guarded {
     fn name(&self) -> &str {
         "guarded"

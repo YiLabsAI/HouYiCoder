@@ -2,7 +2,7 @@
 
 use std::cell::{Cell, RefCell};
 
-use super::index_read::PendingIndexChunk;
+use crate::state::index_read::PendingIndexChunk;
 
 /// The G full-scan build's state that the chrome reads and the loop advances.
 /// A search-view exit resets the four progress cells; the pending chunk slot

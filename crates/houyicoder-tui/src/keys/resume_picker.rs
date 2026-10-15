@@ -9,7 +9,7 @@ use crossterm::event::{KeyCode, KeyEvent};
 use crate::input::queue::InputItem;
 use crate::state::{App, Pane};
 
-pub(super) fn handle_resume_picker(app: &mut App, k: KeyEvent) {
+pub(crate) fn handle_resume_picker(app: &mut App, k: KeyEvent) {
     match k.code {
         KeyCode::Esc => {
             app.ui.navigation.resume_picker.close();

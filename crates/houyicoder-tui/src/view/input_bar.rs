@@ -16,7 +16,7 @@ use unicode_segmentation::UnicodeSegmentation;
 use crate::state::App;
 
 /// Render the inline Ctrl+F search bar (one line below the input box).
-pub(super) fn draw_inline_search(f: &mut Frame, area: Rect, app: &App) {
+pub(crate) fn draw_inline_search(f: &mut Frame, area: Rect, app: &App) {
     let n = app.ui.transcript_view.search_matches_len();
     let text = format!(
         " search: {} | {} match(es) | Enter=next Up/Down=prev Esc=close ",
@@ -35,7 +35,7 @@ pub(super) fn draw_inline_search(f: &mut Frame, area: Rect, app: &App) {
 /// border is dim gray, yellow while an approval is pending. Wrapped lines are
 /// pre-computed by the editor at the same column count used for the height,
 /// so the rendered rows and the reserved height never drift.
-pub(super) fn draw_input(f: &mut Frame, area: Rect, app: &App) {
+pub(crate) fn draw_input(f: &mut Frame, area: Rect, app: &App) {
     let content_cols = (area.width as usize).saturating_sub(4);
     let border_color = if app.approval().is_some() || app.ask_question().is_some() {
         Color::Yellow

@@ -27,7 +27,7 @@ const ARTIFACT_PAGE_SIZE: usize = 10;
 
 /// Input box keys: type, send, open palette, switch pane, toggle plan mode,
 /// and per-pane hunk/finding keys.
-pub(super) fn handle_input(app: &mut App, k: KeyEvent) {
+pub(crate) fn handle_input(app: &mut App, k: KeyEvent) {
     if let Some(remaining) = pane_action_key(app, k) {
         // The key was not consumed by the pane action controls; fall through
         // to the generic input handler.
@@ -511,7 +511,7 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
 /// guided-chain panes only). Utility panes are slash-only. In agent-chat mode
 /// (runner wired) Tab is a no-op: the working screen is a single chat stream,
 /// not a pane tab system.
-pub(super) fn cycle_pane(app: &mut App) {
+pub(crate) fn cycle_pane(app: &mut App) {
     if app.sessions.current.connection.is_some() {
         return;
     }

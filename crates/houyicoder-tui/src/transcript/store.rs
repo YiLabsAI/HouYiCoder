@@ -5,8 +5,7 @@
 //! history the frame window dropped live here too, ahead of the lines the
 //! blocks derive.
 
-pub(crate) mod blocks;
-pub(crate) mod view;
+pub(crate) use crate::transcript::{blocks, view};
 
 use std::cell::Cell;
 

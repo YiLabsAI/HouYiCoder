@@ -73,7 +73,7 @@ fn render_usage_latency(app: &App, f: &impl Fn(&str, &str) -> String, s: &mut St
     }
 }
 
-pub(super) fn render_usage(app: &App) -> String {
+pub(crate) fn render_usage(app: &App) -> String {
     let f = field;
     let snap = app.snapshot_or_stub();
     let u = &snap.cumulative_usage;

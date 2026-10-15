@@ -4,6 +4,9 @@
 //! screen does real chat: input spawns runner.run, the transcript is rebuilt
 //! from real SessionLogEntries, and approvals come from real Interruptions.
 
+pub(crate) mod terminal_guard;
+pub mod terminal_title;
+
 mod app_default;
 mod placeholder;
 mod switch;

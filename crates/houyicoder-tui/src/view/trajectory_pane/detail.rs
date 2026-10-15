@@ -58,7 +58,7 @@ fn outcome_color(outcome: RecordOutcome) -> Color {
 /// axis (width = duration), so records that overlapped in time overlap on the
 /// same columns and the latency hot-spots are visible at a glance. A ruler line
 /// orients the scale, and the kind and name columns say what each row was.
-pub(super) fn draw_turn_detail(
+pub(crate) fn draw_turn_detail(
     turn: &TrajectoryTurn,
     detail: &TrajectoryDetailView,
     cursor: usize,
@@ -151,7 +151,7 @@ pub(super) fn draw_turn_detail(
 
 /// A [bg] row drilled from L0 has no event timeline: show its detail directly
 /// at L1 and flag it so Enter does not drill to L2.
-pub(super) fn draw_bg_detail(
+pub(crate) fn draw_bg_detail(
     bg: &TrajectoryBg,
     _cursor: usize,
     _area: Rect,
@@ -206,7 +206,7 @@ pub(super) fn draw_bg_detail(
 /// the window: the history was cleared, or the window moved past it. Saying so
 /// is the honest answer, because the row the drill froze now names another
 /// turn.
-pub(super) fn draw_drill_gone() -> (
+pub(crate) fn draw_drill_gone() -> (
     Vec<Line<'static>>,
     Vec<Line<'static>>,
     Vec<Line<'static>>,
@@ -378,7 +378,7 @@ fn record_row(
 /// the record index, frozen on drill — Up/Down is disabled at this level so
 /// the view is stable, not a switcher). Shows the full thinking text, tool
 /// input, and tool output (multi-line) rather than the one-line L1 summary.
-pub(super) fn draw_event_detail(
+pub(crate) fn draw_event_detail(
     _turn: &TrajectoryTurn,
     detail: &TrajectoryDetailView,
     cursor: usize,

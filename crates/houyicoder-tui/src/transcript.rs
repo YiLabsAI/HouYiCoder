@@ -7,6 +7,26 @@
 //! the frontend raises itself rides the same log, so it keeps its place for
 //! the same reason.
 
+pub(crate) mod app_scroll;
+pub mod blocks;
+pub mod brief;
+pub(crate) mod cursors;
+pub mod fold;
+pub mod git_op;
+pub(crate) mod history_state;
+pub(crate) mod index_build;
+pub(crate) mod index_read;
+pub mod markdown;
+pub(crate) mod parked_view_states;
+pub mod records;
+pub mod redaction;
+pub mod result_body;
+pub mod row_id;
+pub mod scroll;
+pub(crate) mod search_view;
+pub mod store;
+pub mod view;
+
 use std::ops::Range;
 
 use houyicoder_protocol::acpx::AcpxNotification;

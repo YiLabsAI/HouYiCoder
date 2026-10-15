@@ -19,7 +19,7 @@ pub(crate) const AGENTS_PANE_HEIGHT: u16 = 14;
 /// Render the agents pane inside a titled block. Used by the capability grid,
 /// which hands over a bare rect; the inline slash-command pane draws its own
 /// frame and calls draw_content with the inner rect instead.
-pub(super) fn draw_agents(f: &mut Frame, area: Rect, app: &App) {
+pub(crate) fn draw_agents(f: &mut Frame, area: Rect, app: &App) {
     let block = titled_block(app, "agents");
     let inner = block.inner(area);
     f.render_widget(block, area);

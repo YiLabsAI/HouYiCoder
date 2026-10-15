@@ -4,6 +4,8 @@
 //! separator, and the return hint. A second dim line carries the
 //! delegation summary.
 
+pub(crate) mod state;
+
 use ratatui::{
     Frame,
     layout::Rect,

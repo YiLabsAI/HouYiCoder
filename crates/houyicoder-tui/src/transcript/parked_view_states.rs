@@ -10,9 +10,9 @@ use std::hash::Hash;
 
 use houyicoder_protocol::frontend::SessionId;
 
-use super::App;
 use crate::row_id::RowId;
 use crate::scroll::TranscriptScroll;
+use crate::state::App;
 
 /// The four expansion sets one view owns.
 #[derive(Debug, Default)]

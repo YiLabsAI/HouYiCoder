@@ -234,14 +234,14 @@ def _check_file_qualifiers(errors: list[str], root: Path = Path("crates")) -> No
 # not apply.
 _GET_PREFIX_EXEMPT = ("get_or_create_",)
 _GET_PREFIX_BASELINE: frozenset[str] = frozenset({
-    "crates/houyicoder-tui/src/selection.rs:get_clipboard_path",
+    "crates/houyicoder-tui/src/ui/selection.rs:get_clipboard_path",
 })
 _VAGUE_SUFFIX_RE = re.compile(r"(?:Info|Data|Wrapper|Manager|Helper|Util|Base)$")
 _VAGUE_SUFFIX_BASELINE: frozenset[str] = frozenset({
     "crates/houyicoder-cli/src/export_view.rs:ExportData",
     "crates/houyicoder-permission/src/pipeline.rs:ValidatorInfo",
-    "crates/houyicoder-tui/src/evidence.rs:DiffData",
-    "crates/houyicoder-tui/src/git_op.rs:PrInfo",
+    "crates/houyicoder-tui/src/workflow/evidence.rs:DiffData",
+    "crates/houyicoder-tui/src/transcript/git_op.rs:PrInfo",
 })
 
 

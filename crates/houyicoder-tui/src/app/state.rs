@@ -8,21 +8,13 @@ use crate::fold::compute_fold_groups;
 use std::fmt;
 use std::time::Instant;
 
-pub(crate) mod chain;
-pub(crate) mod counts;
-mod cursors;
-pub(crate) mod enums;
-pub(crate) mod history_read;
-pub(crate) mod index_build;
-pub(crate) mod index_read;
-pub(crate) mod model_draft;
-mod parked_view_states;
-mod scroll;
-mod search_view;
-pub(crate) mod stage;
-mod teammate_view;
-mod trajectory;
-pub mod transcript;
+pub use crate::transcript::store as transcript;
+pub(crate) use crate::transcript::{
+    cursors, history_state as history_read, index_build, index_read, parked_view_states,
+};
+pub(crate) use crate::ui::enums;
+pub(crate) use crate::view::model_pane::draft as model_draft;
+pub(crate) use crate::view::trajectory_pane::state as trajectory;
 
 #[cfg(test)]
 use crate::composition::app as test_app;

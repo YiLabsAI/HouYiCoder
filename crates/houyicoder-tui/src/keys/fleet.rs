@@ -11,7 +11,7 @@ use crate::state::{App, ViewportMode};
 /// The selected child's session id, if a fleet row is highlighted. Resolves
 /// Enter-on-fleet: the strip selection takes priority over the cursor's
 /// Subagent line when both could drill in.
-pub(super) fn selected_fleet_sid(app: &App) -> Option<String> {
+pub(crate) fn selected_fleet_sid(app: &App) -> Option<String> {
     app.ui.fleet.selected.and_then(|i| {
         app.sessions
             .current
@@ -25,7 +25,7 @@ pub(super) fn selected_fleet_sid(app: &App) -> Option<String> {
 
 /// Shift+Up/Down move the fleet selection. Returns true when the key was
 /// consumed so handle_working returns early.
-pub(super) fn fleet_shift_selected(
+pub(crate) fn fleet_shift_selected(
     strip: &mut FleetStripState,
     len: usize,
     viewport: ViewportMode,

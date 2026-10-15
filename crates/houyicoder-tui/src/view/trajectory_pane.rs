@@ -12,6 +12,8 @@
 //! Keys: Up/Down move cursor at current level, Enter drills down,
 //! Esc goes back one level (or closes at level 0).
 
+pub mod state;
+
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};

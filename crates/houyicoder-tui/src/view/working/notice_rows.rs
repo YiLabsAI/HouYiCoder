@@ -15,7 +15,7 @@ use crate::state::App;
 /// so a summary long enough to wrap reserves the rows it draws. Every row
 /// carries the group key so Ctrl+O and a click in the block toggle the same
 /// notice.
-pub(super) fn push_notice_rows(
+pub(crate) fn push_notice_rows(
     app: &App,
     idx: usize,
     key: &str,

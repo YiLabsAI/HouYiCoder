@@ -13,7 +13,7 @@ impl super::App {
     /// error type: three sources settle a run (a server-classified run
     /// failure, a per-request error routed to the active run, and driver
     /// death), and all the presentation needs is the message.
-    pub(super) fn handle_run_completion(&mut self, result: Result<RunResult, String>) {
+    pub(crate) fn handle_run_completion(&mut self, result: Result<RunResult, String>) {
         let had_live_output = self.run_progress().is_some_and(|p| {
             !p.live_assistant_text.is_empty() || !p.live_reasoning_text.is_empty()
         });

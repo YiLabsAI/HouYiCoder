@@ -17,7 +17,7 @@ use crate::view::todo_list::render_rows;
 /// slots cache or a prior live section) so sections do not run together. The
 /// has_slots flag threads whether the cached slots are non-empty so the first
 /// spacer guard works before any live row exists.
-pub(super) fn build_tail_rows(area: Rect, app: &App, has_slots: bool) -> RowSet {
+pub(crate) fn build_tail_rows(area: Rect, app: &App, has_slots: bool) -> RowSet {
     const PLAIN: u8 = TAG_PLAIN;
     const SPINNER: u8 = TAG_SPINNER;
 

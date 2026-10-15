@@ -12,7 +12,7 @@ use crate::view::word_diff::word_diff;
 /// A unified-diff line kind (add / remove / nochange). The sigil is the
 /// leading char of the raw hunk line (+ / - / space).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(super) enum DiffKind {
+pub(crate) enum DiffKind {
     Add,
     Remove,
     Context,
@@ -33,7 +33,7 @@ struct DiffHunk {
 /// add/remove/context line; Gap is the dim "..." interspersed
 /// between hunks (the omitted unchanged context between two hunks).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(super) enum PlanKind {
+pub(crate) enum PlanKind {
     Summary,
     Diff(DiffKind),
     Gap,
@@ -46,11 +46,11 @@ pub(super) enum PlanKind {
 /// into word-spans so a small inline edit highlights just the changed words;
 /// the row text still carries the full gutter+content for stable width + copy.
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub(super) struct PlanRow {
-    pub(super) kind: PlanKind,
-    pub(super) num: Option<usize>,
-    pub(super) text: String,
-    pub(super) word: Option<Vec<WordDiffPart>>,
+pub(crate) struct PlanRow {
+    pub(crate) kind: PlanKind,
+    pub(crate) num: Option<usize>,
+    pub(crate) text: String,
+    pub(crate) word: Option<Vec<WordDiffPart>>,
 }
 
 /// Parse an Edit/MultiEdit result body (one-line summary + a unified diff)
@@ -63,7 +63,7 @@ pub(super) struct PlanRow {
 /// numbers, context shows the running new-file number). Returns None when
 /// the body carries no @@ hunk header (not a structured diff body) so the
 /// caller falls back to plain line-by-line rendering.
-pub(super) fn plan_diff_body(body: &str, width: u16) -> Option<Vec<PlanRow>> {
+pub(crate) fn plan_diff_body(body: &str, width: u16) -> Option<Vec<PlanRow>> {
     let mut lines = body.split('\n');
     let summary = lines.next()?.to_string();
     let mut hunks: Vec<DiffHunk> = Vec::new();

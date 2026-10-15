@@ -3,6 +3,18 @@
 //! counter, and driver task. Session is the presented session, pairing the
 //! stable identity with that optional live connection.
 
+pub(crate) mod agent_dispatch;
+pub mod agent_message;
+pub mod approval;
+pub mod ask_question_model;
+pub(crate) mod model_receipt;
+pub mod pending_prompt;
+pub mod run_control;
+pub(crate) mod run_metrics;
+pub mod run_state;
+pub(crate) mod sessions;
+pub mod todo_view;
+
 use std::cell::Cell;
 
 use crate::agent_message::PaneAgents;

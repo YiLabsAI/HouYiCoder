@@ -17,7 +17,7 @@ use crate::view::skill_picker::filtered_skills;
 /// through to the input box (filter chars, Backspace, Tab, colon).
 /// The picker stays open on false except for Tab and colon which
 /// close it before falling through.
-pub(super) fn handle(app: &mut App, k: KeyEvent) -> bool {
+pub(crate) fn handle(app: &mut App, k: KeyEvent) -> bool {
     match k.code {
         KeyCode::Up => {
             let cur = app.ui.navigation.skill_picker.sel.get();

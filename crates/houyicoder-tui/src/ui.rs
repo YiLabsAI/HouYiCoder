@@ -10,6 +10,18 @@
 //! view's corpus are Ui state whose loss costs a re-fetch or a rebuild,
 //! never a dropped record.
 
+pub(crate) mod counts;
+pub mod enums;
+pub(crate) mod layout_feedback;
+pub(crate) mod layout_snapshot;
+pub mod notifications;
+pub mod render_cache;
+pub(crate) mod renderer;
+pub(crate) mod rows;
+pub mod selection;
+pub(crate) mod selections;
+pub(crate) mod toggle_hint;
+
 mod navigation;
 
 use std::cell::Cell;

@@ -59,7 +59,7 @@ fn boundary_line(boundary: &TurnBoundary, now_secs: u64) -> Line<'static> {
 /// The body lines for one turn: a context-cleared separator when the log
 /// carries one, then the row itself. The separator is a label rather than a
 /// row, so it never takes a cursor position.
-pub(super) fn turn_row(
+pub(crate) fn turn_row(
     t: &TrajectoryTurn,
     selected: bool,
     width: usize,
@@ -160,7 +160,7 @@ pub(super) fn turn_row(
 /// Level 0: session summary header + turn list body. The cursor selects a row
 /// (a turn or a background event); Enter drills into the focused turn.
 #[expect(clippy::too_many_lines, reason = "long by design, kept whole")]
-pub(super) fn draw_turn_list(
+pub(crate) fn draw_turn_list(
     traj: &TrajectoryView,
     cursor: usize,
     area: Rect,

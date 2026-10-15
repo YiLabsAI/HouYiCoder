@@ -4,65 +4,16 @@
 //! Requests and events cross the wire protocol through the client; runtime
 //! engine types and shared engine state do not enter this crate.
 
-mod agent_dispatch;
-pub mod agent_message;
 pub mod app;
-pub mod approval;
-pub mod artifact;
-pub mod ask_question_model;
-pub mod brief;
 pub mod command;
 pub mod composition;
-pub mod console_state;
-
-pub mod evidence;
-mod fleet;
-pub mod fold;
-pub mod git_op;
-pub mod history;
-mod hooks_state;
 pub mod input;
 pub mod keys;
-mod layout_feedback;
-mod layout_snapshot;
-mod list_pane_state;
-pub mod markdown;
-mod memory_state;
-mod model_receipt;
-pub mod notifications;
-pub mod palette;
-pub mod paste;
-pub mod pending_prompt;
-mod permission_input;
-mod permission_pane_state;
-pub mod records;
-pub mod redaction;
-pub mod render_cache;
-mod renderer;
-pub mod result_body;
-pub mod resume_picker;
-pub mod review_queue;
-pub mod row_id;
-mod rows;
-pub mod run_control;
-mod run_metrics;
-pub mod run_state;
-pub mod scroll;
-pub mod selection;
-mod selections;
 pub mod session;
-mod sessions;
-mod skill_picker_state;
-mod skills_state;
-pub mod state;
-mod terminal_guard;
-pub mod terminal_title;
-pub mod todo_view;
-mod toggle_hint;
 pub mod transcript;
 pub mod ui;
 pub mod view;
-mod workflow;
+pub(crate) mod workflow;
 
 #[cfg(feature = "bench")]
 pub mod bench_api;
@@ -71,3 +22,25 @@ pub mod bench_api;
 mod frame_timing;
 #[cfg(test)]
 mod test_harness;
+
+pub use app::state;
+pub(crate) use composition::terminal_guard;
+pub use composition::terminal_title;
+pub use input::{history, palette, paste};
+pub use session::{
+    agent_message, approval, ask_question_model, pending_prompt, run_control, run_state, todo_view,
+};
+pub(crate) use session::{model_receipt, run_metrics, sessions};
+pub use transcript::{
+    brief, fold, git_op, markdown, records, redaction, result_body, row_id, scroll,
+};
+pub(crate) use ui::{layout_feedback, layout_snapshot, renderer, rows, selections, toggle_hint};
+pub use ui::{notifications, render_cache, selection};
+pub use view::console::state as console_state;
+pub use view::resume_picker::state as resume_picker;
+pub(crate) use view::{
+    capability::input as permission_input, capability::state as permission_pane_state, fleet,
+    hooks_pane::state as hooks_state, list_pane_state, memory_pane::state as memory_state,
+    skill_picker::state as skill_picker_state, skills_pane::state as skills_state,
+};
+pub use workflow::{artifact, evidence, review_queue};

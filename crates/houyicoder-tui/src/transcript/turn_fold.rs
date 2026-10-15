@@ -143,7 +143,7 @@ fn open_turn_before<F: AsRef<TranscriptFrame>>(log: &[F], start: usize) -> Optio
 /// Where folded summary rows take their identity. The identity is only
 /// useful while it names the same turn in every read that carries it, and
 /// what can promise that differs by the log being read.
-pub(super) enum RowNames<'a> {
+pub(crate) enum RowNames<'a> {
     /// The live frame log. A row whose closing frame came from a durable
     /// entry takes that entry's identity off the frame itself; a row no entry
     /// named takes the absolute position where its turn ended, so the name
@@ -167,7 +167,7 @@ pub(super) enum RowNames<'a> {
 /// The facts one turn accumulates for its summary row, gathered as the
 /// fold walks that turn's frames. The row is emitted where the turn
 /// ends, so the summary lands under the answer it describes.
-pub(super) struct TurnFold<'a, F: AsRef<TranscriptFrame>> {
+pub(crate) struct TurnFold<'a, F: AsRef<TranscriptFrame>> {
     /// The whole log, for what a window cannot carry on its own: which turn the
     /// window opens inside, what that turn did before the window began, and
     /// whether the message beside it was delivered into a running turn.
@@ -193,7 +193,7 @@ impl<'a, F: AsRef<TranscriptFrame>> TurnFold<'a, F> {
     /// inside (if any). Frames of earlier turns are not folded; the caller
     /// pushes the rows of the turns they closed. What the open turn did before
     /// the window is folded in for facts, with no rows of its own.
-    pub(super) fn new(log: &'a [F], window: Range<usize>, names: RowNames<'a>) -> Self {
+    pub(crate) fn new(log: &'a [F], window: Range<usize>, names: RowNames<'a>) -> Self {
         let opened_at = open_turn_before(log, window.start);
         let mut fold = Self {
             log,
@@ -244,7 +244,7 @@ impl<'a, F: AsRef<TranscriptFrame>> TurnFold<'a, F> {
     /// a completion record ends the turn it followed and carries that run's
     /// duration. Returns the row for a turn this frame ended, for the caller to
     /// push where the turn ended.
-    pub(super) fn note(&mut self, abs: usize, frame: &TranscriptFrame) -> Option<TranscriptLine> {
+    pub(crate) fn note(&mut self, abs: usize, frame: &TranscriptFrame) -> Option<TranscriptLine> {
         match frame {
             TranscriptFrame::Session(SessionUpdate::UserMessageChunk(_)) => {
                 let closed = if self.delivered_into_turn(abs) {
@@ -305,7 +305,7 @@ impl<'a, F: AsRef<TranscriptFrame>> TurnFold<'a, F> {
     /// Close the open turn and return its row: None when no turn is open, or
     /// when the turn has nothing to summarize. A plain reply renders no row
     /// whose expand affordance would lead to nothing.
-    pub(super) fn close(&mut self, ms: Option<u64>) -> Option<TranscriptLine> {
+    pub(crate) fn close(&mut self, ms: Option<u64>) -> Option<TranscriptLine> {
         self.opened_at.take()?;
         if self.reasoning.is_empty() && self.calls == 0 {
             return None;

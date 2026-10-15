@@ -11,6 +11,10 @@
 //! mid-string editing and movement. The view layer reads wrapped_lines /
 //! line_count to size the input box and render wrapped content.
 
+pub mod history;
+pub mod palette;
+pub mod paste;
+
 pub(crate) mod queue;
 
 use std::mem::take;

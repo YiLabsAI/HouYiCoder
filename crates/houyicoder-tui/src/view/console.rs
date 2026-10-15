@@ -6,6 +6,8 @@
 //! trail: signed-off/rejected findings with who/when/replayable and
 //! a stub hash-chain view. All data is placeholder.
 
+pub mod state;
+
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},

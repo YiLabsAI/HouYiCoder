@@ -7,6 +7,8 @@
 //! The applied check and the focus marker are separate: the check follows the
 //! host's applied selection, the marker follows the cursor.
 
+pub(crate) mod draft;
+
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},

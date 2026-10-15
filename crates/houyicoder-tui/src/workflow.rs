@@ -3,6 +3,12 @@
 //! steps) is still open; this owner only groups the fields their current
 //! behavior shares so a session switch resets them as one value.
 
+pub mod artifact;
+pub(crate) mod chain;
+pub mod evidence;
+pub mod review_queue;
+pub(crate) mod stage;
+
 use crate::artifact::{ArtifactSession, StubProposer};
 use crate::console_state::ConsoleState;
 use crate::evidence::{
