@@ -32,21 +32,75 @@ _REPEATED_PATH_RULE = (
 )
 
 
+def _cache_path(root: Path) -> Path:
+    """Where per-file scan results are cached, under target/ so a clean
+    build drops the cache and the next run is a full scan."""
+    return Path("target") / "rust-imports-cache.json"
+
+
+def _detector_stamp() -> str:
+    """A hash of the detector source, so a changed rule invalidates every
+    cached verdict: a cache entry is only valid for the rules that made it."""
+    import hashlib
+
+    src = Path(__file__).resolve().parent / "rules" / "imports.py"
+    return hashlib.sha256(src.read_bytes()).hexdigest()[:16]
+
+
 def scan(root: Path = Path("crates")):
     """Count both rule violations under root, with the worst files named.
 
     The deep-path count is one finding per file and chain: the rule is
     that a deep chain should be imported, not that each use is wrong.
-    """
+
+    Detection is a pure function of one file's text, so results are cached
+    per file keyed by the file's content hash and the detector's own hash:
+    an unchanged file under an unchanged rule cannot change its findings.
+    The cache lives under target/, so a clean build falls back to a full
+    scan and no stale verdict can survive an untracked state."""
+    import hashlib
+    import json
+
+    cache_file = _cache_path(root)
+    stamp = _detector_stamp()
+    try:
+        cache = json.loads(cache_file.read_text(encoding="utf-8"))
+        if cache.get("stamp") != stamp:
+            cache = {"stamp": stamp, "files": {}}
+    except (OSError, ValueError):
+        cache = {"stamp": stamp, "files": {}}
+
     inline, repeated = [], []
+    seen_keys = set()
     for path in sorted(root.rglob("*.rs")):
         if "/target/" in path.as_posix():
             continue
-        text = path.read_text(encoding="utf-8")
-        for lineno, _ in inline_use_violations(text):
-            inline.append(f"{path.as_posix()}:{lineno}")
-        for chain, count in repeated_deep_paths(text).items():
-            repeated.append(f"{path.as_posix()}: {chain} x{count}")
+        data = path.read_bytes()
+        key = hashlib.sha256(data).hexdigest()
+        rel = path.as_posix()
+        seen_keys.add(f"{rel}:{key}")
+        cached = cache["files"].get(f"{rel}:{key}")
+        if cached is not None:
+            for line in cached[0]:
+                inline.append(f"{rel}:{line}")
+            for chain, count in cached[1]:
+                repeated.append(f"{rel}: {chain} x{count}")
+            continue
+        text = data.decode("utf-8")
+        file_inline = [lineno for lineno, _ in inline_use_violations(text)]
+        file_repeated = sorted(repeated_deep_paths(text).items())
+        cache["files"][f"{rel}:{key}"] = [file_inline, file_repeated]
+        for line in file_inline:
+            inline.append(f"{rel}:{line}")
+        for chain, count in file_repeated:
+            repeated.append(f"{rel}: {chain} x{count}")
+    cache["files"] = {
+        k: v for k, v in cache["files"].items() if k in seen_keys
+    }
+    cache_file.parent.mkdir(parents=True, exist_ok=True)
+    cache_file.write_text(
+        json.dumps(cache, separators=(",", ":")), encoding="utf-8"
+    )
     return inline, repeated
 
 

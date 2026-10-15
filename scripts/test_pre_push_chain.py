@@ -90,7 +90,22 @@ MARKER_CHECKING_GUARD = (
 
 
 class Chain:
-    """A throwaway repository holding the installed hook and the guards it chains."""
+    """A throwaway repository holding the installed hook and the guards it chains.
+
+    The guards the chain runs — not the chain itself, which the runner
+    interprets through bash — live in one process-lifetime directory and are
+    reached from the case's repository by a symlink. The platform charges a
+    first-exec validation per file path: a newly written script pays it even
+    in an already used directory, while a path that has run once — or a link
+    to such a file — does not, so paying it in every case dominated this
+    suite's runtime. The links sit at the paths the chain looks up, so what
+    it resolves and runs is unchanged, and each case still gets its own
+    log, so no case can observe another's guards.
+    """
+
+    _shared_root: Path | None = None
+    _shared_chain: Path | None = None
+    _stub_written: set = set()
 
     def __init__(self, tmp: Path):
         self.root = tmp
@@ -99,33 +114,90 @@ class Chain:
         subprocess.run(
             ["git", "init", "-q", str(tmp)], check=True, capture_output=True
         )
+        if Chain._shared_root is None:
+            shared = Path(tempfile.mkdtemp(prefix="pre-push-chain-scripts-"))
+            installed = shared / "pre-push"
+            installed.write_bytes(HOOK.read_bytes())
+            installed.chmod(0o755)
+            Chain._shared_root, Chain._shared_chain = shared, installed
+        self.shared = Chain._shared_root
         self.installed = tmp / "hooks" / "pre-push"
-        shutil.copy(HOOK, self.installed)
-        self.installed.chmod(0o755)
+        self.installed.symlink_to(Chain._shared_chain)
         self.log = tmp / "guard.log"
         self.log.write_text("", encoding="utf-8")
+        self._guards = {}
+
+    @classmethod
+    def cleanup(cls) -> None:
+        if cls._shared_root is not None:
+            shutil.rmtree(cls._shared_root, ignore_errors=True)
+            cls._shared_root = cls._shared_chain = None
+            Chain._stub_written = set()
+
+    # The two locations the chain resolves, each mapped to one shared stub.
+    # A stub reads its own label and status from the environment run() sets,
+    # so the file's content never changes across cases: a script whose file
+    # keeps its name and content execs without the first-exec validation a
+    # newly named script pays, which every case was paying before.
+    _STUB_VARS = {
+        "hooks/pre-push.local": "LOCAL",
+        "scripts/pre_push_hook.sh": "REPO",
+    }
 
     def guard(self, name: str, label: str, status: int = 0) -> Path:
-        """Install one guard that records the ref list and the arguments it was handed."""
+        """Install one guard that records the ref list and the arguments it
+        was handed, then exits with status. The script is a shared stub
+        linked under the path the chain resolves; what the case wants
+        recorded passes through the environment run() sets."""
         path = self.root / name
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
+        var = self._STUB_VARS.get(name)
+        if var is not None:
+            stub = self.shared / f"guard-{var.lower()}"
+            if stub.name not in Chain._stub_written:
+                stub.write_text(
+                    "#!/usr/bin/env bash\n"
+                    "refs=$(cat)\n"
+                    'echo "$GUARD_LABEL'
+                    f"_{var}"
+                    ':$refs:args=$*" >> "$GUARD_LOG"\n'
+                    'exit "${GUARD_STATUS'
+                    f"_{var}"
+                    ':-0}"\n',
+                    encoding="utf-8",
+                )
+                stub.chmod(0o755)
+                Chain._stub_written.add(stub.name)
+            self._guards[var] = (label, status)
+            path.symlink_to(stub)
+            return path
+        stub = self.shared / f"guard-{name.replace('/', '_')}"
+        stub.write_text(
             "#!/usr/bin/env bash\n"
             "refs=$(cat)\n"
             f'echo "{label}:$refs:args=$*" >> {self.log}\n'
             f"exit {status}\n",
             encoding="utf-8",
         )
-        path.chmod(0o755)
+        stub.chmod(0o755)
+        path.symlink_to(stub)
         return path
 
     def run(self, stdin: str = REFS) -> subprocess.CompletedProcess:
+        import os
+
+        env = dict(os.environ)
+        env["GUARD_LOG"] = str(self.log)
+        for var, (label, status) in self._guards.items():
+            env[f"GUARD_LABEL_{var}"] = label
+            env[f"GUARD_STATUS_{var}"] = str(status)
         return subprocess.run(
             ["bash", str(self.installed), "origin", "url"],
             input=stdin,
             capture_output=True,
             text=True,
             cwd=str(self.root),
+            env=env,
         )
 
     def seen(self) -> str:
@@ -243,13 +315,15 @@ def test_python_guard_runs():
         chain = Chain(Path(tmp))
         path = chain.root / "hooks" / "pre-push.local"
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
+        stub = chain.shared / "guard-python"
+        stub.write_text(
             "#!/usr/bin/env python3\n"
-            "import sys\n"
-            f"open({str(chain.log)!r}, 'a').write('python:' + sys.stdin.read())\n",
+            "import os, sys\n"
+            "open(os.environ['GUARD_LOG'], 'a').write('python:' + sys.stdin.read())\n",
             encoding="utf-8",
         )
-        path.chmod(0o755)
+        stub.chmod(0o755)
+        path.symlink_to(stub)
         proc = chain.run()
         assert proc.returncode == 0, f"exit {proc.returncode}: {proc.stderr}"
         assert chain.seen() == "python:refs/heads/dev aaa bbb refs/heads/main ccc ddd", (
@@ -290,14 +364,16 @@ def test_marker_mention_runs():
         chain = Chain(Path(tmp))
         path = chain.root / "hooks" / "pre-push.local"
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
+        stub = chain.shared / "guard-marker-mentions"
+        stub.write_text(
             "#!/usr/bin/env bash\n"
             f"# not a chain, though it checks for one: {MARKER}\n"
             "refs=$(cat)\n"
             f'echo "mentions:$refs" >> {chain.log}\n',
             encoding="utf-8",
         )
-        path.chmod(0o755)
+        stub.chmod(0o755)
+        path.symlink_to(stub)
         chain.guard("scripts/pre_push_hook.sh", "repo")
         proc = chain.run()
         assert proc.returncode == 0, f"exit {proc.returncode}: {proc.stderr}"
@@ -687,4 +763,7 @@ def test_failed_install_reports():
 if __name__ == "__main__":
     from test_runner import run
 
-    sys.exit(run("pre-push-chain", dict(globals())))
+    try:
+        sys.exit(run("pre-push-chain", dict(globals())))
+    finally:
+        Chain.cleanup()

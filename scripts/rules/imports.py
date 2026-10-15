@@ -51,6 +51,18 @@ _PRELUDE_NAMES = frozenset(
 def _strip_line(line):
     """Drop the trailing comment and any string or char literal content, so
     braces and paths inside them cannot be counted."""
+    # Fast paths for the two shapes that dominate a Rust file. A line with
+    # no string opener, no comment starter, and no char literal is returned
+    # as written: the walk below would leave it untouched. A line whose
+    # first non-space characters start a comment reduces to those leading
+    # spaces, because the walk stops at the starter and nothing before it
+    # was a string or literal. Both skip the per-character walk, which is
+    # what this function costs on a large tree.
+    if '"' not in line and "//" not in line and not _CHAR_LITERAL.search(line):
+        return line
+    stripped = line.lstrip()
+    if stripped.startswith("//") and '"' not in line:
+        return line[: len(line) - len(stripped)]
     out = []
     in_str = False
     escaped = False
