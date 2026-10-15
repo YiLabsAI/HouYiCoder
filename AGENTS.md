@@ -542,7 +542,11 @@ then `cargo xwin check --target x86_64-pc-windows-msvc --workspace
 --all-targets` (and `cargo xwin test` for runtime defects). xwin fetches the
 Microsoft CRT and Windows SDK, the sysroot the TLS stack needs to build from
 a non-Windows host. Use a separate `CARGO_TARGET_DIR` so it does not clobber
-the native build cache.
+the native build cache. A mechanical hoist of imports (a file move, a
+lift of function-local use statements to module scope) must re-run the
+windows check before it lands: the hoist turns a gate the enclosing
+cfg block carried for free into a per-line responsibility, and that is
+exactly the step the hoist forgets.
 
 Five patterns fail on Windows and cannot be seen on macOS, where
 `cfg(unix)` is always true and paths have no backslashes:
@@ -559,7 +563,11 @@ Five patterns fail on Windows and cannot be seen on macOS, where
   leaves the helpers dead on Windows. Gate the module instead:
   `#[cfg(all(test, unix))] mod tests`.
 - **An unconditional `use` of a type only referenced under `#[cfg(unix)]`**,
-  an unused import on Windows. Gate the import to match.
+  an unused import on Windows. Gate the import to match. When two or more
+  imports share one gate, group them under a single `#[cfg(unix)]` on a
+  merged use statement rather than repeating the attribute per line: the
+  group carries the gate as one decision a reader scans once, and a name
+  added to the group is covered without remembering to copy an attribute.
 - **String path matching that assumes forward slashes.** Markers or
   patterns carrying `/` do not match Windows paths, which use backslashes
   after canonicalize — the protected-path gate silently skips. Normalize
