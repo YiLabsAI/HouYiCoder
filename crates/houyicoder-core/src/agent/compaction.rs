@@ -4,6 +4,10 @@
 //! provider-facing measurements. Hooks cannot block compaction. Automatic
 //! retries use reason-scoped suppression; manual requests bypass it.
 
+pub(crate) mod backbone;
+pub(crate) mod economy;
+pub(crate) mod manifest;
+
 mod recording;
 
 pub(crate) use recording::pre_flight_threshold;
@@ -21,13 +25,13 @@ use houyicoder_context::{
     SessionLogEntry,
 };
 
-use super::backbone::{derive_backbone, merge_summary};
-use super::hook::{
+use crate::agent::backbone::{derive_backbone, merge_summary};
+use crate::agent::hook::{
     CompactTrigger, HookContext, HookEvent, HookPayload, HookVerdict, combine_verdicts,
 };
-use super::manifest::{CompressPolicy, build_manifest, estimate_transcript_tokens};
-use super::selection;
-use super::{RunError, Runner};
+use crate::agent::manifest::{CompressPolicy, build_manifest, estimate_transcript_tokens};
+use crate::agent::selection;
+use crate::agent::{RunError, Runner};
 
 /// Consecutive transient failures become sticky to prevent retry churn.
 const MAX_CONSECUTIVE_TRANSIENT_FAILURES: u32 = 3;

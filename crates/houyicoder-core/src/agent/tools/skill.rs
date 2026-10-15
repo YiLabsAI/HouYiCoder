@@ -14,10 +14,10 @@
 
 use std::sync::{Arc, Mutex};
 
-use super::super::SkillHookRegistrar;
-use super::super::conditional_activation::ConditionalSkillActivator;
-use super::super::skill_body::frame_untrusted_body;
-use super::super::skill_body::skill_source;
+use crate::agent::SkillHookRegistrar;
+use crate::agent::conditional_activation::ConditionalSkillActivator;
+use crate::agent::skill_body::frame_untrusted_body;
+use crate::agent::skill_body::skill_source;
 use houyicoder_api::sandbox::SandboxSession;
 use houyicoder_api::skill::grant::{SkillGrantStore, resolve_entitlements};
 use houyicoder_api::skill::{SkillError, SkillRegistry, SkillSource};

@@ -10,18 +10,21 @@
 //! one measurement lock, one provider capability call. No await, no channel.
 //! The host may call it on every command dispatch without throttling.
 
+pub(crate) mod obs_wire;
+pub(crate) mod redundancy;
+
 use std::sync::{Arc, Mutex};
 
 use houyicoder_protocol::llm::Usage;
 use houyicoder_resilience::BreakerState;
 
-use super::memory::{MemoryGateState, index_line};
-use super::model_window::resolve_capabilities;
-use super::prompt::memory_file_paths;
 use crate::agent::ContextMeasurement;
 use crate::agent::Runner;
 use crate::agent::append::new_event;
 use crate::agent::hook::registry::HookEntry;
+use crate::agent::memory::{MemoryGateState, index_line};
+use crate::agent::model_window::resolve_capabilities;
+use crate::agent::prompt::memory_file_paths;
 use crate::observability::MetricsView;
 use crate::observability::ModelUsage;
 use crate::observability::evolution::RedundantCall;

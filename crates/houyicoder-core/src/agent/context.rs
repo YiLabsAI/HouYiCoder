@@ -3,6 +3,12 @@
 //! Checkpoint selection and retention precede message assembly. The resulting
 //! section measurements drive pre-flight limits and the /context view.
 
+pub(crate) mod cache_liveness;
+pub(crate) mod prompt;
+pub(crate) mod retention;
+pub(crate) mod selection;
+pub(crate) mod turn_group;
+
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -11,11 +17,6 @@ use houyicoder_context::{
     memory_age_label, memory_freshness_text,
 };
 use houyicoder_protocol::llm::{AssistantToolCall, InputItem};
-
-use super::prompt;
-use super::retention;
-use super::selection;
-use super::turn_group;
 
 /// Per-turn recall budget shared by retrieval and context assembly.
 pub(crate) const MEMORY_RECALL_BUDGET: usize = 2000;

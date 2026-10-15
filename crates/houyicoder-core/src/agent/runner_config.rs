@@ -6,7 +6,7 @@ use houyicoder_resilience::Retry;
 // The output-token default is owned by the model-window module (the
 // per-family resolver), since the cap is a model capability. Re-exported here
 // so RunnerConfig::default + historical call sites reference one place.
-pub use super::model_window::DEFAULT_MAX_OUTPUT_TOKENS;
+pub use crate::agent::model_window::DEFAULT_MAX_OUTPUT_TOKENS;
 
 /// Default snapshot retention: seven days. Snapshots older than this are
 /// pruned at the start of each run. Overridable via Runner.

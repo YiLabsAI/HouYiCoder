@@ -1,5 +1,5 @@
-use super::*;
 use crate::agent::runner_config::DEFAULT_SNAPSHOT_TTL_SECS;
+use crate::agent::*;
 use crate::provider::test_support::FakeProvider;
 use crate::snapshot::SnapshotStore;
 use crate::snapshot::UndoStack;
@@ -29,7 +29,7 @@ use std::process::id;
 use std::sync::Arc;
 use std::sync::Mutex;
 use tokio::task::yield_now;
-pub(super) mod abort_tool;
+pub(crate) mod abort_tool;
 mod ask_question;
 mod budget_pressure_gate;
 mod denied_agents;
@@ -58,11 +58,11 @@ mod abort_boundary;
 #[cfg(test)]
 mod overflow;
 
-// length is pub(super): turn_usage_emit_tests (a sibling in agent) reuses
+// length is pub(crate): turn_usage_emit_tests (a sibling in agent) reuses
 // ScriptRawProvider from it. The other six submodules are private to tests
 // (no cross-module references); length is the only one with an external user.
 #[cfg(test)]
-pub(super) mod length;
+pub(crate) mod length;
 
 #[cfg(test)]
 mod memory_gates;

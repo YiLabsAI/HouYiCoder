@@ -42,13 +42,13 @@ use std::task::Poll;
 /// A provider that cancels the run on the stream's final poll, once its last
 /// chunk is out — the window a real Esc lands in when the user presses it
 /// while the answer is already complete on the provider side.
-pub(super) struct AbortOnStreamEnd {
+pub(crate) struct AbortOnStreamEnd {
     events: Vec<LlmEvent>,
     runner: Mutex<Weak<Runner>>,
 }
 
 impl AbortOnStreamEnd {
-    pub(super) fn new(events: Vec<LlmEvent>) -> Self {
+    pub(crate) fn new(events: Vec<LlmEvent>) -> Self {
         Self {
             events,
             runner: Mutex::new(Weak::new()),
@@ -58,7 +58,7 @@ impl AbortOnStreamEnd {
     /// Point the provider at the runner it must cancel. Called after the
     /// runner is built: the provider is a constructor argument, so the two
     /// cannot hold each other directly.
-    pub(super) fn bind(&self, runner: &Arc<Runner>) {
+    pub(crate) fn bind(&self, runner: &Arc<Runner>) {
         *self.runner.lock().expect("runner slot") = Arc::downgrade(runner);
     }
 }
@@ -128,13 +128,13 @@ async fn test_abort_at_answer_boundary() {
 /// A verify gate that cancels the run from inside verify, then reports its
 /// verdict. The cancel lands in the gate's own window, after the last token
 /// check before FinalOutput.
-pub(super) struct AbortDuringVerify {
+pub(crate) struct AbortDuringVerify {
     runner: Mutex<Weak<Runner>>,
     fail: bool,
 }
 
 impl AbortDuringVerify {
-    pub(super) fn new(fail: bool) -> Self {
+    pub(crate) fn new(fail: bool) -> Self {
         Self {
             runner: Mutex::new(Weak::new()),
             fail,
@@ -144,7 +144,7 @@ impl AbortDuringVerify {
     /// Point the gate at the runner it must cancel. Called after the runner is
     /// built: the gate is a constructor argument, so the two cannot hold each
     /// other directly.
-    pub(super) fn bind(&self, runner: &Arc<Runner>) {
+    pub(crate) fn bind(&self, runner: &Arc<Runner>) {
         *self.runner.lock().expect("runner slot") = Arc::downgrade(runner);
     }
 }

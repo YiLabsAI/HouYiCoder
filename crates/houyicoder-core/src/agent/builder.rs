@@ -6,18 +6,19 @@ use std::sync::Arc;
 use houyicoder_context::SessionId;
 use houyicoder_resilience::resource_breaker::ResourceBreaker;
 
-use super::backbone::WorkspaceProbe;
-use super::conditional_activation::ConditionalSkillActivator;
-use super::hook::registry::HookRegistry;
-use super::manifest::Summarizer;
-use super::memory::{MemoryRuntime, MutationLog};
-use super::multi_agent::bus_types::BusMessage;
-use super::reducer::ToolOutputReducer;
-use super::skill_reload::SkillReloadGuard;
-use super::tools::{MemoryAddTool, SearchMemoryTool, ShowMemoryTool};
-use super::{RunError, Runner, VerifyGate};
 use crate::agent::SkillHookRegistrar;
+use crate::agent::ToolRegistry;
+use crate::agent::backbone::WorkspaceProbe;
+use crate::agent::conditional_activation::ConditionalSkillActivator;
 use crate::agent::hook::CompactTrigger;
+use crate::agent::hook::registry::HookRegistry;
+use crate::agent::manifest::Summarizer;
+use crate::agent::memory::{MemoryRuntime, MutationLog};
+use crate::agent::multi_agent::bus_types::BusMessage;
+use crate::agent::reducer::ToolOutputReducer;
+use crate::agent::skill_reload::SkillReloadGuard;
+use crate::agent::tools::{MemoryAddTool, SearchMemoryTool, ShowMemoryTool};
+use crate::agent::{RunError, Runner, VerifyGate};
 use houyicoder_api::agent_event::AgentEventHandlers;
 use houyicoder_api::cache_policy::CachePolicyProvider;
 use houyicoder_api::cost_model::CostModelProvider;
@@ -138,7 +139,7 @@ impl Runner {
 
     /// Read access to the tool registry. The composition root + tests use it
     /// to assert a tool is registered (e.g. save_memory after install_memory).
-    pub fn tools(&self) -> &super::ToolRegistry {
+    pub fn tools(&self) -> &ToolRegistry {
         &self.tools
     }
 

@@ -35,7 +35,7 @@ use tokio::task::spawn_blocking;
 /// the blocking pool when rg is not on PATH. The fallback still races the
 /// cancellation token so an Esc mid-walk short-circuits, though the
 /// spawn_blocking orphan keeps running to completion after the caller returns.
-pub(super) async fn dispatch_grep(
+pub(crate) async fn dispatch_grep(
     root: PathBuf,
     dirs: Vec<String>,
     opts: GrepOptions,
@@ -65,7 +65,7 @@ pub(super) async fn dispatch_grep(
 /// output; Ok(None) means rg is not available so the caller falls back to
 /// the in-process traversal; Err means rg ran but failed in a way the caller
 /// should surface.
-pub(super) async fn try_run_grep_subprocess(
+pub(crate) async fn try_run_grep_subprocess(
     root: &Path,
     dirs: &[String],
     opts: &GrepOptions,

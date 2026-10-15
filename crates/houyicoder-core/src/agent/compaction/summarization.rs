@@ -10,8 +10,8 @@ use houyicoder_async::PFut;
 use houyicoder_context::{SessionEvent, SessionLogEntry};
 use houyicoder_protocol::llm::{CompletionRequest, CompletionResponse, ModelSettings, OutputItem};
 
-use super::super::manifest::{HeuristicSummarizer, SummarizeError, Summarizer};
-use super::super::turn_group;
+use crate::agent::manifest::{HeuristicSummarizer, SummarizeError, Summarizer};
+use crate::agent::turn_group;
 #[cfg(test)]
 use futures::stream::iter;
 #[cfg(test)]

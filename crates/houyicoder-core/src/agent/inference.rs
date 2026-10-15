@@ -1,5 +1,9 @@
 //! Atomic inference state and its per-request snapshot.
 
+pub mod effort;
+pub(crate) mod model_display;
+pub mod model_window;
+
 use houyicoder_protocol::frontend::model::{ModelChoice, SpeedMode};
 use houyicoder_protocol::llm::EffortLevel;
 

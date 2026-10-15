@@ -5,7 +5,10 @@
 //!
 //! Submodules are private; the public surface is the named re-exports
 //! below. Internal callers within the tools tree reach siblings via
-//! super::, and cross-crate consumers go through the agent facade.
+//! crate::agent::, and cross-crate consumers go through the agent facade.
+
+pub(crate) mod diff;
+pub(crate) mod registry;
 
 use houyicoder_api::tool::{Tool, ToolCtx};
 use houyicoder_protocol::extension::ToolError;

@@ -1,0 +1,785 @@
+//! Streaming model calls, request preflight, and context overflow recovery.
+use futures::StreamExt;
+use tokio_util::sync::CancellationToken;
+
+use houyicoder_context::{SessionEvent, SessionId, TruncationSignal};
+use houyicoder_protocol::frontend::model::SpeedMode;
+use houyicoder_protocol::llm::{
+    CompletionRequest, CompletionResponse, EffortLevel, InputItem, ModelSettings, OutputItem,
+    ProviderError,
+};
+use houyicoder_protocol::llm::{LlmEvent, Usage};
+
+use crate::agent::compaction::{CompactionSuppression, SuppressionCause};
+use crate::agent::economy::{economy_decision, estimate_compaction};
+use crate::agent::model_window::{
+    conservative_input_tokens, fill_omitted_usage, normalize_model_for_api,
+    record_learned_context_window,
+};
+use crate::agent::truncation::{classify_truncation_signal, is_length_reason};
+use crate::agent::{RunError, Runner, new_event, obs_wire};
+use houyicoder_api::agent_event::{EventHandler, ResponseStreamEvent};
+
+use super::stream_fold;
+use crate::agent::Tokenizer;
+use crate::agent::append::timing::BlockSpans;
+use crate::agent::apply_effort_settings;
+use crate::agent::compaction::pre_flight_threshold;
+use crate::agent::resolve_applied_effort;
+use std::time::Duration;
+use std::time::Instant;
+use stream_fold::StreamFold;
+use tokio::time::sleep;
+
+/// Max gap between stream chunks before the run aborts the call as a stall
+/// (dead socket / half-open gateway). On by default; without it a dead socket
+/// hangs the run forever unless the user presses Esc. Tests use a tiny value
+/// so the stall path runs instantly — a normal test stream emits chunks far faster than 50ms, so only a truly pending stream (no chunks at all) trips it.
+#[cfg(not(test))]
+fn stream_idle_timeout() -> Duration {
+    Duration::from_secs(90)
+}
+#[cfg(test)]
+fn stream_idle_timeout() -> Duration {
+    Duration::from_millis(50)
+}
+
+impl Runner {
+    /// One streaming model call: re-assemble the event log into input, build the
+    /// request, drive the provider stream, and fold it into a CompletionResponse
+    /// while appending each text delta to the session log and notifying the live
+    /// sink. Retry wraps only stream establishment (a retryable error before the
+    /// first real event retries the whole call); once an event lands the turn is
+    /// committed — a mid-stream error is terminal; there is no partial-recovery
+    /// path here yet.
+    ///
+    /// Pre-flight (fail-closed): if the assembled context exceeds the absolute reserve
+    /// (window minus the model response room and an estimation margin), compress
+    /// before sending to the provider. Overflow handler: when
+    /// the stream returns ContextOverflow, compress and retry (bounded 2). If
+    /// compress makes no progress (all Verbatim), fail-closed. Still overflow
+    /// after retries → fail-closed bounded (no infinite retry avalanche).
+    #[expect(clippy::too_many_lines, reason = "long by design, kept whole")]
+    #[expect(clippy::cognitive_complexity, reason = "inherent dispatch complexity")]
+    pub(crate) async fn model_call_stream(
+        &self,
+        session: SessionId,
+        turn: u32,
+        max_turns: u32,
+        token: &CancellationToken,
+        turn_token: &CancellationToken,
+    ) -> Result<Option<CompletionResponse>, RunError> {
+        const MAX_OVERFLOW_RETRIES: u32 = 2;
+        const CONVERGE_REMINDER_TURNS: u32 = 5;
+
+        // One model_call_stream entry = one drive-loop iteration = one logical
+        // turn. Start the turn here so length/overflow retries inside 'outer
+        // stay on the same turn number (the turn boundary is this entry).
+        // Append a durable TurnStarted boundary alongside the in-memory
+        // start_turn, so a turn that never reaches a TurnUsage (cancelled or
+        // errored mid-stream) still carries a boundary marker. Model input
+        // skips the marker; the trajectory view groups turns on it.
+        obs_wire::start_turn(&self.observability);
+        self.heal_turn_start_suppression();
+        self.append_turn_started(session).await?;
+
+        let mut overflow_retries = 0u32;
+        // Economy gate fires at most once per turn: a proactive compact that
+        // does not bring the view under the ceiling would otherwise re-fire
+        // every 'outer re-entry (turn is a caller param, not incremented
+        // here), looping. The ceiling gate is bounded by overflow_retries;
+        // the economy gate is bounded by this flag (one proactive compact,
+        // then the ceiling owns further recovery).
+        let mut economy_fired_this_turn = false;
+        // Length-recovery: a finish_reason "length" cut at the token cap is
+        // recovered by appending the partial assistant message + a resume
+        // nudge, then re-calling so the model continues. Bounded so a model
+        // that always over-runs cannot loop forever. Live streaming UX has
+        // no clean retract for an already-shown partial, so this path skips
+        // the discard-and-retry and continues from the partial — which also
+        // yields more total room across the N continuations than one big cap.
+        const MAX_LENGTH_RETRIES: u32 = 3;
+        let mut length_retries = 0u32;
+        'outer: loop {
+            let snapshot = self.store.current_view(session).await?;
+            let tool_defs = self.tools.tool_defs();
+            // Read the session-frozen MEMORY.md index for the cacheable system
+            // prefix. Clear and compact are the only refresh points.
+            let memory_index = self.format_memory_index();
+            let mut assembled = self.context_builder.build_for_turn(
+                &snapshot.events,
+                snapshot.manifest.as_ref(),
+                Some(self.store.backend()),
+                &tool_defs,
+                memory_index.as_deref(),
+            );
+            // Capture before assembled.messages moves into the request;
+            // token_count() can't run after that. Fallback for
+            // provider-omits-usage, passed to record_turn at turn end.
+            let estimated_input_tokens = assembled.measurement.token_count();
+
+            // Freeze the inference config once per request: pre-flight,
+            // request construction, overflow learning and usage attribution
+            // all read this snapshot, never the live state, so a mid-run switch
+            // cannot hand any of them a mixed config or attribute the old
+            // request onto the new model.
+            let inference = self.snapshot_inference();
+
+            // Convergence reminder: when the turn count is within the
+            // reminder window of the hard cap, inject a user message that
+            // tells the model to synthesize and answer. Without this, an
+            // analysis task (read-heavy, no single definitive result) can
+            // loop tool calls until MaxTurnsReached, producing no answer.
+            // The turn>1 guard skips the very first call: reminding before
+            // the model has acted once is absurd, and it keeps tiny max_turns
+            // configs (tests, short subagent forks) from firing the reminder
+            // on turn 1 and polluting the assembled context.
+            let remaining = max_turns.saturating_sub(turn);
+            if turn > 1 && remaining <= CONVERGE_REMINDER_TURNS {
+                // Convergence nudge: encourage the model to synthesize if it
+                // has enough information, without revealing the turn budget
+                // (budget pressure is a control-plane concern; injecting it
+                // into the model input causes premature convergence).
+                let reminder = "If you have gathered enough information to \
+                     answer, synthesize your findings and produce the final \
+                     answer now. Prioritize answering over further exploration.";
+                assembled.messages.push(InputItem::User {
+                    content: reminder.into(),
+                });
+            }
+
+            // Pre-flight: an absolute reserve (response room, capped, +
+            // estimation margin) beats a 95% ratio, which on a 200k window
+            // left only 10k headroom. Fail closed so an oversized request
+            // never reaches the provider. The window and the output cap come
+            // frozen on the inference snapshot, so the gate, the request
+            // body and the pane row read one value.
+            let window = inference.context_window;
+            if window > 0 {
+                // The reserve uses the frozen output cap — the same value
+                // the request body sends — so the room the gate reserves
+                // matches the room the request asks for.
+                let threshold = pre_flight_threshold(window, inference.max_output_tokens);
+                // Floor the estimate to the last observed input tokens so a
+                // tiktoken undercount on a non-native model cannot false-trip
+                // the gate. The max is the conservative floor.
+                let last_observed = self
+                    .observability
+                    .lock()
+                    .ok()
+                    .and_then(|ol| ol.last_turn_delta().map(|d| d.input));
+                let conservative_input_tokens =
+                    conservative_input_tokens(estimated_input_tokens, last_observed);
+                // Economy gate: compact proactively when the remaining turns
+                // make the rewrite + summarizer cost pay back in cache-read
+                // savings. Runs before the ceiling so an expensive view
+                // compacts early. Guarded by conservative_input_tokens >
+                // window/2 so a small test window does not false-fire.
+                let cost = self.cost_model.cost();
+                if conservative_input_tokens > window / 2
+                    && remaining > 0
+                    && !economy_fired_this_turn
+                    && self.compaction_suppression() == CompactionSuppression::None
+                {
+                    let estimate = estimate_compaction(conservative_input_tokens, remaining as u64);
+                    let decision = economy_decision(estimate, &cost);
+                    if decision.compact {
+                        // Mark fired before the await so a re-entry after
+                        // continue cannot re-fire (the compact itself is
+                        // abortable; a cancel returns Ok(None) first).
+                        economy_fired_this_turn = true;
+                        let progress = tokio::select! {
+                            biased;
+                            _ = token.cancelled() => return Ok(None),
+                            _ = turn_token.cancelled() => return Ok(None),
+                            p = self.compress(session) => p?,
+                        };
+                        if progress {
+                            self.memory.recall(session).await?;
+                            // A compaction folded the listing out of the
+                            // assembled context; re-announce so the model is
+                            // not skill-blind for the rest of this run. No-op
+                            // when a listing still survives (dedup scan).
+                            self.inject_skill_listing_and_body(session).await?;
+                            continue 'outer;
+                        }
+                    }
+                }
+                if conservative_input_tokens > threshold {
+                    if overflow_retries >= MAX_OVERFLOW_RETRIES {
+                        return Err(RunError::ContextOverflowBounded {
+                            retries: overflow_retries,
+                            enforced_limit: None,
+                        });
+                    }
+                    let progress = tokio::select! {
+                        biased;
+                        // compress is another LLM call on the run chain —
+                        // abortable like stream.next(), not a bare await. A
+                        // provider stall here otherwise hangs the run past
+                        // the sandbox fence with no Esc path.
+                        _ = token.cancelled() => return Ok(None),
+                        _ = turn_token.cancelled() => return Ok(None),
+                        p = self.compress(session) => p?,
+                    };
+                    if !progress {
+                        // All-Verbatim and still over ceiling: a re-loop
+                        // would not shrink. Sticky-suppress so the next
+                        // turn does not retry pointlessly.
+                        self.set_compaction_suppression(
+                            SuppressionCause::NoProgress.suppression_state(),
+                        );
+                        return Err(RunError::ContextOverflowNoProgress);
+                    }
+                    overflow_retries += 1;
+                    // Compact folded older memory-recall events out of the
+                    // assembled context, where the Summarized disposition
+                    // drops them from the model's input. Re-inject so the
+                    // model is not memory-blind for the rest of this run:
+                    // the surfaced scan now sees the
+                    // folded set as empty, so recall re-surfaces entries the
+                    // model still needs for the remaining tool turns.
+                    self.memory.recall(session).await?;
+                    // Re-announce skills too: the compact folded the
+                    // listing out, so the scan resets and it re-surfaces.
+                    self.inject_skill_listing_and_body(session).await?;
+                    continue 'outer;
+                }
+            }
+
+            // Append the configured instructions to the assembled system prompt
+            // (do not replace it) so the static identity/framework prefix
+            // stays byte-stable for prompt-cache. An empty configured
+            // instructions field (the production path) uses the assembled
+            // system verbatim. Custom text lands at the end; the default
+            // prompt is kept.
+            let instructions = assemble_instructions(&assembled.system, &self.config.instructions);
+            let active_model = inference.model.clone();
+            let mut settings = ModelSettings {
+                max_output_tokens: Some(inference.max_output_tokens),
+                ..Default::default()
+            };
+            // Per-request effort, resolved from the frozen snapshot (not the
+            // live state) + the catalog + per-model default, then lowered to
+            // the dialect's fields. Reads no stale construction-time value.
+            // The same resolved level lands on the durable TurnUsage, so each
+            // turn is attributed to the effort that actually ran.
+            let applied_effort = resolve_applied_effort(
+                &active_model,
+                inference.effort,
+                self.catalog_resolver.as_deref(),
+            );
+            apply_effort_settings(&mut settings, &active_model, applied_effort);
+            // Observability at the effort inflection point: /debug raises the
+            // level to surface this. Trajectory (durable log) does not collect
+            // tracing — this is the runtime-only view of what the request sends.
+            tracing::debug!(
+                model = %active_model,
+                applied_effort = ?applied_effort,
+                reasoning_effort = ?settings.reasoning_effort,
+                enable_thinking = ?settings.enable_thinking,
+                "effort resolved for request"
+            );
+            // Fast lowers to the provider's fast service tier on models that
+            // declare one. The apply path clamps an unsupported Fast to
+            // Standard, so a Fast snapshot value means the model accepts it.
+            if inference.speed == SpeedMode::Fast {
+                settings.speed = Some(SpeedMode::Fast);
+            }
+            let mut request = CompletionRequest {
+                model: normalize_model_for_api(&active_model),
+                instructions,
+                input: assembled.messages,
+                tools: self.tools.tool_defs(),
+                settings,
+                cache_breakpoints: Vec::new(),
+            };
+            // Apply the cache policy: place prompt-cache breakpoints so the
+            // provider can carve a stable prefix. The Auto three-breakpoint set
+            // (system static prefix, last tool def, latest user message) is the
+            // default; the provider lowers each kind to its wire format.
+            let policy = self.cache_policy.policy();
+            self.cache_policy
+                .apply(&mut request.cache_breakpoints, &policy);
+            let provider = self.provider.clone();
+            let response_handler = self.events.response_stream_handler();
+            let max_attempts = self.config.retry.max_attempts.max(1);
+
+            // Retry-to-first-event: a retryable transport error before any event
+            // retries the stream call; a non-retryable error is fatal; an empty
+            // stream is a completed (empty) turn. After the first event, no retry.
+            let mut attempts = 0u32;
+            // Wall-clock for this round-trip, measured per 'outer iteration
+            // (fresh each retry so attempt 2/3 do not accumulate 1's time).
+            // First provider.stream call → stream end (Finish event); covers
+            // transport retries inside the first-event loop (without_retries
+            // would split those off — deferred, passed 0).
+            let api_start = Instant::now();
+            tracing::debug!(
+                attempt = attempts,
+                overflow_retries,
+                "start stream round-trip"
+            );
+            let mut stream = provider.stream(request.clone());
+            tracing::debug!("stream opened");
+            let first = loop {
+                tokio::select! {
+                    biased;
+                    _ = token.cancelled() => return Ok(None),
+                    _ = turn_token.cancelled() => return Ok(None),
+                    item = stream.next() => match item {
+                        Some(Ok(ev)) => {
+                            tracing::debug!(elapsed = ?api_start.elapsed(), "first event received");
+                            break Some(ev);
+                        }
+                        Some(Err(e)) if e.retryable() && attempts + 1 < max_attempts => {
+                            attempts += 1;
+                            // Exponential backoff with jitter; a server Retry-After
+                            // (429) bypasses the backoff ceiling so a rate-limited
+                            // account is polled after the server's window, not every
+                            // max-delay tick.
+                            let wait = self.config.retry.delay_for(attempts, e.retry_after_delay());
+                            tracing::debug!(attempt = attempts, wait = ?wait, "retrying after error");
+                            sleep(wait).await;
+                            stream = provider.stream(request.clone());
+                            continue;
+                        }
+                        // Overflow handler: compress and retry (bounded).
+                        // ContextOverflow is not retryable, so without this
+                        // branch it would hit the fatal path below and brick
+                        // the session. When the provider's error body named
+                        // the real enforced limit, record it for the model so
+                        // the catalog self-corrects: the next resolution trusts
+                        // the provider's enforced value over the static table.
+                        Some(Err(ProviderError::ContextOverflow { enforced_limit })) => {
+                            // Attribute the overflow to the model the request
+                            // used (the frozen snapshot), not the live state:
+                            // a mid-run switch must not record the old
+                            // request's enforced limit onto the new model.
+                            let active = inference.model.clone();
+                            record_learned_context_window(
+                                &active,
+                                enforced_limit,
+                            );
+                            // The one moment we know the window estimate is
+                            // wrong AND cannot self-heal: the provider rejected
+                            // an over-long request but its error body carried no
+                            // parseable limit, so the learner learned nothing.
+                            // Surface it to the user as a system line pointing at
+                            // the catalog override (zero LLM cost, just text).
+                            if enforced_limit.is_none() {
+                                self.emit_unactionable_overflow(&active);
+                            }
+                            if overflow_retries >= MAX_OVERFLOW_RETRIES {
+                                return Err(RunError::ContextOverflowBounded {
+                                    retries: overflow_retries,
+                                    enforced_limit,
+                                });
+                            }
+                            let progress = tokio::select! {
+                                biased;
+                                // compress is another LLM call on the run chain —
+                                // abortable like stream.next(), not a bare await. A
+                                // provider stall here otherwise hangs the run past
+                                // the sandbox fence with no Esc path.
+                                _ = token.cancelled() => return Ok(None),
+                                _ = turn_token.cancelled() => return Ok(None),
+                                p = self.compress(session) => p?,
+                            };
+                            if !progress {
+                                self.set_compaction_suppression(
+                                    SuppressionCause::NoProgress.suppression_state(),
+                                );
+                                return Err(RunError::ContextOverflowNoProgress);
+                            }
+                            overflow_retries += 1;
+                            // Compaction folded older memory-recall events out
+                            // of the context; re-inject so the model is not
+                            // memory-blind for the rest of this run.
+                            self.memory.recall(session).await?;
+                            // Re-announce skills: the compact folded the
+                            // listing out; the scan resets and re-surfaces it.
+                            self.inject_skill_listing_and_body(session).await?;
+                            continue 'outer;
+                        }
+                        Some(Err(e)) => return Err(RunError::ProviderFatal(e)),
+                        None => break None,
+                    },
+                    _ = sleep(stream_idle_timeout()) => {
+                        tracing::debug!(elapsed = ?api_start.elapsed(), "stall retry (no chunk for idle timeout)");
+                        if attempts + 1 < max_attempts {
+                            attempts += 1;
+                            let wait = self.config.retry.delay_for(attempts, None);
+                            sleep(wait).await;
+                            stream = provider.stream(request.clone());
+                            continue;
+                        }
+                        return Err(RunError::ProviderFatal(ProviderError::Network));
+                    }
+                }
+            };
+
+            let mut state = StreamFold::default();
+            let mut first_token_elapsed: Option<u64> = None;
+            let mut blocks = BlockSpans::default();
+            // Process events as they arrive so response handlers and the log
+            // observe each delta without waiting for stream completion.
+            if let Some(ev) = first {
+                blocks.note(&ev);
+                if matches!(
+                    ev,
+                    LlmEvent::TextDelta { .. }
+                        | LlmEvent::ReasoningDelta { .. }
+                        | LlmEvent::ToolCall { .. }
+                ) {
+                    first_token_elapsed = Some(api_start.elapsed().as_millis() as u64);
+                }
+                self.fold_event(ev, &mut state, session, response_handler.as_deref())
+                    .await?;
+            }
+            loop {
+                let ev = tokio::select! {
+                    biased;
+                    _ = token.cancelled() => {
+                        let response = state.clone().into_response(inference.model.clone());
+                        self.append_response_events(session, &response).await?;
+                        return Ok(None);
+                    }
+                    _ = turn_token.cancelled() => {
+                        // Per-turn abort mid-stream: flush partial; drive loop appends marker + next turn.
+                        let response = state.clone().into_response(inference.model.clone());
+                        self.append_response_events(session, &response).await?;
+                        return Ok(None);
+                    }
+                    ev = stream.next() => match ev {
+                        Some(Ok(e)) => e,
+                        Some(Err(e)) => return Err(RunError::ProviderFatal(e)),
+                        None => break,
+                    },
+                    _ = sleep(stream_idle_timeout()) => {
+                        // Stall mid-stream: flush the partial so text is not lost, then fail (no retry — would replay emitted events).
+                        let response = state.clone().into_response(inference.model.clone());
+                        self.append_response_events(session, &response).await?;
+                        return Err(RunError::ProviderFatal(ProviderError::Network));
+                    }
+                };
+                blocks.note(&ev);
+                if first_token_elapsed.is_none()
+                    && matches!(
+                        ev,
+                        LlmEvent::TextDelta { .. }
+                            | LlmEvent::ReasoningDelta { .. }
+                            | LlmEvent::ToolCall { .. }
+                    )
+                {
+                    first_token_elapsed = Some(api_start.elapsed().as_millis() as u64);
+                }
+                self.fold_event(ev, &mut state, session, response_handler.as_deref())
+                    .await?;
+            }
+            let (reasoning_ms, response_ms) = (blocks.reasoning_ms(), blocks.response_ms());
+            // Provider-omits-usage fallback: some OpenAI-compat streams
+            // ignore stream_options.include_usage; substitute the estimated
+            // input tokens so the status gauge + tally read the real footprint.
+            fill_omitted_usage(&mut state.usage, estimated_input_tokens);
+            // Capture the raw provider finish_reason BEFORE dialect
+            // normalization so the verdict carries the original dialect
+            // (max_tokens / MAX_TOKENS / length / stop). Without this the
+            // normalize below flattens the dialect to "length" and the raw
+            // spelling the gateway used is lost to trajectory analysis.
+            let raw_finish_reason = state.finish_reason.clone();
+            // An unnormalized alias silently disables length recovery and leaves
+            // the response visibly truncated.
+            if let Some(reason) = &state.finish_reason
+                && reason != "length"
+                && is_length_reason(reason)
+            {
+                state.finish_reason = Some("length".into());
+            }
+            // Silent-truncation heuristic: a proxy can cut the stream at
+            // the token cap yet signal "stop". Synthesize "length" when the
+            // provider claimed a natural stop but the output looks cut, so
+            // the resume loop recovers. Either signal suffices: output at
+            // the token cap (server usage or a self-count), or an unclosed
+            // code fence (odd triple-backtick count). Classified once into
+            // TruncationSignal; skipped when the provider already cut.
+            let self_count_output_tokens = Tokenizer::new().count(&state.assistant_text);
+            let mut truncation_signal = TruncationSignal::None;
+            if state.finish_reason.as_deref() != Some("length") {
+                truncation_signal = classify_truncation_signal(
+                    &state.assistant_text,
+                    &state.usage,
+                    self_count_output_tokens,
+                    inference.max_output_tokens,
+                );
+                if truncation_signal != TruncationSignal::None {
+                    state.finish_reason = Some("length".into());
+                }
+            }
+            // Length-recovery: the provider cut the reply at the max_tokens
+            // cap (finish_reason "length"). Withhold the truncation notice
+            // while recovery can still succeed — append the partial assistant
+            // message + a resume-direct nudge, then re-call so the model
+            // picks up mid-thought. The nudge is a MetaUser event (served to
+            // the model, hidden from the readable transcript). Bounded by
+            // MAX_LENGTH_RETRIES; on exhaustion a visible notice lands.
+            if state.finish_reason.as_deref() == Some("length")
+                && length_retries < MAX_LENGTH_RETRIES
+            {
+                length_retries += 1;
+                self.store
+                    .append(new_event(
+                        session,
+                        SessionEvent::TruncationVerdict {
+                            raw_finish_reason,
+                            normalized_reason: state.finish_reason.clone(),
+                            signal: truncation_signal,
+                            server_output_tokens: state.usage.output_tokens,
+                            self_count_output_tokens,
+                            max_output_tokens: inference.max_output_tokens,
+                            recovery_attempts: length_retries,
+                            recovery_fired: true,
+                        },
+                    ))
+                    .await?;
+                let partial = state.clone().into_response(inference.model.clone());
+                self.append_response_events(session, &partial).await?;
+                // Record the partial call's cost before the nudge (the nudge
+                // is the next call's input; the usage is this call's). A
+                // length-recovery retry burns real tokens — and each retry's
+                // input grows, since the partial reply + nudge are appended
+                // before the re-call. Without this the worst offenders (long
+                // replies that retry 1-3x) are the least visible in /cost +
+                // /trajectory, and the self-evolution loop can't mine
+                // truncation-retry waste. recovery=true marks this as a retry
+                // continuation so the cost is queryable per-call.
+                obs_wire::record_turn(
+                    &self.observability,
+                    &partial.model,
+                    &partial.usage,
+                    estimated_input_tokens,
+                    api_start.elapsed().as_millis() as u64,
+                    window,
+                    inference.max_output_tokens,
+                );
+                self.record_turn_cache(&partial.usage);
+                let total_dur_ms = api_start.elapsed().as_millis() as u64;
+                let decode_dur_ms =
+                    first_token_elapsed.map(|ttft| total_dur_ms.saturating_sub(ttft));
+                if let Err(e) = self
+                    .append_model_step_timing(
+                        session,
+                        total_dur_ms,
+                        first_token_elapsed,
+                        decode_dur_ms,
+                        reasoning_ms,
+                        response_ms,
+                    )
+                    .await
+                {
+                    tracing::debug!("timing append failed: {e}");
+                }
+                self.append_turn_usage(
+                    session,
+                    &partial.model,
+                    &partial.usage,
+                    true,
+                    applied_effort.map(EffortLevel::label),
+                )
+                .await?;
+                self.append_resume_nudge(session).await?;
+                continue 'outer;
+            }
+            if state.finish_reason.as_deref() == Some("length") {
+                // Recovery exhausted: surface the cut so an empty/truncated
+                // reply is not a silent mystery.
+                if state.assistant_text.is_empty() {
+                    state.assistant_text = if state.reasoning.is_empty() {
+                        "*(output truncated at the token cap — no reply produced after recovery)*"
+                            .to_string()
+                    } else {
+                        "*(the model reasoned but produced no answer before the token cap — recovery exhausted)*"
+                            .to_string()
+                    };
+                } else {
+                    state
+                        .assistant_text
+                        .push_str("\n\n*…output truncated at the token cap — recovery exhausted.*");
+                }
+            }
+            // Terminal verdict: covers both recovery-exhausted (normalized
+            // reason is length, recovery_attempts at the cap) and clean
+            // success (normalized reason is stop, recovery_attempts is however
+            // many recoveries fired before the clean stop). The data
+            // distinguishes the two cases — no separate emission needed.
+            let normalized_reason = state.finish_reason.clone();
+            let server_output_tokens = state.usage.output_tokens;
+            let response = state.into_response(inference.model.clone());
+            self.append_response_events(session, &response).await?;
+            self.store
+                .append(new_event(
+                    session,
+                    SessionEvent::TruncationVerdict {
+                        raw_finish_reason,
+                        normalized_reason,
+                        signal: truncation_signal,
+                        server_output_tokens,
+                        self_count_output_tokens,
+                        max_output_tokens: inference.max_output_tokens,
+                        recovery_attempts: length_retries,
+                        recovery_fired: false,
+                    },
+                ))
+                .await?;
+            // Record per-turn usage: response.usage (provider-measured,
+            // primary) and estimated_input_tokens (local tiktoken, fallback
+            // when the provider omits usage). Co-located with the
+            // TruncationVerdict so a replay sees them adjacent.
+            obs_wire::record_turn(
+                &self.observability,
+                &response.model,
+                &response.usage,
+                estimated_input_tokens,
+                api_start.elapsed().as_millis() as u64,
+                window,
+                inference.max_output_tokens,
+            );
+            self.record_turn_cache(&response.usage);
+            let total_dur_ms = api_start.elapsed().as_millis() as u64;
+            let decode_dur_ms = first_token_elapsed.map(|ttft| total_dur_ms.saturating_sub(ttft));
+            if let Err(e) = self
+                .append_model_step_timing(
+                    session,
+                    total_dur_ms,
+                    first_token_elapsed,
+                    decode_dur_ms,
+                    reasoning_ms,
+                    response_ms,
+                )
+                .await
+            {
+                tracing::debug!("timing append failed: {e}");
+            }
+            self.append_turn_usage(
+                session,
+                &response.model,
+                &response.usage,
+                false,
+                applied_effort.map(EffortLevel::label),
+            )
+            .await?;
+            return Ok(Some(response));
+        }
+    }
+
+    /// Append the resume-direct nudge as a persisted MetaUser event so the
+    /// next serve picks it up and the model continues the cut reply. The
+    /// nudge: no apology, no recap, pick up mid-thought, break remaining
+    /// work into smaller pieces. Served to the model, hidden from the
+    /// readable transcript.
+    async fn append_resume_nudge(&self, session: SessionId) -> Result<(), RunError> {
+        const NUDGE: &str = "Output token limit hit. Resume directly — no apology, no recap of what you were doing. Pick up mid-thought if that is where the cut happened. Break remaining work into smaller pieces.";
+        self.store
+            .append(new_event(
+                session,
+                SessionEvent::MetaUser {
+                    text: NUDGE.to_string(),
+                },
+            ))
+            .await?;
+        Ok(())
+    }
+
+    /// Fold one streamed LlmEvent into turn state and emit response events.
+    /// A ProviderError event is terminal for the turn.
+    /// Boundary events (TextStart/End, ToolInput*, Step*) are ignored —
+    /// tool-input streaming is not surfaced here yet.
+    async fn fold_event(
+        &self,
+        ev: LlmEvent,
+        state: &mut StreamFold,
+        session: SessionId,
+        response_handler: Option<&dyn EventHandler<ResponseStreamEvent>>,
+    ) -> Result<(), RunError> {
+        match ev {
+            LlmEvent::TextDelta { text, .. } => {
+                if let Some(handler) = response_handler {
+                    handler.handle(ResponseStreamEvent::AssistantTextDelta { text: text.clone() });
+                }
+                self.store
+                    .append(new_event(
+                        session,
+                        SessionEvent::AssistantTextDelta { text: text.clone() },
+                    ))
+                    .await?;
+                state.assistant_text.push_str(&text);
+            }
+            LlmEvent::ReasoningDelta { text, .. } => {
+                if let Some(handler) = response_handler {
+                    handler.handle(ResponseStreamEvent::ReasoningDelta { text: text.clone() });
+                }
+                state.reasoning.push(text);
+            }
+            LlmEvent::ToolCall { id, name, input } => {
+                state
+                    .tool_calls
+                    .push(OutputItem::ToolCall { id, name, input });
+            }
+            LlmEvent::Finish { reason, usage: u } => {
+                if let Some(u) = u {
+                    state.usage = u;
+                }
+                // Capture the provider's finish reason so the drive loop can
+                // react: a "length" finish means the reply was cut at the
+                // max_tokens cap mid-generation, and the loop continues with a
+                // resume-direct nudge (recovery). The marker surfacing lives
+                // in the drive loop, withheld while recovery can still
+                // succeed — not here, where it would fire on every length hit
+                // even when recovery is about to produce a complete reply.
+                state.finish_reason = Some(reason);
+            }
+            LlmEvent::ProviderError { .. } => {
+                return Err(RunError::ProviderFatal(ProviderError::Unknown(
+                    "provider error event mid-stream".into(),
+                )));
+            }
+            LlmEvent::TextStart { .. }
+            | LlmEvent::TextEnd { .. }
+            | LlmEvent::ReasoningStart { .. }
+            | LlmEvent::ReasoningEnd { .. }
+            | LlmEvent::ToolInputStart { .. }
+            | LlmEvent::ToolInputDelta { .. }
+            | LlmEvent::ToolInputEnd { .. }
+            | LlmEvent::ToolResult { .. }
+            | LlmEvent::ToolError { .. }
+            | LlmEvent::StepStart { .. }
+            | LlmEvent::StepFinish { .. } => {}
+        }
+        Ok(())
+    }
+}
+
+/// Sum usage across turns (inclusive totals add up; breakdown fields add too).
+pub(crate) fn accumulate_usage(total: &mut Usage, turn: &Usage) {
+    total.input_tokens += turn.input_tokens;
+    total.output_tokens += turn.output_tokens;
+    total.total_tokens += turn.total_tokens;
+    total.non_cached_input_tokens += turn.non_cached_input_tokens;
+    total.cache_read_input_tokens += turn.cache_read_input_tokens;
+    total.cache_write_input_tokens += turn.cache_write_input_tokens;
+    total.reasoning_tokens += turn.reasoning_tokens;
+}
+
+/// Append configured instructions to the assembled system prompt. An empty
+/// configured field returns the assembled system verbatim. Appending keeps
+/// the static identity/framework prefix byte-stable for prompt-cache.
+fn assemble_instructions(assembled_system: &str, configured: &str) -> String {
+    if configured.is_empty() {
+        assembled_system.to_string()
+    } else {
+        format!("{assembled_system}\n\n{configured}")
+    }
+}
+
+#[cfg(test)]
+mod tests;

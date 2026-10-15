@@ -5,15 +5,15 @@ use houyicoder_api::agent_event::{AgentEventHandlers, UserNoticeEvent};
 use houyicoder_api::session::SessionLog;
 use houyicoder_context::{HookVerdictKind, SessionEvent, SessionId};
 
-use super::super::hook::{
+use super::new_event;
+use crate::agent::hook::{
     HookEvent, HookVerdict,
     wire::{
         HookOutcome, verdict_on_hook_error, wire_error_kind, wire_error_reason, wire_event_kind,
         wire_verdict_kind,
     },
 };
-use super::super::obs_wire::SharedObservability;
-use super::new_event;
+use crate::agent::obs_wire::SharedObservability;
 
 /// Emit a user-visible notice through the configured event handler.
 pub(crate) fn emit_user_notice(events: &AgentEventHandlers, message: String) {
