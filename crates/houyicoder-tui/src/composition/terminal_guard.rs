@@ -17,10 +17,7 @@ use std::io::{self, Write, stdout};
 
 use crossterm::{
     cursor::{Hide, SetCursorStyle, Show},
-    event::{
-        DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
-        EnableFocusChange,
-    },
+    event::{DisableBracketedPaste, DisableFocusChange, EnableBracketedPaste, EnableFocusChange},
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -69,22 +66,32 @@ fn enter_sequences(out: &mut impl Write) -> io::Result<()> {
 
 /// Leave the screen first, then clear the reporting modes and bring the
 /// cursor back, so nothing is written into the alternate screen after it is
-/// left.
+/// left. The mouse report clear is written as raw DECSET resets, mirroring
+/// the enter path: the DisableMouseCapture command routes through the
+/// Windows console API on that platform, which errors when mouse capture was
+/// never enabled through that API. This code enables mouse reporting through
+/// raw escapes, so the leave path clears them the same way, keeping the
+/// sequence builder assertable on any writer without console state.
 fn leave_sequences(out: &mut impl Write) -> io::Result<()> {
     execute!(
         out,
         LeaveAlternateScreen,
-        DisableMouseCapture,
         DisableBracketedPaste,
         DisableFocusChange,
         Show,
         SetCursorStyle::DefaultUserShape
-    )
+    )?;
+    out.write_all(MOUSE_MODES_CLEAR)?;
+    out.flush()
 }
 
 /// The four DECSET modes the TUI needs: button events, drag reporting, motion
 /// reporting, and the SGR encoding that survives coordinates past 223.
 const MOUSE_MODES: &[u8] = b"\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h";
+
+/// The inverse of MOUSE_MODES, turning each report mode back off. Raw escapes
+/// mirror the enable path so the clear works on any writer and any platform.
+const MOUSE_MODES_CLEAR: &[u8] = b"\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l";
 
 /// Enable SGR mouse reporting for clicks, drag, hover, and wheel events.
 /// Reasserting these idempotent modes recovers from terminal state resets.

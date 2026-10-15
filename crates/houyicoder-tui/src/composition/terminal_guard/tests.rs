@@ -175,6 +175,18 @@ fn test_leave_sequences_clear_modes() {
     }
 }
 
+/// A writer that refuses every write must surface the failure from the
+/// leave path: the guard's release decides whether to swallow, but the
+/// sequence builder reports rather than dropping the error silently.
+#[test]
+fn test_leave_propagates_write_failure() {
+    let err = leave_sequences(&mut FailingWriter);
+    assert!(
+        err.is_err(),
+        "a refused write propagates from the leave path"
+    );
+}
+
 /// The progress indicator must be published on both transitions and cleared
 /// on the way out.
 #[test]
