@@ -24,6 +24,7 @@ use tokio::sync::Notify;
 
 use crate::composition::SessionHost;
 use crate::protocol_adapter::{map_run_error, map_run_result};
+use houyicoder_provider::ProviderFacts;
 
 use houyicoder_context::SessionId;
 use houyicoder_core::agent::Runner;
@@ -46,8 +47,11 @@ pub use frame_carrier::FrameCarrier;
 use futures::future::Either;
 use futures::future::pending;
 use houyicoder_api::sandbox::SandboxSession;
-use houyicoder_core::agent::RunOutcome;
 use houyicoder_core::agent::multi_agent::bus_types::AgentBus;
+use houyicoder_core::agent::{
+    ApprovalDecision as EngineApprovalDecision, ApprovalRequest as EngineApprovalRequest, RunError,
+    RunOutcome, RunResult,
+};
 use houyicoder_permission::{Effect, Rule, RuleContent, Scope};
 use houyicoder_protocol::acp_wire::AcpNotification;
 use std::path::PathBuf;
@@ -131,6 +135,10 @@ pub struct Server {
     /// for a non-project session (a test harness, a home-dir run) so no
     /// prompt fires. Set at the composition root from the resolved cwd.
     project_path: Option<PathBuf>,
+    /// What the provider was built from, so /status describes the traffic
+    /// actually sent. None on a server assembled without a resolution (the
+    /// in-process test harness); /status then reports the environment's view.
+    provider_facts: Option<ProviderFacts>,
     /// Optional Append Notify shared with the runner's store: the store fires
     /// notify_one per append, this select's notified() branch wakes to drain
     /// mid-run so a tool-call frame ships while the run is still in flight.
@@ -182,6 +190,7 @@ impl Server {
             host: None,
             settings_path: houyicoder_config::settings_path(),
             project_path: None,
+            provider_facts: None,
             append_notify: None,
             descriptor_store: None,
             diagnostics: handle(),
@@ -206,6 +215,14 @@ impl Server {
     /// None and skips the prompt.
     pub fn with_project_path(mut self, path: PathBuf) -> Self {
         self.project_path = Some(path);
+        self
+    }
+
+    /// Attach what the provider was built from. The composition root passes
+    /// the facts the resolution produced so /status reports the same ones; a
+    /// server assembled without one reports the environment's view.
+    pub fn with_provider_facts(mut self, facts: ProviderFacts) -> Self {
+        self.provider_facts = Some(facts);
         self
     }
 
@@ -457,195 +474,28 @@ impl Server {
     /// final outcome does the service send the RunOk response. The half-live
     /// turn state machine lives here (the composition root + protocol server),
     /// not in the runner and not in the wire.
-    #[expect(clippy::too_many_lines, reason = "message dispatch")]
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "serve loop branches over run, wire, notify, + child permission"
-    )]
     async fn handle_message_send(
         &mut self,
         io: &mut FrameCarrier,
         req_id: RequestId,
         content: Vec<ContentBlock>,
     ) -> Result<(), ProtocolError> {
-        // Collapse the multimodal content to the plain text the engine run
-        // takes today. Non-text blocks are dropped at the service boundary
-        // until a multimodal run path lands; an empty content vec degenerates
-        // to an empty input string.
         let text: String = content
             .into_iter()
             .filter_map(|block| match block {
                 ContentBlock::Text { text } => Some(text),
-                // Non-text dropped at the service boundary until multimodal
-                // run lands.
                 _ => None,
             })
             .collect();
-        let mut result = {
-            // Clone the Arc so run_fut borrows the local clone, not self.runner
-            // — this frees self for the select's notify branch to drain mid-run.
-            // Without it run_fut would hold &self.runner and the
-            // notify branch could not take &mut self to push new events.
-            let runner = Arc::clone(&self.runner);
-            let run_fut = runner.run(self.session, text);
-            tokio::pin!(run_fut);
-            // Child permission asks arrive while the parent run is parked on the child.
-            let mut perm_rx = self
-                .bus
-                .as_ref()
-                .map(|b| b.subscribe(permission_request_topic()));
-            loop {
-                // Either the shared store notification or a
-                // never-resolving pending future when no Notify is wired (None
-                // => behavior is exactly today's: events push only at resolve).
-                let notify_fut = match &self.append_notify {
-                    Some(n) => Either::Left(n.notified()),
-                    None => Either::Right(pending::<()>()),
-                };
-                let event_fut = self.event_sequencer.notified();
-                // Child permission ask published on the bus while this run is
-                // parked on a child. None means the branch never resolves.
-                let perm_fut = match &mut perm_rx {
-                    Some(rx) => Either::Left(rx.recv()),
-                    None => Either::Right(pending::<Result<BusMessage, RecvError>>()),
-                };
-                tokio::select! {
-                    r = &mut run_fut => break r,
-                    frame = io.next_frame() => match frame {
-                        Some(f) => {
-                            // A session/* notification during the streaming
-                            // phase: session/cancel aborts the run;
-                            // session/inject enqueues a message for mid-turn
-                            // injection; session/queue_remove drops a queued
-                            // message. Fire-and-forget — the effect shows up
-                            // in the run outcome + transcript.
-                            if let Ok(notif) = serde_json::from_str::<AcpNotification>(&f) {
-                                self.handle_session_notification(&notif);
-                            }
-                            // Permission mode change mid-run: update the gate
-                            // so the next tool call sees the new mode. The
-                            // gate is Mutex-protected; the drive loop reads it
-                            // at decide() time, so the switch is immediate.
-                            // Child transcript fetch is read-only, safe mid-run.
-                            else if let Ok(ClientFrame::Request(req)) = serde_json::from_str::<ClientFrame>(&f) {
-                                self.handle_request_during_run(io, req).await;
-                            }
-                        }
-                        None => {
-                            return Err(ProtocolError::new(
-                                ErrorCategory::Unavailable,
-                                "client closed mid-run",
-                                false,
-                            ));
-                        }
-                    },
-                    _ = notify_fut => self.flush_events(io).await?,
-                    _ = event_fut => self.flush_events(io).await?,
-                    req = perm_fut => {
-                        if let Ok(msg) = req
-                            && let Err(e) = child_permission::handle(self, io, msg).await
-                        {
-                            tracing::warn!("child permission ask failed: {e}");
-                        }
-                    },
-                }
-            }
-        };
+        let mut result = self.drive_run_step(io, text).await?;
         loop {
             self.flush_events(io).await?;
             match result {
                 Ok(run) => match run.outcome {
                     RunOutcome::Interruption(approvals) => {
-                        // Half-live turn: send one reverse permission ask per
-                        // pending approval, read one decision back per ask,
-                        // then resume.
-                        // Persist the whole turn before the first ask so a
-                        // disconnect at any point in the batch retains the
-                        // unanswered asks plus the verdicts already given.
-                        // Single-shot (host None) skips this — no reconnect.
-                        if let Some(host) = &self.host {
-                            let remaining = approvals
-                                .iter()
-                                .map(|a| PendingPermission {
-                                    call_id: a.call_id.clone(),
-                                    tool: a.tool_name.clone(),
-                                    input: a.input.clone(),
-                                })
-                                .collect::<Vec<_>>();
-                            host.store().set_pending(
-                                self.session,
-                                Some(PendingTurn {
-                                    remaining,
-                                    decided: Vec::new(),
-                                }),
-                            );
-                        }
-                        let mut decisions = Vec::with_capacity(approvals.len());
-                        for approval in approvals {
-                            let decision = self.handle_approval(io, &approval, None).await?;
-                            decisions.push(decision);
-                            // A cancel mid-ask aborts the run; stop asking the
-                            // remaining approvals so resume() (which checks the
-                            // durable aborted flag) can surface the cancellation
-                            // instead of hanging on a response the client will not
-                            // send for approval #2.
-                            if self.runner.is_aborted() {
-                                break;
-                            }
-                        }
-                        // All asks answered: clear the parked turn before
-                        // resume so a reconnect mid-resume does not re-emit.
-                        if let Some(host) = &self.host {
-                            host.store().set_pending(self.session, None);
-                        }
-                        result = {
-                            let runner = Arc::clone(&self.runner);
-                            let resume_fut = runner.resume(self.session, &decisions);
-                            tokio::pin!(resume_fut);
-                            loop {
-                                let notify_fut = match &self.append_notify {
-                                    Some(notify) => Either::Left(notify.notified()),
-                                    None => Either::Right(pending::<()>()),
-                                };
-                                let event_fut = self.event_sequencer.notified();
-                                tokio::select! {
-                                    r = &mut resume_fut => break r,
-                                    frame = io.next_frame() => match frame {
-                                        Some(f) => {
-                                            // session/* notification mid-resume:
-                                            // same dispatch as mid-run (cancel /
-                                            // inject / queue_remove). A
-                                            // session/inject here enqueues for
-                                            // the next turn boundary after the
-                                            // resumed run re-enters the drive
-                                            // loop.
-                                            if let Ok(notif) = serde_json::from_str::<AcpNotification>(&f) {
-                                                self.handle_session_notification(&notif);
-                                            }
-                                            // Permission mode change mid-resume:
-                                            // same semantics as mid-run; child
-                                            // transcript fetch also safe.
-                                            else if let Ok(ClientFrame::Request(req)) = serde_json::from_str::<ClientFrame>(&f) {
-                                                self.handle_request_during_run(io, req).await;
-                                            }
-                                        }
-                                        None => {
-                                            return Err(ProtocolError::new(
-                                                ErrorCategory::Unavailable,
-                                                "client closed mid-resume",
-                                                false,
-                                            ));
-                                        }
-                                    },
-                                    _ = notify_fut => self.flush_events(io).await?,
-                                    _ = event_fut => self.flush_events(io).await?,
-                                }
-                            }
-                        };
-                        continue;
+                        let decisions = self.collect_interruption_decisions(io, approvals).await?;
+                        result = self.drive_resume_step(io, &decisions).await?;
                     }
-                    // Final outcome: the wire no longer carries an
-                    // Interruption variant; the other arms are the final ones.
                     _ => {
                         let payload = ResponsePayload::RunOk(map_run_result(&run));
                         return self.send_response(io, req_id, payload).await;
@@ -655,6 +505,129 @@ impl Server {
                     let payload = ResponsePayload::RunErr(map_run_error(&e));
                     return self.send_response(io, req_id, payload).await;
                 }
+            }
+        }
+    }
+
+    async fn dispatch_during_run_frame(&mut self, io: &mut FrameCarrier, frame: &str) {
+        if let Ok(notif) = serde_json::from_str::<AcpNotification>(frame) {
+            self.handle_session_notification(&notif);
+        } else if let Ok(ClientFrame::Request(req)) = serde_json::from_str::<ClientFrame>(frame) {
+            self.handle_request_during_run(io, req).await;
+        }
+    }
+
+    async fn drive_run_step(
+        &mut self,
+        io: &mut FrameCarrier,
+        text: String,
+    ) -> Result<Result<RunResult, RunError>, ProtocolError> {
+        let runner = Arc::clone(&self.runner);
+        let run_fut = runner.run(self.session, text);
+        tokio::pin!(run_fut);
+        let mut perm_rx = self
+            .bus
+            .as_ref()
+            .map(|b| b.subscribe(permission_request_topic()));
+        loop {
+            let notify_fut = match &self.append_notify {
+                Some(n) => Either::Left(n.notified()),
+                None => Either::Right(pending::<()>()),
+            };
+            let event_fut = self.event_sequencer.notified();
+            let perm_fut = match &mut perm_rx {
+                Some(rx) => Either::Left(rx.recv()),
+                None => Either::Right(pending::<Result<BusMessage, RecvError>>()),
+            };
+            tokio::select! {
+                r = &mut run_fut => return Ok(r),
+                frame = io.next_frame() => match frame {
+                    Some(f) => self.dispatch_during_run_frame(io, &f).await,
+                    None => {
+                        return Err(ProtocolError::new(
+                            ErrorCategory::Unavailable,
+                            "client closed mid-run",
+                            false,
+                        ));
+                    }
+                },
+                _ = notify_fut => self.flush_events(io).await?,
+                _ = event_fut => self.flush_events(io).await?,
+                req = perm_fut => {
+                    if let Ok(msg) = req
+                        && let Err(e) = child_permission::handle(self, io, msg).await
+                    {
+                        tracing::warn!("child permission ask failed: {e}");
+                    }
+                },
+            }
+        }
+    }
+
+    async fn collect_interruption_decisions(
+        &mut self,
+        io: &mut FrameCarrier,
+        approvals: Vec<EngineApprovalRequest>,
+    ) -> Result<Vec<EngineApprovalDecision>, ProtocolError> {
+        if let Some(host) = &self.host {
+            let remaining = approvals
+                .iter()
+                .map(|a| PendingPermission {
+                    call_id: a.call_id.clone(),
+                    tool: a.tool_name.clone(),
+                    input: a.input.clone(),
+                })
+                .collect::<Vec<_>>();
+            host.store().set_pending(
+                self.session,
+                Some(PendingTurn {
+                    remaining,
+                    decided: Vec::new(),
+                }),
+            );
+        }
+        let mut decisions = Vec::with_capacity(approvals.len());
+        for approval in approvals {
+            let decision = self.handle_approval(io, &approval, None).await?;
+            decisions.push(decision);
+            if self.runner.is_aborted() {
+                break;
+            }
+        }
+        if let Some(host) = &self.host {
+            host.store().set_pending(self.session, None);
+        }
+        Ok(decisions)
+    }
+
+    pub(super) async fn drive_resume_step(
+        &mut self,
+        io: &mut FrameCarrier,
+        decisions: &[EngineApprovalDecision],
+    ) -> Result<Result<RunResult, RunError>, ProtocolError> {
+        let runner = Arc::clone(&self.runner);
+        let resume_fut = runner.resume(self.session, decisions);
+        tokio::pin!(resume_fut);
+        loop {
+            let notify_fut = match &self.append_notify {
+                Some(notify) => Either::Left(notify.notified()),
+                None => Either::Right(pending::<()>()),
+            };
+            let event_fut = self.event_sequencer.notified();
+            tokio::select! {
+                r = &mut resume_fut => return Ok(r),
+                frame = io.next_frame() => match frame {
+                    Some(f) => self.dispatch_during_run_frame(io, &f).await,
+                    None => {
+                        return Err(ProtocolError::new(
+                            ErrorCategory::Unavailable,
+                            "client closed mid-resume",
+                            false,
+                        ));
+                    }
+                },
+                _ = notify_fut => self.flush_events(io).await?,
+                _ = event_fut => self.flush_events(io).await?,
             }
         }
     }

@@ -9,9 +9,11 @@ use super::BuildRunnerOptions;
 use super::*;
 use crate::lifecycle::SessionLeaseStore;
 use crate::server::{EventSequencer, Server};
+use houyicoder_api::provider::ModelProvider;
 use houyicoder_context::{NameSource, SessionDescriptor, SessionProvenance};
 use houyicoder_permission::{Decision, ModeGate, ToolRequest};
 use houyicoder_protocol::frontend::FrontendEvent;
+use houyicoder_provider::FakeProvider;
 use std::env::temp_dir;
 use std::fs::create_dir_all;
 use std::fs::remove_dir_all;
@@ -254,7 +256,7 @@ fn test_store_isolation() {
 /// warm connection pool.
 #[test]
 fn test_clone_shares_provider() {
-    let resolved = ResolvedProvider::stub();
+    let resolved = ProviderResolution::stub();
     let copy = resolved.clone();
     assert!(
         Arc::ptr_eq(&resolved.provider, &copy.provider),
@@ -267,7 +269,7 @@ fn test_clone_shares_provider() {
 /// stop telling the user after the first session.
 #[test]
 fn test_clone_keeps_warnings() {
-    let mut resolved = ResolvedProvider::stub();
+    let mut resolved = ProviderResolution::stub();
     resolved.warnings.push(houyicoder_config::ConfigWarning {
         field: "provider.base_url".into(),
         reason: "this repo redirects model traffic".into(),
@@ -278,4 +280,19 @@ fn test_clone_keeps_warnings() {
         1,
         "the notice must survive the clone the swap path uses"
     );
+}
+
+/// The host carries what the process's provider was built from, so a
+/// reattaching connection reports the same destination the live one does, and
+/// reports nothing when it was built without a resolution.
+#[test]
+fn test_host_carries_provider_facts() {
+    let host = SessionHost::new(SessionLeaseStore::new());
+    assert!(host.provider_facts().is_none(), "unset by default");
+    let carried = ProviderFacts {
+        base_url: "https://gateway.example/compatible-mode/v1".into(),
+        key_origin: Some("keychain houyicoder/dashscope-team".into()),
+    };
+    let host = host.with_provider_facts(carried.clone());
+    assert_eq!(host.provider_facts(), Some(&carried));
 }

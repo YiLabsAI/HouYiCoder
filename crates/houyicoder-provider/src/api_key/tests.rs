@@ -7,7 +7,7 @@ use std::sync::Mutex;
 
 /// Resolve and keep only the key, for the cases that assert on it alone.
 fn key_of(source: Option<&ApiKeySource>, launcher: Option<&dyn ProcessLauncher>) -> Option<String> {
-    resolve_api_key(source, launcher).0
+    resolve_api_key(source, None, launcher).key
 }
 
 /// Records what it was asked to spawn and replays a scripted exit.
@@ -116,23 +116,16 @@ fn test_failed_helper_no_key() {
         stderr: None,
     }));
     let source = ApiKeySource::Helper("vault read".into());
-    // The env may hold a key on this machine, so this pins only that the
-    // failed helper's own output is never the answer.
-    let key = key_of(Some(&source), Some(&launcher));
-    assert_ne!(key.as_deref(), Some("usage: vault read ..."));
+    assert_eq!(key_of(Some(&source), Some(&launcher)), None);
 }
 
-/// A timeout surfaces as a wait error, which must not read as a blank key.
+/// A timeout surfaces as a wait error, which must yield None.
 #[test]
 fn test_timeout_no_key() {
     let launcher =
         RecordingLauncher::with_exit(Err(SpawnError::Io("wall timeout exceeded".into())));
     let source = ApiKeySource::Helper("sleep 600".into());
-    let key = key_of(Some(&source), Some(&launcher));
-    assert!(
-        key.as_deref() != Some(""),
-        "a timeout is not an empty credential"
-    );
+    assert_eq!(key_of(Some(&source), Some(&launcher)), None);
 }
 
 /// Blank output yields no key; an empty string would fail at the provider.
@@ -140,8 +133,7 @@ fn test_timeout_no_key() {
 fn test_blank_output_no_key() {
     let launcher = RecordingLauncher::ok_stdout("   \n");
     let source = ApiKeySource::Helper("true".into());
-    let key = key_of(Some(&source), Some(&launcher));
-    assert_ne!(key.as_deref(), Some(""));
+    assert_eq!(key_of(Some(&source), Some(&launcher)), None);
 }
 
 /// With no source there is no command, so the env fallback costs no process.
@@ -275,7 +267,7 @@ fn test_keychain_failure_warns() {
         service: "houyicoder".into(),
         account: "dashscope".into(),
     };
-    let (_key, warnings) = resolve_api_key(Some(&source), Some(&launcher));
+    let warnings = resolve_api_key(Some(&source), None, Some(&launcher)).warnings;
     let w = warnings
         .iter()
         .find(|w| w.field == "keychain")
@@ -297,7 +289,7 @@ fn test_keychain_success_is_quiet() {
         service: "s".into(),
         account: "a".into(),
     };
-    let (_key, warnings) = resolve_api_key(Some(&source), Some(&launcher));
+    let warnings = resolve_api_key(Some(&source), None, Some(&launcher)).warnings;
     assert!(warnings.is_empty(), "no warning on success: {warnings:?}");
 }
 
@@ -312,7 +304,116 @@ fn test_keychain_off_mac_warns() {
         service: "s".into(),
         account: "a".into(),
     };
-    let (_key, warnings) = resolve_api_key(Some(&source), Some(&launcher));
+    let warnings = resolve_api_key(Some(&source), None, Some(&launcher)).warnings;
     assert_eq!(launcher.spawn_count(), 0, "no lookup off macOS");
     assert!(warnings.iter().any(|w| w.field == "keychain"));
+}
+
+/// A configured source that answers is the origin the status line reports, so
+/// a user can tell which keychain account is live.
+#[cfg(target_os = "macos")]
+#[test]
+fn test_origin_names_source() {
+    let launcher = RecordingLauncher::ok_stdout("kc-secret\n");
+    let source = ApiKeySource::Keychain {
+        service: "houyicoder".into(),
+        account: "dashscope-team".into(),
+    };
+    let resolved = resolve_api_key(Some(&source), None, Some(&launcher));
+    assert_eq!(
+        resolved.origin.as_deref(),
+        Some("keychain houyicoder/dashscope-team")
+    );
+}
+
+/// A configured source that failed leaves the environment to answer, so the
+/// origin reports the environment: naming the failed item would tell the user
+/// their key comes from somewhere it does not.
+#[test]
+fn test_origin_env_after_failure() {
+    let source = ApiKeySource::Keychain {
+        service: "houyicoder".into(),
+        account: "dashscope-team".into(),
+    };
+    assert_eq!(
+        key_origin(true, Some(&source), Some("DASHSCOPE_API_KEY")).as_deref(),
+        Some("env DASHSCOPE_API_KEY")
+    );
+}
+
+/// A configured source that failed with no environment key leaves no key at
+/// all, so there is no origin to report. This is the branch a keychain lands in
+/// on a platform that cannot read one, and naming the item there would report a
+/// credential the caller does not have.
+#[test]
+fn test_origin_absent_after_failure() {
+    let source = ApiKeySource::Keychain {
+        service: "houyicoder".into(),
+        account: "dashscope-team".into(),
+    };
+    assert_eq!(key_origin(false, Some(&source), None), None);
+}
+
+/// The environment alone is a real origin: a user who exports the key and
+/// configures no source still gets a truthful status line.
+#[test]
+fn test_origin_env_only() {
+    assert_eq!(
+        key_origin(true, None, Some("OPENAI_API_KEY")).as_deref(),
+        Some("env OPENAI_API_KEY")
+    );
+}
+
+/// Nothing supplied a key, so there is no origin to report and the status line
+/// says so rather than inventing one.
+#[test]
+fn test_origin_absent() {
+    assert_eq!(key_origin(false, None, None), None);
+}
+
+/// With no configured source the environment is the only origin, and nothing
+/// is spawned to look for one.
+#[test]
+fn test_no_source_env_only() {
+    let launcher = RecordingLauncher::ok_stdout("unused\n");
+    let resolved = resolve_api_key(
+        None,
+        Some(("DASHSCOPE_API_KEY", "env-key".into())),
+        Some(&launcher),
+    );
+    assert_eq!(launcher.spawn_count(), 0, "no source means no spawn");
+    assert_eq!(resolved.key.as_deref(), Some("env-key"));
+    assert_eq!(resolved.origin.as_deref(), Some("env DASHSCOPE_API_KEY"));
+}
+
+/// Neither a source nor the environment supplied a key, so the origin stays
+/// absent rather than naming a place the key did not come from.
+#[test]
+fn test_nothing_supplies_a_key() {
+    let resolved = resolve_api_key(None, None, None);
+    assert_eq!(resolved.key, None);
+    assert_eq!(resolved.origin, None);
+}
+
+/// A configured source that fails, with no environment key behind it, leaves
+/// both the key and the origin absent: the status line must not name an item
+/// that did not supply anything.
+#[test]
+fn test_failed_source_no_origin() {
+    let launcher = RecordingLauncher::with_exit(Ok(LauncherExit {
+        exit_code: Some(44),
+        stdout: Some(String::new()),
+        stderr: Some("could not be found".into()),
+    }));
+    let source = ApiKeySource::Helper("missing-key-helper".into());
+    let resolved = resolve_api_key(Some(&source), None, Some(&launcher));
+    assert_eq!(resolved.key, None, "the helper yielded nothing");
+    assert_eq!(
+        resolved.origin, None,
+        "an item that supplied no key is not an origin"
+    );
+    assert!(
+        !resolved.warnings.is_empty(),
+        "the failed source still has to say so"
+    );
 }

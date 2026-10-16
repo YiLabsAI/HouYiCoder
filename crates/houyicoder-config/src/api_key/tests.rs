@@ -102,3 +102,43 @@ fn test_blank_keychain_fields_warn() {
     assert!(s.is_none());
     assert!(warnings.iter().any(|w| w.field == "keychain"));
 }
+
+/// The label names the keychain item, so a user can tell which account is
+/// live without the password ever being read.
+#[test]
+fn test_keychain_label_names_item() {
+    let source = ApiKeySource::Keychain {
+        service: "houyicoder".into(),
+        account: "dashscope-team".into(),
+    };
+    assert_eq!(source.display_label(), "keychain houyicoder/dashscope-team");
+}
+
+/// The label names the source variant only. A command that holds the key
+/// inline is a real configuration, and the status view is not a place to print
+/// it.
+#[test]
+fn test_helper_label_drops_command() {
+    let source = ApiKeySource::Helper("sk-live-secret-123".into());
+    let label = source.display_label();
+    assert_eq!(label, "helper");
+    assert!(
+        !label.contains("sk-live-secret-123"),
+        "the label must never carry a literal secret: {label}"
+    );
+}
+
+/// A program path is part of the command, so it is withheld too: telling two
+/// helper scripts apart is not worth a label that can print a key.
+#[test]
+fn test_helper_label_keeps_path() {
+    let source = ApiKeySource::Helper("/Users/me/.houyicoder/key.sh --tier team".into());
+    assert_eq!(source.display_label(), "helper");
+}
+
+/// A blank command is the same label as any other: the variant is all a
+/// helper ever contributes.
+#[test]
+fn test_helper_label_blank_command() {
+    assert_eq!(ApiKeySource::Helper("   ".into()).display_label(), "helper");
+}

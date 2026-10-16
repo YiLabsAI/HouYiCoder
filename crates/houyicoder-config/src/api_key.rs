@@ -15,6 +15,22 @@ pub enum ApiKeySource {
     Helper(String),
 }
 
+impl ApiKeySource {
+    /// A label naming where the key comes from, for the status view.
+    ///
+    /// A keychain item is named by its coordinates: that is what tells two
+    /// accounts apart, and the coordinates are not the secret. A helper is
+    /// named by its variant alone — its command is an arbitrary shell string
+    /// that may hold the key inline, so echoing any part of it risks printing
+    /// the very thing this label exists to avoid.
+    pub fn display_label(&self) -> String {
+        match self {
+            Self::Keychain { service, account } => format!("keychain {service}/{account}"),
+            Self::Helper(_) => "helper".to_string(),
+        }
+    }
+}
+
 /// Read the api key source out of a parsed settings value. Callers hand in the
 /// user settings value only: both fields hand control of the key to whoever
 /// wrote them.

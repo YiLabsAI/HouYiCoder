@@ -34,7 +34,7 @@ use std::time::Duration;
 use houyicoder_context::SessionId;
 use houyicoder_service::composition::host_lifecycle::HostLifecycle;
 use houyicoder_service::composition::{
-    BuildRunnerOptions, ResolvedProvider, build_runner, resolve_provider,
+    BuildRunnerOptions, ProviderFacts, ProviderResolution, build_runner, resolve_provider,
 };
 use tokio::runtime::Builder;
 
@@ -315,7 +315,7 @@ fn test_parse_project_then_acp() {
 fn test_pair_completes_handshake() {
     let root = temp_root();
     let mut options = BuildRunnerOptions::default();
-    options.provider = Some(ResolvedProvider::stub());
+    options.provider = Some(ProviderResolution::stub());
     let bundle = build_runner(options);
     let (runner_arc, mut client, _startup_warnings, host) = start_local_server(
         bundle.runner,
@@ -327,6 +327,7 @@ fn test_pair_completes_handshake() {
         None,
         bundle.bus,
         Some(root.join("settings.json")),
+        ProviderFacts::default(),
     );
     // The runner Arc is shared: the server task and the caller hold the
     // same allocation.
@@ -729,7 +730,7 @@ fn test_held_refusal_builds_nothing() {
     let sid_str = sid.to_string();
     let _held = SessionLock::acquire(&sid_str, &root).expect("pre-acquire holds");
 
-    let err = match build_lease_for_existing_sid_at(sid, None, ResolvedProvider::stub(), &root) {
+    let err = match build_lease_for_existing_sid_at(sid, None, ProviderResolution::stub(), &root) {
         Ok(_) => panic!("a held sid must refuse, not build"),
         Err(e) => e,
     };

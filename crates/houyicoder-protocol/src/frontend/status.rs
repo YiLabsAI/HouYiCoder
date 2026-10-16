@@ -53,13 +53,16 @@ pub struct StatusSnapshot {
     /// The session identity fields attached by the server, when available.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub descriptor: Option<SessionDescriptorSummary>,
-    /// Which env var provides the auth token (DASHSCOPE / OPENAI / HOUYICODER
-    /// API KEY), or None. The server resolves this so the TUI never imports
-    /// the config crate + never sees the secret value (only the source name).
+    /// Where the api key came from, as a label: a configured keychain item or
+    /// helper, the environment variable that supplied it, or None when nothing
+    /// supplied one. The server resolves this from the same facts the provider
+    /// was built with, so the TUI never imports the config crate and never
+    /// sees the secret value (only the source name).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth_token_source: Option<String>,
-    /// The provider base URL the server resolves (env or default). The TUI
-    /// renders it without naming the config crate.
+    /// The endpoint the provider actually sends completions to. The server
+    /// carries this from the resolution rather than re-resolving it, so the TUI
+    /// renders the real destination without importing the config crate.
     #[serde(default)]
     pub base_url: String,
     /// Which settings sources contribute ("User", "User, Project", or

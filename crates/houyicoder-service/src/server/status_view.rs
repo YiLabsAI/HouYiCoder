@@ -1,38 +1,16 @@
-//! Builds the server-owned part of a status response: the env/config display
+//! Builds the server-owned part of a status response: the config display
 //! fields and the per-model usage view the server attaches to the
 //! StatusSnapshot after map_status_snapshot builds the runner-owned fields.
-//! Pure readers of env and the observability log, with no Server state.
+//! Pure readers of config and the observability log, with no Server state.
 
-use houyicoder_config::{ENV_DASHSCOPE_API_KEY, ENV_HOUYICODER_API_KEY, ENV_OPENAI_API_KEY};
 use houyicoder_core::observability::ModelUsage;
 use houyicoder_protocol::frontend::status::ModelUsageView;
-use std::env::var;
 
-/// The env var name that provides the auth token (DASHSCOPE / OPENAI /
-/// HOUYICODER), or None. Returns the source name only, never the value.
-pub(super) fn auth_token_source() -> Option<String> {
-    if var(ENV_DASHSCOPE_API_KEY)
-        .map(|v| !v.is_empty())
-        .unwrap_or(false)
-    {
-        Some(ENV_DASHSCOPE_API_KEY.to_string())
-    } else if var(ENV_OPENAI_API_KEY)
-        .map(|v| !v.is_empty())
-        .unwrap_or(false)
-    {
-        Some(ENV_OPENAI_API_KEY.to_string())
-    } else if var(ENV_HOUYICODER_API_KEY)
-        .map(|v| !v.is_empty())
-        .unwrap_or(false)
-    {
-        Some(ENV_HOUYICODER_API_KEY.to_string())
-    } else {
-        None
-    }
-}
-
-/// Which settings sources contribute: "User" when the user settings file
-/// exists, else "(defaults)". Project-local settings are not wired yet.
+/// Whether the user settings file exists: "User" when it does, else
+/// "(defaults)". It names that one layer only: the project and local settings
+/// files are merged into the values a session runs on, but this label does not
+/// yet report them, so a repository that pins an endpoint still reads "User"
+/// here.
 pub(super) fn setting_sources_label() -> String {
     if houyicoder_config::settings_path().exists() {
         "User".to_string()

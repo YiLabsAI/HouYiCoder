@@ -7,7 +7,8 @@ use houyicoder_context::SessionId;
 use houyicoder_core::agent::Runner;
 use houyicoder_protocol::acp_wire::AcpNotification;
 use houyicoder_protocol::envelope::{
-    ClientFrame, ClientResponsePayload, ServerFrame, ServerRequestEnvelope, ServerRequestPayload,
+    ClientFrame, ClientResponsePayload, RequestId, ServerFrame, ServerRequestEnvelope,
+    ServerRequestPayload,
 };
 use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
 
@@ -18,8 +19,6 @@ use crate::lifecycle::{LifecycleState, PendingPermission, PendingTurn};
 use crate::protocol_adapter::{build_approval_request, parse_approval_decision};
 use crate::server::approval::disclose_directory_grants;
 use crate::server::{EventSequencer, FrameCarrier, Server};
-use futures::future::Either;
-use futures::future::pending;
 use houyicoder_context::{
     EventId, PermissionVerdict, SessionDescriptorStore, SessionEvent, SessionLogEntry,
 };
@@ -53,6 +52,7 @@ impl Server {
             host: Some(host),
             settings_path: houyicoder_config::settings_path(),
             project_path: None,
+            provider_facts: None,
             append_notify: Some(append_notify),
             descriptor_store: None,
             diagnostics: handle(),
@@ -106,6 +106,124 @@ impl Server {
     }
 }
 
+/// Wait for the client's verdict on one re-emitted permission ask.
+async fn await_reemit_verdict(
+    server: &mut Server,
+    io: &mut FrameCarrier,
+    ask_id: RequestId,
+    call_id: &str,
+) -> Result<(ApprovalDecision, bool), ProtocolError> {
+    loop {
+        let frame = match io.next_frame().await {
+            Some(f) => f,
+            None => {
+                return Err(ProtocolError::new(
+                    ErrorCategory::Unavailable,
+                    "client closed mid-re-emit",
+                    false,
+                ));
+            }
+        };
+        if let Ok(notif) = serde_json::from_str::<AcpNotification>(&frame) {
+            let is_cancel = notif.method == "session/cancel";
+            server.handle_session_notification(&notif);
+            if is_cancel {
+                return Ok((
+                    ApprovalDecision {
+                        call_id: call_id.to_string(),
+                        approved: false,
+                        updated_input: None,
+                        scope: "once".to_string(),
+                    },
+                    true,
+                ));
+            }
+            continue;
+        }
+        if let Ok(ClientFrame::Response(r)) = serde_json::from_str::<ClientFrame>(&frame)
+            && r.req_id == ask_id
+        {
+            return match r.payload {
+                ClientResponsePayload::Permission(d) => Ok((d, false)),
+                _ => Err(ProtocolError::new(
+                    ErrorCategory::InvalidFrame,
+                    "expected a permission reverse response",
+                    false,
+                )),
+            };
+        }
+        tracing::warn!(
+            "re-emit ask-wait: dropped a non-matching frame (first 80 chars): {}",
+            frame.chars().take(80).collect::<String>()
+        );
+    }
+}
+
+/// Re-emit one pending permission ask, await the client's verdict, and audit it.
+async fn reemit_and_settle_ask(
+    server: &mut Server,
+    io: &mut FrameCarrier,
+    ask_perm: &PendingPermission,
+) -> Result<(ApprovalDecision, bool), ProtocolError> {
+    let mut reason = server.reconstruct_reason(&ask_perm.tool, &ask_perm.input);
+    let directory_grants = server.approval_directory_grants(&ask_perm.tool, &ask_perm.input);
+    disclose_directory_grants(&mut reason, &directory_grants);
+    let engine_approval = ApprovalRequest::new(
+        ask_perm.call_id.clone(),
+        ask_perm.tool.clone(),
+        ask_perm.input.clone(),
+    );
+    let ask_id = server.mint_req_id();
+    let ask = ServerRequestEnvelope::new(
+        ask_id,
+        ServerRequestPayload::Permission(build_approval_request(
+            &engine_approval,
+            reason.as_ref(),
+            None,
+        )),
+    );
+    server.send_typed(io, &ServerFrame::Request(ask)).await?;
+    let (decision, cancelled) = await_reemit_verdict(server, io, ask_id, &ask_perm.call_id).await?;
+    let verdict = if decision.approved {
+        PermissionVerdict::Approved
+    } else {
+        PermissionVerdict::Denied
+    };
+    let audit = SessionLogEntry {
+        id: EventId::new(),
+        session: server.session,
+        ts: super::now_millis(),
+        prev_hash: None,
+        event: SessionEvent::PermissionDecision {
+            call_id: ask_perm.call_id.clone(),
+            tool: ask_perm.tool.clone(),
+            verdict,
+            scope: decision.scope.clone(),
+        },
+    };
+    if let Err(e) = server.runner.store().append(audit).await {
+        tracing::warn!("permission-decision audit append failed: {e}");
+    }
+    if decision.approved && ask_perm.tool != ENTITLEMENT_TOOL {
+        server
+            .route_consent_with_grants(
+                &ask_perm.tool,
+                &ask_perm.input,
+                &decision.scope,
+                reason.as_ref(),
+                &directory_grants,
+            )
+            .map_err(|error| {
+                ProtocolError::new(
+                    ErrorCategory::Unavailable,
+                    format!("approved directory capability could not be installed: {error}"),
+                    false,
+                )
+            })?;
+    }
+    Ok((decision, cancelled))
+}
+
 /// Re-emit a parked PendingTurn a reattaching connection finds in the host
 /// store, then resume the run. The turn carries the unanswered asks (re-sent
 /// head first) plus the verdicts already received (fed to runner.resume
@@ -116,7 +234,6 @@ impl Server {
 /// reattaching client — it did not originate the MessageSend; the run's
 /// continued events stream as ServerFrame::Event, and the outcome is
 /// recorded server-side.
-#[expect(clippy::too_many_lines, reason = "resume lifecycle")]
 pub(crate) async fn resume_pending(
     server: &mut Server,
     io: &mut FrameCarrier,
@@ -132,182 +249,27 @@ pub(crate) async fn resume_pending(
             .store()
             .pending(server.session)
             .expect("parked turn present");
-        // Re-emit each remaining ask, read one verdict per ask, advance the
-        // turn (pop remaining -> decided).
-        let mut cancelled = false;
-        'asks: while !turn.remaining.is_empty() {
+        while !turn.remaining.is_empty() {
             let ask_perm = turn.remaining.remove(0);
-            let mut reason = server.reconstruct_reason(&ask_perm.tool, &ask_perm.input);
-            let directory_grants =
-                server.approval_directory_grants(&ask_perm.tool, &ask_perm.input);
-            disclose_directory_grants(&mut reason, &directory_grants);
-            let engine_approval = ApprovalRequest::new(
-                ask_perm.call_id.clone(),
-                ask_perm.tool.clone(),
-                ask_perm.input.clone(),
-            );
-            let ask_id = server.mint_req_id();
-            let ask = ServerRequestEnvelope::new(
-                ask_id,
-                ServerRequestPayload::Permission(build_approval_request(
-                    &engine_approval,
-                    reason.as_ref(),
-                    None,
-                )),
-            );
-            server.send_typed(io, &ServerFrame::Request(ask)).await?;
-            // Loop, not a single read: a reattaching connection's first status
-            // tick, a racing poll, a session/cancel, or a mode-cycle can land
-            // while the re-emitted ask is in flight. The prior single read +
-            // fatal arm deadlocked (the reconnect TOCTOU variant). Same
-            // paradigm as handle_approval: dispatch session/* + mode-cycle,
-            // drop the rest, fatal only on client close.
-            let decision = loop {
-                let frame = match io.next_frame().await {
-                    Some(f) => f,
-                    None => {
-                        return Err(ProtocolError::new(
-                            ErrorCategory::Unavailable,
-                            "client closed mid-re-emit",
-                            false,
-                        ));
-                    }
-                };
-                if let Ok(notif) = serde_json::from_str::<AcpNotification>(&frame) {
-                    let is_cancel = notif.method == "session/cancel";
-                    server.handle_session_notification(&notif);
-                    if is_cancel {
-                        // Esc mid-re-emit: abort + stop re-emitting the rest.
-                        // Resume proceeds with the collected verdicts + the
-                        // abort token surfaces the cancellation.
-                        cancelled = true;
-                        break ApprovalDecision {
-                            call_id: ask_perm.call_id.clone(),
-                            approved: false,
-                            updated_input: None,
-                            scope: "once".to_string(),
-                        };
-                    }
-                    continue;
-                }
-                if let Ok(ClientFrame::Response(r)) = serde_json::from_str::<ClientFrame>(&frame)
-                    && r.req_id == ask_id
-                {
-                    match r.payload {
-                        ClientResponsePayload::Permission(d) => break d,
-                        _ => {
-                            return Err(ProtocolError::new(
-                                ErrorCategory::InvalidFrame,
-                                "expected a permission reverse response",
-                                false,
-                            ));
-                        }
-                    }
-                }
-                // Non-matching: drop, keep waiting. Surface it so a
-                // protocol-incompatible client does not look stuck with no clue.
-                tracing::warn!(
-                    "re-emit ask-wait: dropped a non-matching frame (first 80 chars): {}",
-                    frame.chars().take(80).collect::<String>()
-                );
-            };
-            // Audit the verdict (keys on call_id — safe to append once; the
-            // reattaching client answers what the prior connection never did).
-            let verdict = if decision.approved {
-                PermissionVerdict::Approved
-            } else {
-                PermissionVerdict::Denied
-            };
-            let audit = SessionLogEntry {
-                id: EventId::new(),
-                session: server.session,
-                ts: super::now_millis(),
-                prev_hash: None,
-                event: SessionEvent::PermissionDecision {
-                    call_id: ask_perm.call_id.clone(),
-                    tool: ask_perm.tool.clone(),
-                    verdict,
-                    scope: decision.scope.clone(),
-                },
-            };
-            if let Err(e) = server.runner.store().append(audit).await {
-                tracing::warn!("permission-decision audit append failed: {e}");
-            }
-            if decision.approved && ask_perm.tool != ENTITLEMENT_TOOL {
-                server
-                    .route_consent_with_grants(
-                        &ask_perm.tool,
-                        &ask_perm.input,
-                        &decision.scope,
-                        reason.as_ref(),
-                        &directory_grants,
-                    )
-                    .map_err(|error| {
-                        ProtocolError::new(
-                            ErrorCategory::Unavailable,
-                            format!(
-                                "approved directory capability could not be installed: {error}"
-                            ),
-                            false,
-                        )
-                    })?;
-            }
+            let (decision, cancelled) = reemit_and_settle_ask(server, io, &ask_perm).await?;
             host.store()
                 .advance_pending(server.session, decision.clone());
             turn.decided.push(decision);
             if cancelled {
-                // A cancel mid-re-emit aborts the run; stop re-emitting the
-                // remaining asks so resume can surface the cancellation.
-                break 'asks;
+                break;
             }
         }
-        // All remaining answered — resume with the full decided set.
         host.store().set_pending(server.session, None);
         let decisions: Vec<_> = turn
             .decided
             .iter()
             .map(|d| parse_approval_decision(d.clone()))
             .collect();
-        let result = {
-            let runner = Arc::clone(&server.runner);
-            let resume_fut = runner.resume(server.session, &decisions);
-            tokio::pin!(resume_fut);
-            loop {
-                let notify_fut = match &server.append_notify {
-                    Some(n) => Either::Left(n.notified()),
-                    None => Either::Right(pending::<()>()),
-                };
-                let event_fut = server.event_sequencer.notified();
-                tokio::select! {
-                    r = &mut resume_fut => break r,
-                    frame = io.next_frame() => match frame {
-                        Some(f) => {
-                            if let Ok(notif) = serde_json::from_str::<AcpNotification>(&f) {
-                                server.handle_session_notification(&notif);
-                            } else if let Ok(ClientFrame::Request(req)) =
-                                serde_json::from_str::<ClientFrame>(&f)
-                            {
-                                server.handle_request_during_run(io, req).await;
-                            }
-                        }
-                        None => {
-                            return Err(ProtocolError::new(
-                                ErrorCategory::Unavailable,
-                                "client closed mid-resume",
-                                false,
-                            ));
-                        }
-                    },
-                    _ = notify_fut => server.flush_events(io).await?,
-                    _ = event_fut => server.flush_events(io).await?,
-                }
-            }
-        };
+        let result = server.drive_resume_step(io, &decisions).await?;
         server.flush_events(io).await?;
         match result {
             Ok(run) => match run.outcome {
                 RunOutcome::Interruption(more) => {
-                    // Resume produced more asks: write a fresh turn + loop.
                     let remaining = more
                         .iter()
                         .map(|a| PendingPermission {
@@ -325,9 +287,6 @@ pub(crate) async fn resume_pending(
                     );
                     continue;
                 }
-                // Final outcome (or error): the run is done. No RunOk to the
-                // reattaching client (it did not originate the MessageSend);
-                // the outcome is in the event log.
                 _ => return Ok(true),
             },
             Err(_) => return Ok(true),
@@ -374,7 +333,7 @@ pub(crate) async fn serve_session(
         )
     })?;
     // try_take_lease already set Running under the lock; no separate set_state.
-    let server = Server::new_for_resume(
+    let mut server = Server::new_for_resume(
         handle.runner,
         session,
         handle.event_sequencer,
@@ -382,6 +341,12 @@ pub(crate) async fn serve_session(
         host.clone(),
         handle.append_notify,
     );
+    // The facts are process-scoped, so a reattaching connection reports the
+    // same ones the live connection does instead of falling back to the
+    // environment's view.
+    if let Some(facts) = host.provider_facts() {
+        server = server.with_provider_facts(facts.clone());
+    }
     let result = server.serve(io).await;
     // Release the lease: a clean exit or a disconnect both leave the session
     // detached (the parked PendingTurn, if any, is retained by the store for

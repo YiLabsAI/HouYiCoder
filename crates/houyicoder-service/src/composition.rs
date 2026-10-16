@@ -8,7 +8,6 @@
 
 #![allow(dead_code)] // composition root consumed by other crates; locally unused
 
-mod api_key;
 pub(crate) mod catalog_resolver;
 pub mod fleet_status_relay;
 pub mod host_lifecycle;
@@ -30,7 +29,8 @@ mod worktree;
 
 mod containment;
 mod paths;
-pub(crate) use containment::{ContainmentAdapter, attach_git_common_dir, restore_directory_grants};
+pub(crate) use containment::ContainmentAdapter;
+use containment::build_session_fences;
 
 pub use resume::{
     ResumeError, build_runner_for_fork, build_runner_for_resume_export,
@@ -46,7 +46,8 @@ use houyicoder_api::sandbox::SandboxSession;
 use houyicoder_api::session::SessionLog;
 use houyicoder_api::trust::TrustState;
 use houyicoder_config::{
-    ModelSelection, load_model_section_from, resolve_model_selection_from, settings_path,
+    ConfigWarning, ModelSelection, load_model_section_from, resolve_model_selection_from,
+    settings_path,
 };
 use houyicoder_context::ContextBackend;
 use houyicoder_context::SessionDescriptorStore;
@@ -57,51 +58,42 @@ use houyicoder_core::agent::model_window;
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::{
     CommandHook, ConversationSearchTool, DelegationTool, GitWorkspaceProbe, HookPolicy,
-    HookRegistry, HookSource, HotPathReducer, LlmSummarizer, Runner, SkillHookRegistrar,
-    TodoWriteTool, ToolRegistry, parse_event,
+    HookRegistry, HookSource, HotPathReducer, LlmSummarizer, Runner, TodoWriteTool, ToolRegistry,
+    parse_event,
 };
+use houyicoder_core::snapshot::{SnapshotStore, UndoStack};
 use houyicoder_memory::{
     FileDescriptorStore, InMemoryBackend, InMemoryDescriptorStore, LocalFileBackend,
 };
 use houyicoder_permission::{DefaultModeGate, ModeGate, RuleStore};
 use houyicoder_protocol::frontend::model::SpeedMode;
-use houyicoder_provider::{FakeProvider, OpenAiCompatibleProvider};
-use houyicoder_resilience::resource_breaker::{ResourceBreaker, ResourceBreakerConfig};
-use houyicoder_sandbox::PlatformSession;
 use houyicoder_session::SessionStore;
+
+pub use houyicoder_provider::{ProviderFacts, ProviderResolution};
+
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::sync::RwLock;
 
 use crate::lifecycle::SessionLeaseStore;
-use crate::sandbox_policy::network_policy_from;
 use crate::server::EventSequencer;
 use built_in_tools::BuiltInToolProvider;
-use houyicoder_api::launcher::ProcessLauncher;
+use hook_compose::SkillRuntime;
 use houyicoder_api::launcher::StdProcessLauncher;
 use houyicoder_api::mcp::McpClient;
 use houyicoder_api::mcp::McpToolProvider;
-use houyicoder_api::skill::SkillRegistry;
 use houyicoder_api::tool::ToolProvider;
-use houyicoder_config::settings_merge::load_provider_settings;
 use houyicoder_core::agent::WorktreeController;
 use houyicoder_core::agent::build_hook_fire;
 use houyicoder_core::agent::multi_agent::bus_types::AgentBus;
-use houyicoder_protocol::llm::OutputItem;
-/// Give up on a capability, and say so, returning the absence as None.
-/// Every degradation point routes through one function so the decision
-/// and the disclosure stay inseparable — both args required so the
-/// failure alone does not tell the user what stopped working.
 pub use paths::{
     resolve_project_workspace, session_log_root, walk_to_workspace_root, workspace_cwd,
 };
-use std::collections::HashSet;
-use std::env::var;
-use std::fmt::Display;
-use std::path::Path;
-use std::path::PathBuf;
-use std::sync::atomic::AtomicU32;
 
+/// Give up on a capability, and say so, returning the absence as None.
+/// Every degradation point routes through one function so the decision and the
+/// disclosure stay inseparable — both args required so the failure alone does
+/// not tell the user what stopped working.
 fn degrade_with_notice<T, E: Display>(
     attempt: Result<T, E>,
     what_failed: &str,
@@ -115,6 +107,11 @@ fn degrade_with_notice<T, E: Display>(
         }
     }
 }
+use std::collections::HashSet;
+use std::env::var;
+use std::fmt::Display;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicU32;
 
 /// The runner plus the handles the host needs to render host-side state
 /// without dispatching a tool call. Returned by build_runner and assemble;
@@ -130,6 +127,11 @@ pub struct AssembledRunner {
     /// The shared multi-agent bus; threaded to the pairing point so the
     /// fleet status relay can subscribe + emit agent status wire frames.
     pub bus: Option<Arc<AgentBus>>,
+    /// What the provider was built from. Carried on the assembled runner rather
+    /// than threaded separately: the resolution happens inside this root, and a
+    /// caller that had to re-derive the facts would be a second source for the
+    /// endpoint the status view reports.
+    pub provider_facts: ProviderFacts,
 }
 
 /// An assembled runner plus the model restored from a resumed session's
@@ -143,27 +145,6 @@ pub struct ResumedRunner {
     pub model: String,
 }
 
-/// A provider resolved from settings, carrying the warnings that resolution
-/// produced. They travel together so a caller cannot reuse the provider and
-/// drop the notice naming where the repo sends traffic. Clone rather than
-/// re-resolve: a second resolution re-runs the key helper.
-#[derive(Clone)]
-pub struct ResolvedProvider {
-    pub provider: Arc<dyn ModelProvider>,
-    pub warnings: Vec<houyicoder_config::ConfigWarning>,
-}
-
-impl ResolvedProvider {
-    /// A stub provider that returns canned text without making external
-    /// requests, used by callers that assemble a runner under test.
-    pub fn stub() -> Self {
-        Self {
-            provider: Arc::new(FakeProvider::text("stub")),
-            warnings: Vec::new(),
-        }
-    }
-}
-
 /// Options for build_runner: None on a store field selects the in-memory
 /// default; persistence is opt-in, named at every production entry.
 #[non_exhaustive]
@@ -175,7 +156,7 @@ pub struct BuildRunnerOptions {
     pub descriptor_store: Option<Arc<dyn SessionDescriptorStore>>,
     /// None resolves one here; a caller reusing a provider across sessions
     /// passes its own.
-    pub provider: Option<ResolvedProvider>,
+    pub provider: Option<ProviderResolution>,
 }
 
 impl BuildRunnerOptions {
@@ -254,15 +235,18 @@ pub fn build_runner(options: BuildRunnerOptions) -> AssembledRunner {
     )
 }
 
-#[expect(clippy::too_many_lines, reason = "composition root")]
-/// Assemble a runner over a pre-built store + session + model. Shared by the
-/// fresh-session path above and the resume paths (which mount a
-/// LocalFileBackend at an existing session log and seed the trajectory before
-/// assembling).
+/// Assemble a runner over a pre-built store, session, and model.
 ///
-/// The provider arrives resolved: assemble runs once per session, including
-/// every swap, so resolving here would re-run the key helper each time.
-#[expect(clippy::too_many_arguments, reason = "composition DI site")]
+/// Kept as separate inputs: they come from different places (the store and the
+/// append signal are built for this session, the project and rule store arrive
+/// from the caller, the provider is already resolved), and the store is
+/// consumed by the runner while the session and append signal are handed back
+/// out, so no single group holds them. A struct would be named for this
+/// function rather than for a concept.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the inputs come from different places and are not one concept"
+)]
 pub(crate) fn assemble(
     store: Arc<SessionStore>,
     session: SessionId,
@@ -270,165 +254,214 @@ pub(crate) fn assemble(
     project: Option<String>,
     rule_store: Option<Arc<dyn RuleStore>>,
     append_notify: Arc<Notify>,
-    resolved: ResolvedProvider,
+    resolved: ProviderResolution,
     descriptor_store: Arc<dyn SessionDescriptorStore>,
 ) -> AssembledRunner {
-    let model = model_selection.model.clone();
-    let model_for_extractor = model.clone();
-    let ResolvedProvider {
+    let model = model_selection.model;
+    let ProviderResolution {
         provider,
+        facts: provider_facts,
         warnings: provider_cfg_warnings,
     } = resolved;
-    // Clone before the provider is moved into the runner so the memory
-    // extractor (wired in the workspace branch) shares the same provider
-    // handle — shares the same prompt-cache prefix as the runner.
     let provider_for_extractor = Arc::clone(&provider);
     let mut tools = ToolRegistry::new();
-    // The checklist tool holds its own session state (no sandbox needed), so
-    // register it unconditionally — it is available even when the seatbelt is
-    // unavailable. It is not destructive and needs no approval gate, so it
-    // skips the GuardedTool wrapper that the filesystem tools require. The
-    // host renders the checklist from the wire stream, so no state handle is
-    // returned to the caller.
-    let todo_tool = TodoWriteTool::new();
-    tools.register(Arc::new(todo_tool));
-    // The shared permission gate. Every tool is wrapped in a GuardedTool that
-    // routes its calls through mode_gate.decide, so the mode (plan / default /
-    // acceptEdits / auto / bypass) and the user-configurable whitelist rule
-    // set decide allow / ask / deny — the runner and the Tool trait stay
-    // untouched. Bypass skips approval; the sandbox still fences it. The same
-    // Arc is returned to the caller so the host and the runner share one gate.
-    // Wire the durable rule store into the gate: rules the user adds via
-    // /permissions persist across restart, and with_store hydrates them into
-    // the in-memory rule set on construction. Without this call the store is
-    // dead code (add_rule's persist branch never fires), so /permissions rule
-    // additions are lost on restart — only the builtins re-seed. None means
-    // no persistence (test isolation: the wire-flow tests do not need a store
-    // and must not touch the real home/project files).
-    let mut gate_builder = DefaultModeGate::new();
-    if let Some(ref rule_store) = rule_store {
-        gate_builder = gate_builder.with_store(rule_store.clone());
-    }
-    // The network posture, read once per session and handed to the sandbox
-    // profile below, the one consumer of it. One
-    // origin on purpose — when the gate was told separately it could disagree
-    // with the fence, so a user who opened the fence still had every egress
-    // command refused. The gate no longer reads network posture; the fence
-    // is the single authority over containment, and the gate asks for every
-    // egress command regardless.
-    let (network, network_warnings) =
-        network_policy_from(&houyicoder_config::load_sandbox_network());
-    // Guarded mode (default): fence the user's project dir directly — the
-    // agent edits the real tree (changes immediate) and the seatbelt denies
-    // writes outside it + the network. Isolated (worktree) mode is opt-in via
-    // the /sandbox command. Fall back to a tempdir sandbox when no cwd or the
-    // seatbelt is unavailable.
-    // One aggregate resource breaker shared across the whole run: every
-    // spawned command the tools issue aggregates against it, so a runaway
-    // (orphan-CPU) command trips Open and the next spawn is refused for the
-    // cool-down. Attached to the shared session so every tool holding the
-    // session Arc aggregates against one breaker — the composition root owns
-    // the policy, the sandbox applies it (no trait change).
-    let breaker = Arc::new(ResourceBreaker::new(ResourceBreakerConfig::default()));
-    // Resolve the project root deterministically — NEVER trust the inherited
-    // process cwd blindly. An installed binary launched from a shell sitting
-    // in the home dir would otherwise make the seatbelt workspace the home
-    // dir, so the agent's bash lists home instead of the repo (it cannot see
-    // the code it is supposed to develop). Resolution order: the project env
-    // override, then walk up from the cwd to the nearest workspace manifest,
-    // then fall back to an isolated tempdir + a stderr warning (never the
-    // home dir as workspace).
-    let workspace = resolve_project_workspace(project);
-    // The two session-wide fences every constructed session must carry: the
-    // aggregate resource breaker and the network posture. Bound once here so the
-    // three construction paths below cannot drift apart — a path that forgot the
-    // network posture would silently fall back to the contained default and make
-    // an opened fence look broken.
-    let fence = |s: PlatformSession| {
-        s.with_breaker(breaker.clone())
-            .with_network(network.clone())
-    };
-    // Last resort when the workspace cannot be fenced. A failure here leaves the
-    // run with no session, and every tool that needs one is then withheld, which
-    // is the right posture and an opaque one: the agent has no way to touch the
-    // filesystem or run a command, and nothing on screen says why.
-    let tempdir_session = || {
-        degrade_with_notice(
-            PlatformSession::new(),
-            "sandbox unavailable: no isolated tempdir session could be created",
-            "the agent starts with no filesystem or command tools.",
-        )
-        .map(&fence)
-    };
-    let sandbox = match &workspace {
-        // A workspace that cannot be fenced (a non-existent --project path, or a
-        // canonicalize failure) degrades to the tempdir rather than to no fence.
-        Some(ws) => degrade_with_notice(
-            PlatformSession::new_in_cwd(ws),
-            &format!("sandbox could not pin to workspace {ws:?}"),
-            "falling back to an isolated tempdir -- the agent's bash will NOT see your repo.",
-        )
-        .map(&fence)
-        .or_else(tempdir_session),
-        None => {
-            tracing::warn!(
-                "no project root found (no Cargo.toml walking up from cwd, and HOUYICODER_PROJECT unset); sandboxing to an isolated tempdir -- the agent's bash will NOT see your repo. run from the repo root or pass --project <path>."
-            );
-            tempdir_session()
-        }
-    };
-    let sandbox_session: Option<Arc<dyn SandboxSession>> =
-        sandbox.map(|s| Arc::new(s) as Arc<dyn SandboxSession>);
-    // Rehydrate persistent directory authorizations into the kernel fence.
-    // Directories the user persisted (via /permissions AddDir or an approval
-    // card) live in the rule store's envelope; the fence is in-memory and
-    // starts empty, so without this loop a persistent directory auth is silent
-    // on restart — the store has it, but the kernel fence does not, and the
-    // tool still refuses. This bridges the two layers (store → fence). Errors
-    // are ignored: a directory deleted since it was persisted should not brick
-    // startup; the stale entry just does not re-attach.
-    if let (Some(session), Some(store)) = (&sandbox_session, &rule_store) {
-        restore_directory_grants(session.as_ref(), store.as_ref());
-    }
-    if let (Some(session), Some(ws)) = (&sandbox_session, workspace.as_deref()) {
-        attach_git_common_dir(session.as_ref(), ws);
-    }
-    // Hand the gate a fence handle so the path-bounds validator can ask for
-    // out-of-workspace grep/glob paths instead of letting confine_path refuse.
-    if let Some(ref session) = sandbox_session {
-        gate_builder = gate_builder.with_containment(Arc::new(ContainmentAdapter(session.clone())));
-    }
-    let gate = Arc::new(gate_builder);
-    let gate_dyn: Arc<dyn ModeGate> = gate.clone();
-    // Worktree controller: built + the enter/exit tools registered when both
-    // a workspace + a sandbox session resolved. The controller's cwd handle
-    // starts as a dummy; set_cwd_handle below swaps in the runner's real cwd.
+    tools.register(Arc::new(TodoWriteTool::new()));
+    let fences = build_session_fences(project, rule_store.clone());
+    let gate_dyn: Arc<dyn ModeGate> = fences.gate.clone();
     let worktree_controller = worktree::wire_worktree_controller(
-        workspace.as_deref(),
-        sandbox_session.as_ref(),
+        fences.workspace.as_deref(),
+        fences.sandbox_session.as_ref(),
         &store,
         session,
         &mut tools,
         &gate_dyn,
     );
-    // Assemble built-in tools; external providers join below.
-    let (skill_registry, skill_conditional) =
-        hook_compose::build_skill_registry_and_activator(workspace.as_deref());
-    let active_skill = Arc::new(Mutex::new(None::<String>));
-    let skill_grants = hook_compose::build_skill_grants();
-    let discovery_skill = skill_grants.as_ref().map(|_| active_skill.clone());
-    let builtin = BuiltInToolProvider::new(sandbox_session.clone(), gate_dyn.clone())
-        .with_activator(Some(Arc::clone(&skill_conditional)))
-        .with_active_skill(discovery_skill);
+    let skills = SkillRuntime::new(fences.workspace.as_deref(), gate_dyn.clone());
+    let undo_handles = register_builtin_tools(&mut tools, &fences, &skills, gate_dyn);
+    let (config, runner_settings_warnings) =
+        build_runner_config(model.clone(), fences.workspace.as_deref());
+    let recall_meter = Arc::new(AtomicU32::new(0));
+    tools.register(Arc::new(ConversationSearchTool::new(
+        store.clone(),
+        recall_meter.clone(),
+    )));
+    skills.register_tool(&mut tools, fences.sandbox_session.clone());
+    let denied_agents = resolve_denied_agents(rule_store.as_deref());
+    let agent_registry = multi_agent::built_in_registry();
+    tools.register(Arc::new(DelegationTool::new(agent_registry.clone())));
+    let bus = Arc::new(AgentBus::new());
+    let spawn_handle = multi_agent::build_runtime(multi_agent::MultiAgentDeps {
+        registry: agent_registry.clone(),
+        store: store.clone(),
+        provider: Arc::clone(&provider),
+        tools: tools.clone(),
+        config: config.clone(),
+        worktree_controller: worktree_controller.clone(),
+        workspace: fences.workspace.clone(),
+        bus: Some(Arc::clone(&bus)),
+        descriptor_store: Some(Arc::clone(&descriptor_store)),
+    });
+    let (section, effort_warnings) = load_model_section_from(&settings_path());
+    let store_log_root = store.session_log_root();
+    let runner = Runner::new(store, provider, tools, config)
+        .with_recall_meter(recall_meter)
+        .with_breaker(fences.breaker)
+        .with_summarizer(Box::new(LlmSummarizer::new(
+            Arc::clone(&provider_for_extractor),
+            model.clone(),
+        )))
+        .with_catalog_resolver(Arc::new(SettingsCatalogResolver::from_section(
+            section.clone(),
+        )))
+        .with_model_choice(model_selection.choice)
+        .with_speed_mode(section.speed_mode.unwrap_or(SpeedMode::Standard))
+        .with_denied_agents(Arc::clone(&denied_agents))
+        .with_spawn_handle(spawn_handle)
+        .with_sandbox_session(fences.sandbox_session.clone())
+        .with_reducer(Arc::new(HotPathReducer));
+    let mut runner = skills.attach_to_runner(runner, fences.workspace.clone());
+    runner.set_workspace_probe(Arc::new(GitWorkspaceProbe::new(runner.cwd_handle())));
+    multi_agent::wire_agent_directory(&runner, agent_registry.as_ref(), &denied_agents);
+    if let Some(controller) = &worktree_controller {
+        controller.set_hook_fire(build_hook_fire(&runner));
+    }
+    let (runner, toggle_warnings) = install_workspace_memory(
+        runner,
+        fences.workspace,
+        session,
+        provider_for_extractor,
+        model,
+        undo_handles,
+        worktree_controller.as_ref(),
+    );
+    let mut startup = startup_warnings::collect_startup_warnings(
+        &fences.network_warnings,
+        &toggle_warnings,
+        &effort_warnings,
+        &provider_cfg_warnings,
+    );
+    finish_startup_warnings(
+        &mut startup,
+        &runner_settings_warnings,
+        fences.sandbox_session.as_ref(),
+        store_log_root,
+        session,
+    );
+    AssembledRunner {
+        runner: runner.with_startup_warnings(startup),
+        session,
+        gate: fences.gate,
+        sandbox_session: fences.sandbox_session,
+        append_notify,
+        worktree_controller,
+        bus: Some(bus),
+        provider_facts,
+    }
+}
+
+/// Build the RunnerConfig and collect any settings warnings from runner_settings.
+fn build_runner_config(
+    model: String,
+    workspace: Option<&Path>,
+) -> (RunnerConfig, Vec<ConfigWarning>) {
+    let max_output_tokens = model_window::resolve_max_output_tokens(&model);
+    let (runner_settings, warnings) = houyicoder_config::load_runner_settings(workspace);
+    let config = RunnerConfig {
+        model,
+        instructions: String::new(),
+        max_turns: runner_settings.max_turns,
+        max_output_tokens,
+        ..RunnerConfig::default()
+    };
+    (config, warnings)
+}
+
+/// Extract denied sub-agent types from the rule store.
+fn resolve_denied_agents(rule_store: Option<&dyn RuleStore>) -> Arc<HashSet<String>> {
+    Arc::new(match rule_store {
+        Some(rules) => houyicoder_permission::denied_agent_types(&rules.load()),
+        None => HashSet::new(),
+    })
+}
+
+/// Append runner-settings warnings, unfenced sandbox notices, and retention backlog notices.
+fn finish_startup_warnings(
+    startup: &mut Vec<String>,
+    runner_settings_warnings: &[ConfigWarning],
+    sandbox_session: Option<&Arc<dyn SandboxSession>>,
+    store_log_root: Option<PathBuf>,
+    session: SessionId,
+) {
+    startup.extend(
+        runner_settings_warnings
+            .iter()
+            .map(|w| format!("{}: {}", w.field, w.reason)),
+    );
+    if var(houyicoder_config::ENV_HOUYICODER_TEST_SUPPRESS_FENCE_NOTICE).map_or(true, |v| v != "1")
+        && let Some(session) = sandbox_session
+        && let Some(notice) = session.fence_status().unfenced_notice()
+    {
+        startup.push(notice);
+    }
+    retention_notice::push_startup_notices(store_log_root, session, startup);
+}
+
+/// Wire workspace-scoped memory, undo handles, and the real cwd handle onto the runner.
+fn install_workspace_memory(
+    runner: Runner,
+    workspace: Option<PathBuf>,
+    session: SessionId,
+    provider_for_extractor: Arc<dyn ModelProvider>,
+    model_for_extractor: String,
+    undo_handles: Option<(Arc<Mutex<UndoStack>>, Arc<SnapshotStore>)>,
+    worktree_controller: Option<&Arc<WorktreeController>>,
+) -> (Runner, Vec<ConfigWarning>) {
+    match workspace {
+        Some(ws) => {
+            let memory_provider: Arc<dyn MemoryProvider> =
+                Arc::new(memory::memory_provider_for(&ws, None));
+            let session_log_root = runner.store().session_log_root();
+            let (runtime, warnings) = memory::build_memory_runtime(
+                runner.store(),
+                session,
+                memory_provider,
+                provider_for_extractor,
+                ws.clone(),
+                model_for_extractor,
+                session_log_root,
+            );
+            let mut r = runner.with_cwd(ws).install_memory(runtime);
+            if let Some((stack, store)) = undo_handles {
+                r.set_undo(stack, store);
+            }
+            if let Some(controller) = worktree_controller {
+                controller.set_cwd_handle(r.cwd_handle());
+            }
+            (r, warnings)
+        }
+        None => (runner, Vec::new()),
+    }
+}
+
+/// Register the sandbox-backed built-in tools, and hand back the undo handles
+/// they expose so the workspace branch can attach them to the runner.
+fn register_builtin_tools(
+    tools: &mut ToolRegistry,
+    fences: &containment::SessionFences,
+    skills: &SkillRuntime,
+    gate_dyn: Arc<dyn ModeGate>,
+) -> Option<(Arc<Mutex<UndoStack>>, Arc<SnapshotStore>)> {
+    let builtin = BuiltInToolProvider::new(fences.sandbox_session.clone(), gate_dyn)
+        .with_activator(Some(Arc::clone(&skills.conditional)))
+        .with_active_skill(skills.discovery_skill());
     let undo_handles = builtin.undo_handles();
+    register_provider_tools(tools, builtin);
+    undo_handles
+}
+
+/// Register the built-in tool provider and any configured MCP tool servers.
+fn register_provider_tools(tools: &mut ToolRegistry, builtin: BuiltInToolProvider) {
     let mut providers: Vec<Box<dyn ToolProvider>> = vec![Box::new(builtin)];
-    // External tool servers (block-on-init): spawn each subprocess via the
-    // launcher, run the initialize plus tools/list handshake before the agent
-    // loop starts, and contribute the discovered tools behind the Tool trait.
-    // A spawn failure is fail-open: the engine still runs with the built-in
-    // tools; the error is surfaced on stderr so a misconfigured server does
-    // not brick the run. The tool list is fixed for the session (a server
-    // that adds tools mid-session does not surface until restart).
     let launcher = StdProcessLauncher::new();
     for cfg in houyicoder_config::resolve_mcp_servers() {
         match McpClient::spawn(&cfg.program, &cfg.args, &launcher) {
@@ -449,262 +482,16 @@ pub(crate) fn assemble(
             tools.register(tool);
         }
     }
-    // An empty instructions lets the runner's ContextBuilder assemble the
-    // system prompt from sections (identity + project context + tool docs +
-    // env) each turn; a non-empty value would override that assembled prompt.
-    // The assembled path is the default; the override is reserved for a future
-    // CLI --system-prompt flag.
-    let max_output_tokens = model_window::resolve_max_output_tokens(&model);
-    // The resolution chain already carries the intent (settings id →
-    // Explicit; fallback → Default), so the runner seeds the real selection
-    // rather than one guessed from id equality.
-    let model_choice = model_selection.choice;
-    let (runner_settings, runner_settings_warnings) =
-        houyicoder_config::load_runner_settings(workspace.as_deref());
-    let config = RunnerConfig {
-        model,
-        instructions: String::new(),
-        max_turns: runner_settings.max_turns,
-        max_output_tokens,
-        ..RunnerConfig::default()
-    };
-    // Recall meter: shared between the conversation recall tool (bumps it on a
-    // match in the folded span) and the compaction path (snapshots + resets
-    // to compute the recall rate). Constructed here so the tool + the runner
-    // share one Arc; passed to the tool at registration + to the runner via
-    // with_recall_meter before the runner is shared.
-    let recall_meter = Arc::new(AtomicU32::new(0));
-    // The conversation recall tool is not sandbox-backed (it replays the raw
-    // session log the runner holds), so it is registered directly like the
-    // checklist tool, not via the sandbox-built-in provider. Shares the store
-    // + the recall meter so its bumps land on the counter the compaction path
-    // reads.
-    let conversation_search = ConversationSearchTool::new(store.clone(), recall_meter.clone());
-    tools.register(Arc::new(conversation_search));
-    // Hook registry + skill-hook registrar + shared launcher.
-    let hook_launcher: Arc<dyn ProcessLauncher> = Arc::new(StdProcessLauncher::new());
-    let hook_registry = hook_compose::build_session_registry(
-        gate_dyn.clone(),
-        Arc::clone(&hook_launcher),
-        workspace.as_deref(),
-    );
-    // Live workspace-trust ref: fail-closed (Untrusted) until the server
-    // writes the resolved state back after the startup trust prompt.
-    let trust_state = Arc::new(RwLock::new(TrustState::Untrusted));
-    let skill_registrar = Arc::new(SkillHookRegistrar::new(
-        Arc::clone(&hook_registry),
-        Arc::clone(&trust_state),
-        Arc::clone(&hook_launcher),
-    ));
-    hook_compose::register_skill_tool(
-        &mut tools,
-        &skill_registry,
-        &skill_registrar,
-        &skill_conditional,
-        sandbox_session.clone(),
-        skill_grants.clone(),
-        Arc::clone(&active_skill),
-    );
-    // Agent tool: delegate a sub-task to a spawned child (not sandbox-backed;
-    // resolves the requested type against the built-in agent registry).
-    let denied_agents = Arc::new(match rule_store.as_ref() {
-        Some(rules) => houyicoder_permission::denied_agent_types(&rules.load()),
-        None => HashSet::new(),
-    });
-    let agent_registry = multi_agent::built_in_registry();
-    tools.register(Arc::new(DelegationTool::new(agent_registry.clone())));
-    // Spawn port + agent directory; construction is in the multi_agent module.
-    // Hoist the bus so the fleet status relay (wired at pairing) can share it.
-    let bus = Arc::new(AgentBus::new());
-    let spawn_handle = multi_agent::build_runtime(multi_agent::MultiAgentDeps {
-        registry: agent_registry.clone(),
-        store: store.clone(),
-        provider: Arc::clone(&provider),
-        tools: tools.clone(),
-        config: config.clone(),
-        worktree_controller: worktree_controller.clone(),
-        workspace: workspace.clone(),
-        bus: Some(Arc::clone(&bus)),
-        descriptor_store: Some(Arc::clone(&descriptor_store)),
-    });
-    // LlmSummarizer shares the main provider + model so compaction produces
-    // real summaries; the self-overflow guard + heuristic fallback are in
-    // compaction/summarization.rs. Cloned before the runner takes the provider.
-    let summarizer = Box::new(LlmSummarizer::new(
-        Arc::clone(&provider_for_extractor),
-        model_for_extractor.clone(),
-    ));
-    let (section, effort_warnings) = load_model_section_from(&settings_path());
-    // One section read feeds both the catalog resolver and the speed seed, so
-    // a restart keeps the tier the user picked without a second load.
-    let speed_mode = section.speed_mode;
-    let catalog = SettingsCatalogResolver::from_section(section);
-    // The sessions root the store's backend owns, captured before the
-    // runner takes the store: the retention backlog notice reads it (never
-    // the global root - reader and writer must never disagree), and an
-    // in-memory backend yields None so the notice scans nothing.
-    let store_log_root = store.session_log_root();
-    let mut runner = Runner::new(store, provider, tools, config)
-        .with_recall_meter(recall_meter)
-        .with_breaker(breaker)
-        .with_summarizer(summarizer)
-        .with_catalog_resolver(Arc::new(catalog))
-        .with_model_choice(model_choice)
-        .with_speed_mode(speed_mode.unwrap_or(SpeedMode::Standard))
-        .with_denied_agents(Arc::clone(&denied_agents))
-        .with_spawn_handle(spawn_handle)
-        .with_skill_registry(Arc::clone(&skill_registry) as Arc<dyn SkillRegistry>)
-        .with_sandbox_session(sandbox_session.clone())
-        .with_skill_grants(skill_grants)
-        .with_active_skill(Arc::clone(&active_skill))
-        .with_conditional(Arc::clone(&skill_conditional));
-    runner.set_skill_reloader(hook_compose::build_skill_reloader(
-        &skill_registry,
-        &skill_conditional,
-        &skill_registrar,
-        workspace.clone(),
-    ));
-    // Workspace probe for the compaction watermark.
-    runner.set_workspace_probe(Arc::new(GitWorkspaceProbe::new(runner.cwd_handle())));
-    multi_agent::wire_agent_directory(&runner, agent_registry.as_ref(), &denied_agents);
-    // Wire the hot-path tool-output reducer so the Isolate stage strips ansi
-    // + truncates a large bash result before serving it (the raw stays in the
-    // CAS for on-demand retrieval).
-    runner = runner.with_reducer(Arc::new(HotPathReducer));
-    // Attach the hook registry (built above, before the Skill tool) + the
-    // skill-hook registrar to the runner so the fire points drive the
-    // registered hooks and both skill-invocation paths share one registrar.
-    let runner = runner
-        .with_hooks(Arc::clone(&hook_registry))
-        .with_registrar(Arc::clone(&skill_registrar));
-    let hook_fire = build_hook_fire(&runner);
-    if let Some(controller) = &worktree_controller {
-        controller.set_hook_fire(hook_fire);
-    }
-    let (runner, toggle_warnings) = match workspace {
-        Some(ws) => {
-            let memory_provider: Arc<dyn MemoryProvider> =
-                Arc::new(memory::memory_provider_for(&ws, None));
-            let session_log_root = runner.store().session_log_root();
-            let (runtime, warnings) = memory::build_memory_runtime(
-                runner.store(),
-                session,
-                memory_provider,
-                provider_for_extractor,
-                ws.clone(),
-                model_for_extractor,
-                session_log_root,
-            );
-            let mut r = runner.with_cwd(ws).install_memory(runtime);
-            if let Some((stack, store)) = undo_handles {
-                r.set_undo(stack, store);
-            }
-            // Swap in the runner's real cwd handle so worktree enter/exit write
-            // the ContextBuilder cwd the next system-prompt build reads.
-            if let Some(controller) = &worktree_controller {
-                controller.set_cwd_handle(r.cwd_handle());
-            }
-            (r, warnings)
-        }
-        None => (runner, Vec::new()),
-    };
-    // Queue startup warnings (bad settings fields + network-policy typos) for
-    // the host to drain + surface as initial transcript system lines at pair
-    // time. A bad value must not silently become a no-op.
-    let mut startup = startup_warnings::collect_startup_warnings(
-        &network_warnings,
-        &toggle_warnings,
-        &effort_warnings,
-        &provider_cfg_warnings,
-    );
-    startup.extend(
-        runner_settings_warnings
-            .iter()
-            .map(|w| format!("{}: {}", w.field, w.reason)),
-    );
-    // The sandbox fence status is a one-time construction event the user
-    // must know: an unfenced workspace is a security-relevant gap. Check
-    // once here rather than per-operation (the per-operation audit lines
-    // stay in the tracing sink as diagnostics). Suppressed in test/PTY
-    // environments via HOUYICODER_TEST_SUPPRESS_FENCE_NOTICE so the notice does not occupy a
-    // transcript line that PTY assertions must account for.
-    if var(houyicoder_config::ENV_HOUYICODER_TEST_SUPPRESS_FENCE_NOTICE).map_or(true, |v| v != "1")
-        && let Some(session) = &sandbox_session
-        && let Some(notice) = session.fence_status().unfenced_notice()
-    {
-        startup.push(notice);
-    }
-    retention_notice::push_startup_notices(store_log_root, session, &mut startup);
-    let runner = runner.with_startup_warnings(startup);
-    AssembledRunner {
-        runner,
-        session,
-        gate,
-        sandbox_session,
-        append_notify,
-        worktree_controller,
-        bus: Some(bus),
-    }
 }
 
-/// Resolve the provider for a project once, at process start, and reuse the
-/// result for every session including a swap.
+/// The provider a project runs on: the workspace this process is held to,
+/// then the adapter crate's resolution of the settings that apply to it.
 ///
-/// One resolution is correct for all of them only because the project is fixed
-/// for the life of a process. A build that lets sessions carry different
-/// projects must revisit this: the endpoint and the refused-helper warning both
-/// come from the project's own settings files.
-pub fn resolve_provider(project: Option<&str>) -> ResolvedProvider {
+/// Choosing the workspace is this root's decision, so it is made here and
+/// handed over; a resolver that also walked the tree would own two questions.
+pub fn resolve_provider(project: Option<&str>) -> ProviderResolution {
     let workspace = resolve_project_workspace(project.map(str::to_string));
-    let (provider, warnings) = provider_or_stub(workspace.as_deref());
-    ResolvedProvider { provider, warnings }
-}
-
-/// A real provider when a key resolves, else a stub so the loop still drives
-/// with a canned reply rather than going silently offline.
-fn provider_or_stub(
-    workspace: Option<&Path>,
-) -> (
-    Arc<dyn ModelProvider>,
-    Vec<houyicoder_config::ConfigWarning>,
-) {
-    // Test affordance: a scripted response sequence lets PTY UI tests drive
-    // tool calls (glob / edit / todo_write) through the real binary so the
-    // interaction layer — permission cards, tool-result rendering, transcript
-    // fold — is exercised end-to-end. The env holds a JSON array of per-call
-    // output-item lists; the first response typically carries a ToolCall, the
-    // rest plain text so the run ends cleanly (a stateless stub re-emits the
-    // same ToolCall every call and loops to max_turns). Falls through to the
-    // normal stub path on any parse failure. Honest test knob, not a feature
-    // — the stub providers exist for dev/test.
-    if let Ok(raw) = var(houyicoder_config::ENV_HOUYICODER_TEST_STUB_RESPONSE_SCRIPT)
-        && let Ok(per_call) = serde_json::from_str::<Vec<Vec<OutputItem>>>(&raw)
-        && !per_call.is_empty()
-    {
-        return (Arc::new(FakeProvider::from_outputs(per_call)), Vec::new());
-    }
-    let (settings, mut warnings) = load_provider_settings(workspace);
-    // The config layer names where the key comes from; obtaining it is a spawn,
-    // so it happens here through the chokepoint.
-    let (key, resolve_warnings) = api_key::resolve_api_key(settings.key_source.as_ref(), None);
-    warnings.extend(resolve_warnings);
-    match key {
-        Some(key) => (
-            Arc::new(OpenAiCompatibleProvider::new(settings.base_url, key)),
-            warnings,
-        ),
-        None => {
-            let reply = format!(
-                "stub mode: no api key resolved, model {} not called. \
-                 set keychain (macOS) or apiKeyHelper in settings.json \
-                 (~/.houyicoder/), or export DASHSCOPE_API_KEY in the shell.",
-                houyicoder_config::DEFAULT_MODEL
-            );
-            // The warnings ride along on the stub path too: a skipped
-            // project helper is most relevant exactly when no key resolved.
-            (Arc::new(FakeProvider::text(&reply)), warnings)
-        }
-    }
+    houyicoder_provider::resolve(workspace.as_deref())
 }
 
 /// Runner and event-stream state retained across client connections. The
@@ -729,6 +516,11 @@ struct LiveRunnerHandle {
 pub struct SessionHost {
     runners: Mutex<HashMap<SessionId, LiveRunnerHandle>>,
     store: SessionLeaseStore,
+    /// The facts the process's provider was built from. Process-scoped
+    /// rather than per-session because the provider is resolved once for the
+    /// life of a process; serve_session reads it so a reattached connection
+    /// reports the same facts the live one does.
+    provider_facts: Option<ProviderFacts>,
 }
 
 impl SessionHost {
@@ -739,7 +531,21 @@ impl SessionHost {
         Self {
             runners: Mutex::new(HashMap::new()),
             store,
+            provider_facts: None,
         }
+    }
+
+    /// Attach what the process's provider was built from, so a reattaching
+    /// connection's status reports the real destination.
+    pub fn with_provider_facts(mut self, facts: ProviderFacts) -> Self {
+        self.provider_facts = Some(facts);
+        self
+    }
+
+    /// The facts a reattaching connection should report, or None when the
+    /// host was built without them.
+    pub(crate) fn provider_facts(&self) -> Option<&ProviderFacts> {
+        self.provider_facts.as_ref()
     }
 
     /// Register a runner and its session-scoped event sequencer.

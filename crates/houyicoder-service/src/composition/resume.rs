@@ -81,7 +81,7 @@ pub fn build_runner_for_resume_export(
     sessions_root: &Path,
     project: Option<String>,
     rule_store: Option<Arc<dyn RuleStore>>,
-    resolved: ResolvedProvider,
+    resolved: ProviderResolution,
 ) -> Result<ResumedRunner, ResumeError> {
     let body = read_to_string(export_path)
         .map_err(|e| ResumeError::Read(format!("{}: {e}", export_path.display())))?;
@@ -164,7 +164,7 @@ pub fn build_runner_for_resume_sid(
     sessions_root: &Path,
     project: Option<String>,
     rule_store: Option<Arc<dyn RuleStore>>,
-    resolved: ResolvedProvider,
+    resolved: ProviderResolution,
 ) -> Result<ResumedRunner, ResumeError> {
     let log_path = session_dir(sessions_root, sid).join(LOG_FILE);
     if !log_path.exists() {
@@ -253,7 +253,7 @@ pub fn build_runner_for_fork(
     sessions_root: &Path,
     project: Option<String>,
     rule_store: Option<Arc<dyn RuleStore>>,
-    resolved: ResolvedProvider,
+    resolved: ProviderResolution,
 ) -> Result<ResumedRunner, ResumeError> {
     let append_notify = Arc::new(Notify::new());
     let backend = LocalFileBackend::new(sessions_root.to_path_buf());

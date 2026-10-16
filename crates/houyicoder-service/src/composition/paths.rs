@@ -96,10 +96,10 @@ pub fn workspace_cwd(project: Option<String>) -> String {
 /// sid-keyed (NOT cwd-slug) so a session survives its original dir being
 /// deleted -- resume the log from anywhere. session.json records the
 /// original cwd; resume falls back to the current cwd if it is gone.
-/// Default: $HOME/.houyi/sessions. A sessions-dir env override points at a
-/// custom root (used by the PTY test harness to land each test's session
-/// log in an isolated temp dir, never the developer real home). Public so
-/// the CLI resume path builds a file backend at the same root.
+/// Default: the sessions directory under the config home. A sessions-dir env
+/// override points at a custom root (used by the PTY test harness to land each
+/// test's session log in an isolated temp dir, never the developer real home).
+/// Public so the CLI resume path builds a file backend at the same root.
 pub fn session_log_root() -> PathBuf {
     if let Ok(p) = var(houyicoder_config::ENV_HOUYICODER_SESSIONS_DIR)
         && !p.is_empty()

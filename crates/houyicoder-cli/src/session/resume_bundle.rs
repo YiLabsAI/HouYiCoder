@@ -5,7 +5,7 @@
 //! the fresh path.
 
 use houyicoder_permission::FileRuleStore;
-use houyicoder_service::composition::ResolvedProvider;
+use houyicoder_service::composition::ProviderResolution;
 use houyicoder_service::composition::build_runner_for_fork;
 use houyicoder_service::composition::build_runner_for_resume_sid;
 use houyicoder_service::composition::session_log_root;
@@ -19,7 +19,7 @@ use std::sync::Arc;
 pub(crate) fn build_bundle_for_resume_sid(
     sid: houyicoder_context::SessionId,
     project: Option<String>,
-    provider: ResolvedProvider,
+    provider: ProviderResolution,
 ) -> Result<crate::WiredBundle, Box<dyn Error>> {
     let resumed = build_runner_for_resume_sid(
         sid,
@@ -38,6 +38,7 @@ pub(crate) fn build_bundle_for_resume_sid(
         true,
         resumed.assembled.worktree_controller,
         resumed.assembled.bus,
+        resumed.assembled.provider_facts,
     ))
 }
 
@@ -48,7 +49,7 @@ pub(crate) fn build_bundle_for_resume_sid(
 pub(crate) fn build_bundle_for_fork(
     source_sid: houyicoder_context::SessionId,
     project: Option<String>,
-    provider: ResolvedProvider,
+    provider: ProviderResolution,
 ) -> Result<crate::WiredBundle, Box<dyn Error>> {
     let resumed = build_runner_for_fork(
         source_sid,
@@ -67,5 +68,6 @@ pub(crate) fn build_bundle_for_fork(
         true,
         resumed.assembled.worktree_controller,
         resumed.assembled.bus,
+        resumed.assembled.provider_facts,
     ))
 }

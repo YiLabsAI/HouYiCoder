@@ -1,7 +1,8 @@
-//! Provider adapters: FakeProvider and OpenAiCompatibleProvider.
-//! The ModelProvider trait and the LLM data types live elsewhere
-//! (ports::provider and protocol::llm); this crate holds the adapter
-//! impls that satisfy the port.
+//! Provider adapters and the resolution that builds them: FakeProvider and
+//! OpenAiCompatibleProvider. The ModelProvider trait and the LLM data types
+//! live elsewhere (ports::provider and protocol::llm); this crate holds the
+//! adapter impls that satisfy the port, plus the step that turns a project's
+//! settings into one of them.
 
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_async::PFut;
@@ -10,11 +11,15 @@ use houyicoder_protocol::llm::{
     Usage,
 };
 
+mod api_key;
 mod http_error;
 mod openai_compat;
+mod resolution;
 mod served_models;
 mod stream_decoder;
 mod usage;
+
+pub use resolution::{ProviderFacts, ProviderResolution, resolve};
 
 use futures::StreamExt;
 /// Adapt a complete (non-streaming) response into a stream of LlmEvents, so a

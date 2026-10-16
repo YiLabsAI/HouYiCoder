@@ -71,7 +71,7 @@ use houyicoder_service::acp::adapter::AcpAdapter;
 use houyicoder_service::acp::carrier::AcpIo;
 use houyicoder_service::acp::server::AcpServer;
 use houyicoder_service::composition::BuildRunnerOptions;
-use houyicoder_service::composition::ResolvedProvider;
+use houyicoder_service::composition::ProviderResolution;
 #[cfg(unix)]
 use houyicoder_service::composition::SessionHost;
 use houyicoder_service::composition::build_runner;
@@ -322,7 +322,7 @@ fn acquire_fresh_lease_at(
 fn build_lease_for_existing_sid(
     sid: SessionId,
     project: Option<String>,
-    provider: ResolvedProvider,
+    provider: ProviderResolution,
 ) -> Result<(RunnerBundle, FrontendStartup, HostLease), Box<dyn Error>> {
     build_lease_for_existing_sid_at(sid, project, provider, &session_log_root())
 }
@@ -330,7 +330,7 @@ fn build_lease_for_existing_sid(
 fn build_lease_for_existing_sid_at(
     sid: SessionId,
     project: Option<String>,
-    provider: ResolvedProvider,
+    provider: ProviderResolution,
     sessions_root: &Path,
 ) -> Result<(RunnerBundle, FrontendStartup, HostLease), Box<dyn Error>> {
     let lock = admit_existing_sid(&sid, sessions_root)?;
@@ -343,7 +343,7 @@ fn build_lease_for_existing_sid_at(
 /// The runner wiring every binary entry shares: the disk persistence
 /// preset plus the default permission rule store. One site so a future
 /// entry cannot drift onto a different store configuration by accident.
-fn production_runner(project: Option<String>, provider: ResolvedProvider) -> BuildRunnerOptions {
+fn production_runner(project: Option<String>, provider: ProviderResolution) -> BuildRunnerOptions {
     let mut options =
         BuildRunnerOptions::disk(project, Some(Arc::new(FileRuleStore::default_paths())));
     options.provider = Some(provider);
@@ -365,6 +365,9 @@ fn run_serve(
     model_override: Option<String>,
 ) -> Result<(), Box<dyn Error>> {
     let provider = resolve_provider(project.as_deref());
+    // Taken before the provider moves into the runner: a reattaching client's
+    // status needs what the provider was built from.
+    let facts = provider.facts.clone();
     let mut bundle = build_runner(production_runner(project, provider));
     if let Some(m) = &model_override {
         bundle.runner.set_model(m.clone());
@@ -387,7 +390,7 @@ fn run_serve(
     // a previous process that crashed without cleanup.
     remove_file(&socket_path).ok();
     let runtime = Builder::new_multi_thread().enable_all().build()?;
-    let host = Arc::new(SessionHost::new(SessionLeaseStore::new()));
+    let host = Arc::new(SessionHost::new(SessionLeaseStore::new()).with_provider_facts(facts));
     let event_sequencer = EventSequencer::new();
     event_sequencer.install_on(&mut bundle.runner);
     let relay_cancel = CancellationToken::new();
@@ -560,7 +563,7 @@ type ResumeFn = Box<dyn Fn(&str) -> Result<(RunnerBundle, FrontendStartup), Box<
 fn build_bundle_for_target(
     target: &str,
     project: Option<String>,
-    provider: ResolvedProvider,
+    provider: ProviderResolution,
     host_slot: &HostLeaseSlot,
 ) -> Result<(RunnerBundle, FrontendStartup), Box<dyn Error>> {
     let sessions_root = session_log_root();
@@ -635,7 +638,7 @@ fn run_tui_loop(
     startup: FrontendStartup,
     lease: HostLease,
     project: Option<String>,
-    provider: ResolvedProvider,
+    provider: ProviderResolution,
 ) -> Result<(), Box<dyn Error>> {
     #[cfg(unix)]
     {

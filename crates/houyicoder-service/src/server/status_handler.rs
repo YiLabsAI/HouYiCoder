@@ -4,7 +4,6 @@ use houyicoder_protocol::envelope::{RequestId, ResponsePayload};
 use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
 use houyicoder_protocol::frontend::SessionId;
 
-use super::status_view::auth_token_source;
 use super::status_view::build_model_usage_view;
 use super::status_view::setting_sources_label;
 use super::{Server, frame_carrier::FrameCarrier};
@@ -14,6 +13,7 @@ use houyicoder_context::DescriptorUpdate;
 use houyicoder_context::NameSource;
 use houyicoder_context::{SessionEvent, SessionLogEntry};
 use houyicoder_protocol::frontend::status::StatusSnapshot;
+use houyicoder_provider::ProviderFacts;
 
 impl Server {
     pub(super) async fn handle_status(
@@ -131,8 +131,24 @@ impl Server {
             snapshot.descriptor = Some(pa::map_session_descriptor(&descriptor));
         }
         snapshot.version = env!("CARGO_PKG_VERSION").to_string();
-        snapshot.auth_token_source = auth_token_source();
-        snapshot.base_url = houyicoder_config::resolve_base_url();
+        // The facts the provider was built from, carried here rather than
+        // re-resolved: a resolver that reads only the environment returns a
+        // different endpoint whenever the settings file pins one, so /status
+        // would name a host the session never contacts.
+        let facts = match self.provider_facts.clone() {
+            Some(facts) => facts,
+            None => {
+                // Only a server assembled without a resolution lands here (the
+                // in-process test harness). Say so rather than rendering an
+                // environment-derived endpoint that reads as authoritative.
+                tracing::warn!(
+                    "no provider facts attached; /status reports the environment's view"
+                );
+                ProviderFacts::unresolved()
+            }
+        };
+        snapshot.base_url = facts.base_url;
+        snapshot.auth_token_source = facts.key_origin;
         snapshot.setting_sources = setting_sources_label();
         let (toggles, _settings_warnings) = houyicoder_config::load_toggles();
         snapshot.auto_memory = toggles.auto_memory;

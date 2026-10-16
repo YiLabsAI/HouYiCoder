@@ -19,8 +19,8 @@ use houyicoder_permission::{DefaultModeGate, FileRuleStore, ModeGate};
 use houyicoder_protocol::frontend::SessionId as WireSessionId;
 use houyicoder_service::composition::host_lifecycle::HostLifecycle;
 use houyicoder_service::composition::{
-    ResolvedProvider, build_runner, build_runner_for_resume_export, disk_descriptor_store,
-    fleet_status_relay, notification_drain, session_log_root,
+    ProviderFacts, ProviderResolution, build_runner, build_runner_for_resume_export,
+    disk_descriptor_store, fleet_status_relay, notification_drain, session_log_root,
 };
 use houyicoder_service::server::{EventSequencer, FrameCarrier, Server};
 use houyicoder_tui::agent_message::SessionMessage;
@@ -53,7 +53,7 @@ pub(crate) type WiredBundle = (RunnerBundle, FrontendStartup, HostLifecycle, Arc
 pub(crate) fn build_bundle(
     project: Option<String>,
     model_override: Option<String>,
-    provider: ResolvedProvider,
+    provider: ProviderResolution,
 ) -> WiredBundle {
     let bundle = build_runner(crate::production_runner(project, provider));
     // --model overrides the settings-seeded active model for a fresh session
@@ -74,6 +74,7 @@ pub(crate) fn build_bundle(
         false,
         bundle.worktree_controller,
         bundle.bus,
+        bundle.provider_facts,
     )
 }
 
@@ -85,7 +86,7 @@ pub(crate) fn build_bundle(
 pub(crate) fn build_bundle_for_resume(
     export_path: &Path,
     project: Option<String>,
-    provider: ResolvedProvider,
+    provider: ProviderResolution,
 ) -> Result<WiredBundle, Box<dyn Error>> {
     let resumed = build_runner_for_resume_export(
         export_path,
@@ -104,6 +105,7 @@ pub(crate) fn build_bundle_for_resume(
         true,
         resumed.assembled.worktree_controller,
         resumed.assembled.bus,
+        resumed.assembled.provider_facts,
     ))
 }
 
@@ -124,6 +126,7 @@ pub(crate) fn assemble_bundle(
     skip_login: bool,
     worktree_controller: Option<Arc<WorktreeController>>,
     bus: Option<Arc<AgentBus>>,
+    provider_facts: ProviderFacts,
 ) -> WiredBundle {
     // Grab the SessionLog BEFORE the runner moves into the server task — the
     // trajectory view reads it for the /trajectory pane, and the session
@@ -164,6 +167,7 @@ pub(crate) fn assemble_bundle(
         worktree_controller,
         bus,
         None,
+        provider_facts,
     );
     // The server task owns the runner + the permission gate; the TUI holds
     // only the protocol client.
@@ -207,6 +211,7 @@ pub(crate) fn start_local_server(
     worktree_controller: Option<Arc<WorktreeController>>,
     bus: Option<Arc<AgentBus>>,
     settings_path: Option<PathBuf>,
+    provider_facts: ProviderFacts,
 ) -> (Arc<Runner>, Client, Vec<String>, HostLifecycle) {
     let mut host = HostLifecycle::new();
     let (c2s_tx, c2s_rx) = futures::channel::mpsc::channel(16);
@@ -270,6 +275,9 @@ pub(crate) fn start_local_server(
     if let Ok(cwd) = current_dir() {
         server = server.with_project_path(cwd);
     }
+    // What the provider was built from, so /status names the host this session
+    // actually contacts instead of re-resolving the environment.
+    server = server.with_provider_facts(provider_facts);
     // Attach the descriptor so /status renders the identity fields (version /
     // name / cwd / provenance). None on paths without a store (tests).
     if let Some(store) = descriptor_store {

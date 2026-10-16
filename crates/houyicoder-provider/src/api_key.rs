@@ -1,6 +1,7 @@
 //! Turning a configured api key source into a key. The config layer names the
 //! source; obtaining it runs a command, which belongs here where the spawn
-//! chokepoint is reachable.
+//! chokepoint is reachable, and where the provider that will spend the key is
+//! built.
 //!
 //! The two sources differ on the argv audit. A helper command may hold the key
 //! inline, so auditing argv would copy the secret into a log; a redacted line
@@ -32,25 +33,82 @@ const _: () = assert!(KEYCHAIN_TIMEOUT_MS > HELPER_TIMEOUT_MS);
 /// let anything earlier on it answer for the keychain.
 const SECURITY_TOOL: &str = "/usr/bin/security";
 
+/// A resolved key together with where it came from.
+pub(crate) struct ResolvedKey {
+    /// The key, or None when neither the configured source nor the environment
+    /// supplied one.
+    pub key: Option<String>,
+    /// A label naming the origin, for the status view, or None when nothing
+    /// supplied a key. A configured source that failed reports the environment
+    /// instead, because that is where the caller's key actually came from.
+    pub origin: Option<String>,
+    pub warnings: Vec<ConfigWarning>,
+}
+
 /// Resolve the api key: the configured source first, then the environment.
 /// A None launcher uses the default one, so only a test has to supply it.
+///
+/// The environment key is a parameter rather than a read: the workspace denies
+/// unsafe, so a test cannot set the variable, and injecting it is the only way
+/// to exercise both branches of the fallback.
 ///
 /// Returns the warnings resolution produced alongside the key. A source that
 /// was configured and did not yield one has to say so: without it the user
 /// sees stub mode with no hint that their keychain entry is the reason.
+///
+/// The origin is reported from this one resolution rather than recomputed by
+/// the caller: a second pass over the same inputs could disagree with what was
+/// actually returned, which is the whole reason the status line shows it.
 pub(crate) fn resolve_api_key(
     source: Option<&ApiKeySource>,
+    env_key: Option<(&'static str, String)>,
     launcher: Option<&dyn ProcessLauncher>,
-) -> (Option<String>, Vec<ConfigWarning>) {
+) -> ResolvedKey {
     let mut warnings = Vec::new();
     let from_source = source.and_then(|s| match s {
-        ApiKeySource::Helper(command) => run_helper(command, launcher),
+        ApiKeySource::Helper(command) => run_helper(command, launcher, &mut warnings),
         ApiKeySource::Keychain { service, account } => {
             read_keychain(service, account, launcher, &mut warnings)
         }
     });
-    let key = from_source.or_else(houyicoder_config::api_key_from_env);
-    (key, warnings)
+    let (key, env_name) = match from_source {
+        Some(key) => (Some(key), None),
+        None => match env_key {
+            Some((name, key)) => (Some(key), Some(name)),
+            None => (None, None),
+        },
+    };
+    let origin = key_origin(key.is_some(), source, env_name);
+    ResolvedKey {
+        key,
+        origin,
+        warnings,
+    }
+}
+
+/// The origin label for a resolved key. Pure over the three facts, so every
+/// branch is testable without touching the process environment.
+///
+/// key_resolved is what makes the label truthful: a configured source that
+/// yielded nothing leaves the key absent, and naming that source would report a
+/// credential the caller does not have — the case a keychain on a platform that
+/// cannot read one lands in.
+///
+/// env_name is Some only where the environment supplied the key, which outranks
+/// a configured source: a source that yielded nothing left the environment to
+/// answer, and the environment is what the caller got.
+fn key_origin(
+    key_resolved: bool,
+    source: Option<&ApiKeySource>,
+    env_name: Option<&str>,
+) -> Option<String> {
+    if !key_resolved {
+        return None;
+    }
+    match env_name {
+        Some(name) => Some(format!("env {name}")),
+        None => source.map(ApiKeySource::display_label),
+    }
 }
 
 /// Read a keychain item's password. macOS only: the lookup shells out to the
@@ -114,7 +172,22 @@ fn read_keychain(
 
 /// Run a helper command and take its stdout as the key. A spawn failure, a
 /// non-zero exit, a timeout kill, and blank output all mean no key.
-fn run_helper(command: &str, launcher: Option<&dyn ProcessLauncher>) -> Option<String> {
+fn run_helper(
+    command: &str,
+    launcher: Option<&dyn ProcessLauncher>,
+    warnings: &mut Vec<ConfigWarning>,
+) -> Option<String> {
+    // The command may hold the key inline, so the notice names the field and
+    // the failure class only — never the command text.
+    let failed = |warnings: &mut Vec<ConfigWarning>, detail: &str| {
+        warnings.push(ConfigWarning {
+            field: "apiKeyHelper".into(),
+            reason: format!(
+                "no key from the configured helper ({detail}); falling back to the environment"
+            ),
+        });
+        None
+    };
     let default_launcher = StdProcessLauncher::new();
     let launcher: &dyn ProcessLauncher = launcher.unwrap_or(&default_launcher);
     // A shell, not a split argv: the field exists so a user can write a
@@ -132,7 +205,7 @@ fn run_helper(command: &str, launcher: Option<&dyn ProcessLauncher>) -> Option<S
         Ok(child) => child,
         Err(e) => {
             tracing::warn!("api key helper could not start: {e}");
-            return None;
+            return failed(warnings, "the command could not start");
         }
     };
     // The capture path resolves its wait future before handing the child back,
@@ -141,7 +214,7 @@ fn run_helper(command: &str, launcher: Option<&dyn ProcessLauncher>) -> Option<S
         Ok(exit) => exit,
         Err(e) => {
             tracing::warn!("api key helper did not finish: {e}");
-            return None;
+            return failed(warnings, "the command did not finish");
         }
     };
     if exit.exit_code != Some(0) {
@@ -149,12 +222,12 @@ fn run_helper(command: &str, launcher: Option<&dyn ProcessLauncher>) -> Option<S
             "api key helper exited with {:?}; falling back to the environment",
             exit.exit_code
         );
-        return None;
+        return failed(warnings, "the command exited non-zero");
     }
     let key = exit.stdout.unwrap_or_default().trim().to_string();
     if key.is_empty() {
         tracing::warn!("api key helper produced no output; falling back to the environment");
-        return None;
+        return failed(warnings, "the command produced no output");
     }
     Some(key)
 }

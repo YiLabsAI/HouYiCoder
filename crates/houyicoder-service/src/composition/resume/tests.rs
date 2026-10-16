@@ -5,12 +5,12 @@
 //! instead of silently starting a blank session the user thinks is their old one.
 
 use super::super::workspace_cwd;
-use super::ResolvedProvider;
 use houyicoder_context::{
     EventId, NameSource, SessionDescriptor, SessionEvent, SessionId, SessionLogEntry,
     SessionProvenance,
 };
 use houyicoder_memory::FileDescriptorStore;
+use houyicoder_provider::ProviderResolution;
 use std::env::temp_dir;
 use std::fs::create_dir_all;
 use std::fs::read_dir;
@@ -87,7 +87,7 @@ fn test_resume_export_seeds_log() {
         &sessions,
         None,
         None,
-        ResolvedProvider::stub(),
+        ProviderResolution::stub(),
     )
     .expect("resume export seeds");
     let runner = resumed.assembled.runner;
@@ -132,7 +132,7 @@ fn test_resume_export_descriptor_provenance() {
         &sessions,
         None,
         None,
-        ResolvedProvider::stub(),
+        ProviderResolution::stub(),
     )
     .expect("resume export seeds");
     let new_sid = resumed.assembled.session;
@@ -179,7 +179,7 @@ fn test_fork_chain_propagates_history() {
         &sessions,
         None,
         None,
-        ResolvedProvider::stub(),
+        ProviderResolution::stub(),
     )
     .expect("resume A -> B");
     let sid_b = resumed.assembled.session;
@@ -206,7 +206,7 @@ fn test_fork_chain_propagates_history() {
         &sessions,
         None,
         None,
-        ResolvedProvider::stub(),
+        ProviderResolution::stub(),
     )
     .expect("resume B -> C");
     let sid_c = resumed.assembled.session;
@@ -240,7 +240,7 @@ fn test_resume_sid_reopens_errors() {
         &sessions,
         None,
         None,
-        ResolvedProvider::stub(),
+        ProviderResolution::stub(),
     )
     .expect("seed via export");
     let existing_sid = resumed.assembled.session;
@@ -251,7 +251,7 @@ fn test_resume_sid_reopens_errors() {
         &sessions,
         None,
         None,
-        ResolvedProvider::stub(),
+        ProviderResolution::stub(),
     )
     .expect("resume sid reopens");
     let runner = resumed.assembled.runner;
@@ -271,7 +271,7 @@ fn test_resume_sid_reopens_errors() {
         &sessions,
         None,
         None,
-        ResolvedProvider::stub(),
+        ProviderResolution::stub(),
     )
     .err()
     .expect("missing sid errors");
@@ -302,7 +302,7 @@ fn test_resume_sid_warns_unverified() {
         &sessions,
         None,
         None,
-        ResolvedProvider::stub(),
+        ProviderResolution::stub(),
     )
     .expect("seed via export");
     let existing_sid = resumed.assembled.session;
@@ -317,7 +317,7 @@ fn test_resume_sid_warns_unverified() {
         &sessions,
         None,
         None,
-        ResolvedProvider::stub(),
+        ProviderResolution::stub(),
     )
     .expect("resume proceeds despite unverified chain");
     let sid = resumed.assembled.session;
@@ -348,7 +348,7 @@ fn test_resume_sid_missing_descriptor() {
         &sessions,
         None,
         None,
-        ResolvedProvider::stub(),
+        ProviderResolution::stub(),
     )
     .expect("seed via export");
     let existing_sid = resumed.assembled.session;
@@ -363,7 +363,7 @@ fn test_resume_sid_missing_descriptor() {
         &sessions,
         None,
         None,
-        ResolvedProvider::stub(),
+        ProviderResolution::stub(),
     )
     .expect("resume succeeds without descriptor");
     let sid = resumed.assembled.session;
@@ -397,7 +397,7 @@ fn test_resume_export_truncated_errors() {
         &sessions,
         None,
         None,
-        ResolvedProvider::stub(),
+        ProviderResolution::stub(),
     );
     assert!(
         result.is_err(),
@@ -442,7 +442,7 @@ fn test_export_empty_trajectory_errors() {
         &sessions,
         None,
         None,
-        ResolvedProvider::stub(),
+        ProviderResolution::stub(),
     );
     assert!(
         result.is_err(),
@@ -476,7 +476,7 @@ fn test_resume_export_garbage_errors() {
         &sessions,
         None,
         None,
-        ResolvedProvider::stub(),
+        ProviderResolution::stub(),
     );
     assert!(result.is_err(), "a non-JSON export must error, not proceed");
     remove_dir_all(&sessions).ok();
@@ -500,7 +500,7 @@ fn test_fork_keeps_source_untouched() {
         &sessions,
         None,
         None,
-        ResolvedProvider::stub(),
+        ProviderResolution::stub(),
     )
     .expect("seed source via export");
     let source_sid = resumed.assembled.session;
@@ -509,9 +509,14 @@ fn test_fork_keeps_source_untouched() {
         read_to_string(sessions.join(source_sid.to_string()).join("log.jsonl")).unwrap();
 
     // Fork the source: a new sid seeded with the source's durable events.
-    let resumed =
-        super::build_runner_for_fork(source_sid, &sessions, None, None, ResolvedProvider::stub())
-            .expect("fork seeds new session");
+    let resumed = super::build_runner_for_fork(
+        source_sid,
+        &sessions,
+        None,
+        None,
+        ProviderResolution::stub(),
+    )
+    .expect("fork seeds new session");
     let runner = resumed.assembled.runner;
     let forked_sid = resumed.assembled.session;
     let model = resumed.model;
@@ -568,7 +573,7 @@ fn test_fork_empty_source_errors() {
     let sessions = temp_root();
     let empty_sid = SessionId::new();
     let result =
-        super::build_runner_for_fork(empty_sid, &sessions, None, None, ResolvedProvider::stub());
+        super::build_runner_for_fork(empty_sid, &sessions, None, None, ProviderResolution::stub());
     let err = result
         .err()
         .expect("forking a sid with no log must error, not mint an empty session");
@@ -602,7 +607,7 @@ fn test_fork_warns_unverified_source() {
         &sessions,
         None,
         None,
-        ResolvedProvider::stub(),
+        ProviderResolution::stub(),
     )
     .expect("seed source via export");
     let source_sid = resumed.assembled.session;
@@ -612,9 +617,14 @@ fn test_fork_warns_unverified_source() {
     let body = read_to_string(&log).unwrap();
     write(&log, body.replacen("resume-unit-prompt", "TAMPERED", 1)).unwrap();
     // Fork still succeeds (warns to stderr, proceeds).
-    let resumed =
-        super::build_runner_for_fork(source_sid, &sessions, None, None, ResolvedProvider::stub())
-            .expect("fork proceeds despite unverified source chain");
+    let resumed = super::build_runner_for_fork(
+        source_sid,
+        &sessions,
+        None,
+        None,
+        ProviderResolution::stub(),
+    )
+    .expect("fork proceeds despite unverified source chain");
     let forked_sid = resumed.assembled.session;
 
     assert_ne!(forked_sid, source_sid, "fork mints a new sid");
@@ -641,7 +651,7 @@ fn test_latest_picks_active_cwd() {
         &sessions,
         None,
         None,
-        ResolvedProvider::stub(),
+        ProviderResolution::stub(),
     )
     .unwrap();
     let minted_a = resumed.assembled.session;
@@ -682,7 +692,7 @@ fn test_latest_picks_active_cwd() {
         &sessions,
         Some(other_ws.to_string_lossy().into_owned()),
         None,
-        ResolvedProvider::stub(),
+        ProviderResolution::stub(),
     )
     .unwrap();
     let minted_c = resumed.assembled.session;

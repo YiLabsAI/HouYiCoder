@@ -214,16 +214,18 @@ fn first_non_empty(vals: &[Option<String>]) -> Option<String> {
 
 // ---- resolution (thin env-reading wrappers) --------------------------------
 
-/// The api key from the environment, in project-preferred order, or None when
-/// none is set. The last fallback after a configured key source yields
-/// nothing. Kept here so the env var names have one home; reading env is not
-/// an effect that needs the spawn chokepoint, unlike running a helper command.
-pub fn api_key_from_env() -> Option<String> {
-    first_non_empty(&[
-        var(ENV_DASHSCOPE_API_KEY).ok(),
-        var(ENV_OPENAI_API_KEY).ok(),
-        var(ENV_HOUYICODER_API_KEY).ok(),
-    ])
+/// The api key from the environment together with the variable that supplied
+/// it, in project-preferred order, or None when none is set. One resolution
+/// serves both the key and the variable name the status view reports, so
+/// the two cannot disagree about which one answered.
+pub fn api_key_env_with_name() -> Option<(&'static str, String)> {
+    [
+        (ENV_DASHSCOPE_API_KEY, var(ENV_DASHSCOPE_API_KEY).ok()),
+        (ENV_OPENAI_API_KEY, var(ENV_OPENAI_API_KEY).ok()),
+        (ENV_HOUYICODER_API_KEY, var(ENV_HOUYICODER_API_KEY).ok()),
+    ]
+    .into_iter()
+    .find_map(|(name, value)| value.filter(|s| !s.is_empty()).map(|s| (name, s)))
 }
 
 /// The base URL to point a provider at. DASHSCOPE_BASE_URL wins, then

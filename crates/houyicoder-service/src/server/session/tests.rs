@@ -816,3 +816,5 @@ mod orphan_recovery;
 mod reconnect;
 
 mod queue_lifecycle;
+
+mod status_facts;

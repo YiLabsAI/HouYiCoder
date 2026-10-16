@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use super::*;
 use houyicoder_api::memory::MemoryProvider;
+use houyicoder_api::provider::ModelProvider;
 use houyicoder_core::agent::{MemoryGates, MemoryRuntime};
 use houyicoder_memory::MarkdownMemoryProvider;
 use houyicoder_memory::SemanticReranker;

@@ -106,8 +106,9 @@ fn test_resume_reads_legacy_dir() {
     let sessions = temp_root();
     write_session_at(&sessions, LEGACY, SessionProvenance::Fresh);
     let sid = SessionId::from_display_string(LEGACY).unwrap();
-    let resumed = build_runner_for_resume_sid(sid, &sessions, None, None, ResolvedProvider::stub())
-        .expect("a legacy-named directory is a session the store can open");
+    let resumed =
+        build_runner_for_resume_sid(sid, &sessions, None, None, ProviderResolution::stub())
+            .expect("a legacy-named directory is a session the store can open");
     assert_eq!(resumed.assembled.session, sid);
     let rt = Builder::new_current_thread().enable_all().build().unwrap();
     let events = rt.block_on(async {

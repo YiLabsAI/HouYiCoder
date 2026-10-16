@@ -1,12 +1,91 @@
-//! Connects sandbox containment with permission storage and runtime directory
-//! grants.
+//! The containment layer: the sandbox session and permission gate a run is
+//! fenced by, the port view the gate asks for path bounds through, and the
+//! bridges that carry persistent directory grants and the git common dir into
+//! the kernel fence.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use super::degrade_with_notice;
+use super::resolve_project_workspace;
 use super::worktree::git_common_dir;
+use crate::sandbox_policy::{PolicyWarning, network_policy_from};
 use houyicoder_api::sandbox::{Containment, Coverage, SandboxSession, SideEffect};
-use houyicoder_permission::RuleStore;
+use houyicoder_permission::{DefaultModeGate, RuleStore};
+use houyicoder_resilience::resource_breaker::{ResourceBreaker, ResourceBreakerConfig};
+use houyicoder_sandbox::PlatformSession;
+
+/// The fences and the permission gate one session runs under.
+pub(super) struct SessionFences {
+    pub(super) workspace: Option<PathBuf>,
+    pub(super) sandbox_session: Option<Arc<dyn SandboxSession>>,
+    pub(super) breaker: Arc<ResourceBreaker>,
+    pub(super) network_warnings: Vec<PolicyWarning>,
+    pub(super) gate: Arc<DefaultModeGate>,
+}
+
+/// Build the session's fences and permission gate.
+///
+/// The fence is the single authority over containment; the gate delegates
+/// out-of-workspace path checks to it via ContainmentAdapter.
+pub(super) fn build_session_fences(
+    project: Option<String>,
+    rule_store: Option<Arc<dyn RuleStore>>,
+) -> SessionFences {
+    let mut gate_builder = DefaultModeGate::new();
+    if let Some(rule_store) = &rule_store {
+        gate_builder = gate_builder.with_store(rule_store.clone());
+    }
+    let (network, network_warnings) =
+        network_policy_from(&houyicoder_config::load_sandbox_network());
+    let breaker = Arc::new(ResourceBreaker::new(ResourceBreakerConfig::default()));
+    let workspace = resolve_project_workspace(project);
+    let fence = |s: PlatformSession| {
+        s.with_breaker(breaker.clone())
+            .with_network(network.clone())
+    };
+    let tempdir_session = || {
+        degrade_with_notice(
+            PlatformSession::new(),
+            "sandbox unavailable: no isolated tempdir session could be created",
+            "the agent starts with no filesystem or command tools.",
+        )
+        .map(&fence)
+    };
+    let sandbox = match &workspace {
+        Some(ws) => degrade_with_notice(
+            PlatformSession::new_in_cwd(ws),
+            &format!("sandbox could not pin to workspace {ws:?}"),
+            "falling back to an isolated tempdir -- the agent's bash will NOT see your repo.",
+        )
+        .map(&fence)
+        .or_else(tempdir_session),
+        None => {
+            tracing::warn!(
+                "no project root found (no Cargo.toml walking up from cwd, and HOUYICODER_PROJECT unset); sandboxing to an isolated tempdir -- the agent's bash will NOT see your repo. run from the repo root or pass --project <path>."
+            );
+            tempdir_session()
+        }
+    };
+    let sandbox_session: Option<Arc<dyn SandboxSession>> =
+        sandbox.map(|s| Arc::new(s) as Arc<dyn SandboxSession>);
+    if let (Some(session), Some(store)) = (&sandbox_session, &rule_store) {
+        restore_directory_grants(session.as_ref(), store.as_ref());
+    }
+    if let (Some(session), Some(ws)) = (&sandbox_session, workspace.as_deref()) {
+        attach_git_common_dir(session.as_ref(), ws);
+    }
+    if let Some(ref session) = sandbox_session {
+        gate_builder = gate_builder.with_containment(Arc::new(ContainmentAdapter(session.clone())));
+    }
+    SessionFences {
+        workspace,
+        sandbox_session,
+        breaker,
+        network_warnings,
+        gate: Arc::new(gate_builder),
+    }
+}
 
 /// Adapter that delegates Containment to a SandboxSession's
 /// as_containment method. Works around the double-trait-object

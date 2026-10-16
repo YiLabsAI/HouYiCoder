@@ -82,7 +82,11 @@ fn test_status_renders_config_fields() {
     );
     assert!(s.contains("glm-5.1") && s.contains("Model:"), "model: {s}");
     assert!(s.contains("Auth token:"), "auth token source: {s}");
-    assert!(s.contains("Anthropic base URL:"), "base url: {s}");
+    assert!(s.contains("Base URL:"), "base url: {s}");
+    assert!(
+        !s.contains("Anthropic"),
+        "the label names no vendor: this client speaks to any compatible endpoint: {s}"
+    );
     assert!(s.contains("Setting sources:"), "setting sources: {s}");
     assert!(s.contains("sandbox:"), "sandbox: {s}");
     // Tokens + wall duration moved to the Usage tab.

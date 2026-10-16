@@ -38,7 +38,9 @@ use houyicoder_protocol::llm::{
     Usage,
 };
 use houyicoder_service::composition::host_lifecycle::HostLifecycle;
-use houyicoder_service::composition::{BuildRunnerOptions, ResolvedProvider, build_runner};
+use houyicoder_service::composition::{
+    BuildRunnerOptions, ProviderFacts, ProviderResolution, build_runner,
+};
 use houyicoder_tui::composition::shared_runtime;
 #[cfg(unix)]
 use tokio::runtime::Builder;
@@ -179,7 +181,7 @@ fn test_release_joins_children_first() {
 
         let mut options = BuildRunnerOptions::default();
         options.backend = Some(backend);
-        options.provider = Some(ResolvedProvider::stub());
+        options.provider = Some(ProviderResolution::stub());
         let bundle = build_runner(options);
         let sid_str = bundle.session.to_string();
         let lock = SessionLock::acquire(&sid_str, &root).expect("first acquire");
@@ -194,6 +196,7 @@ fn test_release_joins_children_first() {
             None,
             bundle.bus,
             Some(root.join("settings.json")),
+            ProviderFacts::default(),
         );
 
         let parent_sid = bundle.session;
@@ -360,9 +363,10 @@ fn test_release_waits_worktree_cleanup() {
 
         let mut options = BuildRunnerOptions::default();
         options.project = Some(repo.to_string_lossy().to_string());
-        options.provider = Some(ResolvedProvider {
+        options.provider = Some(ProviderResolution {
             provider,
             warnings: Vec::new(),
+            facts: ProviderFacts::default(),
         });
         let bundle = build_runner(options);
         let sid_str = bundle.session.to_string();
@@ -378,6 +382,7 @@ fn test_release_waits_worktree_cleanup() {
             bundle.worktree_controller,
             bundle.bus,
             Some(root.join("settings.json")),
+            ProviderFacts::default(),
         );
 
         let parent_sid = bundle.session;
@@ -555,7 +560,7 @@ fn start_host_for_test(
 ) {
     let settings_path = root.join("settings.json");
     let mut options = BuildRunnerOptions::default();
-    options.provider = Some(ResolvedProvider::stub());
+    options.provider = Some(ProviderResolution::stub());
     let bundle = build_runner(options);
     let sid = bundle.session.to_string();
     let bus = bundle.bus.clone().expect("the real assembly carries a bus");
@@ -569,6 +574,7 @@ fn start_host_for_test(
         None,
         bundle.bus,
         Some(settings_path),
+        ProviderFacts::default(),
     );
     let weak = Arc::downgrade(&runner);
     let lock = SessionLock::acquire(&sid, root).expect("acquire session lock");

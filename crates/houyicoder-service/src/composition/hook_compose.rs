@@ -200,6 +200,79 @@ pub(super) fn build_conditional_activator(
     ))
 }
 
+/// The skill registry, conditional activator, grant store, and hook registrar
+/// for one session.
+pub(super) struct SkillRuntime {
+    pub(super) registry: Arc<SkillRegistryImpl>,
+    pub(super) conditional: Arc<dyn ConditionalSkillActivator>,
+    pub(super) active_skill: Arc<Mutex<Option<String>>>,
+    pub(super) grants: Option<Arc<SkillGrantStore>>,
+    pub(super) hook_registry: Arc<HookRegistry>,
+    pub(super) registrar: Arc<SkillHookRegistrar>,
+}
+
+impl SkillRuntime {
+    /// Discover skills, load grants, and build the session hook registry.
+    pub(super) fn new(workspace: Option<&Path>, gate: Arc<dyn ModeGate>) -> Self {
+        let (registry, conditional) = build_skill_registry_and_activator(workspace);
+        let active_skill = Arc::new(Mutex::new(None));
+        let grants = build_skill_grants();
+        let launcher: Arc<dyn ProcessLauncher> = Arc::new(StdProcessLauncher::new());
+        let hook_registry = build_session_registry(gate, Arc::clone(&launcher), workspace);
+        let trust_state = Arc::new(RwLock::new(TrustState::Untrusted));
+        let registrar = Arc::new(SkillHookRegistrar::new(
+            Arc::clone(&hook_registry),
+            trust_state,
+            launcher,
+        ));
+        Self {
+            registry,
+            conditional,
+            active_skill,
+            grants,
+            hook_registry,
+            registrar,
+        }
+    }
+
+    pub(super) fn discovery_skill(&self) -> Option<Arc<Mutex<Option<String>>>> {
+        self.grants.as_ref().map(|_| Arc::clone(&self.active_skill))
+    }
+
+    pub(super) fn register_tool(
+        &self,
+        tools: &mut ToolRegistry,
+        sandbox: Option<Arc<dyn SandboxSession>>,
+    ) {
+        register_skill_tool(
+            tools,
+            &self.registry,
+            &self.registrar,
+            &self.conditional,
+            sandbox,
+            self.grants.clone(),
+            Arc::clone(&self.active_skill),
+        );
+    }
+
+    pub(super) fn attach_to_runner(&self, runner: Runner, workspace: Option<PathBuf>) -> Runner {
+        let mut runner = runner
+            .with_skill_registry(Arc::clone(&self.registry) as Arc<dyn SkillRegistry>)
+            .with_skill_grants(self.grants.clone())
+            .with_active_skill(Arc::clone(&self.active_skill))
+            .with_conditional(Arc::clone(&self.conditional))
+            .with_hooks(Arc::clone(&self.hook_registry))
+            .with_registrar(Arc::clone(&self.registrar));
+        runner.set_skill_reloader(build_skill_reloader(
+            &self.registry,
+            &self.conditional,
+            &self.registrar,
+            workspace,
+        ));
+        runner
+    }
+}
+
 /// Discover the skill registry + build its conditional activator in one
 /// step; the composition root registers the SkillTool separately. Returns
 /// the concrete registry so the hot-reload driver can call reload on it;

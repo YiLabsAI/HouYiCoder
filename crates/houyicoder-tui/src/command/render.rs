@@ -277,7 +277,7 @@ pub(crate) fn render_status(
         "Auth token",
         snap.auth_token_source.as_deref().unwrap_or("(none)"),
     ));
-    s.push_str(&field("Anthropic base URL", &snap.base_url));
+    s.push_str(&field("Base URL", &snap.base_url));
     s.push_str(&field("Model", &snap.model));
     s.push_str(&field("sandbox", sandbox));
     s.push_str(&field("Setting sources", &snap.setting_sources));
