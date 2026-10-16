@@ -89,7 +89,7 @@ fn test_cursor_across_front_drain() {
         app.sessions
             .current
             .transcript
-            .drain_front_to_budget(total - freed, Some(2)),
+            .drain_front_to_budget(total - freed),
         1,
         "the drain takes the first entry alone"
     );

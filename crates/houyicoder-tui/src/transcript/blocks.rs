@@ -52,6 +52,11 @@ pub(crate) struct Block {
     /// of the frame that produced it: an older-row read matches its overlap
     /// against those identities, and the visible list takes both together.
     pub rows: NamedRows,
+    /// How many rows lead these rows standing in for frames the window no
+    /// longer holds. They sit here because the rows keep their line positions
+    /// with them, but the log holds no row of its own to match: a read that
+    /// finds where the view begins in the log starts below them.
+    pub stand_in_rows: usize,
     pub revision: u64,
     pub checkpoint: TurnCheckpoint,
 }

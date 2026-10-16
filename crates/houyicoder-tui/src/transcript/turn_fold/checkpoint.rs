@@ -176,8 +176,16 @@ impl TurnCheckpoint {
     }
     /// Whether the window ends inside a turn: its frames opened one that no
     /// frame closed.
-    pub(super) fn is_open(&self) -> bool {
+    pub(crate) fn is_open(&self) -> bool {
         self.opened_at.is_some()
+    }
+
+    /// The frame that opened the open turn. A read that starts after this
+    /// frame reads the turn's later part alone, so the row standing in for the
+    /// part it cannot show takes this frame's identity: the same opening names
+    /// the same row however many times the window is derived.
+    pub(crate) fn opened_at(&self) -> Option<&RowId> {
+        self.opened_at.as_ref()
     }
 
     /// Open a turn at the frame with this identity, with no facts yet.

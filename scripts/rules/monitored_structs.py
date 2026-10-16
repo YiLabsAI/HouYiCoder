@@ -202,8 +202,12 @@ ACTIVE_OWNERS = {
         # raised with no frame behind them, and revision. The raise count is
         # here because it names those rows: their names must stay past every
         # frame position for the life of the list, and a name reused across
-        # rebuilds would answer an anchor with a row it does not mean.
-        "fields": 13,
+        # rebuilds would answer an anchor with a row it does not mean. The
+        # front checkpoint is here because it is the turn state of the oldest
+        # resident frame, which only the drain advances: held apart from the
+        # frame log, a front that moved without its turn state would summarize
+        # the wrong turn and orphan a result whose call had left.
+        "fields": 14,
     },
     "crates/houyicoder-tui/src/transcript/history_state.rs:HistoryReads": {
         # The pending-read record, the workers holding a slot, the generation that invalidates them, and the retry deadline a failed read sets.

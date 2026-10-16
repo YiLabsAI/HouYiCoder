@@ -107,6 +107,12 @@ fn user_frame(text: &str) -> TranscriptFrame {
     )))
 }
 
+fn agent_frame(text: &str) -> TranscriptFrame {
+    TranscriptFrame::Session(SessionUpdate::AgentMessageChunk(ContentChunk::new(
+        ContentBlock::Text { text: text.into() },
+    )))
+}
+
 /// The resident byte total follows the frames through a push and a drain,
 /// and the absolute coordinates survive: the window start advances past
 /// the drained frames without renumbering the ones it kept.
@@ -125,8 +131,8 @@ fn test_resident_bytes_track_drain() {
         .map(|sf| sf.estimated_bytes() as u64)
         .sum();
     // A budget below the total but above what one frame holds drops the
-    // oldest frames until the total fits, and stops at the kept front.
-    let dropped = t.drain_front_to_budget(total - freed, Some(3));
+    // oldest frames until the total fits.
+    let dropped = t.drain_front_to_budget(total - freed);
     assert_eq!(dropped, 2, "the drain takes the frames the budget needs");
     assert_eq!(t.frame_window_start(), 2);
     assert_eq!(t.abs_frame_count(), 5, "draining does not renumber");
@@ -138,38 +144,58 @@ fn test_resident_bytes_track_drain() {
     );
 }
 
-/// The drain stops at the kept front: a budget far below the total cannot
-/// take the frames the caller protects.
-#[test]
-fn test_drain_keeps_protected() {
-    let mut t = Transcript::default();
-    for i in 0..5 {
-        t.push_frame(user_frame(&format!("m{i}")));
-    }
-    let dropped = t.drain_front_to_budget(1, Some(3));
-    assert_eq!(dropped, 3, "the drain takes every frame below the front");
-    assert_eq!(t.frame_window_start(), 3);
-    assert_eq!(t.frame_count(), 2, "the kept frames stay resident");
-}
-
-/// With no boundary the drain takes any frame but the newest, so a log that
-/// holds no frame to protect still reaches its budget. The newest frame
-/// stays even when it alone exceeds the budget: a resident log drained empty
-/// has nothing left to render.
+/// The drain takes any frame but the newest, so a log that holds no frame to
+/// protect still reaches its budget. The newest frame stays even when it alone
+/// exceeds the budget: a resident log drained empty has nothing left to
+/// render.
 #[test]
 fn test_drain_without_boundary() {
     let mut t = Transcript::default();
     for i in 0..5 {
         t.push_frame(user_frame(&format!("m{i}")));
     }
-    let dropped = t.drain_front_to_budget(1, None);
+    let dropped = t.drain_front_to_budget(1);
     assert_eq!(dropped, 4, "the drain takes every frame but the newest");
     assert_eq!(t.frame_count(), 1, "the newest frame stays resident");
     assert_eq!(t.abs_frame_count(), 5, "draining does not renumber");
     assert_eq!(
-        t.drain_front_to_budget(1, None),
+        t.drain_front_to_budget(1),
         0,
         "a lone frame above the budget is not drained away"
+    );
+}
+
+/// The drain carries the turn its frames belonged to: a read that starts at
+/// the new front opens inside that turn and cannot reach the frame that opened
+/// it, so the state the drain left is the only record of it. A log whose front
+/// is zero carries nothing, and the log itself holds the turn's opening.
+#[test]
+fn test_drain_carries_open_turn() {
+    let mut t = Transcript::default();
+    t.push_frame(user_frame("go"));
+    t.push_frame(agent_frame("first answer"));
+    t.push_frame(agent_frame("second answer"));
+    assert!(
+        t.front_checkpoint().is_none(),
+        "a log nothing was drained from carries no state"
+    );
+    let freed: u64 = t.frames()[..2]
+        .iter()
+        .map(|sf| sf.estimated_bytes() as u64)
+        .sum();
+    assert_eq!(
+        t.drain_front_to_budget(t.resident_bytes() - freed),
+        2,
+        "the budget takes the opening frame and the answer that followed it"
+    );
+    let state = t
+        .front_checkpoint()
+        .expect("the drained frames leave the turn's state behind");
+    assert!(state.is_open(), "the turn they opened is still running");
+    assert_eq!(
+        state.opened_at(),
+        Some(&RowId::local(0)),
+        "the state names the frame that opened the turn"
     );
 }
 

@@ -64,6 +64,8 @@ use std::mem::take;
 pub use turn_fold::bounds_turn_in;
 pub(crate) use turn_fold::delivered_marker_at;
 pub(crate) use turn_fold::is_user_frame;
+pub(crate) use turn_fold::starts_inside_turn;
+pub(crate) use turn_fold::turn_state_from_frames_at;
 
 /// One frame of the turn stream, preserved in arrival order so the
 /// transcript rebuild keeps the time-ordered interleave of session/update

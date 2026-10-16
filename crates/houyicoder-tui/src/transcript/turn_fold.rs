@@ -77,6 +77,15 @@ fn opens_turn<F: AsRef<TranscriptFrame>>(frames: &[F], at: usize) -> bool {
         && !message_marked_delivered(frames, at)
 }
 
+/// Whether a read beginning at the position begins inside a turn rather than
+/// opening one: its frame belongs to a turn that started below it, which is
+/// how a window whose first frame is that one comes to derive rows of a turn
+/// it does not hold the beginning of. A position holding no frame begins
+/// inside nothing.
+pub(crate) fn starts_inside_turn<F: AsRef<TranscriptFrame>>(frames: &[F], at: usize) -> bool {
+    frames.get(at).is_some() && !opens_turn(frames, at)
+}
+
 /// Whether a run of frames holds where a turn begins or ends, read in log
 /// order: a message that opened a turn, or the record that closed one. A
 /// message the log marks as delivered into the turn already running is
@@ -219,6 +228,27 @@ impl RowNames<'_> {
     }
 }
 
+/// The state the turn reached by the frame position at, read from a log whose
+/// first frame sits at abs_base. The entry state names the turn a previous
+/// read ended inside; the frames between it and at advance that state, so a
+/// read handed the result continues the same turn rather than folding it
+/// again. At the log's own front there is nothing to advance over, and the
+/// entry state is the answer.
+pub(crate) fn turn_state_from_frames_at(
+    log: &[SequencedFrame],
+    abs_base: usize,
+    entry: Option<TurnCheckpoint>,
+    at: usize,
+) -> Option<TurnCheckpoint> {
+    let at = at.saturating_sub(abs_base).min(log.len());
+    if at == 0 {
+        return entry;
+    }
+    let mut fold = TurnFold::facts(log, 0..at, RowNames::Live { log, abs_base }, entry);
+    fold.advance(at);
+    Some(fold.checkpoint())
+}
+
 /// The facts one turn accumulates for its summary row, gathered as the
 /// fold walks that turn's frames. The row is emitted where the turn
 /// ends, so the summary lands under the answer it describes.
@@ -240,6 +270,11 @@ pub(super) struct TurnFold<'a, F: AsRef<TranscriptFrame>> {
     /// The open turn's facts, including those the window that opened it
     /// handed on.
     state: TurnCheckpoint,
+    /// Whether the fold builds rows. A fold that only advances the state
+    /// counts the reasoning text without holding it and writes no summary
+    /// row, so the state it hands on stays bounded by the turn's facts rather
+    /// than by the text its frames carried.
+    renders: bool,
 }
 
 impl<'a, F: AsRef<TranscriptFrame>> TurnFold<'a, F> {
@@ -255,18 +290,60 @@ impl<'a, F: AsRef<TranscriptFrame>> TurnFold<'a, F> {
         names: RowNames<'a>,
         carried: Option<TurnCheckpoint>,
     ) -> Self {
+        Self::build(log, window, names, carried, true)
+    }
+
+    /// Fold a window of the log for the facts alone, continuing the turn a
+    /// previous read ended inside when carried state names one. No row is
+    /// written and the reasoning text stays counted rather than held: the
+    /// caller wants the state the window ends with, which is what a read that
+    /// renders none of these frames still has to carry forward.
+    fn facts(
+        log: &'a [F],
+        window: Range<usize>,
+        names: RowNames<'a>,
+        carried: Option<TurnCheckpoint>,
+    ) -> Self {
+        Self::build(log, window, names, carried, false)
+    }
+
+    /// Build the fold over a window of the log. renders decides whether the
+    /// fold holds the reasoning its frames carry, and it is settled before the
+    /// read-back below: the text that read-back gathers belongs to the turn's
+    /// summary, so a fold that builds rows holds it and a fold of the facts
+    /// alone counts it instead.
+    fn build(
+        log: &'a [F],
+        window: Range<usize>,
+        names: RowNames<'a>,
+        carried: Option<TurnCheckpoint>,
+        renders: bool,
+    ) -> Self {
         let mut fold = Self {
             log,
             names,
             ends_at: window.end,
             reasoning: String::new(),
             state: TurnCheckpoint::default(),
+            renders,
         };
         match carried {
             Some(state) => fold.state = state,
             None => fold.absorb_ahead(window.start),
         }
         fold
+    }
+
+    /// Advance the state over the frames the log holds before the position to,
+    /// following the same boundaries the walk does, so a read handed the result
+    /// continues the turn those frames left open. Nothing renders here.
+    fn advance(&mut self, to: usize) {
+        let to = to.min(self.log.len());
+        for at in 0..to {
+            let frame = self.log[at].as_ref();
+            self.note(at, frame);
+            self.settle_call(frame);
+        }
     }
 
     /// Fold what the open turn did before the window, so the row summarizes the
@@ -282,25 +359,36 @@ impl<'a, F: AsRef<TranscriptFrame>> TurnFold<'a, F> {
             return;
         };
         self.state.open(self.names.name_at(opened_at));
-        let log = self.log;
-        for (offset, frame) in log[opened_at + 1..start].iter().enumerate() {
+        self.gather_range(opened_at + 1, start);
+    }
+
+    /// Fold the facts of the frames in from..to onto the open turn, with no
+    /// rows of their own. The range holds no turn boundary: a caller either
+    /// searched back for the frame that opened the turn, and a record between
+    /// the two would have ended the search, or walked the frames through note,
+    /// which folds the boundaries as it passes them.
+    fn gather_range(&mut self, from: usize, to: usize) {
+        for (offset, frame) in self.log[from..to].iter().enumerate() {
             let frame = frame.as_ref();
             if moves_turn_end(frame) {
-                self.state
-                    .moved_to(self.names.name_at(opened_at + 1 + offset));
+                self.state.moved_to(self.names.name_at(from + offset));
             }
-            if let TranscriptFrame::Session(SessionUpdate::ToolCallUpdate(upd)) = frame
-                && upd.fields.raw_output.is_some()
-            {
-                // A call this read-back sees answered leaves the state, as it
-                // does in the walk: the names are kept for a window that
-                // renders a result with the call's own frames out of view, and
-                // the bound on them is spent by the calls still awaiting one.
-                // The close runs where the result frame sits, so the calls
-                // this read-back walks afterwards find the room it freed.
-                self.state.pending_calls.close(&upd.tool_call_id.0);
-            }
+            self.settle_call(frame);
             self.gather(frame);
+        }
+    }
+
+    /// Forget a call once the folded frames hold its result. A read that renders
+    /// rows closes the call where it lays the result row out; a read of the
+    /// facts alone has no such moment, so it closes the call at the result
+    /// frame and frees the room the calls folded after it need. Both ways the
+    /// name stays while a window can still render a result whose call's own
+    /// frames are out of view.
+    fn settle_call(&mut self, frame: &TranscriptFrame) {
+        if let TranscriptFrame::Session(SessionUpdate::ToolCallUpdate(upd)) = frame
+            && upd.fields.raw_output.is_some()
+        {
+            self.state.pending_calls.close(&upd.tool_call_id.0);
         }
     }
 
@@ -386,7 +474,9 @@ impl<'a, F: AsRef<TranscriptFrame>> TurnFold<'a, F> {
             TranscriptFrame::Session(SessionUpdate::AgentThoughtChunk(chunk)) => {
                 let text = chunk_text(chunk);
                 self.state.reasoning_chars += text.chars().count() as u64;
-                self.reasoning.push_str(text);
+                if self.renders {
+                    self.reasoning.push_str(text);
+                }
             }
             TranscriptFrame::Session(SessionUpdate::ToolCall(call)) => {
                 // Every call's name is kept for the window that renders its
@@ -409,6 +499,10 @@ impl<'a, F: AsRef<TranscriptFrame>> TurnFold<'a, F> {
     /// renders no row whose expand affordance would lead to nothing.
     pub(super) fn close(&mut self, ms: Option<u64>) -> Option<(TranscriptLine, RowId)> {
         if !self.state.is_open() {
+            return None;
+        }
+        if !self.renders {
+            self.state.close();
             return None;
         }
         // An open turn always names a newest fact: opening one names the frame

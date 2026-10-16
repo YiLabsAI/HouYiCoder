@@ -16,6 +16,7 @@ use crate::scroll::bound_scrollback;
 use crate::state::transcript::blocks::TranscriptBlocks;
 use crate::state::{App, CurrentTurnBoundary};
 use crate::transcript::rows::NamedRows;
+use crate::transcript::turn_fold::{TurnCheckpoint, turn_state_from_frames_at};
 use crate::transcript::{FrontendRow, SequencedFrame, TranscriptFrame};
 use std::slice::Iter;
 
@@ -28,9 +29,14 @@ pub struct Transcript {
     frame_window_start: usize,
     /// Ceiling on the resident frames' estimated bytes. The rebuild drains the
     /// oldest frames until the resident total falls to it, as far as the frames
-    /// it must keep allow: the newest frame always stays, and a turn whose own
-    /// bytes exceed the budget holds above it until that turn ends.
+    /// it must keep allow: the newest frame always stays.
     resident_byte_budget: usize,
+    /// The facts of the turn a drained frame belonged to, carried forward as
+    /// the drain drops its frames. A read of the frames that survive opens
+    /// inside that turn and cannot reach its opening, so the state the drain
+    /// left is what keeps the turn's summary row and the calls awaiting their
+    /// results. None at a log whose front is zero, where nothing was dropped.
+    front_checkpoint: Option<TurnCheckpoint>,
     /// Estimated bytes of the resident frames, maintained on push and drain.
     resident_bytes: Cell<u64>,
     blocks: TranscriptBlocks,
@@ -97,6 +103,7 @@ impl Default for Transcript {
             frames: Vec::new(),
             frame_window_start: 0,
             resident_byte_budget: RESIDENT_BYTE_BUDGET,
+            front_checkpoint: None,
             resident_bytes: Cell::new(0),
             blocks: TranscriptBlocks::default(),
             rows: NamedRows::default(),
@@ -183,23 +190,16 @@ impl Transcript {
     }
 
     /// Drain the oldest resident frames until their estimated bytes fall to
-    /// the budget. A frame at or after keep_from stays resident; with no
-    /// boundary the drain takes any frame but the newest. The drain stops at
-    /// the frames it may not take, so a kept suffix that alone exceeds the
-    /// budget leaves the resident total above it. Returns how many frames were
-    /// dropped. The bytes are summed in the same pass that drops the frames, so
-    /// the counter cannot drift from the log.
-    pub(crate) fn drain_front_to_budget(&mut self, budget: u64, keep_from: Option<usize>) -> usize {
-        let below = match keep_from {
-            Some(keep_from) => keep_from
-                .saturating_sub(self.frame_window_start)
-                .min(self.frames.len()),
-            None => self.frames.len(),
-        };
-        // The newest frame stays resident in every case: a log drained empty
-        // has nothing left to render, and one frame above the budget cannot be
-        // brought under it.
-        let drainable = below.min(self.frames.len().saturating_sub(1));
+    /// the budget. The newest frame stays resident in every case: a log drained
+    /// empty has nothing left to render, and one frame above the budget cannot
+    /// be brought under it. The drain takes a frame from any turn, the active
+    /// one included, so a turn whose own frames exceed the budget is bounded
+    /// too; the state of the turn it leaves open advances with the frames that
+    /// go, so a read of what survives still knows the turn it opens inside.
+    /// Returns how many frames were dropped. The bytes are summed in the same
+    /// pass that drops the frames, so the counter cannot drift from the log.
+    pub(crate) fn drain_front_to_budget(&mut self, budget: u64) -> usize {
+        let drainable = self.frames.len().saturating_sub(1);
         let mut freed = 0u64;
         let mut k = 0usize;
         while k < drainable && self.resident_bytes.get().saturating_sub(freed) > budget {
@@ -207,12 +207,29 @@ impl Transcript {
             k += 1;
         }
         if k > 0 {
+            let front = self.frame_window_start;
+            let state = turn_state_from_frames_at(
+                &self.frames,
+                front,
+                self.front_checkpoint.take(),
+                front + k,
+            );
             self.frames.drain(..k);
             self.frame_window_start += k;
             self.resident_bytes
                 .set(self.resident_bytes.get().saturating_sub(freed));
+            self.front_checkpoint = state;
         }
         k
+    }
+
+    /// The state the turn reached by the oldest resident frame. A read whose
+    /// window opens at the front starts inside that turn and cannot reach its
+    /// opening, so this is what it folds from. None at a log whose front is
+    /// zero: no frame was dropped, so the frames the log still holds carry the
+    /// turn's facts themselves.
+    pub(crate) fn front_checkpoint(&self) -> Option<&TurnCheckpoint> {
+        self.front_checkpoint.as_ref()
     }
 
     /// Drop the trailing Echo frame when the server's user message for the same
@@ -364,10 +381,14 @@ impl Transcript {
     /// The first n rows of the visible list, oldest first, with the identity
     /// an older-row read matches its overlap against. Walks the loaded disk
     /// rows then the blocks in order — the same assembly a rebuild flattens —
-    /// so the rows returned are the rows the view starts at. The assembly is
-    /// exact right after a rebuild: the scrollback cap cuts the list's head
-    /// only while the reader follows the tail, where no read is dispatched,
-    /// and the first read's own dispatch rebuilds before it captures.
+    /// so the rows returned are the rows the view starts at. A block leading
+    /// with a row standing in for frames the window no longer holds passes
+    /// those rows over: the log holds no row of its own for them, and a read
+    /// anchored on one would find the view's beginning nowhere in the log. The
+    /// assembly is exact right after a rebuild: the scrollback cap cuts the
+    /// list's head only while the reader follows the tail, where no read is
+    /// dispatched, and the first read's own dispatch rebuilds before it
+    /// captures.
     pub(crate) fn front_rows(&self, n: usize) -> Vec<FrontRow> {
         let mut rows: Vec<FrontRow> = Vec::new();
         let add = |line: &TranscriptLine, id: &RowId, rows: &mut Vec<FrontRow>| {
@@ -382,7 +403,8 @@ impl Transcript {
             add(line, id, &mut rows);
         }
         for block in self.blocks.blocks() {
-            for (line, id) in block.rows.lines().iter().zip(block.rows.ids()) {
+            let rows_of_block = block.rows.lines().iter().zip(block.rows.ids());
+            for (line, id) in rows_of_block.skip(block.stand_in_rows) {
                 add(line, id, &mut rows);
             }
         }
@@ -481,6 +503,7 @@ impl Transcript {
         self.rows.clear();
         self.frames.clear();
         self.frame_window_start = 0;
+        self.front_checkpoint = None;
         self.resident_bytes.set(0);
         self.fold_groups.clear();
         self.disk = NamedRows::default();

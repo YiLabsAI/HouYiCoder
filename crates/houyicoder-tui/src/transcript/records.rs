@@ -100,6 +100,13 @@ pub struct ContextView {
 /// than as a fresh utterance in the conversation.
 pub const INTERRUPTED_NOTICE: &str = "  ⎿  Interrupted · What should Houyi do instead?";
 
+/// The row standing in for the part of a turn the resident frames no longer
+/// hold. A window opening inside a turn whose opening frame was drained would
+/// begin mid-turn with nothing saying why; the earlier part is in the session
+/// log, so the row sends the reader there.
+pub const TURN_CONTENT_OUT_OF_VIEW: &str =
+    "earlier content of this turn is out of view — scroll up to load";
+
 /// One line in the work transcript (action log, not chat bubbles).
 #[derive(Debug, Clone)]
 pub enum TranscriptLine {

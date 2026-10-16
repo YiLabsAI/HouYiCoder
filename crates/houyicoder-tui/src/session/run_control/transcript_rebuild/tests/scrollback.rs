@@ -1,5 +1,6 @@
 use super::*;
 use crate::fold::compute_fold_groups;
+use crate::records::TURN_CONTENT_OUT_OF_VIEW;
 use crate::scroll::VIEWABLE_SCROLLBACK_CAP;
 use crate::transcript::rows::NamedRows;
 
@@ -565,6 +566,79 @@ fn test_scrollback_without_rows() {
 
     assert_eq!(app.transcript().disk_row_count(), 0);
     assert_eq!(app.transcript().disk_front(), DiskFront::Unloaded);
+}
+
+/// A scroll back under a window that opens inside a turn still reads its
+/// older rows. Such a window leads with the row standing in for the part of
+/// the turn it cannot show, and the log holds no such row: a read that anchors
+/// the visible front on it finds nothing to cut against and reports the log's
+/// end, which stops every later read of that view.
+#[test]
+fn test_scrollback_reads_inside_turn() {
+    let mut app = fresh_app();
+    app.ui.navigation.screen = Screen::Working;
+    let text = "x".repeat(200);
+    app.transcript_mut().push_frame(user_msg("opening"));
+    for i in 0..120 {
+        app.transcript_mut()
+            .push_frame(agent_msg(&format!("{i} {text}")));
+    }
+    // The log's rows: what a read of the whole log derives, which is the view
+    // before any drain took a frame from it.
+    app.transcript_mut().set_resident_byte_budget(1 << 20);
+    app.rebuild_transcript();
+    let mut log_rows: Vec<TranscriptLine> = (0..5)
+        .map(|i| TranscriptLine::User(format!("older {i}")))
+        .collect();
+    log_rows.extend(app.transcript().iter().cloned());
+    // Bound the window below the size of the turn: the drain takes the
+    // opening frame and the rows that followed it, so the view opens on a
+    // frame of the turn rather than on the frame that opened it.
+    app.transcript_mut().set_resident_byte_budget(4096);
+    app.rebuild_transcript();
+    app.rebuild_transcript();
+    assert!(
+        app.transcript().frame_window_start() > 1,
+        "the drain takes the frames that opened the turn: {}",
+        app.transcript().frame_window_start()
+    );
+    assert!(
+        matches!(
+            app.transcript().lines().first(),
+            Some(TranscriptLine::System(t)) if t.as_str() == TURN_CONTENT_OUT_OF_VIEW
+        ),
+        "the view opens on the row standing for the drained beginning: {:?}",
+        app.transcript().lines().first()
+    );
+    app.sessions.persistence.snapshot = Some(log_source(vec![log_window(log_rows, 100, 4096)]));
+
+    draw_transcript(&mut app);
+    app.park_scroll_at(0);
+    app.load_older_frames();
+    pump_history_read_blocking(&mut app, Duration::from_secs(5));
+
+    assert_eq!(
+        app.transcript().disk_front(),
+        DiskFront::At(100),
+        "the front names where the loaded rows begin rather than latching closed"
+    );
+    assert!(
+        matches!(app.transcript().first(), Some(TranscriptLine::User(t)) if t == "older 0"),
+        "the log's oldest rows lead the view: {:?}",
+        app.transcript().first()
+    );
+    assert!(
+        app.transcript()
+            .iter()
+            .any(|l| matches!(l, TranscriptLine::User(t) if t == "opening")),
+        "the row that opened the turn is back on view"
+    );
+    assert!(
+        !app.transcript().iter().any(
+            |l| matches!(l, TranscriptLine::System(t) if t.as_str() == TURN_CONTENT_OUT_OF_VIEW)
+        ),
+        "the row saying the turn's content left memory gives way to the content itself"
+    );
 }
 
 /// A read that fails does not latch the front closed the way a true end does:

@@ -9,6 +9,7 @@ use std::ops::Range;
 use super::{MAX_REBUILD_FRAMES, PREPEND_BATCH};
 use crate::fold::last_turn_boundary;
 use crate::fold::{compute_fold_groups, fold_groups_in};
+use crate::records::{TURN_CONTENT_OUT_OF_VIEW, TranscriptLine};
 use crate::row_id::RowId;
 use crate::scroll::VIEWABLE_SCROLLBACK_CAP;
 use crate::state::App;
@@ -16,7 +17,11 @@ use crate::state::transcript::blocks::{
     Block, BlockAnchor, BlockId, TranscriptChange, TranscriptChangeSet,
 };
 use crate::transcript::TranscriptFrame;
-use crate::transcript::{TurnCheckpoint, delivered_marker_at, transcript_from_frames_at};
+use crate::transcript::rows::NamedRows;
+use crate::transcript::{
+    TurnCheckpoint, delivered_marker_at, starts_inside_turn, transcript_from_frames_at,
+    turn_state_from_frames_at,
+};
 use houyicoder_protocol::acpx::AcpxMethod;
 use houyicoder_protocol::frontend::permission::PermissionDecisionEntry;
 use houyicoder_protocol::frontend::session_update::SessionUpdate;
@@ -92,7 +97,7 @@ impl App {
         // Every resident frame is scanned before the drain drops any of them,
         // so a drained frame's verdicts are already in the audit cache.
         self.accumulate_wire_state();
-        self.enforce_frame_byte_budget(turn_start);
+        self.enforce_frame_byte_budget();
         // A drain in this pass moved the resident front past the frame the
         // loaded rows were cut at, so the rows leave in the same pass: the
         // frames between the two fronts are gone, and rows above a front that
@@ -120,6 +125,28 @@ impl App {
             Some(sf) => RowId::of(sf.as_ref(), sf.event_id.as_ref(), abs as u64),
             None => RowId::local(abs as u64),
         }
+    }
+
+    /// The state the window's first range opens inside, and the row standing in
+    /// for the part of its turn the window cannot show. A turn already open at
+    /// the range's first frame was opened by a frame below it, so the frames
+    /// between them are ones that pass does not derive, and the fold continues
+    /// the turn instead of starting it there. Both come from the state the
+    /// drain carried, so a window the drain has taken no frame from reads its
+    /// own frames and stands in for nothing: every frame below its front is
+    /// still in memory.
+    fn window_entry(
+        &self,
+        ranges: &[Range<usize>],
+        base: usize,
+    ) -> (Option<TurnCheckpoint>, Option<RowId>) {
+        let entry = ranges
+            .first()
+            .and_then(|range| self.turn_state_at(range.start));
+        let cut_row = entry
+            .as_ref()
+            .and_then(|state| self.cut_row(state, ranges, base));
+        (entry, cut_row)
     }
 
     /// Walk the target ranges against the current block list, matching each by
@@ -157,11 +184,12 @@ impl App {
                 clear_all = true;
             }
         }
+        let (entry, cut_row) = self.window_entry(ranges, base);
         // The state the range before the current one ended a turn with, which
         // the current range's fold continues from. The ranges run in log order
         // and meet at their boundary, so the active turn carries the prefix's
         // state rather than folding the prefix again to find it.
-        let mut carried: Option<TurnCheckpoint> = None;
+        let mut carried: Option<TurnCheckpoint> = entry;
         for (ri, range) in ranges.iter().enumerate() {
             let is_active = has_active && ri + 1 == ranges.len();
             // The frozen prefix is a single reusable slot whose identity
@@ -180,6 +208,14 @@ impl App {
             };
             let slot = blocks.get(cur_idx);
             let matched = slot.is_some_and(|b| b.id == id);
+            // The window's first range marks where its content was cut: a
+            // range starting inside a turn whose opening frame the window no
+            // longer holds derives rows that begin mid-turn, and the row says
+            // so. The later ranges start where a turn opens, so the row is
+            // theirs to say nothing about. The count reaches the block, since
+            // whoever reuses or reads those rows has to know the first of them
+            // is not a row the log holds.
+            let stand_in = usize::from(ri == 0 && cut_row.is_some());
             // A range's rows come from its own frames and from the frame that
             // follows its last one, which decides how that message reads, so
             // reuse needs the id, the range, and that frame to be the ones the
@@ -198,7 +234,9 @@ impl App {
                 .and_then(|at| delivered_marker_at(self.transcript().frames(), at))
                 .map(|at| self.frame_row(base + at, base));
             let unchanged = slot.is_some_and(|b| {
-                b.frame_range == *range && b.checkpoint.delivered_marker() == marker.as_ref()
+                b.frame_range == *range
+                    && b.stand_in_rows == stand_in
+                    && b.checkpoint.delivered_marker() == marker.as_ref()
             });
             if matched && !is_active && unchanged {
                 // Unchanged frozen prefix: keep its lines and fold groups
@@ -209,19 +247,33 @@ impl App {
                 cur_idx += 1;
                 continue;
             }
-            let (rows, checkpoint) = transcript_from_frames_at(
+            let (mut rows, checkpoint) = transcript_from_frames_at(
                 self.sessions.current.transcript.frames(),
                 base,
                 range.clone(),
                 newest_open && is_active,
                 carried.take(),
             );
+            // The window's first range marks where its content was cut: a
+            // range starting inside a turn whose opening frame the window no
+            // longer holds derives rows that begin mid-turn, and the row says
+            // so. The later ranges start where a turn opens, so the row is
+            // theirs to say nothing about.
+            if stand_in > 0
+                && let Some(opening) = &cut_row
+            {
+                rows.prepend(NamedRows::from_parts(
+                    vec![TranscriptLine::System(TURN_CONTENT_OUT_OF_VIEW.to_string())],
+                    vec![opening.clone()],
+                ));
+            }
             let revision = slot.map(|b| b.revision.wrapping_add(1)).unwrap_or(0);
             carried = Some(checkpoint.clone());
             let block = Block {
                 id,
                 frame_range: range.clone(),
                 rows,
+                stand_in_rows: stand_in,
                 revision,
                 checkpoint,
             };
@@ -343,25 +395,77 @@ impl App {
     }
 
     /// Drain the oldest resident frames until their estimated bytes fall to
-    /// the budget. The rebuild passes the active turn's start, so the user frame
-    /// that opened the turn stays in view while its answer streams and a turn
-    /// whose own bytes exceed the budget holds above it until it ends. A start
-    /// at the resident front means the window holds no such frame, and the
-    /// budget then drains the log down to its newest frame. Frames below the
-    /// kept front leave the viewable window: the durable log still holds the
-    /// server frames, while rows the frontend raised live only in this log.
-    fn enforce_frame_byte_budget(&mut self, turn_start: usize) {
+    /// the budget, the frames of the active turn included: a turn whose own
+    /// bytes exceed the budget would otherwise hold the whole log resident
+    /// until it ends. Frames below the front leave the viewable window, where
+    /// the row the window opens with marks their absence; the durable log
+    /// still holds the server frames, while rows the frontend raised live only
+    /// in this log.
+    fn enforce_frame_byte_budget(&mut self) {
         let budget = self.sessions.current.transcript.resident_byte_budget() as u64;
         if self.sessions.current.transcript.resident_bytes() <= budget {
             return;
         }
-        let keep_from = if turn_start > self.sessions.current.transcript.frame_window_start() {
-            Some(turn_start - 1)
-        } else {
-            None
-        };
-        let transcript = &mut self.sessions.current.transcript;
-        transcript.drain_front_to_budget(budget, keep_from);
+        self.sessions
+            .current
+            .transcript
+            .drain_front_to_budget(budget);
+    }
+
+    /// The state the turn reached by the absolute frame position at, for a
+    /// read of a window the drain moved past the frames below it. The state the
+    /// drain carried is where the read starts from, advanced over the resident
+    /// frames the window leaves out.
+    ///
+    /// A log the drain has taken no frame from holds every frame below the
+    /// read, so no state is handed over: the fold reads the turn's beginning
+    /// from the frames below it rather than folding the whole prefix to reach
+    /// the same answer, which would run on every rebuild of a long session.
+    fn turn_state_at(&self, at: usize) -> Option<TurnCheckpoint> {
+        let transcript = &self.sessions.current.transcript;
+        let carried = transcript.front_checkpoint().cloned()?;
+        turn_state_from_frames_at(
+            transcript.frames(),
+            transcript.frame_window_start(),
+            Some(carried),
+            at,
+        )
+    }
+
+    /// The identity of the row standing in for the part of its turn the window
+    /// cannot show, for a window that opens inside a turn. The frame at the
+    /// window front decides it: a turn state reads open whenever the frames
+    /// below the window left a turn running, which includes a window starting
+    /// on the message that opens the next turn — that message ends the turn
+    /// before it, and the window begins where that turn did. A window whose
+    /// first frame carries no turn on holds every row of the turn it shows, so
+    /// no row stands in for anything.
+    ///
+    /// The state is the one the drain carried, so the row is drawn for a part
+    /// of a turn that left memory. The rows the frame cap alone keeps out of
+    /// the window are still in memory and come back by scrolling, which the
+    /// pane's own hints cover.
+    ///
+    /// Rows read back from the log sit above the window, and the part of the
+    /// turn they carry is on view: a row saying that part left memory would be
+    /// false, so none is drawn while they are there.
+    fn cut_row(
+        &self,
+        state: &TurnCheckpoint,
+        ranges: &[Range<usize>],
+        base: usize,
+    ) -> Option<RowId> {
+        if self.transcript().disk_row_count() > 0 {
+            return None;
+        }
+        let opens_inside_turn = ranges
+            .first()
+            .and_then(|range| range.start.checked_sub(base))
+            .is_some_and(|at| starts_inside_turn(self.transcript().frames(), at));
+        if !(state.is_open() && opens_inside_turn) {
+            return None;
+        }
+        state.opened_at().cloned()
     }
 
     /// Load older history when scrollback reaches the current boundary,
@@ -406,12 +510,17 @@ impl App {
         // the frontend raised among them rides the batch's own fold. A batch
         // that yields no lines lowered the boundary above all the same, so the
         // walk reads further back next time; there are no rows to rebuild.
+        // The batch enters on the state the turn reached by its first frame:
+        // a batch that reaches the resident front opens inside the turn the
+        // drain carried past its frames, so the rows it derives belong to that
+        // turn rather than starting one the reader's view would have to invent.
+        let entry = self.turn_state_at(batch_start);
         let prepended = transcript_from_frames_at(
             self.sessions.current.transcript.frames(),
             self.sessions.current.transcript.frame_window_start(),
             batch_start..from,
             self.sessions.current.run.is_active(),
-            None,
+            entry,
         )
         .0
         .len();

@@ -19,6 +19,7 @@ fn block(id: u64, lines: Vec<TranscriptLine>) -> Block {
         id: BlockId(BlockAnchor::Local(id)),
         frame_range: 0..1,
         rows: NamedRows::from_lines(lines),
+        stand_in_rows: 0,
         revision: 0,
         checkpoint: TurnCheckpoint::default(),
     }

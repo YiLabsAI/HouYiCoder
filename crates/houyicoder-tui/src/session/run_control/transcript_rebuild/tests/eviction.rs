@@ -1,4 +1,5 @@
 use super::*;
+use crate::records::TURN_CONTENT_OUT_OF_VIEW;
 use crate::scroll::VIEWABLE_SCROLLBACK_CAP;
 use crate::transcript::FrontendRow;
 
@@ -229,10 +230,10 @@ fn test_evicts_under_byte_budget() {
     );
 }
 
-/// No block names a frame below the resident front, and the drain keeps the
-/// row that opened the active turn: the frames it reclaims belong to turns the
-/// window has moved past, so every rendered row still derives from a resident
-/// frame.
+/// No block names a frame below the resident front, and no rendered row
+/// derives from one: the frames the drain reclaims belong to turns the window
+/// has moved past, so the settled view holds only what the resident window
+/// covers.
 #[test]
 fn test_eviction_stops_at_front() {
     let mut app = fresh_app();
@@ -255,15 +256,11 @@ fn test_eviction_stops_at_front() {
     assert!(
         app.transcript()
             .iter()
-            .any(|l| matches!(l, TranscriptLine::User(t) if t == "turn 3")),
-        "the row that opened the active turn still renders"
-    );
-    assert!(
-        app.transcript()
-            .iter()
             .any(|l| matches!(l, TranscriptLine::Agent(t) if t.starts_with("3.299 "))),
         "the tail row renders after the drain"
     );
+    // The pass that drains still renders the frames it reclaimed; the next
+    // rebuild derives the view from the resident window alone.
     app.rebuild_transcript();
     for b in app.transcript().blocks().blocks() {
         assert!(
@@ -272,6 +269,12 @@ fn test_eviction_stops_at_front() {
             b.frame_range
         );
     }
+    assert!(
+        !app.transcript()
+            .iter()
+            .any(|l| matches!(l, TranscriptLine::User(t) if t == "turn 3")),
+        "the settled view derives no row from a drained frame"
+    );
 }
 
 /// A rebuild that drains keeps the verdicts of the frames it reclaims: the
@@ -400,11 +403,11 @@ fn test_scrollback_stops_at_front() {
     );
 }
 
-/// The active turn is what the viewport shows, so the drain keeps it and the
-/// row that opened it. A turn whose own bytes exceed the budget holds above it
-/// until the turn ends; bounding a single turn is a later step.
+/// The active turn is bounded like every other: a turn whose own frames exceed
+/// the budget drains its oldest frames, and the row that opens the view says
+/// where the part the window can no longer show went.
 #[test]
-fn test_active_turn_protected() {
+fn test_drain_bounds_active_turn() {
     let mut app = fresh_app();
     app.ui.navigation.screen = Screen::Working;
     app.transcript_mut().set_resident_byte_budget(1024);
@@ -415,21 +418,133 @@ fn test_active_turn_protected() {
             .push_frame(agent_msg(&format!("{i} {text}")));
     }
     app.rebuild_transcript();
-    assert_eq!(
-        app.transcript().frame_window_start(),
-        0,
-        "the drain keeps the active turn and its opening frame"
+    assert!(
+        app.transcript().frame_window_start() > 0,
+        "the drain bounds the active turn itself"
     );
     assert!(
-        app.transcript().resident_bytes() > app.transcript().resident_byte_budget() as u64,
-        "the active turn's own frames stay resident above the budget"
+        app.transcript().resident_bytes() <= app.transcript().resident_byte_budget() as u64,
+        "the drain reaches the budget"
+    );
+    // The pass that drains still renders the frames it reclaimed; the next
+    // rebuild derives the view from the resident window alone.
+    app.rebuild_transcript();
+    assert!(
+        matches!(
+            app.transcript().lines().first(),
+            Some(TranscriptLine::System(text)) if text.as_str() == TURN_CONTENT_OUT_OF_VIEW
+        ),
+        "the view opens on the row standing for the drained beginning: {:?}",
+        app.transcript().lines().first()
+    );
+    draw_transcript(&mut app);
+    assert!(
+        (0..20).any(|row| transcript_row(&app, row).contains(TURN_CONTENT_OUT_OF_VIEW)),
+        "the pane tells the reader the earlier content of the turn is on disk"
     );
     assert!(
         app.transcript()
             .iter()
-            .any(|l| matches!(l, TranscriptLine::User(t) if t == "opening")),
-        "the opening row still renders"
+            .any(|l| matches!(l, TranscriptLine::Agent(t) if t.starts_with("99 "))),
+        "the newest row still renders"
     );
+}
+
+/// The drain carries what the frames it reclaims said about their turn: the
+/// row that closes the turn still reports the reasoning and the calls that
+/// left the window, so the summary describes the turn rather than the part of
+/// it the window happens to hold.
+#[test]
+fn test_drain_keeps_turn_summary() {
+    let mut app = fresh_app();
+    app.ui.navigation.screen = Screen::Working;
+    app.transcript_mut().set_resident_byte_budget(1024);
+    app.transcript_mut().push_frame(user_msg("opening"));
+    app.transcript_mut()
+        .push_frame(thought_msg(&"t".repeat(300)));
+    app.transcript_mut().push_frame(tool_call("c1", "bash"));
+    app.transcript_mut().push_frame(tool_result("c1"));
+    let text = "x".repeat(200);
+    for i in 0..40 {
+        app.transcript_mut()
+            .push_frame(agent_msg(&format!("{i} {text}")));
+    }
+    app.transcript_mut().push_frame(user_msg("next turn"));
+    app.rebuild_transcript();
+    assert!(
+        app.transcript().frame_window_start() > 4,
+        "the drain takes the frames the turn's facts came from: {}",
+        app.transcript().frame_window_start()
+    );
+    app.rebuild_transcript();
+    let (reasoning, tools) = app
+        .transcript()
+        .lines()
+        .iter()
+        .find_map(|line| match line {
+            TranscriptLine::ThoughtFor {
+                reasoning,
+                tool_summary,
+                ..
+            } => Some((reasoning.clone(), tool_summary.clone())),
+            _ => None,
+        })
+        .expect("the drained turn keeps its summary row");
+    assert!(
+        reasoning
+            .as_deref()
+            .is_some_and(|text| text.contains("300 characters")),
+        "the summary counts the reasoning the drain took: {reasoning:?}"
+    );
+    assert_eq!(
+        tools.as_deref(),
+        Some("ran 1 bash"),
+        "the summary counts the call the drain took"
+    );
+}
+
+/// A result whose own call frame left the window still names the tool it
+/// answers: the call is what tells a result apart from a line of its own, and
+/// the state the drain carried is the only place it is still named.
+#[test]
+fn test_result_names_drained_call() {
+    let mut app = fresh_app();
+    app.ui.navigation.screen = Screen::Working;
+    app.transcript_mut().set_resident_byte_budget(1024);
+    app.transcript_mut().push_frame(user_msg("opening"));
+    app.transcript_mut().push_frame(tool_call("c1", "bash"));
+    let text = "x".repeat(200);
+    for i in 0..40 {
+        app.transcript_mut()
+            .push_frame(agent_msg(&format!("{i} {text}")));
+    }
+    app.transcript_mut().push_frame(tool_result("c1"));
+    app.rebuild_transcript();
+    assert!(
+        app.transcript().frame_window_start() > 1,
+        "the drain takes the call's own frame: {}",
+        app.transcript().frame_window_start()
+    );
+    app.rebuild_transcript();
+    let (name, tool) = app
+        .transcript()
+        .lines()
+        .iter()
+        .find_map(|line| match line {
+            TranscriptLine::Tool {
+                call_id,
+                name,
+                tool,
+                ..
+            } if call_id == "c1" => Some((name.clone(), tool.clone())),
+            _ => None,
+        })
+        .expect("the result renders under the row standing for its call");
+    assert_eq!(
+        tool, "bash",
+        "the row names the tool the drained call was for, not a bare call"
+    );
+    assert_ne!(name, "call", "the row is not the unnamed form");
 }
 
 /// A scrollback load lowers the window front below the frame cap. The byte
@@ -468,6 +583,227 @@ fn test_load_boundary_keeps_draining() {
     assert!(
         bytes <= budget,
         "resident bytes stay under the budget: {bytes} > {budget}"
+    );
+}
+
+/// A window whose front lands on the record that closed a turn opens inside
+/// that turn: the frames below it left the turn running, and the record the
+/// window starts on closes the turn rather than opening anything, so the rows
+/// the window derives belong to a turn it holds no beginning of. The front
+/// needs no user frame below it for this — a window that starts on a closing
+/// record is the shape a resumed session reads.
+#[test]
+fn test_drain_marks_closed_turn() {
+    let mut app = fresh_app();
+    app.ui.navigation.screen = Screen::Working;
+    let text = "x".repeat(200);
+    app.transcript_mut().push_frame(user_msg("opening"));
+    for i in 0..40 {
+        app.transcript_mut()
+            .push_frame(agent_msg(&format!("{i} {text}")));
+    }
+    app.transcript_mut()
+        .push_frame(TranscriptFrame::Acpx(AcpxNotification::new(
+            AcpxMethod::ContextRunCompleted,
+            json!({ "ms": 5 }),
+        )));
+    let record = app.sessions.current.transcript.frames()[41].estimated_bytes() as u64;
+    assert_eq!(
+        app.sessions
+            .current
+            .transcript
+            .drain_front_to_budget(record),
+        41,
+        "the drain takes every frame above the closing record"
+    );
+    app.rebuild_transcript();
+    assert!(
+        matches!(
+            app.sessions.current.transcript.frames().first().map(|f| f.as_ref()),
+            Some(TranscriptFrame::Acpx(n)) if n.method == AcpxMethod::ContextRunCompleted
+        ),
+        "the window front is the closing record"
+    );
+    assert!(
+        matches!(
+            app.transcript().lines().first(),
+            Some(TranscriptLine::System(text)) if text.as_str() == TURN_CONTENT_OUT_OF_VIEW
+        ),
+        "the view opens on the row standing for the drained beginning: {:?}",
+        app.transcript().lines().first()
+    );
+}
+
+/// A drain front landing on the message that opens the next turn draws no row
+/// standing for content that left memory: that message is where the turn
+/// below it ends, and the rows the window derives begin at the turn it opens.
+/// The frames below left a turn running, so a row drawn on the turn state
+/// alone would claim the window opens inside a turn it holds no part of.
+#[test]
+fn test_opener_leads_without_row() {
+    let mut app = fresh_app();
+    let text = "x".repeat(200);
+    app.transcript_mut().push_frame(user_msg("first"));
+    for i in 0..40 {
+        app.transcript_mut()
+            .push_frame(agent_msg(&format!("{i} {text}")));
+    }
+    app.transcript_mut().push_frame(user_msg("second"));
+    for i in 0..20 {
+        app.transcript_mut()
+            .push_frame(agent_msg(&format!("after {i} {text}")));
+    }
+    let kept: u64 = app.sessions.current.transcript.frames()[..41]
+        .iter()
+        .map(|frame| frame.estimated_bytes() as u64)
+        .sum();
+    let budget = app.transcript().resident_bytes() - kept;
+    assert_eq!(
+        app.sessions
+            .current
+            .transcript
+            .drain_front_to_budget(budget),
+        41,
+        "the drain stops on the frame that opens the next turn"
+    );
+    app.rebuild_transcript();
+    assert!(
+        matches!(app.transcript().first(), Some(TranscriptLine::User(t)) if t == "second"),
+        "the view opens on the row that opens the turn: {:?}",
+        app.transcript().lines().first()
+    );
+    assert!(
+        !app.transcript().iter().any(
+            |l| matches!(l, TranscriptLine::System(t) if t.as_str() == TURN_CONTENT_OUT_OF_VIEW)
+        ),
+        "no row claims content left memory above a row that opens a turn"
+    );
+}
+
+/// A window the drain has taken no frame from holds every frame below its
+/// front, so the row standing for content that left memory is not drawn even
+/// when the frame cap moved that front: the cap keeps every frame resident,
+/// and the rows above the window come back by scrolling. The drain's side of
+/// the condition is test_drain_bounds_active_turn, and the frame that opens a
+/// turn is test_opener_leads_without_row.
+#[test]
+fn test_drain_keeps_turn_start() {
+    let mut app = fresh_app();
+    app.ui.navigation.screen = Screen::Working;
+    for i in 0..710 {
+        app.transcript_mut()
+            .push_frame(user_msg(&format!("msg {i}")));
+    }
+    app.rebuild_transcript();
+    assert!(
+        matches!(app.transcript().first(), Some(TranscriptLine::User(t)) if t == "msg 210"),
+        "the view opens on the row that opens the turn: {:?}",
+        app.transcript().lines().first()
+    );
+    assert!(
+        !app.transcript()
+            .iter()
+            .any(|l| matches!(l, TranscriptLine::User(t) if t == "msg 209")),
+        "the frame cap moved the window past the frames below its front"
+    );
+    assert!(
+        !app.transcript().iter().any(
+            |l| matches!(l, TranscriptLine::System(t) if t.as_str() == TURN_CONTENT_OUT_OF_VIEW)
+        ),
+        "no row claims the window cut a turn it holds whole"
+    );
+}
+
+/// The frame cap alone leaves every frame in memory, so a window cut to the
+/// cap draws no row standing in for content that is still there: the part of
+/// the turn above the window comes back by scrolling, which is the frame
+/// cap's own path, and the row would claim it left memory. The turn below the
+/// cap front never closed, so the state read there reports it running, and
+/// only the drain makes that state mean something left memory.
+#[test]
+fn test_cap_keeps_frames_resident() {
+    let mut app = fresh_app();
+    app.ui.navigation.screen = Screen::Working;
+    app.transcript_mut().push_frame(user_msg("opening"));
+    for i in 0..700 {
+        app.transcript_mut().push_frame(agent_msg(&format!("{i}")));
+    }
+    app.transcript_mut().push_frame(user_msg("next"));
+    app.rebuild_transcript();
+    assert_eq!(
+        app.transcript().frame_window_start(),
+        0,
+        "the budget holds every frame, so nothing left memory"
+    );
+    assert!(
+        matches!(app.transcript().first(), Some(TranscriptLine::Agent(t)) if t == "201"),
+        "the cap cut the window inside the turn below it: {:?}",
+        app.transcript().lines().first()
+    );
+    assert!(
+        !app.transcript().iter().any(
+            |l| matches!(l, TranscriptLine::System(t) if t.as_str() == TURN_CONTENT_OUT_OF_VIEW)
+        ),
+        "no row claims content left memory when it is still resident"
+    );
+}
+
+/// The row standing for a cut turn leaves the view once the rows it stands
+/// for are read back: the window still opens inside the turn, but its earlier
+/// content sits above on view, and the row would say that content was gone.
+/// The cut turn here is the frozen prefix, which a pass reuses while nothing
+/// about its frames changed: whether the row leads it is part of that decision.
+#[test]
+fn test_loaded_rows_drop_marker() {
+    let mut app = fresh_app();
+    app.ui.navigation.screen = Screen::Working;
+    let text = "x".repeat(200);
+    app.transcript_mut().push_frame(user_msg("opening"));
+    for i in 0..120 {
+        app.transcript_mut()
+            .push_frame(agent_msg(&format!("{i} {text}")));
+    }
+    app.transcript_mut().push_frame(user_msg("second"));
+    for i in 0..20 {
+        app.transcript_mut()
+            .push_frame(agent_msg(&format!("after {i} {text}")));
+    }
+    // The log's rows: what a read of the whole log derives, which is the view
+    // before any drain took a frame from it.
+    app.transcript_mut().set_resident_byte_budget(1 << 20);
+    app.rebuild_transcript();
+    let mut log_rows: Vec<TranscriptLine> = (0..5)
+        .map(|i| TranscriptLine::User(format!("older {i}")))
+        .collect();
+    log_rows.extend(app.transcript().iter().cloned());
+    app.transcript_mut().set_resident_byte_budget(12 * 1024);
+    app.rebuild_transcript();
+    app.rebuild_transcript();
+    assert!(
+        matches!(
+            app.transcript().lines().first(),
+            Some(TranscriptLine::System(t)) if t.as_str() == TURN_CONTENT_OUT_OF_VIEW
+        ),
+        "the view opens on the row standing for the cut turn: {:?}",
+        app.transcript().lines().first()
+    );
+    app.sessions.persistence.snapshot = Some(log_source(vec![log_window(log_rows, 100, 4096)]));
+
+    draw_transcript(&mut app);
+    app.park_scroll_at(0);
+    app.load_older_frames();
+    pump_history_read_blocking(&mut app, Duration::from_secs(5));
+
+    assert!(
+        app.transcript().disk_row_count() > 0,
+        "the older rows landed above the window"
+    );
+    assert!(
+        !app.transcript().iter().any(
+            |l| matches!(l, TranscriptLine::System(t) if t.as_str() == TURN_CONTENT_OUT_OF_VIEW)
+        ),
+        "the row gives way once the content it stood for is on view: {:?}",
+        &app.transcript().lines()[..8]
     );
 }
 
