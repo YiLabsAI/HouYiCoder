@@ -1,7 +1,6 @@
-//! Resume + status-provenance PTY journey tests, split out of ui_session on
-//! the file-size gate. Drives the real binary through the sid-resume, lock
-//! release (clean exit + crash), status provenance, and stale-cwd-degraded
-//! journeys. Helpers are shared via the common module.
+//! Resume PTY journey tests that drive the real binary: the sid-resume, lock
+//! release (clean exit + crash), status provenance, stale-cwd-degraded, and
+//! history-load journeys. Helpers are shared via the common module.
 
 #![allow(clippy::unwrap_in_result)]
 
@@ -13,7 +12,10 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use houyicoder_core::{EventId, SessionEvent, SessionId, SessionLogEntry};
 
-use crate::common::{self, Key, PtySession, RENDER_TIMEOUT, fresh_temp_dir, run_slash_command};
+use crate::common::{
+    self, Key, PtySession, RENDER_TIMEOUT, fresh_temp_dir, parse_scroll_status, run_slash_command,
+    seed_large_session_on_disk,
+};
 use std::thread::sleep;
 
 /// --resume <sid> re-opens an existing session: the sid is REUSED (not a
@@ -1195,6 +1197,119 @@ fn test_trajectory_esc_restores_turn() {
     assert!(
         back.contains("▸ T2"),
         "Esc returns to the turn the drill opened:\n{back}"
+    );
+    drop(s);
+}
+
+/// After a big resume, page-up to the top of the loaded rows and then stop
+/// sending keys: the history read that loads the rows above must still land, so
+/// the status total grows with no key left to wake the loop. The freeze this
+/// guards against is the one where the read's delivery waits on an input tick —
+/// a reader parked at the boundary never sees older rows.
+#[test]
+#[ignore]
+fn test_history_loads_without_keys() {
+    let sessions_dir = fresh_temp_dir("sessions-unfreeze");
+    let sid = "44444444-4444-4444-4444-444444444444";
+    // Sixteen mebibytes leaves the log far past the resident byte budget, so
+    // the descent reaches the top of the loaded rows with older rows still
+    // only on disk — the state where the next history read must be dispatched.
+    // Replay time scales with the fixture, and the debug-profile binary is
+    // several times slower than the release profile the measurement harness
+    // times, so the settle timeout holds headroom for both.
+    let fixture =
+        seed_large_session_on_disk(&sessions_dir, sid, "unfreeze-model", 16 * 1024 * 1024);
+    let mut s = PtySession::launch_with_sessions_dir(
+        None,
+        None,
+        None,
+        None,
+        &["--resume".to_string(), sid.to_string()],
+        sessions_dir.clone(),
+    );
+    // The replay ends on the tail that carries the settle marker, so reading
+    // the screen is the settle signal: polling the accumulated output would
+    // copy a multi-megabyte buffer on every pass of a replay this size.
+    assert!(
+        s.wait_for_screen(&fixture.settle_marker, Duration::from_secs(1500)),
+        "replay of {} bytes did not settle:\n{}",
+        fixture.log_bytes,
+        s.output()
+    );
+
+    // Descend with page-ups until the status row reads line 1: the view has
+    // reached the top of the loaded rows, and the pass that drew it dispatched
+    // a read of the rows above. The total before that press is the baseline,
+    // and a read landing after the press takes the total past it — which is
+    // what the deadline below watches for. A press whose line has not reached
+    // 1 by the window's end is a miss, and the descent presses again. The cap
+    // sits far above the presses a descent of this size takes, so a slow render
+    // costs a retry rather than the run: it bounds the loop for a view that
+    // never reaches the top, which the check below then reports.
+    let change_window = Duration::from_millis(300);
+    let mut reached_top = false;
+    let mut baseline = 0;
+    let mut first_line: Option<u64> = None;
+    for _ in 0..1400 {
+        let before = parse_scroll_status(&s.screen().contents());
+        let before_total = before.map(|(_, t)| t).unwrap_or(0);
+        s.send_key(&Key::PageUp);
+        let deadline = Instant::now() + change_window;
+        while Instant::now() < deadline {
+            sleep(Duration::from_millis(10));
+            let now = parse_scroll_status(&s.screen().contents()).map(|(l, _)| l);
+            if first_line.is_none() {
+                first_line = now;
+            }
+            if now == Some(1) {
+                reached_top = true;
+                baseline = before_total;
+                break;
+            }
+            if now != before.map(|(l, _)| l) {
+                break;
+            }
+        }
+        if reached_top {
+            break;
+        }
+    }
+    let parked = s.screen().contents();
+    let (line, total) = parse_scroll_status(&parked).expect("the scroll status row reads");
+    // The view starts at the tail, so the first press lands far below the top;
+    // a descent that began at line 1 would reach the boundary without
+    // exercising it, and this guard fails the run instead of passing quietly.
+    assert!(
+        first_line.is_some_and(|l| l > 1),
+        "the descent must start below the loaded top (first line {first_line:?}):\n{parked}"
+    );
+    assert!(
+        reached_top,
+        "the descent never reached the top of the loaded rows (line {line}):\n{parked}"
+    );
+
+    // No more keys. A dispatched read must land on its own, taking the total
+    // past the baseline within the deadline; a read whose delivery waits for an
+    // input tick leaves the total frozen and this fails. The deadline covers
+    // both the dispatch and the disk read behind it.
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let mut landed = false;
+    while Instant::now() < deadline {
+        sleep(Duration::from_millis(20));
+        if let Some((_, total_now)) = parse_scroll_status(&s.screen().contents())
+            && total_now > baseline
+        {
+            landed = true;
+            break;
+        }
+    }
+    let final_screen = s.screen().contents();
+    assert!(
+        landed,
+        "no history read landed without keys: total {total}, baseline {baseline}, parked at line {line}. \
+         A total that never left the baseline while the view sits at line {line} of {total} loaded rows \
+         means the read the last press dispatched never arrived; a descent that stopped short of line 1 \
+         would have failed the reached-top check above instead:\n{final_screen}"
     );
     drop(s);
 }

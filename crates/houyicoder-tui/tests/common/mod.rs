@@ -524,6 +524,27 @@ fn workspace_root() -> PathBuf {
 /// + any PTY scheduling latency).
 pub const RENDER_TIMEOUT: Duration = Duration::from_secs(6);
 
+/// The scroll status row's line and total values, anchored on the row's SCROLL
+/// label so unrelated screen text containing the same words cannot be misread
+/// as the status row.
+pub fn parse_scroll_status(contents: &str) -> Option<(u64, u64)> {
+    let rest = contents.get(contents.find("SCROLL")?..)?;
+    let at = rest.find("line ")? + "line ".len();
+    let rest = &rest[at..];
+    let slash = rest.find('/')?;
+    let after = &rest[slash + 1..];
+    let end = after
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(after.len());
+    if slash == 0 || end == 0 {
+        return None;
+    }
+    Some((
+        rest[..slash].trim().parse().ok()?,
+        after[..end].parse().ok()?,
+    ))
+}
+
 /// Strip ANSI escape sequences from a string for content assertions. Covers
 /// CSI (ESC [ ... final byte 0x40-0x7E), OSC (ESC ] ... BEL or ST), and bare
 /// two-byte escapes (ESC + next). Anything else passes through. A full vte

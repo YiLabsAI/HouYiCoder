@@ -16,7 +16,9 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use common::{Key, LargeFixture, PtySession, fresh_temp_dir, seed_large_session_on_disk};
+use common::{
+    Key, LargeFixture, PtySession, fresh_temp_dir, parse_scroll_status, seed_large_session_on_disk,
+};
 use std::env::consts::ARCH;
 use std::env::consts::OS;
 use std::env::var;
@@ -144,40 +146,19 @@ fn top_row(contents: &str) -> &str {
     contents.lines().next().unwrap_or("")
 }
 
-/// The scroll status row's line X/Y values, anchored on the row's SCROLL label
-/// so unrelated screen text containing the same words cannot be misread as
-/// the status row.
-fn scroll_status(contents: &str) -> Option<(u64, u64)> {
-    let rest = contents.get(contents.find("SCROLL")?..)?;
-    let at = rest.find("line ")? + "line ".len();
-    let rest = &rest[at..];
-    let slash = rest.find('/')?;
-    let after = &rest[slash + 1..];
-    let end = after
-        .find(|c: char| !c.is_ascii_digit())
-        .unwrap_or(after.len());
-    if slash == 0 || end == 0 {
-        return None;
-    }
-    Some((
-        rest[..slash].trim().parse().ok()?,
-        after[..end].parse().ok()?,
-    ))
-}
-
 /// The scroll view's total row count, read from the status line. A landing
 /// history read grows it while the visible content stays put, which makes the
 /// growth the only external signal that a read landed: rows prepend above a
 /// held viewport, so the screen itself does not move.
 fn view_total(contents: &str) -> Option<u64> {
-    scroll_status(contents).map(|(_, total)| total)
+    parse_scroll_status(contents).map(|(_, total)| total)
 }
 
 /// The scroll view's top line number, from the same status row. A value of
 /// one at the end of a descent proves the oldest rows were reached, which
 /// separates an exhausted log from a read path that stopped answering.
 fn view_line(contents: &str) -> Option<u64> {
-    scroll_status(contents).map(|(line, _)| line)
+    parse_scroll_status(contents).map(|(line, _)| line)
 }
 
 /// The marker token layout: a head literal, four decimal digits identifying
