@@ -3,10 +3,14 @@
 //! Debuggable with plain tools (cat, head) and self-delimiting without a
 //! length prefix. The decoder is a byte-buffer that yields complete frames as
 //! they arrive, holding a partial frame across pushes until its terminator.
+//! One message is bounded: a frame above MAX_MESSAGE_BYTES is refused where it
+//! would be produced and where it would be admitted.
 //!
-//! Framing parse failures are internal to the transport; the service maps
-//! them to a ProtocolError (InvalidFrame) at the boundary so internal error
-//! types never cross it directly.
+//! Framing failures are internal to the transport; the service maps them to a
+//! ProtocolError at the boundary so internal error types never cross it
+//! directly — a parse failure reads as InvalidFrame, and a frame above the
+//! bound keeps its own category so a size refusal is not reported as a
+//! malformed frame.
 
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -16,24 +20,28 @@ use std::fmt::Display;
 use std::fmt::Formatter;
 
 /// A framing failure: a line that is not valid JSON for the expected type, or
-/// a frame that exceeded the line limit. Converted at the boundary to
-/// ProtocolError::InvalidFrame.
+/// a frame that exceeded the line limit. Converted at the boundary to a
+/// ProtocolError whose category names which of the two it was.
 #[derive(Debug)]
 pub enum FrameError {
     /// The frame is not valid JSON, or does not deserialize to the expected type.
     Json(serde_json::Error),
-    /// A single frame exceeded the configured max line length (a denial-of-
-    /// service guard: an unbounded peer could stream a frame that exhausts
-    /// memory before its terminator).
-    TooLarge { limit: usize },
+    /// A single frame exceeded the protocol's per-message byte bound (a
+    /// denial-of-service guard: an unbounded peer could stream a frame that
+    /// exhausts memory before its terminator). The actual size rides along so
+    /// a report names the number that tripped the bound.
+    TooLarge { limit: usize, actual: usize },
 }
 
 impl Display for FrameError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Json(e) => write!(f, "frame json error: {e}"),
-            Self::TooLarge { limit } => {
-                write!(f, "frame exceeded line limit {limit}")
+            Self::TooLarge { limit, actual } => {
+                write!(
+                    f,
+                    "frame of {actual} bytes exceeds the {limit}-byte message bound"
+                )
             }
         }
     }
@@ -47,10 +55,35 @@ impl From<serde_json::Error> for FrameError {
     }
 }
 
+/// The protocol's per-message byte bound. A frame above it is refused at both
+/// entries: encode will not produce one, and a carrier will not admit one.
+/// The bound is per message, so a stream of frames stays unbounded in count;
+/// what it caps is the memory a single message can force, which is the peak
+/// paid before any resident budget or retention rule can apply.
+pub const MAX_MESSAGE_BYTES: usize = 8 * 1024 * 1024;
+
+/// Whether a frame is within the per-message byte bound. The bound counts
+/// frame content, not its newline terminator.
+pub fn check_frame_size(frame: &str) -> Result<(), FrameError> {
+    if frame.len() > MAX_MESSAGE_BYTES {
+        return Err(FrameError::TooLarge {
+            limit: MAX_MESSAGE_BYTES,
+            actual: frame.len(),
+        });
+    }
+    Ok(())
+}
+
 /// Encode a message as one NDJSON frame: serialized JSON followed by a
-/// newline. The newline is the frame terminator; receivers split on it.
+/// newline. The newline is the frame terminator; receivers split on it. A
+/// message whose serialized form exceeds the per-message byte bound is
+/// refused here, before any carrier sees it, so the frame is provably not
+/// sent and a caller reports a local refusal rather than an unknown delivery
+/// outcome.
 pub fn encode<T: Serialize>(msg: &T) -> Result<String, FrameError> {
-    let mut line = serde_json::to_string(msg)?;
+    let serialized = serde_json::to_string(msg)?;
+    check_frame_size(&serialized)?;
+    let mut line = serialized;
     line.push('\n');
     Ok(line)
 }
@@ -89,14 +122,17 @@ impl FrameDecoder {
                     self.buf.clear();
                     return Err(FrameError::TooLarge {
                         limit: self.max_line,
+                        actual: line.len(),
                     });
                 }
                 self.ready.push_back(line);
                 self.buf.clear();
             } else if self.buf.len() > self.max_line {
+                let actual = self.buf.len();
                 self.buf.clear();
                 return Err(FrameError::TooLarge {
                     limit: self.max_line,
+                    actual,
                 });
             }
         }

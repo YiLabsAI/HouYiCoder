@@ -40,6 +40,35 @@ fn test_display_is_message_only() {
 }
 
 #[test]
+fn test_oversized_frame_category() {
+    let too_large = ProtocolError::from(FrameError::TooLarge {
+        limit: 8,
+        actual: 9,
+    });
+    assert!(
+        too_large.message.contains("9 bytes"),
+        "the report names the size that tripped the bound: {}",
+        too_large.message
+    );
+    assert_eq!(too_large.category, ErrorCategory::MessageTooLarge);
+    assert!(
+        !too_large.retriable,
+        "the same bytes fail the same way again"
+    );
+    let bad_json = ProtocolError::from(FrameError::Json(
+        serde_json::from_str::<serde_json::Value>("{").expect_err("bad json"),
+    ));
+    assert_eq!(bad_json.category, ErrorCategory::InvalidFrame);
+}
+
+#[test]
+fn test_message_too_large_serializes() {
+    let e = ProtocolError::new(ErrorCategory::MessageTooLarge, "x", false);
+    let json = serde_json::to_string(&e).expect("serialize");
+    assert!(json.contains("message_too_large"), "{json}");
+}
+
+#[test]
 fn test_frame_error_converts() {
     let frame_err = FrameError::from(serde_json::from_str::<u8>("{").unwrap_err());
     let e = ProtocolError::from(frame_err);

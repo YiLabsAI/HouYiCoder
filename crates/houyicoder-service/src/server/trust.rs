@@ -34,7 +34,7 @@ impl Server {
         io: &mut FrameCarrier,
     ) -> Result<TrustState, ProtocolError> {
         // Clone the path + settings path into owned locals so no shared
-        // borrow of self spans the mutable send_typed / mint_req_id calls.
+        // borrow of self spans the mint_req_id call.
         let project_path = match self.project_path.as_deref() {
             Some(p) => p.to_path_buf(),
             None => return Ok(TrustState::Trusted),
@@ -52,10 +52,10 @@ impl Server {
                 risks: Vec::new(),
             }),
         );
-        self.send_typed(io, &ServerFrame::Request(prompt)).await?;
+        Self::send_typed(io, &ServerFrame::Request(prompt)).await?;
         // Ignore unrelated frames while preserving cancellation as decline.
         let resp = loop {
-            let frame = match io.next_frame().await {
+            let frame = match io.next_frame().await? {
                 Some(f) => f,
                 None => {
                     return Err(ProtocolError::new(

@@ -9,6 +9,7 @@ use houyicoder_protocol::acp_wire::AcpNotification;
 use houyicoder_protocol::envelope::{
     ClientResponsePayload, RequestId, ResponsePayload, ServerFrame, ServerRequestPayload,
 };
+use houyicoder_protocol::error::ErrorCategory;
 use houyicoder_protocol::frontend::FrontendEvent;
 use houyicoder_protocol::frontend::FrontendRequest;
 use houyicoder_protocol::frontend::trust::TrustAccept;
@@ -70,6 +71,13 @@ impl Outbound {
             Outbound::Notification(_) => None,
         }
     }
+
+    /// Whether this outbound answers a request the peer made, rather than one
+    /// this process issued. A refused peer request has no requester here to
+    /// settle, so the two take different paths.
+    fn answers_peer_request(&self) -> bool {
+        matches!(self, Outbound::Reverse { .. })
+    }
 }
 
 /// What the driver learned when it died: the cause and the request ids it
@@ -128,6 +136,10 @@ async fn drive_connection(
     let mut unknown_reports = UnknownReportBudget::new();
     loop {
         while let Some(out) = outbound.pop_front() {
+            // Read what a refusal can settle before the payload moves into
+            // the send below.
+            let out_req = out.req_id();
+            let answers_peer = out.answers_peer_request();
             let res = match out {
                 Outbound::Request { req_id, payload } => client.send_request(req_id, payload).await,
                 Outbound::Reverse { req_id, payload } => {
@@ -136,6 +148,30 @@ async fn drive_connection(
                 Outbound::Notification(n) => client.send_notification(n).await,
             };
             if let Err(e) = res {
+                if e.category == ErrorCategory::MessageTooLarge && !answers_peer {
+                    // This category reaches the driver only from the encoder,
+                    // which measures the frame before any carrier sees it, so
+                    // nothing was written and the connection is healthy. The
+                    // treatment below rests on that producer invariant: a
+                    // transport that could report this size after a partial
+                    // write must not be routed here.
+                    match out_req {
+                        // The requester is here to read the refusal, so only
+                        // this request fails.
+                        Some(req_id) => {
+                            let _send = agent_tx.send(SessionMessage::Response {
+                                request: req_id,
+                                response: ServerResponse::Error {
+                                    message: e.to_string(),
+                                },
+                            });
+                        }
+                        // No requester to answer, so the refusal goes to the
+                        // diagnostic log.
+                        None => tracing::warn!("outbound notification refused: {e}"),
+                    }
+                    continue;
+                }
                 // The failed frame is unknown (a write or flush may have
                 // delivered it); the remaining queue tail is provably
                 // not sent — the driver never attempted it.

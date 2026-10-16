@@ -97,7 +97,7 @@ mod outbound_frames;
 /// then the request loop until the client disconnects or a fatal frame error
 /// surfaces.
 enum ServeWake {
-    Frame(Option<String>),
+    Frame(Result<Option<String>, ProtocolError>),
     Event,
 }
 
@@ -357,8 +357,9 @@ impl Server {
                     self.flush_events(&mut io).await?;
                     continue;
                 }
-                ServeWake::Frame(Some(frame)) => frame,
-                ServeWake::Frame(None) => return Ok(()),
+                ServeWake::Frame(Ok(Some(frame))) => frame,
+                ServeWake::Frame(Ok(None)) => return Ok(()),
+                ServeWake::Frame(Err(e)) => return Err(e),
             };
             // A session/* notification between runs: session/inject enqueues
             // a message for the next run's mid-turn drain (a submit that
@@ -447,13 +448,16 @@ impl Server {
         let local = Hello::local();
         // Send our Hello first so a peer waiting on it can proceed; then read
         // the peer's Hello and validate it.
-        self.send_typed(io, &local).await?;
-        let Some(frame) = io.next_frame().await else {
-            return Err(ProtocolError::new(
-                ErrorCategory::Unavailable,
-                "client closed before hello",
-                false,
-            ));
+        Self::send_typed(io, &local).await?;
+        let frame = match io.next_frame().await? {
+            Some(f) => f,
+            None => {
+                return Err(ProtocolError::new(
+                    ErrorCategory::Unavailable,
+                    "client closed before hello",
+                    false,
+                ));
+            }
         };
         let peer: Hello = serde_json::from_str(&frame)
             .map_err(|e| ProtocolError::new(ErrorCategory::InvalidFrame, e.to_string(), false))?;
@@ -542,14 +546,15 @@ impl Server {
             tokio::select! {
                 r = &mut run_fut => return Ok(r),
                 frame = io.next_frame() => match frame {
-                    Some(f) => self.dispatch_during_run_frame(io, &f).await,
-                    None => {
+                    Ok(Some(f)) => self.dispatch_during_run_frame(io, &f).await,
+                    Ok(None) => {
                         return Err(ProtocolError::new(
                             ErrorCategory::Unavailable,
                             "client closed mid-run",
                             false,
                         ));
                     }
+                    Err(e) => return Err(e),
                 },
                 _ = notify_fut => self.flush_events(io).await?,
                 _ = event_fut => self.flush_events(io).await?,
@@ -617,14 +622,15 @@ impl Server {
             tokio::select! {
                 r = &mut resume_fut => return Ok(r),
                 frame = io.next_frame() => match frame {
-                    Some(f) => self.dispatch_during_run_frame(io, &f).await,
-                    None => {
+                    Ok(Some(f)) => self.dispatch_during_run_frame(io, &f).await,
+                    Ok(None) => {
                         return Err(ProtocolError::new(
                             ErrorCategory::Unavailable,
                             "client closed mid-resume",
                             false,
                         ));
                     }
+                    Err(e) => return Err(e),
                 },
                 _ = notify_fut => self.flush_events(io).await?,
                 _ = event_fut => self.flush_events(io).await?,

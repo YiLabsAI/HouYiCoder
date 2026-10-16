@@ -66,6 +66,8 @@ use houyicoder_permission::FileRuleStore;
 use houyicoder_permission::ModeGate;
 use houyicoder_protocol::acpx::AcpxCapabilities;
 #[cfg(unix)]
+use houyicoder_protocol::framing::MAX_MESSAGE_BYTES;
+#[cfg(unix)]
 use houyicoder_service::CancellationToken;
 use houyicoder_service::acp::adapter::AcpAdapter;
 use houyicoder_service::acp::carrier::AcpIo;
@@ -429,7 +431,7 @@ fn run_serve(
 /// leaves the session alive for a later reattach.
 #[cfg(unix)]
 fn run_attach(socket: String, session_id: String) -> Result<(), Box<dyn Error>> {
-    let transport = UdsTransport::connect(&socket, 1024 * 1024)?;
+    let transport = UdsTransport::connect(&socket, MAX_MESSAGE_BYTES)?;
     let client = Client::new(Box::new(transport));
     let (tx, rx) = channel::<SessionMessage>();
     let wire_session = houyicoder_protocol::frontend::SessionId(session_id);

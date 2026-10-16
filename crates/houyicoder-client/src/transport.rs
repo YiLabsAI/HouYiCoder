@@ -14,6 +14,7 @@ use futures::StreamExt;
 use futures::channel::mpsc;
 use houyicoder_async::PFut;
 use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
+use houyicoder_protocol::framing::FrameError;
 #[cfg(test)]
 use std::io::Cursor;
 #[cfg(test)]
@@ -54,7 +55,10 @@ pub trait Transport: Send {
 
     /// Receive the next complete frame as an owned string with the trailing
     /// newline stripped. None means the peer cleanly half-closed its send
-    /// side; an Err means the carrier failed mid-stream.
+    /// side; an Err means the carrier failed mid-stream, or the peer sent a
+    /// frame above the protocol's per-message byte bound. That second case is a
+    /// peer contract violation rather than a clean close, so it must not
+    /// read as one.
     fn recv_frame(&mut self) -> PFut<'_, Result<Option<String>, ProtocolError>>;
 }
 
@@ -158,11 +162,15 @@ impl StdioTransport {
                     Ok(_) => {
                         let line = buf.strip_suffix('\n').unwrap_or(&buf).to_string();
                         if line.len() > max_line {
-                            let _send = tx.unbounded_send(Err(ProtocolError::new(
-                                ErrorCategory::InvalidFrame,
-                                format!("frame exceeds {max_line}-byte limit"),
-                                false,
-                            )));
+                            // The peer sent a frame above the protocol's
+                            // per-message bound: not a carrier failure, so the
+                            // size refusal keeps its own category and text
+                            // rather than reading as a broken stream.
+                            let refusal = FrameError::TooLarge {
+                                limit: max_line,
+                                actual: line.len(),
+                            };
+                            let _send = tx.unbounded_send(Err(refusal.into()));
                             return;
                         }
                         if tx.unbounded_send(Ok(Some(line))).is_err() {

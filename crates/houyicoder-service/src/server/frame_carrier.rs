@@ -8,12 +8,9 @@ use futures::SinkExt;
 use futures::StreamExt;
 use futures::channel::mpsc;
 use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
+use houyicoder_protocol::framing::check_frame_size;
 
-/// The raw frame I/O for the in-memory carrier (mode A). One half of the
-/// channel pair the composition root mints; the other half goes to the
-/// frontend wrapped as the in-memory carrier, so both ends share one pair.
-/// Each frame is a complete NDJSON line (newline included), matching the
-/// byte stream a pipe would carry.
+/// The service end of the in-memory carrier pair (mode A).
 pub struct FrameCarrier {
     /// Outbound frames to the client (service -> client direction).
     pub(crate) tx: mpsc::Sender<String>,
@@ -30,10 +27,22 @@ impl FrameCarrier {
     }
 
     /// Read the next inbound frame, stripping the trailing newline the carrier
-    /// preserves. None means the client cleanly half-closed its send side.
-    pub(crate) async fn next_frame(&mut self) -> Option<String> {
-        let frame = self.rx.next().await?;
-        Some(frame.strip_suffix('\n').unwrap_or(&frame).to_string())
+    /// preserves. Ok(None) means the client cleanly half-closed its send side;
+    /// an Err means the carrier failed, or the client sent a frame above the
+    /// protocol's per-message byte bound. A frame over the bound is a contract
+    /// violation rather than a clean close, so it must not read as one.
+    pub(crate) async fn next_frame(&mut self) -> Result<Option<String>, ProtocolError> {
+        let Some(frame) = self.rx.next().await else {
+            return Ok(None);
+        };
+        let line = frame.strip_suffix('\n').unwrap_or(&frame);
+        if let Err(e) = check_frame_size(line) {
+            // Ending the connection is the only answer here, so the
+            // diagnostic log is what records the size the peer sent.
+            tracing::warn!("client frame refused: {e}");
+            return Err(e.into());
+        }
+        Ok(Some(line.to_string()))
     }
 
     /// Send one outbound frame, appending the newline terminator the carrier
@@ -52,3 +61,6 @@ impl FrameCarrier {
             .map_err(|_| ProtocolError::new(ErrorCategory::Unavailable, "client closed", false))
     }
 }
+
+#[cfg(test)]
+mod tests;

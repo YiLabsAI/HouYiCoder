@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
 
 use houyicoder_async::PFut;
@@ -1262,6 +1262,57 @@ async fn test_send_failure_announces_death() {
         }
         other => panic!("expected ConnectionLost, got {other:?}"),
     }
+}
+
+/// A message above the protocol's per-message byte bound is refused while it is
+/// being encoded, so nothing was written and the connection is healthy. The
+/// driver settles exactly that request and the next one still goes out;
+/// reading the refusal as a carrier failure would end a live connection.
+#[tokio::test]
+async fn test_refused_send_settles_request() {
+    let huge = "x".repeat(framing::MAX_MESSAGE_BYTES);
+    let run = FakeEngine::new()
+        .drive(vec![
+            ClientCommand::SendMessage {
+                req_id: RequestId(1),
+                session_id: sid(),
+                content: vec![ContentBlock::Text { text: huge }],
+                disabled_skills: HashSet::new(),
+            },
+            ClientCommand::StatusQuery {
+                req_id: RequestId(2),
+            },
+        ])
+        .await;
+    let refusal = run.msgs.iter().find_map(|m| match m {
+        SessionMessage::Response {
+            request,
+            response: ServerResponse::Error { message },
+        } if *request == RequestId(1) => Some(message.clone()),
+        _ => None,
+    });
+    let message = refusal.expect("the refused request is settled as an error");
+    assert!(
+        message.contains(&framing::MAX_MESSAGE_BYTES.to_string()),
+        "the refusal names the bound that tripped: {message}"
+    );
+    assert!(
+        !run.has_request(1, |p| matches!(p, FrontendRequest::MessageSend { .. })),
+        "the refused frame must never reach the carrier: {:?}",
+        run.sent
+    );
+    assert!(
+        run.has_request(2, |p| matches!(p, FrontendRequest::Status)),
+        "the connection stays usable for the next request: {:?}",
+        run.sent
+    );
+    assert!(
+        !run.msgs
+            .iter()
+            .any(|m| matches!(m, SessionMessage::Connection(ConnectionEvent::Lost { .. }))),
+        "a size refusal is not a connection loss: {:?}",
+        run.msgs
+    );
 }
 
 /// A send failure surfaces the not_sent list so the App can distinguish

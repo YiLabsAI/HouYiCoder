@@ -23,6 +23,10 @@ pub enum ErrorCategory {
     ProtocolVersion,
     /// A frame could not be parsed (bad framing, truncated, malformed JSON).
     InvalidFrame,
+    /// A single message exceeded the protocol's per-message byte bound. Distinct
+    /// from InvalidFrame: the message is well-formed, and the fault is its
+    /// size, which a retry of the same bytes cannot fix.
+    MessageTooLarge,
     /// A well-formed frame that is not a valid request for the current state.
     InvalidRequest,
     /// The caller lacks the capability or credential for the request.
@@ -66,9 +70,16 @@ impl ProtocolError {
 
 impl From<FrameError> for ProtocolError {
     /// Framing failures cross the boundary as the single conversion point;
-    /// producers rely on this instead of hand-rolled mapping helpers.
+    /// producers rely on this instead of mapping the error at each call site.
+    /// A frame over the per-message bound keeps its own category so a consumer
+    /// can report a size refusal instead of a malformed frame, and neither is
+    /// retriable: the same bytes would fail the same way.
     fn from(e: FrameError) -> Self {
-        Self::new(ErrorCategory::InvalidFrame, e.to_string(), false)
+        let category = match e {
+            FrameError::TooLarge { .. } => ErrorCategory::MessageTooLarge,
+            FrameError::Json(_) => ErrorCategory::InvalidFrame,
+        };
+        Self::new(category, e.to_string(), false)
     }
 }
 

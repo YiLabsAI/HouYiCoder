@@ -98,10 +98,14 @@ async fn test_stdio_oversize_frame_errors() {
     let stdin: Box<dyn Read + Send> = Box::new(Cursor::new([big.as_slice(), b"\n"].concat()));
     let stdout: Box<dyn Write + Send> = Box::new(sink());
     let mut t = StdioTransport::new(stdin, stdout, 10);
-    let res = t.recv_frame().await;
-    assert!(
-        res.is_err(),
-        "an oversize frame must surface as a protocol error"
+    let err = t
+        .recv_frame()
+        .await
+        .expect_err("an oversize frame must read as a protocol error");
+    assert_eq!(
+        err.category,
+        ErrorCategory::MessageTooLarge,
+        "a peer contract violation keeps its own category rather than reading as a broken stream"
     );
 }
 

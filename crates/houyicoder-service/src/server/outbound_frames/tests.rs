@@ -3,10 +3,18 @@
 //! the mark that says so, and a message that opens a turn is written without
 //! one. The mark is what tells the two apart, and a reader walking the stream
 //! finds it beside the message.
+//!
+//! It also pins what the same path writes for an event too large to send:
+//! a bounded notice in the event's stream position, so the connection survives
+//! and the consumer finds a row rather than a gap.
 
 use super::*;
+use futures::StreamExt;
+use futures::channel::mpsc;
 use houyicoder_context::{EventId, SessionId};
 use houyicoder_protocol::acpx::AcpxMethod;
+use houyicoder_protocol::envelope::EventSeq;
+use houyicoder_protocol::framing::{FrameDecoder, MAX_MESSAGE_BYTES};
 use houyicoder_protocol::frontend::FrontendEvent;
 
 fn entry(event: SessionEvent) -> SessionLogEntry {
@@ -99,4 +107,87 @@ fn test_entry_payloads_carry_identity() {
     let entry = entry(SessionEvent::UserInput { text: "go".into() });
     let mapped = Server::map_turn_event(&entry);
     assert_eq!(mapped.event_id.0, entry.id.to_string());
+}
+
+/// A carrier whose outbound frames land in the returned receiver. The inbound
+/// side is closed, so nothing this unit reads can arrive.
+fn carrier() -> (FrameCarrier, mpsc::Receiver<String>) {
+    let (tx, outbound) = mpsc::channel::<String>(4);
+    let (inbound_tx, inbound) = mpsc::channel::<String>(1);
+    drop(inbound_tx);
+    (FrameCarrier::new(tx, inbound), outbound)
+}
+
+/// The frame the carrier moved, decoded by the protocol's own decoder under the
+/// protocol's own byte bound: whatever arrives is a frame the peer would admit.
+async fn read_frame(outbound: &mut mpsc::Receiver<String>) -> ServerFrame {
+    let line = outbound.next().await.expect("a frame reached the carrier");
+    let mut decoder = FrameDecoder::new(MAX_MESSAGE_BYTES);
+    decoder
+        .push(line.as_bytes())
+        .expect("the frame fits the protocol's per-message bound");
+    decoder
+        .next_frame::<ServerFrame>()
+        .expect("a complete frame")
+        .expect("decodes")
+}
+
+#[tokio::test]
+async fn test_event_under_bound_passes() {
+    let (mut io, mut outbound) = carrier();
+    let frame = EventEnvelope::new(
+        EventSeq(3),
+        FrontendEvent::Message {
+            delta: "hello".into(),
+        },
+    );
+    Server::send_event_frame(&mut io, frame)
+        .await
+        .expect("sent");
+    let sent = match read_frame(&mut outbound).await {
+        ServerFrame::Event(env) => env,
+        other => panic!("an event frame: {other:?}"),
+    };
+    assert_eq!(
+        sent.seq,
+        EventSeq(3),
+        "an admitted event keeps its position"
+    );
+    assert!(
+        matches!(&sent.payload, FrontendEvent::Message { delta } if delta == "hello"),
+        "the admitted payload passes through unchanged: {:?}",
+        sent.payload
+    );
+}
+
+#[tokio::test]
+async fn test_oversized_event_replaced() {
+    let (mut io, mut outbound) = carrier();
+    let frame = EventEnvelope::new(
+        EventSeq(9),
+        FrontendEvent::Message {
+            delta: "x".repeat(MAX_MESSAGE_BYTES),
+        },
+    );
+    Server::send_event_frame(&mut io, frame)
+        .await
+        .expect("the notice goes out in place of the event");
+    let sent = match read_frame(&mut outbound).await {
+        ServerFrame::Event(env) => env,
+        other => panic!("an event frame: {other:?}"),
+    };
+    assert_eq!(
+        sent.seq,
+        EventSeq(9),
+        "the notice stands where the event would have"
+    );
+    assert!(
+        matches!(sent.payload, FrontendEvent::SystemLine { ref text } if text == OVERSIZED_EVENT_NOTICE),
+        "the payload is the bounded notice: {:?}",
+        sent.payload
+    );
+    assert!(
+        sent.event_id.is_none(),
+        "a replaced event must not claim the durable entry's identity"
+    );
 }

@@ -12,7 +12,7 @@ use houyicoder_protocol::envelope::{
     ResumeFrom, ServerFrame,
 };
 use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
-use houyicoder_protocol::framing::encode;
+use houyicoder_protocol::framing::{check_frame_size, encode};
 use houyicoder_protocol::frontend::FrontendRequest;
 use houyicoder_protocol::handshake::{Hello, Negotiated, negotiate};
 use serde::de::DeserializeOwned;
@@ -120,9 +120,15 @@ impl Client {
     }
 }
 
-/// Decode a frame string into a typed message. Surfaces bad framing as a
-/// protocol error at the boundary.
+/// Decode a frame string into a typed message. Bad framing crosses the boundary
+/// as a protocol error. A frame above the protocol's per-message byte bound is
+/// refused before the parser sees it, so an oversized message never becomes a
+/// value the caller holds.
 fn decode_frame<T: DeserializeOwned>(frame: &str) -> Result<T, ProtocolError> {
+    check_frame_size(frame)?;
     serde_json::from_str(frame)
         .map_err(|e| ProtocolError::new(ErrorCategory::InvalidFrame, e.to_string(), false))
 }
+
+#[cfg(test)]
+mod tests;

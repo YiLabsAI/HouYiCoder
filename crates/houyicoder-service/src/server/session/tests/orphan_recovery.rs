@@ -159,7 +159,7 @@ async fn test_disconnect_orphan_repaired() {
         yield_now().await;
     }
     assert!(saw_call, "ToolCall c1 must persist before the disconnect");
-    // Disconnect: drop client1 → io.next_frame() returns None → serve_session
+    // Disconnect: drop client1 → io.next_frame() reads Ok(None) → serve_session
     // returns Unavailable → run_fut dropped (NOT cancelled via token) → the
     // tool's pending future is dropped, no ToolResult is appended.
     drop(client1);

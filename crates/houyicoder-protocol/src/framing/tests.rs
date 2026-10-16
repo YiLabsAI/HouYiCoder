@@ -54,11 +54,38 @@ fn test_decoder_holds_until_terminator() {
 }
 
 #[test]
+fn test_encode_refuses_oversized() {
+    let m = Msg {
+        id: 1,
+        text: "x".repeat(MAX_MESSAGE_BYTES),
+    };
+    let err = encode(&m).unwrap_err();
+    assert!(
+        matches!(err, FrameError::TooLarge { limit, .. } if limit == MAX_MESSAGE_BYTES),
+        "a message above the bound is refused before a carrier sees it: {err}"
+    );
+}
+
+#[test]
+fn test_frame_at_bound_admits() {
+    let at_bound = "x".repeat(MAX_MESSAGE_BYTES);
+    assert!(
+        check_frame_size(&at_bound).is_ok(),
+        "the bound itself is admissible; only a longer frame is refused"
+    );
+    let over = "x".repeat(MAX_MESSAGE_BYTES + 1);
+    assert!(matches!(
+        check_frame_size(&over),
+        Err(FrameError::TooLarge { limit, actual }) if limit == MAX_MESSAGE_BYTES && actual == MAX_MESSAGE_BYTES + 1
+    ));
+}
+
+#[test]
 fn test_decoder_rejects_oversized_frame() {
     let mut d = FrameDecoder::new(8);
     // A frame longer than the limit without a terminator trips the guard.
     let err = d.push(b"0123456789abcdef").unwrap_err();
-    assert!(matches!(err, FrameError::TooLarge { limit: 8 }));
+    assert!(matches!(err, FrameError::TooLarge { limit: 8, .. }));
 }
 
 #[test]

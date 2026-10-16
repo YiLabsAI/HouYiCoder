@@ -63,7 +63,7 @@ impl Server {
                 delegation.as_ref(),
             )),
         );
-        self.send_typed(io, &ServerFrame::Request(ask)).await?;
+        Self::send_typed(io, &ServerFrame::Request(ask)).await?;
         // Read the matching reverse response. Loop, not a single read, so a
         // non-matching frame mid-ask does not fatal: a reconnecting client's
         // first status tick, a racing poll, a session/cancel, or a mode-cycle
@@ -73,7 +73,7 @@ impl Server {
         // and mid-resume selects: dispatch session/* notifications + mode-cycle
         // requests, drop the rest, fatal only on client close.
         let resp = loop {
-            let frame = match io.next_frame().await {
+            let frame = match io.next_frame().await? {
                 Some(f) => f,
                 None => {
                     return Err(ProtocolError::new(

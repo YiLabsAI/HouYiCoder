@@ -6,13 +6,18 @@ use houyicoder_context::{SessionEvent, SessionLogEntry};
 use houyicoder_protocol::envelope::{
     DurableEventId, EventEnvelope, RequestId, ResponseEnvelope, ResponsePayload, ServerFrame,
 };
-use houyicoder_protocol::error::ProtocolError;
+use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
 use houyicoder_protocol::framing::encode;
 use houyicoder_protocol::frontend::{FrontendEvent, PendingInputId, QueuedInput};
 
 use super::event_sequencer::EntryPayloads;
 use super::{FrameCarrier, Server};
 use houyicoder_protocol::envelope::ChildTranscriptFrame;
+
+/// What the user reads where an event was too large to send. The row
+/// states where the content still is, so the notice is not a dead end.
+const OVERSIZED_EVENT_NOTICE: &str =
+    "an event exceeded the protocol's per-message limit — the session log holds the full entry";
 
 impl Server {
     fn map_turn_event(event: &SessionLogEntry) -> EntryPayloads {
@@ -61,7 +66,7 @@ impl Server {
                 .collect()
         });
         for frame in frames {
-            self.send_event_envelope(io, &frame).await?;
+            Self::send_event_frame(io, frame).await?;
         }
         Ok(())
     }
@@ -84,18 +89,40 @@ impl Server {
                 .collect()
         });
         for frame in replay {
-            self.send_event_envelope(io, &frame).await?;
+            Self::send_event_frame(io, frame).await?;
         }
         self.flush_events(io).await
     }
 
-    async fn send_event_envelope(
-        &mut self,
+    /// Deliver one sequenced event, replacing it with a bounded notice when
+    /// its payload exceeds the protocol's per-message bound. The replacement keeps
+    /// the event's stream position, so a consumer reading the seq stream finds
+    /// a row where the event was rather than a gap.
+    async fn send_event_frame(
         io: &mut FrameCarrier,
-        frame: &EventEnvelope,
+        frame: EventEnvelope,
     ) -> Result<(), ProtocolError> {
-        self.send_typed(io, &ServerFrame::Event(frame.clone()))
-            .await
+        let seq = frame.seq;
+        match Self::send_typed(io, &ServerFrame::Event(frame)).await {
+            Err(e) if e.category == ErrorCategory::MessageTooLarge => {
+                // Propagating the refusal would end the connection, and the
+                // event stays in the durable log, so a reconnect would replay
+                // it into the same refusal forever. The notice ends that loop
+                // and says where the content still is.
+                tracing::warn!(
+                    "event seq {} exceeded the per-message byte bound: {e}",
+                    seq.0
+                );
+                let notice = EventEnvelope::new(
+                    seq,
+                    FrontendEvent::SystemLine {
+                        text: OVERSIZED_EVENT_NOTICE.to_string(),
+                    },
+                );
+                Self::send_typed(io, &ServerFrame::Event(notice)).await
+            }
+            other => other,
+        }
     }
 
     /// Map a fetched child session's turn events through the same adapters
@@ -128,7 +155,7 @@ impl Server {
         payload: ResponsePayload,
     ) -> Result<(), ProtocolError> {
         let frame = ServerFrame::Response(ResponseEnvelope::new(req_id, payload));
-        self.send_typed(io, &frame).await
+        Self::send_typed(io, &frame).await
     }
 
     /// Send a protocol error as an unpaired response.
@@ -141,9 +168,11 @@ impl Server {
             .await
     }
 
-    /// Encode a typed server frame and push it through the carrier.
+    /// Encode a typed server frame and push it through the carrier. The
+    /// encoder enforces the protocol's per-message bound, so an over-bound frame
+    /// is refused before any carrier sees it and the caller reports a local
+    /// refusal rather than an unknown delivery outcome.
     pub(super) async fn send_typed<T: serde::Serialize>(
-        &mut self,
         io: &mut FrameCarrier,
         msg: &T,
     ) -> Result<(), ProtocolError> {

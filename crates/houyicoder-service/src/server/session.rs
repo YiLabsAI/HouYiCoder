@@ -114,7 +114,7 @@ async fn await_reemit_verdict(
     call_id: &str,
 ) -> Result<(ApprovalDecision, bool), ProtocolError> {
     loop {
-        let frame = match io.next_frame().await {
+        let frame = match io.next_frame().await? {
             Some(f) => f,
             None => {
                 return Err(ProtocolError::new(
@@ -182,7 +182,7 @@ async fn reemit_and_settle_ask(
             None,
         )),
     );
-    server.send_typed(io, &ServerFrame::Request(ask)).await?;
+    Server::send_typed(io, &ServerFrame::Request(ask)).await?;
     let (decision, cancelled) = await_reemit_verdict(server, io, ask_id, &ask_perm.call_id).await?;
     let verdict = if decision.approved {
         PermissionVerdict::Approved
