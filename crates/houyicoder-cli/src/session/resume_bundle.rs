@@ -29,16 +29,9 @@ pub(crate) fn build_bundle_for_resume_sid(
         provider,
     )?;
     Ok(crate::assemble_bundle(
-        resumed.assembled.runner,
-        resumed.assembled.session,
+        resumed.assembled,
         resumed.model,
-        resumed.assembled.gate,
-        resumed.assembled.sandbox_session,
-        resumed.assembled.append_notify,
         true,
-        resumed.assembled.worktree_controller,
-        resumed.assembled.bus,
-        resumed.assembled.provider_facts,
     ))
 }
 
@@ -59,15 +52,8 @@ pub(crate) fn build_bundle_for_fork(
         provider,
     )?;
     Ok(crate::assemble_bundle(
-        resumed.assembled.runner,
-        resumed.assembled.session,
+        resumed.assembled,
         resumed.model,
-        resumed.assembled.gate,
-        resumed.assembled.sandbox_session,
-        resumed.assembled.append_notify,
         true,
-        resumed.assembled.worktree_controller,
-        resumed.assembled.bus,
-        resumed.assembled.provider_facts,
     ))
 }

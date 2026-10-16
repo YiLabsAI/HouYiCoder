@@ -34,7 +34,7 @@ use std::time::Duration;
 use houyicoder_context::SessionId;
 use houyicoder_service::composition::host_lifecycle::HostLifecycle;
 use houyicoder_service::composition::{
-    BuildRunnerOptions, ProviderFacts, ProviderResolution, build_runner, resolve_provider,
+    BuildRunnerOptions, ProviderResolution, build_runner, resolve_provider,
 };
 use tokio::runtime::Builder;
 
@@ -317,18 +317,8 @@ fn test_pair_completes_handshake() {
     let mut options = BuildRunnerOptions::default();
     options.provider = Some(ProviderResolution::stub());
     let bundle = build_runner(options);
-    let (runner_arc, mut client, _startup_warnings, host) = start_local_server(
-        bundle.runner,
-        bundle.session,
-        bundle.gate,
-        bundle.sandbox_session,
-        bundle.append_notify,
-        None,
-        None,
-        bundle.bus,
-        Some(root.join("settings.json")),
-        ProviderFacts::default(),
-    );
+    let (runner_arc, mut client, _startup_warnings, host) =
+        start_local_server(bundle, None, Some(root.join("settings.json")));
     // The runner Arc is shared: the server task and the caller hold the
     // same allocation.
     assert!(Arc::ptr_eq(&runner_arc, &runner_arc));

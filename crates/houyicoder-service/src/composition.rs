@@ -116,7 +116,10 @@ use std::sync::atomic::AtomicU32;
 /// The runner plus the handles the host needs to render host-side state
 /// without dispatching a tool call. Returned by build_runner and assemble;
 /// the resume variants return ResumedRunner (this plus the restored model).
-#[non_exhaustive]
+///
+/// Deliberately not non-exhaustive, unlike the option structs: this is what
+/// the root builds, so no caller constructs one, and the marker would only
+/// stop a consumer from taking the whole value it was just handed.
 pub struct AssembledRunner {
     pub runner: Runner,
     pub session: SessionId,

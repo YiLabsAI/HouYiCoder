@@ -9,17 +9,15 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::channel;
 
-use houyicoder_api::sandbox::SandboxSession;
 use houyicoder_client::{Client, InProcTransport};
 use houyicoder_config::{config_home, resolve_model};
-use houyicoder_context::{SessionDescriptorStore, SessionId};
-use houyicoder_core::agent::multi_agent::bus_types::AgentBus;
-use houyicoder_core::agent::{Runner, WorktreeController};
-use houyicoder_permission::{DefaultModeGate, FileRuleStore, ModeGate};
+use houyicoder_context::SessionDescriptorStore;
+use houyicoder_core::agent::Runner;
+use houyicoder_permission::{FileRuleStore, ModeGate};
 use houyicoder_protocol::frontend::SessionId as WireSessionId;
 use houyicoder_service::composition::host_lifecycle::HostLifecycle;
 use houyicoder_service::composition::{
-    ProviderFacts, ProviderResolution, build_runner, build_runner_for_resume_export,
+    AssembledRunner, ProviderResolution, build_runner, build_runner_for_resume_export,
     disk_descriptor_store, fleet_status_relay, notification_drain, session_log_root,
 };
 use houyicoder_service::server::{EventSequencer, FrameCarrier, Server};
@@ -28,7 +26,6 @@ use houyicoder_tui::composition::{FrontendStartup, RunnerBundle, shared_runtime}
 use houyicoder_tui::transcript::snapshot::TranscriptSnapshot;
 use houyicoder_tui::view::export_log::ExportLog;
 use houyicoder_tui::view::trajectory_pane::TrajectoryLog;
-use tokio::sync::Notify;
 
 use crate::session::catalog::DescriptorSessionCatalog;
 use crate::session::history::SessionHistory;
@@ -64,18 +61,7 @@ pub(crate) fn build_bundle(
         bundle.runner.set_model(m.clone());
     }
     let model = model_override.unwrap_or_else(resolve_model);
-    assemble_bundle(
-        bundle.runner,
-        bundle.session,
-        model,
-        bundle.gate,
-        bundle.sandbox_session,
-        bundle.append_notify,
-        false,
-        bundle.worktree_controller,
-        bundle.bus,
-        bundle.provider_facts,
-    )
+    assemble_bundle(bundle, model, false)
 }
 
 /// Resume a session from an exported transcript file (--resume <file> when
@@ -95,18 +81,7 @@ pub(crate) fn build_bundle_for_resume(
         Some(Arc::new(FileRuleStore::default_paths())),
         provider,
     )?;
-    Ok(assemble_bundle(
-        resumed.assembled.runner,
-        resumed.assembled.session,
-        resumed.model,
-        resumed.assembled.gate,
-        resumed.assembled.sandbox_session,
-        resumed.assembled.append_notify,
-        true,
-        resumed.assembled.worktree_controller,
-        resumed.assembled.bus,
-        resumed.assembled.provider_facts,
-    ))
+    Ok(assemble_bundle(resumed.assembled, resumed.model, true))
 }
 
 /// Shared TUI wiring: install the agent event handlers, pair the in-memory
@@ -115,19 +90,21 @@ pub(crate) fn build_bundle_for_resume(
 /// the TUI drives. Both the fresh path (build_bundle) and the resume path
 /// (build_bundle_for_resume) route through here so the wiring cannot drift
 /// between them.
-#[expect(clippy::too_many_arguments, reason = "param grouping deliberate")]
 pub(crate) fn assemble_bundle(
-    runner: Runner,
-    session: SessionId,
+    assembled: AssembledRunner,
     model: String,
-    gate: Arc<DefaultModeGate>,
-    sandbox_session: Option<Arc<dyn SandboxSession>>,
-    append_notify: Arc<Notify>,
     skip_login: bool,
-    worktree_controller: Option<Arc<WorktreeController>>,
-    bus: Option<Arc<AgentBus>>,
-    provider_facts: ProviderFacts,
 ) -> WiredBundle {
+    let AssembledRunner {
+        runner,
+        session,
+        gate,
+        sandbox_session,
+        append_notify,
+        worktree_controller,
+        bus,
+        provider_facts,
+    } = assembled;
     // Grab the SessionLog BEFORE the runner moves into the server task — the
     // trajectory view reads it for the /trajectory pane, and the session
     // picker reads other sessions' log heads to derive their titles.
@@ -158,16 +135,18 @@ pub(crate) fn assemble_bundle(
     let wire_session = WireSessionId(session.to_string());
     let (tx, rx) = channel::<SessionMessage>();
     let (runner, client, startup_warnings, host) = start_local_server(
-        runner,
-        session,
-        gate,
-        sandbox_session,
-        append_notify,
+        AssembledRunner {
+            runner,
+            session,
+            gate,
+            sandbox_session,
+            append_notify,
+            worktree_controller,
+            bus,
+            provider_facts,
+        },
         Some(descriptor_store.clone()),
-        worktree_controller,
-        bus,
         None,
-        provider_facts,
     );
     // The server task owns the runner + the permission gate; the TUI holds
     // only the protocol client.
@@ -200,19 +179,21 @@ pub(crate) fn assemble_bundle(
 /// event sequencer receives runtime events before the runner is shared, then
 /// becomes the sole ordering authority for durable event frames, model
 /// deltas, and fleet status. The server is the only carrier writer.
-#[expect(clippy::too_many_arguments, reason = "param grouping deliberate")]
 pub(crate) fn start_local_server(
-    mut runner: Runner,
-    session: SessionId,
-    gate: Arc<DefaultModeGate>,
-    sandbox_session: Option<Arc<dyn SandboxSession>>,
-    append_notify: Arc<Notify>,
+    assembled: AssembledRunner,
     descriptor_store: Option<Arc<dyn SessionDescriptorStore>>,
-    worktree_controller: Option<Arc<WorktreeController>>,
-    bus: Option<Arc<AgentBus>>,
     settings_path: Option<PathBuf>,
-    provider_facts: ProviderFacts,
 ) -> (Arc<Runner>, Client, Vec<String>, HostLifecycle) {
+    let AssembledRunner {
+        mut runner,
+        session,
+        gate,
+        sandbox_session,
+        append_notify,
+        worktree_controller,
+        bus,
+        provider_facts,
+    } = assembled;
     let mut host = HostLifecycle::new();
     let (c2s_tx, c2s_rx) = futures::channel::mpsc::channel(16);
     let (s2c_tx, s2c_rx) = futures::channel::mpsc::channel(16);

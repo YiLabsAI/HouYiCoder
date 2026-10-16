@@ -22,9 +22,7 @@ use houyicoder_protocol::envelope::{ClientResponsePayload, ServerFrame, ServerRe
 use houyicoder_protocol::frontend::event::FrontendEvent;
 use houyicoder_protocol::frontend::trust::TrustAccept;
 use houyicoder_service::composition::host_lifecycle::HostLifecycle;
-use houyicoder_service::composition::{
-    BuildRunnerOptions, ProviderFacts, ProviderResolution, build_runner,
-};
+use houyicoder_service::composition::{BuildRunnerOptions, ProviderResolution, build_runner};
 use tokio::runtime::{Builder, Runtime};
 use tokio::time::{sleep, timeout};
 
@@ -62,18 +60,7 @@ fn start_host(
     let bundle = build_runner(options);
     let sid = bundle.session.to_string();
     let bus = bundle.bus.clone().expect("the real assembly carries a bus");
-    let (runner, client, _warnings, host) = start_local_server(
-        bundle.runner,
-        bundle.session,
-        bundle.gate,
-        bundle.sandbox_session,
-        bundle.append_notify,
-        None,
-        None,
-        bundle.bus,
-        Some(settings_path),
-        ProviderFacts::default(),
-    );
+    let (runner, client, _warnings, host) = start_local_server(bundle, None, Some(settings_path));
     let weak = Arc::downgrade(&runner);
     let lock = SessionLock::acquire(&sid, root).expect("acquire session lock");
     (runner, client, weak, host, lock, bus)
