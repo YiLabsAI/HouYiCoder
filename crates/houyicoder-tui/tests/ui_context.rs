@@ -1,13 +1,12 @@
 //! Real-binary PTY tests for the /context command surface. The unit layer
-//! (view/context_view/tests.rs) asserts on App
-//! state + wire struct fields; this layer drives the real houyi binary through
-//! a real terminal so the rendered byte stream the user actually sees is
-//! fixed: every section is present, the legend carries the model/window/pct
-//! line + category rows, a session that has run no turn still reports the
-//! categories it would send (the "no data yet" empty-grid guard does not fire
-//! on a real session because app.session is always Some), a resumed session
-//! reports the history it loaded, and a post-compact session shows the folded
-//! summary + Compact buffer category + Cache prefix line.
+//! (view/context_view/tests.rs) asserts on App state and protocol fields; this
+//! layer drives the real houyi binary through a real terminal so the rendered
+//! byte stream the user actually sees decides the outcome: every section is
+//! present, the legend carries the model/window/pct line + category rows, zero
+//! turns still give honest prospective data (the "no data yet" empty-grid guard
+//! does not fire on a real session because app.session is always Some), a
+//! resumed session reports the history it loaded, and a post-compact session
+//! shows the folded summary + Compact buffer category + Cache prefix line.
 //!
 //! Run via make suite ui (builds the bin first) or
 //! cargo test --test ui_all ui_context:: -- --ignored after cargo build --bin houyi.
@@ -20,13 +19,14 @@ use crate::common::{
 };
 use std::fs;
 
-/// /context renders every section on a fresh zero-turn session. The
-/// composition root always attaches a live session, so /context reads the
-/// breakdown that session measures rather than the stub the no-session path
-/// would render. That stub path carries invented numbers, is unreachable in
-/// production, and is not asserted here. The PTY session picks local mode
-/// (sends '3' on the login screen) to land on the working screen without a
-/// network call.
+/// /context renders every section on a fresh zero-turn session. The session is
+/// always Some in the real binary (the composition root sets
+/// app.session = Some(live_session)), so /context hits the server's real
+/// prospective breakdown — not the canned stub the no-session path would
+/// render. That stub path (100% full fake data) is unreachable in production
+/// and is not asserted here. pty_session picks local mode (sends
+/// '3' on the login screen) to land on the working screen without a network
+/// call.
 #[test]
 #[ignore]
 fn test_context_renders_sections() {
@@ -39,7 +39,7 @@ fn test_context_renders_sections() {
         s.output()
     );
     assert!(
-        s.output().contains("Estimated usage by category"),
+        s.wait_for("Estimated usage by category", RENDER_TIMEOUT),
         "legend header missing:\n{}",
         s.output()
     );
@@ -48,22 +48,24 @@ fn test_context_renders_sections() {
     // Asserting a real label distinguishes the category row from the
     // model/window/pct legend line, which "tokens (" alone cannot.
     assert!(
-        s.output().contains("Free space:"),
+        s.wait_for("Free space:", RENDER_TIMEOUT),
         "free-space category row missing:\n{}",
         s.output()
     );
     // Cache prefix renders unconditionally (dispatch always fills it from
     // System prompt + Tools tokens). At zero turns hit_rate is None (no
     // prior provider turn) — this asserts the decoupled prefix line still
-    // shows, the exact case the wire-render bug hid. Pins the fix in the
-    // happy path, not just the post-compact path.
+    // shows on a session with no turns, the happy path beside the
+    // post-compact path. The pane is drawn a region at a time, so each row
+    // is waited for rather than read once; the absence check below runs once
+    // the last row has arrived.
     assert!(
-        s.output().contains("Cache prefix:"),
+        s.wait_for("Cache prefix:", RENDER_TIMEOUT),
         "cache prefix line missing on a zero-turn session:\n{}",
         s.output()
     );
-    // The empty-grid guard ("no data yet") must NOT fire on a real wired
-    // session even with zero turns — the measured breakdown is non-empty.
+    // The empty-grid guard ("no data yet") must NOT fire on a real session
+    // even with zero turns — the prospective breakdown is non-empty.
     assert!(
         !s.output().contains("no data yet"),
         "empty-grid guard fired on a real session:\n{}",
@@ -74,7 +76,7 @@ fn test_context_renders_sections() {
 /// /context after a compaction shows the folded summary line + the
 /// Compact buffer category + the Cache prefix line. Seeds a session with a
 /// checkpoint manifest on disk (a post-compact state) via the real
-/// LocalFileBackend, launches --resume <sid>, and pins that the /context
+/// LocalFileBackend, launches --resume <sid>, and asserts that the /context
 /// render surfaces the post-compact state — the interaction the unit layer
 /// could not reach because it never drove compact-then-/context through the
 /// real dispatch + render path.
@@ -109,17 +111,17 @@ fn test_post_compact_shows_folded() {
         s.output()
     );
     assert!(
-        s.output().contains("Compact buffer"),
+        s.wait_for("Compact buffer", RENDER_TIMEOUT),
         "compact buffer category missing:\n{}",
         s.output()
     );
     assert!(
-        s.output().contains("folded:"),
+        s.wait_for("folded:", RENDER_TIMEOUT),
         "folded summary line missing:\n{}",
         s.output()
     );
     assert!(
-        s.output().contains("Cache prefix:"),
+        s.wait_for("Cache prefix:", RENDER_TIMEOUT),
         "cache prefix line missing:\n{}",
         s.output()
     );
@@ -127,7 +129,7 @@ fn test_post_compact_shows_folded() {
     // the cached prefix ends — the real-binary verification of the breakpoint
     // marker.
     assert!(
-        s.output().contains('\u{2502}'),
+        s.wait_for("\u{2502}", RENDER_TIMEOUT),
         "cache breakpoint bar missing on the grid:\n{}",
         s.output()
     );
@@ -173,14 +175,21 @@ fn test_resume_reports_loaded_history() {
     );
     // The loaded turn is the discriminator: a pane measured from an empty
     // event list reports the prompt and its tools only, and no messages row.
+    // The pane is drawn a region at a time, so each row is waited for rather
+    // than read once; a single read can capture the frame before the row.
     assert!(
-        s.output().contains("Messages:"),
+        s.wait_for("Messages:", RENDER_TIMEOUT),
         "the loaded history has no row:\n{}",
         s.output()
     );
     assert!(
-        s.output().contains("System prompt:") && s.output().contains("System tools:"),
-        "the prompt and its tools have no rows:\n{}",
+        s.wait_for("System prompt:", RENDER_TIMEOUT),
+        "the prompt has no row:\n{}",
+        s.output()
+    );
+    assert!(
+        s.wait_for("System tools:", RENDER_TIMEOUT),
+        "the tools have no row:\n{}",
         s.output()
     );
 }
@@ -423,6 +432,13 @@ fn test_context_lifecycle_rows() {
     assert!(
         s.wait_for("System tools:", RENDER_TIMEOUT),
         "the fresh session still measures the tool schemas:\n{}",
+        s.output()
+    );
+    // The pane is drawn a region at a time, so the absence check runs after
+    // the last row it can carry has arrived rather than on a partial frame.
+    assert!(
+        s.wait_for("Cache prefix:", RENDER_TIMEOUT),
+        "the fresh session still measures the cached prefix:\n{}",
         s.output()
     );
     assert!(
