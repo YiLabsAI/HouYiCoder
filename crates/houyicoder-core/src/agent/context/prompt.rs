@@ -1,14 +1,15 @@
 //! SystemPrompt assembly: section-ize the system prompt and inject project
 //! context (an AGENTS.md style memory file) into a Project context section.
-//! This is the thin-identity + project-context slice; tool docs and the env
-//! summary are stubs that fill in when tool schemas and the env probe land.
+//! This is the thin-identity + project-context slice; tool docs are a stub
+//! that fills in when tool schemas land.
 //!
-//! Byte-stability: the assembled prompt is identical across turns unless the
+//! Byte-stability: the static prefix is identical across turns unless the
 //! memory file on disk changes. Volatile data (a per-second timestamp, a live
-//! git status) is kept out of the prompt so the prefix caches cleanly;
-//! the current date is injected per turn outside the system prompt
-//! (into the first user message) for the same reason.
+//! git status) stays out of it so the prefix caches cleanly; the current date
+//! changes daily, so it is appended past the boundary with the rest of the
+//! suffix a cross-session cache cannot share.
 
+pub(crate) mod date;
 pub(crate) mod extract;
 pub(crate) mod memory_behavior;
 pub(crate) mod reward_lesson;
@@ -32,30 +33,30 @@ const LOCAL_MEMORY_FILE: &str = "agent.local.md";
 /// A built system prompt: the assembled text plus the per-section labels the
 /// /context drill-down renders. The static prefix (before dynamic_boundary)
 /// is byte-stable across turns and across sessions — it carries only the
-/// fixed identity, framework, and behavior sections with no cwd/env input.
+/// fixed identity, framework, and behavior sections with no cwd input.
 /// The dynamic suffix (from dynamic_boundary onward) carries the cwd-
-/// dependent project context and env, which change when the working
-/// directory or memory file changes. A future cache-policy consumer splits
-/// on this offset to give the static prefix a global cache scope while the
-/// dynamic suffix stays session-scoped, without leaking a sentinel string
-/// into the model's view.
+/// dependent project context, the session-stable agent directory, and the
+/// run's current date, none of which belong in a cross-session cache. A
+/// cache-policy consumer splits on this offset to give the static prefix a
+/// global cache scope while the dynamic suffix stays session-scoped, without
+/// leaking a sentinel string into the model's view.
 #[derive(Debug, Clone, Default)]
 pub struct SystemPrompt {
     pub text: String,
     pub items: Vec<String>,
     /// True when a project memory file was found and injected.
     pub has_project_context: bool,
-    /// Byte offset into the text where the cwd-dependent dynamic suffix
-    /// begins. Everything before this is byte-stable across turns/sessions;
-    /// from here onward is cwd/env-dependent. A cache policy splits here.
+    /// Byte offset into the text where the dynamic suffix begins. Everything
+    /// before this is byte-stable across turns and sessions; from here onward
+    /// the bytes can change between sessions. A cache policy splits here.
     pub dynamic_boundary: usize,
 }
 
 impl SystemPrompt {
     /// Build the system prompt from sections. The static prefix (identity,
     /// framework, behavior) is byte-stable; the dynamic suffix (project
-    /// context from the first AGENTS.md walking up from cwd, plus env) is
-    /// appended after the boundary so a cache policy can carve the prefix.
+    /// context from the first AGENTS.md walking up from cwd) is appended
+    /// after the boundary so a cache policy can carve the prefix.
     pub fn build(cwd: &Path) -> SystemPrompt {
         Self::build_with_memory_index(cwd, None, None)
     }
@@ -77,7 +78,6 @@ impl SystemPrompt {
         let using_tools = using_tools_section();
         let project = project_context_section(cwd);
         let tool_docs = tool_docs_section();
-        let env = env_section();
 
         let mut text = String::new();
         let mut items = Vec::new();
@@ -129,12 +129,13 @@ impl SystemPrompt {
         text.push_str(&tool_docs);
         items.push("Tool docs".to_string());
 
-        // Boundary: everything above is byte-stable; from here is cwd/env-
-        // dependent. Record the offset so a cache policy can split here.
+        // Boundary: everything above is byte-stable; from here the bytes can
+        // change between sessions. Record the offset so a cache policy can
+        // split here.
         let dynamic_boundary = text.len();
 
-        // Dynamic suffix — cwd/env-dependent, appended after the boundary so
-        // the static prefix stays a clean cacheable prefix.
+        // Dynamic suffix — not byte-stable across sessions, appended after the
+        // boundary so the static prefix stays a clean cacheable prefix.
         if let Some(ref p) = project {
             text.push_str("\n\n");
             text.push_str(p);
@@ -151,9 +152,13 @@ impl SystemPrompt {
             items.push("Agent directory".to_string());
         }
 
+        // The run's current date, last so a day roll-over costs only this
+        // line's bytes. It belongs to the system prompt and not to a message
+        // body: a saved memory must quote text the session log holds, and
+        // text injected into a message would be quotable but unverifiable.
         text.push_str("\n\n");
-        text.push_str(&env);
-        items.push("Env".to_string());
+        text.push_str(&date::utc_date_line());
+        items.push("Date".to_string());
 
         SystemPrompt {
             text,
@@ -384,17 +389,6 @@ fn tool_docs_section() -> String {
     "# Tool docs\n\
      Tools are declared in the Tools section of the assembled context; this summary \
      will list each tool name and a one-line description once tool schemas land."
-        .to_string()
-}
-
-/// Env section: a fixed, non-volatile placeholder. The working directory,
-/// platform, and current date are injected per turn outside the system prompt
-/// to keep this prefix byte-stable for caching (the current date rides
-/// the first user message for the same reason).
-fn env_section() -> String {
-    "# Env\n\
-     Working directory, platform, and current date are injected per turn \
-     outside the system prompt to keep this prefix byte-stable for caching."
         .to_string()
 }
 

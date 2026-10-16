@@ -5,6 +5,7 @@ use houyicoder_context::{
 };
 use houyicoder_protocol::llm::ToolDef;
 use prompt::SystemPrompt;
+use prompt::date::utc_date_line;
 use std::env::temp_dir;
 use std::fs::create_dir_all;
 use std::fs::remove_dir_all;
@@ -739,13 +740,52 @@ fn test_boundary_set_without_project() {
         p.dynamic_boundary > 0,
         "boundary is set even without project context"
     );
-    assert!(
-        p.dynamic_boundary < p.text.len(),
-        "boundary is before the dynamic suffix (env lives after it)"
-    );
-    // The env section is in the dynamic suffix.
+    // No project context exists here, so the date is the whole suffix.
     let suffix = &p.text[p.dynamic_boundary..];
-    assert!(!suffix.is_empty(), "dynamic suffix carries env");
+    assert_eq!(
+        suffix,
+        format!("\n\n{}", utc_date_line()),
+        "the dynamic suffix carries the run's date"
+    );
+    remove_dir_all(&scratch).ok();
+}
+
+/// The date grounds the run without entering a message body. The system prompt
+/// carries it past the boundary, so it neither rotates the cacheable prefix nor
+/// becomes text the model can quote but the session log cannot verify.
+#[test]
+fn test_date_grounds_system_prompt() {
+    let mut scratch = temp_dir();
+    scratch.push(format!("ctx-test-date-{}", id()));
+    create_dir_all(&scratch).expect("mkdir scratch");
+    let events = vec![SessionLogEntry {
+        id: EventId::new(),
+        session: SessionId::new(),
+        ts: 0,
+        prev_hash: None,
+        event: SessionEvent::UserInput {
+            text: "first ask".into(),
+        },
+    }];
+    let v = ContextBuilder::new()
+        .with_cwd(scratch.clone())
+        .build(&events);
+    let date = utc_date_line();
+    assert!(
+        v.system.ends_with(&date),
+        "the system prompt grounds the run's date: {}",
+        v.system
+    );
+    let prefix = &v.system[..v.dynamic_boundary];
+    assert!(
+        !prefix.contains(&date),
+        "the daily date stays out of the cacheable prefix"
+    );
+    let sent = serde_json::to_string(&v.messages).expect("messages serialize");
+    assert!(
+        !sent.contains(&date),
+        "no message body carries the injected date: {sent}"
+    );
     remove_dir_all(&scratch).ok();
 }
 

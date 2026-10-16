@@ -28,7 +28,7 @@ fn test_no_memory_file_identity() {
     );
     assert!(p.items.contains(&"Efficiency".to_string()));
     assert!(p.items.contains(&"Tool docs".to_string()));
-    assert!(p.items.contains(&"Env".to_string()));
+    assert!(p.items.contains(&"Date".to_string()));
 }
 
 #[test]

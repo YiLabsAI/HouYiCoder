@@ -126,22 +126,3 @@ fn test_child_prefix_same_type() {
     let other = child_system_prompt("A different agent.", &dir, "qwen3-coder", false);
     assert_ne!(first, other, "a different type diverges the prefix");
 }
-
-#[test]
-fn test_civil_epoch() {
-    assert_eq!(civil_from_days(0), (1970, 1, 1));
-    assert_eq!(civil_from_days(-1), (1969, 12, 31));
-}
-
-/// Leap-day boundaries: 2024-02-29 is day 19782 and 2024-03-01 is 19783.
-#[test]
-fn test_civil_leap_boundaries() {
-    assert_eq!(civil_from_days(19_782), (2024, 2, 29));
-    assert_eq!(civil_from_days(19_783), (2024, 3, 1));
-}
-
-#[test]
-fn test_iso_date_format() {
-    assert_eq!(iso_date(0), "1970-01-01");
-    assert_eq!(iso_date(86_400), "1970-01-02");
-}
