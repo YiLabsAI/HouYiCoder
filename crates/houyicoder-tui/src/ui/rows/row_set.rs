@@ -7,6 +7,12 @@
 //! then acts on a row beside the one it points at. One value makes that
 //! unrepresentable: the only writers are push and the batch replace on the
 //! caches, and both take the text and the metadata in the same operation.
+//!
+//! The row's identity travels with them for the same reason: a parked viewport
+//! names the row it stands on, converts that name back to a screen row when the
+//! list is rebuilt, and needs the text of the rows around it to keep the offset
+//! into the row's own text. Rows of one line share the identity, so the run of
+//! rows carrying one name is what the offset counts over.
 
 use std::ops::Range;
 
@@ -14,6 +20,7 @@ use ratatui::text::Line;
 
 use crate::records::ToolOutcome;
 use crate::row_id::RowId;
+use crate::scroll::ScrollAnchor;
 use crate::selection::TAG_PLAIN;
 
 /// One row: the tag its styling keys on, its plain text, and the tool outcome
@@ -106,20 +113,36 @@ pub(crate) struct RowSet {
     fold_keys: Vec<Option<String>>,
     expanded_group: Vec<Option<String>>,
     turn_ids: Vec<Option<RowId>>,
+    row_ids: Vec<Option<RowId>>,
     pre_rendered: Vec<Option<Line<'static>>>,
     in_subagent: bool,
+    /// The identity the rows pushed from here on belong to, until the next
+    /// line begins. Builder state, like the delegation nesting flag: a line
+    /// names itself once and every row it emits takes that name -- the blank
+    /// row separating it from the one above included, and every row of a call
+    /// beside its result, which is what makes those rows one run.
+    line_id: Option<RowId>,
 }
 
 impl RowSet {
     /// Append one row and its metadata. The arrays move together, so a row
-    /// cannot arrive without the keys a later click resolves against it.
+    /// cannot arrive without the keys a later click resolves against it, nor
+    /// without the identity a parked viewport names it by.
     pub(crate) fn push(&mut self, row: Row) {
         self.rows.push((row.tag, row.text, row.outcome));
         self.callids.push(row.callid);
         self.fold_keys.push(row.fold_key);
         self.expanded_group.push(row.group);
         self.turn_ids.push(row.turn_id);
+        self.row_ids.push(self.line_id.clone());
         self.pre_rendered.push(row.pre);
+    }
+
+    /// Begin a line: the rows pushed from here on belong to its identity until
+    /// the next call. The caller sets it once per line and the rows the line
+    /// emits all carry it.
+    pub(crate) fn begin_line(&mut self, id: RowId) {
+        self.line_id = Some(id);
     }
 
     /// True while emitting the rows of an expanded delegation. Row builders
@@ -225,9 +248,105 @@ impl RowSet {
                 slots_at.clone(),
                 live_at.clone(),
             ),
+            row_ids: window(
+                &self.row_ids,
+                &live.row_ids,
+                slots_at.clone(),
+                live_at.clone(),
+            ),
             pre_rendered: window(&self.pre_rendered, &live.pre_rendered, slots_at, live_at),
             in_subagent: false,
+            line_id: None,
         }
+    }
+
+    /// The anchor that stands at this screen row, over the rows this set
+    /// holds. None when the set holds no named row to stand on.
+    ///
+    /// A row past the last of them stands in the live tail, whose rows are not
+    /// here: the anchor names the last line, past the end of its text by that
+    /// many rows.
+    pub(crate) fn anchor_at(&self, row: usize) -> Option<ScrollAnchor> {
+        let held = self.rows.len();
+        let (row, past) = match held.checked_sub(1) {
+            None => return None,
+            Some(last) if row > last => (last, Some(row - held)),
+            Some(_) => (row, None),
+        };
+        let row_id = self.row_ids.get(row)?.clone()?;
+        let (start, end) = self.run_around(row)?;
+        // Standing on one of the line's rows counts the text before that row;
+        // standing past them counts the line's whole text, plus the rows below
+        // it that the line does not hold.
+        let offset = match past {
+            None => self.run_width(start, row),
+            Some(beyond) => self.run_width(start, end) + beyond,
+        };
+        Some(ScrollAnchor {
+            row: row_id,
+            char_offset: offset as u32,
+        })
+    }
+
+    /// The screen row this anchor resolves to, over the rows this set holds.
+    /// None when no row here carries the anchor's identity: the line is either
+    /// not resident, or inside a group whose rows the group's own row stands
+    /// for.
+    pub(crate) fn row_of(&self, anchor: &ScrollAnchor) -> Option<usize> {
+        let start = self
+            .row_ids
+            .iter()
+            .position(|id| id.as_ref() == Some(&anchor.row))?;
+        let (start, end) = self.run_around(start)?;
+        let width = self.run_width(start, end);
+        let offset = anchor.char_offset as usize;
+        if offset < width {
+            return Some(self.row_in_run(start, end, offset));
+        }
+        // Past the end of the line's text. The live tail when this is the last
+        // line; the line's own last row otherwise, since a collapsed or
+        // re-wrapped line holds fewer rows than the anchor was taken over and
+        // must not drift into the next line.
+        if end == self.row_ids.len() {
+            Some(end + (offset - width))
+        } else {
+            Some(end - 1)
+        }
+    }
+
+    /// The run of rows around this one that share its identity.
+    fn run_around(&self, row: usize) -> Option<(usize, usize)> {
+        let id = self.row_ids.get(row)?.as_ref()?;
+        let mut start = row;
+        while start > 0 && self.row_ids[start - 1].as_ref() == Some(id) {
+            start -= 1;
+        }
+        let mut end = row + 1;
+        while end < self.row_ids.len() && self.row_ids[end].as_ref() == Some(id) {
+            end += 1;
+        }
+        Some((start, end))
+    }
+
+    /// The scalar width of the rows in this run up to, and including the row
+    /// break after, each of them. An offset inside the run lands by comparing
+    /// it against these cumulated widths.
+    fn run_width(&self, start: usize, end: usize) -> usize {
+        (start..end)
+            .map(|r| self.rows[r].1.chars().count() + 1)
+            .sum()
+    }
+
+    /// The row an offset lands on inside one run.
+    fn row_in_run(&self, start: usize, end: usize, offset: usize) -> usize {
+        let mut acc = 0;
+        for row in start..end {
+            acc += self.rows[row].1.chars().count() + 1;
+            if offset < acc {
+                return row;
+            }
+        }
+        end - 1
     }
 }
 

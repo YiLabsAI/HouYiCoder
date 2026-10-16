@@ -85,7 +85,7 @@ fn rendered_working() -> App {
 #[test]
 fn test_scroll_intents_move() {
     let mut app = rendered_working();
-    app.whole_scroll_mut().jump_to(5);
+    app.park_scroll_at(5);
     let start = app.whole_scroll().top_offset();
 
     app.apply_region_intent(RegionIntent::ScrollUp);

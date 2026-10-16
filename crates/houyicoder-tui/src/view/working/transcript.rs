@@ -35,7 +35,7 @@ use ratatui::buffer::CellDiffOption;
 use std::time::Duration;
 use unicode_width::UnicodeWidthStr;
 
-fn ensure_cached_slots(area: Rect, app: &App) {
+pub(crate) fn ensure_cached_slots(area: Rect, app: &App) {
     // The slot rows depend on the source and its revisions, the wrap width,
     // the mode flags, and the bash ticker. SlotsKey names those inputs and
     // compares them one by one; the live text, spinner, and todos are
@@ -52,6 +52,11 @@ fn ensure_cached_slots(area: Rect, app: &App) {
 
 pub(super) fn draw_transcript(f: &mut Frame, area: Rect, app: &App) {
     ensure_cached_slots(area, app);
+    // Publish the pane rect before resolving the anchor: the resolver reads the
+    // rows of this width back through the same cache, and a stale rect would
+    // have it rebuild them at the width of the frame before.
+    let inner = area;
+    app.ui.frame.layout.transcript_rect.set(inner);
 
     // Every frame: combine cached slots rows + fresh live rows (live text,
     // spinner, todos). Live rows are cheap (a few rows at most).
@@ -62,6 +67,16 @@ pub(super) fn draw_transcript(f: &mut Frame, area: Rect, app: &App) {
     app.active_scroll().cap.set(cap);
     let total = total_slots + live.len();
     app.active_scroll().total.set(total);
+    // Stash the transcript pane width before resolving the anchor: the count
+    // path (line_display_rows, reached from the resolver's folded-group case
+    // and from scroll handlers outside the draw borrow) soft-wraps to the SAME
+    // width the render path just used -- count == render rows.
+    app.ui.frame.feedback.transcript_width.set(area.width);
+    // Resolve the parked anchor against the rows this frame will show. A
+    // resize re-wraps the rows, so the row an anchor stands on is only known
+    // here, after the wrap: without this the viewport would hold a row number
+    // taken at the old width.
+    app.settle_scroll();
     let top = app.active_scroll().top_offset();
 
     // One traversal over (slots ++ live) slices the six arrays by the same
@@ -73,13 +88,7 @@ pub(super) fn draw_transcript(f: &mut Frame, area: Rect, app: &App) {
         all.extend(live.text_rows());
         *app.ui.frame.layout.last_all_rows.borrow_mut() = all;
     }
-    let inner = area;
-    // Stash rect + visible rows + callid table for mouse/copy/Ctrl+O.
-    app.ui.frame.layout.transcript_rect.set(inner);
-    // Stash the transcript pane width so the count path (line_display_rows,
-    // called from scroll handlers outside the draw borrow) soft-wraps to the
-    // SAME width the render path just used — count == render rows.
-    app.ui.frame.feedback.transcript_width.set(inner.width);
+    // Stash the visible rows + callid table for mouse/copy/Ctrl+O.
     *app.ui.frame.layout.last_transcript_rows.borrow_mut() = visible.text_rows();
     app.ui.frame.keys.borrow_mut().replace(&visible);
     f.render_widget(Block::default().borders(Borders::NONE), area);
@@ -594,6 +603,10 @@ fn build_slots_rows(area: Rect, app: &App) -> RowSet {
     for slot in &slots {
         match slot {
             DisplaySlot::Summary(g) => {
+                // The group's rows stand for the lines inside it, the first of
+                // them by name: a viewport parked on one of those lines reads
+                // back to this row, which is where the group renders.
+                sink.begin_line(app.line_identity(g.start));
                 if !sink.is_empty() {
                     sink.push(Row::spacer());
                 }
@@ -618,12 +631,15 @@ fn build_slots_rows(area: Rect, app: &App) -> RowSet {
                 }
             }
             DisplaySlot::NoticeCollapsed { key, idx } => {
+                sink.begin_line(app.line_identity(*idx));
                 push_notice_rows(app, *idx, key, false, area.width, &mut sink);
             }
             DisplaySlot::NoticeExpanded { key, idx } => {
+                sink.begin_line(app.line_identity(*idx));
                 push_notice_rows(app, *idx, key, true, area.width, &mut sink);
             }
             DisplaySlot::Line(i, grp) => {
+                sink.begin_line(app.line_identity(*i));
                 let line = &app.active_transcript()[*i];
                 push_line_rows(line, grp.as_deref(), area.width, app, &mut sink);
             }

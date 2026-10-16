@@ -436,7 +436,8 @@ impl TranscriptViewState {
         &self.scroll
     }
 
-    /// The mutable form of whole_scroll.
+    /// The mutable form of whole_scroll, for the parent-only paths that
+    /// release the whole-vec viewport whatever mode is on.
     pub(crate) fn whole_scroll_mut(&mut self) -> &mut TranscriptScroll {
         &mut self.scroll
     }
@@ -660,7 +661,8 @@ impl App {
         self.ui.transcript_view.whole_scroll()
     }
 
-    /// Mutable whole-vec scroll.
+    /// Mutable whole-vec scroll; the parent-only paths that release the
+    /// viewport write this, not the dispatch.
     pub(crate) fn whole_scroll_mut(&mut self) -> &mut TranscriptScroll {
         self.ui.transcript_view.whole_scroll_mut()
     }

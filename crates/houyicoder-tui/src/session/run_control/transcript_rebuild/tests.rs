@@ -17,6 +17,8 @@ use crate::session::SessionConnection;
 use crate::state::transcript::DiskFront;
 use crate::state::{App, Screen};
 use crate::test_harness::MockSnapshot;
+use crate::test_harness::render_buffer;
+use crate::test_harness::render_text;
 use crate::todo_view::TodoStatus;
 use crate::transcript::TranscriptFrame;
 use crate::transcript::rows::NamedRows;
@@ -112,6 +114,36 @@ fn wait_for_workers_to_leave(app: &App) {
 }
 fn pump(app: &mut App, frame: TranscriptFrame) {
     app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(frame.into())));
+}
+
+/// Draw one frame of the working screen and publish the viewport the transcript
+/// pane occupies. A scroll step names the row it lands on from the rows a draw
+/// built, so a test that parks the viewport draws first -- the order a running
+/// terminal takes. The assert names the frame that published no viewport, since
+/// a park over rows that were never built quietly keeps following the tail.
+fn draw_transcript(app: &mut App) {
+    app.ui.navigation.screen = Screen::Working;
+    drop(render_text(app, 100, 30));
+    assert!(
+        app.ui.frame.layout.transcript_rect.get().height > 0,
+        "the frame published a transcript viewport"
+    );
+}
+
+/// The nth row the transcript pane draws, read from the frame at the pane's own
+/// rect. A viewport that held its place draws the same row at the top of the
+/// pane, so a scroll assertion reads where the rows landed rather than the
+/// offset that put them there.
+fn transcript_row(app: &App, row: usize) -> String {
+    let buffer = render_buffer(app, 100, 30);
+    let rect = app.ui.frame.layout.transcript_rect.get();
+    let mut text = String::new();
+    for x in rect.x..rect.x + rect.width {
+        if let Some(cell) = buffer.cell((x, rect.y + row as u16)) {
+            text.push_str(cell.symbol());
+        }
+    }
+    text.trim_end().to_string()
 }
 fn compaction_frame() -> TranscriptFrame {
     TranscriptFrame::Acpx(AcpxNotification::new(

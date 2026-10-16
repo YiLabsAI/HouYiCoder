@@ -118,13 +118,13 @@ fn test_child_scroll_restored() {
         .as_ref()
         .expect("child on view")
         .scroll
-        .raw_top();
+        .top_offset();
 
     app.exit_teammate_view();
     assert!(app.enter_teammate_view_for_sid("c1", false));
     let view = app.ui.teammate_view.as_ref().expect("child on view");
     assert_eq!(
-        view.scroll.raw_top(),
+        view.scroll.top_offset(),
         top,
         "the re-entered child resumes at the parked offset"
     );
@@ -142,8 +142,8 @@ fn test_child_scroll_restored() {
 #[test]
 fn test_child_blocks_search() {
     let mut app = app_with_two_children(60);
-    app.whole_scroll_mut().jump_to(10);
-    let top = app.whole_scroll().raw_top();
+    app.park_scroll_at(10);
+    let top = app.whole_scroll().top_offset();
 
     assert!(app.enter_teammate_view_for_sid("c1", false));
     app.enter_search_view("row");
@@ -154,7 +154,7 @@ fn test_child_blocks_search() {
     );
     assert!(app.ui.teammate_view.is_some(), "the child view stands");
     assert_eq!(
-        app.whole_scroll().raw_top(),
+        app.whole_scroll().top_offset(),
         top,
         "the hidden parent's viewport did not move"
     );

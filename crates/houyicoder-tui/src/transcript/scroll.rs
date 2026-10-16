@@ -1,17 +1,24 @@
 //! Transcript scrollback and search state. The transcript pane follows the
 //! tail by default; PgUp breaks follow so older rows stay visible, and End
-//! or a new user submission returns to the tail. Search has two modes: an
-//! inline Ctrl+F bar that highlights matches in the transcript, and a /search
-//! popup that lists matching lines and jumps the scroll to the focused one.
+//! or a new user submission returns to the tail. A parked viewport is held by
+//! a logical anchor -- the identity of the row it stands on -- so rows entering
+//! or leaving above it move the viewport with the content instead of past it.
+//! Search has two modes: an inline Ctrl+F bar that highlights matches in the
+//! transcript, and a /search popup that lists matching lines and jumps the
+//! scroll to the focused one.
 //!
 //! Layout metrics the key handler needs (cap, total rows) are published by the
 //! pure view through Cell so the view stays a read-only renderer of App while
-//! paging still knows the real viewport size.
+//! paging still knows the real viewport size. Resolving an anchor into a screen
+//! row needs the row list, which the App holds, so the App runs the steps and
+//! publishes the row it resolved; this module holds the position and the
+//! published metrics and computes nothing that depends on the rows.
 
 use std::cell::Cell;
 
 use crate::input::InputField;
 use crate::records::TranscriptLine;
+use crate::row_id::RowId;
 use crate::transcript::rows::NamedRows;
 
 /// Cap on the in-memory viewable transcript. An unbounded buffer is the
@@ -62,22 +69,55 @@ pub struct NewTurnCount {
     pub is_lower_bound: bool,
 }
 
-/// Scrollback state for the transcript pane. follow_tail true means the most
-/// recent rows stay visible; false means a fixed top offset is pinned so older
-/// content stays on screen while the user scrolls back.
+/// Where a parked viewport stands: the row whose text holds the top line, and
+/// how far the top stands into that row.
+///
+/// The row is named by identity rather than by its position in the row list, so
+/// the same logical place survives rows entering above it (an older read landing
+/// ahead of the resident rows, a drain releasing them) and rows leaving. The
+/// offset counts Unicode scalars into the row's rendered text with the row
+/// breaks between the rows of one identity, so it does not depend on where that
+/// text wrapped when the anchor was taken: a re-wrap moves the same offset onto
+/// the neighbouring screen row by the width of a swallowed space at most.
+///
+/// A viewport standing below every named row -- in the live tail, under text
+/// still being written -- carries an offset past the end of the last named row
+/// and reads back as that many rows below it. Such a place belongs to content
+/// the agent is still producing, so the extension holds the parked row in view
+/// at the bottom instead of snapping the viewport up to the last row an
+/// identity can name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScrollAnchor {
+    /// The identity of the row the top line stands in.
+    pub row: RowId,
+    /// The Unicode scalar offset within that row's text.
+    pub char_offset: u32,
+}
+
+/// Scrollback state for the transcript pane: where the viewport stands, and the
+/// viewport size the last draw published.
+///
+/// The anchor is the whole of the position -- None while the viewport follows
+/// the tail, Some while it is parked on a named row. A separate follow flag
+/// beside it would be a second statement of the same fact, and a reader and a
+/// writer can then disagree about which one decides. Resolving the anchor into a
+/// screen row needs the row list, which the App holds, so the resolved row is
+/// published here rather than computed here.
 #[derive(Debug, Clone)]
 pub struct TranscriptScroll {
-    /// True when pinned to the tail (new rows push in). False once PgUp or a
-    /// wheel-up pins a top offset. End or a new user submission restores
-    /// follow; mid-run agent output never yanks a reader scrolled back.
+    /// The row the viewport is parked on. None follows the tail: new rows push
+    /// in, and End or a new user submission restore it.
     ///
     /// Private: every flip routes through a method so the App wrapper can run
     /// the trim and scroll-away cleanup on a return to the tail, rather than
     /// the flip happening silently inside a scroll op.
-    follow_tail: bool,
-    /// Top display-row index when not following the tail. Ignored while
-    /// follow_tail is true.
-    pub offset: usize,
+    anchor: Option<ScrollAnchor>,
+    /// The screen row the parked anchor last resolved to. A step publishes the
+    /// row it lands on; a rebuild publishes the row the anchor resolved to over
+    /// the rows it assembled. An anchor whose row is not resident keeps the last
+    /// value, so the view holds its place while the older read that brings the
+    /// row back runs.
+    resolved: Cell<usize>,
     /// Viewport capacity in display rows, written by the view during draw so
     /// the key handler can page by a full screen. Defaults to a sane value so
     /// paging works before the first draw.
@@ -90,21 +130,21 @@ pub struct TranscriptScroll {
 }
 
 /// The outcome of a downward scroll step. Unchanged: already at the tail,
-/// nothing moved. Pinned: moved to a mid-buffer offset, still scrolled back.
+/// nothing moved. Parked: moved to a row further up, still scrolled back.
 /// ReachedTail: crossed to the tail, so the caller trims the live transcript
 /// and clears the scroll-away snapshot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScrollTransition {
     Unchanged,
-    Pinned,
+    Parked,
     ReachedTail,
 }
 
 impl Default for TranscriptScroll {
     fn default() -> Self {
         Self {
-            follow_tail: true,
-            offset: 0,
+            anchor: None,
+            resolved: Cell::new(0),
             cap: Cell::new(0),
             total: Cell::new(0),
         }
@@ -112,17 +152,25 @@ impl Default for TranscriptScroll {
 }
 
 impl TranscriptScroll {
-    /// Whether the viewport is pinned to the tail (new rows push in).
+    /// Whether the viewport follows the tail (new rows push in).
     pub fn is_following_tail(&self) -> bool {
-        self.follow_tail
+        self.anchor.is_none()
     }
 
-    pub fn raw_top(&self) -> usize {
-        self.offset
+    /// The row the viewport is parked on, if it is parked at all.
+    pub fn anchor(&self) -> Option<&ScrollAnchor> {
+        self.anchor.as_ref()
     }
 
-    pub fn set_raw_top(&mut self, v: usize) {
-        self.offset = v;
+    /// Park the viewport on this row. The caller publishes the screen row the
+    /// anchor resolves to, since resolving it needs the row list.
+    pub fn park(&mut self, anchor: ScrollAnchor) {
+        self.anchor = Some(anchor);
+    }
+
+    /// Publish the screen row the parked anchor resolved to.
+    pub fn set_resolved_top(&self, row: usize) {
+        self.resolved.set(row);
     }
 
     /// Effective cap (rows visible). Falls back to 1 when the view has not
@@ -132,16 +180,23 @@ impl TranscriptScroll {
         if c == 0 { 1 } else { c }
     }
 
-    /// The top display-row index to render from. Follows the tail when
-    /// follow_tail is true; otherwise the pinned offset clamped to the valid
-    /// range so the viewport always fills: never starts past total - cap.
+    /// Whether the row count leaves anything to scroll: a transcript that fits
+    /// one viewport or less has no parked place to hold, so a step over it
+    /// keeps following the tail instead of parking on the only screen there is.
+    pub fn has_scroll_room(&self) -> bool {
+        self.total.get() > self.effective_cap()
+    }
+
+    /// The top display-row index to render from. Follows the tail when nothing
+    /// is parked; otherwise the row the anchor last resolved to, clamped to the
+    /// valid range so the viewport always fills: never starts past total - cap.
     pub fn top_offset(&self) -> usize {
         let total_rows = self.total.get();
         let cap = self.effective_cap();
-        if self.follow_tail {
+        if self.anchor.is_none() {
             total_rows.saturating_sub(cap)
         } else {
-            self.offset.min(total_rows.saturating_sub(cap))
+            self.resolved.get().min(total_rows.saturating_sub(cap))
         }
     }
 
@@ -150,93 +205,9 @@ impl TranscriptScroll {
         self.top_offset()
     }
 
-    /// Page up by one viewport. Breaks follow-tail and pins the offset. A
-    /// no-op (keeping follow-tail) when the transcript fits one viewport or
-    /// less — otherwise a wheel on a short session would pin offset 0 and
-    /// surface a ghost jump-to-bottom label while the view is already at
-    /// the bottom.
-    pub fn page_up(&mut self) {
-        let total_rows = self.total.get();
-        let cap = self.effective_cap();
-        let max_top = total_rows.saturating_sub(cap);
-        if max_top == 0 {
-            return;
-        }
-        let cur = self.top_offset();
-        self.offset = cur.saturating_sub(cap);
-        self.follow_tail = false;
-    }
-
-    /// Page down by one viewport. Returns to follow-tail when the bottom is
-    /// reached. The transition lets the caller trim the live transcript and
-    /// clear the scroll-away snapshot on a return to the tail, rather than
-    /// the flip happening silently here.
-    pub fn page_down(&mut self) -> ScrollTransition {
-        let total_rows = self.total.get();
-        let cap = self.effective_cap();
-        let cur = self.top_offset();
-        let max_top = total_rows.saturating_sub(cap);
-        if cur + cap >= max_top {
-            if self.follow_tail {
-                ScrollTransition::Unchanged
-            } else {
-                self.follow_tail = true;
-                ScrollTransition::ReachedTail
-            }
-        } else {
-            self.offset = cur + cap;
-            self.follow_tail = false;
-            ScrollTransition::Pinned
-        }
-    }
-
-    /// Step up by n lines. Breaks follow-tail and pins the offset. Used for
-    /// wheel scroll (n = 3) and edge auto-scroll during a drag (n = 1) — a
-    /// line step keeps continuity with the prior viewport, unlike a full
-    /// page jump which swaps the whole screen. A no-op (keeping follow-tail)
-    /// when the transcript fits one viewport or less, matching page_up.
-    pub fn line_up(&mut self, n: usize) {
-        let total_rows = self.total.get();
-        let max_top = total_rows.saturating_sub(self.effective_cap());
-        if max_top == 0 {
-            return;
-        }
-        let cur = self.top_offset();
-        self.offset = cur.saturating_sub(n);
-        self.follow_tail = false;
-    }
-
-    /// Step down by n lines. Returns to follow-tail when the bottom is
-    /// reached. See line_up for why a line step is the wheel default. The
-    /// transition carries whether the step crossed to the tail so the caller
-    /// can trim and clear the scroll-away snapshot.
-    pub fn line_down(&mut self, n: usize) -> ScrollTransition {
-        let total_rows = self.total.get();
-        let cur = self.top_offset();
-        let max_top = total_rows.saturating_sub(self.effective_cap());
-        if cur + n >= max_top {
-            if self.follow_tail {
-                ScrollTransition::Unchanged
-            } else {
-                self.follow_tail = true;
-                ScrollTransition::ReachedTail
-            }
-        } else {
-            self.offset = cur + n;
-            self.follow_tail = false;
-            ScrollTransition::Pinned
-        }
-    }
-
-    /// Pin the viewport so the given display-row index is at the top.
-    pub fn jump_to(&mut self, row: usize) {
-        self.offset = row;
-        self.follow_tail = false;
-    }
-
     /// Return to following the tail.
     pub fn follow_tail(&mut self) {
-        self.follow_tail = true;
+        self.anchor = None;
     }
 }
 

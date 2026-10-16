@@ -359,7 +359,11 @@ fn test_floor_count_after_drain() {
         "the label counts the turns the window still shows: {new:?}"
     );
     assert!(new.is_lower_bound, "a gone anchor reports a floor");
-    app.whole_scroll_mut().jump_to(0);
+    // The park names the row it stands on from the rows a draw built; without
+    // the draw the viewport keeps following the tail and the marker is not
+    // the thing under test here.
+    drop(render_text(&app, 80, 24));
+    app.park_scroll_at(0);
     let out = render_text(&app, 80, 24);
     assert!(
         out.contains("+ new message"),

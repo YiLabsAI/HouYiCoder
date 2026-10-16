@@ -71,6 +71,32 @@ fn test_window_keeps_row_keys() {
     );
 }
 
+/// Every screen row the set holds names itself: the anchor taken at a row
+/// resolves back to that row. The row just past the last named one is where the
+/// viewport crosses into the live tail, and it is the row the two directions
+/// disagree about -- its name is the last line's text plus no rows beyond, and
+/// read back as one of the line's own rows it draws the reader one row off.
+#[test]
+fn test_anchor_names_row() {
+    let mut set = RowSet::default();
+    set.begin_line(RowId::local(3));
+    set.push(Row::new(TAG_PLAIN, "first line"));
+    set.push(Row::spacer());
+    set.begin_line(RowId::local(4));
+    set.push(Row::new(TAG_PLAIN, "second line"));
+    set.push(Row::new(TAG_PLAIN, "second line wraps"));
+    let held = set.len();
+
+    for row in 0..=held + 2 {
+        let anchor = set.anchor_at(row).expect("every row stands on a name");
+        assert_eq!(
+            set.row_of(&anchor),
+            Some(row),
+            "the anchor taken at row {row} resolved elsewhere"
+        );
+    }
+}
+
 /// A window never reports more rows than the two halves hold, and a request
 /// past the end is empty rather than a short slice of one array.
 #[test]

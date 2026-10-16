@@ -20,6 +20,19 @@ use crate::transcript::TranscriptFrame;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct LocalEntryId(pub u64);
 
+/// Where the names of rows raised without a frame begin. Frame positions count
+/// up from zero, so the two producers draw from ranges that never meet.
+const RAISED_ROW_BASE: u64 = 1 << 63;
+
+impl LocalEntryId {
+    /// The sequence this name stands for, when it names a row raised without
+    /// a frame rather than a frame position. None for a frame position, which
+    /// the printed form tells apart by its own marker.
+    fn raised_seq(self) -> Option<u64> {
+        self.0.checked_sub(RAISED_ROW_BASE)
+    }
+}
+
 /// The identity of one transcript row. The two forms cannot collide: the
 /// durable form displays with the entry marker and a slot, the local form
 /// with the frame marker.
@@ -58,6 +71,25 @@ impl RowId {
     /// frame position.
     pub fn local(position: u64) -> RowId {
         RowId::Local(LocalEntryId(position))
+    }
+
+    /// A local identity for a row the frontend raised with no frame behind it:
+    /// an echoed prompt, a notice, a system line. These names come from a
+    /// sequence of their own, above every frame position, so a name a departed
+    /// row leaves behind is never read back as a frame's row, whatever order
+    /// the raises and the rebuilds arrived in.
+    pub fn raised(seq: u64) -> RowId {
+        RowId::Local(LocalEntryId(RAISED_ROW_BASE + seq))
+    }
+
+    /// The position this identity stands for, when it names a frame position.
+    /// None for a durable identity and for a raised row, neither of which a
+    /// transcript assembled outside the store indexes its lines by.
+    pub fn local_position(&self) -> Option<u64> {
+        match self {
+            RowId::Local(id) if id.raised_seq().is_none() => Some(id.0),
+            _ => None,
+        }
     }
 
     /// Whether the identity comes from a durable log entry, and so names the
@@ -102,7 +134,10 @@ impl fmt::Display for RowId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             RowId::Durable { event, slot } => write!(f, "e{}.{}", event.0, slot),
-            RowId::Local(LocalEntryId(n)) => write!(f, "f{n}"),
+            RowId::Local(id) => match id.raised_seq() {
+                Some(seq) => write!(f, "r{seq}"),
+                None => write!(f, "f{}", id.0),
+            },
         }
     }
 }

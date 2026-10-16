@@ -530,11 +530,14 @@ fn test_window_keys_scroll_window() {
         scan_steps: 0,
         scan_calls: AtomicU32::new(0),
     }));
+    // The entry jump names the row it lands on from the rows a draw built, so
+    // the frame comes first -- the order a running terminal takes.
+    drop(render_text(&app, 80, 24));
     app.enter_search_view("tail");
     assert!(app.window_browsing());
-    // Simulate a render that published a window taller than one viewport so
-    // paging is meaningful (the draw path sets these Cells; tests reach in to
-    // avoid driving a full render just to seed scroll metrics).
+    // The window is taller than one viewport, so paging is meaningful. The
+    // draw above published the rows; these Cells carry the extent it cannot
+    // know from a single screen.
     app.window_scroll().total.set(100);
     app.window_scroll().cap.set(10);
     // enter_search_view jumps to the focused match -> follow_tail false.
@@ -593,6 +596,8 @@ fn test_window_scrolls_no_drag() {
         scan_steps: 0,
         scan_calls: AtomicU32::new(0),
     }));
+    // The entry jump names the row it lands on from the rows a draw built.
+    drop(render_text(&app, 80, 24));
     app.enter_search_view("tail");
     app.window_scroll().total.set(100);
     app.window_scroll().cap.set(10);

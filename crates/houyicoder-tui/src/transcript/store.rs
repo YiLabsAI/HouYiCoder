@@ -56,9 +56,9 @@ pub struct Transcript {
     current_turn: CurrentTurnBoundary,
     /// How many rows the frontend raised without a frame behind them have
     /// entered the list since the process started. Monotonic rather than reset
-    /// by a rebuild, so two raised rows of one list never share a name
-    /// whatever order the rebuilds and the raises arrived in.
-    unframed: usize,
+    /// by a rebuild, so no two raised rows ever share a name whatever order
+    /// the rebuilds and the raises arrived in.
+    raised: usize,
     revision: Cell<u64>,
 }
 
@@ -105,7 +105,7 @@ impl Default for Transcript {
             disk_front: DiskFront::default(),
             disk_rows_front: 0,
             current_turn: CurrentTurnBoundary::default(),
-            unframed: 0,
+            raised: 0,
             revision: Cell::new(0),
         }
     }
@@ -265,9 +265,14 @@ impl Transcript {
     /// lines(). Read through the store rather than off the list the rebuild
     /// assembled, so a reader resolving a name to a row reads the same rows
     /// the view renders.
-    #[cfg(test)]
     pub(crate) fn row_ids(&self) -> &[RowId] {
         self.rows.ids()
+    }
+
+    /// The identity of the resident line at this position, for a reader that
+    /// resolves a name back to the line it stood for.
+    pub(crate) fn row_id(&self, index: usize) -> Option<&RowId> {
+        self.rows.ids().get(index)
     }
 
     /// How many lines the resident window holds. Not the frame count: frames
@@ -312,17 +317,15 @@ impl Transcript {
     }
 
     /// Append a row the frontend raised with no frame behind it, named as it
-    /// enters. The name is local, taken past the resident frame positions, so
-    /// within one list no frame-derived row shares it: those name themselves
-    /// from their own position, below that point, and the counter keeps
-    /// successive raised rows apart. A rebuild assembles the list from the
-    /// frames and the blocks, which retires this row and its name; a frame
-    /// landing later at the position the name was taken from enters under the
-    /// same name.
+    /// enters. The name is local and comes from a sequence of its own, which
+    /// no frame-derived row can reach. A rebuild assembles the list from the
+    /// frames and the blocks, which drops this row and its name; the
+    /// sequence is monotonic across rebuilds, so a name a dropped row left
+    /// behind is never handed to another row.
     pub(crate) fn push(&mut self, line: TranscriptLine) {
-        let position = (self.abs_frame_count() + self.unframed) as u64;
-        self.unframed += 1;
-        self.rows.push(line, RowId::local(position));
+        let seq = self.raised as u64;
+        self.raised += 1;
+        self.rows.push(line, RowId::raised(seq));
     }
 
     /// The rows the view shows and where the current turn starts among them:

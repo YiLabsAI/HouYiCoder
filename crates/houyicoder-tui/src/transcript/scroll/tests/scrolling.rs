@@ -49,7 +49,10 @@ fn test_scrollback_keeps_top_row() {
     for i in 0..40 {
         app.push_transcript_line(TranscriptLine::System(format!("row-{i}")));
     }
-    app.whole_scroll_mut().jump_to(0);
+    // A scroll step names the row it lands on from the rows a draw built, and
+    // a frame precedes every key in a running terminal.
+    drop(render(&app));
+    app.park_scroll_at(0);
     let out = render_text(&app, 80, 12);
     let first = out.lines().next().unwrap_or("");
     assert!(
@@ -295,8 +298,8 @@ fn test_grid_survives_page_up() {
     fill_transcript(&mut app, 20);
     app.ui.navigation.viewport = ViewportMode::Scroll;
     drop(render(&app));
-    app.whole_scroll_mut().page_up();
-    app.whole_scroll_mut().page_up();
+    app.scroll_transcript_up();
+    app.scroll_transcript_up();
     let out = render(&app);
     assert!(out.contains("Context Usage"), "header gone: {out}");
     assert!(out.contains("Estimated usage"), "legend gone: {out}");
@@ -307,8 +310,8 @@ fn test_context_grid_visible_top() {
     let mut app = context_app();
     fill_transcript(&mut app, 20);
     app.ui.navigation.viewport = ViewportMode::Scroll;
-    app.whole_scroll_mut().jump_to(0);
     drop(render(&app));
+    app.park_scroll_at(0);
     let out = render(&app);
     assert!(
         out.contains("Context Usage"),
@@ -327,7 +330,7 @@ fn test_context_grid_renders_overlap() {
     fill_transcript(&mut app, 20);
     app.ui.navigation.viewport = ViewportMode::Scroll;
     drop(render(&app));
-    app.whole_scroll_mut().jump_to(5);
+    app.park_scroll_at(5);
     let out = render(&app);
     assert!(
         out.contains("Estimated usage") || out.contains("Suggestions"),
@@ -399,6 +402,8 @@ fn test_search_opens_newest_match() {
         transcript.push(TranscriptLine::Agent(format!("filler line {i}")));
     }
     app.sessions.current.transcript = transcript.into();
+    // The jump names the row it lands on from the rows a draw built.
+    drop(render(&app));
     app.enter_search_view("needle");
     assert!(
         app.ui.transcript_view.search_active(),
@@ -611,6 +616,8 @@ fn test_search_commit_switches_query() {
     }
     transcript.push(TranscriptLine::Agent("other newer".into()));
     app.sessions.current.transcript = transcript.into();
+    // The jump names the row it lands on from the rows a draw built.
+    drop(render(&app));
     app.enter_search_view("needle");
     assert!(render(&app).contains("needle older"));
 

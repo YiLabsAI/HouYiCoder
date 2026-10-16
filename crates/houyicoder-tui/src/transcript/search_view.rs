@@ -196,13 +196,12 @@ impl App {
     /// is window_scroll -- separate from the whole-vec TranscriptScroll.
     pub fn jump_to_focused_match(&mut self) {
         if let Some(idx) = self.ui.transcript_view.search_focused_line() {
-            if self.window_browsing() {
-                let row = self.history_row_of_line(idx);
-                self.window_scroll_mut().jump_to(row);
+            let row = if self.window_browsing() {
+                self.history_row_of_line(idx)
             } else {
-                let row = self.transcript_row_of_line(idx);
-                self.whole_scroll_mut().jump_to(row);
-            }
+                self.transcript_row_of_line(idx)
+            };
+            self.park_scroll_at(row);
         }
     }
 

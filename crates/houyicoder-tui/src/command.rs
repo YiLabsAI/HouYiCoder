@@ -362,6 +362,11 @@ impl App {
         // Host state invalidation is decoupled from id generation.
         self.ui.input.queue.demote_to_parked();
         self.system_line("session archived, new session started");
+        // The history on view is the one being archived, so a viewport parked
+        // in it holds a row the fresh session does not have. Release it here,
+        // after the rows the pass installs: a park that named a row of the
+        // archived log can never resolve again.
+        self.release_history_view();
         self.workflow.reset_to(Stage::Idle);
         self.ui.navigation.pane = Pane::Transcript;
         self.reset_chain_state();

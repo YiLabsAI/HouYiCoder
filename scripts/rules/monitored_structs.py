@@ -149,8 +149,13 @@ ACTIVE_OWNERS = {
         "fields": 2,
     },
     "crates/houyicoder-tui/src/ui/rows/row_set.rs:RowSet": {
-        # The rows of one view with the metadata each row carries; push and the batch replace are the only writers.
-        "fields": 7,
+        # The rows of one view with the metadata each row carries, the identity
+        # of the line it belongs to included, plus the line the rows pushed
+        # from here on belong to; push and the batch replace are the only
+        # writers. The identity is here because a parked viewport names the row
+        # it stands on, and the text beside that row is what resolves the offset
+        # into it.
+        "fields": 9,
     },
     "crates/houyicoder-tui/src/view/capability/state.rs:PermissionPaneState": {
         # The permission pane's tab, cursor, input sub-mode, and search buffer.
@@ -176,9 +181,12 @@ ACTIVE_OWNERS = {
         # The geometry one draw produced: each content region's rectangle
         # beside the rows it rendered, the jump-to-bottom label, the two
         # footer strips' click rects, and the height the footer budget
-        # granted the fleet strip. The input and click paths read the rects
-        # and rows; the status-bar hint reads the granted height.
-        "fields": 13,
+        # granted the fleet strip. The byte window's rows sit here too,
+        # with the range and width they were built from, because that path
+        # rebuilds them every frame and keeps no cache of its own. The input
+        # and click paths read the rects and rows; the status-bar hint reads
+        # the granted height.
+        "fields": 15,
     },
     "crates/houyicoder-tui/src/ui/selections.rs:Selections": {
         # The four per-region drag selections, each in its own coordinate space.

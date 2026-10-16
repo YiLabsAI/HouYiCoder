@@ -34,10 +34,10 @@ use crate::view::{
 mod delegation_rows;
 pub(crate) mod fleet_strip;
 mod footer_budget;
-mod history_window;
+pub(crate) mod history_window;
 mod notice_rows;
 mod tail_rows;
-mod transcript;
+pub(crate) mod transcript;
 
 /// Render the working surface, dispatching on the viewport mode so the chrome
 /// budget tracks the user's cognitive mode. The slash palette and inline

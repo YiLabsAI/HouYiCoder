@@ -2,36 +2,63 @@
 
 use super::*;
 
+use crate::row_id::RowId;
+
 fn line(s: &str) -> TranscriptLine {
     TranscriptLine::System(s.to_string())
 }
 
-#[test]
-fn test_page_up_breaks_follow() {
+/// Park the scroll on a named row, the way a step does once it has named the
+/// row it landed on.
+fn parked(top: usize) -> TranscriptScroll {
     let mut s = TranscriptScroll::default();
     s.cap.set(5);
     s.total.set(20);
-    assert!(s.follow_tail);
-    assert_eq!(s.top_offset(), 15);
-    s.page_up();
-    assert!(!s.follow_tail);
-    assert_eq!(s.top_offset(), 10);
+    s.park(ScrollAnchor {
+        row: RowId::local(7),
+        char_offset: 0,
+    });
+    s.set_resolved_top(top);
+    s
 }
 
-/// The clamp reads the cell, and the cell only. Before this contract the
-/// step methods took total as an argument while the cell held the same
-/// fact, so two sources could disagree about one value; this test pins
-/// that a published cell change is what moves the clamp, with no second
-/// source to override it.
 #[test]
-fn test_clamp_reads_published_total() {
-    let mut s = TranscriptScroll::default();
+fn test_follow_tail_tracks_growth() {
+    let s = TranscriptScroll::default();
     s.cap.set(5);
     s.total.set(20);
-    s.jump_to(18);
+    assert!(s.is_following_tail());
+    assert_eq!(s.top_offset(), 15);
+    s.total.set(30);
+    assert_eq!(
+        s.top_offset(),
+        25,
+        "rows arriving at the tail carry the viewport with them"
+    );
+}
+
+#[test]
+fn test_parked_holds_resolved_row() {
+    let s = parked(12);
+    assert!(!s.is_following_tail());
+    assert_eq!(s.top_offset(), 12);
+    s.total.set(40);
+    assert_eq!(
+        s.top_offset(),
+        12,
+        "rows arriving below a parked viewport leave it where it stands"
+    );
+}
+
+#[test]
+fn test_clamp_reads_published_total() {
+    // The clamp reads the published cells, and those only: nothing else can
+    // say how far back the viewport may stand, so a later publish is what
+    // moves it.
+    let s = parked(18);
     assert_eq!(s.top_offset(), 15, "clamps to the published total");
     s.total.set(40);
-    assert_eq!(s.top_offset(), 18, "a later publish moves the clamp");
+    assert_eq!(s.top_offset(), 18, "a later publish loosens the clamp");
     s.total.set(10);
     assert_eq!(
         s.top_offset(),
@@ -41,80 +68,35 @@ fn test_clamp_reads_published_total() {
 }
 
 #[test]
-fn test_page_down_reaches_tail() {
-    let mut s = TranscriptScroll::default();
-    s.cap.set(5);
-    s.total.set(20);
-    s.page_up();
-    assert!(!s.follow_tail);
-    // page down once -> offset 15, still not at max_top(15) edge
-    s.page_down();
-    // one more page down reaches the bottom -> follow tail
-    s.page_down();
-    assert!(s.follow_tail);
+fn test_reached_tail_follows_again() {
+    let mut s = parked(12);
+    s.set_resolved_top(0);
+    assert_eq!(s.top_offset(), 0, "the top row of the parked list");
+    s.follow_tail();
+    assert!(s.is_following_tail());
+    assert_eq!(s.top_offset(), 15, "the tail is where the growth ends");
+    assert!(
+        s.anchor().is_none(),
+        "the row the viewport stood on is let go on the way down"
+    );
 }
 
 #[test]
-fn test_jump_to_pins_offset() {
-    let mut s = TranscriptScroll::default();
+fn test_scroll_room_needs_overflow() {
+    let s = TranscriptScroll::default();
     s.cap.set(5);
-    s.total.set(20);
-    s.jump_to(3);
-    assert!(!s.follow_tail);
-    assert_eq!(s.top_offset(), 3);
-}
-
-#[test]
-fn test_line_down_three() {
-    let mut s = TranscriptScroll::default();
-    s.cap.set(5);
-    s.total.set(20);
-    // Pin near the middle first so a line step is visible vs a page jump.
-    s.jump_to(5);
-    assert_eq!(s.top_offset(), 5);
-    s.line_down(3);
-    assert_eq!(s.top_offset(), 8, "line step is 3, not a full page of 5");
-    assert!(!s.follow_tail);
-}
-
-#[test]
-fn test_line_up_three() {
-    let mut s = TranscriptScroll::default();
-    s.cap.set(5);
-    s.total.set(20);
-    s.jump_to(8);
-    s.line_up(3);
-    assert_eq!(s.top_offset(), 5);
-    assert!(!s.follow_tail);
-}
-
-#[test]
-fn test_line_down_tail() {
-    let mut s = TranscriptScroll::default();
-    s.cap.set(5);
-    s.total.set(20);
-    s.jump_to(14);
-    // max_top = 20 - 5 = 15; stepping 3 from 14 reaches the tail.
-    s.line_down(3);
-    assert!(s.follow_tail, "reaching the bottom returns to follow-tail");
-}
-
-#[test]
-fn test_line_up_clamp() {
-    let mut s = TranscriptScroll::default();
-    s.cap.set(5);
-    s.total.set(20);
-    s.jump_to(1);
-    s.line_up(3);
-    assert_eq!(s.top_offset(), 0, "never underflows past the top");
+    s.total.set(5);
+    assert!(
+        !s.has_scroll_room(),
+        "a transcript one screen long has none"
+    );
+    s.total.set(6);
+    assert!(s.has_scroll_room());
 }
 
 #[test]
 fn test_more_above_counts_hidden() {
-    let mut s = TranscriptScroll::default();
-    s.cap.set(5);
-    s.total.set(20);
-    s.page_up();
+    let s = parked(10);
     assert_eq!(s.more_above(), 10);
 }
 
@@ -156,4 +138,5 @@ fn test_empty_query_finds_nothing() {
     assert!(s.matches.is_empty());
 }
 
+mod anchor;
 mod scrolling;

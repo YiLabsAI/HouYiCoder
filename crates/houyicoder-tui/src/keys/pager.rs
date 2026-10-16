@@ -71,13 +71,7 @@ fn handle_search_view(app: &mut App, k: KeyEvent) {
                 app.jump_to_focused_match();
             }
         }
-        KeyCode::Char('g') => {
-            if app.window_browsing() {
-                app.window_scroll_mut().jump_to(0);
-            } else {
-                app.active_scroll_mut().jump_to(0);
-            }
-        }
+        KeyCode::Char('g') => app.park_scroll_at(0),
         KeyCode::Char('G') => {
             if app.window_browsing() {
                 // Scan the whole log across frames: it discovers where each
@@ -91,14 +85,14 @@ fn handle_search_view(app: &mut App, k: KeyEvent) {
         }
         KeyCode::PageUp => {
             if app.window_browsing() {
-                app.window_scroll_mut().page_up();
+                app.window_page_up();
             } else {
                 app.scroll_transcript_up();
             }
         }
         KeyCode::PageDown => {
             if app.window_browsing() {
-                app.window_scroll_mut().page_down();
+                app.window_page_down();
             } else {
                 app.scroll_transcript_down();
             }

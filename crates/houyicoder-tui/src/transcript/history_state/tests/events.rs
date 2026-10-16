@@ -11,6 +11,7 @@ use crate::records::TranscriptLine;
 use crate::state::history_read::{HistoryReadOutcome, HistoryReadResult};
 use crate::state::transcript::DiskFront;
 use crate::state::{App, Screen};
+use crate::test_harness::render_text;
 use crate::transcript::TranscriptFrame;
 use crate::transcript::rows::NamedRows;
 use houyicoder_protocol::frontend::SlashCommand;
@@ -48,7 +49,13 @@ fn landed_rows(text: &str, anchor: u64) -> HistoryReadOutcome {
 /// Park off the tail and inject a read stamped with the coordinates the apply
 /// side re-checks, holding the sender so the test controls when it lands.
 fn inject_read(app: &mut App) -> mpsc::Sender<HistoryReadOutcome> {
-    app.whole_scroll_mut().jump_to(0);
+    // A park names the row it stands on from the rows a draw built, and a
+    // frame precedes every key in a running terminal. Without the draw the
+    // park keeps following the tail, and the apply side then drops every
+    // landed read as unwanted -- the drop tests below would pass for that
+    // reason instead of the one they name.
+    drop(render_text(app, 80, 24));
+    app.park_scroll_at(0);
     let (tx, rx) = mpsc::channel::<HistoryReadOutcome>();
     let front = app.sessions.current.transcript.frame_window_start();
     let disk_front = app.sessions.current.transcript.disk_front();
@@ -160,7 +167,7 @@ fn test_tail_return_stales_chain() {
     let tx = inject_read(&mut app);
 
     // The reader returns to the tail: the loaded stack is released.
-    app.whole_scroll_mut().follow_tail();
+    app.scroll_transcript_follow_tail();
     app.rebuild_transcript();
     assert_eq!(
         app.sessions.current.transcript.disk_front(),
@@ -170,7 +177,7 @@ fn test_tail_return_stales_chain() {
 
     // The reader scrolls back up while the stale chain read is still on file,
     // and the result lands.
-    app.whole_scroll_mut().jump_to(0);
+    app.park_scroll_at(0);
     tx.send(landed_rows("chained older", 100)).ok();
     app.pump_history_read();
 

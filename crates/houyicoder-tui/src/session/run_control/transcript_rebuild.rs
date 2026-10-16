@@ -107,15 +107,15 @@ impl App {
         if self.transcript().disk_row_count() > 0
             && self.transcript().disk_rows_front() != self.transcript().frame_window_start()
         {
-            let released = self.sessions.current.transcript.clear_disk_rows();
-            if !self.whole_scroll().is_following_tail() {
-                let top = self.whole_scroll().raw_top();
-                self.whole_scroll_mut()
-                    .set_raw_top(top.saturating_sub(released));
-            }
+            self.sessions.current.transcript.clear_disk_rows();
         }
         self.trim_live_transcript();
         self.bump_transcript_version();
+        // Resolve the parked viewport against the rows just assembled. Rows
+        // entering or leaving this pass moved the row the viewport stands on,
+        // and the anchor names that row rather than a number the pass would
+        // have to patch up by how many rows it added or released.
+        self.settle_whole_scroll();
     }
 
     /// The identity of the frame at an absolute log position: the identity the
@@ -409,10 +409,10 @@ impl App {
         let batch_start = from
             .saturating_sub(PREPEND_BATCH)
             .max(self.sessions.current.transcript.frame_window_start());
-        // Count the older batch's lines to hold the viewport steady across the
-        // rebuild that follows. The batch's frames all precede the frames
-        // already loaded, and a row the frontend raised among them rides the
-        // batch's own fold.
+        // The batch's frames all precede the frames already loaded, and a row
+        // the frontend raised among them rides the batch's own fold. A batch
+        // that yields no lines lowered the boundary above all the same, so the
+        // walk reads further back next time; there are no rows to rebuild.
         let prepended = transcript_from_frames_at(
             self.sessions.current.transcript.frames(),
             self.sessions.current.transcript.frame_window_start(),
@@ -426,17 +426,10 @@ impl App {
         if prepended == 0 {
             return;
         }
-        // Shift the scroll position down by the prepended count so the viewport
-        // content stays stable. NOTE: prepended counts TranscriptLines, not
-        // display rows — multi-row lines (Agent, Tool results) cause
-        // under-adjustment. The next draw_transcript recomputes from the cache
-        // which corrects the viewport. The one-frame drift is acceptable
-        // (prepend only fires on scroll-up, the user is actively scrolling, not
-        // reading a static view).
-        let cur = self.whole_scroll().raw_top();
-        self.whole_scroll_mut().set_raw_top(cur + prepended);
         // The lowered boundary moves the window's front, so the next rebuild
-        // re-derives the prefix rather than reusing it.
+        // re-derives the prefix rather than reusing it. The rebuild resolves
+        // the parked viewport afterwards, so the rows this batch adds above it
+        // move the viewport with their content.
         self.rebuild_transcript();
         self.bump_transcript_version();
     }
@@ -597,12 +590,11 @@ impl App {
                 self.sessions.current.history_reads.record_read_success();
             }
             HistoryReadOutcome::Rows(result) => {
-                let count = result.rows.len();
                 let transcript = &mut self.sessions.current.transcript;
                 transcript.prepend_disk_rows(result.rows, result.anchor, read.dispatch_front);
-                // Hold the viewport still: the rows landed above it.
-                let cur = self.whole_scroll().raw_top();
-                self.whole_scroll_mut().set_raw_top(cur + count);
+                // The rows landed above the viewport; the rebuild resolves the
+                // parked anchor over them, so the viewport holds its place by
+                // the row it stands on rather than by counting what arrived.
                 self.rebuild_transcript();
                 self.bump_transcript_version();
                 self.sessions.current.history_reads.record_read_success();

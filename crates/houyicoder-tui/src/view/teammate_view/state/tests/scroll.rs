@@ -12,6 +12,7 @@ use crate::state::App;
 use crate::state::Screen;
 use crate::state::history_read::{HistoryReadOutcome, HistoryReadResult};
 use crate::test_harness::MockSnapshot;
+use crate::test_harness::render_buffer;
 use crate::test_harness::render_text;
 use crate::transcript::TranscriptFrame;
 use crate::transcript::rows::NamedRows;
@@ -53,6 +54,25 @@ fn app_with_parent(parent_rows: usize) -> App {
     app
 }
 
+/// The rows the transcript pane draws, read from the frame at the pane's own
+/// rect. A viewport that held its place draws the same rows, so a scroll
+/// assertion reads what the reader sees rather than the offset under it.
+fn pane_rows(app: &App) -> Vec<String> {
+    let buffer = render_buffer(app, 80, 24);
+    let rect = app.ui.frame.layout.transcript_rect.get();
+    let mut rows = Vec::new();
+    for y in rect.y..rect.y + rect.height {
+        let mut text = String::new();
+        for x in rect.x..rect.x + rect.width {
+            if let Some(cell) = buffer.cell((x, y)) {
+                text.push_str(cell.symbol());
+            }
+        }
+        rows.push(text.trim_end().to_string());
+    }
+    rows
+}
+
 /// Entering the child view starts the child scroll at the tail and leaves the
 /// parent scroll where the reader parked it, so the exit renders the same
 /// parent rows again.
@@ -60,7 +80,7 @@ fn app_with_parent(parent_rows: usize) -> App {
 fn test_parent_scroll_survives_visit() {
     let mut app = app_with_parent(60);
     let first = render_text(&app, 80, 24);
-    app.whole_scroll_mut().jump_to(20);
+    app.park_scroll_at(20);
     let parked = render_text(&app, 80, 24);
     assert_ne!(first, parked, "scrolling moved the viewport");
 
@@ -69,7 +89,7 @@ fn test_parent_scroll_survives_visit() {
     let _child = render_text(&app, 80, 24);
     app.scroll_transcript_up();
     assert_eq!(
-        app.whole_scroll().raw_top(),
+        app.whole_scroll().top_offset(),
         20,
         "child scroll did not move the parent"
     );
@@ -87,8 +107,11 @@ fn test_parent_scroll_survives_visit() {
 #[test]
 fn test_child_scroll_leaves_parent() {
     let mut app = app_with_parent(60);
-    app.whole_scroll_mut().jump_to(15);
-    let parent_top = app.whole_scroll().raw_top();
+    // A park names the row it stands on from the rows a draw built; without
+    // the draw it keeps following the tail and the parent comparison is idle.
+    drop(render_text(&app, 80, 24));
+    app.park_scroll_at(15);
+    let parent_top = app.whole_scroll().top_offset();
     let parent_follow = app.whole_scroll().is_following_tail();
 
     assert!(app.enter_teammate_view());
@@ -104,7 +127,7 @@ fn test_child_scroll_leaves_parent() {
         "the child did scroll away"
     );
 
-    assert_eq!(app.whole_scroll().raw_top(), parent_top);
+    assert_eq!(app.whole_scroll().top_offset(), parent_top);
     assert_eq!(
         app.whole_scroll().is_following_tail(),
         parent_follow,
@@ -129,6 +152,8 @@ fn test_child_tail_spares_parent() {
     app.rebuild_transcript();
     // Scroll away from the tail: this breaks follow-tail and starts the
     // parent's unseen count, the state a child-side tail step must not touch.
+    // The step names the row it lands on from the rows a draw built.
+    drop(render_text(&app, 80, 24));
     app.scroll_transcript_up();
     assert!(
         app.ui.transcript_view.unseen_since.is_some(),
@@ -136,7 +161,7 @@ fn test_child_tail_spares_parent() {
     );
     app.sessions.current.transcript.push(subagent_line(40));
     let len_before = app.sessions.current.transcript.lines().len();
-    let top_before = app.whole_scroll().raw_top();
+    let top_before = app.whole_scroll().top_offset();
 
     assert!(app.enter_teammate_view());
     app.scroll_transcript_up();
@@ -154,7 +179,7 @@ fn test_child_tail_spares_parent() {
         "no parent trim ran"
     );
     assert_eq!(
-        app.whole_scroll().raw_top(),
+        app.whole_scroll().top_offset(),
         top_before,
         "the parent top is where the reader parked it"
     );
@@ -185,7 +210,8 @@ fn test_child_blocks_parent_reads() {
     app.rebuild_transcript();
     app.rebuild_transcript();
     app.sessions.current.transcript.push(subagent_line(2));
-    app.whole_scroll_mut().jump_to(0);
+    drop(render_text(&app, 80, 24));
+    app.park_scroll_at(0);
     app.sessions.persistence.snapshot = Some(Arc::new(MockSnapshot {
         lines: Vec::new(),
         log_bytes: 4096,
@@ -215,8 +241,12 @@ fn test_child_blocks_parent_reads() {
 /// read completing is not a new dispatch and must not be lost either.
 #[test]
 fn test_parent_read_spares_child() {
-    let mut app = app_with_parent(5);
-    app.whole_scroll_mut().jump_to(0);
+    let mut app = app_with_parent(60);
+    // Draw first: a park over rows that were never built keeps following the
+    // tail, and the apply side drops every landed read as unwanted.
+    drop(render_text(&app, 80, 24));
+    app.park_scroll_at(20);
+    let rows_before = pane_rows(&app);
     let (tx, rx) = mpsc::channel::<HistoryReadOutcome>();
     let front = app.sessions.current.transcript.frame_window_start();
     let disk_front = app.sessions.current.transcript.disk_front();
@@ -229,7 +259,6 @@ fn test_parent_read_spares_child() {
 
     assert!(app.enter_teammate_view());
     let child_before = render_text(&app, 80, 24);
-    let parent_top = app.whole_scroll().raw_top();
 
     tx.send(HistoryReadOutcome::Rows(HistoryReadResult {
         rows: NamedRows::from_lines(vec![TranscriptLine::User("older parent row".into())]),
@@ -244,21 +273,23 @@ fn test_parent_read_spares_child() {
         "the rows went into the parent transcript"
     );
     assert_eq!(
-        app.whole_scroll().raw_top(),
-        parent_top + 1,
-        "the parent viewport held still over the landed rows"
-    );
-    assert_eq!(
         render_text(&app, 80, 24),
         child_before,
         "the child render is untouched by the parent read"
     );
 
     app.exit_teammate_view();
-    let parent_after = render_text(&app, 80, 24);
+    // The row landed above the reader's, so the pane draws the same rows as
+    // before the read: the viewport stands on the row it named.
+    assert_eq!(
+        pane_rows(&app),
+        rows_before,
+        "the parent still draws the rows the reader stood on"
+    );
+    app.park_scroll_at(0);
     assert!(
-        parent_after.contains("older parent row"),
-        "the parent shows the loaded row after the visit"
+        render_text(&app, 80, 24).contains("older parent row"),
+        "the row the read brought in is reachable by stepping back up"
     );
 }
 

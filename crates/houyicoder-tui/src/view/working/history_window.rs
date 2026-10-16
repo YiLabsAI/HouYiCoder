@@ -24,30 +24,56 @@ use crate::view::working::transcript::{
     highlighted_line, push_line_rows, refresh_wide_cells, user_row,
 };
 
+/// The rows the window renders: one row set per line, each named by its line's
+/// position in the window, which is the rule a transcript assembled outside the
+/// store is named by everywhere. The window folds nothing and keeps no slot
+/// layer, so the enclosing group of every line stays None.
+pub(crate) fn window_rows(app: &App, width: u16) -> RowSet {
+    let mut rows = RowSet::default();
+    for (index, line) in app.active_transcript().iter().enumerate() {
+        rows.begin_line(app.line_identity(index));
+        push_line_rows(line, None, width, app, &mut rows);
+    }
+    rows
+}
+
 /// Render the loaded history range with independent scrolling and search
 /// highlighting. Dynamic conversation-tail rows are intentionally absent.
 pub(super) fn draw_history_window(f: &mut Frame, area: Rect, app: &App) {
     // The scan advances on the loop, not here: a chunk reads the log.
     // This path only renders the progress cells the loop published.
-    let mut sink = RowSet::default();
-    // No slot layer: each line is its own row set. grp is None -- the window
-    // has no fold groups, so the enclosing group stays None throughout.
-    for line in app.active_transcript() {
-        push_line_rows(line, None, area.width, app, &mut sink);
-    }
+    let sink = window_rows(app, area.width);
     let cap = area.height as usize;
     app.window_scroll().cap.set(cap);
     let total = sink.len();
     app.window_scroll().total.set(total);
-    let top = app.window_scroll().top_offset();
     // Stash the full + visible row sets so copy can extract selected text from
     // the window (selection past the visible edge, viewport scrolled between
-    // draw and copy). These stashes are the rendered-row cache, not
-    // TranscriptScroll -- distinct from the five total consumers.
+    // draw and copy). The full set keeps its rows' identities so a step, a
+    // rebuild, or the anchor resolution can name the row the window stands on.
+    // These stashes are the rendered-row cache, not TranscriptScroll --
+    // distinct from the five total consumers. The stash lands before the
+    // resolution, which reads the rows back through it.
     *app.ui.frame.layout.last_all_rows.borrow_mut() = sink.text_rows();
+    *app.ui.frame.layout.last_window_rows.borrow_mut() = sink;
+    // Name the window these rows describe, so a step that lands before the
+    // next frame can tell them from the rows of the window this one replaced.
+    app.ui.frame.layout.window_rows_key.set(Some((
+        app.window_anchor(),
+        app.window_end(),
+        area.width,
+    )));
+    app.settle_scroll();
+    let top = app.window_scroll().top_offset();
     // One traversal slices the rows and the metadata by the same bounds, so
     // the visible window cannot give a row its neighbour's keys.
-    let visible = sink.slice(top, cap);
+    let visible = app
+        .ui
+        .frame
+        .layout
+        .last_window_rows
+        .borrow()
+        .slice(top, cap);
 
     let inner = area;
     app.ui.frame.layout.transcript_rect.set(inner);

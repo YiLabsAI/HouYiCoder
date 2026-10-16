@@ -71,7 +71,8 @@ fn test_prepend_loads_history() {
     }
     app.rebuild_transcript();
     let before = app.transcript().len();
-    app.whole_scroll_mut().jump_to(0);
+    draw_transcript(&mut app);
+    app.park_scroll_at(0);
     app.load_older_frames();
     pump_history_read_blocking(&mut app, Duration::from_secs(5));
     assert!(app.transcript().len() > before);
@@ -112,7 +113,8 @@ fn test_prepend_survives_rebuild() {
     }
     app.rebuild_transcript();
     assert!(app.sessions.current.loaded_from_frame.get() > 0);
-    app.whole_scroll_mut().jump_to(0);
+    draw_transcript(&mut app);
+    app.park_scroll_at(0);
     app.load_older_frames();
     pump_history_read_blocking(&mut app, Duration::from_secs(5));
     assert!(
@@ -152,7 +154,8 @@ fn test_prepend_keeps_echo_place() {
             .push_frame(user_msg(&format!("recent {i}")));
     }
     app.rebuild_transcript();
-    app.whole_scroll_mut().jump_to(0);
+    draw_transcript(&mut app);
+    app.park_scroll_at(0);
     app.load_older_frames();
     pump_history_read_blocking(&mut app, Duration::from_secs(5));
     let at = |app: &App, want: &str| {

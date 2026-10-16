@@ -124,7 +124,7 @@ fn test_redrag_stays_char_mode() {
 fn test_edge_drag_scrolls_line() {
     let (mut app, _captured) = app_with_lines(40);
     let rect = app.ui.frame.layout.transcript_rect.get();
-    app.whole_scroll_mut().jump_to(10);
+    app.park_scroll_at(10);
     let _out = render_text(&app, 80, 24);
     assert_eq!(app.whole_scroll().top_offset(), 10);
     // Press mid-viewport, then drag onto the top edge row.

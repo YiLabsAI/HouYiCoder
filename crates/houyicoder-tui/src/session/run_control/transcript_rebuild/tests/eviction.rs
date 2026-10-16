@@ -22,7 +22,8 @@ fn test_trim_skips_scrollaway() {
     );
     // Scroll away from the tail, then keep pushing: trim must not drain a
     // scrolled-back reader, so the lines accumulate past the cap.
-    app.whole_scroll_mut().jump_to(0);
+    draw_transcript(&mut app);
+    app.park_scroll_at(0);
     let extra = 50;
     for _ in 0..extra {
         app.push_transcript_line(TranscriptLine::Agent("scrolled-back line".into()));
@@ -86,9 +87,20 @@ fn test_scrollback_survives_frame() {
             .push_frame(user_msg(&format!("msg {i}")));
     }
     app.rebuild_transcript();
-    // Scroll away and load older frames until the history boundary hits zero.
-    app.whole_scroll_mut().jump_to(0);
-    while app.sessions.current.loaded_from_frame.get() > 0 {
+    // Scroll away and load older frames until the history boundary reaches the
+    // resident front. A batch lands above the parked row, so the viewport stands
+    // deeper afterwards and the reader steps back to the top between loads --
+    // the gesture that asks for the next batch. Bounded: a batch reaches
+    // PREPEND_BATCH frames further back each round, so a loop outliving this
+    // many rounds is one that stopped reaching back, which fails rather than
+    // spins.
+    draw_transcript(&mut app);
+    let front = app.transcript().frame_window_start();
+    let mut rounds = 0;
+    while app.sessions.current.loaded_from_frame.get() > front {
+        rounds += 1;
+        assert!(rounds < 60, "the loads reach the resident front");
+        app.park_scroll_at(0);
         app.load_older_frames();
         pump_history_read_blocking(&mut app, Duration::from_secs(5));
     }
@@ -370,7 +382,8 @@ fn test_scrollback_stops_at_front() {
         base > 0 && base + 1 < cap,
         "the drain leaves a loadable range below the frame cap: front={base}"
     );
-    app.whole_scroll_mut().jump_to(0);
+    draw_transcript(&mut app);
+    app.park_scroll_at(0);
     app.sessions.current.loaded_from_frame.set(base + 1);
     app.load_older_frames();
     pump_history_read_blocking(&mut app, Duration::from_secs(5));
@@ -436,7 +449,8 @@ fn test_load_boundary_keeps_draining() {
         0,
         "the budget holds the frames before a load"
     );
-    app.whole_scroll_mut().jump_to(0);
+    draw_transcript(&mut app);
+    app.park_scroll_at(0);
     app.load_older_frames();
     pump_history_read_blocking(&mut app, Duration::from_secs(5));
     assert!(

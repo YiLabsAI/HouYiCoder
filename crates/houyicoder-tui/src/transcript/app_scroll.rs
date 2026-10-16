@@ -1,12 +1,17 @@
 //! Transcript scroll methods on App, split from state.rs so that file stays
-//! under the file-size gate. All page/line scroll goes through the view
-//! state's scroll; the debug_scroll helper is private to this impl block and
-//! only these methods call it.
+//! under the file-size gate. The steps live here rather than on the scroll
+//! state because a step names the row it lands on, and the row list belongs to
+//! the App. All page/line scroll goes through the view state's scroll; the
+//! debug_scroll helper is private to this impl block and only these methods
+//! call it.
 
 use crate::row_id::RowId;
-use crate::scroll::{NewTurnCount, ScrollTransition, TranscriptScroll};
+use crate::rows::row_set::RowSet;
+use crate::scroll::{NewTurnCount, ScrollAnchor, ScrollTransition, TranscriptScroll};
 use crate::state::{App, EventCursor};
 use crate::transcript::TranscriptFrame;
+use crate::view::working::history_window::window_rows;
+use crate::view::working::transcript::ensure_cached_slots;
 use houyicoder_protocol::frontend::session_update::SessionUpdate;
 
 impl App {
@@ -46,6 +51,230 @@ impl App {
             let walked = self.fold_aware_rows(None);
             self.active_scroll_mut().total.set(walked);
         }
+        self.ensure_scroll_rows();
+    }
+
+    /// Build the rows a step names its landing row from, when the rows on file
+    /// are not the ones for the row list now resident. A row that cannot be
+    /// named cannot be stood on: the walk a draw runs is what builds them, and
+    /// that draw then finds them cached. The width is the one the last frame
+    /// stashed, so a step taken before the first frame builds nothing and
+    /// leaves the viewport following the tail -- no key arrives before a frame
+    /// in a running terminal. The byte window is the exception: the jump that
+    /// opens the search view runs in the same step that loads the window, so
+    /// that view builds its rows here.
+    fn ensure_scroll_rows(&self) {
+        let rect = self.ui.frame.layout.transcript_rect.get();
+        if rect.width == 0 {
+            return;
+        }
+        if self.window_browsing() {
+            self.ensure_window_rows(rect.width);
+            return;
+        }
+        ensure_cached_slots(rect, self);
+    }
+
+    /// Build the byte window's rows when the frame's build no longer describes
+    /// the window on view. The entry load and the older/newer walk replace the
+    /// window without a frame in between, so a step that lands right after
+    /// would otherwise name its row in the list of the window it replaced. The
+    /// build is the one the next frame runs, over the same lines at the same
+    /// width, so the row it names is the row the reader will see.
+    fn ensure_window_rows(&self, width: u16) {
+        let key = (self.window_anchor(), self.window_end(), width);
+        if self.ui.frame.layout.window_rows_key.get() == Some(key) {
+            return;
+        }
+        let rows = window_rows(self, width);
+        *self.ui.frame.layout.last_window_rows.borrow_mut() = rows;
+        self.ui.frame.layout.window_rows_key.set(Some(key));
+    }
+
+    /// Read the full row set of the view on screen: the rows a step names and
+    /// the rows an anchor resolves against. The transcript views keep theirs in
+    /// the render cache, keyed by the view; a byte window builds its rows
+    /// every frame, so the last build is what a step reads.
+    fn with_scroll_rows<R>(&self, read: impl FnOnce(&RowSet) -> R) -> R {
+        if self.window_browsing() {
+            read(&self.ui.frame.layout.last_window_rows.borrow())
+        } else {
+            self.ui.renderer.slots.with(read)
+        }
+    }
+
+    /// Park the viewport on the row standing at this screen row, naming that
+    /// row by identity so the place survives the list being rebuilt. A view
+    /// whose rows carry no name at all has no place to hold, so it keeps
+    /// following the tail.
+    fn park_at_row(&mut self, row: usize) {
+        match self.with_scroll_rows(|rows| rows.anchor_at(row)) {
+            Some(anchor) => {
+                let scroll = self.active_scroll_mut();
+                scroll.park(anchor);
+                scroll.set_resolved_top(row);
+            }
+            None => self.active_scroll_mut().follow_tail(),
+        }
+    }
+
+    /// The highest screen row a viewport can stand on and still fill: beyond it
+    /// the view is at the tail and follows it.
+    fn max_scroll_top(&self) -> usize {
+        let scroll = self.active_scroll();
+        scroll.total.get().saturating_sub(scroll.effective_cap())
+    }
+
+    /// Move the viewport to this screen row: park on it, or return to the tail
+    /// when it is the tail or below. A transcript that fits one viewport has no
+    /// place to hold, so a step over it keeps following rather than parking on
+    /// the only screen there is -- otherwise a wheel on a short session would
+    /// park and show a jump-to-bottom label over a view already at the bottom.
+    fn step_scroll_to(&mut self, row: usize) -> ScrollTransition {
+        if !self.active_scroll().has_scroll_room() {
+            return ScrollTransition::Unchanged;
+        }
+        if row >= self.max_scroll_top() {
+            if self.active_scroll().is_following_tail() {
+                return ScrollTransition::Unchanged;
+            }
+            self.active_scroll_mut().follow_tail();
+            return ScrollTransition::ReachedTail;
+        }
+        self.park_at_row(row);
+        ScrollTransition::Parked
+    }
+
+    /// Park the transcript on view at this screen row, naming the row so a
+    /// rebuild between the jump and the next draw resolves back to it. The
+    /// search match jump and the top-of-view jump both land here.
+    pub fn park_scroll_at(&mut self, row: usize) {
+        self.ensure_rows_published();
+        self.park_at_row(row);
+    }
+
+    /// Step the byte-window view, which keeps no scroll-away snapshot and
+    /// trims nothing: it renders a frozen range of the log rather than the
+    /// running turn, so the parent's bookkeeping has nothing to say about it.
+    fn window_step(&mut self, up: bool, rows: usize) {
+        self.ensure_rows_published();
+        let before = self.active_scroll().top_offset();
+        let row = if up {
+            before.saturating_sub(rows)
+        } else {
+            before.saturating_add(rows)
+        };
+        self.step_scroll_to(row);
+    }
+
+    /// Step the byte-window view up by n lines.
+    pub fn window_line_up(&mut self, n: usize) {
+        self.window_step(true, n);
+    }
+
+    /// Step the byte-window view down by n lines.
+    pub fn window_line_down(&mut self, n: usize) {
+        self.window_step(false, n);
+    }
+
+    /// Page the byte-window view up one viewport.
+    pub fn window_page_up(&mut self) {
+        let cap = self.active_scroll().effective_cap();
+        self.window_step(true, cap);
+    }
+
+    /// Page the byte-window view down one viewport.
+    pub fn window_page_down(&mut self) {
+        let cap = self.active_scroll().effective_cap();
+        self.window_step(false, cap);
+    }
+
+    /// Resolve the parked anchor of the scroll on view against the rows that view
+    /// renders, and publish the screen row it stands on. An anchor whose row is
+    /// not resident keeps the last published row, so the view holds its place
+    /// until the older read that brings the row back lands and this runs again.
+    ///
+    /// The caller must have built the rows of the on-view scroll (a draw does;
+    /// a rebuild reaches the whole-vec form through settle_whole_scroll), so
+    /// the anchor is resolved against the list it belongs to.
+    pub(crate) fn settle_scroll(&self) {
+        let Some(anchor) = self.active_scroll().anchor().cloned() else {
+            return;
+        };
+        if let Some(row) = self.resolved_row(&anchor) {
+            // The published row is a cell, so settling from the read-only draw
+            // does not need the mutable accessor the steps use.
+            self.active_scroll().set_resolved_top(row);
+        }
+    }
+
+    /// Resolve the whole-vec transcript's parked anchor after a pass that
+    /// changed its rows, and publish the screen row it stands on. A pass that
+    /// adds or releases rows above the viewport moves the row the viewport
+    /// stands on, and the anchor names that row rather than a number the pass
+    /// would patch up by how many rows it moved.
+    ///
+    /// Skipped while another view owns the resident rows: the child renders
+    /// its own transcript and the byte window its loaded range, so resolving
+    /// the parent's anchor then would read the wrong list. The parent settles
+    /// at its next draw instead, which re-resolves by identity.
+    pub(crate) fn settle_whole_scroll(&self) {
+        if self.ui.teammate_view.is_some() || self.window_browsing() {
+            return;
+        }
+        if self.whole_scroll().anchor().is_none() {
+            return;
+        }
+        // The pass invalidated the rows on file, so build the current ones
+        // before resolving against them.
+        self.ensure_scroll_rows();
+        self.settle_scroll();
+    }
+
+    /// The screen row this anchor stands on among the rows now resident, or
+    /// None when no row carries its identity.
+    fn resolved_row(&self, anchor: &ScrollAnchor) -> Option<usize> {
+        if let Some(row) = self.with_scroll_rows(|rows| rows.row_of(anchor)) {
+            return Some(row);
+        }
+        // A collapsed group renders as its own row instead of the lines inside
+        // it, so an anchor on one of those lines stands on the group's row. The
+        // byte window folds nothing, so its rows carry every line's own name.
+        if self.window_browsing() {
+            return None;
+        }
+        let line = self.line_of_identity(&anchor.row)?;
+        Some(self.fold_aware_rows(Some(line)))
+    }
+
+    /// The line this identity names in the transcript on view, for an anchor
+    /// whose line a collapsed group stands for.
+    fn line_of_identity(&self, id: &RowId) -> Option<usize> {
+        if self.ui.teammate_view.is_some() || self.ui.transcript_view.search_active() {
+            return id.local_position().map(|position| position as usize);
+        }
+        self.sessions
+            .current
+            .transcript
+            .row_ids()
+            .iter()
+            .position(|row| row == id)
+    }
+
+    /// The identity of the transcript line at this position on the view on
+    /// screen: the store's own name for a session line, and the line's position
+    /// for a transcript assembled outside it -- a child's rows, a search
+    /// snapshot -- which is the rule those lists are named by everywhere.
+    pub(crate) fn line_identity(&self, index: usize) -> RowId {
+        if self.ui.teammate_view.is_some() || self.ui.transcript_view.search_active() {
+            return RowId::local(index as u64);
+        }
+        self.sessions
+            .current
+            .transcript
+            .row_id(index)
+            .cloned()
+            .unwrap_or_else(|| RowId::local(index as u64))
     }
 
     /// Page the transcript on view up by one viewport (older rows). Only the
@@ -57,7 +286,8 @@ impl App {
         let viewing_child = self.ui.teammate_view.is_some();
         let before = self.active_scroll().top_offset();
         let was_following = self.active_scroll().is_following_tail();
-        self.active_scroll_mut().page_up();
+        let cap = self.active_scroll().effective_cap();
+        self.step_scroll_to(before.saturating_sub(cap));
         if !viewing_child {
             self.snapshot_scroll_away(was_following);
         }
@@ -76,7 +306,8 @@ impl App {
         let total = self.transcript_display_rows();
         let viewing_child = self.ui.teammate_view.is_some();
         let before = self.active_scroll().top_offset();
-        let transition = self.active_scroll_mut().page_down();
+        let cap = self.active_scroll().effective_cap();
+        let transition = self.step_scroll_to(before.saturating_add(cap));
         if !viewing_child && transition == ScrollTransition::ReachedTail {
             self.resume_tail_trim();
         }
@@ -99,13 +330,35 @@ impl App {
         }
     }
 
+    /// Let the whole-vec viewport go with the history it was standing in. A
+    /// pass that replaces the session history (the one on view, not merely a
+    /// longer list under it) leaves the parked row out of the log instead of
+    /// off screen, so the anchor can never resolve again and the viewport
+    /// returns to the tail instead of holding a row the fresh session does not
+    /// have. The reader is told when they had parked, because the place they
+    /// left is gone rather than moved.
+    ///
+    /// Every pass that advances the history generation ends here, after the
+    /// rows it installs: releasing against a list that is still the old one
+    /// would drop an anchor that the new list could have resolved.
+    pub(crate) fn release_history_view(&mut self) {
+        let released = self.whole_scroll().anchor().is_some();
+        self.whole_scroll_mut().follow_tail();
+        self.resume_tail_trim();
+        if released {
+            self.system_line("scroll position released: the history on view was replaced");
+        }
+    }
+
     /// Break follow-tail while keeping the current top row on screen. Callers
-    /// that expand a line in place need this: clearing the follow flag alone
-    /// falls back to the last pinned offset, which is 0 on a session that
-    /// never scrolled, so the view jumps to the top of the transcript.
+    /// that expand a line in place need this: the row list grows under the
+    /// viewport, and a viewport left following the tail would move the reader
+    /// to the bottom with it. Parking on the row already at the top holds the
+    /// reader's place instead, and names it, so the rebuild that follows the
+    /// expansion resolves back to the same row.
     pub fn pin_transcript_top(&mut self) {
         let top = self.active_scroll().top_offset();
-        self.active_scroll_mut().jump_to(top);
+        self.park_at_row(top);
     }
 
     /// Capture the frame index the first time a scroll breaks follow-tail
@@ -233,7 +486,7 @@ impl App {
         let viewing_child = self.ui.teammate_view.is_some();
         let before = self.active_scroll().top_offset();
         let was_following = self.active_scroll().is_following_tail();
-        self.active_scroll_mut().line_up(n);
+        self.step_scroll_to(before.saturating_sub(n));
         if !viewing_child {
             self.snapshot_scroll_away(was_following);
         }
@@ -250,7 +503,7 @@ impl App {
         let total = self.transcript_display_rows();
         let viewing_child = self.ui.teammate_view.is_some();
         let before = self.active_scroll().top_offset();
-        let transition = self.active_scroll_mut().line_down(n);
+        let transition = self.step_scroll_to(before.saturating_add(n));
         if !viewing_child && transition == ScrollTransition::ReachedTail {
             self.resume_tail_trim();
         }

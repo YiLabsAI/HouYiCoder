@@ -9,12 +9,23 @@ use std::cell::{Cell, RefCell};
 
 use ratatui::layout::Rect;
 
+use crate::rows::row_set::RowSet;
+
 #[derive(Debug)]
 pub(crate) struct LayoutSnapshot {
     pub(crate) transcript_rect: Cell<Rect>,
     pub(crate) jump_to_bottom_rect: Cell<Rect>,
     pub(crate) last_transcript_rows: RefCell<Vec<(u8, String)>>,
     pub(crate) last_all_rows: RefCell<Vec<(u8, String)>>,
+    /// The whole row set the byte-window view built this frame, identities
+    /// included. The window rebuilds its rows every frame and keeps no cache,
+    /// so this is the only place a scroll step can name the row it lands on.
+    pub(crate) last_window_rows: RefCell<RowSet>,
+    /// The window these rows were built from: its byte range and the pane
+    /// width. The rows are a pure function of the two, so comparing this key
+    /// tells a list that still describes the window on view from one that
+    /// describes the window it replaced.
+    pub(crate) window_rows_key: Cell<Option<(u64, u64, u16)>>,
     pub(crate) pane_rect: Cell<Rect>,
     pub(crate) last_pane_rows: RefCell<Vec<(u8, String)>>,
     pub(crate) status_rect: Cell<Rect>,
@@ -41,6 +52,8 @@ impl Default for LayoutSnapshot {
             jump_to_bottom_rect: Cell::new(Rect::new(0, 0, 0, 0)),
             last_transcript_rows: RefCell::new(Vec::new()),
             last_all_rows: RefCell::new(Vec::new()),
+            last_window_rows: RefCell::new(RowSet::default()),
+            window_rows_key: Cell::new(None),
             pane_rect: Cell::new(Rect::new(0, 0, 0, 0)),
             last_pane_rows: RefCell::new(Vec::new()),
             status_rect: Cell::new(Rect::new(0, 0, 0, 0)),

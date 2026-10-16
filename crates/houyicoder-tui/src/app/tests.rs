@@ -263,6 +263,9 @@ fn test_wheel_scrolls_in_place() {
     }
     assert_eq!(app.ui.navigation.viewport, ViewportMode::Working);
     assert!(app.whole_scroll().is_following_tail());
+    // The wheel names the row it lands on from the rows a draw built, and a
+    // frame precedes every input event in a running terminal.
+    drop(render_text(&app, 80, 24));
     // Wheel up scrolls the transcript in place — it must NOT enter the
     // full-screen Scroll viewport (which would hide the input box).
     handle_mouse(&mut app, wheel(MouseEventKind::ScrollUp));

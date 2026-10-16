@@ -405,7 +405,7 @@ pub(crate) fn handle_mouse(app: &mut App, m: MouseEvent) {
             clear_stale_click(&mut app.ui.selection.transcript);
             clear_stale_click(&mut app.ui.selection.pane);
             if app.window_browsing() {
-                app.window_scroll_mut().line_up(3);
+                app.window_line_up(3);
             } else {
                 app.scroll_transcript_line_up(3);
             }
@@ -414,7 +414,7 @@ pub(crate) fn handle_mouse(app: &mut App, m: MouseEvent) {
             clear_stale_click(&mut app.ui.selection.transcript);
             clear_stale_click(&mut app.ui.selection.pane);
             if app.window_browsing() {
-                app.window_scroll_mut().line_down(3);
+                app.window_line_down(3);
             } else {
                 app.scroll_transcript_line_down(3);
             }

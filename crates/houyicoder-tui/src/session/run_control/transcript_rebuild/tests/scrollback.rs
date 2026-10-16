@@ -16,7 +16,9 @@ fn test_scrollback_reads_log_rows() {
     lines.extend(app.transcript().iter().cloned());
     app.sessions.persistence.snapshot = Some(log_source(vec![log_window(lines, 100, 4096)]));
 
-    app.whole_scroll_mut().jump_to(0);
+    draw_transcript(&mut app);
+    app.park_scroll_at(0);
+    let top_before = transcript_row(&app, 0);
     app.load_older_frames();
     pump_history_read_blocking(&mut app, Duration::from_secs(5));
 
@@ -42,10 +44,52 @@ fn test_scrollback_reads_log_rows() {
     );
     assert_rows_print_once(&app);
     assert_eq!(app.transcript().disk_front(), DiskFront::At(100));
+    // The anchor names the row rather than its row number, so the viewport
+    // stays on it as the loaded rows take the space above. The entry that led
+    // the transcript gains the blank row separating it from the entry now above
+    // it, and an anchor taken at that entry's first row lands on that blank row,
+    // so the row may stand one row down -- never further.
+    assert!(
+        [transcript_row(&app, 0), transcript_row(&app, 1)].contains(&top_before),
+        "the viewport held its row under the rows that landed above it: {:?}",
+        (transcript_row(&app, 0), transcript_row(&app, 1))
+    );
+}
+
+/// A window whose lines are longer than one screen row each takes more rows
+/// above the parked viewport than it has lines. The pane still starts at the
+/// parked row: the viewport is held by the row it stands on, while holding it
+/// by a count of the batch's lines would move it by fewer rows than the batch
+/// took and leave the pane standing above the reader's row.
+#[test]
+fn test_scrollback_holds_wrapped_row() {
+    let mut app = drained_app();
+    let long = "w".repeat(240);
+    let mut lines: Vec<TranscriptLine> = (0..3)
+        .map(|i| TranscriptLine::User(format!("older {i} {long}")))
+        .collect();
+    lines.extend(app.transcript().iter().cloned());
+    app.sessions.persistence.snapshot = Some(log_source(vec![log_window(lines, 100, 4096)]));
+
+    draw_transcript(&mut app);
+    app.park_scroll_at(0);
+    let top_before = transcript_row(&app, 0);
+    app.load_older_frames();
+    pump_history_read_blocking(&mut app, Duration::from_secs(5));
+
     assert_eq!(
-        app.whole_scroll().raw_top(),
-        5,
-        "the viewport held still under the rows that landed above it"
+        app.transcript().disk_row_count(),
+        3,
+        "the wrapped rows landed"
+    );
+    assert!(
+        !top_before.is_empty(),
+        "the park landed on the entry's own row, not a blank one"
+    );
+    assert!(
+        [transcript_row(&app, 0), transcript_row(&app, 1)].contains(&top_before),
+        "the pane still starts at the parked row, never above it: {:?}",
+        (transcript_row(&app, 0), transcript_row(&app, 1))
     );
 }
 
@@ -68,9 +112,14 @@ fn test_scrollback_chains_older_window() {
         log_window(tail, 100, 4096),
     ]));
 
-    app.whole_scroll_mut().jump_to(0);
+    draw_transcript(&mut app);
+    app.park_scroll_at(0);
     app.load_older_frames();
     pump_history_read_blocking(&mut app, Duration::from_secs(5));
+    // The window landed above the parked row, so the viewport stands deeper and
+    // the view stopped being near the boundary. Stepping back to the top of the
+    // loaded rows is what asks for the next window.
+    app.park_scroll_at(0);
     app.load_older_frames();
     pump_history_read_blocking(&mut app, Duration::from_secs(5));
 
@@ -82,6 +131,7 @@ fn test_scrollback_chains_older_window() {
     assert_eq!(app.transcript().disk_front(), DiskFront::At(0));
     assert_rows_print_once(&app);
 
+    app.park_scroll_at(0);
     app.load_older_frames();
     pump_history_read_blocking(&mut app, Duration::from_secs(5));
     assert_eq!(
@@ -102,7 +152,8 @@ fn test_scrollback_chains_older_window() {
 fn test_scrollback_without_log_source() {
     let mut app = drained_app();
     let shown = app.transcript().len();
-    app.whole_scroll_mut().jump_to(0);
+    draw_transcript(&mut app);
+    app.park_scroll_at(0);
     app.load_older_frames();
     pump_history_read_blocking(&mut app, Duration::from_secs(5));
     assert_eq!(app.transcript().len(), shown);
@@ -123,7 +174,8 @@ fn test_scrollback_stops_without_match() {
         4096,
     )]));
 
-    app.whole_scroll_mut().jump_to(0);
+    draw_transcript(&mut app);
+    app.park_scroll_at(0);
     app.load_older_frames();
     pump_history_read_blocking(&mut app, Duration::from_secs(5));
 
@@ -142,7 +194,8 @@ fn test_rows_leave_at_end() {
     lines.extend(app.transcript().iter().cloned());
     app.sessions.persistence.snapshot = Some(log_source(vec![log_window(lines, 100, 4096)]));
 
-    app.whole_scroll_mut().jump_to(0);
+    draw_transcript(&mut app);
+    app.park_scroll_at(0);
     app.load_older_frames();
     pump_history_read_blocking(&mut app, Duration::from_secs(5));
     assert_eq!(app.transcript().disk_row_count(), 1);
@@ -160,7 +213,7 @@ fn test_rows_leave_at_end() {
             .any(|l| matches!(l, TranscriptLine::User(t) if t == "older 0"))
     );
 
-    app.whole_scroll_mut().follow_tail();
+    app.scroll_transcript_follow_tail();
     app.rebuild_transcript();
     assert_eq!(
         app.transcript().disk_row_count(),
@@ -198,7 +251,8 @@ fn test_join_prefers_longest_run() {
     lines.extend(view.clone());
     app.sessions.persistence.snapshot = Some(log_source(vec![log_window(lines, 100, 4096)]));
 
-    app.whole_scroll_mut().jump_to(0);
+    draw_transcript(&mut app);
+    app.park_scroll_at(0);
     app.load_older_frames();
     pump_history_read_blocking(&mut app, Duration::from_secs(5));
 
@@ -233,7 +287,8 @@ fn test_walk_crosses_log_windows() {
         log_window(newer, 100, 4096),
     ]));
 
-    app.whole_scroll_mut().jump_to(0);
+    draw_transcript(&mut app);
+    app.park_scroll_at(0);
     app.load_older_frames();
     pump_history_read_blocking(&mut app, Duration::from_secs(5));
 
@@ -260,7 +315,8 @@ fn test_walk_stops_without_progress() {
         .collect();
     app.sessions.persistence.snapshot = Some(log_source(vec![log_window(lines, 4096, 4096)]));
 
-    app.whole_scroll_mut().jump_to(0);
+    draw_transcript(&mut app);
+    app.park_scroll_at(0);
     app.load_older_frames();
     pump_history_read_blocking(&mut app, Duration::from_secs(5));
 
@@ -297,7 +353,8 @@ fn test_walk_stops_without_window() {
         scan_calls: AtomicU32::new(0),
     }));
 
-    app.whole_scroll_mut().jump_to(0);
+    draw_transcript(&mut app);
+    app.park_scroll_at(0);
     app.load_older_frames();
     pump_history_read_blocking(&mut app, Duration::from_secs(5));
 
@@ -329,7 +386,8 @@ fn test_dispatch_front_after_drain() {
         100,
         4096,
     )]));
-    app.whole_scroll_mut().jump_to(0);
+    draw_transcript(&mut app);
+    app.park_scroll_at(0);
     app.load_older_frames();
     let front_after = app.transcript().frame_window_start();
     assert!(
@@ -361,7 +419,8 @@ fn test_stale_history_read_dropped() {
         .map(|i| TranscriptLine::User(format!("unrelated {i}")))
         .collect();
     app.sessions.persistence.snapshot = Some(log_source(vec![log_window(lines, 100, 4096)]));
-    app.whole_scroll_mut().jump_to(0);
+    draw_transcript(&mut app);
+    app.park_scroll_at(0);
     app.load_older_frames();
     // Move the resident front past the dispatch front before the result lands.
     let text = "z".repeat(2000);
@@ -404,13 +463,14 @@ fn test_rows_leave_on_drain() {
     lines.extend(app.transcript().iter().cloned());
     app.sessions.persistence.snapshot = Some(log_source(vec![log_window(lines, 100, 4096)]));
 
-    app.whole_scroll_mut().jump_to(0);
+    draw_transcript(&mut app);
+    app.park_scroll_at(0);
     app.load_older_frames();
     pump_history_read_blocking(&mut app, Duration::from_secs(5));
     assert_eq!(app.transcript().disk_row_count(), 1);
     assert_eq!(app.transcript().disk_rows_front(), front);
     assert_eq!(
-        app.whole_scroll().raw_top(),
+        app.whole_scroll().top_offset(),
         1,
         "the loaded row carried the viewport down with it"
     );
@@ -433,7 +493,7 @@ fn test_rows_leave_on_drain() {
     );
     assert_eq!(app.transcript().disk_front(), DiskFront::Unloaded);
     assert_eq!(
-        app.whole_scroll().raw_top(),
+        app.whole_scroll().top_offset(),
         0,
         "the viewport holds its place as the row leaves in the drain's own pass"
     );
@@ -464,7 +524,8 @@ fn test_log_rows_capped() {
         .collect();
     app.transcript_mut()
         .prepend_disk_rows(NamedRows::from_lines(rows), 100, 0);
-    app.whole_scroll_mut().jump_to(0);
+    draw_transcript(&mut app);
+    app.park_scroll_at(0);
     app.sessions.persistence.snapshot = Some(log_source(vec![log_window(
         vec![TranscriptLine::User("even older".into())],
         50,
@@ -497,7 +558,8 @@ fn test_scrollback_without_rows() {
         4096,
     )]));
 
-    app.whole_scroll_mut().jump_to(0);
+    draw_transcript(&mut app);
+    app.park_scroll_at(0);
     app.load_older_frames();
     pump_history_read_blocking(&mut app, Duration::from_secs(5));
 
@@ -514,7 +576,8 @@ fn test_failed_read_front_open() {
     let shown = app.transcript().len();
     app.sessions.persistence.snapshot = Some(failing_log_source());
 
-    app.whole_scroll_mut().jump_to(0);
+    draw_transcript(&mut app);
+    app.park_scroll_at(0);
     app.load_older_frames();
     pump_history_read_blocking(&mut app, Duration::from_secs(5));
 
