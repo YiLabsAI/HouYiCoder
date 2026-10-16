@@ -334,8 +334,10 @@ impl Runner {
     }
 
     /// Token count of the compact summary text (the replacement for folded
-    /// turns). Returns 0 when no compaction has run or the summary is empty.
-    /// Used to populate a "Compact buffer" category in /context.
+    /// turns). Returns 0 when no compaction has run, when the summary is empty,
+    /// and when the latest compaction predates a clear: the context the clear
+    /// started carries no folded turn. Used to populate a "Compact buffer"
+    /// category in /context.
     pub async fn compact_summary_tokens(&self, session: SessionId) -> u32 {
         let Ok(view) = self.store.current_view(session).await else {
             return 0;
@@ -350,8 +352,9 @@ impl Runner {
     }
 
     /// Format a compact summary for the /context view. Returns None when no
-    /// compaction has run. Counts folded turn groups + truncates the summary
-    /// preview to one line.
+    /// compaction describes the context the session holds, which includes the
+    /// case where the latest one predates a clear. Counts folded turn groups +
+    /// truncates the summary preview to one line.
     pub async fn compact_summary(&self, session: SessionId) -> Option<String> {
         let view = self.store.current_view(session).await.ok()?;
         let compact_count = view.rewind_points.len();

@@ -293,8 +293,10 @@ pub trait SessionLog: Send + Sync {
     /// Read the full event log for a session in append order.
     fn replay(&self, session: SessionId) -> PFut<'_, Result<Vec<SessionLogEntry>, ContextError>>;
 
-    /// Assemble the context: the full replay plus the latest
-    /// checkpoint manifest, so the caller can apply the disposition plan.
+    /// Assemble the context: the log from the session's last clear boundary
+    /// onward, plus the latest checkpoint manifest that describes it, so the
+    /// caller can apply the disposition plan. The turns a clear archived stay
+    /// readable through replay.
     fn current_view(&self, session: SessionId) -> PFut<'_, Result<ContextSnapshot, ContextError>>;
 
     /// The finalized events in append order (sync, in-memory mirror). Empty

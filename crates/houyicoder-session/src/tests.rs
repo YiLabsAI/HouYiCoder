@@ -9,7 +9,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use super::*;
 use houyicoder_api::session::SessionLog;
 use houyicoder_api::session::SubagentUsage;
-use houyicoder_context::{EventId, SessionEvent};
+use houyicoder_context::{CheckpointId, Disposition, EventId, SessionEvent, TurnGroup};
 use houyicoder_memory::{InMemoryBackend, LocalFileBackend};
 use std::sync::Arc;
 use tokio::sync::Notify;
@@ -410,6 +410,118 @@ async fn test_restore_respects_last_clear() {
     assert_eq!(head.summary.total_turns, 1, "only the turn after the clear");
     assert_eq!(head.summary.usage.input_tokens, 10, "and only its spend");
     assert_eq!(head.summary.single_model.as_deref(), Some("new-model"));
+}
+
+/// The assembled context of a cleared session starts at the boundary too: the
+/// archived turns are durable for /resume, but they are not part of the context
+/// the session is working in, and a checkpoint that folded them no longer
+/// describes it.
+#[tokio::test]
+async fn test_view_respects_last_clear() {
+    let store = SessionStore::new(Box::new(InMemoryBackend::new()));
+    let session = SessionId::new();
+    let archived = appended_event(
+        &store,
+        session,
+        SessionEvent::UserInput {
+            text: "archived".into(),
+        },
+    )
+    .await;
+    store
+        .backend()
+        .write_checkpoint(CheckpointManifest {
+            id: CheckpointId::new(),
+            session,
+            last_event: archived.id,
+            summary: Some("folded the archived turn".into()),
+            plan: vec![TurnGroup {
+                turn_id: archived.id,
+                disposition: Disposition::Summarized,
+                event_ids: vec![archived.id],
+            }],
+            ts: 0,
+        })
+        .await
+        .expect("write checkpoint");
+    appended_event(
+        &store,
+        session,
+        SessionEvent::ContextCleared { prior_turn: 1 },
+    )
+    .await;
+    appended_event(
+        &store,
+        session,
+        SessionEvent::UserInput {
+            text: "current".into(),
+        },
+    )
+    .await;
+
+    let view = store.current_view(session).await.expect("view");
+    let texts: Vec<String> = view
+        .events
+        .iter()
+        .filter_map(|entry| match &entry.event {
+            SessionEvent::UserInput { text } => Some(text.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        texts,
+        vec!["current".to_string()],
+        "only the turn the clear kept"
+    );
+    assert!(
+        view.manifest.is_none(),
+        "a checkpoint that folded the archived turn no longer describes this context"
+    );
+}
+
+/// The other side of the same branch: a checkpoint written after the clear
+/// covers turns this context does carry, so it is applied. Without this the
+/// boundary rule could pass by dropping every manifest.
+#[tokio::test]
+async fn test_view_applies_current_checkpoint() {
+    let store = SessionStore::new(Box::new(InMemoryBackend::new()));
+    let session = SessionId::new();
+    appended_event(
+        &store,
+        session,
+        SessionEvent::ContextCleared { prior_turn: 1 },
+    )
+    .await;
+    let kept = appended_event(
+        &store,
+        session,
+        SessionEvent::UserInput {
+            text: "current".into(),
+        },
+    )
+    .await;
+    store
+        .backend()
+        .write_checkpoint(CheckpointManifest {
+            id: CheckpointId::new(),
+            session,
+            last_event: kept.id,
+            summary: Some("folded the current turn".into()),
+            plan: vec![TurnGroup {
+                turn_id: kept.id,
+                disposition: Disposition::Summarized,
+                event_ids: vec![kept.id],
+            }],
+            ts: 0,
+        })
+        .await
+        .expect("write checkpoint");
+
+    let view = store.current_view(session).await.expect("view");
+    assert!(
+        view.manifest.is_some(),
+        "a checkpoint that describes this context is applied"
+    );
 }
 
 /// A streaming delta moves the mirror revision but not the durable one, so a

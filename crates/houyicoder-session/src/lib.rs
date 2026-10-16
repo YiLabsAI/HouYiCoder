@@ -44,6 +44,19 @@ use tokio::sync::Mutex as AsyncMutex;
 use tokio::sync::Notify;
 use trajectory::TrajectoryMirrors;
 
+/// The index the session's current epoch begins at: the last clear boundary,
+/// or the log head when the session was never cleared. The durable log keeps
+/// the archived turns so /resume can read them back, so a reader that
+/// describes the live session starts at the boundary rather than at the head.
+/// The boundary event itself is included. Callers that read the log whole
+/// (full-text search, memory preservation) use replay instead.
+fn epoch_start(events: &[SessionLogEntry]) -> usize {
+    events
+        .iter()
+        .rposition(|entry| matches!(entry.event, SessionEvent::ContextCleared { .. }))
+        .unwrap_or(0)
+}
+
 /// The engine-facing session facade. Owns a ContextBackend and layers the
 /// hash-chain, delta counter, and view assembly on top. Construct with any
 /// backend (InMemory for tests, LocalFile for persistence, future sqlite/cloud).
@@ -289,18 +302,14 @@ impl SessionStore {
     /// insert that follows.
     pub async fn restore_trajectory(&self, session: SessionId) -> Result<usize, ContextError> {
         let mut replayed = self.backend.replay(session).await?;
-        // A cleared session's trajectory is what came after the last clear. The
-        // durable log keeps everything, so the view starts at the boundary
-        // rather than at the first event: without this, resuming a cleared
-        // session would restore the turns and the spend it no longer counts.
-        let epoch_start = replayed
-            .iter()
-            .rposition(|entry| matches!(entry.event, SessionEvent::ContextCleared { .. }))
-            .unwrap_or(0);
+        // A cleared session's trajectory is what came after the last clear: the
+        // durable log keeps the archived turns, and resuming one would restore
+        // the turns and the spend the clear no longer counts.
+        let boundary = epoch_start(&replayed);
         // Dropped in place: an event carries tool payloads and message text, so
         // slicing to a new vector would copy the whole suffix.
-        if epoch_start > 0 {
-            replayed.drain(..epoch_start);
+        if boundary > 0 {
+            replayed.drain(..boundary);
         }
         let events = replayed;
         let count = events.len();
@@ -559,18 +568,32 @@ impl SessionStore {
         self.backend.list_checkpoints(session).await
     }
 
-    /// Assemble the context. Reads the full event log and, if a
-    /// checkpoint exists, loads the latest manifest so the caller can apply the
-    /// per-event Disposition plan (Verbatim / Summarized / Referenced). No
-    /// checkpoint means full replay (no plan applied).
+    /// Assemble the context. Reads the event log from the session's last clear
+    /// boundary onward and, if a checkpoint exists, loads the latest manifest
+    /// so the caller can apply the per-event Disposition plan (Verbatim /
+    /// Summarized / Referenced). No checkpoint means no plan applied.
+    ///
+    /// The durable log keeps the turns a clear archived, because /resume reads
+    /// them back; the live session's context is what followed the boundary. A
+    /// manifest whose last event predates the boundary folded turns this
+    /// context no longer holds, so it is dropped rather than applied.
     pub async fn current_view(&self, session: SessionId) -> Result<ContextSnapshot, ContextError> {
-        let events = self.backend.replay(session).await?;
+        let mut events = self.backend.replay(session).await?;
+        let boundary = epoch_start(&events);
+        if boundary > 0 {
+            events.drain(..boundary);
+        }
         let rewind_points = self.backend.list_checkpoints(session).await?;
         let last_checkpoint = rewind_points.last().copied();
-        let manifest = if let Some(cp) = last_checkpoint {
-            Some(self.backend.read_checkpoint(cp).await?)
-        } else {
-            None
+        let manifest = match last_checkpoint {
+            Some(cp) => {
+                let manifest = self.backend.read_checkpoint(cp).await?;
+                events
+                    .iter()
+                    .any(|event| event.id == manifest.last_event)
+                    .then_some(manifest)
+            }
+            None => None,
         };
         Ok(ContextSnapshot {
             session,

@@ -58,22 +58,28 @@ pub struct CheckpointManifest {
     pub ts: u64,
 }
 
-/// A snapshot of the assembled context for a session. The events field
-/// is the full replay (raw log is never mutated). When a checkpoint exists,
-/// the manifest carries the per-turn-group Disposition plan; the caller
-/// applies it to produce the assembled context (Verbatim kept, Summarized folded,
-/// Referenced replaced). No manifest means full replay (no plan applied).
+/// A snapshot of the assembled context for a session. The raw log is never
+/// mutated, so the events field is a read of it from the session's last clear
+/// boundary onward: the turns a clear archived stay durable for /resume but are
+/// not part of this context. When a checkpoint describes this context, the
+/// manifest carries the per-turn-group Disposition plan; the caller applies it
+/// to produce the assembled context (Verbatim kept, Summarized folded,
+/// Referenced replaced). No manifest means no plan applied.
 #[derive(Debug, Clone)]
 pub struct ContextSnapshot {
     pub session: SessionId,
-    /// Events in the context window (full replay; the manifest selects them).
+    /// Events in the context window, from the last clear boundary onward (the
+    /// manifest selects among them).
     pub events: Vec<SessionLogEntry>,
-    /// The most recent checkpoint, if any compaction has run.
+    /// The latest checkpoint the log holds, if any compaction has run. A
+    /// checkpoint written before the last clear describes turns this context no
+    /// longer carries, so it can be present here while manifest is None.
     pub last_checkpoint: Option<CheckpointId>,
     /// All checkpoint ids for the session, oldest first (rewind picker).
     pub rewind_points: Vec<CheckpointId>,
-    /// The latest checkpoint manifest, if one exists. None when no compaction
-    /// has run (full replay). The caller applies this to the events to produce
-    /// the assembled context.
+    /// The latest checkpoint manifest, if one describes this context: absent
+    /// when no compaction has run, and when the latest checkpoint predates the
+    /// last clear. The caller applies this to the events to produce the
+    /// assembled context.
     pub manifest: Option<CheckpointManifest>,
 }
