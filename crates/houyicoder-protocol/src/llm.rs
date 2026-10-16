@@ -107,6 +107,26 @@ pub fn count_visible(count: u64, reported: bool) -> bool {
     reported || count > 0
 }
 
+/// The token counts a durable record keeps for one turn, before they are
+/// normalized. A record keeps the counts and whether the endpoint reported
+/// each of them, but no total: the total is derived here, so every reader of
+/// the log derives the same one.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RecordedCounts {
+    /// Inclusive input tokens (includes cache-read and cache-write).
+    pub input_tokens: u64,
+    /// Inclusive output tokens (includes reasoning).
+    pub output_tokens: u64,
+    /// Cache-read input tokens (reused prefix).
+    pub cache_read_input_tokens: u64,
+    /// Cache-write input tokens (new prefix written to the cache).
+    pub cache_write_input_tokens: u64,
+    /// Reasoning tokens (a subset of output_tokens).
+    pub reasoning_tokens: u64,
+    /// Which of the counts above the endpoint reported.
+    pub provenance: UsageProvenance,
+}
+
 /// Token usage for one model call. Inclusive totals plus a non-overlapping
 /// breakdown; see the module doc for the invariants.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -186,6 +206,33 @@ impl Usage {
                 .saturating_add(other.cache_write_input_tokens),
             reasoning_tokens: self.reasoning_tokens.saturating_add(other.reasoning_tokens),
             provenance: self.provenance.merge(other.provenance),
+        }
+    }
+
+    /// Normalize the counts a durable record carries: the total is input plus
+    /// output, the non-cached input is input minus both cache fields, and
+    /// counts above the u32 ceiling saturate. The record holds no total of its
+    /// own, so one is derived here; every path that rebuilds a turn's usage
+    /// from the log normalizes it through this function, so a session's own
+    /// tally and the per-model table cannot disagree about what a turn cost.
+    pub fn from_recorded(counts: RecordedCounts) -> Self {
+        let clamp = |v: u64| v.min(u32::MAX as u64) as u32;
+        let input_tokens = clamp(counts.input_tokens);
+        let output_tokens = clamp(counts.output_tokens);
+        Self {
+            input_tokens,
+            output_tokens,
+            total_tokens: input_tokens.saturating_add(output_tokens),
+            non_cached_input_tokens: clamp(
+                counts
+                    .input_tokens
+                    .saturating_sub(counts.cache_read_input_tokens)
+                    .saturating_sub(counts.cache_write_input_tokens),
+            ),
+            cache_read_input_tokens: clamp(counts.cache_read_input_tokens),
+            cache_write_input_tokens: clamp(counts.cache_write_input_tokens),
+            reasoning_tokens: clamp(counts.reasoning_tokens),
+            provenance: counts.provenance,
         }
     }
 

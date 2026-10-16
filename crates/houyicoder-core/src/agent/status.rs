@@ -31,6 +31,7 @@ use crate::observability::evolution::RedundantCall;
 use crate::snapshot::SnapshotStore;
 use crate::snapshot::UndoOutcome;
 use crate::snapshot::UndoStack;
+use houyicoder_api::session::recorded_turn_usage;
 use houyicoder_api::skill::SkillSnapshot;
 use houyicoder_context::{SessionEvent, SessionId, SessionLogEntry};
 use houyicoder_protocol::frontend::context::{ContextFileEntry, ContextSkillEntry};
@@ -142,44 +143,9 @@ impl UsageAccumulator {
     /// question with a second rule and drift from the live one. They stay
     /// per-run; the usage figures above are per-session.
     pub fn seed_from_events(&mut self, events: &[SessionLogEntry]) {
-        let clamp = |v: u64| v.min(u32::MAX as u64) as u32;
         for entry in events {
-            let SessionEvent::TurnUsage {
-                input_tokens,
-                output_tokens,
-                cache_read_input_tokens,
-                cache_write_input_tokens,
-                reasoning_tokens,
-                input_reported,
-                cache_read_reported,
-                cache_write_reported,
-                ..
-            } = &entry.event
-            else {
+            let Some((_, turn)) = recorded_turn_usage(&entry.event) else {
                 continue;
-            };
-            // Derived the same way the delegated half derives its totals, so
-            // the two halves of a session's spend cannot disagree about what
-            // a turn's non-cached share is. The log carries no total of its
-            // own, so a seeded turn derives one; a live turn keeps the total
-            // its endpoint reported, which may count reasoning on top.
-            let turn = Usage {
-                input_tokens: clamp(*input_tokens),
-                output_tokens: clamp(*output_tokens),
-                total_tokens: clamp(input_tokens.saturating_add(*output_tokens)),
-                non_cached_input_tokens: clamp(
-                    input_tokens
-                        .saturating_sub(*cache_read_input_tokens)
-                        .saturating_sub(*cache_write_input_tokens),
-                ),
-                cache_read_input_tokens: clamp(*cache_read_input_tokens),
-                cache_write_input_tokens: clamp(*cache_write_input_tokens),
-                reasoning_tokens: clamp(*reasoning_tokens),
-                provenance: UsageProvenance {
-                    input_reported: *input_reported,
-                    cache_read_reported: *cache_read_reported,
-                    cache_write_reported: *cache_write_reported,
-                },
             };
             self.cumulative = self.cumulative.saturating_add(&turn);
             self.last_input_tokens = turn.input_tokens;

@@ -12,7 +12,7 @@ use houyicoder_context::{
     CheckpointId, CheckpointManifest, ContextBackend, ContextError, ContextSnapshot, EventId,
     SessionEvent, SessionId, SessionLogEntry,
 };
-use houyicoder_protocol::llm::{Usage, UsageProvenance};
+use houyicoder_protocol::llm::{RecordedCounts, Usage, UsageProvenance};
 use std::path::PathBuf;
 
 /// The delegated usage a session's children reported in durable returns.
@@ -98,24 +98,53 @@ impl SubagentUsage {
     /// holding a child that did not report a field reads unknown rather than
     /// a silent guess.
     pub fn to_usage(self) -> Usage {
-        let clamp = |v: u64| v.min(u32::MAX as u64) as u32;
-        let input_tokens = clamp(self.input_tokens);
-        let output_tokens = clamp(self.output_tokens);
-        Usage {
-            input_tokens,
-            output_tokens,
-            total_tokens: input_tokens.saturating_add(output_tokens),
-            non_cached_input_tokens: clamp(
-                self.input_tokens
-                    .saturating_sub(self.cache_read_input_tokens)
-                    .saturating_sub(self.cache_write_input_tokens),
-            ),
-            cache_read_input_tokens: clamp(self.cache_read_input_tokens),
-            cache_write_input_tokens: clamp(self.cache_write_input_tokens),
-            reasoning_tokens: clamp(self.reasoning_tokens),
+        Usage::from_recorded(RecordedCounts {
+            input_tokens: self.input_tokens,
+            output_tokens: self.output_tokens,
+            cache_read_input_tokens: self.cache_read_input_tokens,
+            cache_write_input_tokens: self.cache_write_input_tokens,
+            reasoning_tokens: self.reasoning_tokens,
             provenance: self.provenance,
-        }
+        })
     }
+}
+
+/// The usage one recorded turn accounts for, together with the model that ran
+/// it. None for an event that records no usage.
+///
+/// A record keeps the counts and whether the endpoint reported each of them,
+/// and no total. Normalizing it here is the one path from a logged turn to the
+/// usage shape the views read, so the tallies a session's spend is read from
+/// cannot disagree about what a turn cost.
+pub fn recorded_turn_usage(event: &SessionEvent) -> Option<(&str, Usage)> {
+    let SessionEvent::TurnUsage {
+        model,
+        input_tokens,
+        output_tokens,
+        cache_read_input_tokens,
+        cache_write_input_tokens,
+        reasoning_tokens,
+        input_reported,
+        cache_read_reported,
+        cache_write_reported,
+        ..
+    } = event
+    else {
+        return None;
+    };
+    let counts = RecordedCounts {
+        input_tokens: *input_tokens,
+        output_tokens: *output_tokens,
+        cache_read_input_tokens: *cache_read_input_tokens,
+        cache_write_input_tokens: *cache_write_input_tokens,
+        reasoning_tokens: *reasoning_tokens,
+        provenance: UsageProvenance {
+            input_reported: *input_reported,
+            cache_read_reported: *cache_read_reported,
+            cache_write_reported: *cache_write_reported,
+        },
+    };
+    Some((model.as_str(), Usage::from_recorded(counts)))
 }
 
 /// Sum the delegated usage in a durable event slice.
@@ -348,3 +377,6 @@ pub trait SessionLog: Send + Sync {
         None
     }
 }
+
+#[cfg(test)]
+mod tests;

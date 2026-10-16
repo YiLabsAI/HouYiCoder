@@ -255,3 +255,38 @@ fn test_usage_identity_is_neutral() {
     assert_eq!(id.saturating_add(&complete), complete);
     assert_eq!(id.cache_hit_rate(), None, "zero-input identity has no rate");
 }
+
+#[test]
+fn test_from_recorded_derives_total() {
+    // A record keeps counts and no total, so a rebuilt turn derives one: the
+    // total is input plus output and the non-cached input is input minus both
+    // cache fields, so the figures a reader shows agree with the counts they
+    // came from.
+    let usage = Usage::from_recorded(RecordedCounts {
+        input_tokens: 12_000,
+        output_tokens: 500,
+        cache_read_input_tokens: 9_600,
+        cache_write_input_tokens: 400,
+        reasoning_tokens: 120,
+        provenance: UsageProvenance::ALL_REPORTED,
+    });
+    assert_eq!(usage.total_tokens, 12_500);
+    assert_eq!(usage.non_cached_input_tokens, 2_000);
+    assert_eq!(usage.cache_hit_rate(), Some(0.8));
+}
+
+#[test]
+fn test_from_recorded_clamps() {
+    // Counts past the u32 ceiling clamp rather than wrap: a wrapped total
+    // would read as a tiny session.
+    let over = u64::from(u32::MAX) + 10;
+    let usage = Usage::from_recorded(RecordedCounts {
+        input_tokens: over,
+        output_tokens: over,
+        provenance: UsageProvenance::ALL_REPORTED,
+        ..Default::default()
+    });
+    assert_eq!(usage.input_tokens, u32::MAX);
+    assert_eq!(usage.total_tokens, u32::MAX);
+    assert_eq!(usage.non_cached_input_tokens, u32::MAX);
+}
