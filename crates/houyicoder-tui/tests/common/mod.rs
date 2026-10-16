@@ -11,7 +11,7 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use portable_pty::cmdbuilder::CommandBuilder;
-use portable_pty::{Child, PtySize};
+use portable_pty::{Child, MasterPty, PtySize};
 
 /// A real TUI process with writable input and accumulated terminal output.
 /// Drop stops the child; the reader exits when the pseudo-terminal closes.
@@ -21,6 +21,10 @@ pub struct PtySession {
     output: Arc<Mutex<Vec<u8>>>,
     screen: Arc<Mutex<Parser>>,
     _reader: thread::JoinHandle<()>,
+    /// Held so the window size can change while the session runs; the child
+    /// reads the change as a resize event, which is what a real terminal
+    /// sends.
+    master: Box<dyn MasterPty + Send>,
     sessions_dir: PathBuf,
     /// A temp home the harness created (not caller-provided); cleaned in Drop
     /// so isolated config roots do not accumulate in /tmp.
@@ -267,6 +271,7 @@ impl PtySession {
             output,
             screen,
             _reader: reader_thread,
+            master: pair.master,
             sessions_dir,
             _owned_home,
         }
@@ -279,11 +284,31 @@ impl PtySession {
 
     /// The child's OS process id, for measurement tests that sample the
     /// running binary's resource use from outside.
-    // Allowed dead because only the measurement binary samples resources;
-    // the aggregated UI binary includes this module without calling it.
+    // Allowed dead: this module is compiled into every test binary, so the
+    // ones that sample nothing leave this unused.
     #[allow(dead_code)]
     pub fn child_pid(&self) -> Option<u32> {
         self._child.process_id()
+    }
+
+    /// Change the window size, which the child reads as a resize event. The
+    /// captured screen is resized with it, so later reads see the new
+    /// geometry rather than the one the session started at.
+    // Allowed dead: this module is compiled into every test binary, so the
+    // ones that keep one window size leave this unused.
+    #[allow(dead_code)]
+    pub fn resize(&mut self, rows: u16, cols: u16) {
+        self.master
+            .resize(PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("pty resize");
+        if let Ok(mut parser) = self.screen.lock() {
+            parser.screen_mut().set_size(rows, cols);
+        }
     }
 
     /// Write raw bytes to the PTY master (the binary reads them as crossterm
@@ -524,6 +549,51 @@ fn workspace_root() -> PathBuf {
 /// + any PTY scheduling latency).
 pub const RENDER_TIMEOUT: Duration = Duration::from_secs(6);
 
+/// How long a replay of a seeded log may take to settle. A healthy run settles
+/// in well under a second at the sizes the small fixtures use; the budget is
+/// wide because the large ones differ by orders of magnitude, and a settled
+/// screen is reached far earlier in every case.
+const SETTLE_TIMEOUT: Duration = Duration::from_secs(900);
+
+/// Resident set of the child process in kilobytes, sampled from outside.
+/// Starting a child process is the only way to read another process's memory
+/// on this platform without a native dependency; this is measurement
+/// scaffolding, not an engine command.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "measurement sampling of the child process, not an engine command"
+)]
+pub fn sample_rss_kb(pid: u32) -> Option<u64> {
+    let out = Command::new("ps")
+        .args(["-o", "rss=", "-p", &pid.to_string()])
+        .output()
+        .ok()?;
+    String::from_utf8_lossy(&out.stdout).trim().parse().ok()
+}
+
+/// Launch over a seeded log and wait for the replay to finish. Returns the
+/// session and the launch-to-settle duration.
+pub fn launch_and_settle(dir: &Path, fixture: &LargeFixture) -> (PtySession, Duration) {
+    let started = Instant::now();
+    let mut session = PtySession::launch_with_sessions_dir(
+        None,
+        None,
+        None,
+        None,
+        &["--resume".to_string(), fixture.sid.clone()],
+        dir.to_path_buf(),
+    );
+    let settled = session.wait_for_screen(&fixture.settle_marker, SETTLE_TIMEOUT);
+    assert!(
+        settled,
+        "replay of {} bytes did not settle within {:?}:\n{}",
+        fixture.log_bytes,
+        SETTLE_TIMEOUT,
+        session.output()
+    );
+    (session, started.elapsed())
+}
+
 /// The scroll status row's line and total values, anchored on the row's SCROLL
 /// label so unrelated screen text containing the same words cannot be misread
 /// as the status row.
@@ -543,6 +613,28 @@ pub fn parse_scroll_status(contents: &str) -> Option<(u64, u64)> {
         rest[..slash].trim().parse().ok()?,
         after[..end].parse().ok()?,
     ))
+}
+
+/// The scroll view's top line number, from the status row. A value of one at
+/// the end of a descent proves the oldest rows were reached, which separates
+/// an exhausted log from a read path that stopped answering.
+pub fn view_line(contents: &str) -> Option<u64> {
+    parse_scroll_status(contents).map(|(line, _)| line)
+}
+
+/// The scroll view's total row count, read from the same status row. A landing
+/// history read grows it while the visible content stays put, which makes the
+/// growth the only external signal that a read landed: rows prepend above a
+/// held viewport, so the screen itself does not move.
+pub fn view_total(contents: &str) -> Option<u64> {
+    parse_scroll_status(contents).map(|(_, total)| total)
+}
+
+/// The first screen row, which is what a page-up press moves. Comparing the
+/// whole contents each poll would fold rendering jitter in unrelated rows into
+/// the change signal.
+pub fn top_row(contents: &str) -> &str {
+    contents.lines().next().unwrap_or("")
 }
 
 /// Strip ANSI escape sequences from a string for content assertions. Covers

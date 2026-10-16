@@ -22,6 +22,8 @@ mod ui_entitlement;
 mod ui_exit_keys;
 #[path = "ui_fence.rs"]
 mod ui_fence;
+#[path = "ui_history.rs"]
+mod ui_history;
 #[path = "ui_hooks.rs"]
 mod ui_hooks;
 #[path = "ui_input.rs"]

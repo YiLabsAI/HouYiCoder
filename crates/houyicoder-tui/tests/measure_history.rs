@@ -17,14 +17,14 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use common::{
-    Key, LargeFixture, PtySession, fresh_temp_dir, parse_scroll_status, seed_large_session_on_disk,
+    Key, LargeFixture, PtySession, fresh_temp_dir, launch_and_settle, sample_rss_kb,
+    seed_large_session_on_disk, top_row, view_line, view_total,
 };
 use std::env::consts::ARCH;
 use std::env::consts::OS;
 use std::env::var;
 use std::fs::create_dir_all;
 use std::fs::write;
-use std::process::Command;
 use std::process::id;
 use std::str::from_utf8;
 use std::thread::sleep;
@@ -54,10 +54,6 @@ const RSS_FIXTURE_BYTES: &[u64] = &[
     64 * 1024 * 1024,
     100 * 1024 * 1024,
 ];
-
-/// Replay of a multi-megabyte log took real minutes at the baseline commit
-/// (16 MiB measured near 300 s); give it room.
-const SETTLE_TIMEOUT: Duration = Duration::from_secs(900);
 
 /// How long one press waits for the top row to change before it counts as a
 /// stall press. A change means rows were already loaded; a stall means the
@@ -114,25 +110,6 @@ fn history_run_dir() -> PathBuf {
     dir
 }
 
-/// Resident set of the child process in kilobytes, sampled from outside.
-/// Starting a child process is the only way to read another process's memory
-/// on this platform without a native dependency; this is measurement
-/// scaffolding, not an engine command.
-#[expect(
-    clippy::disallowed_methods,
-    reason = "measurement sampling of the child process, not an engine command"
-)]
-fn sample_rss_kb(pid: u32) -> Option<u64> {
-    let out = Command::new("ps")
-        .args(["-o", "rss=", "-p", &pid.to_string()])
-        .output()
-        .ok()?;
-    String::from_utf8_lossy(&out.stdout)
-        .trim()
-        .parse::<u64>()
-        .ok()
-}
-
 fn percentile(sorted: &[f64], p: f64) -> f64 {
     if sorted.is_empty() {
         return f64::NAN;
@@ -143,28 +120,6 @@ fn percentile(sorted: &[f64], p: f64) -> f64 {
 
 fn opt_text(value: Option<u64>) -> String {
     value.map(|v| v.to_string()).unwrap_or_else(|| "na".into())
-}
-
-/// The first screen row, which is what a page-up press moves. Comparing the
-/// whole contents each poll would fold rendering jitter in unrelated rows
-/// into the change signal.
-fn top_row(contents: &str) -> &str {
-    contents.lines().next().unwrap_or("")
-}
-
-/// The scroll view's total row count, read from the status line. A landing
-/// history read grows it while the visible content stays put, which makes the
-/// growth the only external signal that a read landed: rows prepend above a
-/// held viewport, so the screen itself does not move.
-fn view_total(contents: &str) -> Option<u64> {
-    parse_scroll_status(contents).map(|(_, total)| total)
-}
-
-/// The scroll view's top line number, from the same status row. A value of
-/// one at the end of a descent proves the oldest rows were reached, which
-/// separates an exhausted log from a read path that stopped answering.
-fn view_line(contents: &str) -> Option<u64> {
-    parse_scroll_status(contents).map(|(line, _)| line)
 }
 
 /// The marker token layout: a head literal, four decimal digits identifying
@@ -942,29 +897,6 @@ impl PgupRun<'_> {
         println!("history pgup baseline ({})", run_dir.display());
         print!("{summary}");
     }
-}
-
-/// Launch over a seeded large fixture and wait for the replay to finish.
-/// Returns the session and the launch-to-settle duration.
-fn launch_and_settle(dir: &Path, fixture: &LargeFixture) -> (PtySession, Duration) {
-    let started = Instant::now();
-    let mut session = PtySession::launch_with_sessions_dir(
-        None,
-        None,
-        None,
-        None,
-        &["--resume".to_string(), fixture.sid.clone()],
-        dir.to_path_buf(),
-    );
-    let settled = session.wait_for_screen(&fixture.settle_marker, SETTLE_TIMEOUT);
-    assert!(
-        settled,
-        "replay of {} bytes did not settle within {:?}:\n{}",
-        fixture.log_bytes,
-        SETTLE_TIMEOUT,
-        session.output()
-    );
-    (session, started.elapsed())
 }
 
 /// Baseline for the page-up history read: settle time, stall episodes split
