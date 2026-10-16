@@ -24,7 +24,7 @@ use crate::state::transcript::blocks::{
     Block, BlockAnchor, BlockId, TranscriptChange, TranscriptChangeSet,
 };
 use crate::transcript::TranscriptFrame;
-use crate::transcript::{TurnCheckpoint, transcript_from_frames_at};
+use crate::transcript::{TurnCheckpoint, delivered_marker_at, transcript_from_frames_at};
 use houyicoder_protocol::acpx::AcpxMethod;
 use houyicoder_protocol::frontend::permission::PermissionDecisionEntry;
 use houyicoder_protocol::frontend::session_update::SessionUpdate;
@@ -198,13 +198,27 @@ impl App {
             };
             let slot = blocks.get(cur_idx);
             let matched = slot.is_some_and(|b| b.id == id);
-            // Reuse needs the id and the range to be the ones the block was
-            // derived from, and neither drifts without the other. A frame
-            // replaced in place is the tentative echo the user's own message
-            // supersedes, which is always the trailing frame, so the boundary
-            // that cuts the ranges moves with it; a refresh under a frame's own
-            // position replaces no block, it clears them all.
-            if matched && !is_active && slot.is_some_and(|b| b.frame_range == *range) {
+            // A range's rows come from its own frames and from the frame that
+            // follows its last one, which decides how that message reads, so
+            // reuse needs the id, the range, and that frame to be the ones the
+            // block was derived from. The frame after the range is the one that
+            // moves: a mark for the range's trailing message arrives after the
+            // block was derived, and the rows under the old decision — a
+            // summary row for a turn the message never opened — must not stay.
+            // A frame replaced in place is the tentative echo the user's own
+            // message supersedes, which is always the trailing frame, so the
+            // boundary that cuts the ranges moves with it; a refresh under a
+            // frame's own position replaces no block, it clears them all.
+            let marker = range
+                .end
+                .checked_sub(1)
+                .and_then(|at| at.checked_sub(base))
+                .and_then(|at| delivered_marker_at(self.transcript().frames(), at))
+                .map(|at| self.frame_row(base + at, base));
+            let unchanged = slot.is_some_and(|b| {
+                b.frame_range == *range && b.checkpoint.delivered_marker() == marker.as_ref()
+            });
+            if matched && !is_active && unchanged {
                 // Unchanged frozen prefix: keep its lines and fold groups
                 // as they are, so only the tail re-derives. Its frames did not
                 // change, so the state they end a turn with did not either.

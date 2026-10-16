@@ -33,20 +33,19 @@ use houyicoder_protocol::acpx::AcpxNotification;
 use houyicoder_protocol::envelope::{DurableEventId, EventSeq};
 use houyicoder_protocol::frontend::session_update::{SessionUpdate, ToolCall};
 
-use crate::brief::{MEMORY_LABEL_TOOLS, result_summary, tool_call_brief};
+use crate::brief::tool_call_brief;
 use crate::records::{ContextView, ToolOutcome, TranscriptLine};
 use crate::row_id::RowId;
 use crate::transcript::frame_payload::chunk_text;
 
+mod call_rows;
 pub(crate) mod frame_payload;
 pub mod snapshot;
 mod tool_updates;
 mod turn_fold;
 #[cfg(test)]
 use crate::result_body::count_diff_lines;
-use crate::result_body::{
-    command_is_silent_success, extract_body, output_has_diff, write_result_body,
-};
+use call_rows::{call_out_of_view_row, tool_renders_chip, tool_result_line};
 use tool_updates::{PendingUpdate, ToolRegistry, collect_tool_updates};
 use turn_fold::{RowNames, TurnFold};
 
@@ -61,6 +60,7 @@ use houyicoder_protocol::tool::tool_invocation;
 use serde_json::Value;
 use std::mem::take;
 pub use turn_fold::bounds_turn_in;
+pub(crate) use turn_fold::delivered_marker_at;
 pub(crate) use turn_fold::is_user_frame;
 
 /// One frame of the turn stream, preserved in arrival order so the
@@ -195,13 +195,6 @@ impl AsRef<TranscriptFrame> for TranscriptFrame {
     fn as_ref(&self) -> &TranscriptFrame {
         self
     }
-}
-
-/// Whether the transcript draws this tool call as a chip. A transparent tool
-/// draws through its own widget (the checklist) or as the question prompt
-/// itself, so the turn summary counts only the calls the user sees.
-fn tool_renders_chip(title: &str) -> bool {
-    title != "todo_write" && title != "AskUserQuestion"
 }
 
 /// The rows a frame-log derivation produced, each with the identity the read
@@ -366,6 +359,10 @@ fn walk_window<'a, F: AsRef<TranscriptFrame>>(
         fold: TurnFold::new(log, window, names, carried),
     };
     p.run(frames);
+    // The reposition pass runs before the trailing close so a result row it
+    // appends falls inside the turn it belongs to, and the summary row the close
+    // writes stays the last row of the turn it summarizes.
+    p.finish();
     // The state handed to the next window describes the turn this window's
     // frames left open, so it is read before the trailing close below. That
     // close answers a question about what to render — whether a log that ends
@@ -374,7 +371,6 @@ fn walk_window<'a, F: AsRef<TranscriptFrame>>(
     // the read that continues the log must summarize.
     let exit = p.fold.checkpoint();
     p.close_trailing_turn();
-    p.finish();
     debug_assert_eq!(
         p.out.len(),
         p.ids.len(),
@@ -389,67 +385,11 @@ fn walk_window<'a, F: AsRef<TranscriptFrame>>(
     )
 }
 
-/// Build the single result row for a tool call from its output. The body is
-/// tool-specific: Read shows a one-line summary (content stays in the frame
-/// log for the model, never the transcript — dumping it flooded the view and
-/// enabled the duplication bug, bug-log #27); Bash shows raw stdout (its
-/// summary is the first stdout line, which the raw body already starts with, so
-/// prepending it duplicates line 1); a silent Bash success renders "done"
-/// rather than an empty "(no output)" placeholder that reads as failure; the
-/// memory tools render a single human label (the raw JSON is not a readable
-/// body); Write renders the chip plus the written content pulled from the
-/// call's input (folding is the render layer's job via tool_rows, not baked
-/// in). Other tools keep summary + raw when both are present.
-fn tool_result_line(
-    id: &str,
-    tool_name: &str,
-    output: &Value,
-    call_input: Option<&Value>,
-) -> TranscriptLine {
-    let out_str = output.to_string();
-    let raw = extract_body(&out_str);
-    let body = if tool_name == "read" {
-        if output.get("error").is_some() {
-            raw
-        } else {
-            result_summary(tool_name, output).unwrap_or_default()
-        }
-    } else if tool_name == "bash" {
-        if raw.is_empty() && command_is_silent_success(call_input, output) {
-            "done".to_string()
-        } else {
-            raw
-        }
-    } else if MEMORY_LABEL_TOOLS.contains(&tool_name) {
-        result_summary(tool_name, output).unwrap_or(raw)
-    } else if tool_name == "write" {
-        write_result_body(output, call_input)
-    } else {
-        match result_summary(tool_name, output) {
-            Some(s) if raw.is_empty() => s,
-            Some(s) => format!("{s}\n{raw}"),
-            None => raw,
-        }
-    };
-    TranscriptLine::Tool {
-        name: "result".to_string(),
-        tool: tool_name.to_string(),
-        status: String::new(),
-        invocation: String::new(),
-        outcome: ToolOutcome::from_output_with(
-            output,
-            tool_name,
-            call_input.unwrap_or(&Value::Null),
-        ),
-        call_id: id.to_string(),
-        body,
-        is_diff: output_has_diff(&out_str),
-    }
-}
-
-/// A result whose call frame already passed, awaiting the reposition pass:
-/// the output, the tool it belongs to, and the identity of the update frame
-/// that carried it, which names the row it becomes.
+/// A result the walk set aside rather than place where it arrived: the
+/// output, the tool it belongs to, and the identity of the update frame that
+/// carried it, which names the row it becomes. The reposition pass attaches it
+/// beside the call row its call id names, and a call that draws no row of its
+/// own leaves the result where the pass appends it.
 struct LateResult {
     row: RowId,
     call_id: String,
@@ -564,20 +504,73 @@ impl<'a, F: AsRef<TranscriptFrame>> LineBuilder<'a, F> {
                 let call_id = &upd.tool_call_id.0;
                 if let Some((_, Some(output))) = self.take_update(call_id) {
                     let (tool_name, _) = self.tools.get(call_id).cloned().unwrap_or_default();
-                    // todo_write's result is boilerplate and the call row is
-                    // skipped, so a late result would orphan. The name comes
-                    // from the tools map, which is empty when the call frame
-                    // scrolled out of the rebuilt window; recognize the orphan
-                    // by its distinctive old_todos field so it never leaks as a
-                    // raw {"todos":...} row.
-                    let orphan_todo = tool_name.is_empty() && output.get("old_todos").is_some();
-                    if tool_name != "todo_write" && !orphan_todo {
-                        self.late_results.push(LateResult {
-                            row: id,
-                            call_id: call_id.clone(),
-                            tool_name,
-                            output,
-                        });
+                    // The tools map holds the window's own call frames, so an
+                    // empty name means the call left the view: there is no call
+                    // row here to attach the result to, and the state the
+                    // earlier read handed on is the only place the call is
+                    // still named. Reading that name in place of the map's is
+                    // what lets one set of rules below cover both.
+                    let out_of_view = tool_name.is_empty();
+                    let tool = self.fold.pending_tool(call_id);
+                    let title = match tool.as_deref() {
+                        Some(tool) if out_of_view => tool,
+                        _ => tool_name.as_str(),
+                    };
+                    // The result is in hand, so the call awaits nothing: no row
+                    // that reads on has to name it.
+                    self.fold.close_call(call_id);
+                    // todo_write's result is boilerplate and draws no call row,
+                    // so it has nothing to sit under here and would render as a
+                    // raw row. The tool's name is what identifies it, and a call
+                    // the state can no longer name leaves only the output itself,
+                    // so the orphan is recognized by its distinctive old_todos
+                    // field as well.
+                    let orphan_todo = out_of_view && output.get("old_todos").is_some();
+                    if title != "todo_write" && !orphan_todo {
+                        if out_of_view {
+                            // Render the call and its result where the result
+                            // arrived: the call row before it stands in for the
+                            // frames that left, so the result is never read as a
+                            // line of its own. Only a tool that draws call rows
+                            // gets one, so the same content reads the same
+                            // whether or not the frames holding it are in view —
+                            // a call the state cannot name gets one, because a
+                            // result with nothing above it is the shape the
+                            // reader cannot place.
+                            if tool_renders_chip(title) {
+                                self.out.push(call_out_of_view_row(
+                                    call_id,
+                                    tool.as_deref(),
+                                    &output,
+                                ));
+                                self.ids.push(id.clone());
+                            }
+                            // A delegated call keeps the fold-group the
+                            // in-view path draws: the group is what opens the
+                            // child's own transcript, and the call's frames
+                            // having left the view is no reason to lose that.
+                            // The call's input went with those frames, so the
+                            // group falls back to a generic type and an empty
+                            // prompt, the shape the in-view path also takes for
+                            // a call whose frame carries no input.
+                            let row = subagent_line(&output, None).unwrap_or_else(|| {
+                                tool_result_line(
+                                    call_id,
+                                    tool.as_deref().unwrap_or(""),
+                                    &output,
+                                    None,
+                                )
+                            });
+                            self.out.push(row);
+                            self.ids.push(id);
+                        } else {
+                            self.late_results.push(LateResult {
+                                row: id,
+                                call_id: call_id.clone(),
+                                tool_name,
+                                output,
+                            });
+                        }
                     }
                 }
             }
@@ -622,6 +615,13 @@ impl<'a, F: AsRef<TranscriptFrame>> LineBuilder<'a, F> {
     fn emit_tool_call(&mut self, tc: &ToolCall, id: &RowId) {
         let call_id = &tc.tool_call_id.0;
         let upd = self.take_update(call_id);
+        // The result is in hand, so the call awaits nothing: the update frame
+        // that would read this name is consumed here, and a window that reads
+        // on has no use for it. The rows below are skipped for a tool that
+        // draws none, so the close runs ahead of them.
+        if matches!(&upd, Some((_, Some(_)))) {
+            self.fold.close_call(call_id);
+        }
         if tc.title == "todo_write" {
             return;
         }
@@ -661,12 +661,12 @@ impl<'a, F: AsRef<TranscriptFrame>> LineBuilder<'a, F> {
 
     /// Reposition pass: attach each late result right after its matching call
     /// row so a result that arrived after a thought pulls back to its call
-    /// (preserving call+result adjacency + input order). A late result whose
-    /// call row is absent (compacted) falls through to the tail. Forward
-    /// search for the first call row with the matching id; the harness ships
-    /// one durable update per call, so at most one late result per id lands
-    /// here (an orphan whose call was compacted out), and the first match is
-    /// the right one. Skip past any result rows already placed for THIS
+    /// (preserving call+result adjacency + input order). A result whose call
+    /// draws no call row has nothing to attach to and renders on its own, the
+    /// shape it also takes beside the call frame. Forward search for the first
+    /// call row with the matching id; the harness ships one durable update per
+    /// call, so at most one late result per id lands here, and the first match
+    /// is the right one. Skip past any result rows already placed for THIS
     /// call_id so multiple late results for one call stack in arrival order
     /// without detaching an edit's diff from its call.
     fn finish(&mut self) {
@@ -691,15 +691,23 @@ impl<'a, F: AsRef<TranscriptFrame>> LineBuilder<'a, F> {
                     break;
                 }
             }
-            // No matching call row in the window: the call compacted out, so
-            // the result has no place — drop it rather than stranding it at the
-            // tail.
+            // No call row to sit under: a call whose frames left the view is
+            // answered where the result arrives, so this is a call that draws
+            // no row of its own.
             if let Some(pos) = insert_at {
                 self.out.insert(
                     pos,
                     tool_result_line(&late.call_id, &late.tool_name, &late.output, None),
                 );
                 self.ids.insert(pos, late.row);
+            } else {
+                self.out.push(tool_result_line(
+                    &late.call_id,
+                    &late.tool_name,
+                    &late.output,
+                    None,
+                ));
+                self.ids.push(late.row);
             }
         }
     }

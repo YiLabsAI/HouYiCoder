@@ -393,6 +393,61 @@ fn run_record(ms: u64) -> TranscriptFrame {
     ))
 }
 
+/// The mark that says the message beside it was delivered into the turn already
+/// running. The host writes it right after the message, so a rebuild can run
+/// between the two.
+fn delivery_mark() -> TranscriptFrame {
+    TranscriptFrame::Acpx(AcpxNotification::new(
+        AcpxMethod::ContextMidTurnInput,
+        json!({}),
+    ))
+}
+
+/// The rows a turn's summary row appears as, oldest first, with the duration
+/// each one carries.
+fn summary_rows(app: &App) -> Vec<Option<u64>> {
+    app.transcript()
+        .iter()
+        .filter_map(|l| match l {
+            TranscriptLine::ThoughtFor { ms, .. } => Some(*ms),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A message queued into a running turn reads as a turn of its own until the
+/// mark that says it was delivered arrives, and a block derived in that first
+/// read writes the summary row of the turn the message was delivered into. The
+/// mark lands after the block was derived, so the block has to be derived again
+/// rather than kept: with its rows kept, the premature row stays for the rest
+/// of the turn and a second one joins it when the record closes the turn.
+#[test]
+fn test_mark_rederives_prefix_block() {
+    let mut app = fresh_app();
+    app.start_run_for_test(0);
+    pump(&mut app, user_msg("go"));
+    pump(&mut app, thought_msg("thinking"));
+    pump(&mut app, user_msg("mid-turn note"));
+    app.rebuild_transcript();
+    assert_eq!(
+        summary_rows(&app).len(),
+        1,
+        "the message reads as a turn of its own until its mark arrives: {:?}",
+        app.transcript()
+    );
+
+    pump(&mut app, delivery_mark());
+    pump(&mut app, run_record(2_000));
+    app.rebuild_transcript();
+
+    assert_eq!(
+        summary_rows(&app),
+        vec![Some(2_000)],
+        "one row for the one turn, closed by its record: {:?}",
+        app.transcript()
+    );
+}
+
 /// The frame at the log's front is replaced in place when the prompt the
 /// frontend echoed gives way to the server's own message for the same text.
 /// The front slot keeps its name across that, so a block reused on its range

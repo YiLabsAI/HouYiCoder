@@ -6,6 +6,8 @@ use houyicoder_protocol::frontend::session_update::{
 };
 use serde_json::Value;
 
+use crate::result_body::{extract_body, output_has_diff};
+
 fn user_msg(text: &str) -> TranscriptFrame {
     TranscriptFrame::Session(SessionUpdate::UserMessageChunk(ContentChunk::new(
         ContentBlock::Text { text: text.into() },
@@ -174,15 +176,110 @@ fn test_todo_result_orphan_dropped() {
 }
 
 #[test]
-fn test_non_todo_orphan_dropped() {
-    // A non-todo orphan (its call frame compacted out of the window) is
-    // dropped, not stranded at the tail. The body stays in the frame log for
-    // search; the transcript only renders a result beside its call.
+fn test_orphan_result_keeps_row() {
+    // A result whose call frame left the window renders under a row standing in
+    // for that call: with the result alone the reader cannot tell what ran, and
+    // the call's name is out of reach here, so the row says the call is out of
+    // view rather than naming it. The body stays in the frame log for search.
     let frames = vec![tool_result("c1", serde_json::json!({"stdout": "hello"}))];
     let lines = transcript_from_frames(&frames, 0..frames.len(), false);
+    assert_eq!(lines.len(), 2, "a call row and its result, got {lines:?}");
     assert!(
-        lines.is_empty(),
-        "a non-todo orphan must not strand at the tail: {lines:?}"
+        lines[0].render().contains("out of view"),
+        "the call row says the call is out of view, got {:?}",
+        lines[0]
+    );
+    assert!(
+        lines[1].render().contains("hello"),
+        "the result keeps its body, got {:?}",
+        lines[1]
+    );
+}
+
+#[test]
+fn test_widget_tool_result_renders() {
+    // A result frame can arrive before the call frame it answers. A tool that
+    // draws through its own prompt writes no call row anywhere, so there is
+    // none to attach the result to: it renders on its own rather than being
+    // held waiting for a row that never comes.
+    let frames = vec![
+        tool_result("c1", serde_json::json!({"answer": "yes"})),
+        tool_call(
+            "c1",
+            "AskUserQuestion",
+            serde_json::json!({"questions": []}),
+        ),
+    ];
+    let lines = transcript_from_frames(&frames, 0..frames.len(), false);
+    let rendered: Vec<String> = lines.iter().map(|l| l.render()).collect();
+    assert_eq!(
+        rendered.len(),
+        1,
+        "the answer alone, with no call row above it: {rendered:?}"
+    );
+    assert!(
+        rendered[0].contains("yes"),
+        "the answer keeps its body: {rendered:?}"
+    );
+}
+
+#[test]
+fn test_summary_row_stays_last() {
+    // A log that stops without a record shows its last turn as finished, and
+    // the row it writes for that turn sits under everything the turn produced:
+    // a result the window moves under its call lands above the summary, not
+    // below it. The prompt tool draws no call row, so the result has no row to
+    // attach to and is placed at the end of what the window rendered.
+    let frames = vec![
+        user_msg("go"),
+        thought("why"),
+        tool_call(
+            "c1",
+            "AskUserQuestion",
+            serde_json::json!({"questions": []}),
+        ),
+        status_update("c1", ToolCallStatus::InProgress),
+        tool_result("c1", serde_json::json!({"answer": "yes"})),
+    ];
+    let lines = transcript_from_frames(&frames, 0..frames.len(), false);
+    let rendered: Vec<String> = lines.iter().map(|l| l.render()).collect();
+    assert!(
+        matches!(lines.last(), Some(TranscriptLine::ThoughtFor { .. })),
+        "the summary row closes the turn: {rendered:?}"
+    );
+    let answer = lines
+        .iter()
+        .position(|l| matches!(l, TranscriptLine::Tool { name, .. } if name == "result"))
+        .expect("the answer renders as a result row");
+    assert_eq!(
+        answer,
+        lines.len() - 2,
+        "the answer sits directly above the summary row: {rendered:?}"
+    );
+}
+
+#[test]
+fn test_drained_answer_alone() {
+    // The prompt tool with its call frames out of view: the state names the
+    // call, and a tool that draws no call row of its own gets none here either,
+    // so the answer reads the same way whether or not those frames are in view.
+    let frames = vec![
+        user_msg("go"),
+        tool_call(
+            "c1",
+            "AskUserQuestion",
+            serde_json::json!({"questions": []}),
+        ),
+        tool_result("c1", serde_json::json!({"answer": "yes"})),
+    ];
+    let log: Vec<SequencedFrame> = frames.into_iter().map(SequencedFrame::from).collect();
+    let (_, carried) = transcript_from_frames_at(&log, 0, 0..2, true, None);
+    let (rows, _) = transcript_from_frames_at(&log[2..], 2, 2..3, true, Some(carried));
+    let rendered: Vec<String> = rows.lines.iter().map(|l| l.render()).collect();
+    assert_eq!(rendered.len(), 1, "the answer alone: {rendered:?}");
+    assert!(
+        rendered[0].contains("yes"),
+        "the answer keeps its body: {rendered:?}"
     );
 }
 
@@ -1017,6 +1114,207 @@ fn test_reasoning_count_complete() {
             "({total} characters of this turn's reasoning are earlier in the transcript)"
         )),
         "the count covers every frame of the turn, none of which the window holds"
+    );
+}
+
+#[test]
+fn test_result_keeps_drained_call() {
+    // The frames holding a tool call leave the log before the window reaches
+    // the result. The call row went with them, so the result would arrive with
+    // nothing above it — a line the reader cannot place. The state the earlier
+    // read hands on still names the call, and the call row and the result
+    // render where the result arrived.
+    let log: Vec<SequencedFrame> = vec![
+        user_msg("go"),
+        tool_call("c1", "bash", serde_json::json!({"command": "ls"})),
+        tool_result("c1", serde_json::json!({"stdout": "file.txt"})),
+    ]
+    .into_iter()
+    .map(SequencedFrame::from)
+    .collect();
+    let (_, carried) = transcript_from_frames_at(&log, 0, 0..2, true, None);
+    let (rows, _) = transcript_from_frames_at(&log[2..], 2, 2..3, true, Some(carried));
+    let rendered: Vec<String> = rows.lines.iter().map(|l| l.render()).collect();
+    assert_eq!(
+        rows.lines.len(),
+        2,
+        "the result renders under a row for its call: {rendered:?}"
+    );
+    assert!(
+        matches!(&rows.lines[0], TranscriptLine::Tool { name, .. } if name != "result"),
+        "the call row comes first: {rendered:?}"
+    );
+    assert!(
+        matches!(&rows.lines[1], TranscriptLine::Tool { name, .. } if name == "result"),
+        "the result row follows it: {rendered:?}"
+    );
+    assert!(
+        rendered[0].contains("out of view"),
+        "the row says why the arguments are missing: {rendered:?}"
+    );
+    assert!(
+        rendered[0].contains("Bash"),
+        "the carried state still names the call: {rendered:?}"
+    );
+}
+
+#[test]
+fn test_agent_group_survives_drain() {
+    // A delegated call whose frames left the view keeps the fold-group the
+    // in-view path draws: the group is what opens the child's own transcript,
+    // and those frames leaving the view is no reason to lose it. The call's
+    // input went with them, so the group names a generic type and no prompt.
+    let log: Vec<SequencedFrame> = vec![
+        user_msg("find the auth module"),
+        tool_call(
+            "c1",
+            "agent",
+            serde_json::json!({"prompt": "locate the auth module"}),
+        ),
+        tool_result(
+            "c1",
+            serde_json::json!({
+                "agentId": "child-sess-42",
+                "content": "auth module is at crates/auth/src/lib.rs",
+            }),
+        ),
+    ]
+    .into_iter()
+    .map(SequencedFrame::from)
+    .collect();
+    let (_, carried) = transcript_from_frames_at(&log, 0, 0..2, true, None);
+    let (rows, _) = transcript_from_frames_at(&log[2..], 2, 2..3, true, Some(carried));
+    let rendered: Vec<String> = rows.lines.iter().map(|l| l.render()).collect();
+    let child = rows.lines.iter().find_map(|l| match l {
+        TranscriptLine::Subagent { child_sid, .. } => Some(child_sid.clone()),
+        _ => None,
+    });
+    assert_eq!(
+        child.as_deref(),
+        Some("child-sess-42"),
+        "the drained delegation still opens its child transcript: {rendered:?}"
+    );
+}
+
+#[test]
+fn test_unnamed_call_keeps_result() {
+    // More calls are open at once than the state keeps names for. The result
+    // still renders a row for the call it answers, with the call left unnamed
+    // rather than named after a different one.
+    let mut frames = vec![user_msg("go")];
+    for i in 0..33 {
+        frames.push(tool_call(&format!("c{i}"), "bash", Value::Null));
+    }
+    frames.push(tool_result(
+        "c32",
+        serde_json::json!({"stdout": "file.txt"}),
+    ));
+    let log: Vec<SequencedFrame> = frames.into_iter().map(SequencedFrame::from).collect();
+    let (_, carried) = transcript_from_frames_at(&log, 0, 0..34, true, None);
+    let (rows, _) = transcript_from_frames_at(&log[34..], 34, 34..35, false, Some(carried));
+    let call = rows
+        .lines
+        .iter()
+        .find(|l| matches!(l, TranscriptLine::Tool { name, .. } if name != "result"))
+        .expect("the result renders with a row for its call");
+    let text = call.render();
+    assert!(
+        text.contains("out of view"),
+        "the row says why the arguments are missing: {text}"
+    );
+    assert!(
+        !text.contains("Bash"),
+        "past the bound the call is not named: {text}"
+    );
+}
+
+#[test]
+fn test_bound_skips_answered_calls() {
+    // The bound counts the calls still awaiting a result, not every call the
+    // turn made: each answered call leaves the state, so a call made after
+    // that many answered ones is still named by the window that renders its
+    // result.
+    let mut frames = vec![user_msg("go")];
+    for i in 0..33 {
+        let id = format!("c{i}");
+        frames.push(tool_call(&id, "bash", Value::Null));
+        if i < 32 {
+            frames.push(tool_result(&id, serde_json::json!({"stdout": "ok"})));
+        }
+    }
+    frames.push(tool_result("c32", serde_json::json!({"stdout": "ok"})));
+    let log: Vec<SequencedFrame> = frames.into_iter().map(SequencedFrame::from).collect();
+    let at = log.len() - 1;
+    let (_, carried) = transcript_from_frames_at(&log, 0, 0..at, true, None);
+    let (rows, _) = transcript_from_frames_at(&log[at..], at, at..log.len(), false, Some(carried));
+    let call = rows
+        .lines
+        .iter()
+        .find(|l| matches!(l, TranscriptLine::Tool { name, .. } if name != "result"))
+        .expect("the result renders with a row for its call");
+    let text = call.render();
+    assert!(
+        text.contains("Bash"),
+        "answered calls leave the state, so the bound does not reach this one: {text}"
+    );
+}
+
+#[test]
+fn test_bound_holds_across_windows() {
+    // A tool that draws no rows of its own still makes a call the state
+    // records. The window that walks those answered calls must not spend the
+    // bound on them, so the call whose result arrives in the next window is
+    // still named there.
+    let mut frames = vec![user_msg("go")];
+    for i in 0..33 {
+        let id = format!("t{i}");
+        frames.push(tool_call(&id, "todo_write", Value::Null));
+        frames.push(tool_result(&id, serde_json::json!({"old_todos": []})));
+    }
+    frames.push(tool_call("cx", "bash", Value::Null));
+    frames.push(tool_result("cx", serde_json::json!({"stdout": "ok"})));
+    let log: Vec<SequencedFrame> = frames.into_iter().map(SequencedFrame::from).collect();
+    let at = log.len() - 1;
+    let (_, carried) = transcript_from_frames_at(&log, 0, 0..at, true, None);
+    let (rows, _) = transcript_from_frames_at(&log[at..], at, at..log.len(), false, Some(carried));
+    let call = rows
+        .lines
+        .iter()
+        .find(|l| matches!(l, TranscriptLine::Tool { name, .. } if name != "result"))
+        .expect("the result renders with a row for its call");
+    let text = call.render();
+    assert!(
+        text.contains("Bash"),
+        "the answers the earlier window walked left the state: {text}"
+    );
+}
+
+#[test]
+fn test_bound_holds_after_replay() {
+    // A window that opens inside a long turn reads the turn's earlier frames
+    // back to summarize it. The answered calls among them leave the state, so
+    // the call whose result this window renders is still named.
+    let mut frames = vec![user_msg("go")];
+    for i in 0..33 {
+        let id = format!("c{i}");
+        frames.push(tool_call(&id, "bash", Value::Null));
+        frames.push(tool_result(&id, serde_json::json!({"stdout": "ok"})));
+    }
+    frames.push(tool_call("cx", "bash", Value::Null));
+    frames.push(tool_result("cx", serde_json::json!({"stdout": "ok"})));
+    let log: Vec<SequencedFrame> = frames.into_iter().map(SequencedFrame::from).collect();
+    let at = log.len() - 1;
+    let (rows, _) = transcript_from_frames_at(&log, 0, at..log.len(), false, None);
+    let rendered: Vec<String> = rows.lines.iter().map(|l| l.render()).collect();
+    let call = rows
+        .lines
+        .iter()
+        .find(|l| matches!(l, TranscriptLine::Tool { name, .. } if name != "result"))
+        .unwrap_or_else(|| panic!("the result renders with a row for its call: {rendered:?}"));
+    let text = call.render();
+    assert!(
+        text.contains("Bash"),
+        "the answers the read-back walked left the state: {text}"
     );
 }
 

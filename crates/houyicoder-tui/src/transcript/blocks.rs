@@ -38,9 +38,11 @@ pub(crate) struct BlockId(pub BlockAnchor);
 /// for it — each beside the identity of the frame that produced it — a
 /// revision that ticks when its frames change, and the state the slice's
 /// frames ended inside a turn with. Rebuild reuses a block whose id and range
-/// still describe the same frames, carrying its lines, expand state, and turn
-/// state forward without re-deriving them; the turn state is what lets the
-/// block after this one continue a turn this one opened and did not close.
+/// still describe the same frames and whose turn state still agrees with the
+/// frame that decides how its last message reads, carrying its lines, expand
+/// state, and turn state forward without re-deriving them; the turn state is
+/// what lets the block after this one continue a turn this one opened and did
+/// not close.
 #[derive(Debug, Clone)]
 pub(crate) struct Block {
     pub id: BlockId,

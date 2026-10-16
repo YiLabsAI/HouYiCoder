@@ -26,8 +26,8 @@ use houyicoder_protocol::frontend::session_update::SessionUpdate;
 
 use super::SequencedFrame;
 use super::TranscriptFrame;
+use super::call_rows::tool_renders_chip;
 use super::frame_payload::chunk_text;
-use super::tool_renders_chip;
 use crate::records::TranscriptLine;
 use crate::row_id::RowId;
 
@@ -107,19 +107,34 @@ fn marks_delivery(frame: &TranscriptFrame) -> bool {
     )
 }
 
+/// Where the frame that decides how a message reads sits, for the message at
+/// the given position: the first frame after it that is not a row the frontend
+/// raised. A mark for the message sits there, and any other frame shows the
+/// message opened a turn of its own. A read derives a message's rows from that
+/// frame, so those rows hold only while the same frame still decides. None when
+/// no frame follows, or when no message sits there.
+pub(crate) fn delivered_marker_at<F: AsRef<TranscriptFrame>>(
+    frames: &[F],
+    at: usize,
+) -> Option<usize> {
+    if !frames.get(at).is_some_and(|sf| is_user_frame(sf.as_ref())) {
+        return None;
+    }
+    frames
+        .get(at + 1..)
+        .unwrap_or_default()
+        .iter()
+        .position(|sf| !matches!(sf.as_ref(), TranscriptFrame::Frontend(_)))
+        .map(|i| at + 1 + i)
+}
+
 /// Whether the log marks the user message at at as delivered into the turn
 /// that was already running. The mark sits beside the message, but a row the
 /// frontend raises while the message is in hand can land between the two:
 /// the mark is read past those rows, so one raised there cannot leave the
 /// message reading as a turn of its own for the rest of the session.
 fn message_marked_delivered<F: AsRef<TranscriptFrame>>(frames: &[F], at: usize) -> bool {
-    frames
-        .get(at + 1..)
-        .unwrap_or_default()
-        .iter()
-        .find(|sf| !matches!(sf.as_ref(), TranscriptFrame::Frontend(_)))
-        .map(|sf| sf.as_ref())
-        .is_some_and(marks_delivery)
+    delivered_marker_at(frames, at).is_some_and(|at| marks_delivery(frames[at].as_ref()))
 }
 
 /// Where the turn a window starts inside begins: the message that opened it.
@@ -210,6 +225,10 @@ pub(super) struct TurnFold<'a, F: AsRef<TranscriptFrame>> {
     log: &'a [F],
     /// Where the row of a closed turn takes its durable name.
     names: RowNames<'a>,
+    /// Where the window ends, in log positions. The frame after it decides how
+    /// the window's last message reads, so the state handed on records that
+    /// frame for the reader that may reuse these rows.
+    ends_at: usize,
     /// Reasoning text the open turn's frames carried inside this window. Text
     /// the state passed on is counted there rather than repeated here, so a
     /// window holds only the text its own frames brought.
@@ -235,6 +254,7 @@ impl<'a, F: AsRef<TranscriptFrame>> TurnFold<'a, F> {
         let mut fold = Self {
             log,
             names,
+            ends_at: window.end,
             reasoning: String::new(),
             state: TurnCheckpoint::default(),
         };
@@ -265,13 +285,46 @@ impl<'a, F: AsRef<TranscriptFrame>> TurnFold<'a, F> {
                 self.state
                     .moved_to(self.names.name_at(opened_at + 1 + offset));
             }
+            if let TranscriptFrame::Session(SessionUpdate::ToolCallUpdate(upd)) = frame
+                && upd.fields.raw_output.is_some()
+            {
+                // A call this read-back sees answered leaves the state, as it
+                // does in the walk: the names are kept for a window that
+                // renders a result with the call's own frames out of view, and
+                // the bound on them is spent by the calls still awaiting one.
+                // The close runs where the result frame sits, so the calls
+                // this read-back walks afterwards find the room it freed.
+                self.state.pending_calls.close(&upd.tool_call_id.0);
+            }
             self.gather(frame);
         }
     }
 
-    /// The state at this window's end, for the read of the next window.
+    /// The state at this window's end, for the read of the next window. The
+    /// frame that decides how the window's last message reads travels with it:
+    /// a reader that reuses these rows has to know whether the decision was
+    /// taken under the same frame.
     pub(super) fn checkpoint(&self) -> TurnCheckpoint {
-        self.state.clone()
+        let mut state = self.state.clone();
+        state.delivered_marker = self
+            .ends_at
+            .checked_sub(1)
+            .and_then(|at| delivered_marker_at(self.log, at))
+            .map(|at| self.names.name_at(at));
+        state
+    }
+
+    /// The tool a call the open turn made was for, while its result has not
+    /// arrived: what a window that no longer holds the call's frames renders
+    /// that result under.
+    pub(super) fn pending_tool(&self, call_id: &str) -> Option<String> {
+        self.state.pending_calls.tool(call_id).map(str::to_string)
+    }
+
+    /// Forget a call once its result is on screen: the call no longer awaits
+    /// one, and no window that reads on has to name it.
+    pub(super) fn close_call(&mut self, call_id: &str) {
+        self.state.pending_calls.close(call_id);
     }
 
     /// Whether the message at abs was delivered into the running turn.
@@ -331,11 +384,17 @@ impl<'a, F: AsRef<TranscriptFrame>> TurnFold<'a, F> {
                 self.state.reasoning_chars += text.chars().count() as u64;
                 self.reasoning.push_str(text);
             }
-            TranscriptFrame::Session(SessionUpdate::ToolCall(call))
-                if tool_renders_chip(&call.title) =>
-            {
-                self.state.tool_counts.add(&call.title);
-                self.state.calls += 1;
+            TranscriptFrame::Session(SessionUpdate::ToolCall(call)) => {
+                // Every call's name is kept for the window that renders its
+                // result; only the calls that draw a row of their own count
+                // toward the turn's summary.
+                self.state
+                    .pending_calls
+                    .add(&call.tool_call_id.0, &call.title);
+                if tool_renders_chip(&call.title) {
+                    self.state.tool_counts.add(&call.title);
+                    self.state.calls += 1;
+                }
             }
             _ => {}
         }

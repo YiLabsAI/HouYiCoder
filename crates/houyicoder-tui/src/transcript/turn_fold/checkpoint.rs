@@ -55,6 +55,51 @@ impl ToolCounts {
     }
 }
 
+/// How many calls a turn may hold unanswered at once. The bound caps the state,
+/// not the turn: a turn that leaves more calls unanswered than this reports the
+/// remainder without a name rather than growing with the batch.
+const PENDING_CALLS: usize = 32;
+
+/// The calls the open turn made whose result has not arrived, each with the
+/// tool it called. A result can reach a window whose frames no longer hold its
+/// call, and the name here is what lets that window show the call the result
+/// answers: without it the result arrives with nothing above it. Past the bound
+/// the call is not kept, and a result for it still renders — the row says the
+/// call is out of view instead of naming it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) struct PendingCalls {
+    calls: Vec<(String, String)>,
+}
+
+impl PendingCalls {
+    /// Record a call the turn made, before its result arrives.
+    pub(super) fn add(&mut self, call_id: &str, tool: &str) {
+        if self.calls.iter().any(|(id, _)| id == call_id) || self.calls.len() >= PENDING_CALLS {
+            return;
+        }
+        self.calls.push((call_id.to_string(), tool.to_string()));
+    }
+
+    /// Drop the call whose result arrived.
+    pub(super) fn close(&mut self, call_id: &str) {
+        self.calls.retain(|(id, _)| id != call_id);
+    }
+
+    /// The tool of a call still awaiting its result.
+    pub(super) fn tool(&self, call_id: &str) -> Option<&str> {
+        self.calls
+            .iter()
+            .find(|(id, _)| id == call_id)
+            .map(|(_, tool)| tool.as_str())
+    }
+
+    /// Drop every call, for a new turn: a turn's calls are the turn's, and the
+    /// next turn's results belong to the next turn's calls.
+    pub(super) fn clear(&mut self) {
+        self.calls.clear();
+    }
+}
+
 /// What one window read hands the next window about the turn it opened into.
 ///
 /// The state carries no frame content: reasoning text stays in the frames
@@ -63,9 +108,11 @@ impl ToolCounts {
 /// and it is why a summary row can say a turn reasoned without repeating
 /// what it reasoned.
 ///
-/// A fact belongs here only when the window that closes the turn cannot read
-/// it from any frame the window holds: each field restates what the turn's
-/// frames carry, kept for the windows that no longer hold them.
+/// A fact belongs here only when a read cannot take it from the frames the
+/// window covers: the turn's identities, counts, and totals restate what its
+/// earlier frames carried, for the windows that no longer hold them, and the
+/// delivery decision restates the frame that follows the window's last one,
+/// which decides how that message reads.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TurnCheckpoint {
     /// Identity of the frame that opened the turn the window ends inside.
@@ -84,9 +131,23 @@ pub struct TurnCheckpoint {
     pub(super) tool_counts: ToolCounts,
     /// Tool calls the turn made, the total the named counts add up to.
     pub(super) calls: u32,
+    /// Calls the turn made whose result has not arrived.
+    pub(super) pending_calls: PendingCalls,
+    /// Identity of the frame that decides how the message this window ends on
+    /// reads: the mark that says the message joined the turn already running,
+    /// or the frame that shows there is none. A reader reuses these rows only
+    /// while the same frame still decides, so a message that first read as a
+    /// turn of its own stops reading that way once its mark arrives. None when
+    /// the window does not end on a message.
+    pub(super) delivered_marker: Option<RowId>,
 }
 
 impl TurnCheckpoint {
+    /// The frame that decided how the message this state's read ended on reads,
+    /// for a reader that reuses the rows derived under that decision.
+    pub(crate) fn delivered_marker(&self) -> Option<&RowId> {
+        self.delivered_marker.as_ref()
+    }
     /// Whether the window ends inside a turn: its frames opened one that no
     /// frame closed.
     pub(super) fn is_open(&self) -> bool {
@@ -100,6 +161,7 @@ impl TurnCheckpoint {
         self.reasoning_chars = 0;
         self.tool_counts.clear();
         self.calls = 0;
+        self.pending_calls.clear();
     }
 
     /// Close the turn: the next frame that opens one opens a new turn.
@@ -109,6 +171,7 @@ impl TurnCheckpoint {
         self.reasoning_chars = 0;
         self.tool_counts.clear();
         self.calls = 0;
+        self.pending_calls.clear();
     }
 
     /// Move where the turn's newest fact sits, as a frame inside the window

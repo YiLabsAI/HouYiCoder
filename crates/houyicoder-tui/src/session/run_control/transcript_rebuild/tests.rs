@@ -41,6 +41,11 @@ fn agent_msg(text: &str) -> TranscriptFrame {
         ContentBlock::Text { text: text.into() },
     )))
 }
+fn thought_msg(text: &str) -> TranscriptFrame {
+    TranscriptFrame::Session(SessionUpdate::AgentThoughtChunk(ContentChunk::new(
+        ContentBlock::Text { text: text.into() },
+    )))
+}
 fn tool_call(id: &str, tool: &str) -> TranscriptFrame {
     TranscriptFrame::Session(SessionUpdate::ToolCall(
         ToolCall::new(id, tool)
