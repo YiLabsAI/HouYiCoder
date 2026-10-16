@@ -8,7 +8,7 @@ use crate::notifications::Notification;
 use crate::records::{TeammateView, TranscriptLine};
 use crate::run_control::ClientCommand;
 use crate::state::App;
-use crate::state::parked_view_states::ChildViewState;
+use crate::state::parked_view_states::ParkedViewState;
 use houyicoder_protocol::frontend::SessionId;
 use std::time::Duration;
 
@@ -141,7 +141,10 @@ impl App {
         // tail. No trim runs here either — the cap bounds the parent
         // transcript, and the reader never scrolled the parent away from
         // its tail to earn one.
-        let view_state = ChildViewState {
+        // A child's viewport lives on the teammate view rather than on the
+        // transcript view state, so the two halves are assembled here instead
+        // of taken as one value.
+        let view_state = ParkedViewState {
             keys: self.take_expanded_keys(),
             scroll: view.scroll,
         };

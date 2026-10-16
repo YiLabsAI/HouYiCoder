@@ -63,9 +63,12 @@ fn toggle_set<T: Hash + Eq>(set: &mut HashSet<T>, key: T) -> bool {
     }
 }
 
-/// What one child view leaves behind on exit: the rows it had open and the
-/// viewport its reader parked at. A re-entry restores both.
-pub(crate) struct ChildViewState {
+/// What one view leaves behind when it stops being the view on screen: the
+/// rows it had open and the viewport its reader stood at. A session switch
+/// and a child view entry park the same shape, so a reader comes back to the
+/// same place in both.
+#[derive(Default)]
+pub(crate) struct ParkedViewState {
     pub(crate) keys: ExpandedKeys,
     pub(crate) scroll: TranscriptScroll,
 }
@@ -75,10 +78,10 @@ pub(crate) struct ChildViewState {
 /// list would grow with the visit count.
 #[derive(Default)]
 pub(crate) struct ParkedViewStates {
-    /// Expansion sets parked by the session that owns them, newest last.
-    sessions: Vec<(SessionId, ExpandedKeys)>,
+    /// View states parked by the session that owns them, newest last.
+    sessions: Vec<(SessionId, ParkedViewState)>,
     /// Child view states parked within the current session visit, newest last.
-    children: Vec<(String, ChildViewState)>,
+    children: Vec<(String, ParkedViewState)>,
     /// The parent's sets, held while a child view is open. One slot: at most
     /// one child view is ever on, and a hop between children passes through
     /// the canonical exit before the next entry.
@@ -92,30 +95,33 @@ const PARKED_SESSIONS: usize = 16;
 const PARKED_CHILDREN: usize = 16;
 
 impl ParkedViewStates {
-    /// Park the sets of the session being left. A session with nothing open
-    /// is not kept: there is nothing to restore. A repeat park of the same
-    /// session replaces its entry, so the entry count follows the sessions
-    /// visited, not the number of switches.
-    pub(crate) fn park_session(&mut self, session: SessionId, mut keys: ExpandedKeys) {
-        // Only the local thinking keys are dropped. A durable key names the
-        // log entry that closed its turn, which a rebuilt session reads back
-        // from the log, so it opens the same block the reader left open; a
-        // local key is a frame position of the visit that raised it, and a
-        // rebuilt session holds no row at that position to open.
-        keys.thinking.retain(RowId::is_durable);
-        if keys.is_empty() {
+    /// Park the view state of the session being left. A session with nothing
+    /// open and its reader at the tail is not kept: there is nothing to
+    /// restore. A repeat park of the same session replaces its entry, so the
+    /// entry count follows the sessions visited, not the number of switches.
+    pub(crate) fn park_session(&mut self, session: SessionId, mut state: ParkedViewState) {
+        // Only what the log can name is kept. A durable key names the log
+        // entry that closed its turn, which a rebuilt session reads back from
+        // the log, so it opens the same block the reader left open; a local
+        // key is a frame position of the visit that raised it, and a rebuilt
+        // session holds no row at that position to open. A place the reader
+        // stood at follows the same rule, for the same reason.
+        state.keys.thinking.retain(RowId::is_durable);
+        state.scroll.drop_local_anchor();
+        if state.keys.is_empty() && state.scroll.is_following_tail() {
             return;
         }
         self.sessions.retain(|(parked, _)| parked != &session);
-        self.sessions.push((session, keys));
+        self.sessions.push((session, state));
         if self.sessions.len() > PARKED_SESSIONS {
             self.sessions.remove(0);
         }
     }
 
-    /// Take the sets parked for a session, if it has any. The session being
-    /// entered is the only caller; its sets are parked again when it is left.
-    pub(crate) fn take_session(&mut self, session: &SessionId) -> Option<ExpandedKeys> {
+    /// Take the view state parked for a session, if it has any. The session
+    /// being entered is the only caller; its state is parked again when it is
+    /// left.
+    pub(crate) fn take_session(&mut self, session: &SessionId) -> Option<ParkedViewState> {
         let at = self
             .sessions
             .iter()
@@ -131,7 +137,7 @@ impl ParkedViewStates {
         &mut self,
         child_sid: &str,
         parent_keys: ExpandedKeys,
-    ) -> Option<ChildViewState> {
+    ) -> Option<ParkedViewState> {
         debug_assert!(
             self.parent_held.is_none(),
             "a child view exits before the next one enters"
@@ -150,7 +156,7 @@ impl ParkedViewStates {
     pub(crate) fn exit_child(
         &mut self,
         child_sid: &str,
-        state: ChildViewState,
+        state: ParkedViewState,
     ) -> Option<ExpandedKeys> {
         self.children.retain(|(sid, _)| sid != child_sid);
         self.children.push((child_sid.to_string(), state));
@@ -180,6 +186,24 @@ impl App {
     /// current value whole.
     pub(crate) fn set_expanded_keys(&mut self, keys: ExpandedKeys) {
         self.ui.transcript_view.swap_expanded(keys);
+    }
+
+    /// Take the visible view's own state whole: the rows it had open and the
+    /// place its reader stood at, leaving it following the tail with nothing
+    /// open. Both halves belong to the transcript view state, so one call
+    /// takes them as one value.
+    pub(crate) fn take_view_state(&mut self) -> ParkedViewState {
+        ParkedViewState {
+            keys: self.ui.transcript_view.take_expanded(),
+            scroll: self.ui.transcript_view.take_whole_scroll(),
+        }
+    }
+
+    /// Install a parked view state as the visible one, replacing both halves
+    /// of the current value.
+    pub(crate) fn set_view_state(&mut self, state: ParkedViewState) {
+        self.ui.transcript_view.swap_expanded(state.keys);
+        self.ui.transcript_view.swap_whole_scroll(state.scroll);
     }
 }
 

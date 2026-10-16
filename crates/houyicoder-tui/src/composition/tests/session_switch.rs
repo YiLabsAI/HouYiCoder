@@ -10,10 +10,13 @@ use crate::records::ToolOutcome;
 use crate::records::TranscriptLine;
 use crate::row_id::RowId;
 use crate::state::Pane;
+use crate::state::Screen;
 use crate::state::history_read::HistoryReadOutcome;
 use crate::state::transcript::DiskFront;
+use crate::test_harness::render_text;
 use crate::todo_view::{TodoStatus, TodoView};
 use crate::transcript::{SequencedFrame, TranscriptFrame};
+use houyicoder_protocol::envelope::DurableEventId;
 use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::frontend::SessionId;
 use houyicoder_protocol::frontend::run::ContentBlock;
@@ -905,6 +908,82 @@ fn test_swap_restores_open_keys() {
         group_body_visible(&app),
         "the returned session draws the group the user had open"
     );
+}
+
+/// Write a transcript of rows the log named, long enough to scroll.
+fn named_transcript(app: &mut App, prefix: &str, lines: usize) {
+    for i in 0..lines {
+        app.sessions.current.transcript.push_frame(SequencedFrame {
+            seq: None,
+            event_id: Some(DurableEventId(format!("{prefix}{i}"))),
+            frame: TranscriptFrame::Session(SessionUpdate::AgentMessageChunk(ContentChunk::new(
+                ContentBlock::Text {
+                    text: format!("{prefix} line {i}"),
+                },
+            ))),
+        });
+    }
+    app.rebuild_transcript();
+}
+
+/// The rows on screen, as the terminal shows them at a standard size.
+fn drawn(app: &App) -> String {
+    render_text(app, 100, 20)
+}
+
+/// A switch carries the place the reader stood at, not only the rows they had
+/// open: leaving a session while rolled back and entering it again puts the
+/// same row on screen, and the row is named by the entry behind it, which the
+/// rebuilt session reads back from the same log. The session entered keeps
+/// its own place -- nothing of the first session's position crosses.
+#[test]
+fn test_swap_restores_place() {
+    let (first, first_startup) = test_bundle();
+    let first_sid = first.session.clone();
+    let mut app = build_app(first, first_startup);
+    app.ui.navigation.screen = Screen::Working;
+    named_transcript(&mut app, "old", 40);
+    // A step names its row from the rows a draw built, and a frame precedes
+    // every key in a running terminal.
+    drop(drawn(&app));
+    app.park_scroll_at(2);
+    let out = drawn(&app);
+    assert!(
+        out.contains("old line 2"),
+        "the reader stands on the row they rolled back to:\n{out}"
+    );
+    assert!(
+        !out.contains("old line 39"),
+        "and the tail is off screen, so the check below tells the two apart:\n{out}"
+    );
+
+    let (second, _second_startup) = test_bundle();
+    app.switch_session(second);
+    named_transcript(&mut app, "new", 40);
+    let out = drawn(&app);
+    assert!(
+        app.ui.transcript_view.whole_scroll().is_following_tail(),
+        "the session entered starts at its own tail"
+    );
+    assert!(
+        out.contains("new line 39"),
+        "the entered session shows its own tail:\n{out}"
+    );
+    assert!(
+        !out.contains("old line 2"),
+        "nothing of the first session's place crosses:\n{out}"
+    );
+
+    let (mut back, _back_startup) = test_bundle();
+    back.session = first_sid;
+    app.switch_session(back);
+    named_transcript(&mut app, "old", 40);
+    let out = drawn(&app);
+    assert!(
+        out.contains("old line 2"),
+        "the returned session stands where the reader left it:\n{out}"
+    );
+    assert!(!out.contains("old line 39"), "and not at its tail:\n{out}");
 }
 
 /// A session switch taken while a child view is open must park only the

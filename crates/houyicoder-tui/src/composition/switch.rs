@@ -110,7 +110,10 @@ impl App {
         // command texts for the notice at the end of the swap.
         let dropped = self.ui.input.queue.transfer_across_sessions();
         let leaving = self.sessions.current.identity.session_id.clone();
-        let open_keys = self.take_expanded_keys();
+        // Taken before the reset below, which empties the owner this value
+        // comes from: what the reader had open and where they stood are the
+        // leaving session's, and they come back with it.
+        let leaving_view = self.take_view_state();
         let mut parked = take(&mut self.ui.parked_view_states);
         // Deconstruct the bundle: the session-construction half (client,
         // channels, id) builds the new Session; the host resources
@@ -174,9 +177,9 @@ impl App {
 
         self.sessions.current.todos.set_replaying_history(true);
         self.bump_transcript_version();
-        parked.park_session(leaving, open_keys);
-        if let Some(keys) = parked.take_session(&self.sessions.current.identity.session_id) {
-            self.set_expanded_keys(keys);
+        parked.park_session(leaving, leaving_view);
+        if let Some(state) = parked.take_session(&self.sessions.current.identity.session_id) {
+            self.set_view_state(state);
         }
         // The new session's fleet is unrelated to the old one's children,
         // and a child id can repeat across sessions: no parked child

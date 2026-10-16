@@ -254,6 +254,17 @@ impl TranscriptScroll {
         self.anchor = None;
         self.row_absent.set(false);
     }
+
+    /// Give up a place taken on a frame position, leaving the viewport
+    /// following the tail. A frame position names a row only within the visit
+    /// that raised it: a later view of the same log holds a different row
+    /// there, so a place parked across that boundary would resolve onto the
+    /// wrong row instead of being given up.
+    pub fn drop_local_anchor(&mut self) {
+        if self.anchor.as_ref().is_some_and(|a| !a.row.is_durable()) {
+            self.follow_tail();
+        }
+    }
 }
 
 /// Search state for the /search view. matches holds transcript line indices

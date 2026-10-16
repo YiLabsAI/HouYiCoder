@@ -456,6 +456,19 @@ impl TranscriptViewState {
         &mut self.scroll
     }
 
+    /// Take the whole-vec viewport whole, leaving this view following the
+    /// tail: the leaving half of a park. The window viewport stays behind --
+    /// a byte window belongs to the log it was read from, and the search view
+    /// that browses it does not cross the boundary a park marks.
+    pub(crate) fn take_whole_scroll(&mut self) -> TranscriptScroll {
+        take(&mut self.scroll)
+    }
+
+    /// Install a parked whole-vec viewport, replacing the current one whole.
+    pub(crate) fn swap_whole_scroll(&mut self, scroll: TranscriptScroll) {
+        self.scroll = scroll;
+    }
+
     /// The search view's within-window scroll.
     pub(crate) fn window_scroll(&self) -> &TranscriptScroll {
         &self.window_scroll
