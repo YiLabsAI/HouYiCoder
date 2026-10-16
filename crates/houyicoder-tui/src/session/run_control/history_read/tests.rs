@@ -274,7 +274,7 @@ fn test_invalidate_stops_walk() {
         reads
             .lock()
             .expect("the owner is not poisoned")
-            .dispatch(0, DiskFront::Unloaded, rx);
+            .dispatch(0, DiskFront::Unloaded, None, rx);
 
     let job = ReadJob::Tail {
         source: snapshot,
@@ -304,7 +304,7 @@ fn test_walk_reaches_start() {
         reads
             .lock()
             .expect("the owner is not poisoned")
-            .dispatch(0, DiskFront::Unloaded, rx);
+            .dispatch(0, DiskFront::Unloaded, None, rx);
 
     let job = ReadJob::Tail {
         source: snapshot,
@@ -587,10 +587,11 @@ impl TranscriptSnapshot for InjectedWindow {
     }
 }
 
-/// Run a tail read through the dispatch, the channel, and the owner's poll
-/// the production loop uses.
-fn injected_tail_read(
+/// Run a read through the dispatch, the channel, and the owner's poll the
+/// production loop uses, with the job built from the source it answers.
+fn injected_read(
     failure: Option<ReadError>,
+    job: impl FnOnce(Arc<dyn TranscriptSnapshot>) -> ReadJob,
 ) -> (HistoryReadOutcome, Arc<Mutex<HistoryReads>>) {
     let reads = Arc::new(Mutex::new(HistoryReads::default()));
     let source: Arc<dyn TranscriptSnapshot> = Arc::new(InjectedWindow {
@@ -602,12 +603,8 @@ fn injected_tail_read(
         reads
             .lock()
             .expect("the owner is not poisoned")
-            .dispatch(0, DiskFront::Unloaded, rx);
-    let job = ReadJob::Tail {
-        source,
-        front: vec![text_front("the row the view starts at")],
-    };
-    job.run_and_send(tx, lease.stop());
+            .dispatch(0, DiskFront::Unloaded, None, rx);
+    job(source).run_and_send(tx, lease.stop());
     // The send already happened; the poll finds it ready.
     let pending = reads
         .lock()
@@ -620,6 +617,17 @@ fn injected_tail_read(
         HistoryReadPoll::Disconnected => panic!("the worker left without sending"),
     };
     (outcome, reads)
+}
+
+/// Run a tail read through the dispatch, the channel, and the owner's poll
+/// the production loop uses.
+fn injected_tail_read(
+    failure: Option<ReadError>,
+) -> (HistoryReadOutcome, Arc<Mutex<HistoryReads>>) {
+    injected_read(failure, |source| ReadJob::Tail {
+        source,
+        front: vec![text_front("the row the view starts at")],
+    })
 }
 
 /// A failed window read is not the log's end: the outcome reports a failed
@@ -645,5 +653,232 @@ fn test_empty_window_exhausts() {
     assert!(
         matches!(outcome, HistoryReadOutcome::Exhausted),
         "an empty window is the log's end: {outcome:?}"
+    );
+}
+
+/// A read sent for a row the rows on view left out reaches it: the walk starts
+/// where a scroll back starts, runs to the rows older than the visible front,
+/// and stops on the window holding the row's own entry.
+#[test]
+fn test_lookback_reaches_parked_row() {
+    let window = durable_window(
+        &[
+            ("e0", "A"),
+            ("e1", "B"),
+            ("e2", "C"),
+            ("e3", "D"),
+            ("e4", "E"),
+        ],
+        1000,
+        2000,
+    );
+    let source: Arc<dyn TranscriptSnapshot> = Arc::new(ScriptedWindows {
+        empty: NoTranscriptSnapshot,
+        windows: vec![window],
+    });
+    let job = ReadJob::Lookback {
+        source,
+        from: LookbackFrom::Visible(durable_front(&[("e2", "C"), ("e3", "D"), ("e4", "E")])),
+        row: RowId::from("e0"),
+    };
+    let stop = AtomicBool::new(false);
+    match job.run(&stop) {
+        Some(HistoryReadOutcome::Rows(result)) => {
+            assert_eq!(
+                rendered(&result.rows),
+                vec!["> A", "> B"],
+                "the rows older than the front, the parked row among them"
+            );
+            assert_eq!(result.anchor, 1000, "the window's start anchors them");
+        }
+        other => panic!("the walk reached the parked row: {other:?}"),
+    }
+}
+
+/// A parked row further back than the rows the first read returns is still
+/// reached: the walk crosses into the older window and hands every window it
+/// crossed back as one block, oldest first, so the row lands in the view with
+/// the rows above it rather than in the middle of nothing.
+#[test]
+fn test_lookback_crosses_older_windows() {
+    let newest = durable_window(&[("e3", "D"), ("e4", "E"), ("e5", "F")], 2000, 3000);
+    let middle = durable_window(&[("e0", "A"), ("e1", "B"), ("e2", "C")], 1000, 2000);
+    let oldest = durable_window(&[("f0", "X"), ("f1", "Y")], 0, 1000);
+    let source: Arc<dyn TranscriptSnapshot> = Arc::new(ScriptedWindows {
+        empty: NoTranscriptSnapshot,
+        windows: vec![newest, middle, oldest],
+    });
+    let job = ReadJob::Lookback {
+        source,
+        from: LookbackFrom::Visible(durable_front(&[("e3", "D"), ("e4", "E"), ("e5", "F")])),
+        row: RowId::from("f0"),
+    };
+    let stop = AtomicBool::new(false);
+    match job.run(&stop) {
+        Some(HistoryReadOutcome::Rows(result)) => {
+            assert_eq!(
+                rendered(&result.rows),
+                vec!["> X", "> Y", "> A", "> B", "> C"],
+                "both windows crossed, oldest first"
+            );
+            assert_eq!(
+                result.rows.ids(),
+                vec![
+                    RowId::from("f0"),
+                    RowId::from("f1"),
+                    RowId::from("e0"),
+                    RowId::from("e1"),
+                    RowId::from("e2"),
+                ],
+                "every row keeps the identity of the entry it came from"
+            );
+            assert_eq!(result.anchor, 0, "the oldest window's start anchors them");
+        }
+        other => panic!("the walk crossed into the older window: {other:?}"),
+    }
+}
+
+/// The rows a read starts from are already on view and named, so a read sent
+/// for a parked row starts below them where the rows read back begin.
+#[test]
+fn test_lookback_reads_from_offset() {
+    let window = durable_window(&[("e0", "A"), ("e1", "B")], 1000, 2000);
+    let source: Arc<dyn TranscriptSnapshot> = Arc::new(ScriptedWindows {
+        empty: NoTranscriptSnapshot,
+        windows: vec![window],
+    });
+    let job = ReadJob::Lookback {
+        source,
+        from: LookbackFrom::Offset(2000),
+        row: RowId::from("e0"),
+    };
+    let stop = AtomicBool::new(false);
+    match job.run(&stop) {
+        Some(HistoryReadOutcome::Rows(result)) => {
+            assert_eq!(rendered(&result.rows), vec!["> A", "> B"]);
+            assert_eq!(result.anchor, 1000);
+        }
+        other => panic!("the walk read below the loaded rows: {other:?}"),
+    }
+}
+
+/// A walk that reaches the log's start without the row reports the log's end.
+/// The row's identity is not in the log, so no later read finds it there and
+/// the viewport is released rather than waiting on a read that cannot answer.
+#[test]
+fn test_lookback_exhausts_at_start() {
+    let newest = durable_window(&[("e3", "D"), ("e4", "E"), ("e5", "F")], 2000, 3000);
+    let middle = durable_window(&[("e0", "A"), ("e1", "B"), ("e2", "C")], 1000, 2000);
+    let source: Arc<dyn TranscriptSnapshot> = Arc::new(ScriptedWindows {
+        empty: NoTranscriptSnapshot,
+        windows: vec![newest, middle],
+    });
+    let job = ReadJob::Lookback {
+        source,
+        from: LookbackFrom::Visible(durable_front(&[("e3", "D"), ("e4", "E"), ("e5", "F")])),
+        row: RowId::from("f0"),
+    };
+    let stop = AtomicBool::new(false);
+    assert!(
+        matches!(job.run(&stop), Some(HistoryReadOutcome::Exhausted)),
+        "the log's start without the row is the log's end"
+    );
+}
+
+/// A walk that spends its byte budget with the log still holding older rows
+/// reports the miss rather than the log's end: the two answers differ in what
+/// the view does with them, and collapsing them would close the front on a log
+/// that has rows to give.
+#[test]
+fn test_lookback_reports_budget() {
+    let reads = Arc::new(Mutex::new(HistoryReads::default()));
+    let log_size = 100 * 1024 * 1024;
+    let step = 16 * 1024 * 1024;
+    let source = Arc::new(SteppingWindow::new(
+        Arc::clone(&reads),
+        log_size,
+        step,
+        None,
+    ));
+    let snapshot: Arc<dyn TranscriptSnapshot> = source.clone();
+    let (tx, rx) = mpsc::channel::<HistoryReadOutcome>();
+    let lease = reads.lock().expect("the owner is not poisoned").dispatch(
+        0,
+        DiskFront::Unloaded,
+        Some(RowId::from("e9")),
+        rx,
+    );
+    let job = ReadJob::Lookback {
+        source: snapshot,
+        from: LookbackFrom::Offset(log_size),
+        row: RowId::from("e9"),
+    };
+    job.run_and_send(tx, lease.stop());
+    let pending = reads
+        .lock()
+        .expect("the owner is not poisoned")
+        .take()
+        .expect("the dispatched read is on file");
+    assert!(
+        matches!(
+            pending.poll(),
+            HistoryReadPoll::Ready(HistoryReadOutcome::LookbackMissed)
+        ),
+        "a walk that ran out of budget did not read the log to its end"
+    );
+    let steps = log_size / step;
+    assert_eq!(
+        source.calls(),
+        2,
+        "the walk stopped at its own budget, well short of the {steps} windows the log holds"
+    );
+}
+
+/// A lookback walk nobody wants any more quits at the window it is inside and
+/// reports nothing, like the tail walk: the rows it holds describe a log it
+/// never finished reading.
+#[test]
+fn test_lookback_stops_when_invalidated() {
+    let reads = Arc::new(Mutex::new(HistoryReads::default()));
+    let source = five_window_log(Arc::clone(&reads), Some(2));
+    let snapshot: Arc<dyn TranscriptSnapshot> = source.clone();
+    let (_tx, rx) = mpsc::channel::<HistoryReadOutcome>();
+    let lease = reads.lock().expect("the owner is not poisoned").dispatch(
+        0,
+        DiskFront::Unloaded,
+        Some(RowId::from("e9")),
+        rx,
+    );
+    let job = ReadJob::Lookback {
+        source: snapshot,
+        from: LookbackFrom::Offset(5000),
+        row: RowId::from("e9"),
+    };
+    let outcome = job.run(lease.stop());
+    assert!(outcome.is_none(), "a stopped walk reports nothing");
+    assert_eq!(
+        source.calls(),
+        2,
+        "the walk quit at the window it was inside, not at its byte budget"
+    );
+}
+
+/// A failed window read during a lookback is the same failure a tail read
+/// reports: the row may yet be readable, so the front stays open for a retry.
+#[test]
+fn test_lookback_failure_stays_open() {
+    let (outcome, reads) = injected_read(Some(ReadError::Io), |source| ReadJob::Lookback {
+        source,
+        from: LookbackFrom::Offset(4096),
+        row: RowId::from("e9"),
+    });
+    assert!(
+        matches!(outcome, HistoryReadOutcome::ReadFailed),
+        "a failed window read is not the log's end: {outcome:?}"
+    );
+    assert_eq!(
+        reads.lock().expect("the owner is not poisoned").running(),
+        0,
+        "the failed read's worker freed its slot"
     );
 }

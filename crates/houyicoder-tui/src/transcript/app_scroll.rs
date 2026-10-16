@@ -7,7 +7,7 @@
 
 use crate::row_id::RowId;
 use crate::rows::row_set::RowSet;
-use crate::scroll::{NewTurnCount, ScrollAnchor, ScrollTransition, TranscriptScroll};
+use crate::scroll::{NewTurnCount, RowRelease, ScrollAnchor, ScrollTransition, TranscriptScroll};
 use crate::state::{App, EventCursor};
 use crate::transcript::TranscriptFrame;
 use crate::view::working::history_window::window_rows;
@@ -198,13 +198,19 @@ impl App {
     /// a rebuild reaches the whole-vec form through settle_whole_scroll), so
     /// the anchor is resolved against the list it belongs to.
     pub(crate) fn settle_scroll(&self) {
+        // The published row is a cell, so settling from the read-only draw
+        // does not need the mutable accessor the steps use.
         let Some(anchor) = self.active_scroll().anchor().cloned() else {
             return;
         };
-        if let Some(row) = self.resolved_row(&anchor) {
-            // The published row is a cell, so settling from the read-only draw
-            // does not need the mutable accessor the steps use.
-            self.active_scroll().set_resolved_top(row);
+        match self.resolved_row(&anchor) {
+            Some(row) => self.active_scroll().set_resolved_top(row),
+            // The rows no longer carry the row the viewport stands on. Holding
+            // the last published row is only half an answer: whether that row
+            // is still in the session log is a question for a read, so note it
+            // and let the read decide between holding the place and giving it
+            // up with the reader told.
+            None => self.active_scroll().note_row_absent(),
         }
     }
 
@@ -342,12 +348,36 @@ impl App {
     /// rows it installs: releasing against a list that is still the old one
     /// would drop an anchor that the new list could have resolved.
     pub(crate) fn release_history_view(&mut self) {
+        self.release_parked_row(RowRelease::HistoryReplaced);
+    }
+
+    /// Give up the row the whole-vec viewport stands on and return to the
+    /// tail, telling the reader why. Every release is a place the reader chose
+    /// to stand and did not choose to leave, so none of them is silent, and
+    /// the three verdicts differ in what they say the row's fate was.
+    ///
+    /// Returns whether there was a parked row to release, for a caller that
+    /// redraws on the change.
+    pub(crate) fn release_parked_row(&mut self, verdict: RowRelease) -> bool {
         let released = self.whole_scroll().anchor().is_some();
         self.whole_scroll_mut().follow_tail();
         self.resume_tail_trim();
         if released {
-            self.system_line("scroll position released: the history on view was replaced");
+            let notice = match verdict {
+                RowRelease::HistoryReplaced => {
+                    "scroll position released: the history on view was replaced"
+                }
+                RowRelease::RowLeftHistory => {
+                    "scroll position released: the row this view stood on left the history"
+                }
+                RowRelease::RowOutOfReach => {
+                    "scroll position released: the row this view stood on is further back \
+                     than the view reads"
+                }
+            };
+            self.system_line(notice);
         }
+        released
     }
 
     /// Break follow-tail while keeping the current top row on screen. Callers

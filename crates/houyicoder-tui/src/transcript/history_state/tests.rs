@@ -21,7 +21,7 @@ fn rendezvous<T>(channel: &mpsc::Receiver<T>) -> T {
 fn test_invalidate_moves_epoch() {
     let mut reads = HistoryReads::default();
     let (tx, rx) = mpsc::channel::<HistoryReadOutcome>();
-    let lease = reads.dispatch(0, DiskFront::Unloaded, rx);
+    let lease = reads.dispatch(0, DiskFront::Unloaded, None, rx);
     assert_eq!(reads.running(), 1);
     let epoch_before = reads.epoch();
 
@@ -46,7 +46,7 @@ fn test_dispatch_stamps_epoch() {
     let mut reads = HistoryReads::default();
     reads.invalidate();
     let (_tx, rx) = mpsc::channel::<HistoryReadOutcome>();
-    let _lease = reads.dispatch(3, DiskFront::At(4096), rx);
+    let _lease = reads.dispatch(3, DiskFront::At(4096), None, rx);
     let pending = reads.take().expect("a read is pending");
     assert_eq!(pending.epoch, reads.epoch());
     assert_eq!(pending.dispatch_front, 3);
@@ -66,7 +66,7 @@ fn test_invalidate_raises_stop() {
     let mut reads = HistoryReads::default();
     let (_tx, rx) = mpsc::channel::<HistoryReadOutcome>();
     let stopped = {
-        let lease = reads.dispatch(0, DiskFront::Unloaded, rx);
+        let lease = reads.dispatch(0, DiskFront::Unloaded, None, rx);
         let flag = Arc::clone(lease.stop());
         assert!(!flag.load(Ordering::Relaxed), "a fresh read is wanted");
 
@@ -80,7 +80,7 @@ fn test_invalidate_raises_stop() {
     };
 
     let (_tx, rx) = mpsc::channel::<HistoryReadOutcome>();
-    let next = reads.dispatch(0, DiskFront::Unloaded, rx);
+    let next = reads.dispatch(0, DiskFront::Unloaded, None, rx);
     assert!(
         !next.stop().load(Ordering::Relaxed),
         "a new read does not inherit the stop it was not given"
@@ -101,7 +101,7 @@ fn test_invalidate_raises_stop() {
 fn test_record_blocks_dispatch() {
     let mut reads = HistoryReads::default();
     let (tx, rx) = mpsc::channel::<HistoryReadOutcome>();
-    drop(reads.dispatch(0, DiskFront::Unloaded, rx));
+    drop(reads.dispatch(0, DiskFront::Unloaded, None, rx));
     assert_eq!(
         reads.running(),
         0,
@@ -137,7 +137,7 @@ fn test_record_blocks_dispatch() {
 fn test_running_counts_workers() {
     let mut reads = HistoryReads::default();
     let (_tx, rx) = mpsc::channel::<HistoryReadOutcome>();
-    let lease = reads.dispatch(0, DiskFront::Unloaded, rx);
+    let lease = reads.dispatch(0, DiskFront::Unloaded, None, rx);
 
     // Two rendezvous instead of sleeps: the worker announces it has arrived
     // inside its read, and the test releases it again only after checking

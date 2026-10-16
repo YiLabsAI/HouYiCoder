@@ -254,7 +254,7 @@ fn test_parent_read_spares_child() {
         app.sessions
             .current
             .history_reads
-            .dispatch(front, disk_front, rx),
+            .dispatch(front, disk_front, None, rx),
     );
 
     assert!(app.enter_teammate_view());

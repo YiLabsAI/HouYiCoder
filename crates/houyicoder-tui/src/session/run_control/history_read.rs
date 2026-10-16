@@ -12,6 +12,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::scroll::WINDOW_MAX_BYTES;
 use crate::state::history_read::{HistoryReadOutcome, HistoryReadResult};
+use crate::transcript::row_id::RowId;
 use crate::transcript::rows::NamedRows;
 use crate::transcript::snapshot::{ReadError, TranscriptSnapshot, WindowLoad};
 use crate::transcript::store::FrontRow;
@@ -26,6 +27,13 @@ const LOG_WINDOW_BYTES: u64 = WINDOW_MAX_BYTES;
 /// took to render; the walk holds one window at a time, so this bounds how far
 /// it travels, not what it holds. Hitting the cap stops the read.
 const LOG_WALK_MAX_BYTES: u64 = 32 * 1024 * 1024;
+/// How far past the rows a view holds a read for a parked row walks. Counted
+/// from where those rows begin, not from the log tail: the read that reaches
+/// them is the one an ordinary scroll back spends, and this bounds only what
+/// the view reads past the rows it already shows. A walk that spends it ends
+/// without the row, which the view reports rather than holding a place no read
+/// reaches.
+const LOOKBACK_MAX_BYTES: u64 = 8 * 1024 * 1024;
 /// How many rows from the visible front an overlap match is looked for in.
 pub(crate) const OVERLAP_FRONT_ROWS: usize = 32;
 /// How many rows an overlap match must hold for, so a row text the log repeats
@@ -43,6 +51,27 @@ pub(crate) enum ReadJob {
         source: Arc<dyn TranscriptSnapshot>,
         anchor: u64,
     },
+    /// Read older windows until the window holding this row is reached. Sent
+    /// when the viewport parks on a row the rows on view left out: the row is
+    /// the place to hold, and whether the log still has it decides between
+    /// showing it again and telling the reader the place is gone.
+    Lookback {
+        source: Arc<dyn TranscriptSnapshot>,
+        from: LookbackFrom,
+        row: RowId,
+    },
+}
+
+/// Where a lookback walk starts. The two forms are the two states a view can
+/// be in: the rows it holds came from the log and it knows where they begin,
+/// or none have been read back yet and the walk first has to reach them.
+pub(crate) enum LookbackFrom {
+    /// The rows the view shows, oldest first, for a view that has read nothing
+    /// back yet. The walk reaches the rows older than them the way the first
+    /// scroll back does.
+    Visible(Vec<FrontRow>),
+    /// The byte offset the rows already read back begin at.
+    Offset(u64),
 }
 
 impl ReadJob {
@@ -57,19 +86,16 @@ impl ReadJob {
     /// record holding the receiver, so there is no apply side left to tell.
     fn run(self, stop: &AtomicBool) -> Option<HistoryReadOutcome> {
         let read = match self {
-            ReadJob::Tail { source, front } => read_log_tail(&*source, &front, stop),
-            ReadJob::Before { source, anchor } => read_log_before(&*source, anchor),
+            ReadJob::Tail { source, front } => older_rows(read_log_tail(&*source, &front, stop)),
+            ReadJob::Before { source, anchor } => older_rows(read_log_before(&*source, anchor)),
+            ReadJob::Lookback { source, from, row } => {
+                lookback_rows(read_lookback(&*source, from, &row, stop))
+            }
         };
         if stop.load(Ordering::Relaxed) {
             return None;
         }
-        Some(match read {
-            Ok(Some((rows, anchor))) => {
-                HistoryReadOutcome::Rows(HistoryReadResult { rows, anchor })
-            }
-            Ok(None) => HistoryReadOutcome::Exhausted,
-            Err(ReadError::Io) => HistoryReadOutcome::ReadFailed,
-        })
+        Some(read.unwrap_or(HistoryReadOutcome::ReadFailed))
     }
 
     /// Run the job and send the outcome over the channel. The sender is dropped
@@ -81,6 +107,125 @@ impl ReadJob {
             tx.send(outcome).ok();
         }
     }
+}
+
+/// What an older-rows read reported: rows to prepend, the end of the log, or
+/// the IO failure the caller retries.
+fn older_rows(
+    read: Result<Option<(NamedRows, u64)>, ReadError>,
+) -> Result<HistoryReadOutcome, ReadError> {
+    match read {
+        Ok(Some((rows, anchor))) => {
+            Ok(HistoryReadOutcome::Rows(HistoryReadResult { rows, anchor }))
+        }
+        Ok(None) => Ok(HistoryReadOutcome::Exhausted),
+        Err(ReadError::Io) => Err(ReadError::Io),
+    }
+}
+
+/// What a lookback walk reported: the rows reaching the row it was sent for,
+/// the end of the log without it, or a walk that spent its budget.
+fn lookback_rows(read: Result<LookbackEnd, ReadError>) -> Result<HistoryReadOutcome, ReadError> {
+    match read {
+        Ok(LookbackEnd::Reached(rows, anchor)) => {
+            Ok(HistoryReadOutcome::Rows(HistoryReadResult { rows, anchor }))
+        }
+        Ok(LookbackEnd::Absent) => Ok(HistoryReadOutcome::Exhausted),
+        Ok(LookbackEnd::OutOfBudget) => Ok(HistoryReadOutcome::LookbackMissed),
+        Err(ReadError::Io) => Err(ReadError::Io),
+    }
+}
+
+/// What a lookback walk ended with.
+enum LookbackEnd {
+    /// The rows reaching the row the walk was sent for, and the byte offset
+    /// they begin at.
+    Reached(NamedRows, u64),
+    /// The walk read to the log's start without the row: the log does not hold
+    /// it, so no later read will find it there either.
+    Absent,
+    /// The walk spent its byte budget with the log still holding older rows.
+    OutOfBudget,
+}
+
+/// Read older windows until the window holding this row is reached, and report
+/// every window the walk crossed as one block of rows.
+///
+/// The first step is the read an ordinary scroll back runs from the same
+/// state, so the bytes it crosses are not this walk's to count: a viewport
+/// whose row a pass released stands where a scroll back to the front would
+/// have stood. Each step after it reads one window older, looks through its
+/// rows for the identity once, and keeps the window while the row is still
+/// further back. Every window the walk crossed is handed back together, so the
+/// viewport is resolved once rather than once per window. The stop flag is
+/// checked between windows, so a read nobody wants any more quits after the
+/// window it is inside.
+fn read_lookback(
+    source: &dyn TranscriptSnapshot,
+    from: LookbackFrom,
+    row: &RowId,
+    stop: &AtomicBool,
+) -> Result<LookbackEnd, ReadError> {
+    let first = match from {
+        LookbackFrom::Visible(front) => read_log_tail(source, &front, stop)?,
+        LookbackFrom::Offset(anchor) => read_log_before(source, anchor)?,
+    };
+    // No window joined the rows the view holds, so there is no run of older
+    // rows for the parked row to sit in. The walk reports the log's end, which
+    // is what the read from the same state reports.
+    let Some((first, anchor)) = first else {
+        return Ok(LookbackEnd::Absent);
+    };
+    // Newest window first; the result is assembled oldest first at the end.
+    let mut windows = vec![first];
+    let mut anchor = anchor;
+    if window_holds(&windows[0], row) {
+        return Ok(assemble(windows, anchor));
+    }
+    let mut walked: u64 = 0;
+    loop {
+        if anchor == 0 {
+            return Ok(LookbackEnd::Absent);
+        }
+        if stop.load(Ordering::Relaxed) {
+            // The walk was abandoned. The invalidation that raised the flag
+            // dropped the record holding the result, so run reports nothing
+            // and this walk ends here either way.
+            return Ok(LookbackEnd::OutOfBudget);
+        }
+        if walked >= LOOKBACK_MAX_BYTES {
+            return Ok(LookbackEnd::OutOfBudget);
+        }
+        let Some((older, start)) = read_log_before(source, anchor)? else {
+            return Ok(LookbackEnd::Absent);
+        };
+        // A window that does not begin below the anchor would leave the walk
+        // standing still and counting no bytes; read_log_before answers None
+        // for one, so the step always moves.
+        walked += anchor - start;
+        anchor = start;
+        let found = window_holds(&older, row);
+        windows.push(older);
+        if found {
+            return Ok(assemble(windows, anchor));
+        }
+    }
+}
+
+/// Whether one window's rows carry this identity. A window holds its rows in
+/// order, so one pass over their names answers it.
+fn window_holds(window: &NamedRows, row: &RowId) -> bool {
+    window.ids().iter().any(|id| id == row)
+}
+
+/// The windows a walk crossed as one block of rows, oldest first, with the
+/// byte offset the block begins at.
+fn assemble(windows: Vec<NamedRows>, oldest_start: u64) -> LookbackEnd {
+    let mut rows = NamedRows::default();
+    for window in windows.into_iter().rev() {
+        rows.append(&window);
+    }
+    LookbackEnd::Reached(rows, oldest_start)
 }
 
 /// Read the rows the log holds older than the row the visible transcript

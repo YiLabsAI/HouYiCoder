@@ -3,6 +3,10 @@
 //! or a new user submission returns to the tail. A parked viewport is held by
 //! a logical anchor -- the identity of the row it stands on -- so rows entering
 //! or leaving above it move the viewport with the content instead of past it.
+//! An anchor whose row the rows on view no longer carry is the non-resident
+//! case: the position stays held, and whether the session log still holds the
+//! row is a question only a read answers, so the absent row is noted here and
+//! the App sends that read.
 //! Search has two modes: an inline Ctrl+F bar that highlights matches in the
 //! transcript, and a /search popup that lists matching lines and jumps the
 //! scroll to the focused one.
@@ -118,6 +122,10 @@ pub struct TranscriptScroll {
     /// value, so the view holds its place while the older read that brings the
     /// row back runs.
     resolved: Cell<usize>,
+    /// Whether the rows on view carried the parked row at the last settlement.
+    /// True means the viewport is holding a place the rows no longer show, and
+    /// a read of older rows is what can tell whether the log still holds it.
+    row_absent: Cell<bool>,
     /// Viewport capacity in display rows, written by the view during draw so
     /// the key handler can page by a full screen. Defaults to a sane value so
     /// paging works before the first draw.
@@ -140,11 +148,29 @@ pub enum ScrollTransition {
     ReachedTail,
 }
 
+/// Why a parked viewport gave up the row it stood on, which decides what the
+/// reader is told. The place they left is gone rather than moved, so a release
+/// the reader did not ask for never happens silently.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RowRelease {
+    /// A pass replaced the history on view. The row may sit in the log of the
+    /// session that replaced it, and it is still not the row this view stood
+    /// on, so the viewport returns to the tail.
+    HistoryReplaced,
+    /// The row's identity left the history: no read of the log can bring it
+    /// back.
+    RowLeftHistory,
+    /// The row is further back than this view reads: the log may hold it, and
+    /// reading that far is out of reach rather than exhausted.
+    RowOutOfReach,
+}
+
 impl Default for TranscriptScroll {
     fn default() -> Self {
         Self {
             anchor: None,
             resolved: Cell::new(0),
+            row_absent: Cell::new(false),
             cap: Cell::new(0),
             total: Cell::new(0),
         }
@@ -163,14 +189,32 @@ impl TranscriptScroll {
     }
 
     /// Park the viewport on this row. The caller publishes the screen row the
-    /// anchor resolves to, since resolving it needs the row list.
+    /// anchor resolves to, since resolving it needs the row list. An anchor
+    /// taken from the rows on view names a row they carry, so no read is
+    /// wanted for it.
     pub fn park(&mut self, anchor: ScrollAnchor) {
         self.anchor = Some(anchor);
+        self.row_absent.set(false);
     }
 
-    /// Publish the screen row the parked anchor resolved to.
+    /// Publish the screen row the parked anchor resolved to. The rows on view
+    /// carry the parked row again, so a read sent for it is no longer wanted.
     pub fn set_resolved_top(&self, row: usize) {
         self.resolved.set(row);
+        self.row_absent.set(false);
+    }
+
+    /// Note that the rows on view do not carry the parked row. The viewport
+    /// keeps the last published row, and the parked row is what a read of
+    /// older rows is sent for.
+    pub fn note_row_absent(&self) {
+        self.row_absent.set(true);
+    }
+
+    /// Whether the rows on view left out the parked row at the last
+    /// settlement.
+    pub fn row_absent(&self) -> bool {
+        self.row_absent.get()
     }
 
     /// Effective cap (rows visible). Falls back to 1 when the view has not
@@ -208,6 +252,7 @@ impl TranscriptScroll {
     /// Return to following the tail.
     pub fn follow_tail(&mut self) {
         self.anchor = None;
+        self.row_absent.set(false);
     }
 }
 

@@ -206,7 +206,7 @@ fn test_switch_drops_pending_read() {
         .sessions
         .current
         .history_reads
-        .dispatch(0, DiskFront::Unloaded, rx);
+        .dispatch(0, DiskFront::Unloaded, None, rx);
     assert_eq!(app.sessions.current.history_reads.running(), 1);
 
     app.switch_session(test_bundle().0);

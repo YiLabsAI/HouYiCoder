@@ -63,7 +63,7 @@ fn inject_read(app: &mut App) -> mpsc::Sender<HistoryReadOutcome> {
         app.sessions
             .current
             .history_reads
-            .dispatch(front, disk_front, rx),
+            .dispatch(front, disk_front, None, rx),
     );
     tx
 }
@@ -212,7 +212,7 @@ fn test_disconnect_clears_record() {
         app.sessions
             .current
             .history_reads
-            .dispatch(front, disk_front, rx),
+            .dispatch(front, disk_front, None, rx),
     );
     assert!(
         app.sessions.current.history_reads.holds_pending(),

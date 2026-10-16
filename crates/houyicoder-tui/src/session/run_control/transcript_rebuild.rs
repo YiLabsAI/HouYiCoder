@@ -5,20 +5,13 @@
 //! the affected range, keeping rebuild cost independent of session length.
 
 use std::ops::Range;
-use std::sync::mpsc;
-use std::time::Duration;
 
-use super::history_read::{OVERLAP_FRONT_ROWS, ReadJob};
 use super::{MAX_REBUILD_FRAMES, PREPEND_BATCH};
-use crate::composition::shared_runtime;
 use crate::fold::last_turn_boundary;
 use crate::fold::{compute_fold_groups, fold_groups_in};
-use crate::notifications::{NotifKind, Notification};
 use crate::row_id::RowId;
 use crate::scroll::VIEWABLE_SCROLLBACK_CAP;
 use crate::state::App;
-use crate::state::history_read::{HistoryReadOutcome, HistoryReadPoll, PendingHistoryRead};
-use crate::state::transcript::DiskFront;
 use crate::state::transcript::blocks::{
     Block, BlockAnchor, BlockId, TranscriptChange, TranscriptChangeSet,
 };
@@ -34,7 +27,7 @@ use std::mem::take;
 /// Rows the view holds from the session log before it stops reading older
 /// ones: the same bound the viewable transcript keeps. The bound is checked
 /// before a read rather than after, so one read can pass it, and by however
-/// many rows a window of the log byte budget holds, which no row count limits.
+/// many rows that read's own byte budget holds, which no row count limits.
 const LOG_ROW_BUDGET: usize = VIEWABLE_SCROLLBACK_CAP;
 
 impl App {
@@ -399,7 +392,7 @@ impl App {
             // The frames below the resident front are gone: dispatch a
             // background read of their rows from the session log. The draw
             // path never waits on disk; the result lands on a later pump.
-            self.dispatch_history_read();
+            self.dispatch_history_read(None);
             return;
         }
         // A batch reaching past the resident front can only load the frames that
@@ -432,185 +425,6 @@ impl App {
         // move the viewport with their content.
         self.rebuild_transcript();
         self.bump_transcript_version();
-    }
-
-    /// Dispatch a background read of older rows from the session log, the
-    /// rows of the drained frames that still live on disk. The draw path
-    /// never blocks on this: the task ships the result over a channel the
-    /// record on file holds, and a later pump applies it. Without a runtime or
-    /// a snapshot source there is nothing to dispatch and the scroll stops at
-    /// the resident front; when the owner has no room for another read a second
-    /// dispatch is skipped and a later scroll asks again, so the log is walked
-    /// by one task at a time and a result nobody has looked at yet is never
-    /// dispatched over.
-    fn dispatch_history_read(&mut self) {
-        let Some(source) = self.sessions.persistence.snapshot.clone() else {
-            return;
-        };
-        if self.sessions.current.connection.is_none() {
-            // No connection: the bare or unwired path has no way to run a
-            // background task, so the read stays off the draw thread by not
-            // running at all, matching the no-source short-circuit.
-            return;
-        }
-        if !self.sessions.current.history_reads.may_dispatch() {
-            return;
-        }
-        if self.sessions.current.transcript.disk_row_count() >= LOG_ROW_BUDGET {
-            return;
-        }
-        let job = match self.sessions.current.transcript.disk_front() {
-            DiskFront::Stopped => return,
-            DiskFront::Unloaded => {
-                // The pass that drained frames still renders their rows.
-                // Re-derive the view first, so the rows the overlap matches
-                // are the ones that stay: a match against a row on its way
-                // out would place the loaded rows above history the next
-                // rebuild drops.
-                self.rebuild_transcript();
-                let front = self.transcript().front_rows(OVERLAP_FRONT_ROWS);
-                if front.is_empty() {
-                    return;
-                }
-                ReadJob::Tail { source, front }
-            }
-            // The window ends where the loaded rows begin, so every row it
-            // carries is older than every row the view holds and the overlap
-            // needs no match.
-            DiskFront::At(anchor) => ReadJob::Before { source, anchor },
-        };
-        // Capture the resident front after any rebuild the Unloaded branch ran,
-        // not before: that rebuild can drain frames and advance the front, so a
-        // pre-rebuild capture would make the first read's own result look stale
-        // and drop it. The sync path this replaced read the front after the
-        // rebuild too.
-        let dispatch_front = self.sessions.current.transcript.frame_window_start();
-        let dispatch_disk_front = self.sessions.current.transcript.disk_front();
-        let (tx, rx) = mpsc::channel();
-        // The owner issues the stop flag and the execution slot together, so the
-        // flag the task watches is the one an invalidation raises and the budget
-        // counts the read from the moment the worker exists. The lease moves into
-        // the closure and drops when the closure returns, which is what holds the
-        // slot for the length of the walk: an invalidation before that point
-        // stops the worker but cannot take the slot back from it.
-        let history_reads = &mut self.sessions.current.history_reads;
-        let lease = history_reads.dispatch(dispatch_front, dispatch_disk_front, rx);
-        shared_runtime().spawn_blocking(move || {
-            job.run_and_send(tx, lease.stop());
-        });
-    }
-
-    /// Advance the reads that run off the draw path: the older-rows read and
-    /// the epoch scan. Both read the log, so neither runs where the frame is
-    /// drawn; the loop calls this instead. Returns true when either moved, so
-    /// the caller redraws.
-    pub(crate) fn pump_background_reads(&mut self) -> bool {
-        let history = self.pump_history_read();
-        let scan = self.pump_scan_chunk();
-        history || scan
-    }
-
-    /// Drain the running history read without blocking and apply it when
-    /// ready. Returns true when a result landed and the view must redraw.
-    /// Called from the loop body every pass, not inside the dirty gate, so an
-    /// idle loop still picks the result up.
-    pub(crate) fn pump_history_read(&mut self) -> bool {
-        let Some(pending) = self.sessions.current.history_reads.take() else {
-            return false;
-        };
-        match pending.poll() {
-            HistoryReadPoll::Pending => {
-                self.sessions.current.history_reads.put_back(pending);
-                false
-            }
-            HistoryReadPoll::Ready(outcome) => {
-                self.apply_history_read_result(outcome, &pending);
-                true
-            }
-            HistoryReadPoll::Disconnected => {
-                // The worker died or dropped its sender without sending. Leave
-                // the record cleared and stop re-reading: without the latch the
-                // scroll keeps asking for rows no worker will ever bring back.
-                // The budget needs no help here: a worker frees its slot on its
-                // own when it leaves.
-                let transcript = &mut self.sessions.current.transcript;
-                transcript.set_disk_front(DiskFront::Stopped);
-                false
-            }
-        }
-    }
-
-    /// Apply a background read's result, or drop it when it no longer belongs
-    /// to the view. Four checks, each covering one way the world moves while a
-    /// read runs: the reader returned to the tail (rows not wanted); the
-    /// history was invalidated (the epoch moved on, so the rows belong to an
-    /// archived history even when the rebuilt view's numbers match again); the
-    /// resident front moved (the frames the rows were cut against are gone and
-    /// prepending would leave a gap); the disk-rows state moved (a chained read
-    /// is trusted against the loaded stack's seam without its own overlap
-    /// match, so releasing the stack removes the basis of that trust). Full
-    /// view-generation rejection (pane, parent/child) is a later concern.
-    fn apply_history_read_result(
-        &mut self,
-        outcome: HistoryReadOutcome,
-        read: &PendingHistoryRead,
-    ) {
-        if self.whole_scroll().is_following_tail() {
-            tracing::debug!("history read dropped: the reader returned to the tail");
-            return;
-        }
-        if read.epoch != self.sessions.current.history_reads.epoch() {
-            tracing::debug!(
-                read_epoch = read.epoch,
-                current = self.sessions.current.history_reads.epoch(),
-                "history read dropped: the history was invalidated"
-            );
-            return;
-        }
-        if self.sessions.current.transcript.frame_window_start() != read.dispatch_front {
-            tracing::debug!(
-                dispatch_front = read.dispatch_front,
-                current = self.sessions.current.transcript.frame_window_start(),
-                "history read dropped: the resident front moved"
-            );
-            return;
-        }
-        if self.sessions.current.transcript.disk_front() != read.dispatch_disk_front {
-            tracing::debug!(
-                dispatch_disk_front = ?read.dispatch_disk_front,
-                current = ?self.sessions.current.transcript.disk_front(),
-                "history read dropped: the disk-rows state moved"
-            );
-            return;
-        }
-        match outcome {
-            HistoryReadOutcome::Exhausted => {
-                let transcript = &mut self.sessions.current.transcript;
-                transcript.set_disk_front(DiskFront::Stopped);
-                self.sessions.current.history_reads.record_read_success();
-            }
-            HistoryReadOutcome::Rows(result) => {
-                let transcript = &mut self.sessions.current.transcript;
-                transcript.prepend_disk_rows(result.rows, result.anchor, read.dispatch_front);
-                // The rows landed above the viewport; the rebuild resolves the
-                // parked anchor over them, so the viewport holds its place by
-                // the row it stands on rather than by counting what arrived.
-                self.rebuild_transcript();
-                self.bump_transcript_version();
-                self.sessions.current.history_reads.record_read_success();
-            }
-            HistoryReadOutcome::ReadFailed => {
-                // The front stays open for a retry after the cooldown; the
-                // failure surfaces as a visible notice.
-                tracing::warn!("history read failed; front stays open for a retry");
-                self.sessions.current.history_reads.record_read_failure();
-                self.ui.notifications.add(Notification::immediate(
-                    "history-read-failed",
-                    NotifKind::text("older rows unreadable — retrying shortly"),
-                    Duration::from_millis(4000),
-                ));
-            }
-        }
     }
 
     /// Return the first frame in the changing turn. If that boundary would
@@ -713,6 +527,8 @@ impl App {
         );
     }
 }
+
+mod read_pump;
 
 #[cfg(test)]
 mod tests;

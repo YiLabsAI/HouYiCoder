@@ -279,5 +279,6 @@ fn assert_rows_print_once(app: &App) {
 
 mod eviction;
 mod history;
+mod parked_row;
 mod rebuild;
 mod scrollback;

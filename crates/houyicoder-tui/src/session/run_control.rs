@@ -13,6 +13,7 @@ use houyicoder_protocol::frontend::session_update::SessionUpdate;
 use crate::input::queue::InputItem;
 use crate::pending_prompt::PendingPrompt;
 use crate::records::{Approval, AskQuestion, TranscriptLine};
+use crate::scroll::RowRelease;
 use crate::session::{ConnectionStatus, EnqueueError, PollOutcome};
 use crate::state::App;
 use crate::state::enums::LiveBlock;
@@ -641,9 +642,23 @@ impl App {
         }) else {
             return;
         };
+        // A parked viewport whose row one of the removed frames carried loses
+        // its place with them, and the reader is told. The check belongs here,
+        // where the frames go: a read of the log walks older rows, so the chase
+        // a release on its own leaves behind only ever reaches past the row,
+        // which sits newer than the rows on view.
+        let anchor = self.whole_scroll().anchor().cloned();
+        let lost = anchor.is_some_and(|anchor| {
+            transcript.frames()[start..]
+                .iter()
+                .any(|sf| anchor.row.names(sf.as_ref(), sf.event_id.as_ref()))
+        });
         let transcript = &mut self.sessions.current.transcript;
         transcript.with_frames_mut(|log| log.truncate(start));
         self.sessions.current.todos.set_replaying_history(true);
+        if lost {
+            self.release_parked_row(RowRelease::RowLeftHistory);
+        }
         self.rebuild_transcript();
     }
 }

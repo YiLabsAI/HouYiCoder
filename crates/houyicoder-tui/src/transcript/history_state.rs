@@ -19,6 +19,7 @@ use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
 use crate::state::transcript::DiskFront;
+use crate::transcript::row_id::RowId;
 use crate::transcript::rows::NamedRows;
 use mpsc::TryRecvError;
 use std::fmt::Debug;
@@ -113,6 +114,10 @@ pub(crate) struct HistoryReadResult {
 pub(crate) enum HistoryReadOutcome {
     Rows(HistoryReadResult),
     Exhausted,
+    /// A read sent for a row the view no longer shows walked its whole budget
+    /// without reaching it. Unlike Exhausted the log is not proven to hold no
+    /// older row -- the walk stopped at its own limit, not at the log's start.
+    LookbackMissed,
     /// An IO failure reading the log. Unlike Exhausted, the log may yet hold
     /// older rows: the front stays open and a retry follows the cooldown.
     ReadFailed,
@@ -137,6 +142,11 @@ pub(crate) struct PendingHistoryRead {
     /// loaded stack seam without its own overlap match; when the stack is
     /// released the basis of that trust is gone and the result must not apply.
     pub dispatch_disk_front: DiskFront,
+    /// The row this read was sent to reach, when the viewport was parked on a
+    /// row the rows on view left out. A read that could not reach it decides
+    /// the fate of that row alone: the reader may park elsewhere while the read
+    /// runs, and a verdict about one row says nothing about another.
+    pub lookback: Option<RowId>,
     /// Raised when the read stops being wanted. The owner holds it here and the
     /// task holds its own reference to the same flag, so the one that decides
     /// the read is unwanted is the one that says so.
@@ -294,6 +304,7 @@ impl HistoryReads {
         &mut self,
         dispatch_front: usize,
         dispatch_disk_front: DiskFront,
+        lookback: Option<RowId>,
         rx: mpsc::Receiver<HistoryReadOutcome>,
     ) -> WorkerLease {
         debug_assert!(
@@ -310,6 +321,7 @@ impl HistoryReads {
             epoch: self.epoch,
             dispatch_front,
             dispatch_disk_front,
+            lookback,
             stop: Arc::clone(&stop),
             rx,
         });
