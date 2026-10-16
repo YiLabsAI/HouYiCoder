@@ -275,7 +275,7 @@ fn test_drained_answer_alone() {
     let log: Vec<SequencedFrame> = frames.into_iter().map(SequencedFrame::from).collect();
     let (_, carried) = transcript_from_frames_at(&log, 0, 0..2, true, None);
     let (rows, _) = transcript_from_frames_at(&log[2..], 2, 2..3, true, Some(carried));
-    let rendered: Vec<String> = rows.lines.iter().map(|l| l.render()).collect();
+    let rendered: Vec<String> = rows.lines().iter().map(|l| l.render()).collect();
     assert_eq!(rendered.len(), 1, "the answer alone: {rendered:?}");
     assert!(
         rendered[0].contains("yes"),
@@ -688,7 +688,7 @@ fn test_fold_names_rows() {
         .map(|i| RowId::from(format!("e{i}")))
         .collect();
     let (rows, _) = transcript_from_named_frames(&frames, &names, 0..frames.len(), true, None);
-    let row = thought_row(&rows.lines).expect("the closed turn derives its row");
+    let row = thought_row(rows.lines()).expect("the closed turn derives its row");
     assert_eq!(
         row.turn_id,
         RowId::from("e2"),
@@ -1058,11 +1058,11 @@ fn test_drained_turn_closes() {
     let (_, carried) = transcript_from_frames_at(&log, 0, 0..3, true, None);
     let drained = &log[3..];
     let (rows, _) = transcript_from_frames_at(drained, 3, 3..5, false, Some(carried));
-    let row = thought_row(&rows.lines).expect("the record closes the turn the prefix opened");
+    let row = thought_row(rows.lines()).expect("the record closes the turn the prefix opened");
     let whole = thought_row(
-        &transcript_from_frames_at(&log, 0, 0..5, false, None)
+        transcript_from_frames_at(&log, 0, 0..5, false, None)
             .0
-            .lines,
+            .lines(),
     )
     .expect("the whole log writes the row");
     assert_eq!(
@@ -1080,7 +1080,7 @@ fn test_drained_turn_closes() {
     // nothing opened and no row is written at all.
     let (unfinished, _) = transcript_from_frames_at(drained, 3, 3..5, false, None);
     assert!(
-        thought_row(&unfinished.lines).is_none(),
+        thought_row(unfinished.lines()).is_none(),
         "a read that never saw the turn open writes no row: {unfinished:?}"
     );
 }
@@ -1107,7 +1107,7 @@ fn test_reasoning_count_complete() {
         false,
         Some(carried),
     );
-    let row = thought_row(&rows.lines).expect("the turn closes into a row");
+    let row = thought_row(rows.lines()).expect("the turn closes into a row");
     assert_eq!(
         row.reasoning,
         Some(format!(
@@ -1134,18 +1134,18 @@ fn test_result_keeps_drained_call() {
     .collect();
     let (_, carried) = transcript_from_frames_at(&log, 0, 0..2, true, None);
     let (rows, _) = transcript_from_frames_at(&log[2..], 2, 2..3, true, Some(carried));
-    let rendered: Vec<String> = rows.lines.iter().map(|l| l.render()).collect();
+    let rendered: Vec<String> = rows.lines().iter().map(|l| l.render()).collect();
     assert_eq!(
-        rows.lines.len(),
+        rows.lines().len(),
         2,
         "the result renders under a row for its call: {rendered:?}"
     );
     assert!(
-        matches!(&rows.lines[0], TranscriptLine::Tool { name, .. } if name != "result"),
+        matches!(&rows.lines()[0], TranscriptLine::Tool { name, .. } if name != "result"),
         "the call row comes first: {rendered:?}"
     );
     assert!(
-        matches!(&rows.lines[1], TranscriptLine::Tool { name, .. } if name == "result"),
+        matches!(&rows.lines()[1], TranscriptLine::Tool { name, .. } if name == "result"),
         "the result row follows it: {rendered:?}"
     );
     assert!(
@@ -1184,8 +1184,8 @@ fn test_agent_group_survives_drain() {
     .collect();
     let (_, carried) = transcript_from_frames_at(&log, 0, 0..2, true, None);
     let (rows, _) = transcript_from_frames_at(&log[2..], 2, 2..3, true, Some(carried));
-    let rendered: Vec<String> = rows.lines.iter().map(|l| l.render()).collect();
-    let child = rows.lines.iter().find_map(|l| match l {
+    let rendered: Vec<String> = rows.lines().iter().map(|l| l.render()).collect();
+    let child = rows.lines().iter().find_map(|l| match l {
         TranscriptLine::Subagent { child_sid, .. } => Some(child_sid.clone()),
         _ => None,
     });
@@ -1213,7 +1213,7 @@ fn test_unnamed_call_keeps_result() {
     let (_, carried) = transcript_from_frames_at(&log, 0, 0..34, true, None);
     let (rows, _) = transcript_from_frames_at(&log[34..], 34, 34..35, false, Some(carried));
     let call = rows
-        .lines
+        .lines()
         .iter()
         .find(|l| matches!(l, TranscriptLine::Tool { name, .. } if name != "result"))
         .expect("the result renders with a row for its call");
@@ -1248,7 +1248,7 @@ fn test_bound_skips_answered_calls() {
     let (_, carried) = transcript_from_frames_at(&log, 0, 0..at, true, None);
     let (rows, _) = transcript_from_frames_at(&log[at..], at, at..log.len(), false, Some(carried));
     let call = rows
-        .lines
+        .lines()
         .iter()
         .find(|l| matches!(l, TranscriptLine::Tool { name, .. } if name != "result"))
         .expect("the result renders with a row for its call");
@@ -1278,7 +1278,7 @@ fn test_bound_holds_across_windows() {
     let (_, carried) = transcript_from_frames_at(&log, 0, 0..at, true, None);
     let (rows, _) = transcript_from_frames_at(&log[at..], at, at..log.len(), false, Some(carried));
     let call = rows
-        .lines
+        .lines()
         .iter()
         .find(|l| matches!(l, TranscriptLine::Tool { name, .. } if name != "result"))
         .expect("the result renders with a row for its call");
@@ -1305,9 +1305,9 @@ fn test_bound_holds_after_replay() {
     let log: Vec<SequencedFrame> = frames.into_iter().map(SequencedFrame::from).collect();
     let at = log.len() - 1;
     let (rows, _) = transcript_from_frames_at(&log, 0, at..log.len(), false, None);
-    let rendered: Vec<String> = rows.lines.iter().map(|l| l.render()).collect();
+    let rendered: Vec<String> = rows.lines().iter().map(|l| l.render()).collect();
     let call = rows
-        .lines
+        .lines()
         .iter()
         .find(|l| matches!(l, TranscriptLine::Tool { name, .. } if name != "result"))
         .unwrap_or_else(|| panic!("the result renders with a row for its call: {rendered:?}"));
@@ -1341,7 +1341,7 @@ fn test_cut_window_past_queued() {
     let at = log.len() - 4;
     let (rows, _) = transcript_from_frames_at(&log, 0, at..log.len(), false, None);
     let row =
-        thought_row(&rows.lines).expect("the record closes the turn the window was cut inside");
+        thought_row(rows.lines()).expect("the record closes the turn the window was cut inside");
     assert_eq!(row.reasoning.as_deref(), Some("first second third"));
     assert_eq!(row.ms, Some(5_000));
     assert_eq!(row.turn_id, RowId::local((log.len() - 1) as u64));
@@ -1365,7 +1365,7 @@ fn test_record_stops_read_back() {
     let log: Vec<SequencedFrame> = frames.into_iter().map(SequencedFrame::from).collect();
     let (rows, _) = transcript_from_frames_at(&log, 0, 3..log.len(), false, None);
     let row =
-        thought_row(&rows.lines).expect("the record closes the turn the window was cut inside");
+        thought_row(rows.lines()).expect("the record closes the turn the window was cut inside");
     assert_eq!(row.reasoning.as_deref(), Some("this"));
     assert_eq!(row.ms, Some(2_000));
 }

@@ -12,8 +12,7 @@
 //! (load -> window), not a parallel path.
 
 use crate::records::TranscriptLine;
-use crate::row_id::RowId;
-use crate::transcript::NamedRows;
+use crate::transcript::rows::NamedRows;
 
 /// What a load returned: the materialized lines, how many log lines were
 /// skipped (corrupt), and whether the load truncated (log over the
@@ -34,13 +33,11 @@ pub struct SnapshotLoad {
 /// whole log. Line-aligned (never splits mid-UTF-8).
 #[derive(Debug, Default, Clone)]
 pub struct WindowLoad {
-    /// The rendered TranscriptLine rows in this window (forward order).
-    pub lines: Vec<TranscriptLine>,
-    /// The identity of each row in lines, in the same order: what an
-    /// older-row read matches the visible front against, so a join between
-    /// two windows lands on the row the entry named rather than on the first
-    /// row whose text agrees. Runs parallel to lines.
-    pub row_ids: Vec<RowId>,
+    /// The rows this window holds (forward order), each beside the identity
+    /// the log named it with: an older-row read matches the visible front
+    /// against those names, so a join between two windows lands on the row the
+    /// entry named rather than on the first row whose text agrees.
+    pub rows: NamedRows,
     /// The byte offset where the FIRST line in this window begins. Scrolling
     /// older loads a window ending here; the byte-% position indicator divides
     /// this by the frozen file size.
@@ -56,14 +53,10 @@ pub struct WindowLoad {
 }
 
 impl WindowLoad {
-    /// The window's rows with their identities, dropping the byte
-    /// coordinates. The shape the history-read walk carries between windows
-    /// and hands to the apply side.
-    pub fn into_named_rows(self) -> NamedRows {
-        NamedRows {
-            lines: self.lines,
-            ids: self.row_ids,
-        }
+    /// The window's rows alone, for the search view, which reads the rendered
+    /// text and names no row.
+    pub fn into_lines(self) -> Vec<TranscriptLine> {
+        self.rows.into_lines()
     }
 }
 

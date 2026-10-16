@@ -582,15 +582,14 @@ impl App {
             |l| matches!(l, TranscriptLine::Subagent { child_sid: c, .. } if c == &child_sid),
         );
         if let Some(idx) = idx {
-            let mut line = self.sessions.current.transcript.lines_mut().remove(idx);
-            if let TranscriptLine::Subagent {
-                folded_transcript, ..
-            } = &mut line
-            {
-                *folded_transcript = folded.clone();
-            }
-            let lines = self.sessions.current.transcript.lines_mut();
-            lines.insert(idx, line);
+            self.sessions.current.transcript.edit_line(idx, |line| {
+                if let TranscriptLine::Subagent {
+                    folded_transcript, ..
+                } = line
+                {
+                    *folded_transcript = folded.clone();
+                }
+            });
             // The block holds the frame-derived copy the next rebuild
             // migrates from, so the fetched rows must reach it too, or a
             // rebuild that re-derives this block reads an empty old copy.

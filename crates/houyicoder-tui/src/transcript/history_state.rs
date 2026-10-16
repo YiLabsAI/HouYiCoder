@@ -19,7 +19,7 @@ use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
 use crate::state::transcript::DiskFront;
-use crate::transcript::NamedRows;
+use crate::transcript::rows::NamedRows;
 use mpsc::TryRecvError;
 use std::fmt::Debug;
 use std::fmt::Formatter;

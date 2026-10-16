@@ -18,8 +18,8 @@ use crate::state::transcript::DiskFront;
 use crate::state::{App, Screen};
 use crate::test_harness::MockSnapshot;
 use crate::todo_view::TodoStatus;
-use crate::transcript::NamedRows;
 use crate::transcript::TranscriptFrame;
+use crate::transcript::rows::NamedRows;
 use crate::transcript::snapshot::{
     ReadError, ScanProgress, SnapshotLoad, TranscriptSnapshot, WindowLoad,
 };
@@ -169,10 +169,8 @@ fn drained_app() -> App {
 /// One window of the session log, as the read port returns it. The rows carry
 /// positional identities, so an overlap match against them falls back to text.
 fn log_window(lines: Vec<TranscriptLine>, start_offset: u64, next_offset: u64) -> WindowLoad {
-    let rows = NamedRows::from_lines(lines);
     WindowLoad {
-        lines: rows.lines,
-        row_ids: rows.ids,
+        rows: NamedRows::from_lines(lines),
         start_offset,
         next_offset,
         skipped: 0,

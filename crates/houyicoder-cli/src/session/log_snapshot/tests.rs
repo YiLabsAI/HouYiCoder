@@ -246,21 +246,22 @@ fn test_doubled_payload_names_agree() {
     let (live, _) = transcript_from_frames_at(&log, 0, 0..log.len(), true, None);
     let disk = SessionLogSnapshot::render_named(events.iter());
     let durable: Vec<RowId> = live
-        .ids
+        .ids()
         .iter()
         .filter(|id| matches!(id, RowId::Durable { .. }))
         .cloned()
         .collect();
     assert_eq!(
-        durable, disk.ids,
+        durable,
+        disk.ids(),
         "both reads name every durable row alike, past a doubled entry and a row the host raised"
     );
     assert!(
-        live.ids.iter().any(|id| matches!(id, RowId::Local(_))),
+        live.ids().iter().any(|id| matches!(id, RowId::Local(_))),
         "the row the host raised is named by where it happened"
     );
     let summary = live
-        .lines
+        .lines()
         .iter()
         .find_map(|line| match line {
             TranscriptLine::ThoughtFor { turn_id, .. } => Some(turn_id.clone()),
@@ -318,7 +319,7 @@ fn test_snapshot_live_names_agree() {
         }
     }
     let (live_rows, _) = transcript_from_frames_at(&log, 0, 0..log.len(), true, None);
-    let live_row = row_name(&live_rows.lines).expect("the live fold closes the same turn");
+    let live_row = row_name(live_rows.lines()).expect("the live fold closes the same turn");
     let expected = RowId::Durable {
         event: DurableEventId(closing.to_string()),
         slot: 1,
@@ -460,10 +461,10 @@ fn test_window_mid_turn_row() {
     assert_eq!(rows(&whole.lines).len(), 1, "the whole log derives the row");
     let mid = snap.window(anchor, 1 << 20);
     assert_eq!(
-        rows(&mid.lines),
+        rows(mid.rows.lines()),
         rows(&whole.lines),
         "a window starting mid-turn derives the same row: {:?}",
-        mid.lines
+        mid.rows
     );
     remove_dir_all(&root).ok();
 }
@@ -515,10 +516,10 @@ fn test_window_at_record_row() {
     let whole = row_facts(&snap.load(1 << 20).lines).expect("the whole log derives the row");
     let at_record = snap.window(anchor, 1 << 20);
     assert_eq!(
-        row_facts(&at_record.lines),
+        row_facts(at_record.rows.lines()),
         Some(whole.clone()),
         "a window opening at the record derives the same row: {:?}",
-        at_record.lines
+        at_record.rows
     );
     assert_eq!(whole.1, Some(7_000), "the record's duration closes the row");
     assert_eq!(
@@ -586,10 +587,10 @@ fn test_window_long_turn_row() {
     let whole = row_facts(&snap.load(1 << 20).lines).expect("the whole log derives the row");
     let at_record = snap.window(anchor, 1 << 20);
     assert_eq!(
-        row_facts(&at_record.lines),
+        row_facts(at_record.rows.lines()),
         Some(whole.clone()),
         "a window at the record derives the same row: {:?}",
-        at_record.lines
+        at_record.rows
     );
     assert_eq!(whole.1, Some(9_000), "the record's duration closes the row");
     let reasoning = whole.0.expect("the row carries the turn's reasoning");
@@ -687,7 +688,7 @@ fn test_turn_names_durable() {
         anchor > LOOKBACK_STEP_BYTES,
         "the second turn spans more than one lookback step: {anchor} bytes of log"
     );
-    let at_record = ids(&snap.window(anchor, 1 << 20).lines);
+    let at_record = ids(snap.window(anchor, 1 << 20).rows.lines());
     assert_eq!(
         at_record,
         vec![format!("e{closing}.1")],
@@ -752,14 +753,15 @@ fn test_lookback_finds_opener() {
     let whole = row_facts(&snap.load(1 << 21).lines).expect("the whole log derives the row");
     let at_record = snap.window(anchor, 1 << 21);
     assert_eq!(
-        row_facts(&at_record.lines),
+        row_facts(at_record.rows.lines()),
         Some(whole.clone()),
         "the lookback reaches the opener and the window derives the same row: {:?}",
-        at_record.lines
+        at_record.rows
     );
     let name = format!("e{closing}.1");
     let window_names: Vec<String> = at_record
-        .lines
+        .rows
+        .lines()
         .iter()
         .filter_map(|l| match l {
             TranscriptLine::ThoughtFor { turn_id, .. } => Some(turn_id.to_string()),
@@ -851,16 +853,18 @@ fn test_names_durable_without_record() {
         vec![format!("e{r1}.0"), format!("e{r2}.0")],
         "each record-less turn is named by the event holding its newest fact: {whole:?}"
     );
-    let at_second = ids(&snap
+    let at_second = ids(snap
         .window(snap.byte_at(2).expect("indexed"), 1 << 20)
-        .lines);
+        .rows
+        .lines());
     assert_eq!(
         at_second, whole,
         "a window starting at the first closing message reads like the whole log: {at_second:?}"
     );
-    let at_third = ids(&snap
+    let at_third = ids(snap
         .window(snap.byte_at(5).expect("indexed"), 1 << 20)
-        .lines);
+        .rows
+        .lines());
     assert_eq!(
         at_third,
         vec![format!("e{r2}.0")],
@@ -944,7 +948,7 @@ fn test_window_matches_load_render() {
     let load = snap.load(1 << 20);
     let win = snap.window(0, 1 << 20);
     let load_text: Vec<String> = load.lines.iter().map(|l| l.render()).collect();
-    let win_text: Vec<String> = win.lines.iter().map(|l| l.render()).collect();
+    let win_text: Vec<String> = win.rows.lines().iter().map(|l| l.render()).collect();
     assert_eq!(load_text, win_text, "load vs window render parity");
     assert!(!win_text.is_empty());
     remove_dir_all(&root).ok();
@@ -981,7 +985,8 @@ fn test_window_safe_on_multibyte() {
     let fwd = snap.window(0, 1 << 20);
     let rev = snap.tail_window(1 << 20).unwrap();
     let joined_fwd: String = fwd
-        .lines
+        .rows
+        .lines()
         .iter()
         .map(|l| l.render())
         .collect::<Vec<_>>()
@@ -991,7 +996,8 @@ fn test_window_safe_on_multibyte() {
         "forward window keeps the multibyte: {joined_fwd}"
     );
     let joined_rev: String = rev
-        .lines
+        .rows
+        .lines()
         .iter()
         .map(|l| l.render())
         .collect::<Vec<_>>()
@@ -1697,14 +1703,15 @@ fn test_large_log_budget() {
     // must hold rendered lines + the needle, not be empty. Skipped for a
     // foreign-format real log (mapping parses to nothing there).
     let rendered: String = tail
-        .lines
+        .rows
+        .lines()
         .iter()
         .map(|l| l.render())
         .collect::<Vec<_>>()
         .join("|");
     if !using_real {
         assert!(
-            !tail.lines.is_empty(),
+            !tail.rows.lines().is_empty(),
             "tail window materialized lines (not empty):\n{rendered}"
         );
         assert!(
@@ -1714,7 +1721,7 @@ fn test_large_log_budget() {
         );
     }
     // The resident window is bounded by WINDOW_MAX_BYTES regardless of log size.
-    let window_bytes: usize = tail.lines.iter().map(|l| l.render().len()).sum();
+    let window_bytes: usize = tail.rows.lines().iter().map(|l| l.render().len()).sum();
     assert!(
         window_bytes < 1_000_000,
         "resident window bounded ({window_bytes} bytes), not the whole {total}-byte log"
@@ -1798,11 +1805,11 @@ fn test_scroll_back_parity() {
     let mut anchor = snap.log_size();
     while anchor > 0 {
         let window = snap.window_before(anchor, 1024).unwrap();
-        if window.lines.is_empty() {
+        if window.rows.lines().is_empty() {
             break;
         }
         windows += 1;
-        let mut texts: Vec<String> = window.lines.iter().map(|l| l.render()).collect();
+        let mut texts: Vec<String> = window.rows.lines().iter().map(|l| l.render()).collect();
         texts.extend(walked);
         walked = texts;
         anchor = window.start_offset;

@@ -15,7 +15,8 @@ use crate::row_id::RowId;
 use crate::scroll::bound_scrollback;
 use crate::state::transcript::blocks::TranscriptBlocks;
 use crate::state::{App, CurrentTurnBoundary};
-use crate::transcript::{FrontendRow, NamedRows, SequencedFrame, TranscriptFrame};
+use crate::transcript::rows::NamedRows;
+use crate::transcript::{FrontendRow, SequencedFrame, TranscriptFrame};
 use std::slice::Iter;
 
 #[derive(Debug)]
@@ -33,7 +34,9 @@ pub struct Transcript {
     /// Estimated bytes of the resident frames, maintained on push and drain.
     resident_bytes: Cell<u64>,
     blocks: TranscriptBlocks,
-    lines: Vec<TranscriptLine>,
+    /// The rows the view renders, each beside the identity a scroll anchor, a
+    /// fold key, or a search jump names it by.
+    rows: NamedRows,
     /// Fold groups over the current lines, maintained incrementally by the
     /// rebuild so every render and count pass reads the cache instead of
     /// rescanning the transcript.
@@ -51,6 +54,11 @@ pub struct Transcript {
     /// so the rows no longer reach the view and are dropped.
     disk_rows_front: usize,
     current_turn: CurrentTurnBoundary,
+    /// How many rows the frontend raised without a frame behind them have
+    /// entered the list since the process started. Monotonic rather than reset
+    /// by a rebuild, so two raised rows of one list never share a name
+    /// whatever order the rebuilds and the raises arrived in.
+    unframed: usize,
     revision: Cell<u64>,
 }
 
@@ -91,12 +99,13 @@ impl Default for Transcript {
             resident_byte_budget: RESIDENT_BYTE_BUDGET,
             resident_bytes: Cell::new(0),
             blocks: TranscriptBlocks::default(),
-            lines: Vec::new(),
+            rows: NamedRows::default(),
             fold_groups: Vec::new(),
             disk: NamedRows::default(),
             disk_front: DiskFront::default(),
             disk_rows_front: 0,
             current_turn: CurrentTurnBoundary::default(),
+            unframed: 0,
             revision: Cell::new(0),
         }
     }
@@ -108,7 +117,7 @@ impl From<Vec<TranscriptLine>> for Transcript {
         // active; a rebuild re-derives this cache with the real run state.
         let fold_groups = compute_fold_groups(&lines, false);
         Self {
-            lines,
+            rows: NamedRows::from_lines(lines),
             fold_groups,
             ..Default::default()
         }
@@ -249,54 +258,104 @@ impl Transcript {
     /// fold groups are the transcript's other halves, so a reader asks for the
     /// conversation by name instead of dereferencing to it.
     pub fn lines(&self) -> &[TranscriptLine] {
-        &self.lines
+        self.rows.lines()
+    }
+
+    /// The identity of each resident line, at the position that line holds in
+    /// lines(). Read through the store rather than off the list the rebuild
+    /// assembled, so a reader resolving a name to a row reads the same rows
+    /// the view renders.
+    #[cfg(test)]
+    pub(crate) fn row_ids(&self) -> &[RowId] {
+        self.rows.ids()
     }
 
     /// How many lines the resident window holds. Not the frame count: frames
     /// carry the log's own boundaries, lines are what the view renders.
     pub fn len(&self) -> usize {
-        self.lines.len()
+        self.rows.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.lines.is_empty()
+        self.rows.is_empty()
     }
 
     pub fn iter(&self) -> Iter<'_, TranscriptLine> {
-        self.lines.iter()
+        self.rows.lines().iter()
     }
 
     pub fn first(&self) -> Option<&TranscriptLine> {
-        self.lines.first()
+        self.rows.lines().first()
     }
 
     pub fn last(&self) -> Option<&TranscriptLine> {
-        self.lines.last()
+        self.rows.lines().last()
     }
 
     pub fn get(&self, index: usize) -> Option<&TranscriptLine> {
-        self.lines.get(index)
+        self.rows.line(index)
     }
 
-    pub(crate) fn lines_mut(&mut self) -> &mut Vec<TranscriptLine> {
-        &mut self.lines
+    /// Replace the resident rows and their identities, as one write.
+    pub(crate) fn replace_rows(&mut self, rows: NamedRows) {
+        self.rows = rows;
     }
 
-    pub(crate) fn replace_lines(&mut self, lines: Vec<TranscriptLine>) {
-        self.lines = lines;
+    /// Change one resident line in place, at its own position and under its own
+    /// identity. An edit that a rebuild will not re-derive (a child's fetched
+    /// rows swapped into the row that stands for it) changes the line and
+    /// nothing else, so no other row shifts and no identity moves.
+    pub(crate) fn edit_line(&mut self, index: usize, edit: impl FnOnce(&mut TranscriptLine)) {
+        if let Some(line) = self.rows.line_mut(index) {
+            edit(line);
+        }
     }
 
+    /// Append a row the frontend raised with no frame behind it, named as it
+    /// enters. The name is local, taken past the resident frame positions, so
+    /// within one list no frame-derived row shares it: those name themselves
+    /// from their own position, below that point, and the counter keeps
+    /// successive raised rows apart. A rebuild assembles the list from the
+    /// frames and the blocks, which retires this row and its name; a frame
+    /// landing later at the position the name was taken from enters under the
+    /// same name.
     pub(crate) fn push(&mut self, line: TranscriptLine) {
-        self.lines.push(line);
+        let position = (self.abs_frame_count() + self.unframed) as u64;
+        self.unframed += 1;
+        self.rows.push(line, RowId::local(position));
     }
 
-    /// The rows read back from the session log, oldest first.
-    pub(crate) fn disk_rows(&self) -> &[TranscriptLine] {
-        &self.disk.lines
+    /// The rows the view shows and where the current turn starts among them:
+    /// the rows read back from the session log, then the in-window blocks in
+    /// order. A block whose frames sit outside the window is skipped, so the
+    /// rows the drain reclaims still render in the pass that drops them. The
+    /// rows read back lead the list because they are older than every block.
+    ///
+    /// Assembled here rather than at the caller, because which rows the list
+    /// leads with is this object's own rule.
+    pub(crate) fn visible_rows(
+        &self,
+        frame_start: usize,
+        frame_end: usize,
+        turn_start: usize,
+    ) -> (NamedRows, usize) {
+        let mut rows = NamedRows::default();
+        let mut prefix_line_count = self.disk_row_count();
+        rows.append(&self.disk);
+        for b in self.blocks.blocks() {
+            if b.frame_range.end <= frame_start || b.frame_range.start >= frame_end {
+                continue;
+            }
+            if b.frame_range.end <= turn_start {
+                prefix_line_count += b.rows.len();
+            }
+            rows.append(&b.rows);
+        }
+        (rows, prefix_line_count)
     }
 
     pub(crate) fn disk_row_count(&self) -> usize {
-        self.disk.lines.len()
+        self.disk.len()
     }
 
     /// The first n rows of the visible list, oldest first, with the identity
@@ -316,11 +375,11 @@ impl Transcript {
                 });
             }
         };
-        for (line, id) in self.disk.lines.iter().zip(&self.disk.ids) {
+        for (line, id) in self.disk.lines().iter().zip(self.disk.ids()) {
             add(line, id, &mut rows);
         }
         for block in self.blocks.blocks() {
-            for (line, id) in block.lines.iter().zip(&block.ids) {
+            for (line, id) in block.rows.lines().iter().zip(block.rows.ids()) {
                 add(line, id, &mut rows);
             }
         }
@@ -352,23 +411,20 @@ impl Transcript {
     /// row folds without it and a group of a run the frame window drained still
     /// reads as closed.
     pub(crate) fn prepend_disk_rows(&mut self, rows: NamedRows, anchor: u64, front: usize) {
-        if rows.lines.is_empty() {
+        if rows.is_empty() {
             return;
         }
-        let shift = rows.lines.len();
+        let shift = rows.len();
         for group in &mut self.fold_groups {
             group.start += shift;
             group.end += shift;
         }
-        let mut head = compute_fold_groups(&rows.lines, false);
+        let mut head = compute_fold_groups(rows.lines(), false);
         head.append(&mut self.fold_groups);
         self.fold_groups = head;
         self.current_turn.line_index += shift;
-        let mut merged = rows.lines.clone();
-        merged.append(&mut self.lines);
-        self.lines = merged;
-        self.disk.lines.splice(0..0, rows.lines);
-        self.disk.ids.splice(0..0, rows.ids);
+        self.rows.prepend(rows.clone());
+        self.disk.prepend(rows);
         self.disk_front = DiskFront::At(anchor);
         self.disk_rows_front = front;
     }
@@ -380,15 +436,15 @@ impl Transcript {
     /// list itself was cut, shifting every surviving group too far up.
     /// Returns how many rows were dropped.
     pub(crate) fn clear_disk_rows(&mut self) -> usize {
-        let dropped = self.disk.lines.len();
+        let dropped = self.disk.len();
         if dropped == 0 {
             return 0;
         }
         self.disk = NamedRows::default();
         self.disk_front = DiskFront::Unloaded;
         self.disk_rows_front = 0;
-        let cut = dropped.min(self.lines.len());
-        self.lines.drain(0..cut);
+        let cut = dropped.min(self.rows.len());
+        self.rows.drop_front(cut);
         self.current_turn.line_index = self.current_turn.line_index.saturating_sub(cut);
         self.shift_fold_groups_down(cut);
         dropped
@@ -419,7 +475,7 @@ impl Transcript {
     /// revision counter stays monotonic so a cached render pass never matches
     /// a pre-reset version.
     pub(crate) fn reset(&mut self) {
-        self.lines.clear();
+        self.rows.clear();
         self.frames.clear();
         self.frame_window_start = 0;
         self.resident_bytes.set(0);
@@ -454,7 +510,7 @@ impl Transcript {
             return 0;
         }
         let released = self.clear_disk_rows();
-        let dropped = bound_scrollback(&mut self.lines);
+        let dropped = bound_scrollback(&mut self.rows);
         self.current_turn.line_index = self.current_turn.line_index.saturating_sub(dropped);
         if dropped > 0 {
             self.shift_fold_groups_down(dropped);

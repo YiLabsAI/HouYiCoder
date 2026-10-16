@@ -12,6 +12,7 @@ use std::cell::Cell;
 
 use crate::input::InputField;
 use crate::records::TranscriptLine;
+use crate::transcript::rows::NamedRows;
 
 /// Cap on the in-memory viewable transcript. An unbounded buffer is the
 /// perf cliff: the per-frame display-row count walks every line, and search
@@ -41,10 +42,10 @@ pub const WINDOW_MAX_BYTES: u64 = 256 * 1024;
 /// view renders a frozen snapshot (active_transcript), not this live vec, so
 /// an open search needs no recompute on eviction: its matches index into the
 /// snapshot, which does not shift.
-pub(crate) fn bound_scrollback(transcript: &mut Vec<TranscriptLine>) -> usize {
+pub(crate) fn bound_scrollback(transcript: &mut NamedRows) -> usize {
     if transcript.len() > VIEWABLE_SCROLLBACK_CAP {
         let drop = transcript.len() - VIEWABLE_SCROLLBACK_CAP;
-        transcript.drain(0..drop);
+        transcript.drop_front(drop);
         drop
     } else {
         0

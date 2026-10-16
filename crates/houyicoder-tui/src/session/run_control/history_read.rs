@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::scroll::WINDOW_MAX_BYTES;
 use crate::state::history_read::{HistoryReadOutcome, HistoryReadResult};
-use crate::transcript::NamedRows;
+use crate::transcript::rows::NamedRows;
 use crate::transcript::snapshot::{ReadError, TranscriptSnapshot, WindowLoad};
 use crate::transcript::store::FrontRow;
 use std::sync::mpsc::Sender;
@@ -117,7 +117,7 @@ fn read_log_tail(
         // between it and the rows already read, so the walk stops instead. One
         // that does not begin below the anchor would leave the walk standing
         // still, so it stops too.
-        if window.lines.is_empty() || window.next_offset != anchor {
+        if window.rows.is_empty() || window.next_offset != anchor {
             return Ok(None);
         }
         if window.start_offset >= anchor {
@@ -126,15 +126,14 @@ fn read_log_tail(
         walked += anchor - window.start_offset;
         if past_overlap {
             let start = window.start_offset;
-            return Ok(Some((window.into_named_rows(), start)));
+            return Ok(Some((window.rows, start)));
         }
         let rows = overlap_rows(&window);
         if let Some(cut) = overlap_cut(&rows, &newer, front) {
             if cut > 0 {
                 let start = window.start_offset;
-                let mut kept = window.into_named_rows();
-                kept.lines.truncate(cut);
-                kept.ids.truncate(cut);
+                let mut kept = window.rows;
+                kept.truncate(cut);
                 return Ok(Some((kept, start)));
             }
             past_overlap = true;
@@ -155,26 +154,22 @@ fn read_log_before(
     anchor: u64,
 ) -> Result<Option<(NamedRows, u64)>, ReadError> {
     let window = source.window_before(anchor, LOG_WINDOW_BYTES)?;
-    if window.lines.is_empty() || window.next_offset != anchor || window.start_offset >= anchor {
+    if window.rows.is_empty() || window.next_offset != anchor || window.start_offset >= anchor {
         return Ok(None);
     }
     let start = window.start_offset;
-    Ok(Some((window.into_named_rows(), start)))
+    Ok(Some((window.rows, start)))
 }
 
 /// The rows of one read window as the overlap match sees them: the identity
 /// the log named each row with, and the rendered text the match falls back to
 /// when either side carries no durable identity.
 fn overlap_rows(window: &WindowLoad) -> Vec<FrontRow> {
-    debug_assert_eq!(
-        window.row_ids.len(),
-        window.lines.len(),
-        "window row identities run parallel to its rows"
-    );
     window
-        .lines
+        .rows
+        .lines()
         .iter()
-        .zip(&window.row_ids)
+        .zip(window.rows.ids())
         .map(|(line, id)| FrontRow {
             id: id.clone(),
             text: line.render(),

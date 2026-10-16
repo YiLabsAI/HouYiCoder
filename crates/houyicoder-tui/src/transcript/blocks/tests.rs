@@ -1,6 +1,7 @@
 use super::*;
 use crate::records::TranscriptLine;
-use crate::transcript::{NamedRows, TurnCheckpoint};
+use crate::transcript::TurnCheckpoint;
+use crate::transcript::rows::NamedRows;
 
 fn subagent(child_sid: &str, rows: Vec<TranscriptLine>) -> TranscriptLine {
     TranscriptLine::Subagent {
@@ -14,12 +15,10 @@ fn subagent(child_sid: &str, rows: Vec<TranscriptLine>) -> TranscriptLine {
 }
 
 fn block(id: u64, lines: Vec<TranscriptLine>) -> Block {
-    let rows = NamedRows::from_lines(lines);
     Block {
         id: BlockId(BlockAnchor::Local(id)),
         frame_range: 0..1,
-        lines: rows.lines,
-        ids: rows.ids,
+        rows: NamedRows::from_lines(lines),
         revision: 0,
         checkpoint: TurnCheckpoint::default(),
     }
@@ -64,7 +63,7 @@ fn test_migrate_rows_by_sid() {
     let old = block(1, vec![subagent("sid-a", fetched.clone())]);
     let mut new = block(1, vec![subagent("sid-a", vec![])]);
     migrate_fetched_rows(&old, &mut new);
-    let carried = match new.lines.first() {
+    let carried = match new.rows.lines().first() {
         Some(TranscriptLine::Subagent {
             folded_transcript, ..
         }) => folded_transcript.clone(),
@@ -84,7 +83,7 @@ fn test_migrate_skips_unknown() {
     let old = block(1, vec![subagent("sid-a", vec![])]);
     let mut new = block(1, vec![subagent("sid-b", vec![])]);
     migrate_fetched_rows(&old, &mut new);
-    let carried = match new.lines.first() {
+    let carried = match new.rows.lines().first() {
         Some(TranscriptLine::Subagent {
             folded_transcript, ..
         }) => folded_transcript.clone(),
@@ -111,7 +110,8 @@ fn test_replace_block_in_place() {
         }],
     });
     match bs.blocks().first() {
-        Some(Block { lines, .. }) => {
+        Some(Block { rows, .. }) => {
+            let lines = rows.lines();
             assert_eq!(lines.len(), 1);
             assert!(matches!(lines.first(), Some(TranscriptLine::Agent(t)) if t == "new"));
         }

@@ -13,8 +13,8 @@ use crate::state::Screen;
 use crate::state::history_read::{HistoryReadOutcome, HistoryReadResult};
 use crate::test_harness::MockSnapshot;
 use crate::test_harness::render_text;
-use crate::transcript::NamedRows;
 use crate::transcript::TranscriptFrame;
+use crate::transcript::rows::NamedRows;
 use houyicoder_protocol::frontend::run::ContentBlock;
 use houyicoder_protocol::frontend::session_update::{ContentChunk, SessionUpdate};
 

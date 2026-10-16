@@ -25,7 +25,7 @@ use crate::composition::shared_runtime;
 use crate::records::TranscriptLine;
 use crate::session::SessionConnection;
 use crate::state::{App, Screen};
-use crate::transcript::NamedRows;
+use crate::transcript::rows::NamedRows;
 use crate::transcript::snapshot::{
     ReadError, ScanProgress, SnapshotLoad, TranscriptSnapshot, WindowLoad,
 };
@@ -136,10 +136,8 @@ impl TranscriptSnapshot for MockSnapshot {
         if let Some(last) = self.windows.last() {
             return Ok(last.clone());
         }
-        let rows = NamedRows::from_lines(self.window_lines.clone());
         Ok(WindowLoad {
-            lines: rows.lines,
-            row_ids: rows.ids,
+            rows: NamedRows::from_lines(self.window_lines.clone()),
             start_offset: self.window_start,
             next_offset: self.log_bytes,
             skipped: 0,

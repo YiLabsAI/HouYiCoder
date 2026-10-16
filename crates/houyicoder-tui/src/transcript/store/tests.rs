@@ -2,6 +2,7 @@ use super::*;
 use crate::records::ToolOutcome;
 use crate::scroll::VIEWABLE_SCROLLBACK_CAP;
 use crate::transcript::frame_payload::chunk_text;
+use houyicoder_protocol::envelope::DurableEventId;
 use houyicoder_protocol::frontend::run::ContentBlock;
 use houyicoder_protocol::frontend::session_update::{ContentChunk, SessionUpdate};
 use std::iter::repeat_with;
@@ -251,5 +252,124 @@ fn test_frames_mut_recounts_bytes() {
     assert!(
         t.resident_bytes() > before + 4000,
         "the swapped frame's larger payload counts"
+    );
+}
+
+fn disk_row(name: &str, text: &str) -> NamedRows {
+    NamedRows::from_parts(
+        vec![TranscriptLine::User(text.into())],
+        vec![RowId::Durable {
+            event: DurableEventId(name.into()),
+            slot: 0,
+        }],
+    )
+}
+
+/// A row read back from the session log arrives with its own name and keeps
+/// it at the front of the list, and the rows behind it keep theirs: a scroll
+/// anchor held on a resident row must still find that row after the read
+/// lands, wherever the list now stands.
+#[test]
+fn test_prepend_keeps_row_identity() {
+    let mut t = Transcript::from(vec![
+        TranscriptLine::User("go".into()),
+        TranscriptLine::Agent("answer".into()),
+    ]);
+    t.prepend_disk_rows(disk_row("disk", "older"), 4096, 0);
+
+    assert_eq!(t.row_ids().len(), t.len(), "every row keeps its name");
+    assert!(
+        matches!(t.lines()[0], TranscriptLine::User(ref s) if s == "older"),
+        "the loaded row leads"
+    );
+    assert_eq!(
+        t.row_ids()[0],
+        RowId::Durable {
+            event: DurableEventId("disk".into()),
+            slot: 0
+        },
+        "the leading row carries the name the log gave it"
+    );
+    assert_eq!(
+        t.row_ids()[2],
+        RowId::local(1),
+        "the last row keeps its name"
+    );
+
+    t.clear_disk_rows();
+    assert_eq!(t.row_ids().len(), t.len());
+    assert_eq!(
+        t.row_ids(),
+        [RowId::local(0), RowId::local(1)],
+        "releasing the loaded rows takes their names with them"
+    );
+}
+
+/// The cap cuts the front of the list, so the names it takes belong to the
+/// rows it drops: a name left behind would point one row up for every row the
+/// cut removed.
+#[test]
+fn test_trim_keeps_row_identity() {
+    let lines: Vec<TranscriptLine> = (0..VIEWABLE_SCROLLBACK_CAP + 3)
+        .map(|i| TranscriptLine::Agent(format!("row {i}")))
+        .collect();
+    let mut t = Transcript::from(lines);
+    let dropped = t.trim_live(true);
+    assert_eq!(dropped, 3);
+
+    assert_eq!(t.row_ids().len(), t.len());
+    assert_eq!(t.len(), VIEWABLE_SCROLLBACK_CAP);
+    assert_eq!(
+        t.row_ids()[0],
+        RowId::local(dropped as u64),
+        "the new front row carries the name it was dropped onto"
+    );
+    assert!(
+        matches!(t.lines()[0], TranscriptLine::Agent(ref s) if s == "row 3"),
+        "the surviving row is the one that name belongs to"
+    );
+}
+
+/// Swapping a line's payload in place is the one write a rebuild does not
+/// re-derive, so it moves no name: the row that stands for a child keeps the
+/// identity the fold state and any anchor hold for it.
+#[test]
+fn test_edit_keeps_row_identity() {
+    let mut t = Transcript::from(vec![
+        TranscriptLine::User("go".into()),
+        TranscriptLine::Agent("fetched".into()),
+    ]);
+    let names = t.row_ids().to_vec();
+    t.edit_line(1, |line| *line = TranscriptLine::Agent("swapped".into()));
+
+    assert!(
+        matches!(t.lines()[1], TranscriptLine::Agent(ref s) if s == "swapped"),
+        "the edit lands on the row it names"
+    );
+    assert_eq!(t.row_ids(), names, "an edit moves no name");
+}
+
+/// A row the frontend raises with no frame behind it still enters the list
+/// with one name of its own, and a rebuild that assembles the list from the
+/// frames and blocks drops it rather than leaving it behind without one.
+#[test]
+fn test_unframed_rows_named_separately() {
+    let mut t = Transcript::default();
+    t.push(TranscriptLine::System("first".into()));
+    t.push(TranscriptLine::System("second".into()));
+
+    assert_eq!(t.len(), 2);
+    assert_eq!(t.row_ids().len(), 2);
+    assert_ne!(
+        t.row_ids()[0],
+        t.row_ids()[1],
+        "two raised rows hold two names"
+    );
+
+    let (rows, _) = t.visible_rows(0, 0, 0);
+    t.replace_rows(rows);
+    assert!(
+        t.is_empty(),
+        "the rebuild drops raised rows along with their names"
     );
 }

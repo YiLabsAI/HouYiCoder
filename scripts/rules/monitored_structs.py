@@ -189,8 +189,13 @@ ACTIVE_OWNERS = {
         "fields": 9,
     },
     "crates/houyicoder-tui/src/transcript/store.rs:Transcript": {
-        # The transcript facts: frame log, budget counters, derived lines and fold cache, disk rows, turn boundary, and revision.
-        "fields": 12,
+        # The transcript facts: frame log, budget counters, derived lines and
+        # fold cache, disk rows, turn boundary, the count of rows the frontend
+        # raised with no frame behind them, and revision. The raise count is
+        # here because it names those rows: their names must stay past every
+        # frame position for the life of the list, and a name reused across
+        # rebuilds would answer an anchor with a row it does not mean.
+        "fields": 13,
     },
     "crates/houyicoder-tui/src/transcript/history_state.rs:HistoryReads": {
         # The pending-read record, the workers holding a slot, the generation that invalidates them, and the retry deadline a failed read sets.

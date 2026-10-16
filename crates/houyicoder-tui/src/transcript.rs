@@ -20,6 +20,7 @@ pub mod records;
 pub mod redaction;
 pub mod result_body;
 pub mod row_id;
+pub mod rows;
 pub(crate) mod scan_chunk;
 pub(crate) mod scan_state;
 pub(crate) mod scroll;
@@ -37,6 +38,7 @@ use crate::brief::tool_call_brief;
 use crate::records::{ContextView, ToolOutcome, TranscriptLine};
 use crate::row_id::RowId;
 use crate::transcript::frame_payload::chunk_text;
+use crate::transcript::rows::NamedRows;
 
 mod call_rows;
 pub(crate) mod frame_payload;
@@ -197,27 +199,6 @@ impl AsRef<TranscriptFrame> for TranscriptFrame {
     }
 }
 
-/// The rows a frame-log derivation produced, each with the identity the read
-/// paths match it by. The two vectors run parallel: a row and its identity
-/// are produced together by one walk and consumed together by whichever read
-/// carries them.
-#[derive(Debug, Default, Clone)]
-pub struct NamedRows {
-    pub lines: Vec<TranscriptLine>,
-    pub ids: Vec<RowId>,
-}
-
-#[cfg(test)]
-impl NamedRows {
-    /// Rows named by position: the identity-free fallback a test double uses.
-    /// Every name is local, so the overlap match falls back to text — the
-    /// behavior the text-only match already had.
-    pub fn from_lines(lines: Vec<TranscriptLine>) -> Self {
-        let ids = (0..lines.len() as u64).map(RowId::local).collect();
-        Self { lines, ids }
-    }
-}
-
 /// Rebuild the transcript from the ordered frame log the driver accumulated.
 /// Each SessionUpdate maps to one TranscriptLine; the acpx audit kinds the
 /// transcript surfaces (compaction, summary) become System lines; the
@@ -258,7 +239,7 @@ pub fn transcript_from_frames(
         None,
     )
     .0
-    .lines
+    .into_lines()
 }
 
 /// Derive the rows of a window when the log's first frame sits at an absolute
@@ -371,18 +352,7 @@ fn walk_window<'a, F: AsRef<TranscriptFrame>>(
     // the read that continues the log must summarize.
     let exit = p.fold.checkpoint();
     p.close_trailing_turn();
-    debug_assert_eq!(
-        p.out.len(),
-        p.ids.len(),
-        "every derived row carries its identity"
-    );
-    (
-        NamedRows {
-            lines: p.out,
-            ids: p.ids,
-        },
-        exit,
-    )
+    (NamedRows::from_parts(p.out, p.ids), exit)
 }
 
 /// A result the walk set aside rather than place where it arrived: the

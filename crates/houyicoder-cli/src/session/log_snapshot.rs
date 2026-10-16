@@ -30,7 +30,7 @@ use houyicoder_protocol::envelope::DurableEventId;
 use houyicoder_service::protocol_adapter::{map_acpx_notification, map_session_update};
 use houyicoder_tui::records::TranscriptLine;
 use houyicoder_tui::row_id::RowId;
-use houyicoder_tui::transcript::NamedRows;
+use houyicoder_tui::transcript::rows::NamedRows;
 use houyicoder_tui::transcript::snapshot::{
     ReadError, ScanProgress, SnapshotLoad, TranscriptSnapshot, WindowLoad,
 };
@@ -110,7 +110,7 @@ impl SessionLogSnapshot {
     fn render_events<'a>(
         events: impl IntoIterator<Item = &'a SessionLogEntry>,
     ) -> Vec<TranscriptLine> {
-        Self::render_named(events).lines
+        Self::render_named(events).into_lines()
     }
 
     /// Render a run of durable events to rows with their identities, the
@@ -182,8 +182,7 @@ impl TranscriptSnapshot for SessionLogSnapshot {
         let window = self.history.window(anchor, max_bytes);
         let (rows, skipped) = self.render_window(&window);
         WindowLoad {
-            lines: rows.lines,
-            row_ids: rows.ids,
+            rows,
             start_offset: window.lines_start_offset,
             next_offset: window.next_offset,
             skipped,
@@ -196,8 +195,7 @@ impl TranscriptSnapshot for SessionLogSnapshot {
             Ok(window) => {
                 let (rows, skipped) = self.render_window(&window);
                 Ok(WindowLoad {
-                    lines: rows.lines,
-                    row_ids: rows.ids,
+                    rows,
                     start_offset: window.lines_start_offset,
                     next_offset: window.next_offset,
                     skipped,
@@ -218,8 +216,7 @@ impl TranscriptSnapshot for SessionLogSnapshot {
             Ok(window) => {
                 let (rows, skipped) = self.render_window(&window);
                 Ok(WindowLoad {
-                    lines: rows.lines,
-                    row_ids: rows.ids,
+                    rows,
                     start_offset: window.lines_start_offset,
                     next_offset: window.next_offset,
                     skipped,

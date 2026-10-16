@@ -1,7 +1,7 @@
 use super::*;
 use crate::fold::compute_fold_groups;
 use crate::scroll::VIEWABLE_SCROLLBACK_CAP;
-use crate::transcript::NamedRows;
+use crate::transcript::rows::NamedRows;
 
 /// The rows a scroll back to the resident front reads from the session log:
 /// the frames there were drained, so the log is the only source for them. The
@@ -287,8 +287,7 @@ fn test_walk_stops_without_window() {
         window_lines: Vec::new(),
         window_start: 0,
         windows: vec![WindowLoad {
-            lines: older_rows.lines,
-            row_ids: older_rows.ids,
+            rows: older_rows,
             start_offset: 100,
             next_offset: 5005,
             skipped: 0,

@@ -82,12 +82,15 @@ impl App {
         });
         match loaded {
             Some(Loaded::Over { log_bytes, w }) => {
+                let skipped = w.skipped;
+                let start_offset = w.start_offset;
+                let next_offset = w.next_offset;
                 self.ui.transcript_view.enter_search_over_window(
-                    w.lines,
+                    w.into_lines(),
                     log_bytes,
-                    w.skipped,
-                    w.start_offset,
-                    w.next_offset,
+                    skipped,
+                    start_offset,
+                    next_offset,
                     query,
                 );
             }
@@ -240,15 +243,17 @@ impl App {
                     return;
                 }
             };
-            if w.lines.is_empty() || w.start_offset == anchor {
+            if w.rows.is_empty() || w.start_offset == anchor {
                 return; // no progress (corrupt/empty) -- stop.
             }
             let new_anchor = w.start_offset;
+            let next_offset = w.next_offset;
+            let skipped = w.skipped;
             self.ui.transcript_view.replace_search_window(
-                w.lines,
+                w.into_lines(),
                 new_anchor,
-                w.next_offset,
-                w.skipped,
+                next_offset,
+                skipped,
             );
             if self.ui.transcript_view.search_matches_len() > 0 {
                 // Newest match in this older window = last index.
@@ -289,15 +294,17 @@ impl App {
                 return; // EOF: no newer window.
             }
             let w = snap.window(cursor, WINDOW_MAX_BYTES);
-            if w.lines.is_empty() || w.next_offset == cursor {
+            if w.rows.is_empty() || w.next_offset == cursor {
                 return; // no progress -- stop.
             }
             let new_end = w.next_offset;
+            let start_offset = w.start_offset;
+            let skipped = w.skipped;
             self.ui.transcript_view.replace_search_window(
-                w.lines,
-                w.start_offset,
+                w.into_lines(),
+                start_offset,
                 new_end,
-                w.skipped,
+                skipped,
             );
             if self.ui.transcript_view.search_matches_len() > 0 {
                 // Newest match in a forward (older->newer) window = last index,

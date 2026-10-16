@@ -8,6 +8,7 @@ use std::ops::Range;
 use super::turn_fold::TurnCheckpoint;
 use crate::records::TranscriptLine;
 use crate::row_id::{LocalEntryId, RowId};
+use crate::transcript::rows::NamedRows;
 
 /// The stable identity of a block. A block that covers frames anchors on its
 /// opening frame: a frame from a durable log entry takes that entry's row
@@ -47,10 +48,10 @@ pub(crate) struct BlockId(pub BlockAnchor);
 pub(crate) struct Block {
     pub id: BlockId,
     pub frame_range: Range<usize>,
-    pub lines: Vec<TranscriptLine>,
-    /// Runs parallel to lines: the identity each derived row carries, which
-    /// an older-row read matches its overlap against.
-    pub ids: Vec<RowId>,
+    /// The rows the fold derived for this slice, each kept beside the identity
+    /// of the frame that produced it: an older-row read matches its overlap
+    /// against those identities, and the visible list takes both together.
+    pub rows: NamedRows,
     pub revision: u64,
     pub checkpoint: TurnCheckpoint,
 }
@@ -102,7 +103,7 @@ impl TranscriptBlocks {
     /// block, not just the flattened view, or the next rebuild loses them.
     pub(crate) fn set_subagent_folded(&mut self, child_sid: &str, folded: &[TranscriptLine]) {
         for b in self.blocks.iter_mut() {
-            for l in b.lines.iter_mut() {
+            for l in b.rows.lines_mut().iter_mut() {
                 if let TranscriptLine::Subagent {
                     child_sid: c,
                     folded_transcript,
@@ -166,7 +167,7 @@ impl TranscriptBlocks {
 /// (no fetch yet this rebuild) takes the rows the old block already fetched,
 /// so the view does not blank out between rebuilds of the same delegation.
 fn migrate_fetched_rows(old: &Block, new: &mut Block) {
-    for new_line in new.lines.iter_mut() {
+    for new_line in new.rows.lines_mut().iter_mut() {
         let TranscriptLine::Subagent {
             child_sid,
             folded_transcript,
@@ -178,7 +179,7 @@ fn migrate_fetched_rows(old: &Block, new: &mut Block) {
         if !folded_transcript.is_empty() {
             continue;
         }
-        if let Some(old_rows) = old.lines.iter().find_map(|l| match l {
+        if let Some(old_rows) = old.rows.lines().iter().find_map(|l| match l {
             TranscriptLine::Subagent {
                 child_sid: os,
                 folded_transcript: oft,

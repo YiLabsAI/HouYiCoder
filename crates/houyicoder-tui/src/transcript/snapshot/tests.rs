@@ -20,7 +20,7 @@ use crate::session::SessionConnection;
 use crate::state::App;
 use crate::state::scan_chunk::PendingScanChunk;
 use crate::test_harness::{MockSnapshot, render_text, working_app};
-use crate::transcript::NamedRows;
+use crate::transcript::rows::NamedRows;
 use crate::transcript::snapshot::{
     NoTranscriptSnapshot, ScanProgress, TranscriptSnapshot, WindowLoad,
 };
@@ -37,10 +37,8 @@ fn one_line_window(
     next_offset: u64,
     bytes_total: u64,
 ) -> WindowLoad {
-    let rows = NamedRows::from_lines(vec![line]);
     WindowLoad {
-        lines: rows.lines,
-        row_ids: rows.ids,
+        rows: NamedRows::from_lines(vec![line]),
         start_offset,
         next_offset,
         skipped: 0,
@@ -363,13 +361,13 @@ fn test_no_snapshot_answers_empty() {
     let source = NoTranscriptSnapshot;
     assert_eq!(source.log_size(), 0);
     assert!(source.load(1024).lines.is_empty(), "load is empty");
-    assert!(source.window(0, 1024).lines.is_empty(), "window is empty");
+    assert!(source.window(0, 1024).rows.is_empty(), "window is empty");
     assert!(
-        source.tail_window(1024).unwrap().lines.is_empty(),
+        source.tail_window(1024).unwrap().rows.is_empty(),
         "tail_window is empty"
     );
     assert!(
-        source.window_before(512, 1024).unwrap().lines.is_empty(),
+        source.window_before(512, 1024).unwrap().rows.is_empty(),
         "window_before is empty"
     );
     let progress = source.scan_chunk();

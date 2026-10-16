@@ -23,11 +23,12 @@ fn text_front(text: &str) -> FrontRow {
 /// user row text per entry, in order.
 fn durable_window(rows: &[(&str, &str)], start_offset: u64, next_offset: u64) -> WindowLoad {
     WindowLoad {
-        lines: rows
-            .iter()
-            .map(|(_, text)| TranscriptLine::User((*text).into()))
-            .collect(),
-        row_ids: rows.iter().map(|(event, _)| RowId::from(*event)).collect(),
+        rows: NamedRows::from_parts(
+            rows.iter()
+                .map(|(_, text)| TranscriptLine::User((*text).into()))
+                .collect(),
+            rows.iter().map(|(event, _)| RowId::from(*event)).collect(),
+        ),
         start_offset,
         next_offset,
         skipped: 0,
@@ -48,7 +49,7 @@ fn durable_front(rows: &[(&str, &str)]) -> Vec<FrontRow> {
 
 /// The rendered texts of a read's rows, oldest first.
 fn rendered(rows: &NamedRows) -> Vec<String> {
-    rows.lines.iter().map(|line| line.render()).collect()
+    rows.lines().iter().map(|line| line.render()).collect()
 }
 
 /// A source whose older window holds real rows but does not end where the
@@ -91,8 +92,7 @@ fn window_ending_at(next_offset: u64) -> FixedWindow {
     FixedWindow {
         empty: NoTranscriptSnapshot,
         window: WindowLoad {
-            lines: rows.lines,
-            row_ids: rows.ids,
+            rows,
             start_offset: 100,
             next_offset,
             skipped: 0,
@@ -108,9 +108,9 @@ fn test_fixed_window_older_only() {
     let source = window_ending_at(5000);
     assert_eq!(source.log_size(), 0, "no log size of its own");
     assert!(source.load(1024).lines.is_empty(), "no whole-log load");
-    assert!(source.window(0, 1024).lines.is_empty(), "no forward window");
+    assert!(source.window(0, 1024).rows.is_empty(), "no forward window");
     assert!(
-        source.tail_window(1024).unwrap().lines.is_empty(),
+        source.tail_window(1024).unwrap().rows.is_empty(),
         "no tail window"
     );
     assert!(!source.scan_chunk().done, "no index");
@@ -207,8 +207,7 @@ impl TranscriptSnapshot for SteppingWindow {
         let start = from_byte.saturating_sub(self.step);
         let rows = NamedRows::from_lines(vec![TranscriptLine::User(format!("row at {start}"))]);
         Ok(WindowLoad {
-            lines: rows.lines,
-            row_ids: rows.ids,
+            rows,
             start_offset: start,
             next_offset: from_byte,
             skipped: 0,
@@ -241,9 +240,9 @@ fn test_stepping_window_older_only() {
     let source = five_window_log(reads, None);
     assert_eq!(source.log_size(), 5000, "the size the walk starts from");
     assert!(source.load(1024).lines.is_empty(), "no whole-log load");
-    assert!(source.window(0, 1024).lines.is_empty(), "no forward window");
+    assert!(source.window(0, 1024).rows.is_empty(), "no forward window");
     assert!(
-        source.tail_window(1024).unwrap().lines.is_empty(),
+        source.tail_window(1024).unwrap().rows.is_empty(),
         "no tail window"
     );
     assert!(!source.scan_chunk().done, "no index");
@@ -369,17 +368,14 @@ fn test_tail_walks_past_overlap() {
         TranscriptLine::User("C".into()),
     ]);
     let overlap_window = WindowLoad {
-        lines: overlap_rows.lines,
-        row_ids: overlap_rows.ids,
+        rows: overlap_rows,
         start_offset: 2000,
         next_offset: 3000,
         skipped: 0,
         bytes_total: 3000,
     };
-    let older_rows = NamedRows::from_lines(vec![TranscriptLine::User("D".into())]);
     let older = WindowLoad {
-        lines: older_rows.lines,
-        row_ids: older_rows.ids,
+        rows: NamedRows::from_lines(vec![TranscriptLine::User("D".into())]),
         start_offset: 1000,
         next_offset: 2000,
         skipped: 0,
@@ -401,11 +397,7 @@ fn test_tail_walks_past_overlap() {
     match job.run(&stop) {
         Some(HistoryReadOutcome::Rows(result)) => {
             assert_eq!(result.anchor, 1000, "the older window's start anchors it");
-            assert_eq!(
-                result.rows.lines.len(),
-                1,
-                "the whole older window is the answer"
-            );
+            assert_eq!(result.rows.len(), 1, "the whole older window is the answer");
         }
         other => panic!("the walk returned the window below the overlap: {other:?}"),
     }
@@ -448,7 +440,7 @@ fn test_overlap_picks_newest_repeat() {
                 "the rows older than the newest occurrence are the answer"
             );
             assert_eq!(
-                result.rows.ids,
+                result.rows.ids(),
                 vec![
                     RowId::from("e0"),
                     RowId::from("e1"),

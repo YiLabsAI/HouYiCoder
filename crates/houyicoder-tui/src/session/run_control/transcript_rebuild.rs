@@ -14,7 +14,6 @@ use crate::composition::shared_runtime;
 use crate::fold::last_turn_boundary;
 use crate::fold::{compute_fold_groups, fold_groups_in};
 use crate::notifications::{NotifKind, Notification};
-use crate::records::TranscriptLine;
 use crate::row_id::RowId;
 use crate::scroll::VIEWABLE_SCROLLBACK_CAP;
 use crate::state::App;
@@ -84,25 +83,15 @@ impl App {
         }
         self.sessions.current.transcript.blocks_mut().apply(changes);
 
-        // Flatten the in-window blocks to the viewable line list. A block whose
-        // frames sit before the window start (the frame cap, or a drain in an
-        // earlier pass) is skipped here; the drain below runs after this, so the
-        // rows it reclaims still render in the pass that drops them. The rows
-        // read back from the session log lead the list: they are older than
-        // every block, so the current turn starts past them.
-        let mut lines: Vec<TranscriptLine> = Vec::new();
-        let mut prefix_line_count = self.sessions.current.transcript.disk_row_count();
-        lines.extend_from_slice(self.sessions.current.transcript.disk_rows());
-        for b in self.sessions.current.transcript.blocks().blocks() {
-            if b.frame_range.end <= frame_start || b.frame_range.start >= frame_end {
-                continue;
-            }
-            if b.frame_range.end <= turn_start {
-                prefix_line_count += b.lines.len();
-            }
-            lines.extend_from_slice(&b.lines);
-        }
-        self.sessions.current.transcript.replace_lines(lines);
+        // The rows the view shows, each beside its identity, and where the
+        // current turn starts among them. The drain below runs after this, so
+        // the rows it reclaims still render in the pass that drops them.
+        let (rows, prefix_line_count) =
+            self.sessions
+                .current
+                .transcript
+                .visible_rows(frame_start, frame_end, turn_start);
+        self.sessions.current.transcript.replace_rows(rows);
         let transcript = &mut self.sessions.current.transcript;
         transcript.current_turn_mut().line_index = prefix_line_count;
         self.update_fold_cache(prefix_line_count, prefix_reused);
@@ -239,8 +228,7 @@ impl App {
             let block = Block {
                 id,
                 frame_range: range.clone(),
-                lines: rows.lines,
-                ids: rows.ids,
+                rows,
                 revision,
                 checkpoint,
             };
@@ -433,7 +421,6 @@ impl App {
             None,
         )
         .0
-        .lines
         .len();
         self.sessions.current.loaded_from_frame.set(batch_start);
         if prepended == 0 {
@@ -610,7 +597,7 @@ impl App {
                 self.sessions.current.history_reads.record_read_success();
             }
             HistoryReadOutcome::Rows(result) => {
-                let count = result.rows.lines.len();
+                let count = result.rows.len();
                 let transcript = &mut self.sessions.current.transcript;
                 transcript.prepend_disk_rows(result.rows, result.anchor, read.dispatch_front);
                 // Hold the viewport still: the rows landed above it.
