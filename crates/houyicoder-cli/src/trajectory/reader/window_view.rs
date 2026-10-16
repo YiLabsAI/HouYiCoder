@@ -158,6 +158,7 @@ impl SessionLogTrajectory {
                 input: summary.usage.subagent.input_tokens,
                 output: summary.usage.subagent.output_tokens,
                 cache_read: summary.usage.subagent.cache_read_input_tokens,
+                provenance: summary.usage.subagent.provenance,
             }),
             state: load,
             skipped_records: 0,

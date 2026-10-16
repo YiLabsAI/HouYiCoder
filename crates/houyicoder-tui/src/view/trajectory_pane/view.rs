@@ -4,6 +4,7 @@
 //! read it without either depending on the other.
 
 use crate::state::TrajectoryTurnKey;
+use houyicoder_protocol::llm::UsageProvenance;
 
 use super::{EventTiming, EventUsage, RecordOutcome, TrajectoryRecordKind, TurnBoundary};
 
@@ -139,13 +140,21 @@ pub struct SubagentUsage {
     pub input: u64,
     pub output: u64,
     pub cache_read: u64,
+    /// Which breakdown fields the children reported, AND-folded. A child that
+    /// did not report its cache-read leaves the count at zero, so without this
+    /// the zero reads as a cache miss.
+    pub provenance: UsageProvenance,
 }
 
 impl SubagentUsage {
-    /// The share of the delegated input that came from cache, when any input
-    /// was reported at all.
+    /// The share of the delegated input that came from cache, when the
+    /// children reported both the input total and the cache-read count. None
+    /// otherwise: an unreported count is unknown, not a miss. A child whose
+    /// cache-read count exceeds its input total would push the share above
+    /// one, so it is held to the range the share is defined over.
     pub fn cache_hit_pct(&self) -> Option<f64> {
-        (self.input > 0).then(|| 100.0 * self.cache_read as f64 / self.input as f64)
+        (self.input > 0 && self.provenance.cache_account_complete())
+            .then(|| (100.0 * self.cache_read as f64 / self.input as f64).min(100.0))
     }
 }
 

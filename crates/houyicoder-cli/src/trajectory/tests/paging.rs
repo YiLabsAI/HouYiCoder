@@ -542,6 +542,46 @@ fn test_subagent_usage_unknown() {
     );
 }
 
+/// A child that reported its input total but not its cache-read count leaves
+/// the delegated cache share unknown: the count stands at zero without having
+/// been measured, so the row has no percentage to show.
+#[test]
+fn test_delegated_cache_unknown() {
+    let events = vec![
+        ev(
+            100,
+            SessionEvent::UserInput {
+                text: "explore".into(),
+            },
+        ),
+        ev(
+            500,
+            SessionEvent::SubagentReturn {
+                child_session_id: "child-1".into(),
+                status: "completed".into(),
+                summary: "done".into(),
+                result_ref: "child-1".into(),
+                input_tokens: 180_000,
+                output_tokens: 4_000,
+                cache_read_input_tokens: 0,
+                cache_write_input_tokens: 0,
+                reasoning_tokens: 0,
+                input_reported: true,
+                cache_read_reported: false,
+                cache_write_reported: false,
+            },
+        ),
+    ];
+    let view = build_view(&events, "test", 0);
+    let delegated = view.subagent_usage.expect("the call is reported");
+    assert_eq!(delegated.input, 180_000, "the reported tokens stand");
+    assert_eq!(
+        delegated.cache_hit_pct(),
+        None,
+        "an unreported count is unknown, not a 0% miss"
+    );
+}
+
 /// A file-backed reader, which is the path the product runs on. The
 /// in-memory store takes the mirror branch, so a bug in the page path would
 /// not show up there.
@@ -624,6 +664,65 @@ fn test_disk_header_uses_summary() {
     assert_eq!(
         view.hidden_turns, 50,
         "and the turns before the page are counted as hidden"
+    );
+}
+
+/// The live pane reads its figures from the session summary rather than from
+/// the page it shows, so the delegated cache share reaches that path through
+/// the summary. A child that reported its input but not its cache-read count
+/// arrives there as an unknown share, not as a 0% miss.
+#[test]
+fn test_disk_delegated_cache() {
+    let root = temp_dir().join(format!(
+        "houyi_disk_delegated_{}_{}",
+        SessionId::new(),
+        id()
+    ));
+    create_dir_all(&root).expect("create temp root");
+    let store = Arc::new(SessionStore::new(Box::new(LocalFileBackend::new(
+        root.clone(),
+    ))));
+    let sid = SessionId::new();
+    let rt = Runtime::new().expect("test runtime");
+    rt.block_on(store.append(SessionLogEntry {
+        id: EventId::new(),
+        session: sid,
+        ts: 0,
+        prev_hash: None,
+        event: SessionEvent::UserInput {
+            text: "explore".into(),
+        },
+    }))
+    .expect("append");
+    rt.block_on(store.append(SessionLogEntry {
+        id: EventId::new(),
+        session: sid,
+        ts: 1_000,
+        prev_hash: None,
+        event: SessionEvent::SubagentReturn {
+            child_session_id: "child-1".into(),
+            status: "completed".into(),
+            summary: "done".into(),
+            result_ref: "child-1".into(),
+            input_tokens: 180_000,
+            output_tokens: 4_000,
+            cache_read_input_tokens: 0,
+            cache_write_input_tokens: 0,
+            reasoning_tokens: 0,
+            input_reported: true,
+            cache_read_reported: false,
+            cache_write_reported: false,
+        },
+    }))
+    .expect("append");
+    let (reader, _history) = reader_of(&store, sid);
+    let view = pump(&reader);
+    let delegated = view.subagent_usage.expect("the call is reported");
+    assert_eq!(delegated.input, 180_000, "the reported tokens stand");
+    assert_eq!(
+        delegated.cache_hit_pct(),
+        None,
+        "an unreported count is unknown, not a 0% miss"
     );
 }
 

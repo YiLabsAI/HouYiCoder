@@ -298,6 +298,7 @@ fn test_usage_tab_delegated() {
             input: 812_000,
             output: 41_000,
             cache_read: 755_000,
+            provenance: UsageProvenance::ALL_REPORTED,
         }),
         rows: Vec::new(),
         ..TrajectoryView::default()
@@ -397,6 +398,7 @@ fn test_usage_tab_delegated_unreported() {
             input: 0,
             output: 0,
             cache_read: 0,
+            provenance: UsageProvenance::default(),
         }),
         rows: Vec::new(),
         ..TrajectoryView::default()
@@ -419,4 +421,78 @@ fn test_usage_tab_delegated_unreported() {
         !row.contains("cached"),
         "and no share is invented on the delegated row: {row}"
     );
+}
+
+/// A child that reported its input total but not its cache-read count leaves
+/// the cache-read total at zero without measuring it. The row shows the tokens
+/// it did report and no share at all, rather than a 0% that reads as a miss.
+#[test]
+fn test_delegated_row_cache_unknown() {
+    let mut app = working_app();
+    app.sessions.persistence.trajectory_log = Some(Arc::new(Fixed(Arc::new(TrajectoryView {
+        session_id: "s".into(),
+        model: "m".into(),
+        total_turns: 1,
+        tokens_in: Some(10),
+        tokens_out: Some(5),
+        cache_read: None,
+        failures: 0,
+        duration_ms: Some(1_000),
+        timing: SessionTiming::default(),
+        hidden_turns: 0,
+        subagent_usage: Some(SubagentUsage {
+            calls: 1,
+            input: 812_000,
+            output: 41_000,
+            cache_read: 0,
+            provenance: UsageProvenance {
+                input_reported: true,
+                cache_read_reported: false,
+                cache_write_reported: false,
+            },
+        }),
+        rows: Vec::new(),
+        ..TrajectoryView::default()
+    }))));
+    let s = render_usage(&app);
+    assert!(s.contains("812k input"), "the reported tokens stand: {s}");
+    let row = s
+        .lines()
+        .find(|l| l.starts_with("delegated usage:"))
+        .expect("the row is present");
+    assert!(
+        !row.contains("cached"),
+        "an unmeasured cache-read count has no share to show: {row}"
+    );
+}
+
+/// A child whose cache-read count exceeds its input total would put the share
+/// above one. The row holds it to the range the share is defined over, the
+/// same way the session row does.
+#[test]
+fn test_delegated_share_clamped() {
+    let mut app = working_app();
+    app.sessions.persistence.trajectory_log = Some(Arc::new(Fixed(Arc::new(TrajectoryView {
+        session_id: "s".into(),
+        model: "m".into(),
+        total_turns: 1,
+        tokens_in: Some(10),
+        tokens_out: Some(5),
+        cache_read: None,
+        failures: 0,
+        duration_ms: Some(1_000),
+        timing: SessionTiming::default(),
+        hidden_turns: 0,
+        subagent_usage: Some(SubagentUsage {
+            calls: 1,
+            input: 100_000,
+            output: 4_000,
+            cache_read: 150_000,
+            provenance: UsageProvenance::ALL_REPORTED,
+        }),
+        rows: Vec::new(),
+        ..TrajectoryView::default()
+    }))));
+    let s = render_usage(&app);
+    assert!(s.contains("100% cached"), "the share is held at one: {s}");
 }

@@ -531,6 +531,7 @@ fn accumulate_session(events: &[SessionLogEntry], acc: &mut AccTotals) {
         input: delegated.input_tokens,
         output: delegated.output_tokens,
         cache_read: delegated.cache_read_input_tokens,
+        provenance: delegated.provenance,
     };
     acc.subagent_unmeasured = delegated.unmeasured_calls > 0;
     // The session's wall time is the span of its own durable events, which is
