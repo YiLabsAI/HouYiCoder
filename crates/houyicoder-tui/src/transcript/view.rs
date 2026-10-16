@@ -293,7 +293,7 @@ impl TranscriptViewState {
     }
 
     /// Replace the frozen corpus rows and bump the presentation revision.
-    #[cfg(any(test, feature = "bench"))]
+    #[cfg(test)]
     pub(crate) fn replace_corpus_rows(&mut self, rows: NamedRows) {
         self.search_corpus.replace_rows(rows);
         self.bump_presentation();

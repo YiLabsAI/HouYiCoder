@@ -9,6 +9,7 @@
 use crate::composition;
 use crate::fold::compute_fold_groups;
 use crate::state::App;
+use crate::transcript::store::Transcript;
 use crate::transcript::{SequencedFrame, TranscriptFrame};
 
 /// Build a bare App carrying the given frame log. A bare App has no
@@ -23,6 +24,24 @@ pub fn app_with_frames(frames: Vec<TranscriptFrame>) -> App {
         .transcript
         .with_frames_mut(|log| *log = sequenced);
     app
+}
+
+/// A frame log holding the given frames, for the append benchmark. The append
+/// needs the log alone, so the wrapper returns it without the App around it:
+/// an App parameter would be broad access the coupling ratchet must not carry.
+pub fn transcript_with_frames(frames: Vec<TranscriptFrame>) -> Transcript {
+    let mut transcript = Transcript::default();
+    let sequenced: Vec<SequencedFrame> = frames.into_iter().map(Into::into).collect();
+    transcript.with_frames_mut(|log| *log = sequenced);
+    transcript
+}
+
+/// Append one frame to the resident log, the write the streaming path performs
+/// per delta. The append benchmark names this instead of the log's own append,
+/// so a change to how the log stores frames is absorbed here rather than in
+/// every bench.
+pub fn append_frame(transcript: &mut Transcript, frame: TranscriptFrame) {
+    transcript.push_frame(frame);
 }
 
 /// Rebuild the transcript from the frame log. Takes the App by value and
