@@ -5,30 +5,42 @@
 
 use std::ops::Range;
 
+use super::turn_fold::TurnCheckpoint;
 use crate::records::TranscriptLine;
 use crate::row_id::{LocalEntryId, RowId};
 
-/// The stable identity of a block, taken from its opening frame. A frame
-/// from a durable log entry anchors the block on that entry's row identity,
-/// which survives a re-read of the log; a frame the frontend raised anchors
-/// on its absolute log position, stable while the frame stays in the visible
-/// window. The stream seq is deliberately not an anchor source — numbering
-/// restarts with the service process, so an identity built from it would
-/// drift.
+/// The stable identity of a block. A block that covers frames anchors on its
+/// opening frame: a frame from a durable log entry takes that entry's row
+/// identity, which survives a re-read of the log; a frame the frontend raised
+/// takes its absolute log position, stable while the frame stays in the
+/// visible window. The stream seq is deliberately not an anchor source —
+/// numbering restarts with the service process, so an identity built from it
+/// would drift.
+///
+/// The block holding the window's front frames has no opening frame of its
+/// own to name — its first frame moves as the window slides back — so it takes
+/// a name from its place in the list. No two blocks share a name: a
+/// frame-derived name belongs to one frame, and the front slot is the only one
+/// of its kind.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum BlockAnchor {
     Durable(RowId),
     Local(u64),
+    /// The window's front slot, whose frames precede the turn now being
+    /// folded. The slot keeps its name while the window slides under it.
+    Frozen,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct BlockId(pub BlockAnchor);
 
 /// One turn-level slice of the frame log, with the lines the fold derived
-/// for it — each beside the identity of the frame that produced it — and a
-/// revision that ticks when its frames change. Rebuild reuses a block whose
-/// id and revision match, carrying its lines and expand state forward without
-/// re-deriving them.
+/// for it — each beside the identity of the frame that produced it — a
+/// revision that ticks when its frames change, and the state the slice's
+/// frames ended inside a turn with. Rebuild reuses a block whose id and range
+/// still describe the same frames, carrying its lines, expand state, and turn
+/// state forward without re-deriving them; the turn state is what lets the
+/// block after this one continue a turn this one opened and did not close.
 #[derive(Debug, Clone)]
 pub(crate) struct Block {
     pub id: BlockId,
@@ -38,6 +50,7 @@ pub(crate) struct Block {
     /// an older-row read matches its overlap against.
     pub ids: Vec<RowId>,
     pub revision: u64,
+    pub checkpoint: TurnCheckpoint,
 }
 
 /// The delta vocabulary the rebuild applies to the block list. Evict before a

@@ -226,7 +226,7 @@ fn test_snapshot_live_names_agree() {
             });
         }
     }
-    let live_rows = transcript_from_frames_at(&log, 0, 0..log.len(), true);
+    let (live_rows, _) = transcript_from_frames_at(&log, 0, 0..log.len(), true, None);
     let live_row = row_name(&live_rows.lines).expect("the live fold closes the same turn");
     let expected = RowId::Durable {
         event: DurableEventId(closing.to_string()),

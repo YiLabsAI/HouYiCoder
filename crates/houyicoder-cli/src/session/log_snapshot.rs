@@ -117,7 +117,7 @@ impl SessionLogSnapshot {
     /// shape a window read hands the TUI.
     fn render_named<'a>(events: impl IntoIterator<Item = &'a SessionLogEntry>) -> NamedRows {
         let (frames, names) = Self::named_frames(events);
-        transcript_from_named_frames(&frames, &names, 0..frames.len(), true)
+        transcript_from_named_frames(&frames, &names, 0..frames.len(), true, None).0
     }
 
     /// Whether a step of events holds where a turn begins or ends, in the
@@ -150,7 +150,7 @@ impl SessionLogSnapshot {
             Self::named_frames(window.events.iter().map(|e| &e.entry));
         frames.extend(window_frames);
         names.extend(window_names);
-        let rows = transcript_from_named_frames(&frames, &names, start..frames.len(), true);
+        let rows = transcript_from_named_frames(&frames, &names, start..frames.len(), true, None).0;
         (rows, window.skipped)
     }
 }

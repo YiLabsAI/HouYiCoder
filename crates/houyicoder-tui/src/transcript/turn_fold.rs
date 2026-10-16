@@ -7,7 +7,18 @@
 //! the log. Row naming lives with the fold because the row is the fold's
 //! output, and a name is only useful while it identifies the same turn in
 //! every read that carries it.
+//!
+//! A turn outlives the window that holds its frames: the window a read is
+//! handed may open past the frame that opened the turn, and the frames
+//! between may already have been drained. The fold therefore takes the state
+//! a previous window produced for the turn it opened into, and hands on the
+//! state at its own end, so one turn is folded once however many windows it
+//! spans.
 
+mod checkpoint;
+
+use std::cmp::Reverse;
+use std::mem::take;
 use std::ops::Range;
 
 use houyicoder_protocol::acpx::AcpxMethod;
@@ -19,8 +30,8 @@ use super::frame_payload::chunk_text;
 use super::tool_renders_chip;
 use crate::records::TranscriptLine;
 use crate::row_id::RowId;
-use std::cmp::Reverse;
-use std::mem::take;
+
+pub use checkpoint::TurnCheckpoint;
 
 /// The duration a run-completion record carries. A record without a readable
 /// one closes the turn with no duration rather than a claimed zero.
@@ -197,43 +208,40 @@ pub(super) struct TurnFold<'a, F: AsRef<TranscriptFrame>> {
     /// window opens inside, what that turn did before the window began, and
     /// whether the message beside it was delivered into a running turn.
     log: &'a [F],
-    /// Log position of the frame that opened the open turn. None when the
-    /// window opens between turns — a record behind it ended the one before —
-    /// or ahead of any turn at all: frames before the first user message (a
-    /// session notice) belong to no turn this fold can summarize.
-    opened_at: Option<usize>,
-    /// Log position of the newest frame folded into the turn. The row is
-    /// named by where the turn ended, which this is once the turn closes.
-    ended_at: usize,
     /// Where the row of a closed turn takes its durable name.
     names: RowNames<'a>,
+    /// Reasoning text the open turn's frames carried inside this window. Text
+    /// the state passed on is counted there rather than repeated here, so a
+    /// window holds only the text its own frames brought.
     reasoning: String,
-    /// Tool calls by tool, in the order the turn first used each.
-    tools: Vec<(String, u32)>,
-    calls: u32,
+    /// The open turn's facts, including those the window that opened it
+    /// handed on.
+    state: TurnCheckpoint,
 }
 
 impl<'a, F: AsRef<TranscriptFrame>> TurnFold<'a, F> {
-    /// Fold a window of the log, starting from the turn the window opens
-    /// inside (if any). Frames of earlier turns are not folded; the caller
-    /// pushes the rows of the turns they closed. What the open turn did before
-    /// the window is folded in for facts, with no rows of its own.
-    pub(super) fn new(log: &'a [F], window: Range<usize>, names: RowNames<'a>) -> Self {
-        let opened_at = open_turn_before(log, window.start);
+    /// Fold a window of the log, continuing the turn a previous window ended
+    /// inside when state carries one. Frames of earlier turns are not folded;
+    /// the caller pushes the rows of the turns they closed. Without carried
+    /// state the fold itself reads back what the open turn did before the
+    /// window, so a caller that hands a window of the whole log needs to pass
+    /// nothing.
+    pub(super) fn new(
+        log: &'a [F],
+        window: Range<usize>,
+        names: RowNames<'a>,
+        carried: Option<TurnCheckpoint>,
+    ) -> Self {
         let mut fold = Self {
             log,
-            // The turn the window opens inside has ended, so far, at the frame
-            // that opened it; the read-back pass advances this over the facts
-            // it absorbs ahead of the window, and the walk advances it over
-            // the facts the window holds.
-            ended_at: opened_at.unwrap_or(window.start),
-            opened_at,
             names,
             reasoning: String::new(),
-            tools: Vec::new(),
-            calls: 0,
+            state: TurnCheckpoint::default(),
         };
-        fold.absorb_ahead(window.start);
+        match carried {
+            Some(state) => fold.state = state,
+            None => fold.absorb_ahead(window.start),
+        }
         fold
     }
 
@@ -241,22 +249,29 @@ impl<'a, F: AsRef<TranscriptFrame>> TurnFold<'a, F> {
     /// turn rather than the part of it this window happens to hold. Without it
     /// a window whose oldest frame is the turn's own record finds no reasoning
     /// and no calls to summarize, and drops a row the whole-log read writes.
-    /// These frames render no rows of their own here. The pass also advances
-    /// where the turn currently ends, by the same rule the walk over the
-    /// window's frames follows, so a turn that closes at the window's first
-    /// frame is named by its own newest fact rather than by that frame.
+    /// These frames render no rows of their own here. The pass also moves where
+    /// the turn currently ends, by the same rule the walk over the window's
+    /// frames follows, so a turn that closes at the window's first frame is
+    /// named by its own newest fact rather than by that frame.
     fn absorb_ahead(&mut self, start: usize) {
-        let Some(opened_at) = self.opened_at else {
+        let Some(opened_at) = open_turn_before(self.log, start) else {
             return;
         };
+        self.state.open(self.names.name_at(opened_at));
         let log = self.log;
         for (offset, frame) in log[opened_at + 1..start].iter().enumerate() {
             let frame = frame.as_ref();
             if moves_turn_end(frame) {
-                self.ended_at = opened_at + 1 + offset;
+                self.state
+                    .moved_to(self.names.name_at(opened_at + 1 + offset));
             }
             self.gather(frame);
         }
+    }
+
+    /// The state at this window's end, for the read of the next window.
+    pub(super) fn checkpoint(&self) -> TurnCheckpoint {
+        self.state.clone()
     }
 
     /// Whether the message at abs was delivered into the running turn.
@@ -281,19 +296,14 @@ impl<'a, F: AsRef<TranscriptFrame>> TurnFold<'a, F> {
                 } else {
                     self.close(None)
                 };
-                if self.opened_at.is_none() {
-                    self.opened_at = Some(abs);
-                    self.ended_at = abs;
+                if !self.state.is_open() {
+                    self.state.open(self.names.name_at(abs));
                     self.reasoning.clear();
-                    self.tools.clear();
-                    self.calls = 0;
                 }
                 return closed;
             }
-            TranscriptFrame::Session(SessionUpdate::AgentThoughtChunk(_))
-            | TranscriptFrame::Session(SessionUpdate::ToolCall(_)) => self.gather(frame),
             TranscriptFrame::Acpx(n) if n.method == AcpxMethod::ContextRunCompleted => {
-                self.ended_at = abs;
+                self.state.moved_to(self.names.name_at(abs));
                 return self.close(recorded_ms(&n.params));
             }
             // A row the frontend raises is not a fact of the turn it sits in:
@@ -301,31 +311,31 @@ impl<'a, F: AsRef<TranscriptFrame>> TurnFold<'a, F> {
             TranscriptFrame::Frontend(_) => return None,
             _ => {}
         }
+        self.gather(frame);
         if moves_turn_end(frame) {
-            self.ended_at = abs;
+            self.state.moved_to(self.names.name_at(abs));
         }
         None
     }
 
     /// Collect what one frame of the open turn contributes to its summary: its
-    /// reasoning text, and the tool calls it made. Read for the frames the
+    /// reasoning text and the tool calls it made. Read for the frames the
     /// window holds and for those it reads back to reach the turn's opening.
     fn gather(&mut self, frame: &TranscriptFrame) {
-        if self.opened_at.is_none() {
+        if !self.state.is_open() {
             return;
         }
         match frame {
             TranscriptFrame::Session(SessionUpdate::AgentThoughtChunk(chunk)) => {
-                self.reasoning.push_str(chunk_text(chunk));
+                let text = chunk_text(chunk);
+                self.state.reasoning_chars += text.chars().count() as u64;
+                self.reasoning.push_str(text);
             }
             TranscriptFrame::Session(SessionUpdate::ToolCall(call))
                 if tool_renders_chip(&call.title) =>
             {
-                match self.tools.iter_mut().find(|(tool, _)| tool == &call.title) {
-                    Some(slot) => slot.1 += 1,
-                    None => self.tools.push((call.title.clone(), 1)),
-                }
-                self.calls += 1;
+                self.state.tool_counts.add(&call.title);
+                self.state.calls += 1;
             }
             _ => {}
         }
@@ -335,17 +345,27 @@ impl<'a, F: AsRef<TranscriptFrame>> TurnFold<'a, F> {
     /// turn is open, or when the turn has nothing to summarize. A plain reply
     /// renders no row whose expand affordance would lead to nothing.
     pub(super) fn close(&mut self, ms: Option<u64>) -> Option<(TranscriptLine, RowId)> {
-        self.opened_at.take()?;
-        if self.reasoning.is_empty() && self.calls == 0 {
+        if !self.state.is_open() {
             return None;
         }
-        let reasoning = (!self.reasoning.is_empty()).then(|| take(&mut self.reasoning));
-        let id = self.names.name_at(self.ended_at);
+        // An open turn always names a newest fact: opening one names the frame
+        // that opened it, and every fact since moves the name on.
+        let id = self.state.newest_fact.clone()?;
+        let text = take(&mut self.reasoning);
+        let earlier = self
+            .state
+            .reasoning_chars
+            .saturating_sub(text.chars().count() as u64);
+        let tool_summary = self.tool_summary();
+        self.state.close();
+        if text.is_empty() && earlier == 0 && tool_summary.is_none() {
+            return None;
+        }
         Some((
             TranscriptLine::ThoughtFor {
                 ms,
-                reasoning,
-                tool_summary: self.tool_summary(),
+                reasoning: reasoning_body(earlier, text),
+                tool_summary,
                 turn_id: id.clone(),
             },
             id,
@@ -359,20 +379,45 @@ impl<'a, F: AsRef<TranscriptFrame>> TurnFold<'a, F> {
     }
 
     /// The one-line tool summary, grouped by tool with the most-used first.
-    /// One kind of tool reads as its own count; mixed kinds keep the breakdown.
-    fn tool_summary(&mut self) -> Option<String> {
-        if self.calls == 0 {
+    /// A turn that called one tool reads as its own count; several keep the
+    /// breakdown.
+    fn tool_summary(&self) -> Option<String> {
+        if self.state.calls == 0 {
             return None;
         }
-        self.tools.sort_by_key(|(_, count)| Reverse(*count));
-        if let [(tool, count)] = self.tools.as_slice() {
+        let mut named = self.state.tool_counts.named().to_vec();
+        named.sort_by_key(|(_, count)| Reverse(*count));
+        let other = self.state.tool_counts.other();
+        if other == 0
+            && let [(tool, count)] = named.as_slice()
+        {
             return Some(format!("ran {count} {tool}"));
         }
-        let parts: Vec<String> = self
-            .tools
+        let mut parts: Vec<String> = named
             .iter()
             .map(|(tool, count)| format!("{count} {tool}"))
             .collect();
-        Some(format!("ran {} tools ({})", self.calls, parts.join(", ")))
+        if other > 0 {
+            parts.push(format!("{other} other"));
+        }
+        Some(format!(
+            "ran {} tools ({})",
+            self.state.calls,
+            parts.join(", ")
+        ))
     }
+}
+
+/// The text a summary row expands into: what this window's frames carried,
+/// led by a note counting the reasoning that left the window.
+fn reasoning_body(earlier: u64, text: String) -> Option<String> {
+    if earlier == 0 {
+        return (!text.is_empty()).then_some(text);
+    }
+    let note =
+        format!("({earlier} characters of this turn's reasoning are earlier in the transcript)");
+    if text.is_empty() {
+        return Some(note);
+    }
+    Some(format!("{note}\n{text}"))
 }

@@ -50,6 +50,8 @@ use crate::result_body::{
 use tool_updates::{PendingUpdate, ToolRegistry, collect_tool_updates};
 use turn_fold::{RowNames, TurnFold};
 
+pub use turn_fold::TurnCheckpoint;
+
 use crate::brief::tool_user_facing_name;
 use crate::records::subagent_line;
 use houyicoder_protocol::acpx::AcpxMethod;
@@ -260,7 +262,9 @@ pub fn transcript_from_frames(
         RowNames::Position { abs_base: 0 },
         resident_window(0, log.len(), window),
         newest_open,
+        None,
     )
+    .0
     .lines
 }
 
@@ -272,17 +276,26 @@ pub fn transcript_from_frames(
 /// the resident window's front drains, so expand state stays attached to its row.
 /// Every row carries the identity of the frame that produced it, so a read
 /// that joins windows matches rows by identity rather than by text.
+///
+/// carried is the state the read of the previous window ended inside a turn
+/// with; the read continues that turn instead of folding it again, which is
+/// what lets a window summarize a turn whose earlier frames the log no longer
+/// holds. The state at this window's end comes back for the next read. With
+/// nothing carried the fold reads back what it can of the turn from the log it
+/// was handed.
 pub fn transcript_from_frames_at(
     log: &[SequencedFrame],
     abs_base: usize,
     window: Range<usize>,
     newest_open: bool,
-) -> NamedRows {
+    carried: Option<TurnCheckpoint>,
+) -> (NamedRows, TurnCheckpoint) {
     walk_window(
         log,
         RowNames::Live { log, abs_base },
         resident_window(abs_base, log.len(), window),
         newest_open,
+        carried,
     )
 }
 
@@ -311,7 +324,8 @@ pub fn transcript_from_named_frames<F: AsRef<TranscriptFrame>>(
     names: &[RowId],
     window: Range<usize>,
     newest_open: bool,
-) -> NamedRows {
+    carried: Option<TurnCheckpoint>,
+) -> (NamedRows, TurnCheckpoint) {
     assert_eq!(
         names.len(),
         log.len(),
@@ -323,18 +337,21 @@ pub fn transcript_from_named_frames<F: AsRef<TranscriptFrame>>(
         RowNames::EventName(names),
         window.start..end,
         newest_open,
+        carried,
     )
 }
 
 /// The shared walk behind every entry that derives rows from a frame log:
 /// window is relative to log, and names says where each row takes its
-/// identity.
+/// identity. The state the walk ends inside a turn with comes back beside the
+/// rows, for the read of the window that continues that turn.
 fn walk_window<'a, F: AsRef<TranscriptFrame>>(
     log: &'a [F],
     names: RowNames<'a>,
     window: Range<usize>,
     newest_open: bool,
-) -> NamedRows {
+    carried: Option<TurnCheckpoint>,
+) -> (NamedRows, TurnCheckpoint) {
     let frames = &log[window.clone()];
     let (updates, tools) = collect_tool_updates(frames);
     let mut p = LineBuilder {
@@ -346,19 +363,30 @@ fn walk_window<'a, F: AsRef<TranscriptFrame>>(
         out: Vec::with_capacity(frames.len()),
         ids: Vec::with_capacity(frames.len()),
         late_results: Vec::new(),
-        fold: TurnFold::new(log, window, names),
+        fold: TurnFold::new(log, window, names, carried),
     };
     p.run(frames);
+    // The state handed to the next window describes the turn this window's
+    // frames left open, so it is read before the trailing close below. That
+    // close answers a question about what to render — whether a log that ends
+    // without a record should show the turn it stops inside — while the state
+    // is a fact of the frames: a turn the log merely ends at is still the turn
+    // the read that continues the log must summarize.
+    let exit = p.fold.checkpoint();
+    p.close_trailing_turn();
     p.finish();
     debug_assert_eq!(
         p.out.len(),
         p.ids.len(),
         "every derived row carries its identity"
     );
-    NamedRows {
-        lines: p.out,
-        ids: p.ids,
-    }
+    (
+        NamedRows {
+            lines: p.out,
+            ids: p.ids,
+        },
+        exit,
+    )
 }
 
 /// Build the single result row for a tool call from its output. The body is
@@ -459,12 +487,15 @@ impl<'a, F: AsRef<TranscriptFrame>> LineBuilder<'a, F> {
             }
             self.emit(abs, f.as_ref());
         }
-        // The window's last turn. A log written before the completion record
-        // existed ends its final turn nowhere else, so this is where that
-        // turn's summary row comes from. The window must reach the end of the
-        // log for this: a window cut mid-log keeps its last turn open, whose
-        // end the rest of the log still holds, and a turn nothing has stopped
-        // running yet yields no summary at all.
+    }
+
+    /// Close the window's last turn when the log ends with no record for it. A
+    /// log written before the completion record existed ends its final turn
+    /// nowhere else, so this is where that turn's summary row comes from. The
+    /// window must reach the end of the log for this: a window cut mid-log
+    /// keeps its last turn open, whose end the rest of the log still holds, and
+    /// a turn nothing has stopped running yet yields no summary at all.
+    fn close_trailing_turn(&mut self) {
         if !self.newest_open
             && self.at_end
             && let Some((row, id)) = self.fold.close(None)

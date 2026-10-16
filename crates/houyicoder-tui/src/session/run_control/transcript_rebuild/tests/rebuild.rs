@@ -385,3 +385,50 @@ fn test_hanging_call_keeps_prefix() {
     pump(&mut app, user_msg("second"));
     assert_eq!(app.current_turn_start(), 3);
 }
+
+fn run_record(ms: u64) -> TranscriptFrame {
+    TranscriptFrame::Acpx(AcpxNotification::new(
+        AcpxMethod::ContextRunCompleted,
+        json!({ "ms": ms }),
+    ))
+}
+
+/// The frame at the log's front is replaced in place when the prompt the
+/// frontend echoed gives way to the server's own message for the same text.
+/// The front slot keeps its name across that, so a block reused on its range
+/// alone would carry the turn state its own frames ended with — and the turn
+/// the durable message opens, which the following frames carry to its record,
+/// would render without a summary row.
+#[test]
+fn test_replaced_front_rederives_block() {
+    let mut app = fresh_app();
+    app.push_unanswered_echo("go".into());
+    assert_eq!(
+        app.transcript().frames().len(),
+        1,
+        "the log holds the echo alone"
+    );
+    app.transcript_mut().drop_trailing_echo("go");
+    app.transcript_mut().push_frame(user_msg("go"));
+    app.transcript_mut()
+        .push_frame(TranscriptFrame::Session(SessionUpdate::AgentThoughtChunk(
+            ContentChunk::new(ContentBlock::Text {
+                text: "pondering the task".into(),
+            }),
+        )));
+    app.transcript_mut()
+        .push_frame(agent_msg("here is my answer"));
+    app.transcript_mut().push_frame(run_record(2_000));
+    app.rebuild_transcript();
+
+    let summary = app.transcript().iter().find_map(|l| match l {
+        TranscriptLine::ThoughtFor { reasoning, ms, .. } => Some((reasoning.clone(), *ms)),
+        _ => None,
+    });
+    assert_eq!(
+        summary,
+        Some((Some("pondering the task".to_string()), Some(2_000))),
+        "the turn the replaced frame opened surfaces its summary row: {:?}",
+        app.transcript()
+    );
+}

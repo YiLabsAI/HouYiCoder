@@ -1,6 +1,6 @@
 use super::*;
 use crate::records::TranscriptLine;
-use crate::transcript::NamedRows;
+use crate::transcript::{NamedRows, TurnCheckpoint};
 
 fn subagent(child_sid: &str, rows: Vec<TranscriptLine>) -> TranscriptLine {
     TranscriptLine::Subagent {
@@ -21,6 +21,7 @@ fn block(id: u64, lines: Vec<TranscriptLine>) -> Block {
         lines: rows.lines,
         ids: rows.ids,
         revision: 0,
+        checkpoint: TurnCheckpoint::default(),
     }
 }
 
@@ -46,7 +47,9 @@ fn test_evict_drops_prefix() {
         .iter()
         .map(|b| match b.id.0 {
             BlockAnchor::Local(n) => n,
-            BlockAnchor::Durable(_) => panic!("test blocks anchor locally"),
+            BlockAnchor::Durable(_) | BlockAnchor::Frozen => {
+                panic!("test blocks anchor on a frame")
+            }
         })
         .collect();
     assert_eq!(ids, vec![2, 3]);
@@ -139,7 +142,9 @@ fn test_rewind_truncates_tail() {
         .iter()
         .map(|b| match b.id.0 {
             BlockAnchor::Local(n) => n,
-            BlockAnchor::Durable(_) => panic!("test blocks anchor locally"),
+            BlockAnchor::Durable(_) | BlockAnchor::Frozen => {
+                panic!("test blocks anchor on a frame")
+            }
         })
         .collect();
     assert_eq!(ids, vec![1]);

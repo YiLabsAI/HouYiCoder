@@ -590,7 +590,7 @@ fn test_fold_names_rows() {
     let names: Vec<RowId> = (0..frames.len())
         .map(|i| RowId::from(format!("e{i}")))
         .collect();
-    let rows = transcript_from_named_frames(&frames, &names, 0..frames.len(), true);
+    let (rows, _) = transcript_from_named_frames(&frames, &names, 0..frames.len(), true, None);
     let row = thought_row(&rows.lines).expect("the closed turn derives its row");
     assert_eq!(
         row.turn_id,
@@ -939,6 +939,85 @@ fn test_window_record_only() {
     assert_eq!(row.tool_summary.as_deref(), Some("ran 1 bash"));
     assert_eq!(row.ms, Some(5_000));
     assert_eq!(row.turn_id, RowId::local(3));
+}
+
+#[test]
+fn test_drained_turn_closes() {
+    // The log drops the frames that opened a turn before the window reaches
+    // the record that ends it. The read that still held them hands the turn's
+    // facts on, so the record closes the turn into the row the whole log
+    // writes: the same name, the same totals, and the reasoning it can no
+    // longer quote reported by size.
+    let log: Vec<SequencedFrame> = vec![
+        user_msg("go"),
+        thought("first half "),
+        tool_call("c1", "bash", Value::Null),
+        thought("rest"),
+        run_completed(Some(2_000)),
+    ]
+    .into_iter()
+    .map(SequencedFrame::from)
+    .collect();
+    let (_, carried) = transcript_from_frames_at(&log, 0, 0..3, true, None);
+    let drained = &log[3..];
+    let (rows, _) = transcript_from_frames_at(drained, 3, 3..5, false, Some(carried));
+    let row = thought_row(&rows.lines).expect("the record closes the turn the prefix opened");
+    let whole = thought_row(
+        &transcript_from_frames_at(&log, 0, 0..5, false, None)
+            .0
+            .lines,
+    )
+    .expect("the whole log writes the row");
+    assert_eq!(
+        row.turn_id, whole.turn_id,
+        "one turn, one name, whichever frames a read still holds"
+    );
+    assert_eq!(row.turn_id, RowId::local(4), "the record names the row");
+    assert_eq!(row.ms, Some(2_000));
+    assert_eq!(row.tool_summary.as_deref(), Some("ran 1 bash"));
+    assert_eq!(
+        row.reasoning.as_deref(),
+        Some("(11 characters of this turn's reasoning are earlier in the transcript)\nrest")
+    );
+    // Without the facts the earlier read hands on, the record ends a turn
+    // nothing opened and no row is written at all.
+    let (unfinished, _) = transcript_from_frames_at(drained, 3, 3..5, false, None);
+    assert!(
+        thought_row(&unfinished.lines).is_none(),
+        "a read that never saw the turn open writes no row: {unfinished:?}"
+    );
+}
+
+#[test]
+fn test_reasoning_count_complete() {
+    // A long turn leaves the log behind; the row it writes still reports how
+    // much reasoning the turn did, because the count travels in place of the
+    // text. Nothing of the text itself travels, which is what keeps the state
+    // a turn hands on the same size however long the turn ran.
+    let words: Vec<String> = (0..64).map(|i| format!("step-{i} ")).collect();
+    let mut frames = vec![user_msg("go")];
+    frames.extend(words.iter().map(|w| thought(w)));
+    frames.push(run_completed(None));
+    let log: Vec<SequencedFrame> = frames.into_iter().map(SequencedFrame::from).collect();
+    let total: u64 = words.iter().map(|w| w.chars().count() as u64).sum();
+    let (_, carried) = transcript_from_frames_at(&log, 0, 0..log.len() - 1, true, None);
+    let record_at = log.len() - 1;
+    let drained = &log[record_at..];
+    let (rows, _) = transcript_from_frames_at(
+        drained,
+        record_at,
+        record_at..log.len(),
+        false,
+        Some(carried),
+    );
+    let row = thought_row(&rows.lines).expect("the turn closes into a row");
+    assert_eq!(
+        row.reasoning,
+        Some(format!(
+            "({total} characters of this turn's reasoning are earlier in the transcript)"
+        )),
+        "the count covers every frame of the turn, none of which the window holds"
+    );
 }
 
 #[test]

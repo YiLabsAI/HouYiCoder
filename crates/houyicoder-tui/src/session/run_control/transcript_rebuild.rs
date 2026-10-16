@@ -24,7 +24,7 @@ use crate::state::transcript::blocks::{
     Block, BlockAnchor, BlockId, TranscriptChange, TranscriptChangeSet,
 };
 use crate::transcript::TranscriptFrame;
-use crate::transcript::transcript_from_frames_at;
+use crate::transcript::{TurnCheckpoint, transcript_from_frames_at};
 use houyicoder_protocol::acpx::AcpxMethod;
 use houyicoder_protocol::frontend::permission::PermissionDecisionEntry;
 use houyicoder_protocol::frontend::session_update::SessionUpdate;
@@ -129,6 +129,17 @@ impl App {
         self.bump_transcript_version();
     }
 
+    /// The identity of the frame at an absolute log position: the identity the
+    /// frame carries when the read gives it one, the position itself otherwise.
+    /// A turn's block anchors on the frame that opened it, so the block is
+    /// reused on the same name its rows were derived under.
+    fn frame_row(&self, abs: usize, base: usize) -> RowId {
+        match self.transcript().frames().get(abs.saturating_sub(base)) {
+            Some(sf) => RowId::of(sf.as_ref(), sf.event_id.as_ref(), abs as u64),
+            None => RowId::local(abs as u64),
+        }
+    }
+
     /// Walk the target ranges against the current block list, matching each by
     /// stable id. A reused frozen prefix keeps its lines and fold groups; an
     /// active turn whose frames grew re-derives; a cap advance or a new turn
@@ -146,6 +157,7 @@ impl App {
         let mut cur_idx = 0;
         let mut clear_all = false;
         let mut prefix_reused = false;
+        let base = self.transcript().frame_window_start();
         let blocks = self.sessions.current.transcript.blocks().blocks();
         // Evict blocks the cap advanced past: a block whose frame range ended
         // before the window start is out of view, so name the first survivor
@@ -163,52 +175,60 @@ impl App {
                 clear_all = true;
             }
         }
+        // The state the range before the current one ended a turn with, which
+        // the current range's fold continues from. The ranges run in log order
+        // and meet at their boundary, so the active turn carries the prefix's
+        // state rather than folding the prefix again to find it.
+        let mut carried: Option<TurnCheckpoint> = None;
         for (ri, range) in ranges.iter().enumerate() {
             let is_active = has_active && ri + 1 == ranges.len();
             // The frozen prefix is a single reusable slot whose identity
             // stays fixed across cap advances (the window slides under it),
-            // so it anchors on Local(0) rather than the moving frame_start;
-            // the active turn anchors on the identity its opening frame
-            // carries — the durable entry when the frame came from the log,
-            // the frame's log position when the frontend raised it. The
+            // so it anchors on a name of its own rather than the moving
+            // frame_start; the active turn anchors on the identity its opening
+            // frame carries — the durable entry when the frame came from the
+            // log, the frame's log position when the frontend raised it. The
             // stream seq never anchors a block: numbering restarts with the
             // service process, so an identity built from it would drift.
             let id = if is_active {
-                let base = self.transcript().frame_window_start();
-                let opening = self
-                    .transcript()
-                    .frames()
-                    .get(range.start.saturating_sub(base));
-                let anchor = match opening {
-                    Some(sf) => RowId::of(sf.as_ref(), sf.event_id.as_ref(), range.start as u64),
-                    None => RowId::local(range.start as u64),
-                };
+                let anchor = self.frame_row(range.start, base);
                 self.sessions.current.transcript.blocks().assign_id(anchor)
             } else {
-                BlockId(BlockAnchor::Local(0))
+                BlockId(BlockAnchor::Frozen)
             };
             let slot = blocks.get(cur_idx);
             let matched = slot.is_some_and(|b| b.id == id);
-            if matched && !is_active && slot.expect("checked").frame_range == *range {
+            // Reuse needs the id and the range to be the ones the block was
+            // derived from, and neither drifts without the other. A frame
+            // replaced in place is the tentative echo the user's own message
+            // supersedes, which is always the trailing frame, so the boundary
+            // that cuts the ranges moves with it; a refresh under a frame's own
+            // position replaces no block, it clears them all.
+            if matched && !is_active && slot.is_some_and(|b| b.frame_range == *range) {
                 // Unchanged frozen prefix: keep its lines and fold groups
-                // as they are, so only the tail re-derives.
+                // as they are, so only the tail re-derives. Its frames did not
+                // change, so the state they end a turn with did not either.
                 prefix_reused = true;
+                carried = slot.map(|b| b.checkpoint.clone());
                 cur_idx += 1;
                 continue;
             }
-            let rows = transcript_from_frames_at(
+            let (rows, checkpoint) = transcript_from_frames_at(
                 self.sessions.current.transcript.frames(),
-                self.sessions.current.transcript.frame_window_start(),
+                base,
                 range.clone(),
                 newest_open && is_active,
+                carried.take(),
             );
             let revision = slot.map(|b| b.revision.wrapping_add(1)).unwrap_or(0);
+            carried = Some(checkpoint.clone());
             let block = Block {
                 id,
                 frame_range: range.clone(),
                 lines: rows.lines,
                 ids: rows.ids,
                 revision,
+                checkpoint,
             };
             match slot {
                 // Slot holds a block whose identity no longer fits the
@@ -396,7 +416,9 @@ impl App {
             self.sessions.current.transcript.frame_window_start(),
             batch_start..from,
             self.sessions.current.run.is_active(),
+            None,
         )
+        .0
         .lines
         .len();
         self.sessions.current.loaded_from_frame.set(batch_start);
