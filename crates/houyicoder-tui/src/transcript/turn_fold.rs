@@ -146,24 +146,28 @@ fn message_marked_delivered<F: AsRef<TranscriptFrame>>(frames: &[F], at: usize) 
 /// still folds that turn, so its row keeps its place rather than vanishing
 /// whenever the oldest frames of the view fall inside a turn.
 fn open_turn_before<F: AsRef<TranscriptFrame>>(log: &[F], start: usize) -> Option<usize> {
-    let mut search_from = start;
-    loop {
-        let k = log[..search_from]
-            .iter()
-            .rposition(|sf| is_user_frame(sf.as_ref()) || is_run_completed(sf.as_ref()))?;
+    // One pass back over the frames, so the work grows with how many frames
+    // the window leaves behind rather than restarting the search at each
+    // message the running turn absorbed: a turn carrying many queued messages
+    // would otherwise walk its own prefix once per message.
+    for at in (0..start).rev() {
+        let frame = log[at].as_ref();
         // A record here closed the turn before this position, so the window
         // opens between turns: no turn to fold.
-        if !is_user_frame(log[k].as_ref()) {
+        if is_run_completed(frame) {
             return None;
+        }
+        if !is_user_frame(frame) {
+            continue;
         }
         // A message the log marks as delivered into the running turn did not
         // open it, so the turn begins further back. Reading it as the opening
         // would cut the turn's earlier facts out of the row.
-        if opens_turn(log, k) {
-            return Some(k);
+        if opens_turn(log, at) {
+            return Some(at);
         }
-        search_from = k;
     }
+    None
 }
 
 /// Where folded summary rows take their identity. The identity is only

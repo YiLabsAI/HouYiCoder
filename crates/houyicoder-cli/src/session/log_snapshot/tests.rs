@@ -20,7 +20,7 @@ use houyicoder_session::SessionStore;
 use houyicoder_tui::records::TranscriptLine;
 use houyicoder_tui::row_id::RowId;
 use houyicoder_tui::transcript::{
-    SequencedFrame, transcript_from_frames, transcript_from_frames_at,
+    FrontendRow, SequencedFrame, TranscriptFrame, transcript_from_frames, transcript_from_frames_at,
 };
 use std::env::temp_dir;
 use std::env::var;
@@ -183,6 +183,97 @@ fn test_named_frames_slot_sequence() {
             entry(mid, 1),
             entry(closing, 1)
         ]
+    );
+}
+
+/// Both read paths name one run alike, row for row, on a run that holds an
+/// entry yielding two frames — a queued message beside the mark saying it
+/// joined the turn already running — and, wedged between them, a row the host
+/// raised with no entry behind it. A row takes the identity of the frame that
+/// produced it, so the durable rows keep their identities in both reads even
+/// where a frame without one sits between them, and the row no entry produced
+/// takes none.
+#[test]
+fn test_doubled_payload_names_agree() {
+    let input = EventId::new();
+    let queued = EventId::new();
+    let closing = EventId::new();
+    let events = [
+        ev_session(
+            SessionId::new(),
+            input,
+            SessionEvent::UserInput { text: "go".into() },
+        ),
+        ev(SessionEvent::Reasoning {
+            text: "weighing".into(),
+        }),
+        ev_session(
+            SessionId::new(),
+            queued,
+            SessionEvent::MidTurnInput {
+                text: "queued".into(),
+                pending_input_id: Some(7),
+            },
+        ),
+        ev_session(
+            SessionId::new(),
+            closing,
+            SessionEvent::RunCompleted { ms: Some(4_000) },
+        ),
+    ];
+    let mut log: Vec<SequencedFrame> = Vec::new();
+    for entry in &events {
+        let id = DurableEventId(entry.id.to_string());
+        for frame in SessionLogSnapshot::frames_of(&entry.event)
+            .into_iter()
+            .flatten()
+        {
+            log.push(SequencedFrame {
+                seq: Some(EventSeq(1)),
+                event_id: Some(id.clone()),
+                frame,
+            });
+        }
+    }
+    log.insert(
+        3,
+        SequencedFrame {
+            seq: None,
+            event_id: None,
+            frame: TranscriptFrame::Frontend(FrontendRow::System("read failed".into())),
+        },
+    );
+    let (live, _) = transcript_from_frames_at(&log, 0, 0..log.len(), true, None);
+    let disk = SessionLogSnapshot::render_named(events.iter());
+    let durable: Vec<RowId> = live
+        .ids
+        .iter()
+        .filter(|id| matches!(id, RowId::Durable { .. }))
+        .cloned()
+        .collect();
+    assert_eq!(
+        durable, disk.ids,
+        "both reads name every durable row alike, past a doubled entry and a row the host raised"
+    );
+    assert!(
+        live.ids.iter().any(|id| matches!(id, RowId::Local(_))),
+        "the row the host raised is named by where it happened"
+    );
+    let summary = live
+        .lines
+        .iter()
+        .find_map(|line| match line {
+            TranscriptLine::ThoughtFor { turn_id, .. } => Some(turn_id.clone()),
+            _ => None,
+        })
+        .expect("the record closes the turn");
+    assert_eq!(
+        summary,
+        RowId::Durable {
+            event: DurableEventId(closing.to_string()),
+            slot: 1,
+        },
+        "the summary row takes the closing entry's notification slot, not the place it rendered at"
     );
 }
 

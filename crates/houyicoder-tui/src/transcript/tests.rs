@@ -1319,6 +1319,58 @@ fn test_bound_holds_after_replay() {
 }
 
 #[test]
+fn test_cut_window_past_queued() {
+    // The window's oldest frame is a message the running turn absorbed, with
+    // another like it behind: neither opened the turn, so the read that folds
+    // this window back walks past both to the turn's real opening, and stops
+    // there rather than at the turn before it. The row then reports the whole
+    // turn's reasoning and none of the turn before it.
+    let mut frames = vec![
+        user_msg("before"),
+        thought("old "),
+        run_completed(Some(1_000)),
+        user_msg("go"),
+        thought("first "),
+    ];
+    frames.extend(mid_turn_msg("note one"));
+    frames.push(thought("second "));
+    frames.extend(mid_turn_msg("note two"));
+    frames.push(thought("third"));
+    frames.push(run_completed(Some(5_000)));
+    let log: Vec<SequencedFrame> = frames.into_iter().map(SequencedFrame::from).collect();
+    let at = log.len() - 4;
+    let (rows, _) = transcript_from_frames_at(&log, 0, at..log.len(), false, None);
+    let row =
+        thought_row(&rows.lines).expect("the record closes the turn the window was cut inside");
+    assert_eq!(row.reasoning.as_deref(), Some("first second third"));
+    assert_eq!(row.ms, Some(5_000));
+    assert_eq!(row.turn_id, RowId::local((log.len() - 1) as u64));
+}
+
+#[test]
+fn test_record_stops_read_back() {
+    // The turn the window was cut inside has no opening left in the frames:
+    // the frames behind the window begin with the record that closed the turn
+    // before it. A read that walked back past that record would fold the
+    // earlier turn's facts into this turn's row, so the record ends the walk,
+    // and the row reports what this window holds.
+    let mut frames = vec![
+        user_msg("before"),
+        thought("old "),
+        run_completed(Some(1_000)),
+    ];
+    frames.extend(mid_turn_msg("queued note"));
+    frames.push(thought("this"));
+    frames.push(run_completed(Some(2_000)));
+    let log: Vec<SequencedFrame> = frames.into_iter().map(SequencedFrame::from).collect();
+    let (rows, _) = transcript_from_frames_at(&log, 0, 3..log.len(), false, None);
+    let row =
+        thought_row(&rows.lines).expect("the record closes the turn the window was cut inside");
+    assert_eq!(row.reasoning.as_deref(), Some("this"));
+    assert_eq!(row.ms, Some(2_000));
+}
+
+#[test]
 fn test_upgraded_log_rows() {
     // A session started before the record existed and continued on a build
     // that writes one: the turns of the old era end at the next prompt, as
