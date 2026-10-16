@@ -32,6 +32,7 @@ pub(super) fn build_model_usage_view(entries: Vec<(String, ModelUsage)>) -> Vec<
             cache_read_tokens: u.cache_read_tokens,
             cache_write_tokens: u.cache_write_tokens,
             reasoning_tokens: u.reasoning_tokens,
+            provenance: u.provenance,
         })
         .collect()
 }

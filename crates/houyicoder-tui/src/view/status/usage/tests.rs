@@ -35,7 +35,6 @@ fn test_usage_tab_has_tokens() {
     let s = render_usage(&app);
     assert!(s.contains("input tokens:"), "input row: {s}");
     assert!(s.contains("output tokens:"), "output row: {s}");
-    assert!(s.contains("cached input:"), "cache row: {s}");
 }
 
 /// The Usage tab shows reasoning tokens (incl. in output) only when >0.
@@ -94,6 +93,7 @@ fn test_per_model_lists_models() {
             cache_read_tokens: 1_100_000,
             cache_write_tokens: 900_000,
             reasoning_tokens: 0,
+            provenance: UsageProvenance::ALL_REPORTED,
         },
         ModelUsageView {
             model: "glm-5.2".into(),
@@ -102,6 +102,7 @@ fn test_per_model_lists_models() {
             cache_read_tokens: 0,
             cache_write_tokens: 0,
             reasoning_tokens: 8_000,
+            provenance: UsageProvenance::ALL_REPORTED,
         },
     ];
     app.sessions.current.capabilities.status.status_cache = Some(snap);
@@ -122,6 +123,81 @@ fn test_per_model_lists_models() {
     );
     assert!(glm.contains("300k input"), "glm compact: {glm}");
     assert!(glm.contains("8k reasoning"), "glm reasoning shown: {glm}");
+}
+
+/// A model whose calls never reported the cache-read field leaves that count
+/// at zero without measuring it. The row states neither the count nor a share
+/// for it, rather than a 0% that reads as a miss.
+#[test]
+fn test_per_model_hides_share() {
+    let mut app = working_app();
+    let mut snap = app.snapshot_or_stub();
+    snap.by_model = vec![
+        ModelUsageView {
+            model: "glm-5.2".into(),
+            input_tokens: 300_000,
+            output_tokens: 100_000,
+            provenance: UsageProvenance {
+                input_reported: true,
+                cache_read_reported: false,
+                cache_write_reported: false,
+            },
+            ..Default::default()
+        },
+        ModelUsageView {
+            model: "qwen3.7-max".into(),
+            input_tokens: 1_000,
+            provenance: UsageProvenance::ALL_REPORTED,
+            ..Default::default()
+        },
+    ];
+    app.sessions.current.capabilities.status.status_cache = Some(snap);
+    let s = render_usage(&app);
+    let row = s
+        .lines()
+        .find(|l| l.contains("glm-5.2"))
+        .expect("the model row");
+    assert!(
+        !row.contains("cached"),
+        "an unmeasured count claims nothing: {row}"
+    );
+    assert!(!row.contains('%'), "and no share: {row}");
+    assert!(
+        row.contains("300k input"),
+        "the tokens it did report stand: {row}"
+    );
+}
+
+/// A model that reported its cache-read count and reused nothing states the
+/// miss, the same way the session's own row does: a reported zero is a
+/// measurement, an unreported one is unknown.
+#[test]
+fn test_per_model_states_miss() {
+    let mut app = working_app();
+    let mut snap = app.snapshot_or_stub();
+    snap.by_model = vec![
+        ModelUsageView {
+            model: "glm-5.2".into(),
+            input_tokens: 300_000,
+            output_tokens: 100_000,
+            provenance: UsageProvenance::ALL_REPORTED,
+            ..Default::default()
+        },
+        ModelUsageView {
+            model: "qwen3.7-max".into(),
+            input_tokens: 1_000,
+            provenance: UsageProvenance::ALL_REPORTED,
+            ..Default::default()
+        },
+    ];
+    app.sessions.current.capabilities.status.status_cache = Some(snap);
+    let s = render_usage(&app);
+    let row = s
+        .lines()
+        .find(|l| l.contains("glm-5.2"))
+        .expect("the model row");
+    assert!(row.contains("0 cached"), "the miss is stated: {row}");
+    assert!(row.contains("(0.0%)"), "with the share it measures: {row}");
 }
 
 /// A model id wider than the label column still keeps a separating space,
@@ -148,7 +224,14 @@ fn test_long_model_id_spacing() {
         s.contains("deepseek-v4-pro-0813: 2m input"),
         "long id keeps a space: {s}"
     );
-    assert!(s.contains("cached"), "clear cache label: {s}");
+    let row = s
+        .lines()
+        .find(|l| l.contains("qwen3.7-max"))
+        .expect("the second model row");
+    assert!(
+        row.contains("qwen3.7-max: ") && row.contains("1k input"),
+        "the shorter id keeps its gap too: {row}"
+    );
     assert!(!s.contains("cache rd"), "no abbreviation: {s}");
 }
 
@@ -375,6 +458,49 @@ fn test_usage_cache_share() {
     assert!(s.contains("cached input"), "the row is present: {s}");
     assert!(s.contains("500"), "the count stands: {s}");
     assert!(!s.contains("% of input"), "no share to divide by: {s}");
+}
+
+/// The cached row appears with what the session's calls reported: an
+/// unreported zero is unknown and stays off the tab, while a zero the
+/// endpoints did report is a measured miss the row states.
+#[test]
+fn test_cached_row_follows_report() {
+    let mut app = working_app();
+    let mut snap = app
+        .sessions
+        .current
+        .capabilities
+        .status
+        .status_cache
+        .take()
+        .unwrap_or_default();
+    snap.model = "m".into();
+    snap.cumulative_usage = Usage {
+        input_tokens: 1000,
+        total_tokens: 1000,
+        ..Default::default()
+    };
+    app.sessions.current.capabilities.status.status_cache = Some(snap.clone());
+    let s = render_usage(&app);
+    assert!(
+        !s.contains("cached input"),
+        "no call reported the field, so the tab claims nothing: {s}"
+    );
+    snap.cumulative_usage.provenance = UsageProvenance {
+        input_reported: true,
+        cache_read_reported: true,
+        cache_write_reported: false,
+    };
+    app.sessions.current.capabilities.status.status_cache = Some(snap);
+    let s = render_usage(&app);
+    assert!(
+        s.contains("cached input"),
+        "a reported zero is a miss the row states: {s}"
+    );
+    assert!(
+        s.contains("(0.0% of input)"),
+        "with the share it measures: {s}"
+    );
 }
 
 /// A child that returned before reporting usage leaves the row saying so,

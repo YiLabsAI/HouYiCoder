@@ -27,7 +27,7 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 use houyicoder_context::SessionLogEntry;
-use houyicoder_protocol::llm::Usage;
+use houyicoder_protocol::llm::{Usage, UsageProvenance};
 use serde::{Deserialize, Serialize};
 
 use crate::agent::compaction::RecordedCompaction;
@@ -223,6 +223,13 @@ pub struct ModelUsage {
     pub cost_usd: f64,
     pub context_window: u32,
     pub max_output_tokens: u32,
+    /// Which of the token counts above reported. A model whose calls never
+    /// reported the cache-read field leaves the count at zero, so a reader
+    /// consults this before deriving a share from the two counts. Defaults to
+    /// all-unreported, so a payload that carries no flag for it reads as
+    /// unknown rather than as a measured zero.
+    #[serde(default)]
+    pub provenance: UsageProvenance,
 }
 
 /// Aggregated cost summary for a session. Carries the total USD, per-model
@@ -284,7 +291,10 @@ impl Default for CostAccumulator {
 }
 
 impl CostAccumulator {
-    /// Fold one response's usage and cost into the per-model tally.
+    /// Fold one response's usage and cost into the per-model tally. The
+    /// model's provenance folds with the counts, so one call that did not
+    /// report a field leaves the model total short of a full account and a
+    /// reader derives no share from it.
     pub fn record(
         &mut self,
         model: &str,
@@ -293,7 +303,14 @@ impl CostAccumulator {
         api_duration_ms: u64,
         api_duration_without_retries_ms: u64,
     ) {
-        let entry = self.by_model.entry(model.to_string()).or_default();
+        let entry = self
+            .by_model
+            .entry(model.to_string())
+            .or_insert_with(|| ModelUsage {
+                provenance: UsageProvenance::ALL_REPORTED,
+                ..ModelUsage::default()
+            });
+        entry.provenance = entry.provenance.merge(usage.provenance);
         entry.input_tokens += usage.input_tokens as u64;
         entry.output_tokens += usage.output_tokens as u64;
         entry.cache_read_tokens += usage.cache_read_input_tokens as u64;

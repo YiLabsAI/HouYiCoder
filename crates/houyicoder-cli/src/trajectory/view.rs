@@ -10,6 +10,7 @@ use super::turns::{self, FoldMode};
 
 use houyicoder_context::{SessionEvent, SessionLogEntry};
 use houyicoder_core::agent::multi_agent::aggregate_subagent_usage;
+use houyicoder_protocol::llm::{UsageProvenance, count_visible};
 use houyicoder_protocol::tool::tool_result_failed;
 use houyicoder_tui::state::TrajectoryTurnKey;
 use houyicoder_tui::view::trajectory_pane::{
@@ -164,6 +165,13 @@ fn build_summary(
         n => format!("{n} models"),
     };
     let total_cache_read = acc.cache_read + acc.subagent.cache_read;
+    // The account's completeness is one fact: the parent's turns and every
+    // child were folded by the same rule, so a reader asks this field whether a
+    // share is claimable instead of combining the two halves itself.
+    let usage_provenance = acc
+        .usage_provenance
+        .unwrap_or(UsageProvenance::ALL_REPORTED)
+        .merge(acc.subagent.provenance);
     let (ttft_avg_ms, ttft_p95_ms, ttft_p99_ms) = if acc.ttfts.is_empty() {
         (None, None, None)
     } else {
@@ -206,11 +214,9 @@ fn build_summary(
         } else {
             Some((acc.total_out + acc.subagent.output) as usize)
         },
-        cache_read: if total_cache_read > 0 {
-            Some(total_cache_read)
-        } else {
-            None
-        },
+        cache_read: count_visible(total_cache_read, usage_provenance.cache_read_reported)
+            .then_some(total_cache_read),
+        usage_provenance,
         failures: acc.failures,
         tool_calls: acc.tool_calls,
         duration_ms: acc.duration_ms,
@@ -245,6 +251,12 @@ struct AccTotals {
     model_ms: u64,
     tool_ms: u64,
     cache_read: u64,
+    /// Which of the counts above the endpoints reported, folded across the
+    /// turns the log recorded, or None before any turn reported usage. An
+    /// option rather than the type's own default, because a fold that has
+    /// counted nothing is complete (the identity is all-reported) while a turn
+    /// written before the flags existed reads as unknown.
+    usage_provenance: Option<UsageProvenance>,
     /// The span between the log's first and last event. None when the log
     /// carried no event to measure between.
     duration_ms: Option<u64>,
@@ -497,6 +509,9 @@ fn accumulate_session(events: &[SessionLogEntry], acc: &mut AccTotals) {
                 output_tokens,
                 cache_read_input_tokens,
                 model,
+                input_reported,
+                cache_read_reported,
+                cache_write_reported,
                 ..
             } => {
                 acc.total_in += *input_tokens;
@@ -504,6 +519,15 @@ fn accumulate_session(events: &[SessionLogEntry], acc: &mut AccTotals) {
                 acc.cache_read += *cache_read_input_tokens;
                 acc.decode_tokens += *output_tokens;
                 acc.usage_events += 1;
+                let provenance = UsageProvenance {
+                    input_reported: *input_reported,
+                    cache_read_reported: *cache_read_reported,
+                    cache_write_reported: *cache_write_reported,
+                };
+                acc.usage_provenance = Some(match acc.usage_provenance {
+                    Some(folded) => folded.merge(provenance),
+                    None => provenance,
+                });
                 if !model.is_empty() {
                     acc.models.insert(model.clone());
                 }

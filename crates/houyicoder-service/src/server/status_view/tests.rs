@@ -2,6 +2,7 @@
 
 use super::*;
 use houyicoder_core::observability::ModelUsage;
+use houyicoder_protocol::llm::UsageProvenance;
 
 #[test]
 fn test_model_view_trims_fields() {
@@ -20,6 +21,7 @@ fn test_model_view_trims_fields() {
             cost_usd: 1.5,
             context_window: 200_000,
             max_output_tokens: 8192,
+            provenance: UsageProvenance::ALL_REPORTED,
         },
     )];
     let view = build_model_usage_view(entries);
@@ -30,6 +32,11 @@ fn test_model_view_trims_fields() {
     assert_eq!(view[0].cache_read_tokens, 800);
     assert_eq!(view[0].cache_write_tokens, 0);
     assert_eq!(view[0].reasoning_tokens, 200);
+    assert_eq!(
+        view[0].provenance,
+        UsageProvenance::ALL_REPORTED,
+        "the trim keeps what the row needs to decide whether a share is claimable"
+    );
 }
 
 #[test]

@@ -799,6 +799,60 @@ fn test_measured_miss_is_stated() {
     assert!(!head.contains("(0%)"), "a miss names no count: {head}");
 }
 
+/// The session header derives its share from the account the folds own, not
+/// from the two counts alone: an account the endpoints did not fully report
+/// leaves the cache-read total a floor, and dividing it by an input total short
+/// by whatever went unreported would read as a share the session never had.
+#[test]
+fn test_session_header_hides_share() {
+    let view = TrajectoryView {
+        tokens_in: Some(1_000),
+        tokens_out: Some(200),
+        cache_read: Some(500),
+        usage_provenance: UsageProvenance {
+            input_reported: true,
+            cache_read_reported: false,
+            cache_write_reported: false,
+        },
+        ..view(Vec::new())
+    };
+    let (header, _, _, _) = list::draw_turn_list(&view, 0, Rect::new(0, 0, 100, 25));
+    let head: String = header
+        .iter()
+        .flat_map(|l| l.spans.iter())
+        .map(|s| s.content.as_ref())
+        .collect();
+    assert!(
+        !head.contains("cache hit"),
+        "a partial account states no share: {head}"
+    );
+    assert!(!head.contains('%'), "and no percentage: {head}");
+    assert!(
+        head.contains("1.0k in 200 out"),
+        "the counts themselves still render: {head}"
+    );
+}
+
+/// A session whose endpoints reported the cache-read count and reused nothing
+/// states the miss: a reported zero is a measurement, not a missing value.
+#[test]
+fn test_session_header_states_miss() {
+    let view = TrajectoryView {
+        tokens_in: Some(1_000),
+        tokens_out: Some(200),
+        cache_read: Some(0),
+        usage_provenance: UsageProvenance::ALL_REPORTED,
+        ..view(Vec::new())
+    };
+    let (header, _, _, _) = list::draw_turn_list(&view, 0, Rect::new(0, 0, 100, 25));
+    let head: String = header
+        .iter()
+        .flat_map(|l| l.spans.iter())
+        .map(|s| s.content.as_ref())
+        .collect();
+    assert!(head.contains("cache hit 0%"), "the miss is stated: {head}");
+}
+
 /// Entering trajectory initializes cursor to tail, and draw clamps and persists it.
 #[test]
 fn test_enter_trajectory_clamps_tail() {

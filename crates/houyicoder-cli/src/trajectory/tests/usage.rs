@@ -1,10 +1,21 @@
-//! Tests for the turn's usage totals: which counts the durable log hands the
-//! fold, and the cache share the account behind them does or does not support.
+//! Tests for the turn's usage totals and the session account they fold into:
+//! which counts the durable log hands the fold, the cache share the account
+//! behind them does or does not support, and the same account read through the
+//! paged disk path the product runs on.
 
+use super::super::reader::SessionLogTrajectory;
 use super::super::view::build_view;
+use super::paging::{pump, reader_of};
 use super::view::{ev, usage_ev, usage_ev_unreported};
-use houyicoder_context::SessionEvent;
+use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
+use houyicoder_memory::LocalFileBackend;
+use houyicoder_session::SessionStore;
 use houyicoder_tui::view::trajectory_pane::{TrajectoryRow, TrajectoryTurn, TrajectoryView};
+use std::env::temp_dir;
+use std::fs::create_dir_all;
+use std::process::id;
+use std::sync::Arc;
+use tokio::runtime::Runtime;
 
 fn turn_of(view: &TrajectoryView, index: usize) -> &TrajectoryTurn {
     match &view.rows[index] {
@@ -342,4 +353,184 @@ fn test_child_report_hides_share() {
         None,
         "a child that reported no account leaves the turn's share unstated"
     );
+}
+
+/// The session's account holds the parent's calls and every child's, and its
+/// completeness is one folded fact: the parent reported everything here, the
+/// child reported nothing, and the session is still not complete.
+#[test]
+fn test_child_report_gates_session() {
+    let events = vec![
+        ev(
+            100,
+            SessionEvent::UserInput {
+                text: "delegate".into(),
+            },
+        ),
+        ev(
+            105,
+            SessionEvent::TurnStarted {
+                turn: 1,
+                call_in_turn: 0,
+            },
+        ),
+        usage_ev(110, 1, 1_000, 10, 500),
+        ev(
+            120,
+            SessionEvent::SubagentReturn {
+                child_session_id: "child".into(),
+                status: "completed".into(),
+                summary: "done".into(),
+                result_ref: String::new(),
+                input_tokens: 0,
+                output_tokens: 0,
+                cache_read_input_tokens: 0,
+                cache_write_input_tokens: 0,
+                reasoning_tokens: 0,
+                input_reported: false,
+                cache_read_reported: false,
+                cache_write_reported: false,
+            },
+        ),
+    ];
+    let view = build_view(&events, "test", 0);
+    assert!(
+        !view.usage_provenance.cache_account_complete(),
+        "a parent that reported everything does not cover a child that did not"
+    );
+    assert_eq!(
+        view.tokens_in, None,
+        "a child that measured nothing leaves the session total unknown"
+    );
+}
+
+/// A session whose endpoints reported the cache-read count and reused nothing
+/// carries a zero, not an absence: the header derives a measured miss from it
+/// rather than staying silent as it does for an unreported count.
+#[test]
+fn test_reported_zero_is_stated() {
+    let events = vec![
+        ev(
+            100,
+            SessionEvent::UserInput {
+                text: "fresh".into(),
+            },
+        ),
+        ev(
+            105,
+            SessionEvent::TurnStarted {
+                turn: 1,
+                call_in_turn: 0,
+            },
+        ),
+        usage_ev(110, 1, 1_000, 10, 0),
+    ];
+    let view = build_view(&events, "test", 0);
+    assert_eq!(
+        view.cache_read,
+        Some(0),
+        "a reported zero is a count the header can state"
+    );
+    assert!(
+        view.usage_provenance.cache_account_complete(),
+        "and the account behind it is complete"
+    );
+}
+
+/// The paged disk path carries the session's completeness beside its counts, so
+/// the header can ask whether the account behind them is whole. A log whose call
+/// reported nothing leaves the share silent rather than deriving it over an
+/// input total short by whatever went unreported.
+#[test]
+fn test_disk_header_hides_share() {
+    let reader = disk_usage_reader(|sid| vec![usage_entry(sid, 110, 1_000, 10, 0, false)]);
+    let view = pump(&reader);
+    assert!(
+        !view.usage_provenance.cache_account_complete(),
+        "the call reported no account, so the summary says the session is incomplete"
+    );
+    assert_eq!(
+        view.cache_read, None,
+        "and an unreported zero is unknown rather than a measured miss"
+    );
+    assert_eq!(
+        view.tokens_in,
+        Some(1_000),
+        "the count stands as a floor even though no call reported the field"
+    );
+}
+
+/// The same path keeps a zero the endpoints did report: a session that reused
+/// nothing and said so states a measured miss, share and all.
+#[test]
+fn test_disk_header_states_miss() {
+    let reader = disk_usage_reader(|sid| vec![usage_entry(sid, 110, 1_000, 10, 0, true)]);
+    let view = pump(&reader);
+    assert!(
+        view.usage_provenance.cache_account_complete(),
+        "every call reported, so the session's account is whole"
+    );
+    assert_eq!(
+        view.cache_read,
+        Some(0),
+        "a reported zero is a count the header states"
+    );
+    assert_eq!(
+        view.usage_provenance.cache_hit_pct(0, 1_000),
+        Some(0.0),
+        "and the share over it is a measured miss"
+    );
+}
+
+/// One model call's usage as a log entry, with the reporting flags the caller
+/// asks for: the remaining flags stay off, as a log written before they existed
+/// would have them.
+fn usage_entry(
+    sid: SessionId,
+    ts: u64,
+    input: u64,
+    output: u64,
+    cache_read: u64,
+    reported: bool,
+) -> SessionLogEntry {
+    SessionLogEntry {
+        id: EventId::new(),
+        session: sid,
+        ts,
+        prev_hash: None,
+        event: SessionEvent::TurnUsage {
+            turn: 1,
+            call_in_turn: 1,
+            input_tokens: input,
+            output_tokens: output,
+            cache_read_input_tokens: cache_read,
+            cache_write_input_tokens: 0,
+            reasoning_tokens: 0,
+            model: "test".into(),
+            recovery: false,
+            effort: None,
+            input_reported: reported,
+            cache_read_reported: reported,
+            cache_write_reported: false,
+        },
+    }
+}
+
+/// A file-backed reader over the entries the builder writes for the session it
+/// is handed, so a test states the log a header is read from.
+fn disk_usage_reader(
+    build: impl FnOnce(SessionId) -> Vec<SessionLogEntry>,
+) -> SessionLogTrajectory {
+    let root = temp_dir().join(format!("houyi_disk_usage_{}_{}", SessionId::new(), id()));
+    create_dir_all(&root).expect("create temp root");
+    let store = Arc::new(SessionStore::new(Box::new(LocalFileBackend::new(
+        root.clone(),
+    ))));
+    let sid = SessionId::new();
+    let rt = Runtime::new().expect("test runtime");
+    for entry in build(sid) {
+        rt.block_on(store.append(entry)).expect("append");
+    }
+    let (reader, _history) = reader_of(&store, sid);
+    reader
 }

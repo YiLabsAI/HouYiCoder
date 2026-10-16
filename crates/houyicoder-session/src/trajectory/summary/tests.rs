@@ -461,6 +461,76 @@ fn test_unmeasured_child_breaks_totals() {
     );
 }
 
+/// The headline account is what the whole session spent: the parent's calls
+/// plus every child's. The delegated half also stays beside it, so a reader
+/// that wants the child's contribution reads it rather than subtracting.
+#[test]
+fn test_total_includes_delegated() {
+    let events = vec![
+        entry(0, SessionEvent::UserInput { text: "a".into() }),
+        usage(10, 1_000, 100, "m"),
+        child_return(20, 500, 50, true),
+        entry(30, SessionEvent::RunCompleted { ms: Some(1) }),
+    ];
+    let summary = fold(&events);
+    assert_eq!(
+        summary.usage.input_tokens, 1_500,
+        "the parent's calls and the child's together"
+    );
+    assert_eq!(summary.usage.output_tokens, 150);
+    assert_eq!(
+        summary.usage.cache_read_tokens, 750,
+        "the child's cache-read count is in the session's, not only beside it"
+    );
+    assert_eq!(summary.usage.subagent.input_tokens, 500);
+    assert!(summary.usage.provenance.cache_account_complete());
+}
+
+/// A child that did not report a field leaves the session's account partial
+/// even when every parent turn reported: the account holds the child, so its
+/// silence is a hole in the same account, and a reader that combined the two
+/// halves itself would eventually read the total as complete.
+#[test]
+fn test_unreported_child_hides_share() {
+    let events = vec![
+        entry(0, SessionEvent::UserInput { text: "a".into() }),
+        usage(10, 1_000, 100, "m"),
+        child_return(20, 0, 0, false),
+        entry(30, SessionEvent::RunCompleted { ms: Some(1) }),
+    ];
+    let summary = fold(&events);
+    assert!(
+        !summary.usage.provenance.cache_account_complete(),
+        "the child reported nothing, so the session's account is partial"
+    );
+    assert_eq!(
+        summary.usage.input_tokens, 1_000,
+        "an unmeasured child adds no tokens to the total"
+    );
+}
+
+/// A child's durable return, reporting the counts it measured. A child that
+/// reached a terminal without reporting leaves zeroes with the flags clear.
+fn child_return(ts: u64, input: u64, output: u64, reported: bool) -> SessionLogEntry {
+    entry(
+        ts,
+        SessionEvent::SubagentReturn {
+            child_session_id: "child".into(),
+            status: "completed".into(),
+            summary: String::new(),
+            result_ref: "child".into(),
+            input_tokens: input,
+            output_tokens: output,
+            cache_read_input_tokens: input / 2,
+            cache_write_input_tokens: 0,
+            reasoning_tokens: 0,
+            input_reported: reported,
+            cache_read_reported: reported,
+            cache_write_reported: false,
+        },
+    )
+}
+
 #[test]
 fn test_delegated_usage_folds() {
     let events = vec![entry(

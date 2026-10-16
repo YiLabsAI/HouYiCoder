@@ -213,11 +213,17 @@ pub struct TrajectoryView {
     pub total_turns: usize,
     pub tokens_in: Option<usize>,
     pub tokens_out: Option<usize>,
-    /// The cache-read count the session's log holds, or None when nothing in
-    /// it was cached. It is a floor on what the session reused, and nothing
-    /// more: whether the account behind it is complete is a fact of the turns,
-    /// held on each turn's own provenance rather than summary-folded here.
+    /// The cache-read count the session's log holds, or None when the count
+    /// is unknown and nothing was reported cached. A count the endpoints
+    /// reported, or one above zero, is carried as it stands: it is a floor on
+    /// what the session reused.
     pub cache_read: Option<u64>,
+    /// Which of the session's counts the endpoints reported, folded by the one
+    /// fold that owns the session's account. A share is derived from this
+    /// rather than from the counts alone: the totals include the delegated
+    /// children, so a child that reported nothing leaves the account partial
+    /// even when every one of the session's own turns reported.
+    pub usage_provenance: UsageProvenance,
     pub failures: usize,
     /// Tool calls the session issued, from the session summary rather than
     /// from the rows the window happens to hold.

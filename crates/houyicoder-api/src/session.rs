@@ -158,7 +158,10 @@ pub struct TrajectoryRevision {
     pub epoch_event_id: Option<EventId>,
 }
 
-/// The session's token account.
+/// The session's token account: what the parent's own calls and every
+/// delegated child spent together, which is the figure the headline reports.
+/// The delegated half is also carried on its own, so a reader that wants the
+/// child contribution reads it there rather than subtracting.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct TrajectoryUsageSummary {
     pub input_tokens: u64,
@@ -167,6 +170,14 @@ pub struct TrajectoryUsageSummary {
     /// False when any turn reached its end without reporting usage, so the
     /// token figures are a lower bound rather than the session's cost.
     pub totals_known: bool,
+    /// Which of the counts above the endpoints reported, folded across every
+    /// turn and every child by the one fold that owns the session's account.
+    /// A reader asks this whether a share is claimable rather than combining
+    /// the parent's and the delegated half itself: a parent that reported
+    /// everything and a child that reported nothing is not a complete
+    /// account, and a reader left to work that out would eventually read it
+    /// as one.
+    pub provenance: UsageProvenance,
     pub failures: usize,
     /// Tool calls the session issued, counted from the calls themselves so a
     /// header can report the session rather than the page it has loaded.

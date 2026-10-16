@@ -10,6 +10,7 @@ use super::{DELTA_MAX_BYTES, PageRead, SessionHistory};
 use super::{
     DurableWatermark, ResidentPage, SessionLogTrajectory, TrajectoryHead, TrajectoryState,
 };
+use houyicoder_protocol::llm::count_visible;
 use houyicoder_tui::view::trajectory_pane::{
     ModelSwitchBoundary, SessionTiming, SubagentUsage, TurnBoundary,
 };
@@ -129,13 +130,18 @@ impl SessionLogTrajectory {
                 .usage
                 .totals_known
                 .then_some(summary.usage.output_tokens as usize),
-            cache_read: (summary.usage.cache_read_tokens > 0)
-                .then_some(summary.usage.cache_read_tokens),
+            // A count is shown when the endpoints reported it or when it is
+            // above zero: a reported zero is a measured miss worth seeing, and
+            // an unreported one is unknown. The share the header derives from
+            // this and the input total asks the session's provenance instead.
+            cache_read: count_visible(
+                summary.usage.cache_read_tokens,
+                summary.usage.provenance.cache_read_reported,
+            )
+            .then_some(summary.usage.cache_read_tokens),
+            usage_provenance: summary.usage.provenance,
             failures: summary.usage.failures,
             tool_calls: summary.usage.tool_calls,
-            // The span is measured between the log's first and last event, so
-            // a log with no durable event has no span to report: saying zero
-            // would claim a measurement the session never made.
             // The span is measured between the log's first and last event, so
             // a log with no durable event has no span to report: saying zero
             // would claim a measurement the session never made.

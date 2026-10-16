@@ -13,6 +13,7 @@ use houyicoder_api::session::{
     SubagentUsage, TrajectorySummary, TrajectoryTimingSummary, TrajectoryUsageSummary,
 };
 use houyicoder_context::{SessionEvent, SessionLogEntry};
+use houyicoder_protocol::llm::UsageProvenance;
 use houyicoder_protocol::tool::{simple_command_word, tool_result_failed};
 use serde_json::Value;
 
@@ -149,6 +150,14 @@ pub(crate) struct TrajectorySummaryState {
     input_tokens: u64,
     output_tokens: u64,
     cache_read_tokens: u64,
+    /// Which of the counts above the endpoints reported, folded across the
+    /// turns this fold counted, or None before any turn reported usage. An
+    /// option rather than the type's own default, because a fold that has
+    /// counted nothing is complete (the identity is all-reported) while a
+    /// record written before the flags existed reads as unknown. The snapshot
+    /// joins it with the delegated half, so the account's completeness has one
+    /// owner and no reader combines the two itself.
+    turn_provenance: Option<UsageProvenance>,
     failures: usize,
     tool_calls: usize,
     subagent: SubagentUsage,
@@ -217,12 +226,20 @@ impl TrajectorySummaryState {
                 input_tokens,
                 output_tokens,
                 cache_read_input_tokens,
+                input_reported,
+                cache_read_reported,
+                cache_write_reported,
                 model,
                 ..
             } => self.fold_usage(
                 *input_tokens,
                 *output_tokens,
                 *cache_read_input_tokens,
+                UsageProvenance {
+                    input_reported: *input_reported,
+                    cache_read_reported: *cache_read_reported,
+                    cache_write_reported: *cache_write_reported,
+                },
                 model,
             ),
             SessionEvent::ModelStepTiming {
@@ -260,11 +277,22 @@ impl TrajectorySummaryState {
         self.open_turn_has_usage = false;
     }
 
-    fn fold_usage(&mut self, input: u64, output: u64, cache_read: u64, model: &str) {
+    fn fold_usage(
+        &mut self,
+        input: u64,
+        output: u64,
+        cache_read: u64,
+        provenance: UsageProvenance,
+        model: &str,
+    ) {
         self.open_turn_has_usage = true;
         self.input_tokens = self.input_tokens.saturating_add(input);
         self.output_tokens = self.output_tokens.saturating_add(output);
         self.cache_read_tokens = self.cache_read_tokens.saturating_add(cache_read);
+        self.turn_provenance = Some(match self.turn_provenance {
+            Some(folded) => folded.merge(provenance),
+            None => provenance,
+        });
         // Decode speed is measured against the tokens the model produced,
         // which is what the output count reports.
         self.decode_tokens = self.decode_tokens.saturating_add(output);
@@ -380,13 +408,26 @@ impl TrajectorySummaryState {
         // of completeness covers both. A reader that had to combine the two
         // fields itself would eventually read the total as complete.
         let subagent_unmeasured = self.subagent.unmeasured_calls > 0;
+        let turn_provenance = self
+            .turn_provenance
+            .unwrap_or(UsageProvenance::ALL_REPORTED);
         TrajectorySummary {
             total_turns: self.numbered_turns(),
             usage: TrajectoryUsageSummary {
-                input_tokens: self.input_tokens,
-                output_tokens: self.output_tokens,
-                cache_read_tokens: self.cache_read_tokens,
+                // The session's own account is the parent's calls plus every
+                // child's: what the whole session spent is the figure the
+                // headline reports, and the delegated half is carried beside
+                // it so a reader can see the child's contribution rather than
+                // subtract for it.
+                input_tokens: self.input_tokens.saturating_add(self.subagent.input_tokens),
+                output_tokens: self
+                    .output_tokens
+                    .saturating_add(self.subagent.output_tokens),
+                cache_read_tokens: self
+                    .cache_read_tokens
+                    .saturating_add(self.subagent.cache_read_input_tokens),
                 totals_known: self.totals_known() && !subagent_unmeasured,
+                provenance: turn_provenance.merge(self.subagent.provenance),
                 failures: self.failures,
                 tool_calls: self.tool_calls,
                 subagent: self.subagent,

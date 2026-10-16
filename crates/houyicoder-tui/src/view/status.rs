@@ -16,6 +16,7 @@ use ratatui::{
 };
 
 use houyicoder_protocol::frontend::permission::PermissionMode;
+use houyicoder_protocol::llm::count_visible;
 
 use crate::state::{App, Pane, Stage, ViewportMode};
 use crate::view::logo;

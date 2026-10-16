@@ -10,7 +10,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::llm::Usage;
+use crate::llm::{Usage, UsageProvenance};
 
 /// A runner status snapshot, wire form. Owned + serde so it crosses any
 /// carrier. The TUI renders this directly; it never sees the engine
@@ -110,6 +110,13 @@ pub struct ModelUsageView {
     pub cache_read_tokens: u64,
     pub cache_write_tokens: u64,
     pub reasoning_tokens: u64,
+    /// Which of those counts the endpoints behind this model reported. A
+    /// model whose calls never reported the cache-read field leaves the count
+    /// at zero, so the row consults this before claiming a share. Defaults to
+    /// all-unreported, so a payload that carries no flag for it reads as
+    /// unknown rather than as a confirmed zero.
+    #[serde(default)]
+    pub provenance: UsageProvenance,
 }
 
 fn default_true() -> bool {
@@ -159,3 +166,6 @@ pub enum SessionProvenance {
         task_id: String,
     },
 }
+
+#[cfg(test)]
+mod tests;

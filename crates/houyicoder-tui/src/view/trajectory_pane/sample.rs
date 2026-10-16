@@ -82,6 +82,7 @@ pub(crate) fn sample_trajectory() -> TrajectoryView {
         failures: 1,
         duration_ms: Some(39_000),
         cache_read: Some(9800),
+        usage_provenance: UsageProvenance::ALL_REPORTED,
         timing: SessionTiming {
             ttft_samples: 12,
             ttft_avg_ms: Some(420),

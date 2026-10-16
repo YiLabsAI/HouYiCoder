@@ -175,9 +175,11 @@ pub(super) fn draw_turn_list(
         (None, None) => "—".to_string(),
     };
     let cache_hit_str = match (traj.cache_read, traj.tokens_in) {
-        (Some(c), Some(tin)) if tin > 0 => {
-            format!(" · cache hit {:.0}%", 100.0 * c as f64 / tin as f64)
-        }
+        (Some(c), Some(tin)) => traj
+            .usage_provenance
+            .cache_hit_pct(c, tin as u64)
+            .map(|pct| format!(" · cache hit {pct:.0}%"))
+            .unwrap_or_default(),
         _ => String::new(),
     };
     // Both ends can be unloaded at once: the window is walked back from the

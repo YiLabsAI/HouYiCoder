@@ -24,7 +24,7 @@ use crate::state::{TrajectoryDrill, TrajectoryPaneState, TrajectoryTurnKey};
 use crate::view::line_wrap::truncate_width;
 use crate::view::navigation::key_hint;
 use crate::view::relative_time::{format_span_ms, now_epoch_secs, relative_time};
-use houyicoder_protocol::llm::UsageProvenance;
+use houyicoder_protocol::llm::{UsageProvenance, count_visible};
 use std::sync::Arc;
 use unicode_width::UnicodeWidthStr;
 
@@ -99,19 +99,6 @@ pub struct EventUsage {
     /// zero is unknown rather than a measured zero, so the drill consults this
     /// before printing a count.
     pub provenance: UsageProvenance,
-}
-
-/// Whether a recorded count belongs on a row: the endpoint said it reported
-/// the field, or the count itself is above zero.
-///
-/// A zero no call reported is unknown, not a measured miss, so it stays off the
-/// row. A zero the endpoint did report is kept — a miss the provider measured is
-/// worth seeing — and a count above zero is shown even when the account behind
-/// it is incomplete, because a floor is honest where a quotient over that
-/// account is not. Only counts go through this; a share is derived from the
-/// complete-account rule instead.
-fn count_visible(count: u64, reported: bool) -> bool {
-    reported || count > 0
 }
 
 /// Latency facts for one model call, as measured by the agent loop. A call

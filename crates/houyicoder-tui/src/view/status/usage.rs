@@ -1,5 +1,10 @@
 //! The Usage sub-tab: cumulative token and cache totals, the session's
 //! latency summary, delegated work, and the per-model breakdown.
+//!
+//! A cache-read count is stated when the endpoints reported the field or when
+//! it is above zero, and a share only over an account they fully reported: a
+//! count is a floor on what was reused, while a quotient over a partial
+//! account can read higher than the truth.
 
 use unicode_width::UnicodeWidthStr;
 
@@ -91,11 +96,13 @@ pub(super) fn render_usage(app: &App) -> String {
         ));
     }
     let cache_read = u.cache_read_input_tokens as u64;
-    let cache_value = match u.cache_hit_pct() {
-        Some(pct) => format!("{} ({pct:.1}% of input)", ft(cache_read)),
-        None => ft(cache_read),
-    };
-    s.push_str(&f("cached input", &cache_value));
+    if count_visible(cache_read, u.provenance.cache_read_reported) {
+        let cache_value = match u.cache_hit_pct() {
+            Some(pct) => format!("{} ({pct:.1}% of input)", ft(cache_read)),
+            None => ft(cache_read),
+        };
+        s.push_str(&f("cached input", &cache_value));
+    }
     // Not every provider reports cache creation. A zero cannot distinguish
     // an actual zero from an omitted field, so show this row only with data.
     if u.cache_write_input_tokens > 0 {
@@ -138,19 +145,16 @@ pub(super) fn render_usage(app: &App) -> String {
             if m.reasoning_tokens > 0 {
                 row.push_str(&format!(" · {} reasoning", ft(m.reasoning_tokens)));
             }
-            let cache_pct = if m.input_tokens > 0 {
-                format!(
-                    " ({:.1}%)",
-                    100.0 * m.cache_read_tokens as f64 / m.input_tokens as f64
-                )
-            } else {
-                String::new()
+            let cache_pct = match m
+                .provenance
+                .cache_hit_pct(m.cache_read_tokens, m.input_tokens)
+            {
+                Some(pct) => format!(" ({pct:.1}%)"),
+                None => String::new(),
             };
-            row.push_str(&format!(
-                " · {} cached{}",
-                ft(m.cache_read_tokens),
-                cache_pct
-            ));
+            if count_visible(m.cache_read_tokens, m.provenance.cache_read_reported) {
+                row.push_str(&format!(" · {} cached{cache_pct}", ft(m.cache_read_tokens)));
+            }
             if m.cache_write_tokens > 0 {
                 row.push_str(&format!(" · {} cache creation", ft(m.cache_write_tokens)));
             }

@@ -94,6 +94,19 @@ impl UsageProvenance {
     }
 }
 
+/// Whether a recorded count belongs on a row: the endpoint said it reported the
+/// field, or the count itself is above zero.
+///
+/// A zero no call reported is unknown, not a measured miss, so it stays off the
+/// row. A zero the endpoint did report is kept — a miss the provider measured is
+/// worth seeing — and a count above zero is shown even when the account behind
+/// it is incomplete, because a floor is honest where a quotient over that
+/// account is not. Only counts go through this; a share is derived from the
+/// complete-account rule instead.
+pub fn count_visible(count: u64, reported: bool) -> bool {
+    reported || count > 0
+}
+
 /// Token usage for one model call. Inclusive totals plus a non-overlapping
 /// breakdown; see the module doc for the invariants.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

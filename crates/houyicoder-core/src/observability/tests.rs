@@ -355,3 +355,54 @@ fn test_two_models_tracked_separately() {
     assert_eq!(cost.by_model["model-b"].input_tokens, 200);
     assert_eq!(cost.total_api_duration_ms, 70);
 }
+
+/// A cost summary payload that carries no provenance record reads as
+/// all-unreported, so a reader derives no share from counts whose endpoints
+/// never said whether they reported them.
+#[test]
+fn test_legacy_summary_unreported() {
+    let legacy = r#"{"total_cost_usd":0.0,"by_model":{"glm-5.2":{
+        "input_tokens":1000,"output_tokens":0,"cache_read_tokens":0,
+        "cache_write_tokens":0,"reasoning_tokens":0,"web_search_requests":0,
+        "cost_usd":0.0,"context_window":0,"max_output_tokens":0}},
+        "total_api_duration_ms":0,"total_wall_duration_ms":0,
+        "total_api_duration_without_retries_ms":0,"lines_added":0,"lines_removed":0}"#;
+    let summary: CostSummary = serde_json::from_str(legacy).expect("a legacy cost summary");
+    let model = &summary.by_model["glm-5.2"];
+    assert_eq!(
+        model.provenance,
+        UsageProvenance::default(),
+        "a summary with no provenance record reads as all-unreported"
+    );
+    assert!(!model.provenance.cache_account_complete());
+}
+
+/// The cost log folds each call's reporting into the model's own account, so a
+/// model one of whose calls reported nothing reads as incomplete there, and one
+/// whose calls all reported reads as whole.
+#[test]
+fn test_unreported_call_gates_model() {
+    let reported_call = || Usage {
+        provenance: UsageProvenance::ALL_REPORTED,
+        ..usage(100, 50, 80)
+    };
+    let mut partial = ObservabilityLog::new(200_000);
+    partial.record_usage("model-a", &reported_call(), 0, 30, 30, 200_000, 32_768);
+    partial.record_usage("model-a", &usage(200, 30, 120), 0, 40, 40, 200_000, 32_768);
+    let model = &partial.cost().by_model["model-a"];
+    assert_eq!(model.input_tokens, 300, "both calls are folded");
+    assert!(
+        !model.provenance.cache_account_complete(),
+        "one call that reported nothing leaves the model's account incomplete"
+    );
+
+    let mut whole = ObservabilityLog::new(200_000);
+    whole.record_usage("model-a", &reported_call(), 0, 30, 30, 200_000, 32_768);
+    whole.record_usage("model-a", &reported_call(), 0, 40, 40, 200_000, 32_768);
+    assert!(
+        whole.cost().by_model["model-a"]
+            .provenance
+            .cache_account_complete(),
+        "a model whose calls all reported keeps a complete account"
+    );
+}
