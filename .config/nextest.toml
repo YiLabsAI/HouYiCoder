@@ -5,3 +5,12 @@
 # test a few times over, so the kill sits far enough above the budget that a
 # busy machine does not turn into a failing gate.
 slow-timeout = { period = "1s", terminate-after = 20 }
+
+# Replaying a multi-megabyte session log through a debug-profile binary in a
+# terminal holds this test at tens of seconds, which is the default kill line
+# itself, so a healthy run was reported as a hang. The budget stays where a
+# stall shows (ten seconds of silence) and the kill sits well above the
+# replay's own runtime.
+[[profile.default.overrides]]
+filter = 'test(test_history_loads_without_keys)'
+slow-timeout = { period = "10s", terminate-after = 12 }
