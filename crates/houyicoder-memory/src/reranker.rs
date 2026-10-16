@@ -11,6 +11,7 @@ use houyicoder_api::memory::{MemoryReranker, RerankOutcome};
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_async::PFut;
 use houyicoder_context::{MemoryRankHit, memory_age_days, memory_age_label};
+use houyicoder_protocol::cache_policy::PromptCacheFormat;
 use houyicoder_protocol::llm::{
     CompletionRequest, CompletionResponse, InputItem, ModelSettings, OutputItem,
 };
@@ -63,6 +64,7 @@ impl MemoryReranker for SemanticReranker {
                 tools: Vec::new(),
                 settings: ModelSettings::default(),
                 cache_breakpoints: Vec::new(),
+                cache_format: PromptCacheFormat::AutoPrefix,
             };
             match provider.complete(req).await {
                 Ok(resp) => parse_selection(&resp, &keys, limit),

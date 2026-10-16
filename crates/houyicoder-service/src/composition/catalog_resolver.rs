@@ -8,6 +8,7 @@ use houyicoder_config::{
     ModelSection, SettingsWriteError, load_model_section_from, update_settings,
 };
 use houyicoder_core::agent::{ModelCatalogResolver, effort_default_for};
+use houyicoder_protocol::cache_policy::PromptCacheFormat;
 use houyicoder_protocol::frontend::model::SpeedMode;
 use houyicoder_protocol::llm::EffortLevel;
 use serde_json::json;
@@ -182,6 +183,14 @@ impl ModelCatalogResolver for SettingsCatalogResolver {
             .iter()
             .find(|e| e.id == model)
             .and_then(|e| e.fast)
+    }
+
+    fn catalog_cache_format(&self, model: &str) -> Option<PromptCacheFormat> {
+        self.section
+            .catalog
+            .iter()
+            .find(|e| e.id == model)
+            .and_then(|e| e.cache_format)
     }
 }
 

@@ -33,7 +33,7 @@ use crate::{
 use futures::StreamExt;
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_async::PFut;
-use houyicoder_protocol::cache_policy::BreakpointKind;
+use houyicoder_protocol::cache_policy::{BreakpointKind, PromptCacheFormat};
 use houyicoder_protocol::llm::Usage;
 use houyicoder_protocol::llm::{
     CompletionRequest, CompletionResponse, EffortLevel, InputItem, LlmEvent, ModelCapabilities,
@@ -461,10 +461,7 @@ fn map_input_item(item: &InputItem) -> Value {
 
 /// Build the chat/completions JSON body from the unified CompletionRequest.
 fn build_request_body(req: &CompletionRequest) -> Value {
-    let has_prefix_breakpoint = req
-        .cache_breakpoints
-        .iter()
-        .any(|bp| bp.kind == BreakpointKind::SystemStaticPrefix);
+    let marks = |kind: BreakpointKind| req.cache_breakpoints.iter().any(|bp| bp.kind == kind);
     // The whole instructions string, static prefix and cwd-dependent suffix
     // alike, rides in one leading system message, so the tools and history
     // render after it. A cwd change thus diverges the contiguous prefix inside
@@ -476,20 +473,9 @@ fn build_request_body(req: &CompletionRequest) -> Value {
     // byte-stable turn to turn, and the full prefix reuses, so this order costs
     // nothing on the common path.
     let mut messages = Vec::with_capacity(req.input.len() + 1);
-    if has_prefix_breakpoint {
-        messages.push(json!({
-            "role": "system",
-            "content": [
-                {
-                    "type": "text",
-                    "text": req.instructions,
-                    "cache_control": {"type": "ephemeral"}
-                }
-            ]
-        }));
-    } else {
-        messages.push(json!({"role": "system", "content": req.instructions}));
-    }
+    let marked = req.cache_format == PromptCacheFormat::PositionalMarkers
+        && marks(BreakpointKind::SystemStaticPrefix);
+    messages.push(system_message(&req.instructions, marked));
     messages.extend(req.input.iter().map(map_input_item));
     let mut body = json!({"model": req.model, "messages": messages, "stream": false});
     if !req.tools.is_empty() {
@@ -552,28 +538,106 @@ fn build_request_body(req: &CompletionRequest) -> Value {
     if req.settings.speed == Some(SpeedMode::Fast) {
         body["service_tier"] = json!("fast");
     }
-    // Lower the symbolic cache breakpoints to OpenAI's prompt_cache_key: a
-    // single stable label for the cached prefix (system + tools). OpenAI
-    // auto-caches the leading prefix; the key labels it so identical prefixes
-    // reuse the cache across requests. The other breakpoint kinds (LastToolDef,
-    // LatestUserMessage) have no single-key equivalent here — auto-cache
-    // handles the sliding reuse. A provider with positional cache_control
-    // blocks lowers each kind to its own position instead.
-    if let Some(key) = lower_prompt_cache_key(req) {
-        body["prompt_cache_key"] = json!(key);
+    // The declared form picks the convention. A marker-bearing endpoint reuses
+    // only what a marker covers, so each breakpoint the policy placed goes at
+    // its own position; an automatic-prefix endpoint caches the leading prefix
+    // itself and needs only the label.
+    match req.cache_format {
+        PromptCacheFormat::PositionalMarkers => {
+            if marks(BreakpointKind::LastToolDef) {
+                mark_last_tool(&mut body);
+            }
+            if marks(BreakpointKind::LatestUserMessage) {
+                mark_tail_message(&mut body["messages"]);
+            }
+        }
+        PromptCacheFormat::AutoPrefix => {
+            if let Some(key) = lower_prompt_cache_key(req) {
+                body["prompt_cache_key"] = json!(key);
+            }
+        }
     }
     body
 }
 
-/// Derive the OpenAI prompt_cache_key from the request's symbolic breakpoints.
-/// When the Auto policy placed a SystemStaticPrefix breakpoint, hash the static
-/// segment of the instructions, everything before dynamic_boundary, plus the
-/// tool names into a short hex label. The cwd-dependent suffix after the
-/// boundary stays out of the hash, so a working-directory change keeps the key
-/// stable and the static prefix reusable. Returns None when no breakpoint asks
-/// for a cache key (the None policy, or a provider that skips hints). The hash
-/// is deterministic so the same static prefix reuses the cache across turns; a
-/// changed static segment or tool set produces a new key and a deliberate miss.
+/// The leading system message: the instructions as one marked text part, or
+/// as a plain string when the endpoint takes no marker here. An empty prompt
+/// keeps the plain form too: a marker over nothing covers nothing.
+fn system_message(instructions: &str, marked: bool) -> Value {
+    if marked && !instructions.is_empty() {
+        json!({"role": "system", "content": marked_text(instructions)})
+    } else {
+        json!({"role": "system", "content": instructions})
+    }
+}
+
+/// A text payload in the marker-bearing content form.
+fn marked_text(text: &str) -> Value {
+    json!([{
+        "type": "text",
+        "text": text,
+        "cache_control": cache_marker()
+    }])
+}
+
+/// The breakpoint value itself. Both marker positions carry the same
+/// ephemeral form, so the wire value lives in one place.
+fn cache_marker() -> Value {
+    json!({"type": "ephemeral"})
+}
+
+/// Attach the marker to the last tool definition, beside its type and
+/// function: the tool schemas are the largest stable block after the system
+/// prefix.
+fn mark_last_tool(body: &mut Value) {
+    let Some(tools) = body.get_mut("tools").and_then(Value::as_array_mut) else {
+        return;
+    };
+    if let Some(last) = tools.last_mut() {
+        last["cache_control"] = cache_marker();
+    }
+}
+
+/// Attach the marker to the newest message carrying text, where the sliding
+/// reuse point sits this turn. An assistant message holding only tool calls
+/// has no text, so the scan moves past it.
+fn mark_tail_message(messages: &mut Value) {
+    let Some(list) = messages.as_array_mut() else {
+        return;
+    };
+    for message in list.iter_mut().rev() {
+        let conversational = matches!(
+            message.get("role").and_then(Value::as_str),
+            Some("user") | Some("assistant") | Some("tool")
+        );
+        if conversational && mark_message_text(message) {
+            return;
+        }
+    }
+}
+
+/// Rewrap a message's text content in the marker-bearing form; false when
+/// there is no text to mark.
+fn mark_message_text(message: &mut Value) -> bool {
+    let Some(content) = message.get_mut("content") else {
+        return false;
+    };
+    match content.as_str() {
+        Some(text) if !text.is_empty() => {
+            let text = text.to_string();
+            *content = marked_text(&text);
+            true
+        }
+        _ => false,
+    }
+}
+
+/// The label an automatic-prefix endpoint reuses a cached prefix under: a hex
+/// hash of the static segment of the instructions, everything before
+/// dynamic_boundary, plus the tool names, so a working-directory change keeps
+/// one label for the session. None when no breakpoint asks for one (the None
+/// policy, or a provider that skips hints). The hash is deterministic, so a
+/// changed static segment or tool set rotates the label into a deliberate miss.
 fn lower_prompt_cache_key(req: &CompletionRequest) -> Option<String> {
     let has_prefix_breakpoint = req
         .cache_breakpoints

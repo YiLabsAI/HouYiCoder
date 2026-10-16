@@ -8,6 +8,7 @@ use std::sync::Arc;
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_async::PFut;
 use houyicoder_context::{SessionEvent, SessionLogEntry};
+use houyicoder_protocol::cache_policy::PromptCacheFormat;
 use houyicoder_protocol::llm::{CompletionRequest, CompletionResponse, ModelSettings, OutputItem};
 
 use crate::agent::manifest::{HeuristicSummarizer, SummarizeError, Summarizer};
@@ -93,6 +94,7 @@ impl Summarizer for LlmSummarizer {
                     tools: Vec::new(),
                     settings: ModelSettings::default(),
                     cache_breakpoints: Vec::new(),
+                    cache_format: PromptCacheFormat::AutoPrefix,
                 };
                 match provider.complete(req).await {
                     Ok(resp) => match extract_text(&resp) {

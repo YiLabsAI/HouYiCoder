@@ -2,6 +2,7 @@
 //! fallback, and the catalog the /model panel lists. Loaded per-field-recoverable
 //! via ConfigWarning so one malformed entry does not reset the section.
 
+use houyicoder_protocol::cache_policy::PromptCacheFormat;
 use houyicoder_protocol::frontend::model::SpeedMode;
 use houyicoder_protocol::llm::EffortLevel;
 
@@ -66,6 +67,10 @@ pub struct ModelEntry {
     pub max_output_tokens: Option<u32>,
     #[serde(default)]
     pub fast: Option<bool>,
+    /// How the endpoint serving this model wants a cache position expressed.
+    /// None declares nothing and leaves the request's default in place.
+    #[serde(default)]
+    pub cache_format: Option<PromptCacheFormat>,
 }
 
 /// The model section of settings.json: the active id (None = Default
@@ -277,6 +282,8 @@ fn parse_catalog_entry(
         warnings,
     );
     let fast = extract_field::<bool>(value, "fast", &label("fast"), warnings);
+    let cache_format =
+        extract_field::<PromptCacheFormat>(value, "cache_format", &label("cache_format"), warnings);
     let effort_levels = extract_field::<Vec<EffortLevel>>(
         value,
         "effort_levels",
@@ -292,6 +299,7 @@ fn parse_catalog_entry(
         context_window,
         max_output_tokens,
         fast,
+        cache_format,
     })
 }
 

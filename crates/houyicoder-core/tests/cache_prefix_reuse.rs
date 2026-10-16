@@ -19,9 +19,10 @@ use std::sync::{Arc, Mutex};
 
 use houyicoder_context::{SessionEvent, SessionId};
 use houyicoder_core::agent::runner_config::RunnerConfig;
-use houyicoder_core::agent::{Runner, StubTool, ToolRegistry};
+use houyicoder_core::agent::{ModelCatalogResolver, Runner, StubTool, ToolRegistry};
 use houyicoder_memory::InMemoryBackend;
-use houyicoder_protocol::llm::{Usage, UsageProvenance};
+use houyicoder_protocol::cache_policy::PromptCacheFormat;
+use houyicoder_protocol::llm::{EffortLevel, Usage, UsageProvenance};
 use houyicoder_provider::OpenAiCompatibleProvider;
 use houyicoder_resilience::Retry;
 use houyicoder_session::SessionStore;
@@ -168,6 +169,54 @@ fn framing_bytes(body: &[u8]) -> Vec<u8> {
     serde_json::to_vec(&parsed).expect("the fields around a message list serialize")
 }
 
+/// Where a request body carries cache markers: the total count, and whether
+/// the system message, the last tool definition, and the newest message each
+/// carry one.
+fn marker_sites(body: &[u8]) -> (usize, bool, bool, bool) {
+    let parsed: Value = serde_json::from_slice(body).expect("a request body is json");
+    let total = parsed.to_string().matches("cache_control").count();
+    let system = parsed["messages"][0]["content"][0]["cache_control"].is_object();
+    let last_tool = parsed["tools"]
+        .as_array()
+        .and_then(|tools| tools.last())
+        .is_some_and(|tool| tool["cache_control"].is_object());
+    let tail = parsed["messages"]
+        .as_array()
+        .and_then(|messages| messages.last())
+        .is_some_and(|message| message["content"][0]["cache_control"].is_object());
+    (total, system, last_tool, tail)
+}
+
+/// The message list as it stands without the cache markers: a text part
+/// carrying one collapses back to its plain string, which is what the same
+/// message holds on a turn that marks another position.
+///
+/// The endpoint drops this control metadata before matching a prefix, so the
+/// stripped form is the sequence it compares. The raw bytes of a
+/// marker-bearing request are not: the marker moves to the newest message each
+/// turn, so the message that carried it the turn before is rebuilt plain and
+/// the two bodies differ there.
+fn unmarked_messages(body: &[u8]) -> Vec<u8> {
+    let mut parsed: Value = serde_json::from_slice(body).expect("a request body is json");
+    let Some(Value::Array(mut messages)) = parsed.get_mut("messages").map(Value::take) else {
+        panic!("a request body carries a message list");
+    };
+    for message in &mut messages {
+        let plain = message
+            .get("content")
+            .and_then(Value::as_array)
+            .and_then(|parts| parts.first())
+            .and_then(|part| part.get("text"))
+            .cloned();
+        if let Some(text) = plain
+            && let Some(content) = message.get_mut("content")
+        {
+            *content = text;
+        }
+    }
+    serde_json::to_vec(&messages).expect("a message list serializes")
+}
+
 /// A streaming reply shaped like the endpoint's: content, the finish reason,
 /// then a trailing chunk carrying usage. A stand-in that reports no cache read
 /// leaves the detail object out, which is what an endpoint says when it has
@@ -199,12 +248,31 @@ fn reply_body(reports_cache: bool, cached: usize, input: usize) -> String {
         .collect()
 }
 
+/// A catalog that declares the marker-bearing convention, so the request the
+/// loop assembles carries it.
+struct DeclaredMarkers;
+
+impl ModelCatalogResolver for DeclaredMarkers {
+    fn catalog_effort(&self, _model: &str) -> Option<EffortLevel> {
+        None
+    }
+
+    fn catalog_cache_format(&self, _model: &str) -> Option<PromptCacheFormat> {
+        Some(PromptCacheFormat::PositionalMarkers)
+    }
+}
+
 /// Drive one session of short-tail turns against the stand-in and return the
 /// runner, the session, and the usage each turn resolved.
 ///
 /// The prompts ask for a bare word, so the loop completes on text and the next
-/// request differs from this one by the appended exchange alone.
-async fn drive(server: &MockServer) -> (Runner, SessionId, Vec<Usage>) {
+/// request differs from this one by the appended exchange alone. A catalog
+/// passed here is the endpoint's declaration; without one the requests keep
+/// the undeclared form.
+async fn drive(
+    server: &MockServer,
+    catalog: Option<Arc<dyn ModelCatalogResolver>>,
+) -> (Runner, SessionId, Vec<Usage>) {
     let provider = Arc::new(OpenAiCompatibleProvider::new(
         server.uri(),
         "test-key".into(),
@@ -226,6 +294,10 @@ async fn drive(server: &MockServer) -> (Runner, SessionId, Vec<Usage>) {
             },
         },
     );
+    let runner = match catalog {
+        Some(resolver) => runner.with_catalog_resolver(resolver),
+        None => runner,
+    };
     let session = SessionId::new();
     let mut usages = Vec::new();
     for turn in 1..=TURNS {
@@ -323,7 +395,7 @@ async fn test_turns_extend_request_prefix() {
         .mount(&server)
         .await;
 
-    let (_runner, _session, _usages) = drive(&server).await;
+    let (_runner, _session, _usages) = drive(&server, None).await;
     let records = stub.records();
     assert_eq!(records.len(), TURNS, "one request per turn");
     assert!(
@@ -401,6 +473,80 @@ async fn test_turns_extend_request_prefix() {
     }
 }
 
+/// A session on an endpoint that declares the marker-bearing convention sends
+/// one marker at each placed breakpoint — the system prefix, the last tool
+/// definition, the newest message — and no cache label, and the sequence the
+/// endpoint matches on still grows by the appended exchange alone once the
+/// markers are stripped.
+///
+/// The stand-in compares raw bytes under a cache key this form does not send,
+/// so the reuse it reports here is a lower bound rather than a share to read.
+#[tokio::test]
+async fn test_markers_hold_positions() {
+    let server = MockServer::start().await;
+    let stub = PrefixCacheStub::reporting();
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(stub.clone())
+        .mount(&server)
+        .await;
+
+    let (_runner, _session, _usages) = drive(&server, Some(Arc::new(DeclaredMarkers))).await;
+    let records = stub.records();
+    assert_eq!(records.len(), TURNS, "one request per turn");
+    for (index, record) in records.iter().enumerate() {
+        assert!(
+            record.cache_key.is_none(),
+            "turn {} sent a cache label the marker form does not use",
+            index + 1
+        );
+        let sites = marker_sites(&record.body);
+        assert_eq!(
+            sites,
+            (3, true, true, true),
+            "turn {} markers: {}",
+            index + 1,
+            String::from_utf8_lossy(&record.body)
+        );
+    }
+
+    let mut reusable = Vec::new();
+    for (index, pair) in records.windows(2).enumerate() {
+        let (before, after) = (&pair[0], &pair[1]);
+        let previous = unmarked_messages(&before.body);
+        let current = unmarked_messages(&after.body);
+        assert!(
+            previous.len() < current.len(),
+            "turn {} appended nothing to the message list",
+            index + 2
+        );
+        // The closing bracket of the previous list gives way to the exchange
+        // this turn appended, so everything the list held is still there.
+        let head = &previous[..previous.len() - 1];
+        assert!(
+            current.starts_with(head),
+            "turn {} rewrote the message list it should only extend: the two first differ at byte \
+             {}",
+            index + 2,
+            shared_prefix(head, &current)
+        );
+        reusable.push(shared_prefix(&previous, &current));
+    }
+    for (index, pair) in reusable.windows(2).enumerate() {
+        assert!(
+            pair[1] > pair[0],
+            "the run of unmarked bytes turns {} and {} share ({}) does not grow over the run turns \
+             {} and {} share ({})",
+            index + 2,
+            index + 3,
+            pair[1],
+            index + 1,
+            index + 2,
+            pair[0]
+        );
+    }
+}
+
 /// What the endpoint reported has to arrive in the durable rows intact, so the
 /// share a pane derives from the log is the share the endpoint's bytes support.
 /// The two sides are computed apart: the stand-in counts bytes as it answers,
@@ -415,7 +561,7 @@ async fn test_cache_report_reaches_log() {
         .mount(&server)
         .await;
 
-    let (runner, session, _usages) = drive(&server).await;
+    let (runner, session, _usages) = drive(&server, None).await;
     let records = stub.records();
     let logged = rows(&runner, session);
     assert_eq!(logged.len(), records.len(), "one usage row per request");
@@ -468,7 +614,7 @@ async fn test_absent_account_stays_unknown() {
         .mount(&server)
         .await;
 
-    let (runner, session, usages) = drive(&server).await;
+    let (runner, session, usages) = drive(&server, None).await;
     let logged = rows(&runner, session);
     assert_eq!(logged.len(), TURNS, "one usage row per turn");
     for (index, row) in logged.iter().enumerate() {

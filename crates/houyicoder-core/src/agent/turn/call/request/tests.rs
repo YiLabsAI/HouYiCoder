@@ -1,4 +1,6 @@
-use super::super::assemble_instructions;
+//! Tests for this module.
+
+use super::assemble_instructions;
 
 #[test]
 fn test_empty_configured_uses_assembled() {

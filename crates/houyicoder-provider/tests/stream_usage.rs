@@ -5,6 +5,7 @@
 
 use futures::StreamExt;
 use houyicoder_api::provider::ModelProvider;
+use houyicoder_protocol::cache_policy::PromptCacheFormat;
 use houyicoder_protocol::llm::{CompletionRequest, InputItem, LlmEvent, ModelSettings};
 use houyicoder_provider::OpenAiCompatibleProvider;
 use wiremock::matchers::{method, path};
@@ -36,6 +37,7 @@ fn request() -> CompletionRequest {
         tools: vec![],
         settings: ModelSettings::default(),
         cache_breakpoints: Vec::new(),
+        cache_format: PromptCacheFormat::AutoPrefix,
     }
 }
 

@@ -12,7 +12,7 @@
 //! clamped difference silently stores the wrong value. The single subtraction
 //! is visible_output_tokens (output - reasoning, saturating).
 
-use crate::cache_policy::CacheBreakpoint;
+use crate::cache_policy::{CacheBreakpoint, PromptCacheFormat};
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::fmt::Display;
@@ -468,6 +468,11 @@ pub struct CompletionRequest {
     /// carve a prefix beyond its own defaults).
     #[serde(default)]
     pub cache_breakpoints: Vec<CacheBreakpoint>,
+    /// How the endpoint wants a cache position expressed. Undeclared is the
+    /// automatic-prefix form, so a request assembled with no declaration sends
+    /// no marker.
+    #[serde(default)]
+    pub cache_format: PromptCacheFormat,
 }
 
 /// One output item from a model response.

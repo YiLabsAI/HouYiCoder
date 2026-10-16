@@ -5,16 +5,14 @@ use tokio_util::sync::CancellationToken;
 use houyicoder_context::{SessionEvent, SessionId, TruncationSignal};
 use houyicoder_protocol::frontend::model::SpeedMode;
 use houyicoder_protocol::llm::{
-    CompletionRequest, CompletionResponse, EffortLevel, InputItem, ModelSettings, OutputItem,
-    ProviderError,
+    CompletionResponse, EffortLevel, InputItem, ModelSettings, OutputItem, ProviderError,
 };
 use houyicoder_protocol::llm::{LlmEvent, Usage};
 
 use crate::agent::compaction::{CompactionSuppression, SuppressionCause};
 use crate::agent::economy::{economy_decision, estimate_compaction};
 use crate::agent::model_window::{
-    conservative_input_tokens, fill_omitted_usage, normalize_model_for_api,
-    record_learned_context_window,
+    conservative_input_tokens, fill_omitted_usage, record_learned_context_window,
 };
 use crate::agent::truncation::{classify_truncation_signal, is_length_reason};
 use crate::agent::{RunError, Runner, new_event, obs_wire};
@@ -30,6 +28,8 @@ use std::time::Duration;
 use std::time::Instant;
 use stream_fold::StreamFold;
 use tokio::time::sleep;
+
+mod request;
 
 /// Max gap between stream chunks before the run aborts the call as a stall
 /// (dead socket / half-open gateway). On by default; without it a dead socket
@@ -247,13 +247,6 @@ impl Runner {
                 }
             }
 
-            // Append the configured instructions to the assembled system prompt
-            // (do not replace it) so the static identity/framework prefix
-            // stays byte-stable for prompt-cache. An empty configured
-            // instructions field (the production path) uses the assembled
-            // system verbatim. Custom text lands at the end; the default
-            // prompt is kept.
-            let instructions = assemble_instructions(&assembled.system, &self.config.instructions);
             let active_model = inference.model.clone();
             let mut settings = ModelSettings {
                 max_output_tokens: Some(inference.max_output_tokens),
@@ -286,25 +279,7 @@ impl Runner {
             if inference.speed == SpeedMode::Fast {
                 settings.speed = Some(SpeedMode::Fast);
             }
-            let mut request = CompletionRequest {
-                model: normalize_model_for_api(&active_model),
-                instructions,
-                // The configured instructions append after the dynamic suffix,
-                // so the offset into the assembled system is still where the
-                // suffix begins in the final string.
-                dynamic_boundary: Some(assembled.dynamic_boundary),
-                input: assembled.messages,
-                tools: self.tools.tool_defs(),
-                settings,
-                cache_breakpoints: Vec::new(),
-            };
-            // Apply the cache policy: place prompt-cache breakpoints so the
-            // provider can carve a stable prefix. The Auto three-breakpoint set
-            // (system static prefix, last tool def, latest user message) is the
-            // default; the provider lowers each kind to its wire format.
-            let policy = self.cache_policy.policy();
-            self.cache_policy
-                .apply(&mut request.cache_breakpoints, &policy);
+            let request = self.build_request(&active_model, assembled, settings);
             let provider = self.provider.clone();
             let response_handler = self.events.response_stream_handler();
             let max_attempts = self.config.retry.max_attempts.max(1);
@@ -778,17 +753,3 @@ impl Runner {
 pub(crate) fn accumulate_usage(total: &mut Usage, turn: &Usage) {
     *total = total.saturating_add(turn);
 }
-
-/// Append configured instructions to the assembled system prompt. An empty
-/// configured field returns the assembled system verbatim. Appending keeps
-/// the static identity/framework prefix byte-stable for prompt-cache.
-fn assemble_instructions(assembled_system: &str, configured: &str) -> String {
-    if configured.is_empty() {
-        assembled_system.to_string()
-    } else {
-        format!("{assembled_system}\n\n{configured}")
-    }
-}
-
-#[cfg(test)]
-mod tests;

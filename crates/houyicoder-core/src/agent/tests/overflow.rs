@@ -14,6 +14,7 @@ use futures::stream::iter;
 use houyicoder_api::provider::stream_from_response;
 use houyicoder_context::EventId;
 use houyicoder_memory::InMemoryBackend;
+use houyicoder_protocol::cache_policy::PromptCacheFormat;
 use houyicoder_protocol::llm::CompletionRequest;
 use houyicoder_protocol::llm::ModelSettings;
 use houyicoder_resilience::Retry;
@@ -301,6 +302,7 @@ async fn test_overflow_provider_complete() {
             tools: vec![],
             settings: ModelSettings::default(),
             cache_breakpoints: Vec::new(),
+            cache_format: PromptCacheFormat::AutoPrefix,
         })
         .await
         .unwrap_err();
@@ -709,6 +711,7 @@ async fn test_fake_stream_complete() {
             tools: vec![],
             settings: ModelSettings::default(),
             cache_breakpoints: Vec::new(),
+            cache_format: PromptCacheFormat::AutoPrefix,
         })
         .await
         .unwrap();

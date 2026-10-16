@@ -8,6 +8,20 @@ use std::fs::remove_file;
 use std::fs::write;
 use std::process::id;
 
+fn entry(id: &str, ctx: Option<u32>, max: Option<u32>) -> ModelEntry {
+    ModelEntry {
+        id: id.to_string(),
+        display_name: None,
+        description: None,
+        effort: None,
+        effort_levels: None,
+        context_window: ctx,
+        max_output_tokens: max,
+        fast: None,
+        cache_format: None,
+    }
+}
+
 fn resolver_with(catalog: &[(&str, Option<u32>, Option<u32>)]) -> SettingsCatalogResolver {
     let section = ModelSection {
         id: None,
@@ -15,19 +29,32 @@ fn resolver_with(catalog: &[(&str, Option<u32>, Option<u32>)]) -> SettingsCatalo
         speed_mode: None,
         catalog: catalog
             .iter()
-            .map(|(id, ctx, max)| ModelEntry {
-                id: id.to_string(),
-                display_name: None,
-                description: None,
-                effort: None,
-                effort_levels: None,
-                context_window: *ctx,
-                max_output_tokens: *max,
-                fast: None,
-            })
+            .map(|(id, ctx, max)| entry(id, *ctx, *max))
             .collect(),
     };
     SettingsCatalogResolver::from_section(section)
+}
+
+#[test]
+fn test_catalog_cache_format() {
+    // The declared convention comes from the model's own entry; an entry
+    // that declares nothing leaves the request default alone.
+    let mut declared = entry("a", None, None);
+    declared.cache_format = Some(PromptCacheFormat::PositionalMarkers);
+    let section = ModelSection {
+        id: None,
+        effort_level: None,
+        speed_mode: None,
+        catalog: vec![declared, entry("b", None, None)],
+    };
+    let r = SettingsCatalogResolver::from_section(section);
+
+    assert_eq!(
+        r.catalog_cache_format("a"),
+        Some(PromptCacheFormat::PositionalMarkers)
+    );
+    assert_eq!(r.catalog_cache_format("b"), None, "undeclared => None");
+    assert_eq!(r.catalog_cache_format("other"), None, "no entry => None");
 }
 
 #[test]

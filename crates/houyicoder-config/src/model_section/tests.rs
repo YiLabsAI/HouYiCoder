@@ -12,6 +12,7 @@ fn entry(id: &str) -> ModelEntry {
         context_window: None,
         max_output_tokens: None,
         fast: None,
+        cache_format: None,
     }
 }
 
@@ -68,6 +69,32 @@ fn test_entry_fast_override() {
     assert_eq!(s.catalog[1].fast, None, "bad boolean nulled, entry kept");
     assert!(
         w.iter().any(|x| x.field == "model.catalog[1].fast"),
+        "warning names the bad field: {w:?}"
+    );
+    drop(remove_file(&path));
+}
+
+#[test]
+fn test_cache_format_declared() {
+    // A per-model cache convention parses on its own entry; an undeclared
+    // entry stays None so the request keeps its default, and a bad value
+    // nulls only that field.
+    let path = temp_dir().join(format!("entry-cache-format-{}.json", id()));
+    write(
+        &path,
+        r#"{"model":{"catalog":[{"id":"a","cache_format":"positionalMarkers"},{"id":"b"},{"id":"c","cache_format":"nope"}]}}"#,
+    )
+    .unwrap();
+    let (s, w) = load_model_section_from(&path);
+    assert_eq!(s.catalog.len(), 3, "all entries kept");
+    assert_eq!(
+        s.catalog[0].cache_format,
+        Some(PromptCacheFormat::PositionalMarkers)
+    );
+    assert_eq!(s.catalog[1].cache_format, None, "undeclared stays None");
+    assert_eq!(s.catalog[2].cache_format, None, "bad value nulled");
+    assert!(
+        w.iter().any(|x| x.field == "model.catalog[2].cache_format"),
         "warning names the bad field: {w:?}"
     );
     drop(remove_file(&path));

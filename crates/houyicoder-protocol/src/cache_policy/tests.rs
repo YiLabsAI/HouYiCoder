@@ -18,3 +18,17 @@ fn test_breakpoint_round_trips() {
     let back: CacheBreakpoint = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(back, bp);
 }
+
+#[test]
+fn test_cache_format_defaults() {
+    // An endpoint that declares nothing reads as the automatic-prefix form,
+    // and a declaration round-trips in the settings spelling.
+    assert_eq!(PromptCacheFormat::default(), PromptCacheFormat::AutoPrefix);
+    assert_eq!(
+        serde_json::to_string(&PromptCacheFormat::PositionalMarkers).expect("serialize"),
+        "\"positionalMarkers\""
+    );
+    let declared: PromptCacheFormat =
+        serde_json::from_str("\"positionalMarkers\"").expect("deserialize");
+    assert_eq!(declared, PromptCacheFormat::PositionalMarkers);
+}

@@ -1,5 +1,6 @@
 use super::*;
 use futures::StreamExt;
+use houyicoder_protocol::cache_policy::PromptCacheFormat;
 use houyicoder_protocol::llm::{CompletionRequest, InputItem, ModelSettings, ToolDef};
 
 #[test]
@@ -15,6 +16,7 @@ fn test_fake_returns_canned_text() {
         tools: vec![],
         settings: ModelSettings::default(),
         cache_breakpoints: Vec::new(),
+        cache_format: PromptCacheFormat::AutoPrefix,
     };
     let resp = pollster::block_on(p.complete(req)).expect("fake completes");
     assert_eq!(resp.output.len(), 1);
@@ -65,6 +67,7 @@ fn test_request_response_serde_round() {
             ..Default::default()
         },
         cache_breakpoints: Vec::new(),
+        cache_format: PromptCacheFormat::AutoPrefix,
     };
     let json = serde_json::to_string(&req).unwrap();
     let back: CompletionRequest = serde_json::from_str(&json).unwrap();
@@ -96,6 +99,7 @@ fn stub_req() -> CompletionRequest {
         tools: vec![],
         settings: ModelSettings::default(),
         cache_breakpoints: Vec::new(),
+        cache_format: PromptCacheFormat::AutoPrefix,
     }
 }
 
@@ -165,6 +169,7 @@ fn test_with_error_propagates() {
         tools: vec![],
         settings: ModelSettings::default(),
         cache_breakpoints: Vec::new(),
+        cache_format: PromptCacheFormat::AutoPrefix,
     };
     let err = pollster::block_on(p.complete(req)).unwrap_err();
     assert!(matches!(err, ProviderError::Auth), "injected Auth returned");
@@ -178,6 +183,7 @@ fn test_with_error_propagates() {
         tools: vec![],
         settings: ModelSettings::default(),
         cache_breakpoints: Vec::new(),
+        cache_format: PromptCacheFormat::AutoPrefix,
     }))
     .unwrap_err();
     assert!(

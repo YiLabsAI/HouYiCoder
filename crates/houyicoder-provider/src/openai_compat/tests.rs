@@ -1,6 +1,8 @@
 use super::*;
 use crate::http_error::{classify_status, classify_with_body, parse_retry_after};
-use houyicoder_protocol::cache_policy::{BreakpointKind, CacheBreakpoint, CacheHint, CacheTtl};
+use houyicoder_protocol::cache_policy::{
+    BreakpointKind, CacheBreakpoint, CacheHint, CacheTtl, PromptCacheFormat,
+};
 use houyicoder_protocol::llm::{AssistantToolCall, EffortLevel, ModelSettings, SpeedMode, ToolDef};
 use houyicoder_protocol::llm::{Usage, UsageProvenance};
 use reqwest::header::HeaderMap;
@@ -18,7 +20,30 @@ fn req(input: Vec<InputItem>, tools: Vec<ToolDef>) -> CompletionRequest {
             ..Default::default()
         },
         cache_breakpoints: Vec::new(),
+        cache_format: PromptCacheFormat::AutoPrefix,
     }
+}
+
+/// The cache breakpoints the Auto policy places.
+fn auto_breakpoints() -> Vec<CacheBreakpoint> {
+    let hint = CacheHint::Ephemeral(CacheTtl::OneHour);
+    [
+        BreakpointKind::SystemStaticPrefix,
+        BreakpointKind::LastToolDef,
+        BreakpointKind::LatestUserMessage,
+    ]
+    .into_iter()
+    .map(|kind| CacheBreakpoint {
+        kind,
+        hint: hint.clone(),
+    })
+    .collect()
+}
+
+/// How many cache markers the payload carries. Counted over the whole
+/// serialized body, so a marker at an unexpected position is counted too.
+fn marker_count(body: &Value) -> usize {
+    body.to_string().matches("cache_control").count()
 }
 
 #[test]
@@ -104,9 +129,10 @@ fn test_build_body_includes_tools() {
     assert_eq!(body["tools"][0]["function"]["name"], "edit");
 }
 
-/// The SystemStaticPrefix cache breakpoint lowers to an OpenAI prompt_cache_key
-/// so the provider's auto-cache reuses the stable system+tools prefix across
-/// requests. Without a breakpoint (the None policy), no key is sent.
+/// The SystemStaticPrefix cache breakpoint lowers to a prompt_cache_key so the
+/// endpoint's auto-cache reuses the stable system+tools prefix across requests,
+/// and the automatic-prefix form sends no marker. Without a breakpoint (the
+/// None policy), no key is sent.
 #[test]
 fn test_prompt_cache_key_lowered() {
     let mut r = req(
@@ -137,9 +163,14 @@ fn test_prompt_cache_key_lowered() {
         key.starts_with("houyi-"),
         "key carries the label prefix, got: {key}"
     );
+    assert!(
+        body["messages"][0]["content"].is_string(),
+        "the automatic-prefix form sends the instructions as plain text: {body}"
+    );
     assert_eq!(
-        body["messages"][0]["content"][0]["cache_control"]["type"], "ephemeral",
-        "system message carries cache_control block"
+        marker_count(&body),
+        0,
+        "the automatic-prefix form sends no marker: {body}"
     );
 
     // The same prefix hashes to the same key (stable across turns).
@@ -158,6 +189,172 @@ fn test_prompt_cache_key_lowered() {
         Some(key),
         "changed prefix ⇒ different cache key"
     );
+}
+
+/// A declared marker-bearing endpoint gets each placed breakpoint at its own
+/// position — the system prefix, the last tool definition, the newest message
+/// carrying text — and no cache label, since the label means nothing there.
+#[test]
+fn test_positional_markers_lowered() {
+    let mut r = req(
+        vec![
+            InputItem::User {
+                content: "first".into(),
+            },
+            InputItem::Assistant {
+                content: "let me look".into(),
+                tool_calls: vec![],
+            },
+            InputItem::ToolResult {
+                call_id: "c1".into(),
+                output: json!({"ok": true}),
+            },
+        ],
+        vec![
+            ToolDef {
+                name: "edit".into(),
+                description: "edit a file".into(),
+                input_schema: json!({"type": "object"}),
+            },
+            ToolDef {
+                name: "glob".into(),
+                description: "find files".into(),
+                input_schema: json!({"type": "object"}),
+            },
+        ],
+    );
+    r.cache_format = PromptCacheFormat::PositionalMarkers;
+    r.cache_breakpoints = auto_breakpoints();
+
+    let body = build_request_body(&r);
+    assert_eq!(
+        marker_count(&body),
+        3,
+        "one marker per placed breakpoint: {body}"
+    );
+    assert_eq!(
+        body["messages"][0]["content"][0]["cache_control"]["type"], "ephemeral",
+        "the system prefix is marked"
+    );
+    assert!(
+        body["tools"][0].get("cache_control").is_none(),
+        "only the last tool definition is marked: {body}"
+    );
+    assert_eq!(body["tools"][1]["cache_control"]["type"], "ephemeral");
+    let tail = body["messages"].as_array().unwrap().last().unwrap();
+    assert_eq!(tail["role"], "tool");
+    assert_eq!(
+        tail["content"][0]["cache_control"]["type"], "ephemeral",
+        "the newest message is marked"
+    );
+    assert_eq!(
+        body["messages"][1]["content"], "first",
+        "an earlier message stays plain"
+    );
+    assert!(
+        body.get("prompt_cache_key").is_none(),
+        "the marker form sends no cache label: {body}"
+    );
+}
+
+/// The two axes are independent: the declared form says how a position is
+/// expressed, the placed breakpoints say which positions exist, so a
+/// breakpoint the policy did not place stays unmarked.
+#[test]
+fn test_markers_follow_policy() {
+    let mut r = req(
+        vec![InputItem::User {
+            content: "hi".into(),
+        }],
+        vec![ToolDef {
+            name: "edit".into(),
+            description: "edit a file".into(),
+            input_schema: json!({"type": "object"}),
+        }],
+    );
+    r.cache_format = PromptCacheFormat::PositionalMarkers;
+    r.cache_breakpoints = vec![CacheBreakpoint {
+        kind: BreakpointKind::SystemStaticPrefix,
+        hint: CacheHint::Ephemeral(CacheTtl::OneHour),
+    }];
+
+    let body = build_request_body(&r);
+    assert_eq!(
+        marker_count(&body),
+        1,
+        "only the placed breakpoint is marked: {body}"
+    );
+    assert!(body["tools"][0].get("cache_control").is_none());
+}
+
+/// A tail message with no text to mark cannot carry the marker, so the scan
+/// moves to the newest message that can instead of dropping it.
+#[test]
+fn test_marker_skips_empty() {
+    let mut r = req(
+        vec![
+            InputItem::ToolResult {
+                call_id: "c1".into(),
+                output: json!({"ok": true}),
+            },
+            InputItem::Assistant {
+                content: String::new(),
+                tool_calls: vec![AssistantToolCall {
+                    id: "c2".into(),
+                    name: "edit".into(),
+                    input: json!({}),
+                }],
+            },
+        ],
+        vec![],
+    );
+    r.cache_format = PromptCacheFormat::PositionalMarkers;
+    r.cache_breakpoints = vec![CacheBreakpoint {
+        kind: BreakpointKind::LatestUserMessage,
+        hint: CacheHint::Ephemeral(CacheTtl::OneHour),
+    }];
+
+    let body = build_request_body(&r);
+    assert_eq!(
+        marker_count(&body),
+        1,
+        "the marker lands on the newest message with text: {body}"
+    );
+    assert_eq!(body["messages"][1]["role"], "tool");
+    assert_eq!(
+        body["messages"][1]["content"][0]["cache_control"]["type"],
+        "ephemeral"
+    );
+    assert!(
+        body["messages"][2]["content"].is_string(),
+        "the textless tail keeps its plain content: {body}"
+    );
+}
+
+/// A system prompt with no text cannot carry a marker, so the plain string
+/// form stays rather than a marker over nothing.
+#[test]
+fn test_empty_system_stays_plain() {
+    let mut r = req(
+        vec![InputItem::User {
+            content: "hi".into(),
+        }],
+        vec![],
+    );
+    r.instructions = String::new();
+    r.cache_format = PromptCacheFormat::PositionalMarkers;
+    r.cache_breakpoints = vec![CacheBreakpoint {
+        kind: BreakpointKind::SystemStaticPrefix,
+        hint: CacheHint::Ephemeral(CacheTtl::OneHour),
+    }];
+
+    let body = build_request_body(&r);
+    assert_eq!(
+        marker_count(&body),
+        0,
+        "no marker over an empty system prompt: {body}"
+    );
+    assert!(body["messages"][0]["content"].is_string());
 }
 
 /// The cache key is derived from the stable prefix (instructions + tools)
@@ -1060,6 +1257,7 @@ fn req_with(model: &str, settings: ModelSettings) -> CompletionRequest {
         tools: vec![],
         settings,
         cache_breakpoints: Vec::new(),
+        cache_format: PromptCacheFormat::AutoPrefix,
     }
 }
 

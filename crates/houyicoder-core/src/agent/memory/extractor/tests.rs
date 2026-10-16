@@ -7,6 +7,7 @@ use houyicoder_api::agent_event::{
 };
 use houyicoder_context::{MemoryEntry, MemorySummary, SessionId};
 use houyicoder_memory::{InMemoryBackend, MarkdownMemoryProvider};
+use houyicoder_protocol::cache_policy::PromptCacheFormat;
 use houyicoder_protocol::llm::{
     CompletionRequest, CompletionResponse, InputItem, LlmEvent, ModelCapabilities, ModelSettings,
     OutputItem, ProviderError, Usage,
@@ -935,6 +936,7 @@ async fn test_main_final_complete_returns() {
             tools: vec![],
             settings: ModelSettings::default(),
             cache_breakpoints: Vec::new(),
+            cache_format: PromptCacheFormat::AutoPrefix,
         })
         .await
         .expect("complete");

@@ -1,9 +1,9 @@
-//! Prompt-cache breakpoint wire types. A cache policy marks where the
-//! provider should carve a stable prefix for prompt-cache reuse, with an
-//! ephemeral TTL hint. The types are wire-only (serde, no behavior) so they
-//! ride the CompletionRequest without the protocol crate depending on a
-//! behavior crate. The policy trait that produces these lives in the behavior
-//! crate.
+//! Prompt-cache request types. A cache policy marks where the provider should
+//! carve a stable prefix for prompt-cache reuse, with an ephemeral TTL hint;
+//! the endpoint's declared convention says how that position is expressed.
+//! The types are serde-only, so they ride the CompletionRequest without the
+//! protocol crate depending on a behavior crate. The policy trait that
+//! produces these lives in the behavior crate.
 
 use serde::{Deserialize, Serialize};
 
@@ -46,6 +46,26 @@ pub enum BreakpointKind {
     SystemStaticPrefix,
     LastToolDef,
     LatestUserMessage,
+}
+
+/// How an endpoint wants a cache position expressed. A breakpoint says where
+/// the prefix should end; this says how the endpoint accepts that position.
+/// The two axes are independent: a breakpoint whose position the declared
+/// form cannot express is dropped rather than approximated.
+///
+/// - AutoPrefix: the endpoint caches the leading prefix by itself, so the
+///   request carries no marker and a stable label names the prefix to reuse.
+///   Undeclared is this form, the one the plain chat/completions endpoint
+///   family expects.
+/// - PositionalMarkers: the endpoint reuses only what a marker covers, so
+///   each breakpoint is written at its own position and the label means
+///   nothing.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PromptCacheFormat {
+    #[default]
+    AutoPrefix,
+    PositionalMarkers,
 }
 
 /// One cache breakpoint the policy placed on the request.

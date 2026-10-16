@@ -14,6 +14,7 @@
 //! ModelSection. None in the resolver means no catalog is configured (the stub
 //! path) and the chain stops at the in-session pick + the built-in default.
 
+use houyicoder_protocol::cache_policy::PromptCacheFormat;
 use houyicoder_protocol::llm::{EffortLevel, ModelSettings};
 
 use crate::agent::model_window::{EffortDialect, dialect_effort_levels, effort_dialect};
@@ -61,6 +62,14 @@ pub trait ModelCatalogResolver: Send + Sync {
     /// unavailable — no name probe grants the tier, because a family name is
     /// no evidence that an endpoint offers a faster variant of it.
     fn catalog_fast(&self, _model: &str) -> Option<bool> {
+        None
+    }
+
+    /// How the endpoint serving a model wants a cache position expressed
+    /// (ModelEntry.cache_format). None when the catalog declares nothing,
+    /// which leaves the request's own default in place: no model name
+    /// reveals a convention, and the wrong one costs the prefix.
+    fn catalog_cache_format(&self, _model: &str) -> Option<PromptCacheFormat> {
         None
     }
 }

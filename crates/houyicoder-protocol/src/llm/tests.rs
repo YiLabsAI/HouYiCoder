@@ -48,6 +48,16 @@ fn test_usage_visible_output_saturates() {
 }
 
 #[test]
+fn test_absent_cache_defaults() {
+    // A request serialized before the cache fields existed carries neither
+    // key: it reads back with no breakpoints and the undeclared cache form.
+    let legacy = r#"{"model":"m","instructions":"sys","input":[],"tools":[],"settings":{}}"#;
+    let request: CompletionRequest = serde_json::from_str(legacy).expect("deserialize");
+    assert!(request.cache_breakpoints.is_empty());
+    assert_eq!(request.cache_format, PromptCacheFormat::AutoPrefix);
+}
+
+#[test]
 fn test_llm_event_serde_round() {
     let e = LlmEvent::TextDelta {
         id: "b1".into(),

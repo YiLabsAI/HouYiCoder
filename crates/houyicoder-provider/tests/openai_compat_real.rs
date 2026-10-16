@@ -3,6 +3,7 @@
 
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_config::{DEFAULT_DASHSCOPE_BASE_URL, DEFAULT_MODEL};
+use houyicoder_protocol::cache_policy::PromptCacheFormat;
 use houyicoder_protocol::llm::{CompletionRequest, InputItem, ModelSettings, OutputItem};
 use houyicoder_provider::OpenAiCompatibleProvider;
 use std::env::var;
@@ -30,6 +31,7 @@ async fn test_openai_roundtrip() {
             ..Default::default()
         },
         cache_breakpoints: Vec::new(),
+        cache_format: PromptCacheFormat::AutoPrefix,
     };
     let resp = provider.complete(req).await.expect("real call succeeds");
     assert!(!resp.output.is_empty(), "response had no output items");
