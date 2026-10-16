@@ -60,7 +60,7 @@ pub use exports::{
     VerifyFailure, VerifyGate, WebFetchTool, WorkspaceProbe, WorktreeController, WriteTool,
     apply_manifest, assemble_model_input, build_grid, build_hook_fire, build_manifest,
     combine_verdicts, derive_backbone, extraction_prompt, merge_summary, never_worse, parse_event,
-    render_backbone_block, stub_breakdown, thinking_brief, unified_diff,
+    render_backbone_block, thinking_brief, unified_diff,
 };
 pub use inference::{InferenceConfig, RequestInferenceConfig};
 

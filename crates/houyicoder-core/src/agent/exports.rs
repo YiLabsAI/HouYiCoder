@@ -8,7 +8,7 @@ pub use crate::agent::compaction::{CompactionOutcome, LlmSummarizer, RecordedCom
 pub use crate::agent::conditional_activation::{ConditionalActivation, ConditionalSkillActivator};
 pub use crate::agent::context::{
     AssembledContext, CategoryBreakdown, ContextBreakdown, ContextBuilder, ContextMeasurement,
-    GridCell, Section, SectionKind, Tokenizer, build_grid, stub_breakdown,
+    GridCell, Section, SectionKind, Tokenizer, build_grid,
 };
 pub use crate::agent::diff::unified_diff;
 pub use crate::agent::hook::HookError;

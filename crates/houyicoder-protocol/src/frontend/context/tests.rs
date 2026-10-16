@@ -122,3 +122,18 @@ fn test_cache_breakpoint_round_trips() {
     assert_eq!(back, bd);
     assert!(json.contains("null"));
 }
+
+/// The preview breakdown must carry everything the view needs to draw: a
+/// category per section plus free space, a filled grid, and no cache
+/// breakpoint, which only the live measurement knows.
+#[test]
+fn test_stub_breakdown_renders_grid() {
+    let b = stub_breakdown();
+    assert!(!b.categories.is_empty());
+    assert!(!b.grid.is_empty(), "the preview must produce a grid");
+    assert_eq!(b.context_window, 200_000);
+    assert!(
+        b.cache_breakpoint.is_none(),
+        "the preview has no measured breakpoint"
+    );
+}

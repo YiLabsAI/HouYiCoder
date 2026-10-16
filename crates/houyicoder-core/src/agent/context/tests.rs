@@ -491,18 +491,6 @@ fn test_build_grid_200k_100() {
 }
 
 #[test]
-fn test_stub_breakdown_renders_grid() {
-    let b = stub_breakdown();
-    assert!(!b.categories.is_empty());
-    assert!(!b.grid.is_empty(), "stub must produce a grid for the viz");
-    assert_eq!(b.context_window, 200_000);
-    assert!(
-        b.cache_breakpoint.is_none(),
-        "stub has no breakpoint tracker"
-    );
-}
-
-#[test]
 fn test_measurement_breakdown_real() {
     // The real /context breakdown derives from the measurement sections:
     // one category per section kind, a trailing Free-space row, a grid,
