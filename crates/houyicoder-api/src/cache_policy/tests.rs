@@ -25,7 +25,7 @@ fn test_none_places_no_breakpoints() {
     let policy = NoCachePolicy;
     let mut breakpoints = vec![CacheBreakpoint {
         kind: BreakpointKind::SystemStaticPrefix,
-        hint: CacheHint::Persistent,
+        hint: CacheHint::Ephemeral(CacheTtl::OneHour),
     }];
     policy.apply(&mut breakpoints, &policy.policy());
     assert!(breakpoints.is_empty(), "None clears breakpoints");

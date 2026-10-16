@@ -1,9 +1,9 @@
 //! Prompt-cache breakpoint wire types. A cache policy marks where the
-//! provider should carve a stable prefix for prompt-cache reuse, and the
-//! hint kind (ephemeral with a TTL, or persistent). The types are wire-only
-//! (serde, no behavior) so they ride the CompletionRequest without the
-//! protocol crate depending on a behavior crate. The policy trait that
-//! produces these lives in the behavior crate.
+//! provider should carve a stable prefix for prompt-cache reuse, with an
+//! ephemeral TTL hint. The types are wire-only (serde, no behavior) so they
+//! ride the CompletionRequest without the protocol crate depending on a
+//! behavior crate. The policy trait that produces these lives in the behavior
+//! crate.
 
 use serde::{Deserialize, Serialize};
 
@@ -17,14 +17,14 @@ pub enum CacheTtl {
     OneHour,
 }
 
-/// The cache hint attached to a breakpoint: an ephemeral entry with a TTL
-/// (the common case — the provider reuses the prefix within the TTL window)
-/// or a persistent entry (the provider keeps it across the session).
+/// The cache hint attached to a breakpoint: an ephemeral entry with a TTL —
+/// the provider reuses the prefix within the TTL window. A persistent tier
+/// is deliberately absent: no current endpoint needs it, and it returns with
+/// the capability catalog when a stateful one does.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", tag = "kind", content = "ttl")]
 pub enum CacheHint {
     Ephemeral(CacheTtl),
-    Persistent,
 }
 
 /// Where a breakpoint sits. The kind is symbolic so the policy does not need
