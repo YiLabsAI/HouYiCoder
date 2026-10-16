@@ -127,7 +127,9 @@ impl TranscriptSnapshot for MockSnapshot {
     }
     fn load(&self, _max_bytes: u64) -> SnapshotLoad {
         SnapshotLoad {
-            lines: self.lines.clone(),
+            // The lines this fake hands out were not read from a log, so no
+            // entry named them and each takes its position as its name.
+            rows: NamedRows::from_lines(self.lines.clone()),
             skipped: self.skipped,
             truncated: self.truncated,
         }

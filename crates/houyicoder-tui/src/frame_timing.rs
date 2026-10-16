@@ -10,6 +10,7 @@ use crate::composition::app as default_app;
 use crate::records::{TeammateView, ToolOutcome, TranscriptLine};
 use crate::rows::slots_key::SlotsKey;
 use crate::state::{App, Screen};
+use crate::transcript::rows::NamedRows;
 use crate::view::draw;
 use std::env::consts::ARCH;
 use std::env::consts::OS;
@@ -282,7 +283,9 @@ fn test_frame_timing_benchmark() {
             let mut app = default_app();
             app.ui.navigation.screen = Screen::Working;
             app.sessions.current.transcript = lines.clone().into();
-            app.ui.transcript_view.replace_corpus_lines(lines.clone());
+            app.ui
+                .transcript_view
+                .replace_corpus_rows(NamedRows::from_lines(lines.clone()));
             app.sessions.current.transcript.bump_revision();
             render(&app, area);
             let mut durations = Vec::with_capacity(100);

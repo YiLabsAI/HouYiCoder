@@ -107,7 +107,7 @@ fn window_ending_at(next_offset: u64) -> FixedWindow {
 fn test_fixed_window_older_only() {
     let source = window_ending_at(5000);
     assert_eq!(source.log_size(), 0, "no log size of its own");
-    assert!(source.load(1024).lines.is_empty(), "no whole-log load");
+    assert!(source.load(1024).rows.is_empty(), "no whole-log load");
     assert!(source.window(0, 1024).rows.is_empty(), "no forward window");
     assert!(
         source.tail_window(1024).unwrap().rows.is_empty(),
@@ -239,7 +239,7 @@ fn test_stepping_window_older_only() {
     let reads = Arc::new(Mutex::new(HistoryReads::default()));
     let source = five_window_log(reads, None);
     assert_eq!(source.log_size(), 5000, "the size the walk starts from");
-    assert!(source.load(1024).lines.is_empty(), "no whole-log load");
+    assert!(source.load(1024).rows.is_empty(), "no whole-log load");
     assert!(source.window(0, 1024).rows.is_empty(), "no forward window");
     assert!(
         source.tail_window(1024).unwrap().rows.is_empty(),

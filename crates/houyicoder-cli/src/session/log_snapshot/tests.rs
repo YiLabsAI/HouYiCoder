@@ -67,7 +67,7 @@ fn test_bash_renders_stdout_body() {
             serde_json::json!({"stdout": "hi\nthere", "exitCode": 0}),
         )),
     ];
-    let lines = SessionLogSnapshot::render_events(events);
+    let lines = SessionLogSnapshot::render_named(events).into_lines();
     assert!(lines.len() >= 2, "call + result rows: {lines:?}");
     let body = match &lines[1] {
         TranscriptLine::Tool { body, .. } => body.clone(),
@@ -84,7 +84,7 @@ fn test_turn_aborted_visible_snapshot() {
     let events = &[ev(SessionEvent::TurnAborted {
         reason: "user escape".into(),
     })];
-    let lines = SessionLogSnapshot::render_events(events);
+    let lines = SessionLogSnapshot::render_named(events).into_lines();
     let text = match &lines[..] {
         [TranscriptLine::User(s)] => s.clone(),
         other => panic!("expected one user notice row, got {other:?}"),
@@ -126,7 +126,8 @@ fn test_snapshot_record_row() {
             thinking: None,
         }),
     ];
-    let rows: Vec<(Option<u64>, String)> = SessionLogSnapshot::render_events(events)
+    let rows: Vec<(Option<u64>, String)> = SessionLogSnapshot::render_named(events)
+        .into_lines()
         .iter()
         .filter_map(|l| match l {
             TranscriptLine::ThoughtFor { ms, turn_id, .. } => Some((*ms, turn_id.to_string())),
@@ -302,7 +303,7 @@ fn test_snapshot_live_names_agree() {
             _ => None,
         })
     };
-    let snapshot_row = row_name(&SessionLogSnapshot::render_events(events.iter()))
+    let snapshot_row = row_name(&SessionLogSnapshot::render_named(events.iter()).into_lines())
         .expect("the record closes the turn in the snapshot");
     let mut log: Vec<SequencedFrame> = Vec::new();
     for entry in &events {
@@ -362,7 +363,7 @@ fn test_live_snapshot_parity() {
         );
     }
     let live_rows: Vec<TranscriptLine> = transcript_from_frames(&live, 0..live.len(), false);
-    let snapshot_rows = SessionLogSnapshot::render_events(events);
+    let snapshot_rows = SessionLogSnapshot::render_named(events).into_lines();
     assert_eq!(
         live_rows.iter().map(|l| l.render()).collect::<Vec<_>>(),
         snapshot_rows.iter().map(|l| l.render()).collect::<Vec<_>>(),
@@ -400,7 +401,8 @@ fn test_open_turn_differs() {
         .iter()
         .map(|l| l.render())
         .collect();
-    let snapshot_rows: Vec<String> = SessionLogSnapshot::render_events(events)
+    let snapshot_rows: Vec<String> = SessionLogSnapshot::render_named(events)
+        .into_lines()
         .iter()
         .map(|l| l.render())
         .collect();
@@ -458,11 +460,15 @@ fn test_window_mid_turn_row() {
             .collect()
     };
     let whole = snap.load(1 << 20);
-    assert_eq!(rows(&whole.lines).len(), 1, "the whole log derives the row");
+    assert_eq!(
+        rows(whole.rows.lines()).len(),
+        1,
+        "the whole log derives the row"
+    );
     let mid = snap.window(anchor, 1 << 20);
     assert_eq!(
         rows(mid.rows.lines()),
-        rows(&whole.lines),
+        rows(whole.rows.lines()),
         "a window starting mid-turn derives the same row: {:?}",
         mid.rows
     );
@@ -513,7 +519,7 @@ fn test_window_at_record_row() {
         steps += 1;
     }
     let anchor = snap.byte_at(7).expect("the record is indexed");
-    let whole = row_facts(&snap.load(1 << 20).lines).expect("the whole log derives the row");
+    let whole = row_facts(snap.load(1 << 20).rows.lines()).expect("the whole log derives the row");
     let at_record = snap.window(anchor, 1 << 20);
     assert_eq!(
         row_facts(at_record.rows.lines()),
@@ -584,7 +590,7 @@ fn test_window_long_turn_row() {
         anchor > LOOKBACK_STEP_BYTES,
         "the turn spans more than one lookback step: {anchor} bytes of log"
     );
-    let whole = row_facts(&snap.load(1 << 20).lines).expect("the whole log derives the row");
+    let whole = row_facts(snap.load(1 << 20).rows.lines()).expect("the whole log derives the row");
     let at_record = snap.window(anchor, 1 << 20);
     assert_eq!(
         row_facts(at_record.rows.lines()),
@@ -676,7 +682,7 @@ fn test_turn_names_durable() {
             })
             .collect()
     };
-    let whole = ids(&snap.load(1 << 20).lines);
+    let whole = ids(snap.load(1 << 20).rows.lines());
     assert_eq!(
         whole,
         vec![format!("e{first_close}.1"), format!("e{closing}.1")],
@@ -750,7 +756,7 @@ fn test_lookback_finds_opener() {
         anchor > LOOKBACK_STEP_BYTES * 8,
         "the opener sits deeper than eight lookback steps: {anchor} bytes of log"
     );
-    let whole = row_facts(&snap.load(1 << 21).lines).expect("the whole log derives the row");
+    let whole = row_facts(snap.load(1 << 21).rows.lines()).expect("the whole log derives the row");
     let at_record = snap.window(anchor, 1 << 21);
     assert_eq!(
         row_facts(at_record.rows.lines()),
@@ -847,7 +853,7 @@ fn test_names_durable_without_record() {
             })
             .collect()
     };
-    let whole = ids(&snap.load(1 << 20).lines);
+    let whole = ids(snap.load(1 << 20).rows.lines());
     assert_eq!(
         whole,
         vec![format!("e{r1}.0"), format!("e{r2}.0")],
@@ -947,7 +953,7 @@ fn test_window_matches_load_render() {
     let (snap, _s, root) = bridge_with_log(&events);
     let load = snap.load(1 << 20);
     let win = snap.window(0, 1 << 20);
-    let load_text: Vec<String> = load.lines.iter().map(|l| l.render()).collect();
+    let load_text: Vec<String> = load.rows.lines().iter().map(|l| l.render()).collect();
     let win_text: Vec<String> = win.rows.lines().iter().map(|l| l.render()).collect();
     assert_eq!(load_text, win_text, "load vs window render parity");
     assert!(!win_text.is_empty());
@@ -1795,7 +1801,8 @@ fn test_scroll_back_parity() {
     let (snap, _s, root) = bridge_with_log(&events);
     let load: Vec<String> = snap
         .load(1 << 20)
-        .lines
+        .rows
+        .lines()
         .iter()
         .map(|l| l.render())
         .collect();

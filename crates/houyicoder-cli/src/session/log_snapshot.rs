@@ -28,7 +28,6 @@ use houyicoder_context::SessionId;
 use houyicoder_context::{ContextError, SessionEvent, SessionLogEntry};
 use houyicoder_protocol::envelope::DurableEventId;
 use houyicoder_service::protocol_adapter::{map_acpx_notification, map_session_update};
-use houyicoder_tui::records::TranscriptLine;
 use houyicoder_tui::row_id::RowId;
 use houyicoder_tui::transcript::rows::NamedRows;
 use houyicoder_tui::transcript::snapshot::{
@@ -103,18 +102,11 @@ impl SessionLogSnapshot {
         (frames, names)
     }
 
-    /// Render a run of durable events to transcript lines. The snapshot has
-    /// no run state to consult, so a turn its log carries no record for is
-    /// left open: the snapshot never claims a turn ended that the log does
-    /// not record as ended.
-    fn render_events<'a>(
-        events: impl IntoIterator<Item = &'a SessionLogEntry>,
-    ) -> Vec<TranscriptLine> {
-        Self::render_named(events).into_lines()
-    }
-
     /// Render a run of durable events to rows with their identities, the
-    /// shape a window read hands the TUI.
+    /// shape a whole-log load and a window read both hand the TUI. The
+    /// snapshot has no run state to consult, so a turn its log carries no
+    /// record for is left open: the snapshot never claims a turn ended that
+    /// the log does not record as ended.
     fn render_named<'a>(events: impl IntoIterator<Item = &'a SessionLogEntry>) -> NamedRows {
         let (frames, names) = Self::named_frames(events);
         transcript_from_named_frames(&frames, &names, 0..frames.len(), true, None).0
@@ -164,15 +156,15 @@ impl TranscriptSnapshot for SessionLogSnapshot {
         let size = self.log_size();
         if size > max_bytes {
             return SnapshotLoad {
-                lines: Vec::new(),
+                rows: NamedRows::default(),
                 skipped: 0,
                 truncated: true,
             };
         }
         let read = self.history.read_whole_lenient();
-        let lines = Self::render_events(&read.events);
+        let rows = Self::render_named(&read.events);
         SnapshotLoad {
-            lines,
+            rows,
             skipped: read.skipped,
             truncated: false,
         }

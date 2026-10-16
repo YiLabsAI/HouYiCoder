@@ -14,6 +14,7 @@ use crate::scroll::WINDOW_MAX_BYTES;
 use crate::state::App;
 use crate::state::ViewportMode;
 use crate::state::scan_chunk::{PendingScanChunk, SCAN_CHUNK_BUDGET, ScanChunkPoll};
+use crate::transcript::rows::NamedRows;
 use crate::transcript::snapshot::ScanProgress;
 use crate::transcript::snapshot::{SnapshotLoad, WindowLoad};
 use std::sync::mpsc::channel;
@@ -86,7 +87,7 @@ impl App {
                 let start_offset = w.start_offset;
                 let next_offset = w.next_offset;
                 self.ui.transcript_view.enter_search_over_window(
-                    w.into_lines(),
+                    w.rows,
                     log_bytes,
                     skipped,
                     start_offset,
@@ -96,15 +97,21 @@ impl App {
             }
             Some(Loaded::Under { load }) => {
                 self.ui.transcript_view.enter_search_under(
-                    load.lines,
+                    load.rows,
                     load.truncated,
                     load.skipped,
                     query,
                 );
             }
             None => {
-                let live = self.sessions.current.transcript.lines().to_vec();
-                self.ui.transcript_view.enter_search_fallback(live, query);
+                // The live rows come with the store's own names for them, so a
+                // place taken in the search view outlives the view: the
+                // transcript view resolves it by the name the store gave.
+                let rows = NamedRows::from_parts(
+                    self.sessions.current.transcript.lines().to_vec(),
+                    self.sessions.current.transcript.row_ids().to_vec(),
+                );
+                self.ui.transcript_view.enter_search_fallback(rows, query);
             }
         }
         if self.ui.transcript_view.search_focus_newest() {
@@ -248,12 +255,9 @@ impl App {
             let new_anchor = w.start_offset;
             let next_offset = w.next_offset;
             let skipped = w.skipped;
-            self.ui.transcript_view.replace_search_window(
-                w.into_lines(),
-                new_anchor,
-                next_offset,
-                skipped,
-            );
+            self.ui
+                .transcript_view
+                .replace_search_window(w.rows, new_anchor, next_offset, skipped);
             if self.ui.transcript_view.search_matches_len() > 0 {
                 // Newest match in this older window = last index.
                 self.ui.transcript_view.search_focus_last();
@@ -299,12 +303,9 @@ impl App {
             let new_end = w.next_offset;
             let start_offset = w.start_offset;
             let skipped = w.skipped;
-            self.ui.transcript_view.replace_search_window(
-                w.into_lines(),
-                start_offset,
-                new_end,
-                skipped,
-            );
+            self.ui
+                .transcript_view
+                .replace_search_window(w.rows, start_offset, new_end, skipped);
             if self.ui.transcript_view.search_matches_len() > 0 {
                 // Newest match in a forward (older->newer) window = last index,
                 // but N walks toward newer so the FIRST match is the closest

@@ -11,16 +11,19 @@
 //! text. The windowed successor is the same position's next generation
 //! (load -> window), not a parallel path.
 
-use crate::records::TranscriptLine;
 use crate::transcript::rows::NamedRows;
 
-/// What a load returned: the materialized lines, how many log lines were
-/// skipped (corrupt), and whether the load truncated (log over the
-/// threshold -- only the recent rows were kept).
+/// What a load returned: the materialized rows each beside the identity the
+/// log named it with, how many log lines were skipped (corrupt), and whether
+/// the load truncated (log over the threshold -- only the recent rows were
+/// kept).
 #[derive(Debug, Default, Clone)]
 pub struct SnapshotLoad {
-    /// The rendered TranscriptLine rows the search view holds.
-    pub lines: Vec<TranscriptLine>,
+    /// The rendered rows the search view holds, each beside its identity: the
+    /// search view names the place a match jump lands on, and that place has
+    /// to be a name the transcript view still resolves once the search view
+    /// closes.
+    pub rows: NamedRows,
     /// Corrupt log lines skipped during parse (zero on the strict path).
     pub skipped: usize,
     /// True when the log exceeded the size bound and only recent rows were
@@ -50,14 +53,6 @@ pub struct WindowLoad {
     pub skipped: usize,
     /// The total log file size (for the byte-percent position indicator).
     pub bytes_total: u64,
-}
-
-impl WindowLoad {
-    /// The window's rows alone, for the search view, which reads the rendered
-    /// text and names no row.
-    pub fn into_lines(self) -> Vec<TranscriptLine> {
-        self.rows.into_lines()
-    }
 }
 
 /// An IO failure reading a window from the durable log. Unlike an empty

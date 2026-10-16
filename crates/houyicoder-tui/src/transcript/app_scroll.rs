@@ -254,10 +254,15 @@ impl App {
     }
 
     /// The line this identity names in the transcript on view, for an anchor
-    /// whose line a collapsed group stands for.
+    /// whose line a collapsed group stands for. While the search view is up
+    /// the corpus is the list on view, so the corpus answers and the store's
+    /// own line numbering -- a different list -- is never consulted.
     fn line_of_identity(&self, id: &RowId) -> Option<usize> {
-        if self.ui.teammate_view.is_some() || self.ui.transcript_view.search_active() {
+        if self.ui.teammate_view.is_some() {
             return id.local_position().map(|position| position as usize);
+        }
+        if self.ui.transcript_view.search_active() {
+            return self.ui.transcript_view.search_corpus_row_index(id);
         }
         self.sessions
             .current
@@ -268,12 +273,22 @@ impl App {
     }
 
     /// The identity of the transcript line at this position on the view on
-    /// screen: the store's own name for a session line, and the line's position
-    /// for a transcript assembled outside it -- a child's rows, a search
-    /// snapshot -- which is the rule those lists are named by everywhere.
+    /// screen: the store's own name for a session line, the frozen corpus's
+    /// own name while the search view is up (the log named those rows before
+    /// the snapshot read them), and the line's position for a child's rows,
+    /// which are assembled outside the store and named by position everywhere.
+    /// A list that carries no name at a position leaves that position as the
+    /// name, which is the rule those assembled lists already follow.
     pub(crate) fn line_identity(&self, index: usize) -> RowId {
-        if self.ui.teammate_view.is_some() || self.ui.transcript_view.search_active() {
+        if self.ui.teammate_view.is_some() {
             return RowId::local(index as u64);
+        }
+        if self.ui.transcript_view.search_active() {
+            return self
+                .ui
+                .transcript_view
+                .search_corpus_row_id(index)
+                .unwrap_or_else(|| RowId::local(index as u64));
         }
         self.sessions
             .current

@@ -20,6 +20,7 @@ use crate::scroll::{TranscriptScroll, TranscriptSearch};
 use crate::state::App;
 use crate::state::cursors::EventCursor;
 use crate::state::parked_view_states::ExpandedKeys;
+use crate::transcript::rows::NamedRows;
 use crossterm::event::KeyCode;
 use std::mem::take;
 
@@ -120,6 +121,18 @@ impl TranscriptViewState {
         self.search_corpus.lines()
     }
 
+    /// The identity of the frozen corpus row at this position, for the reader
+    /// naming the rows the search view renders.
+    pub(crate) fn search_corpus_row_id(&self, index: usize) -> Option<RowId> {
+        self.search_corpus.row_id(index).cloned()
+    }
+
+    /// The position of the frozen corpus row this identity names, for a
+    /// reader resolving a place the search view took back to its line.
+    pub(crate) fn search_corpus_row_index(&self, id: &RowId) -> Option<usize> {
+        self.search_corpus.row_index(id)
+    }
+
     /// True when the snapshot source declined the whole log.
     pub(crate) fn search_corpus_truncated(&self) -> bool {
         self.search_corpus.truncated()
@@ -138,7 +151,7 @@ impl TranscriptViewState {
     /// Enter the search view in byte-window mode over a large log.
     pub(crate) fn enter_search_over_window(
         &mut self,
-        lines: Vec<TranscriptLine>,
+        rows: NamedRows,
         log_bytes: u64,
         skipped: usize,
         anchor: u64,
@@ -146,7 +159,7 @@ impl TranscriptViewState {
         query: &str,
     ) {
         self.search_corpus
-            .enter_over_window(lines, log_bytes, skipped);
+            .enter_over_window(rows, log_bytes, skipped);
         self.window_mode = true;
         self.enter_history_window(log_bytes, anchor, end, skipped);
         self.reset_window_scroll();
@@ -158,21 +171,22 @@ impl TranscriptViewState {
     /// Enter the search view over a snapshot under the size threshold.
     pub(crate) fn enter_search_under(
         &mut self,
-        lines: Vec<TranscriptLine>,
+        rows: NamedRows,
         truncated: bool,
         skipped: usize,
         query: &str,
     ) {
-        self.search_corpus.enter_under(lines, truncated, skipped);
+        self.search_corpus.enter_under(rows, truncated, skipped);
         self.window_mode = false;
         self.search.begin(query);
         self.run_search_on_corpus();
         self.search_opened();
     }
 
-    /// Enter the search view using a clone of the live transcript.
-    pub(crate) fn enter_search_fallback(&mut self, live: Vec<TranscriptLine>, query: &str) {
-        self.search_corpus.enter_fallback(live);
+    /// Enter the search view over the live transcript's own rows, each under
+    /// the identity the store named it with.
+    pub(crate) fn enter_search_fallback(&mut self, rows: NamedRows, query: &str) {
+        self.search_corpus.enter_fallback(rows);
         self.window_mode = false;
         self.search.begin(query);
         self.run_search_on_corpus();
@@ -268,24 +282,24 @@ impl TranscriptViewState {
         }
     }
 
-    /// Replace the window corpus lines and update navigation bounds.
+    /// Replace the window corpus rows and update navigation bounds.
     pub(crate) fn replace_search_window(
         &mut self,
-        lines: Vec<TranscriptLine>,
+        rows: NamedRows,
         anchor: u64,
         end: u64,
         skipped: usize,
     ) {
-        self.search_corpus.replace_lines(lines);
+        self.search_corpus.replace_rows(rows);
         self.replace_history_window(anchor, end, skipped);
         self.reset_window_scroll();
         self.run_search_on_corpus();
     }
 
-    /// Replace the frozen corpus lines and bump the presentation revision.
+    /// Replace the frozen corpus rows and bump the presentation revision.
     #[cfg(any(test, feature = "bench"))]
-    pub(crate) fn replace_corpus_lines(&mut self, lines: Vec<TranscriptLine>) {
-        self.search_corpus.replace_lines(lines);
+    pub(crate) fn replace_corpus_rows(&mut self, rows: NamedRows) {
+        self.search_corpus.replace_rows(rows);
         self.bump_presentation();
     }
 
@@ -526,17 +540,23 @@ fn taken_is_empty(keys: &ExpandedKeys) -> bool {
     keys_eq(keys, &ExpandedKeys::default())
 }
 
-/// The frozen lines the search view renders and counts against, plus the
+/// The frozen rows the search view renders and counts against, plus the
 /// load metadata that explains them: whether the snapshot source declined the
 /// whole log, the raw log byte size at enter, and the corrupt-line skip
 /// count. One owner so enter and exit are transactions -- four assignments a
 /// caller would otherwise repeat in lockstep, where forgetting one leaves
 /// the chrome reading a stale value.
+///
+/// The rows keep the identities the log named them with. The search view
+/// renders them under those names, so the place a match jump lands on is a
+/// name the transcript view resolves once the search view closes, and a row
+/// the resident window no longer holds is read back from the log rather than
+/// given up.
 #[derive(Debug, Default)]
 pub(crate) struct SearchCorpus {
-    /// Frozen snapshot lines. Empty outside the search view; active_transcript
+    /// Frozen snapshot rows. Empty outside the search view; active_transcript
     /// picks it when search is active so count and render read one source.
-    lines: Vec<TranscriptLine>,
+    rows: NamedRows,
     /// True when the snapshot source declined the whole log and the lines vec
     /// is empty as an honest degrade. The chrome shows a too-large hint
     /// instead of no-match.
@@ -554,11 +574,24 @@ impl SearchCorpus {
     /// The frozen snapshot lines the search view renders, counts, and matches
     /// against.
     pub(crate) fn lines(&self) -> &[TranscriptLine] {
-        &self.lines
+        self.rows.lines()
     }
 
-    /// True when the snapshot source declined the whole log and the lines vec
-    /// is empty as an honest degrade.
+    /// The identity of the corpus row at this position: the name a place the
+    /// search view takes is held by, and the name the transcript view reads
+    /// once the search view closes.
+    pub(crate) fn row_id(&self, index: usize) -> Option<&RowId> {
+        self.rows.ids().get(index)
+    }
+
+    /// The position of the corpus row this identity names, for a reader
+    /// resolving a name back to the line it stood for.
+    pub(crate) fn row_index(&self, id: &RowId) -> Option<usize> {
+        self.rows.ids().iter().position(|row| row == id)
+    }
+
+    /// True when the snapshot source declined the whole log and the rows are
+    /// empty as an honest degrade.
     pub(crate) fn truncated(&self) -> bool {
         self.truncated
     }
@@ -574,16 +607,11 @@ impl SearchCorpus {
     }
 
     /// Enter over-threshold: a byte window loaded, so the corpus is the
-    /// window's lines, the frozen log size is the byte boundary, and skipped
+    /// window's rows, the frozen log size is the byte boundary, and skipped
     /// counts the window's corrupt lines. Not truncated -- the window is the
     /// real search view, not a degrade.
-    pub(crate) fn enter_over_window(
-        &mut self,
-        lines: Vec<TranscriptLine>,
-        log_bytes: u64,
-        skipped: usize,
-    ) {
-        self.lines = lines;
+    pub(crate) fn enter_over_window(&mut self, rows: NamedRows, log_bytes: u64, skipped: usize) {
+        self.rows = rows;
         self.log_bytes = log_bytes;
         self.skipped = skipped;
         self.truncated = false;
@@ -591,37 +619,33 @@ impl SearchCorpus {
 
     /// Enter under-threshold: the whole log loaded, with its truncate and
     /// skip flags. No byte boundary applies.
-    pub(crate) fn enter_under(
-        &mut self,
-        lines: Vec<TranscriptLine>,
-        truncated: bool,
-        skipped: usize,
-    ) {
-        self.lines = lines;
+    pub(crate) fn enter_under(&mut self, rows: NamedRows, truncated: bool, skipped: usize) {
+        self.rows = rows;
         self.truncated = truncated;
         self.skipped = skipped;
         self.log_bytes = 0;
     }
 
     /// Enter with no snapshot source: the corpus is a clone of the live
-    /// transcript, no degrade, no boundary, no skips.
-    pub(crate) fn enter_fallback(&mut self, lines: Vec<TranscriptLine>) {
-        self.lines = lines;
+    /// transcript under its own row identities, no degrade, no boundary, no
+    /// skips.
+    pub(crate) fn enter_fallback(&mut self, rows: NamedRows) {
+        self.rows = rows;
         self.truncated = false;
         self.log_bytes = 0;
         self.skipped = 0;
     }
 
-    /// Replace the lines for a newer or older window load during navigation.
-    /// A window step changes which lines the view holds; the enter-time skip
+    /// Replace the rows for a newer or older window load during navigation.
+    /// A window step changes which rows the view holds; the enter-time skip
     /// count the chrome shows stays.
-    pub(crate) fn replace_lines(&mut self, lines: Vec<TranscriptLine>) {
-        self.lines = lines;
+    pub(crate) fn replace_rows(&mut self, rows: NamedRows) {
+        self.rows = rows;
     }
 
-    /// Exit: clear the lines and the load metadata together.
+    /// Exit: clear the rows and the load metadata together.
     pub(crate) fn exit(&mut self) {
-        self.lines.clear();
+        self.rows.clear();
         self.truncated = false;
         self.log_bytes = 0;
         self.skipped = 0;

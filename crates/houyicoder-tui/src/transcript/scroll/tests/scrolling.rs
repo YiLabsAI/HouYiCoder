@@ -5,6 +5,9 @@
 
 #![cfg(test)]
 
+use std::sync::Arc;
+use std::sync::atomic::AtomicU32;
+
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 use houyicoder_protocol::frontend::SlashCommand;
 use houyicoder_protocol::frontend::run::ContentBlock;
@@ -16,8 +19,9 @@ use crate::composition;
 use crate::keys::handle_working;
 use crate::records::{ToolOutcome, TranscriptLine};
 use crate::state::{App, Screen, ViewportMode};
-use crate::test_harness::{render_buffer, render_text};
-use crate::transcript::TranscriptFrame;
+use crate::test_harness::{MockSnapshot, render_buffer, render_text};
+use crate::transcript::{SequencedFrame, TranscriptFrame};
+use houyicoder_protocol::envelope::DurableEventId;
 use ratatui::buffer::Buffer;
 
 fn working() -> App {
@@ -36,6 +40,19 @@ fn agent_row(app: &mut App, text: &str) {
         .push_frame(TranscriptFrame::Session(SessionUpdate::AgentMessageChunk(
             ContentChunk::new(ContentBlock::Text { text: text.into() }),
         )));
+    app.rebuild_transcript();
+}
+
+/// Deliver one agent text frame the log named, so the row it produces takes
+/// the entry's identity: what a session fed by the host actually holds.
+fn named_row(app: &mut App, event: &str, text: &str) {
+    app.sessions.current.transcript.push_frame(SequencedFrame {
+        seq: None,
+        event_id: Some(DurableEventId(event.to_string())),
+        frame: TranscriptFrame::Session(SessionUpdate::AgentMessageChunk(ContentChunk::new(
+            ContentBlock::Text { text: text.into() },
+        ))),
+    });
     app.rebuild_transcript();
 }
 
@@ -759,5 +776,84 @@ fn test_search_input_edits_buffer() {
         render(&app).contains("n=older"),
         "Ctrl+C cancels the bar: {}",
         render(&app)
+    );
+}
+
+// Closing the search view leaves the reader where the jump put them. A
+// session's rows are named by the log entries behind them, so the place the
+// search view takes has to be a name the transcript view can still resolve
+// once that view closes. The draw after the view closes is what starts that
+// resolving, and the pass after it is what decides the fate of a place the
+// rows cannot hold.
+#[test]
+fn test_search_exit_keeps_place() {
+    let mut app = working();
+    named_row(&mut app, "e0", "needle in history");
+    for i in 0..40 {
+        named_row(
+            &mut app,
+            &format!("e{}", i + 1),
+            &format!("filler line {i}"),
+        );
+    }
+    drop(render(&app));
+    app.enter_search_view("needle");
+    assert!(
+        render(&app).contains("needle in history"),
+        "the jump lands on the match"
+    );
+
+    app.exit_search_view();
+    drop(render(&app));
+    app.pump_background_reads();
+
+    let out = render(&app);
+    assert!(
+        out.contains("needle in history"),
+        "the place the jump landed on stands after the search view closes:\n{out}"
+    );
+}
+
+// A place held by a row the session log never carried cannot be read back from
+// it, so the search view gives the place up with a notice rather than holding a
+// screen row the corpus does not stand on. The row here was raised by the front
+// end alone, which is what a prompt echo is before the host names it.
+#[test]
+fn test_search_frees_raised_place() {
+    let mut app = working();
+    for i in 0..40 {
+        app.push_transcript_line(TranscriptLine::Agent(format!("raised line {i}")));
+    }
+    // A step names the row it lands on from the rows a draw built, and a frame
+    // precedes every key in a running terminal.
+    drop(render(&app));
+    app.park_scroll_at(0);
+    app.sessions.persistence.snapshot = Some(Arc::new(MockSnapshot {
+        lines: vec![TranscriptLine::Agent("only the log holds this".into())],
+        log_bytes: 1024,
+        truncated: false,
+        skipped: 0,
+        window_lines: Vec::new(),
+        window_start: 0,
+        windows: Vec::new(),
+        scan_steps: 0,
+        scan_calls: AtomicU32::new(0),
+    }));
+
+    app.enter_search_view("nothing matches this");
+    let out = render(&app);
+    assert!(
+        out.contains("only the log holds this"),
+        "the search view stands on the corpus:\n{out}"
+    );
+    // The release is decided off the draw path, so it lands on the pass after
+    // the one that noticed the row was gone.
+    app.pump_background_reads();
+    app.exit_search_view();
+
+    let out = render(&app);
+    assert!(
+        out.contains("scroll position released"),
+        "the place the corpus cannot hold is given up where the reader can see it:\n{out}"
     );
 }

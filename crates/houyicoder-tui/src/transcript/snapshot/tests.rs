@@ -72,13 +72,15 @@ fn test_count_matches_under_snapshot() {
         TranscriptLine::User("live beta".into()),
     ]
     .into();
-    app.ui.transcript_view.replace_corpus_lines(vec![
-        TranscriptLine::User("snap one".into()),
-        TranscriptLine::User("snap two".into()),
-        TranscriptLine::User("snap three".into()),
-        TranscriptLine::User("snap four".into()),
-        TranscriptLine::User("snap five".into()),
-    ]);
+    app.ui
+        .transcript_view
+        .replace_corpus_rows(NamedRows::from_lines(vec![
+            TranscriptLine::User("snap one".into()),
+            TranscriptLine::User("snap two".into()),
+            TranscriptLine::User("snap three".into()),
+            TranscriptLine::User("snap four".into()),
+            TranscriptLine::User("snap five".into()),
+        ]));
     app.ui
         .transcript_view
         .set_search_state_for_test(true, "snap", vec![], 0);
@@ -124,10 +126,12 @@ fn test_count_matches_under_snapshot() {
 #[test]
 fn test_bound_scrollback_skips_recompute() {
     let mut app = working();
-    app.ui.transcript_view.replace_corpus_lines(vec![
-        TranscriptLine::User("snap match".into()),
-        TranscriptLine::User("snap other".into()),
-    ]);
+    app.ui
+        .transcript_view
+        .replace_corpus_rows(NamedRows::from_lines(vec![
+            TranscriptLine::User("snap match".into()),
+            TranscriptLine::User("snap other".into()),
+        ]));
     app.ui
         .transcript_view
         .set_search_state_for_test(true, "match", vec![], 0);
@@ -360,7 +364,7 @@ fn test_exit_clears_snapshot() {
 fn test_no_snapshot_answers_empty() {
     let source = NoTranscriptSnapshot;
     assert_eq!(source.log_size(), 0);
-    assert!(source.load(1024).lines.is_empty(), "load is empty");
+    assert!(source.load(1024).rows.is_empty(), "load is empty");
     assert!(source.window(0, 1024).rows.is_empty(), "window is empty");
     assert!(
         source.tail_window(1024).unwrap().rows.is_empty(),

@@ -24,10 +24,11 @@ use crate::view::working::transcript::{
     highlighted_line, push_line_rows, refresh_wide_cells, user_row,
 };
 
-/// The rows the window renders: one row set per line, each named by its line's
-/// position in the window, which is the rule a transcript assembled outside the
-/// store is named by everywhere. The window folds nothing and keeps no slot
-/// layer, so the enclosing group of every line stays None.
+/// The rows the window renders: one row set per line, each named by the
+/// identity the loaded corpus carries for that line -- the log named the rows
+/// it holds, so this view names them the same way the transcript view does.
+/// The window folds nothing and keeps no slot layer, so the enclosing group of
+/// every line stays None.
 pub(crate) fn window_rows(app: &App, width: u16) -> RowSet {
     let mut rows = RowSet::default();
     for (index, line) in app.active_transcript().iter().enumerate() {
