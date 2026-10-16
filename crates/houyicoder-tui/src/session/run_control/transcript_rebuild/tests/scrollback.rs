@@ -294,8 +294,8 @@ fn test_walk_stops_without_window() {
             skipped: 0,
             bytes_total: 5000,
         }],
-        index_steps: 0,
-        index_calls: AtomicU32::new(0),
+        scan_steps: 0,
+        scan_calls: AtomicU32::new(0),
     }));
 
     app.whole_scroll_mut().jump_to(0);

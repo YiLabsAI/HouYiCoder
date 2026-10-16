@@ -10,7 +10,7 @@ use houyicoder_context::EventId;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::{
-    EventWindow, INDEX_CHUNK_BYTES, LocatedEvent, PAGE_STEP_BYTES, SessionHistory, TurnPage,
+    EPOCH_CHUNK_BYTES, EventWindow, LocatedEvent, PAGE_STEP_BYTES, SessionHistory, TurnPage,
     is_user_input, parse_lines,
 };
 
@@ -146,7 +146,7 @@ impl SessionHistory {
             if cancel.load(Ordering::Acquire) {
                 return None;
             }
-            let step = INDEX_CHUNK_BYTES.min(from);
+            let step = EPOCH_CHUNK_BYTES.min(from);
             self.note_window_read(step);
             let rev = self
                 .session_log

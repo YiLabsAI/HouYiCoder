@@ -15,9 +15,9 @@ fn test_dispatch_enforces_budget() {
     let (_tx, rx) = mpsc::channel();
     *app.sessions
         .current
-        .index_build
-        .pending_index_chunk
-        .borrow_mut() = Some(PendingIndexChunk::new(rx));
+        .scan_state
+        .pending_scan_chunk
+        .borrow_mut() = Some(PendingScanChunk::new(rx));
 
-    app.dispatch_index_chunk();
+    app.dispatch_scan_chunk();
 }

@@ -21,7 +21,7 @@ use crate::todo_view::TodoStatus;
 use crate::transcript::NamedRows;
 use crate::transcript::TranscriptFrame;
 use crate::transcript::snapshot::{
-    IndexProgress, ReadError, SnapshotLoad, TranscriptSnapshot, WindowLoad,
+    ReadError, ScanProgress, SnapshotLoad, TranscriptSnapshot, WindowLoad,
 };
 use houyicoder_protocol::acpx::{AcpxMethod, AcpxNotification};
 use houyicoder_protocol::frontend::run::ContentBlock;
@@ -184,8 +184,8 @@ fn log_source(windows: Vec<WindowLoad>) -> Arc<MockSnapshot> {
         window_lines: Vec::new(),
         window_start: 0,
         windows,
-        index_steps: 0,
-        index_calls: AtomicU32::new(0),
+        scan_steps: 0,
+        scan_calls: AtomicU32::new(0),
     })
 }
 
@@ -217,8 +217,8 @@ impl TranscriptSnapshot for FailingWindows {
     fn window_before(&self, _from_byte: u64, _max_bytes: u64) -> Result<WindowLoad, ReadError> {
         Err(ReadError::Io)
     }
-    fn index_chunk(&self) -> IndexProgress {
-        self.inner.index_chunk()
+    fn scan_chunk(&self) -> ScanProgress {
+        self.inner.scan_chunk()
     }
     fn byte_at(&self, event_idx: usize) -> Option<u64> {
         self.inner.byte_at(event_idx)

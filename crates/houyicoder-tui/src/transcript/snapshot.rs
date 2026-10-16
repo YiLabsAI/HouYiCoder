@@ -80,9 +80,9 @@ pub enum ReadError {
 /// offset index its one check and rebuild. Offset queries answer from the
 /// sidecar whether or not the scan has run.
 #[derive(Debug, Default, Clone)]
-pub struct IndexProgress {
+pub struct ScanProgress {
     /// Bytes of the log the reverse scan has read (from the tail backward).
-    pub indexed_bytes: u64,
+    pub scanned_bytes: u64,
     /// Total log file size.
     pub total_bytes: u64,
     /// True when the scan reached the beginning of the log.
@@ -99,7 +99,7 @@ pub struct IndexProgress {
 /// position, not a parallel path. The log's sidecar offset index (byte_at)
 /// lets the windowed view seek to any scroll position without reading the
 /// prefix; G triggers a full scan with progress, which discovers the history
-/// epochs and gives the sidecar its one rebuild when it is refused.
+/// epochs and gives the sidecar its one check and rebuild.
 pub trait TranscriptSnapshot: Send + Sync {
     /// The raw on-disk log size in bytes. Cheap stat the TUI uses to pick
     /// the read-whole path vs the degrade hint, without loading first.
@@ -142,7 +142,7 @@ pub trait TranscriptSnapshot: Send + Sync {
     /// progress so the status bar shows scan percent. No-op when done. The
     /// scan discovers where histories began and checks the log's sidecar
     /// offset index; record offsets come from that index, not from the scan.
-    fn index_chunk(&self) -> IndexProgress;
+    fn scan_chunk(&self) -> ScanProgress;
 
     /// The byte offset of the event at event_idx, from the log's sidecar
     /// offset index. None when the index is missing or refused against the
@@ -154,7 +154,7 @@ pub trait TranscriptSnapshot: Send + Sync {
     fn event_count(&self) -> Option<usize>;
 }
 
-/// A source with no on-disk log: every window is empty and nothing is indexed.
+/// A source with no on-disk log: every window is empty and nothing is scanned.
 ///
 /// A trait implementation that answers nothing does so through this type, so a
 /// reader sees a name that says the source has no windows rather than an
@@ -177,8 +177,8 @@ impl TranscriptSnapshot for NoTranscriptSnapshot {
     fn window_before(&self, _from_byte: u64, _max_bytes: u64) -> Result<WindowLoad, ReadError> {
         Ok(WindowLoad::default())
     }
-    fn index_chunk(&self) -> IndexProgress {
-        IndexProgress::default()
+    fn scan_chunk(&self) -> ScanProgress {
+        ScanProgress::default()
     }
     fn byte_at(&self, _event_idx: usize) -> Option<u64> {
         None

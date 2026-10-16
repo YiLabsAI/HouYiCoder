@@ -18,11 +18,11 @@ use crate::brief::tool_call_brief;
 use crate::records::{ToolOutcome, TranscriptLine};
 use crate::session::SessionConnection;
 use crate::state::App;
-use crate::state::index_read::PendingIndexChunk;
+use crate::state::scan_chunk::PendingScanChunk;
 use crate::test_harness::{MockSnapshot, render_text, working_app};
 use crate::transcript::NamedRows;
 use crate::transcript::snapshot::{
-    IndexProgress, NoTranscriptSnapshot, TranscriptSnapshot, WindowLoad,
+    NoTranscriptSnapshot, ScanProgress, TranscriptSnapshot, WindowLoad,
 };
 
 fn working() -> App {
@@ -49,7 +49,7 @@ fn one_line_window(
 }
 
 /// A working App whose session holds a receiver-backed connection, so the
-/// index build dispatches on a worker rather than reading inline.
+/// epoch scan dispatches on a worker rather than reading inline.
 fn connected_working() -> App {
     let mut app = working();
     let (_tx, rx) = channel::<SessionMessage>();
@@ -172,8 +172,8 @@ fn test_uncapped_finds_old_match() {
         window_lines: Vec::new(),
         window_start: 0,
         windows: Vec::new(),
-        index_steps: 0,
-        index_calls: AtomicU32::new(0),
+        scan_steps: 0,
+        scan_calls: AtomicU32::new(0),
     }));
     app.enter_search_view("needle");
     assert_eq!(
@@ -218,8 +218,8 @@ fn test_search_finds_synthesized_name() {
         window_lines: Vec::new(),
         window_start: 0,
         windows: Vec::new(),
-        index_steps: 0,
-        index_calls: AtomicU32::new(0),
+        scan_steps: 0,
+        scan_calls: AtomicU32::new(0),
     }));
     app.enter_search_view("Update");
     assert!(
@@ -248,8 +248,8 @@ fn test_large_log_opens_mode() {
         ],
         window_start: 19 * 1024 * 1024,
         windows: Vec::new(),
-        index_steps: 0,
-        index_calls: AtomicU32::new(0),
+        scan_steps: 0,
+        scan_calls: AtomicU32::new(0),
     }));
     app.enter_search_view("needle");
     assert!(
@@ -297,8 +297,8 @@ fn test_skipped_lines_in_chrome() {
         window_lines: Vec::new(),
         window_start: 0,
         windows: Vec::new(),
-        index_steps: 0,
-        index_calls: AtomicU32::new(0),
+        scan_steps: 0,
+        scan_calls: AtomicU32::new(0),
     }));
     app.enter_search_view("needle");
     assert_eq!(
@@ -331,8 +331,8 @@ fn test_exit_clears_snapshot() {
         window_lines: Vec::new(),
         window_start: 0,
         windows: Vec::new(),
-        index_steps: 0,
-        index_calls: AtomicU32::new(0),
+        scan_steps: 0,
+        scan_calls: AtomicU32::new(0),
     }));
     app.enter_search_view("snap");
     assert!(
@@ -372,9 +372,9 @@ fn test_no_snapshot_answers_empty() {
         source.window_before(512, 1024).unwrap().lines.is_empty(),
         "window_before is empty"
     );
-    let progress = source.index_chunk();
-    assert_eq!(progress.indexed_bytes, 0, "nothing is indexed");
-    assert!(!progress.done, "and the build is not claimed done");
+    let progress = source.scan_chunk();
+    assert_eq!(progress.scanned_bytes, 0, "nothing is scanned");
+    assert!(!progress.done, "and the scan is not claimed done");
     assert!(source.byte_at(0).is_none(), "no event offset is known");
     assert!(source.event_count().is_none(), "and no count either");
 }
@@ -452,8 +452,8 @@ fn test_flat_count_matches_render() {
         window_lines: window,
         window_start: 19 * 1024 * 1024,
         windows: Vec::new(),
-        index_steps: 0,
-        index_calls: AtomicU32::new(0),
+        scan_steps: 0,
+        scan_calls: AtomicU32::new(0),
     }));
     app.enter_search_view("answer");
     assert!(app.window_browsing(), "test setup: window mode active");
@@ -497,8 +497,8 @@ fn test_exit_clears_window_state() {
         ],
         window_start: 19 * 1024 * 1024,
         windows: Vec::new(),
-        index_steps: 0,
-        index_calls: AtomicU32::new(0),
+        scan_steps: 0,
+        scan_calls: AtomicU32::new(0),
     }));
     app.enter_search_view("tail");
     assert!(app.window_browsing(), "window mode entered");
@@ -529,8 +529,8 @@ fn test_window_keys_scroll_window() {
         window_lines: vec![TranscriptLine::User("tail".into())],
         window_start: 19 * 1024 * 1024,
         windows: Vec::new(),
-        index_steps: 0,
-        index_calls: AtomicU32::new(0),
+        scan_steps: 0,
+        scan_calls: AtomicU32::new(0),
     }));
     app.enter_search_view("tail");
     assert!(app.window_browsing());
@@ -592,8 +592,8 @@ fn test_window_scrolls_no_drag() {
         window_lines: vec![TranscriptLine::User("tail".into())],
         window_start: 19 * 1024 * 1024,
         windows: Vec::new(),
-        index_steps: 0,
-        index_calls: AtomicU32::new(0),
+        scan_steps: 0,
+        scan_calls: AtomicU32::new(0),
     }));
     app.enter_search_view("tail");
     app.window_scroll().total.set(100);
@@ -664,8 +664,8 @@ fn test_walks_older_across_windows() {
         window_lines: Vec::new(),
         window_start: 0,
         windows,
-        index_steps: 0,
-        index_calls: AtomicU32::new(0),
+        scan_steps: 0,
+        scan_calls: AtomicU32::new(0),
     }));
     app.enter_search_view("needle");
     assert_eq!(app.window_anchor(), 200, "opens at the tail window");
@@ -711,8 +711,8 @@ fn test_walks_newer_across_windows() {
         window_lines: Vec::new(),
         window_start: 0,
         windows,
-        index_steps: 0,
-        index_calls: AtomicU32::new(0),
+        scan_steps: 0,
+        scan_calls: AtomicU32::new(0),
     }));
     app.enter_search_view("needle");
     // Walk to the oldest first (n), then N back to the newest.
@@ -733,12 +733,11 @@ fn test_walks_newer_across_windows() {
     );
 }
 
-/// G in byte-window mode starts the full-index build (indexing on); the
-/// render path pumps index_chunk per frame. With a mock that completes in one
-/// chunk, one pump flips indexing off + sets done. Asserts the mode flag +
-/// the done cell, not internal index state.
+/// G in byte-window mode starts the full scan (indexing on); the render path
+/// pumps scan_chunk per frame. With a mock that completes in one chunk, one
+/// pump flips indexing off. Asserts the mode flag, not internal index state.
 #[test]
-fn test_g_completes_full_index() {
+fn test_g_completes_full_scan() {
     let mut app = working();
     app.sessions.persistence.snapshot = Some(Arc::new(MockSnapshot {
         lines: Vec::new(),
@@ -748,12 +747,12 @@ fn test_g_completes_full_index() {
         window_lines: vec![TranscriptLine::User("tail".into())],
         window_start: 0,
         windows: Vec::new(),
-        index_steps: 1, // completes in one chunk
-        index_calls: AtomicU32::new(0),
+        scan_steps: 1, // completes in one chunk
+        scan_calls: AtomicU32::new(0),
     }));
     app.enter_search_view("tail");
     assert!(
-        !app.sessions.current.index_build.indexing.get(),
+        !app.sessions.current.scan_state.indexing.get(),
         "indexing off before G"
     );
     handle_key(
@@ -761,18 +760,14 @@ fn test_g_completes_full_index() {
         KeyEvent::new(KeyCode::Char('G'), KeyModifiers::NONE),
     );
     assert!(
-        app.sessions.current.index_build.indexing.get(),
-        "G starts the index build"
+        app.sessions.current.scan_state.indexing.get(),
+        "G starts the full scan"
     );
-    // One render pump completes the build (the mock's index_steps == 1).
-    app.pump_index_chunk();
+    // One render pump completes the scan (the mock's scan_steps == 1).
+    app.pump_scan_chunk();
     assert!(
-        !app.sessions.current.index_build.indexing.get(),
-        "index build completed + stopped"
-    );
-    assert!(
-        app.sessions.current.index_build.index_done.get(),
-        "done flag set"
+        !app.sessions.current.scan_state.indexing.get(),
+        "scan completed + stopped"
     );
     let out = render_text(&app, 100, 24);
     // No longer indexing -> the chrome shows byte-%, not "indexing".
@@ -782,11 +777,11 @@ fn test_g_completes_full_index() {
     );
 }
 
-/// Esc while the full-index is building interrupts it (indexing off, view
+/// Esc while the full scan is running interrupts it (indexing off, view
 /// stays open). Asserts the Esc is consumed by the interrupt (not exit) +
 /// the view remains active.
 #[test]
-fn test_esc_interrupts_full_index() {
+fn test_esc_interrupts_full_scan() {
     let mut app = working();
     app.sessions.persistence.snapshot = Some(Arc::new(MockSnapshot {
         lines: Vec::new(),
@@ -796,8 +791,8 @@ fn test_esc_interrupts_full_index() {
         window_lines: vec![TranscriptLine::User("tail".into())],
         window_start: 0,
         windows: Vec::new(),
-        index_steps: 99, // never completes in the test -> Esc must interrupt
-        index_calls: AtomicU32::new(0),
+        scan_steps: 99, // never completes in the test -> Esc must interrupt
+        scan_calls: AtomicU32::new(0),
     }));
     app.enter_search_view("tail");
     handle_key(
@@ -805,13 +800,13 @@ fn test_esc_interrupts_full_index() {
         KeyEvent::new(KeyCode::Char('G'), KeyModifiers::NONE),
     );
     assert!(
-        app.sessions.current.index_build.indexing.get(),
-        "G started the build"
+        app.sessions.current.scan_state.indexing.get(),
+        "G started the scan"
     );
     handle_key(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     assert!(
-        !app.sessions.current.index_build.indexing.get(),
-        "Esc interrupted the index build"
+        !app.sessions.current.scan_state.indexing.get(),
+        "Esc interrupted the full scan"
     );
     assert!(
         app.ui.transcript_view.search_active(),
@@ -833,18 +828,18 @@ fn test_mock_has_no_index() {
         window_lines: Vec::new(),
         window_start: 0,
         windows: Vec::new(),
-        index_steps: 1,
-        index_calls: AtomicU32::new(0),
+        scan_steps: 1,
+        scan_calls: AtomicU32::new(0),
     };
     assert!(mock.byte_at(0).is_none(), "the mock names no event offset",);
     assert!(mock.event_count().is_none(), "and no event count");
 }
 
-/// Drawing never reads the log for the index: a chunk is up to four megabytes
-/// and parses every line in it, so the build advances on the loop instead. A
-/// draw while the build is running leaves the chunk unread.
+/// Drawing never reads the log for the scan: a chunk is up to four megabytes
+/// and parses every line in it, so the scan advances on the loop instead. A
+/// draw while the scan is running leaves the chunk unread.
 #[test]
-fn test_draw_reads_no_index() {
+fn test_draw_reads_no_scan() {
     let mut app = working();
     let source = Arc::new(MockSnapshot {
         lines: Vec::new(),
@@ -854,8 +849,8 @@ fn test_draw_reads_no_index() {
         window_lines: vec![TranscriptLine::User("tail".into())],
         window_start: 0,
         windows: Vec::new(),
-        index_steps: 3,
-        index_calls: AtomicU32::new(0),
+        scan_steps: 3,
+        scan_calls: AtomicU32::new(0),
     });
     app.sessions.persistence.snapshot = Some(source.clone());
     app.enter_search_view("tail");
@@ -864,24 +859,24 @@ fn test_draw_reads_no_index() {
         KeyEvent::new(KeyCode::Char('G'), KeyModifiers::NONE),
     );
     assert!(
-        app.sessions.current.index_build.indexing.get(),
-        "G starts the index build"
+        app.sessions.current.scan_state.indexing.get(),
+        "G starts the full scan"
     );
 
-    let calls_before = source.index_calls.load(Ordering::Relaxed);
+    let calls_before = source.scan_calls.load(Ordering::Relaxed);
     let drawn = render_text(&app, 100, 24);
     assert!(!drawn.is_empty(), "the frame drew");
-    let calls_after = source.index_calls.load(Ordering::Relaxed);
+    let calls_after = source.scan_calls.load(Ordering::Relaxed);
     assert_eq!(
         calls_after, calls_before,
-        "a draw reads no index chunk: {calls_before} then {calls_after}"
+        "a draw reads no scan chunk: {calls_before} then {calls_after}"
     );
 }
 
 /// With a live connection, a chunk runs on a worker: the loop advances the
-/// build and applies what the worker sent.
+/// scan and applies what the worker sent.
 #[test]
-fn test_index_runs_on_worker() {
+fn test_scan_runs_on_worker() {
     let mut app = connected_working();
     app.sessions.persistence.snapshot = Some(Arc::new(MockSnapshot {
         lines: Vec::new(),
@@ -891,8 +886,8 @@ fn test_index_runs_on_worker() {
         window_lines: vec![TranscriptLine::User("tail".into())],
         window_start: 0,
         windows: Vec::new(),
-        index_steps: 1,
-        index_calls: AtomicU32::new(0),
+        scan_steps: 1,
+        scan_calls: AtomicU32::new(0),
     }));
     app.enter_search_view("tail");
     handle_key(
@@ -900,31 +895,32 @@ fn test_index_runs_on_worker() {
         KeyEvent::new(KeyCode::Char('G'), KeyModifiers::NONE),
     );
     assert!(
-        app.sessions.current.index_build.indexing.get(),
-        "G starts the build"
+        app.sessions.current.scan_state.indexing.get(),
+        "G starts the scan"
     );
 
     let deadline = Instant::now() + Duration::from_secs(5);
     while Instant::now() < deadline {
-        if app.pump_background_reads() && app.sessions.current.index_build.index_done.get() {
+        if app.pump_background_reads() && !app.sessions.current.scan_state.indexing.get() {
             break;
         }
         thread::sleep(Duration::from_millis(5));
     }
     assert!(
-        app.sessions.current.index_build.index_done.get(),
-        "the worker's chunk finished the build"
+        !app.sessions.current.scan_state.indexing.get(),
+        "the worker's chunk finished the scan"
     );
-    assert!(
-        !app.sessions.current.index_build.indexing.get(),
-        "and the build stopped"
+    assert_eq!(
+        app.sessions.current.scan_state.scanned_bytes.get(),
+        app.sessions.current.scan_state.scan_total.get(),
+        "the scan reached its total rather than dying on the worker"
     );
 }
 
-/// A worker that dies without sending stops the build rather than stalling it:
+/// A worker that dies without sending stops the scan rather than stalling it:
 /// the record is cleared and indexing turns off, so a later G can start again.
 #[test]
-fn test_index_worker_death_stops() {
+fn test_worker_death_stops_scan() {
     let mut app = working();
     app.sessions.persistence.snapshot = Some(Arc::new(MockSnapshot {
         lines: Vec::new(),
@@ -934,8 +930,8 @@ fn test_index_worker_death_stops() {
         window_lines: vec![TranscriptLine::User("tail".into())],
         window_start: 0,
         windows: Vec::new(),
-        index_steps: 1,
-        index_calls: AtomicU32::new(0),
+        scan_steps: 1,
+        scan_calls: AtomicU32::new(0),
     }));
     app.enter_search_view("tail");
     handle_key(
@@ -947,32 +943,32 @@ fn test_index_worker_death_stops() {
     drop(tx);
     *app.sessions
         .current
-        .index_build
-        .pending_index_chunk
-        .borrow_mut() = Some(PendingIndexChunk::new(rx));
+        .scan_state
+        .pending_scan_chunk
+        .borrow_mut() = Some(PendingScanChunk::new(rx));
 
-    assert!(app.pump_index_chunk(), "the dead worker is noticed");
+    assert!(app.pump_scan_chunk(), "the dead worker is noticed");
     assert!(
-        !app.sessions.current.index_build.indexing.get(),
-        "and the build stops rather than stalling"
+        !app.sessions.current.scan_state.indexing.get(),
+        "and the scan stops rather than stalling"
     );
     assert!(
         app.sessions
             .current
-            .index_build
-            .pending_index_chunk
+            .scan_state
+            .pending_scan_chunk
             .borrow()
             .is_none(),
         "the record is cleared so a later G can dispatch again"
     );
 }
 
-/// An interrupt stops the build but the chunk already on its worker still
-/// lands. The partial index is kept by contract, so the landing applies its
-/// progress without resuming the interrupted build; a later G restarts and
+/// An interrupt stops the scan but the chunk already on its worker still
+/// lands. The partial pass is kept by contract, so the landing applies its
+/// progress without resuming the interrupted scan; a later G restarts and
 /// completes from there.
 #[test]
-fn test_index_landing_after_interrupt() {
+fn test_landing_after_interrupt() {
     let mut app = working();
     app.sessions.persistence.snapshot = Some(Arc::new(MockSnapshot {
         lines: Vec::new(),
@@ -982,8 +978,8 @@ fn test_index_landing_after_interrupt() {
         window_lines: vec![TranscriptLine::User("tail".into())],
         window_start: 0,
         windows: Vec::new(),
-        index_steps: 1,
-        index_calls: AtomicU32::new(0),
+        scan_steps: 1,
+        scan_calls: AtomicU32::new(0),
     }));
     app.enter_search_view("tail");
     handle_key(
@@ -991,54 +987,59 @@ fn test_index_landing_after_interrupt() {
         KeyEvent::new(KeyCode::Char('G'), KeyModifiers::NONE),
     );
     assert!(
-        app.sessions.current.index_build.indexing.get(),
-        "G starts the build"
+        app.sessions.current.scan_state.indexing.get(),
+        "G starts the scan"
     );
     // A held sender stands in for the chunk's worker.
     let (tx, rx) = channel();
     *app.sessions
         .current
-        .index_build
-        .pending_index_chunk
-        .borrow_mut() = Some(PendingIndexChunk::new(rx));
+        .scan_state
+        .pending_scan_chunk
+        .borrow_mut() = Some(PendingScanChunk::new(rx));
 
-    assert!(app.interrupt_index(), "the interrupt consumed the Esc");
-    tx.send(IndexProgress {
-        indexed_bytes: 512,
+    assert!(app.interrupt_scan(), "the interrupt consumed the Esc");
+    tx.send(ScanProgress {
+        scanned_bytes: 512,
         total_bytes: 2048,
         done: false,
     })
     .ok();
 
-    assert!(app.pump_index_chunk(), "the landed chunk is noticed");
+    assert!(app.pump_scan_chunk(), "the landed chunk is noticed");
     assert_eq!(
-        app.sessions.current.index_build.indexed_bytes.get(),
+        app.sessions.current.scan_state.scanned_bytes.get(),
         512,
         "its progress applied"
     );
     assert!(
-        !app.sessions.current.index_build.indexing.get(),
-        "the interrupted build did not resume on the landing"
+        !app.sessions.current.scan_state.indexing.get(),
+        "the interrupted scan did not resume on the landing"
     );
 
-    // Restart with a connection: the build runs on a worker to completion.
+    // Restart with a connection: the scan runs on a worker to completion.
     let (_tx, rx) = channel::<SessionMessage>();
     app.sessions.current.connection = Some(SessionConnection::from_receiver(rx));
-    app.start_full_index();
+    app.start_full_scan();
     assert!(
-        app.sessions.current.index_build.indexing.get(),
-        "G restarts the build"
+        app.sessions.current.scan_state.indexing.get(),
+        "G restarts the scan"
     );
     let deadline = Instant::now() + Duration::from_secs(5);
     while Instant::now() < deadline {
-        if app.pump_background_reads() && app.sessions.current.index_build.index_done.get() {
+        if app.pump_background_reads() && !app.sessions.current.scan_state.indexing.get() {
             break;
         }
         thread::sleep(Duration::from_millis(5));
     }
     assert!(
-        app.sessions.current.index_build.index_done.get(),
-        "the restarted build completed"
+        !app.sessions.current.scan_state.indexing.get(),
+        "the restarted scan completed"
+    );
+    assert_eq!(
+        app.sessions.current.scan_state.scanned_bytes.get(),
+        app.sessions.current.scan_state.scan_total.get(),
+        "the restarted scan reached its total rather than dying on the worker"
     );
 }
 
@@ -1049,7 +1050,7 @@ fn test_index_landing_after_interrupt() {
 /// nobody holds. The sender held here is the observation -- it keeps its
 /// receiver only if no second chunk was dispatched.
 #[test]
-fn test_index_restart_waits() {
+fn test_scan_restart_waits() {
     let mut app = connected_working();
     app.sessions.persistence.snapshot = Some(Arc::new(MockSnapshot {
         lines: Vec::new(),
@@ -1059,17 +1060,17 @@ fn test_index_restart_waits() {
         window_lines: vec![TranscriptLine::User("tail".into())],
         window_start: 0,
         windows: Vec::new(),
-        index_steps: 1,
-        index_calls: AtomicU32::new(0),
+        scan_steps: 1,
+        scan_calls: AtomicU32::new(0),
     }));
     app.enter_search_view("tail");
-    app.sessions.current.index_build.indexing.set(true);
+    app.sessions.current.scan_state.indexing.set(true);
     let (tx, rx) = channel();
     *app.sessions
         .current
-        .index_build
-        .pending_index_chunk
-        .borrow_mut() = Some(PendingIndexChunk::new(rx));
+        .scan_state
+        .pending_scan_chunk
+        .borrow_mut() = Some(PendingScanChunk::new(rx));
 
     handle_key(
         &mut app,
@@ -1077,17 +1078,17 @@ fn test_index_restart_waits() {
     );
 
     assert!(
-        tx.send(IndexProgress {
-            indexed_bytes: 7,
+        tx.send(ScanProgress {
+            scanned_bytes: 7,
             total_bytes: 9,
             done: false,
         })
         .is_ok(),
         "the running chunk still has its receiver"
     );
-    assert!(app.pump_index_chunk(), "and its progress still lands");
+    assert!(app.pump_scan_chunk(), "and its progress still lands");
     assert_eq!(
-        app.sessions.current.index_build.indexed_bytes.get(),
+        app.sessions.current.scan_state.scanned_bytes.get(),
         7,
         "from the chunk that was already running, not a second one"
     );
@@ -1098,7 +1099,7 @@ fn test_index_restart_waits() {
 /// that dispatched while a chunk was running would overwrite the record and
 /// drop that chunk's receiver.
 #[test]
-fn test_index_pump_waits() {
+fn test_scan_pump_waits() {
     let mut app = connected_working();
     app.sessions.persistence.snapshot = Some(Arc::new(MockSnapshot {
         lines: Vec::new(),
@@ -1108,25 +1109,25 @@ fn test_index_pump_waits() {
         window_lines: vec![TranscriptLine::User("tail".into())],
         window_start: 0,
         windows: Vec::new(),
-        index_steps: 1,
-        index_calls: AtomicU32::new(0),
+        scan_steps: 1,
+        scan_calls: AtomicU32::new(0),
     }));
     app.enter_search_view("tail");
-    app.sessions.current.index_build.indexing.set(true);
+    app.sessions.current.scan_state.indexing.set(true);
     let (tx, rx) = channel();
     *app.sessions
         .current
-        .index_build
-        .pending_index_chunk
-        .borrow_mut() = Some(PendingIndexChunk::new(rx));
+        .scan_state
+        .pending_scan_chunk
+        .borrow_mut() = Some(PendingScanChunk::new(rx));
 
     assert!(
-        !app.pump_index_chunk(),
+        !app.pump_scan_chunk(),
         "nothing landed yet, so nothing moved"
     );
     assert!(
-        tx.send(IndexProgress {
-            indexed_bytes: 3,
+        tx.send(ScanProgress {
+            scanned_bytes: 3,
             total_bytes: 9,
             done: false,
         })

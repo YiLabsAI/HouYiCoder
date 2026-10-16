@@ -485,13 +485,13 @@ impl App {
     }
 
     /// Advance the reads that run off the draw path: the older-rows read and
-    /// the index build. Both read the log, so neither runs where the frame is
+    /// the epoch scan. Both read the log, so neither runs where the frame is
     /// drawn; the loop calls this instead. Returns true when either moved, so
     /// the caller redraws.
     pub(crate) fn pump_background_reads(&mut self) -> bool {
         let history = self.pump_history_read();
-        let index = self.pump_index_chunk();
-        history || index
+        let scan = self.pump_scan_chunk();
+        history || scan
     }
 
     /// Drain the running history read without blocking and apply it when

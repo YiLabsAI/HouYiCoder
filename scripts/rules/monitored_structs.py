@@ -136,9 +136,9 @@ ACTIVE_OWNERS = {
         # counts for a call the run still tracks.
         "fields": 3,
     },
-    "crates/houyicoder-tui/src/transcript/index_build.rs:IndexBuild": {
-        # The full-scan index build's progress mirror and the chunk a worker still reads.
-        "fields": 5,
+    "crates/houyicoder-tui/src/transcript/scan_state.rs:ScanState": {
+        # The full scan's progress mirror and the chunk a worker still reads.
+        "fields": 4,
     },
     "crates/houyicoder-tui/src/ui/rows/last_row_keys.rs:LastRowKeys": {
         # The per-row keys of the last visible window, all taken from one row set in a single replace.

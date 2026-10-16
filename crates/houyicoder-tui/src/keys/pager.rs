@@ -43,10 +43,10 @@ pub(super) fn handle_scroll(app: &mut App, k: KeyEvent) {
 /// paging (scroll past the window edge) lands with the G full-scan plus
 /// per-window n/N scan.
 fn handle_search_view(app: &mut App, k: KeyEvent) {
-    // Esc: if the G full-index is building, interrupt it (stay in the view);
+    // Esc: if the G full scan is running, interrupt it (stay in the view);
     // otherwise exit the view.
     if k.code == KeyCode::Esc {
-        if app.interrupt_index() {
+        if app.interrupt_scan() {
             return;
         }
         app.exit_search_view();
@@ -80,10 +80,10 @@ fn handle_search_view(app: &mut App, k: KeyEvent) {
         }
         KeyCode::Char('G') => {
             if app.window_browsing() {
-                // Build the full event-byte-offset index across frames so
-                // arbitrary seek + the total count become possible. Progress
+                // Scan the whole log across frames: it discovers where each
+                // history began and checks the log's sidecar index. Progress
                 // shows in the chrome; Esc interrupts.
-                app.start_full_index();
+                app.start_full_scan();
                 app.window_scroll_mut().follow_tail();
             } else {
                 app.scroll_transcript_follow_tail();

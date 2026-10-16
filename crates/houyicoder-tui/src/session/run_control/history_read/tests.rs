@@ -4,7 +4,7 @@ use crate::row_id::RowId;
 use crate::state::history_read::HistoryReadPoll;
 use crate::state::history_read::HistoryReads;
 use crate::state::transcript::DiskFront;
-use crate::transcript::snapshot::IndexProgress;
+use crate::transcript::snapshot::ScanProgress;
 use crate::transcript::snapshot::{NoTranscriptSnapshot, ReadError, SnapshotLoad, WindowLoad};
 use std::sync::Mutex;
 use std::sync::atomic::AtomicU64;
@@ -75,8 +75,8 @@ impl TranscriptSnapshot for FixedWindow {
     fn window_before(&self, _from_byte: u64, _max_bytes: u64) -> Result<WindowLoad, ReadError> {
         Ok(self.window.clone())
     }
-    fn index_chunk(&self) -> IndexProgress {
-        self.empty.index_chunk()
+    fn scan_chunk(&self) -> ScanProgress {
+        self.empty.scan_chunk()
     }
     fn byte_at(&self, event_idx: usize) -> Option<u64> {
         self.empty.byte_at(event_idx)
@@ -113,7 +113,7 @@ fn test_fixed_window_older_only() {
         source.tail_window(1024).unwrap().lines.is_empty(),
         "no tail window"
     );
-    assert!(!source.index_chunk().done, "no index");
+    assert!(!source.scan_chunk().done, "no index");
     assert!(source.byte_at(0).is_none(), "no offsets");
     assert!(source.event_count().is_none(), "no event count");
 }
@@ -215,8 +215,8 @@ impl TranscriptSnapshot for SteppingWindow {
             bytes_total: self.log_size,
         })
     }
-    fn index_chunk(&self) -> IndexProgress {
-        self.empty.index_chunk()
+    fn scan_chunk(&self) -> ScanProgress {
+        self.empty.scan_chunk()
     }
     fn byte_at(&self, event_idx: usize) -> Option<u64> {
         self.empty.byte_at(event_idx)
@@ -246,7 +246,7 @@ fn test_stepping_window_older_only() {
         source.tail_window(1024).unwrap().lines.is_empty(),
         "no tail window"
     );
-    assert!(!source.index_chunk().done, "no index");
+    assert!(!source.scan_chunk().done, "no index");
     assert!(source.byte_at(0).is_none(), "no offsets");
     assert!(source.event_count().is_none(), "no event count");
 }
@@ -348,8 +348,8 @@ impl TranscriptSnapshot for ScriptedWindows {
             .cloned()
             .unwrap_or_default())
     }
-    fn index_chunk(&self) -> IndexProgress {
-        self.empty.index_chunk()
+    fn scan_chunk(&self) -> ScanProgress {
+        self.empty.scan_chunk()
     }
     fn byte_at(&self, event_idx: usize) -> Option<u64> {
         self.empty.byte_at(event_idx)
@@ -584,8 +584,8 @@ impl TranscriptSnapshot for InjectedWindow {
             None => Ok(WindowLoad::default()),
         }
     }
-    fn index_chunk(&self) -> IndexProgress {
-        self.empty.index_chunk()
+    fn scan_chunk(&self) -> ScanProgress {
+        self.empty.scan_chunk()
     }
     fn byte_at(&self, event_idx: usize) -> Option<u64> {
         self.empty.byte_at(event_idx)

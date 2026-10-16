@@ -121,7 +121,7 @@ check-full: check
 # Verify combines deterministic gates with ignored PTY and sandbox suites.
 # Real-provider tests, expected-failure reproductions, and benchmarks remain
 # explicit so verification never consumes network credentials or model tokens.
-NEXTEST_VERIFY_FILTER := -E 'not(test(/bug_repro/)) and not(binary(/live_agent/)) and not(binary(/openai_compat_real/)) and not(binary(/mcp_live_server/)) and not(binary(/reward_bench/)) and not(binary(/reward_baseline/)) and not(binary(/recall_benchmark/)) and not(binary(/cache_hit_rate/)) and not(test(/frame_timing_benchmark/)) and not(binary(/measure_history/)) and not(test(/test_index_build_baseline/))'
+NEXTEST_VERIFY_FILTER := -E 'not(test(/bug_repro/)) and not(binary(/live_agent/)) and not(binary(/openai_compat_real/)) and not(binary(/mcp_live_server/)) and not(binary(/reward_bench/)) and not(binary(/reward_baseline/)) and not(binary(/recall_benchmark/)) and not(binary(/cache_hit_rate/)) and not(test(/frame_timing_benchmark/)) and not(binary(/measure_history/)) and not(test(/test_scan_state_baseline/))'
 # Per-crate discovery: nextest's list phase spawns every test binary in
 # parallel and -j does not gate it, so a workspace-wide run deadlocks in
 # macOS 26.6.2 _dyld_start. Running -p per crate bounds each discovery

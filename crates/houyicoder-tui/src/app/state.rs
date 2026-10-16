@@ -10,7 +10,7 @@ use std::time::Instant;
 
 pub use crate::transcript::store as transcript;
 pub(crate) use crate::transcript::{
-    cursors, history_state as history_read, index_build, index_read, parked_view_states,
+    cursors, history_state as history_read, parked_view_states, scan_chunk, scan_state,
 };
 pub(crate) use crate::ui::enums;
 pub(crate) use crate::view::model_pane::draft as model_draft;

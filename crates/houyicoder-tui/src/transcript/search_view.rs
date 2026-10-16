@@ -13,8 +13,8 @@ use crate::scroll::SEARCH_LOG_THRESHOLD;
 use crate::scroll::WINDOW_MAX_BYTES;
 use crate::state::App;
 use crate::state::ViewportMode;
-use crate::state::index_read::{INDEX_CHUNK_BUDGET, IndexChunkPoll, PendingIndexChunk};
-use crate::transcript::snapshot::IndexProgress;
+use crate::state::scan_chunk::{PendingScanChunk, SCAN_CHUNK_BUDGET, ScanChunkPoll};
+use crate::transcript::snapshot::ScanProgress;
 use crate::transcript::snapshot::{SnapshotLoad, WindowLoad};
 use std::sync::mpsc::channel;
 
@@ -114,10 +114,9 @@ impl App {
     pub fn exit_search_view(&mut self) {
         self.ui.verbose = false;
         self.ui.transcript_view.exit_search();
-        self.sessions.current.index_build.indexing.set(false);
-        self.sessions.current.index_build.indexed_bytes.set(0);
-        self.sessions.current.index_build.index_total.set(0);
-        self.sessions.current.index_build.index_done.set(false);
+        self.sessions.current.scan_state.indexing.set(false);
+        self.sessions.current.scan_state.scanned_bytes.set(0);
+        self.sessions.current.scan_state.scan_total.set(0);
         self.exit_scroll();
     }
 
@@ -312,107 +311,106 @@ impl App {
         }
     }
 
-    /// How many index chunks are outstanding: dispatched and not yet applied.
+    /// How many scan chunks are outstanding: dispatched and not yet applied.
     ///
-    /// Within the build a record lasts exactly as long as its chunk -- the pump
+    /// Within the scan a record lasts exactly as long as its chunk -- the pump
     /// clears it on a landed or dead one, an interrupt deliberately leaves it on
     /// file -- so counting records bounds chunk reads. A history read cannot
     /// reason this way: its invalidation clears the record under a worker still
     /// inside the log, which is why that budget is held by the worker.
-    fn pending_index_chunks(&self) -> usize {
+    fn pending_scan_chunks(&self) -> usize {
         usize::from(
             self.sessions
                 .current
-                .index_build
-                .pending_index_chunk
+                .scan_state
+                .pending_scan_chunk
                 .borrow()
                 .is_some(),
         )
     }
 
-    /// G in byte-window mode: start the full event-byte-offset index build
-    /// (one chunk at a time; Esc interrupts). The first chunk is dispatched
-    /// here, and the loop advances the build from there.
+    /// G in byte-window mode: start the full epoch scan (one chunk at a time;
+    /// Esc interrupts). The first chunk is dispatched here, and the loop
+    /// advances the scan from there.
     ///
-    /// A build already running is left to the loop. The key carries no gate of
+    /// A scan already running is left to the loop. The key carries no gate of
     /// its own, so pressing it twice would dispatch twice, and the second
     /// dispatch drops the first chunk's receiver: its worker reads the log and
     /// sends into a channel nobody holds.
-    pub fn start_full_index(&mut self) {
+    pub fn start_full_scan(&mut self) {
         if !self.window_browsing() {
             return;
         }
-        self.sessions.current.index_build.indexing.set(true);
-        self.sessions.current.index_build.index_done.set(false);
-        if self.pending_index_chunks() >= INDEX_CHUNK_BUDGET {
+        self.sessions.current.scan_state.indexing.set(true);
+        if self.pending_scan_chunks() >= SCAN_CHUNK_BUDGET {
             return;
         }
-        self.dispatch_index_chunk();
+        self.dispatch_scan_chunk();
     }
 
-    /// Esc while indexing interrupts the build (the partial index is kept --
-    /// a later G resumes from where it left off). Returns true if it
-    /// consumed the Esc so the caller does not also exit the view.
+    /// Esc while scanning interrupts it (the partial pass is kept -- a later G
+    /// resumes from where it left off). Returns true if it consumed the Esc
+    /// so the caller does not also exit the view.
     ///
     /// The chunk already on its worker is not cancelled and cannot be: it is a
     /// blocking read of the log. It lands, its progress applies, and no next
     /// chunk is dispatched, so one chunk is the worst case an interrupt leaves
-    /// running. That bound is the index build's whole stop contract, because a
-    /// worker here reads one chunk and returns rather than walking the log.
-    pub fn interrupt_index(&mut self) -> bool {
-        if self.sessions.current.index_build.indexing.get() {
-            self.sessions.current.index_build.indexing.set(false);
+    /// running. That bound is the scan's whole stop contract, because a worker
+    /// here reads one chunk and returns rather than walking the log.
+    pub fn interrupt_scan(&mut self) -> bool {
+        if self.sessions.current.scan_state.indexing.get() {
+            self.sessions.current.scan_state.indexing.set(false);
             true
         } else {
             false
         }
     }
 
-    /// Advance the index build by one step, on the loop rather than on a draw:
+    /// Advance the epoch scan by one step, on the loop rather than on a draw:
     /// a chunk reads the log, and the draw path must not.
     ///
     /// A wired runtime reads the chunk on a worker and applies it when it
     /// lands; the bare path, which has no runtime, reads it inline. Returns
     /// true when progress moved, so the caller redraws the chrome.
     ///
-    /// This is the build's stop point. A build nobody wants dispatches no next
-    /// chunk, and the loop advances the build from here, so an interrupt takes
+    /// This is the scan's stop point. A scan nobody wants dispatches no next
+    /// chunk, and the loop advances the scan from here, so an interrupt takes
     /// effect at the next chunk boundary rather than partway through a read.
-    pub fn pump_index_chunk(&mut self) -> bool {
-        let mut moved = self.apply_index_progress();
-        if !self.sessions.current.index_build.indexing.get() {
+    pub fn pump_scan_chunk(&mut self) -> bool {
+        let mut moved = self.apply_scan_progress();
+        if !self.sessions.current.scan_state.indexing.get() {
             return moved;
         }
-        if self.pending_index_chunks() >= INDEX_CHUNK_BUDGET {
+        if self.pending_scan_chunks() >= SCAN_CHUNK_BUDGET {
             // A chunk is already running; the next step waits for it.
             return moved;
         }
         if self.sessions.current.connection.is_some() {
-            self.dispatch_index_chunk();
+            self.dispatch_scan_chunk();
             return moved;
         }
         // No connection: the read happens where it stands instead, which is what
         // the bare and test compositions exercise.
         if let Some(snap) = self.sessions.persistence.snapshot.clone() {
-            let p = snap.index_chunk();
-            self.apply_index_chunk(p);
+            let p = snap.scan_chunk();
+            self.apply_scan_chunk(p);
             moved = true;
         }
         moved
     }
 
-    /// Dispatch one index chunk on a worker, when a runtime is wired.
+    /// Dispatch one scan chunk on a worker, when a runtime is wired.
     ///
     /// The one place a chunk task is started, so the budget is asserted here:
     /// every caller guards before asking, and a caller that forgets is told in
     /// debug rather than leaving two workers reading one log with only the
     /// second one's receiver on file.
-    fn dispatch_index_chunk(&mut self) {
+    fn dispatch_scan_chunk(&mut self) {
         debug_assert!(
-            self.pending_index_chunks() < INDEX_CHUNK_BUDGET,
-            "an index chunk was dispatched while {} were outstanding, past the budget of {}",
-            self.pending_index_chunks(),
-            INDEX_CHUNK_BUDGET
+            self.pending_scan_chunks() < SCAN_CHUNK_BUDGET,
+            "a scan chunk was dispatched while {} were outstanding, past the budget of {}",
+            self.pending_scan_chunks(),
+            SCAN_CHUNK_BUDGET
         );
         if self.sessions.current.connection.is_none() {
             return;
@@ -422,70 +420,69 @@ impl App {
         };
         let (tx, rx) = channel();
         shared_runtime().spawn_blocking(move || {
-            tx.send(snap.index_chunk()).ok();
+            tx.send(snap.scan_chunk()).ok();
         });
         *self
             .sessions
             .current
-            .index_build
-            .pending_index_chunk
-            .borrow_mut() = Some(PendingIndexChunk::new(rx));
+            .scan_state
+            .pending_scan_chunk
+            .borrow_mut() = Some(PendingScanChunk::new(rx));
     }
 
     /// Apply a chunk that landed on the worker. Returns true when it moved the
-    /// build forward.
-    fn apply_index_progress(&mut self) -> bool {
+    /// scan forward.
+    fn apply_scan_progress(&mut self) -> bool {
         let polled = self
             .sessions
             .current
-            .index_build
-            .pending_index_chunk
+            .scan_state
+            .pending_scan_chunk
             .borrow()
             .as_ref()
-            .map(PendingIndexChunk::poll);
+            .map(PendingScanChunk::poll);
         match polled {
-            Some(IndexChunkPoll::Ready(progress)) => {
+            Some(ScanChunkPoll::Ready(progress)) => {
                 *self
                     .sessions
                     .current
-                    .index_build
-                    .pending_index_chunk
+                    .scan_state
+                    .pending_scan_chunk
                     .borrow_mut() = None;
-                self.apply_index_chunk(progress);
+                self.apply_scan_chunk(progress);
                 true
             }
-            Some(IndexChunkPoll::Disconnected) => {
-                // The worker died without sending: stop claiming to index, so
-                // a dead task cannot stall the build forever.
+            Some(ScanChunkPoll::Disconnected) => {
+                // The worker died without sending: stop claiming to scan, so
+                // a dead task cannot stall the scan forever.
                 *self
                     .sessions
                     .current
-                    .index_build
-                    .pending_index_chunk
+                    .scan_state
+                    .pending_scan_chunk
                     .borrow_mut() = None;
-                self.sessions.current.index_build.indexing.set(false);
+                self.sessions.current.scan_state.indexing.set(false);
                 true
             }
-            Some(IndexChunkPoll::Pending) | None => false,
+            Some(ScanChunkPoll::Pending) | None => false,
         }
     }
 
-    /// Publish a chunk's progress to the cells the chrome reads, and finish the
-    /// build when the chunk says it is complete.
-    fn apply_index_chunk(&self, progress: IndexProgress) {
+    /// Publish a chunk's progress to the cells the chrome reads, and stop the
+    /// scan when the chunk says it reached the beginning of the log.
+    fn apply_scan_chunk(&self, progress: ScanProgress) {
         self.sessions
             .current
-            .index_build
-            .indexed_bytes
-            .set(progress.indexed_bytes);
+            .scan_state
+            .scanned_bytes
+            .set(progress.scanned_bytes);
         self.sessions
             .current
-            .index_build
-            .index_total
+            .scan_state
+            .scan_total
             .set(progress.total_bytes);
         if progress.done {
-            self.sessions.current.index_build.index_done.set(true);
-            self.sessions.current.index_build.indexing.set(false);
+            self.sessions.current.scan_state.indexing.set(false);
         }
     }
 }

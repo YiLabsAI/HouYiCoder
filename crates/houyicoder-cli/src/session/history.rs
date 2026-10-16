@@ -26,7 +26,7 @@ pub(crate) mod log_index;
 /// One reverse-read chunk of the epoch scan: the scan reads the log backward
 /// by this much per call. At 60 fps this completes a 310 MB / 90k-event scan
 /// in ~1.5 s (77 chunks).
-const INDEX_CHUNK_BYTES: u64 = 4 * 1024 * 1024;
+const EPOCH_CHUNK_BYTES: u64 = 4 * 1024 * 1024;
 
 /// One reverse-read step of the turn lookback: the log ahead of a window is
 /// read in 64 KB steps. A recorded turn spans 16 KB at the median and 66 KB at
@@ -80,9 +80,9 @@ struct EpochScan {
 
 /// How far the epoch scan's reverse read has gotten.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct HistoryIndexProgress {
+pub(crate) struct EpochScanProgress {
     /// Bytes of the log the reverse scan has read (from the tail backward).
-    pub indexed_bytes: u64,
+    pub scanned_bytes: u64,
     /// Total log file size.
     pub total_bytes: u64,
     /// True when the scan reached the beginning of the log.
@@ -633,13 +633,33 @@ impl SessionHistory {
         }
     }
 
+    /// Whether the log's sidecar answers the queries readers ask of it. A file
+    /// that opens and floors still lies when its entries point at bytes that do
+    /// not hold the records they name, so the check a reader trusts -- the first
+    /// offset query, entry and bytes together -- is the one this asks.
+    fn sidecar_answers(&self) -> bool {
+        self.byte_at(0).is_some()
+    }
+
+    /// Rebuild the sidecar through the backend port and say whether queries
+    /// answer after it. The pass is the same one a session's first append
+    /// pays, so a rebuild here costs what the log itself costs to read, and it
+    /// runs on whatever thread called the scan, which the worker contract
+    /// already keeps off the draw path.
+    fn rebuild_sidecar(&self) -> bool {
+        self.session_log
+            .backend()
+            .rebuild_log_index(self.session_id)
+    }
+
     /// Run the next chunk of the reverse scan for history epochs. Called per
     /// frame while a full scan is asked for; a no-op once complete. The first
     /// chunk also gives the log's sidecar index its one check and, when the
-    /// index is missing or refused, its one streaming rebuild: offset queries
-    /// answer from that index, and the rebuild belongs on the worker that
-    /// asked for the scan, never on a query path.
-    pub(crate) fn index_chunk(&self) -> HistoryIndexProgress {
+    /// index is missing, refused, or names bytes the log does not hold, its one
+    /// streaming rebuild: offset queries answer from that index, and the
+    /// rebuild belongs on the worker that asked for the scan, never on a query
+    /// path.
+    pub(crate) fn scan_chunk(&self) -> EpochScanProgress {
         let mut scan = self.scan.lock().expect("scan mutex poisoned");
         let backend = self.session_log.backend();
         if scan.total_bytes == 0 {
@@ -647,30 +667,33 @@ impl SessionHistory {
         }
         if !scan.sidecar_checked {
             scan.sidecar_checked = true;
-            if scan.total_bytes > 0
-                && backend.log_index_floor(self.session_id, 0).is_none()
-                && !backend.rebuild_log_index(self.session_id)
-            {
-                tracing::warn!(
-                    "the log's offset index refused a rebuild, so offset queries answer nothing"
-                );
+            if scan.total_bytes > 0 && !self.sidecar_answers() {
+                if self.rebuild_sidecar() {
+                    tracing::info!(
+                        "the log's sidecar did not answer offset queries and was rebuilt"
+                    );
+                } else {
+                    tracing::warn!(
+                        "the log's offset index refused a rebuild, so offset queries answer nothing"
+                    );
+                }
             }
         }
         if scan.done || scan.total_bytes == 0 {
-            return HistoryIndexProgress {
-                indexed_bytes: scan.built_from_tail,
+            return EpochScanProgress {
+                scanned_bytes: scan.built_from_tail,
                 total_bytes: scan.total_bytes,
                 done: scan.done,
             };
         }
         let from = scan.next_from.unwrap_or(scan.total_bytes);
-        let rev = match backend.read_lines_reverse(self.session_id, from, INDEX_CHUNK_BYTES) {
+        let rev = match backend.read_lines_reverse(self.session_id, from, EPOCH_CHUNK_BYTES) {
             Ok(r) => r,
             Err(e) => {
                 // A stall without advancing: the next call retries.
-                tracing::warn!("index reverse-read stalled on failure: {e}");
-                return HistoryIndexProgress {
-                    indexed_bytes: scan.built_from_tail,
+                tracing::warn!("epoch scan reverse-read stalled on failure: {e}");
+                return EpochScanProgress {
+                    scanned_bytes: scan.built_from_tail,
                     total_bytes: scan.total_bytes,
                     done: scan.done,
                 };
@@ -688,8 +711,8 @@ impl SessionHistory {
         if rev.next_from.is_none() {
             scan.done = true;
         }
-        HistoryIndexProgress {
-            indexed_bytes: scan.built_from_tail,
+        EpochScanProgress {
+            scanned_bytes: scan.built_from_tail,
             total_bytes: scan.total_bytes,
             done: scan.done,
         }

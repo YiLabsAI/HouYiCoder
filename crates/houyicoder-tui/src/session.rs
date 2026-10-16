@@ -24,7 +24,7 @@ use crate::run_state::RunState;
 use crate::session::capabilities::SessionCapabilities;
 use crate::session::identity::SessionIdentity;
 use crate::state::history_read::HistoryReads;
-use crate::state::index_build::IndexBuild;
+use crate::state::scan_state::ScanState;
 use crate::state::transcript::Transcript;
 use crate::todo_view::TodoState;
 use houyicoder_protocol::envelope::RequestId;
@@ -102,9 +102,9 @@ pub(crate) struct Session {
     /// inside it: the transcript owns the resident facts, while this owner
     /// governs a read task's lifecycle across those facts being reset.
     pub(crate) history_reads: HistoryReads,
-    /// The full transcript scan's index progress mirror and pending chunk,
-    /// held in one owner.
-    pub(crate) index_build: IndexBuild,
+    /// The full transcript scan's progress mirror and pending chunk, held in
+    /// one owner.
+    pub(crate) scan_state: ScanState,
     /// The oldest frame the scrollback has loaded, in absolute frame
     /// coordinates, or usize::MAX before any load. It is the view's
     /// requested boundary; the transcript's resident front is the memory
@@ -141,7 +141,7 @@ impl Session {
             todos: TodoState::default(),
             capabilities: SessionCapabilities::default(),
             history_reads: HistoryReads::default(),
-            index_build: IndexBuild::default(),
+            scan_state: ScanState::default(),
             loaded_from_frame: Cell::new(usize::MAX),
             agents: PaneAgents::default(),
             agent_directory: None,

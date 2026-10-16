@@ -194,8 +194,8 @@ fn test_child_blocks_parent_reads() {
         window_lines: Vec::new(),
         window_start: 0,
         windows: Vec::new(),
-        index_steps: 0,
-        index_calls: AtomicU32::new(0),
+        scan_steps: 0,
+        scan_calls: AtomicU32::new(0),
     }));
 
     assert!(app.enter_teammate_view());

@@ -803,13 +803,14 @@ fn test_head_page_cancel_walk() {
     );
 }
 
-/// A history whose start the search index has already scanned is answered from
-/// the index: Home reaches it without walking the log again. The walk is the
-/// fallback for what the index has not reached, not the only way to answer.
+/// A history whose start the epoch scan already discovered is answered from
+/// the scan's record: Home reaches it without walking the log again. The walk
+/// is the fallback for what the scan has not reached, not the only way to
+/// answer.
 #[test]
-fn test_indexed_epoch_start() {
+fn test_epoch_start_from_scan() {
     let (history, clear_id) = far_clear_history();
-    while !history.index_chunk().done {}
+    while !history.scan_chunk().done {}
 
     let (_, _, before) = history.read_stats();
     let page = history.head_turns(Some(clear_id), 3, PAGE_MAX_BYTES, &live());
@@ -1046,7 +1047,7 @@ fn self_rss_kb() -> Option<u64> {
 /// One scan-and-rebuild run over one fixture size: the timed chunks, the
 /// resident-set delta across the build, the sidecar file size, and the
 /// finished state for verification.
-struct IndexBuildRun {
+struct ScanStateRun {
     history: SessionHistory,
     sid: SessionId,
     log_bytes: u64,
@@ -1058,7 +1059,7 @@ struct IndexBuildRun {
     index_file_bytes: u64,
 }
 
-impl IndexBuildRun {
+impl ScanStateRun {
     /// Seed a fixture of the target size under root and run the whole scan,
     /// timing every chunk. The fixture is written without a sidecar, so the
     /// first chunk carries the one streaming rebuild that makes offset
@@ -1073,7 +1074,7 @@ impl IndexBuildRun {
         let mut chunk_ms: Vec<f64> = Vec::new();
         let progress = loop {
             let step = Instant::now();
-            let p = history.index_chunk();
+            let p = history.scan_chunk();
             chunk_ms.push(step.elapsed().as_secs_f64() * 1000.0);
             if p.done {
                 break p;
@@ -1086,7 +1087,7 @@ impl IndexBuildRun {
             .unwrap_or(0);
 
         assert_eq!(progress.total_bytes, log_bytes, "scan covered the log");
-        assert_eq!(progress.indexed_bytes, log_bytes, "scan reached the head");
+        assert_eq!(progress.scanned_bytes, log_bytes, "scan reached the head");
         Self {
             history,
             sid,
@@ -1188,7 +1189,7 @@ impl IndexBuildRun {
         let (p50, max) = self.chunk_stats();
         let rss_text = |r: Option<u64>| r.map(|v| v.to_string()).unwrap_or_else(|| "na".into());
         format!(
-            "index build {} bytes: {} chunks, {:.1} ms total, p50 {p50:.1} ms, max {max:.1} ms, \
+            "scan + rebuild {} bytes: {} chunks, {:.1} ms total, p50 {p50:.1} ms, max {max:.1} ms, \
              rss {} -> {} KiB, sidecar {} bytes",
             self.log_bytes,
             self.chunk_ms.len(),
@@ -1217,7 +1218,7 @@ fn assert_parseable(file: &File, off: u64, i: usize) {
 /// the sidecar index file the rebuild leaves beside the log.
 #[test]
 #[ignore = "measurement workload; run via the history benchmark target"]
-fn test_index_build_baseline() {
+fn test_scan_state_baseline() {
     let run_id = var("HOUYI_BENCH_RUN_ID").unwrap_or_else(|_| format!("adhoc-{}", id()));
     let sha = var("HOUYI_GIT_SHA").unwrap_or_else(|_| "unknown".into());
     let run_dir = Path::new("target/measurements/history-index").join(&run_id);
@@ -1231,7 +1232,7 @@ fn test_index_build_baseline() {
     for target in sizes {
         let root = temp_dir().join(format!("houyi_index_measure_{target}_{}", id()));
         create_dir_all(&root).expect("fixture root");
-        let run = IndexBuildRun::measure(&root, SessionId::new(), target);
+        let run = ScanStateRun::measure(&root, SessionId::new(), target);
         run.verify(&root);
         rows.push_str(&run.csv_row());
         println!("{}", run.report_line());
@@ -1246,13 +1247,13 @@ fn test_index_build_baseline() {
     write(
         run_dir.join("meta.txt"),
         format!(
-            "sha {sha}\nrun_id {run_id}\nprofile {profile}\nos {} {}\nindex_chunk_bytes \
-             {INDEX_CHUNK_BYTES}\nsizes 16MiB 64MiB\n",
+            "sha {sha}\nrun_id {run_id}\nprofile {profile}\nos {} {}\nscan_chunk_bytes \
+             {EPOCH_CHUNK_BYTES}\nsizes 16MiB 64MiB\n",
             OS, ARCH
         ),
     )
     .expect("write meta");
-    write(run_dir.join("index_build.csv"), &rows).expect("write rows");
+    write(run_dir.join("scan_state.csv"), &rows).expect("write rows");
     println!("history index baseline ({})", run_dir.display());
     print!("{rows}");
 }

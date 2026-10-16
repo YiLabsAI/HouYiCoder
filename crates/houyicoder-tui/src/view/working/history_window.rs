@@ -27,7 +27,7 @@ use crate::view::working::transcript::{
 /// Render the loaded history range with independent scrolling and search
 /// highlighting. Dynamic conversation-tail rows are intentionally absent.
 pub(super) fn draw_history_window(f: &mut Frame, area: Rect, app: &App) {
-    // The index build advances on the loop, not here: a chunk reads the log.
+    // The scan advances on the loop, not here: a chunk reads the log.
     // This path only renders the progress cells the loop published.
     let mut sink = RowSet::default();
     // No slot layer: each line is its own row set. grp is None -- the window

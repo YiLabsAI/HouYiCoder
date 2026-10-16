@@ -353,7 +353,7 @@ fn test_window_mid_turn_row() {
     ));
     let (snap, _s, root) = bridge_with_log(&events);
     let mut steps = 0;
-    while !snap.index_chunk().done && steps < 1000 {
+    while !snap.scan_chunk().done && steps < 1000 {
         steps += 1;
     }
     let anchor = snap.byte_at(4).expect("event four is indexed");
@@ -417,7 +417,7 @@ fn test_window_at_record_row() {
     ));
     let (snap, _s, root) = bridge_with_log(&events);
     let mut steps = 0;
-    while !snap.index_chunk().done && steps < 1000 {
+    while !snap.scan_chunk().done && steps < 1000 {
         steps += 1;
     }
     let anchor = snap.byte_at(7).expect("the record is indexed");
@@ -481,7 +481,7 @@ fn test_window_long_turn_row() {
     ));
     let (snap, _s, root) = bridge_with_log(&events);
     let mut steps = 0;
-    while !snap.index_chunk().done && steps < 1000 {
+    while !snap.scan_chunk().done && steps < 1000 {
         steps += 1;
     }
     let newest = snap.event_count().expect("the index is built") - 1;
@@ -572,7 +572,7 @@ fn test_turn_names_durable() {
     ));
     let (snap, _s, root) = bridge_with_log(&events);
     let mut steps = 0;
-    while !snap.index_chunk().done && steps < 1000 {
+    while !snap.scan_chunk().done && steps < 1000 {
         steps += 1;
     }
     let ids = |lines: &[TranscriptLine]| -> Vec<String> {
@@ -647,7 +647,7 @@ fn test_lookback_finds_opener() {
     ));
     let (snap, _s, root) = bridge_with_log(&events);
     let mut steps = 0;
-    while !snap.index_chunk().done && steps < 1000 {
+    while !snap.scan_chunk().done && steps < 1000 {
         steps += 1;
     }
     let newest = snap.event_count().expect("the index is built") - 1;
@@ -742,7 +742,7 @@ fn test_names_durable_without_record() {
     ];
     let (snap, _s, root) = bridge_with_log(&events);
     let mut steps = 0;
-    while !snap.index_chunk().done && steps < 1000 {
+    while !snap.scan_chunk().done && steps < 1000 {
         steps += 1;
     }
     let ids = |lines: &[TranscriptLine]| -> Vec<String> {
@@ -917,7 +917,7 @@ fn test_window_safe_on_multibyte() {
 /// it discovers the history epochs and checks the sidecar once, and neither
 /// loops.
 #[test]
-fn test_index_builds_bounded_chunks() {
+fn test_scan_bounded_chunks() {
     let session = SessionId::new();
     let events: Vec<SessionLogEntry> = (0..200)
         .map(|i| {
@@ -944,7 +944,7 @@ fn test_index_builds_bounded_chunks() {
     );
     let mut steps = 0u32;
     let progress = loop {
-        let p = snap.index_chunk();
+        let p = snap.scan_chunk();
         steps += 1;
         if p.done || steps > 1000 {
             break p;
@@ -958,7 +958,7 @@ fn test_index_builds_bounded_chunks() {
         "progress spans the log"
     );
     assert_eq!(
-        progress.indexed_bytes, progress.total_bytes,
+        progress.scanned_bytes, progress.total_bytes,
         "the scan reached the head"
     );
     remove_dir_all(&root).ok();
@@ -1045,7 +1045,7 @@ fn test_byte_at_crosses_entries() {
     let snap = SessionLogSnapshot::new(Arc::new(store), session);
     // A log written without its sidecar answers nothing until the scan runs.
     assert!(snap.byte_at(0).is_none(), "no sidecar yet, no answer");
-    assert!(snap.index_chunk().done, "one chunk covers this log");
+    assert!(snap.scan_chunk().done, "one chunk covers this log");
     assert_eq!(
         snap.byte_at(0),
         Some(0),
@@ -1144,6 +1144,24 @@ fn test_byte_at_refuses_mismatch() {
         snap.byte_at(0).is_none(),
         "an entry pointing inside a record is refused"
     );
+
+    // A scan chunk over a log whose sidecar is corrupt repairs it: the
+    // reader refuses the file, the scan's one rebuild replaces it, and the
+    // offsets answer again without any caller knowing the file was bad.
+    assert!(
+        snap.scan_chunk().done,
+        "one chunk covers the log the corrupt sidecar sits beside"
+    );
+    assert_eq!(
+        snap.byte_at(0),
+        Some(0),
+        "the scan's rebuild replaced the corrupt sidecar"
+    );
+    assert_eq!(
+        snap.event_count(),
+        Some(events.len()),
+        "the count answers from the rebuilt sidecar"
+    );
     remove_dir_all(&root).ok();
 }
 
@@ -1229,10 +1247,7 @@ fn stale_sidecar_log() -> (SessionLogSnapshot, Vec<(EventId, u64)>, usize, PathB
     let store = SessionStore::new(Box::new(backend));
     let snap = SessionLogSnapshot::new(Arc::new(store), session);
     assert!(snap.byte_at(0).is_none(), "no sidecar yet, no answer");
-    assert!(
-        snap.index_chunk().done,
-        "one chunk covers the first segment"
-    );
+    assert!(snap.scan_chunk().done, "one chunk covers the first segment");
     assert_eq!(
         snap.byte_at(0),
         Some(0),
@@ -1330,7 +1345,7 @@ fn test_count_budget_edge() {
     let backend = LocalFileBackend::new(root.clone());
     let store = SessionStore::new(Box::new(backend));
     let snap = SessionLogSnapshot::new(Arc::new(store), session);
-    assert!(snap.index_chunk().done, "one chunk covers this log");
+    assert!(snap.scan_chunk().done, "one chunk covers this log");
 
     fill_to_exact(&mut text, &mut truth, session, INDEX_WALK_MAX_BYTES);
     append_tail(&log, &text, first_len);
@@ -1627,7 +1642,7 @@ fn test_large_log_budget() {
     let t0 = Instant::now();
     let mut steps = 0u32;
     let progress = loop {
-        let p = snap.index_chunk();
+        let p = snap.scan_chunk();
         steps += 1;
         if p.done || steps > 100_000 {
             break p;

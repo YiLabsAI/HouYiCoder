@@ -27,7 +27,7 @@ use crate::session::SessionConnection;
 use crate::state::{App, Screen};
 use crate::transcript::NamedRows;
 use crate::transcript::snapshot::{
-    IndexProgress, ReadError, SnapshotLoad, TranscriptSnapshot, WindowLoad,
+    ReadError, ScanProgress, SnapshotLoad, TranscriptSnapshot, WindowLoad,
 };
 use crate::view::draw;
 use houyicoder_protocol::envelope::ClientFrame;
@@ -87,7 +87,7 @@ pub(crate) fn dump_buffer(buf: &Buffer) -> String {
 /// is over the threshold, enter_search_view calls tail_window instead of
 /// load. For single-window tests, window_lines + window_start build that one
 /// window; for multi-window scan tests, windows (oldest first, each with its
-/// byte range) drives tail_window/window/window_before. index_steps simulates
+/// byte range) drives tail_window/window/window_before. scan_steps simulates
 /// a multi-chunk full scan (0 = never done, for the Esc-interrupt test).
 pub(crate) struct MockSnapshot {
     pub lines: Vec<TranscriptLine>,
@@ -97,8 +97,8 @@ pub(crate) struct MockSnapshot {
     pub window_lines: Vec<TranscriptLine>,
     pub window_start: u64,
     pub windows: Vec<WindowLoad>,
-    pub index_steps: u32,
-    pub index_calls: AtomicU32,
+    pub scan_steps: u32,
+    pub scan_calls: AtomicU32,
 }
 
 impl MockSnapshot {
@@ -158,18 +158,18 @@ impl TranscriptSnapshot for MockSnapshot {
         }
         Ok(WindowLoad::default())
     }
-    fn index_chunk(&self) -> IndexProgress {
-        let n = self.index_calls.load(Ordering::Relaxed) + 1;
-        self.index_calls.store(n, Ordering::Relaxed);
-        let done = self.index_steps > 0 && n >= self.index_steps;
+    fn scan_chunk(&self) -> ScanProgress {
+        let n = self.scan_calls.load(Ordering::Relaxed) + 1;
+        self.scan_calls.store(n, Ordering::Relaxed);
+        let done = self.scan_steps > 0 && n >= self.scan_steps;
         let total = self.log_bytes;
-        let indexed = if done {
+        let scanned = if done {
             total
         } else {
             (n as u64) * 4 * 1024 * 1024
         };
-        IndexProgress {
-            indexed_bytes: indexed.min(total),
+        ScanProgress {
+            scanned_bytes: scanned.min(total),
             total_bytes: total,
             done,
         }

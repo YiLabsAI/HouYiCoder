@@ -32,7 +32,7 @@ use houyicoder_tui::records::TranscriptLine;
 use houyicoder_tui::row_id::RowId;
 use houyicoder_tui::transcript::NamedRows;
 use houyicoder_tui::transcript::snapshot::{
-    IndexProgress, ReadError, SnapshotLoad, TranscriptSnapshot, WindowLoad,
+    ReadError, ScanProgress, SnapshotLoad, TranscriptSnapshot, WindowLoad,
 };
 use houyicoder_tui::transcript::{TranscriptFrame, bounds_turn_in, transcript_from_named_frames};
 
@@ -234,10 +234,10 @@ impl TranscriptSnapshot for SessionLogSnapshot {
         }
     }
 
-    fn index_chunk(&self) -> IndexProgress {
-        let progress = self.history.index_chunk();
-        IndexProgress {
-            indexed_bytes: progress.indexed_bytes,
+    fn scan_chunk(&self) -> ScanProgress {
+        let progress = self.history.scan_chunk();
+        ScanProgress {
+            scanned_bytes: progress.scanned_bytes,
             total_bytes: progress.total_bytes,
             done: progress.done,
         }
