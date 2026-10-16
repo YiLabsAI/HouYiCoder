@@ -53,3 +53,8 @@ houyicoder-sandbox = { path = "../houyicoder-sandbox" }
 houyicoder-memory = { path = "../houyicoder-memory" }
 houyicoder-provider = { path = "../houyicoder-provider" }
 tokio = { version = "1", features = ["rt", "macros", "rt-multi-thread", "process", "io-util"] }
+# A local HTTP endpoint for the prefix-reuse suite: the provider under test has
+# to post real bytes somewhere, and the endpoint has to answer with a usage
+# object that reports what it recognized. Test-only; the same version the
+# provider crate already uses.
+wiremock = "0.6"

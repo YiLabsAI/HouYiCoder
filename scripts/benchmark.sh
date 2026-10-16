@@ -2,7 +2,7 @@
 set -euo pipefail
 
 if [ "$#" -ne 1 ]; then
-    echo "expected one benchmark: reward | tui | history" >&2
+    echo "expected one benchmark: reward | tui | history | cache" >&2
     exit 2
 fi
 BENCHMARK="$1"
@@ -30,6 +30,14 @@ case "$BENCHMARK" in
         run env HOUYICODER_REWARD_OFF=1 "$CARGO" test -p houyicoder-service \
             --test reward_bench test_reward_off_pair -- --ignored --nocapture
         ;;
+    cache)
+        # Live: one endpoint, one ratio. The model and the credential come from
+        # the resolved settings, so point HOUYICODER_CONFIG_HOME at a settings
+        # file to measure a model other than the default one; the run prints the
+        # endpoint, the key origin, and the model it actually measured.
+        run "$CARGO" test -p houyicoder-service --test cache_hit_rate \
+            -- --ignored --nocapture
+        ;;
     tui)
         run env HOUYI_GIT_SHA="$(git rev-parse --short HEAD)" \
             HOUYI_BENCH_RUN_ID="$(date +%Y-%m-%d-%H%M%S)-$(git rev-parse --short HEAD)" \
@@ -53,11 +61,11 @@ case "$BENCHMARK" in
             -- --ignored --nocapture
         ;;
     "")
-        echo "benchmark name required: reward | tui | history" >&2
+        echo "benchmark name required: reward | tui | history | cache" >&2
         exit 2
         ;;
     *)
-        echo "unknown benchmark: '$BENCHMARK' (expected: reward | tui | history)" >&2
+        echo "unknown benchmark: '$BENCHMARK' (expected: reward | tui | history | cache)" >&2
         exit 2
         ;;
 esac

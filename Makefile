@@ -5,7 +5,7 @@ SHELL := /bin/bash -o pipefail
 .PHONY: help install setup-hooks \
         format fmt-check lint typecheck \
         test suite benchmark test-cov \
-        unit integration all ui sandbox live reward tui \
+        unit integration all ui sandbox live reward tui history cache \
         quick-check check check-full \
         check-deps check-stderr \
         deny clean
@@ -44,6 +44,7 @@ help:
 	@echo ""
 	@echo "Benchmarks (evaluation workload):"
 	@echo "  make benchmark reward Reward-loop ON/OFF comparison with a real provider"
+	@echo "  make benchmark cache  Steady-state prompt-cache hit rate against a real endpoint"
 	@echo ""
 	@echo "  make check-deps       Layering dep-graph assertion (binding; exits 1 on runtime-dep violation)"
 	@echo "  make check-stderr     Console-write assertion (binding; print macros must not reach the TUI screen)"
@@ -94,17 +95,7 @@ ui sandbox live:
 benchmark:
 	@./scripts/benchmark.sh $(filter-out $@,$(MAKECMDGOALS))
 
-tui:
-	@if [[ " $(MAKECMDGOALS) " != *" benchmark "* ]]; then \
-		echo "use: make benchmark $@" >&2; exit 2; \
-	fi
-
-reward:
-	@if [[ " $(MAKECMDGOALS) " != *" benchmark "* ]]; then \
-		echo "use: make benchmark $@" >&2; exit 2; \
-	fi
-
-history:
+tui reward history cache:
 	@if [[ " $(MAKECMDGOALS) " != *" benchmark "* ]]; then \
 		echo "use: make benchmark $@" >&2; exit 2; \
 	fi
@@ -130,7 +121,7 @@ check-full: check
 # Verify combines deterministic gates with ignored PTY and sandbox suites.
 # Real-provider tests, expected-failure reproductions, and benchmarks remain
 # explicit so verification never consumes network credentials or model tokens.
-NEXTEST_VERIFY_FILTER := -E 'not(test(/bug_repro/)) and not(binary(/live_agent/)) and not(binary(/openai_compat_real/)) and not(binary(/mcp_live_server/)) and not(binary(/reward_bench/)) and not(binary(/reward_baseline/)) and not(binary(/recall_benchmark/)) and not(test(/frame_timing_benchmark/)) and not(binary(/measure_history/)) and not(test(/test_index_build_baseline/))'
+NEXTEST_VERIFY_FILTER := -E 'not(test(/bug_repro/)) and not(binary(/live_agent/)) and not(binary(/openai_compat_real/)) and not(binary(/mcp_live_server/)) and not(binary(/reward_bench/)) and not(binary(/reward_baseline/)) and not(binary(/recall_benchmark/)) and not(binary(/cache_hit_rate/)) and not(test(/frame_timing_benchmark/)) and not(binary(/measure_history/)) and not(test(/test_index_build_baseline/))'
 # Per-crate discovery: nextest's list phase spawns every test binary in
 # parallel and -j does not gate it, so a workspace-wide run deadlocks in
 # macOS 26.6.2 _dyld_start. Running -p per crate bounds each discovery

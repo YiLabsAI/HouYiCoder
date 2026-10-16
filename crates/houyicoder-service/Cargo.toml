@@ -13,6 +13,10 @@ path = "tests/service_all.rs"
 name = "reward_bench"
 path = "tests/reward_bench.rs"
 
+[[test]]
+name = "cache_hit_rate"
+path = "tests/cache_hit_rate.rs"
+
 [lib]
 path = "src/lib.rs"
 
