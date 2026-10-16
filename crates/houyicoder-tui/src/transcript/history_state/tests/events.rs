@@ -8,7 +8,7 @@ use std::sync::mpsc;
 
 use crate::composition;
 use crate::records::TranscriptLine;
-use crate::state::history_read::{HistoryReadOutcome, HistoryReadResult};
+use crate::state::history_read::{HistoryReadOutcome, HistoryReadResult, HistoryStamp};
 use crate::state::transcript::DiskFront;
 use crate::state::{App, Screen};
 use crate::test_harness::render_text;
@@ -63,7 +63,7 @@ fn inject_read(app: &mut App) -> mpsc::Sender<HistoryReadOutcome> {
         app.sessions
             .current
             .history_reads
-            .dispatch(front, disk_front, None, rx),
+            .dispatch(HistoryStamp::new(front, disk_front, None), rx),
     );
     tx
 }
@@ -212,7 +212,7 @@ fn test_disconnect_clears_record() {
         app.sessions
             .current
             .history_reads
-            .dispatch(front, disk_front, None, rx),
+            .dispatch(HistoryStamp::new(front, disk_front, None), rx),
     );
     assert!(
         app.sessions.current.history_reads.holds_pending(),

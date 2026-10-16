@@ -343,6 +343,11 @@ fn draw_scroll(f: &mut Frame, app: &App) {
     } else {
         transcript::draw_transcript(f, outer[0], app);
     }
+    // Notices overlay the transcript's bottom row in this mode as they do in
+    // working mode: a notice raised while scrolling (a read that failed, a copy
+    // that landed) has no other row to reach the reader on, and a destination
+    // no view draws is a failure the reader never learns about.
+    toast::draw_toast(f, outer[0], app);
     if let Some(i) = queue_idx {
         queue_overlay::draw_strip(f, outer[i], app);
     }

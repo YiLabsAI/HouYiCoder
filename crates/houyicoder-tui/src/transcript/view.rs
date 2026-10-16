@@ -148,44 +148,40 @@ impl TranscriptViewState {
         self.search_corpus.skipped()
     }
 
-    /// Enter the search view in byte-window mode over a large log.
-    pub(crate) fn enter_search_over_window(
+    /// Adopt a byte window of a large log as the search corpus, for a read
+    /// that came back over the threshold. The query stands as the reader left
+    /// it: the landed rows are searched with it, not with the one the read was
+    /// asked under.
+    pub(crate) fn land_search_over_window(
         &mut self,
         rows: NamedRows,
         log_bytes: u64,
         skipped: usize,
         anchor: u64,
         end: u64,
-        query: &str,
     ) {
         self.search_corpus
             .enter_over_window(rows, log_bytes, skipped);
         self.window_mode = true;
         self.enter_history_window(log_bytes, anchor, end, skipped);
         self.reset_window_scroll();
-        self.search.begin(query);
         self.run_search_on_corpus();
         self.search_opened();
     }
 
-    /// Enter the search view over a snapshot under the size threshold.
-    pub(crate) fn enter_search_under(
-        &mut self,
-        rows: NamedRows,
-        truncated: bool,
-        skipped: usize,
-        query: &str,
-    ) {
+    /// Adopt the whole log as the search corpus, for a read that came back
+    /// under the size threshold.
+    pub(crate) fn land_search_under(&mut self, rows: NamedRows, truncated: bool, skipped: usize) {
         self.search_corpus.enter_under(rows, truncated, skipped);
         self.window_mode = false;
-        self.search.begin(query);
         self.run_search_on_corpus();
         self.search_opened();
     }
 
-    /// Enter the search view over the live transcript's own rows, each under
-    /// the identity the store named it with.
-    pub(crate) fn enter_search_fallback(&mut self, rows: NamedRows, query: &str) {
+    /// Enter the search view over the rows on hand, each under the identity the
+    /// store named it with. This is what the reader sees first: the log read
+    /// that replaces these rows runs off the draw path and lands later.
+    pub(crate) fn enter_search_over_rows(&mut self, rows: NamedRows, query: &str) {
         self.search_corpus.enter_fallback(rows);
         self.window_mode = false;
         self.search.begin(query);

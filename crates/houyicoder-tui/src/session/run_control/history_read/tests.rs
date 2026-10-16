@@ -2,7 +2,7 @@ use super::*;
 use crate::records::TranscriptLine;
 use crate::row_id::RowId;
 use crate::state::history_read::HistoryReadPoll;
-use crate::state::history_read::HistoryReads;
+use crate::state::history_read::{HistoryReads, HistoryStamp};
 use crate::state::transcript::DiskFront;
 use crate::transcript::snapshot::ScanProgress;
 use crate::transcript::snapshot::{NoTranscriptSnapshot, ReadError, SnapshotLoad, WindowLoad};
@@ -270,11 +270,10 @@ fn test_invalidate_stops_walk() {
     let source = five_window_log(Arc::clone(&reads), Some(2));
     let snapshot: Arc<dyn TranscriptSnapshot> = source.clone();
     let (_tx, rx) = mpsc::channel::<HistoryReadOutcome>();
-    let lease =
-        reads
-            .lock()
-            .expect("the owner is not poisoned")
-            .dispatch(0, DiskFront::Unloaded, None, rx);
+    let lease = reads
+        .lock()
+        .expect("the owner is not poisoned")
+        .dispatch(HistoryStamp::new(0, DiskFront::Unloaded, None), rx);
 
     let job = ReadJob::Tail {
         source: snapshot,
@@ -300,11 +299,10 @@ fn test_walk_reaches_start() {
     let source = five_window_log(Arc::clone(&reads), None);
     let snapshot: Arc<dyn TranscriptSnapshot> = source.clone();
     let (_tx, rx) = mpsc::channel::<HistoryReadOutcome>();
-    let lease =
-        reads
-            .lock()
-            .expect("the owner is not poisoned")
-            .dispatch(0, DiskFront::Unloaded, None, rx);
+    let lease = reads
+        .lock()
+        .expect("the owner is not poisoned")
+        .dispatch(HistoryStamp::new(0, DiskFront::Unloaded, None), rx);
 
     let job = ReadJob::Tail {
         source: snapshot,
@@ -599,11 +597,10 @@ fn injected_read(
         failure,
     });
     let (tx, rx) = mpsc::channel::<HistoryReadOutcome>();
-    let lease =
-        reads
-            .lock()
-            .expect("the owner is not poisoned")
-            .dispatch(0, DiskFront::Unloaded, None, rx);
+    let lease = reads
+        .lock()
+        .expect("the owner is not poisoned")
+        .dispatch(HistoryStamp::new(0, DiskFront::Unloaded, None), rx);
     job(source).run_and_send(tx, lease.stop());
     // The send already happened; the poll finds it ready.
     let pending = reads
@@ -803,9 +800,7 @@ fn test_lookback_reports_budget() {
     let snapshot: Arc<dyn TranscriptSnapshot> = source.clone();
     let (tx, rx) = mpsc::channel::<HistoryReadOutcome>();
     let lease = reads.lock().expect("the owner is not poisoned").dispatch(
-        0,
-        DiskFront::Unloaded,
-        Some(RowId::from("e9")),
+        HistoryStamp::new(0, DiskFront::Unloaded, Some(RowId::from("e9"))),
         rx,
     );
     let job = ReadJob::Lookback {
@@ -844,9 +839,7 @@ fn test_lookback_stops_when_invalidated() {
     let snapshot: Arc<dyn TranscriptSnapshot> = source.clone();
     let (_tx, rx) = mpsc::channel::<HistoryReadOutcome>();
     let lease = reads.lock().expect("the owner is not poisoned").dispatch(
-        0,
-        DiskFront::Unloaded,
-        Some(RowId::from("e9")),
+        HistoryStamp::new(0, DiskFront::Unloaded, Some(RowId::from("e9"))),
         rx,
     );
     let job = ReadJob::Lookback {

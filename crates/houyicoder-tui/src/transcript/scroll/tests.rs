@@ -138,5 +138,30 @@ fn test_empty_query_finds_nothing() {
     assert!(s.matches.is_empty());
 }
 
+/// The walk's matcher and the view's are one decision in two shapes, so over one
+/// corpus they never disagree on what the preparation rules carry: case,
+/// surrounding space, a slash-command echo, and an empty query.
+#[test]
+fn test_match_shapes_agree() {
+    let t = vec![
+        line("the BUG is fixed"),
+        line("  needled  "),
+        TranscriptLine::User("/search needled".into()),
+    ];
+
+    for query in ["bug", "  BUG  ", "needled", "/search", "", "   ", "absent"] {
+        assert_eq!(
+            holds_matching_line(&t, query),
+            !matching_lines(&t, query).is_empty(),
+            "the two shapes of the matcher answer the same question for {query:?}"
+        );
+    }
+    assert_eq!(
+        matching_lines(&t, "needled"),
+        vec![1],
+        "the invocation echo is not content, so only the mention matches"
+    );
+}
+
 mod anchor;
 mod scrolling;

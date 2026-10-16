@@ -11,7 +11,7 @@ use crate::records::TranscriptLine;
 use crate::row_id::RowId;
 use crate::state::Pane;
 use crate::state::Screen;
-use crate::state::history_read::HistoryReadOutcome;
+use crate::state::history_read::{HistoryReadOutcome, HistoryStamp};
 use crate::state::transcript::DiskFront;
 use crate::test_harness::render_text;
 use crate::todo_view::{TodoStatus, TodoView};
@@ -209,7 +209,7 @@ fn test_switch_drops_pending_read() {
         .sessions
         .current
         .history_reads
-        .dispatch(0, DiskFront::Unloaded, None, rx);
+        .dispatch(HistoryStamp::new(0, DiskFront::Unloaded, None), rx);
     assert_eq!(app.sessions.current.history_reads.running(), 1);
 
     app.switch_session(test_bundle().0);

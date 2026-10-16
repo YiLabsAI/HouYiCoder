@@ -25,6 +25,7 @@ use crate::session::capabilities::SessionCapabilities;
 use crate::session::identity::SessionIdentity;
 use crate::state::history_read::HistoryReads;
 use crate::state::scan_state::ScanState;
+use crate::state::search_read::SearchReads;
 use crate::state::transcript::Transcript;
 use crate::todo_view::TodoState;
 use houyicoder_protocol::envelope::RequestId;
@@ -102,6 +103,11 @@ pub(crate) struct Session {
     /// inside it: the transcript owns the resident facts, while this owner
     /// governs a read task's lifecycle across those facts being reset.
     pub(crate) history_reads: HistoryReads,
+    /// The background reads of the durable log the search view asked for, and
+    /// the read it is waiting for. Beside history_reads, and for the same
+    /// reason: the reads govern a task's lifecycle across the rows being reset,
+    /// which a session switch does wholesale.
+    pub(crate) search_reads: SearchReads,
     /// The full transcript scan's progress mirror and pending chunk, held in
     /// one owner.
     pub(crate) scan_state: ScanState,
@@ -141,6 +147,7 @@ impl Session {
             todos: TodoState::default(),
             capabilities: SessionCapabilities::default(),
             history_reads: HistoryReads::default(),
+            search_reads: SearchReads::default(),
             scan_state: ScanState::default(),
             loaded_from_frame: Cell::new(usize::MAX),
             agents: PaneAgents::default(),

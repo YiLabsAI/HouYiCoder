@@ -897,6 +897,15 @@ fn test_scan_runs_on_worker() {
         scan_calls: AtomicU32::new(0),
     }));
     app.enter_search_view("tail");
+    // With a connection the read that replaces the rows on hand with the log's
+    // newest window runs on a worker, so the window is there some passes later.
+    // A scan walks a window, so it has one to walk only after that landing.
+    let landed_by = Instant::now() + Duration::from_secs(5);
+    while !app.window_browsing() && Instant::now() < landed_by {
+        app.pump_background_reads();
+        thread::sleep(Duration::from_millis(5));
+    }
+    assert!(app.window_browsing(), "the newest window landed before G");
     handle_key(
         &mut app,
         KeyEvent::new(KeyCode::Char('G'), KeyModifiers::NONE),

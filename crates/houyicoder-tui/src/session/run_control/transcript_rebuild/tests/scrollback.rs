@@ -402,7 +402,7 @@ fn test_dispatch_front_after_drain() {
         .take()
         .expect("a read was dispatched");
     assert_eq!(
-        pending.dispatch_front, front_after,
+        pending.stamp.dispatch_front, front_after,
         "dispatch_front is the front after the rebuild, not before it"
     );
 }

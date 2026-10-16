@@ -1,5 +1,8 @@
-//! The background history read: send one off the draw path, apply what comes
-//! back, and decide the fate of a row the whole-vec viewport is parked on.
+//! The background reads of the transcript's own log: send one off the draw
+//! path, apply what comes back, and decide the fate of a row the whole-vec
+//! viewport is parked on. The search view's read of the same log runs off the
+//! draw path under the same contract and is pumped alongside, in the module
+//! that owns the search view.
 //!
 //! The worker side runs one job and reports its outcome; this side owns when a
 //! job is sent, which result still belongs to the view it lands in, and what
@@ -15,7 +18,9 @@ use super::LOG_ROW_BUDGET;
 use crate::app::state::App;
 use crate::composition::shared_runtime;
 use crate::session::run_control::history_read::{LookbackFrom, OVERLAP_FRONT_ROWS, ReadJob};
-use crate::transcript::history_state::{HistoryReadOutcome, HistoryReadPoll, PendingHistoryRead};
+use crate::transcript::history_state::{
+    HistoryReadOutcome, HistoryReadPoll, HistoryStamp, PendingHistoryRead,
+};
 use crate::transcript::row_id::RowId;
 use crate::transcript::scroll::RowRelease;
 use crate::transcript::store::DiskFront;
@@ -25,12 +30,12 @@ impl App {
     /// Dispatch a background read of older rows from the session log, the
     /// rows of the drained frames that still live on disk. The draw path
     /// never blocks on this: the task ships the result over a channel the
-    /// record on file holds, and a later pump applies it. Without a runtime or
-    /// a snapshot source there is nothing to dispatch and the scroll stops at
-    /// the resident front; when the owner has no room for another read a second
-    /// dispatch is skipped and a later scroll asks again, so the log is walked
-    /// by one task at a time and a result nobody has looked at yet is never
-    /// dispatched over.
+    /// record on file holds, and a later pump applies it. Without a snapshot
+    /// source or a connection there is nothing to dispatch and the scroll stops
+    /// at the resident front; when the owner has no room for another read a
+    /// second dispatch is skipped and a later scroll asks again, so the log is
+    /// walked by one task at a time and a result nobody has looked at yet is
+    /// never dispatched over.
     ///
     /// A reach names a row the read has to get back to, for a viewport parked
     /// on a row the rows on view no longer carry; no reach reads the older rows
@@ -42,9 +47,9 @@ impl App {
             return false;
         };
         if self.sessions.current.connection.is_none() {
-            // No connection: the bare or unwired path has no way to run a
-            // background task, so the read stays off the draw thread by not
-            // running at all, matching the no-source short-circuit.
+            // No connection: a source with no connection is not a live
+            // session's log, so there are no older rows to read, matching the
+            // no-source short-circuit.
             return false;
         }
         if !self.sessions.current.history_reads.may_dispatch() {
@@ -106,7 +111,8 @@ impl App {
         // slot for the length of the walk: an invalidation before that point
         // stops the worker but cannot take the slot back from it.
         let history_reads = &mut self.sessions.current.history_reads;
-        let lease = history_reads.dispatch(dispatch_front, dispatch_disk_front, lookback, rx);
+        let stamp = HistoryStamp::new(dispatch_front, dispatch_disk_front, lookback);
+        let lease = history_reads.dispatch(stamp, rx);
         shared_runtime().spawn_blocking(move || {
             job.run_and_send(tx, lease.stop());
         });
@@ -158,17 +164,19 @@ impl App {
     }
 
     /// Advance the work that runs off the draw path: the older-rows read, the
-    /// epoch scan, and the read that brings back a parked row. All three read
-    /// the log, so none runs where the frame is drawn; the loop calls this
-    /// instead. Returns true when any moved, so the caller redraws.
+    /// epoch scan, the search view's read of the log, and the read that brings
+    /// back a parked row. All four read the log, so none runs where the frame
+    /// is drawn; the loop calls this instead. Returns true when any moved, so
+    /// the caller redraws.
     pub(crate) fn pump_background_reads(&mut self) -> bool {
         let history = self.pump_history_read();
         let scan = self.pump_scan_chunk();
+        let search = self.pump_search_read();
         // After the read pump, so a result that landed in this pass has already
         // resolved the parked row: what is left for the chase is a row the rows
         // on view still leave out.
         let parked = self.pump_parked_row();
-        history || scan || parked
+        history || scan || search || parked
     }
 
     /// Drain the running history read without blocking and apply it when
@@ -228,17 +236,17 @@ impl App {
             );
             return;
         }
-        if self.sessions.current.transcript.frame_window_start() != read.dispatch_front {
+        if self.sessions.current.transcript.frame_window_start() != read.stamp.dispatch_front {
             tracing::debug!(
-                dispatch_front = read.dispatch_front,
+                dispatch_front = read.stamp.dispatch_front,
                 current = self.sessions.current.transcript.frame_window_start(),
                 "history read dropped: the resident front moved"
             );
             return;
         }
-        if self.sessions.current.transcript.disk_front() != read.dispatch_disk_front {
+        if self.sessions.current.transcript.disk_front() != read.stamp.dispatch_disk_front {
             tracing::debug!(
-                dispatch_disk_front = ?read.dispatch_disk_front,
+                dispatch_disk_front = ?read.stamp.dispatch_disk_front,
                 current = ?self.sessions.current.transcript.disk_front(),
                 "history read dropped: the disk-rows state moved"
             );
@@ -253,7 +261,7 @@ impl App {
                 // without it: no later read finds the row there either, so the
                 // viewport gives up the place rather than holding one the
                 // history cannot fill.
-                self.release_chased_row(&read.lookback, RowRelease::RowLeftHistory);
+                self.release_chased_row(&read.stamp.lookback, RowRelease::RowLeftHistory);
             }
             HistoryReadOutcome::LookbackMissed => {
                 // The walk spent its budget with the log still holding older
@@ -261,11 +269,11 @@ impl App {
                 // is not a log that ends here.
                 tracing::debug!("lookback read stopped at its budget without the row");
                 self.sessions.current.history_reads.record_read_success();
-                self.release_chased_row(&read.lookback, RowRelease::RowOutOfReach);
+                self.release_chased_row(&read.stamp.lookback, RowRelease::RowOutOfReach);
             }
             HistoryReadOutcome::Rows(result) => {
                 let transcript = &mut self.sessions.current.transcript;
-                transcript.prepend_disk_rows(result.rows, result.anchor, read.dispatch_front);
+                transcript.prepend_disk_rows(result.rows, result.anchor, read.stamp.dispatch_front);
                 // The rows landed above the viewport; the rebuild resolves the
                 // parked anchor over them, so the viewport holds its place by
                 // the row it stands on rather than by counting what arrived.

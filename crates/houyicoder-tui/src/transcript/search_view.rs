@@ -4,20 +4,20 @@
 //! list/detail view to drift from the index (the structural fix for the
 //! preview/detail desync bugs).
 
+use std::sync::mpsc::channel;
 use std::time::Duration;
 
 use crate::composition::shared_runtime;
 use crate::notifications::{NotifKind, Notification};
 use crate::records::TranscriptLine;
-use crate::scroll::SEARCH_LOG_THRESHOLD;
-use crate::scroll::WINDOW_MAX_BYTES;
 use crate::state::App;
 use crate::state::ViewportMode;
 use crate::state::scan_chunk::{PendingScanChunk, SCAN_CHUNK_BUDGET, ScanChunkPoll};
 use crate::transcript::rows::NamedRows;
+use crate::transcript::search_read::{SearchWant, WalkToward};
 use crate::transcript::snapshot::ScanProgress;
-use crate::transcript::snapshot::{SnapshotLoad, WindowLoad};
-use std::sync::mpsc::channel;
+
+mod read_pump;
 
 impl App {
     /// Enter Scroll mode, remembering the current viewport so Esc/End returns
@@ -28,11 +28,13 @@ impl App {
     }
 
     /// Enter the full-screen search view: Scroll mode with verbose render and
-    /// the query, frozen at the current transcript tail (the newest match
-    /// lands in view). The popup/inline surfaces stay untouched (dead until
-    /// their deletion) so this view owns no list/detail -- the verbose
-    /// transcript IS the result, which is what closes the preview/detail drift
-    /// bugs structurally.
+    /// the query, over the rows on hand (the newest match among them lands in
+    /// view). The read that replaces those rows with the log's own runs off the
+    /// draw path: under the size threshold the whole log, over it the newest
+    /// window, one screen at a time so peak resident stays bounded regardless
+    /// of log size. This view owns no list/detail: the verbose transcript IS
+    /// the result, which is what closes the preview/detail drift bugs
+    /// structurally.
     ///
     /// Refused while a child view is open: the search reads the parent
     /// session's durable log, so its matches would count against the parent
@@ -53,75 +55,34 @@ impl App {
         }
         self.enter_scroll();
         self.ui.verbose = true;
-        // Load the snapshot from the durable log via the seam when wired;
-        // else fall back to a clone of the live transcript (the 4000-row
-        // cap still bounds the live vec, so the clone is the legacy path).
-        // Under the threshold: load the whole log into the snapshot vec.
-        // Over the threshold: open byte-window mode -- one screen at a time,
-        // flat-rendered (no fold slots), so peak resident stays bounded
-        // regardless of log size. NOT a degrade: the window IS the real
-        // search surface; the chrome shows byte-% position, not "too large".
-        // Collect the load inside the snapshot borrow, then commit the whole
-        // enter transaction once the borrow ends -- the fields land together
-        // or not at all.
-        enum Loaded {
-            Over { log_bytes: u64, w: WindowLoad },
-            Under { load: SnapshotLoad },
-        }
-        let loaded = self.sessions.persistence.snapshot.as_ref().map(|snap| {
-            let log_bytes = snap.log_size();
-            if log_bytes > SEARCH_LOG_THRESHOLD {
-                let w = snap.tail_window(WINDOW_MAX_BYTES).unwrap_or_else(|e| {
-                    tracing::warn!("search tail window read failed: {e:?}");
-                    WindowLoad::default()
-                });
-                Loaded::Over { log_bytes, w }
-            } else {
-                let load = snap.load(SEARCH_LOG_THRESHOLD);
-                Loaded::Under { load }
-            }
-        });
-        match loaded {
-            Some(Loaded::Over { log_bytes, w }) => {
-                let skipped = w.skipped;
-                let start_offset = w.start_offset;
-                let next_offset = w.next_offset;
-                self.ui.transcript_view.enter_search_over_window(
-                    w.rows,
-                    log_bytes,
-                    skipped,
-                    start_offset,
-                    next_offset,
-                    query,
-                );
-            }
-            Some(Loaded::Under { load }) => {
-                self.ui.transcript_view.enter_search_under(
-                    load.rows,
-                    load.truncated,
-                    load.skipped,
-                    query,
-                );
-            }
-            None => {
-                // The live rows come with the store's own names for them, so a
-                // place taken in the search view outlives the view: the
-                // transcript view resolves it by the name the store gave.
-                let rows = NamedRows::from_parts(
-                    self.sessions.current.transcript.lines().to_vec(),
-                    self.sessions.current.transcript.row_ids().to_vec(),
-                );
-                self.ui.transcript_view.enter_search_fallback(rows, query);
-            }
-        }
+        // A visit is a generation of its own: a read left over from the last
+        // visit -- one that landed, or one still walking -- is not this view's.
+        self.sessions.current.search_reads.invalidate();
+        // The live rows come with the store's own names for them, so a place
+        // taken in the search view outlives the view: the transcript view
+        // resolves it by the name the store gave. Reading the log first would
+        // hold the frame until the log answered, which is what this view is
+        // opened to search rather than to wait on.
+        let rows = NamedRows::from_parts(
+            self.sessions.current.transcript.lines().to_vec(),
+            self.sessions.current.transcript.row_ids().to_vec(),
+        );
+        self.ui.transcript_view.enter_search_over_rows(rows, query);
         if self.ui.transcript_view.search_focus_newest() {
             self.jump_to_focused_match();
+        }
+        if self.sessions.persistence.snapshot.is_some() {
+            self.sessions.current.search_reads.want(SearchWant::Open);
+            self.pump_search_read();
         }
     }
 
     /// Leave the search view: clear verbose + in_search + the query, then
-    /// restore the viewport active before scrolling.
+    /// restore the viewport active before scrolling. The reads the view asked
+    /// for go with it, in flight or not: they were read for a view that is
+    /// closing, and a walk left running would read the log for nobody.
     pub fn exit_search_view(&mut self) {
+        self.sessions.current.search_reads.invalidate();
         self.ui.verbose = false;
         self.ui.transcript_view.exit_search();
         self.sessions.current.scan_state.indexing.set(false);
@@ -213,11 +174,14 @@ impl App {
     }
 
     /// n in byte-window mode: walk toward the older match. If the current
-    /// window holds an older match, the in-window prev handles it. Otherwise
-    /// load prior windows (reverse) searching for the next older match,
-    /// bounding the scan so a sparse-match log does not stall on one keypress.
-    /// Bounded, not infinite: a bounded scan that finds nothing stays put
-    /// (the chrome shows the partial total) -- honest, not a false "no more".
+    /// window holds an older match, the in-window step handles it. Otherwise
+    /// the walk toward the next older window holding a match is asked for here
+    /// and runs off the draw path: a walk reads up to its bound of windows, and
+    /// a sparse-match log would hold the frame for all of them.
+    ///
+    /// A walk that finds nothing stays put and says so through the chrome's
+    /// partial total, rather than claiming the log holds no older match: the
+    /// walk stopped at its own bound, which is not the log's end.
     pub fn window_search_older(&mut self) {
         if !self.window_browsing() {
             self.ui.transcript_view.search_prev();
@@ -231,47 +195,17 @@ impl App {
             self.jump_to_focused_match();
             return;
         }
-        let Some(snap) = self.sessions.persistence.snapshot.clone() else {
-            return;
-        };
-        // Scan up to BOUND windows older; focus the NEWEST match in the first
-        // window that has one (the closest older match).
-        const BOUND: usize = 64;
-        let mut anchor = self.window_anchor();
-        for _ in 0..BOUND {
-            if anchor == 0 {
-                return; // BOF: no older window.
-            }
-            let w = match snap.window_before(anchor, WINDOW_MAX_BYTES) {
-                Ok(w) => w,
-                Err(e) => {
-                    tracing::warn!("search older window read failed: {e:?}");
-                    return;
-                }
-            };
-            if w.rows.is_empty() || w.start_offset == anchor {
-                return; // no progress (corrupt/empty) -- stop.
-            }
-            let new_anchor = w.start_offset;
-            let next_offset = w.next_offset;
-            let skipped = w.skipped;
-            self.ui
-                .transcript_view
-                .replace_search_window(w.rows, new_anchor, next_offset, skipped);
-            if self.ui.transcript_view.search_matches_len() > 0 {
-                // Newest match in this older window = last index.
-                self.ui.transcript_view.search_focus_last();
-                self.jump_to_focused_match();
-                return;
-            }
-            anchor = new_anchor;
-        }
-        // Bounded scan exhausted: stay (the chrome's partial total signals it).
+        self.sessions
+            .current
+            .search_reads
+            .want(SearchWant::Step(WalkToward::Older));
+        self.pump_search_read();
     }
 
     /// N in byte-window mode: walk toward the newer match. If the current
-    /// window holds a newer match, the in-window next handles it. Otherwise
-    /// load newer windows (forward) searching for the next newer match.
+    /// window holds a newer match, the in-window step handles it. Otherwise
+    /// the walk toward the next newer window holding a match is asked for here
+    /// and runs off the draw path, under the same bound as the older walk.
     pub fn window_search_newer(&mut self) {
         if !self.window_browsing() {
             self.ui.transcript_view.search_next();
@@ -287,35 +221,11 @@ impl App {
             self.jump_to_focused_match();
             return;
         }
-        let Some(snap) = self.sessions.persistence.snapshot.clone() else {
-            return;
-        };
-        const BOUND: usize = 64;
-        let mut cursor = self.window_end();
-        for _ in 0..BOUND {
-            if cursor >= self.frozen_file_size() {
-                return; // EOF: no newer window.
-            }
-            let w = snap.window(cursor, WINDOW_MAX_BYTES);
-            if w.rows.is_empty() || w.next_offset == cursor {
-                return; // no progress -- stop.
-            }
-            let new_end = w.next_offset;
-            let start_offset = w.start_offset;
-            let skipped = w.skipped;
-            self.ui
-                .transcript_view
-                .replace_search_window(w.rows, start_offset, new_end, skipped);
-            if self.ui.transcript_view.search_matches_len() > 0 {
-                // Newest match in a forward (older->newer) window = last index,
-                // but N walks toward newer so the FIRST match is the closest
-                // newer one.
-                self.ui.transcript_view.search_focus_first();
-                self.jump_to_focused_match();
-                return;
-            }
-            cursor = new_end;
-        }
+        self.sessions
+            .current
+            .search_reads
+            .want(SearchWant::Step(WalkToward::Newer));
+        self.pump_search_read();
     }
 
     /// How many scan chunks are outstanding: dispatched and not yet applied.
@@ -376,9 +286,9 @@ impl App {
     /// Advance the epoch scan by one step, on the loop rather than on a draw:
     /// a chunk reads the log, and the draw path must not.
     ///
-    /// A wired runtime reads the chunk on a worker and applies it when it
-    /// lands; the bare path, which has no runtime, reads it inline. Returns
-    /// true when progress moved, so the caller redraws the chrome.
+    /// With a connection the chunk is read on a worker and applied when it
+    /// lands; without one the read happens where it stands. Returns true when
+    /// progress moved, so the caller redraws the chrome.
     ///
     /// This is the scan's stop point. A scan nobody wants dispatches no next
     /// chunk, and the loop advances the scan from here, so an interrupt takes
@@ -406,7 +316,7 @@ impl App {
         moved
     }
 
-    /// Dispatch one scan chunk on a worker, when a runtime is wired.
+    /// Dispatch one scan chunk on a worker, when the session has a connection.
     ///
     /// The one place a chunk task is started, so the budget is asserted here:
     /// every caller guards before asking, and a caller that forgets is told in

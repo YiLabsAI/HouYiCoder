@@ -223,9 +223,9 @@ impl App {
     /// Reset the frontend-side session-local fields a session switch must
     /// clear so the new session renders as if fresh. The fields the new
     /// Session owns (run, transcript, prompt, todos, capabilities,
-    /// history_reads, scan_state, agents, agent_directory) are fresh by
-    /// construction in set_current, so this resets only what stays outside
-    /// the new Session: the workflow stub and the Ui session-local state.
+    /// history_reads, search_reads, scan_state, agents, agent_directory) are
+    /// fresh by construction in set_current, so this resets only what stays
+    /// outside the new Session: the workflow stub and the Ui session-local state.
     /// The Ui owner holds its own reset rule (navigation overlays, pane
     /// states, caches, selection), and the process-level resources (terminal
     /// focus, clipboard) plus the render-measured frame feedback stay. The

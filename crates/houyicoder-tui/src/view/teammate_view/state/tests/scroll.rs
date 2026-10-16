@@ -10,7 +10,7 @@ use crate::composition::app;
 use crate::records::TranscriptLine;
 use crate::state::App;
 use crate::state::Screen;
-use crate::state::history_read::{HistoryReadOutcome, HistoryReadResult};
+use crate::state::history_read::{HistoryReadOutcome, HistoryReadResult, HistoryStamp};
 use crate::test_harness::MockSnapshot;
 use crate::test_harness::render_buffer;
 use crate::test_harness::render_text;
@@ -254,7 +254,7 @@ fn test_parent_read_spares_child() {
         app.sessions
             .current
             .history_reads
-            .dispatch(front, disk_front, None, rx),
+            .dispatch(HistoryStamp::new(front, disk_front, None), rx),
     );
 
     assert!(app.enter_teammate_view());

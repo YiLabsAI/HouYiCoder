@@ -56,8 +56,8 @@ ACTIVE_OWNERS = {
         "fields": 2,
     },
     "crates/houyicoder-tui/src/session.rs:Session": {
-        # The presented session: identity, connection, run lifecycle, tally, pending ask, restore stash, checklist, capabilities, transcript read state, and transcript.
-        "fields": 16,
+        # The presented session: identity, connection, run lifecycle, tally, pending ask, restore stash, checklist, capabilities, the history and search read states, and transcript.
+        "fields": 17,
     },
     "crates/houyicoder-tui/src/session/sessions.rs:Sessions": {
         # The presented session, the resumable catalog, and the current session's persistence ports, swapped together.
@@ -209,9 +209,13 @@ ACTIVE_OWNERS = {
         # the wrong turn and orphan a result whose call had left.
         "fields": 14,
     },
-    "crates/houyicoder-tui/src/transcript/history_state.rs:HistoryReads": {
+    "crates/houyicoder-tui/src/transcript/read_lifecycle.rs:ReadLifecycle": {
         # The pending-read record, the workers holding a slot, the generation that invalidates them, and the retry deadline a failed read sets.
         "fields": 4,
+    },
+    "crates/houyicoder-tui/src/transcript/search_read.rs:SearchReads": {
+        # The search view's reads: the shared lifecycle and the read the view wants next.
+        "fields": 2,
     },
     "crates/houyicoder-tui/src/transcript/parked_view_states.rs:ParkedViewStates": {
         # Expansion sets parked for the views that are not on screen.

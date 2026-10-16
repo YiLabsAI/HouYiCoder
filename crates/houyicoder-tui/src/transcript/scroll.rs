@@ -267,6 +267,58 @@ impl TranscriptScroll {
     }
 }
 
+/// The transcript lines a query matches, oldest first.
+///
+/// The first of the matcher's two shapes: the view highlights every match, so it
+/// wants them all. A background walk only has to decide whether the window it
+/// read is worth landing on and takes holds_matching_line instead. Both prepare
+/// the query the same way and compare through matches_query, so the walk lands on
+/// a window the view will also find a match in by construction rather than by two
+/// implementations agreeing.
+///
+/// An empty query matches nothing, case is ignored, and a slash-command echo is
+/// an invocation rather than content to search, so /search X does not match its
+/// own command echo.
+pub(crate) fn matching_lines(transcript: &[TranscriptLine], query: &str) -> Vec<usize> {
+    let Some(query) = prepared_query(query) else {
+        return Vec::new();
+    };
+    transcript
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| matches_query(line, &query))
+        .map(|(index, _)| index)
+        .collect()
+}
+
+/// Whether any line holds the query: the matcher's second shape, for a walk that
+/// stops at the first match of a window rather than listing them all.
+pub(crate) fn holds_matching_line(transcript: &[TranscriptLine], query: &str) -> bool {
+    let Some(query) = prepared_query(query) else {
+        return false;
+    };
+    transcript.iter().any(|line| matches_query(line, &query))
+}
+
+/// The query in the form matches_query compares against, or None when there is
+/// nothing to match. Stated once here, so both shapes of the matcher agree on
+/// what an empty or mixed-case query means.
+fn prepared_query(query: &str) -> Option<String> {
+    let prepared = query.trim().to_ascii_lowercase();
+    (!prepared.is_empty()).then_some(prepared)
+}
+
+/// Whether one rendered line holds the query, which the caller has already
+/// trimmed and lowercased.
+fn matches_query(line: &TranscriptLine, query: &str) -> bool {
+    if let TranscriptLine::User(text) = line
+        && text.trim_start().starts_with('/')
+    {
+        return false;
+    }
+    line.search_text().to_ascii_lowercase().contains(query)
+}
+
 /// Search state for the /search view. matches holds transcript line indices
 /// (not display rows); the view maps them to rows when rendering highlights.
 /// The legacy inline/popup/detail/disk surfaces are gone (decision 5: only
@@ -307,26 +359,7 @@ impl TranscriptSearch {
     /// (lines starting with /) are skipped so /search X does not self-match
     /// its own command echo.
     pub fn run(&mut self, transcript: &[TranscriptLine]) {
-        self.matches = transcript
-            .iter()
-            .enumerate()
-            .filter(|(_, l)| {
-                let q = self.query.trim().to_ascii_lowercase();
-                if q.is_empty() {
-                    return false;
-                }
-                // Skip slash-command echoes — a /search X line would otherwise
-                // match its own query token, and other /command echoes are
-                // invocations, not content to search.
-                if let TranscriptLine::User(s) = l
-                    && s.trim_start().starts_with('/')
-                {
-                    return false;
-                }
-                l.search_text().to_ascii_lowercase().contains(&q)
-            })
-            .map(|(i, _)| i)
-            .collect();
+        self.matches = matching_lines(transcript, &self.query);
         self.focus = 0;
     }
 
