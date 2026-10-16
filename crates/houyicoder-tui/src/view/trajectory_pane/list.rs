@@ -78,11 +78,9 @@ pub(super) fn turn_row(
         fmt_k_opt(t.tokens_in),
         fmt_k_opt(t.tokens_out)
     );
-    let cached = match (t.cache_read, t.tokens_in) {
-        (Some(c), Some(tin)) if tin > 0 && c > 0 => {
-            format!("{:.0}% cached", 100.0 * c as f64 / tin as f64)
-        }
-        _ => String::new(),
+    let cached = match t.cache_hit_pct() {
+        Some(pct) => format!("{pct:.0}% cached"),
+        None => String::new(),
     };
     // Thinking tokens are a component of output, so the parenthetical sits
     // tight against the output number and carries its own inclusion note.

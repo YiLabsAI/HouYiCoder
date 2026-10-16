@@ -77,6 +77,7 @@ fn test_detail_names_reasoning() {
         cache_read: None,
         cache_write: None,
         reasoning: Some(107),
+        provenance: UsageProvenance::ALL_REPORTED,
     });
     let turn = turn(1, "ask");
     let detail = detail_of(record);

@@ -19,6 +19,7 @@ pub(super) fn turn(n: usize, user_input: &str) -> TrajectoryTurn {
         tokens_out: None,
         cache_read: None,
         cache_write: None,
+        usage_provenance: UsageProvenance::ALL_REPORTED,
         models: Vec::new(),
         efforts: Vec::new(),
         reasoning_tokens: None,

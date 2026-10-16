@@ -91,6 +91,7 @@ fn test_timeline_fits_narrow() {
         cache_read: None,
         cache_write: None,
         reasoning: None,
+        provenance: UsageProvenance::ALL_REPORTED,
     });
     let cases = [
         (record_of(TrajectoryRecordKind::Tool, None), false),

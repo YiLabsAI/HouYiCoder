@@ -8,8 +8,8 @@ use std::collections::HashSet;
 use houyicoder_context::{HookVerdictKind, SessionEvent, SessionLogEntry};
 use houyicoder_tui::state::TrajectoryTurnKey;
 use houyicoder_tui::view::trajectory_pane::{
-    CompactedBoundary, EventUsage, ModelSwitchBoundary, TrajectoryRecord, TrajectoryRecordKind,
-    TrajectoryTurn, TurnBoundary,
+    CompactedBoundary, ModelSwitchBoundary, TrajectoryRecord, TrajectoryRecordKind, TrajectoryTurn,
+    TurnBoundary,
 };
 
 use super::super::view::{CallIndex, fmt_bytes, preview, result_failed};
@@ -167,26 +167,7 @@ pub(in crate::trajectory) fn apply_turn_content(
             prompt_summary,
             ..
         } => builder.begin_agent(child_session_id, subagent_type, prompt_summary, ev.ts),
-        SessionEvent::SubagentReturn {
-            child_session_id,
-            status,
-            summary,
-            input_tokens,
-            output_tokens,
-            cache_read_input_tokens,
-            cache_write_input_tokens,
-            reasoning_tokens,
-            ..
-        } => {
-            let usage = (*input_tokens > 0 || *output_tokens > 0).then_some(EventUsage {
-                input: Some(*input_tokens),
-                output: Some(*output_tokens),
-                cache_read: Some(*cache_read_input_tokens),
-                cache_write: Some(*cache_write_input_tokens),
-                reasoning: Some(*reasoning_tokens),
-            });
-            builder.finish_agent(child_session_id, status, summary, usage, ev.ts);
-        }
+        SessionEvent::SubagentReturn { .. } => builder.apply_subagent_return(ev),
         SessionEvent::MemoryRecall { keys, bytes, .. } => {
             builder.touch(ev.ts);
             // The row names the recall and its count; the size and the keys

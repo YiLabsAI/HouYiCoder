@@ -510,17 +510,21 @@ pub(super) fn draw_event_detail(
 // Helpers
 
 /// The turn's cache line for the L1 header: how much of the turn's input came
-/// from the prompt cache, shown with the share when the input is known.
+/// from the prompt cache. The share comes from the turn's own derivation, so the
+/// header and the row above it cannot disagree about whether the account
+/// supports one. A partial account keeps its raw count and loses only the
+/// derived share.
 fn format_turn_cache(turn: &TrajectoryTurn) -> String {
-    match (turn.cache_read, turn.tokens_in) {
-        (Some(c), Some(tin)) if tin > 0 => {
-            format!(
-                " · {} ({:.0}%) cache hit",
-                fmt_k(c as usize),
-                100.0 * c as f64 / tin as f64
-            )
+    // A count above zero is named before its share. A measured miss has no
+    // count worth naming, so it is stated as the rate alone.
+    match (turn.cache_hit_pct(), turn.cache_read) {
+        (Some(pct), Some(cache_read)) if cache_read > 0 => {
+            format!(" · {} ({pct:.0}%) cache hit", fmt_k(cache_read as usize))
         }
-        (Some(c), _) if c > 0 => format!(" · {} cache hit", fmt_k(c as usize)),
+        (Some(_), _) => " · 0% cache hit".to_string(),
+        (None, Some(cache_read)) if cache_read > 0 => {
+            format!(" · {} cache hit", fmt_k(cache_read as usize))
+        }
         _ => String::new(),
     }
 }
@@ -554,6 +558,7 @@ fn push_model_facts(
         if let (Some(decode_ms), Some(out)) =
             (timing.decode_ms, ev.usage.as_ref().and_then(|u| u.output))
             && decode_ms > 0
+            && out > 0
         {
             push_field(
                 body,
@@ -564,11 +569,29 @@ fn push_model_facts(
         }
     }
     if let Some(usage) = &ev.usage {
+        // A breakdown count the call's endpoint did not report and the log left
+        // at zero is unknown rather than a measured zero, so it stays off the
+        // line.
         let parts: Vec<String> = [
-            usage.input.map(|v| format!("input {v}")),
-            usage.cache_read.map(|v| format!("cache read {v}")),
-            usage.cache_write.map(|v| format!("cache write {v}")),
-            usage.output.map(|v| format!("output {v}")),
+            usage
+                .input
+                .filter(|v| count_visible(*v, usage.provenance.input_reported))
+                .map(|v| format!("input {v}")),
+            usage
+                .cache_read
+                .filter(|v| count_visible(*v, usage.provenance.cache_read_reported))
+                .map(|v| format!("cache read {v}")),
+            usage
+                .cache_write
+                .filter(|v| count_visible(*v, usage.provenance.cache_write_reported))
+                .map(|v| format!("cache write {v}")),
+            // The output total carries no report flag on the durable record, so
+            // a zero cannot be told from an omitted count: it stays off the
+            // line, while a count above zero stands on its own as a floor.
+            usage
+                .output
+                .filter(|v| *v > 0)
+                .map(|v| format!("output {v}")),
         ]
         .into_iter()
         .flatten()
@@ -577,8 +600,9 @@ fn push_model_facts(
             push_field(body, "tokens", &parts.join(" · "), Color::Gray);
         }
         // Reasoning tokens are a component of the output above, not a count of
-        // their own: the line says so instead of leaving the number bare.
-        if let Some(reasoning) = usage.reasoning {
+        // their own: the line says so instead of leaving the number bare. Same
+        // missing flag as the output total, so the same floor rule applies.
+        if let Some(reasoning) = usage.reasoning.filter(|v| *v > 0) {
             push_field(
                 body,
                 "reasoning",

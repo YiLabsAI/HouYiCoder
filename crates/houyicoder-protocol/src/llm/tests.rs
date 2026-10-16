@@ -101,6 +101,35 @@ fn test_usage_rate_unknown_unreported() {
 }
 
 #[test]
+fn test_provenance_rate_partial_account() {
+    // One part of the account reported and the other not: the share is unknown,
+    // even though the reported part is above zero. A quotient over the partial
+    // sum would read higher than the truth, since the input it divides is short
+    // by everything the endpoint left out.
+    let cache_read_reported = UsageProvenance {
+        input_reported: false,
+        cache_read_reported: true,
+        cache_write_reported: false,
+    };
+    assert_eq!(cache_read_reported.cache_hit_rate(500, 1_000), None);
+    assert_eq!(cache_read_reported.cache_hit_pct(500, 1_000), None);
+
+    let input_reported = UsageProvenance {
+        input_reported: true,
+        cache_read_reported: false,
+        cache_write_reported: false,
+    };
+    assert_eq!(input_reported.cache_hit_rate(500, 1_000), None);
+
+    // A complete account with no input to divide by has no share either.
+    assert_eq!(UsageProvenance::ALL_REPORTED.cache_hit_rate(0, 0), None);
+    assert_eq!(
+        UsageProvenance::ALL_REPORTED.cache_hit_pct(500, 1_000),
+        Some(50.0)
+    );
+}
+
+#[test]
 fn test_usage_rate_when_complete() {
     // Input and cache-read both reported: the rate is the share, clamped.
     let u = Usage {

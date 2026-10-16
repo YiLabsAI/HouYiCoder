@@ -14,7 +14,7 @@ use houyicoder_tui::view::trajectory_pane::{
 };
 use std::collections::VecDeque;
 
-fn ev(ts: u64, kind: SessionEvent) -> SessionLogEntry {
+pub(super) fn ev(ts: u64, kind: SessionEvent) -> SessionLogEntry {
     SessionLogEntry {
         id: EventId::new(),
         session: SessionId::new(),
@@ -26,7 +26,13 @@ fn ev(ts: u64, kind: SessionEvent) -> SessionLogEntry {
 
 /// One model call's recorded usage. The figures are marked reported: the
 /// fixture stands for an endpoint that reported its input and cache read.
-fn usage_ev(ts: u64, turn: u32, input: u64, output: u64, cache_read: u64) -> SessionLogEntry {
+pub(super) fn usage_ev(
+    ts: u64,
+    turn: u32,
+    input: u64,
+    output: u64,
+    cache_read: u64,
+) -> SessionLogEntry {
     ev(
         ts,
         SessionEvent::TurnUsage {
@@ -42,6 +48,34 @@ fn usage_ev(ts: u64, turn: u32, input: u64, output: u64, cache_read: u64) -> Ses
             effort: None,
             input_reported: true,
             cache_read_reported: true,
+            cache_write_reported: false,
+        },
+    )
+}
+
+/// One model call's recorded usage as a log written before the reported flags
+/// existed: the counts are on the record, the account behind them is unstated.
+pub(super) fn usage_ev_unreported(
+    ts: u64,
+    turn: u32,
+    input: u64,
+    cache_read: u64,
+) -> SessionLogEntry {
+    ev(
+        ts,
+        SessionEvent::TurnUsage {
+            turn,
+            call_in_turn: 1,
+            input_tokens: input,
+            output_tokens: 0,
+            cache_read_input_tokens: cache_read,
+            cache_write_input_tokens: 0,
+            reasoning_tokens: 0,
+            model: "test".into(),
+            recovery: false,
+            effort: None,
+            input_reported: false,
+            cache_read_reported: false,
             cache_write_reported: false,
         },
     )
@@ -365,47 +399,6 @@ fn test_recovery_retry_same_turn() {
         .filter(|e| e.kind == TrajectoryRecordKind::Model && e.retries > 0)
         .collect();
     assert_eq!(retried.len(), 1, "the recovery call carries the retry");
-}
-
-#[test]
-fn test_tokens_none_no_usage() {
-    // A turn with no TurnUsage (cancelled mid-stream) => tokens None,
-    // not 0. Session total also None (partial sum would undercount).
-    let events = vec![
-        ev(
-            100,
-            SessionEvent::UserInput {
-                text: "hello".into(),
-            },
-        ),
-        ev(
-            105,
-            SessionEvent::TurnStarted {
-                turn: 1,
-                call_in_turn: 0,
-            },
-        ),
-        ev(
-            110,
-            SessionEvent::AssistantMessage {
-                text: "partial".into(),
-                thinking: None,
-            },
-        ),
-        // No TurnUsage — the turn was cancelled before Finish.
-    ];
-    let view = build_view(&events, "test", 0);
-    assert_eq!(view.total_turns, 1);
-    let t = match &view.rows[0] {
-        TrajectoryRow::Turn(t) => t,
-        _ => unreachable!(),
-    };
-    assert_eq!(t.tokens_in, None, "unknown, not 0");
-    assert_eq!(t.tokens_out, None);
-    assert_eq!(
-        view.tokens_in, None,
-        "session total unknown when any turn is unknown"
-    );
 }
 
 #[test]

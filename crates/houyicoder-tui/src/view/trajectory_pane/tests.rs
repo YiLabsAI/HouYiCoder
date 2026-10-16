@@ -279,6 +279,7 @@ fn test_level2_renders_record_detail() {
         tokens_out: Some(0),
         cache_read: Some(0),
         cache_write: Some(0),
+        usage_provenance: UsageProvenance::ALL_REPORTED,
         tool_count: 2,
         ..turn(1, "real kinds")
     };
@@ -372,6 +373,7 @@ fn test_event_detail_redacts_secrets() {
         tokens_out: Some(0),
         cache_read: Some(0),
         cache_write: Some(0),
+        usage_provenance: UsageProvenance::ALL_REPORTED,
         tool_count: 1,
         ..turn(1, "show keys")
     };
@@ -468,6 +470,7 @@ fn test_thinking_tokens_render_nonzero() {
             tokens_out: Some(50),
             cache_read: Some(0),
             cache_write: Some(0),
+            usage_provenance: UsageProvenance::ALL_REPORTED,
             reasoning_tokens: Some(20),
             ..turn(1, "hi")
         })])
@@ -493,6 +496,7 @@ fn test_thinking_tokens_hidden_zero() {
             tokens_out: Some(50),
             cache_read: Some(0),
             cache_write: Some(0),
+            usage_provenance: UsageProvenance::ALL_REPORTED,
             ..turn(1, "hi")
         })])
     };
@@ -522,6 +526,7 @@ fn test_per_turn_model_two() {
                 tokens_out: Some(50),
                 cache_read: Some(0),
                 cache_write: Some(0),
+                usage_provenance: UsageProvenance::ALL_REPORTED,
                 models: vec!["qwen3.7-max".into()],
                 efforts: vec!["high".into()],
                 ..turn(1, "a")
@@ -531,6 +536,7 @@ fn test_per_turn_model_two() {
                 tokens_out: Some(50),
                 cache_read: Some(0),
                 cache_write: Some(0),
+                usage_provenance: UsageProvenance::ALL_REPORTED,
                 models: vec!["glm-5.2".into()],
                 ..turn(2, "b")
             }),
@@ -561,6 +567,7 @@ fn test_per_turn_model_one() {
                 tokens_out: Some(50),
                 cache_read: Some(0),
                 cache_write: Some(0),
+                usage_provenance: UsageProvenance::ALL_REPORTED,
                 models: vec!["qwen3.7-max".into()],
                 ..turn(1, "a")
             }),
@@ -569,6 +576,7 @@ fn test_per_turn_model_one() {
                 tokens_out: Some(50),
                 cache_read: Some(0),
                 cache_write: Some(0),
+                usage_provenance: UsageProvenance::ALL_REPORTED,
                 models: vec!["qwen3.7-max".into()],
                 ..turn(2, "b")
             }),
@@ -599,6 +607,7 @@ fn test_turn_row_cached_ratio() {
                 tokens_out: Some(50),
                 cache_read: Some(0),
                 cache_write: Some(0),
+                usage_provenance: UsageProvenance::ALL_REPORTED,
                 ..turn(2, "first")
             }),
             TrajectoryRow::Turn(TrajectoryTurn {
@@ -606,6 +615,7 @@ fn test_turn_row_cached_ratio() {
                 tokens_out: Some(50),
                 cache_read: Some(50),
                 cache_write: Some(0),
+                usage_provenance: UsageProvenance::ALL_REPORTED,
                 tool_count: 1,
                 duration_ms: 500,
                 ..turn(1, "second")
@@ -626,6 +636,167 @@ fn test_turn_row_cached_ratio() {
         !text.contains('─'),
         "turn numbering is monotonic, so no boundary separator is drawn: {text}"
     );
+}
+
+/// A cache-read count of zero that no call reported is unknown, not a measured
+/// miss, so the row claims no share for it.
+#[test]
+fn test_row_hides_unreported_zero() {
+    let view = TrajectoryView {
+        models_used: 1,
+        tokens_in: Some(100),
+        tokens_out: Some(50),
+        ..view(vec![TrajectoryRow::Turn(TrajectoryTurn {
+            tokens_in: Some(100),
+            tokens_out: Some(50),
+            cache_read: Some(0),
+            cache_write: Some(0),
+            usage_provenance: UsageProvenance::default(),
+            ..turn(1, "legacy")
+        })])
+    };
+    let (_, body, _, _) = list::draw_turn_list(&view, 0, Rect::new(0, 0, 100, 20));
+    let text: String = body
+        .iter()
+        .flat_map(|l| l.spans.iter())
+        .map(|s| s.content.as_ref())
+        .collect();
+    assert!(
+        !text.contains("cached"),
+        "an unreported zero claims no share: {text}"
+    );
+}
+
+/// A turn whose log left the cache-read count at zero and whose call never
+/// reported it states no cache line at all: the header says nothing rather than
+/// naming a share over a count that was never measured.
+#[test]
+fn test_header_hides_unreported_zero() {
+    let legacy = TrajectoryTurn {
+        tokens_in: Some(100),
+        tokens_out: Some(50),
+        cache_read: Some(0),
+        cache_write: Some(0),
+        usage_provenance: UsageProvenance::default(),
+        ..turn(1, "legacy")
+    };
+    let detail = detail_of_all(Vec::new());
+    let app = app();
+    let (header, _, _, _) =
+        detail::draw_turn_detail(&legacy, &detail, 0, Rect::new(0, 0, 140, 20), &app);
+    let head: String = header
+        .iter()
+        .flat_map(|l| l.spans.iter())
+        .map(|s| s.content.as_ref())
+        .collect();
+    assert!(
+        !head.contains("cache hit"),
+        "the header claims nothing for an unreported zero: {head}"
+    );
+    assert!(
+        !head.contains('%'),
+        "no share is stated where nothing was measured: {head}"
+    );
+    assert!(
+        head.contains("100 in 50 out"),
+        "the turn's own counts still render: {head}"
+    );
+}
+
+/// A cache-read count above zero whose account is incomplete keeps its count and
+/// loses its share: the quotient over a partial account can read higher than the
+/// truth, so the row claims none while the header still names the count.
+#[test]
+fn test_row_hides_unreported_share() {
+    let partial = TrajectoryTurn {
+        tokens_in: Some(1_000),
+        tokens_out: Some(50),
+        cache_read: Some(400),
+        cache_write: Some(0),
+        usage_provenance: UsageProvenance::default(),
+        ..turn(1, "inherited")
+    };
+    let view = TrajectoryView {
+        models_used: 1,
+        tokens_in: Some(1_000),
+        tokens_out: Some(50),
+        ..view(vec![TrajectoryRow::Turn(partial.clone())])
+    };
+    let (_, body, _, _) = list::draw_turn_list(&view, 0, Rect::new(0, 0, 100, 20));
+    let text: String = body
+        .iter()
+        .flat_map(|l| l.spans.iter())
+        .map(|s| s.content.as_ref())
+        .collect();
+    assert!(
+        !text.contains("cached"),
+        "a partial account claims no share: {text}"
+    );
+
+    let detail = detail_of_all(Vec::new());
+    let app = app();
+    let (header, _, _, _) =
+        detail::draw_turn_detail(&partial, &detail, 0, Rect::new(0, 0, 140, 20), &app);
+    let head: String = header
+        .iter()
+        .flat_map(|l| l.spans.iter())
+        .map(|s| s.content.as_ref())
+        .collect();
+    assert!(
+        head.contains("400 cache hit"),
+        "the count itself still reaches the header: {head}"
+    );
+    assert!(
+        !head.contains('%'),
+        "no percentage is stated over a partial account: {head}"
+    );
+}
+
+/// A miss the provider measured is worth seeing: the row states the zero, and
+/// the drill's header derives the same share from the same turn, so the two
+/// renderers cannot disagree about it.
+#[test]
+fn test_measured_miss_is_stated() {
+    let measured = TrajectoryTurn {
+        tokens_in: Some(1_000),
+        tokens_out: Some(50),
+        cache_read: Some(0),
+        cache_write: Some(0),
+        usage_provenance: UsageProvenance {
+            input_reported: true,
+            cache_read_reported: true,
+            cache_write_reported: false,
+        },
+        ..turn(1, "fresh prefix")
+    };
+    let view = TrajectoryView {
+        models_used: 1,
+        tokens_in: Some(1_000),
+        tokens_out: Some(50),
+        ..view(vec![TrajectoryRow::Turn(measured.clone())])
+    };
+    let (_, body, _, _) = list::draw_turn_list(&view, 0, Rect::new(0, 0, 100, 20));
+    let row: String = body
+        .iter()
+        .flat_map(|l| l.spans.iter())
+        .map(|s| s.content.as_ref())
+        .collect();
+    assert!(row.contains("0% cached"), "the row states the miss: {row}");
+
+    let detail = detail_of_all(Vec::new());
+    let app = app();
+    let (header, _, _, _) =
+        detail::draw_turn_detail(&measured, &detail, 0, Rect::new(0, 0, 140, 20), &app);
+    let head: String = header
+        .iter()
+        .flat_map(|l| l.spans.iter())
+        .map(|s| s.content.as_ref())
+        .collect();
+    assert!(
+        head.contains("0% cache hit"),
+        "the header states it too: {head}"
+    );
+    assert!(!head.contains("(0%)"), "a miss names no count: {head}");
 }
 
 /// Entering trajectory initializes cursor to tail, and draw clamps and persists it.
@@ -772,6 +943,7 @@ fn test_detail_shows_model_facts() {
         cache_read: Some(1000),
         cache_write: None,
         reasoning: Some(90),
+        provenance: UsageProvenance::ALL_REPORTED,
     });
     record.retries = 1;
     let turn = TrajectoryTurn {
@@ -806,6 +978,77 @@ fn test_detail_shows_model_facts() {
     assert!(
         text.contains("1 length recovery"),
         "retries are shown: {text}"
+    );
+}
+
+/// Per-call counts obey the same rule as the turn row: a zero the call's
+/// endpoint reported is a measured miss and stated, one it never reported is
+/// unknown and stays off the drill, and a count whose event carries no report
+/// flag is stated only above zero.
+#[test]
+fn test_call_cache_follows_report() {
+    let call = |usage: EventUsage| -> String {
+        let mut record = record_of(TrajectoryRecordKind::Model, Some("answer"));
+        record.name = Some("qwen3.7-max".into());
+        record.usage = Some(usage);
+        let turn = turn(1, "ask");
+        let detail = detail_of_all(vec![record]);
+        let (header, body, _, _) = detail::draw_event_detail(&turn, &detail, 0, Rect::ZERO);
+        header
+            .iter()
+            .chain(body.iter())
+            .flat_map(|l| l.spans.iter())
+            .map(|s| s.content.as_ref())
+            .collect()
+    };
+    let reported = UsageProvenance {
+        input_reported: true,
+        cache_read_reported: true,
+        cache_write_reported: false,
+    };
+    let measured = call(EventUsage {
+        input: Some(1_200),
+        output: Some(340),
+        cache_read: Some(0),
+        cache_write: None,
+        reasoning: None,
+        provenance: reported,
+    });
+    assert!(
+        measured.contains("cache read 0"),
+        "the miss is stated: {measured}"
+    );
+    let unnamed = call(EventUsage {
+        input: Some(1_200),
+        output: Some(340),
+        cache_read: Some(0),
+        cache_write: None,
+        reasoning: None,
+        provenance: UsageProvenance::default(),
+    });
+    assert!(
+        !unnamed.contains("cache read"),
+        "an unreported zero stays off the drill: {unnamed}"
+    );
+
+    // A call whose endpoint reported nothing carries no count to print: the
+    // output and reasoning totals have no report flag on the record, so a zero
+    // reads as unknown there just as an unreported breakdown count does.
+    let silent = call(EventUsage {
+        input: Some(0),
+        output: Some(0),
+        cache_read: Some(0),
+        cache_write: Some(0),
+        reasoning: Some(0),
+        provenance: UsageProvenance::default(),
+    });
+    assert!(
+        !silent.contains("tokens:"),
+        "no count column is drawn from zeroes nobody reported: {silent}"
+    );
+    assert!(
+        !silent.contains("reasoning:"),
+        "an unreported reasoning zero stays off too: {silent}"
     );
 }
 
@@ -928,6 +1171,7 @@ fn test_turn_detail_latency_split() {
         cache_read: None,
         cache_write: None,
         reasoning: None,
+        provenance: UsageProvenance::ALL_REPORTED,
     });
     let turn = TrajectoryTurn {
         tokens_in: Some(10),
@@ -967,6 +1211,7 @@ fn test_turn_list_degrades() {
         tokens_out: Some(500),
         cache_read: Some(1_000),
         cache_write: None,
+        usage_provenance: UsageProvenance::ALL_REPORTED,
         models: vec![model.into()],
         efforts: vec!["high".into()],
         reasoning_tokens: Some(90),

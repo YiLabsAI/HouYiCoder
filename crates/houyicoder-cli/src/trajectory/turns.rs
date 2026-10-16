@@ -9,6 +9,7 @@ use std::collections::HashMap;
 
 use super::view::preview;
 use houyicoder_context::{SessionEvent, SessionLogEntry};
+use houyicoder_protocol::llm::UsageProvenance;
 use houyicoder_tui::result_body::extract_body;
 use houyicoder_tui::state::TrajectoryTurnKey;
 use houyicoder_tui::view::trajectory_pane::{
@@ -52,6 +53,11 @@ pub(super) struct TurnBuilder {
     cache_read: Option<u64>,
     cache_write: Option<u64>,
     reasoning_tokens: Option<u64>,
+    /// Which of the turn's counts the calls behind them reported, AND-folded
+    /// across every call and child folded in. A count no endpoint reported and
+    /// the log left at zero is unknown rather than a measured zero, so the row
+    /// consults this before deriving a share over the totals.
+    usage_provenance: UsageProvenance,
     models: Vec<String>,
     efforts: Vec<String>,
     tool_count: usize,
@@ -85,6 +91,7 @@ impl TurnBuilder {
             cache_read: None,
             cache_write: None,
             reasoning_tokens: None,
+            usage_provenance: UsageProvenance::ALL_REPORTED,
             models: Vec::new(),
             efforts: Vec::new(),
             tool_count: 0,
@@ -121,6 +128,7 @@ impl TurnBuilder {
         self.cache_read = None;
         self.cache_write = None;
         self.reasoning_tokens = None;
+        self.usage_provenance = UsageProvenance::ALL_REPORTED;
         self.models.clear();
         self.efforts.clear();
         self.tool_count = 0;
@@ -314,6 +322,9 @@ impl TurnBuilder {
             model: ev_model,
             effort,
             recovery,
+            input_reported,
+            cache_read_reported,
+            cache_write_reported,
             ..
         } = ev
         else {
@@ -325,6 +336,12 @@ impl TurnBuilder {
         self.cache_read = Some(self.cache_read.unwrap_or(0) + *cache_read_input_tokens);
         self.cache_write = Some(self.cache_write.unwrap_or(0) + *cache_write_input_tokens);
         self.reasoning_tokens = Some(self.reasoning_tokens.unwrap_or(0) + *reasoning_tokens);
+        let call_provenance = UsageProvenance {
+            input_reported: *input_reported,
+            cache_read_reported: *cache_read_reported,
+            cache_write_reported: *cache_write_reported,
+        };
+        self.usage_provenance = self.usage_provenance.merge(call_provenance);
         if !ev_model.is_empty() && !self.models.contains(ev_model) {
             self.models.push(ev_model.clone());
         }
@@ -344,14 +361,19 @@ impl TurnBuilder {
         }
         // A provider retry reuses this record, so its usage accumulates the
         // same way the turn's does; overwriting would drop the retry's cost
-        // from the call that caused it.
-        let prior = record.usage.unwrap_or_default();
+        // from the call that caused it. The record's own completeness folds
+        // the same way: no prior account means this call's answer decides.
+        let (prior, record_provenance) = match record.usage {
+            Some(held) => (held, held.provenance.merge(call_provenance)),
+            None => (EventUsage::default(), call_provenance),
+        };
         record.usage = Some(EventUsage {
             input: Some(prior.input.unwrap_or(0) + *input_tokens),
             output: Some(prior.output.unwrap_or(0) + *output_tokens),
             cache_read: Some(prior.cache_read.unwrap_or(0) + *cache_read_input_tokens),
             cache_write: Some(prior.cache_write.unwrap_or(0) + *cache_write_input_tokens),
             reasoning: Some(prior.reasoning.unwrap_or(0) + *reasoning_tokens),
+            provenance: record_provenance,
         });
         if *recovery {
             record.retries += 1;
@@ -444,6 +466,7 @@ impl TurnBuilder {
         status: &str,
         summary: &str,
         usage: Option<EventUsage>,
+        child_provenance: UsageProvenance,
         ts: u64,
     ) {
         self.touch(ts);
@@ -488,10 +511,67 @@ impl TurnBuilder {
                 self.cache_write = Some(self.cache_write.unwrap_or(0) + cwrite);
             }
         }
+        // The turn's totals now hold the child's counts, so the child's
+        // completeness governs them: a field it did not report cannot be read as
+        // a measured zero in the turn's sum. This folds whether or not the child
+        // recorded any count, so a child nobody measured leaves the turn's
+        // account partial instead of reading as one that spent nothing.
+        self.usage_provenance = self.usage_provenance.merge(child_provenance);
         record.usage = usage;
         if !summary.is_empty() && self.mode == FoldMode::Records {
             record.output = Some(summary.to_string());
         }
+    }
+
+    /// Close a delegation on its return: the record's outcome, the child's
+    /// summary, and what the work spent.
+    ///
+    /// A return that recorded no tokens states no usage at all: it tells the
+    /// parent nothing about the spend, which is not the same as a child that
+    /// spent nothing. Its completeness still folds into the turn, so the turn
+    /// and the session's own aggregation read alike rather than one claiming an
+    /// account the other calls unknown.
+    pub(super) fn apply_subagent_return(&mut self, ev: &SessionLogEntry) {
+        let SessionEvent::SubagentReturn {
+            child_session_id,
+            status,
+            summary,
+            input_tokens,
+            output_tokens,
+            cache_read_input_tokens,
+            cache_write_input_tokens,
+            reasoning_tokens,
+            input_reported,
+            cache_read_reported,
+            cache_write_reported,
+            ..
+        } = &ev.event
+        else {
+            return;
+        };
+        let provenance = UsageProvenance {
+            input_reported: *input_reported,
+            cache_read_reported: *cache_read_reported,
+            cache_write_reported: *cache_write_reported,
+        };
+        // A child counts as measured when any of its five counts is above zero,
+        // the same bar the session's own aggregation holds it to: a child that
+        // reported cache tokens without input or output still spent a real
+        // amount, and dropping it would hide a recorded count.
+        let measured = *input_tokens > 0
+            || *output_tokens > 0
+            || *cache_read_input_tokens > 0
+            || *cache_write_input_tokens > 0
+            || *reasoning_tokens > 0;
+        let usage = measured.then_some(EventUsage {
+            input: Some(*input_tokens),
+            output: Some(*output_tokens),
+            cache_read: Some(*cache_read_input_tokens),
+            cache_write: Some(*cache_write_input_tokens),
+            reasoning: Some(*reasoning_tokens),
+            provenance,
+        });
+        self.finish_agent(child_session_id, status, summary, usage, provenance, ev.ts);
     }
 
     /// Drop the record a delegation's trigger call opened.
@@ -569,11 +649,6 @@ impl TurnBuilder {
         preview(&text)
     }
 
-    /// Flush the open turn into the list, and hand back its records.
-    ///
-    /// The rows carry the turn's facts; the records are what a drill asks for,
-    /// so the caller decides whether to keep them. A builder that never opened
-    /// holds no turn to flush.
     /// The open turn as it stands, without closing it.
     ///
     /// A fold that keeps drawing a turn while more events arrive needs the
@@ -595,6 +670,7 @@ impl TurnBuilder {
             tokens_out: self.tokens_out.map(|v| v as usize),
             cache_read: self.cache_read,
             cache_write: self.cache_write,
+            usage_provenance: self.usage_provenance,
             models: self.models.clone(),
             efforts: self.efforts.clone(),
             reasoning_tokens: self.reasoning_tokens.map(|v| v as usize),
@@ -623,6 +699,10 @@ impl TurnBuilder {
     }
 
     /// Close the open turn into a list, the way a one-shot fold does.
+    ///
+    /// The pushed turn carries the facts a row needs, and the records are what
+    /// a drill asks for, so the caller decides whether to keep them. A builder
+    /// that never opened has no turn to flush.
     pub(super) fn flush(
         &mut self,
         turns: &mut Vec<TrajectoryTurn>,

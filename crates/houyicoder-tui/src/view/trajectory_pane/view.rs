@@ -62,6 +62,11 @@ pub struct TrajectoryTurn {
     pub tokens_out: Option<usize>,
     pub cache_read: Option<u64>,
     pub cache_write: Option<u64>,
+    /// Which token counts this turn's calls reported, AND-folded across them
+    /// and across the children folded into the same totals. A count no call
+    /// reported and the log left at zero is unknown rather than a measured
+    /// zero, so no share is derived over it.
+    pub usage_provenance: UsageProvenance,
     /// Every model id this turn called, in first-use order and de-duplicated.
     /// A turn can switch models mid-flight, so this is a list rather than a
     /// single id; empty when no TurnUsage landed or the log predates the field
@@ -87,6 +92,25 @@ pub struct TrajectoryBg {
     pub kind: String,
     pub summary: String,
     pub duration_ms: u64,
+}
+
+impl TrajectoryTurn {
+    /// The share of this turn's input that came from cache, when the turn's
+    /// account supports one: every call reported the input total and the
+    /// cache-read count, both counts are on the turn, and the input is above
+    /// zero. None otherwise — a call that did not report leaves the account
+    /// partial, and a share divided over a partial account can read higher than
+    /// the truth, so the row claims none.
+    ///
+    /// A partial account still names its raw count where the log holds one: only
+    /// the derived percentage is withheld.
+    pub fn cache_hit_pct(&self) -> Option<f64> {
+        let (Some(cache_read), Some(tokens_in)) = (self.cache_read, self.tokens_in) else {
+            return None;
+        };
+        self.usage_provenance
+            .cache_hit_pct(cache_read, tokens_in as u64)
+    }
 }
 
 #[derive(Clone)]
@@ -147,14 +171,12 @@ pub struct SubagentUsage {
 }
 
 impl SubagentUsage {
-    /// The share of the delegated input that came from cache, when the
-    /// children reported both the input total and the cache-read count. None
-    /// otherwise: an unreported count is unknown, not a miss. A child whose
-    /// cache-read count exceeds its input total would push the share above
-    /// one, so it is held to the range the share is defined over.
+    /// The share of the delegated input that came from cache, from the same
+    /// derivation the per-turn shares use: None unless the children reported
+    /// both the input total and the cache-read count, so an unreported count
+    /// reads as unknown rather than as a miss.
     pub fn cache_hit_pct(&self) -> Option<f64> {
-        (self.input > 0 && self.provenance.cache_account_complete())
-            .then(|| (100.0 * self.cache_read as f64 / self.input as f64).min(100.0))
+        self.provenance.cache_hit_pct(self.cache_read, self.input)
     }
 }
 
@@ -191,6 +213,10 @@ pub struct TrajectoryView {
     pub total_turns: usize,
     pub tokens_in: Option<usize>,
     pub tokens_out: Option<usize>,
+    /// The cache-read count the session's log holds, or None when nothing in
+    /// it was cached. It is a floor on what the session reused, and nothing
+    /// more: whether the account behind it is complete is a fact of the turns,
+    /// held on each turn's own provenance rather than summary-folded here.
     pub cache_read: Option<u64>,
     pub failures: usize,
     /// Tool calls the session issued, from the session summary rather than

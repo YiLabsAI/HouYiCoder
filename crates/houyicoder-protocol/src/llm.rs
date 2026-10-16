@@ -56,6 +56,32 @@ impl UsageProvenance {
         self.input_reported && self.cache_read_reported
     }
 
+    /// The share of a cache account that came from the prompt cache, as a rate
+    /// in 0..1. None unless the account is complete — the endpoint reported both
+    /// the input total and the cache-read count — and the input is above zero.
+    ///
+    /// The gate carries the whole meaning here. A count above zero is a floor on
+    /// what was cached, but a quotient over a partial account divides that floor
+    /// by an input sum that is short by whatever went unreported, so the share
+    /// can read higher than the truth. An account that did not report both
+    /// numbers yields None, which callers render as unknown rather than as a
+    /// percentage. A provider whose cache-read count exceeds its input would
+    /// push the rate above one, so it is held to the range this documents.
+    pub fn cache_hit_rate(self, cache_read: u64, input: u64) -> Option<f64> {
+        if !self.cache_account_complete() || input == 0 {
+            return None;
+        }
+        Some((cache_read as f64 / input as f64).min(1.0))
+    }
+
+    /// The same share as a percentage, the unit the panes render. One formula
+    /// behind every per-call and per-delegation share a pane derives, so no two
+    /// of them can round or floor it apart.
+    pub fn cache_hit_pct(self, cache_read: u64, input: u64) -> Option<f64> {
+        self.cache_hit_rate(cache_read, input)
+            .map(|rate| rate * 100.0)
+    }
+
     /// The merge a combined usage record takes: a field is reported in the sum
     /// only when every summand reported it, so an unreported part cannot hide
     /// inside a total that reads as complete.
@@ -107,23 +133,25 @@ impl Usage {
     }
 
     /// The share of this usage's input that came from the prompt cache, as a
-    /// rate in 0..1. None when the cache account is incomplete (input or
-    /// cache-read not reported by the endpoint) or no input was reported: a
-    /// caller then shows the value as unknown rather than as a 0% that reads
-    /// like a cache miss. A provider whose cache-read count exceeds its input
-    /// would push this above one, so the rate is clamped to the range it
-    /// documents.
+    /// rate in 0..1. The provenance decides whether the account supports a
+    /// share at all, so a record whose endpoint did not report both counts
+    /// yields None and its reader shows unknown rather than a 0% that reads
+    /// like a cache miss.
     pub fn cache_hit_rate(&self) -> Option<f64> {
-        if !self.provenance.cache_account_complete() || self.input_tokens == 0 {
-            return None;
-        }
-        Some((self.cache_read_input_tokens as f64 / self.input_tokens as f64).min(1.0))
+        self.provenance.cache_hit_rate(
+            self.cache_read_input_tokens as u64,
+            self.input_tokens as u64,
+        )
     }
 
     /// The same share as a percentage, the unit the panes render. One formula
-    /// behind both, so a surface cannot round or floor it differently.
+    /// behind every per-call and per-delegation share a pane derives, so no two
+    /// of them can round or floor it apart.
     pub fn cache_hit_pct(&self) -> Option<f64> {
-        self.cache_hit_rate().map(|rate| rate * 100.0)
+        self.provenance.cache_hit_pct(
+            self.cache_read_input_tokens as u64,
+            self.input_tokens as u64,
+        )
     }
 
     /// Sum two usage records field by field, saturating at the u32 ceiling.
