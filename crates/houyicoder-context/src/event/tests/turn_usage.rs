@@ -38,6 +38,9 @@ fn test_effort_absent_defaults_none() {
             model: "test".into(),
             recovery: false,
             effort: Some("high".into()),
+            input_reported: true,
+            cache_read_reported: true,
+            cache_write_reported: false,
         },
     );
     let json = serde_json::to_string(&e).expect("serialize");
@@ -72,11 +75,63 @@ fn test_usage_effort_round_trips() {
                 model: "test".into(),
                 recovery: false,
                 effort: effort.map(str::to_string),
+                input_reported: true,
+                cache_read_reported: true,
+                cache_write_reported: false,
             },
         );
         let json = serde_json::to_string(&e).expect("serialize");
         let back: SessionLogEntry = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(back, e);
+    }
+}
+
+/// An old log entry that predates the reported-field flags still deserializes:
+/// every flag defaults to false, so a tally rebuilt from that log reads the
+/// turn as unreported rather than as a complete zero.
+#[test]
+fn test_flags_absent_read_unreported() {
+    let s = SessionId::new();
+    let e = event(
+        s,
+        EventId::new(),
+        SessionEvent::TurnUsage {
+            turn: 1,
+            call_in_turn: 1,
+            input_tokens: 100,
+            output_tokens: 50,
+            cache_read_input_tokens: 80,
+            cache_write_input_tokens: 0,
+            reasoning_tokens: 0,
+            model: "test".into(),
+            recovery: false,
+            effort: None,
+            input_reported: true,
+            cache_read_reported: true,
+            cache_write_reported: true,
+        },
+    );
+    let json = serde_json::to_string(&e).expect("serialize");
+    // Strip the flags to mimic a log written before the fields existed.
+    let legacy = json
+        .replace(r#","input_reported":true"#, "")
+        .replace(r#","cache_read_reported":true"#, "")
+        .replace(r#","cache_write_reported":true"#, "");
+    assert!(!legacy.contains("reported"), "flags stripped: {legacy}");
+    let back: SessionLogEntry = serde_json::from_str(&legacy).expect("deserialize");
+    match back.event {
+        SessionEvent::TurnUsage {
+            input_reported,
+            cache_read_reported,
+            cache_write_reported,
+            ..
+        } => {
+            assert!(
+                !input_reported && !cache_read_reported && !cache_write_reported,
+                "absent flags read as unreported, not as reported zeroes"
+            );
+        }
+        _ => unreachable!(),
     }
 }
 

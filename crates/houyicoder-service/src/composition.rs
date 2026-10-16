@@ -86,6 +86,7 @@ use houyicoder_api::tool::ToolProvider;
 use houyicoder_core::agent::WorktreeController;
 use houyicoder_core::agent::build_hook_fire;
 use houyicoder_core::agent::multi_agent::bus_types::AgentBus;
+use houyicoder_core::agent::multi_agent::registry::AgentRegistry;
 pub use paths::{
     resolve_project_workspace, session_log_root, walk_to_workspace_root, workspace_cwd,
 };
@@ -267,8 +268,9 @@ pub(crate) fn assemble(
         warnings: provider_cfg_warnings,
     } = resolved;
     let provider_for_extractor = Arc::clone(&provider);
-    let mut tools = ToolRegistry::new();
-    tools.register(Arc::new(TodoWriteTool::new()));
+    let agent_registry = multi_agent::built_in_registry();
+    let recall_meter = Arc::new(AtomicU32::new(0));
+    let mut tools = build_base_tools(&store, &recall_meter, &agent_registry);
     let fences = build_session_fences(project, rule_store.clone());
     let gate_dyn: Arc<dyn ModeGate> = fences.gate.clone();
     let worktree_controller = worktree::wire_worktree_controller(
@@ -283,15 +285,8 @@ pub(crate) fn assemble(
     let undo_handles = register_builtin_tools(&mut tools, &fences, &skills, gate_dyn);
     let (config, runner_settings_warnings) =
         build_runner_config(model.clone(), fences.workspace.as_deref());
-    let recall_meter = Arc::new(AtomicU32::new(0));
-    tools.register(Arc::new(ConversationSearchTool::new(
-        store.clone(),
-        recall_meter.clone(),
-    )));
     skills.register_tool(&mut tools, fences.sandbox_session.clone());
     let denied_agents = resolve_denied_agents(rule_store.as_deref());
-    let agent_registry = multi_agent::built_in_registry();
-    tools.register(Arc::new(DelegationTool::new(agent_registry.clone())));
     let bus = Arc::new(AgentBus::new());
     let spawn_handle = multi_agent::build_runtime(multi_agent::MultiAgentDeps {
         registry: agent_registry.clone(),
@@ -322,6 +317,7 @@ pub(crate) fn assemble(
         .with_spawn_handle(spawn_handle)
         .with_sandbox_session(fences.sandbox_session.clone())
         .with_reducer(Arc::new(HotPathReducer));
+    runner.seed_usage_from_log(session);
     let mut runner = skills.attach_to_runner(runner, fences.workspace.clone());
     runner.set_workspace_probe(Arc::new(GitWorkspaceProbe::new(runner.cwd_handle())));
     multi_agent::wire_agent_directory(&runner, agent_registry.as_ref(), &denied_agents);
@@ -360,6 +356,25 @@ pub(crate) fn assemble(
         bus: Some(bus),
         provider_facts,
     }
+}
+
+/// The tools every session starts with: the todo writer, the search over this
+/// session's own log, and delegation to the built-in agent types. The recall
+/// meter stays with the caller because the runner reports through the same one.
+fn build_base_tools(
+    store: &Arc<SessionStore>,
+    recall_meter: &Arc<AtomicU32>,
+    agent_registry: &Arc<dyn AgentRegistry>,
+) -> ToolRegistry {
+    let mut tools = ToolRegistry::new();
+    let session_log: Arc<dyn SessionLog> = store.clone();
+    tools.register(Arc::new(TodoWriteTool::new()));
+    tools.register(Arc::new(ConversationSearchTool::new(
+        session_log,
+        Arc::clone(recall_meter),
+    )));
+    tools.register(Arc::new(DelegationTool::new(Arc::clone(agent_registry))));
+    tools
 }
 
 /// Build the RunnerConfig and collect any settings warnings from runner_settings.

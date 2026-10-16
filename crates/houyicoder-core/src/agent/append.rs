@@ -615,6 +615,9 @@ impl Runner {
                     model: model.to_string(),
                     recovery,
                     effort: effort.map(str::to_string),
+                    input_reported: usage.provenance.input_reported,
+                    cache_read_reported: usage.provenance.cache_read_reported,
+                    cache_write_reported: usage.provenance.cache_write_reported,
                 },
             ))
             .await?;

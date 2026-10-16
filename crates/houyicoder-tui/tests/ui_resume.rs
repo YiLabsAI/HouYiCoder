@@ -83,6 +83,74 @@ fn test_resume_sid_reopens_history() {
     );
 }
 
+/// A resumed session's Usage tab reports the spend its history already holds:
+/// the turns the log carried are part of the session total, not only the turns
+/// run after the reopen. A tally that started at zero reported the seeded turn
+/// as nothing and left a session that recorded a cache share without one.
+#[test]
+#[ignore]
+fn test_resume_usage_covers_history() {
+    let sessions_dir = fresh_temp_dir("sessions-usage-history");
+    let sid = "44444444-4444-4444-4444-444444444444";
+    common::seed_session_with_usage(
+        &sessions_dir,
+        sid,
+        "usage-model",
+        "seeded prompt",
+        common::SeededTurn {
+            input: 12_000,
+            output: 500,
+            cache_read: 9_600,
+        },
+    );
+    let mut s = PtySession::launch_with_sessions_dir(
+        None,
+        None,
+        None,
+        None,
+        &["--resume".to_string(), sid.to_string()],
+        sessions_dir.clone(),
+    );
+    assert!(
+        s.wait_for("let's build, or / for commands", RENDER_TIMEOUT),
+        "working screen after sid resume:\n{}",
+        s.output()
+    );
+    // The status bar shows the model the descriptor restored, so a status
+    // snapshot has landed before the Usage tab is opened over it.
+    assert!(
+        s.wait_for_plain("usage-model", RENDER_TIMEOUT),
+        "the restored model reaches the status bar:\n{}",
+        s.output()
+    );
+    run_slash_command(&mut s, "status");
+    assert!(
+        s.wait_for_plain("Status", RENDER_TIMEOUT),
+        "/status renders the Status tab:\n{}",
+        s.output_plain()
+    );
+    // Tab cycles: Status -> Config -> Usage.
+    s.send_key(&Key::Tab);
+    s.send_key(&Key::Tab);
+    // The Usage tab's rows are one row each: the token row and the cache row
+    // the recorded turn produced.
+    assert!(
+        s.wait_for_screen("input tokens:", RENDER_TIMEOUT),
+        "the Usage tab renders the token rows:\n{}",
+        s.screen().contents()
+    );
+    assert!(
+        s.wait_for_screen("9.6k (80.0% of input)", RENDER_TIMEOUT),
+        "the Usage tab reports the recorded turn's cache share:\n{}",
+        s.screen().contents()
+    );
+    assert!(
+        s.wait_for_screen("12k", RENDER_TIMEOUT),
+        "the Usage tab reports the recorded turn's input:\n{}",
+        s.screen().contents()
+    );
+}
+
 /// A session directory named in the ULID spelling still resumes: the store
 /// keeps such a directory under its old name, so a --resume by the current
 /// display form must find it rather than report a missing session. The unit

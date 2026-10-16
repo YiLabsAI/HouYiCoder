@@ -77,6 +77,9 @@ fn test_dry_run_structure() {
             model: "test".into(),
             recovery: true,
             effort: None,
+            input_reported: true,
+            cache_read_reported: true,
+            cache_write_reported: false,
         }),
         mk(SessionEvent::MemoryRecall {
             text: "lesson".into(),

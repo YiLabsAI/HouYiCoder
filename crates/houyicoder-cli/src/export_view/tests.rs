@@ -35,6 +35,9 @@ fn usage_event(ts: u64, model: &str, input: u64, output: u64) -> SessionLogEntry
             model: model.to_string(),
             recovery: false,
             effort: None,
+            input_reported: true,
+            cache_read_reported: true,
+            cache_write_reported: false,
         },
     )
 }

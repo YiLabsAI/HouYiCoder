@@ -311,6 +311,9 @@ async fn test_head_model_interned() {
             model: "qwen".into(),
             recovery: false,
             effort: None,
+            input_reported: true,
+            cache_read_reported: true,
+            cache_write_reported: false,
         },
     )
     .await;
@@ -362,6 +365,9 @@ async fn test_restore_respects_last_clear() {
                 model: "old-model".into(),
                 recovery: false,
                 effort: None,
+                input_reported: true,
+                cache_read_reported: true,
+                cache_write_reported: false,
             },
         )
         .await;
@@ -391,6 +397,9 @@ async fn test_restore_respects_last_clear() {
                 model: "new-model".into(),
                 recovery: false,
                 effort: None,
+                input_reported: true,
+                cache_read_reported: true,
+                cache_write_reported: false,
             },
         )
         .await;

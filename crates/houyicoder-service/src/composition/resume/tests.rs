@@ -58,6 +58,74 @@ fn two_events(sid: SessionId) -> Vec<SessionLogEntry> {
     ]
 }
 
+/// One recorded turn as the session reader hands it back: the tokens the
+/// endpoint reported plus the flags saying each figure was reported at all.
+fn usage_events(sid: SessionId) -> Vec<SessionLogEntry> {
+    let mk = |session_event: SessionEvent| SessionLogEntry {
+        id: EventId::new(),
+        session: sid,
+        ts: 0,
+        prev_hash: None,
+        event: session_event,
+    };
+    vec![
+        mk(SessionEvent::UserInput {
+            text: "resume-usage-prompt".into(),
+        }),
+        mk(SessionEvent::TurnUsage {
+            turn: 1,
+            call_in_turn: 1,
+            input_tokens: 12_000,
+            output_tokens: 500,
+            cache_read_input_tokens: 9_600,
+            cache_write_input_tokens: 0,
+            reasoning_tokens: 0,
+            model: "unit-resume-model".into(),
+            recovery: false,
+            effort: None,
+            input_reported: true,
+            cache_read_reported: true,
+            cache_write_reported: false,
+        }),
+    ]
+}
+
+/// A resumed session reports the spend its history already holds. The turns
+/// the export carried are folded into the runner's tally at assembly, so the
+/// parent half of the cumulative figure covers the whole session the delegated
+/// half covers rather than only the turns run after the reopen.
+#[test]
+fn test_resume_export_keeps_usage() {
+    let sessions = temp_root();
+    let export_path = sessions.join("export.json");
+    let legacy_sid = "01KZ5RDH4DG6YV0EDBX1KSKTRA";
+    let sid = SessionId::from_display_string(legacy_sid).unwrap();
+    write_export(&export_path, legacy_sid, "usage-model", &usage_events(sid));
+
+    let resumed = super::build_runner_for_resume_export(
+        &export_path,
+        &sessions,
+        None,
+        None,
+        ProviderResolution::stub(),
+    )
+    .expect("resume export seeds");
+    let snap = resumed.assembled.runner.status_snapshot();
+    assert_eq!(
+        snap.cumulative_usage.input_tokens, 12_000,
+        "the resumed session's input covers the turn its log held"
+    );
+    assert_eq!(snap.cumulative_usage.output_tokens, 500);
+    assert_eq!(snap.cumulative_usage.cache_read_input_tokens, 9_600);
+    assert_eq!(snap.last_input_tokens, 12_000);
+    assert_eq!(
+        snap.cumulative_usage.cache_hit_rate(),
+        Some(0.8),
+        "the recorded turn's completeness survives the fold"
+    );
+    remove_dir_all(&sessions).ok();
+}
+
 fn temp_root() -> PathBuf {
     static SEQ: AtomicU64 = AtomicU64::new(0);
     let n = SEQ.fetch_add(1, Ordering::Relaxed);

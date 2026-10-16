@@ -31,6 +31,102 @@ fn usage(input: u32, output: u32, cache_read: u32) -> Usage {
     }
 }
 
+/// A logged turn as the session reader hands it back: the token figures the
+/// endpoint reported plus whether each was reported at all.
+fn logged_turn(
+    session: SessionId,
+    input: u64,
+    output: u64,
+    cache_read: u64,
+    reported: bool,
+) -> SessionLogEntry {
+    new_event(
+        session,
+        SessionEvent::TurnUsage {
+            turn: 1,
+            call_in_turn: 1,
+            input_tokens: input,
+            output_tokens: output,
+            cache_read_input_tokens: cache_read,
+            cache_write_input_tokens: 0,
+            reasoning_tokens: 0,
+            model: "logged-model".into(),
+            recovery: false,
+            effort: None,
+            input_reported: reported,
+            cache_read_reported: reported,
+            cache_write_reported: false,
+        },
+    )
+}
+
+/// A runner that reopened a session continues that session's spend: the turns
+/// its log already holds are part of the tally, so the parent half covers the
+/// same session the delegated half does. Before this, a reopened session
+/// reported only the turns it had run itself.
+#[test]
+fn test_seed_folds_logged_turns() {
+    let session = SessionId::new();
+    let logged = vec![
+        logged_turn(session, 9_000, 400, 7_200, true),
+        logged_turn(session, 3_000, 100, 2_400, true),
+    ];
+    let mut acc = UsageAccumulator::default();
+    acc.seed_from_events(&logged);
+    let c = acc.cumulative();
+    assert_eq!(c.input_tokens, 12_000, "the whole session's input");
+    assert_eq!(c.output_tokens, 500);
+    assert_eq!(c.cache_read_input_tokens, 9_600);
+    assert_eq!(
+        c.non_cached_input_tokens, 2_400,
+        "the non-cached share of both turns"
+    );
+    assert_eq!(acc.last_input_tokens(), 3_000, "the newest logged turn");
+    assert_eq!(
+        c.cache_hit_rate(),
+        Some(0.8),
+        "every logged turn reported the parts the rate needs"
+    );
+}
+
+/// A log written before the completeness flags existed reads as unreported, so
+/// a seeded total leaves the cache account unknown rather than presenting the
+/// recorded figures as a rate the log never carried.
+#[test]
+fn test_seed_unreported_turn_unknown() {
+    let session = SessionId::new();
+    let mut acc = UsageAccumulator::default();
+    acc.seed_from_events(&[logged_turn(session, 1_000, 100, 800, false)]);
+    let c = acc.cumulative();
+    assert_eq!(c.input_tokens, 1_000, "the recorded figure still counts");
+    assert_eq!(
+        c.cache_hit_rate(),
+        None,
+        "an unreported turn leaves the rate unknown, not guessed"
+    );
+}
+
+/// A fresh session's log holds no turn yet, so seedling it changes nothing:
+/// the resumed path and the new-session path report the same empty tally.
+#[test]
+fn test_seed_log_without_usage() {
+    let session = SessionId::new();
+    let log = vec![
+        new_event(
+            session,
+            SessionEvent::UserInput {
+                text: "first".into(),
+            },
+        ),
+        new_event(session, SessionEvent::RunCompleted { ms: Some(5) }),
+    ];
+    let mut acc = UsageAccumulator::default();
+    acc.seed_from_events(&log);
+    assert_eq!(acc.cumulative().input_tokens, 0);
+    assert_eq!(acc.last_input_tokens(), 0);
+    assert_eq!(acc.tool_calls(), 0, "the tool counters stay per-run");
+}
+
 #[test]
 fn test_accumulator_sums_seven_fields() {
     let mut acc = UsageAccumulator::default();

@@ -368,6 +368,9 @@ fn test_event_variants_round_trip() {
                 model: "test".into(),
                 recovery: true,
                 effort: Some("high".into()),
+                input_reported: true,
+                cache_read_reported: true,
+                cache_write_reported: false,
             },
         ),
         event(

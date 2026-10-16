@@ -32,7 +32,7 @@ use crate::snapshot::SnapshotStore;
 use crate::snapshot::UndoOutcome;
 use crate::snapshot::UndoStack;
 use houyicoder_api::skill::SkillSnapshot;
-use houyicoder_context::SessionEvent;
+use houyicoder_context::{SessionEvent, SessionId, SessionLogEntry};
 use houyicoder_protocol::frontend::context::{ContextFileEntry, ContextSkillEntry};
 use std::fs::read_to_string;
 use std::mem::take;
@@ -63,12 +63,14 @@ pub struct StatusSnapshot {
     /// elapsed; None otherwise. The host renders the secs; it does not need to
     /// know about the resilience type behind it.
     pub breaker_cool_down: Option<Duration>,
-    /// Cumulative provider-reported usage across every turn this runner has
-    /// driven (since the accumulator was last reset). Inclusive totals plus the
+    /// Cumulative provider-reported usage across the whole session, including
+    /// the turns a prior runner drove before a reopen, which the accumulator
+    /// takes from the log at construction. Inclusive totals plus the
     /// non-overlapping breakdown; see the protocol layer's Usage doc.
     pub cumulative_usage: Usage,
-    /// The input_tokens of the last response: the provider's own count for the
-    /// last call, kept as the billing fact. Occupancy is not derived from it.
+    /// The input_tokens of the last recorded call: the provider's own count
+    /// for it, whether this runner made that call or a reopen read it from the
+    /// log. Kept as the billing fact; occupancy is not derived from it.
     pub last_input_tokens: u32,
     /// The token count of the latest assembled context, from the same
     /// measurement the context pane renders. None until a turn has assembled
@@ -126,6 +128,62 @@ impl UsageAccumulator {
         // an unreported part hides inside a total that otherwise reads as
         // reported. The all-reported seed makes the first turn decide.
         self.cumulative.provenance = self.cumulative.provenance.merge(turn.provenance);
+    }
+
+    /// Continue the tally from the turns a session's log already holds, so a
+    /// runner that reopened the session reports that session's totals rather
+    /// than only the turns since it reopened. The cumulative figures and the
+    /// last reported input are seeded, with each turn's completeness folded
+    /// the same way record folds a live one.
+    ///
+    /// The tool counters are not seeded. The log's result payloads are
+    /// classified by the session reader's rule and the live loop's by the
+    /// observability layer's, so a seeded count would answer the same
+    /// question with a second rule and drift from the live one. They stay
+    /// per-run; the usage figures above are per-session.
+    pub fn seed_from_events(&mut self, events: &[SessionLogEntry]) {
+        let clamp = |v: u64| v.min(u32::MAX as u64) as u32;
+        for entry in events {
+            let SessionEvent::TurnUsage {
+                input_tokens,
+                output_tokens,
+                cache_read_input_tokens,
+                cache_write_input_tokens,
+                reasoning_tokens,
+                input_reported,
+                cache_read_reported,
+                cache_write_reported,
+                ..
+            } = &entry.event
+            else {
+                continue;
+            };
+            // Derived the same way the delegated half derives its totals, so
+            // the two halves of a session's spend cannot disagree about what
+            // a turn's non-cached share is. The log carries no total of its
+            // own, so a seeded turn derives one; a live turn keeps the total
+            // its endpoint reported, which may count reasoning on top.
+            let turn = Usage {
+                input_tokens: clamp(*input_tokens),
+                output_tokens: clamp(*output_tokens),
+                total_tokens: clamp(input_tokens.saturating_add(*output_tokens)),
+                non_cached_input_tokens: clamp(
+                    input_tokens
+                        .saturating_sub(*cache_read_input_tokens)
+                        .saturating_sub(*cache_write_input_tokens),
+                ),
+                cache_read_input_tokens: clamp(*cache_read_input_tokens),
+                cache_write_input_tokens: clamp(*cache_write_input_tokens),
+                reasoning_tokens: clamp(*reasoning_tokens),
+                provenance: UsageProvenance {
+                    input_reported: *input_reported,
+                    cache_read_reported: *cache_read_reported,
+                    cache_write_reported: *cache_write_reported,
+                },
+            };
+            self.cumulative = self.cumulative.saturating_add(&turn);
+            self.last_input_tokens = turn.input_tokens;
+        }
     }
 
     /// Fold one tool execution's outcome into the session tally. ok = the
@@ -211,6 +269,28 @@ impl Default for UsageAccumulator {
 pub(crate) type SharedUsage = Arc<Mutex<UsageAccumulator>>;
 
 impl Runner {
+    /// Start the session's usage tally from the turns its own log already
+    /// holds. Called once at assembly, so a runner that reopened a session
+    /// reports that session's totals: without it the cumulative covers only
+    /// the turns since the reopen, while the delegated half of the same
+    /// figure covers the whole session.
+    ///
+    /// The runner reads the log itself rather than taking the turns from a
+    /// caller: the tally and the log it answers for belong to one owner, so
+    /// no assembly path can seed it from a span other than the session it was
+    /// built for.
+    pub fn seed_usage_from_log(&self, session: SessionId) {
+        let events = self.trajectory_snapshot(session);
+        match self.usage.lock() {
+            Ok(mut g) => g.seed_from_events(&events),
+            // A poisoned lock means a panic in a writer; the tally stays at
+            // zero, which is what a session with no readable turns reports.
+            Err(_) => {
+                tracing::warn!("usage accumulator lock poisoned; session totals start at zero")
+            }
+        }
+    }
+
     /// A cheap point-in-time snapshot of the runner's live state for the host
     /// to render. Reads the breaker (when attached) and the shared usage
     /// accumulator; no await, no channel, safe to call on every dispatch.
@@ -314,10 +394,7 @@ impl Runner {
     /// finalized events in append order, each with prev_hash set. The
     /// /trajectory command renders this. Empty for a session with no
     /// events appended this process.
-    pub fn trajectory_snapshot(
-        &self,
-        session: houyicoder_context::SessionId,
-    ) -> Vec<houyicoder_context::SessionLogEntry> {
+    pub fn trajectory_snapshot(&self, session: SessionId) -> Vec<SessionLogEntry> {
         self.store.trajectory_snapshot(session)
     }
 
@@ -328,7 +405,7 @@ impl Runner {
     /// appended afterwards is the only event in the fresh mirror: the boundary
     /// stays visible to an in-process reader while the pre-clear history is
     /// gone from it, and the durable log keeps the whole sequence.
-    pub async fn reset_trajectory(&self, session: houyicoder_context::SessionId) {
+    pub async fn reset_trajectory(&self, session: SessionId) {
         let prior_turn = match self.observability.lock() {
             Ok(ol) => ol.turn_coords().0,
             Err(_) => 0,

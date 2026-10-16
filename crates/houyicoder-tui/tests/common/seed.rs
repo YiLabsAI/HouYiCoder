@@ -43,20 +43,92 @@ pub fn seed_session_with_cwd(
     prompt: &str,
     cwd: &str,
 ) -> EventId {
-    let sid = SessionId::from_display_string(sid_str).expect("sid parses");
-    let event = SessionLogEntry {
-        id: EventId::new(),
-        session: sid,
-        ts: 0,
-        prev_hash: None,
-        event: SessionEvent::UserInput {
+    write_session(
+        root,
+        sid_str,
+        model,
+        cwd,
+        &[SessionEvent::UserInput {
+            text: prompt.into(),
+        }],
+    )
+}
+
+/// The token figures a seeded turn reports, so a PTY test can plant a recorded
+/// spend whose rendered form it asserts after a reopen.
+pub struct SeededTurn {
+    pub input: u64,
+    pub output: u64,
+    pub cache_read: u64,
+}
+
+/// Seed a session whose log already holds a recorded turn, so a resumed
+/// session's whole-session figures come from the seed rather than from a live
+/// provider. Every figure is marked reported: the fixture stands for an
+/// endpoint that reported all three, which is what the rendered cache share
+/// needs.
+pub fn seed_session_with_usage(
+    root: &Path,
+    sid_str: &str,
+    model: &str,
+    prompt: &str,
+    turn: SeededTurn,
+) {
+    let cwd = workspace_cwd(None);
+    let events = [
+        SessionEvent::UserInput {
             text: prompt.into(),
         },
-    };
-    let line = serde_json::to_string(&event).expect("serialize event");
+        SessionEvent::TurnUsage {
+            turn: 1,
+            call_in_turn: 1,
+            input_tokens: turn.input,
+            output_tokens: turn.output,
+            cache_read_input_tokens: turn.cache_read,
+            cache_write_input_tokens: 0,
+            reasoning_tokens: 0,
+            model: model.into(),
+            recovery: false,
+            effort: None,
+            input_reported: true,
+            cache_read_reported: true,
+            cache_write_reported: false,
+        },
+    ];
+    write_session(root, sid_str, model, &cwd, &events);
+}
+
+/// Write the seeded log (one JSONL line per event, timestamps in order) and the
+/// session.json descriptor the resume reader scans, and return the first
+/// event's id. One writer for every seed that lays down a log, so a schema
+/// change to the event or descriptor shape is fixed in one place.
+fn write_session(
+    root: &Path,
+    sid_str: &str,
+    model: &str,
+    cwd: &str,
+    events: &[SessionEvent],
+) -> EventId {
+    let sid = SessionId::from_display_string(sid_str).expect("sid parses");
     let dir = root.join(sid_str);
     create_dir_all(&dir).expect("mkdir session dir");
-    write(dir.join("log.jsonl"), format!("{line}\n")).expect("write log");
+    let mut log = String::new();
+    let mut first_id = None;
+    for (i, session_event) in events.iter().enumerate() {
+        let event = SessionLogEntry {
+            id: EventId::new(),
+            session: sid,
+            ts: (i as u64) * 1000,
+            prev_hash: None,
+            event: session_event.clone(),
+        };
+        if first_id.is_none() {
+            first_id = Some(event.id);
+        }
+        log.push_str(&serde_json::to_string(&event).expect("serialize event"));
+        log.push('\n');
+    }
+    write(dir.join("log.jsonl"), log).expect("write log");
     let meta = serde_json::json!({
         "name": null,
         "name_source": "auto",
@@ -71,7 +143,7 @@ pub fn seed_session_with_cwd(
         serde_json::to_string_pretty(&meta).expect("serialize meta"),
     )
     .expect("write descriptor");
-    event.id
+    first_id.expect("a seeded session holds at least one event")
 }
 
 /// Seed a session on disk with one user turn per prompt, so a PTY test can

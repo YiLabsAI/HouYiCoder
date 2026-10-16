@@ -28,6 +28,9 @@ fn usage(ts: u64, input: u64, output: u64, model: &str) -> SessionLogEntry {
             model: model.into(),
             recovery: false,
             effort: None,
+            input_reported: true,
+            cache_read_reported: true,
+            cache_write_reported: false,
         },
     )
 }

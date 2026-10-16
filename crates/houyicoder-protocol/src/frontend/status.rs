@@ -29,11 +29,12 @@ pub struct StatusSnapshot {
     /// Remaining cool-down seconds when the breaker is Open and the
     /// cool-down has not elapsed; None otherwise.
     pub breaker_cool_down_secs: Option<u64>,
-    /// Cumulative provider-reported usage across every turn this runner
-    /// has driven since the accumulator was last reset.
+    /// Cumulative provider-reported usage across the whole session, including
+    /// the turns a prior runner drove before a reopen.
     pub cumulative_usage: Usage,
-    /// The input_tokens of the last response: the provider's own count for the
-    /// last call. A billing fact, not the occupancy figure.
+    /// The input_tokens of the last recorded call: the provider's own count
+    /// for it, whether this runner made that call or a reopen read it from the
+    /// log. A billing fact, not the occupancy figure.
     pub last_input_tokens: u32,
     /// The token count of the latest assembled context, from the same
     /// measurement the context pane renders. None until a turn has assembled

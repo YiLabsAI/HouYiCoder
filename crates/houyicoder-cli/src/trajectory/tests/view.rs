@@ -24,6 +24,29 @@ fn ev(ts: u64, kind: SessionEvent) -> SessionLogEntry {
     }
 }
 
+/// One model call's recorded usage. The figures are marked reported: the
+/// fixture stands for an endpoint that reported its input and cache read.
+fn usage_ev(ts: u64, turn: u32, input: u64, output: u64, cache_read: u64) -> SessionLogEntry {
+    ev(
+        ts,
+        SessionEvent::TurnUsage {
+            turn,
+            call_in_turn: 1,
+            input_tokens: input,
+            output_tokens: output,
+            cache_read_input_tokens: cache_read,
+            cache_write_input_tokens: 0,
+            reasoning_tokens: 0,
+            model: "test".into(),
+            recovery: false,
+            effort: None,
+            input_reported: true,
+            cache_read_reported: true,
+            cache_write_reported: false,
+        },
+    )
+}
+
 #[expect(clippy::too_many_lines, reason = "long by design, kept whole")]
 #[test]
 fn test_turn_groups_by_input() {
@@ -73,6 +96,9 @@ fn test_turn_groups_by_input() {
                 model: "test".into(),
                 recovery: false,
                 effort: None,
+                input_reported: true,
+                cache_read_reported: true,
+                cache_write_reported: false,
             },
         ),
         ev(
@@ -118,6 +144,9 @@ fn test_turn_groups_by_input() {
                 model: "test".into(),
                 recovery: false,
                 effort: None,
+                input_reported: true,
+                cache_read_reported: true,
+                cache_write_reported: false,
             },
         ),
     ];
@@ -204,21 +233,7 @@ fn test_multi_iteration_produces_turns() {
                 call_in_turn: 0,
             },
         ),
-        ev(
-            120,
-            SessionEvent::TurnUsage {
-                turn: 1,
-                call_in_turn: 1,
-                input_tokens: 3200,
-                output_tokens: 800,
-                cache_read_input_tokens: 0,
-                cache_write_input_tokens: 0,
-                reasoning_tokens: 0,
-                model: "test".into(),
-                recovery: false,
-                effort: None,
-            },
-        ),
+        usage_ev(120, 1, 3200, 800, 0),
         ev(
             300,
             SessionEvent::TurnStarted {
@@ -226,21 +241,7 @@ fn test_multi_iteration_produces_turns() {
                 call_in_turn: 0,
             },
         ),
-        ev(
-            320,
-            SessionEvent::TurnUsage {
-                turn: 2,
-                call_in_turn: 1,
-                input_tokens: 5000,
-                output_tokens: 1200,
-                cache_read_input_tokens: 0,
-                cache_write_input_tokens: 0,
-                reasoning_tokens: 0,
-                model: "test".into(),
-                recovery: false,
-                effort: None,
-            },
-        ),
+        usage_ev(320, 2, 5000, 1200, 0),
         ev(
             500,
             SessionEvent::TurnStarted {
@@ -248,21 +249,7 @@ fn test_multi_iteration_produces_turns() {
                 call_in_turn: 0,
             },
         ),
-        ev(
-            520,
-            SessionEvent::TurnUsage {
-                turn: 3,
-                call_in_turn: 1,
-                input_tokens: 8000,
-                output_tokens: 300,
-                cache_read_input_tokens: 0,
-                cache_write_input_tokens: 0,
-                reasoning_tokens: 0,
-                model: "test".into(),
-                recovery: false,
-                effort: None,
-            },
-        ),
+        usage_ev(520, 3, 8000, 300, 0),
     ];
     let view = build_view(&events, "test", 0);
     assert_eq!(
@@ -327,6 +314,9 @@ fn test_recovery_retry_same_turn() {
                 model: "test".into(),
                 recovery: true,
                 effort: None,
+                input_reported: true,
+                cache_read_reported: true,
+                cache_write_reported: false,
             },
         ),
         ev(
@@ -349,6 +339,9 @@ fn test_recovery_retry_same_turn() {
                 model: "test".into(),
                 recovery: false,
                 effort: None,
+                input_reported: true,
+                cache_read_reported: true,
+                cache_write_reported: false,
             },
         ),
     ];
@@ -902,6 +895,9 @@ fn test_timing_percentiles_and_speed() {
                 model: "qwen".into(),
                 effort: None,
                 recovery: false,
+                input_reported: true,
+                cache_read_reported: true,
+                cache_write_reported: false,
             },
         ),
         ev(
@@ -1089,6 +1085,9 @@ fn test_model_switch_boundary() {
                 model: "qwen".into(),
                 recovery: false,
                 effort: None,
+                input_reported: true,
+                cache_read_reported: true,
+                cache_write_reported: false,
             },
         ),
         ev(200, SessionEvent::UserInput { text: "t2".into() }),
@@ -1112,6 +1111,9 @@ fn test_model_switch_boundary() {
                 model: "deepseek".into(),
                 recovery: false,
                 effort: None,
+                input_reported: true,
+                cache_read_reported: true,
+                cache_write_reported: false,
             },
         ),
     ];
@@ -1198,6 +1200,9 @@ fn test_two_boundaries_kept() {
                 model: model.into(),
                 recovery: false,
                 effort: None,
+                input_reported: true,
+                cache_read_reported: true,
+                cache_write_reported: false,
             },
         )
     };
@@ -1269,6 +1274,9 @@ fn test_switch_inside_turn() {
                 model: model.into(),
                 recovery: false,
                 effort: None,
+                input_reported: true,
+                cache_read_reported: true,
+                cache_write_reported: false,
             },
         )
     };
@@ -1470,6 +1478,9 @@ fn test_fold_modes_agree() {
                 model: "m".into(),
                 recovery: false,
                 effort: None,
+                input_reported: true,
+                cache_read_reported: true,
+                cache_write_reported: false,
             },
         ),
         ev(
@@ -1594,6 +1605,9 @@ fn test_seam_keeps_boundaries() {
                 model: model.into(),
                 recovery: false,
                 effort: None,
+                input_reported: true,
+                cache_read_reported: true,
+                cache_write_reported: false,
             },
         )
     };

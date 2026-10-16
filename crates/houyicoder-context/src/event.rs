@@ -262,6 +262,19 @@ pub enum SessionEvent {
         /// through the same bytes. Unknown is None, never a fake default.
         #[serde(default)]
         effort: Option<String>,
+        /// Whether this call's endpoint reported the inclusive input total.
+        /// A tally rebuilt from the log folds each turn's completeness from
+        /// these flags instead of trusting a count that went unreported to be
+        /// a genuine zero. Defaults to false so a log that predates the field
+        /// reads as unknown; the other two default the same way.
+        #[serde(default)]
+        input_reported: bool,
+        /// Whether this call's endpoint reported the cache-read count.
+        #[serde(default)]
+        cache_read_reported: bool,
+        /// Whether this call's endpoint reported the cache-write count.
+        #[serde(default)]
+        cache_write_reported: bool,
     },
     /// A reward-loop observation: redundant + blind-retry counts flagged this
     /// batch. Durable so a later dream can scan cross-session reward trends
