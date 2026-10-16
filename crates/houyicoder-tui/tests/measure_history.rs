@@ -36,21 +36,27 @@ use std::thread::sleep;
 /// the boundary, not as a wrong number.
 const RESIDENT_BUDGET_BYTES: u64 = 8 * 1024 * 1024;
 
-/// The fixture size for the page-up baseline. Scaled down from the 64 MiB
-/// target after measurement: replaying a 64 MiB log through resume did not
-/// settle within 300 s at the baseline commit (recorded as a finding in the
-/// run's baseline document). 16 MiB still exercises the full descent shape —
-/// it crosses the 8 MiB resident boundary, so the disk zone holds roughly
-/// thirty read windows and both cold and warm episodes occur.
+/// The fixture size for the page-up baseline. The baseline run scaled this
+/// down from 64 MiB because a replay that size did not settle within 300 s;
+/// the descent shape needs a log past the 8 MiB resident boundary, which 16
+/// MiB gives with roughly thirty read windows and both cold and warm
+/// episodes. The size is held here rather than raised so the episodes stay
+/// comparable across runs.
 const PGUP_FIXTURE_BYTES: u64 = 16 * 1024 * 1024;
 
-/// The two fixture sizes for the idle-memory comparison, straddling the
-/// resident boundary: flat retention gives a ratio near 1, retention that
-/// grows with the log gives a ratio near 4.
-const RSS_FIXTURE_BYTES: &[u64] = &[4 * 1024 * 1024, 16 * 1024 * 1024];
+/// The fixture sizes for the idle-memory comparison. The baseline could
+/// measure two points either side of the resident boundary because replay
+/// time ruled out anything larger; the four points here span 25x the log, so
+/// the retention reads as a slope rather than a single ratio.
+const RSS_FIXTURE_BYTES: &[u64] = &[
+    4 * 1024 * 1024,
+    16 * 1024 * 1024,
+    64 * 1024 * 1024,
+    100 * 1024 * 1024,
+];
 
-/// Replay of a multi-megabyte log takes real minutes (16 MiB measured near
-/// 300 s at the baseline commit); give it room.
+/// Replay of a multi-megabyte log took real minutes at the baseline commit
+/// (16 MiB measured near 300 s); give it room.
 const SETTLE_TIMEOUT: Duration = Duration::from_secs(900);
 
 /// How long one press waits for the top row to change before it counts as a
@@ -1004,17 +1010,18 @@ fn test_pgup_baseline() {
     run.check_path_gates(&last_screen);
 }
 
-/// Resident set after settle for two log sizes. The ratio is reported, not
-/// asserted: at the baseline commit the replay retention is expected to grow
-/// with the log, and recording that growth is the point. What is asserted is
-/// that both runs settle and report a live process.
+/// Resident set after settle for several log sizes. The ratios and the slope
+/// are reported, not asserted: what the process retains across a resume is
+/// expected to grow with the log at the current commit, and recording how it
+/// grows is the point. What is asserted is that every run settles and reports
+/// a live process.
 #[test]
 #[ignore = "measurement workload; run via the history benchmark target"]
 fn test_idle_rss_scaling() {
     let run_dir = history_run_dir();
     let mut rows =
         String::from("log_bytes,event_count,settle_ms,rss_kb_min,rss_kb_med,rss_kb_max\n");
-    let mut results: Vec<(u64, u64)> = Vec::new();
+    let mut results: Vec<RssPoint> = Vec::new();
 
     for (slot, size) in RSS_FIXTURE_BYTES.iter().enumerate() {
         let dir = fresh_temp_dir(&format!("measure-rss-{slot}"));
@@ -1033,7 +1040,11 @@ fn test_idle_rss_scaling() {
         assert!(!samples.is_empty(), "no rss sample for {size} byte fixture");
         samples.sort_unstable();
         let med = samples[samples.len() / 2];
-        results.push((*size, med));
+        results.push(RssPoint {
+            log_bytes: fixture.log_bytes,
+            event_count: fixture.event_count as u64,
+            rss_kb: med,
+        });
         rows.push_str(&format!(
             "{},{},{:.0},{},{},{}\n",
             fixture.log_bytes,
@@ -1048,12 +1059,36 @@ fn test_idle_rss_scaling() {
     write(run_dir.join("idle_rss.csv"), &rows).expect("write idle rss");
     println!("idle rss scaling ({})", run_dir.display());
     print!("{rows}");
-    if results.len() == 2 && results[0].1 > 0 {
-        let ratio = results[1].1 as f64 / results[0].1 as f64;
-        println!(
-            "rss ratio {}MiB/{}MiB settle: {ratio:.2}",
-            RSS_FIXTURE_BYTES[1] / (1024 * 1024),
-            RSS_FIXTURE_BYTES[0] / (1024 * 1024)
-        );
+    print!("{}", rss_steps(&results));
+}
+
+/// One settled run's resident set, kept beside the log it settled over so a
+/// step between two runs can be expressed per byte of log and per event.
+struct RssPoint {
+    log_bytes: u64,
+    event_count: u64,
+    rss_kb: u64,
+}
+
+/// How the resident set moved between neighbouring runs: the ratio, and the
+/// growth per thousand events. A retention that holds the log gives a steady
+/// step; one that holds a fixed window gives a step that falls toward zero as
+/// the logs grow.
+fn rss_steps(points: &[RssPoint]) -> String {
+    let mut out = String::new();
+    for neighbours in points.windows(2) {
+        let (a, b) = (&neighbours[0], &neighbours[1]);
+        if a.rss_kb == 0 || b.event_count <= a.event_count {
+            continue;
+        }
+        let ratio = b.rss_kb as f64 / a.rss_kb as f64;
+        let per_1000 = (b.rss_kb.saturating_sub(a.rss_kb)) as f64 * 1000.0
+            / (b.event_count - a.event_count) as f64;
+        out.push_str(&format!(
+            "rss step {}MiB->{}MiB: ratio {ratio:.2}, {per_1000:.0} KiB per 1000 events\n",
+            a.log_bytes / (1024 * 1024),
+            b.log_bytes / (1024 * 1024)
+        ));
     }
+    out
 }
