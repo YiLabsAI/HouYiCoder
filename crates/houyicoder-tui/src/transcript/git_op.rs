@@ -45,6 +45,19 @@ static PR_NUM_FROM_TEXT_RE: LazyLock<Regex> =
 
 static AMEND_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\bamend\b").unwrap());
 
+static GH_PR_CREATE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\bgh\s+pr\s+create\b").unwrap());
+static GH_PR_EDIT_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\bgh\s+pr\s+edit\b").unwrap());
+static GH_PR_MERGE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\bgh\s+pr\s+merge\b").unwrap());
+static GH_PR_COMMENT_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\bgh\s+pr\s+comment\b").unwrap());
+static GH_PR_CLOSE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\bgh\s+pr\s+close\b").unwrap());
+static GH_PR_READY_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\bgh\s+pr\s+ready\b").unwrap());
+
 /// The kind of commit a git commit produced.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub(crate) enum CommitKind {
@@ -103,32 +116,17 @@ pub(crate) fn is_git_op_command(command: &str) -> bool {
 
 /// The gh pr <verb> action, if the command is one.
 fn gh_pr_action(command: &str) -> Option<PrAction> {
-    if Regex::new(r"\bgh\s+pr\s+create\b")
-        .unwrap()
-        .is_match(command)
-    {
+    if GH_PR_CREATE_RE.is_match(command) {
         Some(PrAction::Created)
-    } else if Regex::new(r"\bgh\s+pr\s+edit\b").unwrap().is_match(command) {
+    } else if GH_PR_EDIT_RE.is_match(command) {
         Some(PrAction::Edited)
-    } else if Regex::new(r"\bgh\s+pr\s+merge\b")
-        .unwrap()
-        .is_match(command)
-    {
+    } else if GH_PR_MERGE_RE.is_match(command) {
         Some(PrAction::Merged)
-    } else if Regex::new(r"\bgh\s+pr\s+comment\b")
-        .unwrap()
-        .is_match(command)
-    {
+    } else if GH_PR_COMMENT_RE.is_match(command) {
         Some(PrAction::Commented)
-    } else if Regex::new(r"\bgh\s+pr\s+close\b")
-        .unwrap()
-        .is_match(command)
-    {
+    } else if GH_PR_CLOSE_RE.is_match(command) {
         Some(PrAction::Closed)
-    } else if Regex::new(r"\bgh\s+pr\s+ready\b")
-        .unwrap()
-        .is_match(command)
-    {
+    } else if GH_PR_READY_RE.is_match(command) {
         Some(PrAction::Ready)
     } else {
         None
