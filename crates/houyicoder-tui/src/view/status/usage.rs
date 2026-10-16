@@ -60,17 +60,40 @@ fn render_usage_latency(app: &App, f: &impl Fn(&str, &str) -> String, s: &mut St
         // A child that returned before reporting usage leaves every field at
         // zero; that is an unmeasured cost, not a free one, so the row says so
         // instead of printing zeroes.
-        let detail = if subagent.input == 0 && subagent.output == 0 {
+        let mut parts: Vec<String> = Vec::new();
+        // A count is named when the children reported the field or when it is
+        // above zero, so a field no child measured leaves its zero out of the
+        // row instead of stating a cost the children never reported. The
+        // output total carries no report flag on the durable record, so a zero
+        // there cannot be told from an omitted count: it stays off the row,
+        // the same floor rule the call rows use.
+        if count_visible(subagent.input, subagent.provenance.input_reported) {
+            parts.push(format!("{} input", format_tokens(subagent.input)));
+        }
+        if subagent.output > 0 {
+            parts.push(format!("{} output", format_tokens(subagent.output)));
+        }
+        // The count is named whenever it is above zero, and the share joins it
+        // only over an account the children fully reported: a count with no
+        // complete account behind it keeps the count and drops the share,
+        // while a measured miss states the share alone. The same two levels
+        // the turn header uses.
+        match (subagent.cache_hit_pct(), subagent.cache_read) {
+            (Some(pct), cache_read) if cache_read > 0 => {
+                parts.push(format!("{} ({pct:.0}% cached)", format_tokens(cache_read)))
+            }
+            (Some(_), _) => parts.push("0% cached".to_string()),
+            (None, cache_read) if cache_read > 0 => {
+                parts.push(format!("{} cached", format_tokens(cache_read)));
+            }
+            _ => {}
+        }
+        let detail = if parts.is_empty() {
             format!("usage not reported ({} subagent calls)", subagent.calls)
         } else {
-            let cache = match subagent.cache_hit_pct() {
-                Some(pct) => format!(" · {pct:.0}% cached"),
-                None => String::new(),
-            };
             format!(
-                "{} input · {} output{cache} ({} subagent calls, included above)",
-                format_tokens(subagent.input),
-                format_tokens(subagent.output),
+                "{} ({} subagent calls, included above)",
+                parts.join(" · "),
                 subagent.calls
             )
         };

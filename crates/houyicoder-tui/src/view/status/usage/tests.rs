@@ -388,12 +388,11 @@ fn test_usage_tab_delegated() {
     }))));
     let s = render_usage(&app);
     assert!(s.contains("delegated usage:"), "the row is present: {s}");
-    assert!(s.contains("812k input"), "input shown: {s}");
-    assert!(s.contains("41k output"), "output shown: {s}");
-    assert!(s.contains("93% cached"), "the child cache share: {s}");
     assert!(
-        s.contains("included above"),
-        "the row says the totals above already include it: {s}"
+        s.contains(
+            "812k input · 41k output · 755k (93% cached) (2 subagent calls, included above)"
+        ),
+        "the row names each count and the share the complete account supports: {s}"
     );
 }
 
@@ -621,4 +620,106 @@ fn test_delegated_share_clamped() {
     }))));
     let s = render_usage(&app);
     assert!(s.contains("100% cached"), "the share is held at one: {s}");
+}
+
+/// A child that reported only its cache-read count still has that count worth
+/// naming. The row names it and leaves out the fields no child measured,
+/// rather than reporting the whole child as unmeasured or printing a zero for
+/// a field the endpoint never sent.
+#[test]
+fn test_delegated_row_keeps_cache() {
+    let mut app = working_app();
+    app.sessions.persistence.trajectory_log = Some(Arc::new(Fixed(Arc::new(TrajectoryView {
+        session_id: "s".into(),
+        model: "m".into(),
+        total_turns: 1,
+        tokens_in: Some(10),
+        tokens_out: Some(5),
+        cache_read: None,
+        failures: 0,
+        duration_ms: Some(1_000),
+        timing: SessionTiming::default(),
+        hidden_turns: 0,
+        subagent_usage: Some(SubagentUsage {
+            calls: 2,
+            input: 0,
+            output: 0,
+            cache_read: 12_300,
+            provenance: UsageProvenance {
+                input_reported: false,
+                cache_read_reported: true,
+                cache_write_reported: false,
+            },
+        }),
+        rows: Vec::new(),
+        ..TrajectoryView::default()
+    }))));
+    let s = render_usage(&app);
+    let row = s
+        .lines()
+        .find(|l| l.starts_with("delegated usage:"))
+        .expect("the row is present");
+    assert!(
+        row.contains("12.3k cached"),
+        "the count the child reported is named: {row}"
+    );
+    assert!(
+        !row.contains("usage not reported"),
+        "a child that reported something is not called unmeasured: {row}"
+    );
+    assert!(
+        !row.contains("0 input"),
+        "a field no child measured is left out, not read as zero: {row}"
+    );
+    assert!(
+        !row.contains('%'),
+        "no share over an account the children did not complete: {row}"
+    );
+}
+
+/// A delegated account whose endpoint sent the input total and omitted the
+/// completion total leaves the output count unmeasured. The row names the
+/// input it has and says nothing about output, rather than stating a zero no
+/// endpoint sent.
+#[test]
+fn test_delegated_row_omits_output() {
+    let mut app = working_app();
+    app.sessions.persistence.trajectory_log = Some(Arc::new(Fixed(Arc::new(TrajectoryView {
+        session_id: "s".into(),
+        model: "m".into(),
+        total_turns: 1,
+        tokens_in: Some(10),
+        tokens_out: Some(5),
+        cache_read: None,
+        failures: 0,
+        duration_ms: Some(1_000),
+        timing: SessionTiming::default(),
+        hidden_turns: 0,
+        subagent_usage: Some(SubagentUsage {
+            calls: 1,
+            input: 900,
+            output: 0,
+            cache_read: 0,
+            provenance: UsageProvenance {
+                input_reported: true,
+                cache_read_reported: false,
+                cache_write_reported: false,
+            },
+        }),
+        rows: Vec::new(),
+        ..TrajectoryView::default()
+    }))));
+    let s = render_usage(&app);
+    let row = s
+        .lines()
+        .find(|l| l.starts_with("delegated usage:"))
+        .expect("the row is present");
+    assert!(
+        row.contains("900 input"),
+        "the input total the child reported is named: {row}"
+    );
+    assert!(
+        !row.contains("0 output"),
+        "a completion total no endpoint sent is not stated as zero: {row}"
+    );
 }
