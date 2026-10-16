@@ -237,6 +237,67 @@ async fn test_length_recovery_resumes_completes() {
 }
 
 #[tokio::test]
+async fn test_recovery_counts_both_calls() {
+    // A recovery run charges the endpoint for the cut call and the re-call. The
+    // session tally must cover both, the same set the per-model rows and the
+    // durable records a reopened session is seeded from already carry. A tally
+    // over the terminal call alone would hide retry waste in the session that
+    // spent it, and a session reopened from that log would report more than the
+    // run that wrote it.
+    let p = Arc::new(ScriptRawProvider::new(vec![
+        vec![
+            LlmEvent::StepStart { index: 0 },
+            LlmEvent::TextStart { id: "t1".into() },
+            LlmEvent::TextDelta {
+                id: "t1".into(),
+                text: "partial".into(),
+            },
+            LlmEvent::TextEnd { id: "t1".into() },
+            LlmEvent::Finish {
+                reason: "length".into(),
+                usage: Some(Usage {
+                    input_tokens: 1_000,
+                    output_tokens: 500,
+                    cache_read_input_tokens: 800,
+                    ..Default::default()
+                }),
+            },
+        ],
+        vec![
+            LlmEvent::StepStart { index: 0 },
+            LlmEvent::TextStart { id: "t2".into() },
+            LlmEvent::TextDelta {
+                id: "t2".into(),
+                text: " continued".into(),
+            },
+            LlmEvent::TextEnd { id: "t2".into() },
+            LlmEvent::Finish {
+                reason: "stop".into(),
+                usage: Some(Usage {
+                    input_tokens: 4_000,
+                    output_tokens: 600,
+                    cache_read_input_tokens: 3_500,
+                    ..Default::default()
+                }),
+            },
+        ],
+    ]));
+    let runner = runner_with(p, ToolRegistry::new());
+    let session = SessionId::new();
+    runner.run(session, "hi".into()).await.expect("run");
+    let tally = runner.status_snapshot().cumulative_usage;
+    assert_eq!(
+        (
+            tally.input_tokens,
+            tally.output_tokens,
+            tally.cache_read_input_tokens
+        ),
+        (5_000, 1_100, 4_300),
+        "the tally covers the cut call and the re-call"
+    );
+}
+
+#[tokio::test]
 async fn test_stop_finish_no_recovery() {
     // A natural stop finish must NOT trigger recovery: no nudge appended, the
     // reply returns directly. Guards against the recovery loop firing on

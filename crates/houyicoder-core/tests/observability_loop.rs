@@ -6,7 +6,8 @@
 //! Invariants pinned (each is a regression these last rounds fixed):
 //! - ToolCall ↔ ToolResult pair by call_id, in append order.
 //! - One TurnUsage per logical turn, terminal (recovery=false); a
-//!   length-recovery retry shares the same turn with call_in_turn stepping.
+//!   length-recovery retry shares the same turn with call_in_turn stepping,
+//!   and both calls count toward the session tally a resume is seeded from.
 //! - No HookSignal when no hooks are configured (Allow is derivable from
 //!   absence — the inverse is pinned in-crate by fire_tests with a wired
 //!   hook, which the private hook API cannot reach from here).
@@ -164,8 +165,22 @@ impl Tool for EchoTool {
 }
 
 fn runner_with(provider: Arc<dyn ModelProvider>, tools: ToolRegistry) -> Runner {
-    Runner::new(
+    runner_on(
         Arc::new(SessionStore::new(Box::new(InMemoryBackend::new()))),
+        provider,
+        tools,
+    )
+}
+
+/// A runner over a caller-held store, so a test can reopen the same durable log
+/// the run wrote to.
+fn runner_on(
+    store: Arc<SessionStore>,
+    provider: Arc<dyn ModelProvider>,
+    tools: ToolRegistry,
+) -> Runner {
+    Runner::new(
+        store,
         provider,
         tools,
         RunnerConfig {
@@ -302,14 +317,10 @@ async fn test_trace_substrate_pairs_calls() {
     assert_eq!(hook_signals, 0, "no hooks => no HookSignal (Allow absence)");
 }
 
-#[tokio::test]
-async fn test_trace_substrate_length_retry() {
-    // A length-cut on call 1 fires the resume-direct recovery loop: the
-    // partial + nudge append, then a re-call that stops. Pins #75/#76 at the
-    // public-API seam: both round-trips record a TurnUsage, the retry shares
-    // the logical turn (turn=1 for both, NOT 1/2) with call_in_turn stepping
-    // 1→2, and recovery=true on the retry.
-    let retry_usage = Usage {
+/// The usage each call of the length-cut run reports: the cut call, then the
+/// re-call that finishes it.
+fn length_retry_usages() -> (Usage, Usage) {
+    let cut = Usage {
         input_tokens: 1000,
         output_tokens: 500,
         total_tokens: 1500,
@@ -319,7 +330,7 @@ async fn test_trace_substrate_length_retry() {
         reasoning_tokens: 0,
         ..Default::default()
     };
-    let final_usage = Usage {
+    let terminal = Usage {
         input_tokens: 4000,
         output_tokens: 600,
         total_tokens: 4600,
@@ -329,7 +340,13 @@ async fn test_trace_substrate_length_retry() {
         reasoning_tokens: 0,
         ..Default::default()
     };
-    let provider = Arc::new(FakeRawProvider::new(vec![
+    (cut, terminal)
+}
+
+/// A provider whose first call stops at the token cap and whose second
+/// finishes, which is what fires the resume-direct recovery loop.
+fn length_retry_provider(cut: &Usage, terminal: &Usage) -> Arc<FakeRawProvider> {
+    Arc::new(FakeRawProvider::new(vec![
         vec![
             LlmEvent::StepStart { index: 0 },
             LlmEvent::TextStart { id: "t1".into() },
@@ -340,7 +357,7 @@ async fn test_trace_substrate_length_retry() {
             LlmEvent::TextEnd { id: "t1".into() },
             LlmEvent::Finish {
                 reason: "length".into(),
-                usage: Some(retry_usage.clone()),
+                usage: Some(cut.clone()),
             },
         ],
         vec![
@@ -353,11 +370,21 @@ async fn test_trace_substrate_length_retry() {
             LlmEvent::TextEnd { id: "t2".into() },
             LlmEvent::Finish {
                 reason: "stop".into(),
-                usage: Some(final_usage.clone()),
+                usage: Some(terminal.clone()),
             },
         ],
-    ]));
-    let runner = runner_with(provider, ToolRegistry::new());
+    ]))
+}
+
+#[tokio::test]
+async fn test_trace_substrate_length_retry() {
+    // A length-cut on call 1 fires the resume-direct recovery loop: the
+    // partial + nudge append, then a re-call that stops. Pins #75/#76 at the
+    // public-API seam: both round-trips record a TurnUsage, the retry shares
+    // the logical turn (turn=1 for both, NOT 1/2) with call_in_turn stepping
+    // 1→2, and recovery=true on the retry.
+    let (cut, terminal) = length_retry_usages();
+    let runner = runner_with(length_retry_provider(&cut, &terminal), ToolRegistry::new());
     let session = SessionId::new();
     let result = runner.run(session, "hi".into()).await.expect("run");
     assert!(matches!(result.outcome, RunOutcome::FinalOutput(_)));
@@ -397,5 +424,56 @@ async fn test_trace_substrate_length_retry() {
         (t_final, c_final, r_final),
         (1, 2, false),
         "terminal: turn 1, call 2, not recovery"
+    );
+}
+
+#[tokio::test]
+async fn test_tally_covers_length_retry() {
+    // The session tally counts every call the endpoint charged: the cut call
+    // and the re-call. A tally that covered only the terminal call would make
+    // retry waste invisible in the very session that spent it, and a runner
+    // reopened from that log would read above the run that wrote it.
+    let (cut, terminal) = length_retry_usages();
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let runner = runner_on(
+        store.clone(),
+        length_retry_provider(&cut, &terminal),
+        ToolRegistry::new(),
+    );
+    let session = SessionId::new();
+    runner.run(session, "hi".into()).await.expect("run");
+
+    let live = runner.status_snapshot().cumulative_usage;
+    assert_eq!(
+        (
+            live.input_tokens,
+            live.output_tokens,
+            live.cache_read_input_tokens
+        ),
+        (5_000, 1_100, 4_300),
+        "the tally covers the cut call and the re-call"
+    );
+    // The comparison covers the counts the log carries. The total is not among
+    // them, so a reopened session derives it from the counts while a live run
+    // keeps the endpoint's own figure.
+    let reopened = runner_on(
+        store.clone(),
+        length_retry_provider(&cut, &terminal),
+        ToolRegistry::new(),
+    );
+    reopened.seed_usage_from_log(session);
+    let resumed = reopened.status_snapshot().cumulative_usage;
+    assert_eq!(
+        (
+            resumed.input_tokens,
+            resumed.output_tokens,
+            resumed.cache_read_input_tokens
+        ),
+        (
+            live.input_tokens,
+            live.output_tokens,
+            live.cache_read_input_tokens
+        ),
+        "the resumed tally covers the turns the run recorded"
     );
 }

@@ -567,6 +567,15 @@ impl Runner {
                     inference.max_output_tokens,
                 );
                 self.record_turn_cache(&partial.usage);
+                // The session tally counts every call the endpoint billed, the
+                // same set the per-model rows and the durable records a
+                // reopened session is seeded from already cover. Leaving the
+                // partial out would make the session total the one figure that
+                // skips retry waste, and a session resumed from that log would
+                // then report more than the run that produced it.
+                if let Ok(mut acc) = self.usage.lock() {
+                    acc.record(&partial.usage);
+                }
                 let total_dur_ms = api_start.elapsed().as_millis() as u64;
                 let decode_dur_ms =
                     first_token_elapsed.map(|ttft| total_dur_ms.saturating_sub(ttft));

@@ -369,15 +369,18 @@ fn test_walk_none_outside_repo() {
 #[test]
 fn test_status_snapshot_accumulates_live() {
     // A scripted provider reporting usage must land in the shared accumulator,
-    // the figure /context and /compact read.
+    // the figure /context and /compact read. The reported output count stays
+    // well under the per-call output cap: a count at the cap makes the drive
+    // loop read the reply as cut and re-call, so the run would not be the
+    // single call this test measures.
     let resp = CompletionResponse {
         output: vec![OutputItem::Text {
             text: "done".into(),
         }],
         usage: Usage {
             input_tokens: 12_400,
-            output_tokens: 9_100,
-            total_tokens: 21_500,
+            output_tokens: 4_100,
+            total_tokens: 16_500,
             cache_read_input_tokens: 10_000,
             non_cached_input_tokens: 2_400,
             ..Usage::default()
@@ -409,8 +412,8 @@ fn test_status_snapshot_accumulates_live() {
         .expect("status cache populated by the periodic poll after the run settles");
     assert_eq!(snap.model, "test");
     assert_eq!(snap.cumulative_usage.input_tokens, 12_400);
-    assert_eq!(snap.cumulative_usage.output_tokens, 9_100);
-    assert_eq!(snap.cumulative_usage.total_tokens, 21_500);
+    assert_eq!(snap.cumulative_usage.output_tokens, 4_100);
+    assert_eq!(snap.cumulative_usage.total_tokens, 16_500);
     assert_eq!(snap.cumulative_usage.cache_read_input_tokens, 10_000);
     assert_eq!(snap.last_input_tokens, 12_400);
     assert_eq!(snap.context_window, 200_000);
@@ -1171,8 +1174,8 @@ fn test_clear_drops_context_cache() {
         }],
         usage: Usage {
             input_tokens: 12_400,
-            output_tokens: 9_100,
-            total_tokens: 21_500,
+            output_tokens: 4_100,
+            total_tokens: 16_500,
             ..Usage::default()
         },
         model: "test".into(),
