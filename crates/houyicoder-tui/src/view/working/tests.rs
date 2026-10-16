@@ -7,7 +7,7 @@ use ratatui::layout::Rect;
 use ratatui::style::Color;
 use ratatui::{Terminal, backend::TestBackend};
 
-use crate::agent_message::FleetEntry;
+use crate::agent_message::{FleetEntry, ServerEvent, SessionMessage};
 use crate::app;
 use crate::app::handle_mouse;
 use crate::composition;
@@ -23,6 +23,8 @@ use crate::state::Screen;
 use crate::test_harness::{render_buffer, render_text};
 use crate::todo_view::{TodoStatus, TodoView};
 use crate::view::draw;
+
+use super::tail_rows::build_tail_rows;
 use ratatui::buffer::Buffer;
 use std::collections::HashSet;
 use unicode_width::UnicodeWidthStr;
@@ -322,8 +324,8 @@ fn test_busy_count_matches_render() {
     {
         let p = app.run_progress_mut().expect("active run");
         p.live_active = true;
-        p.live_reasoning_text = "reasoning about the task".to_string();
-        p.live_assistant_text = "partial answer streaming".to_string();
+        p.live_reasoning_text = "reasoning about the task".into();
+        p.live_assistant_text = "partial answer streaming".into();
     }
     let _out = render_text(&app, 80, 24);
     let count = app.transcript_display_rows();
@@ -345,6 +347,40 @@ fn test_busy_count_matches_render() {
     assert_eq!(
         count, rendered,
         "desync spinner-only: count={count} rendered={rendered}"
+    );
+}
+
+/// A long live reply renders at the preview's bound, not at the stream's
+/// size: the block keeps its head and newest end and names what it released,
+/// and the count path and the render path still agree on that bounded text.
+#[test]
+fn test_long_reply_rows_bounded() {
+    let mut app = composition::app();
+    app.ui.navigation.screen = Screen::Working;
+    app.start_run_for_test(0);
+    app.run_progress_mut().expect("active run").live_active = true;
+    for _ in 0..40 {
+        app.handle_agent_message(SessionMessage::Event(ServerEvent::Delta {
+            text: "word ".repeat(200),
+        }));
+    }
+    let live = build_tail_rows(Rect::new(0, 0, 80, 24), &app, false);
+    let rows = live.text_rows();
+    assert!(
+        rows.iter().any(|(_, text)| text.contains("chars …")),
+        "the live block names what it released, in {} rows",
+        rows.len()
+    );
+    let _out = render_text(&app, 80, 24);
+    let count = app.transcript_display_rows();
+    let rendered = app.whole_scroll().total.get();
+    assert_eq!(
+        count, rendered,
+        "desync with a released stream: count={count} rendered={rendered}"
+    );
+    assert!(
+        count < 200,
+        "40 KB streamed renders at the bound: {count} rows"
     );
 }
 

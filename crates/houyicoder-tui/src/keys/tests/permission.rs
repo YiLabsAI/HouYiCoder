@@ -47,7 +47,10 @@ fn test_reasoning_no_live_block() {
         text: "pondering deeply".into(),
     }));
     assert_eq!(
-        app.run_progress().expect("active run").live_reasoning_text,
+        app.run_progress()
+            .expect("active run")
+            .live_reasoning_text
+            .as_str(),
         "pondering deeply"
     );
     assert!(app.run_progress().expect("active run").live_active);

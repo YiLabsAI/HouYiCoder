@@ -2,6 +2,7 @@
 
 #![cfg(test)]
 
+use crate::agent_message::{ServerEvent, SessionMessage};
 use crate::composition;
 use crate::state::App;
 use crate::state::Screen;
@@ -24,7 +25,7 @@ fn test_spinner_verb_reflects_phase() {
     // Reasoning streaming ⇒ Thinking.
     {
         let p = app.run_progress_mut().expect("active run");
-        p.live_reasoning_text = "pondering the task".to_string();
+        p.live_reasoning_text = "pondering the task".into();
         p.live_block = LiveBlock::Thinking;
     }
     let out = render_text(&app, 80, 12);
@@ -58,8 +59,8 @@ fn test_verb_works_text_streams() {
     // Reasoning streamed first, then assistant text takes over.
     {
         let p = app.run_progress_mut().expect("active run");
-        p.live_reasoning_text = "pondered".to_string();
-        p.live_assistant_text = "Here is the answer".to_string();
+        p.live_reasoning_text = "pondered".into();
+        p.live_assistant_text = "Here is the answer".into();
         p.live_block = LiveBlock::Responding;
     }
     let out = render_text(&app, 80, 12);
@@ -70,6 +71,30 @@ fn test_verb_works_text_streams() {
     assert!(
         !out.contains("Thinking"),
         "stale Thinking must not persist once text streams:\n{out}"
+    );
+}
+
+/// The token estimate counts the whole stream, not the bounded display form:
+/// a reply far past the preview's bound still drives the meter to what the
+/// stream holds, where a count over the display form alone would stop at the
+/// bound.
+#[test]
+fn test_token_estimate_counts_stream() {
+    let mut app = working();
+    app.start_run_for_test(0);
+    for _ in 0..40 {
+        app.handle_agent_message(SessionMessage::Event(ServerEvent::Delta {
+            text: "x".repeat(500),
+        }));
+    }
+    // The meter lerps toward the estimate, so a few draws settle it.
+    let mut out = String::new();
+    for _ in 0..40 {
+        out = render_text(&app, 200, 12);
+    }
+    assert!(
+        out.contains("↓ 5.0k tokens"),
+        "20 KB of stream reads as 5k tokens, not the display form's:\n{out}"
     );
 }
 

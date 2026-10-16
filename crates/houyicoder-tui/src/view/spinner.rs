@@ -37,7 +37,7 @@ pub fn spinner_row_text(app: &App, elapsed: Duration, width: u16) -> String {
         "Working"
     };
     let live_chars = prog.map_or(0, |p| {
-        p.live_assistant_text.chars().count() + p.live_reasoning_text.chars().count()
+        p.live_assistant_text.streamed_chars() + p.live_reasoning_text.streamed_chars()
     });
     let actual_tok = (live_chars / 4) as u32;
     let displayed = app.ui.displayed_tokens.get();

@@ -156,7 +156,7 @@ impl App {
                 .renderer
                 .lines
                 .borrow_mut()
-                .live_agent_row_count(&p.live_assistant_text, w);
+                .live_agent_row_count(p.live_assistant_text.as_str(), w);
         }
         if self.agent_busy() && self.run_started().is_some() {
             if n > 0 || !prefix_empty {

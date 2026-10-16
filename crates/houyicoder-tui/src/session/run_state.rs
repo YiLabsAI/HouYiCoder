@@ -1,6 +1,8 @@
 //! Run lifecycle state machine: the single source of truth for whether a
 //! run is in flight, paused for approval, or cancelling.
 
+pub(crate) mod live_preview;
+
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
@@ -8,6 +10,7 @@ use houyicoder_protocol::envelope::RequestId;
 
 use crate::state::BashProgress;
 use crate::state::enums::LiveBlock;
+use live_preview::LivePreview;
 use std::mem::replace;
 
 /// Streaming progress for one in-flight run. Lives with the run, so the
@@ -15,9 +18,11 @@ use std::mem::replace;
 /// rather than outliving it.
 #[derive(Debug, Default)]
 pub struct RunProgress {
-    pub(crate) live_assistant_text: String,
+    /// The assistant text as it streams, bounded as it grows.
+    pub(crate) live_assistant_text: LivePreview,
     pub(crate) live_active: bool,
-    pub(crate) live_reasoning_text: String,
+    /// The reasoning as it streams, bounded the same way.
+    pub(crate) live_reasoning_text: LivePreview,
     pub(crate) live_block: LiveBlock,
     pub(crate) thinking_started_at: Option<Instant>,
     pub(crate) last_delta_at: Option<Instant>,

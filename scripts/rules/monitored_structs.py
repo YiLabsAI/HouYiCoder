@@ -129,6 +129,13 @@ ACTIVE_OWNERS = {
         # The cumulative run metrics, reset whole on a session switch.
         "fields": 3,
     },
+    "crates/houyicoder-tui/src/session/run_state/live_preview.rs:LivePreview": {
+        # One live block's streamed text, its retained head and tail, and the
+        # count over the whole stream. Three together because the bound holds
+        # only while the display form, what it retained, and what arrived keep
+        # one account.
+        "fields": 3,
+    },
     "crates/houyicoder-tui/src/session/run_state.rs:ToolRuntime": {
         # The per-call tool runtime: which calls are in flight and the bash
         # ticker with the revision the slot cache keys on. One owner because

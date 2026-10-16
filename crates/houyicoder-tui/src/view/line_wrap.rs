@@ -20,6 +20,13 @@ use std::mem::take;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
+/// Characters a display cap keeps from the head and from the newest end of a
+/// long text. The cap threshold belongs to the caller; the retention is this
+/// shared shape, so no two display caps hold different amounts of the same
+/// kind of content.
+pub(crate) const DISPLAY_HEAD_CHARS: usize = 2_500;
+pub(crate) const DISPLAY_TAIL_CHARS: usize = 2_500;
+
 /// Truncate a string so its display width is at most max_width columns,
 /// appending an ellipsis when truncation occurs. Width-aware: a CJK
 /// ideograph (width 2) is counted correctly, and the cut point never
@@ -100,26 +107,24 @@ pub fn wrap_line(text: &str, avail: usize) -> Vec<String> {
 /// newlines first preserves explicit line breaks, then each logical line wraps
 /// to the pane width minus the prefix.
 ///
-/// The cap argument enables a head+tail display cap (a
-/// piped-in large prompt is capped at 10 000 chars — head 2 500 + tail 2 500 plus an
-/// ellipsis +N lines marker — so a huge paste does not make the renderer
-/// iterate the full text each frame; the model still receives the full text,
-/// only the display is capped). Returns at least one row.
+/// The cap argument enables a head+tail display cap: text past the threshold
+/// is shown as its first and newest stretches with a marker naming the lines
+/// released between them, so a huge paste does not make the renderer iterate
+/// the full text each frame; the model still receives the full text, only the
+/// display is capped. Returns at least one row.
 pub fn wrap_plain_block(
     text: &str,
     prefix_first: &str,
     width: u16,
     cap: Option<usize>,
 ) -> Vec<String> {
-    const HEAD: usize = 2_500;
-    const TAIL: usize = 2_500;
     let display: Cow<str> = match cap {
         Some(max) if text.chars().count() > max => {
             let chars: Vec<char> = text.chars().collect();
-            let head: String = chars[..HEAD].iter().collect();
-            let tail_start = chars.len() - TAIL;
+            let head: String = chars[..DISPLAY_HEAD_CHARS].iter().collect();
+            let tail_start = chars.len() - DISPLAY_TAIL_CHARS;
             let tail: String = chars[tail_start..].iter().collect();
-            let hidden = chars[HEAD..tail_start]
+            let hidden = chars[DISPLAY_HEAD_CHARS..tail_start]
                 .iter()
                 .filter(|c| **c == '\n')
                 .count();

@@ -840,7 +840,7 @@ fn test_ask_preserves_progress() {
         text: "second".into(),
     }));
     let p = app.run_progress().expect("active run");
-    assert_eq!(p.live_assistant_text, "firstsecond");
+    assert_eq!(p.live_assistant_text.as_str(), "firstsecond");
     assert!(
         p.tools.is_running("c1"),
         "the tracked tool survives the approval pause"

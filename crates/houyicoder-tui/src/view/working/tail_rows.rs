@@ -48,7 +48,7 @@ pub(super) fn build_tail_rows(area: Rect, app: &App, has_slots: bool) -> RowSet 
             .renderer
             .lines
             .borrow_mut()
-            .live_agent_rows(&p.live_assistant_text, area.width);
+            .live_agent_rows(p.live_assistant_text.as_str(), area.width);
         for (md_line, plain) in md_lines.into_iter().zip(md_plain) {
             sink.push(Row::new(PLAIN, plain).pre(Some(md_line)));
         }
