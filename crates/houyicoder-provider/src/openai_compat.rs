@@ -465,6 +465,16 @@ fn build_request_body(req: &CompletionRequest) -> Value {
         .cache_breakpoints
         .iter()
         .any(|bp| bp.kind == BreakpointKind::SystemStaticPrefix);
+    // The whole instructions string, static prefix and cwd-dependent suffix
+    // alike, rides in one leading system message, so the tools and history
+    // render after it. A cwd change thus diverges the contiguous prefix inside
+    // the system content and the identical tools past it do not reuse; only the
+    // static segment before the boundary survives. Moving the suffix below the
+    // tools would recover them, but it carries the repo's engineering rules at
+    // system priority and demoting them trades a safety guarantee for a rare
+    // cross-cwd win. Within a session the cwd is fixed, the system message is
+    // byte-stable turn to turn, and the full prefix reuses, so this order costs
+    // nothing on the common path.
     let mut messages = Vec::with_capacity(req.input.len() + 1);
     if has_prefix_breakpoint {
         messages.push(json!({

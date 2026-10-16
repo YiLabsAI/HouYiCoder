@@ -294,6 +294,193 @@ fn test_cache_key_excludes_dynamic() {
     );
 }
 
+/// Flatten a request body into the contiguous content the provider renders, in
+/// send order: the leading system message, then the tool definitions, then the
+/// rest of the messages. Read from build_request_body's output so the model
+/// tracks the real body; the system-before-tools order is a client-side model of
+/// the chat template's render, not the provider's internal truth. Faithful enough
+/// to locate the byte where two bodies' prefixes first diverge, which is where
+/// the cache stops reusing.
+fn send_order_content(body: &Value) -> String {
+    let mut out = String::new();
+    let messages = body["messages"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    if let Some(system) = messages.first() {
+        push_rendered(&mut out, system);
+    }
+    for tool in body["tools"].as_array().map(Vec::as_slice).unwrap_or(&[]) {
+        out.push_str(&tool.to_string());
+    }
+    for message in messages.iter().skip(1) {
+        push_rendered(&mut out, message);
+    }
+    out
+}
+
+/// Append one message's rendered text: its content, a plain string or a list of
+/// text blocks, then any tool calls, in body order.
+fn push_rendered(out: &mut String, message: &Value) {
+    match &message["content"] {
+        Value::String(text) => out.push_str(text),
+        Value::Array(blocks) => {
+            for block in blocks {
+                if let Some(text) = block["text"].as_str() {
+                    out.push_str(text);
+                }
+            }
+        }
+        _ => {}
+    }
+    for call in message["tool_calls"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or(&[])
+    {
+        out.push_str(&call.to_string());
+    }
+}
+
+/// The byte offset where two content sequences first differ, or the length of
+/// the shorter when one is a prefix of the other. The provider's cache reuses
+/// the bytes before this offset and recomputes everything from it onward.
+fn first_divergence(a: &str, b: &str) -> usize {
+    a.bytes()
+        .zip(b.bytes())
+        .position(|(x, y)| x != y)
+        .unwrap_or_else(|| a.len().min(b.len()))
+}
+
+/// A cwd change confined to the dynamic suffix keeps the cache key stable, as
+/// test_cache_key_excludes_dynamic asserts, but it still diverges the contiguous
+/// prefix the provider actually renders. Both requests carry byte-identical tool
+/// definitions, yet the tools sit after the system content, so the prefix
+/// diverges inside the system message and the identical tools past that point do
+/// not reuse. Equal fields do not make an equal contiguous prefix. This is the
+/// offline evidence for accepting cross-cwd reuse of the static segment only;
+/// confirming the endpoint returns those cached tokens needs a live measurement.
+#[test]
+fn test_prefix_diverges_before_tools() {
+    let static_segment = "you are a test";
+    let boundary = static_segment.len();
+    let tools = vec![ToolDef {
+        name: "edit".into(),
+        description: "edit a file".into(),
+        input_schema: json!({"type": "object"}),
+    }];
+    let bp = vec![CacheBreakpoint {
+        kind: BreakpointKind::SystemStaticPrefix,
+        hint: CacheHint::Ephemeral(CacheTtl::OneHour),
+    }];
+    let history = vec![InputItem::User {
+        content: "hi".into(),
+    }];
+    let mut a = req(history.clone(), tools.clone());
+    a.instructions = format!("{static_segment}\n\n# Project context\n\nAlpha: use spaces.");
+    a.dynamic_boundary = Some(boundary);
+    a.cache_breakpoints = bp.clone();
+    let mut b = req(history.clone(), tools.clone());
+    b.instructions = format!("{static_segment}\n\n# Project context\n\nBeta: use tabs.");
+    b.dynamic_boundary = Some(boundary);
+    b.cache_breakpoints = bp.clone();
+
+    let body_a = build_request_body(&a);
+    let seq_a = send_order_content(&body_a);
+    let seq_b = send_order_content(&build_request_body(&b));
+    let div = first_divergence(&seq_a, &seq_b);
+
+    // The static segment is identical across the cwd change, so the divergence
+    // cannot precede it: at least the static segment reuses.
+    assert!(
+        div >= boundary,
+        "the static segment survives a cwd change (divergence {div} < boundary {boundary})"
+    );
+    assert!(
+        seq_a[..div].starts_with(static_segment),
+        "the reusable prefix begins with the whole static segment"
+    );
+    // The divergence falls inside the system content, before the tools and
+    // history that render after it.
+    assert!(
+        div < a.instructions.len(),
+        "the divergence is inside the system content ({} < {})",
+        div,
+        a.instructions.len()
+    );
+    // The tool definitions are byte-identical in both bodies...
+    let tools_render: String = body_a["tools"]
+        .as_array()
+        .expect("tools lowered into the body")
+        .iter()
+        .map(|t| t.to_string())
+        .collect();
+    assert!(
+        seq_a.contains(&tools_render) && seq_b.contains(&tools_render),
+        "the tool definitions are byte-identical in both bodies"
+    );
+    // ...yet they sit past the divergence, outside the reusable contiguous
+    // prefix: identical fields that still do not cache across the cwd change.
+    assert!(
+        !seq_a[..div].contains(&tools_render),
+        "the identical tools sit past the divergence, so they do not reuse across cwd"
+    );
+}
+
+/// Within a session the cwd is fixed, so the system message and tools are
+/// byte-identical turn to turn and the only change is history appended at the
+/// tail. The contiguous prefix therefore diverges exactly at the end of the prior
+/// turn: the whole system + tools + prior history reuses and only the appended
+/// tail is new. This steady-state append is what drives the hit-rate target, and
+/// it needs no reorder — the order accepted for the cross-cwd case costs nothing
+/// on this common path.
+#[test]
+fn test_append_prefix_reuses() {
+    let static_segment = "you are a test";
+    let instructions = format!("{static_segment}\n\n# Project context\n\nAlpha: use spaces.");
+    let tools = vec![ToolDef {
+        name: "edit".into(),
+        description: "edit a file".into(),
+        input_schema: json!({"type": "object"}),
+    }];
+    let turn1 = vec![InputItem::User {
+        content: "first".into(),
+    }];
+    let turn2 = vec![
+        InputItem::User {
+            content: "first".into(),
+        },
+        InputItem::Assistant {
+            content: "reply".into(),
+            tool_calls: vec![],
+        },
+        InputItem::User {
+            content: "second".into(),
+        },
+    ];
+    let mut a = req(turn1, tools.clone());
+    a.instructions = instructions.clone();
+    let mut b = req(turn2, tools.clone());
+    b.instructions = instructions.clone();
+
+    let seq_a = send_order_content(&build_request_body(&a));
+    let seq_b = send_order_content(&build_request_body(&b));
+    let div = first_divergence(&seq_a, &seq_b);
+
+    // Turn 1 is a contiguous prefix of turn 2: the divergence is at the very end
+    // of turn 1, so the whole prior prefix reuses and only the appended tail is
+    // recomputed.
+    assert_eq!(
+        div,
+        seq_a.len(),
+        "an appended turn diverges at the tail, not mid-prefix"
+    );
+    assert!(
+        seq_b.starts_with(&seq_a),
+        "the prior turn is a contiguous prefix of the next"
+    );
+}
+
 #[test]
 fn test_parse_text_and_calls() {
     let json = json!({
