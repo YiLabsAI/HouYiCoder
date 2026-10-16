@@ -14,6 +14,9 @@ use houyicoder_protocol::llm::ProviderError;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
+use tokio::sync::Notify;
+use tokio::time::timeout;
 
 /// A provider whose stream emits the given LlmEvents then ends, so a run can
 /// complete against a raw event sequence. Used to inject a finish_reason the
@@ -284,17 +287,163 @@ async fn test_recovery_counts_both_calls() {
     ]));
     let runner = runner_with(p, ToolRegistry::new());
     let session = SessionId::new();
-    runner.run(session, "hi".into()).await.expect("run");
+    let result = runner.run(session, "hi".into()).await.expect("run");
     let tally = runner.status_snapshot().cumulative_usage;
+    let expected = (5_000, 1_100, 4_300);
     assert_eq!(
         (
             tally.input_tokens,
             tally.output_tokens,
             tally.cache_read_input_tokens
         ),
-        (5_000, 1_100, 4_300),
+        expected,
         "the tally covers the cut call and the re-call"
     );
+    assert_eq!(
+        (
+            result.usage.input_tokens,
+            result.usage.output_tokens,
+            result.usage.cache_read_input_tokens
+        ),
+        expected,
+        "the run reports the same calls the tally does, retry included"
+    );
+}
+
+/// A provider whose first call ends at the output cap and whose re-call never
+/// yields again, signalling once that re-call is live so a test can cancel the
+/// turn while it is still in flight.
+struct CutThenHangingProvider {
+    cut: Vec<LlmEvent>,
+    calls: AtomicUsize,
+    /// Fires when the re-call's stream has started.
+    entered: Notify,
+}
+
+impl CutThenHangingProvider {
+    fn new(cut: Vec<LlmEvent>) -> Self {
+        Self {
+            cut,
+            calls: AtomicUsize::new(0),
+            entered: Notify::new(),
+        }
+    }
+}
+
+impl ModelProvider for CutThenHangingProvider {
+    fn complete(
+        &self,
+        _req: CompletionRequest,
+    ) -> houyicoder_async::PFut<'_, Result<CompletionResponse, ProviderError>> {
+        Box::pin(async {
+            Ok(CompletionResponse {
+                output: vec![],
+                usage: Usage::default(),
+                model: "test".into(),
+            })
+        })
+    }
+    fn capabilities(&self) -> ModelCapabilities {
+        ModelCapabilities::default()
+    }
+    fn stream(
+        &self,
+        _req: CompletionRequest,
+    ) -> houyicoder_async::PStream<'_, Result<LlmEvent, ProviderError>> {
+        match self.calls.fetch_add(1, Ordering::SeqCst) {
+            0 => Box::pin(iter(self.cut.clone().into_iter().map(Ok))),
+            1 => {
+                self.entered.notify_one();
+                Box::pin(pending())
+            }
+            // The turn after the aborted one answers so the run can finish.
+            _ => {
+                let events = vec![
+                    LlmEvent::StepStart { index: 0 },
+                    LlmEvent::TextStart { id: "t9".into() },
+                    LlmEvent::TextDelta {
+                        id: "t9".into(),
+                        text: "done".into(),
+                    },
+                    LlmEvent::TextEnd { id: "t9".into() },
+                    LlmEvent::Finish {
+                        reason: "stop".into(),
+                        usage: Some(Usage {
+                            input_tokens: 200,
+                            output_tokens: 20,
+                            ..Default::default()
+                        }),
+                    },
+                ];
+                Box::pin(iter(events.into_iter().map(Ok)))
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn test_abort_keeps_recovery_usage() {
+    // The endpoint bills the cut call before the re-call is aborted, so that
+    // cost must reach both totals even though the aborted turn ends with no
+    // response. A turn that folded nothing when it recorded nothing would drop
+    // a charge the endpoint made.
+    let cut = vec![
+        LlmEvent::StepStart { index: 0 },
+        LlmEvent::TextStart { id: "t1".into() },
+        LlmEvent::TextDelta {
+            id: "t1".into(),
+            text: "partial".into(),
+        },
+        LlmEvent::TextEnd { id: "t1".into() },
+        LlmEvent::Finish {
+            reason: "length".into(),
+            usage: Some(Usage {
+                input_tokens: 1_000,
+                output_tokens: 500,
+                cache_read_input_tokens: 800,
+                ..Default::default()
+            }),
+        },
+    ];
+    let p = Arc::new(CutThenHangingProvider::new(cut));
+    let runner = Arc::new(runner_with(p.clone(), ToolRegistry::new()));
+    let session = SessionId::new();
+    let r = runner.clone();
+    let task = tokio::spawn(async move { r.run(session, "hi".into()).await });
+    // The re-call is live and hanging: abort the turn, not the run.
+    p.entered.notified().await;
+    runner.cancel_turn();
+    let result = timeout(Duration::from_secs(3), task)
+        .await
+        .expect("run resolved within 3s after the per-turn abort")
+        .expect("run task")
+        .expect("run ok");
+    let tally = runner.status_snapshot().cumulative_usage;
+    let expected = (1_200, 520, 800);
+    assert_eq!(
+        (
+            tally.input_tokens,
+            tally.output_tokens,
+            tally.cache_read_input_tokens
+        ),
+        expected,
+        "the aborted turn keeps the cut call it was billed for"
+    );
+    assert_eq!(
+        (
+            result.usage.input_tokens,
+            result.usage.output_tokens,
+            result.usage.cache_read_input_tokens
+        ),
+        expected,
+        "the run reports the same calls the tally does"
+    );
+    let events = runner.store().replay(session).await.expect("replay");
+    let aborted = events
+        .iter()
+        .filter(|e| matches!(e.event, SessionEvent::TurnAborted { .. }))
+        .count();
+    assert_eq!(aborted, 1, "the aborted turn left its marker");
 }
 
 #[tokio::test]

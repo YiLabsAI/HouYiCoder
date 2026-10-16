@@ -287,9 +287,10 @@ async fn test_recovery_retry_records_usage() {
 
 #[tokio::test]
 async fn test_cancelled_records_no_usage() {
-    // A stream cancelled mid-flight returns Ok(None) before the record_turn
-    // sites (the retry + terminal arms both sit AFTER the stream loop), so no
-    // TurnUsage lands and no cost/duration is recorded. Pins that cancel
+    // A stream cancelled mid-flight returns a turn that recorded no call,
+    // before the record_turn sites (the retry + terminal arms both sit AFTER
+    // the stream loop), so no TurnUsage lands and no cost/duration is recorded.
+    // Pins that cancel
     // leaves no half-finished timing state: api_start is a per-'outer local
     // dropped on return, and record_turn (the only thing that writes timing)
     // never fires on the cancel path — consistent with "cancelled calls do

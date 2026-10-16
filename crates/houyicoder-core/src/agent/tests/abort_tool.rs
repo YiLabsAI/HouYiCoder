@@ -89,9 +89,9 @@ async fn test_abort_in_tool_dispatch() {
     let session = SessionId::new();
     let r = runner.clone();
     let task = tokio::spawn(async move { r.run(session, "hi".into()).await });
-    // Let the run enter tool dispatch (model_call_stream returns the tool
-    // call, resolve_turn reaches execute_partitioned, the HangingTool future
-    // is polled and goes pending).
+    // Let the run enter tool dispatch (model_call_stream returns a turn
+    // carrying the tool call, resolve_turn reaches execute_partitioned, the
+    // HangingTool future is polled and goes pending).
     for _ in 0..20 {
         yield_now().await;
     }

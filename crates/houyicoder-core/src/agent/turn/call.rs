@@ -44,14 +44,54 @@ fn stream_idle_timeout() -> Duration {
     Duration::from_millis(50)
 }
 
+/// What one logical turn's model calls returned, and what they billed.
+///
+/// A turn usually makes one call, but a reply cut at the output cap is
+/// recovered by re-calling, so a turn can bill several. The usage here covers
+/// every call the turn accounted for, which lets the drive loop fold a turn's
+/// whole cost once instead of counting the recovery retries somewhere else.
+pub(crate) struct TurnCall {
+    /// The response the turn ended on, or None when the run or the turn was
+    /// cancelled before one arrived.
+    pub response: Option<CompletionResponse>,
+    /// The tokens the turn's calls billed, or None for a turn that ended
+    /// without recording a call. A cancelled turn leaves no usage record
+    /// behind, so a zero here would state a measured cost nobody measured and
+    /// would reset the window footprint the status bar reads.
+    pub usage: Option<Usage>,
+}
+
+impl TurnCall {
+    /// A turn that has not recorded a call yet.
+    fn started() -> Self {
+        Self {
+            response: None,
+            usage: None,
+        }
+    }
+
+    /// Fold one call's usage into the turn's total, which starts at the turn's
+    /// first recorded call.
+    fn account(&mut self, usage: &Usage) {
+        match &mut self.usage {
+            Some(total) => accumulate_usage(total, usage),
+            slot => *slot = Some(usage.clone()),
+        }
+    }
+}
+
 impl Runner {
-    /// One streaming model call: re-assemble the event log into input, build the
-    /// request, drive the provider stream, and fold it into a CompletionResponse
-    /// while appending each text delta to the session log and notifying the live
-    /// sink. Retry wraps only stream establishment (a retryable error before the
-    /// first real event retries the whole call); once an event lands the turn is
-    /// committed — a mid-stream error is terminal; there is no partial-recovery
-    /// path here yet.
+    /// One streaming model call sequence: re-assemble the event log into input,
+    /// build the request, drive the provider stream, and fold it into a
+    /// CompletionResponse while appending each text delta to the session log and
+    /// notifying the live sink. Retry wraps only stream establishment (a
+    /// retryable error before the first real event retries the whole call); once
+    /// an event lands the turn is committed — a mid-stream error is terminal;
+    /// there is no partial-recovery path here yet.
+    ///
+    /// The result reports the turn's calls and their total usage; the caller
+    /// folds that usage, not the response's, so a recovery retry reaches the
+    /// run and session totals along with the response it ends on.
     ///
     /// Pre-flight (fail-closed): if the assembled context exceeds the absolute reserve
     /// (window minus the model response room and an estimation margin), compress
@@ -68,7 +108,7 @@ impl Runner {
         max_turns: u32,
         token: &CancellationToken,
         turn_token: &CancellationToken,
-    ) -> Result<Option<CompletionResponse>, RunError> {
+    ) -> Result<TurnCall, RunError> {
         const MAX_OVERFLOW_RETRIES: u32 = 2;
         const CONVERGE_REMINDER_TURNS: u32 = 5;
 
@@ -100,6 +140,11 @@ impl Runner {
         // yields more total room across the N continuations than one big cap.
         const MAX_LENGTH_RETRIES: u32 = 3;
         let mut length_retries = 0u32;
+        // The calls this turn has accounted for. A length-recovery retry
+        // records the partial it cut short and then re-calls, so the turn's
+        // cost runs across more than one call; the caller folds the total
+        // once, when the turn ends.
+        let mut call = TurnCall::started();
         'outer: loop {
             let snapshot = self.store.current_view(session).await?;
             let tool_defs = self.tools.tool_defs();
@@ -190,8 +235,8 @@ impl Runner {
                         economy_fired_this_turn = true;
                         let progress = tokio::select! {
                             biased;
-                            _ = token.cancelled() => return Ok(None),
-                            _ = turn_token.cancelled() => return Ok(None),
+                            _ = token.cancelled() => return Ok(call),
+                            _ = turn_token.cancelled() => return Ok(call),
                             p = self.compress(session) => p?,
                         };
                         if progress {
@@ -218,8 +263,8 @@ impl Runner {
                         // abortable like stream.next(), not a bare await. A
                         // provider stall here otherwise hangs the run past
                         // the sandbox fence with no Esc path.
-                        _ = token.cancelled() => return Ok(None),
-                        _ = turn_token.cancelled() => return Ok(None),
+                        _ = token.cancelled() => return Ok(call),
+                        _ = turn_token.cancelled() => return Ok(call),
                         p = self.compress(session) => p?,
                     };
                     if !progress {
@@ -304,8 +349,8 @@ impl Runner {
             let first = loop {
                 tokio::select! {
                     biased;
-                    _ = token.cancelled() => return Ok(None),
-                    _ = turn_token.cancelled() => return Ok(None),
+                    _ = token.cancelled() => return Ok(call),
+                    _ = turn_token.cancelled() => return Ok(call),
                     item = stream.next() => match item {
                         Some(Ok(ev)) => {
                             tracing::debug!(elapsed = ?api_start.elapsed(), "first event received");
@@ -361,8 +406,8 @@ impl Runner {
                                 // abortable like stream.next(), not a bare await. A
                                 // provider stall here otherwise hangs the run past
                                 // the sandbox fence with no Esc path.
-                                _ = token.cancelled() => return Ok(None),
-                                _ = turn_token.cancelled() => return Ok(None),
+                                _ = token.cancelled() => return Ok(call),
+                                _ = turn_token.cancelled() => return Ok(call),
                                 p = self.compress(session) => p?,
                             };
                             if !progress {
@@ -422,13 +467,13 @@ impl Runner {
                     _ = token.cancelled() => {
                         let response = state.clone().into_response(inference.model.clone());
                         self.append_response_events(session, &response).await?;
-                        return Ok(None);
+                        return Ok(call);
                     }
                     _ = turn_token.cancelled() => {
                         // Per-turn abort mid-stream: flush partial; drive loop appends marker + next turn.
                         let response = state.clone().into_response(inference.model.clone());
                         self.append_response_events(session, &response).await?;
-                        return Ok(None);
+                        return Ok(call);
                     }
                     ev = stream.next() => match ev {
                         Some(Ok(e)) => e,
@@ -542,15 +587,10 @@ impl Runner {
                     inference.max_output_tokens,
                 );
                 self.record_turn_cache(&partial.usage);
-                // The session tally counts every call the endpoint billed, the
-                // same set the per-model rows and the durable records a
-                // reopened session is seeded from already cover. Leaving the
-                // partial out would make the session total the one figure that
-                // skips retry waste, and a session resumed from that log would
-                // then report more than the run that produced it.
-                if let Ok(mut acc) = self.usage.lock() {
-                    acc.record(&partial.usage);
-                }
+                // The cut call is part of the turn the re-call continues, so it
+                // joins the turn's total here and reaches the run figure and
+                // the session tally with it.
+                call.account(&partial.usage);
                 let total_dur_ms = api_start.elapsed().as_millis() as u64;
                 let decode_dur_ms =
                     first_token_elapsed.map(|ttft| total_dur_ms.saturating_sub(ttft));
@@ -656,7 +696,9 @@ impl Runner {
                 applied_effort.map(EffortLevel::label),
             )
             .await?;
-            return Ok(Some(response));
+            call.account(&response.usage);
+            call.response = Some(response);
+            return Ok(call);
         }
     }
 

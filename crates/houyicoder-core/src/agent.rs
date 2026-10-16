@@ -595,13 +595,28 @@ impl Runner {
                     if let Ok(mut guard) = self.turn_cancel.lock() {
                         *guard = Some(turn_token.clone());
                     }
-                    let response = self
+                    let called = self
                         .model_call_stream(session, turn, self.config.max_turns, token, &turn_token)
                         .await?;
                     if let Ok(mut guard) = self.turn_cancel.lock() {
                         *guard = None;
                     }
-                    let response = match response {
+                    // The turn's billed calls reach the totals here, once: a reply
+                    // recovered from an output-cap cut is part of the same turn, so
+                    // dropping the cut call would make the run total the one figure
+                    // that skips retry waste, and a session reopened from the log
+                    // (which records it) would read higher than the run that wrote
+                    // it. An interrupted turn carries no usage, and folding a zero
+                    // in its place would merge an unreported provenance into the
+                    // session total and clear the window footprint the status bar
+                    // reads there.
+                    if let Some(billed) = &called.usage {
+                        accumulate_usage(&mut usage, billed);
+                        if let Ok(mut acc) = self.usage.lock() {
+                            acc.record(billed);
+                        }
+                    }
+                    let response = match called.response {
                         Some(r) => r,
                         None if token.is_cancelled() => {
                             // Lifecycle abort: reconcile orphan results so the
@@ -627,14 +642,6 @@ impl Runner {
                             continue;
                         }
                     };
-                    accumulate_usage(&mut usage, &response.usage);
-                    // Fold into the shared cross-run accumulator so
-                    // status_snapshot reports cumulative usage + the last
-                    // input_tokens (window footprint) for /context + /compact;
-                    // local usage returns per run, the shared one spans the session.
-                    if let Ok(mut acc) = self.usage.lock() {
-                        acc.record(&response.usage);
-                    }
                     next_step = self.resolve_turn(session, &response, token).await?;
                     if matches!(next_step, NextStep::RunAgain) {
                         // Tools may finish normally after cancellation and still yield RunAgain.

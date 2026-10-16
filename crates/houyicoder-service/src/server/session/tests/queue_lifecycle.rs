@@ -48,7 +48,8 @@ impl ModelProvider for HangFirstThenScript {
         if first {
             self.entered.notify_one();
             // Pure pending: the run stays mid-stream until the cancel fires
-            // the run token, which makes model_call_stream return None.
+            // the run token, which makes model_call_stream return a turn with
+            // no response.
             return Box::pin(pending());
         }
         let r = self
@@ -158,8 +159,8 @@ async fn test_inject_cancel_run_clear() {
         ))
         .await
         .expect("send inject");
-    // Cancel: abort the run. The drive loop's model_call_stream returns None
-    // -> Interrupted, without reaching the turn-2 drain.
+    // Cancel: abort the run. The drive loop's model_call_stream returns a turn
+    // with no response -> Interrupted, without reaching the turn-2 drain.
     client
         .send_notification(AcpNotification::new(
             "session/cancel",
