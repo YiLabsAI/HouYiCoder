@@ -147,16 +147,16 @@ impl Runner {
         let mut call = TurnCall::started();
         'outer: loop {
             let snapshot = self.store.current_view(session).await?;
-            let tool_defs = self.tools.tool_defs();
-            // Read the session-frozen MEMORY.md index for the cacheable system
-            // prefix. Clear and compact are the only refresh points.
-            let memory_index = self.format_memory_index();
+            // The declared tools, the session-frozen MEMORY.md index, and the
+            // announced skills, in one bundle, so the measurement the /context
+            // view reports describes this request. Clear and compact are the
+            // only memory-index refresh points.
+            let parts = self.assembly_parts();
             let mut assembled = self.context_builder.build_for_turn(
                 &snapshot.events,
                 snapshot.manifest.as_ref(),
                 Some(self.store.backend()),
-                &tool_defs,
-                memory_index.as_deref(),
+                &parts.input(),
             );
             // Capture before assembled.messages moves into the request;
             // token_count() can't run after that. Fallback for

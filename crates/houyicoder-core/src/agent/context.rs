@@ -2,8 +2,21 @@
 //!
 //! Checkpoint selection and retention precede message assembly. The resulting
 //! section measurements drive pre-flight limits and the /context view.
+//!
+//! The sections partition the request instead of overlapping it: the memory
+//! blocks the system prompt carries are charged to the memory section and
+//! subtracted from the prompt's own footprint, and the skill listing the
+//! message stream carries is charged to the skills section and subtracted from
+//! the messages. The /context drill-down rows come from the same pass, so the
+//! legend and the detail beneath it describe one measurement.
+//!
+//! Two kinds of figure come out of a pass. The sections describe what the
+//! request pays for, and every path that builds one reads them. The
+//! conversation cost reads the whole assembled history, so only the
+//! measurement behind the /context pane derives it.
 
 pub(crate) mod cache_liveness;
+pub(crate) mod conversation;
 pub(crate) mod prompt;
 pub(crate) mod retention;
 pub(crate) mod selection;
@@ -16,21 +29,34 @@ use houyicoder_context::{
     CheckpointManifest, MemoryEntry, SessionEvent, SessionLogEntry, memory_age_days,
     memory_age_label, memory_freshness_text,
 };
+use houyicoder_protocol::frontend::context::{DelegatedContext, ToolFootprint};
 use houyicoder_protocol::llm::{AssistantToolCall, InputItem};
+
+use crate::agent::context::conversation::ConversationCost;
 
 /// Per-turn recall budget shared by retrieval and context assembly.
 pub(crate) const MEMORY_RECALL_BUDGET: usize = 2000;
+
+/// The capability-derived inputs one assembly measures: the tool schemas the
+/// request declares, the frozen memory index the prompt carries, and the skills
+/// the listing announces. The turn path and the /context measurement build the
+/// same three, so a reported breakdown describes the request that would be sent.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AssemblyInput<'a> {
+    pub tool_defs: &'a [ToolDef],
+    pub memory_index: Option<&'a str>,
+    pub skills: &'a [SkillSnapshot],
+}
 
 /// Measured section of the model context.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Section {
     pub kind: SectionKind,
     pub tokens: u32,
-    /// Human-readable previews / item labels for /context drill-down.
-    pub items: Vec<String>,
 }
 
-/// Sections contributing to the model's context window.
+/// Sections contributing to the model's context window, in the order the
+/// legend and the grid present them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SectionKind {
     SystemPrompt,
@@ -54,7 +80,7 @@ impl SectionKind {
     /// Palette index for the /context grid.
     pub fn color_hint(self) -> u8 {
         match self {
-            SectionKind::SystemPrompt => 244,
+            SectionKind::SystemPrompt => 39,
             SectionKind::Tools => 244,
             SectionKind::Memory => 203,
             SectionKind::Skills => 221,
@@ -80,8 +106,30 @@ pub struct AssembledContext {
 /// Pre-flight section measurements of an assembled context.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ContextMeasurement {
-    pub tool_names: Vec<String>,
+    /// Tokens of the whole system prompt text, the memory blocks included. The
+    /// sections split that footprint; the cache prefix the request repeats
+    /// across turns is this plus the tools.
+    pub system_prompt_tokens: u32,
+    /// The memory rows the /context drill-down lists, one per block the prompt
+    /// carries plus one for the recalled memories in the message stream. Their
+    /// tokens sum to the memory section.
+    pub memory_files: Vec<ContextFileEntry>,
+    /// The skill rows the /context drill-down lists, one per configured skill.
+    /// The rows split the skills section, so they sum to it whenever a skill is
+    /// configured: before the first announcement the section is the projected
+    /// size of the entries, and from then on it is the listing the message
+    /// stream carries. Only a listing with no configured skill to split it
+    /// leaves the section non-zero with no rows.
+    pub skills: Vec<ContextSkillEntry>,
     pub sections: Vec<Section>,
+    /// Per-tool conversation footprints, heaviest first. The /context
+    /// suggestions name the tool whose results crowd the window. Empty for a
+    /// measurement that did not derive the conversation cost.
+    pub tool_footprints: Vec<ToolFootprint>,
+    /// What the session's delegated children cost this context. None when the
+    /// session ran no child, and for a measurement that did not derive the
+    /// conversation cost.
+    pub delegated: Option<DelegatedContext>,
 }
 
 impl ContextMeasurement {
@@ -122,11 +170,13 @@ impl ContextMeasurement {
             categories,
             grid,
             cache_breakpoint: None,
-            memory_files: Vec::new(),
-            skills: Vec::new(),
+            memory_files: self.memory_files.clone(),
+            skills: self.skills.clone(),
             compact_summary: None,
             cache_prefix_tokens: None,
             cache_hit_rate: None,
+            tool_footprints: self.tool_footprints.clone(),
+            delegated: self.delegated.clone(),
         }
     }
 
@@ -134,6 +184,54 @@ impl ContextMeasurement {
     pub fn section(&self, kind: SectionKind) -> Option<&Section> {
         self.sections.iter().find(|s| s.kind == kind)
     }
+}
+
+/// The label for a set of memory entries, singular on a count of one so a row
+/// holding one entry does not advertise a plural it does not have.
+pub(crate) fn memory_entry_label(count: usize) -> String {
+    if count == 1 {
+        "1 entry".to_string()
+    } else {
+        format!("{count} entries")
+    }
+}
+
+/// Split a measured total across parts in proportion to their own measures, in
+/// whole tokens that sum to the total: each part takes its floor, and the parts
+/// with the largest remainders take the rest. Used where a measured figure has
+/// to agree with a per-item breakdown of it. Measures that are all zero carry
+/// no proportion, so the whole total lands on the first part instead of
+/// vanishing. An empty list of parts reports nothing: there is no row to carry
+/// the total, so the caller decides what a section with no items reports.
+fn split_total(total: u32, parts: &[u32]) -> Vec<u32> {
+    let sum: u64 = parts.iter().map(|part| u64::from(*part)).sum();
+    let mut out: Vec<u32> = Vec::with_capacity(parts.len());
+    if sum == 0 {
+        out.resize(parts.len(), 0);
+        if let Some(first) = out.first_mut() {
+            *first = total;
+        }
+        return out;
+    }
+    let whole = u64::from(total);
+    for part in parts {
+        out.push(((whole * u64::from(*part)) / sum) as u32);
+    }
+    let mut residue = total.saturating_sub(out.iter().sum());
+    let mut order: Vec<usize> = (0..parts.len()).collect();
+    order.sort_by(|left, right| {
+        let left_rest = (whole * u64::from(parts[*left])) % sum;
+        let right_rest = (whole * u64::from(parts[*right])) % sum;
+        right_rest.cmp(&left_rest).then(left.cmp(right))
+    });
+    for index in order {
+        if residue == 0 {
+            break;
+        }
+        out[index] += 1;
+        residue -= 1;
+    }
+    out
 }
 
 /// Local BPE tokenizer for deterministic pre-flight measurement.
@@ -204,13 +302,22 @@ impl Default for Tokenizer {
     }
 }
 
+/// The Skills section as one pass sees it: the size the request pays, the share
+/// of that size the message stream carries, and the per-skill rows.
+struct SkillCost {
+    section_tokens: u32,
+    stream_tokens: u32,
+    rows: Vec<ContextSkillEntry>,
+}
+
 /// Assembles model context from durable events and runtime capabilities.
 pub struct ContextBuilder {
     tokenizer: Tokenizer,
     /// Runtime cwd shared with worktree switching.
     cwd: Arc<RwLock<PathBuf>>,
-    /// Last turn's measurement, cached for /context. Only build_for_turn
-    /// writes; build() does not.
+    /// Last turn's measurement, cached for the reported occupancy. Only
+    /// build_for_turn writes; build() does not. It holds the sections and no
+    /// conversation cost.
     last_measurement: Mutex<Option<ContextMeasurement>>,
     /// Retention policy shared with cached-prefix liveness.
     retention_policy: Mutex<Option<Arc<dyn retention::RetentionPolicy>>>,
@@ -280,38 +387,58 @@ impl ContextBuilder {
         Arc::clone(&self.cwd)
     }
 
-    /// Bare assembly: no checkpoint selection, no tool measurement, no
-    /// memory index. Does not cache. Used by tests.
+    /// Bare assembly: no checkpoint selection and no capability inputs. Does
+    /// not cache. Used by tests.
     pub fn build(&self, events: &[SessionLogEntry]) -> AssembledContext {
-        self.assemble(events, None, None, &[], None)
+        self.assemble(
+            events,
+            None,
+            None,
+            &AssemblyInput::default(),
+            ConversationCost::SectionsOnly,
+        )
     }
 
-    /// Prospective assembly: what the first turn would measure, with the real
-    /// tool definitions and the memory index the turn path passes, so a
-    /// /context before any turn reports the same system prompt and tools the
-    /// first turn will send. Does not cache: last_measurement stays None
-    /// until a turn actually runs.
-    pub fn build_prospective(
+    /// Measure the assembly these events would produce, without caching it, and
+    /// with the conversation cost the /context pane reads. The pane measures
+    /// the session's loaded events this way, so a resumed session reports its
+    /// history before another turn runs.
+    pub fn measure(
         &self,
-        tool_defs: &[ToolDef],
-        memory_index: Option<&str>,
+        events: &[SessionLogEntry],
+        manifest: Option<&CheckpointManifest>,
+        backend: Option<&dyn houyicoder_context::ContextBackend>,
+        input: &AssemblyInput<'_>,
     ) -> AssembledContext {
-        self.assemble(&[], None, None, tool_defs, memory_index)
+        self.assemble(
+            events,
+            manifest,
+            backend,
+            input,
+            ConversationCost::WithFootprints,
+        )
     }
 
     /// The turn path: select events per the checkpoint manifest, assemble,
-    /// measure real tool defs and the memory index, and cache the
-    /// measurement. Recalled memory stays in the message stream so the
-    /// system prompt stays cache-stable.
+    /// measure the declared tools, the frozen memory index, and the announced
+    /// skills, and cache the measurement. Recalled memory stays in the message
+    /// stream so the system prompt stays cache-stable. The conversation cost is
+    /// left out: nothing on this path reads it, and deriving it would walk the
+    /// whole history on every turn.
     pub fn build_for_turn(
         &self,
         events: &[SessionLogEntry],
         manifest: Option<&CheckpointManifest>,
         backend: Option<&dyn houyicoder_context::ContextBackend>,
-        tool_defs: &[ToolDef],
-        memory_index: Option<&str>,
+        input: &AssemblyInput<'_>,
     ) -> AssembledContext {
-        let assembled = self.assemble(events, manifest, backend, tool_defs, memory_index);
+        let assembled = self.assemble(
+            events,
+            manifest,
+            backend,
+            input,
+            ConversationCost::SectionsOnly,
+        );
         if let Ok(mut g) = self.last_measurement.lock() {
             *g = Some(assembled.measurement.clone());
         }
@@ -323,8 +450,8 @@ impl ContextBuilder {
         events: &[SessionLogEntry],
         manifest: Option<&CheckpointManifest>,
         backend: Option<&dyn houyicoder_context::ContextBackend>,
-        tool_defs: &[ToolDef],
-        memory_index: Option<&str>,
+        input: &AssemblyInput<'_>,
+        cost: ConversationCost,
     ) -> AssembledContext {
         let filtered = match manifest {
             Some(manifest) => selection::apply_manifest(events, manifest, backend),
@@ -338,84 +465,89 @@ impl ContextBuilder {
 
         let cwd = self.cwd.read().expect("cwd lock").clone();
         let agent_directory = self.agent_directory.lock().ok().and_then(|g| g.clone());
-        let prompt =
-            SystemPrompt::build_with_memory_index(&cwd, memory_index, agent_directory.as_deref());
+        let prompt = SystemPrompt::build_with_memory_index(
+            &cwd,
+            input.memory_index,
+            agent_directory.as_deref(),
+        );
+        let prompt_tokens = self.tokenizer.count(&prompt.text);
 
-        // Attribute attachments already merged into the assembled messages.
-        let mut mem_tokens = 0u32;
-        let mut mem_items = Vec::new();
-        let mut skill_tokens = 0u32;
+        // The prompt's memory blocks are memory, not prompt framing: charging
+        // them here is what makes a project memory file visible as a category
+        // of its own instead of hiding inside the prompt's total.
+        let memory_files: Vec<ContextFileEntry> = prompt
+            .memory_blocks
+            .iter()
+            .map(|block| ContextFileEntry {
+                label: block.label.clone(),
+                tokens: self.tokenizer.count(&block.text),
+            })
+            .collect();
+        let block_tokens: u32 = memory_files.iter().map(|row| row.tokens).sum();
+
+        // Recalled memories ride the message stream; they are memory too, and
+        // one aggregate row reports them rather than one row per entry.
+        let mut recall_tokens = 0u32;
+        let mut recall_entries = 0usize;
         for ev in &filtered {
-            match &ev.event {
-                SessionEvent::MemoryRecall { text, keys, .. } => {
-                    mem_tokens += self.tokenizer.count(text);
-                    mem_items.extend(keys.iter().cloned());
-                }
-                SessionEvent::SkillListing { text, .. } => {
-                    skill_tokens += self.tokenizer.count(text);
-                }
-                _ => {}
+            if let SessionEvent::MemoryRecall { text, keys, .. } = &ev.event {
+                recall_tokens += self.tokenizer.count(text);
+                recall_entries += keys.len();
             }
         }
+        let mut memory_files = memory_files;
+        if recall_entries > 0 {
+            memory_files.push(ContextFileEntry {
+                label: format!("Recalled memories ({})", memory_entry_label(recall_entries)),
+                tokens: recall_tokens,
+            });
+        }
+        let memory_tokens = block_tokens + recall_tokens;
 
-        // Subtract attachments from Messages to keep section totals disjoint.
-        let messages_section = Section {
-            kind: SectionKind::Messages,
-            tokens: msg_tokens
-                .saturating_sub(mem_tokens)
-                .saturating_sub(skill_tokens),
-            items: message_previews(&messages),
-        };
+        let skills = self.skill_cost(&filtered, input.skills);
 
         // Tool schemas consume context despite traveling outside messages.
-        let tool_tokens: u32 = tool_defs
+        let tool_tokens: u32 = input
+            .tool_defs
             .iter()
             .map(|td| {
                 self.tokenizer
                     .count(&serde_json::to_string(td).unwrap_or_default())
             })
             .sum();
-        let mut sections = vec![
+
+        let sections = vec![
             Section {
                 kind: SectionKind::SystemPrompt,
-                tokens: self.tokenizer.count(&prompt.text),
-                items: prompt.items,
+                tokens: prompt_tokens.saturating_sub(block_tokens),
             },
-            messages_section,
+            Section {
+                kind: SectionKind::Tools,
+                tokens: tool_tokens,
+            },
+            Section {
+                kind: SectionKind::Memory,
+                tokens: memory_tokens,
+            },
+            Section {
+                kind: SectionKind::Skills,
+                tokens: skills.section_tokens,
+            },
+            Section {
+                kind: SectionKind::Messages,
+                tokens: msg_tokens
+                    .saturating_sub(recall_tokens)
+                    .saturating_sub(skills.stream_tokens),
+            },
         ];
-        if !tool_defs.is_empty() {
-            sections.insert(
-                1,
-                Section {
-                    kind: SectionKind::Tools,
-                    tokens: tool_tokens,
-                    items: tool_defs.iter().map(|td| td.name.clone()).collect(),
-                },
-            );
-        }
-        if mem_tokens > 0 {
-            sections.insert(
-                1,
-                Section {
-                    kind: SectionKind::Memory,
-                    tokens: mem_tokens,
-                    items: mem_items,
-                },
-            );
-        }
-        if skill_tokens > 0 {
-            sections.insert(
-                1,
-                Section {
-                    kind: SectionKind::Skills,
-                    tokens: skill_tokens,
-                    items: vec!["skill listing".to_string()],
-                },
-            );
-        }
 
+        let (tool_footprints, delegated) = self.conversation_cost(&filtered, cost);
         let measurement = ContextMeasurement {
-            tool_names: tool_defs.iter().map(|td| td.name.clone()).collect(),
+            tool_footprints,
+            delegated,
+            system_prompt_tokens: prompt_tokens,
+            memory_files,
+            skills: skills.rows,
             sections,
         };
         AssembledContext {
@@ -423,6 +555,49 @@ impl ContextBuilder {
             dynamic_boundary: prompt.dynamic_boundary,
             messages,
             measurement,
+        }
+    }
+
+    /// The Skills section with its per-skill rows and the share of it the
+    /// message stream carries, returned together so the rows always split the
+    /// section they belong to and the messages are charged exactly what they
+    /// hold. The announcements in the message stream are the text the request
+    /// pays for, and the listing budget can shorten them, so the section takes
+    /// its size from those announcements and each row takes a share of that
+    /// size in proportion to its own entry. Before the first announcement the
+    /// entries alone are what the next request would carry, and that projected
+    /// size rides no message, so nothing is subtracted for it.
+    fn skill_cost(&self, events: &[SessionLogEntry], skills: &[SkillSnapshot]) -> SkillCost {
+        let entry_tokens: Vec<u32> = skills
+            .iter()
+            .map(|snapshot| self.tokenizer.count(&listing_entry(&snapshot.descriptor)))
+            .collect();
+        let stream_tokens: u32 = events
+            .iter()
+            .filter_map(|event| match &event.event {
+                SessionEvent::SkillListing { text, .. } => Some(self.tokenizer.count(text)),
+                _ => None,
+            })
+            .sum();
+        let section_tokens = if stream_tokens > 0 {
+            stream_tokens
+        } else {
+            entry_tokens.iter().sum()
+        };
+        let shares = split_total(section_tokens, &entry_tokens);
+        let rows = skills
+            .iter()
+            .zip(&shares)
+            .map(|(snapshot, tokens)| ContextSkillEntry {
+                source: snapshot.origin.clone(),
+                name: snapshot.descriptor.name.clone(),
+                tokens: *tokens,
+            })
+            .collect();
+        SkillCost {
+            section_tokens,
+            stream_tokens,
+            rows,
         }
     }
 
@@ -448,7 +623,9 @@ impl ContextBuilder {
 
     /// The measurement of the most recent turn. None before the first turn.
     /// Not the exact provider request — call.rs appends configured
-    /// instructions to the system prompt after assembly.
+    /// instructions to the system prompt after assembly. The /context pane
+    /// measures the session itself rather than reading this, since the pane
+    /// reports the conversation cost a turn does not carry.
     pub fn last_measurement(&self) -> Option<ContextMeasurement> {
         self.last_measurement.lock().ok().and_then(|g| g.clone())
     }
@@ -471,30 +648,6 @@ impl Default for ContextBuilder {
     fn default() -> Self {
         Self::new()
     }
-}
-
-/// One-line previews of the assembled messages, for /context drill-down.
-fn message_previews(messages: &[InputItem]) -> Vec<String> {
-    messages
-        .iter()
-        .map(|m| match m {
-            InputItem::User { content } => preview(content),
-            InputItem::Assistant { content, .. } => preview(content),
-            InputItem::ToolResult { output, .. } => preview(&output.to_string()),
-        })
-        .collect()
-}
-
-/// Truncate a string to a char budget with an ellipsis when cut.
-fn preview(s: &str) -> String {
-    const MAX: usize = 60;
-    let chars: Vec<char> = s.chars().take(MAX + 1).collect();
-    if chars.len() <= MAX {
-        return s.to_string();
-    }
-    let mut t: String = chars[..MAX].iter().collect();
-    t.push('\u{2026}');
-    t
 }
 
 /// Render recalled memories as untrusted model context.
@@ -545,8 +698,10 @@ pub(crate) fn render_recall_text(entries: &[MemoryEntry]) -> String {
 }
 
 // Protocol owns the serialized context breakdown types.
+use crate::agent::skill::listing::listing_entry;
+use houyicoder_api::skill::SkillSnapshot;
 pub use houyicoder_protocol::frontend::context::{
-    CategoryBreakdown, ContextBreakdown, GridCell, build_grid,
+    CategoryBreakdown, ContextBreakdown, ContextFileEntry, ContextSkillEntry, GridCell, build_grid,
 };
 use houyicoder_protocol::llm::ToolDef;
 use prompt::SystemPrompt;

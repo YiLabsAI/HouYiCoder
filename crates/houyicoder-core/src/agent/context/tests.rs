@@ -1,5 +1,7 @@
 //! Context assembly and token-accounting tests.
 use super::*;
+use crate::agent::skill::listing::format_skill_listing;
+use houyicoder_api::skill::{SkillDescriptor, SkillUsage};
 use houyicoder_context::{
     EventId, MemoryEntry, MemorySource, SessionEvent, SessionId, SessionLogEntry,
 };
@@ -11,8 +13,39 @@ use std::fs::create_dir_all;
 use std::fs::remove_dir_all;
 use std::fs::write;
 use std::process::id;
+use std::slice::from_ref;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
+
+/// Assembly inputs carrying tools and a memory index but no skills. Call sites
+/// that exercise the skill rows build the struct directly.
+fn assembly_input<'a>(
+    tool_defs: &'a [ToolDef],
+    memory_index: Option<&'a str>,
+) -> AssemblyInput<'a> {
+    AssemblyInput {
+        tool_defs,
+        memory_index,
+        skills: &[],
+    }
+}
+
+/// A skill descriptor with every optional field empty, for the skill-row cases
+/// that only exercise the listing entry.
+fn sample_descriptor() -> SkillDescriptor {
+    SkillDescriptor {
+        name: "sample".to_string(),
+        description: String::new(),
+        when_to_use: None,
+        argument_hint: None,
+        disable_model_invocation: false,
+        user_invocable: true,
+        body_token_estimate: 0,
+        allowed_tools: Vec::new(),
+        allowed_mach_services: Vec::new(),
+        allow_app_launch: false,
+    }
+}
 
 #[test]
 fn test_tokenizer_counts_text() {
@@ -71,12 +104,10 @@ fn test_measurement_token_count() {
             Section {
                 kind: SectionKind::SystemPrompt,
                 tokens: 100,
-                items: vec![],
             },
             Section {
                 kind: SectionKind::Messages,
                 tokens: 50,
-                items: vec![],
             },
         ],
         ..Default::default()
@@ -84,15 +115,6 @@ fn test_measurement_token_count() {
     assert_eq!(m.token_count(), 150);
     assert_eq!(m.section(SectionKind::Messages).unwrap().tokens, 50);
     assert!(m.section(SectionKind::Tools).is_none());
-}
-
-#[test]
-fn test_preview_truncates_long() {
-    let short = preview("hi");
-    assert_eq!(short, "hi");
-    let long = preview(&"x".repeat(100));
-    assert!(long.ends_with('\u{2026}'));
-    assert_eq!(long.chars().count(), 61);
 }
 
 #[test]
@@ -105,19 +127,37 @@ fn test_builder_empty_log_system() {
     let v = b.build(&[]);
     assert!(v.messages.is_empty());
     assert!(!v.system.is_empty(), "system prompt must be non-empty");
-    assert!(v.measurement.tool_names.is_empty());
-    // Two sections: SystemPrompt + Messages.
-    assert_eq!(v.measurement.sections.len(), 2);
+    assert_eq!(
+        v.measurement.section(SectionKind::Tools).unwrap().tokens,
+        0,
+        "no declared tool, no tool cost"
+    );
+    // Every section is present in a fixed order, so the legend reports the
+    // same categories on every session instead of reshaping per turn.
+    let kinds: Vec<SectionKind> = v.measurement.sections.iter().map(|s| s.kind).collect();
+    assert_eq!(
+        kinds,
+        vec![
+            SectionKind::SystemPrompt,
+            SectionKind::Tools,
+            SectionKind::Memory,
+            SectionKind::Skills,
+            SectionKind::Messages,
+        ]
+    );
     let sys = v
         .measurement
         .section(SectionKind::SystemPrompt)
         .expect("system section");
     assert!(sys.tokens > 0, "system prompt must count > 0 tokens");
     assert!(
-        !sys.items.contains(&"Project context".to_string()),
-        "no project context row when no memory file"
+        v.measurement.memory_files.is_empty(),
+        "no memory row when no memory file"
     );
-    assert!(sys.items.contains(&"Identity".to_string()));
+    assert_eq!(
+        v.measurement.section(SectionKind::Memory).unwrap().tokens,
+        0
+    );
     assert_eq!(
         v.measurement.section(SectionKind::Messages).unwrap().tokens,
         0
@@ -142,7 +182,7 @@ fn test_tool_schema_tokens_counted() {
             "required": ["command"]
         }),
     }];
-    let v = b.build_for_turn(&[], None, None, &tool_defs, None);
+    let v = b.build_for_turn(&[], None, None, &assembly_input(&tool_defs, None));
     let tools = v
         .measurement
         .section(SectionKind::Tools)
@@ -152,7 +192,6 @@ fn test_tool_schema_tokens_counted() {
         "tool schema tokens counted: {}",
         tools.tokens
     );
-    assert_eq!(tools.items, vec!["bash".to_string()]);
     assert!(
         v.measurement.token_count() >= tools.tokens,
         "token_count includes tool tokens: total={} tools={}",
@@ -174,7 +213,7 @@ fn test_clear_drops_measurement() {
     scratch.push(format!("ctx-test-clear-{}", id()));
     create_dir_all(&scratch).expect("mkdir scratch");
     let b = ContextBuilder::new().with_cwd(scratch);
-    let v = b.build_for_turn(&[], None, None, &[], None);
+    let v = b.build_for_turn(&[], None, None, &AssemblyInput::default());
     assert!(v.measurement.token_count() > 0, "a turn measures something");
     assert!(b.last_measurement().is_some(), "and caches it");
     b.clear_measurement();
@@ -186,8 +225,8 @@ fn test_clear_drops_measurement() {
 
 #[test]
 fn test_bare_build_skips_cache() {
-    // Bare assembly must leave the cache alone: a prospective /context on a
-    // fresh session must not masquerade as a served turn measurement.
+    // Bare assembly must leave the cache alone: measuring a fresh session for
+    // /context must not masquerade as a served turn measurement.
     let mut scratch = temp_dir();
     scratch.push(format!("ctx-test-nocache-{}", id()));
     create_dir_all(&scratch).expect("mkdir scratch");
@@ -216,7 +255,21 @@ fn test_builder_injects_memory() {
         .section(SectionKind::SystemPrompt)
         .expect("system section");
     assert!(sys.tokens > 0);
-    assert!(sys.items.contains(&"Project context".to_string()));
+    // The memory file is a category of its own, not part of the prompt's
+    // footprint, so the legend can show what the project rules cost.
+    let memory = v
+        .measurement
+        .section(SectionKind::Memory)
+        .expect("memory section");
+    assert!(memory.tokens > 0, "the project memory file is charged");
+    let rows = &v.measurement.memory_files;
+    assert_eq!(rows.len(), 1, "one row per injected memory file");
+    assert_eq!(rows[0].label, "AGENTS.md");
+    assert_eq!(rows[0].tokens, memory.tokens, "rows sum to the section");
+    assert!(
+        memory.tokens < sys.tokens,
+        "the prompt keeps its own framing, not the whole total"
+    );
     remove_dir_all(&scratch).ok();
 }
 
@@ -242,13 +295,9 @@ fn test_memory_behavior_section_present() {
         v.system.contains("Before recommending from memory"),
         "trusting-recall guidance present"
     );
-    let sys = v
-        .measurement
-        .section(SectionKind::SystemPrompt)
-        .expect("system section");
     assert!(
-        sys.items.contains(&"Memory".to_string()),
-        "Memory listed in system items"
+        v.measurement.memory_files.is_empty(),
+        "the behavior guidance is prompt framing, not a memory row"
     );
     remove_dir_all(&dir).ok();
 }
@@ -364,10 +413,14 @@ fn test_context_partitions_recall_tokens() {
         mem.tokens > 0,
         "Memory section must count the attachment tokens"
     );
-    assert!(
-        mem.items.contains(&"build-gate".to_string()),
-        "Memory section items are the surfaced keys"
+    let rows = &v.measurement.memory_files;
+    assert_eq!(
+        rows.len(),
+        1,
+        "one aggregate row, not one row per recalled entry"
     );
+    assert_eq!(rows[0].label, "Recalled memories (1 entry)");
+    assert_eq!(rows[0].tokens, mem.tokens, "rows sum to the section");
     assert!(
         !v.system.contains("# Recalled memories"),
         "system prompt stays byte-frozen, no recalled memory in it"
@@ -403,13 +456,26 @@ fn test_context_partitions_recall_tokens() {
 
 #[test]
 fn test_skill_section_recomputed() {
-    // A SkillListing event in the log: the context assembly merges its text
-    // into the user message, and the Skills section attributes the attachment
-    // tokens so /context shows the discovery cost without double-counting.
+    // The announced listing rides the user message; the Skills section charges
+    // the same entries the announcement was built from, so the legend and the
+    // drill-down rows come from one definition and the listing is not
+    // double-counted.
     let mut scratch = temp_dir();
     scratch.push(format!("ctx-test-skillsec-{}", id()));
     create_dir_all(&scratch).expect("mkdir scratch");
-    let listing_text = "- commit: commit changes - after edits\n- review: review a PR";
+    let descriptor = SkillDescriptor {
+        name: "commit".into(),
+        description: "commit changes".into(),
+        body_token_estimate: 0,
+        ..sample_descriptor()
+    };
+    let listing_text = listing_entry(&descriptor);
+    let snapshot = SkillSnapshot {
+        descriptor,
+        origin: "Project".into(),
+        usage: SkillUsage::default(),
+    };
+    let skills = [snapshot];
     let events = vec![
         SessionLogEntry {
             id: EventId::new(),
@@ -426,24 +492,36 @@ fn test_skill_section_recomputed() {
             ts: 0,
             prev_hash: None,
             event: SessionEvent::SkillListing {
-                text: listing_text.to_string(),
+                text: listing_text.clone(),
                 bytes: listing_text.len() as u32,
                 content_hash: 0,
             },
         },
     ];
+    let input = AssemblyInput {
+        tool_defs: &[],
+        memory_index: None,
+        skills: &skills,
+    };
     let b = ContextBuilder::new().with_cwd(scratch.clone());
-    let v = b.build(&events);
+    let v = b.measure(&events, None, None, &input);
     let skill = v
         .measurement
         .section(SectionKind::Skills)
-        .expect("Skills section present when a listing event is in the log");
+        .expect("Skills section present when a skill is announced");
     assert!(
         skill.tokens > 0,
-        "Skills section must count the listing tokens"
+        "Skills section must count the listing entries"
+    );
+    assert_eq!(v.measurement.skills.len(), 1, "one row per announced entry");
+    assert_eq!(v.measurement.skills[0].name, "commit");
+    assert_eq!(v.measurement.skills[0].source, "Project");
+    assert_eq!(
+        v.measurement.skills[0].tokens, skill.tokens,
+        "rows sum to the section"
     );
     // No double-count: the assembly merges the listing text into the user
-    // message, so Messages (non-listing input) + Skills (attachment) must
+    // message, so Messages (non-listing input) + Skills (the entries) must
     // equal the full merged input.
     let tok = Tokenizer::new();
     let merged = format!("help me commit\n{listing_text}");
@@ -455,6 +533,95 @@ fn test_skill_section_recomputed() {
         "listing must not be double-counted (Messages + Skills == full input)"
     );
     remove_dir_all(&scratch).ok();
+}
+
+/// A listing shortened to fit its budget costs less than the full entries, and
+/// the section reports what the request carries: the rows split the measured
+/// announcement rather than summing to a larger figure the prompt never holds.
+#[test]
+fn test_skill_section_follows_listing() {
+    let mut scratch = temp_dir();
+    scratch.push(format!("ctx-test-skilltrunc-{}", id()));
+    create_dir_all(&scratch).expect("mkdir scratch");
+    let descriptor = SkillDescriptor {
+        name: "commit".into(),
+        description: "y".repeat(600),
+        body_token_estimate: 0,
+        ..sample_descriptor()
+    };
+    let full = listing_entry(&descriptor);
+    // A window too small for any description keeps the names, the tightest
+    // tier of the listing budget.
+    let truncated = format_skill_listing(from_ref(&descriptor), 1_000);
+    assert!(
+        truncated.len() < full.len(),
+        "the fixture must actually truncate: {truncated}"
+    );
+    let snapshot = SkillSnapshot {
+        descriptor,
+        origin: "Project".into(),
+        usage: SkillUsage::default(),
+    };
+    let skills = [snapshot];
+    let events = vec![SessionLogEntry {
+        id: EventId::new(),
+        session: SessionId::new(),
+        ts: 0,
+        prev_hash: None,
+        event: SessionEvent::SkillListing {
+            text: truncated.clone(),
+            bytes: truncated.len() as u32,
+            content_hash: 0,
+        },
+    }];
+    let input = AssemblyInput {
+        tool_defs: &[],
+        memory_index: None,
+        skills: &skills,
+    };
+    let tok = Tokenizer::new();
+    let v = ContextBuilder::new()
+        .with_cwd(scratch.clone())
+        .measure(&events, None, None, &input);
+    let skill = v
+        .measurement
+        .section(SectionKind::Skills)
+        .expect("Skills section present");
+    assert_eq!(
+        skill.tokens,
+        tok.count(&truncated),
+        "the section is the announcement the request carries"
+    );
+    assert!(
+        skill.tokens < tok.count(&full),
+        "and it is smaller than the untruncated entries"
+    );
+    assert_eq!(
+        v.measurement
+            .skills
+            .iter()
+            .map(|row| row.tokens)
+            .sum::<u32>(),
+        skill.tokens,
+        "the rows split the section"
+    );
+    remove_dir_all(&scratch).ok();
+}
+
+/// Splitting a measured total across parts keeps the total exactly: floors,
+/// then the largest remainders, with ties going to the earlier part so the
+/// split is stable.
+#[test]
+fn test_split_total_sums_exact() {
+    assert_eq!(split_total(10, &[1, 1]), vec![5, 5]);
+    assert_eq!(split_total(7, &[1, 1, 1]), vec![3, 2, 2]);
+    assert_eq!(split_total(100, &[3, 1]), vec![75, 25]);
+    assert_eq!(
+        split_total(5, &[0, 0]),
+        vec![5, 0],
+        "a zero measure reports"
+    );
+    assert_eq!(split_total(5, &[]), Vec::<u32>::new());
 }
 
 #[test]
@@ -496,19 +663,24 @@ fn test_measurement_breakdown_real() {
     // one category per section kind, a trailing Free-space row, a grid,
     // and the real per-section token counts (no chars/4 estimate).
     let measurement = ContextMeasurement {
-        tool_names: Vec::new(),
+        system_prompt_tokens: 1_800,
+        memory_files: vec![ContextFileEntry {
+            label: "AGENTS.md".into(),
+            tokens: 400,
+        }],
+        skills: Vec::new(),
         sections: vec![
             Section {
                 kind: SectionKind::SystemPrompt,
                 tokens: 1_800,
-                items: Vec::new(),
             },
             Section {
                 kind: SectionKind::Messages,
                 tokens: 30_000,
-                items: Vec::new(),
             },
         ],
+        tool_footprints: Vec::new(),
+        delegated: None,
     };
     let bd = measurement.breakdown("test", 200_000);
     assert_eq!(bd.total_tokens, 31_800);
@@ -522,24 +694,353 @@ fn test_measurement_breakdown_real() {
     assert_eq!(bd.categories[2].tokens, 200_000 - 31_800);
     assert!(!bd.grid.is_empty(), "breakdown builds a proportional grid");
     assert!(bd.cache_breakpoint.is_none());
+    assert_eq!(
+        bd.memory_files, measurement.memory_files,
+        "the drill-down rows travel with the measurement that produced them"
+    );
+    assert_eq!(bd.skills, measurement.skills);
+}
+
+/// Wrap one event in a log entry, for the measurement cases that read a
+/// sequence of events directly rather than through a session.
+fn entry(event: SessionEvent) -> SessionLogEntry {
+    SessionLogEntry {
+        id: EventId::new(),
+        session: SessionId::new(),
+        ts: 0,
+        prev_hash: None,
+        event,
+    }
+}
+
+#[test]
+fn test_footprint_counts_results() {
+    let builder = ContextBuilder::new();
+    let small_output = serde_json::json!("one line");
+    let large_output = serde_json::json!("a whole file the model should not have read");
+    let events = vec![
+        entry(SessionEvent::ToolCall {
+            call_id: "1".into(),
+            tool: "bash".into(),
+            input: serde_json::json!({"command": "ls"}),
+        }),
+        entry(SessionEvent::tool_result("1", large_output.clone())),
+        entry(SessionEvent::ToolCall {
+            call_id: "2".into(),
+            tool: "read".into(),
+            input: serde_json::json!({"path": "src/lib.rs"}),
+        }),
+        entry(SessionEvent::tool_result("2", small_output.clone())),
+    ];
+    let rows = builder.tool_footprints(&events);
+    assert_eq!(rows.len(), 2, "one row per tool: {rows:?}");
+    assert_eq!(rows[0].tool, "bash", "the heaviest total leads: {rows:?}");
+    assert_eq!(rows[1].tool, "read");
+    for row in &rows {
+        assert_eq!(row.calls, 1);
+        assert!(row.call_tokens > 0, "the call block is measured: {row:?}");
+    }
+    // Each result is counted against the call it answers, not against the
+    // tool named by the position it arrived in.
+    assert_eq!(
+        rows[0].result_tokens,
+        builder.tokenizer.count(&large_output.to_string()),
+        "the bash row carries its own result"
+    );
+    assert_eq!(
+        rows[1].result_tokens,
+        builder.tokenizer.count(&small_output.to_string()),
+        "the read row carries its own result"
+    );
+}
+
+/// Two calls to one tool fold into one row, so the row shows what the tool cost
+/// over the session rather than what one call cost.
+#[test]
+fn test_footprint_sums_calls() {
+    let builder = ContextBuilder::new();
+    let first = serde_json::json!("first output");
+    let second = serde_json::json!("second output");
+    let events = vec![
+        entry(SessionEvent::ToolCall {
+            call_id: "1".into(),
+            tool: "bash".into(),
+            input: serde_json::json!({"command": "ls"}),
+        }),
+        entry(SessionEvent::tool_result("1", first.clone())),
+        entry(SessionEvent::ToolCall {
+            call_id: "2".into(),
+            tool: "bash".into(),
+            input: serde_json::json!({"command": "pwd"}),
+        }),
+        entry(SessionEvent::tool_result("2", second.clone())),
+    ];
+    let rows = builder.tool_footprints(&events);
+    assert_eq!(rows.len(), 1, "one row for the tool: {rows:?}");
+    assert_eq!(rows[0].calls, 2);
+    assert_eq!(
+        rows[0].result_tokens,
+        builder.tokenizer.count(&first.to_string()) + builder.tokenizer.count(&second.to_string()),
+        "both results are counted"
+    );
+}
+
+#[test]
+fn test_footprint_ignores_orphan() {
+    // A result whose call the selection dropped has no tool to attribute, so it
+    // is counted under no tool rather than guessed from the result body.
+    let builder = ContextBuilder::new();
+    let events = vec![entry(SessionEvent::tool_result(
+        "gone",
+        serde_json::json!("output of a call that is no longer selected"),
+    ))];
+    assert!(
+        builder.tool_footprints(&events).is_empty(),
+        "an unattributable result produces no row"
+    );
+}
+
+#[test]
+fn test_delegated_reports_return() {
+    let builder = ContextBuilder::new();
+    let summary = "the child found three call sites";
+    let events = vec![entry(SessionEvent::SubagentReturn {
+        child_session_id: "child".into(),
+        status: "completed".into(),
+        summary: summary.into(),
+        result_ref: String::new(),
+        input_tokens: 900,
+        output_tokens: 100,
+        cache_read_input_tokens: 0,
+        cache_write_input_tokens: 0,
+        reasoning_tokens: 0,
+        input_reported: true,
+        cache_read_reported: true,
+        cache_write_reported: true,
+    })];
+    let delegated = builder
+        .delegated_context(&events)
+        .expect("a session that delegated reports it");
+    assert_eq!(delegated.returns, 1);
+    assert_eq!(
+        delegated.returned_tokens,
+        builder.tokenizer.count(summary),
+        "the return cost is the summary the session kept"
+    );
+    assert_eq!(
+        delegated.child_tokens,
+        Some(1_000),
+        "input plus output is what the child processed"
+    );
+}
+
+#[test]
+fn test_delegated_unknown_total() {
+    // A child that reported nothing leaves its total unknown: the parent knows
+    // it delegated, not what the child spent.
+    let builder = ContextBuilder::new();
+    let events = vec![entry(SessionEvent::SubagentReturn {
+        child_session_id: "child".into(),
+        status: "completed".into(),
+        summary: "no usage reported".into(),
+        result_ref: String::new(),
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_read_input_tokens: 0,
+        cache_write_input_tokens: 0,
+        reasoning_tokens: 0,
+        input_reported: false,
+        cache_read_reported: false,
+        cache_write_reported: false,
+    })];
+    let delegated = builder
+        .delegated_context(&events)
+        .expect("the return is still reported");
+    assert_eq!(delegated.returns, 1);
+    assert_eq!(
+        delegated.child_tokens, None,
+        "an unreported total stays unknown rather than reading zero"
+    );
+}
+
+#[test]
+fn test_delegated_absent() {
+    let builder = ContextBuilder::new();
+    let events = vec![entry(SessionEvent::UserInput {
+        text: "no delegation here".into(),
+    })];
+    assert!(
+        builder.delegated_context(&events).is_none(),
+        "a session with no returns has no delegated section"
+    );
+}
+
+/// The conversation cost is derived for the /context measurement and not for a
+/// turn. Deriving it counts a token per tool call input and per tool result
+/// across the whole history, so a turn that only reports the occupancy must not
+/// pay it, while the pane that shows the footprints must.
+#[test]
+fn test_turn_skips_conversation_cost() {
+    let mut scratch = temp_dir();
+    scratch.push(format!("ctx-test-turncost-{}", id()));
+    create_dir_all(&scratch).expect("mkdir scratch");
+    let b = ContextBuilder::new().with_cwd(scratch.clone());
+    let events = vec![
+        entry(SessionEvent::ToolCall {
+            call_id: "1".into(),
+            tool: "bash".into(),
+            input: serde_json::json!({"command": "ls"}),
+        }),
+        entry(SessionEvent::tool_result(
+            "1",
+            serde_json::json!("a whole directory listing the model paid for"),
+        )),
+        entry(SessionEvent::SubagentReturn {
+            child_session_id: "child".into(),
+            status: "completed".into(),
+            summary: "the child found three call sites".into(),
+            result_ref: String::new(),
+            input_tokens: 900,
+            output_tokens: 100,
+            cache_read_input_tokens: 0,
+            cache_write_input_tokens: 0,
+            reasoning_tokens: 0,
+            input_reported: true,
+            cache_read_reported: true,
+            cache_write_reported: true,
+        }),
+    ];
+    let turn = b.build_for_turn(&events, None, None, &AssemblyInput::default());
+    assert!(
+        turn.measurement.tool_footprints.is_empty(),
+        "a turn reports no tool footprint"
+    );
+    assert!(
+        turn.measurement.delegated.is_none(),
+        "a turn reports no delegated spend"
+    );
+    let pane = b.measure(&events, None, None, &AssemblyInput::default());
+    assert_eq!(
+        pane.measurement.tool_footprints.len(),
+        1,
+        "the pane measures the session's tool cost"
+    );
+    assert!(
+        pane.measurement.delegated.is_some(),
+        "the pane measures the session's delegated spend"
+    );
+    remove_dir_all(&scratch).ok();
+}
+
+/// A skills section holding only the entries the next request would carry is a
+/// listing no message stream carries yet, so it takes nothing from the messages.
+/// Charging the messages for it would report a stream smaller than the one the
+/// session holds.
+#[test]
+fn test_skills_estimate_keeps_messages() {
+    let mut scratch = temp_dir();
+    scratch.push(format!("ctx-test-skillest-{}", id()));
+    create_dir_all(&scratch).expect("mkdir scratch");
+    let skills = [SkillSnapshot {
+        descriptor: SkillDescriptor {
+            name: "commit".into(),
+            description: "commit changes".into(),
+            body_token_estimate: 0,
+            ..sample_descriptor()
+        },
+        origin: "Project".into(),
+        usage: SkillUsage::default(),
+    }];
+    let events = vec![entry(SessionEvent::UserInput {
+        text: "help me commit".into(),
+    })];
+    let input = AssemblyInput {
+        tool_defs: &[],
+        memory_index: None,
+        skills: &skills,
+    };
+    let b = ContextBuilder::new().with_cwd(scratch.clone());
+    let v = b.measure(&events, None, None, &input);
+    let tok = Tokenizer::new();
+    assert_eq!(
+        v.measurement.section(SectionKind::Messages).unwrap().tokens,
+        tok.count("help me commit"),
+        "the messages section reports the whole stream"
+    );
+    let skill = v
+        .measurement
+        .section(SectionKind::Skills)
+        .expect("skills section present");
+    assert!(
+        skill.tokens > 0,
+        "the entries alone are what the next request would carry"
+    );
+    assert_eq!(v.measurement.skills.len(), 1, "one row per entry");
+    assert_eq!(
+        v.measurement.skills[0].tokens, skill.tokens,
+        "rows sum to the section"
+    );
+    remove_dir_all(&scratch).ok();
+}
+
+/// The listing a message stream carries is charged to the skills section and
+/// taken from the messages even when no skill rows describe it: what is
+/// subtracted is what the stream holds, not what the rows can name.
+#[test]
+fn test_listing_charged_without_rows() {
+    let mut scratch = temp_dir();
+    scratch.push(format!("ctx-test-skillnorow-{}", id()));
+    create_dir_all(&scratch).expect("mkdir scratch");
+    let listing = "commit: commit changes";
+    let events = vec![
+        entry(SessionEvent::UserInput {
+            text: "help me commit".into(),
+        }),
+        entry(SessionEvent::SkillListing {
+            text: listing.into(),
+            bytes: listing.len() as u32,
+            content_hash: 0,
+        }),
+    ];
+    let b = ContextBuilder::new().with_cwd(scratch.clone());
+    let v = b.measure(&events, None, None, &AssemblyInput::default());
+    let tok = Tokenizer::new();
+    let merged = format!("help me commit\n{listing}");
+    let full_input = tok.count(&merged);
+    let messages = v.measurement.section(SectionKind::Messages).unwrap().tokens;
+    assert_eq!(
+        messages,
+        full_input - tok.count(listing),
+        "the listing rides the stream, so the messages section is charged for it"
+    );
+    assert_eq!(
+        v.measurement.section(SectionKind::Skills).unwrap().tokens,
+        tok.count(listing),
+        "the skills section reports the listing the stream carries"
+    );
+    assert!(
+        v.measurement.skills.is_empty(),
+        "no configured skill describes the listing, so there is no row to name it"
+    );
+    remove_dir_all(&scratch).ok();
 }
 
 #[test]
 fn test_build_empty_events_view() {
-    // build(&[]) with no events is the fresh-session /context path
-    // (last_measurement() None → prospective_measurement() → build(&[])).
+    // build(&[]) with no events is the empty-session path: a session with
+    // nothing loaded still reports the prompt and its capability sections.
     let cb = ContextBuilder::new();
     let view = cb.build(&[]);
     assert!(
         view.measurement.token_count() > 0,
-        "prospective view must have system prompt + tools tokens, not 0"
+        "an empty session must have system prompt tokens, not 0"
     );
     let messages = view
         .measurement
         .sections
         .iter()
         .find(|s| s.kind == SectionKind::Messages)
-        .expect("messages section present in the prospective view");
+        .expect("messages section present with no events");
     assert_eq!(
         messages.tokens, 0,
         "messages tokens must be 0 (no turn run)"
@@ -547,9 +1048,9 @@ fn test_build_empty_events_view() {
     let bd = view.measurement.breakdown("test", 200_000);
     assert!(
         bd.categories.len() >= 3,
-        "prospective breakdown has system prompt + tools + messages + free space"
+        "the breakdown has a category per section plus free space"
     );
-    assert!(!bd.grid.is_empty(), "prospective breakdown builds a grid");
+    assert!(!bd.grid.is_empty(), "the breakdown builds a grid");
 }
 
 /// The system prompt remains byte-stable as the event log grows in one cwd.
@@ -657,13 +1158,20 @@ fn test_recall_not_system_section() {
         !v.system.contains(&recall_text),
         "recalled memory must not enter the system prompt static section"
     );
-    let sys = v
+    let memory = v
         .measurement
-        .section(SectionKind::SystemPrompt)
-        .expect("system section");
+        .section(SectionKind::Memory)
+        .expect("memory section");
+    let rows = &v.measurement.memory_files;
+    assert_eq!(rows.len(), 1, "the recall is the only memory source here");
     assert!(
-        !sys.items.iter().any(|i| i.contains("DEPLOY_COMMAND")),
-        "system items must not list recall content"
+        !rows[0].label.contains("DEPLOY_COMMAND"),
+        "the recalled content stays out of the row labels"
+    );
+    assert_eq!(
+        memory.tokens,
+        Tokenizer::new().count(&recall_text),
+        "Memory counts the recalled attachment"
     );
     // The recall text is in the user message (merged by the assembly) —
     // the model sees it, just not in the static prefix.
@@ -795,12 +1303,18 @@ fn test_assemble_threads_boundary() {
     create_dir_all(&dir_b).expect("mkdir b");
     write(dir_b.join("AGENTS.md"), "# Project B\n\nrules B.").expect("write b");
 
-    let a = ContextBuilder::new()
-        .with_cwd(dir_a.clone())
-        .build_prospective(&[], Some(index));
-    let b = ContextBuilder::new()
-        .with_cwd(dir_b.clone())
-        .build_prospective(&[], Some(index));
+    let a = ContextBuilder::new().with_cwd(dir_a.clone()).measure(
+        &[],
+        None,
+        None,
+        &assembly_input(&[], Some(index)),
+    );
+    let b = ContextBuilder::new().with_cwd(dir_b.clone()).measure(
+        &[],
+        None,
+        None,
+        &assembly_input(&[], Some(index)),
+    );
 
     assert!(a.dynamic_boundary > 0, "boundary is interior, not zero");
     assert!(
@@ -842,42 +1356,39 @@ fn test_agent_directory_round_trip() {
     );
 }
 
-/// The prospective path must measure the REAL tool definitions and memory
-/// index, not an empty list: a /context before the first turn has to report
-/// the same tools section the first turn will send, or the pane shows zero
-/// and the next turn contradicts it.
+/// A measurement must read the tool definitions the caller declares: a
+/// /context that names no tools reports no tool footprint, so the pane cannot
+/// claim a cost the request does not pay.
 #[test]
-fn test_prospective_measures_real_tools() {
+fn test_measure_reports_declared_tools() {
     let cb = ContextBuilder::new();
     let tool_defs = vec![ToolDef {
         name: "bash".to_string(),
         description: "Run a shell command in the workspace.".to_string(),
         input_schema: serde_json::json!({"type": "object"}),
     }];
-    let with_tools = cb.build_prospective(&tool_defs, None);
+    let with_tools = cb.measure(&[], None, None, &assembly_input(&tool_defs, None));
     let tools = with_tools
         .measurement
         .sections
         .iter()
         .find(|s| s.kind == SectionKind::Tools)
-        .expect("tools section present when definitions are supplied");
+        .expect("tools section present");
     assert!(
         tools.tokens > 0,
         "the tools section must measure the real definitions"
     );
-    assert_eq!(tools.items, vec!["bash".to_string()]);
 
-    let without = cb.build_prospective(&[], None);
-    assert!(
-        without
-            .measurement
-            .sections
-            .iter()
-            .all(|s| s.kind != SectionKind::Tools),
-        "no tools section when no definitions are supplied"
-    );
+    let without = cb.measure(&[], None, None, &AssemblyInput::default());
+    let tools = without
+        .measurement
+        .sections
+        .iter()
+        .find(|s| s.kind == SectionKind::Tools)
+        .expect("the tools section keeps its place in the order");
+    assert_eq!(tools.tokens, 0, "no declared tool, no tool footprint");
     assert!(
         cb.last_measurement().is_none(),
-        "the prospective build must not populate the turn cache"
+        "measuring for /context must not populate the turn cache"
     );
 }

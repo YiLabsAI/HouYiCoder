@@ -20,15 +20,17 @@ fn test_no_memory_file_identity() {
     let dir = scratch_dir("empty");
     let p = SystemPrompt::build(&dir);
     assert!(!p.text.is_empty(), "system prompt must be non-empty");
-    assert!(!p.has_project_context, "scratch dir has no memory file");
+    assert!(
+        p.memory_blocks.is_empty(),
+        "scratch dir has no memory file to report"
+    );
     assert!(p.text.contains("agent"));
     assert!(
-        !p.items.contains(&"Project context".to_string()),
-        "no project context row when no memory file"
+        !p.text.contains("# Project context"),
+        "no project context section when no memory file"
     );
-    assert!(p.items.contains(&"Efficiency".to_string()));
-    assert!(p.items.contains(&"Tool docs".to_string()));
-    assert!(p.items.contains(&"Date".to_string()));
+    assert!(p.text.contains("# Efficiency"));
+    assert!(p.text.contains("# Tool docs"));
 }
 
 #[test]
@@ -37,7 +39,10 @@ fn test_agent_directory_injected() {
     let section = "## Available agents\n\n- explore: fast search";
     let p = SystemPrompt::build_with_memory_index(&dir, None, Some(section));
     assert!(p.text.contains("- explore: fast search"));
-    assert!(p.items.contains(&"Agent directory".to_string()));
+    assert!(
+        p.memory_blocks.is_empty(),
+        "the agent directory is prompt framing, not a memory block"
+    );
 }
 
 #[test]
@@ -45,10 +50,15 @@ fn test_agents_md_injected() {
     let dir = scratch_dir("agents");
     fs::write(dir.join("AGENTS.md"), "# My Project\n\nRules go here.").expect("write");
     let p = SystemPrompt::build(&dir);
-    assert!(p.has_project_context, "AGENTS.md must be detected");
+    assert_eq!(
+        p.memory_blocks.len(),
+        1,
+        "AGENTS.md must be reported as one memory block"
+    );
+    assert_eq!(p.memory_blocks[0].label, "AGENTS.md");
     assert!(p.text.contains("My Project"), "content must be injected");
     assert!(p.text.contains("Rules go here."));
-    assert!(p.items.contains(&"Project context".to_string()));
+    assert!(p.text.contains("# Project context"));
 }
 
 #[test]
@@ -56,7 +66,11 @@ fn test_falls_back_to_md() {
     let dir = scratch_dir("claude");
     fs::write(dir.join("CLAUDE.md"), "# Fallback rules").expect("write");
     let p = SystemPrompt::build(&dir);
-    assert!(p.has_project_context, "CLAUDE.md fallback must work");
+    assert_eq!(
+        p.memory_blocks.len(),
+        1,
+        "CLAUDE.md fallback must be reported"
+    );
     assert!(p.text.contains("Fallback rules"));
 }
 
@@ -110,7 +124,7 @@ fn test_carrier_never_shadows_rules() {
     fs::write(dir.join("agent.md"), "promoted memory rules").expect("write");
     fs::write(dir.join("AGENTS.md"), "engineering rules").expect("write");
     let p = SystemPrompt::build(&dir);
-    assert!(p.has_project_context);
+    assert!(!p.memory_blocks.is_empty());
     assert!(
         p.text.contains("promoted memory rules"),
         "the carrier content still loads"
@@ -152,7 +166,7 @@ fn test_local_overlay_merged() {
     fs::write(dir.join("agent.md"), "shared rules").expect("write");
     fs::write(dir.join("agent.local.md"), "personal overrides").expect("write");
     let p = SystemPrompt::build(&dir);
-    assert!(p.has_project_context);
+    assert!(!p.memory_blocks.is_empty());
     assert!(p.text.contains("shared rules"), "shared memory injected");
     assert!(
         p.text.contains("personal overrides"),
@@ -180,7 +194,10 @@ fn test_walk_up_finds_parent() {
     let child = root.join("sub").join("deep");
     fs::create_dir_all(&child).expect("mkdir child");
     let p = SystemPrompt::build(&child);
-    assert!(p.has_project_context, "walk-up must reach the parent file");
+    assert!(
+        !p.memory_blocks.is_empty(),
+        "walk-up must reach the parent file"
+    );
     assert!(p.text.contains("parent rules"));
 }
 
@@ -191,7 +208,7 @@ fn test_byte_stable_across_turns() {
     let a = SystemPrompt::build(&dir);
     let b = SystemPrompt::build(&dir);
     assert_eq!(a.text, b.text, "same inputs must produce identical bytes");
-    assert_eq!(a.items, b.items);
+    assert_eq!(a.memory_blocks, b.memory_blocks);
 }
 
 #[test]
@@ -214,7 +231,6 @@ fn test_tone_guides_style() {
     assert!(p.text.contains("Only use emojis"), "{}", p.text);
     assert!(p.text.contains("file_path:line_number"), "{}", p.text);
     assert!(p.text.contains("period"), "{}", p.text);
-    assert!(p.items.contains(&"Tone and style".to_string()));
 }
 
 #[test]
@@ -236,7 +252,6 @@ fn test_system_guides_framework() {
         "mechanism awareness present: {}",
         p.text
     );
-    assert!(p.items.contains(&"System".to_string()));
 }
 
 #[test]
@@ -260,7 +275,6 @@ fn test_actions_guides_care() {
     assert!(p.text.contains("rm -rf"), "{}", p.text);
     assert!(p.text.contains("--no-verify"), "{}", p.text);
     assert!(p.text.contains("Match the scope"), "{}", p.text);
-    assert!(p.items.contains(&"Actions".to_string()));
 }
 
 #[test]
@@ -282,7 +296,6 @@ fn test_doing_tasks_guides_behavior() {
     assert!(p.text.contains("verify it works"), "{}", p.text);
     assert!(p.text.contains("Report outcomes faithfully"), "{}", p.text);
     assert!(p.text.contains("Do not add features"), "{}", p.text);
-    assert!(p.items.contains(&"Doing tasks".to_string()));
 }
 
 #[test]

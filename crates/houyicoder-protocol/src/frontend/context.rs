@@ -40,25 +40,27 @@ pub struct GridCell {
     pub fullness: f32,
 }
 
-/// One memory-source row in the /context drill-down, wire form: a project
-/// memory file or a stored memory, with the tokens it costs.
+/// One memory row in the /context drill-down: a block of memory the request
+/// carries, with the tokens it costs. The rows break the Memory category into
+/// its sources and sum to it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ContextFileEntry {
-    /// What to show for this row: a project memory file path, or the key of a
-    /// stored memory whose index line the system prompt carries.
+    /// What to show for this row: the name of a project memory file, the
+    /// memory index with its entry count, or the recalled memories with theirs.
     ///
     /// Named path while a row could only be a file. A renamed field cannot
     /// degrade on its own, so the old name stays readable rather than forcing a
     /// version bump for a same-build peer.
     #[serde(alias = "path")]
     pub label: String,
-    /// Tokens that file occupies in the window.
+    /// Tokens this block of memory occupies in the window.
     pub tokens: u32,
 }
 
 /// One skill row in the /context drill-down, wire form: where the skill came
-/// from, its name, and the tokens its frontmatter costs.
+/// from, its name, and the tokens its listing entry costs. The rows sum to the
+/// Skills category.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ContextSkillEntry {
@@ -68,6 +70,39 @@ pub struct ContextSkillEntry {
     pub name: String,
     /// Tokens the skill's listing entry costs.
     pub tokens: u32,
+}
+
+/// One tool's footprint in the conversation, as the protocol carries it: how
+/// many calls ran, the tokens their call blocks cost, and the tokens their
+/// results cost. Ordered by total cost descending, so the heaviest consumer
+/// reads first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolFootprint {
+    /// The registered tool name.
+    pub tool: String,
+    /// Calls of this tool the assembled conversation holds.
+    pub calls: u32,
+    /// Tokens this tool's call blocks cost.
+    pub call_tokens: u32,
+    /// Tokens this tool's results cost.
+    pub result_tokens: u32,
+}
+
+/// What delegated work costs the window that holds it. A child runs in its own
+/// window, so its spend and what it returned are reported side by side rather
+/// than netted into one figure.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DelegatedContext {
+    /// Tokens the returned child summaries occupy in this window.
+    pub returned_tokens: u32,
+    /// Total tokens the child sessions processed, summed over the returns.
+    /// None when the returns did not all report their input: an unmeasured
+    /// total is unknown, not zero.
+    pub child_tokens: Option<u32>,
+    /// Child returns the session log holds.
+    pub returns: u32,
 }
 
 /// The data the context visualization renders, wire form. The grid is a
@@ -89,15 +124,16 @@ pub struct ContextBreakdown {
     pub grid: Vec<Vec<GridCell>>,
     /// Flat cell index of the cache breakpoint (cached prefix before it).
     pub cache_breakpoint: Option<usize>,
-    /// The memory sources the request pays for: the project memory files the
-    /// index reads (CLAUDE.md and friends) and the stored memories it carries a
-    /// line each for. Not the grid's Memory category, which counts recalled
-    /// entries in the message stream. Empty before the first measurement; the
-    /// frontend renders what the analyzer supplies, never a pane cache.
+    /// The memory sources the request carries, one row each: the project
+    /// memory files, the frozen index, and the recalled memories. The rows sum
+    /// to the Memory category in categories. Empty before the first
+    /// measurement; the frontend renders those rows rather than keeping a pane
+    /// cache of its own.
     #[serde(default)]
     pub memory_files: Vec<ContextFileEntry>,
-    /// The skills the registry exposes, for the drill-down. Empty when no
-    /// skill registry is configured.
+    /// The skills the listing announces, one row each. The rows sum to the
+    /// Skills category in categories. Empty when no skill registry is
+    /// configured.
     #[serde(default)]
     pub skills: Vec<ContextSkillEntry>,
     /// When a compaction has run, a human-readable summary of what was folded
@@ -115,6 +151,14 @@ pub struct ContextBreakdown {
     /// first provider response.
     #[serde(default)]
     pub cache_hit_rate: Option<f64>,
+    /// Per-tool footprints of the conversation, heaviest first. Empty before
+    /// the first measurement and on a session that ran no tool.
+    #[serde(default)]
+    pub tool_footprints: Vec<ToolFootprint>,
+    /// The delegated work this window holds. None when the session ran no
+    /// child, so a childless session reports nothing rather than zeros.
+    #[serde(default)]
+    pub delegated: Option<DelegatedContext>,
 }
 
 /// Build the proportional-area grid the renderer draws: each category's cell
@@ -209,16 +253,16 @@ fn push_cells(
     }
 }
 
-/// A canned ContextBreakdown for the no-runner / preview path so the /context
-/// viz renders a real-shape grid before the live breakdown is wired. The
-/// numbers mirror a typical session footprint; the grid is built via
+/// A representative ContextBreakdown for the no-runner / preview path, so the
+/// /context view renders a real-shape grid before a live measurement exists.
+/// The numbers mirror a typical session footprint; the grid is built via
 /// build_grid.
 pub fn stub_breakdown() -> ContextBreakdown {
     let window: u32 = 200_000;
     let cats: Vec<CategoryBreakdown> = vec![
         CategoryBreakdown {
             label: "System prompt".into(),
-            color_hint: 244,
+            color_hint: 39,
             tokens: 1_800,
             is_deferred: false,
             is_reserved: false,
@@ -273,6 +317,8 @@ pub fn stub_breakdown() -> ContextBreakdown {
         compact_summary: None,
         cache_prefix_tokens: None,
         cache_hit_rate: None,
+        tool_footprints: Vec::new(),
+        delegated: None,
     }
 }
 

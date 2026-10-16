@@ -13,9 +13,10 @@ use crate::toggle_hint::ToggleHint;
 use crate::view::relative_time::turn_span_label;
 
 /// Drill-down rows under the /context grid: per-source memory and per-skill
-/// footprints. A memory source is a project memory file or a stored memory.
-/// These rows list in two sections below the grid; the analyzer supplies them
-/// over the wire, so the renderer never invents rows from a pane cache.
+/// footprints. A memory row is a project memory file, the memory index, or the
+/// recalled memories. These rows list in two sections below the grid; the
+/// measurement supplies them, so the renderer never makes up rows from a pane
+/// cache.
 #[derive(Debug, Clone, Default)]
 pub struct ContextDrillDown {
     pub memory_files: Vec<ContextFileEntry>,
@@ -23,8 +24,8 @@ pub struct ContextDrillDown {
 }
 
 impl ContextDrillDown {
-    /// Read the drill-down rows the breakdown carries. The analyzer measures
-    /// them, so the frontend renders exactly what the wire reported.
+    /// Read the drill-down rows the breakdown carries. The measurement produces
+    /// them, so the frontend renders exactly what the breakdown reported.
     pub fn from_breakdown(breakdown: &ContextBreakdown) -> Self {
         Self {
             memory_files: breakdown
@@ -48,8 +49,8 @@ impl ContextDrillDown {
     }
 }
 
-/// One memory-source row: a project memory file path or a stored memory key,
-/// with the tokens it costs.
+/// One memory-source row: a project memory file name, the memory index, or the
+/// recalled memories, with the tokens it costs.
 #[derive(Debug, Clone)]
 pub struct ContextFileEntry {
     pub label: String,
@@ -64,8 +65,8 @@ pub struct ContextSkillEntry {
     pub tokens: u32,
 }
 
-/// One canned suggestion row under the grid: severity glyph + bold title +
-/// dim detail, optionally a savings estimate.
+/// One suggestion row under the grid: severity glyph + bold title + dim
+/// detail, optionally a savings estimate.
 #[derive(Debug, Clone)]
 pub struct ContextSuggestion {
     pub severity: SuggestionSeverity,
@@ -83,8 +84,8 @@ pub enum SuggestionSeverity {
 }
 
 /// The full /context view payload: the proportional grid + categories, the
-/// drill-down rows, and the canned suggestions. Carried by the ContextGrid
-/// transcript line so the inline renderer has everything it needs.
+/// drill-down rows, and the suggestions. Carried by the ContextGrid transcript
+/// line so the inline renderer has everything it needs.
 #[derive(Debug, Clone, Default)]
 pub struct ContextView {
     pub breakdown: ContextBreakdown,
@@ -526,7 +527,7 @@ pub fn thinking_brief(text: &str) -> String {
 }
 
 /// Capitalize the first letter of a tool name for display (bash → Bash).
-fn capitalize(s: &str) -> String {
+pub(crate) fn capitalize(s: &str) -> String {
     let mut c = s.chars();
     match c.next() {
         Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),

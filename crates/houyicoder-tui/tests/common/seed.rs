@@ -98,6 +98,67 @@ pub fn seed_session_with_usage(
     write_session(root, sid_str, model, &cwd, &events);
 }
 
+/// What a seeded session's shell result, file read, and delegated child cost,
+/// so a PTY test can plant a measured spend and assert the advice rendered from
+/// it. The result bodies carry the tokens; the child carries its own reported
+/// totals.
+pub struct SeededContextCost<'a> {
+    pub bash_result: &'a str,
+    pub read_result: &'a str,
+    pub child_summary: &'a str,
+    pub child_input: u64,
+    pub child_output: u64,
+}
+
+/// Seed a session whose log holds a shell result, a file read, and a child's
+/// return, so a resumed /context reports the per-tool footprints and the
+/// delegated totals the seed stands for rather than an empty measurement.
+pub fn seed_session_with_context_cost(
+    root: &Path,
+    sid_str: &str,
+    model: &str,
+    prompt: &str,
+    cost: &SeededContextCost,
+) {
+    let cwd = workspace_cwd(None);
+    let events = [
+        SessionEvent::UserInput {
+            text: prompt.into(),
+        },
+        SessionEvent::AssistantMessage {
+            text: "reading the workspace".into(),
+            thinking: None,
+        },
+        SessionEvent::ToolCall {
+            call_id: "call-bash".into(),
+            tool: "bash".into(),
+            input: serde_json::json!({"command": "cat src/lib.rs"}),
+        },
+        SessionEvent::tool_result("call-bash", serde_json::json!(cost.bash_result)),
+        SessionEvent::ToolCall {
+            call_id: "call-read".into(),
+            tool: "read".into(),
+            input: serde_json::json!({"path": "src/main.rs"}),
+        },
+        SessionEvent::tool_result("call-read", serde_json::json!(cost.read_result)),
+        SessionEvent::SubagentReturn {
+            child_session_id: "child-seeded".into(),
+            status: "completed".into(),
+            summary: cost.child_summary.into(),
+            result_ref: String::new(),
+            input_tokens: cost.child_input,
+            output_tokens: cost.child_output,
+            cache_read_input_tokens: 0,
+            cache_write_input_tokens: 0,
+            reasoning_tokens: 0,
+            input_reported: true,
+            cache_read_reported: true,
+            cache_write_reported: false,
+        },
+    ];
+    write_session(root, sid_str, model, &cwd, &events);
+}
+
 /// Write the seeded log (one JSONL line per event, timestamps in order) and the
 /// session.json descriptor the resume reader scans, and return the first
 /// event's id. One writer for every seed that lays down a log, so a schema

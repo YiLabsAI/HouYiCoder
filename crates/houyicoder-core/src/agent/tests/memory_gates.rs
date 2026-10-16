@@ -13,6 +13,7 @@ use houyicoder_context::{MemoryEntry, MemorySource, SessionEvent, SessionId, Ses
 use houyicoder_memory::InMemoryBackend;
 use houyicoder_memory::KeywordRecallProvider;
 use houyicoder_memory::MarkdownMemoryProvider;
+use houyicoder_protocol::frontend::context::ContextFileEntry;
 use houyicoder_protocol::llm::CompletionRequest;
 use houyicoder_protocol::llm::{CompletionResponse, ModelCapabilities, OutputItem, ProviderError};
 use houyicoder_protocol::llm::{LlmEvent, Usage};
@@ -259,16 +260,25 @@ fn test_memory_index_respects_gate() {
     drop(remove_dir_all(&root));
 }
 
-/// The /context drill-down lists the stored memories the frozen prompt index
-/// carries, and stops listing them once the gate is off: a row is a cost the
+/// The memory rows a session measurement reports, for the index-freeze cases.
+async fn memory_rows(runner: &Runner, session: SessionId) -> Vec<ContextFileEntry> {
+    runner
+        .session_measurement(session)
+        .await
+        .expect("measure the session")
+        .memory_files
+}
+
+/// The /context rows report the stored memories the frozen prompt index
+/// carries, and stop reporting them once the gate is off: a row is a cost the
 /// request pays, so it follows the index rather than the live store.
 ///
 /// The index is held across turns for a cache-stable prefix, so a memory
 /// written after the freeze reaches the prompt only at the next refresh point.
 /// The row must not appear before then, or the view would report a cost this
 /// request does not carry.
-#[test]
-fn test_drill_lists_stored_memories() {
+#[tokio::test]
+async fn test_memory_index_holds() {
     let root = temp_dir().join(format!("mem-drill-{}-{}", id(), line!()));
     drop(remove_dir_all(&root));
     fs::create_dir_all(&root).expect("mkdir store");
@@ -283,8 +293,8 @@ fn test_drill_lists_stored_memories() {
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let mut runtime = MemoryRuntime::new(store.clone());
     runtime.install_provider(memory.clone());
-    // A cwd holding no project memory file, so a stored memory is the only
-    // source row the drill can produce.
+    // A cwd holding no project memory file, so the memory index is the only
+    // memory row the measurement can produce.
     let cwd = temp_dir().join(format!("mem-drill-cwd-{}-{}", id(), line!()));
     drop(remove_dir_all(&cwd));
     fs::create_dir_all(&cwd).expect("mkdir cwd");
@@ -297,21 +307,18 @@ fn test_drill_lists_stored_memories() {
     .with_cwd(cwd.clone())
     .install_memory(runtime);
 
-    let has_key = |rows: &[houyicoder_protocol::frontend::context::ContextFileEntry]| {
-        rows.iter().any(|row| row.label == "drill-key")
-    };
-    let (sources, _skills) = runner.context_drill();
-    let row = sources
-        .iter()
-        .find(|row| row.label == "drill-key")
-        .expect("the stored memory has a row");
+    let session = SessionId::new();
+    // One aggregate row covers the whole index, whatever it holds: the
+    // drill-down stays file-level instead of expanding one row per memory.
+    let rows = memory_rows(&runner, session).await;
+    assert_eq!(rows.len(), 1, "one row for the index, got {rows:?}");
+    assert_eq!(rows[0].label, "Memory index (1 entry)");
     assert!(
-        row.tokens > 0,
-        "the row reports what the index line costs the prompt"
+        rows[0].tokens > 0,
+        "the row reports what the index costs the prompt"
     );
 
-    // Written after the freeze: the prompt does not carry its line yet, so the
-    // row must not claim the cost.
+    // Written after the freeze: the prompt does not carry its line yet.
     memory
         .add(MemoryEntry::new(
             "written-later",
@@ -319,27 +326,24 @@ fn test_drill_lists_stored_memories() {
             MemorySource::Project,
         ))
         .unwrap();
-    let (frozen, _skills) = runner.context_drill();
-    assert!(
-        !frozen.iter().any(|row| row.label == "written-later"),
-        "a memory written after the freeze costs this request nothing: {frozen:?}"
+    let rows = memory_rows(&runner, session).await;
+    assert_eq!(
+        rows[0].label, "Memory index (1 entry)",
+        "a memory written after the freeze costs this request nothing"
     );
 
-    // Past the refresh point the index carries it, so the row appears.
+    // Past the refresh point the index carries it.
     runner.memory.invalidate_index_snapshot();
-    let (refreshed, _skills) = runner.context_drill();
-    assert!(
-        refreshed.iter().any(|row| row.label == "written-later"),
-        "the refresh point brings the new memory into the index: {refreshed:?}"
+    let rows = memory_rows(&runner, session).await;
+    assert_eq!(
+        rows[0].label, "Memory index (2 entries)",
+        "the refresh point brings the new memory into the index"
     );
 
     // Gate off injects no index at all, so no stored memory costs anything.
     runner.set_auto_memory(false);
-    let (gated, _skills) = runner.context_drill();
-    assert!(
-        !has_key(&gated) && !gated.iter().any(|row| row.label == "written-later"),
-        "gate off injects no index, so the memories cost the request nothing: {gated:?}"
-    );
+    let rows = memory_rows(&runner, session).await;
+    assert!(rows.is_empty(), "gate off injects no index: {rows:?}");
     drop(remove_dir_all(&root));
     drop(remove_dir_all(&cwd));
 }

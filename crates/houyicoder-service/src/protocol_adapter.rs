@@ -256,6 +256,8 @@ pub(crate) fn map_context_breakdown(
         compact_summary: bd.compact_summary.clone(),
         cache_prefix_tokens: bd.cache_prefix_tokens,
         cache_hit_rate: bd.cache_hit_rate,
+        tool_footprints: bd.tool_footprints.clone(),
+        delegated: bd.delegated.clone(),
     }
 }
 

@@ -748,8 +748,8 @@ fn test_slash_queries_ship_connected() {
     let mut app = app_with_provider(provider, ToolRegistry::new());
 
     app.run_command(SlashCommand::Context);
-    // /context sends a ContextQuery; drain the reply (prospective
-    // breakdown when no turn has run) + assert the grid lands.
+    // /context sends a ContextQuery; drain the reply (the session measured as
+    // the store holds it) + assert the grid lands.
     for _ in 0..200 {
         app.poll_agent();
         if app

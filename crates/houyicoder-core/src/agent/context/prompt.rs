@@ -8,6 +8,10 @@
 //! git status) stays out of it so the prefix caches cleanly; the current date
 //! changes daily, so it is appended past the boundary with the rest of the
 //! suffix a cross-session cache cannot share.
+//!
+//! The prompt also reports the memory blocks it carries apart from its own
+//! framing, so a measurement can charge them to the memory category instead
+//! of folding them into the prompt's total.
 
 pub(crate) mod date;
 pub(crate) mod extract;
@@ -30,22 +34,37 @@ const MEMORY_FILE_NAMES: &[&str] = &["agent.md", "AGENTS.md", "claude.md", "CLAU
 /// machine-specific overrides layered on top of the shared project memory.
 const LOCAL_MEMORY_FILE: &str = "agent.local.md";
 
-/// A built system prompt: the assembled text plus the per-section labels the
-/// /context drill-down renders. The static prefix (before dynamic_boundary)
-/// is byte-stable across turns and across sessions — it carries only the
-/// fixed identity, framework, and behavior sections with no cwd input.
-/// The dynamic suffix (from dynamic_boundary onward) carries the cwd-
-/// dependent project context, the session-stable agent directory, and the
-/// run's current date, none of which belong in a cross-session cache. A
-/// cache-policy consumer splits on this offset to give the static prefix a
-/// global cache scope while the dynamic suffix stays session-scoped, without
-/// leaking a sentinel string into the model's view.
+/// One block of memory context the prompt carries. The label names it for the
+/// /context drill-down; the text is the bytes the prompt holds for it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemoryBlock {
+    pub label: String,
+    pub text: String,
+}
+
+/// A built system prompt: the assembled text plus the memory blocks it
+/// carries. The static prefix (before dynamic_boundary) is byte-stable across
+/// turns and across sessions — it carries only the fixed identity, framework,
+/// and behavior sections with no cwd input. The dynamic suffix (from
+/// dynamic_boundary onward) carries the cwd-dependent project context, the
+/// session-stable agent directory, and the run's current date, none of which
+/// belong in a cross-session cache. A cache-policy consumer splits on this
+/// offset to give the static prefix a global cache scope while the dynamic
+/// suffix stays session-scoped, without leaking a sentinel string into the
+/// model's view.
+///
+/// The memory blocks report bytes the text already holds: a measurement
+/// charges them to the memory category rather than to the prompt's framing,
+/// and the /context drill-down lists them. They straddle the boundary (the
+/// index is static, the project context dynamic), which is why they are
+/// reported as their own list rather than as one contiguous span.
 #[derive(Debug, Clone, Default)]
 pub struct SystemPrompt {
     pub text: String,
-    pub items: Vec<String>,
-    /// True when a project memory file was found and injected.
-    pub has_project_context: bool,
+    /// The blocks that measure as memory context: the project memory files
+    /// with the local overlay, then the frozen index. Empty when the prompt
+    /// carries no memory.
+    pub memory_blocks: Vec<MemoryBlock>,
     /// Byte offset into the text where the dynamic suffix begins. Everything
     /// before this is byte-stable across turns and sessions; from here onward
     /// the bytes can change between sessions. A cache policy splits here.
@@ -76,58 +95,54 @@ impl SystemPrompt {
         let tone = tone_section();
         let efficiency = efficiency_section();
         let using_tools = using_tools_section();
-        let project = project_context_section(cwd);
+        let project_memory = read_project_memory(cwd);
         let tool_docs = tool_docs_section();
 
         let mut text = String::new();
-        let mut items = Vec::new();
 
         // Static prefix — byte-stable across turns and sessions.
         text.push_str(&identity);
-        items.push("Identity".to_string());
 
         text.push_str("\n\n");
         text.push_str(&system);
-        items.push("System".to_string());
 
         text.push_str("\n\n");
         text.push_str(&doing_tasks);
-        items.push("Doing tasks".to_string());
 
         text.push_str("\n\n");
         text.push_str(&actions);
-        items.push("Actions".to_string());
 
         text.push_str("\n\n");
         text.push_str(&tone);
-        items.push("Tone and style".to_string());
 
         text.push_str("\n\n");
         text.push_str(&efficiency);
-        items.push("Efficiency".to_string());
 
         text.push_str("\n\n");
         text.push_str(&using_tools);
-        items.push("Using your tools".to_string());
 
         // Memory behavior guidance (always-on, byte-stable): tells the agent
         // what to save, when to save it, and how to treat a recalled memory.
         // Constant across turns so the prefix caches cleanly.
         text.push_str("\n\n");
         text.push_str(&memory_behavior::memory_behavior_section());
-        items.push("Memory".to_string());
 
         // Memory index (stable summaries): appended after the memory-behavior
         // rules so it sits in the byte-stable cache prefix.
-        if let Some(idx) = index.filter(|s| !s.is_empty()) {
+        let index_block = index.filter(|s| !s.is_empty()).map(|idx| {
             text.push_str("\n\n## Memory index\n\n");
             text.push_str(idx);
-            items.push("Memory index".to_string());
-        }
+            MemoryBlock {
+                label: format!(
+                    "Memory index ({})",
+                    super::memory_entry_label(idx.lines().count())
+                ),
+                text: idx.to_string(),
+            }
+        });
 
         text.push_str("\n\n");
         text.push_str(&tool_docs);
-        items.push("Tool docs".to_string());
 
         // Boundary: everything above is byte-stable; from here the bytes can
         // change between sessions. Record the offset so a cache policy can
@@ -136,10 +151,9 @@ impl SystemPrompt {
 
         // Dynamic suffix — not byte-stable across sessions, appended after the
         // boundary so the static prefix stays a clean cacheable prefix.
-        if let Some(ref p) = project {
+        if let Some(project) = &project_memory {
             text.push_str("\n\n");
-            text.push_str(p);
-            items.push("Project context".to_string());
+            text.push_str(&project_context_block(project));
         }
 
         // Agent directory (session-stable: the registry is fixed for the
@@ -149,7 +163,6 @@ impl SystemPrompt {
         if let Some(dir) = agent_directory.filter(|s| !s.is_empty()) {
             text.push_str("\n\n");
             text.push_str(dir);
-            items.push("Agent directory".to_string());
         }
 
         // The run's current date, last so a day roll-over costs only this
@@ -158,14 +171,42 @@ impl SystemPrompt {
         // text injected into a message would be quotable but unverifiable.
         text.push_str("\n\n");
         text.push_str(&date::utc_date_line());
-        items.push("Date".to_string());
+
+        // Report the memory blocks in reading order: the project files the
+        // user maintains, then the frozen index of stored memories.
+        let mut memory_blocks: Vec<MemoryBlock> = Vec::new();
+        if let Some(project) = &project_memory {
+            for file in &project.files {
+                memory_blocks.push(block_for(file));
+            }
+            if let Some(overlay) = &project.overlay {
+                memory_blocks.push(block_for(overlay));
+            }
+        }
+        memory_blocks.extend(index_block);
 
         SystemPrompt {
             text,
-            items,
-            has_project_context: project.is_some(),
+            memory_blocks,
             dynamic_boundary,
         }
+    }
+}
+
+/// The block a memory file reports as: its name labels the row, its text is
+/// what the prompt carries. The name alone (not the path) matches how the
+/// drill-down lists sources; the file lives in the walk-up directory the
+/// memory pane shows in full.
+fn block_for(file: &MemoryFile) -> MemoryBlock {
+    let label = file
+        .path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| file.path.to_string_lossy().into_owned());
+    MemoryBlock {
+        label,
+        text: file.text.clone(),
     }
 }
 
@@ -351,6 +392,26 @@ fn using_tools_section() -> String {
         .to_string()
 }
 
+/// One project memory source: the file it was read from and its text.
+#[derive(Debug, Clone)]
+pub(crate) struct MemoryFile {
+    pub path: PathBuf,
+    pub text: String,
+}
+
+/// The project memory read from the cwd: the memory files found walking up,
+/// plus the local-private overlay layered on top of them.
+#[derive(Debug, Clone)]
+pub(crate) struct ProjectMemory {
+    /// The shared, git-tracked memory files, primary name first.
+    pub files: Vec<MemoryFile>,
+    /// The overlay from the same directory, when one exists.
+    pub overlay: Option<MemoryFile>,
+    /// The content the project-context block carries: the files joined, then
+    /// the overlay.
+    pub content: String,
+}
+
 /// The project context section: the project memory files found walking up
 /// from the cwd argument — agent.md (the promoted-memory carrier) and AGENTS.md
 /// (the engineering rules) both load when present, primary name first — merged
@@ -359,27 +420,57 @@ fn using_tools_section() -> String {
 /// omitted entirely (not rendered empty) so the drill-down shows no Project
 /// context row.
 pub(crate) fn project_context_section(cwd: &Path) -> Option<String> {
-    let (paths, mut content) = find_memory_files(cwd)?;
+    read_project_memory(cwd).map(|memory| project_context_block(&memory))
+}
+
+/// The project-context block as the prompt carries it: a heading naming the
+/// memory files, then their content with the overlay merged on top.
+fn project_context_block(memory: &ProjectMemory) -> String {
+    let names: Vec<&str> = memory
+        .files
+        .iter()
+        .filter_map(|f| f.path.file_name().and_then(|n| n.to_str()))
+        .collect();
+    let noun = if names.len() == 1 { "file" } else { "files" };
+    format!(
+        "# Project context (from the {} memory {noun})\n{}",
+        names.join(" + "),
+        memory.content
+    )
+}
+
+/// Read the project memory for a cwd. None when no memory file is found
+/// walking up from it. The one place the overlay rule lives: every reader of
+/// the project memory sees the same files in the same order.
+pub(crate) fn read_project_memory(cwd: &Path) -> Option<ProjectMemory> {
+    let files = find_memory_files(cwd)?;
+    let mut content = files
+        .iter()
+        .map(|f| f.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n\n");
     // Merge the local-private overlay from the same directory as the found
     // project memory files. Personal or machine-specific overrides sit on top
     // of the shared, git-tracked project memory.
-    if let Some(parent) = paths.first().and_then(|p| p.parent())
-        && let local = parent.join(LOCAL_MEMORY_FILE)
-        && local.is_file()
-        && let Ok(local_text) = read_to_string(&local)
-    {
+    let overlay = files
+        .first()
+        .and_then(|f| f.path.parent())
+        .map(|parent| parent.join(LOCAL_MEMORY_FILE))
+        .filter(|local| local.is_file())
+        .and_then(|local| {
+            read_to_string(&local)
+                .ok()
+                .map(|text| MemoryFile { path: local, text })
+        });
+    if let Some(local) = &overlay {
         content.push_str("\n\n");
-        content.push_str(&local_text);
+        content.push_str(&local.text);
     }
-    let names: Vec<&str> = paths
-        .iter()
-        .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
-        .collect();
-    let noun = if names.len() == 1 { "file" } else { "files" };
-    Some(format!(
-        "# Project context (from the {} memory {noun})\n{content}",
-        names.join(" + ")
-    ))
+    Some(ProjectMemory {
+        files,
+        overlay,
+        content,
+    })
 }
 
 /// Tool docs section: a stub summary of available tools. Real tool schemas
@@ -397,14 +488,13 @@ fn tool_docs_section() -> String {
 /// name first, so the promoted-memory carrier and the engineering rules
 /// coexist instead of shadowing. Case-insensitive filesystems satisfy both
 /// spellings of a name with one file, so candidates dedupe by canonical path
-/// before joining — a lone CLAUDE.md loads once, never twice. Returns the
-/// found paths and the joined content. Walk-up kept sync because the
-/// ContextBuilder is sync.
-fn find_memory_files(cwd: &Path) -> Option<(Vec<PathBuf>, String)> {
+/// before joining — a lone CLAUDE.md loads once, never twice. Walk-up kept
+/// sync because the ContextBuilder is sync.
+fn find_memory_files(cwd: &Path) -> Option<Vec<MemoryFile>> {
     let mut dir = cwd;
     loop {
         let mut seen: Vec<PathBuf> = Vec::new();
-        let mut found: Vec<(PathBuf, String)> = Vec::new();
+        let mut found: Vec<MemoryFile> = Vec::new();
         for name in MEMORY_FILE_NAMES {
             let candidate = dir.join(name);
             if !candidate.is_file() {
@@ -418,34 +508,23 @@ fn find_memory_files(cwd: &Path) -> Option<(Vec<PathBuf>, String)> {
             let Ok(text) = read_to_string(&candidate) else {
                 continue;
             };
-            found.push((candidate, text));
+            found.push(MemoryFile {
+                path: candidate,
+                text,
+            });
         }
         if !found.is_empty() {
-            let paths = found.iter().map(|(p, _)| p.clone()).collect();
-            let content = found
-                .into_iter()
-                .map(|(_, text)| text)
-                .collect::<Vec<_>>()
-                .join("\n\n");
-            return Some((paths, content));
+            return Some(found);
         }
         dir = dir.parent()?;
     }
-}
-
-/// The project memory files the index loads, for the /context drill-down.
-/// Same walk as find_memory_files, exposing the paths without the content.
-pub fn memory_file_paths(cwd: &Path) -> Vec<PathBuf> {
-    find_memory_files(cwd)
-        .map(|(paths, _)| paths)
-        .unwrap_or_default()
 }
 
 /// Locate the nearest project memory file path (for tests and diagnostics):
 /// the primary name among those found in the nearest directory holding any.
 #[cfg(test)]
 pub fn find_memory_file_path(cwd: &Path) -> Option<PathBuf> {
-    find_memory_files(cwd).map(|(paths, _)| paths[0].clone())
+    find_memory_files(cwd).map(|files| files[0].path.clone())
 }
 
 #[cfg(test)]

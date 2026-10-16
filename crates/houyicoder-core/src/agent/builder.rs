@@ -10,6 +10,7 @@ use crate::agent::SkillHookRegistrar;
 use crate::agent::ToolRegistry;
 use crate::agent::backbone::WorkspaceProbe;
 use crate::agent::conditional_activation::ConditionalSkillActivator;
+use crate::agent::context::AssemblyInput;
 use crate::agent::hook::CompactTrigger;
 use crate::agent::hook::registry::HookRegistry;
 use crate::agent::manifest::Summarizer;
@@ -23,16 +24,37 @@ use houyicoder_api::agent_event::AgentEventHandlers;
 use houyicoder_api::cache_policy::CachePolicyProvider;
 use houyicoder_api::cost_model::CostModelProvider;
 use houyicoder_api::memory::MemoryProvider;
-use houyicoder_api::skill::SkillRegistry;
+use houyicoder_api::skill::{SkillDescriptor, SkillRegistry, SkillSnapshot};
 use houyicoder_api::trust::TrustState;
 use houyicoder_context::Disposition;
 use houyicoder_context::MemoryOrigin;
 use houyicoder_protocol::llm::ProviderError;
+use houyicoder_protocol::llm::ToolDef;
 use std::sync::RwLock;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tokio::sync::mpsc::UnboundedReceiver;
+
+/// The capability-derived inputs one assembly reads: the tool schemas the
+/// request declares, the frozen memory index, and the skills the listing
+/// announces. Owned so the caller can hold them across the assembler's borrow.
+pub(crate) struct AssemblyParts {
+    pub tool_defs: Vec<ToolDef>,
+    pub memory_index: Option<String>,
+    pub skills: Vec<SkillSnapshot>,
+}
+
+impl AssemblyParts {
+    /// The borrow the assembler reads.
+    pub(crate) fn input(&self) -> AssemblyInput<'_> {
+        AssemblyInput {
+            tool_defs: &self.tool_defs,
+            memory_index: self.memory_index.as_deref(),
+            skills: &self.skills,
+        }
+    }
+}
 
 impl Runner {
     /// Attach the aggregate resource breaker the sandbox enforces against, so
@@ -331,6 +353,50 @@ impl Runner {
     /// Return the session-frozen memory index for the system prompt prefix.
     pub fn format_memory_index(&self) -> Option<String> {
         self.memory.format_index()
+    }
+
+    /// The capability-derived inputs one assembly reads. Built in one place so
+    /// the turn path and the /context measurement hand the assembler the same
+    /// tools, index, and skills. A second construction would let the reported
+    /// footprint drift from the one the request pays.
+    pub(crate) fn assembly_parts(&self) -> AssemblyParts {
+        AssemblyParts {
+            tool_defs: self.tools.tool_defs(),
+            memory_index: self.format_memory_index(),
+            skills: self.announced_skills(),
+        }
+    }
+
+    /// The skills the discovery listing announces: the model-invocable set
+    /// minus the paths-gated skills that are not active this session. One
+    /// definition, shared by the listing the request carries and the cost the
+    /// /context view reports.
+    pub(crate) fn announced_skills(&self) -> Vec<SkillSnapshot> {
+        self.skills_snapshot()
+            .into_iter()
+            .filter(|snapshot| self.skill_announced(&snapshot.descriptor))
+            .collect()
+    }
+
+    /// True when a skill's listing entry reaches the model. A skill the
+    /// registry disables for model invocation never does; a paths-gated skill
+    /// announces only while its paths are active. An activation state that was
+    /// never set leaves the gate off, so the entry shows rather than
+    /// disappearing.
+    fn skill_announced(&self, descriptor: &SkillDescriptor) -> bool {
+        if descriptor.disable_model_invocation {
+            return false;
+        }
+        let Some(registry) = &self.skill_registry else {
+            return false;
+        };
+        if registry.paths_for(&descriptor.name).is_empty() {
+            return true;
+        }
+        self.conditional
+            .as_ref()
+            .map(|activation| activation.is_active(&descriptor.name))
+            .unwrap_or(true)
     }
 
     /// Token count of the compact summary text (the replacement for folded

@@ -1,9 +1,9 @@
 //! /context breakdown visualization, rendered INLINE in the transcript flow
 //! as plain, selectable rows (not a widget painted over placeholder rows).
 //! Layout: a bold "Context Usage" header, a colored grid (left) beside the
-//! colored grid (left) beside the legend (right) with a 2-col gap, a blank
-//! line, drill-down sections (Memory files, Skills) each with a bold header
-//! plus dim tree-glyph rows, a blank line, then a Suggestions section
+//! legend (right) with a 2-col gap, a blank
+//! line, drill-down sections (Memory files, Skills, Delegated) each with a
+//! bold header plus dim tree-glyph rows, a blank line, then a Suggestions section
 //! (warning/info glyphs + bold title + dim detail). Each visual row is emitted
 //! as a (plain text, styled line) pair: the plain text carries the selectable,
 //! copyable content (the grid glyphs are ordinary characters) and the styled
@@ -14,11 +14,12 @@ use ratatui::{
     text::{Line, Span},
 };
 
+use crate::command::render::format_tokens;
 use crate::records::ContextFileEntry;
 use crate::records::ContextSkillEntry;
 use crate::records::ContextSuggestion;
 use crate::records::{ContextView, SuggestionSeverity};
-use houyicoder_protocol::frontend::context::{ContextBreakdown, GridCell};
+use houyicoder_protocol::frontend::context::{ContextBreakdown, DelegatedContext, GridCell};
 
 /// Midpoint glyph threshold: a cell at least this full draws the filled ball.
 const FULL_GLYPH_THRESHOLD: f32 = 0.7;
@@ -83,14 +84,16 @@ pub fn render_as_rows(view: &ContextView) -> Vec<(String, Line<'static>)> {
         }
         out.push(row_from_spans(spans));
     }
-    // Drill-down (Memory files then Skills) and Suggestions follow, each
-    // section preceded by a blank separator row.
+    // Drill-down (Memory files, Skills, Delegated) and Suggestions follow,
+    // each section preceded by a blank separator row.
     let memory = memory_rows(&view.drill.memory_files);
     let skills = skills_rows(&view.drill.skills);
-    if !memory.is_empty() || !skills.is_empty() {
+    let delegated = delegated_rows(bd.delegated.as_ref());
+    if !memory.is_empty() || !skills.is_empty() || !delegated.is_empty() {
         out.push(blank_row());
         push_section(&mut out, &indent, memory);
         push_section(&mut out, &indent, skills);
+        push_section(&mut out, &indent, delegated);
     }
     let suggestions = suggestions_rows(&view.suggestions);
     if !suggestions.is_empty() {
@@ -184,8 +187,8 @@ fn legend_rows(bd: &ContextBreakdown, pct: f64) -> Vec<Vec<Span<'static>>> {
         format!(
             "{} \u{00b7} {}/{} tokens ({:.0}%)",
             bd.model,
-            fmt_tokens(bd.total_tokens),
-            fmt_tokens(bd.context_window),
+            format_tokens(u64::from(bd.total_tokens)),
+            format_tokens(u64::from(bd.context_window)),
             pct,
         ),
         dim,
@@ -202,7 +205,7 @@ fn legend_rows(bd: &ContextBreakdown, pct: f64) -> Vec<Vec<Span<'static>>> {
             Span::styled(
                 format!(
                     "{} tokens ({:.1}%)",
-                    fmt_tokens(cat.tokens),
+                    format_tokens(u64::from(cat.tokens)),
                     cat_pct(cat.tokens)
                 ),
                 dim,
@@ -216,7 +219,11 @@ fn legend_rows(bd: &ContextBreakdown, pct: f64) -> Vec<Vec<Span<'static>>> {
             Span::styled("\u{26F6}", dim_dark),
             Span::styled(" Free space: ", dim),
             Span::styled(
-                format!("{} ({:.1}%)", fmt_tokens(free.tokens), cat_pct(free.tokens)),
+                format!(
+                    "{} ({:.1}%)",
+                    format_tokens(u64::from(free.tokens)),
+                    cat_pct(free.tokens)
+                ),
                 dim,
             ),
         ]);
@@ -231,7 +238,7 @@ fn legend_rows(bd: &ContextBreakdown, pct: f64) -> Vec<Vec<Span<'static>>> {
             Span::styled(
                 format!(
                     "{} tokens ({:.1}%)",
-                    fmt_tokens(cat.tokens),
+                    format_tokens(u64::from(cat.tokens)),
                     cat_pct(cat.tokens)
                 ),
                 dim,
@@ -241,7 +248,7 @@ fn legend_rows(bd: &ContextBreakdown, pct: f64) -> Vec<Vec<Span<'static>>> {
     // Cache prefix is the System prompt + Tools token footprint. Hit rate is
     // the provider-reported ratio from cumulative usage.
     if let Some(prefix) = bd.cache_prefix_tokens {
-        let mut line = format!("Cache prefix: {}", fmt_tokens(prefix));
+        let mut line = format!("Cache prefix: {}", format_tokens(u64::from(prefix)));
         if let Some(rate) = bd.cache_hit_rate {
             line.push_str(&format!(" \u{00b7} hit rate {:.0}%", rate * 100.0));
         }
@@ -255,9 +262,9 @@ fn legend_rows(bd: &ContextBreakdown, pct: f64) -> Vec<Vec<Span<'static>>> {
 }
 
 /// The memory source rows: a bold header plus dim suffix, then one tree-glyph
-/// row per source (label + tokens). A source is a project memory file or a
-/// stored memory, not a recalled entry (see the grid's Memory category). Empty
-/// when there is no memory file and no stored memory.
+/// row per source (label + tokens). A source is a project memory file, the
+/// memory index, or the recalled memories. Empty when the request carries no
+/// memory.
 fn memory_rows(files: &[ContextFileEntry]) -> Vec<Vec<Span<'static>>> {
     if files.is_empty() {
         return Vec::new();
@@ -273,7 +280,10 @@ fn memory_rows(files: &[ContextFileEntry]) -> Vec<Vec<Span<'static>>> {
         rows.push(vec![
             Span::styled("\u{2514} ", dim),
             Span::styled(format!("{}: ", file.label), dim),
-            Span::styled(format!("{} tokens", fmt_tokens(file.tokens)), dim),
+            Span::styled(
+                format!("{} tokens", format_tokens(u64::from(file.tokens))),
+                dim,
+            ),
         ]);
     }
     rows
@@ -308,10 +318,57 @@ fn skills_rows(skills: &[ContextSkillEntry]) -> Vec<Vec<Span<'static>>> {
             rows.push(vec![
                 Span::styled(format!("{glyph} "), dim),
                 Span::styled(format!("{}: ", s.name), dim),
-                Span::styled(format!("{} tokens", fmt_tokens(s.tokens)), dim),
+                Span::styled(
+                    format!("{} tokens", format_tokens(u64::from(s.tokens))),
+                    dim,
+                ),
             ]);
         }
     }
+    rows
+}
+
+/// The delegated-work rows: a bold header plus dim suffix, then the tokens the
+/// children's returns cost in this session's context, how many returns there
+/// were, and what the children spent in their own windows. The child figure
+/// stays unknown rather than printing a zero when a return reported no input
+/// count. Empty when the session delegated nothing.
+fn delegated_rows(delegated: Option<&DelegatedContext>) -> Vec<Vec<Span<'static>>> {
+    let Some(delegated) = delegated else {
+        return Vec::new();
+    };
+    let bold = Style::new().add_modifier(Modifier::BOLD);
+    let dim = Style::new().fg(Color::DarkGray);
+    let mut rows: Vec<Vec<Span>> = Vec::new();
+    rows.push(vec![
+        Span::styled("Delegated", bold),
+        Span::styled(" \u{00b7} /agents", dim),
+    ]);
+    rows.push(vec![
+        Span::styled("\u{2514} ", dim),
+        Span::styled("in context: ", dim),
+        Span::styled(
+            format!(
+                "{} tokens",
+                format_tokens(u64::from(delegated.returned_tokens))
+            ),
+            dim,
+        ),
+    ]);
+    rows.push(vec![
+        Span::styled("\u{2514} ", dim),
+        Span::styled("returns: ", dim),
+        Span::styled(delegated.returns.to_string(), dim),
+    ]);
+    let child = match delegated.child_tokens {
+        Some(tokens) => format!("{} tokens", format_tokens(u64::from(tokens))),
+        None => "unknown".to_string(),
+    };
+    rows.push(vec![
+        Span::styled("\u{2514} ", dim),
+        Span::styled("children used: ", dim),
+        Span::styled(child, dim),
+    ]);
     rows
 }
 
@@ -340,7 +397,7 @@ fn suggestions_rows(suggestions: &[ContextSuggestion]) -> Vec<Vec<Span<'static>>
         ];
         if let Some(savings) = sug.savings_tokens {
             title.push(Span::styled(
-                format!(" \u{2192} save ~{}", fmt_tokens(savings)),
+                format!(" \u{2192} save ~{}", format_tokens(u64::from(savings))),
                 dim,
             ));
         }
@@ -348,18 +405,6 @@ fn suggestions_rows(suggestions: &[ContextSuggestion]) -> Vec<Vec<Span<'static>>
         rows.push(vec![Span::raw("  "), Span::styled(sug.detail.clone(), dim)]);
     }
     rows
-}
-
-/// Compact token figure: 1.2M / 12.3K / 999. Matches the formatter
-/// shape so the legend reads like the source analyzer.
-fn fmt_tokens(n: u32) -> String {
-    if n >= 1_000_000 {
-        format!("{:.1}M", n as f64 / 1_000_000.0)
-    } else if n >= 1_000 {
-        format!("{:.1}K", n as f64 / 1_000.0)
-    } else {
-        n.to_string()
-    }
 }
 
 #[cfg(test)]

@@ -652,6 +652,43 @@ async fn test_clear_noop_without_memory() {
     runner.before_clear(session).await;
 }
 
+// ===== A clear boundary drops the archived conversation =====
+
+/// The measured tokens of the conversation section.
+fn messages_tokens(measurement: &ContextMeasurement) -> u32 {
+    measurement
+        .sections
+        .iter()
+        .filter(|section| section.kind == SectionKind::Messages)
+        .map(|section| section.tokens)
+        .sum()
+}
+
+/// A user who clears the session starts a fresh conversation: the durable log
+/// keeps the archived turns for /resume, but they are not part of the context
+/// the next request carries. The seeded measurement proves the turns were
+/// measured before the clear, so a zero afterwards is the clear dropping them
+/// rather than nothing having been there.
+#[tokio::test]
+async fn test_clear_drops_prior_messages() {
+    let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("ok"));
+    let runner = runner_with(provider, ToolRegistry::new());
+    let session = SessionId::new();
+    seed_boundary_session(&runner, session).await;
+    let before = runner.session_measurement(session).await.unwrap();
+    assert!(
+        messages_tokens(&before) > 0,
+        "the seeded turns are measured before the clear: {before:#?}"
+    );
+    runner.reset_trajectory(session).await;
+    let after = runner.session_measurement(session).await.unwrap();
+    assert_eq!(
+        messages_tokens(&after),
+        0,
+        "the clear drops the archived conversation: {after:#?}"
+    );
+}
+
 // ===== Max turns: graceful Ok result (not Err crash) =====
 
 /// Hitting the turn cap is a graceful Ok outcome carrying turns + usage,

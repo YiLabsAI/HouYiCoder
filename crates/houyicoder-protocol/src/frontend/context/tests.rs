@@ -75,6 +75,25 @@ fn fixture() -> ContextBreakdown {
         compact_summary: None,
         cache_prefix_tokens: None,
         cache_hit_rate: None,
+        tool_footprints: vec![
+            ToolFootprint {
+                tool: "read".into(),
+                calls: 3,
+                call_tokens: 60,
+                result_tokens: 40_000,
+            },
+            ToolFootprint {
+                tool: "bash".into(),
+                calls: 2,
+                call_tokens: 40,
+                result_tokens: 11_000,
+            },
+        ],
+        delegated: Some(DelegatedContext {
+            returned_tokens: 1_200,
+            child_tokens: Some(38_000),
+            returns: 2,
+        }),
     }
 }
 

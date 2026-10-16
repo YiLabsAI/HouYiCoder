@@ -14,7 +14,8 @@ use houyicoder_protocol::frontend::SlashCommand;
 use houyicoder_protocol::frontend::context::stub_breakdown;
 use houyicoder_protocol::frontend::context::{CategoryBreakdown, ContextBreakdown, GridCell};
 use houyicoder_protocol::frontend::context::{
-    ContextFileEntry as WireFileEntry, ContextSkillEntry as WireSkillEntry,
+    ContextFileEntry as WireFileEntry, ContextSkillEntry as WireSkillEntry, DelegatedContext,
+    ToolFootprint,
 };
 use ratatui::buffer::Buffer;
 
@@ -115,6 +116,8 @@ fn base_breakdown() -> ContextBreakdown {
         compact_summary: None,
         cache_prefix_tokens: None,
         cache_hit_rate: None,
+        tool_footprints: Vec::new(),
+        delegated: None,
     }
 }
 
@@ -143,7 +146,7 @@ fn test_grid_renders_cache_prefix() {
     bd.cache_hit_rate = None;
     let text = rows_text(bd);
     assert!(
-        text.contains("Cache prefix: 21.9K"),
+        text.contains("Cache prefix: 21.9k"),
         "prefix renders without rate (decoupled):\n{text}"
     );
     assert!(
@@ -159,7 +162,7 @@ fn test_grid_renders_rate_suffix() {
     bd.cache_hit_rate = Some(0.75);
     let text = rows_text(bd);
     assert!(
-        text.contains("Cache prefix: 21.9K") && text.contains("hit rate 75%"),
+        text.contains("Cache prefix: 21.9k") && text.contains("hit rate 75%"),
         "prefix + rate suffix render together:\n{text}"
     );
 }
@@ -208,7 +211,7 @@ fn test_grid_renders_prefix_folded() {
     bd.compact_summary = Some("3 compacts · 5 turns folded · \"preview\"".into());
     let text = rows_text(bd);
     assert!(
-        text.contains("Cache prefix: 21.9K"),
+        text.contains("Cache prefix: 21.9k"),
         "prefix renders with folded present + rate absent:\n{text}"
     );
     assert!(
@@ -221,7 +224,7 @@ fn test_grid_renders_prefix_folded() {
     );
 }
 
-/// The model line: "test · 100.0K/200.0K tokens (50%)". The most-seen
+/// The model line: "test · 100k/200k tokens (50%)". The most-seen
 /// legend row but never asserted — guards a regression that drops it or
 /// misformats the pct.
 #[test]
@@ -244,7 +247,7 @@ fn test_legend_renders_category_row() {
         "non-free category label missing:\n{text}"
     );
     assert!(
-        text.contains("21.9K tokens"),
+        text.contains("21.9k tokens"),
         "category token line missing:\n{text}"
     );
 }
@@ -275,10 +278,12 @@ fn test_legend_renders_reserved_row() {
         compact_summary: None,
         cache_prefix_tokens: None,
         cache_hit_rate: None,
+        tool_footprints: Vec::new(),
+        delegated: None,
     };
     let text = rows_text(bd);
     assert!(
-        text.contains("Output cap:") && text.contains("8.0K tokens"),
+        text.contains("Output cap:") && text.contains("8k tokens"),
         "reserved category row missing:\n{text}"
     );
     assert!(
@@ -347,10 +352,11 @@ fn test_grid_renders_breakpoint_marker() {
     );
 }
 
-/// A realistic near-capacity breakdown so suggestions_for fires on
-/// real-ish data, not just the canned stub (Messages=120k) that
-/// grid_inline_renders_suggestions_section uses. pct=85 (>= 80), Messages
-/// 20k (>= 15%), System tools 6k (>= 5%) -- all three triggers met.
+/// A realistic near-capacity breakdown so suggestions_for fires on real-ish
+/// data, not just the stub breakdown (Messages=120k) that
+/// test_grid_inline_renders_suggestions uses. pct=85 (>= 80), a bash
+/// footprint at 18% (>= 15% and >= 10k), memory files at 8% (>= 5% and
+/// >= 5k) -- three triggers met.
 fn full_context_breakdown() -> ContextBreakdown {
     ContextBreakdown {
         model: "test".into(),
@@ -391,18 +397,27 @@ fn full_context_breakdown() -> ContextBreakdown {
             fullness: 1.0,
         }]],
         cache_breakpoint: None,
-        memory_files: Vec::new(),
+        memory_files: vec![WireFileEntry {
+            label: "AGENTS.md".into(),
+            tokens: 8_000,
+        }],
         skills: Vec::new(),
         compact_summary: None,
         cache_prefix_tokens: None,
         cache_hit_rate: None,
+        tool_footprints: vec![ToolFootprint {
+            tool: "bash".into(),
+            calls: 4,
+            call_tokens: 1_000,
+            result_tokens: 17_000,
+        }],
+        delegated: None,
     }
 }
 
-/// Suggestions fire + render on real-ish data (not just the canned stub).
-/// Pins the data -> suggestions_for -> render path on a near-capacity
-/// breakdown, the gap left by the zero-turn PTY journey (its prospective
-/// breakdown never crosses the suggestion thresholds).
+/// Suggestions fire and render on real-shaped data rather than only on the
+/// stub. The zero-turn PTY journey measures an empty context, which crosses no
+/// band, so this covers the data to suggestion to render path.
 #[test]
 fn test_real_data_renders_suggestions() {
     let bd = full_context_breakdown();
@@ -416,21 +431,20 @@ fn test_real_data_renders_suggestions() {
         "pct-full suggestion fires: {:?}",
         suggestions.iter().map(|s| &s.title).collect::<Vec<_>>()
     );
-    // The category suggestions must match the category they describe, not
-    // a per-tool label borrowed from another agent (Messages is the
-    // conversation, System tools is the tool schemas).
+    // The remaining suggestions must describe the measurement they were
+    // derived from: the tool footprint, not a category bearing its name.
     assert!(
         suggestions
             .iter()
-            .any(|s| s.title.contains("Conversation using")),
-        "Messages suggestion is labeled Conversation: {:?}",
+            .any(|s| s.title.contains("Bash results using")),
+        "the bash footprint is reported: {:?}",
         suggestions.iter().map(|s| &s.title).collect::<Vec<_>>()
     );
     assert!(
         suggestions
             .iter()
-            .any(|s| s.title.contains("Tool schemas using")),
-        "System-tools suggestion is labeled Tool schemas: {:?}",
+            .any(|s| s.title.contains("Memory files using")),
+        "the memory files are reported: {:?}",
         suggestions.iter().map(|s| &s.title).collect::<Vec<_>>()
     );
     // The suggestion titles land in the rendered rows (suggestions_rows).
@@ -480,6 +494,60 @@ fn test_grid_inline_renders_skills() {
     assert!(
         text.contains("Built-in"),
         "skills source group label missing"
+    );
+}
+
+/// The delegated rows report the two sides of a delegation: what the returns
+/// cost in this session's context, and what the children spent in their own.
+#[test]
+fn test_grid_renders_delegated_rows() {
+    let mut bd = base_breakdown();
+    bd.delegated = Some(DelegatedContext {
+        returned_tokens: 1_200,
+        child_tokens: Some(38_000),
+        returns: 2,
+    });
+    let text = rows_text(bd);
+    assert!(
+        text.contains("Delegated"),
+        "delegated header missing:\n{text}"
+    );
+    assert!(
+        text.contains("/agents"),
+        "the header points at the pane that acts on it:\n{text}"
+    );
+    assert!(
+        text.contains("in context: 1.2k tokens"),
+        "the return cost renders:\n{text}"
+    );
+    assert!(
+        text.contains("returns: 2"),
+        "the return count renders:\n{text}"
+    );
+    assert!(
+        text.contains("children used: 38k tokens"),
+        "the child total renders:\n{text}"
+    );
+}
+
+/// A child that reported no input count leaves its total unknown. The row says
+/// so rather than printing a zero the session never measured.
+#[test]
+fn test_grid_delegated_unknown_usage() {
+    let mut bd = base_breakdown();
+    bd.delegated = Some(DelegatedContext {
+        returned_tokens: 400,
+        child_tokens: None,
+        returns: 1,
+    });
+    let text = rows_text(bd);
+    assert!(
+        text.contains("children used: unknown"),
+        "an unmeasured child total reads unknown:\n{text}"
+    );
+    assert!(
+        !text.contains("children used: 0"),
+        "a zero would claim a measurement the session lacks:\n{text}"
     );
 }
 
@@ -567,14 +635,6 @@ fn test_legend_tight_no_gap() {
         col < 30,
         "legend starts at col {col}, expected < 30 (tight layout); row: {legend_row}"
     );
-}
-
-#[test]
-fn test_fmt_tokens_compact_shape() {
-    assert_eq!(fmt_tokens(999), "999");
-    assert_eq!(fmt_tokens(1_800), "1.8K");
-    assert_eq!(fmt_tokens(120_000), "120.0K");
-    assert_eq!(fmt_tokens(2_000_000), "2.0M");
 }
 
 #[test]

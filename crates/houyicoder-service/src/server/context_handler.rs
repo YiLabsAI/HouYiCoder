@@ -10,26 +10,35 @@ use houyicoder_core::agent::SectionKind;
 use pa::compaction::map_compact_reply;
 
 impl Server {
-    /// Reply with the assembled context breakdown. When no turn has run yet
-    /// the prospective measurement stands in, so the pane is never empty on a
-    /// fresh session.
+    /// Reply with the assembled context breakdown, measured from the session
+    /// as the store holds it. One source serves every session: a resumed one
+    /// reports the history it loaded, and a live one reports the turns it has
+    /// run. A turn's cached measurement cannot serve here, since the pane also
+    /// reports what the session's tools and children cost, which a turn does
+    /// not derive.
     pub(super) async fn handle_context(
         &mut self,
         io: &mut FrameCarrier,
         req_id: RequestId,
     ) -> Result<(), ProtocolError> {
         let snap = self.runner.status_snapshot();
-        let measurement = self
-            .runner
-            .last_measurement()
-            .unwrap_or_else(|| self.runner.prospective_measurement());
+        let measurement = match self.runner.session_measurement(self.session).await {
+            Ok(measurement) => measurement,
+            Err(e) => {
+                return self
+                    .send_response(
+                        io,
+                        req_id,
+                        ResponsePayload::Error(ProtocolError::new(
+                            ErrorCategory::Internal,
+                            e.to_string(),
+                            false,
+                        )),
+                    )
+                    .await;
+            }
+        };
         let mut bd = measurement.breakdown(&snap.model, snap.context_window);
-        // The drill-down rows come from the analyzer, measured with the same
-        // tokenizer as the sections above, so the frontend renders what the
-        // wire reports instead of synthesizing rows from a pane cache.
-        let (memory_files, skills) = self.runner.context_drill();
-        bd.memory_files = memory_files;
-        bd.skills = skills;
         bd.compact_summary = self.runner.compact_summary(self.session).await;
         let summary_tokens = self.runner.compact_summary_tokens(self.session).await;
         if summary_tokens > 0 {
@@ -49,10 +58,9 @@ impl Server {
                 },
             );
         }
-        let prefix: u32 = measurement
-            .section(SectionKind::SystemPrompt)
-            .map(|s| s.tokens)
-            .unwrap_or(0)
+        // The prefix the request repeats across turns is the whole system
+        // prompt, memory blocks included, plus the tool schemas.
+        let prefix: u32 = measurement.system_prompt_tokens
             + measurement
                 .section(SectionKind::Tools)
                 .map(|s| s.tokens)

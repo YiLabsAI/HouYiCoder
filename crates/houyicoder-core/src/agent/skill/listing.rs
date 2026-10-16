@@ -66,6 +66,20 @@ fn entry_description(desc: &str, when_to_use: Option<&str>) -> String {
     }
 }
 
+/// One skill's line in the discovery listing: its name, description, and body
+/// cost when the descriptor carries one. The listing text and the per-skill
+/// cost the /context view reports both come from this, so the announcement the
+/// request carries and its breakdown cannot disagree.
+pub fn listing_entry(descriptor: &SkillDescriptor) -> String {
+    let desc = entry_description(&descriptor.description, descriptor.when_to_use.as_deref());
+    let cost = if descriptor.body_token_estimate > 0 {
+        format!(" (~{} tok)", descriptor.body_token_estimate)
+    } else {
+        String::new()
+    };
+    format!("- {}: {}{}", descriptor.name, desc, cost)
+}
+
 /// Format the model-invocable skill listing within a char budget. Three
 /// tiers: full descriptions if they fit; descriptions truncated to a
 /// uniform per-entry length if not; names-only when the budget is too
@@ -80,18 +94,7 @@ pub fn format_skill_listing(descriptors: &[SkillDescriptor], context_window_toke
     }
     let budget = char_budget(context_window_tokens);
 
-    let full: Vec<String> = descriptors
-        .iter()
-        .map(|d| {
-            let desc = entry_description(&d.description, d.when_to_use.as_deref());
-            let cost = if d.body_token_estimate > 0 {
-                format!(" (~{} tok)", d.body_token_estimate)
-            } else {
-                String::new()
-            };
-            format!("- {}: {}{}", d.name, desc, cost)
-        })
-        .collect();
+    let full: Vec<String> = descriptors.iter().map(listing_entry).collect();
     let full_total: usize =
         full.iter().map(|s| s.len()).sum::<usize>() + full.len().saturating_sub(1);
 

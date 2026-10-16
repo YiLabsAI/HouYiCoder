@@ -243,3 +243,13 @@ fn test_trajectory_empty_both() {
     assert!(out.contains("no events"), "{out}");
 }
 mod status;
+
+/// The compact token figure the /context rows and the status lines share:
+/// thousands and millions in one fraction digit, with the bare zero dropped.
+#[test]
+fn test_format_tokens_compact_shape() {
+    assert_eq!(format_tokens(999), "999");
+    assert_eq!(format_tokens(1_800), "1.8k");
+    assert_eq!(format_tokens(120_000), "120k");
+    assert_eq!(format_tokens(2_000_000), "2m");
+}

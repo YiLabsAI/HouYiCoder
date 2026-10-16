@@ -19,12 +19,12 @@ use houyicoder_protocol::llm::{Usage, UsageProvenance};
 use houyicoder_resilience::BreakerState;
 
 use crate::agent::ContextMeasurement;
+use crate::agent::RunError;
 use crate::agent::Runner;
 use crate::agent::append::new_event;
 use crate::agent::hook::registry::HookEntry;
-use crate::agent::memory::{MemoryGateState, index_line};
+use crate::agent::memory::MemoryGateState;
 use crate::agent::model_window::resolve_capabilities;
-use crate::agent::prompt::memory_file_paths;
 use crate::observability::MetricsView;
 use crate::observability::ModelUsage;
 use crate::observability::evolution::RedundantCall;
@@ -34,10 +34,7 @@ use crate::snapshot::UndoStack;
 use houyicoder_api::session::recorded_turn_usage;
 use houyicoder_api::skill::SkillSnapshot;
 use houyicoder_context::{SessionEvent, SessionId, SessionLogEntry};
-use houyicoder_protocol::frontend::context::{ContextFileEntry, ContextSkillEntry};
-use std::fs::read_to_string;
 use std::mem::take;
-use std::path::PathBuf;
 use std::time::Duration;
 
 /// A point-in-time view of the runner's live state for the host to render.
@@ -456,13 +453,6 @@ impl Runner {
         self.memory.list()
     }
 
-    /// The memories the frozen system prompt index was built from. The context
-    /// view costs each memory from this set rather than the live store, since
-    /// the frozen set is what the request pays for until the next refresh.
-    pub fn memory_index_entries(&self) -> Vec<houyicoder_context::MemorySummary> {
-        self.memory.index_entries()
-    }
-
     /// Fetch the full body of one memory by key, for /memory <key>. None when
     /// no provider is configured or the key is absent.
     pub fn memory_show(&self, key: &str) -> Option<houyicoder_context::MemoryEntry> {
@@ -507,75 +497,32 @@ impl Runner {
         self.memory.set_auto_dream(enabled);
     }
 
-    /// The measurement of the most recent turn. None before the first turn;
-    /// the host falls back to prospective_measurement() then.
+    /// The measurement of the most recent turn. None before this process has
+    /// run one. Carries the sections, which is what the reported occupancy
+    /// reads; the /context pane measures the session instead.
     pub fn last_measurement(&self) -> Option<ContextMeasurement> {
         self.context_builder.last_measurement()
     }
 
-    /// A prospective measurement — what the context would measure on the
-    /// first turn: the system prompt, the real tool definitions, and the
-    /// memory index, with messages = 0. Used when last_measurement() is None
-    /// so /context is never empty on a fresh session, and never shows a
-    /// tools section of zero that the first turn then contradicts.
-    pub fn prospective_measurement(&self) -> ContextMeasurement {
-        let memory_index = self.format_memory_index();
-        self.context_builder
-            .build_prospective(self.tools.tool_defs().as_slice(), memory_index.as_deref())
-            .measurement
-    }
-
-    /// The /context drill-down rows: the memory sources the request pays for
-    /// and the skills the registry exposes, each with the tokens it costs. A
-    /// memory source is a project memory file (the AGENTS.md family the index
-    /// reads) or a stored memory, which reaches the prompt as one index line.
-    /// This is a different quantity from the grid's Memory category, which
-    /// counts recalled entries carried in the message stream. The frontend
-    /// renders these rows as reported; it does not synthesize them from a pane
-    /// cache, which may be empty or hold placeholders.
-    pub fn context_drill(&self) -> (Vec<ContextFileEntry>, Vec<ContextSkillEntry>) {
-        let tokenizer = self.context_builder.tokenizer();
-        let cwd = self.cwd();
-        let mut sources: Vec<ContextFileEntry> = memory_file_paths(&cwd)
-            .into_iter()
-            .map(|path| ContextFileEntry {
-                label: path.to_string_lossy().into_owned(),
-                tokens: read_to_string(&path)
-                    .map(|text| tokenizer.count(&text))
-                    .unwrap_or(0),
-            })
-            .collect();
-        // A stored memory costs one index line, and only while the gate injects
-        // that index at all. The rows come from the frozen index, not the live
-        // store: a memory written after the freeze reaches the prompt only at
-        // the next refresh point, so counting it now would overstate this
-        // request's cost.
-        sources.extend(
-            self.memory_index_entries()
-                .into_iter()
-                .map(|summary| ContextFileEntry {
-                    label: summary.key.clone(),
-                    tokens: tokenizer.count(&index_line(&summary)),
-                }),
+    /// Measure the session as the store holds it: the system prompt, the
+    /// declared tools, the announced skills, the conversation selected through
+    /// the session's latest checkpoint manifest, and what its tools and
+    /// children cost. The /context view reads this, so a resumed session
+    /// reports its history before a new message is sent and a live one reports
+    /// the turns it has run.
+    pub async fn session_measurement(
+        &self,
+        session: SessionId,
+    ) -> Result<ContextMeasurement, RunError> {
+        let view = self.store.current_view(session).await?;
+        let parts = self.assembly_parts();
+        let assembled = self.context_builder.measure(
+            &view.events,
+            view.manifest.as_ref(),
+            Some(self.store.backend()),
+            &parts.input(),
         );
-        let skills = self
-            .skills_snapshot()
-            .into_iter()
-            .map(|s| {
-                let listing = format!("{}: {}", s.descriptor.name, s.descriptor.description);
-                ContextSkillEntry {
-                    source: s.origin,
-                    name: s.descriptor.name,
-                    tokens: tokenizer.count(&listing),
-                }
-            })
-            .collect();
-        (sources, skills)
-    }
-
-    /// The directory the context builder reads for project memory files.
-    fn cwd(&self) -> PathBuf {
-        self.cwd_handle().read().expect("cwd lock").clone()
+        Ok(assembled.measurement)
     }
 
     /// Install recovery state for destructive operations.

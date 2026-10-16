@@ -41,9 +41,9 @@ use std::path::Path;
 pub(crate) const INDEX_ENTRY_CAP: usize = 200;
 
 /// One line of the system prompt's memory index, the exact text a stored
-/// memory contributes to the prompt. The context view reports each memory's
-/// cost by measuring this line, so the index builder and the view must agree
-/// on the shape: one definition, two readers.
+/// memory contributes to the prompt. The frozen index is the only thing the
+/// prompt carries, so the cost the measurement reports is the cost the request
+/// pays.
 pub(crate) fn index_line(summary: &MemorySummary) -> String {
     format!(
         "- {} [{}/{}]: {}\n",
@@ -73,17 +73,7 @@ impl BackgroundMemory {
 enum MemoryIndexSnapshot {
     #[default]
     Uninitialized,
-    Loaded(Option<IndexSnapshot>),
-}
-
-/// The index the prompt prefix carries, with the memories it was built from.
-/// They travel as one value so a reader reporting what a memory costs reads the
-/// set the prompt was built from: the store can change after the freeze, and
-/// the frozen set is what the request pays for until the next refresh point.
-#[derive(Clone)]
-pub(crate) struct IndexSnapshot {
-    text: String,
-    entries: Vec<MemorySummary>,
+    Loaded(Option<String>),
 }
 
 /// Coordinates memory state and lifecycle operations.
@@ -247,20 +237,12 @@ impl MemoryRuntime {
     /// injects nothing and leaves the snapshot untouched, so re-enabling
     /// rebuilds from the store instead of replaying the disabled era.
     pub(crate) fn format_index(&self) -> Option<String> {
-        self.index_snapshot().map(|index| index.text)
-    }
-
-    /// The memories the frozen index was built from, in index order. Empty
-    /// when the gate is off, no provider is configured, or the store is empty.
-    pub(crate) fn index_entries(&self) -> Vec<MemorySummary> {
         self.index_snapshot()
-            .map(|index| index.entries)
-            .unwrap_or_default()
     }
 
     /// The frozen index, building and storing it on first use. None when the
     /// gate is off, no provider is configured, or the store is empty.
-    fn index_snapshot(&self) -> Option<IndexSnapshot> {
+    fn index_snapshot(&self) -> Option<String> {
         if !self.gates.auto_memory_enabled() {
             return None;
         }
@@ -278,15 +260,19 @@ impl MemoryRuntime {
         }
     }
 
-    fn build_index(&self) -> Option<IndexSnapshot> {
+    fn build_index(&self) -> Option<String> {
         let memory = self.provider.as_ref()?;
         let summaries = memory.list_memories();
         if summaries.is_empty() {
             return None;
         }
-        let entries: Vec<MemorySummary> = summaries.into_iter().take(INDEX_ENTRY_CAP).collect();
-        let text = entries.iter().map(index_line).collect();
-        Some(IndexSnapshot { text, entries })
+        Some(
+            summaries
+                .into_iter()
+                .take(INDEX_ENTRY_CAP)
+                .map(|summary| index_line(&summary))
+                .collect(),
+        )
     }
 
     /// Refresh the frozen index at a natural prompt-cache invalidation point.
