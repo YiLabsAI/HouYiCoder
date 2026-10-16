@@ -672,6 +672,60 @@ fn test_rebuild_heals_external_edit() {
     remove_dir_all(&root).ok();
 }
 
+/// A tie on mtime resolves by key, so the index a run rebuilds from a store
+/// depends on the store contents alone. Two runs must render a byte-identical
+/// index: the frozen index rides the static prefix that a resumed session,
+/// the fork-extraction runner, and the dream consolidation read, so a
+/// read_dir order leak would change the prefix for no content reason.
+#[test]
+fn test_list_ties_by_key() {
+    let root = temp_root();
+    // Creation order deliberately differs from key order, so a directory
+    // enumeration that leaked into the ranking would not match the expected
+    // order by accident.
+    for key in ["zulu", "alpha", "mike"] {
+        let body =
+            format!("---\nname: {key}\ndescription: {key} facts\nsource: project\n---\nbody\n");
+        let path = root.join(format!("{key}.md"));
+        write(&path, body).unwrap();
+        // Set every topic to one fixed mtime: the tie the key must break.
+        let times = FileTimes::new().set_modified(UNIX_EPOCH + Duration::from_secs(1000));
+        OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .expect("open topic for set_times")
+            .set_times(times)
+            .expect("set topic mtime");
+    }
+    let first = MarkdownMemoryProvider::new(root.clone());
+    let order: Vec<String> = first.list_memories().into_iter().map(|s| s.key).collect();
+    assert_eq!(
+        order,
+        vec!["zulu".to_string(), "mike".to_string(), "alpha".to_string()],
+        "mtime ties resolve by key, newest-key first"
+    );
+    // A second runtime over the same store lists the same order: the
+    // enumeration order never leaks into the frozen index text.
+    let second = MarkdownMemoryProvider::new(root.clone());
+    let rebuilt: Vec<String> = second.list_memories().into_iter().map(|s| s.key).collect();
+    assert_eq!(
+        order, rebuilt,
+        "two runtimes over one store list the same order"
+    );
+    // The derived index rebuilds from scan_root alone (no merge re-sort), so
+    // the sort there needs its own guard: the MEMORY.md lines must resolve
+    // the same tie by key, newest key first.
+    second.rebuild_index().unwrap();
+    let idx = fs::read_to_string(root.join(INDEX_FILE)).unwrap();
+    let pos = |k: &str| idx.find(k).expect("key present in the derived index");
+    assert!(
+        pos("zulu") < pos("mike") && pos("mike") < pos("alpha"),
+        "MEMORY.md lines resolve mtime ties by key, newest key first"
+    );
+    remove_dir_all(&root).ok();
+}
+
 /// list_memories returns the frontmatter-only summary for every topic — key,
 /// description, source — without reading any body content. Pins the listing
 /// path the /memory command uses.

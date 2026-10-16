@@ -105,6 +105,28 @@ fn test_child_effort_reasoning_low() {
     assert_eq!(s.reasoning_effort, Some(EffortLevel::Low));
 }
 
+/// Two children of the same type in one repo render byte-identical system
+/// prompts, so the first child's request warms the prefix the second one
+/// reuses. The env block is a function of cwd, platform, date, and model —
+/// all constant for same-type siblings started in one run — and the project
+/// section comes from the same memory files, so any difference here would be
+/// a nondeterminism bug, not a content change.
+#[test]
+fn test_child_prefix_same_type() {
+    let dir = scratch_dir("shared-prefix");
+    fs::write(dir.join("AGENTS.md"), "shared project rules").expect("write");
+    let first = child_system_prompt("Owned prompt body.", &dir, "qwen3-coder", false);
+    let second = child_system_prompt("Owned prompt body.", &dir, "qwen3-coder", false);
+    assert_eq!(
+        first, second,
+        "same-type children in one repo must render the same prefix"
+    );
+    // A different type carries different base instructions, so the prefix
+    // genuinely depends on the type, not just the repo.
+    let other = child_system_prompt("A different agent.", &dir, "qwen3-coder", false);
+    assert_ne!(first, other, "a different type diverges the prefix");
+}
+
 #[test]
 fn test_civil_epoch() {
     assert_eq!(civil_from_days(0), (1970, 1, 1));

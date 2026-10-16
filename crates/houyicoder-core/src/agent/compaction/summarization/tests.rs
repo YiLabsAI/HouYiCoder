@@ -2,8 +2,13 @@
 
 use super::*;
 use crate::provider::test_support::FakeProvider;
+use houyicoder_api::provider::ModelProvider;
+use houyicoder_api::provider::stream_from_response;
+use houyicoder_async::PStream;
 use houyicoder_context::{EventId, SessionId};
 use houyicoder_protocol::llm::{ProviderError, Usage};
+use std::sync::Arc;
+use std::sync::Mutex;
 
 fn ev(session: SessionId, id: EventId, kind: SessionEvent) -> SessionLogEntry {
     SessionLogEntry {
@@ -80,6 +85,77 @@ async fn test_llm_summarizer_produces_summary() {
     assert!(summary.contains("summary"));
 }
 
+/// A provider that records each request it receives and answers with one
+/// fixed text, so a test can assert what the summarizer actually sent.
+struct CaptureProvider {
+    seen: Mutex<Vec<CompletionRequest>>,
+    reply: CompletionResponse,
+}
+
+impl CaptureProvider {
+    fn text(reply: &str) -> Self {
+        Self {
+            seen: Mutex::new(Vec::new()),
+            reply: CompletionResponse {
+                output: vec![OutputItem::Text {
+                    text: reply.to_string(),
+                }],
+                usage: Usage::default(),
+                model: "test".into(),
+            },
+        }
+    }
+}
+
+impl ModelProvider for CaptureProvider {
+    fn complete(
+        &self,
+        req: CompletionRequest,
+    ) -> PFut<'_, Result<CompletionResponse, ProviderError>> {
+        self.seen.lock().expect("seen").push(req);
+        let resp = self.reply.clone();
+        Box::pin(async move { Ok(resp) })
+    }
+    fn stream(&self, req: CompletionRequest) -> PStream<'_, Result<LlmEvent, ProviderError>> {
+        self.seen.lock().expect("seen").push(req);
+        stream_from_response(self.reply.clone())
+    }
+    fn capabilities(&self) -> ModelCapabilities {
+        ModelCapabilities::default()
+    }
+}
+
+/// The summarizer request carries no cache breakpoints and no boundary offset:
+/// its instructions differ from the main conversation's system prompt, its
+/// history is a folded span that differs per compaction, and the design rules
+/// the compaction path out of the main prompt-cache policy until a measured
+/// need says otherwise. The assertion guards the deliberate omission: a future
+/// change that copies the main policy here must be that measured decision, not
+/// an accident of refactor.
+#[tokio::test]
+async fn test_request_skips_cache() {
+    let provider = Arc::new(CaptureProvider::text("a summary"));
+    let summarizer = LlmSummarizer::new(provider.clone(), "test".into());
+    let s = SessionId::new();
+    let events = vec![
+        ev(s, EventId::new(), user("fold me")),
+        ev(s, EventId::new(), assistant("done")),
+    ];
+    summarizer.summarize(&events, None).await.unwrap();
+    let seen = provider.seen.lock().expect("seen");
+    assert!(!seen.is_empty(), "the summarizer sent its request");
+    for req in seen.iter() {
+        assert!(
+            req.cache_breakpoints.is_empty(),
+            "the compaction request applies no main-loop cache policy"
+        );
+        assert!(
+            req.dynamic_boundary.is_none(),
+            "the compaction request declares no static/dynamic split"
+        );
+    }
+}
+
 #[tokio::test]
 async fn test_llm_summarizer_fallback_error() {
     struct ErrorProvider;
@@ -90,10 +166,7 @@ async fn test_llm_summarizer_fallback_error() {
         ) -> PFut<'_, Result<CompletionResponse, ProviderError>> {
             Box::pin(async move { Err(ProviderError::Unknown("no llm".into())) })
         }
-        fn stream(
-            &self,
-            _req: CompletionRequest,
-        ) -> houyicoder_async::PStream<'_, Result<LlmEvent, ProviderError>> {
+        fn stream(&self, _req: CompletionRequest) -> PStream<'_, Result<LlmEvent, ProviderError>> {
             Box::pin(iter(Vec::new()))
         }
         fn capabilities(&self) -> ModelCapabilities {

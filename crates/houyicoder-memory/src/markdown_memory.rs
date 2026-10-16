@@ -220,7 +220,12 @@ impl MarkdownMemoryProvider {
                 })
             })
             .collect();
-        candidates.sort_by_key(|c| Reverse(c.mtime));
+        // The key is the tiebreaker when mtimes collide (a batch write gives
+        // many topics the same second), so the scan order is a function of
+        // the store contents alone. read_dir order is unspecified and must
+        // not leak into the ranking: two runtimes rebuilding the index from
+        // one store would otherwise emit different prompts.
+        candidates.sort_by_key(|c| Reverse((c.mtime, c.key.clone())));
         candidates
     }
 
@@ -241,7 +246,9 @@ impl MarkdownMemoryProvider {
             }
         }
         let mut merged: Vec<ScannedTopic> = by_key.into_values().collect();
-        merged.sort_by_key(|c| Reverse(c.mtime));
+        // Key breaks mtime ties so the merged order depends only on the
+        // store contents, never on HashMap or read_dir iteration order.
+        merged.sort_by_key(|c| Reverse((c.mtime, c.key.clone())));
         merged
     }
 
