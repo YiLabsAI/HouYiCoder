@@ -245,6 +245,11 @@ impl Runner {
     /// caller: the tally and the log it answers for belong to one owner, so
     /// no assembly path can seed it from a span other than the session it was
     /// built for.
+    ///
+    /// The per-model table is seeded from the same turns, because a pane reads
+    /// the session's cumulative and its per-model rows side by side: seeding
+    /// one and not the other would leave two figures of one panel covering
+    /// different spans.
     pub fn seed_usage_from_log(&self, session: SessionId) {
         let events = self.trajectory_snapshot(session);
         match self.usage.lock() {
@@ -253,6 +258,15 @@ impl Runner {
             // zero, which is what a session with no readable turns reports.
             Err(_) => {
                 tracing::warn!("usage accumulator lock poisoned; session totals start at zero")
+            }
+        }
+        // A separate lock scope, never nested inside the one above: the two
+        // accumulators are independent and a reader of either holds only its
+        // own.
+        match self.observability.lock() {
+            Ok(mut g) => g.seed_usage_from_events(&events),
+            Err(_) => {
+                tracing::warn!("observability log lock poisoned; per-model totals start at zero")
             }
         }
     }
@@ -327,11 +341,16 @@ impl Runner {
         entries
     }
 
-    /// Reset the cumulative usage tally. The host calls this on /clear so the
-    /// tally reflects the new session only.
+    /// Reset the cumulative usage tally and the per-model table together. The
+    /// host calls this on /clear so the figures reflect the new session only:
+    /// the two are read side by side in one panel, so clearing one and not the
+    /// other would leave that panel covering two spans.
     pub fn reset_usage(&self) {
         if let Ok(mut g) = self.usage.lock() {
             g.reset();
+        }
+        if let Ok(mut g) = self.observability.lock() {
+            g.reset_usage();
         }
     }
 

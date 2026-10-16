@@ -33,6 +33,38 @@ fn usage(input: u32, output: u32, cache_read: u32) -> Usage {
     }
 }
 
+/// A logged turn as the runner appends it: the counts, the model that ran the
+/// call, and whether the endpoint reported the counts at all.
+fn turn_usage(
+    model: &str,
+    input: u64,
+    output: u64,
+    cache_read: u64,
+    reported: bool,
+) -> SessionLogEntry {
+    SessionLogEntry {
+        id: EventId::new(),
+        session: SessionId::new(),
+        ts: 0,
+        prev_hash: None,
+        event: SessionEvent::TurnUsage {
+            turn: 1,
+            call_in_turn: 1,
+            input_tokens: input,
+            output_tokens: output,
+            cache_read_input_tokens: cache_read,
+            cache_write_input_tokens: 0,
+            reasoning_tokens: 0,
+            model: model.into(),
+            recovery: false,
+            effort: None,
+            input_reported: reported,
+            cache_read_reported: reported,
+            cache_write_reported: reported,
+        },
+    }
+}
+
 #[test]
 fn test_append_write_stores_event() {
     let mut log = ObservabilityLog::new(200_000);
@@ -292,6 +324,68 @@ fn test_log_reset_clears_state() {
     assert!(log.tool_stats().is_empty());
     assert!(log.last_turn_delta().is_none());
     assert_eq!(log.cost().by_model.len(), 0);
+}
+
+/// The per-model rows a pane reads come from the same log read that fills the
+/// cumulative beside them, so one panel cannot show a session's total above
+/// the rows of a narrower span.
+#[test]
+fn test_seed_usage_folds_rows() {
+    let mut log = ObservabilityLog::new(200_000);
+    log.seed_usage_from_events(&[
+        turn_usage("model-a", 9_000, 400, 7_200, true),
+        turn_usage("model-a", 3_000, 100, 2_400, true),
+        turn_usage("model-b", 500, 20, 0, true),
+    ]);
+    let cost = log.cost();
+    assert_eq!(cost.by_model["model-a"].input_tokens, 12_000, "both turns");
+    assert_eq!(cost.by_model["model-a"].cache_read_tokens, 9_600);
+    assert_eq!(cost.by_model["model-b"].input_tokens, 500);
+    assert_eq!(
+        log.cumulative_usage.input_tokens, 12_500,
+        "the cumulative covers the turns the rows cover"
+    );
+    assert!(
+        log.last_turn_delta().is_none(),
+        "a session that has not run a turn has no delta to report"
+    );
+}
+
+/// A restored row keeps the completeness its turns reported: an endpoint that
+/// never said whether it reported the cache counts leaves the row short of an
+/// account, so a reader derives no share from it instead of reading the
+/// recorded zero as a measured miss.
+#[test]
+fn test_seed_usage_keeps_unreported() {
+    let mut log = ObservabilityLog::new(200_000);
+    log.seed_usage_from_events(&[turn_usage("model-a", 1_000, 100, 800, false)]);
+    let row = &log.cost().by_model["model-a"];
+    assert_eq!(row.input_tokens, 1_000, "the recorded figure still counts");
+    assert!(
+        !row.provenance.cache_account_complete(),
+        "a turn that reported nothing leaves its row's account unknown"
+    );
+}
+
+/// A clear restarts the spend figures the log folds and leaves the turn
+/// counters alone: those number turns in a log that keeps going, so a cleared
+/// session does not renumber the turns it has already shown.
+#[test]
+fn test_reset_usage_keeps_turns() {
+    let mut log = ObservabilityLog::new(200_000);
+    log.start_turn();
+    log.seed_usage_from_events(&[turn_usage("model-a", 9_000, 400, 7_200, true)]);
+    log.reset_usage();
+    assert!(
+        log.cost().by_model.is_empty(),
+        "the cleared session has no rows"
+    );
+    assert_eq!(log.cumulative_usage, Usage::identity());
+    assert!(log.last_turn_delta().is_none());
+    assert_eq!(
+        log.turn_count, 1,
+        "the turns the log has shown keep their numbers"
+    );
 }
 
 #[test]

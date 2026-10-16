@@ -91,9 +91,10 @@ fn usage_events(sid: SessionId) -> Vec<SessionLogEntry> {
 }
 
 /// A resumed session reports the spend its history already holds. The turns
-/// the export carried are folded into the runner's tally at assembly, so the
-/// parent half of the cumulative figure covers the whole session the delegated
-/// half covers rather than only the turns run after the reopen.
+/// the export carried are folded into the runner's figures at assembly, so the
+/// cumulative covers the whole session the delegated half covers rather than
+/// only the turns run after the reopen, and the per-model rows the same panel
+/// shows cover that same session.
 #[test]
 fn test_resume_export_keeps_usage() {
     let sessions = temp_root();
@@ -123,6 +124,14 @@ fn test_resume_export_keeps_usage() {
         Some(0.8),
         "the recorded turn's completeness survives the fold"
     );
+    let rows = resumed.assembled.runner.by_model_usage();
+    assert_eq!(rows.len(), 1, "the logged model keeps its row");
+    assert_eq!(rows[0].0, "unit-resume-model");
+    assert_eq!(
+        rows[0].1.input_tokens, 12_000,
+        "the rows cover the turns the cumulative covers"
+    );
+    assert_eq!(rows[0].1.cache_read_tokens, 9_600);
     remove_dir_all(&sessions).ok();
 }
 

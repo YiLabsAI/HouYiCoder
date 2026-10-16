@@ -26,6 +26,7 @@ pub mod evolution;
 use std::collections::HashMap;
 use std::time::Instant;
 
+use houyicoder_api::session::recorded_turn_usage;
 use houyicoder_context::SessionLogEntry;
 use houyicoder_protocol::llm::{Usage, UsageProvenance};
 use serde::{Deserialize, Serialize};
@@ -616,8 +617,10 @@ impl ObservabilityLog {
         self.session_start.elapsed().as_millis() as u64
     }
 
-    /// Clear all records. Called on clear so the log reflects the new
-    /// session only.
+    /// Clear every record and counter, for a log that starts over from
+    /// nothing. A host's /clear path resets the usage figures instead
+    /// (reset_usage): it keeps the turn counters, because those number turns
+    /// in a log that keeps going rather than figures for one span of it.
     pub fn reset(&mut self) {
         self.writes.clear();
         self.tool_calls.clear();
@@ -630,6 +633,36 @@ impl ObservabilityLog {
         self.call_count = 0;
         self.call_in_turn = 0;
         self.session_start = Instant::now();
+    }
+
+    /// Restart the spend figures this log folds: the per-model table, the
+    /// cumulative usage, and the last turn delta, which embeds it. The host
+    /// calls this on /clear, where the session's tally starts over. The turn
+    /// and call counters stay, because they number turns in a log that keeps
+    /// going rather than figures for one span of it.
+    pub fn reset_usage(&mut self) {
+        self.cost = CostAccumulator::default();
+        self.cumulative_usage = Usage::identity();
+        self.last_turn_delta = None;
+    }
+
+    /// Start the spend figures from the turns a session's log already holds,
+    /// so a runner that reopened the session reports that session's per-model
+    /// rows and cumulative rather than only the turns since it reopened: a
+    /// pane reads the cumulative and the rows beside each other, and figures
+    /// covering different spans would be read as one session's.
+    ///
+    /// A record carries counts and their completeness but no cost or
+    /// duration, so the restored rows carry counts; the call counters stay
+    /// with the run, which numbers the calls it makes.
+    pub fn seed_usage_from_events(&mut self, events: &[SessionLogEntry]) {
+        for entry in events {
+            let Some((model, usage)) = recorded_turn_usage(&entry.event) else {
+                continue;
+            };
+            self.cost.record(model, &usage, 0.0, 0, 0);
+            self.cumulative_usage = self.cumulative_usage.saturating_add(&usage);
+        }
     }
 
     /// Clear the last-turn delta. Called after a mid-turn compaction: the

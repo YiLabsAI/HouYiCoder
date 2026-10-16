@@ -127,6 +127,62 @@ fn test_seed_log_without_usage() {
     assert_eq!(acc.tool_calls(), 0, "the tool counters stay per-run");
 }
 
+/// A reopened session's per-model rows cover the turns its log holds, the
+/// same span the cumulative covers: a pane reads the two figures side by side,
+/// so seeding one and not the other would show one session's header above
+/// another session's rows.
+#[tokio::test]
+async fn test_seed_covers_by_model() {
+    let session = SessionId::new();
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    store
+        .append(logged_turn(session, 9_000, 400, 7_200, true))
+        .await
+        .expect("the log accepts a turn");
+    let runner = Runner::new(
+        store.clone(),
+        Arc::new(FakeProvider::text("x")),
+        ToolRegistry::new(),
+        RunnerConfig::default(),
+    );
+    runner.seed_usage_from_log(session);
+    let rows = runner.by_model_usage();
+    assert_eq!(rows.len(), 1, "the logged model has a row");
+    assert_eq!(rows[0].0, "logged-model");
+    assert_eq!(rows[0].1.input_tokens, 9_000, "the row covers the log");
+    assert_eq!(rows[0].1.cache_read_tokens, 7_200);
+    assert_eq!(
+        runner.status_snapshot().cumulative_usage.input_tokens,
+        9_000,
+        "the header covers the turn the rows cover"
+    );
+}
+
+/// A clear restarts both figures of the panel the host resets, so the cleared
+/// session is not offset against the rows of the session before it.
+#[tokio::test]
+async fn test_reset_drops_by_model() {
+    let session = SessionId::new();
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    store
+        .append(logged_turn(session, 9_000, 400, 7_200, true))
+        .await
+        .expect("the log accepts a turn");
+    let runner = Runner::new(
+        store.clone(),
+        Arc::new(FakeProvider::text("x")),
+        ToolRegistry::new(),
+        RunnerConfig::default(),
+    );
+    runner.seed_usage_from_log(session);
+    runner.reset_usage();
+    assert!(
+        runner.by_model_usage().is_empty(),
+        "the rows start over with the cumulative"
+    );
+    assert_eq!(runner.status_snapshot().cumulative_usage.input_tokens, 0);
+}
+
 #[test]
 fn test_accumulator_sums_seven_fields() {
     let mut acc = UsageAccumulator::default();
