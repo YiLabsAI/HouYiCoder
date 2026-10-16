@@ -24,8 +24,8 @@ use std::time::Duration;
 /// at zero is a confirmed zero. Carried alongside the u32 values so a missing
 /// cache-read count reads as unknown rather than as a 0% hit rate. Defaults to
 /// all-unreported: a record that predates the field, or one a provider built
-/// without setting provenance, is treated as unreported and excluded from a
-/// steady-state cohort rather than read as a 0% sample.
+/// without setting provenance, is treated as unreported and left out of the
+/// measured group rather than read as a 0% sample.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UsageProvenance {
     /// Whether the endpoint reported the inclusive input total.
@@ -153,7 +153,7 @@ pub struct Usage {
     /// Which breakdown fields the source endpoint reported; a field not
     /// reported is unknown, not zero. Defaults to all-unreported for records
     /// that predate the field, so old logs deserialize as unreported and are
-    /// excluded from a steady-state cohort rather than read as 0% samples.
+    /// left out of the measured group rather than read as 0% samples.
     #[serde(default)]
     pub provenance: UsageProvenance,
 }

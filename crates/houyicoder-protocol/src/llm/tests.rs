@@ -167,7 +167,7 @@ fn test_usage_rate_clamps_overshoot() {
 fn test_usage_legacy_defaults_unreported() {
     // A record serialized before the provenance field existed carries no
     // provenance key. It deserializes to all-unreported, so an old log entry
-    // is excluded from a steady-state cohort rather than read as a 0% sample.
+    // is left out of the measured group rather than read as a 0% sample.
     let legacy = r#"{"input_tokens":1000,"output_tokens":50,"total_tokens":1050,"non_cached_input_tokens":1000,"cache_read_input_tokens":0,"cache_write_input_tokens":0,"reasoning_tokens":0}"#;
     let u: Usage = serde_json::from_str(legacy).unwrap();
     assert_eq!(
