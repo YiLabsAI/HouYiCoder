@@ -401,6 +401,13 @@ impl App {
             }
         }
         let deadline = Instant::now() + timeout;
+        // A resumed session ships its whole history as a run of frames ahead of
+        // the status reply. Applying them one at a time would rebuild the
+        // transcript once per frame, so the cost grows with the square of the
+        // history. A run of frames lands as one batch instead, and the batch is
+        // drained before any other message so the transcript is current when
+        // that message is handled.
+        let mut batch: Vec<SequencedFrame> = Vec::new();
         loop {
             let remaining = deadline.saturating_duration_since(Instant::now());
             let connection = self.sessions.current.connection.as_mut();
@@ -408,13 +415,20 @@ impl App {
             let Some(message) = next else {
                 break;
             };
-            self.handle_agent_message(message);
+            match message {
+                SessionMessage::Event(ServerEvent::Frame(frame)) => batch.push(frame),
+                other => {
+                    self.apply_frames(batch.drain(..));
+                    self.handle_agent_message(other);
+                }
+            }
             let status = &self.sessions.current.capabilities.status;
             let status_present = status.snapshot().is_some();
             if self.pending_trust().is_some() || status_present {
                 break;
             }
         }
+        self.apply_frames(batch.drain(..));
     }
 
     /// Apply all available agent messages and return whether state changed.

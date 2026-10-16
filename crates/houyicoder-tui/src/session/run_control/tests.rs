@@ -1199,6 +1199,53 @@ fn test_startup_handshake_empty_timeout() {
     assert!(app.pending_trust().is_none(), "no card on empty handshake");
 }
 
+/// A run of frames queued ahead of the trust ask is applied whole, and the
+/// ask still raises: the message that ends the wait must not swallow the
+/// history queued ahead of it.
+#[test]
+fn test_startup_handshake_applies_frames() {
+    let (tx, rx) = mpsc::channel::<SessionMessage>();
+    let mut app = composition::app();
+    app.sessions.current.transcript.reset();
+    app.sessions.current.connection = Some(SessionConnection::from_receiver(rx));
+    for text in ["first", "second", "third"] {
+        tx.send(SessionMessage::Event(ServerEvent::Frame(
+            user_msg(text).into(),
+        )))
+        .expect("the connection receiver is alive");
+    }
+    tx.send(SessionMessage::Request {
+        request: RequestId(7),
+        payload: ServerRequest::Trust {
+            prompt: TrustPrompt {
+                project_path: "/proj".into(),
+                risks: Vec::new(),
+            },
+        },
+    })
+    .expect("the connection receiver is alive");
+    app.startup_handshake(Duration::from_secs(2));
+    assert!(
+        app.pending_trust().is_some(),
+        "the ask queued after the frame run still raises"
+    );
+    let texts: Vec<&str> = app
+        .sessions
+        .current
+        .transcript
+        .iter()
+        .filter_map(|line| match line {
+            TranscriptLine::User(text) => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        texts,
+        vec!["first", "second", "third"],
+        "the frame run lands whole and in order"
+    );
+}
+
 fn thought_msg(text: &str) -> TranscriptFrame {
     TranscriptFrame::Session(SessionUpdate::AgentThoughtChunk(ContentChunk::new(
         ContentBlock::Text { text: text.into() },
