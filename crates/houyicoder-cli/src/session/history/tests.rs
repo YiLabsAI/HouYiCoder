@@ -4,7 +4,8 @@
 
 use super::*;
 use houyicoder_context::{
-    EventId, LogIndex, SessionEvent, SessionLogEntry,
+    ENTRY_LEN, EventId, LogIndex, LogIndexEntry, LogIndexHeader, SAMPLE_INTERVAL_BYTES,
+    SessionEvent, SessionLogEntry,
     session_class::{INDEX_FILE, LOG_FILE},
 };
 use houyicoder_memory::LocalFileBackend;
@@ -16,6 +17,7 @@ use std::env::var;
 use std::fs::File;
 use std::fs::create_dir_all;
 use std::fs::metadata;
+use std::fs::read;
 use std::fs::read_to_string;
 use std::fs::remove_dir_all;
 use std::fs::write;
@@ -888,6 +890,145 @@ fn test_home_refuses_stale() {
         after - before > PAGE_MAX_BYTES,
         "and the walk ran, because the remembered offset was refused: {} bytes",
         after - before
+    );
+}
+
+/// Every record a page holds beside its byte offset, in order. The comparison
+/// this feeds covers the whole sequence rather than the prompts alone, so an
+/// index that dropped a non-prompt event still fails it.
+fn page_records(page: &TurnPage) -> Vec<(u64, SessionLogEntry)> {
+    page.events
+        .iter()
+        .map(|e| (e.byte_offset, e.entry.clone()))
+        .collect()
+}
+
+/// A reader over a store that has seen none of the log: what the next launch
+/// finds, which is when a sidecar damaged since it was written is met.
+fn reader_over(root: &Path, session: SessionId) -> SessionHistory {
+    let store = SessionStore::new(Box::new(LocalFileBackend::new(root.to_path_buf())));
+    SessionHistory::new(Arc::new(store), session)
+}
+
+/// The id of the record the log holds first, the identity a sidecar's header
+/// must name for its entries to describe this log's bytes.
+fn first_logged_event(log: &Path) -> EventId {
+    let mut line = String::new();
+    BufReader::new(File::open(log).expect("open the log"))
+        .read_line(&mut line)
+        .expect("read the first line");
+    parse_event(&line).expect("the first line parses").id
+}
+
+/// The sidecar index beside a log is derived data, so damage to it must not
+/// change what a page read answers. Each damaged file is refused rather than
+/// believed, the head page reads the log itself, and the page comes back as it
+/// did over the intact file. The log's bytes stay as they were through the
+/// whole test, so the index is the only thing that changes and an answer that
+/// moved would have moved with it.
+///
+/// Every case asserts the damage is real first: the store's offset and count
+/// queries answer nothing, so a page that still holds its turns is the fallback
+/// working rather than a file nobody consulted. The last step restores the file
+/// and shows both queries answering, which is what rules out a store that never
+/// indexed this log at all.
+#[test]
+fn test_pages_survive_damage() {
+    let (history, session, root) = session_of(12);
+    let dir = root.join(session.to_string());
+    let index_path = dir.join(INDEX_FILE);
+    let intact_head = page_records(&history.head_turns(None, 3, PAGE_MAX_BYTES, &live()));
+    let intact_tail = page_records(&history.turns_before(history.log_size(), 3, PAGE_MAX_BYTES));
+    // A page keeps whole turns, so its prompt count is the turn count.
+    let turns = |records: &[(u64, SessionLogEntry)]| {
+        records
+            .iter()
+            .filter(|(_, entry)| matches!(entry.event, SessionEvent::UserInput { .. }))
+            .count()
+    };
+    assert_eq!(
+        turns(&intact_head),
+        3,
+        "the head page holds the first turns"
+    );
+    assert_eq!(turns(&intact_tail), 3, "and the tail page the newest ones");
+    let recorded = read(&index_path).expect("the appended log carries a sidecar");
+    let first = first_logged_event(&dir.join(LOG_FILE));
+    let header = LogIndexHeader {
+        interval: SAMPLE_INTERVAL_BYTES,
+        first_event: Some(first),
+        covered_len: history.log_size(),
+    };
+    let sampled = LogIndexEntry {
+        event: first,
+        ordinal: 0,
+        offset: 0,
+    };
+
+    // Four files the store has to refuse: one holding no whole entry, one whose
+    // entry a crash left half written, one whose entry records another event,
+    // and one whose header claims another log's first record.
+    let mut flipped = sampled.encode();
+    flipped[0] ^= 0xff;
+    let mut torn = header.encode().to_vec();
+    torn.extend_from_slice(&sampled.encode()[..(ENTRY_LEN / 2) as usize]);
+    let mut misnamed = header.encode().to_vec();
+    misnamed.extend_from_slice(&flipped);
+    let foreign_header = LogIndexHeader {
+        first_event: Some(EventId::new()),
+        ..header
+    };
+    let mut foreign = foreign_header.encode().to_vec();
+    foreign.extend_from_slice(&sampled.encode());
+    let damages: [(&str, Vec<u8>); 4] = [
+        ("a header holding no entry", header.encode().to_vec()),
+        ("an entry a crash left half written", torn),
+        ("an entry recording another event", misnamed),
+        ("an index over another log", foreign),
+    ];
+
+    for (damage, bytes) in damages {
+        write(&index_path, &bytes).expect("write the damaged sidecar");
+        let reader = reader_over(&root, session);
+        assert!(
+            reader.byte_at(0).is_none(),
+            "the store refuses {damage} instead of answering from it"
+        );
+        assert!(
+            reader.event_count().is_none(),
+            "and refuses to count the records under {damage}"
+        );
+        assert_eq!(
+            page_records(&reader.head_turns(None, 3, PAGE_MAX_BYTES, &live())),
+            intact_head,
+            "the head page survives {damage}"
+        );
+        assert_eq!(
+            page_records(&reader.turns_before(reader.log_size(), 3, PAGE_MAX_BYTES)),
+            intact_tail,
+            "the tail page survives {damage}"
+        );
+        assert_eq!(
+            read(&index_path).expect("the sidecar is still there"),
+            bytes,
+            "reading pages left {damage} as it was"
+        );
+    }
+
+    write(&index_path, &recorded).expect("restore the sidecar");
+    let reader = reader_over(&root, session);
+    assert!(
+        reader.byte_at(0).is_some(),
+        "the restored sidecar answers the offset query again"
+    );
+    assert!(
+        reader.event_count().is_some(),
+        "and counts the log's records again"
+    );
+    assert_eq!(
+        page_records(&reader.head_turns(None, 3, PAGE_MAX_BYTES, &live())),
+        intact_head,
+        "and the head page comes back as it did before the damage"
     );
 }
 
