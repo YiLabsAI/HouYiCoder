@@ -8,6 +8,7 @@
 pub(crate) use crate::transcript::{blocks, view};
 
 use std::cell::Cell;
+use std::env;
 
 use crate::fold::{FoldGroup, compute_fold_groups};
 use crate::records::{ContextView, TranscriptLine};
@@ -97,6 +98,34 @@ pub(crate) struct FrontRow {
 /// Default ceiling on the resident frames' estimated bytes.
 const RESIDENT_BYTE_BUDGET: usize = 8 * 1024 * 1024;
 
+/// The variable a test sets to drive the resident frame window to a size it
+/// can observe, so a history whose frames would not evict under the compiled
+/// budget does evict. Unset in production, where the default applies. The
+/// session store's mirror window reads the same variable, so one setting
+/// bounds both windows; the frontend is a protocol client and cannot name the
+/// config crate's constant for it, so each reader spells the name.
+pub(crate) const RESIDENT_BUDGET_ENV: &str = "HOUYICODER_TEST_RESIDENT_BYTE_BUDGET";
+
+/// The bytes a transcript's resident frames may hold, from the test variable
+/// when one is set and from the compiled default otherwise.
+fn resident_budget_from_env() -> usize {
+    budget_from_setting(env::var(RESIDENT_BUDGET_ENV).ok())
+}
+
+/// The budget a raw variable value names. A value that is not a byte count is
+/// reported and ignored; any count it names is kept, zero included, because
+/// the drain holds the newest frame at any budget, so a zero window costs the
+/// history behind that frame rather than the frame itself.
+fn budget_from_setting(setting: Option<String>) -> usize {
+    let Some(setting) = setting else {
+        return RESIDENT_BYTE_BUDGET;
+    };
+    setting.parse().unwrap_or_else(|_| {
+        tracing::warn!("{RESIDENT_BUDGET_ENV} is not a byte count: {setting}");
+        RESIDENT_BYTE_BUDGET
+    })
+}
+
 impl Default for Transcript {
     fn default() -> Self {
         Self {
@@ -114,6 +143,22 @@ impl Default for Transcript {
             current_turn: CurrentTurnBoundary::default(),
             raised: 0,
             revision: Cell::new(0),
+        }
+    }
+}
+
+impl Transcript {
+    /// A transcript whose resident frame window holds the budget the test
+    /// variable asks for, and the compiled default where none is set.
+    pub(crate) fn with_budget_from_env() -> Self {
+        Self::with_resident_budget(resident_budget_from_env())
+    }
+
+    /// A transcript whose resident frame window holds the given byte budget.
+    pub(crate) fn with_resident_budget(resident_byte_budget: usize) -> Self {
+        Self {
+            resident_byte_budget,
+            ..Self::default()
         }
     }
 }

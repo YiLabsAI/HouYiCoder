@@ -2,6 +2,7 @@
 //! paged read reaches the records the window no longer holds.
 
 use super::*;
+use crate::trajectory::{DEFAULT_RESIDENT_BYTES, RESIDENT_BUDGET_ENV};
 use houyicoder_api::session::TrajectoryPages;
 use houyicoder_api::session::TrajectoryPosition;
 use serde_json::json;
@@ -51,6 +52,101 @@ async fn append_event(store: &SessionStore, session: SessionId, kind: SessionEve
 
 fn body() -> String {
     "x".repeat(TEXT_BYTES)
+}
+
+/// The setting a store is built with is read as the byte count it names, zero
+/// included: the window holds its newest row at any budget, so a zero window
+/// is one row rather than a window nobody could read.
+#[test]
+fn test_count_budget_honored() {
+    assert_eq!(
+        budget_from_setting(Some("65536".into())),
+        65_536,
+        "a byte count is the budget"
+    );
+    assert_eq!(
+        budget_from_setting(Some("0".into())),
+        0,
+        "a zero budget is kept, and the window keeps its newest row at it"
+    );
+}
+
+/// A setting that names no byte count is reported and ignored, so a stray
+/// value leaves the compiled budget in place.
+#[test]
+fn test_unreadable_budget_ignored() {
+    assert_eq!(
+        budget_from_setting(None),
+        DEFAULT_RESIDENT_BYTES,
+        "an unset variable leaves the compiled budget"
+    );
+    assert_eq!(
+        budget_from_setting(Some("8mib".into())),
+        DEFAULT_RESIDENT_BYTES,
+        "a value naming no count leaves the compiled budget"
+    );
+}
+
+/// The variable name this crate spells is the one the config crate owns, so a
+/// rename there cannot leave this reader behind.
+#[test]
+fn test_budget_env_matches_config() {
+    assert_eq!(
+        RESIDENT_BUDGET_ENV,
+        houyicoder_config::ENV_HOUYICODER_TEST_RESIDENT_BYTE_BUDGET,
+        "the session window reads the variable the config crate names"
+    );
+}
+
+/// A window given no budget still holds its newest row: the trim keeps one row
+/// at any budget, so a zero window costs the history behind that row rather
+/// than leaving a session with nothing to read.
+#[tokio::test]
+async fn test_zero_budget_keeps_newest() {
+    let root = temp_root();
+    let store =
+        SessionStore::with_resident_budget(Box::new(LocalFileBackend::new(root.clone())), 0);
+    let session = SessionId::new();
+    let first = append_event(&store, session, SessionEvent::UserInput { text: body() }).await;
+    let second = append_event(&store, session, SessionEvent::UserInput { text: body() }).await;
+
+    let tail = store.trajectory_tail(session);
+    assert_eq!(tail.len(), 1, "a zero budget leaves the newest row");
+    assert_eq!(tail[0].id, second, "the row it leaves is the newest one");
+    assert_ne!(tail[0].id, first, "the row behind it was dropped");
+    assert_eq!(
+        store.trajectory_head(session).revision.event_count,
+        2,
+        "the dropped row is still counted"
+    );
+    remove_dir_all(&root).ok();
+}
+
+/// A fold with no budget keeps the newest row too: reading a session back from
+/// its log trims by the same rule as an append does, so a session the fold
+/// rebuilt still has a row to answer with.
+#[tokio::test]
+async fn test_zero_budget_survives_fold() {
+    let root = temp_root();
+    let session = SessionId::new();
+    let second;
+    {
+        let writer = SessionStore::new(Box::new(LocalFileBackend::new(root.clone())));
+        append_event(&writer, session, SessionEvent::UserInput { text: body() }).await;
+        second = append_event(&writer, session, SessionEvent::UserInput { text: body() }).await;
+    }
+
+    let store =
+        SessionStore::with_resident_budget(Box::new(LocalFileBackend::new(root.clone())), 0);
+    assert_eq!(
+        store.restore_trajectory(session).await.unwrap(),
+        2,
+        "the fold counts every record, held or not"
+    );
+    let tail = store.trajectory_tail(session);
+    assert_eq!(tail.len(), 1, "a zero budget leaves the newest row");
+    assert_eq!(tail[0].id, second, "the row it leaves is the newest one");
+    remove_dir_all(&root).ok();
 }
 
 /// The window drops its oldest rows once it outgrows its budget. Everything a

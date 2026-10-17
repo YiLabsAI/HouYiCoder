@@ -35,10 +35,17 @@ const ROWS: u16 = 24;
 /// Wide viewport for stable path and layout assertions.
 pub const COLS: u16 = 200;
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct LaunchOptions {
     rows: u16,
     pretrust: bool,
+    /// Environment the child starts with, for a journey that drives a variable
+    /// the binary reads once, when it builds the state the journey observes.
+    /// Set on the child rather than this process, so a journey cannot affect a
+    /// test running beside it. The resident window budget is one of these, and
+    /// the config crate names it, so a journey passes that name rather than
+    /// spelling it here.
+    env: Vec<(String, String)>,
 }
 
 impl PtySession {
@@ -87,6 +94,7 @@ impl PtySession {
             LaunchOptions {
                 rows: ROWS,
                 pretrust: false,
+                env: Vec::new(),
             },
         )
     }
@@ -126,6 +134,27 @@ impl PtySession {
         extra_args: &[String],
         sessions_dir: PathBuf,
     ) -> Self {
+        Self::launch_with_sessions_dir_env(
+            script,
+            delay,
+            home,
+            cwd_override,
+            extra_args,
+            sessions_dir,
+            &[],
+        )
+    }
+
+    /// Launch with a shared session root and extra environment for the child.
+    pub fn launch_with_sessions_dir_env(
+        script: Option<String>,
+        delay: Option<u64>,
+        home: Option<PathBuf>,
+        cwd_override: Option<PathBuf>,
+        extra_args: &[String],
+        sessions_dir: PathBuf,
+        env: &[(String, String)],
+    ) -> Self {
         Self::launch_impl(
             script,
             delay,
@@ -136,6 +165,7 @@ impl PtySession {
             LaunchOptions {
                 rows: ROWS,
                 pretrust: true,
+                env: env.to_vec(),
             },
         )
     }
@@ -160,6 +190,7 @@ impl PtySession {
             LaunchOptions {
                 rows,
                 pretrust: true,
+                env: Vec::new(),
             },
         )
     }
@@ -225,6 +256,9 @@ impl PtySession {
                 houyicoder_config::ENV_HOUYICODER_TEST_STUB_DELAY_MS,
                 ms.to_string(),
             );
+        }
+        for (key, value) in &options.env {
+            cmd.env(key, value);
         }
 
         let pty_system = portable_pty::native_pty_system();
@@ -577,14 +611,26 @@ pub fn sample_rss_kb(pid: u32) -> Option<u64> {
 /// Launch over a seeded log and wait for the replay to finish. Returns the
 /// session and the launch-to-settle duration.
 pub fn launch_and_settle(dir: &Path, fixture: &LargeFixture) -> (PtySession, Duration) {
+    launch_and_settle_with(dir, fixture, &[])
+}
+
+/// Launch over a seeded log with extra environment for the child, and wait for
+/// the replay to finish. Returns the session and the launch-to-settle
+/// duration.
+pub fn launch_and_settle_with(
+    dir: &Path,
+    fixture: &LargeFixture,
+    env: &[(String, String)],
+) -> (PtySession, Duration) {
     let started = Instant::now();
-    let mut session = PtySession::launch_with_sessions_dir(
+    let mut session = PtySession::launch_with_sessions_dir_env(
         None,
         None,
         None,
         None,
         &["--resume".to_string(), fixture.sid.clone()],
         dir.to_path_buf(),
+        env,
     );
     let settled = session.wait_for_screen(&fixture.settle_marker, SETTLE_TIMEOUT);
     assert!(

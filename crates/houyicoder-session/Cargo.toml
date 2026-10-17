@@ -21,5 +21,6 @@ tokio = { version = "1", features = ["sync"] }
 tracing = "0.1.44"
 
 [dev-dependencies]
+houyicoder-config = { path = "../houyicoder-config" }
 houyicoder-memory = { path = "../houyicoder-memory" }
 tokio = { version = "1", features = ["rt", "macros"] }

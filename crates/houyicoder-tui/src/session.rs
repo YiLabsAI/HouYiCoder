@@ -138,7 +138,7 @@ impl Session {
             run_metrics: RunMetrics::default(),
             last_run_input: None,
             last_run_final: false,
-            transcript: Transcript::default(),
+            transcript: Transcript::with_budget_from_env(),
             prompt: None,
             todos: TodoState::default(),
             capabilities: SessionCapabilities::default(),

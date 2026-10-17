@@ -1619,6 +1619,7 @@ version = "0.1.0"
 dependencies = [
  "houyicoder-api",
  "houyicoder-async",
+ "houyicoder-config",
  "houyicoder-context",
  "houyicoder-memory",
  "houyicoder-protocol",

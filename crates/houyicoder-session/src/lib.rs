@@ -61,16 +61,22 @@ fn epoch_start(events: &[SessionLogEntry]) -> usize {
 }
 
 /// The bytes a session's mirror may hold, from the test variable when one is
-/// set and from the compiled default otherwise. A value that is not a byte
-/// count is reported and ignored: a budget read as zero would empty a window
-/// that the caller believes is bounded.
+/// set and from the compiled default otherwise.
 fn resident_budget_from_env() -> usize {
-    let Ok(value) = env::var(trajectory::RESIDENT_BUDGET_ENV) else {
+    budget_from_setting(env::var(trajectory::RESIDENT_BUDGET_ENV).ok())
+}
+
+/// The budget a raw variable value names. A value that is not a byte count is
+/// reported and ignored; any count it names is kept, zero included, because
+/// the window holds its newest row at any budget, so a zero window costs the
+/// history behind that row rather than the row itself.
+fn budget_from_setting(setting: Option<String>) -> usize {
+    let Some(setting) = setting else {
         return trajectory::DEFAULT_RESIDENT_BYTES;
     };
-    value.parse().unwrap_or_else(|_| {
+    setting.parse().unwrap_or_else(|_| {
         tracing::warn!(
-            "{} is not a byte count: {value}",
+            "{} is not a byte count: {setting}",
             trajectory::RESIDENT_BUDGET_ENV
         );
         trajectory::DEFAULT_RESIDENT_BYTES

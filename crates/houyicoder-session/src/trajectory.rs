@@ -49,7 +49,10 @@ use summary::TrajectorySummaryState;
 pub(super) const DEFAULT_RESIDENT_BYTES: usize = 16 * 1024 * 1024;
 
 /// The variable a test sets to drive the resident window to a size it can
-/// observe. Unset in production, where the default applies.
+/// observe. Unset in production, where the default applies. The frontend's
+/// transcript window reads the same variable, so one setting bounds both; the
+/// layering does not let this crate reach the config crate that names every
+/// variable, so each reader spells the name.
 pub(super) const RESIDENT_BUDGET_ENV: &str = "HOUYICODER_TEST_RESIDENT_BYTE_BUDGET";
 
 /// What the window holds for a read at an absolute ordinal.

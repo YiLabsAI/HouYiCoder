@@ -144,6 +144,56 @@ fn test_resident_bytes_track_drain() {
     );
 }
 
+/// The setting a run is given is read as the byte count it names, zero
+/// included: the drain holds the newest frame at any budget, so a zero window
+/// is one frame rather than a window nobody could render.
+#[test]
+fn test_count_budget_honored() {
+    assert_eq!(
+        budget_from_setting(Some("65536".into())),
+        65_536,
+        "a byte count is the budget"
+    );
+    assert_eq!(
+        budget_from_setting(Some("0".into())),
+        0,
+        "a zero budget is kept, and the drain keeps the newest frame at it"
+    );
+}
+
+/// A setting that names no byte count is reported and ignored, so a stray
+/// value leaves the compiled budget in place.
+#[test]
+fn test_unreadable_budget_ignored() {
+    assert_eq!(
+        budget_from_setting(None),
+        RESIDENT_BYTE_BUDGET,
+        "an unset variable leaves the compiled budget"
+    );
+    assert_eq!(
+        budget_from_setting(Some("8mib".into())),
+        RESIDENT_BYTE_BUDGET,
+        "a value naming no count leaves the compiled budget"
+    );
+}
+
+/// The budget a transcript is built with is the one its window keeps, which is
+/// what lets a journey drive the front of a transcript to the size it can
+/// observe.
+#[test]
+fn test_construction_budget_bounds_window() {
+    let mut t = Transcript::with_resident_budget(1);
+    assert_eq!(t.resident_byte_budget(), 1, "the window keeps its budget");
+    for i in 0..5 {
+        t.push_frame(user_frame(&format!("m{i}")));
+    }
+
+    let dropped = t.drain_front_to_budget(t.resident_byte_budget() as u64);
+    assert_eq!(dropped, 4, "a one-byte window drains to the newest frame");
+    assert_eq!(t.frame_count(), 1);
+    assert_eq!(t.abs_frame_count(), 5, "draining does not renumber");
+}
+
 /// The drain takes any frame but the newest, so a log that holds no frame to
 /// protect still reaches its budget. The newest frame stays even when it alone
 /// exceeds the budget: a resident log drained empty has nothing left to

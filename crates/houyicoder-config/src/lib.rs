@@ -121,6 +121,11 @@ pub const ENV_HOUYICODER_TEST_STUB_DELAY_MS: &str = "HOUYICODER_TEST_STUB_DELAY_
 /// transcript so PTY assertions do not have to account for the line.
 pub const ENV_HOUYICODER_TEST_SUPPRESS_FENCE_NOTICE: &str = "HOUYICODER_TEST_SUPPRESS_FENCE_NOTICE";
 
+/// Test-only: the resident byte budget the frontend's transcript window and
+/// the session mirror both read, so one setting bounds the rows a run keeps
+/// and a PTY journey can watch a small window evict.
+pub const ENV_HOUYICODER_TEST_RESIDENT_BYTE_BUDGET: &str = "HOUYICODER_TEST_RESIDENT_BYTE_BUDGET";
+
 /// Operational: overrides the sessions-root directory. PTY tests point it at
 /// a temp dir; a deployment or CI can relocate session storage with it.
 pub const ENV_HOUYICODER_SESSIONS_DIR: &str = "HOUYICODER_SESSIONS_DIR";
