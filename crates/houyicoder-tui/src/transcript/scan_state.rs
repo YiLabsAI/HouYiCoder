@@ -1,4 +1,4 @@
-//! The G full-scan's progress mirror and its pending chunk.
+//! The G full-scan's progress and its pending chunk.
 
 use std::cell::{Cell, RefCell};
 

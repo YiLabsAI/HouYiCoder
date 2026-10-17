@@ -165,7 +165,7 @@ pub(super) async fn finalize_child(
 pub(super) fn child_subtree_usage(runner: &Runner, child: SessionId) -> Usage {
     let own = runner.status_snapshot().cumulative_usage;
     // The returns come from the store's folded summary rather than from the
-    // child's mirrored rows: the mirror holds the newest rows and drops the
+    // child's resident rows: the log state holds the newest rows and drops the
     // oldest, so a child whose history outgrew it would report the returns it
     // still held as the whole subtree's cost.
     let descendants = runner.store().subagent_usage(child).to_usage();

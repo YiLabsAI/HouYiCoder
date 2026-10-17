@@ -106,7 +106,7 @@ impl Server {
         let mut snapshot = pa::map_status_snapshot(&snap);
         // The append owner folds the whole-session figures once. Status is
         // polled every second while idle, so reading them must stay constant
-        // time rather than clone and scan the growing event mirror.
+        // time rather than clone and scan the growing event log state.
         let delegated = self
             .runner
             .store()

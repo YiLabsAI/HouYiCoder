@@ -192,7 +192,7 @@ impl TrajectorySummaryState {
                 entry.event,
                 SessionEvent::ContextCleared { .. }
                     | SessionEvent::CompactionBoundary { .. }
-                    // A delta is not durable and not turn content: a mirror that
+                    // A delta is not durable and not turn content: a log state that
                     // saw one before any durable event must not take it for a
                     // turn that reported no usage, or the session total would
                     // read as incomplete for the rest of its life.

@@ -55,7 +55,7 @@ pub struct AcpServer {
     next_req_id: u64,
     /// The position the client has been pushed up to: every durable record
     /// before it was sent. An absolute ordinal of the session's own history,
-    /// so it survives the mirror dropping its oldest rows.
+    /// so it survives the log state dropping its oldest rows.
     pushed_through: TrajectoryPosition,
     /// Set when a session/cancel notification arrives during a pending
     /// permission ask (the run is paused at Interruption, the drive loop

@@ -27,7 +27,7 @@ const OVERSIZED_BYTES: usize = 8_500_000;
 fn temp_root() -> PathBuf {
     static SEQ: AtomicU64 = AtomicU64::new(0);
     let n = SEQ.fetch_add(1, Ordering::Relaxed);
-    let path = temp_dir().join(format!("mirror-window-{}-{n}", id()));
+    let path = temp_dir().join(format!("log-state-{}-{n}", id()));
     create_dir_all(&path).expect("mkdir root");
     path
 }

@@ -251,7 +251,7 @@ impl Runner {
     /// different spans.
     ///
     /// The turns come from the session's durable history page by page, not
-    /// from the mirror's tail: the mirror holds the newest rows, so a tally
+    /// from the log state's tail: it holds the newest rows, so a tally
     /// read from it would cover the part of the session memory happens to hold
     /// while the pane reports it as the session's own.
     pub fn seed_usage_from_log(&self, session: SessionId) {
@@ -393,11 +393,11 @@ impl Runner {
         )
     }
 
-    /// Clear the session's in-memory trajectory mirror and record the clear as
+    /// Clear the session's in-memory log state and record the clear as
     /// a durable boundary marker.
     ///
-    /// The host calls this on /clear. The mirror is dropped first so the marker
-    /// appended afterwards is the only event in the fresh mirror: the boundary
+    /// The host calls this on /clear. The log state is dropped first so the marker
+    /// appended afterwards is the only event in the fresh log state: the boundary
     /// stays visible to an in-process reader while the pre-clear history is
     /// gone from it, and the durable log keeps the whole sequence.
     pub async fn reset_trajectory(&self, session: SessionId) {

@@ -290,7 +290,7 @@ fn test_detail_stale_after_clear() {
 
     let rt = Runtime::new().expect("test runtime");
     let before = store.trajectory_head(sid).revision.epoch_event_id;
-    // A clear is a mirror reset followed by the boundary event, which is what
+    // A clear is a log state reset followed by the boundary event, which is what
     // makes the boundary the new epoch's first durable event.
     store.reset_trajectory(sid);
     rt.block_on(store.append(SessionLogEntry {
@@ -396,11 +396,11 @@ fn test_detail_survives_disk_eviction() {
     assert_eq!(after.turn.as_ref().map(|turn| turn.n), Some(oldest.n));
 }
 
-/// A mirror-backed reader answers a drill from the history it holds, and keeps
+/// A resident reader answers a drill from the history it holds, and keeps
 /// answering it: the same request is not re-read on every draw, and the view it
 /// answers with is the one it built rather than a fresh fold.
 #[test]
-fn test_detail_mirror_caches() {
+fn test_detail_keeps_its_answer() {
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let sid = SessionId::new();
     let rt = Runtime::new().expect("test runtime");
@@ -439,7 +439,7 @@ fn test_detail_mirror_caches() {
         assert_eq!(
             detail.state,
             TrajectoryDetailState::Ready,
-            "a mirror detail stays ready rather than being reported stale"
+            "a resident detail stays ready rather than being reported stale"
         );
         assert_eq!(detail.turn.as_ref().map(|turn| turn.n), Some(turn.n));
         assert!(

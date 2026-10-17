@@ -135,8 +135,8 @@ fn make_session() -> SessionId {
     SessionId::new()
 }
 
-/// This test log implements only the mirror methods, so the trait supplies
-/// the body and answers with the tail of that mirror.
+/// This test log implements only the log state methods, so the trait supplies
+/// the body and answers with the tail of that log state.
 #[test]
 fn test_default_last_id_tail() {
     let log = InMemoryLog::new();

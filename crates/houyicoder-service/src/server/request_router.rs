@@ -36,7 +36,7 @@ impl Server {
     ///
     /// The records are read page by page and released into the result, so a
     /// reader that has to hold the whole history pays for it once rather than
-    /// keeping a second copy in the mirror. Callers that can consume the
+    /// keeping a second copy in the log state. Callers that can consume the
     /// history incrementally read the pages directly.
     fn durable_history(&self) -> Result<Vec<SessionLogEntry>, ContextError> {
         let store = self.runner.store();

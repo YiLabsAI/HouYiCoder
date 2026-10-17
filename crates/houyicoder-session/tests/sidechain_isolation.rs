@@ -120,7 +120,7 @@ async fn test_sidechain_isolates_sessions() {
         .await
         .expect("append child 2");
 
-    // Parent log: read from DISK (not the in-memory mirror) so the
+    // Parent log: read from DISK (not the in-memory log state) so the
     // assertion proves routing-level isolation, not just HashMap partition.
     let parent_events = store
         .backend()

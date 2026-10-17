@@ -167,7 +167,7 @@ struct TrajectoryState {
     /// still in hand from it would rename every row in the window.
     window_total: usize,
     /// The durable history the cached view was built for. A streaming delta
-    /// moves the mirror revision but not this, so keying on it is what keeps a
+    /// moves the log state's revision but not this, so keying on it is what keeps a
     /// stream from re-reading the log once per frame.
     ///
     /// The consequence, deliberate: the header's figures refresh at durable
@@ -423,7 +423,7 @@ impl TrajectoryLog for SessionLogTrajectory {
             return Arc::clone(view);
         }
         // A backend with no byte-addressable log, such as an in-memory store,
-        // has no pages to read. Its mirror holds the whole history already, so
+        // has no pages to read. Its log state holds the whole history already, so
         // its view is built directly rather than paged.
         if !self.history.byte_windows() {
             let events = self.session_log.trajectory_tail(self.session_id);
@@ -469,7 +469,7 @@ impl TrajectoryLog for SessionLogTrajectory {
     }
 
     fn load_older(&self) {
-        // The mirror path widens its own window instead of reading a page.
+        // The resident path widens its own window instead of reading a page.
         if !self.history.byte_windows() {
             self.loaded_turns
                 .fetch_add(TRAJECTORY_PAGE_TURNS, Ordering::Relaxed);
@@ -528,7 +528,7 @@ impl TrajectoryLog for SessionLogTrajectory {
     }
 
     fn load_earliest(&self) {
-        // The mirror path has no pages: widen it to the whole history instead.
+        // The resident path has no pages: widen it to the whole history instead.
         if !self.history.byte_windows() {
             self.loaded_turns.store(usize::MAX, Ordering::Relaxed);
             return;
@@ -566,7 +566,7 @@ impl TrajectoryLog for SessionLogTrajectory {
     }
 
     fn return_to_tail(&self) {
-        // The mirror path folds the newest turns, so resetting the width is
+        // The resident path folds the newest turns, so resetting the width is
         // enough to put the tail back.
         if !self.history.byte_windows() {
             self.loaded_turns

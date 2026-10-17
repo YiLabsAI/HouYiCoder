@@ -414,7 +414,7 @@ impl ExportLog for SessionLogTrajectory {
 
 impl SessionLogTrajectory {
     /// The session's durable records, read page by page from the log instead
-    /// of copied out of the mirror. A history longer than the resident window
+    /// of copied out of the log state. A history longer than the resident window
     /// still exports whole, because the pages are appended here as they arrive.
     fn durable_history(&self) -> Result<Vec<SessionLogEntry>, ContextError> {
         let pages = TrajectoryPages::new(

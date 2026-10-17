@@ -1,14 +1,14 @@
 //! Reading a session's durable log through forward line-aligned byte windows.
 //!
 //! Three readers share the window mechanics. One folds a reopened session's
-//! whole epoch into the rows the mirror keeps, which is how a resumed session
+//! whole epoch into the rows the log state keeps, which is how a resumed session
 //! becomes readable without the process ever holding the history. One reads a
-//! page of records older than the mirror's window, which is how a reader walks
+//! page of records older than the log state's window, which is how a reader walks
 //! a history larger than memory. One hashes a log's lines to verify the links
 //! between them, and reads the same windows so a writer and a verifier cannot
 //! disagree about which bytes hold a record.
 //!
-//! The two ordinal readers count the same way the mirror does: an ordinal per
+//! The two ordinal readers count the same way the log state does: an ordinal per
 //! record from the current epoch's clear boundary. A window widens to hold a
 //! record that overruns it, so a record is read whole; one wider than the
 //! backend's ceiling is beyond any read, and both count its ordinal and report
@@ -56,7 +56,7 @@ pub(crate) fn read_window(
     }
 }
 
-/// Fold a session's durable log into the rows a mirror keeps.
+/// Fold a session's durable log into the rows the log state keeps.
 ///
 /// One forward pass over the log's windows, bounded by the resident budget: the
 /// folded history holds its newest rows and the counts for all of them. Each
@@ -118,7 +118,7 @@ pub(crate) fn fold_epoch(
     Ok(history)
 }
 
-/// Read one page of durable records from the log, for a position the mirror's
+/// Read one page of durable records from the log, for a position the log state's
 /// window does not cover.
 ///
 /// A position carrying a byte offset resumes exactly there. One carrying none
@@ -159,7 +159,7 @@ pub(crate) fn read_page(
         let passed = window.next_offset.saturating_sub(offset + consumed);
         skipped_bytes = skipped_bytes.saturating_add(passed);
         if window.lines.is_empty() && window.next_offset <= offset {
-            // The log ends before the horizon, so the records the mirror
+            // The log ends before the horizon, so the records the log state
             // counts above this point are not on disk to read. The walk
             // reports where it stopped rather than claiming the rest.
             return Ok(page(events, ordinal, offset, skipped_bytes));
@@ -216,7 +216,7 @@ fn page(
     }
 }
 
-/// The page for a position nothing can resolve: the mirror kept no byte
+/// The page for a position nothing can resolve: the log state kept no byte
 /// position for its epoch and the caller named no byte offset of its own.
 fn unreadable_position(from: TrajectoryPosition) -> TrajectoryPage {
     TrajectoryPage {

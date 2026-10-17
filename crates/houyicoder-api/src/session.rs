@@ -1,7 +1,7 @@
 //! The append-only session log port: the engine-facing contract for event
 //! logging, replay, and cursor (checkpoint) support. Signatures reference
 //! context types (SessionLogEntry, ContextSnapshot). The concrete facade (hash
-//! chain, delta counter, trajectory mirror) lives in the session crate; the
+//! chain, delta counter, log state) lives in the session crate; the
 //! engine depends on this trait so it does not depend on the session crate
 //! directly.
 
@@ -156,18 +156,18 @@ pub fn aggregate_subagent_usage(events: &[SessionLogEntry]) -> SubagentUsage {
     total
 }
 
-/// How far the session's mirror has advanced. Ids are monotonic within a
+/// How far the session's log state has advanced. Ids are monotonic within a
 /// process, so a caller that kept the last count can ask for exactly what was
-/// appended since; the id is a cross-check that the mirror was not replaced
+/// appended since; the id is a cross-check that the log state was not replaced
 /// under a smaller count.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct TrajectoryRevision {
-    /// Events in the mirror, streaming deltas included, because a caller
+    /// Events in the log state, streaming deltas included, because a caller
     /// resumes its own cursor in that same index space.
     pub event_count: usize,
-    /// The newest event's id, or None for an empty mirror.
+    /// The newest event's id, or None for an empty log state.
     pub last_event_id: Option<EventId>,
-    /// Durable events in the mirror, streaming deltas excluded.
+    /// Durable events in the log state, streaming deltas excluded.
     ///
     /// A delta arrives many times per second while a model streams, so a
     /// caller that re-reads the log whenever the revision moves has to key on
@@ -177,7 +177,7 @@ pub struct TrajectoryRevision {
     /// The newest durable event's id, or None when none has been appended.
     pub last_durable_event_id: Option<EventId>,
     /// The durable event that began the current epoch: the first event of the
-    /// mirror, which after a clear is the clear itself.
+    /// log state, which after a clear is the clear itself.
     ///
     /// A reader holding a page needs this to tell two cases apart. An append
     /// moves the count but leaves the epoch alone, so a page read before it is
@@ -389,9 +389,8 @@ pub fn last_user_input_id(events: &[SessionLogEntry]) -> Option<EventId> {
 
 /// The engine-facing session log. Object-safe (PFut) so the engine holds
 /// Arc<dyn SessionLog> and the concrete session facade swaps behind it. The
-/// facade layers the hash chain, delta-persistence counter, and trajectory
-/// mirror on top of a ContextBackend; this port surfaces only what the engine
-/// drives.
+/// facade layers the hash chain, delta-persistence counter, and log state on
+/// top of a ContextBackend; this port declares only what the engine drives.
 pub trait SessionLog: Send + Sync {
     /// Append an event to the lossless log. The facade sets prev_hash; the
     /// backend stores it verbatim.
@@ -406,9 +405,9 @@ pub trait SessionLog: Send + Sync {
     /// readable through replay.
     fn current_view(&self, session: SessionId) -> PFut<'_, Result<ContextSnapshot, ContextError>>;
 
-    /// The newest mirrored rows in append order (sync, in-memory mirror),
+    /// The newest resident rows in append order (sync, from the log state),
     /// streamed text deltas included. Empty until events are appended this
-    /// process or the mirror is restored.
+    /// process or the log state is restored.
     ///
     /// This is a tail, not a promise about the whole history: a store whose
     /// backend keeps a byte-addressable log holds only its newest rows in
@@ -434,8 +433,8 @@ pub trait SessionLog: Send + Sync {
         limit: usize,
     ) -> Result<TrajectoryPage, ContextError>;
 
-    /// The id of the latest mirrored event, or None when the session has no
-    /// mirror yet. Defaults to reading the tail; a store that tracks the
+    /// The id of the latest row in the log state, or None when the session
+    /// holds none yet. Defaults to reading the tail; a store that tracks the
     /// latest id as it appends overrides it to answer without cloning rows.
     fn last_trajectory_id(&self, session: SessionId) -> Option<EventId> {
         self.trajectory_tail(session).pop().map(|e| e.id)
@@ -445,7 +444,7 @@ pub trait SessionLog: Send + Sync {
     /// the session holds none yet. A background pass compares this against its
     /// own trigger to tell a change of the turn that just completed from one
     /// the user has already moved past. Defaults to scanning the tail; a store
-    /// whose mirror is a tail overrides it, because the input it looks for may
+    /// whose log state is a tail overrides it, because the input it looks for may
     /// have been trimmed out of the window.
     fn last_user_input_id(&self, session: SessionId) -> Option<EventId> {
         last_user_input_id(&self.trajectory_tail(session))
@@ -466,8 +465,8 @@ pub trait SessionLog: Send + Sync {
     /// would turn a constant-time read into linear work.
     fn trajectory_head(&self, session: SessionId) -> TrajectoryHead;
 
-    /// Drop the in-memory trajectory mirror for a session. The backend log
-    /// is untouched.
+    /// Drop the in-memory log state for a session. The backend log is
+    /// untouched.
     fn reset_trajectory(&self, session: SessionId);
 
     /// Persist a compaction manifest (checkpoint).

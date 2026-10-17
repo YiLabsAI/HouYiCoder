@@ -123,7 +123,7 @@ async fn test_trajectory_keeps_order() {
     .await;
     let e3 = appended_event(&store, s, SessionEvent::Reasoning { text: "c".into() }).await;
     let traj = store.trajectory_tail(s);
-    assert_eq!(traj.len(), 3, "mirror holds every appended event");
+    assert_eq!(traj.len(), 3, "log state holds every appended event");
     assert!(traj[0].prev_hash.is_none(), "first link has no predecessor");
     assert_eq!(
         traj[1].prev_hash,
@@ -137,19 +137,19 @@ async fn test_trajectory_keeps_order() {
     );
     assert_eq!(
         traj[2].prev_hash, e3.prev_hash,
-        "mirror row matches the finalized event append returned"
+        "log state row matches the finalized event append returned"
     );
-    // The mirror is per-session: a different session reads empty until it
+    // The log state is per-session: a different session reads empty until it
     // appends.
     let other = SessionId::new();
     assert!(store.trajectory_tail(other).is_empty());
-    // reset_trajectory frees the mirror without touching the backend log.
+    // reset_trajectory frees the log state without touching the backend log.
     store.reset_trajectory(s);
     assert!(store.trajectory_tail(s).is_empty());
     assert_eq!(
         store.replay(s).await.unwrap().len(),
         3,
-        "backend log survives a mirror reset"
+        "backend log survives a log state reset"
     );
 }
 
@@ -219,7 +219,7 @@ async fn test_usage_through_trait() {
     assert_eq!(direct, usage, "the two reads report the same total");
 }
 
-/// The head reports how far the mirror has advanced, so a caller can ask for
+/// The head reports how far the log state has advanced, so a caller can ask for
 /// exactly what was appended since it last read.
 #[tokio::test]
 async fn test_head_tracks_revision() {
@@ -254,7 +254,10 @@ async fn test_head_tracks_revision() {
     delta.ts = 500;
     store.append(delta).await.expect("append the delta");
     let after = store.trajectory_head(session);
-    assert_eq!(after.revision.event_count, 2, "the delta is in the mirror");
+    assert_eq!(
+        after.revision.event_count, 2,
+        "the delta is in the log state"
+    );
     assert_eq!(
         after.summary.usage, before.usage,
         "and outside the counters"
@@ -265,7 +268,7 @@ async fn test_head_tracks_revision() {
     );
 }
 
-/// A clear drops the mirror and the summary together, so a reader cannot see
+/// A clear drops the log state and the summary together, so a reader cannot see
 /// figures from before it.
 #[tokio::test]
 async fn test_clear_resets_head() {
@@ -525,7 +528,7 @@ async fn test_view_applies_current_checkpoint() {
     );
 }
 
-/// A streaming delta moves the mirror revision but not the durable one, so a
+/// A streaming delta moves the log state revision but not the durable one, so a
 /// reader that re-reads the log on revision change keys on the durable count
 /// and does not re-read once per token.
 #[tokio::test]
@@ -551,7 +554,7 @@ async fn test_durable_revision_ignores_delta() {
     assert_eq!(
         after.event_count,
         before.event_count + 1,
-        "the mirror moved"
+        "the log state moved"
     );
     assert_eq!(
         after.durable_event_count, before.durable_event_count,
@@ -561,10 +564,10 @@ async fn test_durable_revision_ignores_delta() {
 }
 
 #[tokio::test]
-async fn test_last_id_tracks_mirror() {
+async fn test_last_id_tracks_appends() {
     let store = SessionStore::new(Box::new(InMemoryBackend::new()));
     let s = SessionId::new();
-    assert_eq!(store.last_trajectory_id(s), None, "no mirror, no id");
+    assert_eq!(store.last_trajectory_id(s), None, "no log state, no id");
     appended_event(&store, s, SessionEvent::UserInput { text: "a".into() }).await;
     let e2 = appended_event(&store, s, SessionEvent::Reasoning { text: "c".into() }).await;
     assert_eq!(
@@ -576,7 +579,7 @@ async fn test_last_id_tracks_mirror() {
     assert_eq!(
         store.last_trajectory_id(other),
         None,
-        "the mirror is per-session"
+        "the log state is per-session"
     );
     // Through the trait object: the override answers what the inherent read
     // answers.
@@ -586,10 +589,14 @@ async fn test_last_id_tracks_mirror() {
 }
 
 #[tokio::test]
-async fn test_last_user_input_mirror() {
+async fn test_frontier_tracks_appends() {
     let store = SessionStore::new(Box::new(InMemoryBackend::new()));
     let s = SessionId::new();
-    assert_eq!(store.last_user_input_id(s), None, "no mirror, no frontier");
+    assert_eq!(
+        store.last_user_input_id(s),
+        None,
+        "no log state, no frontier"
+    );
     let first = appended_event(&store, s, SessionEvent::UserInput { text: "a".into() }).await;
     assert_eq!(store.last_user_input_id(s), Some(first.id));
     // A mid-turn input continues the turn it arrived in, so it does not move
@@ -618,7 +625,7 @@ async fn test_last_user_input_mirror() {
     assert_eq!(
         store.last_user_input_id(other),
         None,
-        "the mirror is per-session"
+        "the log state is per-session"
     );
     // Through the trait object: the override answers what the inherent read
     // answers.
@@ -629,7 +636,7 @@ async fn test_last_user_input_mirror() {
 
 /// A resumed session backfills the frontier with the durable log, so a
 /// background pass on a restored session classifies against the real last
-/// prompt rather than reading an empty mirror as "no user input ever".
+/// prompt rather than reading an empty log state as "no user input ever".
 #[tokio::test]
 async fn test_last_user_input_restores() {
     let root = temp_dir().join(format!("user-input-restore-{}-{}", id(), EventId::new()));
@@ -1204,4 +1211,4 @@ async fn test_torn_tail_hash() {
 }
 
 mod disk_verify;
-mod mirror_window;
+mod log_state;

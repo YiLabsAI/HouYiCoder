@@ -108,8 +108,7 @@ pub(crate) struct Session {
     /// reason: the reads govern a task's lifecycle across the rows being reset,
     /// which a session switch does wholesale.
     pub(crate) search_reads: SearchReads,
-    /// The full transcript scan's progress mirror and pending chunk, held in
-    /// one owner.
+    /// The full transcript scan's progress and pending chunk, held in one owner.
     pub(crate) scan_state: ScanState,
     /// The oldest frame the scrollback has loaded, in absolute frame
     /// coordinates, or usize::MAX before any load. It is the view's

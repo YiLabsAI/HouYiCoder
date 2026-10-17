@@ -45,7 +45,7 @@ mod log_windows;
 mod trajectory;
 
 use chain::LogChain;
-use trajectory::{RestoredHistory, TrajectoryMirrors, WindowRead};
+use trajectory::{LogStates, RestoredHistory, WindowRead};
 
 /// The index the session's current epoch begins at: the last clear boundary,
 /// or the log head when the session was never cleared. The durable log keeps
@@ -60,7 +60,7 @@ fn epoch_start(events: &[SessionLogEntry]) -> usize {
         .unwrap_or(0)
 }
 
-/// The bytes a session's mirror may hold, from the test variable when one is
+/// The bytes a session's log state may hold, from the test variable when one is
 /// set and from the compiled default otherwise.
 fn resident_budget_from_env() -> usize {
     budget_from_setting(env::var(trajectory::RESIDENT_BUDGET_ENV).ok())
@@ -99,11 +99,11 @@ pub struct SessionStore {
     /// Per-session delta-persistence counter (the interrupted-turn rewind
     /// pattern).
     persisted: Mutex<HashMap<SessionId, u32>>,
-    /// Per-session in-memory mirror of finalized events and their delegated
+    /// Per-session in-memory state for finalized events and their delegated
     /// usage. The raw append-only log stays the source of truth; this gives
-    /// trajectory a sync mirror and status a constant-time aggregate. Resume
+    /// trajectory a sync read and status a constant-time aggregate. Resume
     /// backfills both from the same durable revision.
-    mirrors: TrajectoryMirrors,
+    states: LogStates,
     /// Optional Notify fired on each append so a host draining mid-run wakes
     /// to push the new durable event without waiting for the run future to
     /// resolve. None when no host wires the mid-run drain; behavior is then
@@ -159,27 +159,27 @@ pub struct ImportReport {
 impl SessionStore {
     /// Construct a session store over any ContextBackend.
     ///
-    /// The mirror keeps a window of the session's events only over a backend
+    /// The log state keeps a window of the session's events only over a backend
     /// that can answer a read below it from its own log; a backend with no byte
-    /// log has nowhere else to read, so its mirror holds the history. The
+    /// log has nowhere else to read, so its log state holds the history. The
     /// window's byte budget comes from the test variable when it is set and
     /// from the compiled default otherwise.
     pub fn new(backend: Box<dyn ContextBackend>) -> Self {
         Self::with_resident_budget(backend, resident_budget_from_env())
     }
 
-    /// A store whose mirror window holds at most budget_bytes of a session's
+    /// A store whose log state window holds at most budget_bytes of a session's
     /// rows. The compiled default reaches this through new; a test states the
     /// budget it wants to observe instead, because the variable new reads is
     /// process-wide and every store in the same test process would share it.
     fn with_resident_budget(backend: Box<dyn ContextBackend>, budget_bytes: usize) -> Self {
-        let mirrors = TrajectoryMirrors::new(backend.supports_log_windows(), budget_bytes);
+        let states = LogStates::new(backend.supports_log_windows(), budget_bytes);
         Self {
             backend,
             chain: LogChain::default(),
             append_lock: AsyncMutex::new(()),
             persisted: Mutex::new(HashMap::new()),
-            mirrors,
+            states,
             append_notify: None,
             first_durable: None,
             first_durable_fired: Mutex::new(HashSet::new()),
@@ -213,7 +213,7 @@ impl SessionStore {
     /// Append an event. Streaming text deltas (AssistantTextDelta) take a
     /// separate path from durable events: a delta is a process-local
     /// transport record for live display, not a durable audit row. It enters
-    /// only the in-memory mirror and fires the notify (so a host draining
+    /// only the in-memory log state and fires the notify (so a host draining
     /// mid-run sees the streamed text), but it does NOT enter the backend log,
     /// the hash chain, or the chain's cache. The authoritative AssistantMessage
     /// (full text) lands at turn end and carries the durable record; the
@@ -224,30 +224,30 @@ impl SessionStore {
     /// Durable events keep the existing path: compute prev_hash over the
     /// durable subset (deltas never touch the chain's cache, so the chain
     /// skips them naturally), hash, persist to the backend, cache the new
-    /// hash, mirror, notify.
+    /// hash, log state, notify.
     pub async fn append(&self, mut event: SessionLogEntry) -> Result<EventId, ContextError> {
         let _guard = self.append_lock.lock().await;
         let session = event.session;
         if matches!(event.event, SessionEvent::AssistantTextDelta { .. }) {
-            // Delta path: mirror + notify only. No backend, no chain, no cache.
+            // Delta path: log state + notify only. No backend, no chain, no cache.
             let id = event.id;
             // A delta carries no durable fact, so it moves no counter. It does
             // extend the session's span, which is what the old whole-log fold
             // reported while a generation was still streaming.
-            self.mirrors.note_delta(session, event);
+            self.states.note_delta(session, event);
             if let Some(n) = &self.append_notify {
                 n.notify_one();
             }
             return Ok(id);
         }
         // Durable path.
-        if self.mirrors.needs_epoch_offset(session) {
+        if self.states.needs_epoch_offset(session) {
             // This record opens the session's epoch, either because it is the
-            // session's first durable event or because the mirror was dropped
+            // session's first durable event or because the log state was dropped
             // for a clear. Where the log stands now is where that epoch starts,
-            // and it is the one position the mirror cannot recover from the
+            // and it is the one position the log state cannot recover from the
             // records it later holds.
-            self.mirrors
+            self.states
                 .start_epoch(session, self.backend.log_size(session));
         }
         let prev_hash = self.chain.link(self.backend.as_ref(), session).await?;
@@ -269,7 +269,7 @@ impl SessionStore {
             }
         }
         self.chain.remember(session, new_hash);
-        self.mirrors.note_durable(session, finalized);
+        self.states.note_durable(session, finalized);
         // Retain one wake permit when the host is polling the run future, so
         // the durable event cannot remain invisible until the run completes.
         // Notify coalesces surplus permits; draining from a cursor publishes
@@ -280,7 +280,7 @@ impl SessionStore {
         Ok(id)
     }
 
-    /// The newest rows of a session's in-memory trajectory mirror (sync), each
+    /// The newest rows of a session's in-memory log state (sync), each
     /// with prev_hash set. Empty when no events have been appended for the
     /// session this process and none were folded in from its log. The
     /// /trajectory command reads this directly — SessionLogEntry already
@@ -291,7 +291,7 @@ impl SessionStore {
     /// holds only its newest rows. A reader that must see every record pages
     /// with trajectory_page.
     pub fn trajectory_tail(&self, session: SessionId) -> Vec<SessionLogEntry> {
-        self.mirrors.tail(session)
+        self.states.tail(session)
     }
 
     /// Read one bounded page of a session's durable history from an absolute
@@ -305,7 +305,7 @@ impl SessionStore {
     /// could not read is not the page's end: the position it reports is asked
     /// of the window again, which is where those records are.
     ///
-    /// With no mirror in this process the store folds the session's log first,
+    /// With no log state in this process the store folds the session's log first,
     /// because a position is meaningful only against an epoch: its ordinals
     /// start at the newest clear boundary, which nothing but a read of the log
     /// can find.
@@ -318,7 +318,7 @@ impl SessionStore {
         let mut from = from;
         let mut passed: u64 = 0;
         let mut page = loop {
-            match self.mirrors.page(session, from, limit) {
+            match self.states.page(session, from, limit) {
                 WindowRead::Held { events, next } => {
                     break TrajectoryPage {
                         events,
@@ -357,10 +357,10 @@ impl SessionStore {
                     let history = log_windows::fold_epoch(
                         self.backend.as_ref(),
                         session,
-                        self.mirrors.restore_budget(),
+                        self.states.restore_budget(),
                     )?;
                     let rows = history.rows();
-                    self.mirrors.commit_restore(session, history);
+                    self.states.commit_restore(session, history);
                     if rows == 0 {
                         break TrajectoryPage {
                             next: from,
@@ -382,28 +382,28 @@ impl SessionStore {
         Ok(page)
     }
 
-    /// The id of the latest mirrored event, or None when the session has no
-    /// mirror entries. Reads a counter, not the window.
+    /// The id of the latest event the log state holds, or None when it holds
+    /// none yet. Reads a counter, not the window.
     pub fn last_trajectory_id(&self, session: SessionId) -> Option<EventId> {
-        self.mirrors.last_id(session)
+        self.states.last_id(session)
     }
 
     /// The id of the latest durable user input for a session, or None when
     /// the session holds none yet. Reads a counter taken as events arrive, so
     /// an input the window has trimmed still answers.
     pub fn last_user_input_id(&self, session: SessionId) -> Option<EventId> {
-        self.mirrors.last_user_input_id(session)
+        self.states.last_user_input_id(session)
     }
 
     /// Read the session's trajectory revision and whole-session summary under
     /// one lock, so the two describe the same revision.
     pub fn trajectory_head(&self, session: SessionId) -> TrajectoryHead {
-        self.mirrors.head(session)
+        self.states.head(session)
     }
 
     /// Read a child session's full transcript from disk. Returns empty when
     /// the child log is gone (deleted or archived), so the caller falls back
-    /// to the inline summary the parent already holds. Not a mirror -- the
+    /// to the inline summary the parent already holds. Not the log state -- the
     /// parent carries the summary; this follows the ref for the full text.
     pub fn read_child_result(&self, child: SessionId) -> Vec<SessionLogEntry> {
         match self.backend.read_log(child) {
@@ -415,15 +415,15 @@ impl SessionStore {
         }
     }
 
-    /// Drop the in-memory trajectory mirror for a session (the /clear path).
+    /// Drop the in-memory log state for a session (the /clear path).
     /// The backend's append-only log is untouched — this only frees the
-    /// viewable mirror so /trajectory reads fresh after a clear.
+    /// viewable state so /trajectory reads fresh after a clear.
     pub fn reset_trajectory(&self, session: SessionId) {
-        self.mirrors.reset(session);
+        self.states.reset(session);
     }
 
-    /// Backfill the in-memory trajectory mirror from the backend log for a
-    /// resumed session (read-only — no append, no chain rewrite). The mirror
+    /// Backfill the in-memory log state from the backend log for a
+    /// resumed session (read-only — no append, no chain rewrite). The state
     /// starts empty on resume; this reads the durable history so the
     /// serve-start replay ships the resumed conversation to the client (the
     /// working screen shows the past turns, not just the status bar). Returns
@@ -432,13 +432,13 @@ impl SessionStore {
     /// A backend that reads byte windows of its own log is read one window at
     /// a time, so the process never holds the history: the fold keeps the
     /// newest rows and the counts for all of them. A backend with no byte log
-    /// has nowhere else to read, so its whole replay becomes the mirror.
+    /// has nowhere else to read, so its whole replay becomes the log state.
     ///
     /// The chain's cache is not primed here. Priming from the replayed
     /// last event would re-serialize it and link the next append to a hash
     /// that drifts from the on-disk bytes under a schema change; the next
     /// append's cold read hashes the last disk line's raw bytes instead. The
-    /// mirror is replaced, so this must run before any
+    /// log state is replaced, so this must run before any
     /// append for the session: one landing mid-read is dropped by the
     /// install that follows.
     pub async fn restore_trajectory(&self, session: SessionId) -> Result<usize, ContextError> {
@@ -446,11 +446,11 @@ impl SessionStore {
             let history = log_windows::fold_epoch(
                 self.backend.as_ref(),
                 session,
-                self.mirrors.restore_budget(),
+                self.states.restore_budget(),
             )?;
             if history.skipped_bytes() > 0 {
                 tracing::warn!(
-                    "session {session} holds {} bytes in records wider than a log window; those records are not in the mirror",
+                    "session {session} holds {} bytes in records wider than a log window; those records are not in the log state",
                     history.skipped_bytes()
                 );
             }
@@ -469,7 +469,7 @@ impl SessionStore {
             RestoredHistory::from_events(replayed)
         };
         let count = history.rows();
-        self.mirrors.commit_restore(session, history);
+        self.states.commit_restore(session, history);
         Ok(count)
     }
 
@@ -483,8 +483,8 @@ impl SessionStore {
     /// which recomputes prev_hash over the durable subset (deltas never
     /// entered the chain, so it skips them naturally). Historical
     /// deltas are dropped entirely -- they are transport-only, never
-    /// persisted, never mirrored (their authoritative AssistantMessage is
-    /// the full superset). Returns a typed report; an unverified source is a
+    /// persisted and never held in the log state (their authoritative
+    /// AssistantMessage is the full superset). Returns a typed report; an
     /// warning, not an error, so the rescue never hard-fails here.
     pub async fn seed_trajectory(
         &self,

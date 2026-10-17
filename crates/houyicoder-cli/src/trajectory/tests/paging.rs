@@ -592,7 +592,7 @@ fn test_delegated_cache_unknown() {
 }
 
 /// A file-backed reader, which is the path the product runs on. The
-/// in-memory store takes the mirror branch, so a bug in the page path would
+/// in-memory store takes the resident branch, so a bug in the page path would
 /// not show up there.
 pub(super) fn disk_reader(turns: usize) -> (Arc<SessionStore>, SessionLogTrajectory, SessionId) {
     let (store, reader, sid, _history, _root) = disk_reader_at(turns);
@@ -830,7 +830,7 @@ fn test_clear_drops_old_epoch() {
     assert!(first.hidden_turns > 0, "older turns exist to be read");
 
     // An older read is genuinely in flight when the clear lands. A clear is a
-    // mirror reset followed by the boundary event, which is what makes the
+    // log state reset followed by the boundary event, which is what makes the
     // boundary the new epoch's first durable event.
     reader.load_older();
     store.reset_trajectory(sid);
@@ -1806,11 +1806,11 @@ fn test_empty_session_span_unknown() {
 
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let sid = SessionId::new();
-    let (mirror_reader, _history) = reader_of(&store, sid);
-    let mirror_view = pump(&mirror_reader);
+    let (resident_reader, _history) = reader_of(&store, sid);
+    let resident_view = pump(&resident_reader);
     assert_eq!(
-        mirror_view.duration_ms, None,
-        "and neither does an empty mirror"
+        resident_view.duration_ms, None,
+        "and neither does an empty log state"
     );
 }
 

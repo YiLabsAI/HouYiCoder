@@ -101,7 +101,7 @@ const RESIDENT_BYTE_BUDGET: usize = 8 * 1024 * 1024;
 /// The variable a test sets to drive the resident frame window to a size it
 /// can observe, so a history whose frames would not evict under the compiled
 /// budget does evict. Unset in production, where the default applies. The
-/// session store's mirror window reads the same variable, so one setting
+/// session store's resident window reads the same variable, so one setting
 /// bounds both windows; the frontend is a protocol client and cannot name the
 /// config crate's constant for it, so each reader spells the name.
 pub(crate) const RESIDENT_BUDGET_ENV: &str = "HOUYICODER_TEST_RESIDENT_BYTE_BUDGET";

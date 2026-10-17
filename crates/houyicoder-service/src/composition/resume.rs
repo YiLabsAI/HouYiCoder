@@ -71,7 +71,7 @@ struct ResumePayload {
 /// when the value is an existing path). The export is a snapshot, not a live
 /// log, so resume forks a new session: a fresh session id is minted, the
 /// export's durable events are seeded into the new session's log + the
-/// trajectory mirror (delta events dropped, the hash chain rebuilt on the
+/// log state (delta events dropped, the hash chain rebuilt on the
 /// durable subset), and the descriptor records the lineage (provenance =
 /// ResumedFromExport). The model from the export is restored (the runner
 /// runs with the model the export ran with). Returns the 6-tuple the TUI
@@ -190,10 +190,10 @@ pub fn build_runner_for_resume_sid(
              resuming anyway (the log is the source of truth)"
         ),
     }
-    // Backfill the in-memory trajectory mirror from the durable log so the
+    // Backfill the in-memory log state from the durable log so the
     // serve-start replay ships the resumed history to the client (the working
     // screen shows the past turns, not just the status bar). Best-effort: a
-    // read failure falls through to an empty mirror (the run still works, the
+    // read failure falls through to an empty log state (the run still works, the
     // history just is not pre-rendered).
     let restore_store = Arc::clone(&store);
     let restore_session = sid;

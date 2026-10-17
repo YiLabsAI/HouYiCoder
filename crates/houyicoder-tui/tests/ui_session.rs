@@ -33,7 +33,7 @@ const ONE_REPLY_SCRIPT: &str = r#"[[{"type":"Text","text":"logged"}]]"#;
 /// Drive one turn through the real binary and assert the session log file
 /// exists on disk with non-empty content. Proves the production wiring
 /// flushes durable events to disk per turn -- the resume precondition, and
-/// the mirror guard of the default-in-memory isolation: a production entry
+/// the guard against the default in-memory store: a production entry
 /// that loses its disk opt-in turns this red. The sessions root is isolated
 /// to a per-launch temp dir by the harness, so the assertion lands on the
 /// test's own dir, never the developer home.

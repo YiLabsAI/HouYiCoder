@@ -251,7 +251,7 @@ impl SessionHistory {
     }
 
     /// Whether this session's log can be read as byte windows, so a caller
-    /// knows whether to page it or fall back to the in-memory mirror.
+    /// knows whether to page it or fall back to the in-memory log state.
     pub(crate) fn byte_windows(&self) -> bool {
         self.byte_windows
     }

@@ -35,7 +35,7 @@ use std::thread::sleep;
 
 /// Mirrors RESIDENT_BYTE_BUDGET in the transcript state: frames newer than
 /// this many bytes from the tail stay in memory; anything older is reachable
-/// only through a history read. Kept as a mirror because the tui constant is
+/// only through a history read. Kept as a copy because the tui constant is
 /// crate-private; a drift shows up as episodes landing on the wrong side of
 /// the boundary, not as a wrong number.
 const RESIDENT_BUDGET_BYTES: u64 = 8 * 1024 * 1024;

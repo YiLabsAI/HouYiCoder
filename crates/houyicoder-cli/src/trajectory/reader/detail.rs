@@ -145,8 +145,8 @@ fn first_turn_of(rows: Vec<TrajectoryRow>) -> Option<TrajectoryTurn> {
     })
 }
 
-/// The mirror path holds the whole history, so it answers without a read.
-pub(super) fn mirror_detail(
+/// The resident path holds the whole history, so it answers without a read.
+pub(super) fn resident_detail(
     session_log: &dyn SessionLog,
     session_id: SessionId,
     drill: &TrajectoryDrill,
@@ -217,9 +217,9 @@ pub(super) fn request(
         .trajectory_head(session_id)
         .revision
         .epoch_event_id;
-    // The mirror path holds the whole history, so it answers at once.
+    // The resident path holds the whole history, so it answers at once.
     if !history.byte_windows() {
-        let view = mirror_detail(session_log.as_ref(), session_id, drill);
+        let view = resident_detail(session_log.as_ref(), session_id, drill);
         state.requested = Some(drill.key.clone());
         state.drill = Some(drill.clone());
         state.epoch = epoch;

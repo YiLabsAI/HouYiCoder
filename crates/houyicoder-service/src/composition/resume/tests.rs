@@ -179,7 +179,7 @@ fn test_resume_export_seeds_log() {
     let rt = Builder::new_current_thread().enable_all().build().unwrap();
     let events = rt.block_on(async { runner.store().replay(new_sid).await.unwrap() });
     assert!(events.len() >= 2, "seeded events should replay: {events:?}");
-    // The mirror was filled before assembly, so the extractor cursor is
+    // The log state was filled before assembly, so the extractor cursor is
     // seeded to the restored tail: the history is never re-extracted.
     assert_eq!(
         runner.extractor_cursor(),
@@ -633,7 +633,7 @@ fn test_fork_keeps_source_untouched() {
     let rt = Builder::new_current_thread().enable_all().build().unwrap();
     let events = rt.block_on(async { runner.store().replay(forked_sid).await.unwrap() });
     assert!(events.len() >= 2, "forked store replays the seeded events");
-    // The fork fills the mirror before assembly too: same seeding contract.
+    // The fork fills the log state before assembly too: same seeding contract.
     assert_eq!(
         runner.extractor_cursor(),
         events.last().map(|e| e.id),

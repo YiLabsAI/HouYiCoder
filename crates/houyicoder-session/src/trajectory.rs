@@ -1,7 +1,7 @@
-//! The session's in-process trajectory mirror.
+//! The in-process log state of a session.
 //!
 //! The raw append-only log is the source of truth; this is the sync view of it
-//! a reader can hold without touching the disk. One session's mirror keeps its
+//! a reader can hold without touching the disk. One session's log state keeps its
 //! newest events, the durable revision they add up to, the epoch the current
 //! history began in, and the whole-session summary folded from them — all
 //! under one lock, so a reader cannot see figures from a different revision
@@ -14,12 +14,12 @@
 //! count, the id of the latest event, and the id of the latest user input are
 //! absolute, so trimming events out of the window never changes what the
 //! session is said to hold. A backend with no byte log has nowhere else to
-//! read, so its mirror holds everything and nothing is trimmed.
+//! read, so its log state holds everything and nothing is trimmed.
 //!
 //! A reader that pages takes positions in a durable ordinal per session: the
 //! record's place in the log, counting from the record the newest clear
 //! boundary begins at. The window answers the ordinals it still holds; the log
-//! answers the ones below it, which is why the mirror also carries the byte
+//! answers the ones below it, which is why the log state also carries the byte
 //! position the current epoch starts at.
 //!
 //! Appending writes here; reading never does. The store calls the note methods
@@ -43,7 +43,7 @@ use serde_json::Value;
 
 use summary::TrajectorySummaryState;
 
-/// Bytes a window may hold before the mirror trims its oldest events. Sized for
+/// Bytes a window may hold before the log state trims its oldest events. Sized for
 /// the window's job -- answering a reader that asks for the recent past without
 /// a disk read -- rather than for the whole history, which is the log's.
 pub(super) const DEFAULT_RESIDENT_BYTES: usize = 16 * 1024 * 1024;
@@ -69,13 +69,13 @@ pub(super) enum WindowRead {
         base_index: usize,
         epoch_byte_offset: Option<u64>,
     },
-    /// No mirror for this session in this process.
+    /// No log state for this session in this process.
     Absent,
 }
 
-/// One session's durable facts, mirrored in memory.
+/// One session's durable facts, held in memory.
 #[derive(Default)]
-struct SessionMirror {
+struct LogState {
     /// The newest rows, at most the resident budget allows.
     window: VecDeque<SessionLogEntry>,
     /// Rows the window has dropped off its front, of any kind. The session's
@@ -98,7 +98,7 @@ struct SessionMirror {
     /// window has trimmed still answers.
     last_user_input_id: Option<EventId>,
     /// The first durable event of the window, which is what makes the epoch
-    /// identity: a clear restarts the mirror, so its next event begins a new
+    /// identity: a clear restarts the state, so its next event begins a new
     /// one.
     epoch_event_id: Option<EventId>,
     /// Bytes the window's rows hold, charged against the resident budget.
@@ -106,7 +106,7 @@ struct SessionMirror {
     summary: TrajectorySummaryState,
 }
 
-impl SessionMirror {
+impl LogState {
     fn head(&self) -> TrajectoryHead {
         TrajectoryHead {
             revision: TrajectoryRevision {
@@ -174,19 +174,19 @@ impl SessionMirror {
     }
 }
 
-/// Every session's mirror, under the one lock that keeps events and figures
+/// Every session's log state, under the one lock that keeps events and figures
 /// moving together.
-pub(super) struct TrajectoryMirrors {
-    inner: Mutex<HashMap<SessionId, SessionMirror>>,
-    /// Whether a mirror trims its window. False for a backend that keeps no
-    /// byte-addressable log, whose mirror is the only place its history
+pub(super) struct LogStates {
+    inner: Mutex<HashMap<SessionId, LogState>>,
+    /// Whether a log state trims its window. False for a backend that keeps no
+    /// byte-addressable log, whose log state is the only place its history
     /// exists.
     bounded: bool,
     budget_bytes: usize,
 }
 
-impl TrajectoryMirrors {
-    /// The mirrors over a backend that can (or cannot) answer a read below the
+impl LogStates {
+    /// The log states over a backend that can (or cannot) answer a read below the
     /// window from its own log, and the bytes a window may hold.
     pub(super) fn new(bounded: bool, budget_bytes: usize) -> Self {
         Self {
@@ -210,20 +210,20 @@ impl TrajectoryMirrors {
     /// Note a streaming delta: it advances the session's span and joins the
     /// window, and moves no durable counter because it is not a durable fact.
     pub(super) fn note_delta(&self, session: SessionId, event: SessionLogEntry) {
-        let mut mirrors = self.lock();
-        let mirror = mirrors.entry(session).or_default();
-        mirror.push(event, self.budget_bytes, self.bounded);
+        let mut states = self.lock();
+        let state = states.entry(session).or_default();
+        state.push(event, self.budget_bytes, self.bounded);
     }
 
     /// Note a durable event: the summary folds it, the revision moves, and the
-    /// first durable event of a restarted mirror begins a new epoch.
+    /// first durable event of a restarted log state begins a new epoch.
     pub(super) fn note_durable(&self, session: SessionId, event: SessionLogEntry) {
-        let mut mirrors = self.lock();
-        let mirror = mirrors.entry(session).or_default();
-        mirror.push(event, self.budget_bytes, self.bounded);
+        let mut states = self.lock();
+        let state = states.entry(session).or_default();
+        state.push(event, self.budget_bytes, self.bounded);
     }
 
-    /// Whether this session's mirror still needs the byte position its epoch
+    /// Whether this session's log state still needs the byte position its epoch
     /// starts at. Asked before an append is written, when the log's size is
     /// that position.
     pub(super) fn needs_epoch_offset(&self, session: SessionId) -> bool {
@@ -232,32 +232,32 @@ impl TrajectoryMirrors {
         }
         self.lock()
             .get(&session)
-            .is_none_or(|mirror| mirror.epoch_byte_offset.is_none())
+            .is_none_or(|state| state.epoch_byte_offset.is_none())
     }
 
     /// Record the byte position the session's epoch starts at, discarding any
     /// window held for the session. Called before an append whose record opens
-    /// an epoch: the position is where the log stood, and the rows the mirror
+    /// an epoch: the position is where the log stood, and the rows the log state
     /// holds describe a history that no longer counts.
     pub(super) fn start_epoch(&self, session: SessionId, byte_offset: u64) {
-        let mut mirrors = self.lock();
-        mirrors.insert(
+        let mut states = self.lock();
+        states.insert(
             session,
-            SessionMirror {
+            LogState {
                 epoch_byte_offset: Some(byte_offset),
-                ..SessionMirror::default()
+                ..LogState::default()
             },
         );
     }
 
     /// Install a history folded from a session's log. An empty history leaves
-    /// the session with no mirror.
+    /// the session with no log state.
     pub(super) fn commit_restore(&self, session: SessionId, restored: RestoredHistory) {
         if restored.rows == 0 {
             self.reset(session);
             return;
         }
-        let mirror = SessionMirror {
+        let state = LogState {
             window: restored.window,
             dropped_rows: restored.dropped_rows,
             base_index: restored.base_index,
@@ -270,14 +270,14 @@ impl TrajectoryMirrors {
             resident_bytes: restored.resident_bytes,
             summary: restored.summary,
         };
-        self.lock().insert(session, mirror);
+        self.lock().insert(session, state);
     }
 
     /// The newest rows in append order, streamed text included.
     pub(super) fn tail(&self, session: SessionId) -> Vec<SessionLogEntry> {
         self.lock()
             .get(&session)
-            .map(|mirror| mirror.window.iter().cloned().collect())
+            .map(|state| state.window.iter().cloned().collect())
             .unwrap_or_default()
     }
 
@@ -288,27 +288,27 @@ impl TrajectoryMirrors {
         from: TrajectoryPosition,
         limit: usize,
     ) -> WindowRead {
-        let mirrors = self.lock();
-        let Some(mirror) = mirrors.get(&session) else {
+        let states = self.lock();
+        let Some(state) = states.get(&session) else {
             return WindowRead::Absent;
         };
-        if from.index < mirror.base_index {
+        if from.index < state.base_index {
             return WindowRead::Below {
-                base_index: mirror.base_index,
-                epoch_byte_offset: mirror.epoch_byte_offset,
+                base_index: state.base_index,
+                epoch_byte_offset: state.epoch_byte_offset,
             };
         }
-        let events = mirror.page(from.index, limit);
+        let events = state.page(from.index, limit);
         let next = from.index + events.len();
         WindowRead::Held { events, next }
     }
 
-    /// The id of the latest row, or None when the session has no mirror.
+    /// The id of the latest row, or None when the session has no log state.
     /// Reads a counter, not the window.
     pub(super) fn last_id(&self, session: SessionId) -> Option<EventId> {
         self.lock()
             .get(&session)
-            .and_then(|mirror| mirror.last_event_id)
+            .and_then(|state| state.last_event_id)
     }
 
     /// The id of the latest durable user input, or None when the session holds
@@ -317,7 +317,7 @@ impl TrajectoryMirrors {
     pub(super) fn last_user_input_id(&self, session: SessionId) -> Option<EventId> {
         self.lock()
             .get(&session)
-            .and_then(|mirror| mirror.last_user_input_id)
+            .and_then(|state| state.last_user_input_id)
     }
 
     /// The session's trajectory revision and whole-session summary under one
@@ -325,17 +325,19 @@ impl TrajectoryMirrors {
     pub(super) fn head(&self, session: SessionId) -> TrajectoryHead {
         self.lock()
             .get(&session)
-            .map(SessionMirror::head)
+            .map(LogState::head)
             .unwrap_or_default()
     }
 
-    /// Drop a session's mirror, leaving the append-only log untouched.
+    /// Drop a session's log state, leaving the append-only log untouched.
     pub(super) fn reset(&self, session: SessionId) {
         self.lock().remove(&session);
     }
 
-    fn lock(&self) -> MutexGuard<'_, HashMap<SessionId, SessionMirror>> {
-        self.inner.lock().expect("session mirrors mutex poisoned")
+    fn lock(&self) -> MutexGuard<'_, HashMap<SessionId, LogState>> {
+        self.inner
+            .lock()
+            .expect("session log states mutex poisoned")
     }
 }
 
