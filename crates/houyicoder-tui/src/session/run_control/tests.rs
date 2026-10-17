@@ -1253,6 +1253,103 @@ fn test_startup_handshake_applies_frames() {
     );
 }
 
+/// A batch hands a run back as soon as the frames it holds reach the bound, and
+/// the run it handed back leaves the count at zero, so the frames that follow
+/// it are measured on their own rather than added to a run already applied.
+#[test]
+fn test_startup_batch_hands_back() {
+    let frames: Vec<SequencedFrame> = ["first", "second", "third"]
+        .into_iter()
+        .map(|text| user_msg(text).into())
+        .collect();
+    let two_frames = frames[0].estimated_bytes() + frames[1].estimated_bytes();
+    let mut batch = StartupBatch::new(two_frames);
+    assert!(
+        batch.push(frames[0].clone()).is_none(),
+        "a run below the bound stays held"
+    );
+    let applied = batch
+        .push(frames[1].clone())
+        .expect("the run reaches the bound");
+    assert_eq!(applied.len(), 2, "the run the bound released");
+    assert!(
+        batch.push(frames[2].clone()).is_none(),
+        "the applied run left the count at zero"
+    );
+    assert_eq!(
+        batch.take().len(),
+        1,
+        "the drain takes the frames it still holds"
+    );
+}
+
+/// Drain a startup run of user frames at the given batch bound, reporting the
+/// rows the run settled on, how many times the transcript was re-derived while
+/// they arrived, and whether a trust ask queued behind them still raised.
+fn drain_at_bound(texts: &[&str], bound: usize) -> (Vec<String>, u64, bool) {
+    let (tx, rx) = mpsc::channel::<SessionMessage>();
+    let mut app = composition::app();
+    app.sessions.current.transcript.reset();
+    app.sessions.current.connection = Some(SessionConnection::from_receiver(rx));
+    for text in texts {
+        tx.send(SessionMessage::Event(ServerEvent::Frame(
+            user_msg(text).into(),
+        )))
+        .expect("the connection receiver is alive");
+    }
+    tx.send(SessionMessage::Request {
+        request: RequestId(7),
+        payload: ServerRequest::Trust {
+            prompt: TrustPrompt {
+                project_path: "/proj".into(),
+                risks: Vec::new(),
+            },
+        },
+    })
+    .expect("the connection receiver is alive");
+    let derived_before = app.sessions.current.transcript.revision();
+    app.drain_startup(Duration::from_secs(2), bound);
+    let rows: Vec<String> = app
+        .sessions
+        .current
+        .transcript
+        .iter()
+        .filter_map(|line| match line {
+            TranscriptLine::User(text) => Some(text.clone()),
+            _ => None,
+        })
+        .collect();
+    let derived = app.sessions.current.transcript.revision() - derived_before;
+    (rows, derived, app.pending_trust().is_some())
+}
+
+/// The same history at two bounds settles on the same rows in the same order,
+/// and the ask queued behind it raises either way.
+///
+/// The bound decides when a run is applied, not what it contains, so the rows
+/// of the split leg must equal the rows of the run applied whole. The
+/// re-derivation count is what keeps that agreement from being read off a test
+/// that would pass just as well if the bound were ignored: the split leg
+/// re-derives once per run it releases, which is more than the one run the
+/// whole leg applies. The ask is behind the frames in both legs, so the count
+/// the ask costs is the same on each side of the comparison.
+#[test]
+fn test_startup_batches_settle_alike() {
+    let texts = ["first", "second", "third"];
+    let (whole_rows, whole_derived, whole_ask) = drain_at_bound(&texts, usize::MAX);
+    let (split_rows, split_derived, split_ask) = drain_at_bound(&texts, 1);
+    assert!(whole_ask && split_ask, "the ask behind the frames raises");
+    assert_eq!(
+        split_rows, whole_rows,
+        "a run applied at the bound holds what the run applied whole holds"
+    );
+    assert!(
+        split_derived >= whole_derived + texts.len() as u64 - 1,
+        "the bound releases the run as it arrives: {whole_derived} re-derivations whole against \
+         {split_derived} split"
+    );
+}
+
 fn thought_msg(text: &str) -> TranscriptFrame {
     TranscriptFrame::Session(SessionUpdate::AgentThoughtChunk(ContentChunk::new(
         ContentBlock::Text { text: text.into() },
