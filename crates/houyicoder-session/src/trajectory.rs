@@ -45,8 +45,11 @@ use summary::TrajectorySummaryState;
 
 /// Bytes a window may hold before the log state trims its oldest events. Sized for
 /// the window's job -- answering a reader that asks for the recent past without
-/// a disk read -- rather than for the whole history, which is the log's.
-pub(super) const DEFAULT_RESIDENT_BYTES: usize = 16 * 1024 * 1024;
+/// a disk read -- rather than for the whole history, which is the log's. The
+/// frontend's own window reads the same test variable and keeps the same bytes
+/// under it, so a window wider than the frontend's would hold rows the frontend
+/// releases as they arrive.
+pub(super) const DEFAULT_RESIDENT_BYTES: usize = 8 * 1024 * 1024;
 
 /// The variable a test sets to drive the resident window to a size it can
 /// observe. Unset in production, where the default applies. The frontend's
