@@ -9,6 +9,7 @@ use std::time::Duration;
 use houyicoder_async::PFut;
 use houyicoder_client::{Client, Transport};
 use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
+use houyicoder_protocol::frontend::agents::{AgentEntry, AgentPrompt};
 use houyicoder_protocol::frontend::model::{
     AppliedModel, ContextWindow, ContextWindowSource, EffortCapability, FastModeAvailability,
     ModelCatalog, ModelCatalogEntry, ModelChoice, ModelDisplayCapabilities, ResolvedModel,
@@ -189,6 +190,31 @@ pub(crate) fn working_app() -> App {
     let mut app = composition_app();
     app.ui.navigation.screen = Screen::Working;
     app
+}
+
+/// One delegatable type as the /agents pane receives it: the shown fields
+/// only, with everything unset left to inherit the caller's.
+pub(crate) fn agent_entry(subagent_type: &str, when_to_use: &str) -> AgentEntry {
+    AgentEntry {
+        subagent_type: subagent_type.to_string(),
+        when_to_use: when_to_use.to_string(),
+        tools: None,
+        disallowed_tools: Vec::new(),
+        model: None,
+        effort: None,
+        system_prompt: AgentPrompt::InheritParent,
+    }
+}
+
+/// Install the delegatable types a fixture session has received, name and
+/// when-to-use per type. What a test asserts on beyond those two fields
+/// builds the entries itself.
+pub(crate) fn install_agent_types(app: &mut App, types: &[(&str, &str)]) {
+    let entries: Vec<AgentEntry> = types
+        .iter()
+        .map(|(subagent_type, when_to_use)| agent_entry(subagent_type, when_to_use))
+        .collect();
+    app.sessions.current.capabilities.agent_types.entries = Some(entries);
 }
 
 /// The capabilities a fixture model advertises: a fixed window and output cap,

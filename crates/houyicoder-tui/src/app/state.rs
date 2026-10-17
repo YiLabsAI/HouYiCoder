@@ -34,6 +34,7 @@ pub(crate) use crate::state::parked_view_states::ParkedViewStates;
 pub use crate::state::trajectory::{
     TrajectoryDrill, TrajectoryPaneState, TrajectorySelection, TrajectoryTurnKey,
 };
+use crate::view::agents_pane::rows::{AgentRow, pane_rows};
 use std::fmt::Debug;
 
 /// Live progress for one long-running tool call (bash): elapsed seconds +
@@ -94,20 +95,55 @@ impl App {
     /// integration tests trigger a rebuild through.
     pub fn refresh_agents(&mut self) {
         self.sessions.current.refresh_agents();
-        let rows = self.sessions.current.agents.rows.len();
-        self.ui.agents_sel = self.ui.agents_sel.min(rows.saturating_sub(1));
+        let len = pane_rows(self).len();
+        self.ui.agents_pane.clamp_cursor(len);
+        // The pane's cursor is settled by the open as much as by an arrow, and
+        // a cursor standing on a running child names the child the footer strip
+        // should show. Only a strip with no choice of its own is seeded: a
+        // selection the user made in the strip is theirs to keep until an arrow
+        // lands the cursor on a running child, which moves the strip there.
+        if self.ui.navigation.pane == Pane::Agents && self.ui.fleet.selected.is_none() {
+            self.ui.fleet.selected = self.running_child_index_at_cursor();
+        }
     }
 
-    /// Move the /agents pane cursor by a signed delta, clamped to the
-    /// session's returned-delegation rows and a no-op while they are empty.
-    /// The cursor lives with the Ui pane state; the rows it indexes are the
-    /// session's, so one call reads the rows and steps the cursor.
-    pub fn move_agents_cursor(&mut self, delta: i32) {
-        let rows = self.sessions.current.agents.rows.len();
-        if rows == 0 {
-            return;
+    /// The footer strip row of the running child the /agents pane cursor
+    /// stands on, and None when the cursor stands on any other row: a returned
+    /// delegation or a delegatable type names no child the strip holds.
+    fn running_child_index_at_cursor(&self) -> Option<usize> {
+        let rows = pane_rows(self);
+        let selected = self
+            .ui
+            .agents_pane
+            .cursor()
+            .min(rows.len().saturating_sub(1));
+        match rows.get(selected) {
+            Some(AgentRow::Running(entry)) => self
+                .sessions
+                .current
+                .capabilities
+                .fleet
+                .entries
+                .iter()
+                .position(|child| child.agent_id == entry.agent_id),
+            _ => None,
         }
-        self.ui.agents_sel = (self.ui.agents_sel as i32 + delta).clamp(0, rows as i32 - 1) as usize;
+    }
+
+    /// Move the /agents pane cursor by a signed delta over the pane's rows in
+    /// screen order, and mirror the footer strip's selection when the cursor
+    /// lands on a running child, so the two highlights never point at
+    /// different children. A cursor on any other row leaves the strip's own
+    /// selection alone: the strip answers Shift+Up/Down, and clearing it here
+    /// would erase a choice the user made there.
+    pub fn move_agents_cursor(&mut self, delta: i32) {
+        {
+            let rows = pane_rows(self);
+            self.ui.agents_pane.move_cursor(delta, rows.len());
+        }
+        if let Some(index) = self.running_child_index_at_cursor() {
+            self.ui.fleet.selected = Some(index);
+        }
     }
 
     /// The working transcript, mutably borrowed for fixture setup and the

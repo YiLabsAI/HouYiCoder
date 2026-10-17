@@ -140,20 +140,28 @@ pub fn format_agent_line(def: &AgentDefinition) -> String {
     format!("- {}: {}{}", def.subagent_type, def.when_to_use, tools)
 }
 
-/// The agent directory section for the parent system prompt: the registered
-/// types the model may delegate to, minus any a deny rule blocks, sorted by
-/// type so the bytes are stable within a session (no hot reload in v0).
-/// None when the registry is empty after filtering.
-pub fn agent_directory_section(
+/// The registered types the model may delegate to, minus any a deny rule
+/// blocks, sorted by type. Membership and order come from here alone, so the
+/// prompt section and the /agents reply cannot disagree about which types
+/// exist or what order they are read in.
+pub fn delegatable_agents(
     registry: &dyn AgentRegistry,
     denied: &HashSet<String>,
-) -> Option<String> {
+) -> Vec<AgentDefinition> {
     let mut defs: Vec<AgentDefinition> = registry
         .list()
         .into_iter()
         .filter(|d| !denied.contains(&d.subagent_type))
         .collect();
     defs.sort_by(|a, b| a.subagent_type.cmp(&b.subagent_type));
+    defs
+}
+
+/// The agent directory section for the parent system prompt: one line per
+/// definition. None when there is nothing to announce. Rendering only — the
+/// bytes stay stable within a session because the definitions are installed
+/// once and the order is already fixed by the caller.
+pub fn agent_directory_section(defs: &[AgentDefinition]) -> Option<String> {
     if defs.is_empty() {
         return None;
     }

@@ -14,15 +14,18 @@ use serde::{Deserialize, Serialize};
 /// the v4 active_id/catalog and ModelApplied forms) — old and new v4 peers
 /// would handshake through and then fail payload decode. v6: the
 /// run-completion notification carries its duration as ms in place of secs.
-/// The old field is gone rather than supplemented, so a mixed pair would
-/// handshake through and then silently drop every turn's duration label; an
-/// added variant can degrade on its own, a renamed field cannot. v7: the
-/// memory-operation tag Stored was replaced by Created and Updated. A
+/// The old field is gone rather than supplemented, so a mixed-version peer
+/// would handshake through and then silently drop every turn's duration
+/// label; an added variant can degrade on its own, a renamed field cannot.
+/// v7: the memory-operation tag Stored was replaced by Created and Updated. A
 /// same-version peer without the operation enum's catch-all would drop every
-/// memory-change frame at decode; the version gate keeps the pair from
+/// memory-change frame at decode; the version gate keeps such a peer from
 /// half-working, and a new receiver still reads a legacy stored tag as
-/// Unknown.
-pub const PROTOCOL_VERSION: u16 = 7;
+/// Unknown. v8: the agents reply payload changed shape, from the prompt's
+/// Markdown string to structured entries. A same-version peer would handshake
+/// through and then fail every agents reply at decode, leaving the pane
+/// waiting on a reply that cannot arrive.
+pub const PROTOCOL_VERSION: u16 = 8;
 
 /// Capabilities a peer advertises in Hello. Added only when a real optional
 /// feature needs negotiation; absent means the peer does not support it.

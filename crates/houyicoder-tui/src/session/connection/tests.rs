@@ -19,6 +19,7 @@ use houyicoder_protocol::handshake::Hello;
 use super::*;
 use crate::agent_message::{ConnectionEvent, ServerEvent, ServerRequest, ServerResponse};
 use crate::composition::shared_runtime;
+use crate::test_harness::agent_entry;
 use crate::test_harness::connected_app_events;
 use crate::transcript::SequencedFrame;
 use houyicoder_protocol::acpx::{AcpxMethod, AcpxNotification};
@@ -1050,7 +1051,10 @@ async fn test_drive_translates_catalog_responses() {
         name: "grep".into(),
         description: "search files".into(),
     }]));
-    engine.response(ResponsePayload::Agents("explore".into()));
+    engine.response(ResponsePayload::Agents(vec![agent_entry(
+        "explore",
+        "fast search",
+    )]));
     engine.response(ResponsePayload::ChildTranscript {
         child_sid: SessionId::new("c1"),
         frames: Vec::new(),
@@ -1082,7 +1086,8 @@ async fn test_drive_translates_catalog_responses() {
     ));
     assert!(
         run.msgs.iter().any(
-            |m| matches!(m, SessionMessage::Response { response: ServerResponse::Agents { directory }, .. } if directory == "explore")
+            |m| matches!(m, SessionMessage::Response { response: ServerResponse::Agents { entries }, .. }
+                if entries.len() == 1 && entries[0].subagent_type == "explore")
         )
     );
     assert!(run.msgs.iter().any(

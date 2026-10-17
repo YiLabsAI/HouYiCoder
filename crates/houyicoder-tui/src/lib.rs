@@ -40,8 +40,9 @@ pub use ui::{render_cache, selection};
 pub use view::console::state as console_state;
 pub use view::resume_picker::state as resume_picker;
 pub(crate) use view::{
-    capability::input as permission_input, capability::state as permission_pane_state, fleet,
-    hooks_pane::state as hooks_state, list_pane_state, memory_pane::state as memory_state,
-    skill_picker::state as skill_picker_state, skills_pane::state as skills_state,
+    agents_pane::state as agents_state, capability::input as permission_input,
+    capability::state as permission_pane_state, fleet, hooks_pane::state as hooks_state,
+    list_pane_state, memory_pane::state as memory_state, skill_picker::state as skill_picker_state,
+    skills_pane::state as skills_state,
 };
 pub use workflow::{artifact, evidence, review_queue};

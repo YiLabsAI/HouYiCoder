@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use houyicoder_protocol::frontend::SessionId;
 
+use crate::agents_state::AgentsPaneState;
 use crate::fleet::strip_state::FleetStripState;
 use crate::hooks_state::HooksPaneState;
 use crate::input::Input;
@@ -52,7 +53,7 @@ pub fn app() -> App {
             skills_pane: SkillsPaneState::default(),
             hooks_pane: HooksPaneState::default(),
             memory: MemoryPaneState::default(),
-            agents_sel: 0,
+            agents_pane: AgentsPaneState::default(),
             fleet: FleetStripState::default(),
             model: ModelDraft::default(),
             trajectory: TrajectoryPaneState::default(),

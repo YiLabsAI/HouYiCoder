@@ -250,9 +250,11 @@ fn test_agents_pane_lists_returned() {
     );
 }
 /// The agents cursor steps and clamps at the bounds of the
-/// returned-delegation list; an empty list leaves it put.
+/// returned-delegation list. Asserted through Enter, the pub-level action the
+/// user takes: the child whose view opens is the row the cursor reached, so a
+/// cursor that reads right while the action lands elsewhere fails here.
 #[test]
-fn test_agents_pane_cursor_walks() {
+fn test_agents_enter_follows_cursor() {
     let mut app = app();
     app.ui.navigation.screen = Screen::Working;
     app.ui.navigation.pane = Pane::Agents;
@@ -262,22 +264,34 @@ fn test_agents_pane_cursor_walks() {
             subagent_type: "explore".into(),
             summary: summary.into(),
             prompt: String::new(),
-            folded_transcript: Vec::new(),
+            folded_transcript: vec![TranscriptLine::Agent("reply".into())],
             color: None,
         });
     }
     let v = app.transcript().revision();
     let rows = app.transcript().lines().to_vec();
     app.agents_mut().refresh(&rows, v);
+    handle_working(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert_eq!(
+        app.ui.teammate_view.as_ref().map(|v| v.child_sid.as_str()),
+        Some("c2"),
+        "the newest delegation leads the list"
+    );
     app.move_agents_cursor(1);
-    assert_eq!(app.ui.agents_sel, 1);
+    handle_working(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert_eq!(
+        app.ui.teammate_view.as_ref().map(|v| v.child_sid.as_str()),
+        Some("c1"),
+        "the cursor stepped to the next row"
+    );
     app.move_agents_cursor(1);
-    assert_eq!(app.ui.agents_sel, 1, "clamped at the last row");
-    app.move_agents_cursor(-1);
-    assert_eq!(app.ui.agents_sel, 0, "clamped at the first row");
-    app.agents_mut().rows.clear();
     app.move_agents_cursor(1);
-    assert_eq!(app.ui.agents_sel, 0, "an empty list leaves the cursor put");
+    handle_working(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert_eq!(
+        app.ui.teammate_view.as_ref().map(|v| v.child_sid.as_str()),
+        Some("c1"),
+        "the cursor clamps at the last row instead of wrapping"
+    );
 }
 
 /// Exit a teammate view and drill into a DIFFERENT completed child. Proves
@@ -358,6 +372,119 @@ fn test_exit_to_parent_repaints() {
     assert!(
         !s.output_compact().contains("Viewing"),
         "exit should clear the teammate banner:\n{}",
+        s.output()
+    );
+}
+
+/// The /agents journey on the real terminal: the pane lists the delegatable
+/// types, the arrows move the highlight, Enter opens a type's detail, Esc
+/// returns to the list, and the next Esc closes the pane. The routing order
+/// is what this covers: while a detail is open the scroll keys and Esc belong
+/// to it, not to the list behind it. Slow, ignored by default.
+///
+/// Read the reconstructed screen rather than the byte stream: a repaint sends
+/// only the cells that changed, so moving the highlight re-sends the cursor
+/// marker alone and the row's own text never crosses the stream a second time.
+#[test]
+#[ignore]
+fn test_agents_pane_journey() {
+    let mut s = common::PtySession::launch();
+    assert!(
+        s.wait_for("sign in to houyicoder", RENDER_TIMEOUT),
+        "should reach login:\n{}",
+        s.output()
+    );
+    s.send_key(&Key::Char('3'));
+    assert!(
+        s.wait_for("let's build, or / for commands", RENDER_TIMEOUT),
+        "working screen:\n{}",
+        s.output()
+    );
+    common::run_slash_command(&mut s, "agents");
+    assert!(
+        s.wait_for_screen("AVAILABLE", RENDER_TIMEOUT),
+        "/agents should open the pane over the transcript:\n{}",
+        s.output()
+    );
+    let listed = s.screen().contents();
+    for subagent_type in ["code-guide", "explore", "general-purpose", "plan", "verify"] {
+        assert!(
+            listed.contains(subagent_type),
+            "the pane should list the {subagent_type} type:\n{}",
+            s.output()
+        );
+    }
+    assert!(
+        listed.contains("\u{25b6} - code-guide"),
+        "the highlight starts on the first type:\n{}",
+        s.output()
+    );
+    let text = s.screen().contents();
+    let lines: Vec<&str> = text.lines().collect();
+    let head = lines
+        .iter()
+        .rposition(|line| line.trim_start().starts_with("Agents"))
+        .expect("the pane opens with its head line");
+    assert!(
+        lines[head].contains("types"),
+        "the head counts the types it lists:\n{}",
+        s.output()
+    );
+    let section = lines
+        .iter()
+        .position(|line| line.contains("AVAILABLE"))
+        .expect("the section heading is on screen");
+    assert_eq!(
+        section,
+        head + 1,
+        "the head holds one line, so the body starts under it:\n{}",
+        s.output()
+    );
+    s.send_key(&Key::Down);
+    assert!(
+        s.wait_for_screen("\u{25b6} - explore", RENDER_TIMEOUT),
+        "down should move the highlight to the next type:\n{}",
+        s.output()
+    );
+    s.send_key(&Key::Enter);
+    assert!(
+        s.wait_for_screen("When to use:", RENDER_TIMEOUT),
+        "enter should open the highlighted type's detail:\n{}",
+        s.output()
+    );
+    let detail = s.screen().contents();
+    let lines: Vec<&str> = detail.lines().collect();
+    let section = lines
+        .iter()
+        .position(|line| line.contains("Available for delegation"))
+        .expect("the detail opens with its section row");
+    assert!(
+        lines[section - 1].contains("explore"),
+        "the detail answers the row the highlight stands on:\n{}",
+        s.output()
+    );
+    for field in ["Tools:", "System prompt"] {
+        assert!(
+            detail.contains(field),
+            "the detail should show the {field} field:\n{}",
+            s.output()
+        );
+    }
+    s.send_key(&Key::Esc);
+    assert!(
+        s.wait_for_screen("AVAILABLE", RENDER_TIMEOUT),
+        "esc should return to the list, not close the pane:\n{}",
+        s.output()
+    );
+    assert!(
+        !s.screen().contents().contains("When to use:"),
+        "the detail should be gone:\n{}",
+        s.output()
+    );
+    s.send_key(&Key::Esc);
+    assert!(
+        s.wait_for_screen("for commands", RENDER_TIMEOUT),
+        "the list's esc should close the pane and bring the input box back:\n{}",
         s.output()
     );
 }

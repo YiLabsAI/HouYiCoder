@@ -293,3 +293,47 @@ fn test_indented_block_wraps() {
     assert!(rows.len() > 1);
     assert!(rows.iter().all(|r| r.starts_with("  ")));
 }
+
+/// A list that fits its body renders from the first row, so short lists are
+/// unaffected by the cursor window.
+#[test]
+fn test_cursor_window_fits() {
+    assert_eq!(cursor_window_offset(2, 5, 5), 0, "the list fits");
+    assert_eq!(
+        cursor_window_offset(4, 5, 6),
+        0,
+        "the list has room to spare"
+    );
+}
+
+/// A cursor below the window scrolls the body by exactly as much as the
+/// selection passed its last row, so the selected row lands on the bottom edge.
+#[test]
+fn test_cursor_window_follows() {
+    assert_eq!(
+        cursor_window_offset(4, 20, 5),
+        0,
+        "the first window holds it"
+    );
+    assert_eq!(cursor_window_offset(5, 20, 5), 1, "one row past the window");
+    assert_eq!(
+        cursor_window_offset(9, 20, 5),
+        5,
+        "the row below the window"
+    );
+}
+
+/// A selection at the end of the list shows the tail: the window never runs
+/// past the last row into empty space.
+#[test]
+fn test_cursor_window_tail() {
+    assert_eq!(cursor_window_offset(19, 20, 5), 15, "the tail is the floor");
+    assert_eq!(cursor_window_offset(30, 20, 5), 15, "a cursor past the end");
+}
+
+/// A body with no height to draw into cannot be scrolled, so the offset stays
+/// at the top rather than wrapping around a zero-height subtraction.
+#[test]
+fn test_cursor_window_no_height() {
+    assert_eq!(cursor_window_offset(9, 20, 0), 0);
+}

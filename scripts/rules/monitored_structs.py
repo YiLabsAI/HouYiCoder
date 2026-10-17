@@ -57,7 +57,7 @@ ACTIVE_OWNERS = {
     },
     "crates/houyicoder-tui/src/session.rs:Session": {
         # The presented session: identity, connection, run lifecycle, tally, pending ask, restore stash, checklist, capabilities, the history and search read states, and transcript.
-        "fields": 17,
+        "fields": 16,
     },
     "crates/houyicoder-tui/src/session/sessions.rs:Sessions": {
         # The presented session, the resumable catalog, and the current session's persistence ports, swapped together.
@@ -77,7 +77,7 @@ ACTIVE_OWNERS = {
     },
     "crates/houyicoder-tui/src/session/capabilities.rs:SessionCapabilities": {
         # The static composition of a session's named capabilities; the connection, run, and transcript sit beside it, not inside it.
-        "fields": 9,
+        "fields": 10,
     },
     "crates/houyicoder-tui/src/session/capabilities.rs:HooksCapability": {
         # The registered-hook cache the hooks pane renders.
@@ -97,6 +97,10 @@ ACTIVE_OWNERS = {
     },
     "crates/houyicoder-tui/src/session/capabilities.rs:FleetCapability": {
         # The child snapshots the host pushes, in first-observed order.
+        "fields": 1,
+    },
+    "crates/houyicoder-tui/src/session/capabilities.rs:AgentTypesCapability": {
+        # The delegatable sub-agent types, absent until the first reply lands.
         "fields": 1,
     },
     "crates/houyicoder-tui/src/view/fleet/strip_state.rs:FleetStripState": {

@@ -445,7 +445,7 @@ fn test_hop_expansion_isolation() {
         "ctrl+o expands the viewed child's reasoning:\n{}",
         s.output()
     );
-    // Open the agents pane over the standing view and Enter the first
+    // Open the agents pane over the standing view and Enter the older
     // delegation: a hop that must park the plan child's expansion and open
     // the explore child with its own state.
     s.send_str("/agents");
@@ -456,6 +456,10 @@ fn test_hop_expansion_isolation() {
         s.output()
     );
     s.clear_output();
+    // The pane's completed rows lead with the newest delegation, which is the
+    // child the standing view already shows, so step down to the older child
+    // to make Enter a hop between two children.
+    s.send_key(&Key::Down);
     s.send_key(&Key::Enter);
     // Esc closes the pane back to the transcript; the hop already
     // happened under it.
@@ -465,7 +469,7 @@ fn test_hop_expansion_isolation() {
     // holds the full banner.
     assert!(
         s.wait_for_screen("Viewing @explore", RENDER_TIMEOUT),
-        "the pane Enter hops to the first child's view:\n{}",
+        "the pane Enter hops to the older child's view:\n{}",
         s.screen().contents()
     );
     assert!(

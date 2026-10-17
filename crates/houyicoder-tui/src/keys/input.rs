@@ -164,6 +164,20 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
         }
         return;
     }
+    // The /agents detail owns Esc and the scroll keys, on the same grammar as
+    // the /skills detail. The list stays behind it, so Esc returns to the list
+    // rather than leaving the pane.
+    if app.ui.navigation.pane == Pane::Agents && app.ui.agents_pane.detail().is_some() {
+        match k.code {
+            KeyCode::Esc => app.ui.agents_pane.close_detail(),
+            KeyCode::Up => app.ui.agents_pane.scroll_detail(-1),
+            KeyCode::Down => app.ui.agents_pane.scroll_detail(1),
+            KeyCode::PageUp => app.ui.agents_pane.scroll_detail(-10),
+            KeyCode::PageDown => app.ui.agents_pane.scroll_detail(10),
+            _ => {}
+        }
+        return;
+    }
     if app.ui.navigation.pane == Pane::Trajectory && trajectory::handle(app, k) {
         return;
     }
@@ -220,35 +234,15 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
         }
         KeyCode::Up if app.ui.navigation.pane == Pane::Memory => app.move_memory_cursor(-1),
         KeyCode::Down if app.ui.navigation.pane == Pane::Memory => app.move_memory_cursor(1),
-        KeyCode::Up if app.ui.navigation.pane == Pane::Agents && !fleet_empty(app) => {
-            app.move_fleet_selection(-1);
-        }
-        KeyCode::Down if app.ui.navigation.pane == Pane::Agents && !fleet_empty(app) => {
-            app.move_fleet_selection(1);
-        }
-        // Fleet dropped: the pane lists this session's returned delegations,
-        // and the same arrows walk them.
+        // The /agents list: the same arrows and Enter as the /skills list. The
+        // pane cursor walks every rendered row, so Enter reaches the row that
+        // is highlighted rather than a selection made on another view.
         KeyCode::Up if app.ui.navigation.pane == Pane::Agents => app.move_agents_cursor(-1),
         KeyCode::Down if app.ui.navigation.pane == Pane::Agents => app.move_agents_cursor(1),
-        // Enter drills into the selected row of the list being rendered. The
-        // branch follows the render (the live fleet when it has entries, else
-        // the returned delegations), not the presence of a selection: keying
-        // off the selection let an unselected live fleet fall through and
-        // open a delegation that was not even on screen.
         KeyCode::Enter
             if app.ui.navigation.pane == Pane::Agents && app.ui.input.editor.is_empty() =>
         {
-            if fleet_empty(app) {
-                let rows = &app.sessions.current.agents.rows;
-                let cur = app.ui.agents_sel.min(rows.len().saturating_sub(1));
-                if let Some(row) = rows.get(cur) {
-                    let sid = row.child_sid.clone();
-                    let loaded = row.loaded;
-                    app.enter_teammate_view_for_sid(&sid, !loaded);
-                }
-            } else if let Some(sid) = fleet::selected_fleet_sid(app) {
-                app.enter_teammate_view_for_sid(&sid, true);
-            }
+            app.open_agent_row();
         }
         // Shift+Tab moves the /model pane's setting focus (the pane owns Tab while
         // it is on top); everywhere else it cycles the permission mode:
@@ -521,14 +515,6 @@ pub(super) fn cycle_pane(app: &mut App) {
         .map(|i| (i + 1) % Pane::PRIMARY.len())
         .unwrap_or(0);
     app.ui.navigation.pane = Pane::PRIMARY[next];
-}
-
-/// Whether the session has no live fleet entries. The /agents pane's key
-/// arms branch on it: the pane renders the fleet list while entries exist
-/// and the returned delegations otherwise, so the arrows and Enter follow
-/// the same list the render shows.
-fn fleet_empty(app: &App) -> bool {
-    app.sessions.current.capabilities.fleet.entries.is_empty()
 }
 
 #[cfg(test)]

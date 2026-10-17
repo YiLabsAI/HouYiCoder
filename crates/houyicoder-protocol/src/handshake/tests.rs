@@ -57,7 +57,7 @@ fn test_hello_serializes_exactly() {
     let json = serde_json::to_string(&Hello::local()).expect("serialize");
     assert_eq!(
         json,
-        r#"{"protocol_version":7,"capabilities":{"streaming":true,"cas":false,"detach":false},"last_event_seq":null}"#
+        r#"{"protocol_version":8,"capabilities":{"streaming":true,"cas":false,"detach":false},"last_event_seq":null}"#
     );
 }
 

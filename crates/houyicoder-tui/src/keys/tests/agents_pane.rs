@@ -1,13 +1,60 @@
-//! Agents-pane key behavior: Esc closure, input retraction, and Enter
-//! routing between the live fleet and the returned-delegation list. The
-//! pane owns Esc while open (pane_owns_esc), retracts the input box like
-//! the command panes, and routes Enter off the rendered list -- the live
-//! fleet when it has entries, else the returned delegations -- so an
-//! unselected fleet never opens an off-screen delegation.
+//! Agents-pane key behavior: Esc closure, input retraction, the list arms,
+//! and the detail the pane opens over the list. One cursor walks every
+//! rendered row, so the row the keys reach is the row the pane highlights,
+//! and the detail answers the same scroll keys as the /skills detail.
 use super::*;
 use crate::agent_message::FleetEntry;
 use crate::records::TranscriptLine;
 use crate::test_harness::render_text;
+use houyicoder_protocol::frontend::agents::{AgentEntry, AgentPrompt};
+
+fn push_running(app: &mut App, agent_id: &str) {
+    app.sessions
+        .current
+        .capabilities
+        .fleet
+        .entries
+        .push(FleetEntry {
+            agent_id: agent_id.into(),
+            subagent_type: "explore".into(),
+            turn: 1,
+            tokens: 10,
+            tool_uses: 0,
+            last_activity: None,
+            completed: None,
+            completed_at: None,
+            started_at: None,
+        });
+}
+
+fn push_returned(app: &mut App, child_sid: &str, folded: bool) {
+    let folded_transcript = if folded {
+        vec![TranscriptLine::Agent("child reply".into())]
+    } else {
+        Vec::new()
+    };
+    app.push_transcript_line(TranscriptLine::Subagent {
+        child_sid: child_sid.into(),
+        subagent_type: "explore".into(),
+        summary: format!("summary of {child_sid}"),
+        prompt: String::new(),
+        folded_transcript,
+        color: None,
+    });
+    app.refresh_agents();
+}
+
+fn install_type(app: &mut App, subagent_type: &str) {
+    app.sessions.current.capabilities.agent_types.entries = Some(vec![AgentEntry {
+        subagent_type: subagent_type.into(),
+        when_to_use: "when it helps".into(),
+        tools: None,
+        disallowed_tools: Vec::new(),
+        model: None,
+        effort: None,
+        system_prompt: AgentPrompt::InheritParent,
+    }]);
+}
 
 /// Esc closes the /agents pane. The pane had no Esc branch at all -- the key
 /// fell through to the queue-recall and abort branches, so while agents ran, Esc
@@ -65,111 +112,180 @@ fn test_agents_pane_hides_input() {
     );
 }
 
-/// With a live fleet on screen, Enter acts on the fleet -- never on a
-/// returned delegation the pane is not showing. The selection is None until
-/// the user moves it, and keying the branch off the selection instead of off
-/// the rendered list let that unselected case open an off-screen delegation.
+/// Enter acts on the row the pane highlights. The rows are listed in one
+/// order, so a live child above a returned delegation means the first Enter
+/// opens the child and the next one, after an arrow, opens the delegation.
+/// Keying off the fleet's own selection instead opened a row the pane was
+/// not showing.
 #[test]
-fn test_agents_enter_follows_list() {
+fn test_enter_opens_highlighted_row() {
     let mut app = working_app();
     app.ui.navigation.pane = Pane::Agents;
-    app.push_transcript_line(TranscriptLine::Subagent {
-        child_sid: "returned".into(),
-        subagent_type: "explore".into(),
-        summary: "old".into(),
-        prompt: String::new(),
-        folded_transcript: vec![TranscriptLine::Agent("reply".into())],
-        color: None,
-    });
-    app.sessions.current.refresh_agents();
-    app.sessions
-        .current
-        .capabilities
-        .fleet
-        .entries
-        .push(FleetEntry {
-            agent_id: "live".into(),
-            subagent_type: "explore".into(),
-            turn: 1,
-            tokens: 10,
-            tool_uses: 0,
-            last_activity: None,
-            completed: None,
-            completed_at: None,
-            started_at: None,
-        });
-    handle_working(&mut app, key(KeyCode::Enter));
-    assert!(
-        app.ui.teammate_view.is_none(),
-        "an unselected live fleet opens nothing, not the off-screen delegation"
-    );
-    app.ui.fleet.selected = Some(0);
+    push_returned(&mut app, "returned", true);
+    push_running(&mut app, "live");
     handle_working(&mut app, key(KeyCode::Enter));
     assert_eq!(
         app.ui.teammate_view.as_ref().map(|v| v.child_sid.as_str()),
         Some("live"),
-        "Enter opens the selected fleet child"
+        "the running child leads the list and Enter opens it"
     );
-}
-
-/// With no live fleet, the arrows step the agents cursor with clamping and
-/// Enter drills into the selected returned delegation, opening its view.
-/// Also drives the App-level accessors for the agents pane state -- the
-/// public seam external integration tests reach the session-owned rows
-/// through, since in-crate code reads the session field directly.
-#[test]
-fn test_agents_enter_returned_delegation() {
-    let mut app = working_app();
-    app.ui.navigation.pane = Pane::Agents;
-    app.push_transcript_line(TranscriptLine::Subagent {
-        child_sid: "c1".into(),
-        subagent_type: "explore".into(),
-        summary: "found auth".into(),
-        prompt: String::new(),
-        folded_transcript: vec![TranscriptLine::Agent("child reply".into())],
-        color: None,
-    });
-    app.refresh_agents();
-    assert_eq!(app.agents().rows.len(), 1, "accessor reads the rows");
-    assert!(app.agents().rows[0].loaded, "loaded fold detected");
     handle_working(&mut app, key(KeyCode::Down));
-    handle_working(&mut app, key(KeyCode::Up));
-    assert_eq!(app.ui.agents_sel, 0, "cursor clamps at the single row");
-    handle_working(&mut app, key(KeyCode::Enter));
-    let view = app.ui.teammate_view.as_ref().expect("view opened");
-    assert_eq!(view.child_sid, "c1");
-    assert!(
-        !view.transcript.is_empty(),
-        "the loaded fold is copied into the view"
-    );
-    app.sessions.current.agents.rows.clear();
-    handle_working(&mut app, key(KeyCode::Down));
-    assert_eq!(app.ui.agents_sel, 0, "an empty list leaves the cursor put");
-}
-
-/// A cursor past the end still opens the row the render highlights: the
-/// Enter drill clamps against the rows as the marker does.
-#[test]
-fn test_enter_clamps() {
-    let mut app = working_app();
-    app.ui.navigation.pane = Pane::Agents;
-    for (sid, summary) in [("c1", "first"), ("c2", "second")] {
-        app.push_transcript_line(TranscriptLine::Subagent {
-            child_sid: sid.into(),
-            subagent_type: "explore".into(),
-            summary: summary.into(),
-            prompt: String::new(),
-            folded_transcript: vec![TranscriptLine::Agent("reply".into())],
-            color: None,
-        });
-    }
-    app.refresh_agents();
-    app.ui.agents_sel = 5;
     handle_working(&mut app, key(KeyCode::Enter));
     assert_eq!(
         app.ui.teammate_view.as_ref().map(|v| v.child_sid.as_str()),
-        Some("c2"),
-        "Enter opens the last row the clamped cursor lands on"
+        Some("returned"),
+        "the next row is the returned delegation"
+    );
+}
+
+/// A registered type opens its detail instead of a child view: nothing ran,
+/// so there is no transcript to drill into.
+#[test]
+fn test_enter_opens_type_detail() {
+    let mut app = working_app();
+    app.ui.navigation.pane = Pane::Agents;
+    install_type(&mut app, "explore");
+    handle_working(&mut app, key(KeyCode::Enter));
+    assert_eq!(
+        app.ui
+            .agents_pane
+            .detail()
+            .map(|detail| detail.subagent_type()),
+        Some("explore"),
+        "Enter opens the type's detail"
+    );
+    assert!(
+        app.ui.teammate_view.is_none(),
+        "a type has no child view to open"
+    );
+}
+
+/// Esc returns one level: the detail closes back to the list, and only the
+/// list closes the pane. Closing the pane on the first Esc would drop the
+/// user out of the pane they were reading.
+#[test]
+fn test_esc_returns_to_list() {
+    let mut app = working_app();
+    app.ui.navigation.pane = Pane::Agents;
+    install_type(&mut app, "explore");
+    app.ui.agents_pane.open_detail("explore".into());
+    handle_working(&mut app, key(KeyCode::Esc));
+    assert!(app.ui.agents_pane.detail().is_none(), "the detail closes");
+    assert_eq!(
+        app.ui.navigation.pane,
+        Pane::Agents,
+        "the pane stays open on the list behind it"
+    );
+    handle_working(&mut app, key(KeyCode::Esc));
+    assert_eq!(app.ui.navigation.pane, Pane::Transcript);
+}
+
+/// While the detail is open the arrows scroll it and the cursor stays put:
+/// the same keys reach the pane that is on top.
+#[test]
+fn test_detail_arrows_scroll() {
+    let mut app = working_app();
+    app.ui.navigation.pane = Pane::Agents;
+    install_type(&mut app, "explore");
+    app.ui.agents_pane.open_detail("explore".into());
+    app.ui.agents_pane.set_detail_max_offset(50);
+    handle_working(&mut app, key(KeyCode::PageDown));
+    assert_eq!(app.ui.agents_pane.detail_offset(), 10);
+    handle_working(&mut app, key(KeyCode::Down));
+    assert_eq!(app.ui.agents_pane.detail_offset(), 11);
+    handle_working(&mut app, key(KeyCode::Up));
+    assert_eq!(app.ui.agents_pane.detail_offset(), 10);
+    handle_working(&mut app, key(KeyCode::PageUp));
+    assert_eq!(app.ui.agents_pane.detail_offset(), 0);
+    assert_eq!(
+        app.ui.agents_pane.cursor(),
+        0,
+        "the list cursor does not move behind the detail"
+    );
+}
+
+/// The pane cursor and the footer strip name the same child: landing on a
+/// running row writes the strip's selection, and landing on any other row
+/// leaves the strip's own choice alone rather than clearing it.
+#[test]
+fn test_cursor_mirrors_running_row() {
+    let mut app = working_app();
+    app.ui.navigation.pane = Pane::Agents;
+    push_returned(&mut app, "returned", true);
+    push_running(&mut app, "live");
+    install_type(&mut app, "explore");
+    assert!(app.ui.fleet.selected.is_none(), "no strip choice yet");
+    handle_working(&mut app, key(KeyCode::Up));
+    assert_eq!(
+        app.ui.fleet.selected,
+        Some(0),
+        "the running row writes the strip's selection"
+    );
+    app.ui.fleet.selected = Some(2);
+    handle_working(&mut app, key(KeyCode::Down));
+    assert_eq!(app.ui.agents_pane.cursor(), 1, "the cursor reached row two");
+    assert_eq!(
+        app.ui.fleet.selected,
+        Some(2),
+        "a row with no child leaves the strip's own choice alone"
+    );
+}
+
+/// Opening the pane settles the cursor on the first row, so a cursor standing
+/// on a running child seeds the strip's selection then: the two highlights
+/// agree before any arrow is pressed.
+#[test]
+fn test_open_seeds_strip_selection() {
+    let mut app = working_app();
+    push_running(&mut app, "live");
+    app.ui.navigation.pane = Pane::Agents;
+    assert!(app.ui.fleet.selected.is_none(), "no strip choice yet");
+    app.refresh_agents();
+    assert_eq!(
+        app.ui.fleet.selected,
+        Some(0),
+        "the running row the pane opens on writes the strip's selection"
+    );
+}
+
+/// A selection the user made in the footer strip stands when the pane opens:
+/// the pane seeds only a strip that has no choice of its own.
+#[test]
+fn test_open_keeps_strip_choice() {
+    let mut app = working_app();
+    push_running(&mut app, "a");
+    push_running(&mut app, "b");
+    app.ui.navigation.pane = Pane::Agents;
+    app.ui.fleet.selected = Some(1);
+    app.refresh_agents();
+    assert_eq!(
+        app.ui.fleet.selected,
+        Some(1),
+        "the strip's own choice is not overwritten"
+    );
+}
+
+/// The arrows step the cursor with clamping, Enter opens the highlighted row,
+/// and a cursor past the end still opens the last row -- the Enter drill
+/// clamps against the rows exactly as the marker does.
+#[test]
+fn test_cursor_clamps_both_ends() {
+    let mut app = working_app();
+    app.ui.navigation.pane = Pane::Agents;
+    push_returned(&mut app, "c1", true);
+    push_returned(&mut app, "c2", true);
+    handle_working(&mut app, key(KeyCode::Up));
+    handle_working(&mut app, key(KeyCode::Up));
+    assert_eq!(app.ui.agents_pane.cursor(), 0, "the first row is the top");
+    handle_working(&mut app, key(KeyCode::Down));
+    handle_working(&mut app, key(KeyCode::Down));
+    handle_working(&mut app, key(KeyCode::Down));
+    assert_eq!(app.ui.agents_pane.cursor(), 1, "the last row is the bottom");
+    handle_working(&mut app, key(KeyCode::Enter));
+    assert_eq!(
+        app.ui.teammate_view.as_ref().map(|v| v.child_sid.as_str()),
+        Some("c1"),
+        "the cursor stopped at the last row, so Enter opens that one"
     );
 }
 
@@ -180,21 +296,30 @@ fn test_enter_clamps() {
 fn test_rebuild_parks_cursor() {
     let mut app = working_app();
     app.ui.navigation.pane = Pane::Agents;
-    for (sid, summary) in [("c1", "first"), ("c2", "second")] {
-        app.push_transcript_line(TranscriptLine::Subagent {
-            child_sid: sid.into(),
-            subagent_type: "explore".into(),
-            summary: summary.into(),
-            prompt: String::new(),
-            folded_transcript: Vec::new(),
-            color: None,
-        });
-    }
-    app.refresh_agents();
+    push_returned(&mut app, "c1", false);
+    push_returned(&mut app, "c2", false);
     app.move_agents_cursor(1);
-    assert_eq!(app.ui.agents_sel, 1);
+    assert_eq!(app.ui.agents_pane.cursor(), 1);
     app.sessions.current.transcript = Default::default();
     app.refresh_agents();
     assert_eq!(app.agents().rows.len(), 0, "the rebuild emptied the rows");
-    assert_eq!(app.ui.agents_sel, 0, "the emptied list parks the cursor");
+    assert_eq!(app.ui.agents_pane.cursor(), 0, "the emptied list parks it");
+}
+
+/// A returned delegation whose fold was never loaded opens its view with the
+/// on-demand fetch, and its view is empty until the fetch answers -- the /
+/// agents list must not claim a transcript it does not have.
+#[test]
+fn test_enter_fetches_unloaded_child() {
+    let mut app = working_app();
+    app.ui.navigation.pane = Pane::Agents;
+    push_returned(&mut app, "c1", false);
+    assert!(!app.agents().rows[0].loaded, "the fold was never loaded");
+    handle_working(&mut app, key(KeyCode::Enter));
+    let view = app.ui.teammate_view.as_ref().expect("view opened");
+    assert_eq!(view.child_sid, "c1");
+    assert!(
+        view.transcript.is_empty(),
+        "an unloaded fold leaves the view to be filled by the fetch"
+    );
 }

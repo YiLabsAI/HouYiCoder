@@ -656,8 +656,8 @@ async fn drive_connection(
                         }
                         ResponsePayload::Debug(state) => Some(ServerResponse::Debug { state }),
                         ResponsePayload::Tools(tools) => Some(ServerResponse::Tools { tools }),
-                        ResponsePayload::Agents(directory) => {
-                            Some(ServerResponse::Agents { directory })
+                        ResponsePayload::Agents(entries) => {
+                            Some(ServerResponse::Agents { entries })
                         }
                         ResponsePayload::ChildTranscript { child_sid, frames } => {
                             // Convert the wire frames to the live-frame shape

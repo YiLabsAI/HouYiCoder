@@ -128,7 +128,8 @@ fn built_in() -> BuiltInRegistry {
 #[test]
 fn test_agent_directory_lists_sorted() {
     let reg = built_in();
-    let dir = super::agent_directory_section(&reg, &HashSet::new()).expect("non-empty");
+    let defs = super::delegatable_agents(&reg, &HashSet::new());
+    let dir = super::agent_directory_section(&defs).expect("non-empty");
     // Deterministic alphabetical order by type.
     let code_pos = dir.find("- code-guide:").unwrap();
     let explore_pos = dir.find("- explore:").unwrap();
@@ -144,7 +145,16 @@ fn test_agent_directory_filters_denied() {
     let reg = built_in();
     let mut denied = HashSet::new();
     denied.insert("explore".to_string());
-    let dir = super::agent_directory_section(&reg, &denied).expect("non-empty");
+    let defs = super::delegatable_agents(&reg, &denied);
+    assert!(
+        !defs.iter().any(|d| d.subagent_type == "explore"),
+        "denied type must not appear"
+    );
+    assert!(
+        defs.iter().any(|d| d.subagent_type == "plan"),
+        "non-denied type stays"
+    );
+    let dir = super::agent_directory_section(&defs).expect("non-empty");
     assert!(!dir.contains("- explore:"), "denied type must not appear");
     assert!(dir.contains("- plan:"), "non-denied type stays");
 }
@@ -152,9 +162,9 @@ fn test_agent_directory_filters_denied() {
 #[test]
 fn test_agent_directory_stable_bytes() {
     let reg = built_in();
-    let a = super::agent_directory_section(&reg, &HashSet::new());
-    let b = super::agent_directory_section(&reg, &HashSet::new());
-    assert_eq!(a, b, "same registry + denied must yield identical bytes");
+    let a = super::agent_directory_section(&super::delegatable_agents(&reg, &HashSet::new()));
+    let b = super::agent_directory_section(&super::delegatable_agents(&reg, &HashSet::new()));
+    assert_eq!(a, b, "one registry must derive the same bytes twice");
 }
 
 #[test]
@@ -164,7 +174,31 @@ fn test_agent_directory_all_denied() {
         .into_iter()
         .map(|d| d.subagent_type)
         .collect();
-    assert!(super::agent_directory_section(&reg, &all).is_none());
+    let defs = super::delegatable_agents(&reg, &all);
+    assert!(defs.is_empty());
+    assert!(super::agent_directory_section(&defs).is_none());
+}
+
+/// The paragraph the model reads is a cached prefix, so its characters are a
+/// contract: the definitions a caller holds render to exactly this text, in
+/// the order it holds them, with the tools suffix only when the definition
+/// declares one.
+#[test]
+fn test_section_keeps_bytes() {
+    let mut explore = super::built_in_explore();
+    explore.when_to_use = "fast search".to_string();
+    explore.tools = Some(vec!["read".into(), "grep".into()]);
+    let mut planner = built_in_general_purpose();
+    planner.subagent_type = "planner".to_string();
+    planner.when_to_use = "slow and careful".to_string();
+    planner.tools = None;
+    let expected = "## Available agents\n\n\
+                    - explore: fast search (Tools: read, grep)\n\
+                    - planner: slow and careful";
+    assert_eq!(
+        super::agent_directory_section(&[explore, planner]).expect("non-empty"),
+        expected
+    );
 }
 
 #[test]

@@ -12,14 +12,6 @@ use std::time::Instant;
 use crate::state::App;
 
 impl App {
-    /// Step the strip selection by a signed delta against the live entry
-    /// count (clamped, no wrap). The /agents pane arrows route here while the
-    /// pane renders live children.
-    pub(crate) fn move_fleet_selection(&mut self, delta: i32) {
-        let len = self.sessions.current.capabilities.fleet.entries.len();
-        self.ui.fleet.move_selection(delta, len);
-    }
-
     /// Drop completed children whose grace window elapsed, keeping the child
     /// the user is drilled into (the teammate view names it), then pull the
     /// selection back inside the surviving entries. Returns true when at

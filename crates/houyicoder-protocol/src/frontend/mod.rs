@@ -6,6 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
+pub mod agents;
 pub mod compact;
 pub mod context;
 pub mod debug;

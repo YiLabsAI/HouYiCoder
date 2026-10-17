@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 
 use houyicoder_protocol::acp_wire::PermissionOptionKind;
 use houyicoder_protocol::envelope::RequestId;
+use houyicoder_protocol::frontend::agents::AgentEntry;
 use houyicoder_protocol::frontend::context::ContextBreakdown;
 use houyicoder_protocol::frontend::hooks::HookEntry;
 use houyicoder_protocol::frontend::memory::{MemoryChangeId, MemoryToggleWhich, ToggleState};
@@ -178,6 +179,16 @@ pub(crate) struct SkillsCapability {
 pub(crate) struct WorktreeCapability {
     /// The worktree rows in listing order.
     pub(crate) entries: Vec<WorktreeEntry>,
+}
+
+/// The session's registered sub-agent types, the rows the /agents pane's
+/// available section renders. None until the first reply lands, so the pane
+/// can tell "not read yet" from "registered nothing"; the server owns the
+/// truth and the same definitions produce the model's prompt paragraph.
+#[derive(Debug, Default)]
+pub(crate) struct AgentTypesCapability {
+    /// The delegatable types in server order (sorted by type).
+    pub(crate) entries: Option<Vec<AgentEntry>>,
 }
 
 /// The session's fleet facts: one live status snapshot per spawned child,
@@ -425,6 +436,8 @@ pub(crate) struct SessionCapabilities {
     pub(crate) memory: MemoryCapability,
     /// The fleet capability: the live child status snapshots.
     pub(crate) fleet: FleetCapability,
+    /// The agent-types capability: the delegatable sub-agent types.
+    pub(crate) agent_types: AgentTypesCapability,
     /// The model capability: the host-reported catalog with the applied
     /// model, and the commit awaiting its reply.
     pub(crate) model: ModelCapability,

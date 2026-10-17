@@ -848,7 +848,7 @@ impl Tool for MarkerTool {
 }
 
 /// /agents and /tools ship a wire query and land the server's reply on the
-/// agent directory field and the tool cache, proving the in-proc
+/// agent-type entries and the tool cache, proving the in-proc
 /// server round-trip completes for these pane-query commands — not just the
 /// pane open. /agents goes None→Some; /tools (with a registered tool) goes
 /// empty→non-empty. A break in the driver→server→dispatch chain fails here.
@@ -864,7 +864,14 @@ fn test_agents_tools_round_trip() {
     let mut landed = false;
     for _ in 0..300 {
         app.poll_agent();
-        if app.sessions.current.agent_directory.is_some() {
+        if app
+            .sessions
+            .current
+            .capabilities
+            .agent_types
+            .entries
+            .is_some()
+        {
             landed = true;
             break;
         }
@@ -872,7 +879,7 @@ fn test_agents_tools_round_trip() {
     }
     assert!(
         landed,
-        "/agents query must round-trip: agent_directory should be set"
+        "/agents query must round-trip: the agent types should land"
     );
 
     app.run_command(SlashCommand::Tools);

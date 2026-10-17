@@ -34,6 +34,7 @@ use houyicoder_protocol::frontend::context::{DelegatedContext, ToolFootprint};
 use houyicoder_protocol::llm::{AssistantToolCall, InputItem};
 
 use crate::agent::context::conversation::ConversationCost;
+use crate::agent::multi_agent::registry::{AgentDefinition, agent_directory_section};
 
 /// Per-turn recall budget shared by retrieval and context assembly.
 pub(crate) const MEMORY_RECALL_BUDGET: usize = 2000;
@@ -329,11 +330,12 @@ pub struct ContextBuilder {
     last_measurement: Mutex<Option<ContextMeasurement>>,
     /// Retention policy shared with cached-prefix liveness.
     retention_policy: Mutex<Option<Arc<dyn retention::RetentionPolicy>>>,
-    /// The agent directory section (deterministic list of registered agent
-    /// types the model may delegate to), injected into the system prompt so
-    /// the model can discover sub-agent types. Interior-mutable so the
-    /// composition root installs it post-construction.
-    agent_directory: Mutex<Option<String>>,
+    /// The sub-agent types the model may delegate to. The system prompt's
+    /// directory section is derived from these, so the definitions are the
+    /// stored fact and the paragraph is a rendering of it; the /agents reply
+    /// reads the same list. Interior-mutable so the composition root installs
+    /// them post-construction.
+    agent_types: Mutex<Vec<AgentDefinition>>,
 }
 
 impl ContextBuilder {
@@ -344,20 +346,24 @@ impl ContextBuilder {
             cwd: Arc::new(RwLock::new(cwd)),
             last_measurement: Mutex::new(None),
             retention_policy: Mutex::new(None),
-            agent_directory: Mutex::new(None),
+            agent_types: Mutex::new(Vec::new()),
         }
     }
 
-    /// Install the agent directory section for the system prompt. Set once
-    /// at the composition root (the registry is fixed for the session).
-    pub(crate) fn set_agent_directory(&self, section: String) {
-        if let Ok(mut g) = self.agent_directory.lock() {
-            *g = Some(section);
+    /// Install the delegatable agent definitions. Set once at the composition
+    /// root (the registry is fixed for the session).
+    pub(crate) fn set_agent_types(&self, defs: Vec<AgentDefinition>) {
+        if let Ok(mut g) = self.agent_types.lock() {
+            *g = defs;
         }
     }
 
-    pub(crate) fn agent_directory(&self) -> Option<String> {
-        self.agent_directory.lock().ok().and_then(|g| g.clone())
+    /// The installed definitions, in the order they were installed.
+    pub(crate) fn agent_types(&self) -> Vec<AgentDefinition> {
+        self.agent_types
+            .lock()
+            .map(|g| g.clone())
+            .unwrap_or_default()
     }
 
     /// Install the retention policy the serve path uses for block_ref
@@ -472,7 +478,13 @@ impl ContextBuilder {
             .sum();
 
         let cwd = self.cwd.read().expect("cwd lock").clone();
-        let agent_directory = self.agent_directory.lock().ok().and_then(|g| g.clone());
+        // Rendered under the lock: the definitions are copied only for the
+        // caller that reads them, never per assembly.
+        let agent_directory = self
+            .agent_types
+            .lock()
+            .ok()
+            .and_then(|defs| agent_directory_section(&defs));
         let prompt = SystemPrompt::build_with_memory_index(
             &cwd,
             input.memory_index,

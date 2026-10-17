@@ -1,5 +1,6 @@
 //! Context assembly and token-accounting tests.
 use super::*;
+use crate::agent::multi_agent::registry::built_in_general_purpose;
 use crate::agent::skill::listing::format_skill_listing;
 use houyicoder_api::skill::{SkillDescriptor, SkillUsage};
 use houyicoder_context::{
@@ -1432,14 +1433,32 @@ fn test_assemble_threads_boundary() {
     remove_dir_all(&dir_b).ok();
 }
 
+/// The installed definitions are the stored fact; the prompt paragraph is
+/// derived from them at assembly. One store means what the model is told and
+/// what the /agents reply carries cannot name different type sets.
 #[test]
-fn test_agent_directory_round_trip() {
+fn test_agent_types_drive_section() {
+    let empty = ContextBuilder::new().measure(&[], None, None, &assembly_input(&[], None));
+    assert!(
+        !empty.system.contains("Available agents"),
+        "no installed definitions means no directory section"
+    );
+
     let cb = ContextBuilder::new();
-    assert!(cb.agent_directory().is_none(), "unset directory is None");
-    cb.set_agent_directory("## Available agents\n\n- explore: fast".into());
+    cb.set_agent_types(vec![built_in_general_purpose()]);
     assert_eq!(
-        cb.agent_directory().as_deref(),
-        Some("## Available agents\n\n- explore: fast"),
+        cb.agent_types().len(),
+        1,
+        "the store reads back what it holds"
+    );
+    let full = cb.measure(&[], None, None, &assembly_input(&[], None));
+    assert!(
+        full.system.contains("## Available agents"),
+        "an installed definition reaches the assembled prompt"
+    );
+    assert!(
+        full.system.contains("- general-purpose:"),
+        "the section renders the definition it was derived from"
     );
 }
 

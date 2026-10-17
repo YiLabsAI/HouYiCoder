@@ -4,24 +4,27 @@ use crate::records::TranscriptLine;
 use crate::skills_state::SkillDetail;
 use crate::state::Pane;
 use crate::state::Screen;
+use crate::test_harness::agent_entry;
 use crate::test_harness::connected_app_with_events;
 use crate::test_harness::connection_lost_app;
+use crate::test_harness::install_agent_types;
 use crate::test_harness::render_text;
 use houyicoder_protocol::frontend::skills::SkillEntry;
 use houyicoder_protocol::frontend::tools::ToolEntry;
 
 #[test]
-fn test_agents_result_stores_directory() {
+fn test_agents_result_stores_types() {
     let mut app = app();
+    let entry = agent_entry("explore", "fast");
     app.handle_agent_message(SessionMessage::Response {
         request: RequestId(9),
         response: ServerResponse::Agents {
-            directory: "## Available agents\n\n- explore: fast".into(),
+            entries: vec![entry.clone()],
         },
     });
     assert_eq!(
-        app.sessions.current.agent_directory.as_deref(),
-        Some("## Available agents\n\n- explore: fast"),
+        app.sessions.current.capabilities.agent_types.entries,
+        Some(vec![entry]),
     );
 }
 
@@ -382,34 +385,36 @@ fn test_tools_pane_renders_empty() {
 }
 
 #[test]
-fn test_agents_directory_renders_lines() {
+fn test_agents_types_render_rows() {
     let mut app = app();
     app.ui.navigation.screen = Screen::Working;
     app.ui.navigation.pane = Pane::Agents;
-    app.sessions.current.agent_directory =
-        Some("## Available agents\n\n- explore: fast search\n- plan: design".into());
+    install_agent_types(
+        &mut app,
+        &[("explore", "fast search"), ("plan", "design a step")],
+    );
     let out = render_text(&app, 80, 24);
-    let header_row = out.lines().position(|l| l.contains("Available agents"));
+    let heading_row = out.lines().position(|l| l.contains("AVAILABLE"));
     let explore_row = out.lines().position(|l| l.contains("explore"));
-    assert!(header_row.is_some(), "header renders: {out}");
+    assert!(heading_row.is_some(), "heading renders: {out}");
     assert!(explore_row.is_some(), "explore renders: {out}");
     assert!(
-        header_row.unwrap() < explore_row.unwrap(),
-        "header must sit above the explore bullet (per-line render), not flatten to one row"
+        heading_row.unwrap() < explore_row.unwrap(),
+        "the heading must sit above the type row (per-line render), not flatten to one row"
     );
 }
 
-/// A Some("") reply (no agents registered) renders the placeholder, not a
-/// blank pane. Pins the empty-filter so the fallback fires on empty content.
+/// A reply carrying no types renders the placeholder, not a blank pane, so the
+/// fallback fires on an empty list.
 #[test]
-fn test_agents_directory_empty_placeholder() {
+fn test_agents_types_empty_placeholder() {
     let mut app = app();
     app.ui.navigation.screen = Screen::Working;
     app.ui.navigation.pane = Pane::Agents;
-    app.sessions.current.agent_directory = Some(String::new());
+    install_agent_types(&mut app, &[]);
     let out = render_text(&app, 80, 24);
     assert!(
-        out.contains("(no agent directory loaded)"),
-        "empty directory shows placeholder, not blank: {out}"
+        out.contains("(no agent types registered)"),
+        "an empty type list shows the placeholder, not a blank pane: {out}"
     );
 }

@@ -2,6 +2,7 @@
 //! protocol types — no I/O, no state — so the server loop stays decoupled
 //! from serialization.
 
+pub(crate) mod agents;
 pub(crate) mod compaction;
 pub(crate) mod hooks;
 pub(crate) mod memory_view;

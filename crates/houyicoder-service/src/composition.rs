@@ -320,7 +320,7 @@ pub(crate) fn assemble(
     runner.seed_usage_from_log(session);
     let mut runner = skills.attach_to_runner(runner, fences.workspace.clone());
     runner.set_workspace_probe(Arc::new(GitWorkspaceProbe::new(runner.cwd_handle())));
-    multi_agent::wire_agent_directory(&runner, agent_registry.as_ref(), &denied_agents);
+    multi_agent::install_agent_types(&runner, agent_registry.as_ref(), &denied_agents);
     if let Some(controller) = &worktree_controller {
         controller.set_hook_fire(build_hook_fire(&runner));
     }

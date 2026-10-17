@@ -28,8 +28,8 @@ use houyicoder_core::agent::multi_agent::concurrency_gate::ConcurrencyGate;
 use houyicoder_core::agent::multi_agent::record_subagent_return;
 use houyicoder_core::agent::multi_agent::registry::AgentRegistry;
 use houyicoder_core::agent::multi_agent::registry::BuiltInRegistry;
-use houyicoder_core::agent::multi_agent::registry::agent_directory_section;
 use houyicoder_core::agent::multi_agent::registry::built_in_all;
+use houyicoder_core::agent::multi_agent::registry::delegatable_agents;
 use houyicoder_core::agent::multi_agent::spawn::{ChildHandle, TriggerSource};
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::worktree_controller::WorktreeController;
@@ -317,17 +317,16 @@ pub(super) fn built_in_registry() -> Arc<dyn AgentRegistry> {
     Arc::new(BuiltInRegistry::from_agents(built_in_all()))
 }
 
-/// Install the agent directory (registered sub-agent types, minus denied)
-/// on the runner's system prompt. Session-stable: the registry is fixed for
-/// the session, so the section's bytes do not change across turns.
-pub(super) fn wire_agent_directory(
+/// Install the sub-agent types the model may delegate to (registered, minus
+/// denied) on the runner, so the system prompt can announce them and the
+/// /agents command can list them. Session-stable: the registry is fixed for
+/// the session, so the prompt's bytes do not change across turns.
+pub(super) fn install_agent_types(
     runner: &Runner,
     registry: &dyn AgentRegistry,
     denied: &HashSet<String>,
 ) {
-    if let Some(dir) = agent_directory_section(registry, denied) {
-        runner.set_agent_directory(dir);
-    }
+    runner.set_agent_types(delegatable_agents(registry, denied));
 }
 
 /// Build the child-spawn port attached to the parent runner.

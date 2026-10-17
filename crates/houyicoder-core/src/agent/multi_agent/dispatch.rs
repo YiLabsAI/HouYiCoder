@@ -7,6 +7,7 @@ use std::sync::Arc;
 use houyicoder_api::spawn::{AgentIdentity, SpawnHandle};
 
 use crate::agent::Runner;
+use crate::agent::multi_agent::registry::AgentDefinition;
 
 impl Runner {
     /// Attach the spawn port the agent tool launches children through.
@@ -86,19 +87,20 @@ impl Runner {
         }
     }
 
-    /// Install the agent directory section the system prompt carries so the
-    /// model can discover sub-agent types. Set once at the composition root.
-    pub fn set_agent_directory(&self, section: String) {
-        self.context_builder.set_agent_directory(section);
+    /// Install the sub-agent types the model may delegate to, so the system
+    /// prompt can announce them and the /agents command can list them. Set
+    /// once at the composition root.
+    pub fn set_agent_types(&self, defs: Vec<AgentDefinition>) {
+        self.context_builder.set_agent_types(defs);
     }
 
-    /// The agent directory section, if one was installed. Read by the server
-    /// when the TUI's /agents command queries the registered types. This is
-    /// the exact prompt paragraph the system prompt carries: its bytes are
-    /// load-bearing for the prompt cache, so the /agents panel renders it
-    /// verbatim - reformat in the TUI, never mutate what this returns.
-    pub fn agent_directory(&self) -> Option<String> {
-        self.context_builder.agent_directory()
+    /// The delegatable sub-agent types, sorted by type. Read by the server
+    /// when the TUI's /agents command queries the registered types. The
+    /// system prompt's directory section is derived from these same
+    /// definitions, so the answer here and the paragraph the model is told
+    /// cannot disagree.
+    pub fn agent_types(&self) -> Vec<AgentDefinition> {
+        self.context_builder.agent_types()
     }
 }
 

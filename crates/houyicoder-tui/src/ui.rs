@@ -29,6 +29,7 @@ use std::io;
 use std::mem;
 use std::sync::Arc;
 
+use crate::agents_state::AgentsPaneState;
 use crate::fleet::strip_state::FleetStripState;
 use crate::hooks_state::HooksPaneState;
 use crate::input::Input;
@@ -99,11 +100,12 @@ pub struct Ui {
     /// compositions across the two owners are App methods. Resets with its
     /// pane peers on a session switch.
     pub(crate) memory: MemoryPaneState,
-    /// The /agents pane's list cursor: which returned-delegation row the
-    /// marker highlights. The rows are the session's record; the cursor is
-    /// pane interaction state, kept within the rows by every rebuild, step,
-    /// and read, and reset on a session switch.
-    pub agents_sel: usize,
+    /// The /agents pane's interaction state: one list cursor across the
+    /// running, completed, and available sections, plus the open type detail.
+    /// The rows these index are the session's; the cursor and the drill-down
+    /// are pane state, kept within the rows by every rebuild, step, and read,
+    /// and reset on a session switch.
+    pub(crate) agents_pane: AgentsPaneState,
     /// The footer fleet strip's interaction state: the highlighted child row
     /// and the elapsed counters' repaint pacing. The child snapshots this
     /// index and the geometry a draw produced are the session's fleet
@@ -202,7 +204,7 @@ impl Ui {
         self.worktree_list = Default::default();
         self.worktree_level = Cell::new(0);
         self.trajectory = Default::default();
-        self.agents_sel = 0;
+        self.agents_pane = Default::default();
         self.notifications = Default::default();
         self.displayed_tokens = Cell::new(0);
         self.selection = Default::default();

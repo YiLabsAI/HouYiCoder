@@ -434,8 +434,8 @@ impl App {
             ServerResponse::Tools { tools } => {
                 self.sessions.current.capabilities.tools.entries = tools;
             }
-            ServerResponse::Agents { directory } => {
-                self.sessions.current.agent_directory = Some(directory);
+            ServerResponse::Agents { entries } => {
+                self.sessions.current.capabilities.agent_types.entries = Some(entries);
             }
             ServerResponse::ChildTranscript { child_sid, frames } => {
                 self.apply_child_transcript(child_sid, frames);

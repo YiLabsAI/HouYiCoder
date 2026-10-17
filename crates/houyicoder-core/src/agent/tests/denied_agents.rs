@@ -252,8 +252,8 @@ async fn test_approval_dispatch_carries_caps() {
 }
 
 #[test]
-fn test_runner_agent_directory() {
+fn test_runner_agent_types() {
     let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("ok"));
     let runner = runner_with(provider, ToolRegistry::new());
-    assert!(runner.agent_directory().is_none());
+    assert!(runner.agent_types().is_empty());
 }

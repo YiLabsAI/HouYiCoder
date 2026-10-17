@@ -12,6 +12,7 @@ use crate::error::ProtocolError;
 use crate::frontend::FrontendEvent;
 use crate::frontend::FrontendRequest;
 use crate::frontend::SessionId;
+use crate::frontend::agents::AgentEntry;
 use crate::frontend::compact::CompactReply;
 use crate::frontend::context::ContextBreakdown;
 use crate::frontend::debug::DebugState;
@@ -209,9 +210,10 @@ pub enum ResponsePayload {
     /// The registered tool list (/tools), so the TUI renders the capability
     /// inventory without importing the engine registry.
     Tools(Vec<ToolEntry>),
-    /// The /agents reply: the formatted agent directory string
-    /// (registered sub-agent types, minus denied, sorted).
-    Agents(String),
+    /// The /agents reply: the sub-agent types the model may delegate to,
+    /// sorted by type, so the pane renders their fields rather than parsing
+    /// the prompt paragraph.
+    Agents(Vec<AgentEntry>),
     /// The /hooks reply: the registered hooks (read-only visibility).
     Hooks(Vec<HookEntry>),
     /// The /skills reply: the discovered skills (name, description,

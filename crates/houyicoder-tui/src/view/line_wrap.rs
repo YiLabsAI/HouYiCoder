@@ -305,5 +305,36 @@ pub(crate) fn max_scroll_offset(body: &[Line<'static>], width: u16, height: u16)
     u16::try_from(rendered_rows.saturating_sub(height as usize)).unwrap_or(u16::MAX)
 }
 
+/// Pad a string to a display width so the columns after it line up across
+/// rows. Counts columns rather than characters, so a wide glyph cannot shift
+/// the columns that follow it. A string already at the width is returned
+/// unchanged.
+pub(crate) fn pad_width(text: &str, width: usize) -> String {
+    let used = UnicodeWidthStr::width(text);
+    if used >= width {
+        return text.to_string();
+    }
+    let mut out = text.to_string();
+    out.push_str(&" ".repeat(width - used));
+    out
+}
+
+/// The first row a cursor-driven list body shows so the selected row stays on
+/// screen. The window follows the selection down once it passes the last
+/// visible row, and the tail of the list is what a selection near the end
+/// shows. Zero when the list fits, so a short list renders from its first row.
+///
+/// The caller passes the row the cursor stands on among the rendered rows, not
+/// its index among the selectable items: a section heading occupies a row of
+/// its own, so the two numbers part company wherever headings sit.
+pub(crate) fn cursor_window_offset(selected: usize, rows: usize, height: u16) -> u16 {
+    let height = height as usize;
+    if height == 0 || rows <= height {
+        return 0;
+    }
+    let offset = selected.saturating_sub(height - 1).min(rows - height);
+    u16::try_from(offset).unwrap_or(u16::MAX)
+}
+
 #[cfg(test)]
 mod tests;

@@ -451,7 +451,8 @@ fn draw_main(f: &mut Frame, area: Rect, app: &App) {
         return;
     }
     // The /agents pane renders inline (the Pane primitive): transcript tail
-    // above, the live fleet or the registered directory below.
+    // above, the live children, the returned delegations, and the delegatable
+    // types below.
     if matches!(app.ui.navigation.pane, Pane::Agents) {
         draw_agents_pane(f, area, app);
         return;

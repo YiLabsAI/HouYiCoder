@@ -122,10 +122,6 @@ pub(crate) struct Session {
     /// the pane's cursor lives with the Ui pane interaction state alongside
     /// its peers.
     pub(crate) agents: PaneAgents,
-    /// The agent directory listing the last /agents query fetched, kept so
-    /// the pane can render it before any delegation has returned. It is
-    /// session-scoped server read state, reset on a switch.
-    pub(crate) agent_directory: Option<String>,
 }
 
 impl Session {
@@ -151,7 +147,6 @@ impl Session {
             scan_state: ScanState::default(),
             loaded_from_frame: Cell::new(usize::MAX),
             agents: PaneAgents::default(),
-            agent_directory: None,
         }
     }
 

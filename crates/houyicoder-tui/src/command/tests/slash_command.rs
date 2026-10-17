@@ -12,14 +12,14 @@ use crate::state::App;
 use crate::state::{Pane, Screen, Stage};
 use crate::test_harness::connected_app;
 use crate::test_harness::connection_lost_app;
+use crate::test_harness::install_agent_types;
 use crate::test_harness::{model_caps, model_catalog, model_entry, render_text};
 use houyicoder_protocol::frontend::trajectory::TrajectoryEntry;
 
 fn working() -> App {
     let mut app = composition::app();
     app.ui.navigation.screen = Screen::Working;
-    app.sessions.current.agent_directory =
-        Some("## Available agents\n\n- explore: fast read-only search".into());
+    install_agent_types(&mut app, &[("explore", "fast read-only search")]);
     app
 }
 
@@ -92,10 +92,16 @@ fn test_tab_cycles_panes() {
         // each pane renders without panic; its identity appears somewhere in
         // the render. Transcript is borderless by design (no title label);
         // with an empty transcript the input placeholder carries the hint.
+        // The /agents pane heads its list with the capitalized name; the
+        // other panes print the label itself.
         if matches!(p, Pane::Transcript) {
             assert!(out.contains("let's build"), "placeholder missing");
         } else {
-            assert!(out.contains(p.label()), "pane {p:?} label missing");
+            let name = match p {
+                Pane::Agents => "Agents",
+                other => other.label(),
+            };
+            assert!(out.contains(name), "pane {p:?} label missing");
         }
     }
 }

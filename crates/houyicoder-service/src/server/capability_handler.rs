@@ -1,9 +1,11 @@
-//! Capability listing handlers: registered tools and the agent directory.
+//! Capability listing handlers: registered tools and the delegatable agent
+//! types.
 
 use houyicoder_protocol::envelope::{RequestId, ResponsePayload};
 use houyicoder_protocol::error::ProtocolError;
 
 use super::{Server, frame_carrier::FrameCarrier};
+use crate::protocol_adapter::agents::agent_entries;
 use houyicoder_protocol::frontend::tools::ToolEntry;
 
 impl Server {
@@ -24,15 +26,16 @@ impl Server {
             .await
     }
 
-    /// Reply with the agent directory. The directory doubles as the model's
-    /// prompt paragraph and is byte-stable for the prompt cache.
+    /// Reply with the sub-agent types the model may delegate to. The same
+    /// definitions produce the prompt paragraph, so the pane and the model
+    /// name one type set.
     pub(super) async fn handle_agents(
         &mut self,
         io: &mut FrameCarrier,
         req_id: RequestId,
     ) -> Result<(), ProtocolError> {
-        let dir = self.runner.agent_directory().unwrap_or_default();
-        self.send_response(io, req_id, ResponsePayload::Agents(dir))
+        let entries = agent_entries(self.runner.agent_types());
+        self.send_response(io, req_id, ResponsePayload::Agents(entries))
             .await
     }
 }

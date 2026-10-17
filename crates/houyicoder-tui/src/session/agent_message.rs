@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 
 use crate::records::TranscriptLine;
 use crate::transcript::{SequencedFrame, TranscriptFrame};
+use houyicoder_protocol::frontend::agents::AgentEntry;
 use houyicoder_protocol::frontend::compact::CompactReply;
 use houyicoder_protocol::frontend::context::ContextBreakdown;
 use houyicoder_protocol::frontend::debug::DebugLevel;
@@ -309,8 +310,9 @@ pub enum ServerResponse {
     PermissionAskBeforeGit { enabled: bool },
     /// The registered tool list the /tools command requested over the wire.
     Tools { tools: Vec<ToolEntry> },
-    /// The formatted agent directory string the /agents command requested.
-    Agents { directory: String },
+    /// The sub-agent types the model may delegate to, which the /agents
+    /// command requested.
+    Agents { entries: Vec<AgentEntry> },
     /// The on-demand child transcript for an expanded Subagent fold-group.
     /// Frames arrive already converted to TranscriptFrame, so the fill site
     /// runs transcript_from_frames to populate the child rows through the
@@ -408,7 +410,7 @@ pub enum ClientCommand {
     ToolListQuery {
         req_id: RequestId,
     },
-    /// Request the agent directory (registered sub-agent types) for /agents.
+    /// Request the registered sub-agent types for /agents.
     AgentsQuery {
         req_id: RequestId,
     },

@@ -24,6 +24,7 @@ use crate::view::export_log::write_atomic_0600;
 use houyicoder_protocol::llm::Usage;
 use std::path::PathBuf;
 
+mod agents;
 mod debug;
 mod memory;
 mod model;
