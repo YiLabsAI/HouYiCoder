@@ -158,7 +158,7 @@ async fn test_pre_tool_use_deny() {
     // The model saw the blocked result losslessly (carried by call_id).
     let blocked = runner
         .store()
-        .trajectory_snapshot(session)
+        .trajectory_tail(session)
         .iter()
         .any(|ev| matches!(ev.event, SessionEvent::ToolResult { ref output, .. } if output.to_string().contains("blocked by hook")));
     assert!(
@@ -175,7 +175,7 @@ async fn test_hook_deny_records_signal() {
     // losslessly; the trajectory sees the verdict + the hook that issued it.
     let (runner, session, _ran) = deny_runner();
     runner.run(session, "go".into()).await.expect("run");
-    let snap = runner.store().trajectory_snapshot(session);
+    let snap = runner.store().trajectory_tail(session);
     let signals: Vec<&SessionLogEntry> = snap
         .iter()
         .filter(|ev| matches!(ev.event, SessionEvent::HookSignal { .. }))
@@ -245,7 +245,7 @@ async fn test_pre_tool_use_observe() {
     // The tool result landed in the trajectory (the run is lossless).
     let result_landed = runner
         .store()
-        .trajectory_snapshot(session)
+        .trajectory_tail(session)
         .iter()
         .any(|ev| matches!(ev.event, SessionEvent::ToolResult { ref output, .. } if output.to_string().contains("ran")));
     assert!(result_landed, "the executed tool_result lands in the log");
@@ -368,7 +368,7 @@ async fn test_pre_tool_use_feedback() {
     );
     let feedback = runner
         .store()
-        .trajectory_snapshot(session)
+        .trajectory_tail(session)
         .iter()
         .any(|ev| matches!(ev.event, SessionEvent::ToolResult { ref output, .. } if output.to_string().contains("hook feedback")));
     assert!(
@@ -409,7 +409,7 @@ async fn test_post_tool_use_fires() {
     // The failing tool's error result landed in the trajectory.
     let failed = runner
         .store()
-        .trajectory_snapshot(session)
+        .trajectory_tail(session)
         .iter()
         .any(|ev| matches!(ev.event, SessionEvent::ToolResult { ref output, .. } if output.to_string().contains("always fails")));
     assert!(failed, "the failing tool's error result lands losslessly");
@@ -494,7 +494,7 @@ async fn test_recover_turn_not_reexecute() {
     // regenerated content.
     let has_aborted = runner
         .store()
-        .trajectory_snapshot(session)
+        .trajectory_tail(session)
         .iter()
         .any(|ev| matches!(ev.event, SessionEvent::TurnAborted { .. }));
     assert!(

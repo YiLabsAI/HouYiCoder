@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::*;
+use crate::chain;
 use houyicoder_api::session::SessionLog;
 use houyicoder_api::session::SubagentUsage;
 use houyicoder_context::{CheckpointId, Disposition, EventId, SessionEvent, TurnGroup};
@@ -76,12 +77,12 @@ async fn test_append_sets_hash_chain() {
     // e2.prev_hash == H(e1 stored).
     assert_eq!(
         e2_stored.prev_hash,
-        Some(SessionStore::hash_event(&e1_stored).unwrap())
+        Some(chain::hash_event(&e1_stored).unwrap())
     );
     // e3.prev_hash == H(e2 stored, including e2's own prev_hash) — recursive.
     assert_eq!(
         e3_stored.prev_hash,
-        Some(SessionStore::hash_event(&e2_stored).unwrap())
+        Some(chain::hash_event(&e2_stored).unwrap())
     );
 }
 
@@ -121,17 +122,17 @@ async fn test_trajectory_keeps_order() {
     )
     .await;
     let e3 = appended_event(&store, s, SessionEvent::Reasoning { text: "c".into() }).await;
-    let traj = store.trajectory_snapshot(s);
+    let traj = store.trajectory_tail(s);
     assert_eq!(traj.len(), 3, "mirror holds every appended event");
     assert!(traj[0].prev_hash.is_none(), "first link has no predecessor");
     assert_eq!(
         traj[1].prev_hash,
-        Some(SessionStore::hash_event(&e1).unwrap()),
+        Some(chain::hash_event(&e1).unwrap()),
         "second link hashes the first finalized event"
     );
     assert_eq!(
         traj[2].prev_hash,
-        Some(SessionStore::hash_event(&e2).unwrap()),
+        Some(chain::hash_event(&e2).unwrap()),
         "third link hashes the second finalized event"
     );
     assert_eq!(
@@ -141,10 +142,10 @@ async fn test_trajectory_keeps_order() {
     // The mirror is per-session: a different session reads empty until it
     // appends.
     let other = SessionId::new();
-    assert!(store.trajectory_snapshot(other).is_empty());
+    assert!(store.trajectory_tail(other).is_empty());
     // reset_trajectory frees the mirror without touching the backend log.
     store.reset_trajectory(s);
-    assert!(store.trajectory_snapshot(s).is_empty());
+    assert!(store.trajectory_tail(s).is_empty());
     assert_eq!(
         store.replay(s).await.unwrap().len(),
         3,
@@ -707,7 +708,7 @@ fn chained_source(session: SessionId, kinds: Vec<SessionEvent>) -> Vec<SessionLo
             event: kind,
         };
         let bytes = serde_json::to_vec(&ev).unwrap();
-        prev = Some(SessionStore::hash_line_bytes(&bytes));
+        prev = Some(chain::hash_line_bytes(&bytes));
         out.push(ev);
     }
     out
@@ -738,7 +739,7 @@ async fn test_seed_drops_text_delta() {
         "durable UserInput + AssistantMessage"
     );
     assert_eq!(report.deltas_dropped, 1, "the streaming delta is dropped");
-    assert_eq!(report.source_chain, SourceChain::Verified);
+    assert_eq!(report.source_chain, ChainVerdict::Verified);
     let replayed = dest.replay(dest_session).await.expect("replay");
     assert_eq!(replayed.len(), 2, "durable log carries no delta");
     assert!(
@@ -752,7 +753,7 @@ async fn test_seed_drops_text_delta() {
     let last_bytes = serde_json::to_vec(replayed.last().unwrap()).unwrap();
     assert_eq!(
         report.head_hash,
-        Some(SessionStore::hash_line_bytes(&last_bytes)),
+        Some(chain::hash_line_bytes(&last_bytes)),
         "head_hash matches the rebuilt durable chain tail"
     );
 }
@@ -781,7 +782,7 @@ async fn test_seed_unverified_source_rebuilds() {
     assert!(
         matches!(
             report.source_chain,
-            SourceChain::Unverified { at_index: 1, .. }
+            ChainVerdict::Unverified { at_index: 1, .. }
         ),
         "source chain is unverified at the tampered index"
     );
@@ -794,33 +795,10 @@ async fn test_seed_unverified_source_rebuilds() {
         "durable chain rebuilt despite unverified source"
     );
     assert_eq!(
-        verify_source_chain_inline(&replayed),
-        SourceChain::Verified,
+        chain::verify_source(&replayed),
+        ChainVerdict::Verified,
         "rebuilt durable chain is internally verified"
     );
-}
-
-fn verify_source_chain_inline(events: &[SessionLogEntry]) -> SourceChain {
-    // Same logic as SessionStore::verify_source_chain, exercised here on
-    // the rebuilt durable chain to assert internal consistency.
-    let mut prev: Option<PrevHash> = None;
-    for (i, ev) in events.iter().enumerate() {
-        let Ok(bytes) = serde_json::to_vec(ev) else {
-            return SourceChain::Unverified {
-                at_index: i,
-                reason: "serialize failed".into(),
-            };
-        };
-        let h = SessionStore::hash_line_bytes(&bytes);
-        if ev.prev_hash != prev {
-            return SourceChain::Unverified {
-                at_index: i,
-                reason: "prev_hash does not chain".into(),
-            };
-        }
-        prev = Some(h);
-    }
-    SourceChain::Verified
 }
 
 /// An empty source (an export with no trajectory events) seeds zero durable
@@ -841,7 +819,7 @@ async fn test_seed_empty_source_fresh() {
     assert_eq!(report.deltas_dropped, 0);
     assert_eq!(
         report.source_chain,
-        SourceChain::Verified,
+        ChainVerdict::Verified,
         "an empty chain is trivially verified"
     );
     let replayed = dest.replay(dest_session).await.expect("replay");
@@ -993,8 +971,8 @@ async fn test_prev_hash_reads_raw() {
         },
     )
     .await;
-    store.last_hashes.lock().unwrap().clear();
-    let cold = store.compute_prev_hash(sid).await.unwrap();
+    store.chain.forget(sid);
+    let cold = store.chain.link(store.backend(), sid).await.unwrap();
     let rr = store
         .backend()
         .read_lines_reverse(sid, u64::MAX, 1_048_576)
@@ -1002,12 +980,12 @@ async fn test_prev_hash_reads_raw() {
     let last_line = rr.lines.first().expect("last line").1.clone();
     assert_eq!(
         cold,
-        Some(SessionStore::hash_line_bytes(last_line.as_bytes())),
+        Some(chain::hash_line_bytes(last_line.as_bytes())),
         "cold path must hash the raw last disk line bytes",
     );
     assert_eq!(
         cold,
-        Some(SessionStore::hash_event(&e2).unwrap()),
+        Some(chain::hash_event(&e2).unwrap()),
         "within one binary, raw line bytes match re-serialization",
     );
     remove_dir_all(&root).ok();
@@ -1042,15 +1020,15 @@ async fn test_prev_hash_survives_drift() {
     let drifted_line = format!("{},\"zz_future_drift\":0}}", &orig_line[..brace]);
     let log_path = root.join(sid.to_string()).join("log.jsonl");
     write(&log_path, format!("{drifted_line}\n")).unwrap();
-    store.last_hashes.lock().unwrap().clear();
-    let cold = store.compute_prev_hash(sid).await.unwrap();
+    store.chain.forget(sid);
+    let cold = store.chain.link(store.backend(), sid).await.unwrap();
     assert_eq!(
         cold,
-        Some(SessionStore::hash_line_bytes(drifted_line.as_bytes())),
+        Some(chain::hash_line_bytes(drifted_line.as_bytes())),
         "cold path must hash the raw line bytes (stable across schema drift)",
     );
     let reparsed = store.replay(sid).await.unwrap();
-    let drifted_hash = SessionStore::hash_event(&reparsed[0]).unwrap();
+    let drifted_hash = chain::hash_event(&reparsed[0]).unwrap();
     assert_ne!(
         cold,
         Some(drifted_hash),
@@ -1089,21 +1067,21 @@ async fn test_wide_last_line_hash() {
     let log_path = root.join(sid.to_string()).join("log.jsonl");
     let raw = read_to_string(&log_path).unwrap();
     let last_line = raw.lines().last().expect("the log holds lines").to_string();
-    store.last_hashes.lock().unwrap().clear();
-    let cold = store.compute_prev_hash(sid).await.unwrap();
+    store.chain.forget(sid);
+    let cold = store.chain.link(store.backend(), sid).await.unwrap();
     assert_eq!(
         cold,
-        Some(SessionStore::hash_line_bytes(last_line.as_bytes())),
+        Some(chain::hash_line_bytes(last_line.as_bytes())),
         "cold path must hash the line the log ends with",
     );
     assert_eq!(
         cold,
-        Some(SessionStore::hash_event(&wide).unwrap()),
+        Some(chain::hash_event(&wide).unwrap()),
         "the hash still matches the event that was appended",
     );
     assert_ne!(
         cold,
-        Some(SessionStore::hash_line_bytes(first_line_bytes(&raw))),
+        Some(chain::hash_line_bytes(first_line_bytes(&raw))),
         "cold path must not fall back to the first line of the log",
     );
     remove_dir_all(&root).ok();
@@ -1144,16 +1122,16 @@ async fn test_wide_over_budget_hash() {
     .await;
     let log_path = root.join(sid.to_string()).join("log.jsonl");
     let raw = read_to_string(&log_path).unwrap();
-    store.last_hashes.lock().unwrap().clear();
-    let cold = store.compute_prev_hash(sid).await.unwrap();
+    store.chain.forget(sid);
+    let cold = store.chain.link(store.backend(), sid).await.unwrap();
     assert_eq!(
         cold,
-        Some(SessionStore::hash_event(&wide).unwrap()),
+        Some(chain::hash_event(&wide).unwrap()),
         "the cold path must link to the line the log ends with",
     );
     assert_ne!(
         cold,
-        Some(SessionStore::hash_line_bytes(first_line_bytes(&raw))),
+        Some(chain::hash_line_bytes(first_line_bytes(&raw))),
         "cold path must not fall back to the line before the last",
     );
     remove_dir_all(&root).ok();
@@ -1202,16 +1180,16 @@ async fn test_torn_tail_hash() {
     let f = OpenOptions::new().write(true).open(&log_path).unwrap();
     f.set_len(size - 5).unwrap();
     let raw = read_to_string(&log_path).unwrap();
-    store.last_hashes.lock().unwrap().clear();
-    let cold = store.compute_prev_hash(sid).await.unwrap();
+    store.chain.forget(sid);
+    let cold = store.chain.link(store.backend(), sid).await.unwrap();
     assert_eq!(
         cold,
-        Some(SessionStore::hash_line_bytes(first_line_bytes(&raw))),
+        Some(chain::hash_line_bytes(first_line_bytes(&raw))),
         "the last whole line the log holds is its first",
     );
     // The append after the tear still lands: the cold path reads the line the
     // log holds rather than failing on the bytes it does not.
-    store.last_hashes.lock().unwrap().clear();
+    store.chain.forget(sid);
     store
         .append(evt(
             sid,
@@ -1226,3 +1204,4 @@ async fn test_torn_tail_hash() {
 }
 
 mod disk_verify;
+mod mirror_window;

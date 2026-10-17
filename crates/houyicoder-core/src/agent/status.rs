@@ -31,6 +31,8 @@ use crate::observability::evolution::RedundantCall;
 use crate::snapshot::SnapshotStore;
 use crate::snapshot::UndoOutcome;
 use crate::snapshot::UndoStack;
+use houyicoder_api::session::TrajectoryPages;
+use houyicoder_api::session::TrajectoryPosition;
 use houyicoder_api::session::recorded_turn_usage;
 use houyicoder_api::skill::SkillSnapshot;
 use houyicoder_context::{SessionEvent, SessionId, SessionLogEntry};
@@ -247,21 +249,40 @@ impl Runner {
     /// the session's cumulative and its per-model rows side by side: seeding
     /// one and not the other would leave two figures of one panel covering
     /// different spans.
+    ///
+    /// The turns come from the session's durable history page by page, not
+    /// from the mirror's tail: the mirror holds the newest rows, so a tally
+    /// read from it would cover the part of the session memory happens to hold
+    /// while the pane reports it as the session's own.
     pub fn seed_usage_from_log(&self, session: SessionId) {
-        let events = self.trajectory_snapshot(session);
+        let store = self.store.clone();
+        let pages = TrajectoryPages::new(store.as_ref(), session, TrajectoryPosition::start());
+        for page in pages {
+            let page = match page {
+                Ok(page) => page,
+                Err(e) => {
+                    tracing::warn!("usage seed read of session {session} stopped: {e}");
+                    break;
+                }
+            };
+            self.seed_usage_page(&page.events);
+        }
+    }
+
+    /// Fold one page of a session's log into both tallies. Each accumulator is
+    /// read under its own lock scope, never nested inside the other: the two
+    /// are independent, and a reader of either holds only its own.
+    fn seed_usage_page(&self, events: &[SessionLogEntry]) {
         match self.usage.lock() {
-            Ok(mut g) => g.seed_from_events(&events),
+            Ok(mut g) => g.seed_from_events(events),
             // A poisoned lock means a panic in a writer; the tally stays at
             // zero, which is what a session with no readable turns reports.
             Err(_) => {
                 tracing::warn!("usage accumulator lock poisoned; session totals start at zero")
             }
         }
-        // A separate lock scope, never nested inside the one above: the two
-        // accumulators are independent and a reader of either holds only its
-        // own.
         match self.observability.lock() {
-            Ok(mut g) => g.seed_usage_from_events(&events),
+            Ok(mut g) => g.seed_usage_from_events(events),
             Err(_) => {
                 tracing::warn!("observability log lock poisoned; per-model totals start at zero")
             }
@@ -370,14 +391,6 @@ impl Runner {
                 .lock()
                 .unwrap_or_else(|e| e.into_inner()),
         )
-    }
-
-    /// Read the in-memory trajectory buffer for a session (sync): the
-    /// finalized events in append order, each with prev_hash set. The
-    /// /trajectory command renders this. Empty for a session with no
-    /// events appended this process.
-    pub fn trajectory_snapshot(&self, session: SessionId) -> Vec<SessionLogEntry> {
-        self.store.trajectory_snapshot(session)
     }
 
     /// Clear the session's in-memory trajectory mirror and record the clear as

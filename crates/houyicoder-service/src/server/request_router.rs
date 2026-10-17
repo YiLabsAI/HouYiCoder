@@ -8,7 +8,11 @@ use houyicoder_protocol::frontend::{FrontendRequest, SessionId};
 use super::model_apply::ModelSelection;
 use super::{Server, frame_carrier::FrameCarrier};
 use crate::protocol_adapter as pa;
+use houyicoder_api::session::TrajectoryPages;
+use houyicoder_api::session::TrajectoryPosition;
+use houyicoder_context::ContextError;
 use houyicoder_context::SessionEvent;
+use houyicoder_context::SessionLogEntry;
 use houyicoder_core::snapshot::UndoOutcome;
 use houyicoder_protocol::frontend::model::SpeedMode;
 use houyicoder_protocol::frontend::run::ContentBlock;
@@ -26,6 +30,22 @@ impl Server {
     /// the match is on the display form.
     pub(super) fn session_matches(&self, wire_id: &SessionId) -> bool {
         wire_id.0 == self.session.to_string()
+    }
+
+    /// Every durable record of this session's current epoch, in append order.
+    ///
+    /// The records are read page by page and released into the result, so a
+    /// reader that has to hold the whole history pays for it once rather than
+    /// keeping a second copy in the mirror. Callers that can consume the
+    /// history incrementally read the pages directly.
+    fn durable_history(&self) -> Result<Vec<SessionLogEntry>, ContextError> {
+        let store = self.runner.store();
+        let pages = TrajectoryPages::new(store.as_ref(), self.session, TrajectoryPosition::start());
+        let mut events = Vec::new();
+        for page in pages {
+            events.extend(page?.events);
+        }
+        Ok(events)
     }
 
     pub(super) async fn dispatch(
@@ -301,7 +321,22 @@ impl Server {
         io: &mut FrameCarrier,
         req_id: RequestId,
     ) -> Result<(), ProtocolError> {
-        let events = self.runner.store().trajectory_snapshot(self.session);
+        let events = match self.durable_history() {
+            Ok(events) => events,
+            Err(e) => {
+                return self
+                    .send_response(
+                        io,
+                        req_id,
+                        ResponsePayload::Error(ProtocolError::new(
+                            ErrorCategory::Unavailable,
+                            format!("trajectory read failed: {e}"),
+                            false,
+                        )),
+                    )
+                    .await;
+            }
+        };
         let entries = pa::build_trajectory_entries(&events);
         let redundant = map_redundant_entries(&self.runner.redundancy_snapshot());
         let unknown_count = events

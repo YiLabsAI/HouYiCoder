@@ -19,7 +19,7 @@ use houyicoder_core::agent::multi_agent::concurrency_gate::AcquireResult;
 use houyicoder_core::agent::multi_agent::registry::{IsolationMode, ResolveCtx};
 use houyicoder_core::agent::multi_agent::spawn::TriggerSource;
 use houyicoder_core::agent::multi_agent::status_publisher::ChildStatusPublisher;
-use houyicoder_core::agent::multi_agent::{SpawnRequest, aggregate_subagent_usage, spawn_child};
+use houyicoder_core::agent::multi_agent::{SpawnRequest, spawn_child};
 use houyicoder_core::agent::worktree_controller::WorktreeController;
 use houyicoder_protocol::llm::Usage;
 use tokio::sync::OwnedSemaphorePermit;
@@ -85,21 +85,21 @@ pub(super) async fn finalize_child(
     // receiver by now (the publish is synchronous), so a failure arm below
     // knows whether it owes one.
     let run_published = terminal.as_mut().is_some_and(|rx| rx.try_recv().is_ok());
-    let child_log = store.trajectory_snapshot(child_sid);
+    let child_tail = store.trajectory_tail(child_sid);
     let (status, summary, payload) = match result {
         Ok(Ok(r)) => {
-            let (status, summary) = super::terminal_summary(r, &child_log);
+            let (status, summary) = super::terminal_summary(r, &child_tail);
             (status, summary, None)
         }
         Ok(Err(e)) => {
-            let summary = failure_summary(&format!("run failed: {e}"), &child_log);
+            let summary = failure_summary(&format!("run failed: {e}"), &child_tail);
             report_failed_terminal(bus.as_ref(), &child, &summary, run_published);
             ("failed".to_string(), summary, None)
         }
         Err(payload) => {
             let summary = failure_summary(
                 &format!("run panicked: {}", panic_message(payload.as_ref())),
-                &child_log,
+                &child_tail,
             );
             let reason = panic_message(payload.as_ref());
             tracing::error!("child {child_str} run panicked: {reason}");
@@ -110,7 +110,7 @@ pub(super) async fn finalize_child(
     // The usage the parent records is read from durable state, not from the
     // run's own result, so a failed, cancelled, or background child reports
     // what it really spent instead of zeroes. See child_subtree_usage.
-    let usage = child_subtree_usage(&handle.runner, &child_log);
+    let usage = child_subtree_usage(&handle.runner, child_sid);
     if let (Some(cw), Some(ctrl)) = (handle.worktree, worktree_controller.as_ref()) {
         ctrl.cleanup_child(cw).await;
     }
@@ -121,7 +121,7 @@ pub(super) async fn finalize_child(
         &child_str,
         &subagent_type,
         &status,
-        super::extract_last_assistant(&child_log),
+        super::extract_last_assistant(&child_tail),
     )
     .await;
     if super::record_subagent_return(
@@ -152,26 +152,30 @@ pub(super) async fn finalize_child(
 ///
 /// A child's run result carries only its direct provider usage, so a
 /// grandchild's cost would be lost without the second term. The first term
-/// reads the child runner's accumulator, the second sums the returns the
-/// child's own log holds, and each of those returns was itself built this way,
-/// so the total covers the whole subtree. Reading durable state also means a
-/// failed, cancelled, or background child reports what it really spent rather
-/// than zeroes.
+/// reads the child runner's accumulator, the second reads the returns the
+/// child's own session folded as they were appended, and each of those returns
+/// was itself built this way, so the total covers the whole subtree. Reading
+/// durable state also means a failed, cancelled, or background child reports
+/// what it really spent rather than zeroes.
 ///
 /// The subtree is read at the moment the child ends. A grandchild still
-/// running then is not in the child's log yet, and its return lands after this
-/// boundary is written, so its cost reaches no total. A child that finishes
-/// before its own children is a gap the delegation model accepts.
-pub(super) fn child_subtree_usage(runner: &Runner, child_log: &[SessionLogEntry]) -> Usage {
+/// running then has not returned yet, and its return lands after this boundary
+/// is written, so its cost reaches no total. A child that finishes before its
+/// own children is a gap the delegation model accepts.
+pub(super) fn child_subtree_usage(runner: &Runner, child: SessionId) -> Usage {
     let own = runner.status_snapshot().cumulative_usage;
-    let descendants = aggregate_subagent_usage(child_log);
-    own.saturating_add(&descendants.to_usage())
+    // The returns come from the store's folded summary rather than from the
+    // child's mirrored rows: the mirror holds the newest rows and drops the
+    // oldest, so a child whose history outgrew it would report the returns it
+    // still held as the whole subtree's cost.
+    let descendants = runner.store().subagent_usage(child).to_usage();
+    own.saturating_add(&descendants)
 }
 
 /// The summary a failed child reports: the reason, plus whatever partial
 /// output its transcript holds, so an interrupted run is not silently empty.
-fn failure_summary(reason: &str, child_log: &[SessionLogEntry]) -> String {
-    match super::extract_last_assistant(child_log) {
+fn failure_summary(reason: &str, child_tail: &[SessionLogEntry]) -> String {
+    match super::extract_last_assistant(child_tail) {
         Some(p) => format!("{reason}\n\nPartial output:\n{p}"),
         None => reason.to_string(),
     }

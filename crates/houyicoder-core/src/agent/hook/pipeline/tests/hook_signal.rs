@@ -75,7 +75,7 @@ async fn test_append_signals_cover_verdicts() {
             &outcomes,
         )
         .await;
-    let snap = runner.store().trajectory_snapshot(session);
+    let snap = runner.store().trajectory_tail(session);
     let signals: Vec<&SessionLogEntry> = snap
         .iter()
         .filter(|ev| matches!(ev.event, SessionEvent::HookSignal { .. }))

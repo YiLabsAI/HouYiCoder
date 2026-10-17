@@ -269,6 +269,113 @@ pub struct TrajectoryHead {
     pub summary: TrajectorySummary,
 }
 
+/// Where a paged trajectory read resumes.
+///
+/// The index counts durable records on the session's current epoch: 0 is the
+/// record the newest clear boundary begins at. It is the record's ordinal in
+/// the durable log, which is what makes it a position a reader can name once
+/// and return to after a restart.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TrajectoryPosition {
+    /// Absolute index of the next record to read.
+    pub index: usize,
+    /// The byte position the index begins at in the durable log, when this
+    /// position came from a log read. None while the resident window answers.
+    pub byte_offset: Option<u64>,
+}
+
+impl TrajectoryPosition {
+    /// The position a read of the whole history starts at.
+    pub fn start() -> Self {
+        Self::default()
+    }
+}
+
+/// The records one page read asks for. Each page is dropped once the reader
+/// has seen it, so this is the memory a walk of the whole history costs.
+const PAGE_EVENTS: usize = 512;
+
+/// One bounded page of a session's durable history.
+#[derive(Debug, Default, Clone)]
+pub struct TrajectoryPage {
+    /// Durable records in append order, at most the limit the reader asked
+    /// for. Streamed text deltas are absent: the log carries none, so a read
+    /// that serves part of its answer from the log cannot reproduce them.
+    pub events: Vec<SessionLogEntry>,
+    /// Where the next page continues.
+    pub next: TrajectoryPosition,
+    /// Bytes this page passed over because no complete record fit the log's
+    /// read window. A record wider than that window cannot be parsed, so the
+    /// reader reports the span instead of presenting a gap as a neighbour.
+    /// Zero when the page read every record it covered.
+    pub skipped_bytes: u64,
+}
+
+/// A session's durable history as successive bounded pages, read from an
+/// absolute position to the end of what the store can serve.
+///
+/// A reader that must see every record reads these pages rather than the
+/// resident tail: the tail holds only the newest rows, so a reader that took
+/// it for the history would answer with the part memory happens to hold and
+/// would report a session whose front was dropped as a whole one. Each page is
+/// released as the next is read, so reading a history this way costs one page
+/// of memory however long the history is.
+///
+/// The read ends at the first page without records, which is how a store
+/// reports a history with nothing left to serve.
+pub struct TrajectoryPages<'a> {
+    log: &'a dyn SessionLog,
+    session: SessionId,
+    position: TrajectoryPosition,
+    done: bool,
+}
+
+impl<'a> TrajectoryPages<'a> {
+    /// The pages of a session's durable history, from a position to its end.
+    pub fn new(log: &'a dyn SessionLog, session: SessionId, from: TrajectoryPosition) -> Self {
+        Self {
+            log,
+            session,
+            position: from,
+            done: false,
+        }
+    }
+}
+
+impl Iterator for TrajectoryPages<'_> {
+    type Item = Result<TrajectoryPage, ContextError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.done {
+            return None;
+        }
+        let page = match self
+            .log
+            .trajectory_page(self.session, self.position, PAGE_EVENTS)
+        {
+            Ok(page) => page,
+            Err(e) => {
+                // A failed read ends the walk: retrying the same position
+                // would report the same failure until something else changes.
+                self.done = true;
+                return Some(Err(e));
+            }
+        };
+        if page.events.is_empty() {
+            self.done = true;
+            return None;
+        }
+        // A page that did not move the position describes records the store
+        // cannot serve past, so the read stops after reporting it once.
+        let moved = page.next != self.position;
+        self.position = page.next;
+        if !moved {
+            self.done = true;
+        }
+        Some(Ok(page))
+    }
+}
+
 /// The id of the latest durable user input in a finalized event slice, or
 /// None when the slice holds none. Only a fresh prompt counts: a mid-turn
 /// input continues the turn it arrived in, so it does not move the frontier.
@@ -299,24 +406,49 @@ pub trait SessionLog: Send + Sync {
     /// readable through replay.
     fn current_view(&self, session: SessionId) -> PFut<'_, Result<ContextSnapshot, ContextError>>;
 
-    /// The finalized events in append order (sync, in-memory mirror). Empty
-    /// until events are appended this process for the session.
-    fn trajectory_snapshot(&self, session: SessionId) -> Vec<SessionLogEntry>;
+    /// The newest mirrored rows in append order (sync, in-memory mirror),
+    /// streamed text deltas included. Empty until events are appended this
+    /// process or the mirror is restored.
+    ///
+    /// This is a tail, not a promise about the whole history: a store whose
+    /// backend keeps a byte-addressable log holds only its newest rows in
+    /// memory, and a reader that must see every record pages with
+    /// trajectory_page instead. A store whose backend keeps no log holds the
+    /// whole history here, because there is nowhere else to read it.
+    fn trajectory_tail(&self, session: SessionId) -> Vec<SessionLogEntry>;
+
+    /// Read one bounded page of the session's durable history from an absolute
+    /// position, so a reader can walk a history larger than memory.
+    ///
+    /// The resident window answers a position it covers; below that the
+    /// backend's log does. A below-window position without a byte offset is
+    /// resolved by reading from where the epoch begins, which costs one parse
+    /// per record skipped -- prefer carrying the offset a page returned.
+    ///
+    /// A position at or past the newest record reads as an empty page whose
+    /// next position is the same, which is how a walk ends.
+    fn trajectory_page(
+        &self,
+        session: SessionId,
+        from: TrajectoryPosition,
+        limit: usize,
+    ) -> Result<TrajectoryPage, ContextError>;
 
     /// The id of the latest mirrored event, or None when the session has no
-    /// mirror yet. Defaults to reading the snapshot; a store with an indexed
-    /// mirror overrides it to answer without cloning the log.
+    /// mirror yet. Defaults to reading the tail; a store that tracks the
+    /// latest id as it appends overrides it to answer without cloning rows.
     fn last_trajectory_id(&self, session: SessionId) -> Option<EventId> {
-        self.trajectory_snapshot(session).pop().map(|e| e.id)
+        self.trajectory_tail(session).pop().map(|e| e.id)
     }
 
     /// The id of the latest durable user input for a session, or None when
     /// the session holds none yet. A background pass compares this against its
     /// own trigger to tell a change of the turn that just completed from one
-    /// the user has already moved past. Defaults to scanning the snapshot; a
-    /// store that mirrors the events in memory scans them in place.
+    /// the user has already moved past. Defaults to scanning the tail; a store
+    /// whose mirror is a tail overrides it, because the input it looks for may
+    /// have been trimmed out of the window.
     fn last_user_input_id(&self, session: SessionId) -> Option<EventId> {
-        last_user_input_id(&self.trajectory_snapshot(session))
+        last_user_input_id(&self.trajectory_tail(session))
     }
 
     /// What the session's delegated children spent, read from the summary the
@@ -324,15 +456,6 @@ pub trait SessionLog: Send + Sync {
     /// constant time; the default reads it from the head.
     fn subagent_usage(&self, session: SessionId) -> SubagentUsage {
         self.trajectory_head(session).summary.usage.subagent
-    }
-
-    /// Clone the finalized suffix beginning at start from the in-memory mirror.
-    /// Implementations should avoid cloning the already-consumed prefix.
-    fn trajectory_since(&self, session: SessionId, start: usize) -> Vec<SessionLogEntry> {
-        self.trajectory_snapshot(session)
-            .into_iter()
-            .skip(start)
-            .collect()
     }
 
     /// The session's trajectory revision and its whole-session summary, read

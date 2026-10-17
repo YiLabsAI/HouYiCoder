@@ -500,7 +500,7 @@ async fn test_permission_allow_completes() {
     let resp: PromptResponse = serde_json::from_value(result).expect("typed prompt response");
     assert_eq!(resp.stop_reason, StopReason::EndTurn);
 
-    let events = inspector.store().trajectory_snapshot(session);
+    let events = inspector.store().trajectory_tail(session);
     assert!(
         events.iter().any(|e| matches!(
             e.event,

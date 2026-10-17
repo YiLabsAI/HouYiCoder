@@ -218,7 +218,7 @@ fn test_release_joins_children_first() {
         }
 
         // The SubagentReturn event is not committed yet while the latch holds.
-        let events_during = runner.store().trajectory_snapshot(parent_sid);
+        let events_during = runner.store().trajectory_tail(parent_sid);
         assert!(
             !events_during
                 .iter()
@@ -234,7 +234,7 @@ fn test_release_joins_children_first() {
         let _reacquire =
             SessionLock::acquire(&sid_str, &root).expect("lock released only after child finished");
 
-        let events_after = runner.store().trajectory_snapshot(parent_sid);
+        let events_after = runner.store().trajectory_tail(parent_sid);
         assert!(
             events_after
                 .iter()

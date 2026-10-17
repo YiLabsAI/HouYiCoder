@@ -125,7 +125,7 @@ async fn test_fire_dispatches_reserved_events() {
     assert!(recorded.contains(&HookEvent::WorktreeCreate));
     assert!(recorded.contains(&HookEvent::WorktreeRemove));
 
-    let snap = runner.store().trajectory_snapshot(session);
+    let snap = runner.store().trajectory_tail(session);
     let signals: Vec<&SessionLogEntry> = snap
         .iter()
         .filter(|ev| matches!(ev.event, SessionEvent::HookSignal { .. }))
@@ -173,7 +173,7 @@ async fn test_hookfire_ignores_nonservice() {
             },
         )
         .await;
-    let snap = runner.store().trajectory_snapshot(session);
+    let snap = runner.store().trajectory_tail(session);
     let signals = snap
         .iter()
         .filter(|ev| matches!(ev.event, SessionEvent::HookSignal { .. }))

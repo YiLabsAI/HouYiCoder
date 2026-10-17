@@ -79,7 +79,7 @@ async fn test_spawn_creates_boundary() {
     // child_session_id matches the handle's session id. Resume and orphan
     // reconciliation pair spawn with return on this id; a mismatched or
     // missing id breaks the durable chain.
-    let parent_events = store.trajectory_snapshot(parent_sid);
+    let parent_events = store.trajectory_tail(parent_sid);
     let spawn = parent_events
         .iter()
         .find(|e| matches!(e.event, SessionEvent::SubagentSpawn { .. }))
@@ -114,7 +114,7 @@ async fn test_delegation_opens_child_log() {
     let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("ok"));
     let req = req_at_depth(parent_sid, store.clone(), provider, 0);
     let handle = spawn_child(req).await.expect("spawn should succeed");
-    let events = store.trajectory_snapshot(handle.session);
+    let events = store.trajectory_tail(handle.session);
     match &events.first().expect("child log is not empty").event {
         SessionEvent::ChildDelegated {
             parent_session_id,
@@ -138,7 +138,7 @@ async fn test_spawn_records_system_trigger() {
         hook: "review_gate".into(),
     };
     let handle = spawn_child(req).await.expect("spawn should succeed");
-    let events = store.trajectory_snapshot(parent_sid);
+    let events = store.trajectory_tail(parent_sid);
     let spawn = events
         .iter()
         .find(|e| matches!(e.event, SessionEvent::SubagentSpawn { .. }))
@@ -175,7 +175,7 @@ async fn test_spawn_rejects_depth_cap() {
         Ok(_) => panic!("spawn at depth cap must reject, not succeed"),
         Err(e) => assert_eq!(e, SpawnError::SpawnRecursive),
     }
-    let parent_events = store.trajectory_snapshot(parent_sid);
+    let parent_events = store.trajectory_tail(parent_sid);
     assert!(
         parent_events.is_empty(),
         "a rejected spawn must write no boundary: {:?}",
@@ -411,7 +411,7 @@ async fn test_inbox_drained_at_boundary() {
         .runner
         .run(handle.session, "do the task".to_string())
         .await;
-    let events = store.trajectory_snapshot(handle.session);
+    let events = store.trajectory_tail(handle.session);
     assert!(
         events.iter().any(|e| matches!(&e.event,
                 SessionEvent::MidTurnInput { text, .. } if text == "steer here")),

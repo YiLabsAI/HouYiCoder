@@ -4,6 +4,8 @@
 
 use super::*;
 use houyicoder_api::session::TrajectoryHead;
+use houyicoder_api::session::TrajectoryPage;
+use houyicoder_api::session::TrajectoryPosition;
 use houyicoder_context::CheckpointId;
 use houyicoder_context::{
     CheckpointManifest, ContextBackend, ContextError, ContextSnapshot, EventId, SessionId,
@@ -59,8 +61,33 @@ impl SessionLog for InMemoryLog {
             })
         })
     }
-    fn trajectory_snapshot(&self, _session: SessionId) -> Vec<SessionLogEntry> {
+    fn trajectory_tail(&self, _session: SessionId) -> Vec<SessionLogEntry> {
         self.events.lock().unwrap().clone()
+    }
+    /// This double keeps a session's records in memory and logs no streamed
+    /// rows, so every record is durable and an ordinal is an index into them.
+    fn trajectory_page(
+        &self,
+        _session: SessionId,
+        from: TrajectoryPosition,
+        limit: usize,
+    ) -> Result<TrajectoryPage, ContextError> {
+        let events = self.events.lock().unwrap();
+        let events: Vec<SessionLogEntry> = events
+            .iter()
+            .skip(from.index)
+            .take(limit)
+            .cloned()
+            .collect();
+        let next = from.index + events.len();
+        Ok(TrajectoryPage {
+            events,
+            next: TrajectoryPosition {
+                index: next,
+                byte_offset: None,
+            },
+            skipped_bytes: 0,
+        })
     }
     fn trajectory_head(&self, session: SessionId) -> TrajectoryHead {
         // This double keeps no summary; the store that appends maintains one.

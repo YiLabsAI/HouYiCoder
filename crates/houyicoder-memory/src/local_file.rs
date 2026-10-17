@@ -31,8 +31,8 @@ use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use houyicoder_async::PFut;
 use houyicoder_context::{
     BlockHash, CheckpointId, CheckpointManifest, ContextBackend, ContextError, EventId,
-    LenientRead, LogIndexEntry, LogIndexReader, LogRangeRead, ReverseRead, SAMPLE_INTERVAL_BYTES,
-    SessionId, SessionLogEntry,
+    LenientRead, LogIndexEntry, LogIndexReader, LogRangeRead, MAX_WINDOW_BYTES, ReverseRead,
+    SAMPLE_INTERVAL_BYTES, SessionId, SessionLogEntry,
     session_class::{INDEX_FILE, LOG_FILE, session_dir},
 };
 
@@ -522,7 +522,7 @@ impl ContextBackend for LocalFileBackend {
                 ..Default::default()
             };
         }
-        let mut buf = vec![0u8; max_bytes.min(1 << 20) as usize]; // cap the read at 1MB
+        let mut buf = vec![0u8; max_bytes.min(MAX_WINDOW_BYTES) as usize];
         let n = f.read(&mut buf).unwrap_or(0);
         buf.truncate(n);
         // Skip a partial first line when byte_offset lands mid-line (the byte
@@ -562,8 +562,12 @@ impl ContextBackend for LocalFileBackend {
                 }
             }
         }
-        // Split the complete lines (start..n), tracking byte offsets.
+        // Split the complete lines (start..n), tracking byte offsets. One
+        // terminator per returned line, plus the one the mid-line skip passed
+        // over: together they are every terminator in the span the read
+        // consumed, which is what counts the records off the bytes alone.
         let mut lines = Vec::new();
+        let mut line_breaks = if start > 0 { 1 } else { 0 };
         let mut cur = start;
         let mut line_start_abs = byte_offset + start as u64;
         while cur < buf.len() {
@@ -574,6 +578,7 @@ impl ContextBackend for LocalFileBackend {
             };
             let text = String::from_utf8_lossy(&buf[cur..line_end]).into_owned();
             lines.push((line_start_abs, text));
+            line_breaks += 1;
             line_start_abs += (line_end - cur + 1) as u64; // +1 for the \n
             cur = line_end + 1;
         }
@@ -586,6 +591,7 @@ impl ContextBackend for LocalFileBackend {
             lines,
             next_offset,
             bytes_total,
+            line_breaks,
         }
     }
 

@@ -325,7 +325,8 @@ struct UsageRow {
 /// The usage rows one session recorded, in order.
 fn rows(runner: &Runner, session: SessionId) -> Vec<UsageRow> {
     runner
-        .trajectory_snapshot(session)
+        .store()
+        .trajectory_tail(session)
         .into_iter()
         .filter_map(|entry| match entry.event {
             SessionEvent::TurnUsage {

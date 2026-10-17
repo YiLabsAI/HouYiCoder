@@ -86,7 +86,7 @@ async fn test_model_step_timing_appended() {
         .await
         .expect("run completes");
 
-    let events = runner.store().trajectory_snapshot(session);
+    let events = runner.store().trajectory_tail(session);
     let timings = timing_events(&events);
     assert_eq!(timings.len(), 1, "one model call appends one timing event");
     let first = &timings[0];
@@ -128,7 +128,7 @@ async fn test_timing_per_model_call() {
     let session = SessionId::new();
     drop(runner.run(session, "hi".into()).await);
 
-    let events = runner.store().trajectory_snapshot(session);
+    let events = runner.store().trajectory_tail(session);
     let timings = timing_events(&events);
     assert!(
         timings.len() >= 2,
@@ -160,7 +160,7 @@ async fn test_clear_appends_marker() {
 
     runner.reset_trajectory(session).await;
 
-    let events = runner.store().trajectory_snapshot(session);
+    let events = runner.store().trajectory_tail(session);
     let cleared: Vec<u32> = events
         .iter()
         .filter_map(|e| match e.event {
@@ -258,7 +258,7 @@ async fn test_spans_reach_the_event() {
         .await
         .expect("run completes");
 
-    let timings = timing_events(&runner.store().trajectory_snapshot(session));
+    let timings = timing_events(&runner.store().trajectory_tail(session));
     assert_eq!(timings.len(), 1, "one model call appends one timing event");
     let first = &timings[0];
     assert!(
@@ -449,7 +449,7 @@ async fn test_no_reasoning_stays_unknown() {
         .await
         .expect("run completes");
 
-    let timings = timing_events(&runner.store().trajectory_snapshot(session));
+    let timings = timing_events(&runner.store().trajectory_tail(session));
     let first = &timings[0];
     assert_eq!(
         first.reasoning_ms, None,

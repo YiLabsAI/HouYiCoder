@@ -256,7 +256,8 @@ fn workspace() -> PathBuf {
 /// that re-called contributes each call rather than their sum alone.
 fn session_calls(runner: &Runner, session: SessionId) -> Vec<Call> {
     runner
-        .trajectory_snapshot(session)
+        .store()
+        .trajectory_tail(session)
         .into_iter()
         .filter_map(|entry| match entry.event {
             SessionEvent::TurnUsage {

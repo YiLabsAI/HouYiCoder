@@ -71,7 +71,7 @@ async fn test_join_children_awaits_completion() {
     // not interrupt it, so the driver would stay parked forever.
     entered.notified().await;
     runtime.join_children().await;
-    let events = store.trajectory_snapshot(parent_sid);
+    let events = store.trajectory_tail(parent_sid);
     assert!(
         events
             .iter()
@@ -126,7 +126,7 @@ async fn test_join_children_survives_panic() {
     // outcome the join awaits rather than a race against abort.
     entered.notified().await;
     runtime.join_children().await;
-    let events = store.trajectory_snapshot(parent_sid);
+    let events = store.trajectory_tail(parent_sid);
     assert!(
         events
             .iter()
@@ -181,7 +181,7 @@ async fn test_shutdown_aborts_slow_hook() {
 
     runtime.join_children().await;
 
-    let events = store.trajectory_snapshot(parent_sid);
+    let events = store.trajectory_tail(parent_sid);
     assert!(
         !events
             .iter()
@@ -224,7 +224,7 @@ async fn test_join_children_survives_poisoned() {
     }));
     assert!(poisoned.is_err(), "the children lock is poisoned");
     runtime.join_children().await;
-    let events = store.trajectory_snapshot(parent_sid);
+    let events = store.trajectory_tail(parent_sid);
     assert!(
         events
             .iter()

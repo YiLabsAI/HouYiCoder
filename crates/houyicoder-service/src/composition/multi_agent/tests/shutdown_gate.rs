@@ -98,7 +98,7 @@ async fn test_shutdown_races_spawn_registration() {
     // may not exist yet, and the stop request has not reached the child.
     runtime.join_children().await;
 
-    let events = store.trajectory_snapshot(parent_sid);
+    let events = store.trajectory_tail(parent_sid);
     let has_return = events
         .iter()
         .any(|e| matches!(e.event, SessionEvent::SubagentReturn { .. }));
@@ -134,7 +134,7 @@ async fn test_shutdown_stops_unstarted_child() {
     // Stop before yielding to the driver: the child has not entered its run.
     runtime.join_children().await;
 
-    let events = store.trajectory_snapshot(parent_sid);
+    let events = store.trajectory_tail(parent_sid);
     assert!(
         events
             .iter()
@@ -175,7 +175,7 @@ async fn test_shutdown_waits_finalize() {
     entered.notified().await;
     runtime.join_children().await;
 
-    let events = store.trajectory_snapshot(parent_sid);
+    let events = store.trajectory_tail(parent_sid);
     assert!(
         events
             .iter()
@@ -395,7 +395,7 @@ async fn test_shutdown_covers_construction() {
     join_task.await.expect("the join resolves");
     drop(spawn_task.await);
 
-    let events = store.trajectory_snapshot(parent_sid);
+    let events = store.trajectory_tail(parent_sid);
     assert!(
         events
             .iter()
@@ -448,7 +448,7 @@ async fn test_caller_cancel_spares_child() {
         "the aborted caller reports cancellation, not a completed spawn: {caller:?}"
     );
 
-    let events = store.trajectory_snapshot(parent_sid);
+    let events = store.trajectory_tail(parent_sid);
     assert!(
         events
             .iter()

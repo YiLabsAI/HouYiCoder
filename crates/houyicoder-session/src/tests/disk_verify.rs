@@ -44,7 +44,7 @@ async fn test_write_path_chain_verifies() {
         ))
         .await
         .expect("append 2");
-    assert_eq!(store.verify_disk_chain(sid), SourceChain::Verified);
+    assert_eq!(store.verify_disk_chain(sid), ChainVerdict::Verified);
     remove_dir_all(&root).ok();
 }
 
@@ -74,12 +74,12 @@ async fn test_tamper_breaks_chain() {
         ))
         .await
         .expect("append 2");
-    assert_eq!(store.verify_disk_chain(sid), SourceChain::Verified);
+    assert_eq!(store.verify_disk_chain(sid), ChainVerdict::Verified);
     let log = root.join(sid.to_string()).join("log.jsonl");
     let body = read_to_string(&log).expect("read");
     write(&log, body.replacen("orig", "TAMPERED", 1)).expect("write");
     match store.verify_disk_chain(sid) {
-        SourceChain::Unverified { at_index, .. } => assert_eq!(at_index, 1),
+        ChainVerdict::Unverified { at_index, .. } => assert_eq!(at_index, 1),
         other => panic!("tamper must break the chain: {other:?}"),
     }
     remove_dir_all(&root).ok();
@@ -101,7 +101,7 @@ async fn test_corrupt_line_unverified() {
     let mut f = OpenOptions::new().append(true).open(&log).unwrap();
     f.write_all(b"not-json\n").unwrap();
     match store.verify_disk_chain(sid) {
-        SourceChain::Unverified { .. } => {}
+        ChainVerdict::Unverified { .. } => {}
         other => panic!("a corrupt line must yield Unverified, got {other:?}"),
     }
     remove_dir_all(&root).ok();
@@ -132,7 +132,7 @@ async fn test_append_after_seed_verifies() {
     );
     let report = store.seed_trajectory(dest_sid, source).await.expect("seed");
     assert_eq!(report.durable_count, 2);
-    assert_eq!(store.verify_disk_chain(dest_sid), SourceChain::Verified);
+    assert_eq!(store.verify_disk_chain(dest_sid), ChainVerdict::Verified);
     // Append a new event after the seed (the resumed conversation).
     store
         .append(ev(
@@ -147,7 +147,7 @@ async fn test_append_after_seed_verifies() {
     // the seeded tail's raw disk bytes.
     assert_eq!(
         store.verify_disk_chain(dest_sid),
-        SourceChain::Verified,
+        ChainVerdict::Verified,
         "chain must stay verified after a post-seed append"
     );
     remove_dir_all(&root).ok();

@@ -101,7 +101,7 @@ async fn test_spawn_child_worktree_isolation() {
     };
     let handle = spawn_child(req).await.expect("spawn");
     assert!(handle.worktree.is_some(), "child carries a worktree guard");
-    let events = store.trajectory_snapshot(parent_sid);
+    let events = store.trajectory_tail(parent_sid);
     let iso = events
         .iter()
         .find_map(|e| match &e.event {
@@ -151,7 +151,7 @@ async fn test_spawn_child_fence_fail() {
         Err(e) => assert_eq!(e, SpawnError::WorktreeFenceNarrowFail),
     }
     assert!(
-        store.trajectory_snapshot(parent_sid).is_empty(),
+        store.trajectory_tail(parent_sid).is_empty(),
         "a rejected spawn writes no boundary"
     );
     remove_dir_all(&repo).ok();

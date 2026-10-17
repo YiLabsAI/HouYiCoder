@@ -699,35 +699,35 @@ pub(super) fn stamp_spawned_by(
 
 /// Map a terminal RunResult to a status label + the summary text the parent
 /// sees. FinalOutput carries the answer; other terminals fall back to the
-/// last assistant text in the child log (the partial result) so a max-turns
-/// or interrupted child is not silently empty.
+/// last assistant text the child's newest rows hold (the partial result) so a
+/// max-turns or interrupted child is not silently empty.
 ///
 /// The child's usage is not read here: the run result carries only its direct
 /// provider calls, so the parent records the subtree total instead, read from
 /// durable state after the run. See child_subtree_usage.
 fn terminal_summary(
     r: RunResult,
-    child_log: &[houyicoder_context::SessionLogEntry],
+    child_tail: &[houyicoder_context::SessionLogEntry],
 ) -> (String, String) {
     match r.outcome {
         RunOutcome::FinalOutput(t) => ("completed".to_string(), t),
-        RunOutcome::MaxTurnsReached { .. } => ("max_turns".to_string(), partial_of(child_log)),
+        RunOutcome::MaxTurnsReached { .. } => ("max_turns".to_string(), partial_of(child_tail)),
         RunOutcome::Interrupted(_) | RunOutcome::Interruption(_) => {
-            ("interrupted".to_string(), partial_of(child_log))
+            ("interrupted".to_string(), partial_of(child_tail))
         }
-        RunOutcome::VerifyFailed(_) => ("verify_failed".to_string(), partial_of(child_log)),
-        RunOutcome::Handoff(_) => ("handoff".to_string(), partial_of(child_log)),
+        RunOutcome::VerifyFailed(_) => ("verify_failed".to_string(), partial_of(child_tail)),
+        RunOutcome::Handoff(_) => ("handoff".to_string(), partial_of(child_tail)),
     }
 }
 
-/// The last non-empty assistant text in the child log: the partial result a
-/// non-final terminal leaves behind.
-fn partial_of(child_log: &[houyicoder_context::SessionLogEntry]) -> String {
-    extract_last_assistant(child_log).unwrap_or_default()
+/// The last non-empty assistant text the child's newest rows hold: the partial
+/// result a non-final terminal leaves behind.
+fn partial_of(child_tail: &[houyicoder_context::SessionLogEntry]) -> String {
+    extract_last_assistant(child_tail).unwrap_or_default()
 }
 
-/// Walk the child log backwards for the last assistant message carrying text;
-/// the partial result a non-final terminal leaves behind. None when no
+/// Walk the child's rows backwards for the last assistant message carrying
+/// text; the partial result a non-final terminal leaves behind. None when no
 /// assistant message (or none with text) was emitted.
 fn extract_last_assistant(events: &[houyicoder_context::SessionLogEntry]) -> Option<String> {
     for ev in events.iter().rev() {

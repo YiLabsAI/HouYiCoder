@@ -48,7 +48,7 @@ fn test_detail_matches_the_list() {
         "the read landed"
     );
 
-    let events = store.trajectory_snapshot(sid);
+    let events = store.trajectory_tail(sid);
     let expected = records_of(&events, turn.n);
     assert!(!expected.is_empty(), "the turn has records to compare");
     assert_eq!(

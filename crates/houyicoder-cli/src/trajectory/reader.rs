@@ -426,7 +426,7 @@ impl TrajectoryLog for SessionLogTrajectory {
         // has no pages to read. Its mirror holds the whole history already, so
         // its view is built directly rather than paged.
         if !self.history.byte_windows() {
-            let events = self.session_log.trajectory_snapshot(self.session_id);
+            let events = self.session_log.trajectory_tail(self.session_id);
             let mut view = Arc::new(build_view(&events, &self.model, max_turns));
             let view_mut = Arc::make_mut(&mut view);
             view_mut.state = TrajectoryViewState::Ready;

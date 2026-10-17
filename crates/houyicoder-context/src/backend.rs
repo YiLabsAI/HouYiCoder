@@ -21,6 +21,12 @@ pub struct LenientRead {
     pub skipped: usize,
 }
 
+/// The most bytes one log window read returns. A caller that asks for more is
+/// clamped here: the window exists so a single read cannot ask for the whole
+/// log. A record whose line is wider than this is one no read returns, and a
+/// caller that counts records takes it from the window's terminators instead.
+pub const MAX_WINDOW_BYTES: u64 = 8 * 1024 * 1024;
+
 /// A forward line-aligned window: complete JSONL lines starting at or after
 /// byte_offset, the byte offset where the next window begins (just past the
 /// last complete line), and the total file size. If byte_offset lands mid-line
@@ -35,6 +41,20 @@ pub struct LogRangeRead {
     pub next_offset: u64,
     /// Total log file size in bytes.
     pub bytes_total: u64,
+    /// Line terminators the read consumed, from byte_offset to next_offset.
+    /// Every record the window reached ends in one, the record at either edge
+    /// included, so this counts the records the window's bytes hold -- whether
+    /// or not a line came back for them.
+    pub line_breaks: usize,
+}
+
+impl LogRangeRead {
+    /// Records the read passed over: zero, or one when the bytes it consumed
+    /// held the terminator of a line too wide for the read to return. A caller
+    /// counting records takes the returned lines plus this many.
+    pub fn unread_records(&self) -> usize {
+        self.line_breaks.saturating_sub(self.lines.len())
+    }
 }
 
 /// A reverse line batch: whole JSONL lines ending at or before from_byte, in

@@ -151,7 +151,7 @@ pub(super) fn mirror_detail(
     session_id: SessionId,
     drill: &TrajectoryDrill,
 ) -> TrajectoryDetailView {
-    let events = session_log.trajectory_snapshot(session_id);
+    let events = session_log.trajectory_tail(session_id);
     let Some(start) = events
         .iter()
         .position(|entry| entry.id.to_string() == drill.key.as_str())

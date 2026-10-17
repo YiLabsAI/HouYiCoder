@@ -7,7 +7,7 @@ use houyicoder_context::{
     session_class::{LOG_FILE, recent_user_sessions, scan_sessions, session_dir},
 };
 use houyicoder_memory::{FileDescriptorStore, LocalFileBackend};
-use houyicoder_session::{SessionStore, SourceChain};
+use houyicoder_session::{ChainVerdict, SessionStore};
 use std::error::Error;
 use std::fmt::Display;
 use std::fmt::Formatter;
@@ -154,8 +154,9 @@ pub fn build_runner_for_resume_export(
 /// Build a runner resumed from a session already on disk (--resume <sid>).
 /// The session's log.jsonl + session.json exist under the sid-keyed sessions
 /// root; this re-opens them (the engine reads the history via backend replay
-/// on the next run, and last_hashes self-recovers via the cold reverse-read
-/// of the last disk line so new appends chain correctly). No seed -- the log
+/// on the next run, and the chain's cache self-recovers via the cold
+/// reverse-read of the last disk line so new appends link correctly). No
+/// seed -- the log
 /// is already there. The model is restored from the session.json descriptor
 /// (fallback to the current config when the descriptor is missing or its model
 /// is empty). Returns the 6-tuple the TUI wiring expects.
@@ -183,8 +184,8 @@ pub fn build_runner_for_resume_sid(
     // block resume (a crashed session may still recover); /status shows the
     // verdict.
     match store.verify_disk_chain(sid) {
-        SourceChain::Verified => {}
-        SourceChain::Unverified { at_index, reason } => tracing::warn!(
+        ChainVerdict::Verified => {}
+        ChainVerdict::Unverified { at_index, reason } => tracing::warn!(
             "resume: session {sid} chain unverified at event {at_index}: {reason}; \
              resuming anyway (the log is the source of truth)"
         ),
@@ -275,8 +276,8 @@ pub fn build_runner_for_fork(
     // Warn (do not block) -- the log is the source of truth, a crashed session
     // may still recover, and the warn surfaces the lineage question to /status.
     match store.verify_disk_chain(source_sid) {
-        SourceChain::Verified => {}
-        SourceChain::Unverified { at_index, reason } => tracing::warn!(
+        ChainVerdict::Verified => {}
+        ChainVerdict::Unverified { at_index, reason } => tracing::warn!(
             "fork: source session {source_sid} chain unverified at event {at_index}: {reason}; \
              forking anyway (the fork's chain is rebuilt, but the source was tampered/corrupt)"
         ),

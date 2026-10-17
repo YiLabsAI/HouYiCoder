@@ -11,7 +11,7 @@
 //! - No HookSignal when no hooks are configured (Allow is derivable from
 //!   absence — the inverse is pinned in-crate by fire_tests with a wired
 //!   hook, which the private hook API cannot reach from here).
-//! - replay (trajectory_snapshot) returns events in append order.
+//! - replay (trajectory_tail) returns events in append order.
 
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -198,7 +198,7 @@ fn runner_on(
 
 /// Collect the durable event stream via the public SessionLog accessor.
 fn events(runner: &Runner, session: SessionId) -> Vec<SessionLogEntry> {
-    runner.store().trajectory_snapshot(session)
+    runner.store().trajectory_tail(session)
 }
 
 #[tokio::test]

@@ -2,7 +2,10 @@
 //! to sequenced frames, responses, and protocol errors sent to the client.
 
 use crate::protocol_adapter::{map_acpx_notification, map_session_update};
-use houyicoder_context::{SessionEvent, SessionLogEntry};
+use houyicoder_api::session::SessionLog;
+use houyicoder_api::session::TrajectoryPages;
+use houyicoder_api::session::TrajectoryPosition;
+use houyicoder_context::{SessionEvent, SessionId, SessionLogEntry};
 use houyicoder_protocol::envelope::{
     DurableEventId, EventEnvelope, RequestId, ResponseEnvelope, ResponsePayload, ServerFrame,
 };
@@ -58,12 +61,7 @@ impl Server {
         let session = self.session;
         let sequencer = self.event_sequencer.clone();
         let frames = sequencer.sequence_available(move |cursor| {
-            runner
-                .store()
-                .trajectory_since(session, cursor)
-                .iter()
-                .map(Self::map_turn_event)
-                .collect()
+            Self::load_entries(runner.store().as_ref(), session, cursor)
         });
         for frame in frames {
             Self::send_event_frame(io, frame).await?;
@@ -81,17 +79,46 @@ impl Server {
         let session = self.session;
         let sequencer = self.event_sequencer.clone();
         let replay = sequencer.prepare_replay(self.replay_after, move |cursor| {
-            runner
-                .store()
-                .trajectory_since(session, cursor)
-                .iter()
-                .map(Self::map_turn_event)
-                .collect()
+            Self::load_entries(runner.store().as_ref(), session, cursor)
         });
         for frame in replay {
             Self::send_event_frame(io, frame).await?;
         }
         self.flush_events(io).await
+    }
+
+    /// Map the durable records from an ordinal to the end of the history.
+    ///
+    /// The log is never resident whole: the records are read page by page and
+    /// mapped as each page arrives. The mappings this call covers are held
+    /// until the caller sequences them, so a replay asked from the start of a
+    /// long session holds the frames it is about to send. A read that fails
+    /// leaves the cursor after the last record it reported, so the next round
+    /// resumes there rather than replaying the records the client already saw.
+    fn load_entries(
+        store: &dyn SessionLog,
+        session: SessionId,
+        cursor: usize,
+    ) -> Vec<EntryPayloads> {
+        let pages = TrajectoryPages::new(
+            store,
+            session,
+            TrajectoryPosition {
+                index: cursor,
+                byte_offset: None,
+            },
+        );
+        let mut loaded = Vec::new();
+        for page in pages {
+            match page {
+                Ok(page) => loaded.extend(page.events.iter().map(Self::map_turn_event)),
+                Err(e) => {
+                    tracing::warn!("durable read for session {session} stopped: {e}");
+                    break;
+                }
+            }
+        }
+        loaded
     }
 
     /// Deliver one sequenced event, replacing it with a bounded notice when

@@ -12,11 +12,11 @@
 //! live in the memory layer. The agent loop (the engine) drives a
 //! SessionStore.
 //!
-//! Hash-chain: each event's prev_hash is SHA-256 of the canonical JSON of the
-//! previous event (including that event's own prev_hash), so tampering with
-//! event N breaks the link at event N+1. The chain is computed here on append
-//! and cached (O(1) per append); the backend stores it verbatim. A future
-//! verify_chain walk detects tampering on replay (not yet implemented).
+//! Hash-chain: each event's prev_hash is SHA-256 of the previous event's line
+//! bytes, so tampering with event N breaks the link event N+1 carries. The
+//! chain is computed here on append and cached (O(1) per append); the backend
+//! stores it verbatim. Verifying the links a log or an import already carries
+//! lives in the chain module, over the same hash.
 //!
 //! Delta-persistence counter: an absolute "how many items flushed"
 //! pointer, set (overwritten) after each turn's flush; rewind(n) backs it on
@@ -25,24 +25,27 @@
 //! events). Non-optional in this engine.
 
 use std::collections::{HashMap, HashSet};
+use std::env;
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use houyicoder_api::session::TrajectoryHead;
+use houyicoder_api::session::{SessionLog, TrajectoryHead, TrajectoryPage, TrajectoryPosition};
 use houyicoder_async::PFut;
 use houyicoder_context::{
     CheckpointId, CheckpointManifest, ContextBackend, ContextError, ContextSnapshot, EventId,
-    PrevHash, ReverseRead, SessionEvent, SessionId, SessionLogEntry,
+    PrevHash, SessionEvent, SessionId, SessionLogEntry,
 };
-use sha2::{Digest, Sha256};
-
-mod trajectory;
-use houyicoder_api::session::SessionLog;
-use std::path::Path;
-use std::path::PathBuf;
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::sync::Notify;
-use trajectory::TrajectoryMirrors;
+
+mod chain;
+mod log_windows;
+mod trajectory;
+
+use chain::LogChain;
+use trajectory::{RestoredHistory, TrajectoryMirrors, WindowRead};
 
 /// The index the session's current epoch begins at: the last clear boundary,
 /// or the log head when the session was never cleared. The durable log keeps
@@ -57,15 +60,31 @@ fn epoch_start(events: &[SessionLogEntry]) -> usize {
         .unwrap_or(0)
 }
 
+/// The bytes a session's mirror may hold, from the test variable when one is
+/// set and from the compiled default otherwise. A value that is not a byte
+/// count is reported and ignored: a budget read as zero would empty a window
+/// that the caller believes is bounded.
+fn resident_budget_from_env() -> usize {
+    let Ok(value) = env::var(trajectory::RESIDENT_BUDGET_ENV) else {
+        return trajectory::DEFAULT_RESIDENT_BYTES;
+    };
+    value.parse().unwrap_or_else(|_| {
+        tracing::warn!(
+            "{} is not a byte count: {value}",
+            trajectory::RESIDENT_BUDGET_ENV
+        );
+        trajectory::DEFAULT_RESIDENT_BYTES
+    })
+}
+
 /// The engine-facing session facade. Owns a ContextBackend and layers the
 /// hash-chain, delta counter, and view assembly on top. Construct with any
 /// backend (InMemory for tests, LocalFile for persistence, future sqlite/cloud).
 pub struct SessionStore {
     backend: Box<dyn ContextBackend>,
-    /// Cache of the last event's hash per session, so append is O(1) instead
-    /// of replaying the full log per append. Single-process: if the backend is
-    /// mutated out-of-band, this cache goes stale (clear with reload).
-    last_hashes: Mutex<HashMap<SessionId, PrevHash>>,
+    /// The hash each session's newest durable record carries, so an append
+    /// links the record it follows without reading the log back.
+    chain: LogChain,
     /// Serializes appends (compute prev_hash + backend append + cache update)
     /// so concurrent same-session appends don't fork the chain. v0: a single
     /// lock serializes all sessions; a real impl uses per-session locks.
@@ -98,46 +117,63 @@ pub struct SessionStore {
     first_durable_fired: Mutex<HashSet<SessionId>>,
 }
 
-/// Outcome of verifying an imported session's source chain. The chain is
-/// checked against the re-serialized line bytes (the same form the exporting
-/// binary hashed). A schema change between the exporter and the importer can
-/// make re-serialization differ, so verification is best-effort: Unverified
-/// is recorded in provenance and the import still proceeds with a rebuilt
-/// durable chain (which is internally consistent by construction).
+/// The verdict on a chain of records: whether every link holds.
+///
+/// A record's prev_hash is the hash of the record before it, so a chain is
+/// Verified when each record carries the hash of its predecessor, and the
+/// index a broken one reports is where the first record that does not.
+/// Reached over a log's line bytes and over an imported event list, so a
+/// writer and a reader of either agree on what a broken chain is. Best-effort
+/// by design: a schema change between the two can make a re-serialized list
+/// differ, so an unverified chain is recorded and the caller rebuilds one,
+/// which is consistent by construction.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SourceChain {
-    /// Every event's prev_hash chains to the previous event's line-byte hash.
+pub enum ChainVerdict {
+    /// Every record's prev_hash chains to the record before it.
     Verified,
-    /// The chain broke at the given index for the given reason. The import
-    /// continues with a rebuilt durable chain; only the source is marked
-    /// unverified.
+    /// The chain broke at the given index for the given reason.
     Unverified { at_index: usize, reason: String },
 }
 
 /// Report from seeding a session store from an imported trajectory. Carries
 /// the rebuilt durable chain's head hash (for descriptor + provenance), the
 /// count of durable events written, the count of streaming deltas dropped
-/// (they are transport-only, never persisted), and the source-chain verdict.
-/// This is a typed report, not an error: an unverified source is a warning,
-/// not a failure, so the rescue path never hard-fails on the one file it
-/// exists to save.
+/// (they are transport-only, never persisted), and the verdict on the source
+/// chain. This is a typed report, not an error: an unverified source is a
+/// warning, not a failure, so the rescue path never hard-fails on the one file
+/// it exists to save.
 #[derive(Debug, Clone)]
 pub struct ImportReport {
     pub durable_count: usize,
     pub deltas_dropped: usize,
-    pub source_chain: SourceChain,
+    pub source_chain: ChainVerdict,
     pub head_hash: Option<PrevHash>,
 }
 
 impl SessionStore {
     /// Construct a session store over any ContextBackend.
+    ///
+    /// The mirror keeps a window of the session's events only over a backend
+    /// that can answer a read below it from its own log; a backend with no byte
+    /// log has nowhere else to read, so its mirror holds the history. The
+    /// window's byte budget comes from the test variable when it is set and
+    /// from the compiled default otherwise.
     pub fn new(backend: Box<dyn ContextBackend>) -> Self {
+        Self::with_resident_budget(backend, resident_budget_from_env())
+    }
+
+    /// A store whose mirror window holds at most budget_bytes of a session's
+    /// rows. The compiled default reaches this through new; a test states the
+    /// budget it wants to observe instead, because the variable new reads is
+    /// process-wide and every store in the same test process would share it.
+    fn with_resident_budget(backend: Box<dyn ContextBackend>, budget_bytes: usize) -> Self {
+        let mirrors = TrajectoryMirrors::new(backend.supports_log_windows(), budget_bytes);
         Self {
             backend,
-            last_hashes: Mutex::new(HashMap::new()),
+            chain: LogChain::default(),
             append_lock: AsyncMutex::new(()),
             persisted: Mutex::new(HashMap::new()),
-            mirrors: TrajectoryMirrors::default(),
+            mirrors,
             append_notify: None,
             first_durable: None,
             first_durable_fired: Mutex::new(HashSet::new()),
@@ -173,16 +209,16 @@ impl SessionStore {
     /// transport record for live display, not a durable audit row. It enters
     /// only the in-memory mirror and fires the notify (so a host draining
     /// mid-run sees the streamed text), but it does NOT enter the backend log,
-    /// the hash chain, or last_hashes. The authoritative AssistantMessage
+    /// the hash chain, or the chain's cache. The authoritative AssistantMessage
     /// (full text) lands at turn end and carries the durable record; the
     /// delta is its strict sub-event for display only. The transcript
     /// stores complete assistant messages, not per-token rows -- deltas
     /// in the durable log were 84% of events with zero replay value.
     ///
     /// Durable events keep the existing path: compute prev_hash over the
-    /// durable subset (deltas never touched last_hashes, so the chain skips
-    /// them naturally), hash, persist to the backend, cache the new hash,
-    /// mirror, notify.
+    /// durable subset (deltas never touch the chain's cache, so the chain
+    /// skips them naturally), hash, persist to the backend, cache the new
+    /// hash, mirror, notify.
     pub async fn append(&self, mut event: SessionLogEntry) -> Result<EventId, ContextError> {
         let _guard = self.append_lock.lock().await;
         let session = event.session;
@@ -199,10 +235,19 @@ impl SessionStore {
             return Ok(id);
         }
         // Durable path.
-        let prev_hash = self.compute_prev_hash(session).await?;
+        if self.mirrors.needs_epoch_offset(session) {
+            // This record opens the session's epoch, either because it is the
+            // session's first durable event or because the mirror was dropped
+            // for a clear. Where the log stands now is where that epoch starts,
+            // and it is the one position the mirror cannot recover from the
+            // records it later holds.
+            self.mirrors
+                .start_epoch(session, self.backend.log_size(session));
+        }
+        let prev_hash = self.chain.link(self.backend.as_ref(), session).await?;
         event.prev_hash = prev_hash;
         let finalized = event.clone();
-        let new_hash = Self::hash_event(&event)?;
+        let new_hash = chain::hash_event(&event)?;
         let id = self.backend.append(event).await?;
         // First durable event for a session materializes its descriptor. Fired
         // here, after the backend accepted the event, so the session dir the
@@ -217,10 +262,7 @@ impl SessionStore {
                 hook(session);
             }
         }
-        self.last_hashes
-            .lock()
-            .expect("last_hashes mutex poisoned")
-            .insert(session, new_hash);
+        self.chain.remember(session, new_hash);
         self.mirrors.note_durable(session, finalized);
         // Retain one wake permit when the host is polling the run future, so
         // the durable event cannot remain invisible until the run completes.
@@ -232,31 +274,119 @@ impl SessionStore {
         Ok(id)
     }
 
-    /// Read the in-memory trajectory mirror for a session (sync): the finalized
-    /// events in append order, each with prev_hash set. Empty when no events
-    /// have been appended this process for the session. The /trajectory command
-    /// reads this directly — SessionLogEntry already carries the id, ts, prev_hash,
-    /// and kind a trajectory row needs, so no separate record type is introduced.
-    pub fn trajectory_snapshot(&self, session: SessionId) -> Vec<SessionLogEntry> {
-        self.mirrors.snapshot(session)
+    /// The newest rows of a session's in-memory trajectory mirror (sync), each
+    /// with prev_hash set. Empty when no events have been appended for the
+    /// session this process and none were folded in from its log. The
+    /// /trajectory command reads this directly — SessionLogEntry already
+    /// carries the id, ts, prev_hash, and kind a trajectory row needs, so no
+    /// separate record type is introduced.
+    ///
+    /// This is a tail, not the history: a store over a backend that keeps a log
+    /// holds only its newest rows. A reader that must see every record pages
+    /// with trajectory_page.
+    pub fn trajectory_tail(&self, session: SessionId) -> Vec<SessionLogEntry> {
+        self.mirrors.tail(session)
+    }
+
+    /// Read one bounded page of a session's durable history from an absolute
+    /// position, so a reader can walk a history larger than memory.
+    ///
+    /// The resident window answers a position it covers; below that the
+    /// backend's log does. A below-window position carrying no byte offset is
+    /// resolved by reading from where the epoch begins, which costs one parse
+    /// per record passed — prefer carrying the offset a page returned. A page
+    /// the log cannot fill because the walk reached the window over a record it
+    /// could not read is not the page's end: the position it reports is asked
+    /// of the window again, which is where those records are.
+    ///
+    /// With no mirror in this process the store folds the session's log first,
+    /// because a position is meaningful only against an epoch: its ordinals
+    /// start at the newest clear boundary, which nothing but a read of the log
+    /// can find.
+    pub fn trajectory_page(
+        &self,
+        session: SessionId,
+        from: TrajectoryPosition,
+        limit: usize,
+    ) -> Result<TrajectoryPage, ContextError> {
+        let mut from = from;
+        let mut passed: u64 = 0;
+        let mut page = loop {
+            match self.mirrors.page(session, from, limit) {
+                WindowRead::Held { events, next } => {
+                    break TrajectoryPage {
+                        events,
+                        next: TrajectoryPosition {
+                            index: next,
+                            byte_offset: None,
+                        },
+                        skipped_bytes: 0,
+                    };
+                }
+                WindowRead::Below {
+                    base_index,
+                    epoch_byte_offset,
+                } => {
+                    let read = log_windows::read_page(
+                        self.backend.as_ref(),
+                        session,
+                        from,
+                        limit,
+                        base_index,
+                        epoch_byte_offset,
+                    )?;
+                    if read.events.is_empty() && read.next != from {
+                        // The walk moved without reading a record, which only
+                        // happens when the window's own first record is one the
+                        // read cannot hold. The position it reached is the one
+                        // the window answers, so a caller that stopped here
+                        // would never see the window's rows.
+                        passed = passed.saturating_add(read.skipped_bytes);
+                        from = read.next;
+                        continue;
+                    }
+                    break read;
+                }
+                WindowRead::Absent => {
+                    let history = log_windows::fold_epoch(
+                        self.backend.as_ref(),
+                        session,
+                        self.mirrors.restore_budget(),
+                    )?;
+                    let rows = history.rows();
+                    self.mirrors.commit_restore(session, history);
+                    if rows == 0 {
+                        break TrajectoryPage {
+                            next: from,
+                            ..TrajectoryPage::default()
+                        };
+                    }
+                }
+            }
+        };
+        page.skipped_bytes = page.skipped_bytes.saturating_add(passed);
+        if page.skipped_bytes > 0 {
+            // A record wider than one log window cannot be parsed, so the
+            // reader reports the span rather than spending it silently.
+            tracing::warn!(
+                "session {session} passed over {} bytes in records wider than a log window",
+                page.skipped_bytes
+            );
+        }
+        Ok(page)
     }
 
     /// The id of the latest mirrored event, or None when the session has no
-    /// mirror entries. Reads the tail in place — no clone of the log.
+    /// mirror entries. Reads a counter, not the window.
     pub fn last_trajectory_id(&self, session: SessionId) -> Option<EventId> {
         self.mirrors.last_id(session)
     }
 
     /// The id of the latest durable user input for a session, or None when
-    /// the session holds none yet. Scans the mirrored events under the lock,
-    /// so it costs no clone of the log.
+    /// the session holds none yet. Reads a counter taken as events arrive, so
+    /// an input the window has trimmed still answers.
     pub fn last_user_input_id(&self, session: SessionId) -> Option<EventId> {
         self.mirrors.last_user_input_id(session)
-    }
-
-    /// Clone only the finalized suffix beginning at start.
-    pub fn trajectory_since(&self, session: SessionId, start: usize) -> Vec<SessionLogEntry> {
-        self.mirrors.since(session, start)
     }
 
     /// Read the session's trajectory revision and whole-session summary under
@@ -288,133 +418,53 @@ impl SessionStore {
 
     /// Backfill the in-memory trajectory mirror from the backend log for a
     /// resumed session (read-only — no append, no chain rewrite). The mirror
-    /// starts empty on resume; this loads the durable history so the
+    /// starts empty on resume; this reads the durable history so the
     /// serve-start replay ships the resumed conversation to the client (the
     /// working screen shows the past turns, not just the status bar). Returns
-    /// the event count loaded.
+    /// the durable records the session's current epoch holds.
     ///
-    /// The last_hashes cache is not primed here. Priming from the replayed
+    /// A backend that reads byte windows of its own log is read one window at
+    /// a time, so the process never holds the history: the fold keeps the
+    /// newest rows and the counts for all of them. A backend with no byte log
+    /// has nowhere else to read, so its whole replay becomes the mirror.
+    ///
+    /// The chain's cache is not primed here. Priming from the replayed
     /// last event would re-serialize it and link the next append to a hash
     /// that drifts from the on-disk bytes under a schema change; the next
-    /// append's compute_prev_hash reverse-reads the last disk line's raw
-    /// bytes instead. The whole mirror is replaced, so this must run before
-    /// any append for the session: one landing mid-replay is dropped by the
-    /// insert that follows.
+    /// append's cold read hashes the last disk line's raw bytes instead. The
+    /// mirror is replaced, so this must run before any
+    /// append for the session: one landing mid-read is dropped by the
+    /// install that follows.
     pub async fn restore_trajectory(&self, session: SessionId) -> Result<usize, ContextError> {
-        let mut replayed = self.backend.replay(session).await?;
-        // A cleared session's trajectory is what came after the last clear: the
-        // durable log keeps the archived turns, and resuming one would restore
-        // the turns and the spend the clear no longer counts.
-        let boundary = epoch_start(&replayed);
-        // Dropped in place: an event carries tool payloads and message text, so
-        // slicing to a new vector would copy the whole suffix.
-        if boundary > 0 {
-            replayed.drain(..boundary);
-        }
-        let events = replayed;
-        let count = events.len();
-        self.mirrors.replace(session, events);
-        Ok(count)
-    }
-
-    /// Compute the prev_hash for the next event: the cached hash of the last
-    /// event, or (cache miss) the hash of the backend's last on-disk line.
-    /// None if the session is empty.
-    ///
-    /// Cold path hashes the raw last line bytes via reverse-read rather than
-    /// replaying + re-serializing the last event: the on-disk bytes are stable
-    /// across a serde schema change (re-serialization normalizes field order
-    /// and drops unknown fields, breaking the chain on a log a prior binary
-    /// wrote), and the reverse-read avoids a full replay. The read reports
-    /// whether it reached the log's newest line; when it did not (an
-    /// in-memory backend, or a line wider than the read's budget), this falls
-    /// back to replay and re-serialization, which within one binary matches
-    /// the disk bytes there.
-    async fn compute_prev_hash(
-        &self,
-        session: SessionId,
-    ) -> Result<Option<PrevHash>, ContextError> {
-        if let Some(h) = self
-            .last_hashes
-            .lock()
-            .expect("last_hashes mutex poisoned")
-            .get(&session)
-            .copied()
-        {
-            return Ok(Some(h));
-        }
-        // Reverse-read budget: the last durable line is one serialized event.
-        // A SessionLogEntry larger than 1 MiB would be pathological (a tool result
-        // with a huge payload); the fallback covers the rare miss.
-        const COLD_REVERSE_BYTES: u64 = 1_048_576;
-        let rr = self
-            .backend
-            .read_lines_reverse(session, u64::MAX, COLD_REVERSE_BYTES)
-            .unwrap_or_else(|e| {
-                // An in-memory backend reports Unsupported (no byte log), and a
-                // disk read can fail; the reverse-read is an optimization, so
-                // either falls back to the canonical replay path rather than
-                // failing the hash. Replay surfaces a real IO failure itself.
-                tracing::warn!("cold reverse-read fell back to replay: {e}");
-                ReverseRead::default()
-            });
-        // The batch holds whole lines newest first, and the read reports whether
-        // it reached the log's last line: a line no window of the read holds
-        // never comes back, and the older line the batch starts with instead
-        // is the wrong bytes to link the next entry to. Trailing bytes no
-        // terminator follows hold no line, so a read that reaches the last
-        // whole line above them reports that line, torn tail or not.
-        if rr.newest_line_returned
-            && let Some((_offset, line)) = rr.lines.first()
-        {
-            let h = Self::hash_line_bytes(line.as_bytes());
-            self.last_hashes
-                .lock()
-                .expect("last_hashes mutex poisoned")
-                .insert(session, h);
-            return Ok(Some(h));
-        }
-        let events = self.backend.replay(session).await?;
-        let Some(last) = events.last() else {
-            return Ok(None);
+        let history = if self.backend.supports_log_windows() {
+            let history = log_windows::fold_epoch(
+                self.backend.as_ref(),
+                session,
+                self.mirrors.restore_budget(),
+            )?;
+            if history.skipped_bytes() > 0 {
+                tracing::warn!(
+                    "session {session} holds {} bytes in records wider than a log window; those records are not in the mirror",
+                    history.skipped_bytes()
+                );
+            }
+            history
+        } else {
+            let mut replayed = self.backend.replay(session).await?;
+            // A cleared session's trajectory is what came after the last clear:
+            // the durable log keeps the archived turns, and resuming one would
+            // restore the turns and the spend the clear no longer counts.
+            let boundary = epoch_start(&replayed);
+            // Dropped in place: an event carries tool payloads and message
+            // text, so slicing to a new vector would copy the whole suffix.
+            if boundary > 0 {
+                replayed.drain(..boundary);
+            }
+            RestoredHistory::from_events(replayed)
         };
-        let h = Self::hash_event(last)?;
-        self.last_hashes
-            .lock()
-            .expect("last_hashes mutex poisoned")
-            .insert(session, h);
-        Ok(Some(h))
-    }
-
-    /// SHA-256 of the canonical JSON of an event (including its own prev_hash).
-    fn hash_event(event: &SessionLogEntry) -> Result<PrevHash, ContextError> {
-        let bytes = serde_json::to_vec(event)
-            .map_err(|_| ContextError::Corrupt("event failed to serialize".into()))?;
-        let mut hasher = Sha256::new();
-        hasher.update(&bytes);
-        let hash: [u8; 32] = hasher
-            .finalize()
-            .as_slice()
-            .try_into()
-            .expect("sha256 is 32 bytes");
-        Ok(PrevHash(hash))
-    }
-
-    /// SHA-256 of raw line bytes (the on-disk line without trailing newline).
-    /// The verify path hashes the bytes as-read, never re-serializing the
-    /// parsed struct, so a schema change (a new serde-default field) does not
-    /// break old logs: the chain is byte-stable, not schema-stable. The write
-    /// path keeps hash_event (to_vec) because within one binary to_vec equals
-    /// the disk line bytes, so last_hashes stays consistent.
-    fn hash_line_bytes(bytes: &[u8]) -> PrevHash {
-        let mut hasher = Sha256::new();
-        hasher.update(bytes);
-        let hash: [u8; 32] = hasher
-            .finalize()
-            .as_slice()
-            .try_into()
-            .expect("sha256 is 32 bytes");
-        PrevHash(hash)
+        let count = history.rows();
+        self.mirrors.commit_restore(session, history);
+        Ok(count)
     }
 
     /// Seed the store from an imported trajectory (an export or an old log
@@ -425,7 +475,7 @@ impl SessionStore {
     /// best-effort and recorded, not fatal. (2) Rebuild the durable subset
     /// chain by appending each durable event through the normal append path,
     /// which recomputes prev_hash over the durable subset (deltas never
-    /// entered last_hashes, so the chain skips them naturally). Historical
+    /// entered the chain, so it skips them naturally). Historical
     /// deltas are dropped entirely -- they are transport-only, never
     /// persisted, never mirrored (their authoritative AssistantMessage is
     /// the full superset). Returns a typed report; an unverified source is a
@@ -436,10 +486,10 @@ impl SessionStore {
         events: Vec<SessionLogEntry>,
     ) -> Result<ImportReport, ContextError> {
         // Step 1: verify the source chain (read-only, before consuming).
-        let source_chain = Self::verify_source_chain(&events);
+        let source_chain = chain::verify_source(&events);
         // Step 2: rebuild the durable subset. Each append takes the
         // append_lock (uncontended during seed -- the runner is not driving
-        // yet), recomputes prev_hash from last_hashes (durable-only), and
+        // yet), recomputes prev_hash from the chain (durable-only), and
         // persists to the backend. Deltas are dropped, not appended.
         let mut durable_count = 0usize;
         let mut deltas_dropped = 0usize;
@@ -454,12 +504,7 @@ impl SessionStore {
             self.append(ev).await?;
             durable_count += 1;
         }
-        let head_hash = self
-            .last_hashes
-            .lock()
-            .expect("last_hashes mutex poisoned")
-            .get(&session)
-            .copied();
+        let head_hash = self.chain.held(session);
         Ok(ImportReport {
             durable_count,
             deltas_dropped,
@@ -468,79 +513,12 @@ impl SessionStore {
         })
     }
 
-    /// Verify a source event list's prev_hash chain by re-serializing each
-    /// event to compact line bytes (the form the exporting binary hashed) and
-    /// checking linkage. Genesis (first event) must have prev_hash None. A
-    /// serialize failure or a mismatch yields Unverified with the index and
-    /// reason; the caller proceeds with a rebuilt chain regardless.
-    fn verify_source_chain(events: &[SessionLogEntry]) -> SourceChain {
-        let mut prev: Option<PrevHash> = None;
-        for (i, ev) in events.iter().enumerate() {
-            let Ok(bytes) = serde_json::to_vec(ev) else {
-                return SourceChain::Unverified {
-                    at_index: i,
-                    reason: "event failed to serialize".into(),
-                };
-            };
-            let h = Self::hash_line_bytes(&bytes);
-            if ev.prev_hash != prev {
-                return SourceChain::Unverified {
-                    at_index: i,
-                    reason: "prev_hash does not chain to the previous event".into(),
-                };
-            }
-            prev = Some(h);
-        }
-        SourceChain::Verified
-    }
-
-    /// Verify a disk log's prev_hash chain by hashing the RAW line bytes
-    /// (as-read via read_log_range), not a re-serialization of the parsed
-    /// struct. This is the #15 fix: a schema change that adds a serde-default
-    /// field makes re-serialization drift from the on-disk bytes a prior
-    /// binary wrote, so a verify that re-serializes would false-positive a
-    /// cross-binary log as Unverified. Hashing the raw line bytes is
-    /// byte-stable across schema changes (the bytes the writer hashed at
-    /// write time are the bytes we hash at verify time). Genesis (first
-    /// event) must have prev_hash None. Best-effort: a parse failure or a
-    /// mismatch yields Unverified with the index + reason; the caller warns
-    /// but does not block resume (a crashed session may still recover).
-    pub fn verify_disk_chain(&self, session: SessionId) -> SourceChain {
-        let mut lines: Vec<String> = Vec::new();
-        let mut offset = 0u64;
-        loop {
-            let r = self.backend.read_log_range(session, offset, 64_000);
-            if r.lines.is_empty() {
-                break;
-            }
-            for (_off, text) in r.lines {
-                lines.push(text);
-            }
-            if r.next_offset <= offset || offset >= r.bytes_total {
-                break;
-            }
-            offset = r.next_offset;
-        }
-        let mut prev: Option<PrevHash> = None;
-        for (i, line) in lines.iter().enumerate() {
-            // Parse only to read prev_hash; a schema drift with serde-default
-            // fields still parses. The chain check hashes the RAW line bytes.
-            let Ok(ev) = serde_json::from_str::<SessionLogEntry>(line) else {
-                return SourceChain::Unverified {
-                    at_index: i,
-                    reason: "line failed to parse".into(),
-                };
-            };
-            let h = Self::hash_line_bytes(line.as_bytes());
-            if ev.prev_hash != prev {
-                return SourceChain::Unverified {
-                    at_index: i,
-                    reason: "prev_hash does not chain to the previous line's bytes".into(),
-                };
-            }
-            prev = Some(h);
-        }
-        SourceChain::Verified
+    /// Verify a disk log's prev_hash chain by hashing the raw line bytes it
+    /// holds, from the log head. Best-effort: a parse failure or a mismatch
+    /// reports Unverified with the index and reason, and the caller warns
+    /// without blocking resume, because a crashed session may still recover.
+    pub fn verify_disk_chain(&self, session: SessionId) -> ChainVerdict {
+        chain::verify_disk(self.backend.as_ref(), session)
     }
 
     pub async fn replay(&self, session: SessionId) -> Result<Vec<SessionLogEntry>, ContextError> {
@@ -648,17 +626,22 @@ impl SessionLog for SessionStore {
     fn current_view(&self, session: SessionId) -> PFut<'_, Result<ContextSnapshot, ContextError>> {
         Box::pin(Self::current_view(self, session))
     }
-    fn trajectory_snapshot(&self, session: SessionId) -> Vec<SessionLogEntry> {
-        Self::trajectory_snapshot(self, session)
+    fn trajectory_tail(&self, session: SessionId) -> Vec<SessionLogEntry> {
+        Self::trajectory_tail(self, session)
+    }
+    fn trajectory_page(
+        &self,
+        session: SessionId,
+        from: TrajectoryPosition,
+        limit: usize,
+    ) -> Result<TrajectoryPage, ContextError> {
+        Self::trajectory_page(self, session, from, limit)
     }
     fn last_trajectory_id(&self, session: SessionId) -> Option<EventId> {
         Self::last_trajectory_id(self, session)
     }
     fn last_user_input_id(&self, session: SessionId) -> Option<EventId> {
         Self::last_user_input_id(self, session)
-    }
-    fn trajectory_since(&self, session: SessionId, start: usize) -> Vec<SessionLogEntry> {
-        Self::trajectory_since(self, session, start)
     }
     fn trajectory_head(&self, session: SessionId) -> TrajectoryHead {
         Self::trajectory_head(self, session)

@@ -161,19 +161,15 @@ async fn test_deny_verdict_completes_run() {
     drop(client2);
     drop(serve2.await);
     // The audit trajectory carries a Denied verdict for the re-answered call.
-    let denied = runner
-        .store()
-        .trajectory_snapshot(session)
-        .iter()
-        .any(|ev| {
-            matches!(
-                ev.event,
-                SessionEvent::PermissionDecision {
-                    verdict: PermissionVerdict::Denied,
-                    ..
-                }
-            )
-        });
+    let denied = runner.store().trajectory_tail(session).iter().any(|ev| {
+        matches!(
+            ev.event,
+            SessionEvent::PermissionDecision {
+                verdict: PermissionVerdict::Denied,
+                ..
+            }
+        )
+    });
     assert!(denied, "denied verdict audited on reconnect-resume");
     assert!(
         host.store().pending(session).is_none(),

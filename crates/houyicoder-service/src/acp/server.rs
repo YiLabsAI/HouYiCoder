@@ -23,6 +23,8 @@ use crate::protocol_adapter::{
     acp_permission_response_to_decision, approval_to_acp_permission, map_run_error, map_run_result,
     map_session_update,
 };
+use houyicoder_api::session::TrajectoryPages;
+use houyicoder_api::session::TrajectoryPosition;
 use houyicoder_context::{EventId, PermissionVerdict, SessionEvent, SessionId, SessionLogEntry};
 use houyicoder_core::agent::RunResult;
 use houyicoder_core::agent::{RunOutcome, Runner};
@@ -51,7 +53,10 @@ pub struct AcpServer {
     runner: Arc<Runner>,
     session: SessionId,
     next_req_id: u64,
-    pushed_count: usize,
+    /// The position the client has been pushed up to: every durable record
+    /// before it was sent. An absolute ordinal of the session's own history,
+    /// so it survives the mirror dropping its oldest rows.
+    pushed_through: TrajectoryPosition,
     /// Set when a session/cancel notification arrives during a pending
     /// permission ask (the run is paused at Interruption, the drive loop
     /// is not streaming). The resume loop checks this after each frame read
@@ -73,7 +78,7 @@ impl AcpServer {
             runner,
             session,
             next_req_id: 0,
-            pushed_count: 0,
+            pushed_through: TrajectoryPosition::start(),
             cancel_requested: AtomicBool::new(false),
         }
     }
@@ -243,11 +248,10 @@ impl AcpServer {
         loop {
             // Push only the events appended since the last push so a resumed
             // run does not re-send what the client already saw.
-            let events = self.runner.store().trajectory_snapshot(self.session);
-            for ev in events.iter().skip(self.pushed_count) {
+            let events = self.drain_pushed();
+            for ev in &events {
                 self.push_turn_event(io, ev).await?;
             }
-            self.pushed_count = events.len();
             match result {
                 Ok(run) => match run.outcome {
                     RunOutcome::Interruption(approvals) => {
@@ -432,6 +436,34 @@ impl AcpServer {
         self.adapter.handle_notification(&notif).await;
         self.cancel_requested.store(true, Ordering::Relaxed);
         Ok(true)
+    }
+
+    /// The session's durable records past the position the client was last
+    /// pushed up to, in append order.
+    ///
+    /// The read starts at an absolute position in the session's own history
+    /// rather than counting from the front of a returned window: the store
+    /// keeps only its newest rows in memory, so counting from a window would
+    /// re-send records the client already saw as soon as the window moved. A
+    /// read that fails leaves the position after the records it did report, so
+    /// the next pass resumes there instead of repeating them.
+    fn drain_pushed(&mut self) -> Vec<SessionLogEntry> {
+        let store = self.runner.store();
+        let pages = TrajectoryPages::new(store.as_ref(), self.session, self.pushed_through);
+        let mut events = Vec::new();
+        for page in pages {
+            match page {
+                Ok(page) => {
+                    self.pushed_through = page.next;
+                    events.extend(page.events);
+                }
+                Err(e) => {
+                    tracing::warn!("durable read for session {} stopped: {e}", self.session);
+                    break;
+                }
+            }
+        }
+        events
     }
 
     /// Forward one engine turn event as a session/update notification. Kinds

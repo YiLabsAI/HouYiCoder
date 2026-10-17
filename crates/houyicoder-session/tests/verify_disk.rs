@@ -8,7 +8,7 @@
 
 use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
 use houyicoder_memory::LocalFileBackend;
-use houyicoder_session::{SessionStore, SourceChain};
+use houyicoder_session::{ChainVerdict, SessionStore};
 use std::env::temp_dir;
 use std::fs::create_dir_all;
 use std::fs::read_to_string;
@@ -60,7 +60,7 @@ async fn test_disk_chain_verifies_append() {
         .expect("append 2");
     assert_eq!(
         store.verify_disk_chain(sid),
-        SourceChain::Verified,
+        ChainVerdict::Verified,
         "a chain written by the write path must verify (raw bytes match)",
     );
     remove_dir_all(&root).ok();
@@ -94,7 +94,7 @@ async fn test_disk_chain_detects_tamper() {
         .await
         .expect("append 2");
     // Verified before tamper.
-    assert_eq!(store.verify_disk_chain(sid), SourceChain::Verified);
+    assert_eq!(store.verify_disk_chain(sid), ChainVerdict::Verified);
     // Tamper the FIRST line's text on disk. The second event's recorded
     // prev_hash (hash of the original first line) no longer matches the hash
     // of the tampered first line, so the chain breaks at index 1.
@@ -103,7 +103,7 @@ async fn test_disk_chain_detects_tamper() {
     let tampered = body.replacen("orig", "TAMPERED", 1);
     write(&log_path, tampered).expect("write tampered log");
     match store.verify_disk_chain(sid) {
-        SourceChain::Unverified { at_index, .. } => {
+        ChainVerdict::Unverified { at_index, .. } => {
             assert_eq!(
                 at_index, 1,
                 "the break is at the second event (its prev no longer matches the tampered first line)"
@@ -123,7 +123,7 @@ async fn test_disk_chain_empty_verified() {
     let sid = SessionId::new();
     assert_eq!(
         store.verify_disk_chain(sid),
-        SourceChain::Verified,
+        ChainVerdict::Verified,
         "an empty session has no chain to break",
     );
     remove_dir_all(&root).ok();

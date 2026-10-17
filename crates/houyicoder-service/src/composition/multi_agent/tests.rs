@@ -79,7 +79,7 @@ async fn test_foreground_spawn_reaches_terminal() {
     assert_eq!(outcome.summary.as_deref(), Some("child answer"));
     // The parent log carries the durable spawn + return boundary pair so
     // replay reconstructs the delegation.
-    let events = store.trajectory_snapshot(parent_sid);
+    let events = store.trajectory_tail(parent_sid);
     assert!(
         events
             .iter()
@@ -237,7 +237,7 @@ async fn test_child_task_excludes_memory() {
     let child_sid =
         SessionId::from_display_string(&outcome.child_session_id).expect("child sid parses");
     let text: String = store
-        .trajectory_snapshot(child_sid)
+        .trajectory_tail(child_sid)
         .iter()
         .map(|e| format!("{:?}", e.event))
         .collect();
@@ -330,7 +330,7 @@ async fn test_background_spawn_records_return() {
     for _ in 0..200 {
         yield_now().await;
         let has_return = store
-            .trajectory_snapshot(parent_sid)
+            .trajectory_tail(parent_sid)
             .iter()
             .any(|e| matches!(e.event, SessionEvent::SubagentReturn { .. }));
         if has_return {
@@ -416,7 +416,7 @@ async fn test_dropped_spawn_reaches_terminal() {
     }
     assert!(
         store
-            .trajectory_snapshot(parent_sid)
+            .trajectory_tail(parent_sid)
             .iter()
             .any(|e| matches!(e.event, SessionEvent::SubagentReturn { .. })),
         "the dropped caller still leaves a return boundary in the parent log"
@@ -500,7 +500,7 @@ async fn test_spawn_system_records_trigger() {
         parent_sid.to_string(),
         "child session is distinct from the parent"
     );
-    let events = store.trajectory_snapshot(parent_sid);
+    let events = store.trajectory_tail(parent_sid);
     let spawn = events
         .iter()
         .find(|e| matches!(e.event, SessionEvent::SubagentSpawn { .. }))
@@ -534,7 +534,7 @@ async fn test_background_spawn_records_trigger() {
     for _ in 0..200 {
         yield_now().await;
         let has = store
-            .trajectory_snapshot(parent_sid)
+            .trajectory_tail(parent_sid)
             .iter()
             .any(|e| matches!(e.event, SessionEvent::SubagentSpawn { .. }));
         if has {
@@ -546,7 +546,7 @@ async fn test_background_spawn_records_trigger() {
         found,
         "detached driver recorded the first-party spawn boundary"
     );
-    let snap = store.trajectory_snapshot(parent_sid);
+    let snap = store.trajectory_tail(parent_sid);
     let spawn = snap
         .iter()
         .find(|e| matches!(e.event, SessionEvent::SubagentSpawn { .. }))
@@ -902,7 +902,7 @@ async fn test_foreground_failure_reaches_parent() {
     );
     // The durable SubagentReturn boundary records the failure so replay
     // reconstructs the delegation honestly (not a silent drop).
-    let events = store.trajectory_snapshot(parent_sid);
+    let events = store.trajectory_tail(parent_sid);
     let ret_status = events.iter().find_map(|e| match &e.event {
         SessionEvent::SubagentReturn { status, .. } => Some(status.clone()),
         _ => None,
@@ -959,7 +959,7 @@ async fn test_foreground_failure_loses_partial() {
         "partial text is currently lost on mid-stream error (extractor flushes on StepFinish only): {:?}",
         outcome.summary,
     );
-    let events = store.trajectory_snapshot(parent_sid);
+    let events = store.trajectory_tail(parent_sid);
     let ret_status = events.iter().find_map(|e| match &e.event {
         SessionEvent::SubagentReturn { status, .. } => Some(status.clone()),
         _ => None,
@@ -1055,7 +1055,7 @@ async fn test_background_failure_notifies_parent() {
         "one terminal per child: a reported terminal is not repeated",
     );
     // The durable return records the background child's terminal status.
-    let events = store.trajectory_snapshot(parent_sid);
+    let events = store.trajectory_tail(parent_sid);
     let ret_status = events.iter().find_map(|e| match &e.event {
         SessionEvent::SubagentReturn { status, .. } => Some(status.clone()),
         _ => None,
@@ -1179,7 +1179,7 @@ async fn test_failed_write_reaches_terminal() {
     );
     // The tail ran: the parent's return boundary closes the spawn the parent
     // log opened, with the failed status.
-    let events = store.trajectory_snapshot(parent_sid);
+    let events = store.trajectory_tail(parent_sid);
     let ret_status = events.iter().find_map(|e| match &e.event {
         SessionEvent::SubagentReturn { status, .. } => Some(status.clone()),
         _ => None,
@@ -1227,7 +1227,7 @@ async fn test_unwritable_boundary_refuses_spawn() {
         "the refusal names the boundary, not the worktree fence"
     );
     assert!(
-        store.trajectory_snapshot(parent_sid).is_empty(),
+        store.trajectory_tail(parent_sid).is_empty(),
         "a refused spawn leaves no dangling record in the parent log"
     );
 }
@@ -1295,7 +1295,7 @@ async fn test_foreground_panic_reaches_terminal() {
         other => panic!("expected Completed, got {other:?}"),
     }
     let ret_status = store
-        .trajectory_snapshot(parent_sid)
+        .trajectory_tail(parent_sid)
         .iter()
         .find_map(|e| match &e.event {
             SessionEvent::SubagentReturn { status, .. } => Some(status.clone()),
@@ -1378,7 +1378,7 @@ async fn test_background_panic_notifies_parent() {
         "a panicked background child reaches the parent notification queue",
     );
     let ret_status = store
-        .trajectory_snapshot(parent_sid)
+        .trajectory_tail(parent_sid)
         .iter()
         .find_map(|e| match &e.event {
             SessionEvent::SubagentReturn { status, .. } => Some(status.clone()),
@@ -1636,7 +1636,7 @@ async fn test_cancel_before_poll_publishes() {
     );
     assert!(
         store
-            .trajectory_snapshot(parent_sid)
+            .trajectory_tail(parent_sid)
             .iter()
             .any(|e| matches!(e.event, SessionEvent::SubagentReturn { .. })),
         "the parent log records the return boundary for the stopped child"
@@ -1682,7 +1682,7 @@ async fn test_cancel_mid_call_publishes() {
     );
     assert!(
         store
-            .trajectory_snapshot(parent_sid)
+            .trajectory_tail(parent_sid)
             .iter()
             .any(|e| matches!(e.event, SessionEvent::SubagentReturn { .. })),
         "the parent log records the return boundary for the cancelled child"
@@ -1742,7 +1742,7 @@ async fn test_cancel_mid_ask_publishes() {
     );
     assert!(
         store
-            .trajectory_snapshot(parent_sid)
+            .trajectory_tail(parent_sid)
             .iter()
             .any(|e| matches!(e.event, SessionEvent::SubagentReturn { .. })),
         "the parent log records the return boundary for the cancelled child"
@@ -1820,7 +1820,7 @@ async fn test_cancel_mid_resume_publishes() {
     );
     assert!(
         store
-            .trajectory_snapshot(parent_sid)
+            .trajectory_tail(parent_sid)
             .iter()
             .any(|e| matches!(e.event, SessionEvent::SubagentReturn { .. })),
         "the parent log records the return boundary for the cancelled child"
@@ -1928,8 +1928,7 @@ async fn test_return_usage_covers_subtree() {
         })
         .await
         .unwrap();
-    let child_log = store.trajectory_snapshot(child_sid);
-    let usage = child_subtree_usage(&runner, &child_log);
+    let usage = child_subtree_usage(&runner, child_sid);
     assert_eq!(
         usage.input_tokens, 30,
         "the grandchild's input reaches the parent"

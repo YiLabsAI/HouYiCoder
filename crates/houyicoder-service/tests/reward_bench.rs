@@ -36,7 +36,8 @@ async fn run_query(runner: &Runner, session: SessionId, prompt: &str) -> QueryMe
         calls: snap.tool_calls,
         errors: snap.tool_errors,
         recalled: runner
-            .trajectory_snapshot(session)
+            .store()
+            .trajectory_tail(session)
             .iter()
             .filter_map(|ev| match &ev.event {
                 SessionEvent::MemoryRecall { keys, .. } => Some(keys.len() as u32),

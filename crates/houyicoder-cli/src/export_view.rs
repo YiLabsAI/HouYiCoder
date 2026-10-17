@@ -7,7 +7,9 @@
 
 use std::collections::BTreeMap;
 
-use houyicoder_context::{SessionEvent, SessionLogEntry};
+use houyicoder_api::session::TrajectoryPages;
+use houyicoder_api::session::TrajectoryPosition;
+use houyicoder_context::{ContextError, SessionEvent, SessionLogEntry};
 use houyicoder_tui::view::export_log::{ExportLog, ExportPayload};
 
 use crate::trajectory::SessionLogTrajectory;
@@ -374,11 +376,31 @@ impl<'a> ExportDataBuilder<'a> {
 
 impl ExportLog for SessionLogTrajectory {
     fn export(&self) -> ExportPayload {
-        let events = self.session_log.trajectory_snapshot(self.session_id);
+        let events = match self.durable_history() {
+            Ok(events) => events,
+            Err(e) => {
+                return ExportPayload {
+                    filename: format!("{}-export-error.json", format_ts_slug(0)),
+                    json: error_document(&format!("export read failed: {e}")),
+                };
+            }
+        };
         let data =
             ExportDataBuilder::new(&events, &self.session_id.to_string(), &self.model).build();
-        let raw = serde_json::to_string_pretty(&data)
-            .unwrap_or_else(|e| format!("{{\"error\": \"export serialization failed: {e}\"}}"));
+        let filename = format!(
+            "{}-{}.json",
+            format_ts_slug(data.started_at),
+            first_prompt_slug(&events)
+        );
+        let raw = match serde_json::to_string_pretty(&data) {
+            Ok(raw) => raw,
+            Err(e) => {
+                return ExportPayload {
+                    filename,
+                    json: error_document(&format!("export serialization failed: {e}")),
+                };
+            }
+        };
         // Redact secrets on the share boundary — the export file is sent
         // outside the session (a bug report, ExPeL data, a handoff), so any
         // secret in the tool I/O / reasoning / credential fields is stripped
@@ -386,13 +408,32 @@ impl ExportLog for SessionLogTrajectory {
         // stays full-fidelity; only this shared artifact is filtered (the
         // redaction module in the tui crate).
         let json = redact(&raw);
-        let filename = format!(
-            "{}-{}.json",
-            format_ts_slug(data.started_at),
-            first_prompt_slug(&events)
-        );
         ExportPayload { filename, json }
     }
+}
+
+impl SessionLogTrajectory {
+    /// The session's durable records, read page by page from the log instead
+    /// of copied out of the mirror. A history longer than the resident window
+    /// still exports whole, because the pages are appended here as they arrive.
+    fn durable_history(&self) -> Result<Vec<SessionLogEntry>, ContextError> {
+        let pages = TrajectoryPages::new(
+            self.session_log.as_ref(),
+            self.session_id,
+            TrajectoryPosition::start(),
+        );
+        let mut events = Vec::new();
+        for page in pages {
+            events.extend(page?.events);
+        }
+        Ok(events)
+    }
+}
+
+/// The document an export writes when it produced no export: the reason, as
+/// JSON, so a reader of the file sees why rather than an empty session.
+fn error_document(reason: &str) -> String {
+    serde_json::json!({ "error": reason }).to_string()
 }
 
 #[cfg(test)]
