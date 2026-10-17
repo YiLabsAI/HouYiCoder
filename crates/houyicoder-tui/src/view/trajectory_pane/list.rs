@@ -56,14 +56,181 @@ fn boundary_line(boundary: &TurnBoundary, now_secs: u64) -> Line<'static> {
     }
 }
 
+// Column layout
+
+/// The turn label column, in display columns. The turn ordinal is bounded by
+/// the session's own length, so a constant covers every row.
+const TURN_LABEL_W: usize = 5;
+
+/// The title column, in display columns.
+const TURN_TITLE_W: usize = 30;
+
+/// The cached-ratio column. The share behind the cell is a rate held to one, so
+/// the cell is at most a three-digit percentage followed by one word, whatever
+/// the session's size.
+const CACHED_W: usize = 12;
+
+/// The model and effort columns, in display columns.
+const MODEL_W: usize = 20;
+const EFFORT_W: usize = 8;
+
+/// The gap a column leaves after its content, so two columns never touch.
+const COLUMN_GAP_W: usize = 1;
+
+/// The terminal widths at which the optional columns join. Below them the
+/// optional columns are dropped from the least informative end, leaving the
+/// turn, its tokens, its duration, and its outcome. Those four fixed columns
+/// take about sixty columns between them, so a terminal narrower than that
+/// clips the row and no gate here applies.
+const CALLS_MIN_WIDTH: usize = 96;
+const THINKING_MIN_WIDTH: usize = 124;
+const MODEL_MIN_WIDTH: usize = 148;
+
+/// A count with its noun, singular at one: a single call reads as a count, not
+/// as the plural template with the number dropped into it.
+fn count_label(n: usize, noun: &str) -> String {
+    if n == 1 {
+        format!("1 {noun}")
+    } else {
+        format!("{n} {noun}s")
+    }
+}
+
+/// Both token counts, or an em dash for a count the turn never reported.
+fn tokens_cell(t: &TrajectoryTurn) -> String {
+    format!(
+        "{} in {} out",
+        tokens_or_dash(t.tokens_in),
+        tokens_or_dash(t.tokens_out)
+    )
+}
+
+/// The share of this turn's input that came from the cache, or nothing when the
+/// turn states no share. The turn's own derivation decides that: a count the
+/// endpoint never reported, and an account missing one of the two numbers the
+/// share is divided from, both leave the cell blank rather than reading as a
+/// measured miss.
+fn cached_cell(t: &TrajectoryTurn) -> String {
+    match t.cache_hit_pct() {
+        Some(pct) => format!("{pct:.0}% cached"),
+        None => String::new(),
+    }
+}
+
+/// Thinking tokens are a component of output, so the parenthetical sits tight
+/// against the output number and carries its own inclusion note.
+fn thinking_cell(t: &TrajectoryTurn) -> String {
+    match t.reasoning_tokens {
+        Some(r) if r > 0 => format!("(thinking {})", format_tokens(r as u64)),
+        _ => String::new(),
+    }
+}
+
+/// The model ids a turn used. One id repeated on every row is noise, so the
+/// column is drawn only when the session saw at least two distinct models.
+fn model_cell(t: &TrajectoryTurn) -> String {
+    t.models.join(",")
+}
+
+/// The effort levels a turn ran at, on the same condition as the model ids.
+fn effort_cell(t: &TrajectoryTurn) -> String {
+    t.efforts.join(",")
+}
+
+/// The turn's tool calls, or that it made none.
+fn calls_cell(t: &TrajectoryTurn) -> String {
+    if t.tool_count > 0 {
+        count_label(t.tool_count, "call")
+    } else {
+        "direct".to_string()
+    }
+}
+
+/// Only a turn that had a failure states one; a zero would be noise on every
+/// clean row.
+fn fails_cell(t: &TrajectoryTurn) -> String {
+    if t.tool_fail > 0 {
+        count_label(t.tool_fail, "fail")
+    } else {
+        String::new()
+    }
+}
+
+/// The column widths for one render of the turn list.
+///
+/// A table's columns are one decision for the whole screen rather than a
+/// per-row choice: a cell wider than its column pushes every column after it
+/// out of line, which reads as two rows that disagree. The columns whose
+/// figures grow with the session are therefore sized from the widest cell on
+/// screen, and a column no visible row fills is dropped, because a column of
+/// blanks costs the row width while saying nothing.
+pub(super) struct TurnColumns {
+    tokens: usize,
+    cached: bool,
+    thinking: Option<usize>,
+    model: bool,
+    calls: Option<usize>,
+    fails: Option<usize>,
+}
+
+impl TurnColumns {
+    /// The widths for the rows about to be drawn at this terminal width.
+    fn for_rows(rows: &[TrajectoryRow], width: usize, show_per_turn_model: bool) -> Self {
+        let turns: Vec<&TrajectoryTurn> = rows
+            .iter()
+            .filter_map(|row| match row {
+                TrajectoryRow::Turn(t) => Some(t),
+                TrajectoryRow::Bg(_) => None,
+            })
+            .collect();
+        let widest = |cell: fn(&TrajectoryTurn) -> String| -> usize {
+            turns
+                .iter()
+                .map(|t| UnicodeWidthStr::width(cell(t).as_str()))
+                .max()
+                .unwrap_or(0)
+        };
+        let filled = |cell: fn(&TrajectoryTurn) -> String| -> Option<usize> {
+            match widest(cell) {
+                0 => None,
+                w => Some(w + COLUMN_GAP_W),
+            }
+        };
+        TurnColumns {
+            tokens: widest(tokens_cell) + COLUMN_GAP_W,
+            cached: widest(cached_cell) > 0,
+            thinking: if width >= THINKING_MIN_WIDTH {
+                filled(thinking_cell)
+            } else {
+                None
+            },
+            model: width >= MODEL_MIN_WIDTH && show_per_turn_model,
+            calls: if width >= CALLS_MIN_WIDTH {
+                filled(calls_cell)
+            } else {
+                None
+            },
+            fails: if width >= CALLS_MIN_WIDTH {
+                filled(fails_cell)
+            } else {
+                None
+            },
+        }
+    }
+}
+
 /// The body lines for one turn: a context-cleared separator when the log
 /// carries one, then the row itself. The separator is a label rather than a
 /// row, so it never takes a cursor position.
+///
+/// Padding counts display columns, not characters: a wide glyph would otherwise
+/// shift every column after it. A truncated cell is capped two columns below its
+/// width, because the truncation spends one of them on the ellipsis and the next
+/// cell needs the other as its gap.
 pub(super) fn turn_row(
     t: &TrajectoryTurn,
     selected: bool,
-    width: usize,
-    show_per_turn_model: bool,
+    cols: &TurnColumns,
     now_secs: u64,
 ) -> Vec<Line<'static>> {
     let prefix = if selected { "▸ " } else { "  " };
@@ -73,72 +240,37 @@ pub(super) fn turn_row(
     }
     let glyph = if t.success { "✓" } else { "✗" };
     let gc = if t.success { Color::Green } else { Color::Red };
-    let tokens = format!(
-        "{} in {} out",
-        fmt_k_opt(t.tokens_in),
-        fmt_k_opt(t.tokens_out)
-    );
-    let cached = match t.cache_hit_pct() {
-        Some(pct) => format!("{pct:.0}% cached"),
-        None => String::new(),
-    };
-    // Thinking tokens are a component of output, so the parenthetical sits
-    // tight against the output number and carries its own inclusion note.
-    let thinking = match t.reasoning_tokens {
-        Some(r) if r > 0 => format!("(thinking {})", fmt_k(r)),
-        _ => String::new(),
-    };
-    // Per-turn model and effort only when the session saw at least two distinct
-    // models: one id repeated on every row is noise. A turn that switched
-    // models lists each id it used.
-    let model = if show_per_turn_model && !t.models.is_empty() {
-        t.models.join(",")
-    } else {
-        String::new()
-    };
-    let effort = if show_per_turn_model && !t.efforts.is_empty() {
-        t.efforts.join(",")
-    } else {
-        String::new()
-    };
-    let calls = if t.tool_count > 0 {
-        format!("{} calls", t.tool_count)
-    } else {
-        "direct".to_string()
-    };
-    // Only a turn that had a failure states one; a zero would be noise on every
-    // clean row.
-    let fails = if t.tool_fail > 0 {
-        format!(
-            "{} fail{}",
-            t.tool_fail,
-            if t.tool_fail == 1 { "" } else { "s" }
-        )
-    } else {
-        String::new()
-    };
-    // Columns are dropped from the least informative end as the terminal
-    // narrows, so the duration and the outcome always survive. Padding counts
-    // display columns, not characters: a wide glyph would otherwise shift every
-    // column after it.
     let mut spans = vec![
         sp(prefix, Color::Cyan),
-        sp(pad(&format!("T{}", t.n), 5), Color::Cyan),
-        sp(pad(&truncate_width(&t.title, 30), 30), Color::White),
-        sp(pad(&tokens, 15), Color::Gray),
-        sp(pad(&cached, 12), Color::Indexed(208)),
+        sp(pad(&format!("T{}", t.n), TURN_LABEL_W), Color::Cyan),
+        sp(
+            pad(&truncate_width(&t.title, TURN_TITLE_W - 2), TURN_TITLE_W),
+            Color::White,
+        ),
+        sp(pad(&tokens_cell(t), cols.tokens), Color::Gray),
     ];
-    if width >= 124 {
-        spans.push(sp(pad(&thinking, 16), Color::DarkGray));
+    if cols.cached {
+        spans.push(sp(pad(&cached_cell(t), CACHED_W), Color::Indexed(208)));
     }
-    if width >= 148 && show_per_turn_model {
-        spans.push(sp(pad(&truncate_width(&model, 20), 20), Color::DarkGray));
-        spans.push(sp(pad(&truncate_width(&effort, 8), 8), Color::DarkGray));
+    if let Some(w) = cols.thinking {
+        spans.push(sp(pad(&thinking_cell(t), w), Color::DarkGray));
     }
-    if width >= 96 {
-        spans.push(sp(pad(&calls, 9), Color::Gray));
+    if cols.model {
         spans.push(sp(
-            pad(&fails, 8),
+            pad(&truncate_width(&model_cell(t), MODEL_W - 2), MODEL_W),
+            Color::DarkGray,
+        ));
+        spans.push(sp(
+            pad(&truncate_width(&effort_cell(t), EFFORT_W - 2), EFFORT_W),
+            Color::DarkGray,
+        ));
+    }
+    if let Some(w) = cols.calls {
+        spans.push(sp(pad(&calls_cell(t), w), Color::Gray));
+    }
+    if let Some(w) = cols.fails {
+        spans.push(sp(
+            pad(&fails_cell(t), w),
             if t.tool_fail > 0 {
                 Color::Red
             } else {
@@ -169,9 +301,13 @@ pub(super) fn draw_turn_list(
     usize,
 ) {
     let tokens_summary = match (traj.tokens_in, traj.tokens_out) {
-        (Some(tin), Some(tout)) => format!("{} in {} out", fmt_k(tin), fmt_k(tout)),
-        (Some(tin), None) => format!("{} in", fmt_k(tin)),
-        (None, Some(tout)) => format!("{} out", fmt_k(tout)),
+        (Some(tin), Some(tout)) => format!(
+            "{} in {} out",
+            format_tokens(tin as u64),
+            format_tokens(tout as u64)
+        ),
+        (Some(tin), None) => format!("{} in", format_tokens(tin as u64)),
+        (None, Some(tout)) => format!("{} out", format_tokens(tout as u64)),
         (None, None) => "—".to_string(),
     };
     let cache_hit_str = match (traj.cache_read, traj.tokens_in) {
@@ -193,22 +329,25 @@ pub(super) fn draw_turn_list(
         not_loaded.push(format!("{} newer not loaded", traj.newer_hidden));
     }
     let turns_label = if not_loaded.is_empty() {
-        format!("{} turns", traj.total_turns)
+        count_label(traj.total_turns, "turn")
     } else {
-        format!("{} turns ({})", traj.total_turns, not_loaded.join(", "))
+        format!(
+            "{} ({})",
+            count_label(traj.total_turns, "turn"),
+            not_loaded.join(", ")
+        )
     };
     let mut header = vec![line(vec![
         sp(turns_label, Color::Cyan),
         sp(" · ", Color::DarkGray),
         sp(tokens_summary, Color::Gray),
         sp(cache_hit_str, Color::Indexed(208)),
-        sp(format!(" · {} calls", traj.tool_calls), Color::Gray),
         sp(
-            format!(
-                " · {} fail{}",
-                traj.failures,
-                if traj.failures == 1 { "" } else { "s" }
-            ),
+            format!(" · {}", count_label(traj.tool_calls, "call")),
+            Color::Gray,
+        ),
+        sp(
+            format!(" · {}", count_label(traj.failures, "fail")),
             Color::Red,
         ),
         sp(
@@ -219,9 +358,8 @@ pub(super) fn draw_turn_list(
     if traj.skipped_records > 0 {
         header.push(line(vec![sp(
             format!(
-                "  {} unreadable record{} skipped",
-                traj.skipped_records,
-                if traj.skipped_records == 1 { "" } else { "s" }
+                "  {} skipped",
+                count_label(traj.skipped_records, "unreadable record")
             ),
             Color::Yellow,
         )]));
@@ -294,12 +432,13 @@ pub(super) fn draw_turn_list(
     let clamped = cursor.min(traj.rows.len().saturating_sub(1));
     let now_secs = now_epoch_secs();
     let width = area.width as usize;
+    let cols = TurnColumns::for_rows(&traj.rows, width, show_per_turn_model);
     for (i, row) in traj.rows.iter().enumerate() {
         let sel = i == clamped;
         let prefix = if sel { "▸ " } else { "  " };
         match row {
             TrajectoryRow::Turn(t) => {
-                for extra in turn_row(t, sel, width, show_per_turn_model, now_secs) {
+                for extra in turn_row(t, sel, &cols, now_secs) {
                     body.push(extra);
                 }
                 // The selected row's body line is taken after any separator, so

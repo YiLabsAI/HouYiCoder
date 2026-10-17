@@ -16,6 +16,7 @@ use ratatui::{
 };
 
 use crate::agent_message::FleetEntry;
+use crate::command::render::format_tokens;
 use crate::state::App;
 
 /// Max child rows the strip ever shows. A longer fleet scrolls within the
@@ -147,7 +148,7 @@ fn build_row(entry: &FleetEntry, selected: bool) -> Line<'_> {
     } else {
         ("◯ ", Style::default().fg(Color::Cyan))
     };
-    let tokens = format_tokens(entry.tokens);
+    let tokens = format!("{} tok", format_tokens(entry.tokens));
     let body = if entry.completed.is_some() {
         format!("{} · done · {}", entry.subagent_type, tokens)
     } else {
@@ -183,18 +184,6 @@ fn verb_for(tool: Option<&str>) -> &'static str {
         Some("test") => "verifying",
         Some(_) => "working",
         None => "thinking",
-    }
-}
-
-/// Compact token count: under 1k as-is, otherwise kilo with one decimal so
-/// a row stays narrow. Matches the observability token-unit discipline.
-fn format_tokens(tokens: u64) -> String {
-    if tokens < 1000 {
-        format!("{} tok", tokens)
-    } else if tokens < 1_000_000 {
-        format!("{:.1}k tok", tokens as f64 / 1000.0)
-    } else {
-        format!("{:.1}m tok", tokens as f64 / 1_000_000.0)
     }
 }
 

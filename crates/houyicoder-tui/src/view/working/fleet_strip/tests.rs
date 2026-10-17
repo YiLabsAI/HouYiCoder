@@ -32,14 +32,6 @@ fn test_verb_from_tool() {
     assert_eq!(verb_for(None), "thinking");
 }
 
-/// Sub-1k tokens render plain; 1k+ renders kilo with one decimal so the
-/// row width stays bounded.
-#[test]
-fn test_token_format_compact() {
-    assert_eq!(format_tokens(50), "50 tok");
-    assert_eq!(format_tokens(1200), "1.2k tok");
-}
-
 /// The wanted height tracks the fleet up to the cap; a one-entry fleet
 /// asks for one row, a five-entry fleet still asks for three.
 #[test]
@@ -165,7 +157,7 @@ fn test_click_route() {
 }
 
 /// A completed row goes terse: it shows the type, a done marker, and the
-/// token total — never the stale live verb. Pins the auto-background
+/// token total — never the stale live verb. Guards the auto-background
 /// render so a refactor that re-adds the verb to a finished row fails.
 #[test]
 fn test_completed_row_terse() {

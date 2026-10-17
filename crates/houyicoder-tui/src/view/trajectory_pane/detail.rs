@@ -85,8 +85,8 @@ pub(super) fn draw_turn_detail(
                 sp(
                     format!(
                         "  {} in {} out{} · total {}",
-                        fmt_k_opt(turn.tokens_in),
-                        fmt_k_opt(turn.tokens_out),
+                        tokens_or_dash(turn.tokens_in),
+                        tokens_or_dash(turn.tokens_out),
                         cache_str,
                         format_span_ms(turn.duration_ms)
                     ),
@@ -519,11 +519,11 @@ fn format_turn_cache(turn: &TrajectoryTurn) -> String {
     // count worth naming, so it is stated as the rate alone.
     match (turn.cache_hit_pct(), turn.cache_read) {
         (Some(pct), Some(cache_read)) if cache_read > 0 => {
-            format!(" · {} ({pct:.0}%) cache hit", fmt_k(cache_read as usize))
+            format!(" · {} ({pct:.0}%) cache hit", format_tokens(cache_read))
         }
         (Some(_), _) => " · 0% cache hit".to_string(),
         (None, Some(cache_read)) if cache_read > 0 => {
-            format!(" · {} cache hit", fmt_k(cache_read as usize))
+            format!(" · {} cache hit", format_tokens(cache_read))
         }
         _ => String::new(),
     }

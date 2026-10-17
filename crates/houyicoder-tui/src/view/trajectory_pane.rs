@@ -20,6 +20,7 @@ use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
+use crate::command::render::format_tokens;
 use crate::state::{TrajectoryDrill, TrajectoryPaneState, TrajectoryTurnKey};
 use crate::view::line_wrap::truncate_width;
 use crate::view::navigation::key_hint;
@@ -423,14 +424,6 @@ fn blank() -> Line<'static> {
 fn sp(text: impl Into<String>, color: Color) -> Span<'static> {
     Span::styled(text.into(), Style::default().fg(color))
 }
-fn fmt_k(n: usize) -> String {
-    if n >= 1000 {
-        format!("{:.1}k", n as f64 / 1000.0)
-    } else {
-        format!("{}", n)
-    }
-}
-
 /// Pad a string to a display width, counting columns rather than characters
 /// so a wide glyph cannot shift the columns after it.
 fn pad(text: &str, width: usize) -> String {
@@ -443,13 +436,12 @@ fn pad(text: &str, width: usize) -> String {
     out
 }
 
-/// Format an optional token count: a real value via fmt_k, or "—" for None
-/// (unknown — the turn had no TurnUsage, e.g. cancelled mid-stream). Never
-/// renders 0 for an unknown count: a 0% display would read as "confirmed
-/// zero" rather than "not measured".
-fn fmt_k_opt(n: Option<usize>) -> String {
+/// A token count, or an em dash for a count the turn never reported: a turn
+/// cancelled before its usage arrived has none, and a zero there would read as
+/// a measured zero rather than an absent measurement.
+fn tokens_or_dash(n: Option<usize>) -> String {
     match n {
-        Some(v) => fmt_k(v),
+        Some(v) => format_tokens(v as u64),
         None => "—".to_string(),
     }
 }

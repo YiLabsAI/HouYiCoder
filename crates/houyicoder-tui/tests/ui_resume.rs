@@ -802,7 +802,7 @@ fn test_launch_resume_chains_session() {
 }
 
 /// After --resume <sid>, the /trajectory pane lists the seeded turn: the
-/// header reads "1 turns" (not "0 turns") + the turn row renders the seeded
+/// header reads "1 turn" (not "0 turns") + the turn row renders the seeded
 /// user input. Discriminates from the transcript-render test: the output is
 /// cleared before opening the trajectory pane, so the seeded text can only
 /// come from the trajectory turn-list, not the transcript scrollback.
@@ -829,9 +829,12 @@ fn test_trajectory_shows_resumed_events() {
     // can only come from the trajectory turn-list, not the transcript.
     s.clear_output();
     run_slash_command(&mut s, "trajectory");
+    // The singular is part of the match, not a separate assertion: a header
+    // that dropped the count into a fixed plural phrase renders "1 turns", and
+    // the word boundary here rejects it.
     assert!(
-        s.wait_for_plain("1 turns", RENDER_TIMEOUT),
-        "trajectory header must report 1 seeded turn (not 0):\n{}",
+        s.wait_for_plain("1 turn ", RENDER_TIMEOUT),
+        "trajectory header must report one seeded turn in the singular (not 0, not 1 turns):\n{}",
         s.output_plain()
     );
     assert!(

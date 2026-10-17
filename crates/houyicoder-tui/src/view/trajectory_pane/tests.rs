@@ -3,6 +3,7 @@
 
 use super::list;
 
+mod columns;
 mod fixtures;
 mod formatting;
 mod selection;
@@ -20,7 +21,6 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use fixtures::{detail_of_all, record_of, turn, view};
 use houyicoder_protocol::frontend::SlashCommand;
 use ratatui::layout::Rect;
-use ratatui::text::Line;
 use ratatui::{Terminal, backend::TestBackend};
 use std::env::temp_dir;
 use std::fs::write;
@@ -106,13 +106,6 @@ fn test_down_clamps_last_row() {
         len - 1,
         "cursor must clamp to last row, not exceed it"
     );
-}
-
-#[test]
-fn test_fmt_k_short_long() {
-    assert_eq!(fmt_k(800), "800");
-    assert_eq!(fmt_k(3200), "3.2k");
-    assert_eq!(fmt_k(45200), "45.2k");
 }
 
 #[test]
@@ -828,7 +821,7 @@ fn test_session_header_hides_share() {
     );
     assert!(!head.contains('%'), "and no percentage: {head}");
     assert!(
-        head.contains("1.0k in 200 out"),
+        head.contains("1k in 200 out"),
         "the counts themselves still render: {head}"
     );
 }
@@ -1315,46 +1308,6 @@ fn test_turn_list_degrades() {
     assert!(
         !narrow.contains("qwen3.7-max"),
         "so is the model column: {narrow}"
-    );
-}
-
-/// The token column starts at the same display column whatever the title holds,
-/// so a wide-glyph title cannot shift the numbers on the rows below it.
-#[test]
-fn test_turn_list_glyph_aligns() {
-    let turn = |n: usize, title: &str| TrajectoryTurn {
-        tokens_in: Some(1_200),
-        tokens_out: Some(500),
-        duration_ms: 100,
-        ..turn(n, title)
-    };
-    let view = TrajectoryView {
-        models_used: 2,
-        tokens_in: Some(2_400),
-        tokens_out: Some(1_000),
-        ..view(vec![
-            TrajectoryRow::Turn(turn(1, "宽的标题")),
-            TrajectoryRow::Turn(turn(2, "ascii")),
-        ])
-    };
-    let (_, body, _, _) = list::draw_turn_list(&view, 0, Rect::new(0, 0, 200, 10));
-    // The token column is found by the cell that carries the in/out counts,
-    // not by a glyph that may be reworded: a probe that no longer matches
-    // would silently make this assertion vacuous.
-    let col_of_tokens = |line: &Line<'static>| -> usize {
-        let mut col = 0usize;
-        for span in &line.spans {
-            if span.content.contains(" in ") {
-                return col;
-            }
-            col += UnicodeWidthStr::width(span.content.as_ref());
-        }
-        panic!("no token cell in the row: {:?}", line.spans);
-    };
-    assert_eq!(
-        col_of_tokens(&body[0]),
-        col_of_tokens(&body[1]),
-        "the token column sits at one display column on both rows"
     );
 }
 
