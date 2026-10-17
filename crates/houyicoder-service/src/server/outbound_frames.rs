@@ -13,7 +13,7 @@ use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
 use houyicoder_protocol::framing::encode;
 use houyicoder_protocol::frontend::{FrontendEvent, PendingInputId, QueuedInput};
 
-use super::event_sequencer::EntryPayloads;
+use super::event_sequencer::{DurableBatch, EntryPayloads};
 use super::{FrameCarrier, Server};
 use houyicoder_protocol::envelope::ChildTranscriptFrame;
 
@@ -21,6 +21,17 @@ use houyicoder_protocol::envelope::ChildTranscriptFrame;
 /// states where the content still is, so the notice is not a dead end.
 const OVERSIZED_EVENT_NOTICE: &str =
     "an event exceeded the protocol's per-message limit — the session log holds the full entry";
+
+/// The durable records one round of a history walk maps.
+///
+/// The bound counts records rather than bytes: what a round costs is one decode
+/// per record plus the payloads those records map, so a record count bounds
+/// both, where a byte count would bound the frames a round holds and leave the
+/// records behind them free to stretch the round. The count is also what
+/// releases a round's frames before the next round reads, and it is large
+/// enough that the read finding the history's end stays a small part of the
+/// walk.
+const DURABLE_BATCH_RECORDS: usize = 2048;
 
 impl Server {
     fn map_turn_event(event: &SessionLogEntry) -> EntryPayloads {
@@ -52,7 +63,10 @@ impl Server {
     /// Sequence and send every event currently available for this session.
     /// The sequencer holds its producer lock while reading the durable cursor
     /// and draining runtime events, so a delta emitted after an append remains
-    /// behind that append's mappings.
+    /// behind that append's mappings. The history is walked in bounded rounds:
+    /// each round's frames are sent and released before the next round reads,
+    /// because a session without a connection accumulates a history longer than
+    /// the one round that first flushes it can hold.
     pub(super) async fn flush_events(
         &mut self,
         io: &mut FrameCarrier,
@@ -60,17 +74,24 @@ impl Server {
         let runner = self.runner.clone();
         let session = self.session;
         let sequencer = self.event_sequencer.clone();
-        let frames = sequencer.sequence_available(move |cursor| {
-            Self::load_entries(runner.store().as_ref(), session, cursor)
-        });
-        for frame in frames {
-            Self::send_event_frame(io, frame).await?;
+        loop {
+            let loader = runner.clone();
+            let (frames, walk_finished) = sequencer.sequence_available(move |from| {
+                Self::load_entries(loader.store().as_ref(), session, from)
+            });
+            for frame in frames {
+                Self::send_event_frame(io, frame).await?;
+            }
+            if walk_finished {
+                return Ok(());
+            }
         }
-        Ok(())
     }
 
     /// Replay reliable history requested by Hello, then send events that
-    /// accumulated while no connection was active.
+    /// accumulated while no connection was active. The history is sequenced and
+    /// sent in bounded rounds, so a client attaching to a long session receives
+    /// its history as it is read rather than after the whole of it is mapped.
     pub(super) async fn replay_events(
         &mut self,
         io: &mut FrameCarrier,
@@ -78,47 +99,69 @@ impl Server {
         let runner = self.runner.clone();
         let session = self.session;
         let sequencer = self.event_sequencer.clone();
-        let replay = sequencer.prepare_replay(self.replay_after, move |cursor| {
-            Self::load_entries(runner.store().as_ref(), session, cursor)
-        });
-        for frame in replay {
-            Self::send_event_frame(io, frame).await?;
+        let mut plan = sequencer.begin_replay(self.replay_after);
+        loop {
+            let loader = runner.clone();
+            let (frames, complete) = sequencer.next_replay_batch(&mut plan, move |from| {
+                Self::load_entries(loader.store().as_ref(), session, from)
+            });
+            for frame in frames {
+                Self::send_event_frame(io, frame).await?;
+            }
+            if complete {
+                break;
+            }
         }
         self.flush_events(io).await
     }
 
-    /// Map the durable records from an ordinal to the end of the history.
+    /// Map one bounded batch of the durable records from a position.
     ///
-    /// The log is never resident whole: the records are read page by page and
-    /// mapped as each page arrives. The mappings this call covers are held
-    /// until the caller sequences them, so a replay asked from the start of a
-    /// long session holds the frames it is about to send. A read that fails
-    /// leaves the cursor after the last record it reported, so the next round
-    /// resumes there rather than replaying the records the client already saw.
+    /// The log is never resident whole and neither is the batch read from it:
+    /// the records are read page by page and mapped as each page arrives, and
+    /// the batch ends at a record count so the frames one round maps are
+    /// bounded however long the history is. A batch that ends short of that
+    /// count reports the walk finished; a read that fails ends it there too,
+    /// after the last record it reported, so the next round resumes after the
+    /// records the client already saw rather than replaying them.
     fn load_entries(
         store: &dyn SessionLog,
         session: SessionId,
-        cursor: usize,
-    ) -> Vec<EntryPayloads> {
-        let pages = TrajectoryPages::new(
-            store,
-            session,
-            TrajectoryPosition {
-                index: cursor,
-                byte_offset: None,
-            },
-        );
-        let mut loaded = Vec::new();
-        for page in pages {
-            match page {
-                Ok(page) => loaded.extend(page.events.iter().map(Self::map_turn_event)),
-                Err(e) => {
-                    tracing::warn!("durable read for session {session} stopped: {e}");
+        from: TrajectoryPosition,
+    ) -> DurableBatch {
+        let mut pages = TrajectoryPages::new(store, session, from);
+        let mut entries = Vec::new();
+        let mut walk_finished = false;
+        // The pages carry the position between themselves, and the last one
+        // read is what the next batch resumes from. A batch whose first read
+        // failed reports the position it was given, which the walk has not
+        // moved past.
+        let mut next = from;
+        loop {
+            match pages.next() {
+                None => {
+                    walk_finished = true;
                     break;
+                }
+                Some(Err(e)) => {
+                    tracing::warn!("durable read for session {session} stopped: {e}");
+                    walk_finished = true;
+                    break;
+                }
+                Some(Ok(page)) => {
+                    next = page.next;
+                    entries.extend(page.events.iter().map(Self::map_turn_event));
+                    if entries.len() >= DURABLE_BATCH_RECORDS {
+                        break;
+                    }
                 }
             }
         }
-        loaded
+        DurableBatch {
+            entries,
+            next,
+            walk_finished,
+        }
     }
 
     /// Deliver one sequenced event, replacing it with a bounded notice when

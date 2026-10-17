@@ -12,10 +12,12 @@ use super::*;
 use futures::StreamExt;
 use futures::channel::mpsc;
 use houyicoder_context::{EventId, SessionId};
+use houyicoder_memory::InMemoryBackend;
 use houyicoder_protocol::acpx::AcpxMethod;
 use houyicoder_protocol::envelope::EventSeq;
 use houyicoder_protocol::framing::{FrameDecoder, MAX_MESSAGE_BYTES};
 use houyicoder_protocol::frontend::FrontendEvent;
+use houyicoder_session::SessionStore;
 
 fn entry(event: SessionEvent) -> SessionLogEntry {
     SessionLogEntry {
@@ -157,6 +159,83 @@ async fn test_event_under_bound_passes() {
         matches!(&sent.payload, FrontendEvent::Message { delta } if delta == "hello"),
         "the admitted payload passes through unchanged: {:?}",
         sent.payload
+    );
+}
+
+/// A history longer than one round is walked in rounds, each mapping its record
+/// cap and reporting a position past the records it mapped, so the rounds join
+/// up: every record of the log is mapped once, in the log's order, and the walk
+/// ends on the history's own end.
+///
+/// The cap and the reported position are the pair a resume rests on. A round
+/// that reported the position it was given would map the same records twice,
+/// and one that reported a position short of what it mapped would skip the
+/// records in between; both leave the history the client rebuilds wrong while
+/// every round in isolation looks well formed.
+#[tokio::test]
+async fn test_history_walk_batches_capped() {
+    let store = SessionStore::new(Box::new(InMemoryBackend::new()));
+    let session = SessionId::new();
+    let records = DURABLE_BATCH_RECORDS * 2;
+    let mut written: Vec<String> = Vec::new();
+    for turn in 0..records {
+        let record = SessionLogEntry {
+            id: EventId::new(),
+            session,
+            ts: 0,
+            prev_hash: None,
+            event: SessionEvent::UserInput {
+                text: format!("turn {turn}"),
+            },
+        };
+        written.push(record.id.to_string());
+        store.append(record).await.expect("the record is written");
+    }
+    let log: &dyn SessionLog = &store;
+    let mut from = TrajectoryPosition::start();
+    let mut read: Vec<String> = Vec::new();
+    let mut rounds = 0;
+    let mut finished = false;
+    while rounds < 16 {
+        rounds += 1;
+        let batch = Server::load_entries(log, session, from);
+        if !batch.walk_finished {
+            assert!(
+                batch.entries.len() >= DURABLE_BATCH_RECORDS,
+                "a round with more to read maps its record cap: {} entries",
+                batch.entries.len()
+            );
+        }
+        // A page arrives whole, so a round can overshoot its cap by the records
+        // of one page. What the cap bounds is a round's work, and this log is
+        // several rounds long, so no one round maps all of it.
+        assert!(
+            batch.entries.len() < records,
+            "no round maps the whole log: {} of {records} records",
+            batch.entries.len()
+        );
+        assert!(
+            batch.next.index >= from.index + batch.entries.len(),
+            "a round resumes past the records it mapped: {} from {} plus {} entries",
+            batch.next.index,
+            from.index,
+            batch.entries.len()
+        );
+        read.extend(batch.entries.iter().map(|e| e.event_id.0.clone()));
+        if batch.walk_finished {
+            finished = true;
+            break;
+        }
+        from = batch.next;
+    }
+    assert!(finished, "the walk reaches the history's end");
+    assert!(
+        rounds >= 2,
+        "a history longer than the cap takes more than one round: {rounds}"
+    );
+    assert_eq!(
+        read, written,
+        "the rounds map every record once, in the log's order"
     );
 }
 

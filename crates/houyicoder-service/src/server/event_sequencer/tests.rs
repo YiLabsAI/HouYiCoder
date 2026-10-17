@@ -34,13 +34,53 @@ fn status(agent_id: &str, turn: u32) -> FrontendEvent {
     }
 }
 
+/// A batch of entries read from a position, reporting where they end.
+fn batch(
+    from: TrajectoryPosition,
+    entries: Vec<EntryPayloads>,
+    walk_finished: bool,
+) -> DurableBatch {
+    DurableBatch {
+        next: TrajectoryPosition {
+            index: from.index + entries.len(),
+            byte_offset: None,
+        },
+        entries,
+        walk_finished,
+    }
+}
+
+/// A loaded batch that reports the log's end after the entries it carries.
+fn loaded(from: TrajectoryPosition, entries: Vec<EntryPayloads>) -> DurableBatch {
+    batch(from, entries, true)
+}
+
+/// Sequence one batch of a log that ends with it.
+fn available(sequencer: &EventSequencer, entries: Vec<EntryPayloads>) -> Vec<EventEnvelope> {
+    sequencer.sequence_available(|from| loaded(from, entries)).0
+}
+
+/// Replay a history delivered as one batch that reaches its end.
+fn replay_all(
+    sequencer: &EventSequencer,
+    last: Option<EventSeq>,
+    entries: Vec<EntryPayloads>,
+) -> Vec<EventEnvelope> {
+    let mut plan = sequencer.begin_replay(last);
+    sequencer
+        .next_replay_batch(&mut plan, |from| loaded(from, entries))
+        .0
+}
+
 #[test]
 fn test_durable_precedes_preview() {
     let sequencer = EventSequencer::new();
     sequencer.enqueue_ephemeral(line("delta"));
 
-    let frames =
-        sequencer.sequence_available(|_| vec![durable("e1", vec![line("user"), line("commit")])]);
+    let frames = available(
+        &sequencer,
+        vec![durable("e1", vec![line("user"), line("commit")])],
+    );
 
     assert_eq!(frames[0].seq, EventSeq(0));
     assert_eq!(frames[1].seq, EventSeq(1));
@@ -53,8 +93,10 @@ fn test_identity_rides_envelope() {
     // identity, while a runtime push with no log entry carries none,
     // so a consumer can tell durable rows from local ones.
     let sequencer = EventSequencer::new();
-    let frames =
-        sequencer.sequence_available(|_| vec![durable("e1", vec![line("user"), line("commit")])]);
+    let frames = available(
+        &sequencer,
+        vec![durable("e1", vec![line("user"), line("commit")])],
+    );
     assert_eq!(
         frames[0].event_id.as_ref().map(|id| &id.0),
         Some(&"e1".to_string())
@@ -71,7 +113,7 @@ fn test_replay_preserves_identity() {
     // A reconnect replays retained envelopes; the durable identity must
     // survive retention so the resumed consumer lands on the same rows.
     let sequencer = EventSequencer::new();
-    sequencer.sequence_available(|_| vec![durable("e1", vec![line("user")])]);
+    available(&sequencer, vec![durable("e1", vec![line("user")])]);
     sequencer.enqueue_reliable(line("notice"));
     drop(sequencer.sequence_pending_for_test());
 
@@ -98,11 +140,12 @@ const TEST_WINDOW_BYTES: usize = 1024;
 /// what the window dropped can be read out of the log again.
 fn trimmed_sequencer() -> EventSequencer {
     let sequencer = EventSequencer::with_window(TEST_WINDOW_BYTES);
-    sequencer.sequence_available(|_| {
+    available(
+        &sequencer,
         (0..4)
             .map(|index| durable(&format!("e{index}"), vec![line(&"p".repeat(PUSH_BYTES))]))
-            .collect()
-    });
+            .collect(),
+    );
     sequencer
 }
 
@@ -148,13 +191,18 @@ fn test_replay_sends_missed_frames() {
     let sequencer = trimmed_sequencer();
     let filler = "p".repeat(PUSH_BYTES);
     let mut asked = None;
-    let replay = sequencer.prepare_replay(Some(EventSeq(1)), |cursor| {
-        asked = Some(cursor);
-        vec![durable("e2", vec![line(&filler)])]
+    let mut plan = sequencer.begin_replay(Some(EventSeq(1)));
+    let (replay, _) = sequencer.next_replay_batch(&mut plan, |from| {
+        asked = Some(from);
+        loaded(from, vec![durable("e2", vec![line(&filler)])])
     });
 
     let seqs: Vec<u64> = replay.iter().map(|frame| frame.seq.0).collect();
-    assert_eq!(asked, Some(4), "the durable cursor is read where it stands");
+    assert_eq!(
+        asked.map(|position| position.index),
+        Some(4),
+        "the durable cursor is read where it stands"
+    );
     assert_eq!(seqs, vec![2, 3, 4], "the delta plus the loaded entry");
 }
 
@@ -165,13 +213,21 @@ fn test_replay_rereads_below_window() {
     // start, which is the history the window was trimmed against.
     let sequencer = trimmed_sequencer();
     let mut asked = None;
-    let replay = sequencer.prepare_replay(Some(EventSeq(0)), |cursor| {
-        asked = Some(cursor);
-        vec![durable("e9", vec![line("from-log"), line("and-more")])]
+    let mut plan = sequencer.begin_replay(Some(EventSeq(0)));
+    let (replay, _) = sequencer.next_replay_batch(&mut plan, |from| {
+        asked = Some(from);
+        loaded(
+            from,
+            vec![durable("e9", vec![line("from-log"), line("and-more")])],
+        )
     });
 
     let seqs: Vec<u64> = replay.iter().map(|frame| frame.seq.0).collect();
-    assert_eq!(asked, Some(0), "the whole log is read again");
+    assert_eq!(
+        asked.map(|position| position.index),
+        Some(0),
+        "the whole log is read again"
+    );
     assert_eq!(seqs, vec![4, 5], "every entry comes back, in log order");
 }
 
@@ -181,14 +237,160 @@ fn test_replay_rereads_without_cursor() {
     // history it needs.
     let sequencer = trimmed_sequencer();
     let mut asked = None;
-    let replay = sequencer.prepare_replay(None, |cursor| {
-        asked = Some(cursor);
-        vec![durable("e9", vec![line("from-log")])]
+    let mut plan = sequencer.begin_replay(None);
+    let (replay, _) = sequencer.next_replay_batch(&mut plan, |from| {
+        asked = Some(from);
+        loaded(from, vec![durable("e9", vec![line("from-log")])])
     });
 
-    assert_eq!(asked, Some(0), "the whole log is read again");
+    assert_eq!(
+        asked.map(|position| position.index),
+        Some(0),
+        "the whole log is read again"
+    );
     assert_eq!(replay.len(), 1);
     assert_eq!(replay[0].seq, EventSeq(4));
+}
+
+#[test]
+fn test_replay_orders_batches() {
+    // A history longer than one batch is walked in further batches: each
+    // batch's frames come back before the next batch is read, and the frames
+    // only memory holds are sequenced after the log's last batch, so a client
+    // reading along never sees a runtime frame ahead of the log it followed.
+    let sequencer = EventSequencer::new();
+    sequencer.sequence_reliable(line("notice"));
+    let mut plan = sequencer.begin_replay(None);
+    let mut batches = [
+        (vec![durable("e1", vec![line("first")])], false),
+        (vec![durable("e2", vec![line("second")])], true),
+    ]
+    .into_iter();
+
+    let (first, complete) = sequencer.next_replay_batch(&mut plan, |from| {
+        let (entries, walk_finished) = batches.next().expect("a batch");
+        batch(from, entries, walk_finished)
+    });
+    assert!(!complete, "a batch short of the history's end leaves more");
+    let seqs: Vec<u64> = first.iter().map(|frame| frame.seq.0).collect();
+    assert_eq!(seqs, vec![1], "the batch alone, the held frame held back");
+
+    let (second, complete) = sequencer.next_replay_batch(&mut plan, |from| {
+        let (entries, walk_finished) = batches.next().expect("a batch");
+        batch(from, entries, walk_finished)
+    });
+    assert!(complete, "the history's last batch ends the replay");
+    let seqs: Vec<u64> = second.iter().map(|frame| frame.seq.0).collect();
+    assert_eq!(seqs, vec![2, 3], "the last entry, then the held frame");
+}
+
+#[test]
+fn test_batches_resume_reported_position() {
+    // A history longer than one batch is walked in rounds, and a round starts
+    // where the round before it stopped. Both readers of the durable log take
+    // that position from the batch: it carries the byte position the log was
+    // read to, so the next round seeks there instead of counting records from
+    // the epoch's start for every round of the walk.
+    let after_first = TrajectoryPosition {
+        index: 1,
+        byte_offset: Some(2048),
+    };
+    let after_last = TrajectoryPosition {
+        index: 2,
+        byte_offset: Some(4096),
+    };
+
+    let sequencer = EventSequencer::new();
+    let mut asked = Vec::new();
+    let mut rounds = positioned_batches().into_iter();
+    let (_, walk_finished) = sequencer.sequence_available(|from| {
+        asked.push(from);
+        rounds.next().expect("a batch")
+    });
+    assert!(
+        !walk_finished,
+        "a batch short of the end leaves more rounds"
+    );
+    let (_, walk_finished) = sequencer.sequence_available(|from| {
+        asked.push(from);
+        rounds.next().expect("a batch")
+    });
+    assert!(walk_finished);
+    // A read after the walk starts where the finished batch stopped, so a
+    // later flush reads what arrived since rather than the history again.
+    sequencer.sequence_available(|from| {
+        asked.push(from);
+        batch(from, Vec::new(), true)
+    });
+    assert_eq!(
+        asked,
+        vec![TrajectoryPosition::start(), after_first, after_last],
+        "each round resumes where the batch before it stopped"
+    );
+
+    let mut asked = Vec::new();
+    let mut rounds = positioned_batches().into_iter();
+    let mut plan = sequencer.begin_replay(None);
+    let (_, complete) = sequencer.next_replay_batch(&mut plan, |from| {
+        asked.push(from);
+        rounds.next().expect("a batch")
+    });
+    assert!(!complete, "a batch short of the end leaves more rounds");
+    let (_, complete) = sequencer.next_replay_batch(&mut plan, |from| {
+        asked.push(from);
+        rounds.next().expect("a batch")
+    });
+    assert!(complete);
+    assert_eq!(
+        asked,
+        vec![TrajectoryPosition::start(), after_first],
+        "a replay resumes where its batch stopped too"
+    );
+}
+
+/// The two batches of a history last read at a byte position, which the round
+/// after them resumes from.
+fn positioned_batches() -> [DurableBatch; 2] {
+    [
+        DurableBatch {
+            entries: vec![durable("e1", vec![line("first")])],
+            next: TrajectoryPosition {
+                index: 1,
+                byte_offset: Some(2048),
+            },
+            walk_finished: false,
+        },
+        DurableBatch {
+            entries: vec![durable("e2", vec![line("second")])],
+            next: TrajectoryPosition {
+                index: 2,
+                byte_offset: Some(4096),
+            },
+            walk_finished: true,
+        },
+    ]
+}
+
+#[test]
+fn test_sequence_defers_pending() {
+    // A producer's event pushed while the log is still being walked waits
+    // behind it: the batch that does not end the walk sequences nothing
+    // pending, so a log's records keep their order ahead of what a producer
+    // pushed at runtime.
+    let sequencer = EventSequencer::new();
+    sequencer.enqueue_reliable(line("notice"));
+    let (first, walk_finished) = sequencer
+        .sequence_available(|from| batch(from, vec![durable("e1", vec![line("first")])], false));
+    assert_eq!(first.len(), 1, "the batch's own record alone");
+    assert!(!walk_finished);
+
+    let (second, walk_finished) =
+        sequencer.sequence_available(|from| batch(from, Vec::new(), true));
+    assert!(walk_finished);
+    assert!(matches!(
+        &second[0].payload,
+        FrontendEvent::SystemLine { text } if text == "notice"
+    ));
 }
 
 /// A notice, a memory change and a live status are pushed by producers at
@@ -213,12 +415,14 @@ fn test_replay_keeps_runtime_frames() {
     drop(sequencer.sequence_pending_for_test());
     sequencer.sequence_reliable(status("child", 1));
 
-    let replay = sequencer.prepare_replay(None, |_| {
+    let replay = replay_all(
+        &sequencer,
+        None,
         vec![durable(
             "e1",
             vec![line(&"p".repeat(4 * TEST_WINDOW_BYTES))],
-        )]
-    });
+        )],
+    );
 
     assert!(
         replay.iter().any(
@@ -247,8 +451,8 @@ fn test_replay_keeps_runtime_frames() {
 #[test]
 fn test_reread_replaces_retained_frames() {
     let sequencer = EventSequencer::with_window(TEST_WINDOW_BYTES);
-    sequencer.sequence_available(|_| vec![durable("e1", vec![line("first")])]);
-    sequencer.prepare_replay(None, |_| vec![durable("e1", vec![line("first")])]);
+    available(&sequencer, vec![durable("e1", vec![line("first")])]);
+    replay_all(&sequencer, None, vec![durable("e1", vec![line("first")])]);
 
     let retained = sequencer.reliable_after(None);
     let identities: Vec<&str> = retained
@@ -413,10 +617,13 @@ fn test_snapshot_blocks_causal_delta() {
     let (snapshot_tx, snapshot_rx) = channel();
     let (release_tx, release_rx) = channel();
     let sequencing = spawn(move || {
-        sequencer_for_load.sequence_available(|_| {
+        sequencer_for_load.sequence_available(|from| {
             snapshot_tx.send(()).expect("snapshot entered");
             release_rx.recv().expect("snapshot released");
-            vec![durable("e1", vec![line("user"), line("commit")])]
+            loaded(
+                from,
+                vec![durable("e1", vec![line("user"), line("commit")])],
+            )
         })
     });
     snapshot_rx.recv().expect("snapshot started");
@@ -430,7 +637,7 @@ fn test_snapshot_blocks_causal_delta() {
     attempt_rx.recv().expect("producer started");
     release_tx.send(()).expect("release snapshot");
 
-    let durable = sequencing.join().expect("sequencing thread");
+    let (durable, _) = sequencing.join().expect("sequencing thread");
     enqueue.join().expect("producer thread");
     let pending = sequencer.sequence_pending_for_test();
     assert_eq!(durable[0].seq, EventSeq(0));

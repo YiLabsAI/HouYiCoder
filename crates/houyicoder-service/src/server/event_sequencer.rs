@@ -7,6 +7,7 @@ use houyicoder_api::agent_event::{
     self, AgentEventHandlers, EventHandler, MemoryChangedEvent, ResponseStreamEvent,
     ToolExecutionEvent, UserNoticeEvent,
 };
+use houyicoder_api::session::TrajectoryPosition;
 use houyicoder_context::MemoryScope;
 use houyicoder_core::agent::Runner;
 use houyicoder_protocol::acpx::{AcpxMethod, AcpxNotification};
@@ -44,6 +45,36 @@ struct PendingEvent {
 pub(crate) struct EntryPayloads {
     pub(crate) event_id: DurableEventId,
     pub(crate) payloads: Vec<FrontendEvent>,
+}
+
+/// One bounded read of a session's durable log: the entries read from a
+/// position, where the read stopped, and whether the walk over the log is
+/// finished, either because the history ran out or because a read failed and
+/// ended it. The reader reports this apart from the entries because a history
+/// longer than one read has to be walked in further reads, while a finished
+/// walk has nothing behind it.
+pub(crate) struct DurableBatch {
+    pub(crate) entries: Vec<EntryPayloads>,
+    /// Where the next read resumes, as the walk left it: the ordinal of the
+    /// record after the last entry read, and the byte position the log held
+    /// when that record was reached. Reading a session's history in rounds
+    /// costs a walk from the epoch start per round unless each round is told
+    /// the byte position the round before it read to.
+    pub(crate) next: TrajectoryPosition,
+    pub(crate) walk_finished: bool,
+}
+
+/// A replay that has begun and not finished: the frames the window answers the
+/// client's cursor with, and the payloads only memory holds, kept until the
+/// log's last batch has been sequenced.
+pub(crate) struct ReplayPlan {
+    /// The retained frames the client is missing, sent ahead of the log's
+    /// records. None when the window cannot answer the cursor, where the log
+    /// itself carries the whole history back to the client.
+    opening: Option<Vec<EventEnvelope>>,
+    /// The payloads the durable log cannot reproduce, sequenced after its last
+    /// batch so the client's cursor still advances over them.
+    held: Vec<FrontendEvent>,
 }
 
 /// The newest reliable frames a session keeps in memory, bounded by the bytes
@@ -137,7 +168,12 @@ impl ReliableWindow {
 struct SequencerState {
     next_seq: u64,
     next_pending_order: u64,
-    trajectory_cursor: usize,
+    /// The position the next durable read starts at. Its ordinal is the
+    /// absolute index of the record that read begins at, counted over the
+    /// whole log rather than over any window, and the byte position rides
+    /// beside it so the log is read where it was left rather than searched
+    /// from its start.
+    trajectory_position: TrajectoryPosition,
     pending: VecDeque<PendingEvent>,
     pending_status: HashMap<String, PendingEvent>,
     ephemeral_pending: usize,
@@ -352,7 +388,7 @@ impl EventSequencer {
 
     pub(crate) fn reset_sequencer(&self) {
         let mut state = self.inner.state.lock().expect("event sequencer lock");
-        state.trajectory_cursor = 0;
+        state.trajectory_position = TrajectoryPosition::start();
         state.next_pending_order = 0;
         state.pending.clear();
         state.pending_status.clear();
@@ -361,63 +397,102 @@ impl EventSequencer {
         state.latest_status.clear();
     }
 
-    pub(crate) fn sequence_available<F>(&self, load_durable_events: F) -> Vec<EventEnvelope>
+    /// Sequence the durable events one bounded batch of the log maps, and the
+    /// pending runtime events once that batch was the history's last. Reports
+    /// whether the log has been read to its end.
+    ///
+    /// The lock is held for one batch rather than for a walk of the whole
+    /// history, so a producer appending while a long session is read waits for
+    /// a batch instead of for the walk.
+    pub(crate) fn sequence_available<F>(&self, load_durable_events: F) -> (Vec<EventEnvelope>, bool)
     where
-        F: FnOnce(usize) -> Vec<EntryPayloads>,
+        F: FnOnce(TrajectoryPosition) -> DurableBatch,
     {
         let mut state = self.inner.state.lock().expect("event sequencer lock");
-        let durable_events = load_durable_events(state.trajectory_cursor);
-        let mut sequenced = Self::sequence_trajectory(&mut state, durable_events);
-        sequenced.extend(Self::sequence_pending(&mut state));
-        sequenced
-    }
-
-    pub(crate) fn prepare_replay<F>(
-        &self,
-        last: Option<EventSeq>,
-        load_durable_events: F,
-    ) -> Vec<EventEnvelope>
-    where
-        F: FnOnce(usize) -> Vec<EntryPayloads>,
-    {
-        let mut state = self.inner.state.lock().expect("event sequencer lock");
-        if !state.window.covers(last) {
-            // The window cannot answer this cursor, so the log does. The frames
-            // only memory holds are lifted out before that read, because
-            // sequencing a log longer than the window fills it and would drop
-            // them before anything read them. Reading the log from its start
-            // rather than the window's tail also answers a cursor below the
-            // window with the whole history instead of its newest part.
-            let mut held = state.window.runtime_payloads();
-            held.extend(
-                state
-                    .latest_status
-                    .values()
-                    .map(|frame| frame.payload.clone()),
-            );
-            state.trajectory_cursor = 0;
-            // The window is emptied before the log is read: those frames are
-            // about to be produced again under new sequence numbers, and the
-            // copies would otherwise sit beside each other.
-            state.window.clear();
-            let mut replay = Self::sequence_trajectory(&mut state, load_durable_events(0));
-            // Held frames are sequenced after the log so the client's cursor
-            // still advances; each is filed again under its new sequence, which
-            // is what keeps it reachable for the next reconnect.
-            for payload in held {
-                replay.push(Self::sequence_runtime(&mut state, payload));
-            }
-            return replay;
+        let batch = load_durable_events(state.trajectory_position);
+        let DurableBatch {
+            entries,
+            next,
+            walk_finished,
+        } = batch;
+        let mut sequenced = Self::sequence_trajectory(&mut state, entries);
+        state.trajectory_position = next;
+        if walk_finished {
+            sequenced.extend(Self::sequence_pending(&mut state));
         }
-        // The delta is taken before this round's load can trim the front of
-        // the window, and the frames that load makes durable join it at the
-        // tail.
-        let mut replay = Self::collect_reliable_after(&state, last);
-        let durable_events = load_durable_events(state.trajectory_cursor);
-        replay.extend(Self::sequence_trajectory(&mut state, durable_events));
-        replay
+        (sequenced, walk_finished)
     }
 
+    /// Begin a replay for a client that last saw the given sequence.
+    ///
+    /// A cursor the window still covers is answered from the window, and the
+    /// frames the client is missing are lifted out here, before any load can
+    /// trim the window's front out from under them. A cursor it cannot cover is
+    /// answered by the log: the walk restarts at the start of the history,
+    /// which answers a cursor below the window with the whole history rather
+    /// than its newest part, and the payloads only memory holds are kept aside
+    /// before that walk, because sequencing a log longer than the window fills
+    /// it and would drop them before anything read them.
+    pub(crate) fn begin_replay(&self, last: Option<EventSeq>) -> ReplayPlan {
+        let mut state = self.inner.state.lock().expect("event sequencer lock");
+        if state.window.covers(last) {
+            let opening = Self::collect_reliable_after(&state, last);
+            return ReplayPlan {
+                opening: Some(opening),
+                held: Vec::new(),
+            };
+        }
+        let mut held = state.window.runtime_payloads();
+        held.extend(
+            state
+                .latest_status
+                .values()
+                .map(|frame| frame.payload.clone()),
+        );
+        state.trajectory_position = TrajectoryPosition::start();
+        // The window is emptied before the log is read: those frames are about
+        // to be produced again under new sequence numbers, and the copies would
+        // otherwise sit beside each other.
+        state.window.clear();
+        ReplayPlan {
+            opening: None,
+            held,
+        }
+    }
+
+    /// Sequence one bounded batch of the log for a replay in progress, then the
+    /// payloads memory held once the log's last batch has been read. Reports
+    /// whether the replay is complete.
+    pub(crate) fn next_replay_batch<F>(
+        &self,
+        plan: &mut ReplayPlan,
+        load_durable_events: F,
+    ) -> (Vec<EventEnvelope>, bool)
+    where
+        F: FnOnce(TrajectoryPosition) -> DurableBatch,
+    {
+        let mut state = self.inner.state.lock().expect("event sequencer lock");
+        let mut frames = plan.opening.take().unwrap_or_default();
+        let batch = load_durable_events(state.trajectory_position);
+        let DurableBatch {
+            entries,
+            next,
+            walk_finished,
+        } = batch;
+        frames.extend(Self::sequence_trajectory(&mut state, entries));
+        state.trajectory_position = next;
+        if !walk_finished {
+            return (frames, false);
+        }
+        for payload in plan.held.drain(..) {
+            frames.push(Self::sequence_runtime(&mut state, payload));
+        }
+        (frames, true)
+    }
+
+    /// Sequence the entries of one durable batch. The read position is the
+    /// batch's to report, because a read can pass over records it cannot hold
+    /// and only the walk knows how far it moved.
     fn sequence_trajectory(
         state: &mut SequencerState,
         entries: Vec<EntryPayloads>,
@@ -434,7 +509,6 @@ impl EventSequencer {
                 state.window.retain(frame.clone());
                 sequenced.push(frame);
             }
-            state.trajectory_cursor = state.trajectory_cursor.saturating_add(1);
         }
         sequenced
     }
