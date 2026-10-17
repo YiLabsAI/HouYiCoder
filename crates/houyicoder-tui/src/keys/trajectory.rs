@@ -1,12 +1,19 @@
 //! /trajectory pane key handlers: 3-level drill-down.
 //! Level 0: turn list — Up/Down select, Enter expands, Esc closes.
 //! Level 1: turn detail — Up/Down select events, Enter shows detail, Esc back.
-//! Level 2: event detail — Esc back to level 1.
+//! Level 2: event detail — Up/Down and PageUp/PageDown scroll the body, Esc
+//! back to level 1.
 
 use crate::state::App;
+use crate::state::TrajectoryPaneState;
 use crate::state::enums::Pane;
 use crate::view::trajectory_pane;
 use crossterm::event::{KeyCode, KeyEvent};
+
+/// The lines a key moves the level-2 body, the step the sibling detail panes
+/// move theirs by: a page is a fixed ten lines rather than the pane's height,
+/// so the step does not change with the terminal.
+const DETAIL_PAGE_LINES: i16 = 10;
 
 /// Record the turn the L0 cursor sits on, so a page that arrives under it can
 /// put the cursor back on the same turn instead of the same row index.
@@ -19,6 +26,24 @@ fn note_selected_turn(app: &App) {
     }
 }
 
+/// Move the record body when the record level is showing, and report whether
+/// the key was one of its scroll keys. The same keys move a cursor at the list
+/// levels, where the rows in hand hold no body of their own to move.
+fn scroll_record_body(state: &TrajectoryPaneState, code: KeyCode) -> bool {
+    if state.level() != 2 {
+        return false;
+    }
+    let step = match code {
+        KeyCode::Up => -1,
+        KeyCode::Down => 1,
+        KeyCode::PageUp => -DETAIL_PAGE_LINES,
+        KeyCode::PageDown => DETAIL_PAGE_LINES,
+        _ => return false,
+    };
+    state.scroll_detail(step);
+    true
+}
+
 /// Handle a key when the /trajectory pane is active. Returns true if the key
 /// was consumed (the caller should not fall through to generic input).
 ///
@@ -27,39 +52,39 @@ fn note_selected_turn(app: &App) {
 /// Wrapping would jump a thousand-turn history from end to start on one
 /// keystroke and destroy the sense of where the user is.
 pub fn handle(app: &mut App, k: KeyEvent) -> bool {
+    // The record level shows the whole body of one record, so its scroll keys
+    // move the view rather than a cursor: which record is shown was chosen a
+    // level up. They are answered before the table below, which reads a key as
+    // a move of the cursor over the rows in hand.
+    if scroll_record_body(&app.ui.trajectory, k.code) {
+        return true;
+    }
     match k.code {
-        // Level 2 is a stable detail view (the record selected at L1), not a
-        // switcher — Up/Down is a no-op there; switch records at L1. The keys
-        // are still consumed so they never move the input cursor.
         KeyCode::Up => {
-            if app.ui.trajectory.level() < 2 {
-                let c = app.ui.trajectory.cursor();
-                if c == 0 && app.ui.trajectory.level() == 0 {
-                    // At the top of the loaded turn list there is nowhere to
-                    // move, so widen it: the pane loads the tail first and
-                    // older history arrives a page at a time. Only the turn
-                    // list widens: at the record levels the window is not what
-                    // the user is moving in, and loading behind it would
-                    // re-point the drilled turn under them.
-                    if let Some(log) = app.sessions.persistence.trajectory_log.as_ref() {
-                        log.load_older();
-                    }
+            let c = app.ui.trajectory.cursor();
+            if c == 0 && app.ui.trajectory.level() == 0 {
+                // At the top of the loaded turn list there is nowhere to
+                // move, so widen it: the pane loads the tail first and
+                // older history arrives a page at a time. Only the turn
+                // list widens: at the record levels the window is not what
+                // the user is moving in, and loading behind it would
+                // re-point the drilled turn under them.
+                if let Some(log) = app.sessions.persistence.trajectory_log.as_ref() {
+                    log.load_older();
                 }
-                app.ui.trajectory.set_cursor(c.saturating_sub(1));
-                note_selected_turn(app);
             }
+            app.ui.trajectory.set_cursor(c.saturating_sub(1));
+            note_selected_turn(app);
             true
         }
         KeyCode::Down => {
-            if app.ui.trajectory.level() < 2 {
-                let c = app.ui.trajectory.cursor();
-                let last = app.ui.trajectory.list_len().saturating_sub(1);
-                // Saturating: the pane opens with a cursor that asks for the
-                // last row, and before the first page lands there is no row to
-                // clamp it against.
-                app.ui.trajectory.set_cursor(c.saturating_add(1).min(last));
-                note_selected_turn(app);
-            }
+            let c = app.ui.trajectory.cursor();
+            let last = app.ui.trajectory.list_len().saturating_sub(1);
+            // Saturating: the pane opens with a cursor that asks for the
+            // last row, and before the first page lands there is no row to
+            // clamp it against.
+            app.ui.trajectory.set_cursor(c.saturating_add(1).min(last));
+            note_selected_turn(app);
             true
         }
         // At the turn list these are the ends of the history, not the ends of
@@ -137,6 +162,11 @@ pub fn handle(app: &mut App, k: KeyEvent) -> bool {
             } else if level == 1 {
                 // [bg] rows have no event list to drill into — stay at L1.
                 if !app.ui.trajectory.at_bg() {
+                    // The offset belongs to the record the body is of, so the
+                    // level opens at the top of it: showing another record at
+                    // the offset the last one was left at would open it
+                    // mid-way through.
+                    app.ui.trajectory.reset_detail_offset();
                     app.ui.trajectory.set_level(2);
                     // Keep the cursor so L2 shows the event selected at L1.
                 }

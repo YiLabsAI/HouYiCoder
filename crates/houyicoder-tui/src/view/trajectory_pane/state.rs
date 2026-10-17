@@ -96,6 +96,14 @@ pub struct TrajectoryPaneState {
     /// The turn the drill levels are about, or None while the pane is on the
     /// list or on a background row.
     drill: RefCell<Option<TrajectoryDrill>>,
+    /// The line the level-2 body is scrolled to. Level 2 is read by scrolling
+    /// rather than by moving a cursor, so its position is the reader's; it
+    /// starts at the top every time the level opens.
+    detail_offset: Cell<usize>,
+    /// The largest offset the last level-2 render produced. A body shorter
+    /// than the pane has none to scroll to, and scrolling past the end has to
+    /// stop at the last line rather than leave the body off the pane.
+    detail_max_offset: Cell<usize>,
 }
 
 impl TrajectoryPaneState {
@@ -180,5 +188,38 @@ impl TrajectoryPaneState {
     /// Drop the drill: the pane is back on the list, or on a background row.
     pub fn clear_drill(&self) {
         *self.drill.borrow_mut() = None;
+    }
+
+    /// The line the level-2 body is scrolled to.
+    pub fn detail_offset(&self) -> usize {
+        self.detail_offset.get()
+    }
+
+    /// Start the level-2 body at its first line.
+    pub fn reset_detail_offset(&self) {
+        self.detail_offset.set(0);
+        self.detail_max_offset.set(0);
+    }
+
+    /// Record the largest offset the level-2 render produced, clamping the
+    /// offset in hand so a body that no longer fills the pane cannot leave the
+    /// view past its end.
+    pub fn set_detail_max_offset(&self, max_offset: usize) {
+        self.detail_max_offset.set(max_offset);
+        self.detail_offset
+            .set(self.detail_offset.get().min(max_offset));
+    }
+
+    /// Scroll the level-2 body by a whole number of lines, stopping at either
+    /// end of it.
+    pub fn scroll_detail(&self, delta: i16) {
+        let current = self.detail_offset.get();
+        let next = if delta.is_negative() {
+            current.saturating_sub(delta.unsigned_abs() as usize)
+        } else {
+            current.saturating_add(delta as usize)
+        };
+        self.detail_offset
+            .set(next.min(self.detail_max_offset.get()));
     }
 }

@@ -6,6 +6,7 @@ use super::list;
 mod columns;
 mod fixtures;
 mod formatting;
+mod scroll;
 mod selection;
 mod timeline;
 
@@ -293,7 +294,7 @@ fn test_level2_renders_record_detail() {
         ),
     ]);
     let body_text = |cursor: usize| {
-        let (_, body, _, _) = detail::draw_event_detail(&turn, &detail, cursor, Rect::ZERO);
+        let (_, body, _, _) = detail::draw_event_detail(&turn, &detail, cursor, Rect::ZERO, 0);
         body.iter()
             .flat_map(|l| l.spans.iter().map(|s| s.content.as_ref().to_string()))
             .collect::<String>()
@@ -385,7 +386,7 @@ fn test_event_detail_redacts_secrets() {
         timing: None,
         retries: 0,
     }]);
-    let (_, body, _, _) = detail::draw_event_detail(&turn, &detail, 0, Rect::ZERO);
+    let (_, body, _, _) = detail::draw_event_detail(&turn, &detail, 0, Rect::ZERO, 0);
     let text = body
         .iter()
         .flat_map(|l| l.spans.iter().map(|s| s.content.as_ref().to_string()))
@@ -1129,7 +1130,7 @@ fn test_detail_shows_model_facts() {
         ..turn(1, "ask")
     };
     let detail = detail_of_all(vec![record]);
-    let (header, body, _, _) = detail::draw_event_detail(&turn, &detail, 0, Rect::ZERO);
+    let (header, body, _, _) = detail::draw_event_detail(&turn, &detail, 0, Rect::ZERO, 0);
     let text: String = header
         .iter()
         .chain(body.iter())
@@ -1165,7 +1166,7 @@ fn test_call_cache_follows_report() {
         record.usage = Some(usage);
         let turn = turn(1, "ask");
         let detail = detail_of_all(vec![record]);
-        let (header, body, _, _) = detail::draw_event_detail(&turn, &detail, 0, Rect::ZERO);
+        let (header, body, _, _) = detail::draw_event_detail(&turn, &detail, 0, Rect::ZERO, 0);
         header
             .iter()
             .chain(body.iter())
@@ -1284,9 +1285,10 @@ fn test_turn_list_boundary() {
     );
     assert!(text.contains("2m ago"), "with when it happened: {text}");
     assert_eq!(
-        sel_line, 1,
-        "the selected row sits below the separator, so the scroll offset is \
-         the body line, not the row index"
+        sel_line,
+        BodyScroll::Cursor(1),
+        "the selected row sits below the separator, so the cursor's body line \
+         is not the row index"
     );
 }
 

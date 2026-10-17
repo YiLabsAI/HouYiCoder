@@ -270,8 +270,9 @@ fn test_home_end_stay_local() {
         "and the window did not move"
     );
 
-    // The event detail holds one record: there is no list to move in, and the
-    // window is not its to move either.
+    // The record level holds one record: there is no list to move in, so the
+    // ends of one are not the ends of the history, and Up/Down scroll the body
+    // rather than the cursor. The window is not its to move either.
     app.ui.trajectory.set_level(2);
     app.ui.trajectory.set_cursor(0);
     handle_working(&mut app, KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
@@ -279,7 +280,7 @@ fn test_home_end_stay_local() {
     assert_eq!(
         app.ui.trajectory.cursor(),
         0,
-        "an event detail does not move"
+        "the record level does not move the cursor"
     );
     assert_eq!(log.tail.load(Ordering::Relaxed), 0);
     assert_eq!(log.earliest.load(Ordering::Relaxed), 0);

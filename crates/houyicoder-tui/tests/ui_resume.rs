@@ -6,6 +6,7 @@
 
 use std::env;
 use std::fs;
+use std::path::Path;
 use std::process;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -1200,6 +1201,278 @@ fn test_trajectory_esc_restores_turn() {
     assert!(
         back.contains("▸ T2"),
         "Esc returns to the turn the drill opened:\n{back}"
+    );
+    drop(s);
+}
+
+/// The lines the seeded reply is made of. The record body carries them one per
+/// row, which is how a test reads where the body is scrolled to.
+const BODY_LINE_PREFIX: &str = "paged-line-";
+
+/// The key hints each level of the drill states, which is how a test tells
+/// which level the pane has drawn without reading the pane's own state.
+const TURN_LIST_FOOTER: &str = "Esc to close";
+const RECORD_LIST_FOOTER: &str = "Enter to open · Esc to back";
+const RECORD_BODY_FOOTER: &str = "Up/Down to scroll · Esc to back";
+
+/// The record-list row the cursor is on, or None while no row carries it.
+fn selected_row(screen: &str) -> Option<&str> {
+    screen.lines().find(|row| row.contains('▸'))
+}
+
+/// The body lines the pane is showing, each as the screen row it sits on and
+/// its number, read off the drawn screen: which line the body starts at, and
+/// how far what the reader was looking at moved, is what a scroll either did
+/// or did not do.
+fn body_rows(screen: &str) -> Vec<(usize, usize)> {
+    screen
+        .lines()
+        .enumerate()
+        .filter_map(|(row, text)| {
+            let at = text.find(BODY_LINE_PREFIX)?;
+            let number = text[at + BODY_LINE_PREFIX.len()..]
+                .split_whitespace()
+                .next()?
+                .parse::<usize>()
+                .ok()?;
+            Some((row, number))
+        })
+        .collect()
+}
+
+/// The first body line the pane is showing.
+fn first_body_line(screen: &str) -> Option<usize> {
+    body_rows(screen)
+        .into_iter()
+        .map(|(_, number)| number)
+        .min()
+}
+
+/// Poll the drawn screen until the predicate holds. A key's effect arrives with
+/// the next frame, so waiting on the effect is what keeps a sequence of keys
+/// from running ahead of the level each one acts on.
+fn wait_until(s: &mut PtySession, holds: impl Fn(&str) -> bool) -> bool {
+    for _ in 0..60 {
+        if holds(&s.screen().contents()) {
+            return true;
+        }
+        sleep(Duration::from_millis(50));
+    }
+    false
+}
+
+/// Drill from the turn list to the model record's body: Enter opens the turn,
+/// Down walks the cursor down to the model record, Enter opens that record.
+/// Each step waits on the drawn screen, so a key cannot act on a level the
+/// frame behind it has not drawn yet.
+fn open_model_record(s: &mut PtySession) {
+    s.send_key(&Key::Enter);
+    assert!(
+        s.wait_for_screen(RECORD_LIST_FOOTER, RENDER_TIMEOUT),
+        "Enter opens the turn's record list:\n{}",
+        s.screen().contents()
+    );
+    // The list opens on the turn's first record. The model call is the last
+    // one the turn holds, behind its context line and its tool call.
+    let mut on_model = false;
+    for _ in 0..3 {
+        s.send_key(&Key::Down);
+        if wait_until(s, |screen| {
+            selected_row(screen).is_some_and(|row| row.contains("model"))
+        }) {
+            on_model = true;
+            break;
+        }
+    }
+    assert!(
+        on_model,
+        "Down walks the cursor to the model record:\n{}",
+        s.screen().contents()
+    );
+    s.send_key(&Key::Enter);
+    assert!(
+        s.wait_for_screen(RECORD_BODY_FOOTER, RENDER_TIMEOUT),
+        "Enter opens the record the cursor is on:\n{}",
+        s.screen().contents()
+    );
+    assert!(
+        s.screen().contents().contains("model"),
+        "and the record it opened is the model call the cursor was on:\n{}",
+        s.screen().contents()
+    );
+}
+
+/// The reply the journey's model record carries: one numbered line per row, so
+/// a test reads where the body is scrolled to off the screen.
+fn journey_reply() -> String {
+    (1..=40)
+        .map(|n| format!("{BODY_LINE_PREFIX}{n:02}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// The journey's session. Three turns, and the one in the middle holds a tool
+/// record before the model record so the drill has to move the cursor to reach
+/// the long body. The turns either side make "Esc returns to the turn it
+/// opened" an assertion the pane's default tail position cannot satisfy by
+/// accident.
+fn journey_events(reply: &str) -> [SessionEvent; 8] {
+    [
+        SessionEvent::UserInput {
+            text: "first prompt".into(),
+        },
+        SessionEvent::AssistantMessage {
+            text: "first reply".into(),
+            thinking: None,
+        },
+        SessionEvent::UserInput {
+            text: "second prompt".into(),
+        },
+        SessionEvent::ToolCall {
+            call_id: "call-short".into(),
+            tool: "bash".into(),
+            input: serde_json::json!({"command": "true"}),
+        },
+        SessionEvent::ToolResult {
+            call_id: "call-short".into(),
+            output: serde_json::json!({"stdout": "short tool body", "exit_code": 0}),
+            duration_ms: 5,
+        },
+        SessionEvent::AssistantMessage {
+            text: reply.to_string(),
+            thinking: None,
+        },
+        SessionEvent::UserInput {
+            text: "third prompt".into(),
+        },
+        SessionEvent::AssistantMessage {
+            text: "third reply".into(),
+            thinking: None,
+        },
+    ]
+}
+
+/// Seed the journey's session, resume it, and leave the /trajectory pane open
+/// on the second turn: the turn holding the model record with the long reply.
+fn open_journey_pane(sessions_dir: &Path, sid: &str) -> PtySession {
+    let events = journey_events(&journey_reply());
+    common::seed_session_events(sessions_dir, sid, "traj-model", &events);
+    let mut s = PtySession::launch_with_sessions_dir(
+        None,
+        None,
+        None,
+        None,
+        &["--resume".to_string(), sid.to_string()],
+        sessions_dir.to_path_buf(),
+    );
+    assert!(
+        s.wait_for("let's build, or / for commands", RENDER_TIMEOUT),
+        "working screen after sid resume:\n{}",
+        s.output()
+    );
+    s.clear_output();
+    run_slash_command(&mut s, "trajectory");
+    // The pane opens on the newest turn, which is also how the test knows the
+    // first page has landed.
+    assert!(
+        s.wait_for_screen("▸ T3", RENDER_TIMEOUT),
+        "the pane opens on the newest turn:\n{}",
+        s.screen().contents()
+    );
+    assert!(
+        s.screen().contents().contains(TURN_LIST_FOOTER),
+        "the turn list names the keys that act on it:\n{}",
+        s.screen().contents()
+    );
+    s.send_key(&Key::Up);
+    assert!(
+        wait_until(&mut s, |screen| screen.contains("▸ T2")),
+        "Up selects the second turn:\n{}",
+        s.screen().contents()
+    );
+    s
+}
+
+/// A record body taller than the pane opens at its first line, pages ten lines
+/// at a time, stops at its last, and the two Esc levels each come back to where
+/// the drill started. Driven through the real terminal, so the pane's own key
+/// routing and the frame each key acts on are what is under test.
+#[test]
+#[ignore]
+fn test_trajectory_record_body_pages() {
+    let sessions_dir = fresh_temp_dir("sessions-traj-record-pages");
+    let sid = "1a1a1a1a-1a1a-1a1a-1a1a-1a1a1a1a1a1a";
+    let mut s = open_journey_pane(&sessions_dir, sid);
+
+    open_model_record(&mut s);
+    assert_eq!(
+        first_body_line(&s.screen().contents()),
+        Some(1),
+        "the body opens at its first line:\n{}",
+        s.screen().contents()
+    );
+    let body = s.screen().contents();
+    assert!(
+        body.contains(RECORD_BODY_FOOTER),
+        "the footer names the keys that act on the body:\n{body}"
+    );
+
+    // A page moves the body ten lines: the line at the foot of the first
+    // window sits ten rows higher, still on screen.
+    let foot = *body_rows(&s.screen().contents())
+        .last()
+        .expect("a body line on screen");
+    s.send_key(&Key::PageDown);
+    assert!(
+        wait_until(&mut s, |screen| body_rows(screen)
+            .iter()
+            .any(|(row, number)| *number == foot.1 && *row + 10 == foot.0)),
+        "PageDown moves the body ten lines:\n{}",
+        s.screen().contents()
+    );
+
+    // Walking to the end brings the last line into view, and one more page
+    // there changes nothing.
+    for _ in 0..8 {
+        s.send_key(&Key::PageDown);
+    }
+    assert!(
+        wait_until(&mut s, |screen| screen
+            .contains(&format!("{BODY_LINE_PREFIX}40"))),
+        "the walk to the end brings the last line into view:\n{}",
+        s.screen().contents()
+    );
+    let bottom = first_body_line(&s.screen().contents());
+    s.send_key(&Key::PageDown);
+    assert!(
+        wait_until(&mut s, |screen| first_body_line(screen) == bottom
+            && screen.contains(RECORD_BODY_FOOTER)),
+        "one more page at the end changes nothing:\n{}",
+        s.screen().contents()
+    );
+
+    // Esc returns to the record list on the record the drill opened, then to
+    // the turn it opened.
+    s.send_key(&Key::Esc);
+    assert!(
+        wait_until(&mut s, |screen| !screen.contains(RECORD_BODY_FOOTER)
+            && selected_row(screen).is_some_and(|row| row.contains("model"))),
+        "Esc returns to the record the drill opened:\n{}",
+        s.screen().contents()
+    );
+    s.send_key(&Key::Esc);
+    assert!(
+        wait_until(&mut s, |screen| screen.contains("▸ T2")),
+        "and again to the turn it opened:\n{}",
+        s.screen().contents()
+    );
+
+    // The offset belongs to the record, so opening it again starts at the top.
+    open_model_record(&mut s);
+    assert!(
+        wait_until(&mut s, |screen| first_body_line(screen) == Some(1)),
+        "the body opens at its first line again:\n{}",
+        s.screen().contents()
     );
     drop(s);
 }

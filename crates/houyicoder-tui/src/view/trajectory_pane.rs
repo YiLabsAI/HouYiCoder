@@ -22,7 +22,7 @@ use ratatui::widgets::Paragraph;
 
 use crate::command::render::format_tokens;
 use crate::state::{TrajectoryDrill, TrajectoryPaneState, TrajectoryTurnKey};
-use crate::view::line_wrap::truncate_width;
+use crate::view::line_wrap::{truncate_width, wrap_line};
 use crate::view::navigation::key_hint;
 use crate::view::relative_time::{format_span_ms, now_epoch_secs, relative_time};
 use houyicoder_protocol::llm::{UsageProvenance, count_visible};
@@ -303,12 +303,41 @@ fn detail_for(app: &App, drill: Option<&TrajectoryDrill>) -> Arc<TrajectoryDetai
     }
 }
 
+/// How a level's body is positioned in the pane.
+///
+/// The list levels have a cursor and keep its row in view; the record level has
+/// no cursor and shows the lines the reader scrolled to. A row index and a
+/// scroll offset are different numbers over different lists, so each builder
+/// says which one it produced and the renderer reads only that one.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum BodyScroll {
+    /// The body line the cursor sits on, kept in view.
+    Cursor(usize),
+    /// The body line to draw from, as the reader scrolled the body.
+    Offset(usize),
+}
+
+impl BodyScroll {
+    /// The first body line a frame draws, given how many lines the body has and
+    /// how many of them fit. A cursor row is centered where the body allows and
+    /// held inside it either way; an offset is the reader's, so a body that no
+    /// longer fills the pane clamps it rather than leaving the view past its
+    /// end.
+    fn resolve(self, body_len: usize, visible: usize) -> usize {
+        let max_offset = body_len.saturating_sub(visible);
+        match self {
+            BodyScroll::Cursor(line) => line.saturating_sub(visible / 2).min(max_offset),
+            BodyScroll::Offset(offset) => offset.min(max_offset),
+        }
+    }
+}
+
 /// Main entry: dispatch on the drill level. Each level builder returns the
-/// header and footer to pin plus a scrollable body and the body line the
-/// selection sits on; header + footer stay pinned so the key hints never scroll
-/// off. The selected body line, not the row index, drives the scroll offset:
-/// a boundary separator occupies a body line without being a selectable row, so
-/// the two are not the same number.
+/// header and footer it wants held at the pane's top and bottom, the body, and
+/// how that body is positioned; holding them means the key hints never scroll
+/// off. A cursor row is not the selection's index: a separator or a surrounding
+/// line occupies a body line without being a selectable row, so the two are not
+/// the same number.
 pub fn draw_content(f: &mut Frame, area: Rect, app: &App) {
     // Real data when wired; fallback sample in unwired modes so the pane
     // still renders demonstration rows.
@@ -353,14 +382,20 @@ pub fn draw_content(f: &mut Frame, area: Rect, app: &App) {
         Some(TrajectoryRow::Turn(turn)) => Some(turn.clone()),
         _ => None,
     });
-    let (header, body, footer, sel_line) = match level {
+    let (header, body, footer, window) = match level {
         1 => match (turn.as_ref(), row) {
             (Some(turn), _) => detail::draw_turn_detail(turn, &detail, cursor, area, app),
             (None, Some(TrajectoryRow::Bg(bg))) => detail::draw_bg_detail(bg, cursor, area, app),
             _ => detail::draw_drill_gone(),
         },
         2 => match turn.as_ref() {
-            Some(turn) => detail::draw_event_detail(turn, &detail, cursor, area),
+            Some(turn) => detail::draw_event_detail(
+                turn,
+                &detail,
+                cursor,
+                area,
+                app.ui.trajectory.detail_offset(),
+            ),
             None => detail::draw_drill_gone(),
         },
         _ => list::draw_turn_list(&traj, cursor, area),
@@ -376,22 +411,27 @@ pub fn draw_content(f: &mut Frame, area: Rect, app: &App) {
         app.ui.trajectory.set_cursor(active_len.saturating_sub(1));
     }
     app.ui.trajectory.set_list_len(active_len);
-    render_scrolled(f, area, header, body, footer, sel_line);
+    let max_offset = render_scrolled(f, area, header, body, footer, window);
+    if level == 2 {
+        // The key handler scrolls the record body within what this frame drew,
+        // the same bound the renderer used, so how far a key press moves the
+        // view cannot depend on which of the two ran last.
+        app.ui.trajectory.set_detail_max_offset(max_offset);
+    }
 }
 
-/// Render a pane as a pinned header, a cursor-following scrollable body, and a
-/// pinned footer. The body window is chosen so the cursor row stays in view
-/// (centered when possible, clamped at the top/bottom of the body). This keeps
-/// the key-hint footer visible no matter how many turns or events a level
-/// holds — the half-pane height cannot clip the hints.
+/// Render a pane as a header, a positioned body, and a footer, and report the
+/// largest offset the body has. The header and the footer keep their rows at
+/// the pane's top and bottom, so a pane drawn at half its height cannot clip
+/// the key hints however many rows a level holds.
 fn render_scrolled(
     f: &mut Frame,
     area: Rect,
     header: Vec<Line<'static>>,
     body: Vec<Line<'static>>,
     footer: Vec<Line<'static>>,
-    sel_line: usize,
-) {
+    window: BodyScroll,
+) -> usize {
     let h = header.len() as u16;
     let ft = footer.len() as u16;
     let chunks = Layout::default()
@@ -404,16 +444,14 @@ fn render_scrolled(
         .split(area);
     f.render_widget(Paragraph::new(header), chunks[0]);
     let visible = chunks[1].height as usize;
-    let scroll = if body.len() <= visible {
-        0
-    } else {
-        let half = visible / 2;
-        sel_line
-            .saturating_sub(half)
-            .min(body.len().saturating_sub(visible))
-    };
-    f.render_widget(Paragraph::new(body).scroll((scroll as u16, 0)), chunks[1]);
+    let max_offset = body.len().saturating_sub(visible);
+    let scroll = window.resolve(body.len(), visible);
+    f.render_widget(
+        Paragraph::new(body).scroll((u16::try_from(scroll).unwrap_or(u16::MAX), 0)),
+        chunks[1],
+    );
     f.render_widget(Paragraph::new(footer), chunks[2]);
+    max_offset
 }
 
 fn line(spans: Vec<Span<'static>>) -> Line<'static> {

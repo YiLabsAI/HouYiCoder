@@ -98,6 +98,15 @@ pub fn seed_session_with_usage(
     write_session(root, sid_str, model, &cwd, &events);
 }
 
+/// Seed a session from an explicit event list, so a journey test can lay down
+/// the exact turn and record structure it drives and has the binary read it
+/// back. The named seeds above cover the shapes several tests share; this one
+/// covers the shape a single journey needs.
+pub fn seed_session_events(root: &Path, sid_str: &str, model: &str, events: &[SessionEvent]) {
+    let cwd = workspace_cwd(None);
+    write_session(root, sid_str, model, &cwd, events);
+}
+
 /// What a seeded session's shell result, file read, and delegated child cost,
 /// so a PTY test can plant a measured spend and assert the advice rendered from
 /// it. The result bodies carry the tokens; the child carries its own reported

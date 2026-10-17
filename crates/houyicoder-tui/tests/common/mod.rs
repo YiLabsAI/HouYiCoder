@@ -480,6 +480,8 @@ pub enum Key {
     ShiftDown,
     /// PageUp — the transcript page-back key.
     PageUp,
+    /// PageDown — the page-forward key a detail body scrolls by.
+    PageDown,
 }
 
 impl Key {
@@ -510,6 +512,7 @@ impl Key {
             Key::ShiftUp => b"\x1b[1;2A".to_vec(),
             Key::ShiftDown => b"\x1b[1;2B".to_vec(),
             Key::PageUp => b"\x1b[5~".to_vec(),
+            Key::PageDown => b"\x1b[6~".to_vec(),
         }
     }
 }

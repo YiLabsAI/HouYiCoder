@@ -337,7 +337,7 @@ pub(super) fn draw_turn_list(
     Vec<Line<'static>>,
     Vec<Line<'static>>,
     Vec<Line<'static>>,
-    usize,
+    BodyScroll,
 ) {
     let tokens_summary = match (traj.tokens_in, traj.tokens_out) {
         (Some(tin), Some(tout)) => format!(
@@ -459,14 +459,24 @@ pub(super) fn draw_turn_list(
         // an empty table or the demonstration rows.
         TrajectoryViewState::Loading => {
             body.push(line(vec![sp("  loading trajectory...", Color::DarkGray)]));
-            return (header, body, vec![blank(), key_hint(&[("Esc", "back")])], 0);
+            return (
+                header,
+                body,
+                vec![blank(), key_hint(&[("Esc", "back")])],
+                BodyScroll::Cursor(0),
+            );
         }
         TrajectoryViewState::Failed => {
             body.push(line(vec![sp(
                 "  could not read trajectory history",
                 Color::Red,
             )]));
-            return (header, body, vec![blank(), key_hint(&[("Esc", "back")])], 0);
+            return (
+                header,
+                body,
+                vec![blank(), key_hint(&[("Esc", "back")])],
+                BodyScroll::Cursor(0),
+            );
         }
         // Older turns are on their way and the rows already loaded stay: the
         // line is an addition to the list, not a replacement for it.
@@ -527,5 +537,5 @@ pub(super) fn draw_turn_list(
             ("Esc", "close"),
         ]),
     ];
-    (header, body, footer, sel_line)
+    (header, body, footer, BodyScroll::Cursor(sel_line))
 }
