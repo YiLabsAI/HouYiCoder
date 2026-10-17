@@ -274,6 +274,54 @@ fn test_detail_usage_never() {
     );
 }
 
+/// A list longer than the pane follows the cursor: the row it stands on is
+/// rendered and the rows above it that no longer fit scroll off. Rendering
+/// the list from its first row instead let the cursor walk below the last
+/// visible row, so the marker left the screen while the keys kept moving it.
+/// The skills span several origin headings, so the row the cursor stands on
+/// sits below its index in the list: a window that counts list positions
+/// instead of rendered rows leaves the cursor row off the bottom.
+#[test]
+fn test_list_scrolls_to_cursor() {
+    let mut app = composition::app();
+    app.ui.navigation.screen = Screen::Working;
+    app.ui.navigation.pane = Pane::Skills;
+    let origins = ["managed", "user", "project", "claude_eco", "agents"];
+    app.sessions.current.capabilities.skills.entries = (0..40)
+        .map(|index| SkillEntry {
+            name: format!("skill-{index:02}"),
+            description: "a skill".into(),
+            origin: origins[index % origins.len()].into(),
+            invocable: true,
+            body_token_estimate: 50,
+            user_invocable: true,
+            usage: None,
+        })
+        .collect();
+    let top = render(&app, 80, 24);
+    assert!(
+        top.contains("▶ - skill-00:"),
+        "the cursor opens on the first row: {top}"
+    );
+    for _ in 0..39 {
+        handle_working(&mut app, key(KeyCode::Down));
+    }
+    let out = render(&app, 80, 24);
+    assert!(
+        out.contains("▶ "),
+        "the row the cursor reached stays on screen: {out}"
+    );
+    assert_eq!(
+        out.matches("▶ - skill").count(),
+        1,
+        "one marked skill row is drawn, not a copy left at the top: {out}"
+    );
+    assert!(
+        !out.contains("skill-00"),
+        "the rows above the window scroll off: {out}"
+    );
+}
+
 /// A skill with model-invocation disabled but user-invocation enabled
 /// (invocable=false, user_invocable=true) is still usable — the glyph is
 /// ✓ in both the listing and the detail view. This is the mixed case the

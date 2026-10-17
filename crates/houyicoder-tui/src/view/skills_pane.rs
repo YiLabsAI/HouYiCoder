@@ -4,6 +4,7 @@
 //!
 //! The detail pins the skill header and the usage line, and scrolls only
 //! the body, so a long SKILL.md never pushes the invocation cost off screen.
+//! The list follows the cursor once it holds more rows than the pane draws.
 
 pub(crate) mod state;
 
@@ -19,6 +20,7 @@ use houyicoder_protocol::frontend::skills::SkillEntry;
 
 use crate::skills_state::SkillDetail;
 use crate::state::App;
+use crate::view::line_wrap::cursor_window_offset;
 use crate::view::line_wrap::max_scroll_offset;
 use crate::view::navigation::key_hint;
 use crate::view::relative_time::now_epoch_secs;
@@ -88,14 +90,13 @@ pub(crate) fn draw_content(f: &mut Frame, inner: Rect, app: &App) {
             .skills_pane
             .cursor()
             .min(ordered.len().saturating_sub(1));
-        f.render_widget(
-            Paragraph::new(grouped_lines(
-                &ordered,
-                sel,
-                &app.sessions.current.capabilities.skills.disabled,
-            )),
-            chunks[2],
+        let (body, selected_line) = grouped_lines(
+            &ordered,
+            sel,
+            &app.sessions.current.capabilities.skills.disabled,
         );
+        let offset = cursor_window_offset(selected_line, body.len(), chunks[2].height);
+        f.render_widget(Paragraph::new(body).scroll((offset, 0)), chunks[2]);
     }
 
     f.render_widget(
@@ -262,13 +263,16 @@ fn usage_line(entry: Option<&SkillEntry>) -> Line<'static> {
 /// path), then each skill in that group on its own line carrying the
 /// model-invocation gate and the body token estimate. One line per skill
 /// keeps the list scannable; the gate + token sit at the row tail and only
-/// clip for very long descriptions (the name always stays visible).
+/// clip for very long descriptions (the name always stays visible). The
+/// second value is the row the cursor stands on, headings included, which is
+/// what the list window follows.
 fn grouped_lines(
     ordered: &[&SkillEntry],
     cursor: usize,
     disabled: &HashSet<String>,
-) -> Vec<Line<'static>> {
+) -> (Vec<Line<'static>>, usize) {
     let mut lines: Vec<Line> = Vec::new();
+    let mut selected_line = 0;
     let mut prev_origin: &str = "";
     for (idx, s) in ordered.iter().enumerate() {
         if s.origin != prev_origin {
@@ -283,6 +287,9 @@ fn grouped_lines(
         }
         let desc = truncate_desc(&s.description, DESC_BUDGET);
         let is_selected = idx == cursor;
+        if is_selected {
+            selected_line = lines.len();
+        }
         let prefix = if is_selected { "▶ " } else { "  " };
         let (glyph, color) = gate_glyph(s, disabled.contains(&s.name));
         lines.push(Line::from(vec![
@@ -297,7 +304,7 @@ fn grouped_lines(
             ),
         ]));
     }
-    lines
+    (lines, selected_line)
 }
 
 #[cfg(test)]
