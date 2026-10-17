@@ -451,9 +451,72 @@ fn test_up_down_move_cursor() {
     assert_eq!(app.ui.trajectory.cursor(), 0);
 }
 
+/// The thinking cell states the reasoning span and the tokens together, so a
+/// turn that thought for seconds is visible in the list without a drill.
+#[test]
+fn test_thinking_cell_states_both() {
+    let view = TrajectoryView {
+        models_used: 2,
+        tokens_in: Some(100),
+        tokens_out: Some(50),
+        ..view(vec![TrajectoryRow::Turn(TrajectoryTurn {
+            tokens_in: Some(100),
+            tokens_out: Some(50),
+            cache_read: Some(0),
+            cache_write: Some(0),
+            usage_provenance: UsageProvenance::ALL_REPORTED,
+            reasoning_tokens: Some(541),
+            reasoning_ms: Some(4_200),
+            ..turn(1, "hi")
+        })])
+    };
+    let (_, body, _, _) = list::draw_turn_list(&view, 0, Rect::new(0, 0, 200, 20));
+    let text: String = body
+        .iter()
+        .flat_map(|l| l.spans.iter())
+        .map(|s| s.content.as_ref())
+        .collect();
+    assert!(
+        text.contains("(thinking 4.2s · 541)"),
+        "the span and the tokens are stated together: {text}"
+    );
+}
+
+/// A call that reported a reasoning span but no reasoning token count states
+/// the span alone rather than inventing a count beside it.
+#[test]
+fn test_thinking_cell_states_span() {
+    let view = TrajectoryView {
+        models_used: 2,
+        tokens_in: Some(100),
+        tokens_out: Some(50),
+        ..view(vec![TrajectoryRow::Turn(TrajectoryTurn {
+            tokens_in: Some(100),
+            tokens_out: Some(50),
+            cache_read: Some(0),
+            cache_write: Some(0),
+            usage_provenance: UsageProvenance::ALL_REPORTED,
+            reasoning_ms: Some(4_200),
+            ..turn(1, "hi")
+        })])
+    };
+    let (_, body, _, _) = list::draw_turn_list(&view, 0, Rect::new(0, 0, 200, 20));
+    let cell = body[0]
+        .spans
+        .iter()
+        .map(|s| s.content.as_ref())
+        .find(|c| c.contains("thinking"))
+        .expect("the row states the reasoning span");
+    assert_eq!(
+        cell.trim(),
+        "(thinking 4.2s)",
+        "the span is stated alone, with no count invented beside it"
+    );
+}
+
 /// Thinking tokens render as (thinking Nk) only when Some and >0.
 #[test]
-fn test_thinking_tokens_render_nonzero() {
+fn test_thinking_cell_states_tokens() {
     let view = TrajectoryView {
         models_used: 2,
         tokens_in: Some(100),
@@ -474,34 +537,96 @@ fn test_thinking_tokens_render_nonzero() {
         .flat_map(|l| l.spans.iter())
         .map(|s| s.content.as_ref())
         .collect();
-    assert!(text.contains("thinking"), "thinking shown when >0: {text}");
+    assert!(
+        text.contains("(thinking 20)"),
+        "tokens shown when >0: {text}"
+    );
 }
 
-/// Thinking tokens are hidden when 0 or None.
+/// A turn that reported neither figure states no thinking cell, while a turn
+/// beside it that did report one draws the column: the absence belongs to the
+/// cell, not to a column the layout dropped for want of width.
 #[test]
-fn test_thinking_tokens_hidden_zero() {
-    let view = TrajectoryView {
-        models_used: 2,
+fn test_thinking_cell_hidden_unmeasured() {
+    let mk = |n: usize, ms: Option<u64>| TrajectoryTurn {
         tokens_in: Some(100),
         tokens_out: Some(50),
-        ..view(vec![TrajectoryRow::Turn(TrajectoryTurn {
+        duration_ms: 100,
+        reasoning_ms: ms,
+        ..turn(n, "hi")
+    };
+    let view = TrajectoryView {
+        models_used: 2,
+        tokens_in: Some(200),
+        tokens_out: Some(100),
+        ..view(vec![
+            TrajectoryRow::Turn(mk(1, None)),
+            TrajectoryRow::Turn(mk(2, Some(1_200))),
+        ])
+    };
+    // Past the width at which the thinking column joins, so a blank cell on the
+    // first row is the cell's own doing. Below that width the column is dropped
+    // whole and the assertion would hold whatever the cell returned.
+    let (_, body, _, _) = list::draw_turn_list(&view, 0, Rect::new(0, 0, 200, 20));
+    let row_text = |i: usize| -> String {
+        body[i]
+            .spans
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect::<String>()
+    };
+    assert!(
+        row_text(1).contains("thinking"),
+        "the column holds at this width, so the assertion below is about the cell: {}",
+        row_text(1)
+    );
+    assert!(
+        !row_text(0).contains("thinking"),
+        "a turn that reported neither figure states no thinking cell: {}",
+        row_text(0)
+    );
+}
+
+/// A span the call reported is stated whatever it rounds to: a block that
+/// closed inside a millisecond is a measurement, not the absence a missing span
+/// is, and stating it does not displace a count reported beside it.
+#[test]
+fn test_thinking_zero_stated() {
+    let thinking_cell = |tokens: Option<usize>| -> String {
+        let view = TrajectoryView {
+            models_used: 2,
             tokens_in: Some(100),
             tokens_out: Some(50),
-            cache_read: Some(0),
-            cache_write: Some(0),
-            usage_provenance: UsageProvenance::ALL_REPORTED,
-            ..turn(1, "hi")
-        })])
+            ..view(vec![TrajectoryRow::Turn(TrajectoryTurn {
+                tokens_in: Some(100),
+                tokens_out: Some(50),
+                cache_read: Some(0),
+                cache_write: Some(0),
+                usage_provenance: UsageProvenance::ALL_REPORTED,
+                reasoning_ms: Some(0),
+                reasoning_tokens: tokens,
+                ..turn(1, "hi")
+            })])
+        };
+        let (_, body, _, _) = list::draw_turn_list(&view, 0, Rect::new(0, 0, 200, 20));
+        body[0]
+            .spans
+            .iter()
+            .map(|s| s.content.as_ref())
+            .find(|c| c.contains("thinking"))
+            .unwrap_or_default()
+            .trim()
+            .to_string()
     };
-    let (_, body, _, _) = list::draw_turn_list(&view, 0, Rect::new(0, 0, 100, 20));
-    let text: String = body
-        .iter()
-        .flat_map(|l| l.spans.iter())
-        .map(|s| s.content.as_ref())
-        .collect();
-    assert!(
-        !text.contains("thinking"),
-        "thinking hidden when None: {text}"
+    assert_eq!(
+        thinking_cell(None),
+        "(thinking 0ms)",
+        "a span measured below a millisecond is stated as the measurement it is"
+    );
+    assert_eq!(
+        thinking_cell(Some(20)),
+        "(thinking 0ms · 20)",
+        "the count is stated beside the span it accompanied"
     );
 }
 
@@ -1262,6 +1387,7 @@ fn test_turn_list_degrades() {
         models: vec![model.into()],
         efforts: vec!["high".into()],
         reasoning_tokens: Some(90),
+        reasoning_ms: Some(4_200),
         tool_count: 3,
         tool_fail: 1,
         retries: 0,

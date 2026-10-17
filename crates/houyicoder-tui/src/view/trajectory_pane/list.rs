@@ -65,17 +65,25 @@ const TURN_LABEL_W: usize = 5;
 /// The title column, in display columns.
 const TURN_TITLE_W: usize = 30;
 
-/// The cached-ratio column. The share behind the cell is a rate held to one, so
-/// the cell is at most a three-digit percentage followed by one word, whatever
-/// the session's size.
-const CACHED_W: usize = 12;
+/// The cached-ratio cell's own widest form. The share behind it is a rate held
+/// to one, so the figure is at most a three-digit percentage, whatever the
+/// session's size.
+const CACHED_CELL_W: usize = "100% cached".len();
 
 /// The model and effort columns, in display columns.
 const MODEL_W: usize = 20;
 const EFFORT_W: usize = 8;
 
 /// The gap a column leaves after its content, so two columns never touch.
-const COLUMN_GAP_W: usize = 1;
+const COLUMN_GAP_W: usize = 2;
+
+/// The cached-ratio column, in display columns: the widest cell plus the
+/// trailing gap, so the widest ratio does not run into the column after it.
+const CACHED_W: usize = CACHED_CELL_W + COLUMN_GAP_W;
+
+/// The part of the token cell's width that does not depend on the figures: the
+/// two keywords and the spaces that separate them from their numbers.
+const TOKENS_FIXED_W: usize = " in ".len() + " out".len();
 
 /// The terminal widths at which the optional columns join. Below them the
 /// optional columns are dropped from the least informative end, leaving the
@@ -96,15 +104,6 @@ fn count_label(n: usize, noun: &str) -> String {
     }
 }
 
-/// Both token counts, or an em dash for a count the turn never reported.
-fn tokens_cell(t: &TrajectoryTurn) -> String {
-    format!(
-        "{} in {} out",
-        tokens_or_dash(t.tokens_in),
-        tokens_or_dash(t.tokens_out)
-    )
-}
-
 /// The share of this turn's input that came from the cache, or nothing when the
 /// turn states no share. The turn's own derivation decides that: a count the
 /// endpoint never reported, and an account missing one of the two numbers the
@@ -118,11 +117,26 @@ fn cached_cell(t: &TrajectoryTurn) -> String {
 }
 
 /// Thinking tokens are a component of output, so the parenthetical sits tight
-/// against the output number and carries its own inclusion note.
+/// against the output number and carries its own inclusion note. The time the
+/// turn spent thinking is stated beside them, because a turn that thought for
+/// seconds is the one a reader is looking for.
+///
+/// Each figure is stated for what the log holds and neither invents the other.
+/// A span the calls reported is stated whatever it measured, a block closed
+/// inside a millisecond reading as zero; a count of zero stays off the line,
+/// because a reasoning count the endpoint left at zero cannot be told from one
+/// it never reported.
 fn thinking_cell(t: &TrajectoryTurn) -> String {
-    match t.reasoning_tokens {
-        Some(r) if r > 0 => format!("(thinking {})", format_tokens(r as u64)),
-        _ => String::new(),
+    let tokens = match t.reasoning_tokens {
+        Some(r) if r > 0 => Some(format_tokens(r as u64)),
+        _ => None,
+    };
+    let span = t.reasoning_ms.map(format_span_ms);
+    match (span, tokens) {
+        (Some(span), Some(tokens)) => format!("(thinking {span} · {tokens})"),
+        (Some(span), None) => format!("(thinking {span})"),
+        (None, Some(tokens)) => format!("(thinking {tokens})"),
+        (None, None) => String::new(),
     }
 }
 
@@ -156,6 +170,15 @@ fn fails_cell(t: &TrajectoryTurn) -> String {
     }
 }
 
+/// The widest cell one column carries across the rows on screen.
+fn max_cell_width<F: Fn(&TrajectoryTurn) -> String>(turns: &[&TrajectoryTurn], cell: F) -> usize {
+    turns
+        .iter()
+        .map(|t| UnicodeWidthStr::width(cell(t).as_str()))
+        .max()
+        .unwrap_or(0)
+}
+
 /// The column widths for one render of the turn list.
 ///
 /// A table's columns are one decision for the whole screen rather than a
@@ -165,7 +188,14 @@ fn fails_cell(t: &TrajectoryTurn) -> String {
 /// screen, and a column no visible row fills is dropped, because a column of
 /// blanks costs the row width while saying nothing.
 pub(super) struct TurnColumns {
-    tokens: usize,
+    /// The token cell's two subcolumns: one cell on the row, sized as two, so
+    /// the figures line up under each other instead of drifting with the width
+    /// of the figure beside them. The suffix keeps each width apart from the
+    /// count of the same name on the turn.
+    in_width: usize,
+    out_width: usize,
+    /// The whole token cell: both subcolumns plus the keywords between them.
+    tokens_width: usize,
     cached: bool,
     thinking: Option<usize>,
     model: bool,
@@ -183,22 +213,19 @@ impl TurnColumns {
                 TrajectoryRow::Bg(_) => None,
             })
             .collect();
-        let widest = |cell: fn(&TrajectoryTurn) -> String| -> usize {
-            turns
-                .iter()
-                .map(|t| UnicodeWidthStr::width(cell(t).as_str()))
-                .max()
-                .unwrap_or(0)
-        };
+        let in_width = max_cell_width(&turns, |t| tokens_or_dash(t.tokens_in));
+        let out_width = max_cell_width(&turns, |t| tokens_or_dash(t.tokens_out));
         let filled = |cell: fn(&TrajectoryTurn) -> String| -> Option<usize> {
-            match widest(cell) {
+            match max_cell_width(&turns, cell) {
                 0 => None,
                 w => Some(w + COLUMN_GAP_W),
             }
         };
         TurnColumns {
-            tokens: widest(tokens_cell) + COLUMN_GAP_W,
-            cached: widest(cached_cell) > 0,
+            in_width,
+            out_width,
+            tokens_width: in_width + out_width + TOKENS_FIXED_W + COLUMN_GAP_W,
+            cached: max_cell_width(&turns, cached_cell) > 0,
             thinking: if width >= THINKING_MIN_WIDTH {
                 filled(thinking_cell)
             } else {
@@ -216,6 +243,18 @@ impl TurnColumns {
                 None
             },
         }
+    }
+
+    /// Both token counts, or an em dash for a count the turn never reported,
+    /// each figure right-aligned in its own subcolumn.
+    fn tokens_cell(&self, t: &TrajectoryTurn) -> String {
+        format!(
+            "{:>in_w$} in {:>out_w$} out",
+            tokens_or_dash(t.tokens_in),
+            tokens_or_dash(t.tokens_out),
+            in_w = self.in_width,
+            out_w = self.out_width,
+        )
     }
 }
 
@@ -247,7 +286,7 @@ pub(super) fn turn_row(
             pad(&truncate_width(&t.title, TURN_TITLE_W - 2), TURN_TITLE_W),
             Color::White,
         ),
-        sp(pad(&tokens_cell(t), cols.tokens), Color::Gray),
+        sp(pad(&cols.tokens_cell(t), cols.tokens_width), Color::Gray),
     ];
     if cols.cached {
         spans.push(sp(pad(&cached_cell(t), CACHED_W), Color::Indexed(208)));
@@ -346,9 +385,16 @@ pub(super) fn draw_turn_list(
             format!(" · {}", count_label(traj.tool_calls, "call")),
             Color::Gray,
         ),
+        // A failure count is a fact, not an alarm: red is kept for a session
+        // that actually had failures, so a clean session's header does not
+        // shout the zero on every frame.
         sp(
             format!(" · {}", count_label(traj.failures, "fail")),
-            Color::Red,
+            if traj.failures > 0 {
+                Color::Red
+            } else {
+                Color::DarkGray
+            },
         ),
         sp(
             format!(" · total {}", session_span_label(traj.duration_ms)),
@@ -427,7 +473,15 @@ pub(super) fn draw_turn_list(
         TrajectoryViewState::LoadingOlder => {
             body.push(line(vec![sp("  loading older turns...", Color::DarkGray)]));
         }
-        TrajectoryViewState::Ready => {}
+        // A session that has run nothing yet is ready and empty, which is a
+        // fact about the session rather than a read still running: say so
+        // instead of leaving an area under the header that reads as a load
+        // failure.
+        TrajectoryViewState::Ready => {
+            if traj.rows.is_empty() {
+                body.push(line(vec![sp("  no turns recorded yet", Color::DarkGray)]));
+            }
+        }
     }
     let clamped = cursor.min(traj.rows.len().saturating_sub(1));
     let now_secs = now_epoch_secs();

@@ -928,6 +928,65 @@ fn test_timing_percentiles_and_speed() {
     assert!((tps - (250.0 / 1.7)).abs() < 0.1);
 }
 
+/// A turn's reasoning span sums what its calls reported, so a turn that
+/// thought in two calls states the time the user waited; a turn whose calls
+/// reported no span stays unknown rather than reading as none spent.
+#[test]
+fn test_reasoning_span_sums_calls() {
+    let step = |ts: u64, reasoning_ms: Option<u64>| {
+        ev(
+            ts,
+            SessionEvent::ModelStepTiming {
+                turn: 1,
+                step: 0,
+                total_ms: 1_000,
+                ttft_ms: Some(200),
+                decode_ms: Some(800),
+                reasoning_ms,
+                response_ms: Some(100),
+            },
+        )
+    };
+    let events = |steps: &[Option<u64>]| {
+        let mut out = vec![
+            ev(
+                100,
+                SessionEvent::UserInput {
+                    text: "calc".into(),
+                },
+            ),
+            ev(
+                105,
+                SessionEvent::TurnStarted {
+                    turn: 1,
+                    call_in_turn: 0,
+                },
+            ),
+        ];
+        for (i, ms) in steps.iter().enumerate() {
+            out.push(step(110 + i as u64, *ms));
+        }
+        out
+    };
+    let span_of = |events: &[SessionLogEntry]| {
+        let view = build_view(events, "qwen", 0);
+        match &view.rows[0] {
+            TrajectoryRow::Turn(t) => t.reasoning_ms,
+            TrajectoryRow::Bg(_) => panic!("the first row is a turn"),
+        }
+    };
+    assert_eq!(
+        span_of(&events(&[Some(4_200), None, Some(300)])),
+        Some(4_500),
+        "the spans the calls reported are summed"
+    );
+    assert_eq!(
+        span_of(&events(&[None, None])),
+        None,
+        "a turn whose calls reported no span stays unknown"
+    );
+}
+
 /// Turn numbering survives a runner rebuild. The runner's TurnStarted counter
 /// lives in the process and restarts at 1 whenever the runner is rebuilt
 /// (resume, reconnect), but the session log keeps growing. Numbering turns from

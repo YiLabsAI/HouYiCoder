@@ -53,6 +53,9 @@ pub(super) struct TurnBuilder {
     cache_read: Option<u64>,
     cache_write: Option<u64>,
     reasoning_tokens: Option<u64>,
+    /// Time this turn spent inside reasoning blocks, summed over the calls
+    /// that reported a span: unknown until one does.
+    reasoning_ms: Option<u64>,
     /// Which of the turn's counts the calls behind them reported, AND-folded
     /// across every call and child folded in. A count no endpoint reported and
     /// the log left at zero is unknown rather than a measured zero, so the row
@@ -91,6 +94,7 @@ impl TurnBuilder {
             cache_read: None,
             cache_write: None,
             reasoning_tokens: None,
+            reasoning_ms: None,
             usage_provenance: UsageProvenance::ALL_REPORTED,
             models: Vec::new(),
             efforts: Vec::new(),
@@ -128,6 +132,7 @@ impl TurnBuilder {
         self.cache_read = None;
         self.cache_write = None;
         self.reasoning_tokens = None;
+        self.reasoning_ms = None;
         self.usage_provenance = UsageProvenance::ALL_REPORTED;
         self.models.clear();
         self.efforts.clear();
@@ -297,6 +302,12 @@ impl TurnBuilder {
     ) {
         self.touch(ts);
         let index = self.current_model_index(ts);
+        // Each call states its own reasoning span or none; the turn's figure
+        // is the sum of the ones that did, so a call that reported nothing
+        // leaves the total a floor rather than zeroing it.
+        if let Some(ms) = reasoning_ms {
+            self.reasoning_ms = Some(self.reasoning_ms.unwrap_or(0) + ms);
+        }
         self.records[index].outcome = RecordOutcome::Ok;
         self.records[index].timing = Some(EventTiming {
             total_ms,
@@ -674,6 +685,7 @@ impl TurnBuilder {
             models: self.models.clone(),
             efforts: self.efforts.clone(),
             reasoning_tokens: self.reasoning_tokens.map(|v| v as usize),
+            reasoning_ms: self.reasoning_ms,
             tool_count: self.tool_count,
             tool_fail: self.tool_fail,
             retries: self.retries,

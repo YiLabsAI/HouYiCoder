@@ -23,6 +23,7 @@ pub(super) fn turn(n: usize, user_input: &str) -> TrajectoryTurn {
         models: Vec::new(),
         efforts: Vec::new(),
         reasoning_tokens: None,
+        reasoning_ms: None,
         tool_count: 0,
         tool_fail: 0,
         retries: 0,

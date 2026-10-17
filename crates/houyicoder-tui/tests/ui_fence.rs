@@ -242,6 +242,17 @@ fn test_trajectory_read_settles() {
 {}",
         s.output()
     );
+    // The body says the session has no turns: a blank area under the header
+    // reads as a list that failed to load rather than as a session with
+    // nothing in it yet. Read off the screen rather than the byte stream: the
+    // settle rewrites the loading line, so the renderer emits only the cells
+    // that changed and the phrase never arrives as one run of bytes.
+    assert!(
+        s.wait_for_screen("no turns recorded yet", t),
+        "an empty session states its own emptiness:
+{}",
+        s.output_plain()
+    );
     // The buffer holds every frame written so far, so the loading line from
     // the first frames is cleared before the settled screen is read.
     s.clear_output();
@@ -262,12 +273,8 @@ fn test_trajectory_read_settles() {
         "nor the demonstration turns: {plain}"
     );
     // An ordinary character is not the pane's to keep: typing it closes the
-    // pane and the character lands in the input box, visible. The alternative
-    // (the shared pane policy dropping it) is what the pane's own contract
-    // rules out.
-    // An ordinary character is not the pane's to keep: typing it closes the
-    // pane, in Focus as well as Working. This PTY is what found the Focus gap
-    // (the pane was drawn but its keys never arrived).
+    // pane and the character lands in the input box, visible, rather than
+    // being dropped by the shared pane policy.
     s.clear_output();
     s.send_str("hello");
     // The renderer emits only the cells that changed, so the screen is what the

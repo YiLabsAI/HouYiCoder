@@ -80,6 +80,12 @@ pub struct TrajectoryTurn {
     /// output_tokens, not a separate total). None when no TurnUsage landed or
     /// the log predates the field — unknown, not zero.
     pub reasoning_tokens: Option<usize>,
+    /// Wall time this turn spent inside reasoning blocks, summed from the
+    /// durable timing events of its calls. None when no call reported a
+    /// reasoning span: a sum over the calls that reported one is a floor on
+    /// what the turn thought, but a turn where nobody reported states nothing
+    /// rather than zero.
+    pub reasoning_ms: Option<u64>,
     pub tool_count: usize,
     pub tool_fail: usize,
     pub retries: usize,
@@ -113,7 +119,17 @@ impl TrajectoryTurn {
     }
 }
 
+/// One row of the turn list: a turn, or a background event between turns.
+///
+/// Nearly every row is a turn and a background event is the rare one, so the
+/// union is sized for the turn: rows are held in a list and read by reference,
+/// and boxing the turn would put an allocation and an indirection on every row
+/// of that list to shrink the variant that is occasionally present.
 #[derive(Clone)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "the turn is nearly every row, and boxing it would allocate a heap node per row to shrink the rare one"
+)]
 pub enum TrajectoryRow {
     Turn(TrajectoryTurn),
     Bg(TrajectoryBg),

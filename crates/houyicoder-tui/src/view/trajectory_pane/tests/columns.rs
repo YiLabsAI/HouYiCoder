@@ -3,9 +3,10 @@
 
 use super::super::list;
 use super::super::*;
-use super::fixtures::{turn, view};
+use super::fixtures::{lines_text, turn, view};
 use ratatui::layout::Rect;
 use ratatui::text::Line;
+use std::slice::from_ref;
 
 /// The index of the first cell matching probe, and the display column it starts
 /// at. A cell is found by its content rather than by its position, so a probe
@@ -24,6 +25,21 @@ fn cell_of(line: &Line<'static>, probe: impl Fn(&str) -> bool) -> (usize, usize)
 /// The display column where the first cell matching probe starts.
 fn column_of(line: &Line<'static>, probe: impl Fn(&str) -> bool) -> usize {
     cell_of(line, probe).1
+}
+
+/// The display column where needle first appears in the line's text. Byte
+/// offsets inside the spans are counted as display columns, so a glyph wider
+/// than one column on an earlier span does not shift the answer.
+fn text_column(line: &Line<'static>, needle: &str) -> usize {
+    let mut col = 0usize;
+    for span in &line.spans {
+        let text = span.content.as_ref();
+        if let Some(at) = text.find(needle) {
+            return col + UnicodeWidthStr::width(&text[..at]);
+        }
+        col += UnicodeWidthStr::width(text);
+    }
+    panic!("no {needle:?} in the row: {:?}", line.spans);
 }
 
 /// The token column starts at the same display column whatever the title holds,
@@ -237,6 +253,96 @@ fn test_long_model_cut() {
         column_of(&body[0], |c| c.contains("ms")),
         column_of(&body[1], |c| c.contains("ms")),
         "the duration stays put whatever the id length"
+    );
+}
+
+/// The two token counts are subcolumns of one cell: the in and out keywords
+/// hold the same display column on every row, so the numbers line up whatever
+/// each figure is wide. A short figure is padded onto its subcolumn rather
+/// than left where it lands.
+///
+/// The two rows deliberately differ in figure width on both counts: with
+/// figures of one width the two subcolumns have one width between them, and a
+/// left-aligned cell would hold the same columns, so the assertions below
+/// would pass without the code under test.
+#[test]
+fn test_token_columns_hold() {
+    let mk = |n: usize, tin: usize, tout: usize| TrajectoryTurn {
+        tokens_in: Some(tin),
+        tokens_out: Some(tout),
+        duration_ms: 100,
+        ..turn(n, "title")
+    };
+    let view = TrajectoryView {
+        tokens_in: Some(1_117_800),
+        tokens_out: Some(2_700),
+        ..view(vec![
+            TrajectoryRow::Turn(mk(1, 1_117_800, 2_700)),
+            TrajectoryRow::Turn(mk(2, 45, 5)),
+        ])
+    };
+    let (_, body, _, _) = list::draw_turn_list(&view, 0, Rect::new(0, 0, 160, 20));
+    assert_eq!(
+        text_column(&body[0], " in "),
+        text_column(&body[1], " in "),
+        "the in keyword holds one display column across rows: {}",
+        lines_text(&body)
+    );
+    assert_eq!(
+        text_column(&body[0], " out"),
+        text_column(&body[1], " out"),
+        "the out keyword holds one display column across rows: {}",
+        lines_text(&body)
+    );
+    assert!(
+        lines_text(from_ref(&body[1])).contains("  45 in    5 out"),
+        "the short counts sit on their subcolumns: {}",
+        lines_text(&body)
+    );
+}
+
+/// A session with no failures states the count quietly, and a count above zero
+/// keeps the red that draws the eye to it.
+#[test]
+fn test_header_fail_count_color() {
+    let rows = |failures: usize| TrajectoryView {
+        failures,
+        tokens_in: Some(1_000),
+        tokens_out: Some(200),
+        ..view(vec![TrajectoryRow::Turn(TrajectoryTurn {
+            tokens_in: Some(1_000),
+            tokens_out: Some(200),
+            tool_fail: failures,
+            duration_ms: 100,
+            ..turn(1, "title")
+        })])
+    };
+    let failures_cell = |failures: usize| {
+        let (header, _, _, _) = list::draw_turn_list(&rows(failures), 0, Rect::new(0, 0, 160, 10));
+        let (i, _) = cell_of(&header[0], |c| c.contains("fail"));
+        header[0].spans[i].style.fg
+    };
+    assert_eq!(
+        failures_cell(0),
+        Some(Color::DarkGray),
+        "a session with no failures does not raise an alarm"
+    );
+    assert_eq!(
+        failures_cell(2),
+        Some(Color::Red),
+        "a failure count above zero keeps its red"
+    );
+}
+
+/// A session that has run no turns yet says so in the body: an empty area
+/// under the header would read as a list that failed to load.
+#[test]
+fn test_empty_session_states_none() {
+    let (_, body, _, _) = list::draw_turn_list(&view(vec![]), 0, Rect::new(0, 0, 160, 10));
+    assert!(
+        lines_text(&body).contains("no turns recorded yet"),
+        "an empty list states that it is empty: {}",
+        lines_text(&body)
     );
 }
 
