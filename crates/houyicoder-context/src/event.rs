@@ -549,7 +549,8 @@ pub enum SessionEvent {
         /// a measurement, and zero would claim the model thought for no time.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reasoning_ms: Option<u64>,
-        /// Time the stream spent inside its reply blocks, summed the same way.
+        /// Time the stream spent inside its output blocks (reply text and tool
+        /// call arguments), summed the same way.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         response_ms: Option<u64>,
     },

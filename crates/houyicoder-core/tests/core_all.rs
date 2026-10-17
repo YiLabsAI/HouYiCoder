@@ -17,6 +17,8 @@ mod compaction_pipeline;
 mod loop_with_sandbox;
 #[path = "memory_loop.rs"]
 mod memory_loop;
+#[path = "model_call_timing.rs"]
+mod model_call_timing;
 #[path = "observability_loop.rs"]
 mod observability_loop;
 #[path = "recall_quality.rs"]

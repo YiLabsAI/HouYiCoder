@@ -319,13 +319,13 @@ fn record_row(
                 ));
             }
             // The split the provider's own blocks measured: how long the call
-            // spent thinking and how long it spent answering. A span the stream
-            // never closed stays absent rather than reading as no time.
+            // spent thinking and how long it spent producing output. A span the
+            // stream never closed stays absent rather than reading as no time.
             if let Some(reasoning) = t.reasoning_ms {
                 parts.push(format!("reasoning {}", format_span_ms(reasoning)));
             }
             if let Some(response) = t.response_ms {
-                parts.push(format!("reply {}", format_span_ms(response)));
+                parts.push(format!("generating {}", format_span_ms(response)));
             }
             if parts.is_empty() {
                 String::new()
@@ -551,7 +551,7 @@ fn push_model_facts(
             parts.push(format!("reasoning {}ms", reasoning));
         }
         if let Some(response) = timing.response_ms {
-            parts.push(format!("reply {}ms", response));
+            parts.push(format!("generating {}ms", response));
         }
         push_field(body, "timing", &parts.join(" · "), Color::Gray);
         // The rate the call decoded at, from its own output and decode span.

@@ -7,20 +7,44 @@ use super::{RunError, Runner};
 use crate::agent::append::new_event;
 use std::time::Instant;
 
-/// The time a stream spent inside its reasoning and reply blocks.
+/// The time a stream spent inside its reasoning blocks and its output blocks.
 ///
 /// A block is measured from the event that opens it to the event that closes
 /// it, so what a figure says is what the provider marked, not a share of the
-/// total estimated from text or tokens. A block the call ended inside is left
-/// out: an unfinished span is unknown, and zero would be a measurement.
+/// total estimated from text or tokens. An output block is a reply's text or a
+/// tool call's argument stream; both are the model producing output, and a call
+/// that answers with a tool alone has no text block to measure. Tool calls
+/// streaming at the same time are one span from the first opener to the last
+/// closer, so overlapping output is counted once. A block the call ended
+/// inside is left out: an unfinished span is unknown, and zero would be a
+/// measurement.
 #[derive(Default)]
 pub(crate) struct BlockSpans {
     open_reasoning: Option<Instant>,
-    open_reply: Option<Instant>,
+    open_text: Option<Instant>,
+    open_tool_input: Option<Instant>,
+    tool_inputs_open: usize,
     reasoning_ms: u64,
     response_ms: u64,
     closed_reasoning: bool,
-    closed_reply: bool,
+    closed_output: bool,
+}
+
+/// Whether an event marks the model's output beginning to arrive: a reply or
+/// reasoning delta, the opening of a tool call's arguments or a fragment of
+/// them, or the call itself when a provider publishes one without fragments.
+/// Time to first token is read at the first such event, so a turn the model
+/// answers with a tool call alone is timed from the moment its arguments start
+/// arriving rather than from the closed stream that carries the call.
+pub(crate) fn is_first_output(ev: &LlmEvent) -> bool {
+    matches!(
+        ev,
+        LlmEvent::TextDelta { .. }
+            | LlmEvent::ReasoningDelta { .. }
+            | LlmEvent::ToolInputStart { .. }
+            | LlmEvent::ToolInputDelta { .. }
+            | LlmEvent::ToolCall { .. }
+    )
 }
 
 impl BlockSpans {
@@ -44,12 +68,25 @@ impl BlockSpans {
                 }
             }
             LlmEvent::TextStart { .. } => {
-                self.open_reply = Some(now);
+                self.open_text = Some(now);
             }
             LlmEvent::TextEnd { .. } => {
-                if let Some(started) = self.open_reply.take() {
+                if let Some(started) = self.open_text.take() {
                     self.response_ms += now.saturating_duration_since(started).as_millis() as u64;
-                    self.closed_reply = true;
+                    self.closed_output = true;
+                }
+            }
+            LlmEvent::ToolInputStart { .. } => {
+                self.open_tool_input = self.open_tool_input.or(Some(now));
+                self.tool_inputs_open += 1;
+            }
+            LlmEvent::ToolInputEnd { .. } => {
+                self.tool_inputs_open = self.tool_inputs_open.saturating_sub(1);
+                if self.tool_inputs_open == 0
+                    && let Some(started) = self.open_tool_input.take()
+                {
+                    self.response_ms += now.saturating_duration_since(started).as_millis() as u64;
+                    self.closed_output = true;
                 }
             }
             _ => {}
@@ -61,9 +98,9 @@ impl BlockSpans {
         self.closed_reasoning.then_some(self.reasoning_ms)
     }
 
-    /// The reply time, when a block was closed.
+    /// The output time, when an output block was closed.
     pub(crate) fn response_ms(&self) -> Option<u64> {
-        self.closed_reply.then_some(self.response_ms)
+        self.closed_output.then_some(self.response_ms)
     }
 }
 
@@ -71,7 +108,7 @@ impl Runner {
     /// Append model step timing for latency analysis.
     ///
     /// The split is what the provider's own stream marked: how long it spent
-    /// inside reasoning blocks and inside reply blocks. A block the call ended
+    /// inside reasoning blocks and inside output blocks. A block the call ended
     /// inside is not counted, so an absent figure is unknown rather than zero.
     pub(crate) async fn append_model_step_timing(
         &self,

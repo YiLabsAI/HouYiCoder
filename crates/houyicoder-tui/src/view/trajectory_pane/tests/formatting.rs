@@ -137,7 +137,7 @@ fn test_detail_header_omits_span() {
     assert!(text.contains("10ms"), "a measured one is stated: {text}");
 }
 
-/// A model call that measured its reasoning and reply blocks says so, and one
+/// A model call that measured its reasoning and output blocks says so, and one
 /// that did not stays silent about them: an unmeasured span is not a zero.
 #[test]
 fn test_detail_shows_reasoning_split() {
@@ -157,8 +157,8 @@ fn test_detail_shows_reasoning_split() {
         "the thinking time: {text}"
     );
     assert!(
-        text.contains("reply 5500ms"),
-        "and the answering time: {text}"
+        text.contains("generating 5500ms"),
+        "and the time it spent producing output: {text}"
     );
 
     let mut unmeasured = record_of(TrajectoryRecordKind::Model, Some("answer"));
@@ -173,7 +173,7 @@ fn test_detail_shows_reasoning_split() {
     let (_, body, _, _) = detail::draw_event_detail(&turn(1, "ask"), &detail, 0, Rect::ZERO);
     let text = lines_text(&body);
     assert!(
-        !text.contains("reasoning") && !text.contains("reply"),
+        !text.contains("reasoning") && !text.contains("generating"),
         "an unmeasured split is not printed: {text}"
     );
 }

@@ -307,10 +307,12 @@ pub(crate) fn abnormal_close_events(
 }
 
 /// Merge one streamed tool-call fragment (a delta.tool_calls[i] JSON object)
-/// into the by-index accumulator. The first chunk carries id + function.name;
-/// arguments arrive as concatenated string fragments. Pure (no I/O) so the
-/// reassembly is unit-testable without a mock SSE server.
-pub(crate) fn accumulate_tool_call(acc: &mut Vec<ToolCallAccum>, tc: &Value) {
+/// into the by-index accumulator, returning the slot it merged into so a caller
+/// that publishes per-fragment events reads the same slot this merge used
+/// rather than parsing the index a second time. The first chunk carries id +
+/// function.name; arguments arrive as concatenated string fragments. Pure (no
+/// I/O) so the reassembly is unit-testable without a mock SSE server.
+pub(crate) fn accumulate_tool_call(acc: &mut Vec<ToolCallAccum>, tc: &Value) -> usize {
     let idx = tc.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
     if idx >= acc.len() {
         acc.resize_with(idx + 1, ToolCallAccum::default);
@@ -327,6 +329,7 @@ pub(crate) fn accumulate_tool_call(acc: &mut Vec<ToolCallAccum>, tc: &Value) {
             slot.args.push_str(args);
         }
     }
+    idx
 }
 
 /// Make tool-call ids non-empty and unique within one response. Approval,

@@ -20,7 +20,7 @@ use houyicoder_api::agent_event::{EventHandler, ResponseStreamEvent};
 
 use super::stream_fold;
 use crate::agent::Tokenizer;
-use crate::agent::append::timing::BlockSpans;
+use crate::agent::append::timing::{BlockSpans, is_first_output};
 use crate::agent::apply_effort_settings;
 use crate::agent::compaction::pre_flight_threshold;
 use crate::agent::resolve_applied_effort;
@@ -450,12 +450,7 @@ impl Runner {
             // observe each delta without waiting for stream completion.
             if let Some(ev) = first {
                 blocks.note(&ev);
-                if matches!(
-                    ev,
-                    LlmEvent::TextDelta { .. }
-                        | LlmEvent::ReasoningDelta { .. }
-                        | LlmEvent::ToolCall { .. }
-                ) {
+                if is_first_output(&ev) {
                     first_token_elapsed = Some(api_start.elapsed().as_millis() as u64);
                 }
                 self.fold_event(ev, &mut state, session, response_handler.as_deref())
@@ -488,14 +483,7 @@ impl Runner {
                     }
                 };
                 blocks.note(&ev);
-                if first_token_elapsed.is_none()
-                    && matches!(
-                        ev,
-                        LlmEvent::TextDelta { .. }
-                            | LlmEvent::ReasoningDelta { .. }
-                            | LlmEvent::ToolCall { .. }
-                    )
-                {
+                if first_token_elapsed.is_none() && is_first_output(&ev) {
                     first_token_elapsed = Some(api_start.elapsed().as_millis() as u64);
                 }
                 self.fold_event(ev, &mut state, session, response_handler.as_deref())

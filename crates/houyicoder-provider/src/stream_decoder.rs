@@ -7,6 +7,7 @@ use crate::openai_compat::{
     ToolCallAccum, abnormal_close_events, accumulate_tool_call, finalize_tool_calls,
 };
 use crate::usage::parse_usage;
+use std::collections::HashSet;
 use std::mem::take;
 
 /// Progress outcome after consuming one parsed JSON SSE chunk.
@@ -26,6 +27,9 @@ pub(crate) struct StreamDecoder {
     pub(crate) tool_calls: Vec<ToolCallAccum>,
     pub(crate) text_started: bool,
     pub(crate) reasoning_started: bool,
+    /// The tool-call slots whose argument stream has been opened, so a slot
+    /// opens once and closes once no matter how many fragments arrive.
+    tool_inputs_open: HashSet<usize>,
 }
 
 impl StreamDecoder {
@@ -58,6 +62,7 @@ impl StreamDecoder {
 
         if let Some(reason) = choice.get("finish_reason").and_then(Value::as_str) {
             self.close_in_flight(out);
+            self.close_tool_input(out);
             for ev in finalize_tool_calls(take(&mut self.tool_calls)) {
                 out.push(ev);
             }
@@ -113,7 +118,65 @@ impl StreamDecoder {
 
         if let Some(tcs) = delta.get("tool_calls").and_then(Value::as_array) {
             for tc in tcs {
-                accumulate_tool_call(&mut self.tool_calls, tc);
+                self.note_tool_fragment(tc, out);
+            }
+        }
+    }
+
+    /// Merge one streamed tool-call fragment and publish the events it implies:
+    /// the first fragment that names a call opens that call's input, and any
+    /// fragment carrying argument text extends it. A fragment arriving before
+    /// the name cannot open the stream, because the event names the call it
+    /// belongs to; the arguments it carried are published with the opener, so
+    /// the fragments a reader sees always spell out the finalized call.
+    fn note_tool_fragment(&mut self, tc: &Value, out: &mut Vec<LlmEvent>) {
+        let idx = accumulate_tool_call(&mut self.tool_calls, tc);
+        let args = tc
+            .get("function")
+            .and_then(|f| f.get("arguments"))
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty());
+        let slot = &self.tool_calls[idx];
+        if !self.tool_inputs_open.contains(&idx) {
+            if slot.name.is_empty() {
+                return;
+            }
+            self.tool_inputs_open.insert(idx);
+            let (id, name, carried) = (slot.id.clone(), slot.name.clone(), slot.args.clone());
+            out.push(LlmEvent::ToolInputStart {
+                id: id.clone(),
+                name: name.clone(),
+            });
+            if !carried.is_empty() {
+                out.push(LlmEvent::ToolInputDelta {
+                    id,
+                    name,
+                    text: carried,
+                });
+            }
+            return;
+        }
+        if let Some(args) = args {
+            out.push(LlmEvent::ToolInputDelta {
+                id: slot.id.clone(),
+                name: slot.name.clone(),
+                text: args.to_string(),
+            });
+        }
+    }
+
+    /// Close the tool input stream of every call this decoder opened, in slot order.
+    /// A reader of the event sequence then sees the arguments end before the
+    /// call they built, and a measured block has both an opener and a closer.
+    fn close_tool_input(&mut self, out: &mut Vec<LlmEvent>) {
+        let mut open: Vec<usize> = self.tool_inputs_open.drain().collect();
+        open.sort_unstable();
+        for idx in open {
+            if let Some(slot) = self.tool_calls.get(idx) {
+                out.push(LlmEvent::ToolInputEnd {
+                    id: slot.id.clone(),
+                    name: slot.name.clone(),
+                });
             }
         }
     }
@@ -133,7 +196,11 @@ impl StreamDecoder {
     }
 
     /// Produce the terminal StepFinish and Finish events once the stream ends.
-    pub(crate) fn finish_events(self) -> Vec<LlmEvent> {
+    /// A stream that ended without a finish reason still ends every input
+    /// stream this decoder opened, so the argument stream of a cut call is
+    /// measured rather than left open; a stream that announced its end closed
+    /// them where the reason arrived.
+    pub(crate) fn finish_events(mut self) -> Vec<LlmEvent> {
         match self.finish_reason {
             Some(reason) => vec![
                 LlmEvent::StepFinish {
@@ -146,12 +213,17 @@ impl StreamDecoder {
                     usage: self.final_usage,
                 },
             ],
-            None => abnormal_close_events(
-                self.reasoning_started,
-                self.text_started,
-                self.tool_calls,
-                self.final_usage,
-            ),
+            None => {
+                let mut events = Vec::new();
+                self.close_tool_input(&mut events);
+                events.extend(abnormal_close_events(
+                    self.reasoning_started,
+                    self.text_started,
+                    self.tool_calls,
+                    self.final_usage,
+                ));
+                events
+            }
         }
     }
 }

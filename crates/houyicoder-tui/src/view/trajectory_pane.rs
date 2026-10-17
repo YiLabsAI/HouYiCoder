@@ -114,7 +114,8 @@ pub struct EventTiming {
     /// any. None is unknown: the provider sent no reasoning, or the call ended
     /// inside one, and neither is a measurement of zero.
     pub reasoning_ms: Option<u64>,
-    /// Time the call spent inside its reply blocks, summed the same way.
+    /// Time the call spent inside its output blocks, the reply text and a tool
+    /// call's arguments alike, summed the same way.
     pub response_ms: Option<u64>,
 }
 

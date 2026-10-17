@@ -11,7 +11,7 @@ use houyicoder_protocol::llm::{CompletionResponse, OutputItem, Usage};
 use houyicoder_session::SessionStore;
 use std::sync::Arc;
 
-use super::BlockSpans;
+use super::{BlockSpans, is_first_output};
 use crate::agent::{Runner, ToolRegistry, runner_config::RunnerConfig};
 use houyicoder_protocol::llm::LlmEvent;
 use std::time::{Duration, Instant};
@@ -272,6 +272,169 @@ async fn test_spans_reach_the_event() {
     assert!(
         first.ttft_ms.is_some() && first.decode_ms.is_some(),
         "the split the header already read is unchanged: {first:?}"
+    );
+}
+
+/// A tool call's argument stream opens the output clock: a reply that answers
+/// with a call and no text is timed from the moment its arguments start
+/// arriving, not from the closed stream that carries the call. The events that
+/// only announce a block or end one do not start it.
+#[test]
+fn test_tool_input_starts_output() {
+    let (id, name) = ("c1".to_string(), "read_file".to_string());
+    assert!(
+        is_first_output(&LlmEvent::ToolInputStart {
+            id: id.clone(),
+            name: name.clone()
+        }),
+        "the fragment that names the call opens its arguments"
+    );
+    assert!(
+        is_first_output(&LlmEvent::ToolInputDelta {
+            id: id.clone(),
+            name: name.clone(),
+            text: "{\"path\":".into()
+        }),
+        "a later fragment of the same arguments is output too"
+    );
+    assert!(
+        is_first_output(&LlmEvent::ToolCall {
+            id: id.clone(),
+            name: name.clone(),
+            input: serde_json::json!({"path": "a.rs"})
+        }),
+        "a provider that publishes the call without fragments still counts"
+    );
+    assert!(
+        is_first_output(&LlmEvent::TextDelta {
+            id: "t1".into(),
+            text: "hi".into()
+        }),
+        "reply text is unchanged"
+    );
+    assert!(
+        !is_first_output(&LlmEvent::StepStart { index: 0 }),
+        "the step opening carries no output"
+    );
+    assert!(
+        !is_first_output(&LlmEvent::TextStart { id: "t1".into() }),
+        "announcing a block is not output arriving"
+    );
+    assert!(
+        !is_first_output(&LlmEvent::ToolInputEnd { id, name }),
+        "closing the arguments is the end of the output, not its start"
+    );
+    assert!(
+        !is_first_output(&LlmEvent::Finish {
+            reason: "stop".into(),
+            usage: None
+        }),
+        "the stream closing is not output either"
+    );
+}
+
+/// A tool call's arguments close the output block they opened, so the time the
+/// model spent producing them is measured alongside a reply's text.
+#[test]
+fn test_tool_input_closes_output() {
+    let t0 = Instant::now();
+    let at = |ms: u64| t0 + Duration::from_millis(ms);
+    let mut spans = BlockSpans::default();
+    spans.note_at(
+        &LlmEvent::ToolInputStart {
+            id: "c1".into(),
+            name: "read_file".into(),
+        },
+        at(5),
+    );
+    spans.note_at(
+        &LlmEvent::ToolInputEnd {
+            id: "c1".into(),
+            name: "read_file".into(),
+        },
+        at(45),
+    );
+    assert_eq!(
+        spans.response_ms(),
+        Some(40),
+        "the arguments' own span reaches the output time"
+    );
+
+    spans.note_at(&LlmEvent::TextStart { id: "t1".into() }, at(50));
+    spans.note_at(&LlmEvent::TextEnd { id: "t1".into() }, at(60));
+    assert_eq!(
+        spans.response_ms(),
+        Some(50),
+        "a reply block adds to it, the way two reasoning blocks sum"
+    );
+}
+
+/// Two calls streaming their arguments at the same time are one output span,
+/// measured from the first opener to the last closer. Reading the clock at each
+/// opener would measure the last call alone and lose the time the first spent.
+#[test]
+fn test_tool_calls_share_span() {
+    let t0 = Instant::now();
+    let at = |ms: u64| t0 + Duration::from_millis(ms);
+    let mut spans = BlockSpans::default();
+    spans.note_at(
+        &LlmEvent::ToolInputStart {
+            id: "c1".into(),
+            name: "read_file".into(),
+        },
+        at(0),
+    );
+    spans.note_at(
+        &LlmEvent::ToolInputStart {
+            id: "c2".into(),
+            name: "grep".into(),
+        },
+        at(30),
+    );
+    spans.note_at(
+        &LlmEvent::ToolInputEnd {
+            id: "c1".into(),
+            name: "read_file".into(),
+        },
+        at(60),
+    );
+    assert_eq!(
+        spans.response_ms(),
+        None,
+        "one call still streaming keeps the span open"
+    );
+    spans.note_at(
+        &LlmEvent::ToolInputEnd {
+            id: "c2".into(),
+            name: "grep".into(),
+        },
+        at(60),
+    );
+    assert_eq!(
+        spans.response_ms(),
+        Some(60),
+        "the span runs from the first opener to the last closer, counted once"
+    );
+}
+
+/// A call whose stream ended inside its arguments reports no output time: the
+/// block never closed, and zero would claim the model produced nothing.
+#[test]
+fn test_open_tool_input_unknown() {
+    let mut spans = BlockSpans::default();
+    spans.note(&LlmEvent::ToolInputStart {
+        id: "c1".into(),
+        name: "read_file".into(),
+    });
+    spans.note(&LlmEvent::ToolInputDelta {
+        id: "c1".into(),
+        name: "read_file".into(),
+        text: "{\"path\":".into(),
+    });
+    assert_eq!(
+        spans.response_ms(),
+        None,
+        "an argument stream the call ended inside is not a measurement"
     );
 }
 
