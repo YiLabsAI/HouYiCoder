@@ -2,6 +2,11 @@
 
 use super::*;
 use crate::acpx::AcpxMethod;
+use crate::frontend::memory::{
+    MemoryChange, MemoryChangeCausality, MemoryChangeId, MemoryChangeOrigin, MemoryChangeScope,
+    MemoryOperation,
+};
+use crate::frontend::queue::QueuedInput;
 use crate::frontend::session_update::{
     AvailableCommand, AvailableCommandInput, ConfigOptionUpdate, CurrentModeUpdate, PlanEntry,
     PlanEntryPriority, PlanEntryStatus, SessionInfoUpdate, ToolCallId, ToolCallLocation,
@@ -101,6 +106,99 @@ fn test_update_carries_payload() {
             "{update:?} holds text a holder must account for"
         );
     }
+}
+
+/// One event per variant, each holding the same filler. A variant absent from
+/// the walk reports nothing no matter what it carries, so a holder that keeps
+/// a window of events never reaches its byte budget on those.
+#[test]
+fn test_event_carries_payload() {
+    let filler = "p".repeat(FILLER_BYTES);
+    let events = vec![
+        FrontendEvent::Message {
+            delta: filler.clone(),
+        },
+        FrontendEvent::Diff {
+            path: filler.clone(),
+            patch: filler.clone(),
+        },
+        FrontendEvent::ToolProgress {
+            name: filler.clone(),
+            status: filler.clone(),
+        },
+        FrontendEvent::PermissionAsk {
+            reason: filler.clone(),
+        },
+        FrontendEvent::AgentEvent {
+            topic: filler.clone(),
+            summary: filler.clone(),
+        },
+        FrontendEvent::Artifact {
+            kind: filler.clone(),
+            id: filler.clone(),
+        },
+        FrontendEvent::SpecImplDivergence {
+            clause_id: filler.clone(),
+            status: filler.clone(),
+        },
+        FrontendEvent::FindingArrived {
+            finding_id: filler.clone(),
+        },
+        FrontendEvent::SessionUpdate {
+            update: SessionUpdate::CurrentModeUpdate(CurrentModeUpdate {
+                current_mode_id: filler.clone(),
+                meta: None,
+            }),
+        },
+        FrontendEvent::Acpx {
+            notification: AcpxNotification::new(
+                AcpxMethod::LlmTextDelta,
+                json!({ "text": filler.clone() }),
+            ),
+        },
+        FrontendEvent::QueuedInputCommitted {
+            inputs: vec![QueuedInput::new(filler.clone())],
+        },
+        FrontendEvent::MemoryChanged {
+            id: MemoryChangeId(filler.clone()),
+            origin: MemoryChangeOrigin::AutoMemory,
+            causality: MemoryChangeCausality::ThisTurn,
+            changes: vec![MemoryChange {
+                key: filler.clone(),
+                operation: MemoryOperation::Created,
+                scope: MemoryChangeScope::User,
+            }],
+        },
+        FrontendEvent::SystemLine {
+            text: filler.clone(),
+        },
+        FrontendEvent::AgentStatus {
+            agent_id: filler.clone(),
+            subagent_type: filler.clone(),
+            turn: 1,
+            tokens: 0,
+            tool_uses: 0,
+            last_activity: Some(filler.clone()),
+            completed: None,
+        },
+    ];
+
+    for event in &events {
+        assert!(
+            event.estimated_bytes() >= FILLER_BYTES,
+            "{event:?} holds text a holder must account for"
+        );
+    }
+
+    let counters = FrontendEvent::Metrics {
+        tokens: 4096,
+        cache_hit_ratio: 0.5,
+    };
+    assert_eq!(
+        counters.estimated_bytes(),
+        0,
+        "a frame of counters carries no payload of its own"
+    );
 }
 
 /// A tool's arguments are JSON the producer chose, so they nest: an edit list

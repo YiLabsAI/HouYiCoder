@@ -7,6 +7,10 @@
 //! advertised commands, session metadata, config options, the metadata a
 //! producer attaches to any of them, and a notification's own parameters.
 //!
+//! An event's figure is its payload's figure plus whatever text the event
+//! carries itself, so a holder that keeps events sizes its window from this
+//! walk rather than from a rule of its own.
+//!
 //! Each entry reports the bytes the value's own payload holds. The fixed cost
 //! of the slot a value sits in belongs to the type holding it, so the holder
 //! charges that cost itself rather than reading it from here. The walk is
@@ -16,6 +20,7 @@
 
 use serde_json::Value;
 
+use super::event::FrontendEvent;
 use super::run::ContentBlock;
 use super::session_update::{
     AvailableCommand, AvailableCommandsUpdate, ConfigOptionUpdate, ContentChunk, Plan,
@@ -56,6 +61,47 @@ impl AcpxNotification {
     /// measures the parameters it decoded into.
     pub fn estimated_bytes(&self) -> usize {
         json_bytes(&self.params)
+    }
+}
+
+impl FrontendEvent {
+    /// The bytes this event's own payload holds, excluding the fixed cost of
+    /// the slot holding it. The holder charges its own cost.
+    pub fn estimated_bytes(&self) -> usize {
+        match self {
+            FrontendEvent::SessionUpdate { update } => update.estimated_bytes(),
+            FrontendEvent::Acpx { notification } => notification.estimated_bytes(),
+            FrontendEvent::Message { delta } => delta.len(),
+            FrontendEvent::Diff { path, patch } => path.len() + patch.len(),
+            FrontendEvent::ToolProgress { name, status } => name.len() + status.len(),
+            FrontendEvent::PermissionAsk { reason } => reason.len(),
+            FrontendEvent::AgentEvent { topic, summary } => topic.len() + summary.len(),
+            FrontendEvent::Artifact { kind, id } => kind.len() + id.len(),
+            FrontendEvent::SpecImplDivergence { clause_id, status } => {
+                clause_id.len() + status.len()
+            }
+            FrontendEvent::FindingArrived { finding_id } => finding_id.len(),
+            FrontendEvent::QueuedInputCommitted { inputs } => {
+                inputs.iter().map(|input| input.text.len()).sum()
+            }
+            FrontendEvent::MemoryChanged { id, changes, .. } => {
+                id.0.len() + changes.iter().map(|change| change.key.len()).sum::<usize>()
+            }
+            FrontendEvent::SystemLine { text } => text.len(),
+            FrontendEvent::AgentStatus {
+                agent_id,
+                subagent_type,
+                last_activity,
+                completed,
+                ..
+            } => {
+                agent_id.len()
+                    + subagent_type.len()
+                    + last_activity.as_ref().map_or(0, String::len)
+                    + completed.as_ref().map_or(0, String::len)
+            }
+            FrontendEvent::Metrics { .. } => 0,
+        }
     }
 }
 

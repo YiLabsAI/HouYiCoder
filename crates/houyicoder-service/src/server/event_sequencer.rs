@@ -20,6 +20,16 @@ use tokio::sync::Notify;
 
 const MAX_EPHEMERAL_PENDING: usize = 256;
 
+/// The bytes of reliable frames a session retains for a reconnect. A frame the
+/// durable log produced is read back from the log on demand, while a notice a
+/// producer pushed at runtime exists only while this window holds it, so the
+/// budget is sized to keep a session's runtime notice content reachable.
+const RELIABLE_WINDOW_BYTES: usize = 8 * 1024 * 1024;
+
+/// Fixed cost of one retained frame: the envelope, its identity, and the
+/// queue slot it occupies.
+const FRAME_SLOT_BYTES: usize = 64;
+
 #[derive(Clone)]
 struct PendingEvent {
     order: u64,
@@ -36,6 +46,93 @@ pub(crate) struct EntryPayloads {
     pub(crate) payloads: Vec<FrontendEvent>,
 }
 
+/// The newest reliable frames a session keeps in memory, bounded by the bytes
+/// they carry.
+///
+/// A reconnect the window still covers is answered from here. Where it does not
+/// cover the client's cursor, the durable log answers instead, and the two
+/// sources are not interchangeable: a frame derived from the log can be read
+/// out of it again, while a notice a producer pushed at runtime can only come
+/// from this window, which is what bounds how far back that content survives.
+struct ReliableWindow {
+    frames: VecDeque<EventEnvelope>,
+    bytes: usize,
+    budget: usize,
+    floor: Option<EventSeq>,
+}
+
+impl Default for ReliableWindow {
+    /// A window holding the bytes a session's runtime notices are expected to
+    /// occupy.
+    fn default() -> Self {
+        Self::new(RELIABLE_WINDOW_BYTES)
+    }
+}
+
+impl ReliableWindow {
+    /// Create an empty window holding at most this many bytes of frames.
+    fn new(budget: usize) -> Self {
+        Self {
+            frames: VecDeque::new(),
+            bytes: 0,
+            budget,
+            floor: None,
+        }
+    }
+
+    /// Append one frame, dropping the oldest frames while the window is over
+    /// its budget. The newest frame always stays, so a frame larger than the
+    /// whole budget is retained rather than dropped on arrival.
+    fn retain(&mut self, frame: EventEnvelope) {
+        self.bytes += FRAME_SLOT_BYTES + frame.payload.estimated_bytes();
+        self.frames.push_back(frame);
+        while self.frames.len() > 1 && self.bytes > self.budget {
+            let dropped = self
+                .frames
+                .pop_front()
+                .expect("a window of more than one frame yields its oldest");
+            self.bytes -= FRAME_SLOT_BYTES + dropped.payload.estimated_bytes();
+            self.floor = Some(dropped.seq);
+        }
+    }
+
+    fn clear(&mut self) {
+        self.frames.clear();
+        self.bytes = 0;
+        self.floor = None;
+    }
+
+    /// Whether the window still holds every frame a client that last saw this
+    /// cursor is missing. A client with no cursor has seen nothing, so only the
+    /// log answers it, and once frames have been dropped only a cursor at or
+    /// after the oldest dropped frame is answered from here.
+    fn covers(&self, last: Option<EventSeq>) -> bool {
+        last.is_some_and(|seq| self.floor.is_none_or(|floor| seq >= floor))
+    }
+
+    /// The retained frames a client that last saw this cursor is missing, in
+    /// the order they were sequenced.
+    fn after(&self, last: Option<EventSeq>) -> Vec<EventEnvelope> {
+        self.frames
+            .iter()
+            .filter(|frame| after_cursor(frame.seq, last))
+            .cloned()
+            .collect()
+    }
+
+    /// The retained payloads the durable log cannot reproduce. A frame a log
+    /// entry produced carries that entry's identity, so reading the log again
+    /// delivers it; a frame a producer pushed at runtime carries none, and this
+    /// is the only place it is held.
+    fn runtime_payloads(&self) -> Vec<FrontendEvent> {
+        self.frames
+            .iter()
+            .filter(|frame| frame.event_id.is_none())
+            .map(|frame| frame.payload.clone())
+            .collect()
+    }
+}
+
 #[derive(Default)]
 struct SequencerState {
     next_seq: u64,
@@ -44,7 +141,7 @@ struct SequencerState {
     pending: VecDeque<PendingEvent>,
     pending_status: HashMap<String, PendingEvent>,
     ephemeral_pending: usize,
-    reliable: Vec<EventEnvelope>,
+    window: ReliableWindow,
     latest_status: HashMap<String, EventEnvelope>,
 }
 
@@ -60,14 +157,20 @@ fn agent_status_id(event: &FrontendEvent) -> Option<&str> {
     }
 }
 
+/// Whether a frame is newer than the last one a client acknowledged.
+fn after_cursor(seq: EventSeq, last: Option<EventSeq>) -> bool {
+    last.is_none_or(|seen| seq > seen)
+}
+
 /// The per-session ordering authority for frontend events.
 ///
 /// Producers enqueue typed events without assigning sequence numbers. The
 /// active Server is the sole consumer and frontend event writer, so sequence
-/// allocation and carrier order cannot diverge. Reliable frames remain in
-/// memory for a
-/// reconnect to the same server process; ephemeral previews may be dropped
-/// while their queue is full.
+/// allocation and carrier order cannot diverge. Reliable frames are retained
+/// for a reconnect to the same server process in a window bounded by the bytes
+/// those frames carry; a cursor the window no longer covers is answered from
+/// the durable log, with the frames only memory holds delivered alongside it.
+/// Ephemeral previews may be dropped while their queue is full.
 #[derive(Clone)]
 pub struct EventSequencer {
     inner: Arc<SequencerInner>,
@@ -180,9 +283,18 @@ impl Default for EventSequencer {
 impl EventSequencer {
     /// Create an empty per-session event stream.
     pub fn new() -> Self {
+        Self::with_window(RELIABLE_WINDOW_BYTES)
+    }
+
+    /// Create an empty stream whose retained window holds at most this many
+    /// bytes of reliable frames.
+    fn with_window(reliable_window_bytes: usize) -> Self {
         Self {
             inner: Arc::new(SequencerInner {
-                state: Mutex::new(SequencerState::default()),
+                state: Mutex::new(SequencerState {
+                    window: ReliableWindow::new(reliable_window_bytes),
+                    ..SequencerState::default()
+                }),
                 notify: Notify::new(),
             }),
         }
@@ -245,7 +357,7 @@ impl EventSequencer {
         state.pending.clear();
         state.pending_status.clear();
         state.ephemeral_pending = 0;
-        state.reliable.clear();
+        state.window.clear();
         state.latest_status.clear();
     }
 
@@ -269,9 +381,41 @@ impl EventSequencer {
         F: FnOnce(usize) -> Vec<EntryPayloads>,
     {
         let mut state = self.inner.state.lock().expect("event sequencer lock");
+        if !state.window.covers(last) {
+            // The window cannot answer this cursor, so the log does. The frames
+            // only memory holds are lifted out before that read, because
+            // sequencing a log longer than the window fills it and would drop
+            // them before anything read them. Reading the log from its start
+            // rather than the window's tail also answers a cursor below the
+            // window with the whole history instead of its newest part.
+            let mut held = state.window.runtime_payloads();
+            held.extend(
+                state
+                    .latest_status
+                    .values()
+                    .map(|frame| frame.payload.clone()),
+            );
+            state.trajectory_cursor = 0;
+            // The window is emptied before the log is read: those frames are
+            // about to be produced again under new sequence numbers, and the
+            // copies would otherwise sit beside each other.
+            state.window.clear();
+            let mut replay = Self::sequence_trajectory(&mut state, load_durable_events(0));
+            // Held frames are sequenced after the log so the client's cursor
+            // still advances; each is filed again under its new sequence, which
+            // is what keeps it reachable for the next reconnect.
+            for payload in held {
+                replay.push(Self::sequence_runtime(&mut state, payload));
+            }
+            return replay;
+        }
+        // The delta is taken before this round's load can trim the front of
+        // the window, and the frames that load makes durable join it at the
+        // tail.
+        let mut replay = Self::collect_reliable_after(&state, last);
         let durable_events = load_durable_events(state.trajectory_cursor);
-        drop(Self::sequence_trajectory(&mut state, durable_events));
-        Self::collect_reliable_after(&state, last)
+        replay.extend(Self::sequence_trajectory(&mut state, durable_events));
+        replay
     }
 
     fn sequence_trajectory(
@@ -287,12 +431,28 @@ impl EventSequencer {
                     entry.event_id.clone(),
                 );
                 state.next_seq = state.next_seq.saturating_add(1);
-                state.reliable.push(frame.clone());
+                state.window.retain(frame.clone());
                 sequenced.push(frame);
             }
             state.trajectory_cursor = state.trajectory_cursor.saturating_add(1);
         }
         sequenced
+    }
+
+    /// Give one runtime payload its sequence number and file it where its
+    /// content belongs: a status frame supersedes that agent's previous status,
+    /// and every other reliable frame joins the retained window.
+    fn sequence_runtime(state: &mut SequencerState, payload: FrontendEvent) -> EventEnvelope {
+        let frame = EventEnvelope::new(EventSeq(state.next_seq), payload);
+        state.next_seq = state.next_seq.saturating_add(1);
+        if let Some(agent_id) = agent_status_id(&frame.payload) {
+            state
+                .latest_status
+                .insert(agent_id.to_string(), frame.clone());
+        } else {
+            state.window.retain(frame.clone());
+        }
+        frame
     }
 
     fn sequence_pending(state: &mut SequencerState) -> Vec<EventEnvelope> {
@@ -302,17 +462,15 @@ impl EventSequencer {
         state.ephemeral_pending = 0;
         let mut sequenced = Vec::with_capacity(pending.len());
         for event in pending {
-            let frame = EventEnvelope::new(EventSeq(state.next_seq), event.payload);
-            state.next_seq = state.next_seq.saturating_add(1);
-            if event.reliable {
-                if let Some(agent_id) = agent_status_id(&frame.payload) {
-                    state
-                        .latest_status
-                        .insert(agent_id.to_string(), frame.clone());
-                } else {
-                    state.reliable.push(frame.clone());
-                }
-            }
+            // An ephemeral preview is sequenced for delivery and released with
+            // it, so only a reliable payload is filed for a later reconnect.
+            let frame = if event.reliable {
+                Self::sequence_runtime(state, event.payload)
+            } else {
+                let frame = EventEnvelope::new(EventSeq(state.next_seq), event.payload);
+                state.next_seq = state.next_seq.saturating_add(1);
+                frame
+            };
             sequenced.push(frame);
         }
         sequenced
@@ -326,29 +484,21 @@ impl EventSequencer {
 
     pub(crate) fn sequence_reliable(&self, payload: FrontendEvent) -> EventEnvelope {
         let mut state = self.inner.state.lock().expect("event sequencer lock");
-        let frame = EventEnvelope::new(EventSeq(state.next_seq), payload);
-        state.next_seq = state.next_seq.saturating_add(1);
-        if let Some(agent_id) = agent_status_id(&frame.payload) {
-            state
-                .latest_status
-                .insert(agent_id.to_string(), frame.clone());
-        } else {
-            state.reliable.push(frame.clone());
-        }
-        frame
+        Self::sequence_runtime(&mut state, payload)
     }
 
     fn collect_reliable_after(
         state: &SequencerState,
         last: Option<EventSeq>,
     ) -> Vec<EventEnvelope> {
-        let mut frames: Vec<_> = state
-            .reliable
-            .iter()
-            .chain(state.latest_status.values())
-            .filter(|frame| last.is_none_or(|seq| frame.seq > seq))
-            .cloned()
-            .collect();
+        let mut frames = state.window.after(last);
+        frames.extend(
+            state
+                .latest_status
+                .values()
+                .filter(|frame| after_cursor(frame.seq, last))
+                .cloned(),
+        );
         frames.sort_unstable_by_key(|frame| frame.seq);
         frames
     }
