@@ -40,9 +40,10 @@ fn working_app_with_drill() -> App {
                 tokens: 6_600,
             }],
             skills: vec![ContextSkillEntry {
-                source: "Built-in".to_string(),
+                source: "claude_eco".to_string(),
                 name: "design-review".to_string(),
                 tokens: 360,
+                announced: true,
             }],
         },
         suggestions,
@@ -492,8 +493,8 @@ fn test_grid_inline_renders_skills() {
     let text = dump(&buf);
     assert!(text.contains("Skills"), "skills header missing");
     assert!(
-        text.contains("Built-in"),
-        "skills source group label missing"
+        text.contains("Ecosystem — .claude/skills/"),
+        "skills group must carry the label and scan path the skills pane shows:\n{text}"
     );
 }
 
@@ -685,9 +686,10 @@ fn test_drill_reads_the_wire() {
         tokens: 6_600,
     }];
     bd.skills = vec![WireSkillEntry {
-        source: "Built-in".to_string(),
+        source: "claude_eco".to_string(),
         name: "design-review".to_string(),
         tokens: 360,
+        announced: true,
     }];
     let drill = ContextDrillDown::from_breakdown(&bd);
     assert_eq!(drill.memory_files.len(), 1, "memory rows read off the wire");
@@ -696,11 +698,83 @@ fn test_drill_reads_the_wire() {
         "~/.houyicoder/memory/MEMORY.md"
     );
     assert_eq!(drill.skills.len(), 1, "skill rows read off the wire");
-    assert_eq!(drill.skills[0].source, "Built-in");
+    assert_eq!(drill.skills[0].source, "claude_eco");
 
     let text = rows_text(bd);
     assert!(
         text.contains("MEMORY.md") && text.contains("design-review"),
         "the wire rows render in the drill-down: {text}"
+    );
+}
+
+/// A skill the listing does not announce still shows in the drill-down, marked as the
+/// user's to invoke rather than counted: the window carries none of it, so a
+/// token figure would report a cost that is not there.
+#[test]
+fn test_skills_rows_mark_manual() {
+    let mut bd = base_breakdown();
+    bd.skills = vec![
+        WireSkillEntry {
+            source: "project".to_string(),
+            name: "commit".to_string(),
+            tokens: 360,
+            announced: true,
+        },
+        WireSkillEntry {
+            source: "claude_eco".to_string(),
+            name: "brainstorm".to_string(),
+            tokens: 0,
+            announced: false,
+        },
+    ];
+    let text = rows_text(bd);
+    assert!(
+        text.contains("brainstorm: manual"),
+        "a skill the listing does not announce reads as the user's to invoke:\n{text}"
+    );
+    assert!(
+        !text.contains("brainstorm: 0 tokens"),
+        "a skill the listing does not announce must not report a zero cost as a measurement:\n{text}"
+    );
+    assert!(
+        text.contains("commit: 360 tokens"),
+        "an announced skill keeps its token figure:\n{text}"
+    );
+}
+
+/// The drill-down groups under the /skills pane's own vocabulary: the shared
+/// label and scan path, in the shared origin order, whatever order the
+/// measurement reported the rows in.
+#[test]
+fn test_skills_rows_share_order() {
+    let mut bd = base_breakdown();
+    bd.skills = vec![
+        WireSkillEntry {
+            source: "claude_eco".to_string(),
+            name: "ego".to_string(),
+            tokens: 100,
+            announced: true,
+        },
+        WireSkillEntry {
+            source: "project".to_string(),
+            name: "commit".to_string(),
+            tokens: 200,
+            announced: true,
+        },
+    ];
+    let text = rows_text(bd);
+    let native = text
+        .find("Native — .houyicoder/skills/")
+        .unwrap_or_else(|| panic!("the project group is unnamed:\n{text}"));
+    let eco = text
+        .find("Ecosystem — .claude/skills/")
+        .unwrap_or_else(|| panic!("the ecosystem group is unnamed:\n{text}"));
+    assert!(
+        native < eco,
+        "the pane's origin order puts Native before Ecosystem:\n{text}"
+    );
+    assert!(
+        !text.contains("claude_eco"),
+        "the raw origin key must not reach the reader:\n{text}"
     );
 }

@@ -191,7 +191,7 @@ async fn test_trusted_origin_body_unframed() {
     );
 }
 
-/// An untrusted-origin skill (project/claude-eco/agents/mcp/local)
+/// An untrusted-origin skill (project/claude-eco/agents/mcp)
 /// returns its body framed as data: the framing note + the wrapper tag
 /// carry the skill name + the body stays inside. A non-managed/user
 /// source body is framed, the same framing the slash path applies, so

@@ -23,6 +23,8 @@ use crate::view::line_wrap::max_scroll_offset;
 use crate::view::navigation::key_hint;
 use crate::view::relative_time::now_epoch_secs;
 use crate::view::relative_time::relative_time;
+use crate::view::skill_origin::display_order;
+use crate::view::skill_origin::heading_spans;
 use std::collections::HashSet;
 
 pub(crate) const SKILLS_PANE_HEIGHT: u16 = 16;
@@ -40,82 +42,6 @@ fn truncate_desc(desc: &str, budget: usize) -> String {
     }
     let mut out: String = desc.chars().take(budget.saturating_sub(1)).collect();
     out.push('\u{2026}');
-    out
-}
-
-/// A display row: label + canonical scan path for a discovery origin. Only
-/// origins that appear in the snapshot render, in fixed precedence order
-/// (managed first, local last), so the group order is stable across snapshots.
-struct OriginGroup {
-    key: &'static str,
-    label: &'static str,
-    path: &'static str,
-}
-
-/// Map a raw origin key (snake_case) to its display label. Returns the
-/// key as-is if no matching group is found (defensive).
-fn origin_label(origin: &str) -> &str {
-    ORIGIN_ORDER
-        .iter()
-        .find(|g| g.key == origin)
-        .map(|g| g.label)
-        .unwrap_or(origin)
-}
-
-/// The label and canonical scan path for one origin key, when it is known.
-fn origin_group(origin: &str) -> Option<&'static OriginGroup> {
-    ORIGIN_ORDER.iter().find(|g| g.key == origin)
-}
-
-const ORIGIN_ORDER: &[OriginGroup] = &[
-    OriginGroup {
-        key: "managed",
-        label: "Managed",
-        path: "/etc/houyicoder/skills/",
-    },
-    OriginGroup {
-        key: "user",
-        label: "Native",
-        path: "~/.houyicoder/skills/",
-    },
-    OriginGroup {
-        key: "project",
-        label: "Native",
-        path: ".houyicoder/skills/",
-    },
-    OriginGroup {
-        key: "claude_eco",
-        label: "Ecosystem",
-        path: ".claude/skills/",
-    },
-    OriginGroup {
-        key: "agents",
-        label: "Spec",
-        path: ".agents/skills/",
-    },
-    OriginGroup {
-        key: "mcp",
-        label: "MCP",
-        path: "(mcp server)",
-    },
-    OriginGroup {
-        key: "local",
-        label: "Local",
-        path: "(local override)",
-    },
-];
-
-/// The display order: entries grouped by origin (ORIGIN_ORDER), sorted by
-/// name within each group. Both render and key-dispatch resolve the list cursor
-/// through this so the highlighted row and the acted-on entry match.
-pub(crate) fn display_order(entries: &[SkillEntry]) -> Vec<&SkillEntry> {
-    let mut out: Vec<&SkillEntry> = Vec::new();
-    for group in ORIGIN_ORDER {
-        let mut members: Vec<&SkillEntry> =
-            entries.iter().filter(|e| e.origin == group.key).collect();
-        members.sort_by(|a, b| a.name.cmp(&b.name));
-        out.extend(members);
-    }
     out
 }
 
@@ -279,23 +205,11 @@ fn header_lines(entry: Option<&SkillEntry>, name: &str, user_disabled: bool) -> 
             format!("  ~{} tok", entry.body_token_estimate),
             Style::new().fg(Color::DarkGray),
         ));
-        match origin_group(&entry.origin) {
-            Some(group) => {
-                origin.push(Span::styled(
-                    group.label.to_string(),
-                    Style::new().fg(Color::Cyan),
-                ));
-                origin.push(Span::raw(" — "));
-                origin.push(Span::styled(
-                    group.path.to_string(),
-                    Style::new().fg(Color::DarkGray),
-                ));
-            }
-            None => origin.push(Span::styled(
-                format!("origin: {}", origin_label(&entry.origin)),
-                Style::new().fg(Color::DarkGray),
-            )),
-        }
+        origin = heading_spans(
+            &entry.origin,
+            Style::new().fg(Color::Cyan),
+            Style::new().fg(Color::DarkGray),
+        );
     }
     vec![Line::from(head), Line::from(origin)]
 }
@@ -358,13 +272,13 @@ fn grouped_lines(
     let mut prev_origin: &str = "";
     for (idx, s) in ordered.iter().enumerate() {
         if s.origin != prev_origin {
-            if let Some(group) = origin_group(&s.origin) {
-                lines.push(Line::from(vec![
-                    Span::styled(group.label.to_string(), Style::new().fg(Color::Cyan)),
-                    Span::raw(" — "),
-                    Span::styled(group.path.to_string(), Style::new().fg(Color::DarkGray)),
-                ]));
-            }
+            // An origin outside the shared vocabulary has no scan path to
+            // name, so its heading is just its label; the group still shows.
+            lines.push(Line::from(heading_spans(
+                &s.origin,
+                Style::new().fg(Color::Cyan),
+                Style::new().fg(Color::DarkGray),
+            )));
             prev_origin = &s.origin;
         }
         let desc = truncate_desc(&s.description, DESC_BUDGET);

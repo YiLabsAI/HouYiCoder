@@ -22,6 +22,7 @@ pub(crate) mod retention;
 pub(crate) mod selection;
 pub(crate) mod turn_group;
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -38,14 +39,21 @@ use crate::agent::context::conversation::ConversationCost;
 pub(crate) const MEMORY_RECALL_BUDGET: usize = 2000;
 
 /// The capability-derived inputs one assembly measures: the tool schemas the
-/// request declares, the frozen memory index the prompt carries, and the skills
-/// the listing announces. The turn path and the /context measurement build the
-/// same three, so a reported breakdown describes the request that would be sent.
+/// request declares, the frozen memory index the prompt carries, the skills
+/// the listing announces, and every skill discovery found. The turn path and
+/// the /context measurement build the same set, so a reported breakdown
+/// describes the request that would be sent.
+///
+/// The announced skills are a subset of the discovered ones: the /context
+/// rows cover discovery so a skill the listing does not announce still shows, and
+/// only the announced part is counted, because only the announced part reaches
+/// the window.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AssemblyInput<'a> {
     pub tool_defs: &'a [ToolDef],
     pub memory_index: Option<&'a str>,
-    pub skills: &'a [SkillSnapshot],
+    pub announced_skills: &'a [SkillSnapshot],
+    pub discovered_skills: &'a [SkillSnapshot],
 }
 
 /// Measured section of the model context.
@@ -504,7 +512,7 @@ impl ContextBuilder {
         }
         let memory_tokens = block_tokens + recall_tokens;
 
-        let skills = self.skill_cost(&filtered, input.skills);
+        let skills = self.skill_cost(&filtered, input.announced_skills, input.discovered_skills);
 
         // Tool schemas consume context despite traveling outside messages.
         let tool_tokens: u32 = input
@@ -565,10 +573,22 @@ impl ContextBuilder {
     /// pays for, and the listing budget can shorten them, so the section takes
     /// its size from those announcements and each row takes a share of that
     /// size in proportion to its own entry. Before the first announcement the
-    /// entries alone are what the next request would carry, and that projected
+    /// announced entries alone are what the next request would carry, and that projected
     /// size rides no message, so nothing is subtracted for it.
-    fn skill_cost(&self, events: &[SessionLogEntry], skills: &[SkillSnapshot]) -> SkillCost {
-        let entry_tokens: Vec<u32> = skills
+    ///
+    /// One row per discovered skill, not per announced one: a skill the
+    /// listing does not announce belongs in the drill-down beside its siblings, so the
+    /// reader sees the whole set the registry found, and its cost is zero
+    /// because the window carries nothing of it. The announced rows keep the
+    /// share split among themselves, so they still sum to the Skills category
+    /// the legend reports.
+    fn skill_cost(
+        &self,
+        events: &[SessionLogEntry],
+        announced_skills: &[SkillSnapshot],
+        discovered: &[SkillSnapshot],
+    ) -> SkillCost {
+        let entry_tokens: Vec<u32> = announced_skills
             .iter()
             .map(|snapshot| self.tokenizer.count(&listing_entry(&snapshot.descriptor)))
             .collect();
@@ -585,13 +605,21 @@ impl ContextBuilder {
             entry_tokens.iter().sum()
         };
         let shares = split_total(section_tokens, &entry_tokens);
-        let rows = skills
+        let announced: HashMap<&str, u32> = announced_skills
             .iter()
             .zip(&shares)
-            .map(|(snapshot, tokens)| ContextSkillEntry {
-                source: snapshot.origin.clone(),
-                name: snapshot.descriptor.name.clone(),
-                tokens: *tokens,
+            .map(|(snapshot, tokens)| (snapshot.descriptor.name.as_str(), *tokens))
+            .collect();
+        let rows = discovered
+            .iter()
+            .map(|snapshot| {
+                let share = announced.get(snapshot.descriptor.name.as_str()).copied();
+                ContextSkillEntry {
+                    source: snapshot.origin.clone(),
+                    name: snapshot.descriptor.name.clone(),
+                    tokens: share.unwrap_or(0),
+                    announced: share.is_some(),
+                }
             })
             .collect();
         SkillCost {

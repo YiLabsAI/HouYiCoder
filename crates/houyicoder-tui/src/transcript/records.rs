@@ -11,6 +11,9 @@ use crate::row_id::RowId;
 use crate::scroll::TranscriptScroll;
 use crate::toggle_hint::ToggleHint;
 use crate::view::relative_time::turn_span_label;
+use crate::view::skill_origin::cost_label;
+use crate::view::skill_origin::display_order;
+use crate::view::skill_origin::heading_text;
 
 /// Drill-down rows under the /context grid: per-source memory and per-skill
 /// footprints. A memory row is a project memory file, the memory index, or the
@@ -43,6 +46,7 @@ impl ContextDrillDown {
                     source: s.source.clone(),
                     name: s.name.clone(),
                     tokens: s.tokens,
+                    announced: s.announced,
                 })
                 .collect(),
         }
@@ -57,12 +61,15 @@ pub struct ContextFileEntry {
     pub tokens: u32,
 }
 
-/// One skill row: source group (Built-in / Project / ...) + name + tokens.
+/// One skill row: discovery origin key + name + tokens, with whether the
+/// listing announces the skill. A skill the listing does not announce costs
+/// the window nothing and shows without a token figure.
 #[derive(Debug, Clone)]
 pub struct ContextSkillEntry {
     pub source: String,
     pub name: String,
     pub tokens: u32,
+    pub announced: bool,
 }
 
 /// One suggestion row under the grid: severity glyph + bold title + dim
@@ -581,8 +588,12 @@ fn context_grid_text(view: &ContextView) -> String {
     }
     if !view.drill.skills.is_empty() {
         s.push_str("  Skills\n");
-        for k in &view.drill.skills {
-            s.push_str(&format!("  \u{2514} {}: {} tokens\n", k.name, k.tokens));
+        let ordered = display_order(&view.drill.skills);
+        for (i, k) in ordered.iter().enumerate() {
+            if i == 0 || ordered[i - 1].source != k.source {
+                s.push_str(&format!("  {}\n", heading_text(&k.source)));
+            }
+            s.push_str(&format!("  \u{2514} {}: {}\n", k.name, cost_label(k)));
         }
     }
     if !view.suggestions.is_empty() {

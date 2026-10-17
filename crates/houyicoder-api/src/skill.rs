@@ -309,7 +309,7 @@ pub trait SkillRegistry: Send + Sync {
     ) -> Result<String, SkillError>;
 
     /// All discovered skills paired with their discovery origin (managed /
-    /// user / project / claude_eco / agents / mcp / local), for surfaces that
+    /// user / project / claude_eco / agents / mcp), for surfaces that
     /// group skills by source — the /skills pane. Unlike
     /// list_model_invocable, this does NOT filter disable-model-invocation
     /// skills: the visibility surface shows them (marked not invocable) so

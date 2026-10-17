@@ -164,9 +164,9 @@ impl Runner {
     /// mismatch (the set changed since the surviving listing) or a folded
     /// listing re-injects full.
     pub(crate) async fn inject_skill_listing(&self, session: SessionId) -> Result<(), RunError> {
-        let Some(registry) = &self.skill_registry else {
+        if self.skill_registry.is_none() {
             return Ok(());
-        };
+        }
         let view = self.store.current_view(session).await?;
         // Scan the assembled (manifest-applied) view, not the raw log: a
         // Summarized listing folded by compaction drops out of the view,
@@ -175,21 +175,7 @@ impl Runner {
             Some(m) => selection::apply_manifest(&view.events, m, Some(self.store.backend())),
             None => view.events.clone(),
         };
-        let descriptors = registry.list_model_invocable();
-        // Hide paths-gated skills until activated; unwrap_or(true) means
-        // unwired = feature off = show all, not fail-closed.
-        let descriptors: Vec<_> = descriptors
-            .into_iter()
-            .filter(|d| {
-                if registry.paths_for(&d.name).is_empty() {
-                    return true;
-                }
-                self.conditional
-                    .as_ref()
-                    .map(|a| a.is_active(&d.name))
-                    .unwrap_or(true)
-            })
-            .collect();
+        let descriptors = self.announced_descriptors();
         if descriptors.is_empty() {
             return Ok(());
         }
@@ -223,6 +209,31 @@ impl Runner {
             ))
             .await?;
         Ok(())
+    }
+
+    /// The descriptors the model-facing listing carries: the registry's
+    /// model-invocable set, minus the paths-gated skills that are not active
+    /// yet. The /context measurement counts this set's entries, so both read it here
+    /// rather than each deciding for itself which skills the model sees.
+    pub(crate) fn announced_descriptors(&self) -> Vec<SkillDescriptor> {
+        let Some(registry) = &self.skill_registry else {
+            return Vec::new();
+        };
+        registry
+            .list_model_invocable()
+            .into_iter()
+            // Hide paths-gated skills until activated; unwrap_or(true) means
+            // unwired = feature off = show all, not fail-closed.
+            .filter(|d| {
+                if registry.paths_for(&d.name).is_empty() {
+                    return true;
+                }
+                self.conditional
+                    .as_ref()
+                    .map(|a| a.is_active(&d.name))
+                    .unwrap_or(true)
+            })
+            .collect()
     }
 }
 

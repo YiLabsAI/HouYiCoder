@@ -59,17 +59,32 @@ pub struct ContextFileEntry {
 }
 
 /// One skill row in the /context drill-down, wire form: where the skill came
-/// from, its name, and the tokens its listing entry costs. The rows sum to the
-/// Skills category.
+/// from, its name, and the tokens its listing entry costs. A skill the listing
+/// does not announce costs the window nothing, so it carries no tokens and
+/// reports itself as not announced; the announced rows sum to the Skills
+/// category.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ContextSkillEntry {
-    /// Discovery origin group (Built-in / Project / User).
+    /// Discovery origin key, as the registry reports it (managed, user,
+    /// project, claude_eco, agents, mcp).
     pub source: String,
     /// The skill name.
     pub name: String,
-    /// Tokens the skill's listing entry costs.
+    /// Tokens the skill's listing entry costs; zero when the listing does not
+    /// announce it.
     pub tokens: u32,
+    /// Whether the listing announces this skill to the model. A skill it
+    /// does not announce still shows here, marked so the reader knows the cost is
+    /// absent because the skill is the user's to invoke.
+    #[serde(default = "default_true")]
+    pub announced: bool,
+}
+
+/// A row written before this field existed came from the announced listing
+/// alone, so a payload without it describes an announced skill.
+fn default_true() -> bool {
+    true
 }
 
 /// One tool's footprint in the conversation, as the protocol carries it: how
@@ -131,9 +146,11 @@ pub struct ContextBreakdown {
     /// cache of its own.
     #[serde(default)]
     pub memory_files: Vec<ContextFileEntry>,
-    /// The skills the listing announces, one row each. The rows sum to the
-    /// Skills category in categories. Empty when no skill registry is
-    /// configured.
+    /// Every skill discovery found, one row each, each carrying whether the
+    /// listing announces it. The rows the listing announces sum to the Skills
+    /// category in categories; a row it does not announce reports no cost,
+    /// because the window carries nothing of it. Empty when no skill registry
+    /// is configured.
     #[serde(default)]
     pub skills: Vec<ContextSkillEntry>,
     /// When a compaction has run, a human-readable summary of what was folded

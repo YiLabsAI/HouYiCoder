@@ -16,7 +16,7 @@ use ratatui::{
 
 use crate::state::App;
 use crate::view::line_wrap::truncate_width;
-use crate::view::skills_pane::display_order;
+use crate::view::skill_origin::display_order;
 use houyicoder_protocol::frontend::skills::SkillEntry;
 use unicode_width::UnicodeWidthStr;
 

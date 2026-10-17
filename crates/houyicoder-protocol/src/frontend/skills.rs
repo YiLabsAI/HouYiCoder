@@ -15,7 +15,7 @@ pub struct SkillEntry {
     pub name: String,
     pub description: String,
     /// Discovery source snake_case (managed/user/project/claude_eco/agents/
-    /// mcp/local) — the /skills pane groups entries by this field.
+    /// mcp) — the /skills pane groups entries by this field.
     pub origin: String,
     /// False when frontmatter disable-model-invocation hides the skill from
     /// the model; the pane flags it so the user knows it is not callable.

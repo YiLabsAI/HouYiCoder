@@ -1,5 +1,6 @@
 //! Configures Runner collaborators and runtime policy.
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -24,7 +25,7 @@ use houyicoder_api::agent_event::AgentEventHandlers;
 use houyicoder_api::cache_policy::CachePolicyProvider;
 use houyicoder_api::cost_model::CostModelProvider;
 use houyicoder_api::memory::MemoryProvider;
-use houyicoder_api::skill::{SkillDescriptor, SkillRegistry, SkillSnapshot};
+use houyicoder_api::skill::{SkillRegistry, SkillSnapshot};
 use houyicoder_api::trust::TrustState;
 use houyicoder_context::Disposition;
 use houyicoder_context::MemoryOrigin;
@@ -37,12 +38,14 @@ use std::time::Duration;
 use tokio::sync::mpsc::UnboundedReceiver;
 
 /// The capability-derived inputs one assembly reads: the tool schemas the
-/// request declares, the frozen memory index, and the skills the listing
-/// announces. Owned so the caller can hold them across the assembler's borrow.
+/// request declares, the frozen memory index, the skills the listing
+/// announces, and every skill discovery found. Owned so the caller can hold
+/// them across the assembler's borrow.
 pub(crate) struct AssemblyParts {
     pub tool_defs: Vec<ToolDef>,
     pub memory_index: Option<String>,
-    pub skills: Vec<SkillSnapshot>,
+    pub announced_skills: Vec<SkillSnapshot>,
+    pub discovered_skills: Vec<SkillSnapshot>,
 }
 
 impl AssemblyParts {
@@ -51,7 +54,8 @@ impl AssemblyParts {
         AssemblyInput {
             tool_defs: &self.tool_defs,
             memory_index: self.memory_index.as_deref(),
-            skills: &self.skills,
+            announced_skills: &self.announced_skills,
+            discovered_skills: &self.discovered_skills,
         }
     }
 }
@@ -359,44 +363,28 @@ impl Runner {
     /// the turn path and the /context measurement hand the assembler the same
     /// tools, index, and skills. A second construction would let the reported
     /// footprint drift from the one the request pays.
+    ///
+    /// One discovery read feeds both skill lists: the announced skills the
+    /// listing carries, and the whole discovered set the /context rows cover.
+    /// The announced set is the listing's own, read from the same call the
+    /// turn-entry listing makes, so a skill the listing does not announce
+    /// never enters the counted set; the rows still cover discovery, so such
+    /// a skill reaches the drill-down marked as the user's to invoke.
     pub(crate) fn assembly_parts(&self) -> AssemblyParts {
+        let discovered_skills = self.skills_snapshot();
+        let announced = self.announced_descriptors();
+        let announced_names: HashSet<&str> = announced.iter().map(|d| d.name.as_str()).collect();
+        let announced_skills = discovered_skills
+            .iter()
+            .filter(|snapshot| announced_names.contains(snapshot.descriptor.name.as_str()))
+            .cloned()
+            .collect();
         AssemblyParts {
             tool_defs: self.tools.tool_defs(),
             memory_index: self.format_memory_index(),
-            skills: self.announced_skills(),
+            announced_skills,
+            discovered_skills,
         }
-    }
-
-    /// The skills the discovery listing announces: the model-invocable set
-    /// minus the paths-gated skills that are not active this session. One
-    /// definition, shared by the listing the request carries and the cost the
-    /// /context view reports.
-    pub(crate) fn announced_skills(&self) -> Vec<SkillSnapshot> {
-        self.skills_snapshot()
-            .into_iter()
-            .filter(|snapshot| self.skill_announced(&snapshot.descriptor))
-            .collect()
-    }
-
-    /// True when a skill's listing entry reaches the model. A skill the
-    /// registry disables for model invocation never does; a paths-gated skill
-    /// announces only while its paths are active. An activation state that was
-    /// never set leaves the gate off, so the entry shows rather than
-    /// disappearing.
-    fn skill_announced(&self, descriptor: &SkillDescriptor) -> bool {
-        if descriptor.disable_model_invocation {
-            return false;
-        }
-        let Some(registry) = &self.skill_registry else {
-            return false;
-        };
-        if registry.paths_for(&descriptor.name).is_empty() {
-            return true;
-        }
-        self.conditional
-            .as_ref()
-            .map(|activation| activation.is_active(&descriptor.name))
-            .unwrap_or(true)
     }
 
     /// Token count of the compact summary text (the replacement for folded

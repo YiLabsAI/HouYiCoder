@@ -251,6 +251,7 @@ pub(crate) fn map_context_breakdown(
                 source: s.source.clone(),
                 name: s.name.clone(),
                 tokens: s.tokens,
+                announced: s.announced,
             })
             .collect(),
         compact_summary: bd.compact_summary.clone(),

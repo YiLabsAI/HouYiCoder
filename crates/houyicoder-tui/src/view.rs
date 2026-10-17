@@ -27,6 +27,7 @@ pub mod queue_overlay;
 pub mod queue_pane;
 pub mod relative_time;
 pub mod resume_picker;
+pub mod skill_origin;
 pub mod skill_picker;
 pub mod skills_pane;
 pub mod spinner;

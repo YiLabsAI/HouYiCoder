@@ -19,6 +19,9 @@ use crate::records::ContextFileEntry;
 use crate::records::ContextSkillEntry;
 use crate::records::ContextSuggestion;
 use crate::records::{ContextView, SuggestionSeverity};
+use crate::view::skill_origin::cost_label;
+use crate::view::skill_origin::display_order;
+use crate::view::skill_origin::heading_spans;
 use houyicoder_protocol::frontend::context::{ContextBreakdown, DelegatedContext, GridCell};
 
 /// Midpoint glyph threshold: a cell at least this full draws the filled ball.
@@ -289,8 +292,12 @@ fn memory_rows(files: &[ContextFileEntry]) -> Vec<Vec<Span<'static>>> {
     rows
 }
 
-/// The Skills drill-down rows: a bold header plus dim suffix, then per-source
-/// groups (dim source label + tree-glyph rows). Empty when there are no skills.
+/// The Skills drill-down rows: a bold header plus dim suffix, then one group
+/// per discovery origin (the label and scan path the /skills pane shows) with
+/// a tree-glyph row per skill. The rows cover every discovered skill in the
+/// pane's own order, so the two views name and sort a skill the same way;
+/// a skill the listing does not announce reads manual rather than as a token
+/// count, because the window carries none of it.
 fn skills_rows(skills: &[ContextSkillEntry]) -> Vec<Vec<Span<'static>>> {
     if skills.is_empty() {
         return Vec::new();
@@ -302,28 +309,21 @@ fn skills_rows(skills: &[ContextSkillEntry]) -> Vec<Vec<Span<'static>>> {
         Span::styled("Skills", bold),
         Span::styled(" \u{00b7} /skills", dim),
     ]);
-    // Group by source preserving first-seen order.
-    let mut sources: Vec<String> = Vec::new();
-    for s in skills {
-        if !sources.iter().any(|x| x == &s.source) {
-            sources.push(s.source.clone());
+    let ordered = display_order(skills);
+    for (i, s) in ordered.iter().enumerate() {
+        if i == 0 || ordered[i - 1].source != s.source {
+            rows.push(heading_spans(&s.source, dim, dim));
         }
-    }
-    for src in &sources {
-        rows.push(vec![Span::styled(src.clone(), dim)]);
-        let group: Vec<&ContextSkillEntry> = skills.iter().filter(|s| &s.source == src).collect();
-        let n = group.len();
-        for (i, s) in group.iter().enumerate() {
-            let glyph = if i + 1 == n { "\u{2514}" } else { "\u{251C}" };
-            rows.push(vec![
-                Span::styled(format!("{glyph} "), dim),
-                Span::styled(format!("{}: ", s.name), dim),
-                Span::styled(
-                    format!("{} tokens", format_tokens(u64::from(s.tokens))),
-                    dim,
-                ),
-            ]);
-        }
+        let last = ordered
+            .get(i + 1)
+            .map(|next| next.source != s.source)
+            .unwrap_or(true);
+        let glyph = if last { "\u{2514}" } else { "\u{251C}" };
+        rows.push(vec![
+            Span::styled(format!("{glyph} "), dim),
+            Span::styled(format!("{}: ", s.name), dim),
+            Span::styled(cost_label(s), dim),
+        ]);
     }
     rows
 }

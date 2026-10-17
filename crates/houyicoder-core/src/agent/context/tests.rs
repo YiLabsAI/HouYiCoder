@@ -26,7 +26,8 @@ fn assembly_input<'a>(
     AssemblyInput {
         tool_defs,
         memory_index,
-        skills: &[],
+        announced_skills: &[],
+        discovered_skills: &[],
     }
 }
 
@@ -472,7 +473,7 @@ fn test_skill_section_recomputed() {
     let listing_text = listing_entry(&descriptor);
     let snapshot = SkillSnapshot {
         descriptor,
-        origin: "Project".into(),
+        origin: "project".into(),
         usage: SkillUsage::default(),
     };
     let skills = [snapshot];
@@ -501,7 +502,8 @@ fn test_skill_section_recomputed() {
     let input = AssemblyInput {
         tool_defs: &[],
         memory_index: None,
-        skills: &skills,
+        announced_skills: &skills,
+        discovered_skills: &skills,
     };
     let b = ContextBuilder::new().with_cwd(scratch.clone());
     let v = b.measure(&events, None, None, &input);
@@ -515,7 +517,7 @@ fn test_skill_section_recomputed() {
     );
     assert_eq!(v.measurement.skills.len(), 1, "one row per announced entry");
     assert_eq!(v.measurement.skills[0].name, "commit");
-    assert_eq!(v.measurement.skills[0].source, "Project");
+    assert_eq!(v.measurement.skills[0].source, "project");
     assert_eq!(
         v.measurement.skills[0].tokens, skill.tokens,
         "rows sum to the section"
@@ -531,6 +533,89 @@ fn test_skill_section_recomputed() {
         messages_tokens + skill.tokens,
         full_input,
         "listing must not be double-counted (Messages + Skills == full input)"
+    );
+    remove_dir_all(&scratch).ok();
+}
+
+/// A skill the listing does not announce still gets a row: the /context drill-down
+/// covers discovery, so a skill the model cannot invoke reads beside the
+/// announced ones instead of vanishing, and its cost is zero because the
+/// window carries nothing of it. The announced row keeps the section's whole
+/// cost, so the rows still sum to the category the legend reports.
+#[test]
+fn test_skill_rows_cover_manual() {
+    let mut scratch = temp_dir();
+    scratch.push(format!("ctx-test-skillmanual-{}", id()));
+    create_dir_all(&scratch).expect("mkdir scratch");
+    let listed = SkillSnapshot {
+        descriptor: SkillDescriptor {
+            name: "commit".into(),
+            description: "commit changes".into(),
+            body_token_estimate: 0,
+            ..sample_descriptor()
+        },
+        origin: "project".into(),
+        usage: SkillUsage::default(),
+    };
+    let listing_text = listing_entry(&listed.descriptor);
+    let manual = SkillSnapshot {
+        descriptor: SkillDescriptor {
+            name: "brainstorm".into(),
+            description: "run a brainstorm".into(),
+            disable_model_invocation: true,
+            body_token_estimate: 0,
+            ..sample_descriptor()
+        },
+        origin: "claude_eco".into(),
+        usage: SkillUsage::default(),
+    };
+    let announced = [listed];
+    let discovered = [announced[0].clone(), manual];
+    let events = vec![SessionLogEntry {
+        id: EventId::new(),
+        session: SessionId::new(),
+        ts: 0,
+        prev_hash: None,
+        event: SessionEvent::SkillListing {
+            text: listing_text,
+            bytes: 0,
+            content_hash: 0,
+        },
+    }];
+    let input = AssemblyInput {
+        tool_defs: &[],
+        memory_index: None,
+        announced_skills: &announced,
+        discovered_skills: &discovered,
+    };
+    let b = ContextBuilder::new().with_cwd(scratch.clone());
+    let v = b.measure(&events, None, None, &input);
+    let section = v
+        .measurement
+        .section(SectionKind::Skills)
+        .expect("Skills section present");
+    let rows = &v.measurement.skills;
+    assert_eq!(rows.len(), 2, "a row per discovered skill");
+    let manual_row = rows
+        .iter()
+        .find(|row| row.name == "brainstorm")
+        .expect("the skill the listing does not announce has a row");
+    assert!(
+        !manual_row.announced,
+        "a skill the listing does not announce reports itself manual"
+    );
+    assert_eq!(
+        manual_row.tokens, 0,
+        "the window carries nothing of a skill the listing does not announce"
+    );
+    let listed_row = rows
+        .iter()
+        .find(|row| row.name == "commit")
+        .expect("the announced skill has a row");
+    assert!(listed_row.announced, "the announced skill reports itself");
+    assert_eq!(
+        listed_row.tokens, section.tokens,
+        "the announced rows still sum to the section"
     );
     remove_dir_all(&scratch).ok();
 }
@@ -559,7 +644,7 @@ fn test_skill_section_follows_listing() {
     );
     let snapshot = SkillSnapshot {
         descriptor,
-        origin: "Project".into(),
+        origin: "project".into(),
         usage: SkillUsage::default(),
     };
     let skills = [snapshot];
@@ -577,7 +662,8 @@ fn test_skill_section_follows_listing() {
     let input = AssemblyInput {
         tool_defs: &[],
         memory_index: None,
-        skills: &skills,
+        announced_skills: &skills,
+        discovered_skills: &skills,
     };
     let tok = Tokenizer::new();
     let v = ContextBuilder::new()
@@ -948,7 +1034,7 @@ fn test_skills_estimate_keeps_messages() {
             body_token_estimate: 0,
             ..sample_descriptor()
         },
-        origin: "Project".into(),
+        origin: "project".into(),
         usage: SkillUsage::default(),
     }];
     let events = vec![entry(SessionEvent::UserInput {
@@ -957,7 +1043,8 @@ fn test_skills_estimate_keeps_messages() {
     let input = AssemblyInput {
         tool_defs: &[],
         memory_index: None,
-        skills: &skills,
+        announced_skills: &skills,
+        discovered_skills: &skills,
     };
     let b = ContextBuilder::new().with_cwd(scratch.clone());
     let v = b.measure(&events, None, None, &input);

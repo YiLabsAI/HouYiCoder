@@ -142,6 +142,30 @@ fn test_cache_breakpoint_round_trips() {
     assert!(json.contains("null"));
 }
 
+/// A skill row read from a payload written before the announced flag existed
+/// describes an announced skill: only the announced listing had rows then, so
+/// the field's absence is not a skill the listing does not announce.
+#[test]
+fn test_skill_row_defaults_announced() {
+    let json = r#"{"source":"project","name":"commit","tokens":360}"#;
+    let row: ContextSkillEntry = serde_json::from_str(json).expect("deserialize");
+    assert!(
+        row.announced,
+        "a row without the field came from the announced listing"
+    );
+
+    let unannounced = ContextSkillEntry {
+        source: "claude_eco".into(),
+        name: "brainstorm".into(),
+        tokens: 0,
+        announced: false,
+    };
+    let round_tripped: ContextSkillEntry =
+        serde_json::from_str(&serde_json::to_string(&unannounced).expect("serialize"))
+            .expect("deserialize");
+    assert_eq!(round_tripped, unannounced);
+}
+
 /// The preview breakdown must carry everything the view needs to draw: a
 /// category per section plus free space, a filled grid, and no cache
 /// breakpoint, which only the live measurement knows.

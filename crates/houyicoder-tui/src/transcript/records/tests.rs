@@ -2,8 +2,11 @@
 //! so records.rs stays under the file-size gate.
 
 use crate::records::subagent_line;
+use crate::records::{ContextDrillDown, ContextSkillEntry, ContextView, context_grid_text};
 use crate::records::{ToolOutcome, TranscriptLine};
 use crate::toggle_hint::ToggleHint;
+use crate::view::context_view::render_as_rows;
+use houyicoder_protocol::frontend::context::{ContextBreakdown, GridCell};
 use serde_json::Value;
 use unicode_width::UnicodeWidthStr;
 
@@ -353,4 +356,101 @@ fn test_thinking_line_no_plus() {
     assert!(r.contains("thinking"));
     assert!(!r.contains("only line"), "content must not show, got {r}");
     assert!(!r.contains("+"));
+}
+
+/// The flattened context block is the text search reads, so a skill the
+/// listing does not announce must read manual there as well: a token figure
+/// would report a cost the window never carried.
+#[test]
+fn test_grid_text_marks_manual() {
+    let view = ContextView {
+        drill: ContextDrillDown {
+            memory_files: Vec::new(),
+            skills: vec![ContextSkillEntry {
+                source: "project".into(),
+                name: "brainstorm".into(),
+                tokens: 0,
+                announced: false,
+            }],
+        },
+        ..Default::default()
+    };
+    let text = context_grid_text(&view);
+    assert!(
+        text.contains("brainstorm: manual"),
+        "the flattened text marks the skill as the user's to invoke:\n{text}"
+    );
+    assert!(
+        !text.contains("brainstorm: 0 tokens"),
+        "the flattened text must not report a zero cost as a measurement:\n{text}"
+    );
+}
+
+/// A skill row of the /context block with the origin and name under test.
+fn skill_row(origin: &str, name: &str, announced: bool) -> ContextSkillEntry {
+    ContextSkillEntry {
+        source: origin.to_string(),
+        name: name.to_string(),
+        tokens: 0,
+        announced,
+    }
+}
+
+/// A /context block carrying the given skill rows, with one grid cell so the
+/// rendered rows do not short-circuit on an empty grid.
+fn view_with_skills(skills: Vec<ContextSkillEntry>) -> ContextView {
+    ContextView {
+        breakdown: ContextBreakdown {
+            grid: vec![vec![GridCell {
+                category_idx: 0,
+                fullness: 1.0,
+            }]],
+            ..Default::default()
+        },
+        drill: ContextDrillDown {
+            memory_files: Vec::new(),
+            skills,
+        },
+        suggestions: Vec::new(),
+    }
+}
+
+/// The flattened text reads a skill under the heading and in the position the
+/// rendered rows give it: the ecosystem row arrives first in the block, and
+/// the native group still leads the text, so a drag over the block lifts the
+/// rows in the order the user saw.
+#[test]
+fn test_grid_text_share_order() {
+    let view = view_with_skills(vec![
+        skill_row("claude_eco", "alpha", true),
+        skill_row("project", "beta", true),
+    ]);
+    let text = context_grid_text(&view);
+    let heading = text
+        .find("Native — .houyicoder/skills/")
+        .expect("the native group heading is printed");
+    let beta = text.find("beta: ").expect("the native row is printed");
+    let alpha = text.find("alpha: ").expect("the ecosystem row is printed");
+    assert!(
+        heading < beta && beta < alpha,
+        "the native group leads the ecosystem one:\n{text}"
+    );
+}
+
+/// Both projections of the block give a skill the same cost, because the cell
+/// comes from one place: a change to one view cannot leave the other
+/// reporting a cost the window never carried.
+#[test]
+fn test_grid_text_cost_agrees() {
+    let view = view_with_skills(vec![skill_row("claude_eco", "brainstorm", false)]);
+    let flat = context_grid_text(&view);
+    let rows: String = render_as_rows(&view)
+        .iter()
+        .map(|(plain, _)| plain.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    for text in [&flat, &rows] {
+        assert!(text.contains("brainstorm: manual"), "{text}");
+        assert!(!text.contains("brainstorm: 0 tokens"), "{text}");
+    }
 }

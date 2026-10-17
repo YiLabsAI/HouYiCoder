@@ -6,7 +6,7 @@
 
 use crate::agent_message::ClientCommand;
 use crate::state::App;
-use crate::view::skills_pane::display_order;
+use crate::view::skill_origin::display_order;
 
 impl App {
     /// Open the detail for the skill the list cursor points at, asking for

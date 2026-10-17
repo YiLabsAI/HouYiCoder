@@ -19,6 +19,53 @@ fn key(code: KeyCode) -> KeyEvent {
     KeyEvent::new(code, KeyModifiers::NONE)
 }
 
+/// The list groups through the shared vocabulary, and an origin the
+/// vocabulary does not carry still gets its own heading: previously such a
+/// skill vanished from the list while the count above it kept counting it.
+#[test]
+fn test_list_groups_unknown_origin() {
+    let mut app = composition::app();
+    app.ui.navigation.screen = Screen::Working;
+    app.ui.navigation.pane = Pane::Skills;
+    app.sessions.current.capabilities.skills.entries = vec![
+        SkillEntry {
+            name: "commit".into(),
+            description: "land a change".into(),
+            origin: "project".into(),
+            invocable: true,
+            body_token_estimate: 360,
+            user_invocable: true,
+            usage: None,
+        },
+        SkillEntry {
+            name: "release".into(),
+            description: "cut a release".into(),
+            origin: "workspace".into(),
+            invocable: true,
+            body_token_estimate: 120,
+            user_invocable: true,
+            usage: None,
+        },
+    ];
+    let out = render(&app, 80, 24);
+    assert!(
+        out.contains("2 skills discovered"),
+        "the count covers both entries: {out}"
+    );
+    assert!(
+        out.contains("Native — .houyicoder/skills/"),
+        "the known origin heading carries label and path: {out}"
+    );
+    assert!(
+        out.contains("workspace"),
+        "an origin outside the vocabulary names itself: {out}"
+    );
+    assert!(
+        out.contains("commit") && out.contains("release"),
+        "both rows render under their own heading: {out}"
+    );
+}
+
 #[test]
 fn test_skills_pane_detail_renders() {
     let mut app = composition::app();

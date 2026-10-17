@@ -8,7 +8,7 @@ use houyicoder_protocol::frontend::memory::MemoryToggleWhich;
 
 use crate::state::enums::{CyclicTab, StatusTab};
 use crate::state::{App, Pane};
-use crate::view::skills_pane::display_order;
+use crate::view::skill_origin::display_order;
 
 use super::approval::handle_approval;
 use super::ask_question::handle_ask_question;
