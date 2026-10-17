@@ -200,11 +200,12 @@ pub(crate) fn handle_ctrl_o(app: &mut App) {
 }
 
 /// Focus mode keys: input is hidden, so only per-pane action keys (a/r/i),
-/// Up/Down, PgUp to scroll, and Esc to fold to Working are accepted.
+/// Up/Down, PgUp to scroll while the pane on screen is not one that retracts
+/// the input box, and Esc to fold to Working are accepted.
 fn handle_focus(app: &mut App, k: KeyEvent) {
     match k.code {
         KeyCode::Esc => app.fold_to_working(),
-        KeyCode::PageUp => app.enter_scroll(),
+        KeyCode::PageUp if !pane_replaces_input(app.ui.navigation.pane) => app.enter_scroll(),
         KeyCode::Up if pane_navigable(app) => app.navigate_pane(false),
         KeyCode::Down if pane_navigable(app) => app.navigate_pane(true),
         KeyCode::Char('a') if pane_approvable(app) => app.approve_in_pane(),

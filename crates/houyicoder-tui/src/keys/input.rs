@@ -418,7 +418,12 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
             }
             app.submit_input()
         }
-        KeyCode::PageUp if !editing => {
+        // A pane that retracts the input box owns the screen, so these two
+        // keys are inert while one is open: entering Scroll mode here would
+        // hand the screen to the transcript and the pane the user is reading
+        // would vanish. The panes whose detail bodies page handle these keys
+        // in their own branches above.
+        KeyCode::PageUp if !editing && !pane_replaces_input(app.ui.navigation.pane) => {
             // Enter Scroll mode without paging: the first PgUp from Working
             // mode switches to the full-screen transcript so the render can
             // publish the Scroll-mode cap (larger than Working's). Subsequent
@@ -427,7 +432,9 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
             // block entirely above the visible window.
             app.enter_scroll();
         }
-        KeyCode::PageDown if !editing => app.scroll_transcript_down(),
+        KeyCode::PageDown if !editing && !pane_replaces_input(app.ui.navigation.pane) => {
+            app.scroll_transcript_down()
+        }
         // Ctrl+End always re-follows the tail, even mid-edit, so the user can
         // jump to the newest content without submitting or clearing input.
         KeyCode::End if k.modifiers.contains(KeyModifiers::CONTROL) => {

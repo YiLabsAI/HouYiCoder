@@ -368,3 +368,55 @@ fn test_agents_opens_pane() {
         s.output_plain()
     );
 }
+
+/// A pane on screen owns the viewport, so both paging keys are inert while one
+/// is open: page-up used to enter Scroll mode and replace the pane with the
+/// transcript the user never asked to see. Closing the pane gives the keys back.
+#[test]
+#[ignore]
+fn test_pane_keeps_page_keys() {
+    let mut s = PtySession::launch();
+    assert!(
+        s.wait_for("sign in to houyicoder", RENDER_TIMEOUT),
+        "should reach login"
+    );
+    s.send_key(&Key::Char('3'));
+    assert!(
+        s.wait_for("let's build, or / for commands", RENDER_TIMEOUT),
+        "working screen"
+    );
+    run_slash_command(&mut s, "agents");
+    assert!(
+        s.wait_for_screen("AVAILABLE", RENDER_TIMEOUT),
+        "/agents should open the pane over the transcript:\n{}",
+        s.output()
+    );
+    s.send_key(&Key::PageUp);
+    // The arrow that follows is the latch: it repaints the pane's own row, so
+    // waiting on that row proves the key sequence reached the pane. A page-up
+    // that had entered Scroll mode would leave the arrow scrolling a screen
+    // the pane is no longer drawn on.
+    s.send_key(&Key::Down);
+    assert!(
+        s.wait_for_screen("\u{25b6} - explore", RENDER_TIMEOUT),
+        "the pane should still be on screen and answering keys after page-up:\n{}",
+        s.output()
+    );
+    assert!(
+        !s.screen().contents().contains("SCROLL"),
+        "page-up under a pane must not enter the scroll viewport:\n{}",
+        s.output()
+    );
+    s.send_key(&Key::Esc);
+    assert!(
+        s.wait_for_screen("for commands", RENDER_TIMEOUT),
+        "the pane's esc should close it and bring the input box back:\n{}",
+        s.output()
+    );
+    s.send_key(&Key::PageUp);
+    assert!(
+        s.wait_for_screen("SCROLL", RENDER_TIMEOUT),
+        "with no pane open page-up still enters the scroll viewport:\n{}",
+        s.output()
+    );
+}

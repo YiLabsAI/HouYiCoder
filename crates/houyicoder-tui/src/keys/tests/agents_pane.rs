@@ -323,3 +323,59 @@ fn test_enter_fetches_unloaded_child() {
         "an unloaded fold leaves the view to be filled by the fetch"
     );
 }
+
+/// The pane on screen keeps the viewport: the paging keys are inert while one
+/// is open, and with none open the same key still enters the scroll viewport.
+/// The predicate behind this is shared by every pane in the family, and the
+/// binary-level journey pins the real key bytes.
+#[test]
+fn test_pane_keeps_screen() {
+    let mut app = working_app();
+    app.ui.navigation.pane = Pane::Agents;
+    install_type(&mut app, "explore");
+    for index in 0..40 {
+        app.push_transcript_line(TranscriptLine::Agent(format!("line {index}")));
+    }
+    render_text(&app, 80, 24);
+    app.scroll_transcript_up();
+    let back = app.whole_scroll().top_offset();
+    assert!(back > 0, "the transcript is scrolled back from the tail");
+    handle_working(&mut app, key(KeyCode::PageUp));
+    handle_working(&mut app, key(KeyCode::PageDown));
+    let out = render_text(&app, 80, 24);
+    assert!(
+        out.contains("explore"),
+        "the pane is still the screen the keys reached:\n{out}"
+    );
+    assert!(
+        !out.contains("SCROLL"),
+        "paging under a pane does not enter the scroll viewport:\n{out}"
+    );
+    assert_eq!(
+        app.whole_scroll().top_offset(),
+        back,
+        "and does not page the transcript behind the pane"
+    );
+    app.ui.navigation.pane = Pane::Transcript;
+    handle_working(&mut app, key(KeyCode::PageDown));
+    assert!(
+        app.whole_scroll().top_offset() > back,
+        "with no pane open page-down pages the transcript"
+    );
+    handle_working(&mut app, key(KeyCode::PageUp));
+    assert!(
+        render_text(&app, 80, 24).contains("SCROLL"),
+        "with no pane open page-up enters the scroll viewport"
+    );
+    // Focus is a second dispatch entry for the same key: it draws the pane
+    // full screen and routes through its own table, so the pane must keep
+    // that viewport too.
+    app.ui.navigation.pane = Pane::Agents;
+    app.ui.navigation.viewport = ViewportMode::Focus;
+    handle_working(&mut app, key(KeyCode::PageUp));
+    assert_eq!(
+        app.ui.navigation.viewport,
+        ViewportMode::Focus,
+        "page-up in the focus viewport leaves the pane's own screen standing"
+    );
+}
