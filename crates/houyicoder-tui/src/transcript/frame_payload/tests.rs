@@ -1,5 +1,8 @@
 use super::*;
-use houyicoder_protocol::frontend::session_update::ToolCallUpdateFields;
+use houyicoder_protocol::frontend::session_update::{
+    Plan, PlanEntry, PlanEntryPriority, PlanEntryStatus, SessionUpdate, ToolCallUpdate,
+    ToolCallUpdateFields,
+};
 
 fn sized(frame: TranscriptFrame) -> usize {
     SequencedFrame::from(frame).estimated_bytes()
@@ -31,12 +34,24 @@ fn test_sizes_image_and_output() {
     assert!(sized(text) < 500, "a short text frame rides its overhead");
 }
 
-/// A nested value's cost must include its inner strings, not just its
-/// outer keys.
+/// A frame whose payload is a plan counts the step text it holds. Sizing only
+/// the streaming frames leaves every other resident payload carried by a frame
+/// that reports no cost, and a window of those never reaches its budget.
 #[test]
-fn test_sizes_nested_json() {
-    let shallow = json_bytes(&serde_json::json!({ "a": "x" }));
-    let nested = json_bytes(&serde_json::json!({ "a": { "b": { "c": "x".repeat(400) } } }));
-    assert!(nested >= 400, "the innermost string is counted");
-    assert!(shallow < 32, "a one-field value stays small");
+fn test_sizes_plan_entries() {
+    let step = "read the session log and total the bytes it holds".repeat(2);
+    let plan = TranscriptFrame::Session(SessionUpdate::Plan(Plan {
+        entries: vec![PlanEntry {
+            content: step.clone(),
+            priority: PlanEntryPriority::High,
+            status: PlanEntryStatus::Pending,
+            meta: None,
+        }],
+        meta: None,
+    }));
+
+    assert!(
+        sized(plan) >= FRAME_OVERHEAD + step.len(),
+        "a plan's step text is resident"
+    );
 }

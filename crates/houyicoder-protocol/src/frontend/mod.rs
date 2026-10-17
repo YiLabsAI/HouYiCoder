@@ -19,6 +19,7 @@ pub mod permission;
 pub mod queue;
 pub mod run;
 pub mod session_update;
+mod size;
 pub mod skills;
 pub mod status;
 pub mod tools;
