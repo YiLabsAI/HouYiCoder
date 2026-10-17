@@ -18,13 +18,17 @@ use std::time::{Duration, Instant};
 
 use common::{
     Key, LargeFixture, PtySession, fresh_temp_dir, launch_and_settle, sample_rss_kb,
-    seed_large_session_on_disk, top_row, view_line, view_total,
+    seed_large_session_on_disk, sid_dirs, top_row, view_line, view_total,
 };
 use std::env::consts::ARCH;
 use std::env::consts::OS;
 use std::env::var;
+use std::fs::File;
 use std::fs::create_dir_all;
+use std::fs::metadata;
 use std::fs::write;
+use std::io::BufRead;
+use std::io::BufReader;
 use std::process::id;
 use std::str::from_utf8;
 use std::thread::sleep;
@@ -88,6 +92,48 @@ const LANDING_TIMEOUT: Duration = Duration::from_secs(10);
 /// run's meta so a reader does not have to open the seeder to know it.
 const MARKER_STEP_BYTES: u64 = 64 * 1024;
 
+/// Sessions root holding a provider transcript converted with the workspace
+/// loader. Unset means the real-transcript run is skipped: the input is a
+/// user's own session, so it is supplied from outside the repository.
+const MEASURE_SESSION_DIR: &str = "HOUYICODER_MEASURE_SESSION_DIR";
+
+/// The alternate-screen entry, the terminal's own signal that the interface is
+/// up. The prompt placeholder cannot carry this measurement: it also occurs in
+/// the transcript's own rows, so a match there would time text arriving rather
+/// than the first frame.
+const FIRST_PAINT: &str = "\u{1b}[?1049h";
+
+/// Safety bound on the page-up walk. The walk ends on its own signal, on the
+/// press that stops moving the view, and on a long session that is where the
+/// pane's scrollback ends rather than the session's opening row; this only caps
+/// a run against a view that never stops.
+const CONVERTED_PRESSES: usize = 8000;
+
+/// How many history reads the run prints. The full series lands in the press
+/// sample beside it; the console carries the shape, not every row.
+const LANDINGS_PRINTED: usize = 6;
+
+/// How many rows the view comes to rest on that the run prints. The head of the
+/// at-rest view separates the two ways a walk ends: the log's own opening rows,
+/// or a row standing in for content the pane could not load.
+const ROWS_AT_REST: usize = 4;
+
+/// Response window for one page-up over the real transcript. A cold read of a
+/// log this size takes longer than the tight window the seeded baseline uses,
+/// so the window is wide enough to hold a sample read. It is a window, not a
+/// deadline, and the walk cannot tell a read slower than it from no read at
+/// all: on a log past the resident budget both end the walk with no landing,
+/// which the landing gate then reports as a missing read. The distinction the
+/// walk does keep is the extent, so a run that reddens the gate is re-read from
+/// the press rows before the read path is called broken.
+const CONVERTED_CHANGE_WINDOW: Duration = Duration::from_secs(5);
+
+/// Replay watchdog for the real transcript. It is a log no seeder produced, so
+/// the timeout covers a cold disk read of the whole file; a resume that misses
+/// this window has stalled rather than loaded slowly, and the run should report
+/// that instead of waiting on it.
+const REPLAY_TIMEOUT: Duration = Duration::from_secs(60);
+
 fn git_sha() -> String {
     var("HOUYI_GIT_SHA").unwrap_or_else(|_| "unknown".into())
 }
@@ -120,6 +166,15 @@ fn percentile(sorted: &[f64], p: f64) -> f64 {
 
 fn opt_text(value: Option<u64>) -> String {
     value.map(|v| v.to_string()).unwrap_or_else(|| "na".into())
+}
+
+/// A timed press's latency to one decimal, so the column keeps the fraction of
+/// a millisecond the fastest presses land in. Absent reads the same as an
+/// absent screen reading.
+fn opt_ms(value: Option<f64>) -> String {
+    value
+        .map(|v| format!("{v:.1}"))
+        .unwrap_or_else(|| "na".into())
 }
 
 /// The marker token layout: a head literal, four decimal digits identifying
@@ -994,6 +1049,152 @@ fn test_idle_rss_scaling() {
     print!("{}", rss_steps(&results));
 }
 
+/// Resume over a converted provider transcript, then read the history back on
+/// demand. The fixture is a real session converted with the workspace loader,
+/// so the log carries a history no seeder reproduces. The sessions root comes
+/// from the environment because the transcript is user data and cannot live in
+/// the repository; without it the run reports that it skipped rather than
+/// measuring an empty session.
+///
+/// Recorded, not asserted: the time to the first frame, the time to the tail of
+/// the loaded history, the resident set at settle, and the page-up latency
+/// against rows outside the resident budget. A history read on demand is
+/// expected to pay a bounded first screen whatever the log size; the resident
+/// set says how much of that log the process is still holding.
+///
+/// The transcript named by the environment must be larger than the pane's
+/// resident budget. A smaller one is measured and recorded, but every press
+/// then walks rows already resident, so nothing exercises the read path and
+/// the run cannot tell a working read from a pane that never reads.
+#[test]
+#[ignore = "measurement workload; needs a converted transcript in HOUYICODER_MEASURE_SESSION_DIR"]
+fn test_resume_converted_transcript() {
+    let Ok(root) = var(MEASURE_SESSION_DIR) else {
+        println!("{MEASURE_SESSION_DIR} unset: no converted transcript to measure");
+        return;
+    };
+    let root = PathBuf::from(root);
+    let Some(log) = converted_log(&root) else {
+        panic!("no session log under {}", root.display());
+    };
+    // The newest message text is the settle point: it is on screen only once
+    // the replay has reached the end of the loaded history, which is what
+    // separates a loaded history from one still arriving. It is the newest
+    // non-empty text because the wait below searches for it, and every screen
+    // contains an empty one. The log may end on a tool row after this message,
+    // so the settle time is a floor under the last row's arrival.
+    let newest = log
+        .newest_text
+        .as_deref()
+        .expect("the log ends with no non-empty message text");
+    let started = Instant::now();
+    let mut session = PtySession::launch_with_sessions_dir(
+        None,
+        None,
+        None,
+        None,
+        &["--resume".to_string(), log.sid.clone()],
+        root,
+    );
+    assert!(
+        session.wait_for(FIRST_PAINT, REPLAY_TIMEOUT),
+        "the interface never painted over {} bytes:\n{}",
+        log.log_bytes,
+        session.output()
+    );
+    let paint_ms = started.elapsed().as_secs_f64() * 1000.0;
+    assert!(
+        session.wait_for_screen(newest, REPLAY_TIMEOUT),
+        "the loaded history's tail never arrived over {} bytes:\n{}",
+        log.log_bytes,
+        session.output()
+    );
+    let settle_ms = started.elapsed().as_secs_f64() * 1000.0;
+    let rss_kb = session.child_pid().and_then(sample_rss_kb);
+    println!(
+        "painted at {paint_ms:.0} ms, settled over {} events at {settle_ms:.0} ms, rss {}",
+        log.event_count,
+        opt_text(rss_kb)
+    );
+
+    let walk = page_up_walk(&mut session);
+    let scrolled = session.screen().contents();
+    let total_lines = view_total(&scrolled);
+    drop(session);
+
+    let landings = walk.landings();
+    // The history reads are recorded beside their latency: a memory change to
+    // the read path shows up here as a count and a range, which the reached
+    // extent alone would not separate from a walk that stopped early.
+    let row = format!(
+        "{},{},{paint_ms:.0},{settle_ms:.0},{},{},{},{},{},{}\n",
+        log.log_bytes,
+        log.event_count,
+        opt_text(rss_kb),
+        walk.ms.len(),
+        landings.len(),
+        opt_ms(walk.fastest()),
+        opt_ms(walk.slowest()),
+        opt_text(total_lines)
+    );
+    let csv = format!(
+        "log_bytes,event_count,paint_ms,settle_ms,rss_kb,presses,history_reads,press_ms_fastest,press_ms_slowest,view_total\n{row}"
+    );
+    // Samples land before the gates, so a failed run still leaves its numbers
+    // on disk and on stdout for diagnosis.
+    let run_dir = history_run_dir();
+    write(run_dir.join("converted_transcript.csv"), &csv).expect("write converted transcript");
+    write(run_dir.join("converted_presses.csv"), walk.presses_csv())
+        .expect("write converted presses");
+    println!("converted transcript resume ({})", run_dir.display());
+    print!("{csv}");
+    println!(
+        "page-up walk: {} presses, {} of them history reads, view line at rest {:?}",
+        walk.ms.len(),
+        landings.len(),
+        view_line(&scrolled)
+    );
+    for (idx, ms, extent) in landings.iter().take(LANDINGS_PRINTED) {
+        println!("  press {idx}: {ms:.1} ms, extent now {extent}");
+    }
+    print_read_range(&landings);
+    print_rows_at_rest(&scrolled, ROWS_AT_REST);
+
+    // Liveness, not the numbers: a press that never moves the view means the
+    // history stopped answering, and an absent scroll status means the pane
+    // never entered the scroll view the presses are meant to reach.
+    assert!(
+        !walk.ms.is_empty(),
+        "no page-up moved the view over {} events",
+        log.event_count
+    );
+    assert!(
+        total_lines.is_some(),
+        "the scroll status reported no history extent over {} events",
+        log.event_count
+    );
+    // A log past the resident boundary makes a read unavoidable, so a walk of
+    // one with no landing timed the resident window instead of the read path
+    // this run exists to measure. The walk still moves the view there, which is
+    // why the press count alone does not catch it.
+    assert!(
+        log.log_bytes <= RESIDENT_BUDGET_BYTES || !landings.is_empty(),
+        "no history read landed over {} bytes, past the {} byte resident budget",
+        log.log_bytes,
+        RESIDENT_BUDGET_BYTES
+    );
+    // The walk ends where the pane's scrollback ends, which for a long session
+    // is a bounded run of rows above the resident window rather than the
+    // session's opening row; full-history recall is the search view's. What the
+    // run has to show is that the walk ends on its own signal, so a pane that
+    // never settles is the failure this catches.
+    assert!(
+        walk.ms.len() < CONVERTED_PRESSES,
+        "the page-up walk hit its {CONVERTED_PRESSES} press bound over {} events",
+        log.event_count
+    );
+}
+
 /// One settled run's resident set, kept beside the log it settled over so a
 /// step between two runs can be expressed per byte of log and per event.
 struct RssPoint {
@@ -1023,4 +1224,210 @@ fn rss_steps(points: &[RssPoint]) -> String {
         ));
     }
     out
+}
+
+/// A converted transcript on disk: the session directory under the configured
+/// root that carries a log, with the extent of that log and the text of its
+/// newest message row.
+struct ConvertedLog {
+    sid: String,
+    log_bytes: u64,
+    event_count: usize,
+    newest_text: Option<String>,
+}
+
+/// The session under root that carries a log. None when the root holds no
+/// session, so a wrong path is reported rather than measured as an empty one.
+/// A root holding several sessions stops the run: the numbers are filed under
+/// this root, and measuring an arbitrary one of its sessions would file them
+/// against the wrong log. The log is read once for its extent and its newest
+/// row: the row is the settle latch, and a second pass over hundreds of
+/// megabytes to find it would be paid on every run.
+fn converted_log(root: &Path) -> Option<ConvertedLog> {
+    let carrying: Vec<PathBuf> = sid_dirs(root)
+        .into_iter()
+        .filter(|path| path.join("log.jsonl").is_file())
+        .collect();
+    let session_dir = match carrying.as_slice() {
+        [] => return None,
+        [only] => only.clone(),
+        several => panic!("{root:?} holds {} sessions: {several:?}", several.len()),
+    };
+    let path = session_dir.join("log.jsonl");
+    let log_bytes = metadata(&path).ok()?.len();
+    let mut event_count = 0usize;
+    let mut newest_text = None;
+    for line in BufReader::new(File::open(&path).ok()?).lines() {
+        event_count += 1;
+        let Ok(line) = line else { continue };
+        let Ok(entry) = serde_json::from_str::<serde_json::Value>(&line) else {
+            continue;
+        };
+        let event = &entry["event"];
+        // An empty message text is no latch: the settle wait searches for this
+        // snippet, and every screen contains the empty string, so a log whose
+        // last message is empty would settle on the first poll.
+        if matches!(
+            event["type"].as_str(),
+            Some("UserInput" | "AssistantMessage")
+        ) && let Some(text) = event["text"].as_str()
+            && !text.trim().is_empty()
+        {
+            newest_text = Some(text.chars().take(SNIPPET_CHARS).collect());
+        }
+    }
+    Some(ConvertedLog {
+        sid: session_dir.file_name()?.to_string_lossy().into_owned(),
+        log_bytes,
+        event_count,
+        newest_text,
+    })
+}
+
+/// How many characters of a row's text stand in for the whole row. A short run
+/// survives wrapping, so it is still one row on screen.
+const SNIPPET_CHARS: usize = 16;
+
+/// Where the scroll view sits, read from the status row: the first visible
+/// line and the extent behind it. Both halves are compared because each press
+/// outcome moves a different half. A press inside the resident window moves the
+/// line; a press past it is answered by a history read, and a read lands by
+/// putting rows above a held viewport, so the line stays and the extent grows.
+#[derive(PartialEq)]
+struct ViewPlace {
+    line: Option<u64>,
+    extent: Option<u64>,
+}
+
+/// Read the view's place off the current screen.
+fn view_place(session: &PtySession) -> ViewPlace {
+    let screen = session.screen().contents();
+    ViewPlace {
+        line: view_line(&screen),
+        extent: view_total(&screen),
+    }
+}
+
+/// One page-up against the loaded history: the time from the key press to the
+/// view moving. None when neither half moved for the whole window, which is a
+/// stall rather than a slow press.
+fn press_older(session: &mut PtySession, window: Duration) -> Option<f64> {
+    let before = view_place(session);
+    let sent = Instant::now();
+    session.send_key(&Key::PageUp);
+    while sent.elapsed() < window {
+        if view_place(session) != before {
+            return Some(sent.elapsed().as_secs_f64() * 1000.0);
+        }
+        sleep(POLL_INTERVAL);
+    }
+    None
+}
+
+/// One completed page-up walk: how long each press took and where the view sat
+/// after it. The two series are parallel, so a press's latency and the extent
+/// it reached are read together.
+struct PressWalk {
+    ms: Vec<f64>,
+    place: Vec<ViewPlace>,
+}
+
+/// Press page-up until a press no longer moves the view, and record each press.
+/// The stop has two causes the press count cannot separate: the pane's
+/// scrollback ends there, or a read that never lands holds the view where it
+/// is. The press bound stops a walk against a view that never stops.
+fn page_up_walk(session: &mut PtySession) -> PressWalk {
+    let mut walk = PressWalk {
+        ms: Vec::new(),
+        place: Vec::new(),
+    };
+    for _ in 0..CONVERTED_PRESSES {
+        let Some(ms) = press_older(session, CONVERTED_CHANGE_WINDOW) else {
+            break;
+        };
+        walk.ms.push(ms);
+        walk.place.push(view_place(session));
+    }
+    walk
+}
+
+impl PressWalk {
+    /// The presses that answered with more rows behind the view than the last
+    /// one had. A history read puts older rows above a held viewport, so the
+    /// extent is the only half that moves and the only place the read shows up.
+    /// Both readings must be present: an extent that was unreadable and then
+    /// readable is a parse that started working, not a read that landed.
+    fn landings(&self) -> Vec<(usize, f64, u64)> {
+        let mut landings = Vec::new();
+        for (idx, (ms, place)) in self.ms.iter().zip(&self.place).enumerate() {
+            if idx == 0 {
+                continue;
+            }
+            let previous = self.place[idx - 1].extent;
+            if let (Some(extent), Some(earlier)) = (place.extent, previous)
+                && extent > earlier
+            {
+                landings.push((idx + 1, *ms, extent));
+            }
+        }
+        landings
+    }
+
+    /// The quickest press timed, or None for a walk that timed none. None
+    /// rather than a placeholder number: a walk with no press is a run that
+    /// failed, and a zero here would read as a press that answered instantly.
+    fn fastest(&self) -> Option<f64> {
+        self.ms.iter().copied().reduce(f64::min)
+    }
+
+    /// The slowest press timed, or None for a walk that timed none.
+    fn slowest(&self) -> Option<f64> {
+        self.ms.iter().copied().reduce(f64::max)
+    }
+
+    /// Every press as a sample row, so the shape of the walk survives the run:
+    /// a press inside the resident window and a press that waited on the log
+    /// differ by the extent alone.
+    fn presses_csv(&self) -> String {
+        let mut csv = String::from("press,ms,line,extent\n");
+        for (idx, (ms, place)) in self.ms.iter().zip(&self.place).enumerate() {
+            csv.push_str(&format!(
+                "{},{ms:.1},{},{}\n",
+                idx + 1,
+                opt_text(place.line),
+                opt_text(place.extent)
+            ));
+        }
+        csv
+    }
+}
+
+/// Print the latency range over the presses that waited on the log. An absent
+/// range means no press grew the extent: either the walk stayed inside the
+/// resident window, or a read slower than the response window ended it. The run
+/// states the absence rather than leaving it to be inferred from an empty
+/// range, and the press rows tell the two apart.
+fn print_read_range(landings: &[(usize, f64, u64)]) {
+    let read_ms: Vec<f64> = landings.iter().map(|(_, ms, _)| *ms).collect();
+    if let (Some(slowest), Some(fastest)) = (
+        read_ms.iter().copied().reduce(f64::max),
+        read_ms.iter().copied().reduce(f64::min),
+    ) {
+        println!("history read ms: fastest {fastest:.1}, slowest {slowest:.1}");
+    }
+}
+
+/// Print the rows the view rests on, blank rows skipped. A walk that stops on
+/// the log's opening rows and one that stops on a row standing in for content
+/// the pane could not load reach the same press count, and only these rows tell
+/// them apart.
+fn print_rows_at_rest(screen: &str, rows: usize) {
+    println!("rows at rest:");
+    for line in screen
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .take(rows)
+    {
+        println!("  {}", line.trim_end());
+    }
 }
