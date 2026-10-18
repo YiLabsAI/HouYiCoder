@@ -134,12 +134,7 @@ fn test_status_renders_three_subtabs() {
 #[test]
 #[ignore]
 fn test_status_bar_renders_gauge() {
-    let mut s = PtySession::launch_with_stub_script(common::ONE_REPLY_SCRIPT);
-    assert!(
-        s.wait_for("sign in to houyicoder", RENDER_TIMEOUT),
-        "should reach login"
-    );
-    s.send_key(&Key::Char('3'));
+    let mut s = common::pty_session_scripted(common::ONE_REPLY_SCRIPT);
     assert!(
         s.wait_for_screen("auto mode on", RENDER_TIMEOUT),
         "working status bar: {}",

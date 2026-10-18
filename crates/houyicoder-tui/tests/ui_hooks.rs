@@ -14,9 +14,8 @@
 
 #![allow(clippy::unwrap_in_result)]
 
-use crate::common::{self, Key, RENDER_TIMEOUT, pty_session, run_slash_command};
+use crate::common::{self, Key, RENDER_TIMEOUT, make_temp_repo, pty_session, run_slash_command};
 use common::PtySession;
-use std::env::current_dir;
 use std::fs::create_dir_all;
 use std::fs::write;
 
@@ -52,9 +51,12 @@ fn test_hooks_pane_subtitle_hint() {
 // ---- hook fire-point PTY tests ----
 
 /// Launch the binary with an isolated HOME whose settings.json carries
-/// the given hooks config, plus a stub provider script. Pre-trusts the
-/// workspace cwd so User-source hooks are not skipped by the trust gate.
-/// Returns a logged-in session at the working screen.
+/// the given hooks config, plus a stub provider script. The run's working
+/// directory is a fresh throwaway repo, pre-trusted so User-source hooks
+/// are not skipped by the trust gate: the stub answers every provider call
+/// from one counter, so it only means what the test wrote while the run
+/// reads no other project scope. Returns a logged-in session at the
+/// working screen.
 fn launch_with_hooks(hooks_json: serde_json::Value, stub_script: &str) -> PtySession {
     let home = common::fresh_temp_dir("hook-home");
     let config_dir = home.join(".houyicoder");
@@ -66,13 +68,13 @@ fn launch_with_hooks(hooks_json: serde_json::Value, stub_script: &str) -> PtySes
         serde_json::to_string_pretty(&settings_json).unwrap(),
     )
     .expect("write settings");
-    let cwd = current_dir().expect("cwd");
+    let cwd = make_temp_repo("hooks");
     houyicoder_config::persist_project_trust(&settings, &cwd).expect("pre-trust cwd");
     let mut s = PtySession::launch_with_args(
         Some(stub_script.to_string()),
         None,
         Some(home.clone()),
-        None,
+        Some(cwd),
         &[],
     );
     assert!(

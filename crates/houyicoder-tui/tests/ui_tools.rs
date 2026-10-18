@@ -17,7 +17,8 @@ use crate::common::{Key, RENDER_TIMEOUT, pty_session_scripted};
 /// executes the real read tool on the workspace manifest), the second is plain
 /// text so the run ends cleanly (a stateless stub would re-emit the ToolCall
 /// every call and loop to max_turns). The path is relative to the binary's cwd
-/// (the workspace root), so confine_path resolves it inside the workspace.
+/// (the throwaway repo the run works in), so confine_path resolves it inside
+/// that repo; make_temp_repo writes the manifest it reads.
 const READ_CARGO_TOML_SCRIPT: &str = r#"[
   [{"type":"ToolCall","id":"c1","name":"read","input":{"path":"Cargo.toml"}}],
   [{"type":"Text","text":"done"}]

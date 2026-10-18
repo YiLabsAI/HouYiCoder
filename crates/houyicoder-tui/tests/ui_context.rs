@@ -14,7 +14,7 @@
 #![allow(clippy::unwrap_in_result)]
 
 use crate::common::{
-    self, Key, PtySession, RENDER_TIMEOUT, fresh_temp_dir, pty_session, pty_session_in_dir,
+    self, Key, PtySession, RENDER_TIMEOUT, fresh_temp_dir, make_temp_repo, pty_session_in_dir,
     pty_session_with_home, run_slash_command,
 };
 use std::fs;
@@ -24,13 +24,15 @@ use std::fs;
 /// app.session = Some(live_session)), so /context hits the server's real
 /// prospective breakdown — not the canned stub the no-session path would
 /// render. That stub path (100% full fake data) is unreachable in production
-/// and is not asserted here. pty_session picks local mode (sends
+/// and is not asserted here. pty_session_in_dir picks local mode (sends
 /// '3' on the login screen) to land on the working screen without a network
-/// call.
+/// call. The run's cwd is a throwaway repo, never the developer's own
+/// workspace: what the report holds decides how much of it fits the viewport,
+/// so reading their project memory would make the assertions machine-dependent.
 #[test]
 #[ignore]
 fn test_context_renders_sections() {
-    let mut s = pty_session();
+    let mut s = pty_session_in_dir(make_temp_repo("ctx-sections"));
     s.clear_output();
     run_slash_command(&mut s, "context");
     assert!(
@@ -96,7 +98,7 @@ fn test_post_compact_shows_folded() {
         None,
         None,
         None,
-        None,
+        Some(make_temp_repo("ctx-compact")),
         &["--resume".to_string(), sid.to_string()],
         sessions_dir,
     );
@@ -285,7 +287,7 @@ fn test_context_reports_measured_cost() {
         None,
         None,
         None,
-        None,
+        Some(make_temp_repo("ctx-cost")),
         &["--resume".to_string(), sid.to_string()],
         sessions_dir,
     );

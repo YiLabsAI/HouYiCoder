@@ -5,7 +5,9 @@
 
 #![allow(clippy::unwrap_in_result)]
 
-use crate::common::{Key, PtySession, RENDER_TIMEOUT, fresh_temp_dir, run_slash_command};
+use crate::common::{
+    Key, PtySession, RENDER_TIMEOUT, fresh_temp_dir, make_temp_repo, run_slash_command,
+};
 use serde_json::Value;
 #[cfg(unix)]
 use std::fs::Permissions;
@@ -277,7 +279,13 @@ fn test_switch_during_run() {
     // A long streamed reply holds the request in flight across the whole pick
     // sequence; the delay stretches every 4-char delta of it.
     let plan = format!(r#"[[{{"type":"Text","text":"{}"}}]]"#, "x".repeat(400));
-    let mut s = PtySession::launch_with_args(Some(plan), Some(50), Some(home), None, &Vec::new());
+    let mut s = PtySession::launch_with_args(
+        Some(plan),
+        Some(50),
+        Some(home),
+        Some(make_temp_repo("model-active-run")),
+        &Vec::new(),
+    );
     assert!(s.wait_for("sign in to houyicoder", RENDER_TIMEOUT), "login");
     s.send_key(&Key::Char('3'));
     assert!(

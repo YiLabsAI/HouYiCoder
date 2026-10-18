@@ -71,11 +71,6 @@ impl PtySession {
         Self::launch_inner(None, Some(ms), None, Some(repo))
     }
 
-    /// Drive the stub provider with a JSON sequence of model output items.
-    pub fn launch_with_stub_script(script_json: &str) -> Self {
-        Self::launch_inner(Some(script_json.to_string()), None, None, None)
-    }
-
     /// Launch with a caller-owned home for config and memory assertions.
     pub fn launch_with_home(home: PathBuf) -> Self {
         Self::launch_inner(None, None, Some(home), None)
@@ -889,6 +884,11 @@ pub fn sid_dirs(root: &Path) -> Vec<PathBuf> {
 
 /// Launch the binary + pick local mode (no login, no network ever) → land on
 /// the Working screen. Shared by every test.
+///
+/// The run works in the real workspace root, so it reads the developer's own
+/// project scope: right for a test that needs this repository, wrong for a
+/// scripted run (pty_session_scripted), whose replies the stub hands out from
+/// one counter.
 pub fn pty_session() -> PtySession {
     pty_session_inner(PtySession::launch())
 }
@@ -963,8 +963,21 @@ pub fn pty_session_slow_scripted_home(ms: u64, script_json: &str, home: PathBuf)
 /// Like pty_session, but the stub emits a scripted response sequence
 /// (HOUYICODER_TEST_STUB_RESPONSE_SCRIPT) so the run drives real tool calls. Used by the
 /// tool-call + permission-flow tests.
+///
+/// The run's working directory is a fresh throwaway repo, never the
+/// developer's workspace: the stub answers every provider call from one
+/// counter, so a script only means what the test wrote while the stub is its
+/// sole caller. A workspace whose memory store holds entries fires a recall
+/// rerank in the background, and that call takes one reply and shifts every
+/// later one by a turn.
 pub fn pty_session_scripted(script_json: &str) -> PtySession {
-    pty_session_inner(PtySession::launch_with_stub_script(script_json))
+    pty_session_inner(PtySession::launch_with_args(
+        Some(script_json.to_string()),
+        None,
+        None,
+        Some(make_temp_repo("scripted")),
+        &[],
+    ))
 }
 
 /// Like pty_session_scripted, but with a custom PTY row count. The
@@ -977,7 +990,7 @@ pub fn pty_session_scripted_rows(script_json: &str, rows: u16) -> PtySession {
         Some(script_json.to_string()),
         None,
         None,
-        None,
+        Some(make_temp_repo("scripted-rows")),
         &[],
         sessions_dir,
         rows,
@@ -993,7 +1006,7 @@ pub fn pty_session_slow_scripted_rows(ms: u64, script_json: &str, rows: u16) -> 
         Some(script_json.to_string()),
         Some(ms),
         None,
-        None,
+        Some(make_temp_repo("scripted-slow-rows")),
         &[],
         sessions_dir,
         rows,
@@ -1030,7 +1043,7 @@ pub fn pty_session_slow_scripted(ms: u64, script_json: &str) -> PtySession {
         Some(script_json.to_string()),
         Some(ms),
         None,
-        None,
+        Some(make_temp_repo("scripted-slow")),
         &[],
         sessions_dir,
     ))
