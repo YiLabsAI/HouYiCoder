@@ -359,11 +359,12 @@ fn test_resume_sid_reopens_errors() {
     remove_dir_all(&sessions).ok();
 }
 
-/// A tampered session log: sid-resume warns (Unverified chain) but still
-/// proceeds -- the log is the source of truth, the chain verdict is
-/// best-effort + advisory. Covers the warn branch.
+/// A tampered session log: sid-resume reports the Unverified chain on the
+/// diagnostic channel and still proceeds -- the log is the source of truth,
+/// the chain verdict is best-effort and advisory. The diagnostic is not
+/// captured here, so this asserts the resume, not the warning.
 #[test]
-fn test_resume_sid_warns_unverified() {
+fn test_resume_sid_proceeds_unverified() {
     let sessions = temp_root();
     let export_path = sessions.join("export.json");
     let legacy_sid = "01KZ5RDH4DG6YV0EDBX1KSKTRA";
@@ -388,7 +389,7 @@ fn test_resume_sid_warns_unverified() {
     let log = sessions.join(existing_sid.to_string()).join("log.jsonl");
     let body = read_to_string(&log).unwrap();
     write(&log, body.replacen("resume-unit-prompt", "TAMPERED", 1)).unwrap();
-    // Resume still succeeds (warns to stderr, proceeds).
+    // Resume still succeeds; the chain warning is a diagnostic line.
     let resumed = super::build_runner_for_resume_sid(
         existing_sid,
         &sessions,
@@ -661,14 +662,14 @@ fn test_fork_empty_source_errors() {
     remove_dir_all(&sessions).ok();
 }
 
-/// Forking a session whose source log is tampered warns (Unverified chain)
-/// but still proceeds -- the fork's chain is rebuilt on the durable subset,
-/// so it is internally self-consistent; the warn surfaces that the source was
-/// tampered/corrupt so the user knows the fork's lineage is questionable.
-/// Mirrors resume_sid_warns_on_unverified. (The warn goes to stderr; the test
-/// asserts the fork proceeds, not the stderr text -- stderr is not captured.)
+/// Forking a session whose source log is tampered reports the Unverified chain
+/// on the diagnostic channel and still proceeds -- the fork's chain is rebuilt
+/// on the durable subset, so the fork is internally self-consistent, and the
+/// diagnostic is what marks the source as tampered or corrupt. Mirrors
+/// test_resume_sid_proceeds_unverified. (The diagnostic is not captured here, so
+/// this asserts the fork, not the warning.)
 #[test]
-fn test_fork_warns_unverified_source() {
+fn test_fork_proceeds_unverified_source() {
     let sessions = temp_root();
     let export_path = sessions.join("export.json");
     let legacy_sid = "01KZ5RDH4DG6YV0EDBX1KSKTRA";
@@ -693,7 +694,7 @@ fn test_fork_warns_unverified_source() {
     let log = sessions.join(source_sid.to_string()).join("log.jsonl");
     let body = read_to_string(&log).unwrap();
     write(&log, body.replacen("resume-unit-prompt", "TAMPERED", 1)).unwrap();
-    // Fork still succeeds (warns to stderr, proceeds).
+    // Fork still succeeds; the chain warning is a diagnostic line.
     let resumed = super::build_runner_for_fork(
         source_sid,
         &sessions,

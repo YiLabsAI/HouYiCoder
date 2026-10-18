@@ -151,6 +151,20 @@ pub fn build_runner_for_resume_export(
     })
 }
 
+/// Report a session's chain verdict on the diagnostic channel. The verdict
+/// gates nothing -- an unverified log is a line in the log and the run goes on
+/// with the log as the source of truth -- so this report is the whole product
+/// of the disk check. The caller states what it does next, because resume and
+/// fork differ there.
+fn report_chain_verdict(sid: SessionId, consequence: &str, verdict: ChainVerdict) {
+    match verdict {
+        ChainVerdict::Verified => {}
+        ChainVerdict::Unverified { at_index, reason } => tracing::warn!(
+            "session {sid} chain unverified at event {at_index}: {reason}; {consequence}"
+        ),
+    }
+}
+
 /// Build a runner resumed from a session already on disk (--resume <sid>).
 /// The session's log.jsonl + session.json exist under the sid-keyed sessions
 /// root; this re-opens them (the engine reads the history via backend replay
@@ -178,17 +192,25 @@ pub fn build_runner_for_resume_sid(
     let backend = LocalFileBackend::new(sessions_root.to_path_buf());
     let store =
         Arc::new(SessionStore::new(Box::new(backend)).with_append_notify(append_notify.clone()));
-    // Best-effort chain verify: hash the raw on-disk line bytes (not a
-    // re-serialization) so a cross-binary log with a serde-default schema
-    // drift still verifies. A tampered or broken chain warns but does not
-    // block resume (a crashed session may still recover); /status shows the
-    // verdict.
-    match store.verify_disk_chain(sid) {
-        ChainVerdict::Verified => {}
-        ChainVerdict::Unverified { at_index, reason } => tracing::warn!(
-            "resume: session {sid} chain unverified at event {at_index}: {reason}; \
-             resuming anyway (the log is the source of truth)"
-        ),
+    // Best-effort chain verify: hash each line as read, not a re-serialization
+    // of the parsed event, so a cross-binary log with a serde-default schema
+    // drift still verifies. A broken chain does not block resume -- a crashed
+    // session may still recover -- and the walk covers the whole log while
+    // nothing on this path reads the verdict, so running it inline would put
+    // that walk in front of the first paint: it runs on its own thread
+    // instead. That thread is not joined, so a run that ends before the walk
+    // finishes simply loses the warning.
+    const RESUMING: &str = "resuming anyway (the log is the source of truth)";
+    let verify_store = Arc::clone(&store);
+    // Qualified: the Builder this file imports is tokio's.
+    let verify = std::thread::Builder::new()
+        .name("resume-chain-verify".into())
+        .spawn(move || report_chain_verdict(sid, RESUMING, verify_store.verify_disk_chain(sid)));
+    if let Err(e) = verify {
+        // A thread that will not start is not a reason to drop the check: run
+        // it here, paying the first paint to keep the verdict.
+        tracing::warn!("resume: chain verify thread did not start: {e}; verifying inline");
+        report_chain_verdict(sid, RESUMING, store.verify_disk_chain(sid));
     }
     // Backfill the in-memory log state from the durable log so the
     // serve-start replay ships the resumed history to the client (the working
@@ -273,15 +295,11 @@ pub fn build_runner_for_fork(
     // Verify the source chain before seeding: seed_trajectory rebuilds a
     // self-consistent chain on the durable subset, so a fork from a tampered
     // or corrupted source would otherwise launder into a Verified new session.
-    // Warn (do not block) -- the log is the source of truth, a crashed session
-    // may still recover, and the warn surfaces the lineage question to /status.
-    match store.verify_disk_chain(source_sid) {
-        ChainVerdict::Verified => {}
-        ChainVerdict::Unverified { at_index, reason } => tracing::warn!(
-            "fork: source session {source_sid} chain unverified at event {at_index}: {reason}; \
-             forking anyway (the fork's chain is rebuilt, but the source was tampered/corrupt)"
-        ),
-    }
+    report_chain_verdict(
+        source_sid,
+        "forking anyway (the fork's chain is rebuilt, but the source was tampered or corrupt)",
+        store.verify_disk_chain(source_sid),
+    );
     // Read the source's durable events, then seed them onto the new sid (the
     // seed rebuilds the chain on the durable subset, so the fork's chain is
     // internally consistent + independent of the source's). seed_trajectory is
