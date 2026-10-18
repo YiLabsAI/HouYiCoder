@@ -297,7 +297,7 @@ async fn test_cancelled_call_no_timing() {
 
     let timings: Vec<SessionEvent> = runner
         .store()
-        .trajectory_snapshot(session)
+        .trajectory_tail(session)
         .into_iter()
         .filter(|entry| matches!(entry.event, SessionEvent::ModelStepTiming { .. }))
         .map(|entry| entry.event)
@@ -334,7 +334,7 @@ async fn test_tool_reply_keeps_decode() {
 
     let timing = runner
         .store()
-        .trajectory_snapshot(session)
+        .trajectory_tail(session)
         .into_iter()
         .find_map(|entry| match entry.event {
             SessionEvent::ModelStepTiming {
