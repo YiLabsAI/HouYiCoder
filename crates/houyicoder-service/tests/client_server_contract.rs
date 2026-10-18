@@ -6,15 +6,19 @@
 //! the runner, the client receives the turn events on the seq stream and the
 //! run outcome as a paired response.
 
+use std::env::temp_dir;
+use std::fs::{create_dir_all, remove_dir_all};
+use std::process::id;
 use std::sync::Arc;
+use std::time::Duration;
 
 use futures::channel::mpsc;
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_client::{Client, InProcTransport};
-use houyicoder_context::SessionId;
+use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::{Runner, ToolRegistry};
-use houyicoder_memory::InMemoryBackend;
+use houyicoder_memory::{InMemoryBackend, LocalFileBackend};
 use houyicoder_permission::DefaultModeGate;
 use houyicoder_protocol::envelope::{RequestId, ResponsePayload, ServerFrame};
 use houyicoder_protocol::frontend::FrontendRequest;
@@ -22,6 +26,23 @@ use houyicoder_protocol::frontend::run::{ContentBlock, RunOutcome};
 use houyicoder_provider::FakeProvider;
 use houyicoder_service::server::{FrameCarrier, Server};
 use houyicoder_session::SessionStore;
+use tokio::time::timeout;
+
+/// The bytes one durable record carries, sized so two of them overrun the
+/// session's resident window: the oldest is then dropped from memory before the
+/// client attaches, while the log still holds it.
+const ROW_BYTES: usize = 5 * 1024 * 1024;
+
+/// A durable user message carrying the given text.
+fn row(session: SessionId, text: String) -> SessionLogEntry {
+    SessionLogEntry {
+        id: EventId::new(),
+        session,
+        ts: 0,
+        prev_hash: None,
+        event: SessionEvent::UserInput { text },
+    }
+}
 
 fn stub_runner() -> (Arc<Runner>, SessionId) {
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
@@ -154,4 +175,72 @@ async fn test_resume_cursor_advances_events() {
     assert!(after.0.is_some(), "cursor advanced past an event");
     drop(client);
     drop(handle.await);
+}
+
+/// A client attaching to a session with no cursor is handed the rows the
+/// session holds in memory. The rows below that window stay reachable through
+/// the frontend's own read of the log, so pushing them would send the client
+/// rows it releases as they arrive -- and on a long history, it would send it
+/// the whole of one.
+#[tokio::test]
+async fn test_attach_sends_newest_rows() {
+    let root = temp_dir().join(format!("houyi-attach-window-{}-{}", id(), line!()));
+    drop(remove_dir_all(&root));
+    create_dir_all(&root).expect("mkdir root");
+    let store = Arc::new(SessionStore::new(Box::new(LocalFileBackend::new(
+        root.clone(),
+    ))));
+    let session = SessionId::new();
+    for marker in ["oldest-row", "newest-row"] {
+        let text = format!("{marker} {}", "p".repeat(ROW_BYTES));
+        store.append(row(session, text)).await.expect("append");
+    }
+    assert_eq!(
+        store.resident_base(session).expect("the window answers"),
+        Some(1),
+        "the oldest row left the resident window before the client attached"
+    );
+    let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("unused"));
+    let runner = Arc::new(Runner::new(
+        store,
+        provider,
+        ToolRegistry::new(),
+        RunnerConfig::default(),
+    ));
+    let (client_tx, server_rx) = mpsc::channel::<String>(8);
+    let (server_tx, client_rx) = mpsc::channel::<String>(8);
+    let server_io = FrameCarrier::new(server_tx, server_rx);
+    let client_transport = InProcTransport::from_halves(client_tx, client_rx);
+    let mut client = Client::new(Box::new(client_transport));
+    let server = Server::new(runner, session, Arc::new(DefaultModeGate::new()));
+    let handle = tokio::spawn(async move { drop(server.serve(server_io).await) });
+
+    client.connect().await.expect("handshake");
+
+    // The replay delivers in log order, so a row below the window would arrive
+    // before the newest one: reading as far as the newest covers every row the
+    // client was handed.
+    let mut delivered = String::new();
+    for _ in 0..4 {
+        let frame = timeout(Duration::from_secs(10), client.next_frame())
+            .await
+            .expect("the server delivered the newest row")
+            .expect("server frame");
+        delivered.push_str(&serde_json::to_string(&frame).expect("frame encodes"));
+        if delivered.contains("newest-row") {
+            break;
+        }
+    }
+    drop(client);
+    drop(handle.await);
+    drop(remove_dir_all(&root));
+
+    assert!(
+        delivered.contains("newest-row"),
+        "the row the session holds arrives"
+    );
+    assert!(
+        !delivered.contains("oldest-row"),
+        "and the row below the window does not"
+    );
 }

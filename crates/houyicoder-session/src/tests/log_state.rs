@@ -206,6 +206,39 @@ async fn test_window_trim_keeps_totals() {
     remove_dir_all(&root).ok();
 }
 
+/// The base a reader attaches at: a session with no record names none, a
+/// trimmed window names the oldest row it still holds, and a store that has
+/// not read the session reaches the same ordinal by folding its log.
+#[tokio::test]
+async fn test_resident_base_tracks_window() {
+    let root = temp_root();
+    let store = bounded_store(&root);
+    let session = SessionId::new();
+    assert_eq!(
+        store.resident_base(session).expect("the base reads"),
+        None,
+        "a session holding no record names no base"
+    );
+
+    let rows = (BUDGET_BYTES / TEXT_BYTES) + 4;
+    for _ in 0..rows {
+        append_event(&store, session, SessionEvent::UserInput { text: body() }).await;
+    }
+    let base = store
+        .resident_base(session)
+        .expect("the base reads")
+        .expect("the window holds a row");
+    assert!(base > 0, "the window trimmed past its own rows: {base}");
+
+    let unread = bounded_store(&root);
+    assert_eq!(
+        unread.resident_base(session).expect("the base reads"),
+        Some(base),
+        "folding the log lands on the ordinal the live window reached"
+    );
+    remove_dir_all(&root).ok();
+}
+
 /// A reader that pages sees the records the window no longer holds: the log
 /// answers the ordinals below the window and the window answers the rest, once
 /// each, in append order.

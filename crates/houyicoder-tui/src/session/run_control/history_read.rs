@@ -228,21 +228,77 @@ fn assemble(windows: Vec<NamedRows>, oldest_start: u64) -> LookbackEnd {
     LookbackEnd::Reached(rows, oldest_start)
 }
 
+/// What one walk of the log for one row of the view's front ended with.
+enum WalkEnd {
+    /// The row was met, and the rows older than it begin at this byte offset.
+    Anchored(NamedRows, u64),
+    /// The walk reached the log's start without meeting the row: the log
+    /// holds no row that this view row stands for, so the row is no place to
+    /// begin at.
+    Absent,
+    /// The walk met the row and then reached the log's start: the view
+    /// already shows the oldest rows the log holds. A later row of the front
+    /// is no better a place to begin at — the rows between the two are on
+    /// view, and reading from the later row hands them back.
+    Exhausted,
+    /// The walk stopped before the log's start, its budget spent or the read
+    /// stopped. The row is not settled either way, and what the walk read is
+    /// a prefix of an answer about a log it never finished.
+    Stopped,
+}
+
 /// Read the rows the log holds older than the row the visible transcript
 /// starts at. The read walks back from the log tail one window at a time,
 /// since the row it looks for sits behind the resident window and the bytes
 /// crossed to reach it must not be held at once. The first window carrying
 /// that row ends the walk, and the rows older than it in that window are the
-/// result. None when no window within the walk carries it, when it is the
-/// oldest row the walk reached, or when the stop flag was raised, which ends
-/// the walk at the window it is inside.
+/// result.
+///
+/// The view's opening rows are tried in turn as the row to begin at. A view
+/// whose front was cut shows rows the log has no counterpart for, since they
+/// stand in for frames the window no longer carries, and a read that can only
+/// begin at such a row is a read that never begins: every scroll back would
+/// walk the whole log and report its end, closing the front for good. Prove
+/// the row is not in the log and the row after it is tried, so the view walks
+/// back from the first row it still shares with the log. The bytes the tries
+/// cross are counted together, so the tries spend one walk's budget between
+/// them rather than one walk's budget each: a try that reaches the log's start
+/// leaves a later try only what is left of the budget, and a row the remainder
+/// does not reach stays unsettled, which is what a single walk reported there.
+/// The tries widen which row the walk may begin at, not how far it travels.
+///
+/// None when no row of the view's front begins the older rows the log holds,
+/// and when a walk stopped before it could settle that.
 fn read_log_tail(
     source: &dyn TranscriptSnapshot,
     front: &[FrontRow],
     stop: &AtomicBool,
 ) -> Result<Option<(NamedRows, u64)>, ReadError> {
-    let mut anchor = source.log_size();
     let mut walked: u64 = 0;
+    for from in 0..front.len() {
+        match walk_tail_from(source, &front[from..], stop, &mut walked)? {
+            WalkEnd::Anchored(rows, start) => return Ok(Some((rows, start))),
+            WalkEnd::Absent => continue,
+            // The two ends that are not a place to begin at: the log holds no
+            // row older than one of them, and from the other the walk never
+            // settled. Neither leaves a later row of the front a better one.
+            WalkEnd::Exhausted | WalkEnd::Stopped => return Ok(None),
+        }
+    }
+    Ok(None)
+}
+
+/// Walk back from the log tail for the row the rows of the view's front begin
+/// at, whose run of agreeing rows decides the cut. The bytes a try crosses are
+/// added to walked as it crosses them, so a try that follows starts with what
+/// the tries before it spent.
+fn walk_tail_from(
+    source: &dyn TranscriptSnapshot,
+    front: &[FrontRow],
+    stop: &AtomicBool,
+    walked: &mut u64,
+) -> Result<WalkEnd, ReadError> {
+    let mut anchor = source.log_size();
     // The rows of the window read before this one that sit just after this
     // window's newest row: an overlap whose run reaches this window's end
     // continues into them.
@@ -250,12 +306,12 @@ fn read_log_tail(
     // Set once the walk has passed the overlap row itself, so the next window's
     // rows are all older than it and are the whole result.
     let mut past_overlap = false;
-    while walked < LOG_WALK_MAX_BYTES && anchor > 0 {
+    while *walked < LOG_WALK_MAX_BYTES && anchor > 0 {
         // Between windows, not inside one: the read below blocks in the kernel
         // and this thread cannot interrupt it, so the flag bounds how many more
         // windows the walk spends and one is the worst case.
         if stop.load(Ordering::Relaxed) {
-            return Ok(None);
+            return Ok(WalkEnd::Stopped);
         }
         let window = source.window_before(anchor, LOG_WINDOW_BYTES)?;
         // A window that does not end where it was asked to would leave a gap
@@ -263,15 +319,15 @@ fn read_log_tail(
         // that does not begin below the anchor would leave the walk standing
         // still, so it stops too.
         if window.rows.is_empty() || window.next_offset != anchor {
-            return Ok(None);
+            return Ok(WalkEnd::Stopped);
         }
         if window.start_offset >= anchor {
-            return Ok(None);
+            return Ok(WalkEnd::Stopped);
         }
-        walked += anchor - window.start_offset;
+        *walked += anchor - window.start_offset;
         if past_overlap {
             let start = window.start_offset;
-            return Ok(Some((window.rows, start)));
+            return Ok(WalkEnd::Anchored(window.rows, start));
         }
         let rows = overlap_rows(&window);
         if let Some(cut) = overlap_cut(&rows, &newer, front) {
@@ -279,14 +335,25 @@ fn read_log_tail(
                 let start = window.start_offset;
                 let mut kept = window.rows;
                 kept.truncate(cut);
-                return Ok(Some((kept, start)));
+                return Ok(WalkEnd::Anchored(kept, start));
             }
             past_overlap = true;
         }
         newer = rows.iter().take(OVERLAP_FRONT_ROWS).cloned().collect();
         anchor = window.start_offset;
     }
-    Ok(None)
+    if anchor == 0 {
+        // Which of the two the walk reached the start with is the whole
+        // difference between a row the log never held and the log's own oldest
+        // row, and the cut above is what tells them apart: a cut at the
+        // window's first row is the row itself, met.
+        return Ok(if past_overlap {
+            WalkEnd::Exhausted
+        } else {
+            WalkEnd::Absent
+        });
+    }
+    Ok(WalkEnd::Stopped)
 }
 
 /// Read the rows the log holds older than a byte offset, which the previous

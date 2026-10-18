@@ -141,6 +141,12 @@ impl SessionLog for ScriptedLog {
     fn trajectory_tail(&self, _session: SessionId) -> Vec<SessionLogEntry> {
         unreachable!("a paged walk reads pages, not the tail")
     }
+    /// This double stands for a session whose log is read page by page and
+    /// whose window no reader can be placed at, so a reader beginning here
+    /// starts at the head.
+    fn resident_base(&self, _session: SessionId) -> Result<Option<usize>, ContextError> {
+        Ok(None)
+    }
     fn trajectory_page(
         &self,
         _session: SessionId,

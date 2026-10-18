@@ -276,6 +276,13 @@ impl LogStates {
         self.lock().insert(session, state);
     }
 
+    /// The ordinal of the oldest durable record this session's window holds, or
+    /// None when the process holds no window for the session. Reads a counter,
+    /// not the window.
+    pub(super) fn window_start(&self, session: SessionId) -> Option<usize> {
+        self.lock().get(&session).map(|state| state.base_index)
+    }
+
     /// The newest rows in append order, streamed text included.
     pub(super) fn tail(&self, session: SessionId) -> Vec<SessionLogEntry> {
         self.lock()

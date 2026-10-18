@@ -416,6 +416,24 @@ pub trait SessionLog: Send + Sync {
     /// whole history here, because there is nowhere else to read it.
     fn trajectory_tail(&self, session: SessionId) -> Vec<SessionLogEntry>;
 
+    /// The ordinal of the oldest durable record the session holds in memory,
+    /// folding its log in first when this process has not read the session yet.
+    /// None when the process holds no window for the session and its fold found
+    /// no record.
+    ///
+    /// A reader attaching with no cursor starts here. The records older than the
+    /// window are still on the session's log, where a reader reaches them for
+    /// itself when those rows are scrolled back to; pushing them would hand it
+    /// rows it discards as they arrive, and on a long session would hand it the
+    /// whole history. The ordinal says how far down the window reaches, and it
+    /// numbers the records the way this store's own paged read does, so a walk
+    /// begun at it reads the window from there.
+    ///
+    /// Required rather than defaulted: an implementation that answered None
+    /// would leave every reader attaching to a long session handed the whole
+    /// history, which is the cost this figure exists to bound.
+    fn resident_base(&self, session: SessionId) -> Result<Option<usize>, ContextError>;
+
     /// Read one bounded page of the session's durable history from an absolute
     /// position, so a reader can walk a history larger than memory.
     ///

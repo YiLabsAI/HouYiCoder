@@ -99,7 +99,13 @@ impl Server {
         let runner = self.runner.clone();
         let session = self.session;
         let sequencer = self.event_sequencer.clone();
-        let mut plan = sequencer.begin_replay(self.replay_after);
+        // A client that names a cursor is answered for that cursor; one that
+        // names none is a fresh reader, and it is handed what the session holds.
+        let fresh_base = match self.replay_after {
+            Some(_) => None,
+            None => Self::attach_base(runner.store().as_ref(), session),
+        };
+        let mut plan = sequencer.begin_replay(self.replay_after, fresh_base);
         loop {
             let loader = runner.clone();
             let (frames, complete) = sequencer.next_replay_batch(&mut plan, move |from| {
@@ -113,6 +119,20 @@ impl Server {
             }
         }
         self.flush_events(io).await
+    }
+
+    /// Where a fresh attach starts its walk: the ordinal of the oldest durable
+    /// record the session holds in memory. None -- a session with no durable
+    /// record, or a log the store could not read -- leaves the walk at the head
+    /// of the history, the only start left that the walk resolves on its own.
+    fn attach_base(store: &dyn SessionLog, session: SessionId) -> Option<usize> {
+        match store.resident_base(session) {
+            Ok(base) => base,
+            Err(e) => {
+                tracing::warn!("resident base for session {session} unreadable: {e}");
+                None
+            }
+        }
     }
 
     /// Map one bounded batch of the durable records from a position.

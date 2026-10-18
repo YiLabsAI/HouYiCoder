@@ -433,7 +433,18 @@ impl EventSequencer {
     /// than its newest part, and the payloads only memory holds are kept aside
     /// before that walk, because sequencing a log longer than the window fills
     /// it and would drop them before anything read them.
-    pub(crate) fn begin_replay(&self, last: Option<EventSeq>) -> ReplayPlan {
+    ///
+    /// A client with no cursor has seen nothing, and its walk starts at
+    /// fresh_base: the ordinal of the oldest durable record the session holds
+    /// in memory. The records below that ordinal stay reachable to the client
+    /// through its own read of the log, so handing them over here would send it
+    /// rows it releases as they arrive. None starts the walk at the head of the
+    /// history, which is where a start nothing can name has to begin.
+    pub(crate) fn begin_replay(
+        &self,
+        last: Option<EventSeq>,
+        fresh_base: Option<usize>,
+    ) -> ReplayPlan {
         let mut state = self.inner.state.lock().expect("event sequencer lock");
         if state.window.covers(last) {
             let opening = Self::collect_reliable_after(&state, last);
@@ -449,7 +460,13 @@ impl EventSequencer {
                 .values()
                 .map(|frame| frame.payload.clone()),
         );
-        state.trajectory_position = TrajectoryPosition::start();
+        state.trajectory_position = match (last, fresh_base) {
+            (None, Some(index)) => TrajectoryPosition {
+                index,
+                byte_offset: None,
+            },
+            _ => TrajectoryPosition::start(),
+        };
         // The window is emptied before the log is read: those frames are about
         // to be produced again under new sequence numbers, and the copies would
         // otherwise sit beside each other.

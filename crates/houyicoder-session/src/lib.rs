@@ -354,14 +354,7 @@ impl SessionStore {
                     break read;
                 }
                 WindowRead::Absent => {
-                    let history = log_windows::fold_epoch(
-                        self.backend.as_ref(),
-                        session,
-                        self.states.restore_budget(),
-                    )?;
-                    let rows = history.rows();
-                    self.states.commit_restore(session, history);
-                    if rows == 0 {
+                    if self.fold_session(session)? == 0 {
                         break TrajectoryPage {
                             next: from,
                             ..TrajectoryPage::default()
@@ -380,6 +373,32 @@ impl SessionStore {
             );
         }
         Ok(page)
+    }
+
+    /// Fold the session's durable log into its log state, and report how many
+    /// records the epoch it read holds. Zero records leaves the session with no
+    /// log state, so a later read folds again rather than answering from a
+    /// window that describes nothing.
+    fn fold_session(&self, session: SessionId) -> Result<usize, ContextError> {
+        let history =
+            log_windows::fold_epoch(self.backend.as_ref(), session, self.states.restore_budget())?;
+        let rows = history.rows();
+        self.states.commit_restore(session, history);
+        Ok(rows)
+    }
+
+    /// The ordinal of the oldest durable record the session's log state holds,
+    /// with its log folded in first when this process has not read the session.
+    /// None when the process holds no window for the session and its fold found
+    /// no record.
+    pub fn resident_base(&self, session: SessionId) -> Result<Option<usize>, ContextError> {
+        if let Some(base) = self.states.window_start(session) {
+            return Ok(Some(base));
+        }
+        if self.fold_session(session)? == 0 {
+            return Ok(None);
+        }
+        Ok(self.states.window_start(session))
     }
 
     /// The id of the latest event the log state holds, or None when it holds
@@ -642,6 +661,9 @@ impl SessionLog for SessionStore {
         limit: usize,
     ) -> Result<TrajectoryPage, ContextError> {
         Self::trajectory_page(self, session, from, limit)
+    }
+    fn resident_base(&self, session: SessionId) -> Result<Option<usize>, ContextError> {
+        Self::resident_base(self, session)
     }
     fn last_trajectory_id(&self, session: SessionId) -> Option<EventId> {
         Self::last_trajectory_id(self, session)

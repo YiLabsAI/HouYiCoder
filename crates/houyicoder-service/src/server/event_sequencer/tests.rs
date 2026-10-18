@@ -66,7 +66,7 @@ fn replay_all(
     last: Option<EventSeq>,
     entries: Vec<EntryPayloads>,
 ) -> Vec<EventEnvelope> {
-    let mut plan = sequencer.begin_replay(last);
+    let mut plan = sequencer.begin_replay(last, None);
     sequencer
         .next_replay_batch(&mut plan, |from| loaded(from, entries))
         .0
@@ -191,7 +191,7 @@ fn test_replay_sends_missed_frames() {
     let sequencer = trimmed_sequencer();
     let filler = "p".repeat(PUSH_BYTES);
     let mut asked = None;
-    let mut plan = sequencer.begin_replay(Some(EventSeq(1)));
+    let mut plan = sequencer.begin_replay(Some(EventSeq(1)), None);
     let (replay, _) = sequencer.next_replay_batch(&mut plan, |from| {
         asked = Some(from);
         loaded(from, vec![durable("e2", vec![line(&filler)])])
@@ -213,7 +213,7 @@ fn test_replay_rereads_below_window() {
     // start, which is the history the window was trimmed against.
     let sequencer = trimmed_sequencer();
     let mut asked = None;
-    let mut plan = sequencer.begin_replay(Some(EventSeq(0)));
+    let mut plan = sequencer.begin_replay(Some(EventSeq(0)), None);
     let (replay, _) = sequencer.next_replay_batch(&mut plan, |from| {
         asked = Some(from);
         loaded(
@@ -232,12 +232,14 @@ fn test_replay_rereads_below_window() {
 }
 
 #[test]
-fn test_replay_rereads_without_cursor() {
-    // A client with no cursor has seen nothing, so the window tail is not the
-    // history it needs.
+fn test_replay_starts_at_base() {
+    // A client with no cursor has seen nothing, so the walk begins at the
+    // oldest record the session holds in memory: the records below it reach the
+    // client from its own read of the log, and pushing them would send rows it
+    // releases as they arrive.
     let sequencer = trimmed_sequencer();
     let mut asked = None;
-    let mut plan = sequencer.begin_replay(None);
+    let mut plan = sequencer.begin_replay(None, Some(6));
     let (replay, _) = sequencer.next_replay_batch(&mut plan, |from| {
         asked = Some(from);
         loaded(from, vec![durable("e9", vec![line("from-log")])])
@@ -245,11 +247,28 @@ fn test_replay_rereads_without_cursor() {
 
     assert_eq!(
         asked.map(|position| position.index),
-        Some(0),
-        "the whole log is read again"
+        Some(6),
+        "the walk starts at the base the caller named"
     );
     assert_eq!(replay.len(), 1);
     assert_eq!(replay[0].seq, EventSeq(4));
+
+    // A base nothing can name -- a session with no record, a log that could not
+    // be read -- starts the walk at the head, which is the only position left
+    // that the walk can resolve on its own.
+    let sequencer = trimmed_sequencer();
+    let mut asked = None;
+    let mut plan = sequencer.begin_replay(None, None);
+    sequencer.next_replay_batch(&mut plan, |from| {
+        asked = Some(from);
+        loaded(from, vec![durable("e9", vec![line("from-log")])])
+    });
+
+    assert_eq!(
+        asked.map(|position| position.index),
+        Some(0),
+        "an unnamed base falls back to the head of the history"
+    );
 }
 
 #[test]
@@ -260,7 +279,7 @@ fn test_replay_orders_batches() {
     // reading along never sees a runtime frame ahead of the log it followed.
     let sequencer = EventSequencer::new();
     sequencer.sequence_reliable(line("notice"));
-    let mut plan = sequencer.begin_replay(None);
+    let mut plan = sequencer.begin_replay(None, None);
     let mut batches = [
         (vec![durable("e1", vec![line("first")])], false),
         (vec![durable("e2", vec![line("second")])], true),
@@ -330,7 +349,7 @@ fn test_batches_resume_reported_position() {
 
     let mut asked = Vec::new();
     let mut rounds = positioned_batches().into_iter();
-    let mut plan = sequencer.begin_replay(None);
+    let mut plan = sequencer.begin_replay(None, None);
     let (_, complete) = sequencer.next_replay_batch(&mut plan, |from| {
         asked.push(from);
         rounds.next().expect("a batch")

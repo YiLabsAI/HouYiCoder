@@ -401,6 +401,82 @@ fn test_tail_walks_past_overlap() {
     }
 }
 
+/// A view whose oldest row the log never held still walks back: that row
+/// stands in for frames the window no longer carries, so the walk reads the
+/// whole log, proves the row is not there, and begins at the row after it.
+/// Read as the log's end instead, the read reports Exhausted and the front
+/// closes for good. The rows the walk keeps are the ones older than the row it
+/// began at, so the rows the view shows arrive once.
+#[test]
+fn test_tail_skips_absent_front() {
+    let held = durable_window(
+        &[("e0", "X"), ("e1", "A"), ("e2", "B"), ("e3", "C")],
+        2000,
+        3000,
+    );
+    let middle = durable_window(&[("e4", "Y")], 1000, 2000);
+    let oldest = durable_window(&[("e5", "Z")], 0, 1000);
+    let source: Arc<dyn TranscriptSnapshot> = Arc::new(ScriptedWindows {
+        empty: NoTranscriptSnapshot,
+        windows: vec![held, middle, oldest],
+    });
+    let job = ReadJob::Tail {
+        source,
+        front: vec![
+            text_front("an earlier call is out of view"),
+            text_front("> A"),
+            text_front("> B"),
+            text_front("> C"),
+        ],
+    };
+    let stop = AtomicBool::new(false);
+    match job.run(&stop) {
+        Some(HistoryReadOutcome::Rows(result)) => {
+            assert_eq!(
+                result.anchor, 2000,
+                "the window the walk began in anchors it"
+            );
+            assert_eq!(
+                rendered(&result.rows),
+                vec!["> X"],
+                "the rows older than the row the walk began at"
+            );
+        }
+        other => panic!("the walk began at the row the log holds: {other:?}"),
+    }
+}
+
+/// A view whose oldest row is also the log's oldest row has nothing older to
+/// load, and the read says so. Read as a row the log does not hold, the read
+/// would begin at the row after it and hand back that row's own log copy,
+/// printing the view's first row a second time above itself.
+#[test]
+fn test_tail_reports_log_start() {
+    let only = durable_window(
+        &[("e0", "X"), ("e1", "A"), ("e2", "B"), ("e3", "C")],
+        0,
+        3000,
+    );
+    let source: Arc<dyn TranscriptSnapshot> = Arc::new(ScriptedWindows {
+        empty: NoTranscriptSnapshot,
+        windows: vec![only],
+    });
+    let job = ReadJob::Tail {
+        source,
+        front: vec![
+            text_front("> X"),
+            text_front("> A"),
+            text_front("> B"),
+            text_front("> C"),
+        ],
+    };
+    let stop = AtomicBool::new(false);
+    match job.run(&stop) {
+        Some(HistoryReadOutcome::Exhausted) => {}
+        other => panic!("the read reached the log's start: {other:?}"),
+    }
+}
+
 /// A row text the log repeats cannot cut the window at its earliest copy: the
 /// front's rows carry the identities of the newest occurrence, and the cut
 /// keeps the rows older than that occurrence. A text-only match cuts at the

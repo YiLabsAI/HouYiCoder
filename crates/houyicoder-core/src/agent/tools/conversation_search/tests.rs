@@ -64,6 +64,11 @@ impl SessionLog for InMemoryLog {
     fn trajectory_tail(&self, _session: SessionId) -> Vec<SessionLogEntry> {
         self.events.lock().unwrap().clone()
     }
+    /// This double keeps every record in memory, so the oldest one it holds is
+    /// the session's first.
+    fn resident_base(&self, _session: SessionId) -> Result<Option<usize>, ContextError> {
+        Ok((!self.events.lock().unwrap().is_empty()).then_some(0))
+    }
     /// This double keeps a session's records in memory and logs no streamed
     /// rows, so every record is durable and an ordinal is an index into them.
     fn trajectory_page(
