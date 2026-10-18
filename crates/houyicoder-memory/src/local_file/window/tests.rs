@@ -67,6 +67,92 @@ fn test_range_read_aligns_newlines() {
     fs::remove_dir_all(&root).ok();
 }
 
+/// A window holding bytes that are not valid UTF-8 still returns its lines:
+/// the damaged one comes back with the invalid bytes replaced and the lines
+/// after it read whole. Deciding what to do with such a line is the caller's
+/// parse, not this read's.
+#[test]
+fn test_range_reads_damaged_line() {
+    let root = temp_root();
+    let b = LocalFileBackend::new(root.clone());
+    let s = SessionId::new();
+    for text in ["before", "after"] {
+        if text == "after" {
+            let mut f = OpenOptions::new()
+                .append(true)
+                .open(b.log_path(s))
+                .expect("open log");
+            f.write_all(b"\xff\xfe broken\n").expect("write damaged");
+        }
+        pollster::block_on(b.append(evt(
+            s,
+            EventId::new(),
+            SessionEvent::UserInput { text: text.into() },
+        )))
+        .unwrap();
+    }
+    let r = b.read_log_range(s, 0, 1 << 20);
+    assert_eq!(r.lines.len(), 3, "every line is returned: {:?}", r.lines);
+    assert!(
+        r.lines[1].1.contains('\u{fffd}') && r.lines[1].1.contains("broken"),
+        "the damaged line is readable, its invalid bytes replaced: {:?}",
+        r.lines[1]
+    );
+    assert!(
+        r.lines[0].1.contains("before") && r.lines[2].1.contains("after"),
+        "the lines around it are unaffected: {:?}",
+        r.lines
+    );
+    assert_eq!(r.next_offset, r.bytes_total, "the read consumed the log");
+    assert!(
+        b.lossy_line_count() > 0,
+        "a window holding invalid bytes converts line by line"
+    );
+    fs::remove_dir_all(&root).ok();
+}
+
+/// A window whose byte budget lands inside a multi-byte character returns the
+/// complete lines before it, each with its own text and start offset, and
+/// leaves the split line to the next window. A caller that advances by
+/// next_offset reads that line whole, so the truncation is this read's
+/// boundary rather than a damaged log.
+#[test]
+fn test_range_ends_mid_char() {
+    let root = temp_root();
+    let b = LocalFileBackend::new(root.clone());
+    let s = SessionId::new();
+    let log = b.log_path(s);
+    fs::create_dir_all(log.parent().expect("log path has a parent")).expect("create dirs");
+    let mut f = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log)
+        .expect("create log");
+    f.write_all("alpha\n中文\n中文中文中文\n".as_bytes())
+        .expect("write log");
+    // Two complete lines (6 + 7 bytes) plus the first four bytes of the third:
+    // one whole character and the leading byte of the next.
+    let r = b.read_log_range(s, 0, 17);
+    assert_eq!(r.lines.len(), 2, "only complete lines: {:?}", r.lines);
+    assert_eq!(r.lines[0].1, "alpha", "first line verbatim: {:?}", r.lines);
+    assert_eq!(
+        r.lines[1].1, "中文",
+        "split neighbour intact: {:?}",
+        r.lines
+    );
+    assert_eq!(r.lines[1].0, 6, "second line starts after the first");
+    assert_eq!(
+        r.next_offset, 13,
+        "the next window starts at the split line"
+    );
+    assert_eq!(r.bytes_total, 32, "the log is longer than the window");
+    assert_eq!(
+        b.lossy_line_count(),
+        0,
+        "the split character lies past the last complete line, so the window converts in one check"
+    );
+}
+
 /// The reverse reader yields lines newest-first with their byte offsets +
 /// None next_from at BOF.
 #[test]

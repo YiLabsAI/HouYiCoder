@@ -22,6 +22,7 @@ use std::fs;
 use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader, ErrorKind, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::str::from_utf8;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -56,6 +57,13 @@ pub struct LocalFileBackend {
     /// keeps this at one per session; a regression to per-append rescans
     /// would push it to one per append. Test-only observability hook.
     read_count: AtomicUsize,
+    /// Number of lines converted one at a time because their window held bytes
+    /// that are not valid UTF-8. A window of valid lines converts in the single
+    /// check and never touches this; only a damaged window walks the per-line
+    /// conversion. Test-only observability hook: both conversions return the
+    /// same text on valid input, so counting them is the only way a test can
+    /// tell the single check from the per-line fallback.
+    lossy_line_count: AtomicUsize,
     /// The positive first-record identities, by session. An append-only log
     /// never changes its first record, so one confirmed identity answers every
     /// later index query without re-reading the log's leading mebibyte. Only
@@ -72,6 +80,7 @@ impl LocalFileBackend {
             root,
             write_state: Mutex::new(HashMap::new()),
             read_count: AtomicUsize::new(0),
+            lossy_line_count: AtomicUsize::new(0),
             first_record_ids: Mutex::new(HashMap::new()),
         }
     }
@@ -81,6 +90,13 @@ impl LocalFileBackend {
     #[cfg(test)]
     pub(crate) fn dedup_read_count(&self) -> usize {
         self.read_count.load(Ordering::Relaxed)
+    }
+
+    /// Number of lines the per-line conversion produced. Zero after a read
+    /// means the window validated in one check.
+    #[cfg(test)]
+    pub(crate) fn lossy_line_count(&self) -> usize {
+        self.lossy_line_count.load(Ordering::Relaxed)
     }
 
     /// Build a session's write state by streaming its log line by line
@@ -566,6 +582,18 @@ impl ContextBackend for LocalFileBackend {
         // terminator per returned line, plus the one the mid-line skip passed
         // over: together they are every terminator in the span the read
         // consumed, which is what counts the records off the bytes alone.
+        // Validate the complete lines once instead of once per line: a log
+        // written here is valid UTF-8, so the span converts in a single check.
+        // The read is a byte count, so the window can stop inside a character;
+        // that tail is never returned, and validating it would send a valid
+        // log down the per-line path. Bytes that are genuinely invalid still
+        // fall back to the per-line conversion, which keeps the damaged line
+        // readable rather than dropping it.
+        let complete_end = buf[start..]
+            .iter()
+            .rposition(|&b| b == b'\n')
+            .map(|last| start + last + 1);
+        let valid_window = complete_end.and_then(|end| from_utf8(&buf[start..end]).ok());
         let mut lines = Vec::new();
         let mut line_breaks = if start > 0 { 1 } else { 0 };
         let mut cur = start;
@@ -576,7 +604,13 @@ impl ContextBackend for LocalFileBackend {
                 Some(p) => cur + p,
                 None => break, // last partial line -- drop, the next window reads it whole
             };
-            let text = String::from_utf8_lossy(&buf[cur..line_end]).into_owned();
+            let text = match valid_window {
+                Some(window) => window[cur - start..line_end - start].to_owned(),
+                None => {
+                    self.lossy_line_count.fetch_add(1, Ordering::Relaxed);
+                    String::from_utf8_lossy(&buf[cur..line_end]).into_owned()
+                }
+            };
             lines.push((line_start_abs, text));
             line_breaks += 1;
             line_start_abs += (line_end - cur + 1) as u64; // +1 for the \n
