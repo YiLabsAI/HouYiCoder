@@ -738,16 +738,13 @@ pub fn strip_ansi(s: &str) -> String {
 /// A unique real temp directory for one test run. The server's
 /// add_working_dir canonicalizes + checks is_dir, so the added path must
 /// exist as a directory; a non-existent path is rejected silently (a real
-/// UX gap surfaced by the workspace tests). Uniqueness comes from an
-/// atomic counter, not the wall clock: the clock resolution on some
-/// platforms is coarse enough that two parallel test launches in the same
-/// process can land the same nanosecond stamp and collide on mkdir, which
-/// A per-launch temp dir under the system temp root. Each PTY test gets its
-/// own process under nextest, so a process-local counter would reset to 0 in
-/// every test; combined with the OS recycling a pid, a new test process could
-/// mint the same path as a stale leftover dir from a prior run, and create_dir
-/// (which fails on an existing dir) would panic. The pid + a per-process
-/// monotonic counter cannot.
+/// UX gap surfaced by the workspace tests).
+///
+/// The name carries the process id and a counter within that process: the
+/// counter alone restarts at 0 wherever a new process starts, and the OS
+/// recycles pids, so a name can still land on a stale leftover directory from
+/// an earlier run; create_dir then fails on the existing path and the loop
+/// below takes the next name.
 pub fn fresh_temp_dir(slug: &str) -> PathBuf {
     static SEQ: AtomicU64 = AtomicU64::new(0);
     // Retry on collision: a stale leftover dir from a previous run (same pid
