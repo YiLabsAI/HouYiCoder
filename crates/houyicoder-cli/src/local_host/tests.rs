@@ -38,9 +38,7 @@ use houyicoder_protocol::llm::{
     Usage,
 };
 use houyicoder_service::composition::host_lifecycle::HostLifecycle;
-use houyicoder_service::composition::{
-    BuildRunnerOptions, ProviderFacts, ProviderResolution, build_runner,
-};
+use houyicoder_service::composition::{BuildRunnerOptions, ProviderResolution, build_runner};
 use houyicoder_tui::composition::shared_runtime;
 #[cfg(unix)]
 use tokio::runtime::Builder;
@@ -60,6 +58,8 @@ use crate::session::lock::LockError;
 use crate::session::lock::SessionLock;
 #[cfg(target_os = "macos")]
 use futures::stream::once;
+#[cfg(target_os = "macos")]
+use houyicoder_service::composition::ProviderFacts;
 #[cfg(target_os = "macos")]
 use std::process::Command;
 
