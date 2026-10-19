@@ -27,9 +27,9 @@ use crate::transcript::search_read::{
 
 impl App {
     /// Advance the search view's read: apply a landed outcome, then start the
-    /// requested read. Called from the loop body every pass, not inside the dirty
-    /// gate, so an idle loop still picks the outcome up. Returns true when the
-    /// screen changed, so the caller redraws.
+    /// requested read. Called from the loop body every pass, not inside the
+    /// dirty gate, so an idle loop still picks the outcome up. Returns true
+    /// when the screen changed, so the caller redraws.
     pub(crate) fn pump_search_read(&mut self) -> bool {
         if !self.ui.transcript_view.search_active() {
             // Closed without the exit that would have invalidated it, which a
@@ -40,8 +40,10 @@ impl App {
         }
         let mut landed = self.poll_search_read();
         if self.dispatch_search_read() {
-            // A read with no connection ran where it stood, so its outcome is
-            // already in hand rather than a pass away.
+            // Only a read that ran where it stood has its outcome in hand
+            // already. A read on a worker answers on a later pass, and looking
+            // for it here would let its outcome land inside the pass that
+            // started it.
             landed |= self.poll_search_read();
         }
         landed
@@ -74,7 +76,9 @@ impl App {
     }
 
     /// Start the read the view asked for, when there is room for one. Returns
-    /// whether a read started.
+    /// whether it ran where it stood, so its outcome is already in hand; false
+    /// when no read started, or when the read went to a worker and answers on a
+    /// later pass.
     fn dispatch_search_read(&mut self) -> bool {
         let Some(request) = self.sessions.current.search_reads.take_request() else {
             return false;
@@ -93,6 +97,7 @@ impl App {
         let lease = self.sessions.current.search_reads.dispatch(job.clone(), rx);
         if self.sessions.current.connection.is_some() {
             shared_runtime().spawn_blocking(move || job.run_and_send(source, tx, lease.stop()));
+            false
         } else {
             // A source with no connection is not a live session's log: the
             // compositions that build a session set the source and the
@@ -101,8 +106,8 @@ impl App {
             // read runs where it stands there, and no log whose walk could hold
             // a frame is read this way.
             job.run_and_send(source, tx, lease.stop());
+            true
         }
-        true
     }
 
     /// The read for a request, built from where the view stands now.
