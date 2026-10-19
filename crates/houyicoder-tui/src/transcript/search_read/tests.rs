@@ -387,25 +387,26 @@ fn test_read_failure_is_reported() {
     );
 }
 
-/// A want waits for the budget rather than starting beside the read already
-/// running, and a wanted read that is replaced keeps the reader's latest ask.
+/// A request waits for the budget rather than starting beside the read already
+/// running, and a requested read that is replaced keeps the reader's latest
+/// ask.
 #[test]
-fn test_want_waits_for_budget() {
+fn test_request_waits_for_budget() {
     let mut reads = SearchReads::default();
     let (_tx, rx) = channel::<SearchReadOutcome>();
     drop(reads.dispatch(SearchReadJob::Open, rx));
 
-    reads.want(SearchWant::Step(WalkToward::Older));
+    reads.request(SearchReadRequest::Step(WalkToward::Older));
     assert!(
-        reads.take_want().is_none(),
-        "a read is on file, so the want waits instead of starting a second walk"
+        reads.take_request().is_none(),
+        "a read is on file, so the request waits instead of starting a second walk"
     );
 
     drop(reads.take());
     assert_eq!(
-        reads.take_want(),
-        Some(SearchWant::Step(WalkToward::Older)),
-        "the want is answered once the read it waited for left the file"
+        reads.take_request(),
+        Some(SearchReadRequest::Step(WalkToward::Older)),
+        "the request is answered once the read it waited for left the file"
     );
 }
 
@@ -418,7 +419,7 @@ fn test_closed_view_drops_read() {
     let (_tx, rx) = channel::<SearchReadOutcome>();
     let lease = reads.dispatch(SearchReadJob::Open, rx);
     let stop = Arc::clone(lease.stop());
-    reads.want(SearchWant::Step(WalkToward::Newer));
+    reads.request(SearchReadRequest::Step(WalkToward::Newer));
     let epoch = reads.epoch();
 
     reads.forget_closed_view();
@@ -434,11 +435,11 @@ fn test_closed_view_drops_read() {
     );
 
     drop(lease);
-    reads.want(SearchWant::Step(WalkToward::Newer));
+    reads.request(SearchReadRequest::Step(WalkToward::Newer));
     assert_eq!(
-        reads.take_want(),
-        Some(SearchWant::Step(WalkToward::Newer)),
-        "the budget is free again, and the earlier want is not what is answered"
+        reads.take_request(),
+        Some(SearchReadRequest::Step(WalkToward::Newer)),
+        "the budget is free again, and the earlier request is not what is answered"
     );
 
     let settled = reads.epoch();

@@ -1,13 +1,13 @@
-//! The search view's background reads: start the read the view wants, apply
-//! what comes back, and drop both when the view closes.
+//! The search view's background reads: start the read the view asked for,
+//! apply what comes back, and drop both when the view closes.
 //!
-//! The reader's key press or command records a want; this side turns it into a
-//! read when the shared budget has room, reads it inline where the session is
-//! not connected, and applies the outcome only while the view that asked is
-//! still the view on screen. The coordinates a step runs from are read here at the moment
-//! the read starts, so a want that waited behind a running walk steps from
-//! where the view has arrived rather than from where it stood when the key was
-//! pressed.
+//! The reader's key press or command records a request; this side turns it
+//! into a read when the shared budget has room, reads it inline where the
+//! session is not connected, and applies the outcome only while the view that
+//! asked is still the view on screen. The coordinates a step runs from are
+//! read here at the moment the read starts, so a request that waited behind a
+//! running walk steps from where the view has arrived rather than from where
+//! it stood when the key was pressed.
 //!
 //! Entering the view no longer reads the log before the frame is drawn: the
 //! view opens over the rows on hand, and this read replaces them with the log's
@@ -21,12 +21,13 @@ use crate::app::state::App;
 use crate::composition::shared_runtime;
 use crate::notifications::{NotifKind, Notification};
 use crate::transcript::search_read::{
-    PendingSearchRead, SearchReadJob, SearchReadOutcome, SearchReadPoll, SearchWant, WalkToward,
+    PendingSearchRead, SearchReadJob, SearchReadOutcome, SearchReadPoll, SearchReadRequest,
+    WalkToward,
 };
 
 impl App {
     /// Advance the search view's read: apply a landed outcome, then start the
-    /// wanted read. Called from the loop body every pass, not inside the dirty
+    /// requested read. Called from the loop body every pass, not inside the dirty
     /// gate, so an idle loop still picks the outcome up. Returns true when the
     /// screen changed, so the caller redraws.
     pub(crate) fn pump_search_read(&mut self) -> bool {
@@ -38,7 +39,7 @@ impl App {
             return false;
         }
         let mut landed = self.poll_search_read();
-        if self.dispatch_search_want() {
+        if self.dispatch_search_read() {
             // A read with no connection ran where it stood, so its outcome is
             // already in hand rather than a pass away.
             landed |= self.poll_search_read();
@@ -72,18 +73,18 @@ impl App {
         }
     }
 
-    /// Start the read the view wants, when there is room for one. Returns
+    /// Start the read the view asked for, when there is room for one. Returns
     /// whether a read started.
-    fn dispatch_search_want(&mut self) -> bool {
-        let Some(want) = self.sessions.current.search_reads.take_want() else {
+    fn dispatch_search_read(&mut self) -> bool {
+        let Some(request) = self.sessions.current.search_reads.take_request() else {
             return false;
         };
-        // No source and no view to step from: the want is dropped rather than
-        // left to be examined on every pass for a read that cannot start.
+        // No source and no view to step from: the request is dropped rather
+        // than left to be examined on every pass for a read that cannot start.
         let Some(source) = self.sessions.persistence.snapshot.clone() else {
             return false;
         };
-        let Some(job) = self.search_job_for(want) else {
+        let Some(job) = self.search_job_for(request) else {
             return false;
         };
         // The job goes to the worker and its copy stays on file as the stamp,
@@ -104,11 +105,11 @@ impl App {
         true
     }
 
-    /// The read for a want, built from where the view stands now.
-    fn search_job_for(&self, want: SearchWant) -> Option<SearchReadJob> {
-        match want {
-            SearchWant::Open => Some(SearchReadJob::Open),
-            SearchWant::Step(toward) => {
+    /// The read for a request, built from where the view stands now.
+    fn search_job_for(&self, request: SearchReadRequest) -> Option<SearchReadJob> {
+        match request {
+            SearchReadRequest::Open => Some(SearchReadJob::Open),
+            SearchReadRequest::Step(toward) => {
                 // A step walks window against window, so it needs the view to
                 // still be browsing one.
                 if !self.window_browsing() {

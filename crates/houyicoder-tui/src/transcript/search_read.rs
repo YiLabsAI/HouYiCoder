@@ -1,5 +1,5 @@
-//! The search view's reads of the session log, and the read the view wants
-//! next.
+//! The search view's reads of the session log, and the read the view asked
+//! for next.
 //!
 //! The search view reads the durable log on two occasions: entering a query
 //! reads the log whole when it fits the size threshold and its newest window
@@ -8,15 +8,14 @@
 //! own path, so a large log froze the frame the reader pressed the key on. Both
 //! run here now, where a walk checks its stop signal between windows.
 //!
-//! A read is asked for as a want rather than dispatched on the spot, because
-//! the budget admits one read at a time and a want is how the second press is
-//! held without starting a second walk. The want names the intent -- open, or
+//! A read is requested rather than dispatched on the spot, because the budget
+//! admits one read at a time and a request is how the second press is held
+//! without starting a second walk. The request names the intent -- open, or
 //! step toward older or newer -- and the byte coordinates are read from the
-//! view at the moment the read starts, so a want that waited behind a running
-//! walk steps from where the view has arrived rather than from where it stood
-//! when the key was pressed. The want is not a queue: asking again replaces the
-//! stance that has not started, which bounds a held-down step key at the one
-//! running read plus the one it waits for.
+//! view when the read starts, so a request that waited behind a running walk
+//! steps from where the view has arrived rather than from where it stood when
+//! the key was pressed. Asking again replaces the stance that has not started,
+//! which bounds a held-down step key at one running read plus one waiting.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -43,10 +42,10 @@ pub(crate) enum WalkToward {
 }
 
 /// What the search view is waiting for. The coordinates are not part of it:
-/// they are read from the view when the read starts, so a want that outlives
-/// the window it was asked against still steps from the right place.
+/// they are read from the view when the read starts, so a request that
+/// outlives the window it was made against still steps from the right place.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SearchWant {
+pub(crate) enum SearchReadRequest {
     /// Read the log the way its size calls for at the tail, replacing the rows
     /// the view opened over with the log's own.
     Open,
@@ -210,33 +209,33 @@ impl SearchReadJob {
 /// The search view's reads: the shared lifecycle, plus the read the view is
 /// waiting for.
 ///
-/// The want lives here rather than on the view so that a view which closes
+/// The request lives here rather than on the view so that a view which closes
 /// leaves nothing behind: one invalidation drops the read in flight and the
 /// read not yet started together, and a landing after either is refused by the
 /// generation.
 #[derive(Debug, Default)]
 pub(crate) struct SearchReads {
     reads: ReadLifecycle<SearchReadJob, SearchReadOutcome>,
-    wanted: Option<SearchWant>,
+    requested: Option<SearchReadRequest>,
 }
 
 impl SearchReads {
     /// Ask for a read. It starts on the next pump that finds room, which is
     /// this same call's own pump when no read is running.
-    pub(crate) fn want(&mut self, want: SearchWant) {
-        self.wanted = Some(want);
+    pub(crate) fn request(&mut self, request: SearchReadRequest) {
+        self.requested = Some(request);
     }
 
     /// The read to start now, when there is room for one. None while a read is
     /// on file or a worker still holds the budget's only slot.
-    pub(crate) fn take_want(&mut self) -> Option<SearchWant> {
+    pub(crate) fn take_request(&mut self) -> Option<SearchReadRequest> {
         if !self.reads.may_dispatch() {
             return None;
         }
-        self.wanted.take()
+        self.requested.take()
     }
 
-    /// Drop the read in flight and the read wanted, for a view that is no
+    /// Drop the read in flight and the read requested, for a view that is no
     /// longer open. Nothing happens when neither was ever asked for, so a view
     /// closed for a long while does not move the generation on every pass.
     ///
@@ -244,16 +243,16 @@ impl SearchReads {
     /// fold closes it where it stands, and a walk left running would read the
     /// log for a reader who is no longer searching.
     pub(crate) fn forget_closed_view(&mut self) {
-        if self.reads.holds_pending() || self.wanted.is_some() {
+        if self.reads.holds_pending() || self.requested.is_some() {
             self.invalidate();
         }
     }
 
-    /// Drop the read in flight and the read wanted: the generation moves on, so
-    /// neither can land in the view that follows.
+    /// Drop the read in flight and the read requested: the generation moves
+    /// on, so neither can land in the view that follows.
     pub(crate) fn invalidate(&mut self) {
         self.reads.invalidate();
-        self.wanted = None;
+        self.requested = None;
     }
 
     /// The current generation, which a landing is checked against.

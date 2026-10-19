@@ -14,7 +14,7 @@ use crate::state::App;
 use crate::state::ViewportMode;
 use crate::state::scan_chunk::{PendingScanChunk, SCAN_CHUNK_BUDGET, ScanChunkPoll};
 use crate::transcript::rows::NamedRows;
-use crate::transcript::search_read::{SearchWant, WalkToward};
+use crate::transcript::search_read::{SearchReadRequest, WalkToward};
 use crate::transcript::snapshot::ScanProgress;
 
 mod read_pump;
@@ -72,7 +72,10 @@ impl App {
             self.jump_to_focused_match();
         }
         if self.sessions.persistence.snapshot.is_some() {
-            self.sessions.current.search_reads.want(SearchWant::Open);
+            self.sessions
+                .current
+                .search_reads
+                .request(SearchReadRequest::Open);
             self.pump_search_read();
         }
     }
@@ -198,7 +201,7 @@ impl App {
         self.sessions
             .current
             .search_reads
-            .want(SearchWant::Step(WalkToward::Older));
+            .request(SearchReadRequest::Step(WalkToward::Older));
         self.pump_search_read();
     }
 
@@ -224,7 +227,7 @@ impl App {
         self.sessions
             .current
             .search_reads
-            .want(SearchWant::Step(WalkToward::Newer));
+            .request(SearchReadRequest::Step(WalkToward::Newer));
         self.pump_search_read();
     }
 
