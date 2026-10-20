@@ -117,9 +117,11 @@ impl FetchCache {
     }
 
     /// Keep a page for reuse, dropping the oldest entry when the cache is
-    /// full.
+    /// full. Re-storing a URL already held replaces it in place, so a refresh
+    /// does not evict an unrelated page.
     fn store_page(&mut self, url: &str, content: String, content_type: String) {
-        if self.pages.len() >= CACHE_MAX_ENTRIES
+        if !self.pages.contains_key(url)
+            && self.pages.len() >= CACHE_MAX_ENTRIES
             && let Some(oldest) = self
                 .pages
                 .iter()
@@ -155,9 +157,11 @@ impl FetchCache {
     }
 
     /// Remember that a URL could not be reached, dropping the oldest entry
-    /// when the cache is full.
+    /// when the cache is full. Re-storing a URL already held replaces it in
+    /// place, so a repeated failure does not evict an unrelated entry.
     fn store_failure(&mut self, url: &str, kind: &'static str, message: String) {
-        if self.failures.len() >= FAILURE_MAX_ENTRIES
+        if !self.failures.contains_key(url)
+            && self.failures.len() >= FAILURE_MAX_ENTRIES
             && let Some(oldest) = self
                 .failures
                 .iter()

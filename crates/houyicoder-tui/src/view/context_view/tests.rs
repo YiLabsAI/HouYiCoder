@@ -829,3 +829,36 @@ fn test_suggestion_detail_wraps() {
         );
     }
 }
+
+/// The two boundary widths the wrap budgets against: a zero width means the
+/// pane size is unknown, so rows go out unwrapped and the terminal clips, while
+/// one column still breaks every grapheme onto its own row without overflowing.
+#[test]
+fn test_context_rows_narrow() {
+    let detail = "Largest: AGENTS.md (8.5k), Memory index (36 entries) (2.3k). \
+                  Use /memory to review and prune stale entries.";
+    let view = ContextView {
+        breakdown: stub_breakdown(),
+        drill: ContextDrillDown::default(),
+        suggestions: vec![ContextSuggestion {
+            severity: SuggestionSeverity::Info,
+            title: "Memory files using 14.9k tokens (7%)".to_string(),
+            detail: detail.to_string(),
+            savings_tokens: Some(4_500),
+        }],
+    };
+    let unknown = render_as_rows(&view, 0);
+    assert!(
+        unknown
+            .iter()
+            .any(|(plain, _)| plain.contains("prune stale entries.")),
+        "a zero width leaves the row whole: {unknown:#?}"
+    );
+    let narrow = render_as_rows(&view, 1);
+    for (plain, _) in &narrow {
+        assert!(
+            UnicodeWidthStr::width(plain.as_str()) <= 1,
+            "a one-column pane must not receive a wider row: {plain:?}"
+        );
+    }
+}

@@ -122,6 +122,10 @@ pub fn render_as_rows(view: &ContextView, width: usize) -> Vec<(String, Line<'st
 /// Split a row's leading spaces from its content, so the content can be
 /// wrapped against the width that remains after the indent. Returns the indent
 /// text and the styled spans that follow it.
+///
+/// The block's own producers indent with spaces, so only spaces count here; a
+/// tab would be treated as content, which is the safe direction (it is never
+/// silently dropped).
 fn split_indent(line: Line<'static>) -> (String, Vec<Span<'static>>) {
     let mut head = String::new();
     let mut body: Vec<Span<'static>> = Vec::new();
@@ -153,7 +157,10 @@ fn wrap_rows(rows: Vec<Line<'static>>, width: usize) -> Vec<(String, Line<'stati
     for row in rows {
         let (head, body) = split_indent(row);
         let indent = UnicodeWidthStr::width(head.as_str()).min(width.saturating_sub(1));
-        let budget = width.saturating_sub(indent).max(1);
+        // A zero width means the pane size is unknown, which is the shared
+        // wrap helper's "do not wrap" case: the body goes out unwrapped and
+        // the terminal falls back to its own clipping.
+        let budget = width.saturating_sub(indent);
         for mut line in wrap_styled_line(Line::from(body), budget) {
             let mut spans = vec![Span::raw(" ".repeat(indent))];
             spans.append(&mut line.spans);

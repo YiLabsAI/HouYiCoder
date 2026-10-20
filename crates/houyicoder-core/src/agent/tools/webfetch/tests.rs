@@ -330,21 +330,55 @@ fn test_finish_page_strips_html() {
     assert_eq!(plain["content"], "plain text");
 }
 
-/// The remembered-failure map is bounded like the page cache, so a session
-/// that probes many distinct dead URLs cannot grow it without limit.
+/// The remembered-failure map is bounded like the page cache, and the entry
+/// it drops is the oldest one: a session that probes many distinct dead URLs
+/// cannot grow it without limit, and the newest failure still answers.
 #[test]
-fn test_failure_cache_bounded() {
+fn test_failure_cache_evicts_oldest() {
     let mut cache = FetchCache::default();
-    for i in 0..=FAILURE_MAX_ENTRIES {
-        cache.store_failure(
-            &format!("https://example.com/dead/{i}"),
-            "connect",
-            "refused".to_string(),
+    let base = Instant::now()
+        .checked_sub(Duration::from_secs(60))
+        .unwrap_or_else(Instant::now);
+    for i in 0..FAILURE_MAX_ENTRIES {
+        cache.failures.insert(
+            format!("https://example.com/dead/{i}"),
+            FailedUrl {
+                kind: "connect",
+                message: "refused".to_string(),
+                failed: base + Duration::from_millis(i as u64),
+            },
         );
     }
+    cache.store_failure(
+        "https://example.com/dead/new",
+        "connect",
+        "refused".to_string(),
+    );
     assert_eq!(
         cache.failures.len(),
         FAILURE_MAX_ENTRIES,
         "the failure cache is bounded"
+    );
+    assert!(
+        !cache.failures.contains_key("https://example.com/dead/0"),
+        "the oldest entry is the one dropped"
+    );
+    assert!(
+        cache.failures.contains_key("https://example.com/dead/new"),
+        "the newest failure still answers"
+    );
+    // Re-storing a URL already held replaces it in place: no unrelated entry
+    // is evicted when the map does not grow. The refreshed key is deliberately
+    // not the oldest, so an implementation that evicts before inserting shows
+    // up as the oldest survivor going missing.
+    cache.store_failure(
+        "https://example.com/dead/new",
+        "connect",
+        "refused again".to_string(),
+    );
+    assert_eq!(cache.failures.len(), FAILURE_MAX_ENTRIES);
+    assert!(
+        cache.failures.contains_key("https://example.com/dead/1"),
+        "a refresh must not evict an unrelated entry"
     );
 }
