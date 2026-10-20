@@ -520,6 +520,56 @@ const TIMELINE_SUMMARY_MIN_W: usize = 32;
 /// how long it took, and how it ended.
 const TIMELINE_MIN_W: usize = 40;
 
+/// The widest the Gantt axis may grow. Beyond this the bar stops adding
+/// resolution the eye cannot read and the width goes to the name and summary
+/// columns, which is where the reader looks first.
+pub(crate) const TIMELINE_BAR_MAX_W: usize = 24;
+
+/// The short name for one model, found by its id rather than by its position
+/// in the call sequence: a turn can call the same model more than once, so a
+/// call ordinal does not index the distinct-model list.
+pub(crate) fn short_model_name(model: &str, models: &[String]) -> String {
+    let short = short_model_names(models);
+    models
+        .iter()
+        .position(|m| m == model)
+        .map(|i| short[i].clone())
+        .unwrap_or_else(|| model.to_string())
+}
+
+/// The shortest name that still tells each model apart from the others in the
+/// same view. The shared prefix is dropped only at a separator boundary, so a
+/// set from one vendor shortens to its distinguishing tail while a mixed set
+/// (a different vendor in the same turn) keeps full names.
+pub(crate) fn short_model_names(models: &[String]) -> Vec<String> {
+    if models.len() < 2 {
+        return models.to_vec();
+    }
+    let mut common = models[0].clone();
+    for model in &models[1..] {
+        common = common_prefix(&common, model).to_string();
+    }
+    let boundary = common.rfind(['-', '.', '/']).map(|i| i + 1).unwrap_or(0);
+    let shorts: Vec<String> = models.iter().map(|m| m[boundary..].to_string()).collect();
+    let ambiguous = shorts.iter().any(String::is_empty)
+        || shorts
+            .iter()
+            .enumerate()
+            .any(|(i, s)| shorts.iter().skip(i + 1).any(|other| other == s));
+    if ambiguous { models.to_vec() } else { shorts }
+}
+
+/// The longest prefix two model ids share.
+fn common_prefix<'a>(a: &'a str, b: &str) -> &'a str {
+    let n = a
+        .chars()
+        .zip(b.chars())
+        .take_while(|(left, right)| left == right)
+        .count();
+    let end = a.char_indices().nth(n).map(|(i, _)| i).unwrap_or(a.len());
+    &a[..end]
+}
+
 /// The outcome glyph a row ends with, and the space before it.
 const TIMELINE_MARK_W: usize = 2;
 

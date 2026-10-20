@@ -222,3 +222,36 @@ fn test_record_reopens_at_top() {
         "the body opens at its first line: {reopened:?}"
     );
 }
+
+/// The record detail states which model call the record is, so the row can
+/// keep its name column free of a competing ordinal.
+#[test]
+fn test_detail_names_model_call() {
+    let mut first = record_of(TrajectoryRecordKind::Model, None);
+    first.name = Some("deepseek-v4-pro-0813".into());
+    first.ordinal = 1;
+    let mut second = record_of(TrajectoryRecordKind::Model, None);
+    second.name = Some("deepseek-v4.1-flash".into());
+    second.ordinal = 2;
+    let mut turn = turn(1, "ask");
+    turn.models = vec![
+        "deepseek-v4-pro-0813".to_string(),
+        "deepseek-v4.1-flash".to_string(),
+    ];
+    let detail = detail_of_all(vec![first, second]);
+    let (header, _, _, _) =
+        detail::draw_event_detail(&turn, &detail, 1, Rect::new(0, 0, 140, 20), 0);
+    let text: String = header
+        .iter()
+        .flat_map(|l| l.spans.iter())
+        .map(|s| s.content.as_ref())
+        .collect();
+    assert!(
+        text.contains("model call 2 of 2"),
+        "the detail states the model-call ordinal: {text:?}"
+    );
+    assert!(
+        text.contains("v4.1-flash"),
+        "the header names the shortened model: {text:?}"
+    );
+}

@@ -266,6 +266,7 @@ fn test_level2_renders_record_detail() {
             usage: None,
             timing: None,
             retries: 0,
+            model_switch_from: None,
         }
     }
     let turn = TrajectoryTurn {
@@ -385,6 +386,7 @@ fn test_event_detail_redacts_secrets() {
         usage: None,
         timing: None,
         retries: 0,
+        model_switch_from: None,
     }]);
     let (_, body, _, _) = detail::draw_event_detail(&turn, &detail, 0, Rect::ZERO, 0);
     let text = body
@@ -1367,8 +1369,8 @@ fn test_turn_detail_latency_split() {
     assert!(text.contains("TTFT 210ms"), "the wait is shown: {text}");
     assert!(text.contains("975.6 tok/s"), "and the rate: {text}");
     assert!(
-        text.contains("1 qwen3.7"),
-        "the call is numbered in the name column: {text}"
+        text.contains("qwen3.7-max"),
+        "the name column names the model without a competing ordinal: {text}"
     );
 }
 

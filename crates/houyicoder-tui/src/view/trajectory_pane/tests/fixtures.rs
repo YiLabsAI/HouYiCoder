@@ -49,6 +49,7 @@ pub(super) fn record_of(kind: TrajectoryRecordKind, output: Option<&str>) -> Tra
         usage: None,
         timing: None,
         retries: 0,
+        model_switch_from: None,
     }
 }
 

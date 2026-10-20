@@ -1883,8 +1883,8 @@ fn test_intra_turn_switch_stated() {
     assert!(
         records.iter().any(|r| r.kind == TrajectoryRecordKind::Model
             && r.name.as_deref() == Some("flash")
-            && r.summary.contains("model switch: pro -> flash")),
-        "the switching call does not state the switch: {records:#?}"
+            && r.model_switch_from.as_deref() == Some("pro")),
+        "the switching call does not carry the switch: {records:#?}"
     );
     assert!(
         records.iter().any(|r| r.kind == TrajectoryRecordKind::Cache
@@ -1943,7 +1943,8 @@ fn test_switch_states_empty_summary() {
         .find(|r| r.kind == TrajectoryRecordKind::Model && r.name.as_deref() == Some("flash"))
         .unwrap_or_else(|| panic!("no flash call record: {records:#?}"));
     assert_eq!(
-        switched.summary, "model switch: pro -> flash",
-        "the switch is the row's whole summary when the call said nothing else"
+        switched.model_switch_from.as_deref(),
+        Some("pro"),
+        "the switch is stated on the call that made it"
     );
 }

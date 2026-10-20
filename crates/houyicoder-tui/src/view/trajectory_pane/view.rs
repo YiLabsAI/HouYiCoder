@@ -38,6 +38,10 @@ pub struct TrajectoryRecord {
     pub timing: Option<EventTiming>,
     /// Model calls only: length-recovery retries folded into this call.
     pub retries: usize,
+    /// The model this call switched away from, when it did. Kept as a field
+    /// rather than folded into the summary so a reply that later replaces the
+    /// summary cannot erase the switch.
+    pub model_switch_from: Option<String>,
 }
 
 #[derive(Clone, PartialEq, Debug)]

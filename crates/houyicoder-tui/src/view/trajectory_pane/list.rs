@@ -149,7 +149,8 @@ fn thinking_cell(t: &TrajectoryTurn) -> String {
 /// plain truncation of the joined ids would spend the whole budget on the
 /// first long id and hide the switch the column exists to report.
 fn model_cell(t: &TrajectoryTurn, budget: usize) -> String {
-    let Some((first, rest)) = t.models.split_first() else {
+    let short = short_model_names(&t.models);
+    let Some((first, rest)) = short.split_first() else {
         return String::new();
     };
     if rest.is_empty() {
@@ -245,7 +246,10 @@ impl TurnColumns {
             } else {
                 None
             },
-            model: width >= MODEL_MIN_WIDTH && show_per_turn_model,
+            // A turn that used more than one model keeps the column at the
+            // thinking tier too: hiding it on a common 130-column terminal
+            // hid the switch itself, which is the fact the column exists for.
+            model: show_per_turn_model && (width >= MODEL_MIN_WIDTH || width >= THINKING_MIN_WIDTH),
             calls: if width >= CALLS_MIN_WIDTH {
                 filled(calls_cell)
             } else {

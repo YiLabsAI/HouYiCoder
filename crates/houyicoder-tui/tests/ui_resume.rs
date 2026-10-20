@@ -1589,3 +1589,90 @@ fn test_history_loads_without_keys() {
     );
     drop(s);
 }
+
+/// A turn that switched models keeps that fact visible on a common terminal.
+/// The list names the second model as a count and the drill states the switch,
+/// so a reader does not have to widen the window to 148 columns to learn that
+/// the turn ran on two models.
+#[test]
+#[ignore]
+fn test_trajectory_switch_visible_narrow() {
+    let sessions_dir = fresh_temp_dir("sessions-traj-switch");
+    let sid = "56565656-5656-5656-5656-565656565656";
+    let usage = |turn: u32, model: &str| SessionEvent::TurnUsage {
+        turn,
+        call_in_turn: 1,
+        input_tokens: 100,
+        output_tokens: 10,
+        cache_read_input_tokens: 90,
+        cache_write_input_tokens: 0,
+        reasoning_tokens: 0,
+        model: model.to_string(),
+        recovery: false,
+        effort: None,
+        input_reported: true,
+        cache_read_reported: true,
+        cache_write_reported: false,
+    };
+    let events = vec![
+        SessionEvent::UserInput {
+            text: "switched turn".into(),
+        },
+        SessionEvent::TurnStarted {
+            turn: 1,
+            call_in_turn: 0,
+        },
+        SessionEvent::AssistantMessage {
+            text: "first reply".into(),
+            thinking: None,
+        },
+        usage(1, "deepseek-v4-pro-0813"),
+        SessionEvent::TurnStarted {
+            turn: 2,
+            call_in_turn: 0,
+        },
+        SessionEvent::AssistantMessage {
+            text: "second reply".into(),
+            thinking: None,
+        },
+        usage(2, "deepseek-v4.1-flash"),
+        SessionEvent::CacheBreak {
+            cause: "model-switch".into(),
+        },
+        SessionEvent::RunCompleted { ms: Some(1_000) },
+    ];
+    common::seed_session_events(&sessions_dir, sid, "deepseek-v4-pro-0813", &events);
+    let mut s = PtySession::launch_with_sessions_dir(
+        None,
+        None,
+        None,
+        None,
+        &["--resume".to_string(), sid.to_string()],
+        sessions_dir.clone(),
+    );
+    assert!(
+        s.wait_for("let's build, or / for commands", RENDER_TIMEOUT),
+        "working screen after sid resume:\n{}",
+        s.output()
+    );
+    s.resize(24, 130);
+    s.clear_output();
+    run_slash_command(&mut s, "trajectory");
+    assert!(
+        s.wait_for_plain("2 models", RENDER_TIMEOUT),
+        "the header must name both models:\n{}",
+        s.output_plain()
+    );
+    assert!(
+        s.wait_for_plain("+1", RENDER_TIMEOUT),
+        "the turn row must keep the switch at 130 columns:\n{}",
+        s.output_plain()
+    );
+    s.clear_output();
+    s.send_key(&Key::Enter);
+    assert!(
+        s.wait_for_plain("-> v4.1-flash", RENDER_TIMEOUT),
+        "the drill must state the switch:\n{}",
+        s.output_plain()
+    );
+}

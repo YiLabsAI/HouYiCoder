@@ -100,7 +100,7 @@ pub(super) fn draw_turn_detail(
             // the timeline rather than the numbers.
             let bar_area = (area.width as usize)
                 .saturating_sub(TIMELINE_PREFIX_W + TIMELINE_SUFFIX_W + TIMELINE_SUMMARY_MIN_W)
-                .max(8);
+                .clamp(8, TIMELINE_BAR_MAX_W);
             // No floor: on a narrow terminal the summary is what gives way, so
             // the row still ends with the duration and the outcome glyph.
             let summary_w = (area.width as usize)
@@ -118,7 +118,14 @@ pub(super) fn draw_turn_detail(
                         body.push(if compact {
                             compact_record_row(ev, i == clamped, area.width as usize)
                         } else {
-                            record_row(ev, i == clamped, turn.duration_ms, bar_area, summary_w)
+                            record_row(
+                                ev,
+                                i == clamped,
+                                turn.duration_ms,
+                                bar_area,
+                                summary_w,
+                                &turn.models,
+                            )
                         });
                     }
                 }
@@ -286,37 +293,40 @@ fn record_row(
     turn_ms: u64,
     bar_area: usize,
     summary_w: usize,
+    turn_models: &[String],
 ) -> Line<'static> {
     let prefix = if selected { "▸ " } else { "  " };
     let bar = positioned_bar(ev.start_ms, ev.duration_ms, turn_ms, bar_area);
     let bc = outcome_color(ev.outcome);
     let mark = ev.outcome.glyph();
-    // The name column carries what the record acted on: the tool it called, the
-    // agent it delegated to, the model it asked, prefixed by the call's ordinal
-    // inside the turn.
+    // The name column carries what the record acted on: the tool it called,
+    // the agent it delegated to, the model it asked. A model id is shortened
+    // against the turn's own set so two models stay distinguishable; the call
+    // ordinal lives in the record detail, not in this column.
     let name = ev.name.as_deref().unwrap_or("");
-    let label = if ev.ordinal > 0 {
-        format!("{} {name}", ev.ordinal)
+    let label = if ev.kind == TrajectoryRecordKind::Model {
+        short_model_name(name, turn_models)
     } else {
         name.to_string()
     };
     // A model call states its own measured split: the wait for the first token
     // and the decode rate of the tokens it produced. A part the log did not
     // record stays absent.
+    let mut compact_timing = String::new();
     let timing = match &ev.timing {
         Some(t) if ev.kind == TrajectoryRecordKind::Model => {
             let mut parts = Vec::new();
             if let Some(ttft) = t.ttft_ms {
                 parts.push(format!("TTFT {}", format_span_ms(ttft)));
+                compact_timing = format!(" · TTFT {}", format_span_ms(ttft));
             }
             if let (Some(decode_ms), Some(out)) =
                 (t.decode_ms, ev.usage.as_ref().and_then(|u| u.output))
                 && decode_ms > 0
             {
-                parts.push(format!(
-                    "{:.1} tok/s",
-                    out as f64 / (decode_ms as f64 / 1000.0)
-                ));
+                let rate = format!("{:.1} tok/s", out as f64 / (decode_ms as f64 / 1000.0));
+                parts.push(rate.clone());
+                compact_timing.push_str(&format!(" · {rate}"));
             }
             // The split the provider's own blocks measured: how long the call
             // spent thinking and how long it spent producing output. A span the
@@ -339,13 +349,24 @@ fn record_row(
     // what is left, so a row never runs past the width it is drawn in. On a
     // terminal too narrow for both, the suffix is what goes: the summary is
     // what the row is about.
+    // The measured suffix gives way in tiers: the full split, then the two
+    // figures a reader scans for, then the wait alone. Clearing it outright
+    // hid time-to-first-token on every call that also reported reasoning.
     let timing = if UnicodeWidthStr::width(timing.as_str()) < summary_w {
         timing
+    } else if !compact_timing.is_empty()
+        && UnicodeWidthStr::width(compact_timing.as_str()) < summary_w
+    {
+        compact_timing
     } else {
         String::new()
     };
     let summary_w = summary_w.saturating_sub(UnicodeWidthStr::width(timing.as_str()));
-    let summary = format!("{}{}", truncate_width(&ev.summary, summary_w), timing);
+    let summary_text = match &ev.model_switch_from {
+        Some(prior) => format!("[model: {prior} -> {label}] {}", ev.summary),
+        None => ev.summary.clone(),
+    };
+    let summary = format!("{}{}", truncate_width(&summary_text, summary_w), timing);
     line(vec![
         sp(prefix, Color::Cyan),
         sp(format!("{:7}", ev.kind.label()), Color::DarkGray),
@@ -379,7 +400,7 @@ fn record_row(
 /// body rather than a cursor: the full thinking text, tool input, and tool
 /// output, wrapped to the pane instead of cut off at its right edge.
 pub(super) fn draw_event_detail(
-    _turn: &TrajectoryTurn,
+    turn: &TrajectoryTurn,
     detail: &TrajectoryDetailView,
     cursor: usize,
     area: Rect,
@@ -434,12 +455,25 @@ pub(super) fn draw_event_detail(
     let idx = cursor.min(detail.records.len().saturating_sub(1));
     let mark = ev.outcome.glyph();
     let mc = outcome_color(ev.outcome);
-    let name = match (ev.ordinal, ev.name.as_deref()) {
-        (0, Some(n)) => format!(" {n}"),
-        (0, None) => String::new(),
-        (ordinal, Some(n)) => format!(" {ordinal} {n}"),
-        (ordinal, None) => format!(" {ordinal}"),
+    let name = if ev.kind == TrajectoryRecordKind::Model {
+        let model = ev.name.as_deref().unwrap_or("");
+        format!(" {}", short_model_name(model, &turn.models))
+    } else {
+        ev.name
+            .as_deref()
+            .map(|n| format!(" {n}"))
+            .unwrap_or_default()
     };
+    // The model-call ordinal belongs to the record's own identity, so it is
+    // stated here rather than competing with the row's reading order.
+    let model_calls: Vec<usize> = detail
+        .records
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| r.kind == TrajectoryRecordKind::Model)
+        .map(|(i, _)| i)
+        .collect();
+    let call_of = model_calls.iter().position(|i| *i == idx).map(|p| p + 1);
     let mut ev_head = vec![
         sp(format!(" {}{} ", ev.kind.label(), name), Color::Cyan),
         sp(truncate_width(&ev.summary, 48), Color::White),
@@ -457,6 +491,16 @@ pub(super) fn draw_event_detail(
         format!("  · Record {} of {}", idx + 1, detail.records.len()),
         Color::DarkGray,
     ));
+    if let Some(n) = call_of {
+        // A detail read can stop at a byte budget, so the loaded records may be
+        // the turn's beginning. The total is then a floor, not the count.
+        let total = if detail.truncated {
+            format!("{}+", model_calls.len())
+        } else {
+            model_calls.len().to_string()
+        };
+        ev_head.push(sp(format!(" · model call {n} of {total}"), Color::DarkGray));
+    }
     header.push(line(ev_head));
     header.push(blank());
     let body = event_body(ev, area.width);

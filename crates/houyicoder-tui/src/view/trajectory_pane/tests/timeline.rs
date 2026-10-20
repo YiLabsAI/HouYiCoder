@@ -2,7 +2,7 @@
 //! what the ruler above them says.
 
 use super::super::*;
-use super::fixtures::{detail_of, detail_of_all, lines_text, record_of, turn};
+use super::fixtures::{detail_of, detail_of_all, lines_text, record_of, turn, view};
 use crate::composition::app;
 use std::slice::from_ref;
 
@@ -225,4 +225,97 @@ fn test_compact_row_keeps_marks() {
             assert!(line.width() <= 30, "the row fits: {rows:?}");
         }
     }
+}
+
+/// The axis stops growing at its cap: a wide terminal spends the extra columns
+/// on the name and summary, so a model row keeps its wait and rate instead of
+/// losing them to a bar the eye cannot read.
+#[test]
+fn test_timeline_bar_is_capped() {
+    let mut record = record_of(TrajectoryRecordKind::Model, None);
+    record.start_ms = 0;
+    record.duration_ms = 1000;
+    record.timing = Some(EventTiming {
+        total_ms: 1000,
+        ttft_ms: Some(210),
+        decode_ms: Some(600),
+        reasoning_ms: Some(300),
+        response_ms: Some(400),
+    });
+    record.usage = Some(EventUsage {
+        output: Some(600),
+        ..EventUsage::default()
+    });
+    let mut turn = turn(1, "ask");
+    turn.duration_ms = 1000;
+    let detail = detail_of(record);
+    let app = app();
+    let (_, body, _, _) =
+        detail::draw_turn_detail(&turn, &detail, 0, Rect::new(0, 0, 200, 20), &app);
+    let text: String = body
+        .iter()
+        .flat_map(|l| l.spans.iter())
+        .map(|s| s.content.as_ref())
+        .collect();
+    assert_eq!(
+        text.matches('█').count(),
+        TIMELINE_BAR_MAX_W,
+        "the bar stops at its cap: {text:?}"
+    );
+    assert!(text.contains("TTFT 210ms"), "the wait survives: {text}");
+}
+
+/// At a common 130-column terminal a turn that used two models still shows the
+/// model column; hiding it below 148 columns hid the switch itself.
+#[test]
+fn test_model_column_survives_narrow() {
+    let turn = TrajectoryTurn {
+        models: vec![
+            "deepseek-v4-pro-0813".to_string(),
+            "deepseek-v4.1-flash".to_string(),
+        ],
+        tokens_in: Some(1_200),
+        tokens_out: Some(500),
+        duration_ms: 100,
+        ..turn(1, "switched")
+    };
+    let view = TrajectoryView {
+        models_used: 2,
+        ..view(vec![TrajectoryRow::Turn(turn)])
+    };
+    let (_, body, _, _) = list::draw_turn_list(&view, 0, Rect::new(0, 0, 130, 10));
+    let text: String = body[0].spans.iter().map(|s| s.content.as_ref()).collect();
+    assert!(
+        text.contains("v4-pro-0813") && text.contains("+1"),
+        "the switch stays visible at 130 columns: {text:?}"
+    );
+}
+
+/// The switch marker leads the row and survives a reply: it is a field on the
+/// record, rendered where the row is drawn, not text folded into the summary.
+#[test]
+fn test_row_states_switch_marker() {
+    let mut record = record_of(TrajectoryRecordKind::Model, None);
+    record.name = Some("deepseek-v4.1-flash".into());
+    record.ordinal = 2;
+    record.model_switch_from = Some("deepseek-v4-pro-0813".into());
+    let mut turn = turn(1, "ask");
+    turn.duration_ms = 1000;
+    turn.models = vec![
+        "deepseek-v4-pro-0813".to_string(),
+        "deepseek-v4.1-flash".to_string(),
+    ];
+    let detail = detail_of(record);
+    let app = app();
+    let (_, body, _, _) =
+        detail::draw_turn_detail(&turn, &detail, 0, Rect::new(0, 0, 140, 20), &app);
+    let text: String = body
+        .iter()
+        .flat_map(|l| l.spans.iter())
+        .map(|s| s.content.as_ref())
+        .collect();
+    assert!(
+        text.contains("[model: deepseek-v4-pro-0813 -> v4.1-flash]"),
+        "the row leads with the switch: {text:?}"
+    );
 }

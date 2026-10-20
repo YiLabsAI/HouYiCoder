@@ -416,3 +416,30 @@ fn test_model_cell_names_switch() {
         "the cell still joins every id and truncates: {text}"
     );
 }
+
+/// Model names shorten against the set they appear in: a same-vendor pair
+/// keeps its distinguishing tail, and a mixed-vendor pair keeps full names
+/// because they share no boundary-safe prefix.
+#[test]
+fn test_model_names_shorten() {
+    let deepseek = vec![
+        "deepseek-v4-pro-0813".to_string(),
+        "deepseek-v4.1-flash".to_string(),
+    ];
+    assert_eq!(
+        short_model_names(&deepseek),
+        vec!["v4-pro-0813", "v4.1-flash"]
+    );
+    let mixed = vec![
+        "deepseek-v4-pro-0813".to_string(),
+        "qwen3.8-max".to_string(),
+    ];
+    assert_eq!(short_model_names(&mixed), mixed);
+    let same = vec!["qwen3.8-max".to_string(), "qwen3.8-flash".to_string()];
+    assert_eq!(short_model_names(&same), vec!["max", "flash"]);
+    assert_eq!(
+        short_model_name("not-in-the-set", &deepseek),
+        "not-in-the-set",
+        "an unknown model keeps its full name"
+    );
+}

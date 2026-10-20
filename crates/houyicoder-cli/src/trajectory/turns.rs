@@ -223,6 +223,7 @@ impl TurnBuilder {
             usage: None,
             timing: None,
             retries: 0,
+            model_switch_from: None,
         }
     }
 
@@ -375,12 +376,7 @@ impl TurnBuilder {
         if record.name.is_none() && !ev_model.is_empty() {
             record.name = Some(ev_model.clone());
             if let Some(prior) = prior_model.filter(|prior| prior != ev_model) {
-                let marker = format!("model switch: {prior} -> {ev_model}");
-                if record.summary.is_empty() {
-                    record.summary = marker;
-                } else {
-                    record.summary.push_str(&format!(" \u{00b7} {marker}"));
-                }
+                record.model_switch_from = Some(prior);
             }
         }
         // A provider retry reuses this record, so its usage accumulates the
