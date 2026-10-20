@@ -21,18 +21,55 @@ use houyicoder_async::PFut;
 use serde_json::{Value, json};
 
 use super::{Tool, ToolCtx, ToolError};
+
+mod cache;
+mod target;
+
+#[cfg(test)]
+pub(crate) use cache::CACHE_MAX_ENTRIES;
+#[cfg(test)]
+pub(crate) use cache::FAILURE_MAX_ENTRIES;
+#[cfg(test)]
+pub(crate) use cache::FAILURE_TTL;
+#[cfg(test)]
+pub(crate) use cache::FailedUrl;
+pub(crate) use cache::FetchCache;
+#[cfg(test)]
+pub(crate) use cache::PAGE_TTL;
 use reqwest::Client;
 use reqwest::redirect::Policy;
-use std::collections::HashMap;
-use std::io::Error;
-use std::net::IpAddr;
+#[cfg(test)]
+pub(crate) use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(test)]
+pub(crate) use std::time::Instant;
+pub(crate) use target::FetchError;
+#[cfg(test)]
+pub(crate) use target::Hop;
+#[cfg(test)]
+pub(crate) use target::MAX_REDIRECTS;
+#[cfg(test)]
+pub(crate) use target::ensure_public_target;
+pub(crate) use target::fetch_following;
+#[cfg(test)]
+pub(crate) use target::is_private_host;
+#[cfg(test)]
+pub(crate) use target::is_private_ip;
+#[cfg(test)]
+pub(crate) use target::redirect_hop;
+pub(crate) use target::upgrade_to_https;
+pub(crate) use target::validate_url;
 use tokio::net::lookup_host;
 
 /// Maximum URL length accepted by the tool. Guards against oversized URLs
 /// that may be crafted for data exfiltration.
 const MAX_URL_LENGTH: usize = 2_000;
+
+/// Maximum bytes of a response body the tool will read. A page larger than
+/// this is not a page a model turn can use, and reading it whole first would
+/// spend the memory before the truncation ran.
+const MAX_BODY_BYTES: usize = 10 * 1024 * 1024;
 
 /// Maximum characters of extracted text returned to the model. Bounds
 /// context consumption so a single fetch cannot overflow the window. Uses
@@ -55,158 +92,6 @@ const CONNECT_TIMEOUT_SECS: u64 = 10;
 /// between two tool calls in one turn instead of paying a fresh handshake.
 const TCP_KEEPALIVE_SECS: u64 = 30;
 
-/// How long a fetched page stays reusable for the same URL.
-const PAGE_TTL: Duration = Duration::from_secs(15 * 60);
-
-/// How long a URL that just failed to connect stays answered from that
-/// failure. Short on purpose: a transient network fault clears, and the tool
-/// must not keep a host unreachable after it recovers.
-const FAILURE_TTL: Duration = Duration::from_secs(60);
-
-/// Upper bound on cached pages, so a long session cannot grow this cache
-/// without limit. The oldest page is dropped when the bound is reached.
-const CACHE_MAX_ENTRIES: usize = 32;
-
-/// Upper bound on remembered connection failures, for the same reason: a
-/// session that probes many distinct dead URLs must not grow this map without
-/// limit. The oldest failure is dropped when the bound is reached.
-const FAILURE_MAX_ENTRIES: usize = 32;
-
-/// Maximum bytes of a response body the tool will read. A page larger than
-/// this is not a page a model turn can use, and reading it whole first would
-/// spend the memory before the truncation ran.
-const MAX_BODY_BYTES: usize = 10 * 1024 * 1024;
-
-/// Maximum redirect hops followed. Guards against redirect loops. A hop may
-/// cross hosts, but every target still passes the same URL check, so a
-/// redirect cannot reach a private address the first hop was denied.
-const MAX_REDIRECTS: usize = 10;
-
-/// A page fetched once, kept for a short reuse window.
-struct CachedPage {
-    content: String,
-    content_type: String,
-    fetched: Instant,
-}
-
-/// A URL whose connection attempt failed, kept only long enough that a blind
-/// retry in the same turn does not pay the timeout again.
-struct FailedUrl {
-    kind: &'static str,
-    message: String,
-    failed: Instant,
-}
-
-/// Per-tool reuse state: successful pages and recent connection failures,
-/// both keyed by the URL as requested (before the HTTPS upgrade), so the key
-/// matches what a caller asks for.
-#[derive(Default)]
-struct FetchCache {
-    pages: HashMap<String, CachedPage>,
-    failures: HashMap<String, FailedUrl>,
-}
-
-impl FetchCache {
-    /// A page still inside its reuse window.
-    fn page(&mut self, url: &str) -> Option<(String, String)> {
-        self.page_at(url, Instant::now())
-    }
-
-    /// A page still inside its reuse window at a stated instant. The instant
-    /// is a parameter so a test can state an expired entry instead of waiting
-    /// out the window.
-    fn page_at(&mut self, url: &str, now: Instant) -> Option<(String, String)> {
-        let page = self.pages.get(url)?;
-        if now.saturating_duration_since(page.fetched) >= PAGE_TTL {
-            self.pages.remove(url);
-            return None;
-        }
-        Some((page.content.clone(), page.content_type.clone()))
-    }
-
-    /// Keep a page for reuse, dropping the oldest entry when the cache is
-    /// full. Re-storing a URL already held replaces it in place, so a refresh
-    /// does not evict an unrelated page.
-    fn store_page(&mut self, url: &str, content: String, content_type: String) {
-        if !self.pages.contains_key(url)
-            && self.pages.len() >= CACHE_MAX_ENTRIES
-            && let Some(oldest) = self
-                .pages
-                .iter()
-                .min_by_key(|(_, page)| page.fetched)
-                .map(|(key, _)| key.clone())
-        {
-            self.pages.remove(&oldest);
-        }
-        self.pages.insert(
-            url.to_string(),
-            CachedPage {
-                content,
-                content_type,
-                fetched: Instant::now(),
-            },
-        );
-    }
-
-    /// A connection failure still inside its short window.
-    fn failure(&mut self, url: &str) -> Option<(&'static str, String)> {
-        self.failure_at(url, Instant::now())
-    }
-
-    /// A connection failure still inside its short window at a stated instant,
-    /// for the same reason the page check takes one.
-    fn failure_at(&mut self, url: &str, now: Instant) -> Option<(&'static str, String)> {
-        let failure = self.failures.get(url)?;
-        if now.saturating_duration_since(failure.failed) >= FAILURE_TTL {
-            self.failures.remove(url);
-            return None;
-        }
-        Some((failure.kind, failure.message.clone()))
-    }
-
-    /// Remember that a URL could not be reached, dropping the oldest entry
-    /// when the cache is full. Re-storing a URL already held replaces it in
-    /// place, so a repeated failure does not evict an unrelated entry.
-    fn store_failure(&mut self, url: &str, kind: &'static str, message: String) {
-        if !self.failures.contains_key(url)
-            && self.failures.len() >= FAILURE_MAX_ENTRIES
-            && let Some(oldest) = self
-                .failures
-                .iter()
-                .min_by_key(|(_, failure)| failure.failed)
-                .map(|(key, _)| key.clone())
-        {
-            self.failures.remove(&oldest);
-        }
-        self.failures.insert(
-            url.to_string(),
-            FailedUrl {
-                kind,
-                message,
-                failed: Instant::now(),
-            },
-        );
-    }
-}
-
-/// Whether a redirect hop may be followed: the hop count is under the cap and
-/// the target passes the same literal URL rule as the first request. The
-/// resolved-address screen runs on the first target only, because the hop is
-/// resolved inside the client; a redirect to a name that resolves inward is
-/// not excluded here.
-fn redirect_allowed(previous: usize, target: &str) -> Result<(), &'static str> {
-    if previous >= MAX_REDIRECTS {
-        Err("too many redirects")
-    } else if !validate_url(target) {
-        Err("redirect target rejected")
-    } else {
-        Ok(())
-    }
-}
-
-/// The stage a fetch failed in, as the model sees it. A transport failure
-/// before any response and a response the server marked as an error are
-/// different problems, and the model reacts to them differently.
 fn classify_fetch_error(error: &reqwest::Error) -> &'static str {
     classify_failure(error.is_timeout(), error.is_connect(), &error.to_string())
 }
@@ -323,6 +208,17 @@ fn append_chunk(body: &mut Vec<u8>, chunk: &[u8]) -> Result<(), Value> {
     Ok(())
 }
 
+/// The payload for a URL that failed a moment ago: the stage, the fact that
+/// it is remembered, and the action that helps — change source.
+fn cached_failure_payload(kind: &'static str, message: &str) -> Value {
+    let mut payload = fetch_failure_payload(kind, message);
+    payload["cached_failure"] = json!(true);
+    payload["hint"] = json!(
+        "this url failed to connect a moment ago; try a different source rather than retrying it"
+    );
+    payload
+}
+
 /// The payload for a body that stopped arriving.
 fn read_error(message: &str) -> Value {
     json!({
@@ -377,12 +273,9 @@ pub struct WebFetchTool {
 impl WebFetchTool {
     pub fn new() -> Self {
         let client = Client::builder()
-            .redirect(Policy::custom(|attempt| {
-                match redirect_allowed(attempt.previous().len(), attempt.url().as_str()) {
-                    Ok(()) => attempt.follow(),
-                    Err(reason) => attempt.error(Error::other(reason)),
-                }
-            }))
+            // Redirects are followed here so every hop passes the resolved
+            // address screen, which the client's own policy cannot do.
+            .redirect(Policy::none())
             .timeout(Duration::from_secs(FETCH_TIMEOUT_SECS))
             .connect_timeout(Duration::from_secs(CONNECT_TIMEOUT_SECS))
             .tcp_keepalive(Duration::from_secs(TCP_KEEPALIVE_SECS))
@@ -457,19 +350,7 @@ impl Tool for WebFetchTool {
                 return Ok(cached_failure_payload(kind, &message));
             }
 
-            // A public name can resolve to a private address; the literal
-            // check cannot see that, so the first target is screened by its
-            // resolved addresses before the request is sent.
-            if let Err(payload) = ensure_public_target(&fetch_url).await {
-                return Ok(payload);
-            }
-
-            let result = client
-                .get(&fetch_url)
-                .header("Accept", "text/markdown, text/html, */*")
-                .header("User-Agent", "webfetch/0.1")
-                .send()
-                .await;
+            let result = fetch_following(&client, &fetch_url).await;
 
             match result {
                 Ok(resp) => {
@@ -499,7 +380,8 @@ impl Tool for WebFetchTool {
 
                     Ok(finish_page(&cache, url, prompt, body, content_type))
                 }
-                Err(e) => {
+                Err(FetchError::Refused(payload)) => Ok(payload),
+                Err(FetchError::Transport(e)) => {
                     let kind = classify_fetch_error(&e);
                     let message = e.to_string();
                     // Only a transport failure is worth remembering: a
@@ -525,146 +407,6 @@ impl Tool for WebFetchTool {
     }
 }
 
-/// Validate a URL string. Rejects oversized URLs, malformed URLs, URLs
-/// with username/password credentials, and hostnames without a dot (a
-/// heuristic to block internal or privileged addresses).
-fn validate_url(url: &str) -> bool {
-    if url.len() > MAX_URL_LENGTH {
-        return false;
-    }
-    let after_scheme = if let Some(rest) = url.strip_prefix("https://") {
-        rest
-    } else if let Some(rest) = url.strip_prefix("http://") {
-        rest
-    } else {
-        return false;
-    };
-    let authority_end = after_scheme.find('/').unwrap_or(after_scheme.len());
-    let authority = &after_scheme[..authority_end];
-    if authority.contains('@') {
-        return false;
-    }
-    let hostname = authority.split(':').next().unwrap_or(authority);
-    if !hostname.contains('.') {
-        return false;
-    }
-    if is_private_host(hostname) {
-        return false;
-    }
-    true
-}
-
-/// The payload for a URL that failed a moment ago: the stage, the fact that
-/// it is remembered, and the action that helps — change source.
-fn cached_failure_payload(kind: &'static str, message: &str) -> Value {
-    let mut payload = fetch_failure_payload(kind, message);
-    payload["cached_failure"] = json!(true);
-    payload["hint"] = json!(
-        "this url failed to connect a moment ago; try a different source rather than retrying it"
-    );
-    payload
-}
-
-/// Refuse a target whose resolved addresses are private, loopback, or
-/// link-local. The literal check runs first; this covers a public name that
-/// resolves inward. The request re-resolves the name, so a name that changes
-/// its answer between the two lookups is not fully excluded; the screen
-/// removes the ordinary case without pinning the connection.
-async fn ensure_public_target(url: &str) -> Result<(), Value> {
-    let Some(authority) = url
-        .split_once("://")
-        .map(|(_, rest)| rest.split('/').next().unwrap_or(rest))
-    else {
-        return Ok(());
-    };
-    let host = authority.split(':').next().unwrap_or(authority);
-    if host.is_empty() {
-        return Ok(());
-    }
-    let port = if url.starts_with("https://") { 443 } else { 80 };
-    let Ok(addresses) = lookup_host((host.to_string(), port)).await else {
-        // A name that does not resolve fails at connect with its own stage.
-        return Ok(());
-    };
-    for address in addresses {
-        if is_private_ip(address.ip()) {
-            return Err(json!({
-                "error": format!("webfetch: target resolves to a private address ({})", address.ip()),
-                "error_kind": "private_target",
-            }));
-        }
-    }
-    Ok(())
-}
-
-/// Whether a resolved address belongs to this machine or a private network.
-fn is_private_ip(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(v4) => {
-            let [a, b, ..] = v4.octets();
-            v4.is_loopback()
-                || v4.is_private()
-                || v4.is_link_local()
-                || v4.is_unspecified()
-                || v4.is_broadcast()
-                || v4.is_multicast()
-                || v4.is_documentation()
-                // Carrier-grade NAT, not reachable from the public internet.
-                || (a == 100 && (64..=127).contains(&b))
-        }
-        IpAddr::V6(v6) => {
-            if let Some(v4) = v6.to_ipv4_mapped() {
-                return is_private_ip(IpAddr::V4(v4));
-            }
-            let first = v6.segments()[0];
-            v6.is_loopback()
-                || v6.is_unspecified()
-                || v6.is_multicast()
-                // Unique local and link local.
-                || (first & 0xfe00) == 0xfc00
-                || (first & 0xffc0) == 0xfe80
-        }
-    }
-}
-
-/// Whether a host names this machine or a private network. A public page can
-/// redirect to one of these, so the same check runs on every hop.
-///
-/// A name is screened here by its literal form; the resolved addresses are
-/// screened by ensure_public_target before each hop is sent.
-fn is_private_host(host: &str) -> bool {
-    let host = host.trim_matches(['[', ']']).to_ascii_lowercase();
-    if host == "localhost" || host.ends_with(".local") {
-        return true;
-    }
-    if let Ok(ip) = host.parse::<IpAddr>() {
-        return is_private_ip(ip);
-    }
-    // A host written only with digits and dots is a non-canonical IPv4
-    // spelling (127.1, 0177.0.0.1) that resolvers still accept, so it is not
-    // a public name.
-    // Only the non-canonical IPv4 spellings are numeric hosts: all digits and
-    // dots, or a hex literal marked with 0x. A word made of hex letters is a
-    // real domain name and stays allowed.
-    host.chars().all(|c| c.is_ascii_digit() || c == '.')
-        || (host.contains("0x")
-            && host
-                .chars()
-                .all(|c| c.is_ascii_hexdigit() || c == '.' || c == 'x'))
-}
-
-/// Upgrade an HTTP URL to HTTPS. Leaves HTTPS URLs unchanged.
-fn upgrade_to_https(url: &str) -> String {
-    if let Some(rest) = url.strip_prefix("http://") {
-        format!("https://{rest}")
-    } else {
-        url.to_string()
-    }
-}
-
-/// Strip HTML tags from a string, producing readable plain text. Removes
-/// script and style blocks entirely (including their content), drops all
-/// remaining tags, decodes common HTML entities, and collapses whitespace.
 fn strip_html(html: &str) -> String {
     let lower = html.to_ascii_lowercase();
     let mut out = String::with_capacity(html.len());

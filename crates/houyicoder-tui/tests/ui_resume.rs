@@ -1733,6 +1733,17 @@ fn test_trajectory_switch_visible_narrow() {
         !detail.contains('┃'),
         "an instant draws no vertical rule:\n{detail}"
     );
+    // A row's tail is what a narrow pane drops, so the model row must still end
+    // with its outcome on the real screen, not only in the accumulated output.
+    let detail_screen = s.screen().contents();
+    let model_row = detail_screen
+        .lines()
+        .find(|line| line.contains("model 1") && line.contains("TTFT"))
+        .unwrap_or_else(|| panic!("no model row on the level 1 screen:\n{detail_screen}"));
+    assert!(
+        model_row.trim_end().ends_with('✓'),
+        "the model row keeps its outcome at 130 columns: {model_row:?}"
+    );
     // The third level is where the raw identity is checked: the row above
     // shortens nothing, and the switch names the model it came from.
     s.clear_output();

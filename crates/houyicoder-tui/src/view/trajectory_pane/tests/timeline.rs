@@ -176,7 +176,7 @@ fn test_timeline_compact_narrow() {
     let (header, body, _, _) =
         detail::draw_turn_detail(&turn(1, "ask"), &detail, 0, Rect::new(0, 0, 60, 20), &app);
     assert!(
-        lines_text(&header).contains("···"),
+        lines_text(&header).contains("0s") && lines_text(&header).contains("3.2s"),
         "a ruler at 60 columns: {:?}",
         lines_text(&header)
     );

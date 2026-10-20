@@ -3,6 +3,7 @@
 use super::*;
 use houyicoder_protocol::tool::tool_result_failed;
 use pollster::block_on;
+use reqwest::Client;
 use std::io::Read;
 use std::io::Write;
 use std::net::TcpListener;
@@ -485,19 +486,70 @@ fn test_host_check_families() {
     assert!(!is_private_host("example.com"));
 }
 
-/// A redirect hop is followed only while the hops are under the cap and the
-/// target passes the literal rule.
+/// A hop is followed only while the count is under the cap and the target
+/// passes the literal rule; a malformed base or target is refused with a
+/// payload the model can read.
 #[test]
-fn test_redirect_target_checked() {
-    assert_eq!(redirect_allowed(0, "https://example.com/a"), Ok(()));
-    assert_eq!(
-        redirect_allowed(MAX_REDIRECTS, "https://example.com/a"),
-        Err("too many redirects")
-    );
-    assert_eq!(
-        redirect_allowed(1, "https://127.0.0.1/a"),
-        Err("redirect target rejected")
-    );
+fn test_redirect_hop_decides() {
+    assert!(matches!(
+        redirect_hop("https://example.com/a", None, 0),
+        Hop::Done
+    ));
+    match redirect_hop("https://example.com/a", Some("/b"), 0) {
+        Hop::Follow(next) => assert_eq!(next, "https://example.com/b"),
+        _ => panic!("a relative hop is followed"),
+    }
+    assert!(matches!(
+        redirect_hop("https://example.com/a", Some("/b"), MAX_REDIRECTS),
+        Hop::Refuse(_)
+    ));
+    assert!(matches!(
+        redirect_hop("https://example.com/a", Some("https://127.0.0.1/b"), 1),
+        Hop::Refuse(_)
+    ));
+    assert!(matches!(
+        redirect_hop("not a url", Some("/b"), 1),
+        Hop::Refuse(_)
+    ));
+    assert!(matches!(
+        redirect_hop("https://example.com/a", Some("http://[bad"), 1),
+        Hop::Refuse(_)
+    ));
+}
+
+/// A relative redirect is followed to the answer.
+#[test]
+fn test_follows_relative_redirect() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    let server = spawn(move || {
+        for hop in 0..2 {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let mut buf = [0u8; 1024];
+            let _read = stream.read(&mut buf);
+            let reply: &[u8] = if hop == 0 {
+                b"HTTP/1.1 302 Found\r\nLocation: /second\r\nContent-Length: 0\r\n\r\n"
+            } else {
+                b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"
+            };
+            stream.write_all(reply).expect("write");
+        }
+    });
+    let client = Client::builder()
+        .resolve("example.test", addr)
+        .build()
+        .expect("client");
+    let runtime = Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    runtime.block_on(async {
+        let url = format!("http://example.test:{}/start", addr.port());
+        let response = fetch_following(&client, &url).await.expect("response");
+        assert_eq!(response.status().as_u16(), 200);
+        assert_eq!(read_body(response).await.expect("body"), "ok");
+    });
+    server.join().expect("server");
 }
 
 /// The body reader takes a real response in chunks and decodes it as text.

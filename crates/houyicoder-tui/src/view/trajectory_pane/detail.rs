@@ -143,12 +143,14 @@ pub(super) fn draw_turn_detail(
             // bar drawn into columns the terminal does not have is a bar the
             // reader cannot use.
             let compact = (area.width as usize) < TIMELINE_MIN_W;
-            if !compact {
-                header.push(ruler_line(turn.duration_ms, bar_area));
-            }
             // The axis the bars share: idle gaps collapse so a long wait does
-            // not squeeze the work into one column.
+            // not squeeze the work into one column. The ruler labels this same
+            // axis, so a folded wait does not leave the scale saying one thing
+            // and the bars another.
             let axis = ActiveAxis::new(&detail.records);
+            if !compact {
+                header.push(ruler_line(axis.total(), bar_area));
+            }
             match detail.state {
                 TrajectoryDetailState::Ready => {
                     for (i, ev) in detail.records.iter().enumerate() {
