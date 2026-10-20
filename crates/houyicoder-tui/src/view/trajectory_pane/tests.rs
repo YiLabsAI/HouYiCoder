@@ -1082,6 +1082,7 @@ fn test_record_kind_labels() {
         TrajectoryRecordKind::Tool,
         TrajectoryRecordKind::Agent,
         TrajectoryRecordKind::Memory,
+        TrajectoryRecordKind::Cache,
         TrajectoryRecordKind::Hook,
         TrajectoryRecordKind::Compaction,
         TrajectoryRecordKind::Error,
@@ -1092,7 +1093,7 @@ fn test_record_kind_labels() {
     assert_eq!(
         labels,
         vec![
-            "context", "model", "tool", "agent", "memory", "hook", "compact", "error"
+            "context", "model", "tool", "agent", "memory", "cache", "hook", "compact", "error"
         ]
     );
 }
