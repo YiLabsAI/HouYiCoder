@@ -383,7 +383,7 @@ pub(crate) fn push_line_rows(
         return true;
     }
     if let TranscriptLine::ContextGrid(view) = line {
-        for (plain, styled) in context_view::render_as_rows(view) {
+        for (plain, styled) in context_view::render_as_rows(view, width as usize) {
             sink.push(
                 Row::new(PLAIN, plain)
                     .group(grp_key.clone())

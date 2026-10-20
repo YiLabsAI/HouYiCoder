@@ -444,7 +444,7 @@ fn test_grid_text_share_order() {
 fn test_grid_text_cost_agrees() {
     let view = view_with_skills(vec![skill_row("claude_eco", "brainstorm", false)]);
     let flat = context_grid_text(&view);
-    let rows: String = render_as_rows(&view)
+    let rows: String = render_as_rows(&view, usize::MAX)
         .iter()
         .map(|(plain, _)| plain.as_str())
         .collect::<Vec<_>>()

@@ -19,10 +19,12 @@ use crate::records::ContextFileEntry;
 use crate::records::ContextSkillEntry;
 use crate::records::ContextSuggestion;
 use crate::records::{ContextView, SuggestionSeverity};
+use crate::view::line_wrap::wrap_styled_line;
 use crate::view::skill_origin::cost_label;
 use crate::view::skill_origin::display_order;
 use crate::view::skill_origin::heading_spans;
 use houyicoder_protocol::frontend::context::{ContextBreakdown, DelegatedContext, GridCell};
+use unicode_width::UnicodeWidthStr;
 
 /// Midpoint glyph threshold: a cell at least this full draws the filled ball.
 const FULL_GLYPH_THRESHOLD: f32 = 0.7;
@@ -41,13 +43,22 @@ const BLOCK_INDENT: usize = 5;
 /// beside the matching legend line), then the drill-down and suggestion
 /// sections. The plain text drives selection and copy; the styled line is
 /// painted on screen. An empty grid yields a single "no data yet" row.
-pub fn render_as_rows(view: &ContextView) -> Vec<(String, Line<'static>)> {
+///
+/// Every row is soft-wrapped to the given display width before it is paired
+/// with its plain text, so a long suggestion or summary hangs under its own
+/// indent instead of being clipped at the terminal edge. The wrap is the
+/// transcript's shared word-boundary helper, which keeps this block's row
+/// count identical to the rows the draw path emits.
+pub fn render_as_rows(view: &ContextView, width: usize) -> Vec<(String, Line<'static>)> {
     let bd = &view.breakdown;
     if bd.grid.is_empty() {
-        return vec![row_from_spans(vec![Span::styled(
-            "Context Usage (no data yet)",
-            Style::new().fg(Color::DarkGray),
-        )])];
+        return wrap_rows(
+            vec![Line::from(vec![Span::styled(
+                "Context Usage (no data yet)",
+                Style::new().fg(Color::DarkGray),
+            )])],
+            width,
+        );
     }
     let pct = if bd.context_window > 0 {
         100.0 * bd.total_tokens as f64 / bd.context_window as f64
@@ -56,9 +67,9 @@ pub fn render_as_rows(view: &ContextView) -> Vec<(String, Line<'static>)> {
     };
     let bold = Style::new().add_modifier(Modifier::BOLD);
     let indent = " ".repeat(BLOCK_INDENT);
-    let mut out: Vec<(String, Line<'static>)> = Vec::new();
+    let mut out: Vec<Line<'static>> = Vec::new();
     // Header row: the continuation glyph plus the bold title.
-    out.push(row_from_spans(vec![
+    out.push(Line::from(vec![
         Span::raw("  "),
         Span::raw(CONTINUATION_GLYPH),
         Span::raw("  "),
@@ -85,7 +96,7 @@ pub fn render_as_rows(view: &ContextView) -> Vec<(String, Line<'static>)> {
         if let Some(lrow) = legend.get(i) {
             spans.extend(lrow.iter().cloned());
         }
-        out.push(row_from_spans(spans));
+        out.push(Line::from(spans));
     }
     // Drill-down (Memory files, Skills, Delegated) and Suggestions follow,
     // each section preceded by a blank separator row.
@@ -103,33 +114,50 @@ pub fn render_as_rows(view: &ContextView) -> Vec<(String, Line<'static>)> {
         out.push(blank_row());
         push_section(&mut out, &indent, suggestions);
     }
+    wrap_rows(out, width)
+}
+
+/// The display columns a row's leading whitespace occupies, so a wrapped
+/// continuation can hang under the text instead of returning to column zero.
+fn leading_indent(line: &Line<'static>) -> usize {
+    line.spans
+        .iter()
+        .take_while(|span| span.content.chars().all(char::is_whitespace))
+        .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
+        .sum()
+}
+
+/// Wrap each row to the available width and pair it with the plain text a
+/// selection or copy lifts. A continuation row repeats the row's leading
+/// indent, so wrapped text stays in the column its section owns.
+fn wrap_rows(rows: Vec<Line<'static>>, width: usize) -> Vec<(String, Line<'static>)> {
+    let mut out = Vec::new();
+    for row in rows {
+        let indent = leading_indent(&row).min(width.saturating_sub(1));
+        for (i, mut line) in wrap_styled_line(row, width).into_iter().enumerate() {
+            if i > 0 && indent > 0 {
+                let mut spans = vec![Span::raw(" ".repeat(indent))];
+                spans.append(&mut line.spans);
+                line = Line::from(spans);
+            }
+            let plain: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+            out.push((plain, line));
+        }
+    }
     out
 }
 
-/// Build one (plain text, styled line) row from an ordered span list. The
-/// plain text is the span contents concatenated, so its display columns match
-/// the styled line exactly — a drag over the colored grid or legend lifts the
-/// text under the pointer.
-fn row_from_spans(spans: Vec<Span<'static>>) -> (String, Line<'static>) {
-    let plain: String = spans.iter().map(|s| s.content.as_ref()).collect();
-    (plain, Line::from(spans))
-}
-
 /// A blank separator row between sections.
-fn blank_row() -> (String, Line<'static>) {
-    (String::new(), Line::raw(""))
+fn blank_row() -> Line<'static> {
+    Line::raw("")
 }
 
-/// Prepend the block indent to each content row and append the pairs to out.
-fn push_section(
-    out: &mut Vec<(String, Line<'static>)>,
-    indent: &str,
-    rows: Vec<Vec<Span<'static>>>,
-) {
+/// Prepend the block indent to each content row and append them to out.
+fn push_section(out: &mut Vec<Line<'static>>, indent: &str, rows: Vec<Vec<Span<'static>>>) {
     for row in rows {
         let mut spans: Vec<Span<'static>> = vec![Span::raw(indent.to_string())];
         spans.extend(row);
-        out.push(row_from_spans(spans));
+        out.push(Line::from(spans));
     }
 }
 

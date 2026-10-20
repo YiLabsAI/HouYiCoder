@@ -63,7 +63,7 @@ impl App {
                 w,
             ),
             // Plain selectable rows: count the exact set the draw path emits.
-            TranscriptLine::ContextGrid(view) => render_as_rows(view).len(),
+            TranscriptLine::ContextGrid(view) => render_as_rows(view, w as usize).len(),
             TranscriptLine::Subagent {
                 child_sid,
                 folded_transcript,

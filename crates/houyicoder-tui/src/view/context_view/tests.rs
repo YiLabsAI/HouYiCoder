@@ -129,7 +129,7 @@ fn rows_text(bd: ContextBreakdown) -> String {
         drill,
         suggestions: vec![],
     };
-    render_as_rows(&view)
+    render_as_rows(&view, usize::MAX)
         .iter()
         .map(|(p, _)| p.as_str())
         .collect::<Vec<_>>()
@@ -454,7 +454,7 @@ fn test_real_data_renders_suggestions() {
         drill: ContextDrillDown::default(),
         suggestions,
     };
-    let text: String = render_as_rows(&view)
+    let text: String = render_as_rows(&view, usize::MAX)
         .iter()
         .map(|(p, _)| p.as_str())
         .collect::<Vec<_>>()
@@ -668,7 +668,7 @@ fn test_grid_rows_selectable_plain() {
 #[test]
 fn test_empty_grid_renders_row() {
     let view = ContextView::default();
-    let rows = render_as_rows(&view);
+    let rows = render_as_rows(&view, usize::MAX);
     assert_eq!(rows.len(), 1, "empty grid yields a single no-data row");
     assert!(rows[0].0.contains("no data yet"));
 }
@@ -777,4 +777,49 @@ fn test_skills_rows_share_order() {
         !text.contains("claude_eco"),
         "the raw origin key must not reach the reader:\n{text}"
     );
+}
+
+/// A suggestion whose detail is wider than the pane keeps its tail: the row
+/// wraps under the section's own indent instead of being clipped at the right
+/// edge, and no emitted row exceeds the pane width.
+#[test]
+fn test_suggestion_detail_wraps() {
+    let detail = "Largest: AGENTS.md (8.5k), Recalled memories (10 entries) (4k), \
+                  Memory index (36 entries) (2.3k). Use /memory to review and prune \
+                  stale entries.";
+    let view = ContextView {
+        breakdown: stub_breakdown(),
+        drill: ContextDrillDown::default(),
+        suggestions: vec![ContextSuggestion {
+            severity: SuggestionSeverity::Info,
+            title: "Memory files using 14.9k tokens (7%)".to_string(),
+            detail: detail.to_string(),
+            savings_tokens: Some(4_500),
+        }],
+    };
+    let rows = render_as_rows(&view, 80);
+    for (plain, _) in &rows {
+        assert!(
+            UnicodeWidthStr::width(plain.as_str()) <= 80,
+            "row wider than the pane: {plain:?}"
+        );
+    }
+    let head = rows
+        .iter()
+        .position(|(plain, _)| plain.contains("Largest:"))
+        .expect("the detail's head is on a row");
+    let tail = rows
+        .iter()
+        .position(|(plain, _)| plain.contains("prune stale entries."))
+        .unwrap_or_else(|| panic!("the detail lost its tail: {rows:#?}"));
+    assert!(
+        tail > head,
+        "the detail did not wrap, so the tail shares the head's row"
+    );
+    for (plain, _) in &rows[head..=tail] {
+        assert!(
+            plain.starts_with("       "),
+            "a wrapped continuation must hang under the section indent: {plain:?}"
+        );
+    }
 }
