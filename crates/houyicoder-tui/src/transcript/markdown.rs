@@ -517,7 +517,14 @@ fn stacked_table(rows: &[Vec<String>], avail: usize) -> Vec<String> {
             let label = headers.get(c).map(String::as_str).unwrap_or("");
             let prefix = format!("{label}: ");
             let indent = UnicodeWidthStr::width(prefix.as_str());
-            let budget = avail.saturating_sub(indent).max(1);
+            // A label wider than the pane leaves no hanging column: wrap the
+            // pair as one line instead of printing a prefix that already runs
+            // past the edge.
+            if indent + 4 > avail {
+                out.extend(wrap_line(&format!("{prefix}{cell}"), avail));
+                continue;
+            }
+            let budget = avail - indent;
             for (i, line) in wrap_line(cell, budget).iter().enumerate() {
                 if i == 0 {
                     out.push(format!("{prefix}{line}"));

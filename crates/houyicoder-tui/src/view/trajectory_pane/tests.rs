@@ -25,6 +25,7 @@ use ratatui::layout::Rect;
 use ratatui::{Terminal, backend::TestBackend};
 use std::env::temp_dir;
 use std::fs::write;
+use std::slice::from_ref;
 use std::sync::{Arc, Mutex};
 
 #[test]
@@ -51,31 +52,54 @@ fn test_bar_width_proportional() {
 #[test]
 fn test_positioned_bar_fixed_width() {
     // Every bar must be exactly width chars or columns misalign.
+    let mut record = record_of(TrajectoryRecordKind::Tool, None);
+    record.start_ms = 100;
+    record.duration_ms = 500;
+    let axis = ActiveAxis::new(from_ref(&record));
     for w in 8..=60 {
-        let s = positioned_bar(100, 500, 1000, w);
+        let s = positioned_bar(100, 500, &axis, w);
         assert_eq!(s.chars().count(), w, "width {w}");
     }
 }
 
 #[test]
 fn test_positioned_bar_zero_total() {
-    assert_eq!(positioned_bar(0, 100, 0, 20), " ".repeat(20));
+    let axis = ActiveAxis::new(&[]);
+    assert_eq!(positioned_bar(0, 100, &axis, 20), " ".repeat(20));
 }
 
 #[test]
 fn test_positioned_bar_instant_marker() {
-    // A 0-duration event renders a thin marker at its offset, not a block.
-    let s = positioned_bar(500, 0, 1000, 20);
+    // A 0-duration event is a dot at its offset, not a rule that stacks with
+    // its neighbours into a column.
+    let mut instant = record_of(TrajectoryRecordKind::Memory, None);
+    instant.start_ms = 500;
+    let mut later = record_of(TrajectoryRecordKind::Tool, None);
+    later.start_ms = 900;
+    later.duration_ms = 100;
+    let axis = ActiveAxis::new(&[instant, later]);
+    let s = positioned_bar(500, 0, &axis, 20);
     assert_eq!(s.chars().count(), 20);
-    assert!(s.contains('┃'));
+    assert!(s.contains('·'));
+    assert!(!s.contains('┃'));
     assert!(!s.contains('█'));
 }
 
 #[test]
 fn test_positioned_bar_spans_offset() {
-    // A 200ms event at offset 100 on a 1000ms / 20-char axis: scale 0.02,
-    // start col 2, end col 6 — 4 block chars, rest spaces.
-    let s = positioned_bar(100, 200, 1000, 20);
+    // A 200ms event at offset 100 of a 1,000ms active span on 20 columns:
+    // start column 2, and the bar covers four columns.
+    let mut first = record_of(TrajectoryRecordKind::Tool, None);
+    first.start_ms = 0;
+    first.duration_ms = 100;
+    let mut second = record_of(TrajectoryRecordKind::Tool, None);
+    second.start_ms = 100;
+    second.duration_ms = 200;
+    let mut last = record_of(TrajectoryRecordKind::Tool, None);
+    last.start_ms = 1_000;
+    last.duration_ms = 1;
+    let axis = ActiveAxis::new(&[first, second, last]);
+    let s = positioned_bar(100, 200, &axis, 20);
     assert_eq!(s.chars().count(), 20);
     assert_eq!(s.chars().filter(|&c| c == '█').count(), 4);
     assert!(s.starts_with("  "));
@@ -295,7 +319,8 @@ fn test_level2_renders_record_detail() {
         ),
     ]);
     let body_text = |cursor: usize| {
-        let (_, body, _, _) = detail::draw_event_detail(&turn, &detail, cursor, Rect::ZERO, 0);
+        let (_, body, _, _) =
+            record_detail::draw_event_detail(&turn, &detail, cursor, Rect::ZERO, 0);
         body.iter()
             .flat_map(|l| l.spans.iter().map(|s| s.content.as_ref().to_string()))
             .collect::<String>()
@@ -388,7 +413,7 @@ fn test_event_detail_redacts_secrets() {
         retries: 0,
         model_switch_from: None,
     }]);
-    let (_, body, _, _) = detail::draw_event_detail(&turn, &detail, 0, Rect::ZERO, 0);
+    let (_, body, _, _) = record_detail::draw_event_detail(&turn, &detail, 0, Rect::ZERO, 0);
     let text = body
         .iter()
         .flat_map(|l| l.spans.iter().map(|s| s.content.as_ref().to_string()))
@@ -454,185 +479,6 @@ fn test_up_down_move_cursor() {
     assert_eq!(app.ui.trajectory.cursor(), 0);
 }
 
-/// The thinking cell states the reasoning span and the tokens together, so a
-/// turn that thought for seconds is visible in the list without a drill.
-#[test]
-fn test_thinking_cell_states_both() {
-    let view = TrajectoryView {
-        models_used: 2,
-        tokens_in: Some(100),
-        tokens_out: Some(50),
-        ..view(vec![TrajectoryRow::Turn(TrajectoryTurn {
-            tokens_in: Some(100),
-            tokens_out: Some(50),
-            cache_read: Some(0),
-            cache_write: Some(0),
-            usage_provenance: UsageProvenance::ALL_REPORTED,
-            reasoning_tokens: Some(541),
-            reasoning_ms: Some(4_200),
-            ..turn(1, "hi")
-        })])
-    };
-    let (_, body, _, _) = list::draw_turn_list(&view, 0, Rect::new(0, 0, 200, 20));
-    let text: String = body
-        .iter()
-        .flat_map(|l| l.spans.iter())
-        .map(|s| s.content.as_ref())
-        .collect();
-    assert!(
-        text.contains("(thinking 4.2s · 541)"),
-        "the span and the tokens are stated together: {text}"
-    );
-}
-
-/// A call that reported a reasoning span but no reasoning token count states
-/// the span alone rather than inventing a count beside it.
-#[test]
-fn test_thinking_cell_states_span() {
-    let view = TrajectoryView {
-        models_used: 2,
-        tokens_in: Some(100),
-        tokens_out: Some(50),
-        ..view(vec![TrajectoryRow::Turn(TrajectoryTurn {
-            tokens_in: Some(100),
-            tokens_out: Some(50),
-            cache_read: Some(0),
-            cache_write: Some(0),
-            usage_provenance: UsageProvenance::ALL_REPORTED,
-            reasoning_ms: Some(4_200),
-            ..turn(1, "hi")
-        })])
-    };
-    let (_, body, _, _) = list::draw_turn_list(&view, 0, Rect::new(0, 0, 200, 20));
-    let cell = body[0]
-        .spans
-        .iter()
-        .map(|s| s.content.as_ref())
-        .find(|c| c.contains("thinking"))
-        .expect("the row states the reasoning span");
-    assert_eq!(
-        cell.trim(),
-        "(thinking 4.2s)",
-        "the span is stated alone, with no count invented beside it"
-    );
-}
-
-/// Thinking tokens render as (thinking Nk) only when Some and >0.
-#[test]
-fn test_thinking_cell_states_tokens() {
-    let view = TrajectoryView {
-        models_used: 2,
-        tokens_in: Some(100),
-        tokens_out: Some(50),
-        ..view(vec![TrajectoryRow::Turn(TrajectoryTurn {
-            tokens_in: Some(100),
-            tokens_out: Some(50),
-            cache_read: Some(0),
-            cache_write: Some(0),
-            usage_provenance: UsageProvenance::ALL_REPORTED,
-            reasoning_tokens: Some(20),
-            ..turn(1, "hi")
-        })])
-    };
-    let (_, body, _, _) = list::draw_turn_list(&view, 0, Rect::new(0, 0, 200, 20));
-    let text: String = body
-        .iter()
-        .flat_map(|l| l.spans.iter())
-        .map(|s| s.content.as_ref())
-        .collect();
-    assert!(
-        text.contains("(thinking 20)"),
-        "tokens shown when >0: {text}"
-    );
-}
-
-/// A turn that reported neither figure states no thinking cell, while a turn
-/// beside it that did report one draws the column: the absence belongs to the
-/// cell, not to a column the layout dropped for want of width.
-#[test]
-fn test_thinking_cell_hidden_unmeasured() {
-    let mk = |n: usize, ms: Option<u64>| TrajectoryTurn {
-        tokens_in: Some(100),
-        tokens_out: Some(50),
-        duration_ms: 100,
-        reasoning_ms: ms,
-        ..turn(n, "hi")
-    };
-    let view = TrajectoryView {
-        models_used: 2,
-        tokens_in: Some(200),
-        tokens_out: Some(100),
-        ..view(vec![
-            TrajectoryRow::Turn(mk(1, None)),
-            TrajectoryRow::Turn(mk(2, Some(1_200))),
-        ])
-    };
-    // Past the width at which the thinking column joins, so a blank cell on the
-    // first row is the cell's own doing. Below that width the column is dropped
-    // whole and the assertion would hold whatever the cell returned.
-    let (_, body, _, _) = list::draw_turn_list(&view, 0, Rect::new(0, 0, 200, 20));
-    let row_text = |i: usize| -> String {
-        body[i]
-            .spans
-            .iter()
-            .map(|s| s.content.as_ref())
-            .collect::<String>()
-    };
-    assert!(
-        row_text(1).contains("thinking"),
-        "the column holds at this width, so the assertion below is about the cell: {}",
-        row_text(1)
-    );
-    assert!(
-        !row_text(0).contains("thinking"),
-        "a turn that reported neither figure states no thinking cell: {}",
-        row_text(0)
-    );
-}
-
-/// A span the call reported is stated whatever it rounds to: a block that
-/// closed inside a millisecond is a measurement, not the absence a missing span
-/// is, and stating it does not displace a count reported beside it.
-#[test]
-fn test_thinking_zero_stated() {
-    let thinking_cell = |tokens: Option<usize>| -> String {
-        let view = TrajectoryView {
-            models_used: 2,
-            tokens_in: Some(100),
-            tokens_out: Some(50),
-            ..view(vec![TrajectoryRow::Turn(TrajectoryTurn {
-                tokens_in: Some(100),
-                tokens_out: Some(50),
-                cache_read: Some(0),
-                cache_write: Some(0),
-                usage_provenance: UsageProvenance::ALL_REPORTED,
-                reasoning_ms: Some(0),
-                reasoning_tokens: tokens,
-                ..turn(1, "hi")
-            })])
-        };
-        let (_, body, _, _) = list::draw_turn_list(&view, 0, Rect::new(0, 0, 200, 20));
-        body[0]
-            .spans
-            .iter()
-            .map(|s| s.content.as_ref())
-            .find(|c| c.contains("thinking"))
-            .unwrap_or_default()
-            .trim()
-            .to_string()
-    };
-    assert_eq!(
-        thinking_cell(None),
-        "(thinking 0ms)",
-        "a span measured below a millisecond is stated as the measurement it is"
-    );
-    assert_eq!(
-        thinking_cell(Some(20)),
-        "(thinking 0ms · 20)",
-        "the count is stated beside the span it accompanied"
-    );
-}
-
 /// Per-turn model renders only when ≥2 distinct models in the session.
 #[test]
 fn test_per_turn_model_two() {
@@ -671,7 +517,10 @@ fn test_per_turn_model_two() {
         .collect();
     assert!(text.contains("qwen3.7-max"), "model id on turn 1: {text}");
     assert!(text.contains("glm-5.2"), "model id on turn 2: {text}");
-    assert!(text.contains("high"), "effort on turn 1: {text}");
+    assert!(
+        !text.contains("high"),
+        "the list no longer spends a column on effort: {text}"
+    );
 }
 
 /// Per-turn model is hidden when the session used only one model.
@@ -1133,7 +982,7 @@ fn test_detail_shows_model_facts() {
         ..turn(1, "ask")
     };
     let detail = detail_of_all(vec![record]);
-    let (header, body, _, _) = detail::draw_event_detail(&turn, &detail, 0, Rect::ZERO, 0);
+    let (header, body, _, _) = record_detail::draw_event_detail(&turn, &detail, 0, Rect::ZERO, 0);
     let text: String = header
         .iter()
         .chain(body.iter())
@@ -1169,7 +1018,8 @@ fn test_call_cache_follows_report() {
         record.usage = Some(usage);
         let turn = turn(1, "ask");
         let detail = detail_of_all(vec![record]);
-        let (header, body, _, _) = detail::draw_event_detail(&turn, &detail, 0, Rect::ZERO, 0);
+        let (header, body, _, _) =
+            record_detail::draw_event_detail(&turn, &detail, 0, Rect::ZERO, 0);
         header
             .iter()
             .chain(body.iter())
@@ -1390,6 +1240,7 @@ fn test_turn_list_degrades() {
         cache_write: None,
         usage_provenance: UsageProvenance::ALL_REPORTED,
         models: vec![model.into()],
+        model_chain: vec![model.into()],
         efforts: vec!["high".into()],
         reasoning_tokens: Some(90),
         reasoning_ms: Some(4_200),

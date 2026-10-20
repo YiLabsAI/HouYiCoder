@@ -1,8 +1,8 @@
-//! Level 1 and Level 2 drill-down renderers for the trajectory pane, and what
-//! the pane knows about the turn it is showing.
+//! Level 1 of the trajectory pane: one turn's record timeline, and what the
+//! pane knows about the turn it is showing.
 //!
-//! Level 1 draws one turn's record timeline; Level 2 draws the full detail of
-//! the selected record. Both share the pane's line helpers and view types.
+//! The Level 2 record body lives in the record_detail module; both share the
+//! pane's line helpers and view types.
 
 use super::*;
 
@@ -40,12 +40,11 @@ pub struct TrajectoryDetailView {
     /// the whole of it.
     pub truncated: bool,
 }
-use crate::redaction::redact;
 use crate::state::App;
 use crate::view::relative_time::format_span_ms;
 
 /// The colour a record's outcome is drawn in.
-fn outcome_color(outcome: RecordOutcome) -> Color {
+pub(super) fn outcome_color(outcome: RecordOutcome) -> Color {
     match outcome {
         RecordOutcome::Ok => Color::Green,
         RecordOutcome::Failed => Color::Red,
@@ -93,6 +92,41 @@ pub(super) fn draw_turn_detail(
                     Color::Gray,
                 ),
             ]));
+            // What the turn's row could not carry: the thinking time and
+            // tokens, the effort it asked for, and the chain of models it
+            // used. A turn that switched models states the whole chain here,
+            // so the rows below can name one model each without repeating it.
+            let mut meta = Vec::new();
+            match (turn.reasoning_ms, turn.reasoning_tokens) {
+                (Some(ms), Some(tokens)) => meta.push(format!(
+                    "thinking {} ({})",
+                    format_span_ms(ms),
+                    format_tokens(tokens as u64)
+                )),
+                (Some(ms), None) => meta.push(format!("thinking {}", format_span_ms(ms))),
+                (None, Some(tokens)) => {
+                    meta.push(format!("thinking {} tok", format_tokens(tokens as u64)))
+                }
+                (None, None) => {}
+            }
+            if !turn.efforts.is_empty() {
+                meta.push(format!("effort {}", turn.efforts.join(", ")));
+            }
+            if !meta.is_empty() {
+                for row in wrap_line(&format!("  {}", meta.join(" · ")), area.width as usize) {
+                    header.push(line(vec![sp(row, Color::DarkGray)]));
+                }
+            }
+            if turn.model_chain.len() > 1 {
+                // A chain of several long ids is wider than the pane; wrapping
+                // it keeps every model it names readable.
+                for row in wrap_line(
+                    &format!("  models: {}", turn.model_chain.join(" → ")),
+                    area.width as usize,
+                ) {
+                    header.push(line(vec![sp(row, Color::DarkGray)]));
+                }
+            }
             header.push(blank());
             // Layout, in display columns: the prefix, the bar, a gap, the
             // duration, the summary, and the outcome glyph. The bar takes what
@@ -112,20 +146,16 @@ pub(super) fn draw_turn_detail(
             if !compact {
                 header.push(ruler_line(turn.duration_ms, bar_area));
             }
+            // The axis the bars share: idle gaps collapse so a long wait does
+            // not squeeze the work into one column.
+            let axis = ActiveAxis::new(&detail.records);
             match detail.state {
                 TrajectoryDetailState::Ready => {
                     for (i, ev) in detail.records.iter().enumerate() {
                         body.push(if compact {
                             compact_record_row(ev, i == clamped, area.width as usize)
                         } else {
-                            record_row(
-                                ev,
-                                i == clamped,
-                                turn.duration_ms,
-                                bar_area,
-                                summary_w,
-                                &turn.models,
-                            )
+                            record_row(ev, i == clamped, &axis, bar_area, summary_w)
                         });
                     }
                 }
@@ -290,91 +320,36 @@ fn compact_record_row(ev: &TrajectoryRecord, selected: bool, width: usize) -> Li
 fn record_row(
     ev: &TrajectoryRecord,
     selected: bool,
-    turn_ms: u64,
+    axis: &ActiveAxis,
     bar_area: usize,
     summary_w: usize,
-    turn_models: &[String],
 ) -> Line<'static> {
     let prefix = if selected { "▸ " } else { "  " };
-    let bar = positioned_bar(ev.start_ms, ev.duration_ms, turn_ms, bar_area);
+    let bar = positioned_bar(ev.start_ms, ev.duration_ms, axis, bar_area);
     let bc = outcome_color(ev.outcome);
-    let mark = ev.outcome.glyph();
-    // The name column carries what the record acted on: the tool it called,
-    // the agent it delegated to, the model it asked. A model id is shortened
-    // against the turn's own set so two models stay distinguishable; the call
-    // ordinal lives in the record detail, not in this column.
-    let name = ev.name.as_deref().unwrap_or("");
-    let label = if ev.kind == TrajectoryRecordKind::Model {
-        short_model_name(name, turn_models)
+    // An instant is a fact, not a task: it has no span to draw and no outcome
+    // to grade, so its row carries neither a duration nor a tick.
+    let instantaneous = ev.duration_ms == 0
+        && !matches!(
+            ev.kind,
+            TrajectoryRecordKind::Tool | TrajectoryRecordKind::Model | TrajectoryRecordKind::Agent
+        );
+    let mark = if instantaneous {
+        " "
     } else {
-        name.to_string()
+        ev.outcome.glyph()
     };
-    // A model call states its own measured split: the wait for the first token
-    // and the decode rate of the tokens it produced. A part the log did not
-    // record stays absent.
-    let mut compact_timing = String::new();
-    let timing = match &ev.timing {
-        Some(t) if ev.kind == TrajectoryRecordKind::Model => {
-            let mut parts = Vec::new();
-            if let Some(ttft) = t.ttft_ms {
-                parts.push(format!("TTFT {}", format_span_ms(ttft)));
-                compact_timing = format!(" · TTFT {}", format_span_ms(ttft));
-            }
-            if let (Some(decode_ms), Some(out)) =
-                (t.decode_ms, ev.usage.as_ref().and_then(|u| u.output))
-                && decode_ms > 0
-            {
-                let rate = format!("{:.1} tok/s", out as f64 / (decode_ms as f64 / 1000.0));
-                parts.push(rate.clone());
-                compact_timing.push_str(&format!(" · {rate}"));
-            }
-            // The split the provider's own blocks measured: how long the call
-            // spent thinking and how long it spent producing output. A span the
-            // stream never closed stays absent rather than reading as no time.
-            if let Some(reasoning) = t.reasoning_ms {
-                parts.push(format!("reasoning {}", format_span_ms(reasoning)));
-            }
-            if let Some(response) = t.response_ms {
-                parts.push(format!("generating {}", format_span_ms(response)));
-            }
-            if parts.is_empty() {
-                String::new()
-            } else {
-                format!(" · {}", parts.join(" · "))
-            }
-        }
-        _ => String::new(),
-    };
-    // The measured-latency suffix keeps its own columns and the summary takes
-    // what is left, so a row never runs past the width it is drawn in. On a
-    // terminal too narrow for both, the suffix is what goes: the summary is
-    // what the row is about.
-    // The measured suffix gives way in tiers: the full split, then the two
-    // figures a reader scans for, then the wait alone. Clearing it outright
-    // hid time-to-first-token on every call that also reported reasoning.
-    let timing = if UnicodeWidthStr::width(timing.as_str()) < summary_w {
-        timing
-    } else if !compact_timing.is_empty()
-        && UnicodeWidthStr::width(compact_timing.as_str()) < summary_w
-    {
-        compact_timing
-    } else {
-        String::new()
-    };
-    let summary_w = summary_w.saturating_sub(UnicodeWidthStr::width(timing.as_str()));
-    let summary_text = match &ev.model_switch_from {
-        Some(prior) => format!("[model: {prior} -> {label}] {}", ev.summary),
-        None => ev.summary.clone(),
-    };
-    let summary = format!("{}{}", truncate_width(&summary_text, summary_w), timing);
+    let kind = kind_cell(ev);
+    let name = name_cell(ev);
+    let summary = row_summary(ev, &name, summary_w);
     line(vec![
         sp(prefix, Color::Cyan),
-        sp(format!("{:7}", ev.kind.label()), Color::DarkGray),
+        sp(pad(&kind, TIMELINE_KIND_W), Color::DarkGray),
         sp(" ", Color::DarkGray),
         // Padded by display columns, not characters: a wide glyph in the name
         // would otherwise shift the bar and everything after it.
         sp(
-            pad(&truncate_width(&label, TIMELINE_NAME_W), TIMELINE_NAME_W),
+            pad(&truncate_width(&name, TIMELINE_NAME_W), TIMELINE_NAME_W),
             Color::Cyan,
         ),
         sp(bar, bc),
@@ -384,193 +359,103 @@ fn record_row(
         sp(
             format!(
                 "{:>width$} ",
-                truncate_width(&format_span_ms(ev.duration_ms), TIMELINE_DUR_W - 1),
+                if instantaneous {
+                    String::new()
+                } else {
+                    truncate_width(&format_span_ms(ev.duration_ms), TIMELINE_DUR_W - 1)
+                },
                 width = TIMELINE_DUR_W - 1
             ),
             Color::Gray,
         ),
         sp(" ", Color::DarkGray),
         sp(summary, Color::White),
-        sp(format!(" {}", mark), bc),
+        sp(" ", Color::DarkGray),
+        sp(mark, bc),
     ])
 }
 
-/// Level 2: the full detail of the record selected at Level 1. The record is
-/// chosen a level up, so the keys here move the view over one record's whole
-/// body rather than a cursor: the full thinking text, tool input, and tool
-/// output, wrapped to the pane instead of cut off at its right edge.
-pub(super) fn draw_event_detail(
-    turn: &TrajectoryTurn,
-    detail: &TrajectoryDetailView,
-    cursor: usize,
-    area: Rect,
-    offset: usize,
-) -> (
-    Vec<Line<'static>>,
-    Vec<Line<'static>>,
-    Vec<Line<'static>>,
-    BodyScroll,
-) {
-    // The body belongs to the reader, so it is drawn from the offset the pane
-    // holds: a redraw that arrives while they read must not take the view back
-    // to the top.
-    let window = BodyScroll::Offset(offset);
-    let mut header = Vec::new();
-    let mut body = Vec::new();
-    match detail.state {
-        TrajectoryDetailState::Loading => {
-            body.push(line(vec![sp(
-                "  reading this turn's records...",
-                Color::DarkGray,
-            )]));
-            return (
-                header,
-                body,
-                vec![blank(), key_hint(&[("Esc", "back")])],
-                window,
-            );
-        }
-        TrajectoryDetailState::Failed => {
-            body.push(line(vec![sp(
-                "  could not read this turn's records",
-                Color::Red,
-            )]));
-            return (
-                header,
-                body,
-                vec![blank(), key_hint(&[("Esc", "back")])],
-                window,
-            );
-        }
-        TrajectoryDetailState::Stale => return draw_drill_gone(),
-        TrajectoryDetailState::Ready => {}
-    }
-    let ev = detail
-        .records
-        .get(cursor)
-        .or_else(|| detail.records.first());
-    let Some(ev) = ev else {
-        return (header, body, vec![], window);
-    };
-    let idx = cursor.min(detail.records.len().saturating_sub(1));
-    let mark = ev.outcome.glyph();
-    let mc = outcome_color(ev.outcome);
-    let name = if ev.kind == TrajectoryRecordKind::Model {
-        let model = ev.name.as_deref().unwrap_or("");
-        format!(" {}", short_model_name(model, &turn.models))
+/// The kind column: the kind and, for a call, its place in the turn.
+fn kind_cell(ev: &TrajectoryRecord) -> String {
+    let text = if ev.ordinal > 0 {
+        format!("{} {}", ev.kind.label(), ev.ordinal)
     } else {
-        ev.name
-            .as_deref()
-            .map(|n| format!(" {n}"))
-            .unwrap_or_default()
+        ev.kind.label().to_string()
     };
-    // The model-call ordinal belongs to the record's own identity, so it is
-    // stated here rather than competing with the row's reading order.
-    let model_calls: Vec<usize> = detail
-        .records
-        .iter()
-        .enumerate()
-        .filter(|(_, r)| r.kind == TrajectoryRecordKind::Model)
-        .map(|(i, _)| i)
-        .collect();
-    let call_of = model_calls.iter().position(|i| *i == idx).map(|p| p + 1);
-    let mut ev_head = vec![
-        sp(format!(" {}{} ", ev.kind.label(), name), Color::Cyan),
-        sp(truncate_width(&ev.summary, 48), Color::White),
-    ];
-    // An unmeasured span is absent here too: a header that printed 0ms would
-    // state a measurement the log does not have, however the body reads.
-    if ev.duration_ms > 0 {
-        ev_head.push(sp(
-            format!("  {} ", format_span_ms(ev.duration_ms)),
-            Color::Gray,
-        ));
-    }
-    ev_head.push(sp(mark, mc));
-    ev_head.push(sp(
-        format!("  · Record {} of {}", idx + 1, detail.records.len()),
-        Color::DarkGray,
-    ));
-    if let Some(n) = call_of {
-        // A detail read can stop at a byte budget, so the loaded records may be
-        // the turn's beginning. The total is then a floor, not the count.
-        let total = if detail.truncated {
-            format!("{}+", model_calls.len())
-        } else {
-            model_calls.len().to_string()
-        };
-        ev_head.push(sp(format!(" · model call {n} of {total}"), Color::DarkGray));
-    }
-    header.push(line(ev_head));
-    header.push(blank());
-    let body = event_body(ev, area.width);
-    let footer = vec![blank(), key_hint(&[("Up/Down", "scroll"), ("Esc", "back")])];
-    (header, body, footer, window)
+    truncate_width(&text, TIMELINE_KIND_W)
 }
 
-/// The body of one record: what it acted on, what it measured, and the prose it
-/// produced, each as its own block.
-///
-/// Every field the record carries is rendered by presence rather than through a
-/// table naming the fields of each record type: such a table would hide a fold
-/// that emits fewer fields than the pane reads, leaving a record that could be
-/// drilled into showing an empty body. Secrets are redacted here because the
-/// pane is read by a person — over a screen share, in a recording, in
-/// scrollback — while the log keeps its full fidelity.
-///
-/// What the record acted on comes first, then its measurements, then the long
-/// prose: a hundred-line body ahead of the latency and the usage would push
-/// them off the pane, and the reader would scroll past the text to reach the
-/// numbers the text is read for.
-fn event_body(ev: &TrajectoryRecord, width: u16) -> Vec<Line<'static>> {
-    let mut body = Vec::new();
-    // Wrap a field to the pane so a logical line wider than it is read in full
-    // instead of being cut off at the right edge, and indent the rows it wraps
-    // into under the value column, so a second row does not read as another
-    // field.
-    let push_field = |body: &mut Vec<Line<'static>>, label: &str, text: &str, color: Color| {
-        let prefix = format!(" {label}: ");
-        let indent = " ".repeat(UnicodeWidthStr::width(prefix.as_str()));
-        let avail = (width as usize).saturating_sub(indent.len());
-        let mut first = true;
-        for logical in text.split('\n') {
-            for row in wrap_line(logical, avail) {
-                let lead = if first {
-                    prefix.clone()
-                } else {
-                    indent.clone()
-                };
-                body.push(line(vec![sp(lead, Color::DarkGray), sp(row, color)]));
-                first = false;
-            }
-        }
+/// The name column: the model with its vendor prefix, or the tool's own name.
+fn name_cell(ev: &TrajectoryRecord) -> String {
+    match (ev.kind, ev.name.as_deref()) {
+        (TrajectoryRecordKind::Model, Some(id)) => display_model_id(id),
+        (_, Some(name)) => name.to_string(),
+        _ => String::new(),
+    }
+}
+
+/// The measured split of a model call, in the full and compact forms the
+/// summary column may use. A part the log did not record stays absent.
+fn timing_cells(ev: &TrajectoryRecord) -> (String, String) {
+    let Some(t) = ev
+        .timing
+        .as_ref()
+        .filter(|_| ev.kind == TrajectoryRecordKind::Model)
+    else {
+        return (String::new(), String::new());
     };
-    if let Some(input) = &ev.input {
-        push_field(&mut body, "input", &redact(input), Color::Gray);
-        body.push(blank());
+    let mut parts = Vec::new();
+    let mut compact = Vec::new();
+    if let Some(ttft) = t.ttft_ms {
+        parts.push(format!("TTFT {}", format_span_ms(ttft)));
+        compact.push(format!("TTFT {}", format_span_ms(ttft)));
     }
-    let before_facts = body.len();
-    push_model_facts(&mut body, ev, &push_field);
-    push_record_span(&mut body, ev);
-    // A record whose log carries no measurement is not left with a blank where
-    // facts would have been.
-    if body.len() > before_facts {
-        body.push(blank());
+    if let (Some(decode_ms), Some(out)) = (t.decode_ms, ev.usage.as_ref().and_then(|u| u.output))
+        && decode_ms > 0
+    {
+        let rate = format!("{:.1} tok/s", out as f64 / (decode_ms as f64 / 1000.0));
+        parts.push(rate.clone());
+        compact.push(rate);
     }
-    if let Some(thinking) = &ev.thinking {
-        push_field(&mut body, "thinking", &redact(thinking), Color::Gray);
-        body.push(blank());
+    // The split the provider's own blocks measured: how long the call spent
+    // thinking and how long it spent producing output. A span the stream never
+    // closed stays absent rather than reading as no time.
+    if let Some(reasoning) = t.reasoning_ms {
+        parts.push(format!("reasoning {}", format_span_ms(reasoning)));
     }
-    if let Some(output) = &ev.output {
-        push_field(
-            &mut body,
-            "output",
-            &redact(output),
-            outcome_color(ev.outcome),
-        );
-        body.push(blank());
+    if let Some(response) = t.response_ms {
+        parts.push(format!("generating {}", format_span_ms(response)));
     }
-    body
+    (parts.join(" · "), compact.join(" · "))
+}
+
+/// The summary column: the switch and the measured split lead, because the
+/// tail is what a narrow column drops.
+fn row_summary(ev: &TrajectoryRecord, name: &str, summary_w: usize) -> String {
+    let (full, compact) = timing_cells(ev);
+    // The suffix gives way in tiers: the full split, then the two figures a
+    // reader scans for, then nothing. Clearing it outright hid
+    // time-to-first-token on every call that also reported reasoning.
+    let timing = if UnicodeWidthStr::width(full.as_str()) < summary_w {
+        full
+    } else if !compact.is_empty() && UnicodeWidthStr::width(compact.as_str()) < summary_w {
+        compact
+    } else {
+        String::new()
+    };
+    let switch = ev
+        .model_switch_from
+        .as_ref()
+        .map(|prior| format!("[switch: {} -> {}] ", display_model_id(prior), name))
+        .unwrap_or_default();
+    let lead = match (switch.is_empty(), timing.is_empty()) {
+        (false, false) => format!("{switch}{timing} · "),
+        (false, true) => switch,
+        (true, false) => format!("{timing} · "),
+        (true, true) => String::new(),
+    };
+    let room = summary_w.saturating_sub(UnicodeWidthStr::width(lead.as_str()));
+    format!("{}{}", lead, truncate_width(&ev.summary, room))
 }
 
 // Helpers
@@ -592,122 +477,5 @@ fn format_turn_cache(turn: &TrajectoryTurn) -> String {
             format!(" · {} cache hit", format_tokens(cache_read))
         }
         _ => String::new(),
-    }
-}
-
-/// The latency split, provider usage, and retry count of a model call or
-/// delegated child. Each part is rendered only when the log recorded it: an
-/// unmeasured value stays absent rather than appearing as a zero.
-fn push_model_facts(
-    body: &mut Vec<Line<'static>>,
-    ev: &TrajectoryRecord,
-    push_field: &impl Fn(&mut Vec<Line<'static>>, &str, &str, Color),
-) {
-    if let Some(timing) = &ev.timing {
-        // Every span here reads the way the session header and the Level 1 rows
-        // read one: the same span shown twice must not read as two numbers.
-        let mut parts = vec![format!("total {}", format_span_ms(timing.total_ms))];
-        if let Some(ttft) = timing.ttft_ms {
-            parts.push(format!("TTFT {}", format_span_ms(ttft)));
-        }
-        if let Some(decode) = timing.decode_ms {
-            parts.push(format!("decode {}", format_span_ms(decode)));
-        }
-        // The split the provider's own blocks measured. A span the stream never
-        // closed stays absent rather than reading as no time.
-        if let Some(reasoning) = timing.reasoning_ms {
-            parts.push(format!("reasoning {}", format_span_ms(reasoning)));
-        }
-        if let Some(response) = timing.response_ms {
-            parts.push(format!("generating {}", format_span_ms(response)));
-        }
-        push_field(body, "timing", &parts.join(" · "), Color::Gray);
-        // The rate the call decoded at, from its own output and decode span.
-        if let (Some(decode_ms), Some(out)) =
-            (timing.decode_ms, ev.usage.as_ref().and_then(|u| u.output))
-            && decode_ms > 0
-            && out > 0
-        {
-            push_field(
-                body,
-                "speed",
-                &format!("{:.1} tok/s", out as f64 / (decode_ms as f64 / 1000.0)),
-                Color::Gray,
-            );
-        }
-    }
-    if let Some(usage) = &ev.usage {
-        // A breakdown count the call's endpoint did not report and the log left
-        // at zero is unknown rather than a measured zero, so it stays off the
-        // line.
-        let parts: Vec<String> = [
-            usage
-                .input
-                .filter(|v| count_visible(*v, usage.provenance.input_reported))
-                .map(|v| format!("input {v}")),
-            usage
-                .cache_read
-                .filter(|v| count_visible(*v, usage.provenance.cache_read_reported))
-                .map(|v| format!("cache read {v}")),
-            usage
-                .cache_write
-                .filter(|v| count_visible(*v, usage.provenance.cache_write_reported))
-                .map(|v| format!("cache write {v}")),
-            // The output total carries no report flag on the durable record, so
-            // a zero cannot be told from an omitted count: it stays off the
-            // line, while a count above zero stands on its own as a floor.
-            usage
-                .output
-                .filter(|v| *v > 0)
-                .map(|v| format!("output {v}")),
-        ]
-        .into_iter()
-        .flatten()
-        .collect();
-        if !parts.is_empty() {
-            push_field(body, "tokens", &parts.join(" · "), Color::Gray);
-        }
-        // Reasoning tokens are a component of the output above, not a count of
-        // their own: the line says so instead of leaving the number bare. Same
-        // missing flag as the output total, so the same floor rule applies.
-        if let Some(reasoning) = usage.reasoning.filter(|v| *v > 0) {
-            push_field(
-                body,
-                "reasoning",
-                &format!("{reasoning} tokens (part of output)"),
-                Color::Gray,
-            );
-        }
-    }
-    if ev.retries > 0 {
-        push_field(
-            body,
-            "retries",
-            &format!("{} length recovery", ev.retries),
-            Color::Gray,
-        );
-    }
-}
-
-/// The record's own span and where it started in the turn, read the way the
-/// rest of the pane reads a span. This line belongs with the measurements
-/// above the prose for the same reason they do: below a long body it is off
-/// the pane the moment the reader needs it. An unmeasured value stays absent
-/// rather than reading as a measured zero: a start of 0ms, like a latency of
-/// 0ms, would state a measurement the log does not have.
-fn push_record_span(body: &mut Vec<Line<'static>>, ev: &TrajectoryRecord) {
-    let mut span = Vec::new();
-    if ev.duration_ms > 0 {
-        span.push(sp(" latency: ", Color::DarkGray));
-        span.push(sp(format_span_ms(ev.duration_ms), Color::Gray));
-    }
-    if ev.start_ms > 0 {
-        let lead = if span.is_empty() { " " } else { "  ·  " };
-        span.push(sp(lead, Color::DarkGray));
-        span.push(sp("start: ", Color::DarkGray));
-        span.push(sp(format_span_ms(ev.start_ms), Color::Gray));
-    }
-    if !span.is_empty() {
-        body.push(line(span));
     }
 }

@@ -417,29 +417,78 @@ fn test_model_cell_names_switch() {
     );
 }
 
-/// Model names shorten against the set they appear in: a same-vendor pair
-/// keeps its distinguishing tail, and a mixed-vendor pair keeps full names
-/// because they share no boundary-safe prefix.
+/// A model keeps its vendor prefix and only loses a gateway route or a
+/// trailing snapshot date, so the name still says whose model it is.
 #[test]
-fn test_model_names_shorten() {
-    let deepseek = vec![
-        "deepseek-v4-pro-0813".to_string(),
-        "deepseek-v4.1-flash".to_string(),
-    ];
+fn test_model_names_keep_vendor() {
     assert_eq!(
-        short_model_names(&deepseek),
-        vec!["v4-pro-0813", "v4.1-flash"]
+        display_model_id("deepseek-v4-pro-0813"),
+        "deepseek-v4-pro-0813"
     );
-    let mixed = vec![
-        "deepseek-v4-pro-0813".to_string(),
-        "qwen3.8-max".to_string(),
-    ];
-    assert_eq!(short_model_names(&mixed), mixed);
-    let same = vec!["qwen3.8-max".to_string(), "qwen3.8-flash".to_string()];
-    assert_eq!(short_model_names(&same), vec!["max", "flash"]);
     assert_eq!(
-        short_model_name("not-in-the-set", &deepseek),
-        "not-in-the-set",
-        "an unknown model keeps its full name"
+        display_model_id("deepseek-v4.1-flash"),
+        "deepseek-v4.1-flash"
     );
+    assert_eq!(display_model_id("qwen3.8-max"), "qwen3.8-max");
+    assert_eq!(
+        display_model_id("openrouter/deepseek/deepseek-v4.1-flash"),
+        "deepseek-v4.1-flash"
+    );
+    assert_eq!(
+        display_model_id("claude-sonnet-4-20250514"),
+        "claude-sonnet-4",
+        "a snapshot date is dropped when the id does not fit"
+    );
+}
+
+/// Every row of the turn list ends inside the terminal and keeps its outcome:
+/// the tail is what tells a reader the turn finished, so a column added on the
+/// left must never push it off the right edge.
+#[test]
+fn test_turn_list_keeps_tail() {
+    let turn = TrajectoryTurn {
+        models: vec![
+            "deepseek-v4-pro-0813".to_string(),
+            "deepseek-v4.1-flash".to_string(),
+        ],
+        model_chain: vec![
+            "deepseek-v4-pro-0813".to_string(),
+            "deepseek-v4.1-flash".to_string(),
+        ],
+        tokens_in: Some(432_200),
+        tokens_out: Some(10_300),
+        cache_read: Some(333_000),
+        cache_write: Some(0),
+        usage_provenance: UsageProvenance::ALL_REPORTED,
+        reasoning_tokens: Some(4_200),
+        reasoning_ms: Some(63_000),
+        tool_count: 20,
+        tool_fail: 6,
+        duration_ms: 390_000,
+        success: true,
+        ..turn(1, "长上下文模型和多轮对话会产生大量 KV cache，这段标题很长")
+    };
+    let view = TrajectoryView {
+        models_used: 2,
+        model: "2 models".into(),
+        ..view(vec![TrajectoryRow::Turn(turn)])
+    };
+    for width in [100u16, 120, 130, 160] {
+        let (_, body, _, _) = list::draw_turn_list(&view, 0, Rect::new(0, 0, width, 10));
+        let text: String = body[0].spans.iter().map(|s| s.content.as_ref()).collect();
+        let shown = UnicodeWidthStr::width(text.as_str());
+        assert!(
+            shown <= width as usize,
+            "row wider than the terminal at {width}: {shown} > {width}: {text:?}"
+        );
+        let tail = text.trim_end().chars().last().unwrap_or(' ');
+        assert!(
+            tail == '✓' || tail == '✗',
+            "the outcome must survive at {width} columns: {text:?}"
+        );
+        assert!(
+            text.contains("6 fails"),
+            "the failure count must survive at {width} columns: {text:?}"
+        );
+    }
 }

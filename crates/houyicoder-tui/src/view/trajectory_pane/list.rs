@@ -3,7 +3,7 @@
 //!
 //! The list is the pane's index surface, so it owns the turn title, the
 //! column layout, and the boundary separator. The drill-down renderers live in
-//! the detail submodule.
+//! the detail and record_detail modules.
 
 use super::*;
 use crate::command::render::format_tokens;
@@ -71,8 +71,7 @@ const TURN_TITLE_W: usize = 30;
 const CACHED_CELL_W: usize = "100% cached".len();
 
 /// The model and effort columns, in display columns.
-const MODEL_W: usize = 20;
-const EFFORT_W: usize = 8;
+const MODEL_W: usize = MODEL_NAME_W + 2;
 
 /// The gap a column leaves after its content, so two columns never touch.
 const COLUMN_GAP_W: usize = 2;
@@ -91,8 +90,7 @@ const TOKENS_FIXED_W: usize = " in ".len() + " out".len();
 /// take about sixty columns between them, so a terminal narrower than that
 /// clips the row and no gate here applies.
 const CALLS_MIN_WIDTH: usize = 96;
-const THINKING_MIN_WIDTH: usize = 124;
-const MODEL_MIN_WIDTH: usize = 148;
+const MODEL_MIN_WIDTH: usize = 124;
 
 /// A count with its noun, singular at one: a single call reads as a count, not
 /// as the plural template with the number dropped into it.
@@ -116,30 +114,6 @@ fn cached_cell(t: &TrajectoryTurn) -> String {
     }
 }
 
-/// Thinking tokens are a component of output, so the parenthetical sits tight
-/// against the output number and carries its own inclusion note. The time the
-/// turn spent thinking is stated beside them, because a turn that thought for
-/// seconds is the one a reader is looking for.
-///
-/// Each figure is stated for what the log holds and neither invents the other.
-/// A span the calls reported is stated whatever it measured, a block closed
-/// inside a millisecond reading as zero; a count of zero stays off the line,
-/// because a reasoning count the endpoint left at zero cannot be told from one
-/// it never reported.
-fn thinking_cell(t: &TrajectoryTurn) -> String {
-    let tokens = match t.reasoning_tokens {
-        Some(r) if r > 0 => Some(format_tokens(r as u64)),
-        _ => None,
-    };
-    let span = t.reasoning_ms.map(format_span_ms);
-    match (span, tokens) {
-        (Some(span), Some(tokens)) => format!("(thinking {span} · {tokens})"),
-        (Some(span), None) => format!("(thinking {span})"),
-        (None, Some(tokens)) => format!("(thinking {tokens})"),
-        (None, None) => String::new(),
-    }
-}
-
 /// The model ids a turn used, fitted to the column budget. One id repeated on
 /// every row is noise, so the column is drawn only when the session saw at
 /// least two distinct models.
@@ -149,21 +123,19 @@ fn thinking_cell(t: &TrajectoryTurn) -> String {
 /// plain truncation of the joined ids would spend the whole budget on the
 /// first long id and hide the switch the column exists to report.
 fn model_cell(t: &TrajectoryTurn, budget: usize) -> String {
-    let short = short_model_names(&t.models);
-    let Some((first, rest)) = short.split_first() else {
+    let Some((first, rest)) = t.models.split_first() else {
         return String::new();
     };
     if rest.is_empty() {
-        return truncate_width(first, budget);
+        return truncate_width(&display_model_id(first), budget);
     }
     let suffix = format!(" +{}", rest.len());
     let room = budget.saturating_sub(suffix.chars().count());
-    format!("{}{}", truncate_width(first, room), suffix)
-}
-
-/// The effort levels a turn ran at, on the same condition as the model ids.
-fn effort_cell(t: &TrajectoryTurn) -> String {
-    t.efforts.join(",")
+    format!(
+        "{}{}",
+        truncate_width(&display_model_id(first), room),
+        suffix
+    )
 }
 
 /// The turn's tool calls, or that it made none.
@@ -212,7 +184,6 @@ pub(super) struct TurnColumns {
     /// The whole token cell: both subcolumns plus the keywords between them.
     tokens_width: usize,
     cached: bool,
-    thinking: Option<usize>,
     model: bool,
     calls: Option<usize>,
     fails: Option<usize>,
@@ -241,15 +212,10 @@ impl TurnColumns {
             out_width,
             tokens_width: in_width + out_width + TOKENS_FIXED_W + COLUMN_GAP_W,
             cached: max_cell_width(&turns, cached_cell) > 0,
-            thinking: if width >= THINKING_MIN_WIDTH {
-                filled(thinking_cell)
-            } else {
-                None
-            },
-            // A turn that used more than one model keeps the column at the
-            // thinking tier too: hiding it on a common 130-column terminal
-            // hid the switch itself, which is the fact the column exists for.
-            model: show_per_turn_model && (width >= MODEL_MIN_WIDTH || width >= THINKING_MIN_WIDTH),
+            // The model column joins as soon as the row can hold it: a turn
+            // that switched models states that fact here, and hiding the column
+            // on a common terminal hid the switch itself.
+            model: show_per_turn_model && width >= MODEL_MIN_WIDTH,
             calls: if width >= CALLS_MIN_WIDTH {
                 filled(calls_cell)
             } else {
@@ -309,16 +275,9 @@ pub(super) fn turn_row(
     if cols.cached {
         spans.push(sp(pad(&cached_cell(t), CACHED_W), Color::Indexed(208)));
     }
-    if let Some(w) = cols.thinking {
-        spans.push(sp(pad(&thinking_cell(t), w), Color::DarkGray));
-    }
     if cols.model {
         spans.push(sp(
             pad(&model_cell(t, MODEL_W - 2), MODEL_W),
-            Color::DarkGray,
-        ));
-        spans.push(sp(
-            pad(&truncate_width(&effort_cell(t), EFFORT_W - 2), EFFORT_W),
             Color::DarkGray,
         ));
     }

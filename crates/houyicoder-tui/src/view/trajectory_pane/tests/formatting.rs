@@ -54,7 +54,7 @@ fn test_detail_omits_unmeasured_span() {
     record.duration_ms = 0;
     let unmeasured = turn(1, "ask");
     let detail = detail_of(record);
-    let (_, body, _, _) = detail::draw_event_detail(&unmeasured, &detail, 0, Rect::ZERO, 0);
+    let (_, body, _, _) = record_detail::draw_event_detail(&unmeasured, &detail, 0, Rect::ZERO, 0);
     let text = lines_text(&body);
     assert!(!text.contains("latency"), "no unmeasured latency: {text}");
     assert!(
@@ -67,7 +67,8 @@ fn test_detail_omits_unmeasured_span() {
     let mut measured_record = record_of(TrajectoryRecordKind::Tool, None);
     measured_record.start_ms = 1_310;
     let detail = detail_of(measured_record);
-    let (_, body, _, _) = detail::draw_event_detail(&turn(1, "ask"), &detail, 0, Rect::ZERO, 0);
+    let (_, body, _, _) =
+        record_detail::draw_event_detail(&turn(1, "ask"), &detail, 0, Rect::ZERO, 0);
     let text = lines_text(&body);
     assert!(text.contains("latency: 10ms"), "a measured one is: {text}");
     assert!(
@@ -91,7 +92,7 @@ fn test_detail_names_reasoning() {
     });
     let turn = turn(1, "ask");
     let detail = detail_of(record);
-    let (_, body, _, _) = detail::draw_event_detail(&turn, &detail, 0, Rect::ZERO, 0);
+    let (_, body, _, _) = record_detail::draw_event_detail(&turn, &detail, 0, Rect::ZERO, 0);
     let text = lines_text(&body);
     assert!(
         text.contains("reasoning: 107 tokens (part of output)"),
@@ -108,7 +109,7 @@ fn test_detail_separates_fields() {
     record.input = Some("a command".into());
     let turn = turn(1, "ask");
     let detail = detail_of(record);
-    let (_, body, _, _) = detail::draw_event_detail(&turn, &detail, 0, Rect::ZERO, 0);
+    let (_, body, _, _) = record_detail::draw_event_detail(&turn, &detail, 0, Rect::ZERO, 0);
     let lines: Vec<String> = body
         .iter()
         .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
@@ -156,7 +157,8 @@ fn test_detail_timing_first() {
         response_ms: None,
     });
     let detail = detail_of(record);
-    let (_, body, _, _) = detail::draw_event_detail(&turn(1, "ask"), &detail, 0, Rect::ZERO, 0);
+    let (_, body, _, _) =
+        record_detail::draw_event_detail(&turn(1, "ask"), &detail, 0, Rect::ZERO, 0);
     let lines: Vec<String> = body
         .iter()
         .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
@@ -192,7 +194,8 @@ fn test_detail_header_omits_span() {
     record.duration_ms = 0;
     let unmeasured = turn(1, "ask");
     let detail = detail_of(record);
-    let (header, _, _, _) = detail::draw_event_detail(&unmeasured, &detail, 0, Rect::ZERO, 0);
+    let (header, _, _, _) =
+        record_detail::draw_event_detail(&unmeasured, &detail, 0, Rect::ZERO, 0);
     let text = lines_text(&header);
     assert!(
         !text.contains("0ms"),
@@ -201,7 +204,7 @@ fn test_detail_header_omits_span() {
 
     let measured = turn(1, "ask");
     let detail = detail_of(record_of(TrajectoryRecordKind::Tool, None));
-    let (header, _, _, _) = detail::draw_event_detail(&measured, &detail, 0, Rect::ZERO, 0);
+    let (header, _, _, _) = record_detail::draw_event_detail(&measured, &detail, 0, Rect::ZERO, 0);
     let text = lines_text(&header);
     assert!(text.contains("10ms"), "a measured one is stated: {text}");
 }
@@ -219,7 +222,8 @@ fn test_detail_shows_reasoning_split() {
         response_ms: Some(5_500),
     });
     let detail = detail_of(measured);
-    let (_, body, _, _) = detail::draw_event_detail(&turn(1, "ask"), &detail, 0, Rect::ZERO, 0);
+    let (_, body, _, _) =
+        record_detail::draw_event_detail(&turn(1, "ask"), &detail, 0, Rect::ZERO, 0);
     let text = lines_text(&body);
     assert!(text.contains("reasoning 3.0s"), "the thinking time: {text}");
     assert!(
@@ -236,7 +240,8 @@ fn test_detail_shows_reasoning_split() {
         response_ms: None,
     });
     let detail = detail_of(unmeasured);
-    let (_, body, _, _) = detail::draw_event_detail(&turn(1, "ask"), &detail, 0, Rect::ZERO, 0);
+    let (_, body, _, _) =
+        record_detail::draw_event_detail(&turn(1, "ask"), &detail, 0, Rect::ZERO, 0);
     let text = lines_text(&body);
     assert!(
         !text.contains("reasoning") && !text.contains("generating"),
@@ -254,8 +259,13 @@ fn test_detail_wraps_long_field() {
     record.duration_ms = 0;
     let detail = detail_of(record);
     let width = 80;
-    let (_, body, _, _) =
-        detail::draw_event_detail(&turn(1, "ask"), &detail, 0, Rect::new(0, 0, width, 20), 0);
+    let (_, body, _, _) = record_detail::draw_event_detail(
+        &turn(1, "ask"),
+        &detail,
+        0,
+        Rect::new(0, 0, width, 20),
+        0,
+    );
     let rows: Vec<String> = body
         .iter()
         .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
@@ -303,7 +313,7 @@ fn test_detail_span_matches_row() {
     let app = app();
     let area = Rect::new(0, 0, 140, 20);
     let l1 = lines_text(&detail::draw_turn_detail(&turn, &detail, 0, area, &app).1);
-    let l2 = lines_text(&detail::draw_event_detail(&turn, &detail, 0, area, 0).1);
+    let l2 = lines_text(&record_detail::draw_event_detail(&turn, &detail, 0, area, 0).1);
     for reading in ["4.2s", "1.2s", "2.1s"] {
         assert!(
             l1.contains(reading),

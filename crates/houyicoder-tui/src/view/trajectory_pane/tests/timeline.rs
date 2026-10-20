@@ -169,14 +169,15 @@ fn test_timeline_compact_narrow() {
         }
     }
 
-    // At the width a bar is drawn in, the axis is back.
+    // At the width a bar is drawn in, the axis is back. Below it the row drops
+    // the axis rather than drawing one the terminal would cut.
     let detail = detail_of(record);
     let app = app();
     let (header, body, _, _) =
-        detail::draw_turn_detail(&turn(1, "ask"), &detail, 0, Rect::new(0, 0, 40, 20), &app);
+        detail::draw_turn_detail(&turn(1, "ask"), &detail, 0, Rect::new(0, 0, 60, 20), &app);
     assert!(
         lines_text(&header).contains("···"),
-        "a ruler at 40 columns: {:?}",
+        "a ruler at 60 columns: {:?}",
         lines_text(&header)
     );
     assert!(
@@ -286,7 +287,7 @@ fn test_model_column_survives_narrow() {
     let (_, body, _, _) = list::draw_turn_list(&view, 0, Rect::new(0, 0, 130, 10));
     let text: String = body[0].spans.iter().map(|s| s.content.as_ref()).collect();
     assert!(
-        text.contains("v4-pro-0813") && text.contains("+1"),
+        text.contains("deepseek-v4-pro") && text.contains("+1"),
         "the switch stays visible at 130 columns: {text:?}"
     );
 }
@@ -315,7 +316,114 @@ fn test_row_states_switch_marker() {
         .map(|s| s.content.as_ref())
         .collect();
     assert!(
-        text.contains("[model: deepseek-v4-pro-0813 -> v4.1-flash]"),
+        text.contains("[switch: deepseek-v4-pro-0813 -> deepseek-v4.1-flash]"),
         "the row leads with the switch: {text:?}"
+    );
+}
+
+/// The axis describes the work, not the wait: a long idle gap collapses, the
+/// steps keep distinct widths, and an instant is a dot rather than a rule that
+/// stacks into a column.
+#[test]
+fn test_waterfall_active_scale() {
+    let mut context = record_of(TrajectoryRecordKind::Context, None);
+    context.start_ms = 0;
+    context.duration_ms = 0;
+    let mut fast = record_of(TrajectoryRecordKind::Tool, None);
+    fast.name = Some("glob".into());
+    fast.start_ms = 100;
+    fast.duration_ms = 50;
+    let mut model = record_of(TrajectoryRecordKind::Model, None);
+    model.name = Some("deepseek-v4-pro-0813".into());
+    model.ordinal = 1;
+    model.start_ms = 200;
+    model.duration_ms = 3_000;
+    let mut slow = record_of(TrajectoryRecordKind::Tool, None);
+    slow.name = Some("bash".into());
+    slow.start_ms = 10_000;
+    slow.duration_ms = 60_000;
+    // A permission prompt held the turn for half an hour.
+    let mut after_wait = record_of(TrajectoryRecordKind::Model, None);
+    after_wait.name = Some("deepseek-v4-pro-0813".into());
+    after_wait.ordinal = 2;
+    after_wait.start_ms = 1_800_000;
+    after_wait.duration_ms = 3_000;
+    let mut turn = turn(1, "ask");
+    turn.models = vec!["deepseek-v4-pro-0813".to_string()];
+    turn.model_chain = vec!["deepseek-v4-pro-0813".to_string()];
+    turn.duration_ms = 1_803_000;
+    let detail = detail_of_all(vec![context, fast, model, slow, after_wait]);
+    let app = app();
+    let (_, body, _, _) =
+        detail::draw_turn_detail(&turn, &detail, 0, Rect::new(0, 0, 120, 20), &app);
+    let rows: Vec<String> = body
+        .iter()
+        .map(|l| {
+            l.spans
+                .iter()
+                .map(|s| s.content.as_ref())
+                .collect::<String>()
+        })
+        .collect();
+    let all = rows.join("\n");
+    assert!(!all.contains('┃'), "an instant draws no rule: {all}");
+    // The bar is drawn in eighths of a column, so compare the drawn length in
+    // eighths rather than in characters: a three-second call is one character
+    // wide but seven eighths, and a fifty-millisecond call is one eighth.
+    let eighths = |row: &str| -> usize {
+        row.chars()
+            .map(|c| match c {
+                '▏' => 1,
+                '▎' => 2,
+                '▍' => 3,
+                '▌' => 4,
+                '▋' => 5,
+                '▊' => 6,
+                '▉' => 7,
+                '█' => 8,
+                _ => 0,
+            })
+            .sum()
+    };
+    let widths: Vec<usize> = rows.iter().map(|r| eighths(r)).collect();
+    assert!(
+        widths[1] < widths[2] && widths[2] < widths[3],
+        "50ms, 3s and 60s must differ in width: {widths:?}\n{all}"
+    );
+    assert!(rows[0].contains('·'), "the instant is a dot: {:?}", rows[0]);
+    assert!(
+        !rows[0].contains("0ms"),
+        "an instant states no duration: {:?}",
+        rows[0]
+    );
+    assert!(
+        rows.iter().any(|r| r.contains("model 1")),
+        "the call ordinal is stated: {all}"
+    );
+}
+
+/// The turn header carries what the list row no longer spends columns on: the
+/// thinking span and tokens, the effort, and the chain of models the turn ran
+/// through.
+#[test]
+fn test_header_states_chain() {
+    let mut turn = turn(1, "ask");
+    turn.reasoning_ms = Some(63_000);
+    turn.reasoning_tokens = Some(4_200);
+    turn.efforts = vec!["high".into()];
+    turn.model_chain = vec![
+        "deepseek-v4-pro-0813".to_string(),
+        "deepseek-v4.1-flash".to_string(),
+    ];
+    let detail = detail_of_all(Vec::new());
+    let app = app();
+    let (header, _, _, _) =
+        detail::draw_turn_detail(&turn, &detail, 0, Rect::new(0, 0, 140, 20), &app);
+    let text = lines_text(&header);
+    assert!(text.contains("thinking 1m 3s (4.2k)"), "thinking: {text:?}");
+    assert!(text.contains("effort high"), "effort: {text:?}");
+    assert!(
+        text.contains("models: deepseek-v4-pro-0813 → deepseek-v4.1-flash"),
+        "the chain: {text:?}"
     );
 }

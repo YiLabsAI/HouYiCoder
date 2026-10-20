@@ -242,12 +242,11 @@ fn apply_hook_signal(
     } else {
         hook_name.to_string()
     };
-    builder.touch(ts);
-    let record = builder.record(
+    builder.push_hook(
         kind,
         Some(name),
         format!("{verdict:?} {}", preview(reason)),
+        reason,
         ts,
     );
-    builder.push(record);
 }

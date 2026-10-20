@@ -1594,11 +1594,9 @@ fn test_history_loads_without_keys() {
 /// The list names the second model as a count and the drill states the switch,
 /// so a reader does not have to widen the window to 148 columns to learn that
 /// the turn ran on two models.
-#[test]
-#[ignore]
-fn test_trajectory_switch_visible_narrow() {
-    let sessions_dir = fresh_temp_dir("sessions-traj-switch");
-    let sid = "56565656-5656-5656-5656-565656565656";
+/// The events of a turn that ran on two models: one tool call, a measured
+/// step on each model, and the cache break the switch caused.
+fn switch_session_events() -> Vec<SessionEvent> {
     let usage = |turn: u32, model: &str| SessionEvent::TurnUsage {
         turn,
         call_in_turn: 1,
@@ -1614,6 +1612,15 @@ fn test_trajectory_switch_visible_narrow() {
         cache_read_reported: true,
         cache_write_reported: false,
     };
+    let timing = |turn: u32, step: u32| SessionEvent::ModelStepTiming {
+        turn,
+        step,
+        total_ms: 900,
+        ttft_ms: Some(210),
+        decode_ms: Some(600),
+        reasoning_ms: None,
+        response_ms: None,
+    };
     let events = vec![
         SessionEvent::UserInput {
             text: "switched turn".into(),
@@ -1626,7 +1633,18 @@ fn test_trajectory_switch_visible_narrow() {
             text: "first reply".into(),
             thinking: None,
         },
+        timing(1, 1),
         usage(1, "deepseek-v4-pro-0813"),
+        SessionEvent::ToolCall {
+            call_id: "call-1".into(),
+            tool: "bash".into(),
+            input: serde_json::json!({"command": "true"}),
+        },
+        SessionEvent::ToolResult {
+            call_id: "call-1".into(),
+            output: serde_json::json!({"stdout": "ok"}),
+            duration_ms: 40,
+        },
         SessionEvent::TurnStarted {
             turn: 2,
             call_in_turn: 0,
@@ -1635,12 +1653,22 @@ fn test_trajectory_switch_visible_narrow() {
             text: "second reply".into(),
             thinking: None,
         },
+        timing(2, 1),
         usage(2, "deepseek-v4.1-flash"),
         SessionEvent::CacheBreak {
             cause: "model-switch".into(),
         },
         SessionEvent::RunCompleted { ms: Some(1_000) },
     ];
+    events
+}
+
+#[test]
+#[ignore]
+fn test_trajectory_switch_visible_narrow() {
+    let sessions_dir = fresh_temp_dir("sessions-traj-switch");
+    let sid = "56565656-5656-5656-5656-565656565656";
+    let events = switch_session_events();
     common::seed_session_events(&sessions_dir, sid, "deepseek-v4-pro-0813", &events);
     let mut s = PtySession::launch_with_sessions_dir(
         None,
@@ -1668,11 +1696,54 @@ fn test_trajectory_switch_visible_narrow() {
         "the turn row must keep the switch at 130 columns:\n{}",
         s.output_plain()
     );
+    // The tail of the row is what a column added on the left can push off the
+    // edge, so the outcome and the counts are asserted on the same line as the
+    // model cell.
+    let screen = s.screen().contents();
+    let row = screen
+        .lines()
+        .find(|line| line.contains("+1") && line.contains("✓"))
+        .unwrap_or_else(|| panic!("no turn row with the model cell:\n{screen}"));
+    assert!(
+        row.contains("1 call"),
+        "the row keeps its counts at 130 columns: {row:?}"
+    );
+    assert!(
+        !screen.contains('┃'),
+        "the list draws no vertical rules: {screen}"
+    );
+
     s.clear_output();
     s.send_key(&Key::Enter);
     assert!(
-        s.wait_for_plain("-> v4.1-flash", RENDER_TIMEOUT),
+        s.wait_for_plain("-> deepseek-v4.1-flash", RENDER_TIMEOUT),
         "the drill must state the switch:\n{}",
+        s.output_plain()
+    );
+    let detail = s.output_plain();
+    assert!(
+        detail.contains("models: deepseek-v4-pro-0813 → deepseek-v4.1-flash"),
+        "the detail header states the chain:\n{detail}"
+    );
+    assert!(
+        detail.contains("model 1") && detail.contains("TTFT"),
+        "the timeline keeps the call ordinal and the wait:\n{detail}"
+    );
+    assert!(
+        !detail.contains('┃'),
+        "an instant draws no vertical rule:\n{detail}"
+    );
+    // The third level is where the raw identity is checked: the row above
+    // shortens nothing, and the switch names the model it came from.
+    s.clear_output();
+    for _ in 0..3 {
+        s.send_key(&Key::Down);
+    }
+    s.send_key(&Key::Enter);
+    assert!(
+        s.wait_for_plain("switched", RENDER_TIMEOUT)
+            && s.wait_for_plain("deepseek-v4-pro-0813", RENDER_TIMEOUT),
+        "the record detail states what the call switched from:\n{}",
         s.output_plain()
     );
 }

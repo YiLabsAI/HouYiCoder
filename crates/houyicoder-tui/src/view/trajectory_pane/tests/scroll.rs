@@ -240,7 +240,7 @@ fn test_detail_names_model_call() {
     ];
     let detail = detail_of_all(vec![first, second]);
     let (header, _, _, _) =
-        detail::draw_event_detail(&turn, &detail, 1, Rect::new(0, 0, 140, 20), 0);
+        record_detail::draw_event_detail(&turn, &detail, 1, Rect::new(0, 0, 140, 20), 0);
     let text: String = header
         .iter()
         .flat_map(|l| l.spans.iter())
@@ -253,5 +253,91 @@ fn test_detail_names_model_call() {
     assert!(
         text.contains("v4.1-flash"),
         "the header names the shortened model: {text:?}"
+    );
+}
+
+/// A signal record opens onto its whole text, and a model record names the
+/// model in full and states the cache share: the detail is where the raw
+/// identity and the measured share are checked.
+#[test]
+fn test_detail_signal_body() {
+    let full = "cache break after the model switch: the prefix was rebuilt from the new model";
+    let mut cache = record_of(TrajectoryRecordKind::Cache, None);
+    cache.summary = "cache break: model-switch".into();
+    cache.output = Some(full.into());
+    let mut model = record_of(TrajectoryRecordKind::Model, None);
+    model.name = Some("deepseek-v4-pro-0813".into());
+    model.usage = Some(EventUsage {
+        input: Some(32_360),
+        output: Some(113),
+        cache_read: Some(31_744),
+        cache_write: Some(0),
+        reasoning: None,
+        provenance: UsageProvenance::ALL_REPORTED,
+    });
+    model.model_switch_from = Some("deepseek-v4.1-flash".into());
+    let mut turn = turn(1, "ask");
+    turn.models = vec!["deepseek-v4-pro-0813".to_string()];
+    turn.model_chain = vec![
+        "deepseek-v4.1-flash".to_string(),
+        "deepseek-v4-pro-0813".to_string(),
+    ];
+    let detail = detail_of_all(vec![cache, model]);
+    let (_, body, _, _) =
+        record_detail::draw_event_detail(&turn, &detail, 0, Rect::new(0, 0, 140, 20), 0);
+    let text: String = body
+        .iter()
+        .flat_map(|l| l.spans.iter())
+        .map(|s| s.content.as_ref())
+        .collect();
+    assert!(
+        text.contains("prefix was rebuilt"),
+        "the signal opens onto its whole text: {text:?}"
+    );
+    for kind in [
+        TrajectoryRecordKind::Compaction,
+        TrajectoryRecordKind::Error,
+        TrajectoryRecordKind::Hook,
+    ] {
+        let mut signal = record_of(kind, None);
+        signal.summary = "preview".into();
+        signal.output = Some(format!("whole {kind:?} body"));
+        let detail = detail_of_all(vec![signal]);
+        let (_, body, _, _) =
+            record_detail::draw_event_detail(&turn, &detail, 0, Rect::new(0, 0, 140, 20), 0);
+        let text: String = body
+            .iter()
+            .flat_map(|l| l.spans.iter())
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert!(
+            text.contains(&format!("whole {kind:?} body")),
+            "{kind:?} opens onto its whole text: {text:?}"
+        );
+    }
+
+    let (header, body, _, _) =
+        record_detail::draw_event_detail(&turn, &detail, 1, Rect::new(0, 0, 140, 20), 0);
+    let head: String = header
+        .iter()
+        .flat_map(|l| l.spans.iter())
+        .map(|s| s.content.as_ref())
+        .collect();
+    assert!(
+        head.contains("deepseek-v4-pro-0813"),
+        "the detail names the model in full: {head:?}"
+    );
+    let body: String = body
+        .iter()
+        .flat_map(|l| l.spans.iter())
+        .map(|s| s.content.as_ref())
+        .collect();
+    assert!(
+        body.contains("switched from: deepseek-v4.1-flash"),
+        "the detail states what the call switched from: {body:?}"
+    );
+    assert!(
+        body.contains("cache read 31744 (98.1%)"),
+        "the detail states the cache share: {body:?}"
     );
 }

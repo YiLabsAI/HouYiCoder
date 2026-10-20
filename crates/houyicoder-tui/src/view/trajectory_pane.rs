@@ -1,8 +1,9 @@
 //! The /trajectory pane: a turn-organized distributed-trace view with a
 //! 3-level drill-down and an ASCII time axis. Follows the /memory
 //! /permissions pane shape (shared draw_command_pane template) but
-//! renders a session timeline. The view types live here; the drill-down
-//! renderers live in the detail submodule.
+//! renders a session timeline. The view types live here; the Level 1
+//! timeline is in the detail module and the Level 2 record body in
+//! record_detail.
 //!
 //! 3 levels:
 //! - Level 0: session summary + turn list (collapsed, cursor selects)
@@ -31,6 +32,7 @@ use unicode_width::UnicodeWidthStr;
 
 mod detail;
 mod list;
+mod record_detail;
 mod sample;
 mod view;
 
@@ -393,7 +395,7 @@ pub fn draw_content(f: &mut Frame, area: Rect, app: &App) {
             _ => detail::draw_drill_gone(),
         },
         2 => match turn.as_ref() {
-            Some(turn) => detail::draw_event_detail(
+            Some(turn) => record_detail::draw_event_detail(
                 turn,
                 &detail,
                 cursor,
@@ -500,16 +502,26 @@ fn bar_width(ms: u64, total: u64, max_w: usize) -> usize {
 /// The columns a level 1 timeline row spends before its bar: the selection
 /// prefix, the kind, a gap, and the name. The ruler above the rows starts its
 /// axis at this column, so the two are read as one scale.
-const TIMELINE_PREFIX_W: usize = 2 + 7 + 1 + TIMELINE_NAME_W;
+const TIMELINE_PREFIX_W: usize = 2 + TIMELINE_KIND_W + 1 + TIMELINE_NAME_W;
+
+/// The kind column inside the prefix: the kind and the call's ordinal, so
+/// a turn with fourteen model calls can be read step by step.
+const TIMELINE_KIND_W: usize = 9;
 
 /// The name column inside the prefix, in display columns.
-const TIMELINE_NAME_W: usize = 11;
+const TIMELINE_NAME_W: usize = MODEL_NAME_W;
 
 /// The gap between two columns.
 const TIMELINE_GAP_W: usize = 1;
 
 /// The duration column, including the space after it.
 const TIMELINE_DUR_W: usize = 7;
+
+/// The width of the outcome glyph and the space before it.
+const TIMELINE_MARK_W: usize = 2;
+
+/// The columns after the bar: the gap, the duration, the gap, and the glyph.
+const TIMELINE_SUFFIX_W: usize = TIMELINE_GAP_W + TIMELINE_DUR_W + TIMELINE_GAP_W + TIMELINE_MARK_W;
 
 /// The summary column's floor, so a narrow terminal shrinks the bar first.
 const TIMELINE_SUMMARY_MIN_W: usize = 32;
@@ -518,91 +530,162 @@ const TIMELINE_SUMMARY_MIN_W: usize = 32;
 /// has no columns left to say anything, so the row drops the axis rather than
 /// drawing one the terminal would cut: what a row is read for is what it did,
 /// how long it took, and how it ended.
-const TIMELINE_MIN_W: usize = 40;
+const TIMELINE_MIN_W: usize = 56;
 
 /// The widest the Gantt axis may grow. Beyond this the bar stops adding
 /// resolution the eye cannot read and the width goes to the name and summary
 /// columns, which is where the reader looks first.
-pub(crate) const TIMELINE_BAR_MAX_W: usize = 24;
+pub(crate) const TIMELINE_BAR_MAX_W: usize = 20;
 
-/// The short name for one model, found by its id rather than by its position
-/// in the call sequence: a turn can call the same model more than once, so a
-/// call ordinal does not index the distinct-model list.
-pub(crate) fn short_model_name(model: &str, models: &[String]) -> String {
-    let short = short_model_names(models);
-    models
-        .iter()
-        .position(|m| m == model)
-        .map(|i| short[i].clone())
-        .unwrap_or_else(|| model.to_string())
+/// The width a model name is given in the list and the timeline. Wide enough
+/// for the common vendor-prefixed ids (a 20-column id) so the name is not cut
+/// into a version number that no longer says whose model it is.
+pub(crate) const MODEL_NAME_W: usize = 20;
+
+/// The name a model is shown under. A gateway route prefix is dropped, and a
+/// trailing eight-digit snapshot date is dropped when the id is wider than the
+/// column. The vendor prefix is never dropped: a bare version number does not
+/// say whose model it is.
+pub(crate) fn display_model_id(raw: &str) -> String {
+    let name = raw.rsplit('/').next().unwrap_or(raw);
+    if UnicodeWidthStr::width(name) <= MODEL_NAME_W {
+        return name.to_string();
+    }
+    if let Some((head, tail)) = name.rsplit_once('-')
+        && tail.len() == 8
+        && tail.chars().all(|c| c.is_ascii_digit())
+        && !head.is_empty()
+    {
+        return head.to_string();
+    }
+    name.to_string()
 }
 
-/// The shortest name that still tells each model apart from the others in the
-/// same view. The shared prefix is dropped only at a separator boundary, so a
-/// set from one vendor shortens to its distinguishing tail while a mixed set
-/// (a different vendor in the same turn) keeps full names.
-pub(crate) fn short_model_names(models: &[String]) -> Vec<String> {
-    if models.len() < 2 {
-        return models.to_vec();
-    }
-    let mut common = models[0].clone();
-    for model in &models[1..] {
-        common = common_prefix(&common, model).to_string();
-    }
-    let boundary = common.rfind(['-', '.', '/']).map(|i| i + 1).unwrap_or(0);
-    let shorts: Vec<String> = models.iter().map(|m| m[boundary..].to_string()).collect();
-    let ambiguous = shorts.iter().any(String::is_empty)
-        || shorts
+/// The longest idle gap the axis keeps. A turn can sit on a permission prompt
+/// for tens of minutes; the axis describes the work, so a longer gap is folded
+/// to this and the active time keeps its resolution.
+const IDLE_CAP_MS: u64 = 2_000;
+
+/// A monotonic map from a turn's own clock to the time it spent working.
+///
+/// The records' own spans are kept whole and the idle time between them is
+/// capped, so a long wait on a permission prompt does not squeeze the work
+/// into the first column. Concurrent calls overlap in the source clock and
+/// keep overlapping here.
+pub(crate) struct ActiveAxis {
+    /// Working intervals, merged, as (source start, source end, mapped start).
+    segments: Vec<(u64, u64, u64)>,
+    total: u64,
+}
+
+impl ActiveAxis {
+    pub(crate) fn new(records: &[TrajectoryRecord]) -> Self {
+        let mut spans: Vec<(u64, u64)> = records
             .iter()
-            .enumerate()
-            .any(|(i, s)| shorts.iter().skip(i + 1).any(|other| other == s));
-    if ambiguous { models.to_vec() } else { shorts }
-}
-
-/// The longest prefix two model ids share.
-fn common_prefix<'a>(a: &'a str, b: &str) -> &'a str {
-    let n = a
-        .chars()
-        .zip(b.chars())
-        .take_while(|(left, right)| left == right)
-        .count();
-    let end = a.char_indices().nth(n).map(|(i, _)| i).unwrap_or(a.len());
-    &a[..end]
-}
-
-/// The outcome glyph a row ends with, and the space before it.
-const TIMELINE_MARK_W: usize = 2;
-
-/// The columns a row spends after its bar: a gap, the duration, a gap, and the
-/// mark.
-const TIMELINE_SUFFIX_W: usize = TIMELINE_GAP_W + TIMELINE_DUR_W + TIMELINE_GAP_W + TIMELINE_MARK_W;
-
-/// A fixed-width string (exactly width chars) with the event bar positioned
-/// at its start offset on the shared turn time axis. Parallel events overlap
-/// on the same columns of adjacent rows; sequence + duration + overlap are
-/// visible at a glance. Unicode block elements, not ASCII hashes — the visual
-/// standard for a Gantt-style trace (Jaeger/Zipkin render bars this way).
-fn positioned_bar(start_ms: u64, dur_ms: u64, total_ms: u64, width: usize) -> String {
-    if width == 0 || total_ms == 0 {
-        return " ".repeat(width);
+            .filter(|record| record.duration_ms > 0)
+            .map(|record| {
+                (
+                    record.start_ms,
+                    record.start_ms.saturating_add(record.duration_ms),
+                )
+            })
+            .collect();
+        spans.sort_unstable();
+        let mut merged: Vec<(u64, u64)> = Vec::new();
+        for (start, end) in spans {
+            match merged.last_mut() {
+                Some((_, last_end)) if start <= *last_end => *last_end = (*last_end).max(end),
+                _ => merged.push((start, end)),
+            }
+        }
+        let mut segments = Vec::with_capacity(merged.len());
+        let mut mapped = 0u64;
+        let mut previous_end = 0u64;
+        for (start, end) in merged {
+            mapped += start.saturating_sub(previous_end).min(IDLE_CAP_MS);
+            segments.push((start, end, mapped));
+            mapped += end.saturating_sub(start);
+            previous_end = end;
+        }
+        Self {
+            segments,
+            total: mapped,
+        }
     }
-    let scale = width as f64 / total_ms as f64;
-    let start_col = ((start_ms as f64 * scale) as usize).min(width - 1);
-    if dur_ms == 0 {
-        // Instant event (a gate deny fires at one moment): a thin marker.
-        let mut s = " ".repeat(start_col);
-        s.push('┃');
+
+    /// The mapped position of an instant on the turn's clock.
+    pub(crate) fn map(&self, ms: u64) -> u64 {
+        for (start, end, mapped) in &self.segments {
+            if ms < *start {
+                // Idle before this interval: the wait adds at most the cap.
+                let previous_end = self
+                    .segments
+                    .iter()
+                    .take_while(|(s, _, _)| s < start)
+                    .map(|(_, e, _)| *e)
+                    .max()
+                    .unwrap_or(0);
+                return *mapped - (start - previous_end).min(IDLE_CAP_MS)
+                    + ms.saturating_sub(previous_end).min(IDLE_CAP_MS);
+            }
+            if ms <= *end {
+                return mapped + (ms - start);
+            }
+        }
+        self.total
+    }
+
+    pub(crate) fn total(&self) -> u64 {
+        self.total
+    }
+}
+
+/// The bar for one record on the active axis, in eighth-block resolution so a
+/// fifty-millisecond call and a three-second call do not both read as one full
+/// cell. An instant is a dot, not a full-height rule: a rule per instant stacks
+/// into a column the eye reads as a broken border.
+fn positioned_bar(start_ms: u64, dur_ms: u64, axis: &ActiveAxis, width: usize) -> String {
+    if width == 0 {
+        return String::new();
+    }
+    if axis.total() == 0 {
+        // A turn of instants only: there is no span to scale, so each mark
+        // sits at the axis start instead of the axis going blank.
+        if dur_ms > 0 {
+            return " ".repeat(width);
+        }
+        let mut s = String::from("·");
         while s.chars().count() < width {
             s.push(' ');
         }
         return s;
     }
-    let end_col = (((start_ms + dur_ms) as f64 * scale) as usize)
-        .max(start_col + 1)
-        .min(width);
-    let n = end_col - start_col;
+    const EIGHTHS: [char; 8] = ['▏', '▎', '▍', '▌', '▋', '▊', '▉', '█'];
+    let total = axis.total();
+    let start = axis.map(start_ms);
+    let start_col = ((start as f64 / total as f64) * width as f64).round() as usize;
+    let start_col = start_col.min(width - 1);
+    if dur_ms == 0 {
+        let mut s = " ".repeat(start_col);
+        s.push('·');
+        while s.chars().count() < width {
+            s.push(' ');
+        }
+        return s;
+    }
+    let end = axis.map(start_ms.saturating_add(dur_ms));
+    let span_eighths =
+        (((end.saturating_sub(start)) as f64 / total as f64) * width as f64 * 8.0).round() as usize;
+    let span_eighths = span_eighths.max(1).min((width - start_col) * 8);
+    let full = span_eighths / 8;
+    let fraction = span_eighths % 8;
     let mut s = " ".repeat(start_col);
-    s.push_str(&"█".repeat(n));
+    if full > 0 {
+        s.push_str(&"█".repeat(full));
+    }
+    if fraction > 0 {
+        s.push(EIGHTHS[fraction - 1]);
+    }
     while s.chars().count() < width {
         s.push(' ');
     }

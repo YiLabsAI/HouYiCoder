@@ -71,6 +71,10 @@ pub struct TrajectoryTurn {
     /// reported and the log left at zero is unknown rather than a measured
     /// zero, so no share is derived over it.
     pub usage_provenance: UsageProvenance,
+    /// The model of every call in the order it ran, with a repeat kept
+    /// whenever another model came between: the chain a turn went through, so
+    /// a switch back to an earlier model is visible.
+    pub model_chain: Vec<String>,
     /// Every model id this turn called, in first-use order and de-duplicated.
     /// A turn can switch models mid-flight, so this is a list rather than a
     /// single id; empty when no TurnUsage landed or the log predates the field

@@ -62,6 +62,11 @@ pub(super) struct TurnBuilder {
     /// consults this before deriving a share over the totals.
     usage_provenance: UsageProvenance,
     models: Vec<String>,
+    /// Every call's model in run order, repeats kept.
+    model_chain: Vec<String>,
+    /// The model the last accounted call ran on, so a switch back to an
+    /// earlier model is still stated as a switch.
+    last_call_model: Option<String>,
     efforts: Vec<String>,
     tool_count: usize,
     /// Model calls made in this turn, so each is numbered within it.
@@ -97,6 +102,8 @@ impl TurnBuilder {
             reasoning_ms: None,
             usage_provenance: UsageProvenance::ALL_REPORTED,
             models: Vec::new(),
+            model_chain: Vec::new(),
+            last_call_model: None,
             efforts: Vec::new(),
             tool_count: 0,
             model_calls: 0,
@@ -135,6 +142,8 @@ impl TurnBuilder {
         self.reasoning_ms = None;
         self.usage_provenance = UsageProvenance::ALL_REPORTED;
         self.models.clear();
+        self.model_chain.clear();
+        self.last_call_model = None;
         self.efforts.clear();
         self.tool_count = 0;
         self.model_calls = 0;
@@ -358,9 +367,15 @@ impl TurnBuilder {
         // The model this call ran on, compared with the one the turn used
         // before it, so a switch inside one user turn is a stated fact on the
         // call that switched rather than a silent change of the name column.
-        let prior_model = self.models.last().cloned();
+        let prior_model = self.last_call_model.clone();
         if !ev_model.is_empty() && !self.models.contains(ev_model) {
             self.models.push(ev_model.clone());
+        }
+        if !ev_model.is_empty() && self.model_chain.last().is_none_or(|last| last != ev_model) {
+            self.model_chain.push(ev_model.clone());
+        }
+        if !ev_model.is_empty() {
+            self.last_call_model = Some(ev_model.clone());
         }
         if let Some(e) = effort
             && !self.efforts.contains(e)
@@ -640,6 +655,24 @@ impl TurnBuilder {
         }
     }
 
+    /// Append a hook record with the text the detail shows. The row keeps a
+    /// preview; the full verdict reason is what a drill opens.
+    pub(super) fn push_hook(
+        &mut self,
+        kind: TrajectoryRecordKind,
+        name: Option<String>,
+        summary: String,
+        full: &str,
+        ts: u64,
+    ) {
+        self.touch(ts);
+        let mut record = self.record(kind, name, summary, ts);
+        if self.mode == FoldMode::Records {
+            record.output = Some(full.to_string());
+        }
+        self.push(record);
+    }
+
     /// Append a record for a turn-level signal: an abort, a compaction, or a
     /// hook verdict. These carry no completion of their own.
     fn push_signal(
@@ -650,7 +683,12 @@ impl TurnBuilder {
         ts: u64,
     ) {
         self.touch(ts);
-        let record = self.record(kind, name, preview(text), ts);
+        let mut record = self.record(kind, name, preview(text), ts);
+        // The row carries a preview; the detail shows what happened. Without
+        // this a cache break or a compaction opens onto an empty body.
+        if self.mode == FoldMode::Records {
+            record.output = Some(text.to_string());
+        }
         self.push(record);
     }
 
@@ -692,6 +730,7 @@ impl TurnBuilder {
             cache_write: self.cache_write,
             usage_provenance: self.usage_provenance,
             models: self.models.clone(),
+            model_chain: self.model_chain.clone(),
             efforts: self.efforts.clone(),
             reasoning_tokens: self.reasoning_tokens.map(|v| v as usize),
             reasoning_ms: self.reasoning_ms,

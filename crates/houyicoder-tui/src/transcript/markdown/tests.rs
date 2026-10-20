@@ -295,3 +295,19 @@ fn test_header_only_table_kept() {
     let out = render_table(&rows, &[], 8);
     assert!(!out.is_empty(), "the header must not vanish: {out:?}");
 }
+
+/// A stacked table with a label wider than the pane wraps the pair instead of
+/// printing a prefix that already runs past the edge.
+#[test]
+fn test_stacked_label_wraps() {
+    let rows = vec![
+        vec!["一个非常长的表头名字".to_string(), "第二个表头".to_string()],
+        vec!["值".to_string(), "另一个值".to_string()],
+    ];
+    let out = render_table(&rows, &[], 12);
+    for line in &out {
+        let width = UnicodeWidthStr::width(line.as_str());
+        assert!(width <= 12, "row wider than the pane ({width}): {line:?}");
+    }
+    assert!(!out.is_empty(), "the row is still rendered: {out:?}");
+}
