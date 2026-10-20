@@ -1798,3 +1798,152 @@ fn test_seam_survives_empty_page() {
         "both boundaries reach the turn after them, in the order they happened"
     );
 }
+
+/// A model switch inside one user turn is stated on the call that switched,
+/// and a cache break is its own record. The turn's timeline then explains why
+/// the reused prefix dropped instead of leaving it to the session totals.
+#[test]
+fn test_intra_turn_switch_stated() {
+    let usage = |ts: u64, model: &str, cache_read: u64| {
+        ev(
+            ts,
+            SessionEvent::TurnUsage {
+                turn: 1,
+                call_in_turn: 1,
+                input_tokens: 1_000,
+                output_tokens: 10,
+                cache_read_input_tokens: cache_read,
+                cache_write_input_tokens: 0,
+                reasoning_tokens: 0,
+                model: model.into(),
+                recovery: false,
+                effort: None,
+                input_reported: true,
+                cache_read_reported: true,
+                cache_write_reported: false,
+            },
+        )
+    };
+    let events = vec![
+        ev(100, SessionEvent::UserInput { text: "t1".into() }),
+        ev(
+            105,
+            SessionEvent::TurnStarted {
+                turn: 1,
+                call_in_turn: 0,
+            },
+        ),
+        ev(
+            110,
+            SessionEvent::AssistantMessage {
+                text: String::new(),
+                thinking: Some("first".into()),
+            },
+        ),
+        usage(120, "pro", 900),
+        ev(
+            125,
+            SessionEvent::TurnStarted {
+                turn: 2,
+                call_in_turn: 0,
+            },
+        ),
+        ev(
+            130,
+            SessionEvent::AssistantMessage {
+                text: String::new(),
+                thinking: Some("second".into()),
+            },
+        ),
+        usage(140, "flash", 0),
+        ev(
+            145,
+            SessionEvent::CacheBreak {
+                cause: "model-switch".into(),
+            },
+        ),
+        ev(150, SessionEvent::RunCompleted { ms: Some(100) }),
+    ];
+    let view = build_view(&events, "test", 0);
+    assert_eq!(
+        view.total_turns, 1,
+        "the second call stays in one user turn"
+    );
+    let turn = match &view.rows[0] {
+        TrajectoryRow::Turn(t) => t,
+        _ => unreachable!(),
+    };
+    assert_eq!(turn.models, vec!["pro".to_string(), "flash".to_string()]);
+    assert!(
+        turn.boundary_before.is_empty(),
+        "a switch inside the turn is not a separator above it: {:?}",
+        turn.boundary_before
+    );
+    let records = records_of(&events, turn.n);
+    assert!(
+        records.iter().any(|r| r.kind == TrajectoryRecordKind::Model
+            && r.name.as_deref() == Some("flash")
+            && r.summary.contains("model switch: pro -> flash")),
+        "the switching call does not state the switch: {records:#?}"
+    );
+    assert!(
+        records.iter().any(|r| r.kind == TrajectoryRecordKind::Cache
+            && r.summary.contains("cache break: model-switch")),
+        "the cache break has no record: {records:#?}"
+    );
+}
+
+/// A call that switched before producing any content still states the switch:
+/// the marker takes the empty summary instead of appending to nothing.
+#[test]
+fn test_switch_states_empty_summary() {
+    let usage = |ts: u64, model: &str| {
+        ev(
+            ts,
+            SessionEvent::TurnUsage {
+                turn: 1,
+                call_in_turn: 1,
+                input_tokens: 1_000,
+                output_tokens: 10,
+                cache_read_input_tokens: 0,
+                cache_write_input_tokens: 0,
+                reasoning_tokens: 0,
+                model: model.into(),
+                recovery: false,
+                effort: None,
+                input_reported: true,
+                cache_read_reported: true,
+                cache_write_reported: false,
+            },
+        )
+    };
+    let events = vec![
+        ev(100, SessionEvent::UserInput { text: "t1".into() }),
+        ev(
+            105,
+            SessionEvent::TurnStarted {
+                turn: 1,
+                call_in_turn: 0,
+            },
+        ),
+        usage(120, "pro"),
+        ev(
+            125,
+            SessionEvent::TurnStarted {
+                turn: 2,
+                call_in_turn: 0,
+            },
+        ),
+        usage(140, "flash"),
+        ev(150, SessionEvent::RunCompleted { ms: Some(100) }),
+    ];
+    let records = records_of(&events, 1);
+    let switched = records
+        .iter()
+        .find(|r| r.kind == TrajectoryRecordKind::Model && r.name.as_deref() == Some("flash"))
+        .unwrap_or_else(|| panic!("no flash call record: {records:#?}"));
+    assert_eq!(
+        switched.summary, "model switch: pro -> flash",
+        "the switch is the row's whole summary when the call said nothing else"
+    );
+}

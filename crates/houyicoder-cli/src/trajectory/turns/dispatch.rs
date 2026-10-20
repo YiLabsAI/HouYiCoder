@@ -200,6 +200,18 @@ pub(in crate::trajectory) fn apply_turn_content(
         SessionEvent::Summary { text } => {
             builder.push_signal(TrajectoryRecordKind::Compaction, None, text, ev.ts);
         }
+        // The agent loop attributes a sharp drop in cache reuse to compaction,
+        // a model switch, or an unknown cause. It is a fact about this turn's
+        // prefix, so the turn timeline states it where the drop happened
+        // rather than leaving the reader to infer it from the token counts.
+        SessionEvent::CacheBreak { cause } => {
+            builder.push_signal(
+                TrajectoryRecordKind::Cache,
+                None,
+                &format!("cache break: {cause}"),
+                ev.ts,
+            );
+        }
         SessionEvent::RunCompleted { ms: Some(ms) } => {
             builder.run_completed_ms = *ms;
         }

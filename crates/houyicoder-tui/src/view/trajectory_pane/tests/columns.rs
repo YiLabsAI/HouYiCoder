@@ -387,3 +387,32 @@ fn test_counts_read_singular() {
         "the header counts one call: {head}"
     );
 }
+
+/// A turn that switched models keeps the switch visible in the model cell: the
+/// cell names the first id and counts the rest, so a long first id cannot
+/// spend the whole column and hide that a second model ran.
+#[test]
+fn test_model_cell_names_switch() {
+    let turn = TrajectoryTurn {
+        models: vec![
+            "deepseek-v4-pro-0813".to_string(),
+            "deepseek-v4.1-flash".to_string(),
+        ],
+        duration_ms: 100,
+        ..turn(1, "long answer")
+    };
+    let view = TrajectoryView {
+        models_used: 2,
+        ..view(vec![TrajectoryRow::Turn(turn)])
+    };
+    let (_, body, _, _) = list::draw_turn_list(&view, 0, Rect::new(0, 0, 200, 10));
+    let text: String = body[0].spans.iter().map(|s| s.content.as_ref()).collect();
+    assert!(
+        text.contains("+1"),
+        "the model cell hides the second model: {text}"
+    );
+    assert!(
+        !text.contains("deepseek-v4-pro-0813,deepseek"),
+        "the cell still joins every id and truncates: {text}"
+    );
+}

@@ -61,6 +61,9 @@ pub enum TrajectoryRecordKind {
     Agent,
     /// Memory recalled into this turn.
     Memory,
+    /// A prompt-cache boundary: the provider reused less of the prefix than
+    /// the prior call, with the cause the agent loop attributed it to.
+    Cache,
     /// A hook verdict that did not deny: an observation, an injection, or a
     /// request for the user. Not a failure, so it is not drawn as one.
     Hook,
@@ -79,6 +82,7 @@ impl TrajectoryRecordKind {
             Self::Tool => "tool",
             Self::Agent => "agent",
             Self::Memory => "memory",
+            Self::Cache => "cache",
             Self::Hook => "hook",
             Self::Compaction => "compact",
             Self::Error => "error",

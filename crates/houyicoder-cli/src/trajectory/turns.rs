@@ -205,6 +205,7 @@ impl TurnBuilder {
             | TrajectoryRecordKind::Model => RecordOutcome::Pending,
             TrajectoryRecordKind::Context
             | TrajectoryRecordKind::Memory
+            | TrajectoryRecordKind::Cache
             | TrajectoryRecordKind::Hook
             | TrajectoryRecordKind::Compaction => RecordOutcome::Ok,
         };
@@ -353,6 +354,10 @@ impl TurnBuilder {
             cache_write_reported: *cache_write_reported,
         };
         self.usage_provenance = self.usage_provenance.merge(call_provenance);
+        // The model this call ran on, compared with the one the turn used
+        // before it, so a switch inside one user turn is a stated fact on the
+        // call that switched rather than a silent change of the name column.
+        let prior_model = self.models.last().cloned();
         if !ev_model.is_empty() && !self.models.contains(ev_model) {
             self.models.push(ev_model.clone());
         }
@@ -369,6 +374,14 @@ impl TurnBuilder {
         let record = &mut self.records[index];
         if record.name.is_none() && !ev_model.is_empty() {
             record.name = Some(ev_model.clone());
+            if let Some(prior) = prior_model.filter(|prior| prior != ev_model) {
+                let marker = format!("model switch: {prior} -> {ev_model}");
+                if record.summary.is_empty() {
+                    record.summary = marker;
+                } else {
+                    record.summary.push_str(&format!(" \u{00b7} {marker}"));
+                }
+            }
         }
         // A provider retry reuses this record, so its usage accumulates the
         // same way the turn's does; overwriting would drop the retry's cost

@@ -140,10 +140,24 @@ fn thinking_cell(t: &TrajectoryTurn) -> String {
     }
 }
 
-/// The model ids a turn used. One id repeated on every row is noise, so the
-/// column is drawn only when the session saw at least two distinct models.
-fn model_cell(t: &TrajectoryTurn) -> String {
-    t.models.join(",")
+/// The model ids a turn used, fitted to the column budget. One id repeated on
+/// every row is noise, so the column is drawn only when the session saw at
+/// least two distinct models.
+///
+/// A turn that switched models mid-run names the first id and counts the rest,
+/// so the tail of the cell always says the turn used more than one model. A
+/// plain truncation of the joined ids would spend the whole budget on the
+/// first long id and hide the switch the column exists to report.
+fn model_cell(t: &TrajectoryTurn, budget: usize) -> String {
+    let Some((first, rest)) = t.models.split_first() else {
+        return String::new();
+    };
+    if rest.is_empty() {
+        return truncate_width(first, budget);
+    }
+    let suffix = format!(" +{}", rest.len());
+    let room = budget.saturating_sub(suffix.chars().count());
+    format!("{}{}", truncate_width(first, room), suffix)
 }
 
 /// The effort levels a turn ran at, on the same condition as the model ids.
@@ -296,7 +310,7 @@ pub(super) fn turn_row(
     }
     if cols.model {
         spans.push(sp(
-            pad(&truncate_width(&model_cell(t), MODEL_W - 2), MODEL_W),
+            pad(&model_cell(t, MODEL_W - 2), MODEL_W),
             Color::DarkGray,
         ));
         spans.push(sp(
