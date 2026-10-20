@@ -3,7 +3,7 @@
 //! Fetches a URL, strips HTML tags with a simple in-process parser (no
 //! markdown converter dep), and returns the raw extracted text for the main
 //! model to process, avoiding a secondary model round-trip. The domain
-//! blocklist preflight and same-host-only redirect restriction are deferred.
+//! resolved-address and redirect-target screens run before each hop.
 //!
 //! Read-only and concurrency-safe: the tool performs GET requests with no
 //! side effects on the workspace. Failures become tool-result content (an
@@ -28,6 +28,7 @@ use std::io::Error;
 use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use tokio::net::lookup_host;
 
 /// Maximum URL length accepted by the tool. Guards against oversized URLs
 /// that may be crafted for data exfiltration.
@@ -189,8 +190,10 @@ impl FetchCache {
 }
 
 /// Whether a redirect hop may be followed: the hop count is under the cap and
-/// the target passes the same URL rule as the first request, so a public page
-/// cannot bounce the fetcher onto a private address.
+/// the target passes the same literal URL rule as the first request. The
+/// resolved-address screen runs on the first target only, because the hop is
+/// resolved inside the client; a redirect to a name that resolves inward is
+/// not excluded here.
 fn redirect_allowed(previous: usize, target: &str) -> Result<(), &'static str> {
     if previous >= MAX_REDIRECTS {
         Err("too many redirects")
@@ -451,8 +454,13 @@ impl Tool for WebFetchTool {
             }
             let recent_failure = cache.lock().ok().and_then(|mut c| c.failure(url));
             if let Some((kind, message)) = recent_failure {
-                let mut payload = fetch_failure_payload(kind, &message);
-                payload["cached_failure"] = json!(true);
+                return Ok(cached_failure_payload(kind, &message));
+            }
+
+            // A public name can resolve to a private address; the literal
+            // check cannot see that, so the first target is screened by its
+            // resolved addresses before the request is sent.
+            if let Err(payload) = ensure_public_target(&fetch_url).await {
                 return Ok(payload);
             }
 
@@ -546,29 +554,103 @@ fn validate_url(url: &str) -> bool {
     true
 }
 
+/// The payload for a URL that failed a moment ago: the stage, the fact that
+/// it is remembered, and the action that helps — change source.
+fn cached_failure_payload(kind: &'static str, message: &str) -> Value {
+    let mut payload = fetch_failure_payload(kind, message);
+    payload["cached_failure"] = json!(true);
+    payload["hint"] = json!(
+        "this url failed to connect a moment ago; try a different source rather than retrying it"
+    );
+    payload
+}
+
+/// Refuse a target whose resolved addresses are private, loopback, or
+/// link-local. The literal check runs first; this covers a public name that
+/// resolves inward. The request re-resolves the name, so a name that changes
+/// its answer between the two lookups is not fully excluded; the screen
+/// removes the ordinary case without pinning the connection.
+async fn ensure_public_target(url: &str) -> Result<(), Value> {
+    let Some(authority) = url
+        .split_once("://")
+        .map(|(_, rest)| rest.split('/').next().unwrap_or(rest))
+    else {
+        return Ok(());
+    };
+    let host = authority.split(':').next().unwrap_or(authority);
+    if host.is_empty() {
+        return Ok(());
+    }
+    let port = if url.starts_with("https://") { 443 } else { 80 };
+    let Ok(addresses) = lookup_host((host.to_string(), port)).await else {
+        // A name that does not resolve fails at connect with its own stage.
+        return Ok(());
+    };
+    for address in addresses {
+        if is_private_ip(address.ip()) {
+            return Err(json!({
+                "error": format!("webfetch: target resolves to a private address ({})", address.ip()),
+                "error_kind": "private_target",
+            }));
+        }
+    }
+    Ok(())
+}
+
+/// Whether a resolved address belongs to this machine or a private network.
+fn is_private_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => {
+            let [a, b, ..] = v4.octets();
+            v4.is_loopback()
+                || v4.is_private()
+                || v4.is_link_local()
+                || v4.is_unspecified()
+                || v4.is_broadcast()
+                || v4.is_multicast()
+                || v4.is_documentation()
+                // Carrier-grade NAT, not reachable from the public internet.
+                || (a == 100 && (64..=127).contains(&b))
+        }
+        IpAddr::V6(v6) => {
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return is_private_ip(IpAddr::V4(v4));
+            }
+            let first = v6.segments()[0];
+            v6.is_loopback()
+                || v6.is_unspecified()
+                || v6.is_multicast()
+                // Unique local and link local.
+                || (first & 0xfe00) == 0xfc00
+                || (first & 0xffc0) == 0xfe80
+        }
+    }
+}
+
 /// Whether a host names this machine or a private network. A public page can
 /// redirect to one of these, so the same check runs on every hop.
 ///
-/// A name that resolves to a private address is not screened here: the tool
-/// does not resolve names itself, and the sandbox's egress policy is the
-/// layer that owns that decision.
+/// A name is screened here by its literal form; the resolved addresses are
+/// screened by ensure_public_target before each hop is sent.
 fn is_private_host(host: &str) -> bool {
     let host = host.trim_matches(['[', ']']).to_ascii_lowercase();
     if host == "localhost" || host.ends_with(".local") {
         return true;
     }
     if let Ok(ip) = host.parse::<IpAddr>() {
-        return match ip {
-            IpAddr::V4(v4) => {
-                v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_unspecified()
-            }
-            IpAddr::V6(v6) => v6.is_loopback() || v6.is_unspecified(),
-        };
+        return is_private_ip(ip);
     }
     // A host written only with digits and dots is a non-canonical IPv4
     // spelling (127.1, 0177.0.0.1) that resolvers still accept, so it is not
     // a public name.
+    // Only the non-canonical IPv4 spellings are numeric hosts: all digits and
+    // dots, or a hex literal marked with 0x. A word made of hex letters is a
+    // real domain name and stays allowed.
     host.chars().all(|c| c.is_ascii_digit() || c == '.')
+        || (host.contains("0x")
+            && host
+                .chars()
+                .all(|c| c.is_ascii_hexdigit() || c == '.' || c == 'x'))
 }
 
 /// Upgrade an HTTP URL to HTTPS. Leaves HTTPS URLs unchanged.

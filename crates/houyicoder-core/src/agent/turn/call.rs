@@ -152,6 +152,12 @@ impl Runner {
             // view reports describes this request. Clear and compact are the
             // only memory-index refresh points.
             let parts = self.assembly_parts();
+            // Freeze the inference config once per request before the context
+            // is built: the snapshot is also where a model switch resets the
+            // cached-prefix decisions, so taking it after assembly would let
+            // this request keep the previous model's decisions and land the
+            // reset on the next one.
+            let inference = self.snapshot_inference();
             let mut assembled = self.context_builder.build_for_turn(
                 &snapshot.events,
                 snapshot.manifest.as_ref(),
@@ -162,13 +168,6 @@ impl Runner {
             // token_count() can't run after that. Fallback for
             // provider-omits-usage, passed to record_turn at turn end.
             let estimated_input_tokens = assembled.measurement.token_count();
-
-            // Freeze the inference config once per request: pre-flight,
-            // request construction, overflow learning and usage attribution
-            // all read this snapshot, never the live state, so a mid-run switch
-            // cannot hand any of them a mixed config or attribute the old
-            // request onto the new model.
-            let inference = self.snapshot_inference();
 
             // Convergence reminder: when the turn count is within the
             // reminder window of the hard cap, inject a user message that

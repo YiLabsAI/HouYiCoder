@@ -2,7 +2,6 @@ use super::*;
 
 use std::sync::Arc;
 
-use super::RetentionDecision;
 use crate::agent::cache_liveness::{CACHE_TTL_MS, CacheLivenessRetentionPolicy, CachedPrefixState};
 use houyicoder_context::ContextError;
 use houyicoder_context::SessionEvent;
@@ -127,7 +126,6 @@ fn test_rehydrate_3tier_not_unconditional() {
         is_superseded: false,
         block_ref: None,
         now_ms: 0,
-        cache_cold: false,
     };
     let out = materialize_block(
         &marker,
@@ -144,7 +142,6 @@ fn test_rehydrate_3tier_not_unconditional() {
         is_superseded: false,
         block_ref: None,
         now_ms: 0,
-        cache_cold: false,
     };
     let out = materialize_block(
         &marker,
@@ -169,7 +166,6 @@ fn test_rehydrate_3tier_not_unconditional() {
         is_superseded: false,
         block_ref: None,
         now_ms: 0,
-        cache_cold: false,
     };
     let out = materialize_block(
         &marker,
@@ -204,7 +200,6 @@ fn test_rehydrate_3tier_not_unconditional() {
         is_superseded: true,
         block_ref: None,
         now_ms: 0,
-        cache_cold: false,
     };
     let out = materialize_block(
         &marker,
@@ -242,7 +237,6 @@ fn test_summarize_without_preview_marker() {
         is_superseded: false,
         block_ref: None,
         now_ms: 0,
-        cache_cold: false,
     };
     let out = materialize_block(
         &marker_no_preview,
@@ -469,7 +463,6 @@ fn age_ctx(age: u32) -> RetentionContext<'static> {
         is_superseded: false,
         block_ref: None,
         now_ms: 0,
-        cache_cold: false,
     }
 }
 
@@ -618,7 +611,6 @@ fn test_holds_decision_while_alive() {
         is_superseded: false,
         block_ref: None,
         now_ms: 1_100,
-        cache_cold: false,
     };
     let out1 = materialize_block(
         &marker,
@@ -637,7 +629,6 @@ fn test_holds_decision_while_alive() {
         is_superseded: false,
         block_ref: None,
         now_ms: 1_200,
-        cache_cold: false,
     };
     let out2 = materialize_block(
         &marker,
@@ -667,7 +658,6 @@ fn test_expired_recomputes_aggressively() {
         is_superseded: false,
         block_ref: None,
         now_ms: 1_100,
-        cache_cold: false,
     };
     let _out = materialize_block(
         &marker,
@@ -683,7 +673,6 @@ fn test_expired_recomputes_aggressively() {
         is_superseded: false,
         block_ref: None,
         now_ms: 1_000 + CACHE_TTL_MS + 5_001,
-        cache_cold: false,
     };
     let out = materialize_block(
         &marker,
@@ -694,69 +683,5 @@ fn test_expired_recomputes_aggressively() {
     assert!(
         out.get("evicted").and_then(|v| v.as_bool()) == Some(true),
         "expired cache recomputes aggressively: age 8 evicts, got: {out}"
-    );
-}
-
-#[test]
-fn test_cache_cold_downgrades_recent() {
-    let backend = CountingBackend::new();
-    let big = serde_json::json!({"out": "x".repeat(300)});
-    let hash = pollster::block_on(backend.block_put(serde_json::to_vec(&big).unwrap())).unwrap();
-    let marker = marker_with_preview(&hash.0, "first 200 chars...");
-    let policy = AgeRetentionPolicy::default();
-    let ctx = RetentionContext {
-        age_in_turns: 0,
-        is_superseded: false,
-        block_ref: None,
-        now_ms: 0,
-        cache_cold: true,
-    };
-    let out = materialize_block(
-        &marker,
-        Some(&backend as &dyn ContextBackend),
-        &policy,
-        &ctx,
-    );
-    assert!(
-        out.get("summarized").is_some(),
-        "cache cold downgrades recent to Summarize: {out}"
-    );
-    assert_eq!(
-        backend.gets(),
-        0,
-        "Summarize skipped block_get (no cache to hit)"
-    );
-    let ctx_warm = RetentionContext {
-        age_in_turns: 0,
-        is_superseded: false,
-        block_ref: None,
-        now_ms: 0,
-        cache_cold: false,
-    };
-    let out_warm = materialize_block(
-        &marker,
-        Some(&backend as &dyn ContextBackend),
-        &policy,
-        &ctx_warm,
-    );
-    assert_eq!(out_warm, big, "warm cache materializes in full");
-    assert_eq!(backend.gets(), 1, "warm paid one block_get");
-}
-
-#[test]
-fn test_cache_cold_evicts_results() {
-    let policy = AgeRetentionPolicy::default();
-    // age beyond summarize_turns (6) + cache_cold = Evict (not Summarize).
-    let ctx = RetentionContext {
-        age_in_turns: 10,
-        is_superseded: false,
-        block_ref: None,
-        now_ms: 0,
-        cache_cold: true,
-    };
-    assert_eq!(
-        policy.decide(&ctx),
-        RetentionDecision::Evict,
-        "cache cold + old age = Evict"
     );
 }

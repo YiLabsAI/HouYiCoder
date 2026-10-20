@@ -130,3 +130,19 @@ fn test_set_model_clamps_speed() {
         "the clamp sticks: a later served model does not re-earn the tier"
     );
 }
+
+/// A model switch resets the cached-prefix decisions at the snapshot, and the
+/// loop takes the snapshot before it assembles the request, so the first
+/// request on the new model already sees the reset instead of the next one.
+#[test]
+fn test_switch_resets_before_assembly() {
+    let runner = runner_with("model-a");
+    runner.snapshot_inference();
+    let before = runner.cached_prefix().generation();
+    runner.apply_inference(InferenceConfig::for_model("model-b".into(), true));
+    runner.snapshot_inference();
+    assert!(
+        runner.cached_prefix().generation() > before,
+        "the first request on the new model resets the prefix decisions"
+    );
+}

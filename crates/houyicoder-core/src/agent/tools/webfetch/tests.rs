@@ -485,8 +485,8 @@ fn test_host_check_families() {
     assert!(!is_private_host("example.com"));
 }
 
-/// A redirect is followed only while the hops are under the cap and the target
-/// passes the same rule as the first request.
+/// A redirect hop is followed only while the hops are under the cap and the
+/// target passes the literal rule.
 #[test]
 fn test_redirect_target_checked() {
     assert_eq!(redirect_allowed(0, "https://example.com/a"), Ok(()));
@@ -529,4 +529,98 @@ fn test_read_body_from_response() {
         assert_eq!(body, "hello");
     });
     server.join().expect("server");
+}
+
+/// The resolved-target check refuses a loopback answer and lets a public one
+/// through. A name that does not resolve is left to the connect stage.
+#[test]
+fn test_resolved_target_checked() {
+    let runtime = Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    runtime.block_on(async {
+        let loopback = ensure_public_target("http://127.0.0.1/x")
+            .await
+            .expect_err("a loopback target is refused");
+        assert_eq!(loopback["error_kind"], "private_target");
+        assert!(
+            ensure_public_target("http://localhost/x").await.is_err(),
+            "the loopback name is refused"
+        );
+        assert!(
+            ensure_public_target("http://does-not-resolve.invalid/x")
+                .await
+                .is_ok(),
+            "an unresolvable name is left to the connect stage"
+        );
+    });
+}
+
+/// A cached failure tells the model to change source instead of retrying the
+/// same dead link.
+#[test]
+fn test_cached_failure_hint() {
+    let out = cached_failure_payload("connect_timeout", "timed out");
+    assert_eq!(out["cached_failure"], true);
+    assert_eq!(out["error_kind"], "connect_timeout");
+    assert!(
+        out["hint"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("different source"),
+        "the hint names the action: {out}"
+    );
+}
+
+/// Every non-public range the resolver can answer with is refused, including
+/// the IPv6 unique-local, link-local and IPv4-mapped forms.
+#[test]
+fn test_private_ip_ranges() {
+    for ip in [
+        "10.0.0.1",
+        "172.16.0.1",
+        "192.168.1.1",
+        "169.254.1.1",
+        "0.0.0.0",
+        "255.255.255.255",
+        "224.0.0.1",
+        "192.0.2.1",
+        "100.64.0.1",
+        "::1",
+        "fc00::1",
+        "fe80::1",
+        "::ffff:127.0.0.1",
+    ] {
+        let ip: IpAddr = ip.parse().expect("ip parses");
+        assert!(is_private_ip(ip), "{ip} is not public");
+    }
+    assert!(!is_private_ip("8.8.8.8".parse().expect("ip")));
+}
+
+/// The resolved-target screen leaves a malformed URL to the connect stage and
+/// refuses a literal private address.
+#[test]
+fn test_public_target_edges() {
+    let runtime = Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    runtime.block_on(async {
+        assert!(ensure_public_target("no-scheme").await.is_ok());
+        assert!(ensure_public_target("https:///x").await.is_ok());
+        let refused = ensure_public_target("http://10.0.0.1/x")
+            .await
+            .expect_err("a private literal is refused");
+        assert_eq!(refused["error_kind"], "private_target");
+    });
+}
+
+/// A hex literal is a numeric host; a word made of hex letters is a domain.
+#[test]
+fn test_numeric_host_guard() {
+    assert!(is_private_host("0x7f.0.0.1"));
+    assert!(is_private_host("0x7f000001"));
+    assert!(!is_private_host("dec.af"));
+    assert!(!is_private_host("face.be"));
 }

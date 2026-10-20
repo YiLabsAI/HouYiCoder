@@ -127,13 +127,6 @@ pub struct RetentionContext<'a> {
     pub block_ref: Option<&'a str>,
     /// Wall-clock milliseconds at serve time (for the cache-liveness TTL test).
     pub now_ms: u64,
-    /// True when the provider's prompt cache is cold (the gap since the last
-    /// assistant message exceeds the cache TTL). When cold, recent results
-    /// that would normally materialize in full are downgraded to Summarize
-    /// — the cached prefix is being rewritten anyway, so shrinking it first
-    /// saves tokens without losing a cache hit. A time-based microcompact
-    /// trigger.
-    pub cache_cold: bool,
 }
 
 /// The retention policy seam. The default AgeRetentionPolicy keys the
@@ -166,15 +159,6 @@ impl Default for AgeRetentionPolicy {
 impl RetentionPolicy for AgeRetentionPolicy {
     fn decide(&self, ctx: &RetentionContext<'_>) -> RetentionDecision {
         if ctx.is_superseded {
-            return RetentionDecision::Evict;
-        }
-        // When the cache is cold (TTL expired), downgrade recent results
-        // from Materialize to Summarize — the prefix is being rewritten
-        // anyway, so shrinking it first saves tokens without losing a hit.
-        if ctx.cache_cold {
-            if ctx.age_in_turns < self.summarize_turns {
-                return RetentionDecision::Summarize;
-            }
             return RetentionDecision::Evict;
         }
         if ctx.age_in_turns < self.materialize_turns {

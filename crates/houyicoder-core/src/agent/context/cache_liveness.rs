@@ -226,13 +226,7 @@ impl RetentionPolicy for CacheLivenessRetentionPolicy {
         if ctx.is_superseded {
             return RetentionDecision::Evict;
         }
-        // When the cache is cold (provider TTL expired), use the aggressive
-        // band (same as cache-dead) — the prefix is being rewritten anyway.
-        let alive = if ctx.cache_cold {
-            false
-        } else {
-            self.cached.cache_alive_at(ctx.now_ms, self.ttl_ms)
-        };
+        let alive = self.cached.cache_alive_at(ctx.now_ms, self.ttl_ms);
         // A block_ref's decision is stable within a generation while the cache
         // is live — returning the stored decision keeps the prefix bytes
         // identical across turns so the cache does not thrash.

@@ -247,7 +247,6 @@ fn materialize_result(
         is_superseded,
         block_ref: None,
         now_ms,
-        cache_cold: false,
     };
     materialize_block(output, backend, policy, &ctx)
 }

@@ -23,6 +23,7 @@
 //! server-safe, so Retry only honors ProviderError::retryable.
 
 use std::time::Duration;
+use std::time::Instant;
 
 use crate::served_models::write_cache;
 use crate::{
@@ -163,6 +164,7 @@ impl ModelProvider for OpenAiCompatibleProvider {
             body["stream"] = json!(true);
             body["stream_options"] = json!({"include_usage": true});
             let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
+            let started = Instant::now();
             let resp = match http.post(&url).bearer_auth(&api_key).json(&body).send().await {
                 Ok(r) => r,
                 Err(e) => {
@@ -170,6 +172,13 @@ impl ModelProvider for OpenAiCompatibleProvider {
                     return;
                 }
             };
+            // The wait before the first content chunk is what a reader calls
+            // the time to first token; the header arrival is its transport
+            // share, and the two are read apart only if both are recorded.
+            tracing::debug!(
+                headers_ms = started.elapsed().as_millis() as u64,
+                "stream response headers"
+            );
             if !resp.status().is_success() {
                 let code = resp.status().as_u16();
                 let text = resp.text().await.unwrap_or_default();

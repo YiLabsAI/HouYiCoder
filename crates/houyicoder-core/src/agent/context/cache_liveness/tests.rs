@@ -8,7 +8,6 @@ fn ctx<'a>(age: u32, block_ref: Option<&'a str>, now_ms: u64) -> RetentionContex
         is_superseded: false,
         block_ref,
         now_ms,
-        cache_cold: false,
     }
 }
 
