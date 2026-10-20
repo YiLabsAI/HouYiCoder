@@ -18,6 +18,7 @@ use crate::common::{
     pty_session_with_home, run_slash_command,
 };
 use std::fs;
+use unicode_width::UnicodeWidthStr;
 
 /// /context renders every section on a fresh zero-turn session. The session is
 /// always Some in the real binary (the composition root sets
@@ -448,4 +449,42 @@ fn test_context_lifecycle_rows() {
         "the archived session's messages row must not survive the clear:\n{}",
         s.output()
     );
+}
+
+/// At a narrow terminal the context block wraps instead of clipping: no row
+/// carries text in its last column, and the sections are still readable.
+#[test]
+#[ignore]
+fn test_context_wraps_narrow() {
+    let mut s = pty_session_in_dir(make_temp_repo("ctx-narrow"));
+    assert!(
+        s.wait_for("let's build, or / for commands", RENDER_TIMEOUT),
+        "working screen:\n{}",
+        s.output()
+    );
+    s.resize(24, 90);
+    s.clear_output();
+    run_slash_command(&mut s, "context");
+    assert!(
+        s.wait_for_screen("Context Usage", RENDER_TIMEOUT),
+        "the pane renders at 90 columns:\n{}",
+        s.screen().contents()
+    );
+    let screen = s.screen().contents();
+    for row in screen.lines() {
+        let width = UnicodeWidthStr::width(row);
+        if width < 90 {
+            continue;
+        }
+        // A clipped row carries a glyph in its last column; a padded row ends
+        // in a space, and a rule row is a border rather than content.
+        let clipped = row.chars().next_back().is_some_and(|c| !c.is_whitespace());
+        let rule = row
+            .chars()
+            .all(|c| matches!(c, ' ' | '─' | '━' | '│' | '╭' | '╮' | '╰' | '╯'));
+        assert!(
+            !clipped || rule,
+            "a row is clipped at the right edge: {row:?}\n{screen}"
+        );
+    }
 }

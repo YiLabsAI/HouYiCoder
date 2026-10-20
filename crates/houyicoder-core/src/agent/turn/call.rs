@@ -10,12 +10,13 @@ use houyicoder_protocol::llm::{
 use houyicoder_protocol::llm::{LlmEvent, Usage};
 
 use crate::agent::compaction::{CompactionSuppression, SuppressionCause};
+use crate::agent::context::AssembledContext;
 use crate::agent::economy::{economy_decision, estimate_compaction};
 use crate::agent::model_window::{
     conservative_input_tokens, fill_omitted_usage, record_learned_context_window,
 };
 use crate::agent::truncation::{classify_truncation_signal, is_length_reason};
-use crate::agent::{RunError, Runner, new_event, obs_wire};
+use crate::agent::{RequestInferenceConfig, RunError, Runner, new_event, obs_wire};
 use houyicoder_api::agent_event::{EventHandler, ResponseStreamEvent};
 
 use super::stream_fold;
@@ -81,6 +82,27 @@ impl TurnCall {
 }
 
 impl Runner {
+    /// Freeze the inference config and assemble one request's context.
+    ///
+    /// The two steps belong together and in this order: the snapshot is where
+    /// a model switch resets the cached-prefix decisions, so a request built
+    /// before it would be assembled under the previous model's decisions.
+    pub(crate) fn assemble_request(
+        &self,
+        events: &[houyicoder_context::SessionLogEntry],
+        manifest: Option<&houyicoder_context::CheckpointManifest>,
+    ) -> (RequestInferenceConfig, AssembledContext) {
+        let inference = self.snapshot_inference();
+        let parts = self.assembly_parts();
+        let assembled = self.context_builder.build_for_turn(
+            events,
+            manifest,
+            Some(self.store.backend()),
+            &parts.input(),
+        );
+        (inference, assembled)
+    }
+
     /// One streaming model call sequence: re-assemble the event log into input,
     /// build the request, drive the provider stream, and fold it into a
     /// CompletionResponse while appending each text delta to the session log and
@@ -151,19 +173,12 @@ impl Runner {
             // announced skills, in one bundle, so the measurement the /context
             // view reports describes this request. Clear and compact are the
             // only memory-index refresh points.
-            let parts = self.assembly_parts();
-            // Freeze the inference config once per request before the context
-            // is built: the snapshot is also where a model switch resets the
-            // cached-prefix decisions, so taking it after assembly would let
-            // this request keep the previous model's decisions and land the
-            // reset on the next one.
-            let inference = self.snapshot_inference();
-            let mut assembled = self.context_builder.build_for_turn(
-                &snapshot.events,
-                snapshot.manifest.as_ref(),
-                Some(self.store.backend()),
-                &parts.input(),
-            );
+            // The snapshot comes first inside this call: it is where a model
+            // switch resets the cached-prefix decisions, so assembling before
+            // it would keep the previous model's decisions for this request
+            // and land the reset on the next one.
+            let (inference, mut assembled) =
+                self.assemble_request(&snapshot.events, snapshot.manifest.as_ref());
             // Capture before assembled.messages moves into the request;
             // token_count() can't run after that. Fallback for
             // provider-omits-usage, passed to record_turn at turn end.

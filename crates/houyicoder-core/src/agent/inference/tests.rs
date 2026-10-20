@@ -1,6 +1,11 @@
 //! Tests for this module.
 
 use super::*;
+use crate::agent::cache_liveness::CachedPrefixState;
+use crate::agent::retention::{RetentionContext, RetentionDecision, RetentionPolicy};
+use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
+use std::sync::Mutex;
+
 use crate::agent::ToolRegistry;
 use crate::agent::runner_config::RunnerConfig;
 use crate::agent::{ModelCatalogResolver, Runner};
@@ -131,18 +136,78 @@ fn test_set_model_clamps_speed() {
     );
 }
 
-/// A model switch resets the cached-prefix decisions at the snapshot, and the
-/// loop takes the snapshot before it assembles the request, so the first
-/// request on the new model already sees the reset instead of the next one.
+/// A model switch resets the cached-prefix decisions before the request is
+/// assembled. The probe records the generation it sees while the assembly
+/// consults a retention decision; moving the snapshot after assembly would
+/// show the old generation here.
 #[test]
 fn test_switch_resets_before_assembly() {
+    struct GenerationProbe {
+        cached: Arc<CachedPrefixState>,
+        seen: Mutex<Option<u64>>,
+    }
+    impl RetentionPolicy for GenerationProbe {
+        fn decide(&self, ctx: &RetentionContext) -> RetentionDecision {
+            if ctx.block_ref.is_some() {
+                *self.seen.lock().expect("probe") = Some(self.cached.generation());
+            }
+            RetentionDecision::Evict
+        }
+    }
+
     let runner = runner_with("model-a");
+    let probe = Arc::new(GenerationProbe {
+        cached: Arc::clone(runner.cached_prefix()),
+        seen: Mutex::new(None),
+    });
+    runner
+        .context_builder
+        .set_retention_policy(Arc::clone(&probe) as Arc<dyn RetentionPolicy>);
     runner.snapshot_inference();
-    let before = runner.cached_prefix().generation();
+    assert_eq!(runner.cached_prefix().generation(), 0);
     runner.apply_inference(InferenceConfig::for_model("model-b".into(), true));
-    runner.snapshot_inference();
-    assert!(
-        runner.cached_prefix().generation() > before,
-        "the first request on the new model resets the prefix decisions"
+
+    let entry = |ts: u64, event: SessionEvent| SessionLogEntry {
+        id: EventId::new(),
+        session: SessionId::new(),
+        ts,
+        prev_hash: None,
+        event,
+    };
+    let events = vec![
+        entry(0, SessionEvent::UserInput { text: "u".into() }),
+        entry(
+            1,
+            SessionEvent::AssistantMessage {
+                text: "a".into(),
+                thinking: None,
+            },
+        ),
+        entry(
+            2,
+            SessionEvent::ToolCall {
+                call_id: "c1".into(),
+                tool: "read".into(),
+                input: serde_json::json!({"path": "a.rs"}),
+            },
+        ),
+        entry(
+            3,
+            SessionEvent::ToolResult {
+                call_id: "c1".into(),
+                output: serde_json::json!({
+                    "block_ref": "hash-1",
+                    "preview": "p",
+                    "hint": "compacted",
+                }),
+                duration_ms: 1,
+            },
+        ),
+    ];
+    let (_inference, _assembled) = runner.assemble_request(&events, None);
+    assert_eq!(
+        *probe.seen.lock().expect("probe"),
+        Some(1),
+        "assembly must see the generation the switch bumped, not the old one"
     );
 }

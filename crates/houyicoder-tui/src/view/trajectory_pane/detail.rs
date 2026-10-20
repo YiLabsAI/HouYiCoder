@@ -92,41 +92,7 @@ pub(super) fn draw_turn_detail(
                     Color::Gray,
                 ),
             ]));
-            // What the turn's row could not carry: the thinking time and
-            // tokens, the effort it asked for, and the chain of models it
-            // used. A turn that switched models states the whole chain here,
-            // so the rows below can name one model each without repeating it.
-            let mut meta = Vec::new();
-            match (turn.reasoning_ms, turn.reasoning_tokens) {
-                (Some(ms), Some(tokens)) => meta.push(format!(
-                    "thinking {} ({})",
-                    format_span_ms(ms),
-                    format_tokens(tokens as u64)
-                )),
-                (Some(ms), None) => meta.push(format!("thinking {}", format_span_ms(ms))),
-                (None, Some(tokens)) => {
-                    meta.push(format!("thinking {} tok", format_tokens(tokens as u64)))
-                }
-                (None, None) => {}
-            }
-            if !turn.efforts.is_empty() {
-                meta.push(format!("effort {}", turn.efforts.join(", ")));
-            }
-            if !meta.is_empty() {
-                for row in wrap_line(&format!("  {}", meta.join(" · ")), area.width as usize) {
-                    header.push(line(vec![sp(row, Color::DarkGray)]));
-                }
-            }
-            if turn.model_chain.len() > 1 {
-                // A chain of several long ids is wider than the pane; wrapping
-                // it keeps every model it names readable.
-                for row in wrap_line(
-                    &format!("  models: {}", turn.model_chain.join(" → ")),
-                    area.width as usize,
-                ) {
-                    header.push(line(vec![sp(row, Color::DarkGray)]));
-                }
-            }
+            push_turn_meta(&mut header, turn, area.width);
             header.push(blank());
             // Layout, in display columns: the prefix, the bar, a gap, the
             // duration, the summary, and the outcome glyph. The bar takes what
@@ -148,8 +114,17 @@ pub(super) fn draw_turn_detail(
             // axis, so a folded wait does not leave the scale saying one thing
             // and the bars another.
             let axis = ActiveAxis::new(&detail.records);
-            if !compact {
-                header.push(ruler_line(axis.total(), bar_area));
+            let ready = matches!(detail.state, TrajectoryDetailState::Ready);
+            if !compact && ready {
+                // The scale is the axis the bars sit on; a turn whose records
+                // are not in hand yet (loading, failed) has no axis, so the
+                // wall time keeps the ruler from reading as a zero span.
+                let scale = if axis.total() > 0 {
+                    axis.total()
+                } else {
+                    turn.duration_ms
+                };
+                header.push(ruler_line(scale, bar_area));
             }
             match detail.state {
                 TrajectoryDetailState::Ready => {
@@ -260,6 +235,42 @@ pub(super) fn draw_drill_gone() -> (
         vec![blank(), key_hint(&[("Esc", "back")])],
         BodyScroll::Cursor(0),
     )
+}
+
+/// What the turn's row could not carry: the thinking time and tokens, the
+/// effort it asked for, and the chain of models it used. A turn that switched
+/// models states the whole chain here, so the rows below can name one model
+/// each without repeating it.
+fn push_turn_meta(header: &mut Vec<Line<'static>>, turn: &TrajectoryTurn, width: u16) {
+    let mut meta = Vec::new();
+    match (turn.reasoning_ms, turn.reasoning_tokens) {
+        (Some(ms), Some(tokens)) => meta.push(format!(
+            "thinking {} ({})",
+            format_span_ms(ms),
+            format_tokens(tokens as u64)
+        )),
+        (Some(ms), None) => meta.push(format!("thinking {}", format_span_ms(ms))),
+        (None, Some(tokens)) => meta.push(format!("thinking {} tok", format_tokens(tokens as u64))),
+        (None, None) => {}
+    }
+    if !turn.efforts.is_empty() {
+        meta.push(format!("effort {}", turn.efforts.join(", ")));
+    }
+    if !meta.is_empty() {
+        for row in wrap_line(&format!("  {}", meta.join(" · ")), width as usize) {
+            header.push(line(vec![sp(row, Color::DarkGray)]));
+        }
+    }
+    if turn.model_chain.len() > 1 {
+        // A chain of several long ids is wider than the pane; wrapping it
+        // keeps every model it names readable.
+        for row in wrap_line(
+            &format!("  models: {}", turn.model_chain.join(" → ")),
+            width as usize,
+        ) {
+            header.push(line(vec![sp(row, Color::DarkGray)]));
+        }
+    }
 }
 
 /// One Level 1 timeline row: the kind and name of the record, its bar on the

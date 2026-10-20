@@ -7,7 +7,9 @@ use reqwest::Client;
 use std::io::Read;
 use std::io::Write;
 use std::net::TcpListener;
+use std::thread::sleep;
 use std::thread::spawn;
+use std::time::Duration;
 use tokio::runtime::Builder;
 
 #[test]
@@ -517,6 +519,48 @@ fn test_redirect_hop_decides() {
     ));
 }
 
+/// The follower screens every hop: a hop to a target the URL rule refuses is
+/// refused before it is sent. The test client follows nothing either, so the
+/// only way to reach the refused target is the follower's own code.
+#[test]
+fn test_redirect_hop_refused() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    let server = spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept");
+        let mut buf = [0u8; 1024];
+        let _read = stream.read(&mut buf);
+        stream
+            .write_all(
+                b"HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:1/private\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            )
+            .expect("write");
+        sleep(Duration::from_millis(50));
+    });
+    let client = Client::builder()
+        .resolve("example.test", addr)
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .expect("client");
+    let runtime = Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    runtime.block_on(async {
+        let url = format!("http://example.test:{}/start", addr.port());
+        let refused = fetch_following(&client, &url)
+            .await
+            .expect_err("the hop is refused");
+        match refused {
+            FetchError::Refused(payload) => assert_eq!(payload["error_kind"], "redirect"),
+            FetchError::Transport(error) => {
+                panic!("the hop was sent instead of refused: {error}")
+            }
+        }
+    });
+    server.join().expect("server");
+}
+
 /// A relative redirect is followed to the answer.
 #[test]
 fn test_follows_relative_redirect() {
@@ -537,6 +581,7 @@ fn test_follows_relative_redirect() {
     });
     let client = Client::builder()
         .resolve("example.test", addr)
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .expect("client");
     let runtime = Builder::new_current_thread()
