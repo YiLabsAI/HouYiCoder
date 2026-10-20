@@ -19,7 +19,7 @@ use crate::records::ContextFileEntry;
 use crate::records::ContextSkillEntry;
 use crate::records::ContextSuggestion;
 use crate::records::{ContextView, SuggestionSeverity};
-use crate::view::line_wrap::wrap_styled_line;
+use crate::view::line_wrap::wrap_hanging;
 use crate::view::skill_origin::cost_label;
 use crate::view::skill_origin::display_order;
 use crate::view::skill_origin::heading_spans;
@@ -119,52 +119,26 @@ pub fn render_as_rows(view: &ContextView, width: usize) -> Vec<(String, Line<'st
     wrap_rows(out, width)
 }
 
-/// Split a row's leading spaces from its content, so the content can be
-/// wrapped against the width that remains after the indent. Returns the indent
-/// text and the styled spans that follow it.
-///
-/// The block's own producers indent with spaces, so only spaces count here; a
-/// tab would be treated as content, which is the safe direction (it is never
-/// silently dropped).
-fn split_indent(line: Line<'static>) -> (String, Vec<Span<'static>>) {
-    let mut head = String::new();
-    let mut body: Vec<Span<'static>> = Vec::new();
-    let mut in_indent = true;
-    for span in line.spans {
-        let text = span.content.into_owned();
-        if !in_indent {
-            body.push(Span::styled(text, span.style));
-            continue;
-        }
-        let trimmed = text.trim_start_matches(' ');
-        head.push_str(&text[..text.len() - trimmed.len()]);
-        if trimmed.is_empty() {
-            continue;
-        }
-        in_indent = false;
-        body.push(Span::styled(trimmed.to_string(), span.style));
-    }
-    (head, body)
+/// The display columns a row's leading spaces occupy, so the wrap can spend
+/// them from the same budget on every row instead of adding them on top.
+fn leading_indent(line: &Line<'static>) -> usize {
+    line.spans
+        .iter()
+        .take_while(|span| span.content.chars().all(|c| c == ' '))
+        .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
+        .sum()
 }
 
 /// Wrap each row to the available width and pair it with the plain text a
-/// selection or copy lifts. The row's leading indent is taken out before the
-/// wrap and put back on every line, so a continuation costs the indent out of
-/// the same width budget instead of adding it on top: a wrapped row can never
-/// be wider than the pane.
+/// selection or copy lifts. The row's leading indent is measured first and
+/// handed to the shared hanging wrap, so a continuation costs the indent out
+/// of the same width budget instead of adding it on top: a wrapped row can
+/// never be wider than the pane.
 fn wrap_rows(rows: Vec<Line<'static>>, width: usize) -> Vec<(String, Line<'static>)> {
     let mut out = Vec::new();
     for row in rows {
-        let (head, body) = split_indent(row);
-        let indent = UnicodeWidthStr::width(head.as_str()).min(width.saturating_sub(1));
-        // A zero width means the pane size is unknown, which is the shared
-        // wrap helper's "do not wrap" case: the body goes out unwrapped and
-        // the terminal falls back to its own clipping.
-        let budget = width.saturating_sub(indent);
-        for mut line in wrap_styled_line(Line::from(body), budget) {
-            let mut spans = vec![Span::raw(" ".repeat(indent))];
-            spans.append(&mut line.spans);
-            let line = Line::from(spans);
+        let indent = leading_indent(&row).min(width.saturating_sub(1));
+        for line in wrap_hanging(row, indent, width) {
             let plain: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
             out.push((plain, line));
         }

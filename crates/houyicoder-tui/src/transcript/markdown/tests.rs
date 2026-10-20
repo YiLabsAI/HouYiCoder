@@ -199,3 +199,99 @@ fn test_heading_paragraph_blank() {
     assert_eq!(plain[2], "  body");
     assert!(plain.len() <= 3, "no doubled blank: {:?}", plain);
 }
+
+/// A wrapped paragraph keeps one right edge: the first row and its
+/// continuations are wrapped against the same budget. Wrapping the full width
+/// and re-adding the glyph indent afterwards made every continuation two
+/// columns wider than the row above it, which pushed its tail past the pane.
+#[test]
+fn test_wrap_shares_right_edge() {
+    let md = "1. 第一条很长的说明文字，用来验证折行之后首行与续行的右边界完全一致，\
+              不应该出现续行比首行多伸出两个列宽的情况，否则右侧的汉字会贴死在边框上。\
+              第二条同样要足够长，确保至少折出两行以上。\n";
+    let (_lines, plain) = render_agent_text("●", md, 40);
+    for text in &plain {
+        let width = UnicodeWidthStr::width(text.as_str());
+        assert!(
+            width <= 40,
+            "row wider than the pane ({width} > 40): {text:?}"
+        );
+    }
+    let rows: Vec<usize> = plain
+        .iter()
+        .filter(|t| !t.trim().is_empty())
+        .map(|t| UnicodeWidthStr::width(t.as_str()))
+        .collect();
+    assert!(rows.len() >= 3, "the fixture must wrap: {plain:?}");
+    let first = rows[0];
+    assert!(
+        rows.iter().skip(1).all(|w| *w <= first + 1),
+        "no continuation may end more than one column past the first row: {rows:?}"
+    );
+}
+
+/// A table wider than the pane wraps inside its cells: every visual row keeps
+/// the leading and trailing pipe, and the pipes of each column share one
+/// display column across rows. Wrapping the finished table as prose broke the
+/// header's trailing pipe onto its own row and pushed the third column under
+/// the first.
+#[test]
+fn test_wide_table_wraps() {
+    let md = "| 优化 | 是否成立 | 独立判断 |\n|---|---|---|\n\
+              | 连接超时 | 真优化 | 直接证据支持六十秒死等三次收益取决于上游是否可达 |\n\
+              | 状态码 | 真优化 | 错误页不再算成功但重复同一链接仍需上游恢复 |\n";
+    let (_, plain) = render_agent_text("●", md, 60);
+    for text in &plain {
+        let width = UnicodeWidthStr::width(text.as_str());
+        assert!(width <= 60, "row wider than the pane ({width}): {text:?}");
+    }
+    let table_rows: Vec<&String> = plain
+        .iter()
+        .filter(|t| {
+            let t = t.trim_start().trim_start_matches('●').trim_start();
+            t.starts_with('|')
+        })
+        .collect();
+    assert!(table_rows.len() >= 6, "the table must wrap: {plain:?}");
+    let starts: Vec<usize> = table_rows
+        .iter()
+        .map(|t| {
+            let at = t.find('|').expect("a leading pipe");
+            UnicodeWidthStr::width(&t[..at])
+        })
+        .collect();
+    assert!(
+        starts.iter().all(|s| *s == starts[0]),
+        "every visual row starts its pipe at one column: {table_rows:?}"
+    );
+    for text in &table_rows {
+        assert!(
+            text.trim_end().ends_with('|'),
+            "every visual row keeps its trailing pipe: {text:?}"
+        );
+    }
+    let columns: Vec<Vec<usize>> = table_rows
+        .iter()
+        .map(|t| {
+            let at = t.find('|').expect("a leading pipe");
+            let base = UnicodeWidthStr::width(&t[..at]);
+            t.char_indices()
+                .filter(|(_, c)| *c == '|')
+                .map(|(i, _)| UnicodeWidthStr::width(&t[..i]) - base)
+                .collect()
+        })
+        .collect();
+    assert!(
+        columns.windows(2).all(|w| w[0] == w[1]),
+        "pipe columns must align across every visual row: {columns:?}"
+    );
+}
+
+/// A header-only table too narrow for columns still renders its columns
+/// instead of vanishing.
+#[test]
+fn test_header_only_table_kept() {
+    let rows = vec![vec!["alpha".to_string(), "beta".to_string()]];
+    let out = render_table(&rows, &[], 8);
+    assert!(!out.is_empty(), "the header must not vanish: {out:?}");
+}

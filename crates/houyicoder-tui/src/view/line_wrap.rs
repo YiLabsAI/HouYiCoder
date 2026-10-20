@@ -210,6 +210,89 @@ pub fn wrap_styled_line(line: Line<'static>, avail: usize) -> Vec<Line<'static>>
     }
 }
 
+/// Split a line into the prefix that occupies the first width display
+/// columns and the spans after it. A prefix can be a glyph plus a
+/// non-breaking space, so it is measured in columns rather than characters.
+fn split_display_prefix(
+    line: Line<'static>,
+    width: usize,
+) -> (Vec<Span<'static>>, Vec<Span<'static>>) {
+    let mut prefix: Vec<Span<'static>> = Vec::new();
+    let mut body: Vec<Span<'static>> = Vec::new();
+    let mut consumed = 0usize;
+    let mut in_prefix = true;
+    for span in line.spans {
+        if !in_prefix {
+            body.push(span);
+            continue;
+        }
+        let text = span.content.into_owned();
+        let mut kept = String::new();
+        let mut rest = String::new();
+        let mut split_at = text.len();
+        let mut straddled = false;
+        for (offset, grapheme) in text.grapheme_indices(true) {
+            let w = UnicodeWidthStr::width(grapheme);
+            if consumed + w > width {
+                // This grapheme crosses the boundary, so it belongs to the
+                // body: the prefix never grows past the width it stands for.
+                split_at = offset;
+                straddled = true;
+                break;
+            }
+            consumed += w;
+            kept.push_str(grapheme);
+            split_at = offset + grapheme.len();
+        }
+        if !straddled && consumed < width {
+            // The span ended before the prefix did: keep it whole and keep
+            // consuming the next span.
+            prefix.push(Span::styled(text, span.style));
+            continue;
+        }
+        in_prefix = false;
+        prefix.push(Span::styled(kept, span.style));
+        rest.push_str(&text[split_at..]);
+        if !rest.is_empty() {
+            body.push(Span::styled(rest, span.style));
+        }
+    }
+    (prefix, body)
+}
+
+/// Wrap a line that already carries an indent of a known display width.
+///
+/// The first row keeps that prefix; continuation rows repeat it as spaces.
+/// Both are wrapped against the same remaining budget, so the first row and
+/// its continuations end at the same column. Wrapping the full width and
+/// re-adding the indent afterwards makes every continuation wider than the
+/// row above it by the indent, which is the clipping this exists to prevent.
+pub fn wrap_hanging(line: Line<'static>, indent_w: usize, avail: usize) -> Vec<Line<'static>> {
+    if avail == 0 {
+        return vec![line];
+    }
+    if indent_w >= avail {
+        // The pane is narrower than the indent: there is no column left to
+        // wrap into, so the row goes out whole and the terminal clips it.
+        return vec![line];
+    }
+    let (prefix, body) = split_display_prefix(line, indent_w);
+    let budget = avail - indent_w;
+    wrap_styled_line(Line::from(body), budget)
+        .into_iter()
+        .enumerate()
+        .map(|(i, row)| {
+            let mut spans: Vec<Span<'static>> = if i == 0 {
+                prefix.clone()
+            } else {
+                vec![Span::raw(" ".repeat(indent_w))]
+            };
+            spans.extend(row.spans);
+            Line::from(spans)
+        })
+        .collect()
+}
+
 #[derive(Clone)]
 struct WrapCell {
     text: String,

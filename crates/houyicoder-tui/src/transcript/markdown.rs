@@ -6,7 +6,8 @@
 //! to ANSI-styled output; this module does the same with pulldown-cmark
 //! events mapped to ratatui spans.
 
-use crate::view::line_wrap::wrap_styled_line;
+use crate::view::line_wrap::wrap_hanging;
+use crate::view::line_wrap::wrap_line;
 use pulldown_cmark::Alignment;
 use pulldown_cmark::CodeBlockKind;
 use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
@@ -300,7 +301,11 @@ pub fn render_agent_text(
                 TagEnd::Table => {
                     flush!();
                     in_table = false;
-                    let rows = render_table(&table_rows, &table_aligns);
+                    let rows = render_table(
+                        &table_rows,
+                        &table_aligns,
+                        avail.saturating_sub(UnicodeWidthStr::width(glyph) + 1),
+                    );
                     table_rows.clear();
                     for line in rows {
                         let display = if first_line {
@@ -402,44 +407,40 @@ fn wrap_markdown(
         return (styled, plain);
     }
     let indent_w = UnicodeWidthStr::width(glyph) + 1;
-    let indent = " ".repeat(indent_w);
-    let wrap_width = avail.saturating_sub(indent_w).max(indent_w);
     let mut out_s: Vec<Line<'static>> = Vec::with_capacity(styled.len());
     let mut out_p: Vec<String> = Vec::with_capacity(styled.len());
     for (line, _orig_plain) in styled.into_iter().zip(plain) {
-        let rows = wrap_styled_line(line, wrap_width);
-        for (i, row) in rows.into_iter().enumerate() {
+        // One budget for the first row and its continuations: the row already
+        // carries the glyph indent, so wrapping the full width and re-adding
+        // the indent afterwards would make every continuation wider than the
+        // row above it.
+        for row in wrap_hanging(line, indent_w, avail) {
             let p: String = row
                 .spans
                 .iter()
                 .map(|s| s.content.as_ref())
                 .collect::<String>()
                 .replace('\u{a0}', " ");
-            if i > 0 {
-                let mut spans = vec![Span::raw(indent.clone())];
-                spans.extend(row.spans);
-                out_s.push(Line::from(spans));
-                out_p.push(format!("{indent}{p}"));
-            } else {
-                out_s.push(row);
-                out_p.push(p);
-            }
+            out_s.push(row);
+            out_p.push(p);
         }
     }
     (out_s, out_p)
 }
 
 /// Render a markdown table as ASCII: header row, separator, data rows.
-/// Column widths are max display width per column (CJK-aware, min 3). Cells
-/// are padded per the column alignment so the pipe separators line up.
-/// The table algorithm: column-width min 3, dash-only
-/// separator with no alignment colons, CJK-aware display width.
-fn render_table(rows: &[Vec<String>], aligns: &[Alignment]) -> Vec<String> {
+///
+/// Column widths are the widest cell per column, then shrunk to the width the
+/// pane can spare. A cell wider than its column is wrapped inside the cell and
+/// the row grows downward, so the pipe separators stay in one column on every
+/// visual row. Wrapping the finished table as prose would break the header's
+/// trailing pipe and every column after it.
+fn render_table(rows: &[Vec<String>], aligns: &[Alignment], avail: usize) -> Vec<String> {
     if rows.is_empty() || rows[0].is_empty() {
         return Vec::new();
     }
     let ncols = rows[0].len();
-    let widths: Vec<usize> = (0..ncols)
+    let mut widths: Vec<usize> = (0..ncols)
         .map(|c| {
             let mut w = 3usize;
             for row in rows {
@@ -450,31 +451,81 @@ fn render_table(rows: &[Vec<String>], aligns: &[Alignment]) -> Vec<String> {
             w
         })
         .collect();
+    const MIN_COL: usize = 4;
+    let spent = |widths: &[usize]| widths.iter().sum::<usize>() + 3 * ncols + 1;
+    if avail > 0 {
+        while spent(&widths) > avail {
+            let Some((widest, _)) = widths.iter().enumerate().max_by_key(|(_, w)| **w) else {
+                break;
+            };
+            if widths[widest] <= MIN_COL {
+                break;
+            }
+            widths[widest] -= 1;
+        }
+        if spent(&widths) > avail {
+            return stacked_table(rows, avail);
+        }
+    }
     let align_of = |c: usize| aligns.get(c).copied().unwrap_or(Alignment::None);
     let mut out = Vec::new();
-    let mut header = String::from("| ");
-    for (c, cell) in rows[0].iter().enumerate() {
-        header.push_str(&pad_cell(cell, widths[c], align_of(c)));
-        header.push_str(" | ");
-    }
-    out.push(header.trim_end().to_string());
-    let mut sep = String::from('|');
-    for w in &widths {
-        sep.push_str(&"-".repeat(w + 2));
-        sep.push('|');
-    }
-    out.push(sep);
-    for row in rows.iter().skip(1) {
-        let mut line = String::from("| ");
-        for (c, cell) in row.iter().enumerate() {
-            line.push_str(&pad_cell(
-                cell,
-                widths.get(c).copied().unwrap_or(3),
-                align_of(c),
-            ));
-            line.push_str(" | ");
+    for (r, row) in rows.iter().enumerate() {
+        let cells: Vec<Vec<String>> = (0..ncols)
+            .map(|c| {
+                let cell = row.get(c).map(String::as_str).unwrap_or("");
+                wrap_line(cell, widths[c])
+            })
+            .collect();
+        let height = cells.iter().map(Vec::len).max().unwrap_or(1);
+        for line_idx in 0..height {
+            let mut line = String::from("| ");
+            for (c, cell_rows) in cells.iter().enumerate() {
+                let text = cell_rows.get(line_idx).map(String::as_str).unwrap_or("");
+                line.push_str(&pad_cell(text, widths[c], align_of(c)));
+                line.push_str(" | ");
+            }
+            out.push(line.trim_end().to_string());
         }
-        out.push(line.trim_end().to_string());
+        if r == 0 {
+            let mut sep = String::from('|');
+            for w in &widths {
+                sep.push_str(&"-".repeat(w + 2));
+                sep.push('|');
+            }
+            out.push(sep);
+        }
+    }
+    out
+}
+
+/// The table a pane too narrow for any column layout falls back to: one
+/// header-and-value pair per line, wrapped to the pane. A table that cannot
+/// keep its columns aligned must stop pretending to be a table.
+fn stacked_table(rows: &[Vec<String>], avail: usize) -> Vec<String> {
+    let headers = &rows[0];
+    if rows.len() == 1 {
+        // A header with no body is still content: state its columns instead of
+        // dropping the table.
+        return wrap_line(&headers.join(" | "), avail);
+    }
+    let mut out = Vec::new();
+    for (r, row) in rows.iter().enumerate().skip(1) {
+        if r > 1 {
+            out.push(String::new());
+        }
+        for (c, cell) in row.iter().enumerate() {
+            let label = headers.get(c).map(String::as_str).unwrap_or("");
+            let prefix = format!("{label}: ");
+            let indent = UnicodeWidthStr::width(prefix.as_str());
+            let budget = avail.saturating_sub(indent).max(1);
+            for (i, line) in wrap_line(cell, budget).iter().enumerate() {
+                if i == 0 {
+                    out.push(format!("{prefix}{line}"));
+                } else {
+                    out.push(format!("{}{}", " ".repeat(indent), line));
+                }
+            }
+        }
     }
     out
 }
