@@ -3,12 +3,19 @@
 //! Fetches a URL, strips HTML tags with a simple in-process parser (no
 //! markdown converter dep), and returns the raw extracted text for the main
 //! model to process, avoiding a secondary model round-trip. The domain
-//! blocklist preflight, LRU cache, and same-host-only redirect restriction
-//! are deferred.
+//! blocklist preflight and same-host-only redirect restriction are deferred.
 //!
 //! Read-only and concurrency-safe: the tool performs GET requests with no
 //! side effects on the workspace. Failures become tool-result content (an
-//! error JSON object) so the model sees the failure and can react.
+//! error JSON object) so the model sees the failure and can react. Each
+//! failure names the stage it came from, because a host that cannot be reached
+//! and a host that answered with an error page are different problems for the
+//! model to react to.
+//!
+//! A page fetched once is reusable for a short while, and a URL that just
+//! failed to connect is answered from that failure for a shorter while, so a
+//! model that retries the same dead link pays one timeout rather than one per
+//! attempt.
 
 use houyicoder_async::PFut;
 use serde_json::{Value, json};
@@ -16,7 +23,9 @@ use serde_json::{Value, json};
 use super::{Tool, ToolCtx, ToolError};
 use reqwest::Client;
 use reqwest::redirect::Policy;
-use std::time::Duration;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 /// Maximum URL length accepted by the tool. Guards against oversized URLs
 /// that may be crafted for data exfiltration.
@@ -28,22 +37,234 @@ const MAX_URL_LENGTH: usize = 2_000;
 /// before the result enters the context.
 const MAX_CONTENT_CHARS: usize = 50_000;
 
-/// Request timeout in seconds. Prevents hanging on unresponsive servers.
-const FETCH_TIMEOUT_SECS: u64 = 60;
+/// Request timeout in seconds. Prevents hanging on unresponsive servers. A
+/// fetch that has not answered by now is not going to be useful inside a
+/// model turn, and the turn should learn that quickly.
+const FETCH_TIMEOUT_SECS: u64 = 30;
+
+/// Connection timeout in seconds. Separate from the request timeout: a host
+/// that never completes the TCP or TLS handshake fails here instead of
+/// holding the whole request budget, which is what makes a dead link cost
+/// seconds rather than the full request timeout.
+const CONNECT_TIMEOUT_SECS: u64 = 10;
+
+/// Idle connection lifetime. Keeps a pooled connection alive across the gap
+/// between two tool calls in one turn instead of paying a fresh handshake.
+const TCP_KEEPALIVE_SECS: u64 = 30;
+
+/// How long a fetched page stays reusable for the same URL.
+const PAGE_TTL: Duration = Duration::from_secs(15 * 60);
+
+/// How long a URL that just failed to connect stays answered from that
+/// failure. Short on purpose: a transient network fault clears, and the tool
+/// must not keep a host unreachable after it recovers.
+const FAILURE_TTL: Duration = Duration::from_secs(60);
+
+/// Upper bound on cached pages, so a long session cannot grow this cache
+/// without limit. The oldest page is dropped when the bound is reached.
+const CACHE_MAX_ENTRIES: usize = 32;
 
 /// Maximum redirect hops followed. Guards against redirect loops. Caps at
 /// 10. This v1 follows all redirects (including cross-host) rather than
 /// restricting to same-host.
 const MAX_REDIRECTS: usize = 10;
 
+/// A page fetched once, kept for a short reuse window.
+struct CachedPage {
+    content: String,
+    content_type: String,
+    fetched: Instant,
+}
+
+/// A URL whose connection attempt failed, kept only long enough that a blind
+/// retry in the same turn does not pay the timeout again.
+struct FailedUrl {
+    kind: &'static str,
+    message: String,
+    failed: Instant,
+}
+
+/// Per-tool reuse state: successful pages and recent connection failures,
+/// both keyed by the URL as requested (before the HTTPS upgrade), so the key
+/// matches what a caller asks for.
+#[derive(Default)]
+struct FetchCache {
+    pages: HashMap<String, CachedPage>,
+    failures: HashMap<String, FailedUrl>,
+}
+
+impl FetchCache {
+    /// A page still inside its reuse window.
+    fn page(&mut self, url: &str) -> Option<(String, String)> {
+        self.page_at(url, Instant::now())
+    }
+
+    /// A page still inside its reuse window at a stated instant. The instant
+    /// is a parameter so a test can state an expired entry instead of waiting
+    /// out the window.
+    fn page_at(&mut self, url: &str, now: Instant) -> Option<(String, String)> {
+        let page = self.pages.get(url)?;
+        if now.saturating_duration_since(page.fetched) >= PAGE_TTL {
+            self.pages.remove(url);
+            return None;
+        }
+        Some((page.content.clone(), page.content_type.clone()))
+    }
+
+    /// Keep a page for reuse, dropping the oldest entry when the cache is
+    /// full.
+    fn store_page(&mut self, url: &str, content: String, content_type: String) {
+        if self.pages.len() >= CACHE_MAX_ENTRIES
+            && let Some(oldest) = self
+                .pages
+                .iter()
+                .min_by_key(|(_, page)| page.fetched)
+                .map(|(key, _)| key.clone())
+        {
+            self.pages.remove(&oldest);
+        }
+        self.pages.insert(
+            url.to_string(),
+            CachedPage {
+                content,
+                content_type,
+                fetched: Instant::now(),
+            },
+        );
+    }
+
+    /// A connection failure still inside its short window.
+    fn failure(&mut self, url: &str) -> Option<(&'static str, String)> {
+        self.failure_at(url, Instant::now())
+    }
+
+    /// A connection failure still inside its short window at a stated instant,
+    /// for the same reason the page check takes one.
+    fn failure_at(&mut self, url: &str, now: Instant) -> Option<(&'static str, String)> {
+        let failure = self.failures.get(url)?;
+        if now.saturating_duration_since(failure.failed) >= FAILURE_TTL {
+            self.failures.remove(url);
+            return None;
+        }
+        Some((failure.kind, failure.message.clone()))
+    }
+
+    /// Remember that a URL could not be reached.
+    fn store_failure(&mut self, url: &str, kind: &'static str, message: String) {
+        self.failures.insert(
+            url.to_string(),
+            FailedUrl {
+                kind,
+                message,
+                failed: Instant::now(),
+            },
+        );
+    }
+}
+
+/// The stage a fetch failed in, as the model sees it. A transport failure
+/// before any response and a response the server marked as an error are
+/// different problems, and the model reacts to them differently.
+fn classify_fetch_error(error: &reqwest::Error) -> &'static str {
+    classify_failure(error.is_timeout(), error.is_connect(), &error.to_string())
+}
+
+/// The failure stage from the transport facts and the message text. Split from
+/// the error type so each branch is stated by a test rather than inferred
+/// from a live network fault.
+fn classify_failure(timed_out: bool, connect: bool, message: &str) -> &'static str {
+    if timed_out {
+        if connect {
+            "connect_timeout"
+        } else {
+            "read_timeout"
+        }
+    } else if connect {
+        let text = message.to_ascii_lowercase();
+        if text.contains("certificate") || text.contains("tls") || text.contains("x509") {
+            "tls"
+        } else {
+            "connect"
+        }
+    } else {
+        "request"
+    }
+}
+
+/// The result of a page the tool can hand back: freshly fetched, or reused
+/// from the cache with the flag that says so.
+fn page_payload(
+    url: &str,
+    prompt: &str,
+    content: String,
+    content_type: String,
+    cached: bool,
+) -> Value {
+    let mut payload = json!({
+        "content": content,
+        "url": url,
+        "prompt": prompt,
+        "status": 200,
+        "content_type": content_type,
+    });
+    if cached {
+        payload["cached"] = json!(true);
+    }
+    payload
+}
+
+/// The result of a response the server marked as an error. The error field is
+/// what the transcript colors and the trajectory counts, so an error page can
+/// never read as content.
+fn http_failure_payload(url: &str, status: u16, reason: &str) -> Value {
+    json!({
+        "error": format!("webfetch: http_status: HTTP {status} {reason}"),
+        "error_kind": "http_status",
+        "status": status,
+        "url": url,
+    })
+}
+
+/// Turn a successful response body into the tool result, and keep the page for
+/// reuse. Split from the request so the extraction and the cache write are
+/// stated by a test rather than only by a live fetch.
+fn finish_page(
+    cache: &Mutex<FetchCache>,
+    url: &str,
+    prompt: &str,
+    body: String,
+    content_type: String,
+) -> Value {
+    let text = if content_type.contains("text/html") {
+        strip_html(&body)
+    } else {
+        body
+    };
+    let truncated = truncate_content(&text, MAX_CONTENT_CHARS);
+    if let Ok(mut c) = cache.lock() {
+        c.store_page(url, truncated.clone(), content_type.clone());
+    }
+    page_payload(url, prompt, truncated, content_type, false)
+}
+
+/// The result of a transport failure, naming the stage it came from.
+fn fetch_failure_payload(kind: &'static str, message: &str) -> Value {
+    json!({
+        "error": format!("webfetch: {kind}: {message}"),
+        "error_kind": kind,
+    })
+}
+
 /// A web content fetch tool. Fetches a URL, converts HTML to plain text,
 /// truncates, and returns the content for the model to process.
 ///
 /// The tool stores a reusable HTTP client (connection pool) behind a cheap
-/// Arc clone. Construction is infallible unless the TLS backend cannot be
-/// initialized (a system-level failure).
+/// Arc clone, plus a bounded per-tool reuse cache shared across calls.
+/// Construction is infallible unless the TLS backend cannot be initialized
+/// (a system-level failure).
 pub struct WebFetchTool {
     client: Client,
+    cache: Arc<Mutex<FetchCache>>,
 }
 
 impl WebFetchTool {
@@ -51,9 +272,14 @@ impl WebFetchTool {
         let client = Client::builder()
             .redirect(Policy::limited(MAX_REDIRECTS))
             .timeout(Duration::from_secs(FETCH_TIMEOUT_SECS))
+            .connect_timeout(Duration::from_secs(CONNECT_TIMEOUT_SECS))
+            .tcp_keepalive(Duration::from_secs(TCP_KEEPALIVE_SECS))
             .build()
             .expect("HTTP client construction failed (TLS backend error)");
-        Self { client }
+        Self {
+            client,
+            cache: Arc::new(Mutex::new(FetchCache::default())),
+        }
     }
 }
 
@@ -88,6 +314,7 @@ impl Tool for WebFetchTool {
     }
     fn execute(&self, _ctx: ToolCtx, input: Value) -> PFut<'_, Result<Value, ToolError>> {
         let client = self.client.clone();
+        let cache = Arc::clone(&self.cache);
         Box::pin(async move {
             let url = input
                 .get("url")
@@ -105,6 +332,20 @@ impl Tool for WebFetchTool {
             }
 
             let fetch_url = upgrade_to_https(url);
+
+            // Reuse a page already fetched in this session, and answer a URL
+            // whose connection just failed from that failure, so a blind
+            // retry inside one turn does not pay the timeout twice.
+            let reused = cache.lock().ok().and_then(|mut c| c.page(url));
+            if let Some((content, content_type)) = reused {
+                return Ok(page_payload(url, prompt, content, content_type, true));
+            }
+            let recent_failure = cache.lock().ok().and_then(|mut c| c.failure(url));
+            if let Some((kind, message)) = recent_failure {
+                let mut payload = fetch_failure_payload(kind, &message);
+                payload["cached_failure"] = json!(true);
+                return Ok(payload);
+            }
 
             let result = client
                 .get(&fetch_url)
@@ -126,22 +367,32 @@ impl Tool for WebFetchTool {
                         ToolError::Failed(format!("webfetch: body read error: {e}"))
                     })?;
 
-                    let text = if content_type.contains("text/html") {
-                        strip_html(&body)
-                    } else {
-                        body
-                    };
-                    let truncated = truncate_content(&text, MAX_CONTENT_CHARS);
+                    // A server that answered with an error status is a
+                    // failure the model must see as one: the body is an error
+                    // page, not content, and the transcript's failure count
+                    // and the trajectory's failure rows read this same field.
+                    if !status.is_success() {
+                        return Ok(http_failure_payload(
+                            url,
+                            status.as_u16(),
+                            status.canonical_reason().unwrap_or(""),
+                        ));
+                    }
 
-                    Ok(json!({
-                        "content": truncated,
-                        "url": url,
-                        "prompt": prompt,
-                        "status": status.as_u16(),
-                        "content_type": content_type,
-                    }))
+                    Ok(finish_page(&cache, url, prompt, body, content_type))
                 }
-                Err(e) => Ok(json!({"error": format!("webfetch: fetch failed: {e}")})),
+                Err(e) => {
+                    let kind = classify_fetch_error(&e);
+                    let message = e.to_string();
+                    // Only a transport failure is worth remembering: a
+                    // request the server rejected may succeed next time.
+                    if matches!(kind, "connect" | "connect_timeout" | "tls")
+                        && let Ok(mut c) = cache.lock()
+                    {
+                        c.store_failure(url, kind, message.clone());
+                    }
+                    Ok(fetch_failure_payload(kind, &message))
+                }
             }
         })
     }
