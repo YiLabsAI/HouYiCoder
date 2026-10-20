@@ -781,12 +781,18 @@ fn test_skills_rows_share_order() {
 
 /// A suggestion whose detail is wider than the pane keeps its tail: the row
 /// wraps under the section's own indent instead of being clipped at the right
-/// edge, and no emitted row exceeds the pane width.
+/// edge, and no emitted row exceeds the pane width. The detail spans more than
+/// two panes so the middle continuation rows are exercised, which is where a
+/// wrap that adds the indent after wrapping would overflow.
 #[test]
 fn test_suggestion_detail_wraps() {
     let detail = "Largest: AGENTS.md (8.5k), Recalled memories (10 entries) (4k), \
                   Memory index (36 entries) (2.3k). Use /memory to review and prune \
-                  stale entries.";
+                  stale entries. Largest: AGENTS.md (8.5k), Recalled memories (10 \
+                  entries) (4k), Memory index (36 entries) (2.3k). Use /memory to \
+                  review and prune stale entries. Largest: AGENTS.md (8.5k), \
+                  Recalled memories (10 entries) (4k), Memory index (36 entries) \
+                  (2.3k). Use /memory to review and prune stale entries.";
     let view = ContextView {
         breakdown: stub_breakdown(),
         drill: ContextDrillDown::default(),
@@ -810,11 +816,11 @@ fn test_suggestion_detail_wraps() {
         .expect("the detail's head is on a row");
     let tail = rows
         .iter()
-        .position(|(plain, _)| plain.contains("prune stale entries."))
+        .rposition(|(plain, _)| plain.contains("stale entries."))
         .unwrap_or_else(|| panic!("the detail lost its tail: {rows:#?}"));
     assert!(
-        tail > head,
-        "the detail did not wrap, so the tail shares the head's row"
+        tail >= head + 3,
+        "the detail needs several rows to exercise a middle continuation: {rows:#?}"
     );
     for (plain, _) in &rows[head..=tail] {
         assert!(

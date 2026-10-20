@@ -46,8 +46,10 @@ const BLOCK_INDENT: usize = 5;
 ///
 /// Every row is soft-wrapped to the given display width before it is paired
 /// with its plain text, so a long suggestion or summary hangs under its own
-/// indent instead of being clipped at the terminal edge. The wrap is the
-/// transcript's shared word-boundary helper, which keeps this block's row
+/// indent instead of being clipped at the terminal edge. The indent is taken
+/// out before the wrap and put back on every line, so it costs the same width
+/// budget on a continuation as on the first line. The wrap is the transcript's
+/// shared word-boundary helper, which keeps this block's row
 /// count identical to the rows the draw path emits.
 pub fn render_as_rows(view: &ContextView, width: usize) -> Vec<(String, Line<'static>)> {
     let bd = &view.breakdown;
@@ -78,7 +80,7 @@ pub fn render_as_rows(view: &ContextView, width: usize) -> Vec<(String, Line<'st
     // Top section: grid glyphs on the left beside the legend on the right.
     // Grid cells are fixed two columns each, so every legend line starts at
     // the same display column (indent + grid width + gap), faithful to the
-    // the two-column layout.
+    // two-column layout.
     let legend = legend_rows(bd, pct);
     let top = bd.grid.len().max(legend.len());
     let cells_per_row = bd.grid.first().map(|r| r.len()).unwrap_or(0);
@@ -117,29 +119,45 @@ pub fn render_as_rows(view: &ContextView, width: usize) -> Vec<(String, Line<'st
     wrap_rows(out, width)
 }
 
-/// The display columns a row's leading whitespace occupies, so a wrapped
-/// continuation can hang under the text instead of returning to column zero.
-fn leading_indent(line: &Line<'static>) -> usize {
-    line.spans
-        .iter()
-        .take_while(|span| span.content.chars().all(char::is_whitespace))
-        .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
-        .sum()
+/// Split a row's leading spaces from its content, so the content can be
+/// wrapped against the width that remains after the indent. Returns the indent
+/// text and the styled spans that follow it.
+fn split_indent(line: Line<'static>) -> (String, Vec<Span<'static>>) {
+    let mut head = String::new();
+    let mut body: Vec<Span<'static>> = Vec::new();
+    let mut in_indent = true;
+    for span in line.spans {
+        let text = span.content.into_owned();
+        if !in_indent {
+            body.push(Span::styled(text, span.style));
+            continue;
+        }
+        let trimmed = text.trim_start_matches(' ');
+        head.push_str(&text[..text.len() - trimmed.len()]);
+        if trimmed.is_empty() {
+            continue;
+        }
+        in_indent = false;
+        body.push(Span::styled(trimmed.to_string(), span.style));
+    }
+    (head, body)
 }
 
 /// Wrap each row to the available width and pair it with the plain text a
-/// selection or copy lifts. A continuation row repeats the row's leading
-/// indent, so wrapped text stays in the column its section owns.
+/// selection or copy lifts. The row's leading indent is taken out before the
+/// wrap and put back on every line, so a continuation costs the indent out of
+/// the same width budget instead of adding it on top: a wrapped row can never
+/// be wider than the pane.
 fn wrap_rows(rows: Vec<Line<'static>>, width: usize) -> Vec<(String, Line<'static>)> {
     let mut out = Vec::new();
     for row in rows {
-        let indent = leading_indent(&row).min(width.saturating_sub(1));
-        for (i, mut line) in wrap_styled_line(row, width).into_iter().enumerate() {
-            if i > 0 && indent > 0 {
-                let mut spans = vec![Span::raw(" ".repeat(indent))];
-                spans.append(&mut line.spans);
-                line = Line::from(spans);
-            }
+        let (head, body) = split_indent(row);
+        let indent = UnicodeWidthStr::width(head.as_str()).min(width.saturating_sub(1));
+        let budget = width.saturating_sub(indent).max(1);
+        for mut line in wrap_styled_line(Line::from(body), budget) {
+            let mut spans = vec![Span::raw(" ".repeat(indent))];
+            spans.append(&mut line.spans);
+            let line = Line::from(spans);
             let plain: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
             out.push((plain, line));
         }
