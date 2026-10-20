@@ -329,3 +329,22 @@ fn test_finish_page_strips_html() {
     );
     assert_eq!(plain["content"], "plain text");
 }
+
+/// The remembered-failure map is bounded like the page cache, so a session
+/// that probes many distinct dead URLs cannot grow it without limit.
+#[test]
+fn test_failure_cache_bounded() {
+    let mut cache = FetchCache::default();
+    for i in 0..=FAILURE_MAX_ENTRIES {
+        cache.store_failure(
+            &format!("https://example.com/dead/{i}"),
+            "connect",
+            "refused".to_string(),
+        );
+    }
+    assert_eq!(
+        cache.failures.len(),
+        FAILURE_MAX_ENTRIES,
+        "the failure cache is bounded"
+    );
+}

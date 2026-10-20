@@ -64,6 +64,11 @@ const FAILURE_TTL: Duration = Duration::from_secs(60);
 /// without limit. The oldest page is dropped when the bound is reached.
 const CACHE_MAX_ENTRIES: usize = 32;
 
+/// Upper bound on remembered connection failures, for the same reason: a
+/// session that probes many distinct dead URLs must not grow this map without
+/// limit. The oldest failure is dropped when the bound is reached.
+const FAILURE_MAX_ENTRIES: usize = 32;
+
 /// Maximum redirect hops followed. Guards against redirect loops. Caps at
 /// 10. This v1 follows all redirects (including cross-host) rather than
 /// restricting to same-host.
@@ -149,8 +154,18 @@ impl FetchCache {
         Some((failure.kind, failure.message.clone()))
     }
 
-    /// Remember that a URL could not be reached.
+    /// Remember that a URL could not be reached, dropping the oldest entry
+    /// when the cache is full.
     fn store_failure(&mut self, url: &str, kind: &'static str, message: String) {
+        if self.failures.len() >= FAILURE_MAX_ENTRIES
+            && let Some(oldest) = self
+                .failures
+                .iter()
+                .min_by_key(|(_, failure)| failure.failed)
+                .map(|(key, _)| key.clone())
+        {
+            self.failures.remove(&oldest);
+        }
         self.failures.insert(
             url.to_string(),
             FailedUrl {
