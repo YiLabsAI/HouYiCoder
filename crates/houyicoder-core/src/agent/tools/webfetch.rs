@@ -24,6 +24,8 @@ use super::{Tool, ToolCtx, ToolError};
 use reqwest::Client;
 use reqwest::redirect::Policy;
 use std::collections::HashMap;
+use std::io::Error;
+use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -69,9 +71,14 @@ const CACHE_MAX_ENTRIES: usize = 32;
 /// limit. The oldest failure is dropped when the bound is reached.
 const FAILURE_MAX_ENTRIES: usize = 32;
 
-/// Maximum redirect hops followed. Guards against redirect loops. Caps at
-/// 10. This v1 follows all redirects (including cross-host) rather than
-/// restricting to same-host.
+/// Maximum bytes of a response body the tool will read. A page larger than
+/// this is not a page a model turn can use, and reading it whole first would
+/// spend the memory before the truncation ran.
+const MAX_BODY_BYTES: usize = 10 * 1024 * 1024;
+
+/// Maximum redirect hops followed. Guards against redirect loops. A hop may
+/// cross hosts, but every target still passes the same URL check, so a
+/// redirect cannot reach a private address the first hop was denied.
 const MAX_REDIRECTS: usize = 10;
 
 /// A page fetched once, kept for a short reuse window.
@@ -181,6 +188,19 @@ impl FetchCache {
     }
 }
 
+/// Whether a redirect hop may be followed: the hop count is under the cap and
+/// the target passes the same URL rule as the first request, so a public page
+/// cannot bounce the fetcher onto a private address.
+fn redirect_allowed(previous: usize, target: &str) -> Result<(), &'static str> {
+    if previous >= MAX_REDIRECTS {
+        Err("too many redirects")
+    } else if !validate_url(target) {
+        Err("redirect target rejected")
+    } else {
+        Ok(())
+    }
+}
+
 /// The stage a fetch failed in, as the model sees it. A transport failure
 /// before any response and a response the server marked as an error are
 /// different problems, and the model reacts to them differently.
@@ -260,10 +280,75 @@ fn finish_page(
         body
     };
     let truncated = truncate_content(&text, MAX_CONTENT_CHARS);
-    if let Ok(mut c) = cache.lock() {
+    let missing = looks_like_missing_page(&truncated);
+    // A page that reports itself missing is not reused: caching it would keep
+    // answering later requests with the same dead end.
+    if !missing && let Ok(mut c) = cache.lock() {
         c.store_page(url, truncated.clone(), content_type.clone());
     }
-    page_payload(url, prompt, truncated, content_type, false)
+    let mut payload = page_payload(url, prompt, truncated, content_type, false);
+    if missing {
+        payload["soft_404"] = json!(true);
+    }
+    payload
+}
+
+/// Read a response body up to the byte cap. A larger body returns the error
+/// payload rather than being read whole and then truncated: the memory is
+/// spent before the truncation would run.
+async fn read_body(mut resp: reqwest::Response) -> Result<String, Value> {
+    let mut body = Vec::new();
+    loop {
+        match resp.chunk().await {
+            Ok(Some(chunk)) => append_chunk(&mut body, &chunk)?,
+            Ok(None) => break,
+            Err(e) => return Err(read_error(&e.to_string())),
+        }
+    }
+    Ok(decode_body(&body))
+}
+
+/// Append one chunk unless the body would pass the cap.
+fn append_chunk(body: &mut Vec<u8>, chunk: &[u8]) -> Result<(), Value> {
+    if body.len() + chunk.len() > MAX_BODY_BYTES {
+        return Err(json!({
+            "error": format!("webfetch: response_too_large: over {MAX_BODY_BYTES} bytes"),
+            "error_kind": "response_too_large",
+        }));
+    }
+    body.extend_from_slice(chunk);
+    Ok(())
+}
+
+/// The payload for a body that stopped arriving.
+fn read_error(message: &str) -> Value {
+    json!({
+        "error": format!("webfetch: body read error: {message}"),
+        "error_kind": "read",
+    })
+}
+
+/// Decode a body as text, replacing invalid bytes rather than failing: a page
+/// with one bad byte is still readable.
+fn decode_body(body: &[u8]) -> String {
+    String::from_utf8_lossy(body).into_owned()
+}
+
+/// Whether a short page says it does not exist. The check is deliberately
+/// narrow: a long document that mentions the phrase is real content, and a
+/// server that answers 200 with a missing-page notice is the case worth
+/// flagging.
+fn looks_like_missing_page(text: &str) -> bool {
+    if text.chars().count() >= 400 {
+        return false;
+    }
+    let head: String = text
+        .lines()
+        .take(6)
+        .collect::<Vec<_>>()
+        .join("\n")
+        .to_ascii_lowercase();
+    head.contains("page not found") || head.contains("404 not found")
 }
 
 /// The result of a transport failure, naming the stage it came from.
@@ -289,7 +374,12 @@ pub struct WebFetchTool {
 impl WebFetchTool {
     pub fn new() -> Self {
         let client = Client::builder()
-            .redirect(Policy::limited(MAX_REDIRECTS))
+            .redirect(Policy::custom(|attempt| {
+                match redirect_allowed(attempt.previous().len(), attempt.url().as_str()) {
+                    Ok(()) => attempt.follow(),
+                    Err(reason) => attempt.error(Error::other(reason)),
+                }
+            }))
             .timeout(Duration::from_secs(FETCH_TIMEOUT_SECS))
             .connect_timeout(Duration::from_secs(CONNECT_TIMEOUT_SECS))
             .tcp_keepalive(Duration::from_secs(TCP_KEEPALIVE_SECS))
@@ -382,9 +472,10 @@ impl Tool for WebFetchTool {
                         .and_then(|v| v.to_str().ok())
                         .unwrap_or("")
                         .to_string();
-                    let body = resp.text().await.map_err(|e| {
-                        ToolError::Failed(format!("webfetch: body read error: {e}"))
-                    })?;
+                    let body = match read_body(resp).await {
+                        Ok(body) => body,
+                        Err(payload) => return Ok(payload),
+                    };
 
                     // A server that answered with an error status is a
                     // failure the model must see as one: the body is an error
@@ -449,7 +540,35 @@ fn validate_url(url: &str) -> bool {
     if !hostname.contains('.') {
         return false;
     }
+    if is_private_host(hostname) {
+        return false;
+    }
     true
+}
+
+/// Whether a host names this machine or a private network. A public page can
+/// redirect to one of these, so the same check runs on every hop.
+///
+/// A name that resolves to a private address is not screened here: the tool
+/// does not resolve names itself, and the sandbox's egress policy is the
+/// layer that owns that decision.
+fn is_private_host(host: &str) -> bool {
+    let host = host.trim_matches(['[', ']']).to_ascii_lowercase();
+    if host == "localhost" || host.ends_with(".local") {
+        return true;
+    }
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        return match ip {
+            IpAddr::V4(v4) => {
+                v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_unspecified()
+            }
+            IpAddr::V6(v6) => v6.is_loopback() || v6.is_unspecified(),
+        };
+    }
+    // A host written only with digits and dots is a non-canonical IPv4
+    // spelling (127.1, 0177.0.0.1) that resolvers still accept, so it is not
+    // a public name.
+    host.chars().all(|c| c.is_ascii_digit() || c == '.')
 }
 
 /// Upgrade an HTTP URL to HTTPS. Leaves HTTPS URLs unchanged.

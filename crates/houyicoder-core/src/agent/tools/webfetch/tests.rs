@@ -3,6 +3,11 @@
 use super::*;
 use houyicoder_protocol::tool::tool_result_failed;
 use pollster::block_on;
+use std::io::Read;
+use std::io::Write;
+use std::net::TcpListener;
+use std::thread::spawn;
+use tokio::runtime::Builder;
 
 #[test]
 fn test_schema_has_url_prompt() {
@@ -381,4 +386,147 @@ fn test_failure_cache_evicts_oldest() {
         cache.failures.contains_key("https://example.com/dead/1"),
         "a refresh must not evict an unrelated entry"
     );
+}
+
+/// Private and loopback targets are rejected before any request is sent, and
+/// the same rule runs on a redirect hop.
+#[test]
+fn test_private_hosts_rejected() {
+    for url in [
+        "https://127.0.0.1/x",
+        "https://10.0.0.5/x",
+        "https://172.16.3.4/x",
+        "https://192.168.1.1/x",
+        "https://169.254.1.1/x",
+        "https://[::1]/x",
+        "https://printer.local/x",
+    ] {
+        assert!(!validate_url(url), "private target accepted: {url}");
+    }
+    assert!(validate_url("https://example.com/x"));
+}
+
+/// A short page that says it is missing is flagged and not cached, while a
+/// long document that mentions the phrase stays ordinary content.
+#[test]
+fn test_soft_404_signal() {
+    assert!(looks_like_missing_page(
+        "# Page Not Found\n\nThis page does not exist."
+    ));
+    let long = format!("{} page not found", "x".repeat(2_000));
+    assert!(!looks_like_missing_page(&long));
+}
+
+/// A body that would pass the cap stops at the chunk that crosses it, and the
+/// payload names the reason. A body at the cap is still accepted.
+#[test]
+fn test_body_cap_stops() {
+    let mut body = Vec::new();
+    append_chunk(&mut body, b"hello").expect("under the cap");
+    assert_eq!(body, b"hello");
+    let too_big = vec![0u8; MAX_BODY_BYTES + 1];
+    let err = append_chunk(&mut body, &too_big).expect_err("over the cap");
+    assert_eq!(err["error_kind"], "response_too_large");
+    assert_eq!(body, b"hello", "the rejected chunk is not appended");
+}
+
+/// Invalid bytes are replaced rather than failing the read.
+#[test]
+fn test_body_decode_lossy() {
+    assert_eq!(decode_body(b"plain"), "plain");
+    assert!(decode_body(&[0xff, b'a']).ends_with('a'));
+}
+
+/// A missing-page body is flagged and left out of the reuse cache, so a later
+/// request is not answered with the same dead end.
+#[test]
+fn test_finish_page_flags_missing() {
+    let cache = Mutex::new(FetchCache::default());
+    let out = finish_page(
+        &cache,
+        "https://example.com/gone",
+        "p",
+        "# Page Not Found\n\nThis page does not exist.".to_string(),
+        "text/markdown".to_string(),
+    );
+    assert_eq!(out["soft_404"], true);
+    assert!(
+        cache
+            .lock()
+            .expect("cache")
+            .page("https://example.com/gone")
+            .is_none(),
+        "a missing page is not cached"
+    );
+}
+
+/// A body that stopped arriving reports the read stage rather than a bare
+/// message, so the model can tell it from a rejected request.
+#[test]
+fn test_read_error_payload() {
+    let payload = read_error("connection reset");
+    assert_eq!(payload["error_kind"], "read");
+    assert!(
+        payload["error"]
+            .as_str()
+            .expect("error")
+            .contains("connection reset")
+    );
+}
+
+/// The host check reads literal addresses in both families and the
+/// non-canonical IPv4 spellings a resolver still accepts.
+#[test]
+fn test_host_check_families() {
+    assert!(is_private_host("[::1]"));
+    assert!(is_private_host("127.1"));
+    assert!(is_private_host("0177.0.0.1"));
+    assert!(!is_private_host("[2001:db8::1]"));
+    assert!(!is_private_host("example.com"));
+}
+
+/// A redirect is followed only while the hops are under the cap and the target
+/// passes the same rule as the first request.
+#[test]
+fn test_redirect_target_checked() {
+    assert_eq!(redirect_allowed(0, "https://example.com/a"), Ok(()));
+    assert_eq!(
+        redirect_allowed(MAX_REDIRECTS, "https://example.com/a"),
+        Err("too many redirects")
+    );
+    assert_eq!(
+        redirect_allowed(1, "https://127.0.0.1/a"),
+        Err("redirect target rejected")
+    );
+}
+
+/// The body reader takes a real response in chunks and decodes it as text.
+#[test]
+fn test_read_body_from_response() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    let server = spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept");
+        let mut buf = [0u8; 1024];
+        let _read = stream.read(&mut buf);
+        stream
+            .write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nContent-Type: text/plain\r\n\r\nhello",
+            )
+            .expect("write");
+    });
+    let runtime = Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    runtime.block_on(async {
+        let resp = reqwest::Client::new()
+            .get(format!("http://{addr}/"))
+            .send()
+            .await
+            .expect("request");
+        let body = read_body(resp).await.expect("body");
+        assert_eq!(body, "hello");
+    });
+    server.join().expect("server");
 }
