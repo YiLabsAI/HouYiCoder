@@ -126,6 +126,8 @@ fn test_not_readonly_sort_output() {
         "echo $(pwd) | sort --outp=out.txt",
         "echo $(pwd) | sort -T scratchdir",
         "echo $(pwd) | sort --compress-program=gzip",
+        "echo $(pwd) | sort \"-o\" out.txt",
+        "echo $(pwd) | sort '-no' out.txt",
     ] {
         let segs = split_compound(cmd);
         let refs: Vec<&str> = segs.iter().map(|s| s.as_str()).collect();
@@ -136,6 +138,7 @@ fn test_not_readonly_sort_output() {
         "echo $(pwd) | sort",
         "echo $(pwd) | sort -n",
         "echo $(pwd) | sort -k1,1",
+        "echo $(pwd) | sort -- file.txt",
     ] {
         let segs = split_compound(cmd);
         let refs: Vec<&str> = segs.iter().map(|s| s.as_str()).collect();

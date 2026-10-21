@@ -43,11 +43,17 @@ impl Runner {
     /// The same resolution for an arbitrary model id, so the pane can show a
     /// row's cap without switching the session to it.
     pub fn resolve_max_output_tokens_for(&self, model: &str) -> u32 {
+        let fallback = if model == self.config.model {
+            self.config.max_output_tokens
+        } else {
+            model_window::open_weight_family_max_output(model)
+                .unwrap_or(self.config.max_output_tokens)
+        };
         let resolved = self
             .catalog_resolver
             .as_deref()
             .and_then(|r| r.catalog_max_output_tokens(model))
-            .unwrap_or(self.config.max_output_tokens);
+            .unwrap_or(fallback);
         // The provider's declared cap is its own real limit; take the min so
         // a provider reporting a smaller cap (tests, a constrained gateway)
         // is respected — the catalog default is a fallback for unknown

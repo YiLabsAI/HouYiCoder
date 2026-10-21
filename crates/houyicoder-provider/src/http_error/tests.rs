@@ -238,6 +238,23 @@ fn test_invalid_cuts_long_body() {
     }
 }
 
+/// Secret-shaped API keys echoed by a gateway are redacted before the message
+/// reaches the user-visible error string.
+#[test]
+fn test_invalid_redacts_echoed_key() {
+    let body = r#"{"error":{"message":"invalid key sk-1234567890abcdef in header"}}"#;
+    match classify_with_body(400, None, body) {
+        ProviderError::InvalidRequest(detail) => {
+            assert!(
+                !detail.contains("sk-1234567890abcdef"),
+                "redacted: {detail}"
+            );
+            assert!(detail.contains("[REDACTED]"), "marker present: {detail}");
+        }
+        other => panic!("400 → InvalidRequest, got {other:?}"),
+    }
+}
+
 /// A 401/403 is Auth (not ModelNotFound), so the message points at the
 /// API key.
 #[test]

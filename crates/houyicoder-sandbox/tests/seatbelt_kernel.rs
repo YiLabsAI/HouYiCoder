@@ -1,34 +1,9 @@
-//! What the kernel actually permits under a rendered seatbelt profile. Every
-//! test here renders the real profile against the real home directory and runs
-//! a command through sandbox-exec, so the assertion is the kernel's verdict,
-//! not the contents of the profile string.
-//!
-//! That distinction is the whole reason this file exists, and it is what
-//! separates it from the string-level tests beside the profile builders: a
-//! rule can be present and still be dead. The system-etc allow segment was
-//! emitted correctly for a long time while the kernel refused every read it
-//! named, because the broad deny of the etc subpath also covered the etc
-//! symlink node, so path resolution failed before the leaf rule was ever
-//! evaluated. The string assertions were green throughout. Only a real spawn
-//! catches that class of bug.
-//!
-//! Classification: integration, not unit. These drive a real external
-//! subsystem, which the unit suite is required never to do, so the commit gate
-//! never runs them and the integration suite does: make test integration
-//! compiles the whole tests tree and runs the tests that carry no ignore. The
-//! sandbox suite holds this file as a module, so the file declares no target
-//! of its own. Everything is compiled out where there is no seatbelt.
-//!
-//! Human-readable report, useful when debugging a profile change, run from
-//! this crate's directory:
-//!   cargo test --test sandbox_all seatbelt_kernel:: -- --nocapture
-//! Set HOUYI_PROFILE_DUMP=1 to also print the full rendered profile.
+//! Kernel-level checks of filesystem rules in a rendered Seatbelt profile.
+//! String assertions alone cannot establish that a rule survives path
+//! resolution and rule precedence. The network checks live in network.rs.
 
-// These probes must invoke sandbox-exec directly: the thing under test IS the
-// kernel's verdict on a rendered profile, so routing the spawn through the
-// launcher would put the subject behind one of its own consumers. Same
-// reasoning as the seatbelt test scaffolding. Production code still routes
-// every spawn through the launcher.
+// Use sandbox-exec directly because the kernel verdict is the subject of
+// these integration tests, not the process launcher.
 #![allow(clippy::disallowed_methods)]
 #![cfg(target_os = "macos")]
 

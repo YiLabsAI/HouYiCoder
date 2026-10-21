@@ -1,27 +1,12 @@
-//! HTTP-error classification shared by every provider camp. The two
-//! chat-completion wire formats (OpenAI-compatible chat/completions and
-//! Anthropic Messages) differ in request body, response shape, stream
-//! events, and cache-hint lowering — but their HTTP transport layer is
-//! identical: both run over reqwest, both honor Retry-After, both signal
-//! quota/context-overflow/auth/rate-limit through the same HTTP status
-//! codes + broadly-phrased error bodies. These helpers live here so a new
-//! camp (Anthropic) reuses them instead of copy-pasting.
-//!
-//! Camp-specific — stays in each provider's module:
-//! - request body construction (chat/completions vs Messages)
-//! - response parsing (choices/message vs content blocks)
-//! - stream-event parsing (delta chunks vs message_delta events)
-//! - cache-hint lowering (prompt_cache_key vs cache_control blocks)
-//! - usage field-name parsing (prompt_tokens vs input_tokens/cache_read)
+//! Shared HTTP status classification for providers. Request bodies, stream
+//! decoding, cache hints, and usage parsing remain provider-specific.
 
 use houyicoder_protocol::llm::ProviderError;
 use reqwest::header::HeaderMap;
 use std::time::SystemTime;
 
-/// Classify an HTTP status into a ProviderError. Status codes are universal
-/// across camps: 429 rate-limit, 413/414 context overflow, 401/403 auth,
-/// 5xx internal. The body-ambiguous cases (429 quota vs rate-limit, 422
-/// context-overflow vs invalid) are refined by classify_with_body.
+/// Classify a status without a response body. Ambiguous responses require
+/// classify_with_body to distinguish quota or context errors.
 pub(crate) fn classify_status(status: u16, retry_after_ms: Option<u64>) -> ProviderError {
     match status {
         408 => ProviderError::Network,
@@ -37,18 +22,9 @@ pub(crate) fn classify_status(status: u16, retry_after_ms: Option<u64>) -> Provi
     }
 }
 
-/// Classify an HTTP status using the response body when the status alone is
-/// ambiguous. 429 splits into QuotaExceeded (body signals quota/billing
-/// exhaustion — NOT retryable, don't burn budget) vs RateLimit (transient —
-/// retryable). 400/422/413/414 split into ContextOverflow (body signals
-/// context-length exceeded — the compaction trigger) vs InvalidRequest.
-/// Substring matching on a lowercased body keeps this dependency-free;
-/// providers' phrasing varies across camps, so the patterns are deliberately
-/// broad. Empty body falls back to classify_status.
-///
-/// The remaining rejected requests keep the endpoint's own message: a status
-/// code names no parameter, so without that text a user cannot tell a bad
-/// field from a malformed message sequence.
+/// Refine ambiguous HTTP errors with the response body. Quota exhaustion
+/// must not be retried, and context overflow triggers compaction. Other
+/// rejected requests retain a bounded description of the server's error.
 pub(crate) fn classify_with_body(
     status: u16,
     retry_after_ms: Option<u64>,
@@ -118,11 +94,26 @@ fn body_detail(body: &str) -> Option<String> {
             Some(message.to_owned())
         })
         .unwrap_or_else(|| body.to_owned());
-    let flat = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+    let flat = raw
+        .split_whitespace()
+        .map(redact_token)
+        .collect::<Vec<_>>()
+        .join(" ");
     if flat.is_empty() {
         return None;
     }
     Some(cut_detail(&flat))
+}
+
+/// Redact secret-shaped tokens (such as sk-... API keys) if an endpoint echoes
+/// request headers or credentials inside an error body.
+fn redact_token(word: &str) -> &str {
+    let trimmed = word.trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != '-' && c != '_');
+    if trimmed.starts_with("sk-") && trimmed.len() >= 12 {
+        "[REDACTED]"
+    } else {
+        word
+    }
 }
 
 /// Cut a message to DETAIL_MAX_CHARS characters, marking the cut.
@@ -159,9 +150,8 @@ pub(crate) fn parse_retry_after(headers: &HeaderMap) -> Option<u64> {
     }
 }
 
-/// Map a reqwest transport error to ProviderError. Timeouts and connection
-/// failures are Network (retryable); decode failures become Unknown. Shared
-/// because every camp runs over reqwest.
+/// Map a transport error to ProviderError. Timeouts and connection failures
+/// are retryable; other failures retain their context as Unknown.
 pub(crate) fn map_reqwest_err(e: reqwest::Error) -> ProviderError {
     if e.is_timeout() || e.is_connect() || e.is_request() {
         ProviderError::Network
@@ -170,19 +160,9 @@ pub(crate) fn map_reqwest_err(e: reqwest::Error) -> ProviderError {
     }
 }
 
-/// Extract the enforced context limit a provider names in a context-overflow
-/// error body. A provider enforces the real window by rejecting an
-/// over-long request, and the rejection body often names the real limit
-/// ("this model's maximum context length is 200000", "current length is X
-/// while limit is Y"). That number is ground truth, authoritative over the
-/// static catalog, so it is carried on the error and recorded for the model
-/// to correct an over-estimate at runtime.
-///
-/// A semantic gate (the body must mention context length / window / limit)
-/// prevents parsing an unrelated number; a sane range rejects a misparsed
-/// error code or timestamp. Dependency-free substring + digit scan, since
-/// providers' phrasing varies across camps and a regex dependency would
-/// outweigh the value here.
+/// Extract a provider-enforced context limit for subsequent requests. Only
+/// context-related errors qualify; this avoids learning an unrelated number
+/// such as a status code or timestamp as the model window.
 pub(crate) fn extract_context_limit(body: &str) -> Option<u32> {
     let lower = body.to_ascii_lowercase();
     // Semantic gate: only parse when the body discusses the context window.

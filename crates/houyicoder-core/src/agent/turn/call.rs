@@ -133,49 +133,25 @@ impl Runner {
         const MAX_OVERFLOW_RETRIES: u32 = 2;
         const CONVERGE_REMINDER_TURNS: u32 = 5;
 
-        // One model_call_stream entry = one drive-loop iteration = one logical
-        // turn. Start the turn here so length/overflow retries inside 'outer
-        // stay on the same turn number (the turn boundary is this entry).
-        // Append a durable TurnStarted boundary alongside the in-memory
-        // start_turn, so a turn that never reaches a TurnUsage (cancelled or
-        // errored mid-stream) still carries a boundary marker. Model input
-        // skips the marker; the trajectory view groups turns on it.
+        // Retries stay within this turn. The durable start marker preserves
+        // its boundary even when the call fails before usage is recorded.
         obs_wire::start_turn(&self.observability);
         self.heal_turn_start_suppression();
         self.append_turn_started(session).await?;
 
         let mut overflow_retries = 0u32;
-        // Economy gate fires at most once per turn: a proactive compact that
-        // does not bring the view under the ceiling would otherwise re-fire
-        // every 'outer re-entry (turn is a caller param, not incremented
-        // here), looping. The ceiling gate is bounded by overflow_retries;
-        // the economy gate is bounded by this flag (one proactive compact,
-        // then the ceiling owns further recovery).
+        // Proactive compaction gets one chance per turn; the bounded ceiling
+        // handler owns any remaining overflow.
         let mut economy_fired_this_turn = false;
-        // Length-recovery: a finish_reason "length" cut at the token cap is
-        // recovered by appending the partial assistant message + a resume
-        // nudge, then re-calling so the model continues. Bounded so a model
-        // that always over-runs cannot loop forever. Live streaming UX has
-        // no clean retract for an already-shown partial, so this path skips
-        // the discard-and-retry and continues from the partial — which also
-        // yields more total room across the N continuations than one big cap.
+        // Keep a cut reply and continue from it; streamed text cannot be
+        // retracted. Bound retries when the model repeatedly hits the cap.
         const MAX_LENGTH_RETRIES: u32 = 3;
         let mut length_retries = 0u32;
-        // The calls this turn has accounted for. A length-recovery retry
-        // records the partial it cut short and then re-calls, so the turn's
-        // cost runs across more than one call; the caller folds the total
-        // once, when the turn ends.
         let mut call = TurnCall::started();
         'outer: loop {
             let snapshot = self.store.current_view(session).await?;
-            // The declared tools, the session-frozen MEMORY.md index, and the
-            // announced skills, in one bundle, so the measurement the /context
-            // view reports describes this request. Clear and compact are the
-            // only memory-index refresh points.
-            // The snapshot comes first inside this call: it is where a model
-            // switch resets the cached-prefix decisions, so assembling before
-            // it would keep the previous model's decisions for this request
-            // and land the reset on the next one.
+            // A model switch must invalidate the cached prefix before context
+            // assembly; the request and the context report use that same view.
             let (inference, mut assembled) =
                 self.assemble_request(&snapshot.events, snapshot.manifest.as_ref());
             // Capture before assembled.messages moves into the request;
@@ -183,21 +159,10 @@ impl Runner {
             // provider-omits-usage, passed to record_turn at turn end.
             let estimated_input_tokens = assembled.measurement.token_count();
 
-            // Convergence reminder: when the turn count is within the
-            // reminder window of the hard cap, inject a user message that
-            // tells the model to synthesize and answer. Without this, an
-            // analysis task (read-heavy, no single definitive result) can
-            // loop tool calls until MaxTurnsReached, producing no answer.
-            // The turn>1 guard skips the very first call: reminding before
-            // the model has acted once is absurd, and it keeps tiny max_turns
-            // configs (tests, short subagent forks) from firing the reminder
-            // on turn 1 and polluting the assembled context.
+            // Do not nudge the model before its first turn, even when the
+            // configured turn limit is small.
             let remaining = max_turns.saturating_sub(turn);
             if turn > 1 && remaining <= CONVERGE_REMINDER_TURNS {
-                // Convergence nudge: encourage the model to synthesize if it
-                // has enough information, without revealing the turn budget
-                // (budget pressure is a control-plane concern; injecting it
-                // into the model input causes premature convergence).
                 let reminder = "If you have gathered enough information to \
                      answer, synthesize your findings and produce the final \
                      answer now. Prioritize answering over further exploration.";
@@ -501,19 +466,12 @@ impl Runner {
                     .await?;
             }
             let (reasoning_ms, response_ms) = (blocks.reasoning_ms(), blocks.response_ms());
-            // Provider-omits-usage fallback: some OpenAI-compat streams
-            // ignore stream_options.include_usage; substitute the estimated
-            // input tokens so the status gauge + tally read the real footprint.
+            // Missing provider usage falls back to the request estimate.
             fill_omitted_usage(&mut state.usage, estimated_input_tokens);
             let (raw_finish_reason, self_count_output_tokens, truncation_signal) =
                 classify_stream_truncation(&mut state, inference.max_output_tokens);
-            // Length-recovery: the provider cut the reply at the max_tokens
-            // cap (finish_reason "length"). Withhold the truncation notice
-            // while recovery can still succeed — append the partial assistant
-            // message + a resume-direct nudge, then re-call so the model
-            // picks up mid-thought. The nudge is a MetaUser event (served to
-            // the model, hidden from the readable transcript). Bounded by
-            // MAX_LENGTH_RETRIES; on exhaustion a visible notice lands.
+            // Withhold the visible truncation notice until recovery is
+            // exhausted; the next request continues from the saved partial.
             if state.finish_reason.as_deref() == Some("length")
                 && length_retries < MAX_LENGTH_RETRIES
             {

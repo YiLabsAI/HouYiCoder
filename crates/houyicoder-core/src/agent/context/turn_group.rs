@@ -1,32 +1,15 @@
-//! Turn grouping: assemble the model-input history from a replayed event log.
+//! Assemble model input from the durable session log.
 //!
-//! This is the "transcript-as-truth" seam: the loop holds no in-memory
-//! message buffer — it re-reads the event log each turn and assembles input.
+//! The agent rebuilds messages for each request rather than keeping a second
+//! mutable conversation buffer.
 //!
-//! Grouping: one AssistantMessage event plus its immediately-following
-//! ToolCall events collapse into a single Assistant InputItem (content =
-//! the text, tool_calls = the calls). This reconstructs one API assistant
-//! message with its tool_use blocks. A subsequent ToolResult event becomes
-//! a ToolResult InputItem referencing the call_id — the
-//! tool_use/tool_result pair invariant must hold in the window (a
-//! ToolResult whose ToolCall was compacted out is a view bug, not an
-//! assembly bug).
+//! Assistant text and its tool calls form one message. A tool result must
+//! refer to a call retained in the same context window.
 //!
-//! Adjacency is a property of the projection, not of the log. Background
-//! work appends whenever it finishes, so user-role text can land between a
-//! call and its result; the request is then invalid, because the assistant
-//! message carrying the calls is no longer followed by one tool message per
-//! call. Such text is held until every open call is answered, which keeps
-//! both the log and the request whole.
-//!
-//! The integral-group boundary: thinking + tool_use share a Disposition
-//! (an API constraint — they share the same fate; an assistant message
-//! and its thinking must travel together). Orphaned thinking-only messages
-//! introduced by compaction slicing are post-cleared. Type-First encoding
-//! keeps thinking inside the integral group so it is never orphaned by a
-//! later slice. tool_result can be an independent CAS pointer (the
-//! Isolate stage, not Compress), so a block_ref marker does not break the
-//! integral group.
+//! Background events may arrive between a call and its result. User-role text
+//! is held until the known results arrive; this changes only the request, not
+//! event order on disk. Incomplete call groups still require handling before
+//! sending a request to a strict provider.
 
 use houyicoder_context::{ContextBackend, SessionEvent, SessionLogEntry};
 use houyicoder_protocol::llm::{AssistantToolCall, InputItem};
@@ -110,16 +93,23 @@ impl HeldUserText {
         }
     }
 
-    /// Start a new assistant message. The calls of the previous one are not
-    /// answered before this reply, so the text they held is released ahead of
-    /// it, where the user wrote it.
+    /// Start a new assistant message. Any calls from the previous message that
+    /// were never answered in the log are closed with a stub tool result first,
+    /// then the held user text is released ahead of the new reply.
     fn next_message(&mut self, items: &mut Vec<InputItem>) {
-        self.open.clear();
         self.release(items);
     }
 
-    /// Append the held text in arrival order.
+    /// Close any still-open calls with a stub tool result so an interrupted
+    /// turn never leaves an assistant tool-call message without matching tool
+    /// messages, then append the held user text in arrival order.
     fn release(&mut self, items: &mut Vec<InputItem>) {
+        for call_id in self.open.drain(..) {
+            items.push(InputItem::ToolResult {
+                call_id,
+                output: serde_json::json!({"error": "tool call interrupted"}),
+            });
+        }
         for text in self.held.drain(..) {
             append_user_text(items, &text);
         }

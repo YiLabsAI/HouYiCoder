@@ -36,7 +36,11 @@ const READONLY_COMMANDS: &[&str] = &[
 /// write. uniq names its output file with a second positional operand. cut and
 /// tr print only, so they need no check.
 fn writes_output(cmd: &str, segment: &str) -> bool {
-    let args: Vec<&str> = segment.split_whitespace().skip(1).collect();
+    let args: Vec<String> = segment
+        .split_whitespace()
+        .skip(1)
+        .map(|raw| raw.chars().filter(|&c| c != '"' && c != '\'').collect())
+        .collect();
     match cmd {
         "sort" => args.iter().any(|arg| sort_writes(arg)),
         // uniq [OPTION]... [INPUT [OUTPUT]]: the second path argument is a file.
@@ -57,6 +61,9 @@ fn is_path_arg(arg: &str) -> bool {
 fn sort_writes(arg: &str) -> bool {
     if let Some(long) = arg.strip_prefix("--") {
         let name = long.split('=').next().unwrap_or("");
+        if name.is_empty() {
+            return false;
+        }
         return ["output", "temporary-directory", "compress-program"]
             .iter()
             .any(|option| option.starts_with(name));

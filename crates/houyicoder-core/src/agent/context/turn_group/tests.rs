@@ -226,7 +226,9 @@ fn test_recall_waits_for_tools() {
     }
 }
 
-/// A single result does not release the text while another call is open.
+/// A single result does not release the text while another call is open; at
+/// window end the unanswered second call gets a stub tool result before the
+/// held text is released, keeping the message sequence valid.
 #[test]
 fn test_recall_waits_all_calls() {
     let events = vec![
@@ -240,13 +242,13 @@ fn test_recall_waits_all_calls() {
     let items = assemble_model_input(&events, None);
     assert_eq!(
         shape(&items),
-        vec!["user", "assistant", "tool", "user"],
-        "one open call still holds the text: {items:?}"
+        vec!["user", "assistant", "tool", "tool", "user"],
+        "both calls are answered before the held text: {items:?}"
     );
 }
 
-/// A call an aborted turn never answered must not push the held text past the
-/// next reply: the text is released before that reply, where the user wrote it.
+/// A call an aborted turn never answered gets a stub tool result and releases
+/// the held text before the next reply, where the user wrote it.
 #[test]
 fn test_held_before_reply() {
     let events = vec![
@@ -259,16 +261,17 @@ fn test_held_before_reply() {
     let items = assemble_model_input(&events, None);
     assert_eq!(
         shape(&items),
-        vec!["user", "assistant", "user", "assistant"],
-        "the unanswered call does not swallow the next message: {items:?}"
+        vec!["user", "assistant", "tool", "user", "assistant"],
+        "the unanswered call is closed before the held user message: {items:?}"
     );
-    match &items[2] {
+    match &items[3] {
         InputItem::User { content } => assert_eq!(content, "second"),
         other => panic!("expected the held message, got {other:?}"),
     }
 }
 
-/// Text held to the end of the window is appended, never dropped.
+/// Text held to the end of the window is appended after closing any unanswered
+/// tool call, never dropped.
 #[test]
 fn test_held_at_window_end() {
     let events = vec![
@@ -278,8 +281,8 @@ fn test_held_at_window_end() {
         evt(recall("late recall")),
     ];
     let items = assemble_model_input(&events, None);
-    assert_eq!(shape(&items), vec!["user", "assistant", "user"]);
-    match &items[2] {
+    assert_eq!(shape(&items), vec!["user", "assistant", "tool", "user"]);
+    match &items[3] {
         InputItem::User { content } => assert!(content.contains("late recall")),
         other => panic!("expected the held recall, got {other:?}"),
     }

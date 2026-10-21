@@ -1,27 +1,12 @@
-//! Mandatory-deny policy for the seatbelt profile: the exfiltration and
-//! self-authorization vectors an AI agent must not read or write, plus the
-//! rule-emitting builders that apply them. Split from profile.rs so the
-//! policy tables and their emit loop live as one module, leaving profile.rs
-//! to the workspace / allow-set / fs / network composition.
-//!
-//! These denies land AFTER the fs allow-back in render(), so seatbelt's
-//! last-match-wins cannot wash them out. See profile.rs::render for the
-//! segment order, which is load-bearing.
+//! Seatbelt rules for credentials, executable configuration, and files that
+//! govern the agent's own permissions. The authority-file rules are emitted
+//! again after the session temporary directory is made writable.
 
 use std::path::Path;
 
-/// AI-agent exfiltration vectors — files. Read+write denied so an agent can
-/// neither exfiltrate credentials nor plant a malicious rc file that fires
-/// when the user later opens a shell.
-///
-/// The credential files (.netrc / .npmrc / .pypirc) are denied outright
-/// rather than left to consent and the model's restraint. With the /Users
-/// broad read-deny lifted (so cross-project source reads work), these home
-/// credential files would otherwise become readable. The stance is
-/// deliberately stricter on credentials and looser on ordinary source. The
-/// terminal posture replaces these read-denies with value-level redaction so
-/// the file stays readable while the secret is swapped on the way into the
-/// transcript; until that lands, the deny is the safe interim.
+/// Credential and shell-startup files denied for reading and writing.
+/// Ordinary source files remain readable across projects, but credentials
+/// cannot rely on that broad read policy until value redaction is available.
 const MANDATORY_DENY_FILES: &[&str] = &[
     ".bashrc",
     ".bash_profile",
@@ -29,57 +14,22 @@ const MANDATORY_DENY_FILES: &[&str] = &[
     ".zprofile",
     ".profile",
     ".mcp.json",
-    // Credential files — home-only, read+write denied as the safe interim
-    // until redaction. .env is intentionally NOT here: a workspace .env is
-    // normal dev input and must stay readable; its secrets are a redaction
-    // target, not a read-deny target.
+    // Workspace .env files remain readable as development inputs.
     ".netrc",
     ".npmrc",
     ".pypirc",
 ];
 
-/// Vectors denied for write only, with reads allowed back further down. The
-/// home git config, the repo .git/config, .gitmodules, and .ripgreprc are
-/// the members. git reads the configs on every invocation (log, diff,
-/// status) and .gitmodules on submodule ops; rg reads .ripgreprc on
-/// startup. Denying any of those reads breaks the tool outright. The config
-/// files may hold a credential section (interim read-allow until
-/// redaction), while .gitmodules and .ripgreprc carry no secrets (submodule
-/// URLs and rg flags). Write stays denied for all: a writable git config is
-/// a credential-helper redirection vector, a writable .gitmodules plants a
-/// malicious submodule URL that fires on the next submodule update, and a
-/// writable .ripgreprc plants rg flags.
-///
-/// This is an interim posture, not the end state. Allowing the read means a
-/// credential section in that file can reach the transcript, which is an
-/// unrecoverable outward send. The end state is value-level redaction of the
-/// credential entries on the way into the transcript, which keeps the file
-/// readable and faithful while hiding the secret. Until that lands, the
-/// residual risk is accepted deliberately and is registered as such.
+/// Git and search configuration denied for writing but kept readable for
+/// normal tool operation. Reads of git config can expose embedded credentials;
+/// value redaction remains necessary at the transcript boundary.
 const MANDATORY_DENY_WRITE_ONLY_FILES: &[&str] =
     &[".gitconfig", ".git/config", ".gitmodules", ".ripgreprc"];
 
-/// Files that record what the user has consented to, or that the fence itself
-/// is built from. Write denied wherever they appear.
-///
-/// These are not exfiltration vectors, they are self-authorization vectors, and
-/// the distinction is why they need their own list. A run that appends to the
-/// persisted permission rules grants itself standing approval for every later
-/// turn, and a rule sitting in that file is indistinguishable from one the user
-/// added. A run that rewrites the settings widens the fence its own next
-/// invocation is rendered from. Either way the escalation survives the turn that
-/// performed it, which is what separates this from a one-shot denied operation.
-///
-/// Matched by name wherever they occur rather than at one absolute location,
-/// because the permission store resolves two of its three scopes relative to
-/// the working directory and the temp directory, both of which are writable by
-/// design. Reads stay allowed: knowing which rules exist is not the hazard,
-/// authoring them is.
-///
-/// Deliberately narrow. Denying writes to the whole config directory would be
-/// the broader guard, but a session can legitimately run with its workspace
-/// inside that directory, since worktrees are created there, and a blanket deny
-/// would then refuse the agent every write in its own workspace.
+/// Permission and settings files denied for writing wherever they occur.
+/// Changing one would authorize later operations without the user's consent.
+/// Match files rather than entire directories so workspaces under those
+/// directories remain writable.
 const MANDATORY_DENY_AUTHORITY_FILES: &[&str] = &[
     ".houyicoder/permissions.json",
     ".houyicoder/settings.json",

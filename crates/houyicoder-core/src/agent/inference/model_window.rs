@@ -348,7 +348,7 @@ pub fn resolve_capabilities(
 /// default). The catalog override (ModelEntry.max_output_tokens) lands above
 /// this layer in a later task; here the family default is the top of the
 /// resolution chain.
-fn open_weight_family_max_output(model: &str) -> Option<u32> {
+pub(crate) fn open_weight_family_max_output(model: &str) -> Option<u32> {
     let m = model.to_lowercase();
     open_weight_catalog()
         .iter()

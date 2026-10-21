@@ -211,3 +211,26 @@ fn test_switch_resets_before_assembly() {
         "assembly must see the generation the switch bumped, not the old one"
     );
 }
+
+/// Switching to a model from a family with a different output-token cap
+/// resolves the new model's family cap rather than keeping the startup
+/// model's value.
+#[test]
+fn test_switch_updates_output_cap() {
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let runner = Runner::new(
+        store,
+        Arc::new(FakeProvider::text("x")),
+        ToolRegistry::new(),
+        RunnerConfig {
+            model: "qwen3.6-flash".into(),
+            max_output_tokens: 1_000,
+            ..RunnerConfig::default()
+        },
+    );
+    assert_eq!(runner.resolve_max_output_tokens(), 1_000);
+    assert_eq!(
+        runner.resolve_max_output_tokens_for("deepseek-v4.1-flash-1017"),
+        8_000
+    );
+}
