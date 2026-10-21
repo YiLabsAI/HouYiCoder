@@ -6,6 +6,8 @@
 //! to ANSI-styled output; this module does the same with pulldown-cmark
 //! events mapped to ratatui spans.
 
+mod normalize;
+
 use crate::view::line_wrap::wrap_hanging;
 use crate::view::line_wrap::wrap_line;
 use pulldown_cmark::Alignment;
@@ -13,6 +15,7 @@ use pulldown_cmark::CodeBlockKind;
 use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
+use std::borrow::Cow;
 use std::sync::OnceLock;
 use syntect::easy::HighlightLines;
 use syntect::highlighting::{Style as SynStyle, ThemeSet};
@@ -90,12 +93,13 @@ pub fn render_agent_text(
     avail: usize,
 ) -> (Vec<Line<'static>>, Vec<String>) {
     // Enable GFM extensions: tables (without this the Tag::Table arm is dead
-    // code — pulldown-cmark parses pipes as a plain paragraph), strikethrough,
-    // task lists. GFM-style markdown handling.
-    let opts = Options::ENABLE_TABLES
-        .union(Options::ENABLE_STRIKETHROUGH)
-        .union(Options::ENABLE_TASKLISTS);
-    let parser = Parser::new_ext(text, opts);
+    // code — pulldown-cmark parses pipes as a plain paragraph) and task lists.
+    // Strikethrough stays off: a single tilde is how a reply writes
+    // approximately, and the parser would read a pair of them as a deleted
+    // span and drop both.
+    let opts = Options::ENABLE_TABLES.union(Options::ENABLE_TASKLISTS);
+    let text = normalize::prose(text);
+    let parser = Parser::new_ext(text.as_ref(), opts);
     let mut styled: Vec<Line<'static>> = Vec::new();
     let mut plain: Vec<String> = Vec::new();
 
@@ -321,7 +325,14 @@ pub fn render_agent_text(
                 _ => {}
             },
             Event::Text(t) => {
-                let t = if in_heading { t.trim() } else { &t };
+                // A fenced block is copied verbatim by the prose pass, so an
+                // anchor-shaped character inside it is the author's own.
+                let t = if in_code_block {
+                    Cow::Borrowed(t.as_ref())
+                } else {
+                    normalize::without_anchor(&t)
+                };
+                let t = if in_heading { t.trim() } else { t.as_ref() };
                 if in_table {
                     cell_plain.push_str(t);
                 } else if in_code_block {

@@ -311,3 +311,119 @@ fn test_stacked_label_wraps() {
     }
     assert!(!out.is_empty(), "the row is still rendered: {out:?}");
 }
+
+/// The text the renderer drew in bold, spans joined.
+fn bold_text(lines: &[Line<'static>]) -> String {
+    lines
+        .iter()
+        .flat_map(|l| l.spans.iter())
+        .filter(|s| s.style.add_modifier.contains(Modifier::BOLD))
+        .map(|s| s.content.as_ref())
+        .collect()
+}
+
+/// The display column of every pipe in the row, so two rows line up only when
+/// their separators sit at the same columns.
+fn pipe_columns(row: &str) -> Vec<usize> {
+    let mut col = 0usize;
+    let mut out = Vec::new();
+    for c in row.chars() {
+        if c == '|' {
+            out.push(col);
+        }
+        col += UnicodeWidthStr::width(c.to_string().as_str());
+    }
+    out
+}
+
+#[test]
+fn test_bold_after_cjk_renders() {
+    let (lines, plain) = render_agent_text("●", "是**\"模型切换\"**（x）", 80);
+    let joined = plain.join("\n");
+    assert!(!joined.contains("**"), "the runs are consumed: {joined}");
+    assert!(
+        joined.contains("是\"模型切换\"（x）"),
+        "text kept: {joined}"
+    );
+    assert_eq!(bold_text(&lines), "\"模型切换\"");
+}
+
+/// Two bold runs in one sentence must not swap: anchoring each pair keeps the
+/// text between them plain.
+#[test]
+fn test_runs_pair_in_order() {
+    let (lines, plain) = render_agent_text("●", "是**\"模型切换\"**，以及**\"缓存命中\"**", 80);
+    assert!(!plain.join("\n").contains("**"), "plain: {plain:?}");
+    assert_eq!(bold_text(&lines), "\"模型切换\"\"缓存命中\"");
+}
+
+/// A pair of tildes stays literal. Reading it as a deleted span would drop
+/// both characters, because nothing in this renderer draws a struck span.
+#[test]
+fn test_pair_kept_literal() {
+    let (_, plain) = render_agent_text("●", "耗时 ~~10ms~~ 到 20ms", 80);
+    let joined = plain.join("\n");
+    assert!(joined.contains("~~10ms~~"), "tildes kept: {joined}");
+}
+
+/// A circled numeral is drawn wider than the cell its width reports, so the
+/// glyph covers the character after it and a table stops lining up.
+#[test]
+fn test_digit_in_table() {
+    let md = "| 项 | 判断 |\n|---|---|\n\
+              | ①webfetch 缺 connect_timeout | 真优化 |\n\
+              | ④b openai_compat keepalive | 未做 |";
+    let (_, plain) = render_agent_text("●", md, 100);
+    let joined = plain.join("\n");
+    assert!(!joined.contains('①'), "circled one replaced: {joined}");
+    assert!(!joined.contains('④'), "circled four replaced: {joined}");
+    assert!(joined.contains("(1)webfetch"), "number kept: {joined}");
+    assert!(
+        joined.contains("(4)b openai_compat"),
+        "number kept: {joined}"
+    );
+    let rows: Vec<String> = plain
+        .iter()
+        .filter(|t| {
+            t.trim_start()
+                .trim_start_matches('●')
+                .trim_start()
+                .starts_with('|')
+        })
+        .cloned()
+        .collect();
+    assert!(rows.len() >= 4, "the table rows: {plain:?}");
+    let columns: Vec<Vec<usize>> = rows.iter().map(|r| pipe_columns(r)).collect();
+    assert!(
+        columns.iter().all(|c| c == &columns[0]),
+        "every separator sits at one column: {rows:?}"
+    );
+}
+
+#[test]
+fn test_digit_in_code_kept() {
+    let md = "`①` stays, and\n\n```\n④b\n```\n";
+    let (_, plain) = render_agent_text("●", md, 80);
+    let joined = plain.join("\n");
+    assert!(joined.contains('①'), "inline code kept: {joined}");
+    assert!(joined.contains("④b"), "block code kept: {joined}");
+}
+
+/// A pair written with whitespace inside stays literal, as the parser reads
+/// it: the pre-pass rescues runs the flanking rule rejects, it does not
+/// invent emphasis where the author wrote none.
+#[test]
+fn test_pair_with_space_kept() {
+    let (_, plain) = render_agent_text("●", "x ** y ** z", 80);
+    assert!(plain.join("\n").contains("** y **"), "plain: {plain:?}");
+}
+
+/// A code span that opens on one line and closes on a later one keeps its
+/// content, asterisks and digits alike.
+#[test]
+fn test_code_span_across_lines() {
+    let (_, plain) = render_agent_text("●", "`a\n**x** ①`", 80);
+    let joined = plain.join("\n");
+    assert!(joined.contains("**x**"), "asterisks kept: {joined}");
+    assert!(joined.contains('①'), "digit kept: {joined}");
+}
