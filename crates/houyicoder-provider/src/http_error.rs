@@ -94,26 +94,52 @@ fn body_detail(body: &str) -> Option<String> {
             Some(message.to_owned())
         })
         .unwrap_or_else(|| body.to_owned());
-    let flat = raw
-        .split_whitespace()
-        .map(redact_token)
-        .collect::<Vec<_>>()
-        .join(" ");
-    if flat.is_empty() {
+    let words: Vec<&str> = raw.split_whitespace().collect();
+    if words.is_empty() {
         return None;
     }
-    Some(cut_detail(&flat))
+    let mut out = Vec::with_capacity(words.len());
+    let mut redact_next = false;
+    for word in words {
+        if redact_next {
+            out.push("[REDACTED]".to_string());
+            redact_next = false;
+            continue;
+        }
+        if word.eq_ignore_ascii_case("bearer") {
+            out.push(word.to_string());
+            redact_next = true;
+            continue;
+        }
+        out.push(redact_word(word));
+    }
+    Some(cut_detail(&out.join(" ")))
 }
 
-/// Redact secret-shaped tokens (such as sk-... API keys) if an endpoint echoes
-/// request headers or credentials inside an error body.
-fn redact_token(word: &str) -> &str {
-    let trimmed = word.trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != '-' && c != '_');
-    if trimmed.starts_with("sk-") && trimmed.len() >= 12 {
-        "[REDACTED]"
-    } else {
-        word
+/// Redact secret-shaped substrings inside a whitespace-delimited token,
+/// covering bare sk-... keys, key=sk-... pairs, and Bearer:sk-... headers.
+fn redact_word(word: &str) -> String {
+    let lower = word.to_ascii_lowercase();
+    if let Some(pos) = lower.find("sk-") {
+        let tail = &word[pos + 3..];
+        let key_len = tail
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+            .count();
+        if key_len >= 9 {
+            let end = pos + 3 + key_len;
+            return format!("{}[REDACTED]{}", &word[..pos], &word[end..]);
+        }
     }
+    for prefix in ["api_key=", "apikey=", "token=", "secret=", "bearer:"] {
+        if let Some(pos) = lower.find(prefix) {
+            let value_start = pos + prefix.len();
+            if value_start < word.len() {
+                return format!("{}[REDACTED]", &word[..value_start]);
+            }
+        }
+    }
+    word.to_string()
 }
 
 /// Cut a message to DETAIL_MAX_CHARS characters, marking the cut.

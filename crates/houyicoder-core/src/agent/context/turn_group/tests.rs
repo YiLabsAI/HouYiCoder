@@ -288,6 +288,30 @@ fn test_held_at_window_end() {
     }
 }
 
+/// A tool result that appears in the log after a new assistant reply has
+/// already closed the unanswered call with a stub is skipped rather than
+/// emitted as a dangling second tool message.
+#[test]
+fn test_late_result_after_reply() {
+    let events = vec![
+        evt(user("first")),
+        evt(reply("")),
+        evt(call("c1")),
+        evt(user("second")),
+        evt(reply("answer")),
+        evt(SessionEvent::tool_result(
+            "c1",
+            serde_json::json!({"late": 1}),
+        )),
+    ];
+    let items = assemble_model_input(&events, None);
+    assert_eq!(
+        shape(&items),
+        vec!["user", "assistant", "tool", "user", "assistant"],
+        "late result after a closed call is not emitted twice: {items:?}"
+    );
+}
+
 /// A recall that lands between two calls of one assistant message joins them
 /// back into one message. The calls are appended one at a time, so this gap is
 /// reachable; splitting them would leave the first call unanswered by a tool

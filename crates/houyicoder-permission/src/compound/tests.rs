@@ -128,6 +128,8 @@ fn test_not_readonly_sort_output() {
         "echo $(pwd) | sort --compress-program=gzip",
         "echo $(pwd) | sort \"-o\" out.txt",
         "echo $(pwd) | sort '-no' out.txt",
+        "echo $(pwd) | sort \\-o out.txt",
+        "echo $(pwd) | sort $FLAG out.txt",
     ] {
         let segs = split_compound(cmd);
         let refs: Vec<&str> = segs.iter().map(|s| s.as_str()).collect();

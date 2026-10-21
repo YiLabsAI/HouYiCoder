@@ -239,19 +239,28 @@ fn test_invalid_cuts_long_body() {
 }
 
 /// Secret-shaped API keys echoed by a gateway are redacted before the message
-/// reaches the user-visible error string.
+/// reaches the user-visible error string, whether standalone or attached to
+/// a key=/Bearer prefix.
 #[test]
 fn test_invalid_redacts_echoed_key() {
-    let body = r#"{"error":{"message":"invalid key sk-1234567890abcdef in header"}}"#;
-    match classify_with_body(400, None, body) {
-        ProviderError::InvalidRequest(detail) => {
-            assert!(
-                !detail.contains("sk-1234567890abcdef"),
-                "redacted: {detail}"
-            );
-            assert!(detail.contains("[REDACTED]"), "marker present: {detail}");
+    for body in [
+        r#"{"error":{"message":"invalid key sk-1234567890abcdef in header"}}"#,
+        r#"{"error":{"message":"rejected key=sk-1234567890abcdef"}}"#,
+        r#"{"error":{"message":"Authorization: Bearer secret-token-value"}}"#,
+        r#"{"error":{"message":"api_key=my_raw_secret_value failed"}}"#,
+    ] {
+        match classify_with_body(400, None, body) {
+            ProviderError::InvalidRequest(detail) => {
+                assert!(
+                    !detail.contains("sk-1234567890abcdef")
+                        && !detail.contains("secret-token-value")
+                        && !detail.contains("my_raw_secret_value"),
+                    "redacted: {detail}"
+                );
+                assert!(detail.contains("[REDACTED]"), "marker present: {detail}");
+            }
+            other => panic!("400 → InvalidRequest, got {other:?}"),
         }
-        other => panic!("400 → InvalidRequest, got {other:?}"),
     }
 }
 

@@ -36,9 +36,21 @@ const READONLY_COMMANDS: &[&str] = &[
 /// write. uniq names its output file with a second positional operand. cut and
 /// tr print only, so they need no check.
 fn writes_output(cmd: &str, segment: &str) -> bool {
-    let args: Vec<String> = segment
-        .split_whitespace()
-        .skip(1)
+    if !matches!(cmd, "sort" | "uniq") {
+        return false;
+    }
+    let raw_args: Vec<&str> = segment.split_whitespace().skip(1).collect();
+    // Fail closed when an argument carries a backslash escape or shell
+    // expansion: a static check cannot prove that the expanded token is not
+    // an output flag or a second path argument.
+    if raw_args
+        .iter()
+        .any(|raw| raw.contains('\\') || raw.contains('$') || raw.contains('`'))
+    {
+        return true;
+    }
+    let args: Vec<String> = raw_args
+        .into_iter()
         .map(|raw| raw.chars().filter(|&c| c != '"' && c != '\'').collect())
         .collect();
     match cmd {

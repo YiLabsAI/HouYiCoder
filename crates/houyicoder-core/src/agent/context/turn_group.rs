@@ -85,6 +85,13 @@ impl HeldUserText {
         }
     }
 
+    /// True when the call is still awaiting its tool result in the current
+    /// assistant group. A result for a call that was already closed (or never
+    /// opened in this window) must not be emitted a second time.
+    fn is_open(&self, call_id: &str) -> bool {
+        self.open.iter().any(|id| id == call_id)
+    }
+
     /// Answer a call, releasing the held text once none is left open.
     fn close_call(&mut self, items: &mut Vec<InputItem>, call_id: &str) {
         self.open.retain(|id| id != call_id);
@@ -100,14 +107,14 @@ impl HeldUserText {
         self.release(items);
     }
 
-    /// Close any still-open calls with a stub tool result so an interrupted
+    /// Close any still-open calls with a stub tool result so an incomplete
     /// turn never leaves an assistant tool-call message without matching tool
     /// messages, then append the held user text in arrival order.
     fn release(&mut self, items: &mut Vec<InputItem>) {
         for call_id in self.open.drain(..) {
             items.push(InputItem::ToolResult {
                 call_id,
-                output: serde_json::json!({"error": "tool call interrupted"}),
+                output: serde_json::json!({"error": "no tool result recorded"}),
             });
         }
         for text in self.held.drain(..) {
@@ -240,11 +247,13 @@ pub fn assemble_model_input_with(
                     seen_call_ids.contains(call_id.as_str()),
                     "assemble_model_input: orphan ToolResult {call_id} has no matching ToolCall in the window — a compaction plan dropped the pair"
                 );
-                items.push(InputItem::ToolResult {
-                    call_id: call_id.clone(),
-                    output: materialize_result(events, i, output, backend, policy, now_ms),
-                });
-                held.close_call(&mut items, call_id);
+                if held.is_open(call_id) {
+                    items.push(InputItem::ToolResult {
+                        call_id: call_id.clone(),
+                        output: materialize_result(events, i, output, backend, policy, now_ms),
+                    });
+                    held.close_call(&mut items, call_id);
+                }
                 i += 1;
             }
             _ => {
