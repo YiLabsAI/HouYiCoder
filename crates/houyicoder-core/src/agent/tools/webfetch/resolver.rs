@@ -1,16 +1,18 @@
-//! Resolve a host once, and connect only to the addresses that passed the
-//! private-address screen.
+//! Resolve a host once per hop, screen every answer against private ranges,
+//! and serve the screened addresses to the HTTP connector without a second OS
+//! lookup.
 //!
-//! The fetch path used to resolve a host in order to screen it and then let
-//! the HTTP client resolve it again in order to connect. Those are two answers
-//! to the same question, and a name whose second answer points somewhere
-//! private slips through the screen. This resolver is the connection's own
-//! lookup, so the addresses that were screened are the addresses a socket is
-//! opened to, and there is no second answer.
+//! When a proxy is active, the HTTP client sends the hostname to the proxy
+//! instead of calling its own DNS resolver. Running screen_target before each
+//! hop guarantees that private and loopback answers are refused on both the
+//! proxy path and the direct path, while caching the validated addresses in
+//! the resolver ensures the direct connector reuses the exact same lookup.
 
+use std::collections::HashMap;
 use std::error::Error;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 
@@ -18,22 +20,28 @@ use reqwest::dns::Addrs;
 use reqwest::dns::Name;
 use reqwest::dns::Resolve;
 use reqwest::dns::Resolving;
+use serde_json::Value;
+use serde_json::json;
 use tokio::net::lookup_host;
 
 use super::target::is_private_ip;
 
-/// Prefix of the error a refused lookup reports. The transport classifier
-/// reads it so the model sees a private-target failure rather than a generic
-/// connect error.
+/// Prefix of the error a refused lookup reports.
 pub(crate) const PRIVATE_TARGET: &str = "webfetch: target resolves to a private address";
 
-/// A resolver that refuses a host whose answer is not public.
+/// A resolver that screens every host before a hop is sent and hands the
+/// validated addresses to the direct connector without a second OS lookup.
 pub(crate) struct PublicResolver {
-    /// A fixed answer, so a test can hand back a loopback address without
-    /// depending on a real name.
-    fixed: Option<Vec<SocketAddr>>,
-    /// How many lookups this resolver performed. The test that proves a
-    /// request resolves its host once reads this.
+    /// A preset sequence of answers for tests. Each lookup pops the first
+    /// remaining entry, or clones the last one when only one remains, so a
+    /// rebinding test can supply a public address first and a loopback
+    /// address second.
+    answers: Option<Mutex<Vec<Vec<SocketAddr>>>>,
+    /// Validated addresses from screen_target, keyed by lowercase host. The
+    /// direct connector takes from here so each hop performs at most one OS
+    /// lookup.
+    validated: Mutex<HashMap<String, Vec<SocketAddr>>>,
+    /// How many underlying lookups this resolver performed.
     lookups: Arc<AtomicUsize>,
 }
 
@@ -41,34 +49,107 @@ impl PublicResolver {
     /// Resolve names through the system resolver, screening every answer.
     pub(crate) fn new() -> Self {
         Self {
-            fixed: None,
+            answers: None,
+            validated: Mutex::new(HashMap::new()),
             lookups: Arc::new(AtomicUsize::new(0)),
         }
     }
 
-    /// Answer every name with a fixed set of addresses. Test-only.
+    /// Answer lookups with a fixed address list. Test-only.
     #[cfg(test)]
     pub(crate) fn with_fixed(addrs: Vec<SocketAddr>) -> Self {
+        Self::with_sequence(vec![addrs])
+    }
+
+    /// Answer consecutive lookups with preset address lists. Test-only.
+    #[cfg(test)]
+    pub(crate) fn with_sequence(sequence: Vec<Vec<SocketAddr>>) -> Self {
         Self {
-            fixed: Some(addrs),
+            answers: Some(Mutex::new(sequence)),
+            validated: Mutex::new(HashMap::new()),
             lookups: Arc::new(AtomicUsize::new(0)),
         }
     }
 
-    /// The number of lookups performed so far.
+    /// The number of underlying lookups performed so far.
     #[cfg(test)]
     pub(crate) fn lookup_count(&self) -> usize {
         self.lookups.load(Ordering::Relaxed)
+    }
+
+    /// Resolve the URL's host once, refuse any private or loopback address,
+    /// and cache the validated addresses for the direct connector.
+    pub(crate) async fn screen_target(&self, url: &str) -> Result<(), Value> {
+        let Some(authority) = url
+            .split_once("://")
+            .map(|(_, rest)| rest.split('/').next().unwrap_or(rest))
+        else {
+            return Ok(());
+        };
+        let host = authority.split(':').next().unwrap_or(authority);
+        if host.is_empty() {
+            return Ok(());
+        }
+        let port = if url.starts_with("https://") { 443 } else { 80 };
+        let Ok(addresses) = self.lookup_raw(host, port).await else {
+            return Ok(());
+        };
+        for address in &addresses {
+            if is_private_ip(address.ip()) {
+                return Err(json!({
+                    "error": format!("{PRIVATE_TARGET} ({})", address.ip()),
+                    "error_kind": "private_target",
+                }));
+            }
+        }
+        if !addresses.is_empty()
+            && let Ok(mut map) = self.validated.lock()
+        {
+            map.insert(host.to_ascii_lowercase(), addresses);
+        }
+        Ok(())
+    }
+
+    async fn lookup_raw(&self, host: &str, port: u16) -> Result<Vec<SocketAddr>, String> {
+        self.lookups.fetch_add(1, Ordering::Relaxed);
+        if let Some(ref seq) = self.answers {
+            let mut guard = seq.lock().expect("answers mutex");
+            let addrs = if guard.len() > 1 {
+                guard.remove(0)
+            } else {
+                guard.first().cloned().unwrap_or_default()
+            };
+            return Ok(addrs);
+        }
+        lookup_host((host, port))
+            .await
+            .map(|iter| iter.collect())
+            .map_err(|e| e.to_string())
     }
 }
 
 impl Resolve for PublicResolver {
     fn resolve(&self, name: Name) -> Resolving {
+        let host = name.as_str().to_ascii_lowercase();
+        let cached = self
+            .validated
+            .lock()
+            .ok()
+            .and_then(|map| map.get(&host).cloned());
+        if let Some(addresses) = cached {
+            return Box::pin(async move { Ok(Box::new(addresses.into_iter()) as Addrs) });
+        }
+        let preset = self.answers.as_ref().map(|seq| {
+            let mut guard = seq.lock().expect("answers mutex");
+            if guard.len() > 1 {
+                guard.remove(0)
+            } else {
+                guard.first().cloned().unwrap_or_default()
+            }
+        });
         self.lookups.fetch_add(1, Ordering::Relaxed);
-        let host = name.as_str().to_string();
-        let fixed = self.fixed.clone();
         Box::pin(async move {
-            let addresses: Vec<SocketAddr> = match fixed {
+            let addresses: Vec<SocketAddr> = match preset {
                 Some(addrs) => addrs,
                 None => lookup_host((host.as_str(), 0))
                     .await

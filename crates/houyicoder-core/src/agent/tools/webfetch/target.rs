@@ -4,6 +4,7 @@
 use super::*;
 use reqwest::Url;
 use std::net::IpAddr;
+use tokio::time::sleep;
 
 /// Maximum redirect hops followed. Guards against redirect loops. A hop may
 /// cross hosts, but every target still passes the same URL check, so a
@@ -69,26 +70,29 @@ pub(crate) enum FetchError {
 }
 
 /// Request a target, following redirects by hand so every hop passes the URL
-/// rule before it is sent. The resolved addresses are screened by the client's
-/// resolver, which is also the lookup the connection uses. Each hop carries
-/// the request timeout on its own, so a long chain can spend more than one
-/// request budget; the hop count is what bounds it.
+/// rule and the resolved-address screen before it is sent.
+///
+/// When a proxy client is configured, each hop tries the proxy first and
+/// automatically falls back to the direct client on any transport failure (for
+/// example when a local proxy daemon is stopped). On the direct client, a
+/// transient connect or timeout error is retried once before failing.
 pub(crate) async fn fetch_following(
-    client: &Client,
+    direct: &Client,
+    proxy: Option<&Client>,
+    resolver: Option<&PublicResolver>,
     start: &str,
 ) -> Result<reqwest::Response, FetchError> {
     let mut target = start.to_string();
     let mut hops = 0usize;
     loop {
-        let response = client
-            .get(&target)
-            .header("Accept", "text/markdown, text/html, */*")
-            .header("User-Agent", "webfetch/0.1")
-            .send()
-            .await;
-        let Ok(response) = response else {
-            return response.map_err(FetchError::Transport);
-        };
+        if let Some(res) = resolver {
+            res.screen_target(&target)
+                .await
+                .map_err(FetchError::Refused)?;
+        }
+        let response = send_hop(direct, proxy, &target)
+            .await
+            .map_err(FetchError::Transport)?;
         let location = response
             .headers()
             .get("location")
@@ -103,6 +107,37 @@ pub(crate) async fn fetch_following(
             Hop::Refuse(payload) => return Err(FetchError::Refused(payload)),
         }
     }
+}
+
+/// Send one GET request with proxy-to-direct fallback and a single transient
+/// retry on the direct path.
+async fn send_hop(
+    direct: &Client,
+    proxy: Option<&Client>,
+    target: &str,
+) -> Result<reqwest::Response, reqwest::Error> {
+    if let Some(proxy_client) = proxy
+        && let Ok(resp) = send_once(proxy_client, target).await
+    {
+        return Ok(resp);
+    }
+    match send_once(direct, target).await {
+        Ok(resp) => Ok(resp),
+        Err(err) if err.is_connect() || err.is_timeout() || err.is_request() => {
+            sleep(Duration::from_millis(50)).await;
+            send_once(direct, target).await
+        }
+        Err(err) => Err(err),
+    }
+}
+
+async fn send_once(client: &Client, target: &str) -> Result<reqwest::Response, reqwest::Error> {
+    client
+        .get(target)
+        .header("Accept", "text/markdown, text/html, */*")
+        .header("User-Agent", "webfetch/0.1")
+        .send()
+        .await
 }
 
 /// Validate a URL string. Rejects oversized URLs, malformed URLs, URLs
@@ -198,3 +233,6 @@ pub(crate) fn upgrade_to_https(url: &str) -> String {
         url.to_string()
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -25,6 +25,7 @@ use super::{Tool, ToolCtx, ToolError};
 mod cache;
 mod resolver;
 mod response;
+mod route;
 mod target;
 
 #[cfg(test)]
@@ -64,17 +65,11 @@ use std::time::Duration;
 #[cfg(test)]
 pub(crate) use std::time::Instant;
 pub(crate) use target::FetchError;
-#[cfg(test)]
-pub(crate) use target::Hop;
-#[cfg(test)]
-pub(crate) use target::MAX_REDIRECTS;
 pub(crate) use target::fetch_following;
 #[cfg(test)]
 pub(crate) use target::is_private_host;
 #[cfg(test)]
 pub(crate) use target::is_private_ip;
-#[cfg(test)]
-pub(crate) use target::redirect_hop;
 pub(crate) use target::upgrade_to_https;
 pub(crate) use target::validate_url;
 
@@ -165,46 +160,47 @@ fn classify_failure(timed_out: bool, connect: bool, message: &str) -> &'static s
 /// Construction is infallible unless the TLS backend cannot be initialized
 /// (a system-level failure).
 pub struct WebFetchTool {
-    client: Client,
+    direct: Client,
+    routed: Option<Client>,
+    resolver: Arc<PublicResolver>,
     cache: Arc<Mutex<FetchCache>>,
 }
 
-/// The builder every fetch client starts from. The resolver is a parameter so
-/// a test can hand back a known answer, and the caller finishes the build so a
-/// test can turn off the system proxy it is not exercising.
-fn fetch_client(resolver: Arc<PublicResolver>) -> reqwest::ClientBuilder {
+/// The builder every direct fetch client starts from. The system route is
+/// turned off on this client so it serves as the clean fallback whenever the
+/// mediated client is absent or unreachable.
+fn direct_client(resolver: Arc<PublicResolver>) -> Client {
     Client::builder()
-            // Redirects are followed here so every hop passes the URL rule,
-            // which the client's own policy cannot do.
-            .redirect(Policy::none())
-            .timeout(Duration::from_secs(FETCH_TIMEOUT_SECS))
-            .connect_timeout(Duration::from_secs(CONNECT_TIMEOUT_SECS))
-            .tcp_keepalive(Duration::from_secs(TCP_KEEPALIVE_SECS))
-            // The resolver both looks the name up and screens the answer, and
-            // its answer is the one the connection uses. No separate lookup
-            // can disagree with the screen.
-            .dns_resolver(resolver)
+        .redirect(Policy::none())
+        .timeout(Duration::from_secs(FETCH_TIMEOUT_SECS))
+        .connect_timeout(Duration::from_secs(CONNECT_TIMEOUT_SECS))
+        .tcp_keepalive(Duration::from_secs(TCP_KEEPALIVE_SECS))
+        .no_proxy()
+        .dns_resolver(resolver)
+        .build()
+        .expect("HTTP client construction failed (TLS backend error)")
 }
 
 impl WebFetchTool {
     pub fn new() -> Self {
+        let resolver = Arc::new(PublicResolver::new());
+        let direct = direct_client(Arc::clone(&resolver));
+        let routed = route::build_route_client(Arc::clone(&resolver));
         Self {
-            client: fetch_client(Arc::new(PublicResolver::new()))
-                .build()
-                .expect("HTTP client construction failed (TLS backend error)"),
+            direct,
+            routed,
+            resolver,
             cache: Arc::new(Mutex::new(FetchCache::default())),
         }
     }
 
-    /// Build a tool whose names resolve through the given resolver, with the
-    /// system proxy off so the resolver is the path the request takes.
+    /// Build a tool whose names resolve through the given resolver.
     #[cfg(test)]
     pub(crate) fn with_resolver(resolver: Arc<PublicResolver>) -> Self {
         Self {
-            client: fetch_client(resolver)
-                .no_proxy()
-                .build()
-                .expect("test client"),
+            direct: direct_client(Arc::clone(&resolver)),
+            routed: None,
+            resolver,
             cache: Arc::new(Mutex::new(FetchCache::default())),
         }
     }
@@ -240,7 +236,9 @@ impl Tool for WebFetchTool {
         })
     }
     fn execute(&self, _ctx: ToolCtx, input: Value) -> PFut<'_, Result<Value, ToolError>> {
-        let client = self.client.clone();
+        let direct = self.direct.clone();
+        let routed = self.routed.clone();
+        let resolver = Arc::clone(&self.resolver);
         let cache = Arc::clone(&self.cache);
         Box::pin(async move {
             let url = input
@@ -272,7 +270,8 @@ impl Tool for WebFetchTool {
                 return Ok(cached_failure_payload(kind, &message));
             }
 
-            let result = fetch_following(&client, &fetch_url).await;
+            let result =
+                fetch_following(&direct, routed.as_ref(), Some(&resolver), &fetch_url).await;
 
             match result {
                 Ok(resp) => {
