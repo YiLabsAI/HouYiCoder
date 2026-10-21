@@ -1,9 +1,9 @@
 //! The /trajectory pane: a turn-organized distributed-trace view with a
 //! 3-level drill-down and an ASCII time axis. Follows the /memory
 //! /permissions pane shape (shared draw_command_pane template) but
-//! renders a session timeline. The view types live here; the Level 1
-//! timeline is in the detail module and the Level 2 record body in
-//! record_detail.
+//! renders a session timeline. The view types and their plain-data rows live
+//! in the view module; the Level 1 timeline is in the detail module and the
+//! Level 2 record body in record_detail.
 //!
 //! 3 levels:
 //! - Level 0: session summary + turn list (collapsed, cursor selects)
@@ -49,142 +49,10 @@ use crate::state::App;
 pub use detail::{TrajectoryDetailState, TrajectoryDetailView};
 use ratatui::layout::{Constraint, Direction, Layout};
 pub use view::{
-    SessionTiming, SubagentUsage, TrajectoryBg, TrajectoryRecord, TrajectoryRow, TrajectoryTurn,
-    TrajectoryView, TrajectoryViewState,
+    CompactedBoundary, EventTiming, EventUsage, ModelSwitchBoundary, RecordOutcome, SessionTiming,
+    SubagentUsage, TrajectoryBg, TrajectoryRecord, TrajectoryRecordKind, TrajectoryRow,
+    TrajectoryTurn, TrajectoryView, TrajectoryViewState, TurnBoundary,
 };
-
-// Data types
-
-/// What one timeline record represents. These are domain names: a record is a
-/// model call, a tool call, a piece of context, or an agent, not a raw log
-/// variant and not a provider stream detail.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum TrajectoryRecordKind {
-    /// User input, a mid-turn update, or context injected by the runner.
-    Context,
-    /// One model call: thinking, response, usage, and timing.
-    Model,
-    /// One tool call together with its result.
-    Tool,
-    /// A delegated sub-agent, spanning spawn to return.
-    Agent,
-    /// Memory recalled into this turn.
-    Memory,
-    /// A prompt-cache boundary: the provider reused less of the prefix than
-    /// the prior call, with the cause the agent loop attributed it to.
-    Cache,
-    /// A hook verdict that did not deny: an observation, an injection, or a
-    /// request for the user. Not a failure, so it is not drawn as one.
-    Hook,
-    /// Context folded away by compaction.
-    Compaction,
-    /// A turn-level failure or interruption marker.
-    Error,
-}
-
-impl TrajectoryRecordKind {
-    /// The kind column label. Fixed width so the columns to its right line up.
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Context => "context",
-            Self::Model => "model",
-            Self::Tool => "tool",
-            Self::Agent => "agent",
-            Self::Memory => "memory",
-            Self::Cache => "cache",
-            Self::Hook => "hook",
-            Self::Compaction => "compact",
-            Self::Error => "error",
-        }
-    }
-}
-
-/// Token facts for one model call. Every field is optional: a provider that
-/// omits usage leaves the value unknown, never zero.
-#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
-pub struct EventUsage {
-    pub input: Option<u64>,
-    pub output: Option<u64>,
-    pub cache_read: Option<u64>,
-    pub cache_write: Option<u64>,
-    pub reasoning: Option<u64>,
-    /// Which counts the call's endpoint reported, AND-folded across the retries
-    /// folded into this call. A count it did not report and the log left at
-    /// zero is unknown rather than a measured zero, so the drill consults this
-    /// before printing a count.
-    pub provenance: UsageProvenance,
-}
-
-/// Latency facts for one model call, as measured by the agent loop. A call
-/// that produced no first token (aborted or failed) leaves the split unknown
-/// while still carrying its total wall time.
-#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
-pub struct EventTiming {
-    pub total_ms: u64,
-    pub ttft_ms: Option<u64>,
-    pub decode_ms: Option<u64>,
-    /// Time the call spent inside its reasoning blocks, when the stream closed
-    /// any. None is unknown: the provider sent no reasoning, or the call ended
-    /// inside one, and neither is a measurement of zero.
-    pub reasoning_ms: Option<u64>,
-    /// Time the call spent inside its output blocks, the reply text and a tool
-    /// call's arguments alike, summed the same way.
-    pub response_ms: Option<u64>,
-}
-
-/// How a record ended. Three states, not a boolean: a tool call whose result
-/// has not landed yet is not a success, and claiming it succeeded would put a
-/// checkmark on work that may still fail.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum RecordOutcome {
-    Ok,
-    Failed,
-    /// Started but not finished inside the loaded window.
-    Pending,
-}
-
-impl RecordOutcome {
-    /// The status glyph the timeline and the detail header show.
-    pub fn glyph(self) -> &'static str {
-        match self {
-            Self::Ok => "✓",
-            Self::Failed => "✗",
-            Self::Pending => "…",
-        }
-    }
-}
-
-/// A durable boundary recorded between two turns.
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub enum TurnBoundary {
-    /// The user cleared the conversation context before this turn. prior_turn
-    /// is the model-call count at the clear; at_secs is the durable event's
-    /// timestamp, so the pane can say when it happened.
-    ContextCleared { prior_turn: u32, at_secs: u64 },
-    /// The model changed between this turn and the previous one.
-    ModelSwitch(Box<ModelSwitchBoundary>),
-    /// A compaction occurred before this turn.
-    Compacted(Box<CompactedBoundary>),
-}
-
-/// Facts for a model-switch boundary between turns.
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub struct ModelSwitchBoundary {
-    pub from: String,
-    pub to: String,
-    pub at_secs: u64,
-}
-
-/// Facts for a compaction boundary between turns. The token counts bracket
-/// the fold, so the separator shows what it reclaimed. Both are zero on a log
-/// written before the counts were recorded.
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub struct CompactedBoundary {
-    pub checkpoint_id: String,
-    pub pre_tokens: u64,
-    pub post_tokens: u64,
-    pub at_secs: u64,
-}
 
 /// The trajectory-data seam the render path calls. Matches the disk-search
 /// pattern: the TUI owns the contract + the plain-data view; the
