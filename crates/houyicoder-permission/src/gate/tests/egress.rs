@@ -205,3 +205,48 @@ fn test_egress_scope_names_command() {
         Outcome::Ask
     ));
 }
+
+/// Replay the 5 real session commands from session 71336e41 (fetching PR
+/// metadata, issue comments, files and reviews, raw markdown with grep and
+/// head, and inline comments) and verify the quantitative metrics:
+/// - option target accuracy: 5/5 (100%) resolve to curl https://api.github.com
+///   instead of the leading env assignment;
+/// - repeat-ask rate: after approving the first command with Always,
+///   0/4 (0%) of the remaining 4 commands prompt;
+/// - total prompts across the 5-call sequence: drops from 5 to 1.
+#[test]
+fn test_real_session_metrics() {
+    let session_calls = [
+        "CACERT=/Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/site-packages/certifi/cacert.pem; curl -sS --max-time 25 --cacert \"$CACERT\" \"https://api.github.com/repos/ray-project/ray/pulls/66986\" -o \"$TMPDIR/pr.json\"; python3 -c \"print(1)\"",
+        "CACERT=/Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/site-packages/certifi/cacert.pem; curl -sS --max-time 25 --cacert \"$CACERT\" \"https://api.github.com/repos/ray-project/ray/issues/66986/comments?per_page=50\" -o \"$TMPDIR/c.json\"; python3 -c \"print(2)\"",
+        "CACERT=/Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/site-packages/certifi/cacert.pem; curl -sS --max-time 25 --cacert \"$CACERT\" \"https://api.github.com/repos/ray-project/ray/pulls/66986/files\" -o \"$TMPDIR/f.json\"; curl -sS --max-time 25 --cacert \"$CACERT\" \"https://api.github.com/repos/ray-project/ray/pulls/66986/reviews\" -o \"$TMPDIR/r.json\"; python3 -c \"print(3)\"",
+        "CACERT=/Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/site-packages/certifi/cacert.pem; curl -sS --max-time 25 --cacert \"$CACERT\" -H \"Accept: application/vnd.github.raw\" \"https://api.github.com/repos/ray-project/enhancements/contents/reps/2026-07-14-ray-sandboxing.md\" -o \"$TMPDIR/rep.md\"; wc -c \"$TMPDIR/rep.md\"; grep -n \"gVisor\" \"$TMPDIR/rep.md\" | head -40",
+        "CACERT=/Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/site-packages/certifi/cacert.pem; curl -sS --max-time 25 --cacert \"$CACERT\" \"https://api.github.com/repos/ray-project/ray/pulls/66986/comments?per_page=100\" -o \"$TMPDIR/ic.json\"; python3 -c \"print(5)\"",
+    ];
+    let g = DefaultModeGate::with_mode(PermissionMode::Auto);
+    let mut accurate_targets = 0usize;
+    let mut prompts = 0usize;
+    let mut repeat_prompts = 0usize;
+    for (idx, cmd) in session_calls.iter().enumerate() {
+        let scope = bash_egress_scope(cmd);
+        if scope.as_deref() == Some("curl https://api.github.com") {
+            accurate_targets += 1;
+        }
+        let d = g.decide(&bash_req(cmd));
+        if d.outcome() == Outcome::Ask {
+            prompts += 1;
+            if idx > 0 {
+                repeat_prompts += 1;
+            }
+            if let Some(s) = scope {
+                g.add_egress_allow(&s);
+            }
+        }
+    }
+    assert_eq!(
+        accurate_targets, 5,
+        "M3 option target accuracy = 5/5 (100%)"
+    );
+    assert_eq!(repeat_prompts, 0, "M1 repeat-ask rate = 0/4 (0%)");
+    assert_eq!(prompts, 1, "M4 prompts across 5 calls = 1 (down from 5)");
+}

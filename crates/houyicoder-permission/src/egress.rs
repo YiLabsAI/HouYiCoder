@@ -13,7 +13,10 @@
 //! else. Anything else returns None, which makes the caller ask every time
 //! instead of remembering a scope wider than the command the user saw.
 
+use std::mem::take;
+
 use crate::compound::is_attestable;
+use crate::compound::is_readonly_compound;
 use crate::compound::normalize_shell_command;
 use crate::compound::split_compound;
 use crate::pipeline::detection::should_ask_egress;
@@ -71,34 +74,43 @@ enum Segment {
 /// text the approval card shows for its remember option.
 pub fn bash_egress_scope(command: &str) -> Option<String> {
     let normalized = normalize_shell_command(command);
-    // A pipeline hands the fetched bytes to another program, which the
-    // remembered scope does not name. A read-only tail such as a line filter
-    // is a common case this refuses; the same work stays available as two
-    // statements, so refusing costs the user a rewrite rather than the task.
-    if has_unquoted_pipe(&normalized) {
-        return None;
-    }
     let mut scope: Option<String> = None;
-    for segment in split_compound(&normalized) {
-        let trimmed = segment.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        // Every segment has to be one the gate can reason about, or the
-        // remembered scope would also cover shell syntax the user never saw
-        // approved.
-        if !is_attestable(trimmed) {
-            return None;
-        }
-        match classify_segment(trimmed) {
-            Segment::Local => {}
-            Segment::Unscopable => return None,
-            Segment::Scoped { program, origin } => {
-                let key = format!("{program} {origin}");
-                match &scope {
-                    Some(existing) if existing != &key => return None,
-                    Some(_) => {}
-                    None => scope = Some(key),
+    for clause in split_clauses(&normalized) {
+        let stages: Vec<String> = split_compound(&clause);
+        let stage_refs: Vec<&str> = stages.iter().map(|s| s.as_str()).collect();
+        let piped = stages.len() > 1;
+        for (idx, stage) in stages.iter().enumerate() {
+            let trimmed = stage.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if !is_attestable(trimmed) {
+                return None;
+            }
+            match classify_segment(trimmed) {
+                Segment::Local => {
+                    // When a clause pipes an egress command into a downstream
+                    // stage, every downstream stage in that pipeline must be a
+                    // read-only filter; piping into sh or python is refused.
+                    if piped && idx > 0 && !is_readonly_compound(&stage_refs[idx..=idx]) {
+                        return None;
+                    }
+                }
+                Segment::Unscopable => return None,
+                Segment::Scoped { program, origin } => {
+                    if piped
+                        && !stage_refs[idx + 1..]
+                            .iter()
+                            .all(|s| is_readonly_compound(&[*s]))
+                    {
+                        return None;
+                    }
+                    let key = format!("{program} {origin}");
+                    match &scope {
+                        Some(existing) if existing != &key => return None,
+                        Some(_) => {}
+                        None => scope = Some(key),
+                    }
                 }
             }
         }
@@ -106,24 +118,64 @@ pub fn bash_egress_scope(command: &str) -> Option<String> {
     scope
 }
 
-/// Whether the command contains a pipe outside quotes.
-fn has_unquoted_pipe(command: &str) -> bool {
+/// Split a normalized command on semicolons and logical operators outside
+/// quotes and parentheses, keeping each pipeline together as one clause so
+/// downstream pipe stages of an egress command can be checked independently
+/// of local pipelines in later statements.
+fn split_clauses(command: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let chars: Vec<char> = command.chars().collect();
+    let mut i = 0;
     let mut in_single = false;
     let mut in_double = false;
-    for c in command.chars() {
+    let mut depth = 0i32;
+    while i < chars.len() {
+        let c = chars[i];
         match c {
             '\'' if !in_double => in_single = !in_single,
             '"' if !in_single => in_double = !in_double,
-            '|' if !in_single && !in_double => return true,
+            '(' if !in_single && !in_double => depth += 1,
+            ')' if !in_single && !in_double && depth > 0 => depth -= 1,
+            '&' | '|'
+                if !in_single
+                    && !in_double
+                    && depth == 0
+                    && i + 1 < chars.len()
+                    && chars[i + 1] == c =>
+            {
+                let trimmed = cur.trim();
+                if !trimmed.is_empty() {
+                    out.push(trimmed.to_string());
+                }
+                cur.clear();
+                i += 2;
+                continue;
+            }
+            ';' if !in_single && !in_double && depth == 0 => {
+                let trimmed = cur.trim();
+                if !trimmed.is_empty() {
+                    out.push(trimmed.to_string());
+                }
+                cur.clear();
+                i += 1;
+                continue;
+            }
             _ => {}
         }
+        cur.push(c);
+        i += 1;
     }
-    false
+    let trimmed = cur.trim();
+    if !trimmed.is_empty() {
+        out.push(trimmed.to_string());
+    }
+    out
 }
 
 /// Classify one command segment by where it reaches.
 fn classify_segment(segment: &str) -> Segment {
-    let words: Vec<&str> = segment.split_whitespace().collect();
+    let words = shell_words(segment);
     let Some(first) = words.first() else {
         return Segment::Local;
     };
@@ -138,13 +190,45 @@ fn classify_segment(segment: &str) -> Segment {
             Segment::Local
         };
     }
-    match literal_origin(&words[1..]) {
+    let arg_refs: Vec<&str> = words[1..].iter().map(|s| s.as_str()).collect();
+    match literal_origin(&arg_refs) {
         Some(origin) => Segment::Scoped {
             program: program.to_string(),
             origin,
         },
         None => Segment::Unscopable,
     }
+}
+
+/// Split a segment into words while keeping single- and double-quoted spans
+/// intact, so a multi-word header argument stays one token.
+fn shell_words(segment: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut cur = String::new();
+    let mut in_single = false;
+    let mut in_double = false;
+    for c in segment.chars() {
+        match c {
+            '\'' if !in_double => {
+                in_single = !in_single;
+                cur.push(c);
+            }
+            '"' if !in_single => {
+                in_double = !in_double;
+                cur.push(c);
+            }
+            c if c.is_whitespace() && !in_single && !in_double => {
+                if !cur.is_empty() {
+                    words.push(take(&mut cur));
+                }
+            }
+            _ => cur.push(c),
+        }
+    }
+    if !cur.is_empty() {
+        words.push(cur);
+    }
+    words
 }
 
 /// The single origin a request program's arguments name, or None when the
@@ -199,7 +283,12 @@ fn literal_origin(args: &[&str]) -> Option<String> {
 /// preference.
 fn carries_credential(value: &str) -> bool {
     let lower = value.to_ascii_lowercase();
-    lower.contains("authorization") || lower.contains("cookie") || lower.contains("token")
+    lower.contains("authorization")
+        || lower.contains("cookie")
+        || lower.contains("token")
+        || lower.contains("bearer")
+        || lower.contains("api-key")
+        || lower.contains("apikey")
 }
 
 /// The origin of a literal http or https URL: scheme plus host, with the

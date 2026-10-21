@@ -123,7 +123,8 @@ fn test_scope_rejects_dynamic_url() {
     }
 }
 
-/// A pipeline hands the bytes to a program the scope does not name.
+/// A pipeline into an interpreter is rejected, while a read-only filter tail
+/// or a local grep|head pipeline after a semicolon stays scopable.
 #[test]
 fn test_scope_rejects_pipeline() {
     assert_eq!(
@@ -131,12 +132,23 @@ fn test_scope_rejects_pipeline() {
         None
     );
     assert_eq!(
-        bash_egress_scope("curl https://api.github.com/x | head -5"),
+        bash_egress_scope("curl https://api.github.com/x | python3 -c 'print(1)'"),
         None
     );
     assert_eq!(
-        bash_egress_scope("curl https://api.github.com/x || sh"),
-        None
+        bash_egress_scope("curl https://api.github.com/x | head -5").as_deref(),
+        Some("curl https://api.github.com")
+    );
+    assert_eq!(
+        bash_egress_scope(
+            "CACERT=/opt/cacert.pem; curl -sS --max-time 25 --cacert \"$CACERT\" \
+             -H \"Accept: application/vnd.github.raw\" \
+             \"https://api.github.com/repos/ray-project/enhancements/contents/reps/2026-07-14-ray-sandboxing.md\" \
+             -o \"$TMPDIR/rep.md\"; wc -c \"$TMPDIR/rep.md\"; \
+             grep -n \"gVisor\" \"$TMPDIR/rep.md\" | head -40"
+        )
+        .as_deref(),
+        Some("curl https://api.github.com")
     );
     // A pipe inside quotes is data, not a pipeline.
     assert_eq!(
@@ -157,7 +169,7 @@ fn test_scope_absent_without_egress() {
 /// A redirect or substitution elsewhere in the command is shell syntax the
 /// user never saw approved, so the whole command stays unscopable.
 #[test]
-fn test_scope_rejects_unattestable_neighbour() {
+fn test_scope_rejects_unattestable() {
     assert_eq!(
         bash_egress_scope("curl https://api.github.com/x; echo hi > out.txt"),
         None
