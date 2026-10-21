@@ -21,6 +21,7 @@ use crate::records::{ContextDrillDown, ContextView, TranscriptLine};
 use crate::run_control::ClientCommand;
 use crate::state::{App, Pane, Screen, Stage, pane_for_stage};
 use crate::view::export_log::write_atomic_0600;
+use crate::view::trajectory_pane;
 use houyicoder_protocol::llm::Usage;
 use std::path::PathBuf;
 
@@ -185,10 +186,24 @@ impl App {
                 self.ui.navigation.pane = Pane::Trajectory;
                 self.ui.trajectory.set_level(0);
                 self.ui.trajectory.set_turn_idx(0);
-                // No turn is selected yet: the pane opens on the tail and
-                // follows it until the user picks a row.
-                self.ui.trajectory.clear_selection();
                 self.ui.trajectory.clear_drill();
+                // The pane opens on the tail, so a window the last visit
+                // walked back from is put back on the newest turns.
+                match self.sessions.persistence.trajectory_log.as_ref() {
+                    Some(log) => {
+                        log.return_to_tail();
+                        let view = log.trajectory();
+                        // The selection is the newest turn, not the last row
+                        // in hand: the page holding that turn may still be
+                        // arriving, and the first render would otherwise turn
+                        // the open-at-the-tail request into a cursor on the
+                        // row that page replaces.
+                        trajectory_pane::select_newest_turn(&self.ui.trajectory, &view);
+                    }
+                    // With no paged history the rows in hand are the whole
+                    // list, so the draw can clamp the cursor to its last row.
+                    None => self.ui.trajectory.clear_selection(),
+                }
                 // The cursor starts at the tail; the draw clamps it to the
                 // active row count on first render.
                 self.ui.trajectory.set_cursor(usize::MAX);

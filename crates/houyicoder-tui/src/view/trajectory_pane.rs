@@ -259,6 +259,21 @@ pub(crate) fn note_selected_turn(state: &TrajectoryPaneState, view: &TrajectoryV
     }
 }
 
+/// Put the selection on the newest turn of the history in hand, or drop it
+/// when the session has no turn yet.
+///
+/// The newest turn is a number rather than the last row loaded: the page
+/// holding it may still be arriving, and a row would name the turn that page
+/// replaces. Turn zero is not a turn, so a session with no turn drops the
+/// selection instead of naming one.
+pub(crate) fn select_newest_turn(state: &TrajectoryPaneState, view: &TrajectoryView) {
+    if view.total_turns > 0 {
+        state.select(view.total_turns, view.history_generation);
+    } else {
+        state.clear_selection();
+    }
+}
+
 /// The row the drill is about, when the window in hand still holds it.
 ///
 /// A row index names a different turn once a page arrives under it, and the

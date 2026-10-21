@@ -9,6 +9,7 @@ use crate::keys::handle_working;
 use crate::state::Pane;
 use crate::view::working;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use houyicoder_protocol::frontend::SlashCommand;
 use ratatui::layout::Rect;
 use ratatui::{Terminal, backend::TestBackend};
 use std::collections::VecDeque;
@@ -123,6 +124,63 @@ fn test_cursor_restored_by_turn() {
         TrajectoryRow::Turn(turn) => assert_eq!(turn.n, 401, "still the same turn"),
         _ => panic!("the cursor sits on a turn row"),
     }
+}
+
+/// Opening the pane follows the newest turn even when its page is still on
+/// its way: the selection is the newest turn number, so the cursor moves onto
+/// it once the page lands instead of staying on the row the older window ended
+/// at.
+#[test]
+fn test_open_again_follows_tail() {
+    let log = Arc::new(ScriptedLog::new(vec![
+        window_view(1, 6, 7, 1),
+        window_view(1, 7, 7, 1),
+    ]));
+    let mut app = app();
+    app.sessions.persistence.trajectory_log = Some(log.clone());
+    let mut terminal = Terminal::new(TestBackend::new(80, 40)).unwrap();
+
+    app.run_command(SlashCommand::Trajectory);
+    terminal
+        .draw(|f| {
+            working::draw(f, &app);
+        })
+        .unwrap();
+    assert_eq!(
+        app.ui.trajectory.cursor(),
+        5,
+        "the row in hand ends at the older turn"
+    );
+
+    // The tail page lands with the newest turn in it.
+    log.advance();
+    terminal
+        .draw(|f| {
+            working::draw(f, &app);
+        })
+        .unwrap();
+    assert_eq!(app.ui.trajectory.cursor(), 6, "the cursor follows the turn");
+    assert_eq!(
+        selected_number(&app),
+        Some(7),
+        "the newest turn is selected"
+    );
+    assert_eq!(
+        log.tail.load(Ordering::Relaxed),
+        1,
+        "opening the pane returns the window to the tail"
+    );
+}
+
+/// A session with no turn has none to name: opening the pane must not select
+/// turn zero, which is not a turn.
+#[test]
+fn test_open_empty_clears_selection() {
+    let log = Arc::new(ScriptedLog::new(vec![window_view(1, 0, 0, 1)]));
+    let mut app = app();
+    app.sessions.persistence.trajectory_log = Some(log.clone());
+    app.run_command(SlashCommand::Trajectory);
+    assert_eq!(selected_number(&app), None);
 }
 
 /// Home and End move the window, not just the cursor: the first and last rows

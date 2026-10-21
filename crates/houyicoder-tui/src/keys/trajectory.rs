@@ -119,9 +119,7 @@ pub fn handle(app: &mut App, k: KeyEvent) -> bool {
                     // alone: until then it names a row of the window being
                     // replaced.
                     let view = log.trajectory();
-                    app.ui
-                        .trajectory
-                        .select(view.total_turns, view.history_generation);
+                    trajectory_pane::select_newest_turn(&app.ui.trajectory, &view);
                 }
                 // A record list, or a turn list with no paged history: the
                 // rows in hand are the whole list, so the last one is the end.
