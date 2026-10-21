@@ -7,9 +7,9 @@
 //! events mapped to ratatui spans.
 
 mod normalize;
+mod table;
 
 use crate::view::line_wrap::wrap_hanging;
-use crate::view::line_wrap::wrap_line;
 use pulldown_cmark::Alignment;
 use pulldown_cmark::CodeBlockKind;
 use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
@@ -20,6 +20,7 @@ use std::sync::OnceLock;
 use syntect::easy::HighlightLines;
 use syntect::highlighting::{Style as SynStyle, ThemeSet};
 use syntect::parsing::SyntaxSet;
+use table::render_table;
 use unicode_width::UnicodeWidthStr;
 
 /// The default syntax set (all bundled grammars) and theme set, resolved once
@@ -437,224 +438,6 @@ fn wrap_markdown(
         }
     }
     (out_s, out_p)
-}
-
-/// Render a markdown table as ASCII: header row, separator, data rows.
-///
-/// Column widths are the widest cell per column, then shrunk to the width the
-/// pane can spare. A cell wider than its column is wrapped inside the cell and
-/// the row grows downward, so the pipe separators stay in one column on every
-/// visual row. Wrapping the finished table as prose would break the header's
-/// trailing pipe and every column after it.
-fn render_table(rows: &[Vec<String>], aligns: &[Alignment], avail: usize) -> Vec<String> {
-    if rows.is_empty() || rows[0].is_empty() {
-        return Vec::new();
-    }
-    let ncols = rows[0].len();
-    let mut widths: Vec<usize> = (0..ncols)
-        .map(|c| {
-            let mut w = 3usize;
-            for row in rows {
-                if let Some(cell) = row.get(c) {
-                    w = w.max(UnicodeWidthStr::width(cell.as_str()));
-                }
-            }
-            w
-        })
-        .collect();
-    const MIN_COL: usize = 4;
-    let spent = |widths: &[usize]| widths.iter().sum::<usize>() + 3 * ncols + 1;
-    if avail > 0 {
-        while spent(&widths) > avail {
-            let Some((widest, _)) = widths.iter().enumerate().max_by_key(|(_, w)| **w) else {
-                break;
-            };
-            if widths[widest] <= MIN_COL {
-                break;
-            }
-            widths[widest] -= 1;
-        }
-        if spent(&widths) > avail {
-            return stacked_table(rows, avail);
-        }
-    }
-    let align_of = |c: usize| aligns.get(c).copied().unwrap_or(Alignment::None);
-    let mut out = Vec::new();
-    for (r, row) in rows.iter().enumerate() {
-        let cells: Vec<Vec<String>> = (0..ncols)
-            .map(|c| {
-                let cell = row.get(c).map(String::as_str).unwrap_or("");
-                wrap_line(cell, widths[c])
-            })
-            .collect();
-        let height = cells.iter().map(Vec::len).max().unwrap_or(1);
-        for line_idx in 0..height {
-            let mut line = String::from("| ");
-            for (c, cell_rows) in cells.iter().enumerate() {
-                let text = cell_rows.get(line_idx).map(String::as_str).unwrap_or("");
-                line.push_str(&pad_cell(text, widths[c], align_of(c)));
-                line.push_str(" | ");
-            }
-            out.push(line.trim_end().to_string());
-        }
-        if r == 0 {
-            let mut sep = String::from('|');
-            for w in &widths {
-                sep.push_str(&"-".repeat(w + 2));
-                sep.push('|');
-            }
-            out.push(sep);
-        }
-    }
-    out
-}
-
-/// The table a pane too narrow for any column layout falls back to: one
-/// header-and-value pair per line, wrapped to the pane. A table that cannot
-/// keep its columns aligned must stop pretending to be a table.
-fn stacked_table(rows: &[Vec<String>], avail: usize) -> Vec<String> {
-    let headers = &rows[0];
-    if rows.len() == 1 {
-        // A header with no body is still content: state its columns instead of
-        // dropping the table.
-        return wrap_line(&headers.join(" | "), avail);
-    }
-    let mut out = Vec::new();
-    for (r, row) in rows.iter().enumerate().skip(1) {
-        if r > 1 {
-            out.push(String::new());
-        }
-        for (c, cell) in row.iter().enumerate() {
-            let label = headers.get(c).map(String::as_str).unwrap_or("");
-            let prefix = format!("{label}: ");
-            let indent = UnicodeWidthStr::width(prefix.as_str());
-            // A label wider than the pane leaves no hanging column: wrap the
-            // pair as one line instead of printing a prefix that already runs
-            // past the edge.
-            if indent + 4 > avail {
-                out.extend(wrap_line(&format!("{prefix}{cell}"), avail));
-                continue;
-            }
-            let budget = avail - indent;
-            for (i, line) in wrap_line(cell, budget).iter().enumerate() {
-                if i == 0 {
-                    out.push(format!("{prefix}{line}"));
-                } else {
-                    out.push(format!("{}{}", " ".repeat(indent), line));
-                }
-            }
-        }
-    }
-    out
-}
-
-/// Pad a cell to the column width per its alignment. Left = trailing spaces,
-/// right = leading spaces, center = split. None and Left both render
-/// left-aligned. The pad-aligned rule: dash-only separator, no
-/// alignment colons rendered.
-fn pad_cell(content: &str, width: usize, align: Alignment) -> String {
-    let display_w = UnicodeWidthStr::width(content);
-    let pad = width.saturating_sub(display_w);
-    match align {
-        Alignment::Center => {
-            let left = pad / 2;
-            format!("{}{}{}", " ".repeat(left), content, " ".repeat(pad - left))
-        }
-        Alignment::Right => format!("{}{}", " ".repeat(pad), content),
-        Alignment::Left | Alignment::None => {
-            format!("{content}{}", " ".repeat(pad))
-        }
-    }
-}
-
-#[test]
-fn test_ordered_list_keeps_numbers() {
-    // A numbered breakdown where each item carries a paragraph + a nested
-    // bullet sub-list (a common agent-reply shape). Each "N." must start
-    // its own rendered line and keep its source number — a prior
-    // increment-first counter made every list begin at "2.".
-    let md = "1. Host-Guest model: host holds all trust\n\n   - control plane != model plane\n2. Token economy\n\n   - TokenBudgetPlanner\n3. Reproducibility\n4. Security\n";
-    let (_, plain) = render_agent_text("●", md, 80);
-    let joined = plain.join("\n");
-    assert!(joined.contains("1. Host-Guest"), "item 1 marker: {joined}");
-    assert!(
-        joined.contains("2. Token economy"),
-        "item 2 marker: {joined}"
-    );
-    assert!(
-        joined.contains("3. Reproducibility"),
-        "item 3 marker: {joined}"
-    );
-    assert!(joined.contains("4. Security"), "item 4 marker: {joined}");
-    // No off-by-one bleed: "5." must never appear for a four-item list.
-    assert!(
-        !joined.contains("\n5. "),
-        "no off-by-one fifth marker: {joined}"
-    );
-}
-
-#[test]
-fn test_ordered_list_no_merge() {
-    // Tight ordered list (no blank lines between items): each item still
-    // gets its own line + number; they must not merge into one paragraph.
-    let md = "1. first item\n2. second item\n3. third item\n";
-    let (_, plain) = render_agent_text("●", md, 80);
-    // Three non-empty item lines, each carrying its marker.
-    let item_lines: Vec<&String> = plain.iter().filter(|s| !s.is_empty()).collect();
-    assert!(
-        item_lines.iter().any(|s| s.contains("1. first")),
-        "item 1: {plain:?}"
-    );
-    assert!(
-        item_lines.iter().any(|s| s.contains("2. second")),
-        "item 2: {plain:?}"
-    );
-    assert!(
-        item_lines.iter().any(|s| s.contains("3. third")),
-        "item 3: {plain:?}"
-    );
-}
-
-/// A long agent paragraph soft-wraps: render_agent_text returns >1 styled
-/// line, styled + plain stay length-locked (the render zip never truncates),
-/// and a wide width does not wrap. Pins the markdown leg of count==render at
-/// a wrap-forcing width (diff + stdout legs have their own).
-#[test]
-fn test_wraps_long_paragraph_narrow() {
-    let long = "this is a very long agent paragraph that must soft-wrap to multiple styled rows at a narrow pane width and not drift the count";
-    let (styled, plain) = render_agent_text("●", long, 20);
-    assert!(
-        styled.len() > 1,
-        "must wrap to >1 row at width 20, got {}",
-        styled.len()
-    );
-    assert_eq!(
-        styled.len(),
-        plain.len(),
-        "styled+plain lockstep after wrap"
-    );
-    assert_eq!(render_agent_text("●", long, 20).0.len(), styled.len());
-    let (wide, _) = render_agent_text("●", long, 200);
-    assert_eq!(wide.len(), 1, "no wrap at width 200");
-}
-
-#[test]
-fn test_list_item_code_kept() {
-    // A list item whose text spans multiple source lines with an inline
-    // code span on the second line must not glue the trailing word of
-    // line 1 onto the code span of line 2 ("CI" + "check_dep_graph.py"
-    // -> "CIcheck_dep_graph.py"). Soft breaks start new rendered lines.
-    let md = "1. enforced by CI\n`check_dep_graph.py` machine check\n";
-    let (_, plain) = render_agent_text("●", md, 80);
-    let joined = plain.join("\n");
-    assert!(
-        !joined.contains("CIcheck_dep_graph"),
-        "inline code glued to prior line's tail: {joined}"
-    );
-    assert!(
-        joined.contains("check_dep_graph"),
-        "code span kept: {joined}"
-    );
 }
 
 #[cfg(test)]

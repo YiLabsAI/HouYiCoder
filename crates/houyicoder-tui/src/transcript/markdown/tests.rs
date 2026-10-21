@@ -427,3 +427,92 @@ fn test_code_span_across_lines() {
     assert!(joined.contains("**x**"), "asterisks kept: {joined}");
     assert!(joined.contains('①'), "digit kept: {joined}");
 }
+#[test]
+fn test_ordered_list_keeps_numbers() {
+    // A numbered breakdown where each item carries a paragraph + a nested
+    // bullet sub-list (a common agent-reply shape). Each "N." must start
+    // its own rendered line and keep its source number — a prior
+    // increment-first counter made every list begin at "2.".
+    let md = "1. Host-Guest model: host holds all trust\n\n   - control plane != model plane\n2. Token economy\n\n   - TokenBudgetPlanner\n3. Reproducibility\n4. Security\n";
+    let (_, plain) = render_agent_text("●", md, 80);
+    let joined = plain.join("\n");
+    assert!(joined.contains("1. Host-Guest"), "item 1 marker: {joined}");
+    assert!(
+        joined.contains("2. Token economy"),
+        "item 2 marker: {joined}"
+    );
+    assert!(
+        joined.contains("3. Reproducibility"),
+        "item 3 marker: {joined}"
+    );
+    assert!(joined.contains("4. Security"), "item 4 marker: {joined}");
+    // No off-by-one bleed: "5." must never appear for a four-item list.
+    assert!(
+        !joined.contains("\n5. "),
+        "no off-by-one fifth marker: {joined}"
+    );
+}
+
+#[test]
+fn test_ordered_list_no_merge() {
+    // Tight ordered list (no blank lines between items): each item still
+    // gets its own line + number; they must not merge into one paragraph.
+    let md = "1. first item\n2. second item\n3. third item\n";
+    let (_, plain) = render_agent_text("●", md, 80);
+    // Three non-empty item lines, each carrying its marker.
+    let item_lines: Vec<&String> = plain.iter().filter(|s| !s.is_empty()).collect();
+    assert!(
+        item_lines.iter().any(|s| s.contains("1. first")),
+        "item 1: {plain:?}"
+    );
+    assert!(
+        item_lines.iter().any(|s| s.contains("2. second")),
+        "item 2: {plain:?}"
+    );
+    assert!(
+        item_lines.iter().any(|s| s.contains("3. third")),
+        "item 3: {plain:?}"
+    );
+}
+
+/// A long agent paragraph soft-wraps: render_agent_text returns >1 styled
+/// line, styled + plain stay length-locked (the render zip never truncates),
+/// and a wide width does not wrap. Pins the markdown leg of count==render at
+/// a wrap-forcing width (diff + stdout legs have their own).
+#[test]
+fn test_wraps_long_paragraph_narrow() {
+    let long = "this is a very long agent paragraph that must soft-wrap to multiple styled rows at a narrow pane width and not drift the count";
+    let (styled, plain) = render_agent_text("●", long, 20);
+    assert!(
+        styled.len() > 1,
+        "must wrap to >1 row at width 20, got {}",
+        styled.len()
+    );
+    assert_eq!(
+        styled.len(),
+        plain.len(),
+        "styled+plain lockstep after wrap"
+    );
+    assert_eq!(render_agent_text("●", long, 20).0.len(), styled.len());
+    let (wide, _) = render_agent_text("●", long, 200);
+    assert_eq!(wide.len(), 1, "no wrap at width 200");
+}
+
+#[test]
+fn test_list_item_code_kept() {
+    // A list item whose text spans multiple source lines with an inline
+    // code span on the second line must not glue the trailing word of
+    // line 1 onto the code span of line 2 ("CI" + "check_dep_graph.py"
+    // -> "CIcheck_dep_graph.py"). Soft breaks start new rendered lines.
+    let md = "1. enforced by CI\n`check_dep_graph.py` machine check\n";
+    let (_, plain) = render_agent_text("●", md, 80);
+    let joined = plain.join("\n");
+    assert!(
+        !joined.contains("CIcheck_dep_graph"),
+        "inline code glued to prior line's tail: {joined}"
+    );
+    assert!(
+        joined.contains("check_dep_graph"),
+        "code span kept: {joined}"
+    );
+}
