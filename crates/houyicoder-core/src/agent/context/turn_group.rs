@@ -12,6 +12,13 @@
 //! ToolResult whose ToolCall was compacted out is a view bug, not an
 //! assembly bug).
 //!
+//! Adjacency is a property of the projection, not of the log. Background
+//! work appends whenever it finishes, so user-role text can land between a
+//! call and its result; the request is then invalid, because the assistant
+//! message carrying the calls is no longer followed by one tool message per
+//! call. Such text is held until every open call is answered, which keeps
+//! both the log and the request whole.
+//!
 //! The integral-group boundary: thinking + tool_use share a Disposition
 //! (an API constraint — they share the same fate; an assistant message
 //! and its thinking must travel together). Orphaned thinking-only messages
@@ -48,8 +55,9 @@ pub fn assemble_model_input(
 }
 
 /// Push a user-role text into the items, merging into the last item if it is
-/// already a User (providers reject user-in-a-row).
-fn append_user_text(items: &mut Vec<InputItem>, text: &str) {
+/// already a User (providers reject user-in-a-row). Shared with the loop that
+/// appends a runner nudge after assembly, so both keep the same rule.
+pub(crate) fn append_user_text(items: &mut Vec<InputItem>, text: &str) {
     if let Some(InputItem::User { content }) = items.last_mut() {
         content.push('\n');
         content.push_str(text);
@@ -57,6 +65,64 @@ fn append_user_text(items: &mut Vec<InputItem>, text: &str) {
         items.push(InputItem::User {
             content: text.to_string(),
         });
+    }
+}
+
+/// User-role text that arrived while tool results were still outstanding.
+///
+/// A request is rejected when an assistant message carrying tool calls is not
+/// answered by one tool message per call straight after it. Background work
+/// appends at any point, so a recall or an interjection can land between a call
+/// and its result. Appending it where the log holds it would split the pair;
+/// dropping it would lose a message the user or the runtime wrote. The queue
+/// keeps such text until every open call is answered, so the projection stays
+/// valid while the durable log keeps its own order.
+#[derive(Default)]
+struct HeldUserText {
+    /// Call ids whose result has not been appended yet.
+    open: Vec<String>,
+    /// Text waiting for those calls to close.
+    held: Vec<String>,
+}
+
+impl HeldUserText {
+    /// Append text now, or hold it while a call is open.
+    fn push(&mut self, items: &mut Vec<InputItem>, text: &str) {
+        if self.open.is_empty() {
+            append_user_text(items, text);
+        } else {
+            self.held.push(text.to_string());
+        }
+    }
+
+    /// Record a call the request now has to answer.
+    fn open_call(&mut self, call_id: &str) {
+        if !self.open.iter().any(|id| id == call_id) {
+            self.open.push(call_id.to_string());
+        }
+    }
+
+    /// Answer a call, releasing the held text once none is left open.
+    fn close_call(&mut self, items: &mut Vec<InputItem>, call_id: &str) {
+        self.open.retain(|id| id != call_id);
+        if self.open.is_empty() {
+            self.release(items);
+        }
+    }
+
+    /// Start a new assistant message. The calls of the previous one are not
+    /// answered before this reply, so the text they held is released ahead of
+    /// it, where the user wrote it.
+    fn next_message(&mut self, items: &mut Vec<InputItem>) {
+        self.open.clear();
+        self.release(items);
+    }
+
+    /// Append the held text in arrival order.
+    fn release(&mut self, items: &mut Vec<InputItem>) {
+        for text in self.held.drain(..) {
+            append_user_text(items, &text);
+        }
     }
 }
 
@@ -78,6 +144,7 @@ pub fn assemble_model_input_with(
     let mut seen_call_ids: HashSet<&str> = HashSet::new();
     let mut items = Vec::with_capacity(events.len());
     let mut i = 0;
+    let mut held = HeldUserText::default();
     while i < events.len() {
         match &events[i].event {
             // Merge consecutive user messages: providers reject multiple
@@ -89,7 +156,7 @@ pub fn assemble_model_input_with(
             | SessionEvent::MetaUser { text }
             | SessionEvent::MemoryRecall { text, .. }
             | SessionEvent::SkillListing { text, .. } => {
-                append_user_text(&mut items, text);
+                held.push(&mut items, text);
                 i += 1;
             }
             SessionEvent::SkillBody {
@@ -105,7 +172,7 @@ pub fn assemble_model_input_with(
                 // with the Skill tool path so framing does not differ by
                 // invocation path.
                 let text = frame_untrusted_body(skill_name, content, *untrusted);
-                append_user_text(&mut items, &text);
+                held.push(&mut items, &text);
                 i += 1;
             }
             // Mid-work interjection: wrap with a framing note so the model
@@ -118,7 +185,7 @@ pub fn assemble_model_input_with(
                      Continue your current task and address it when natural.]\n\
                      {text}"
                 );
-                append_user_text(&mut items, &framed);
+                held.push(&mut items, &framed);
                 i += 1;
             }
             // A background subagent finished: the notification carries the
@@ -132,13 +199,14 @@ pub fn assemble_model_input_with(
                     "[A background subagent completed. Act on its result if \
                      relevant to the current task.]\n{summary}"
                 );
-                append_user_text(&mut items, &framed);
+                held.push(&mut items, &framed);
                 i += 1;
             }
             // Reward observations are audit signals, not model input.
             SessionEvent::RewardObservation { .. } => i += 1,
             SessionEvent::Unknown => i += 1,
             SessionEvent::AssistantMessage { text, .. } => {
+                held.next_message(&mut items);
                 let mut tool_calls = Vec::new();
                 let mut j = i + 1;
                 while j < events.len() {
@@ -160,6 +228,9 @@ pub fn assemble_model_input_with(
                         _ => break,
                     }
                 }
+                for call in &tool_calls {
+                    held.open_call(&call.id);
+                }
                 items.push(InputItem::Assistant {
                     content: text.clone(),
                     tool_calls,
@@ -173,14 +244,25 @@ pub fn assemble_model_input_with(
             } => {
                 #[cfg(debug_assertions)]
                 seen_call_ids.insert(call_id.as_str());
-                items.push(InputItem::Assistant {
-                    content: String::new(),
-                    tool_calls: vec![AssistantToolCall {
-                        id: call_id.clone(),
-                        name: tool.clone(),
-                        input: input.clone(),
-                    }],
-                });
+                held.open_call(call_id);
+                let call = AssistantToolCall {
+                    id: call_id.clone(),
+                    name: tool.clone(),
+                    input: input.clone(),
+                };
+                // The calls of one assistant message are appended one at a
+                // time, so background work can land between two of them and
+                // stop the scan above. Joining the trailing assistant item
+                // keeps them one message, which is what the provider needs;
+                // a window that starts mid-group has no item to join, so it
+                // opens one.
+                match items.last_mut() {
+                    Some(InputItem::Assistant { tool_calls, .. }) => tool_calls.push(call),
+                    _ => items.push(InputItem::Assistant {
+                        content: String::new(),
+                        tool_calls: vec![call],
+                    }),
+                }
                 i += 1;
             }
             SessionEvent::ToolResult {
@@ -195,6 +277,7 @@ pub fn assemble_model_input_with(
                     call_id: call_id.clone(),
                     output: materialize_result(events, i, output, backend, policy, now_ms),
                 });
+                held.close_call(&mut items, call_id);
                 i += 1;
             }
             SessionEvent::Reasoning { .. }
@@ -220,6 +303,7 @@ pub fn assemble_model_input_with(
             }
         }
     }
+    held.release(&mut items);
     items
 }
 

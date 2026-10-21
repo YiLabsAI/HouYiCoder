@@ -178,6 +178,66 @@ fn test_classify_generic_400_invalid() {
     );
 }
 
+/// The server's own message reaches the user. A bare status leaves them with
+/// no way to tell which parameter the endpoint rejected, which is the
+/// difference between fixing the request and guessing at it.
+#[test]
+fn test_invalid_keeps_message() {
+    let body = r#"{"error":{"code":"invalid_parameter_error","param":null,"message":"An assistant message with 'tool_calls' must be followed by tool messages responding to each 'tool_call_id'.","type":"invalid_request_error"}}"#;
+    match classify_with_body(400, None, body) {
+        ProviderError::InvalidRequest(detail) => {
+            assert!(
+                detail.contains("must be followed by tool messages"),
+                "the endpoint's message survives: {detail}"
+            );
+            assert!(!detail.contains('\n'), "rendered on one line: {detail}");
+            assert!(
+                !detail.contains('{'),
+                "the JSON envelope is not repeated: {detail}"
+            );
+        }
+        other => panic!("400 → InvalidRequest, got {other:?}"),
+    }
+}
+
+/// A plain-text body is carried through, trimmed to one line.
+#[test]
+fn test_invalid_keeps_text() {
+    match classify_with_body(422, None, "  unsupported field: temperature\nsecond line  ") {
+        ProviderError::InvalidRequest(detail) => {
+            assert_eq!(
+                detail,
+                "HTTP 422: unsupported field: temperature second line"
+            );
+        }
+        other => panic!("422 → InvalidRequest, got {other:?}"),
+    }
+}
+
+/// An empty body keeps the bare status: a trailing separator with nothing
+/// after it reads as a truncated message.
+#[test]
+fn test_invalid_empty_body() {
+    match classify_with_body(400, None, "   ") {
+        ProviderError::InvalidRequest(detail) => assert_eq!(detail, "HTTP 400"),
+        other => panic!("400 → InvalidRequest, got {other:?}"),
+    }
+}
+
+/// A long body is cut to a length the transcript can hold, with the cut
+/// visible rather than silent.
+#[test]
+fn test_invalid_cuts_long_body() {
+    let body = "x".repeat(900);
+    match classify_with_body(400, None, &body) {
+        ProviderError::InvalidRequest(detail) => {
+            assert!(detail.len() < 400, "cut to a readable length: {detail}");
+            assert!(detail.ends_with('…'), "the cut is visible: {detail}");
+        }
+        other => panic!("400 → InvalidRequest, got {other:?}"),
+    }
+}
+
 /// A 401/403 is Auth (not ModelNotFound), so the message points at the
 /// API key.
 #[test]

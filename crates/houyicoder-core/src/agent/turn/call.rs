@@ -5,12 +5,13 @@ use tokio_util::sync::CancellationToken;
 use houyicoder_context::{SessionEvent, SessionId, TruncationSignal};
 use houyicoder_protocol::frontend::model::SpeedMode;
 use houyicoder_protocol::llm::{
-    CompletionResponse, EffortLevel, InputItem, ModelSettings, OutputItem, ProviderError,
+    CompletionResponse, EffortLevel, ModelSettings, OutputItem, ProviderError,
 };
 use houyicoder_protocol::llm::{LlmEvent, Usage};
 
 use crate::agent::compaction::{CompactionSuppression, SuppressionCause};
 use crate::agent::context::AssembledContext;
+use crate::agent::context::turn_group::append_user_text;
 use crate::agent::economy::{economy_decision, estimate_compaction};
 use crate::agent::model_window::{
     conservative_input_tokens, fill_omitted_usage, record_learned_context_window,
@@ -202,9 +203,7 @@ impl Runner {
                 let reminder = "If you have gathered enough information to \
                      answer, synthesize your findings and produce the final \
                      answer now. Prioritize answering over further exploration.";
-                assembled.messages.push(InputItem::User {
-                    content: reminder.into(),
-                });
+                append_user_text(&mut assembled.messages, reminder);
             }
 
             // Pre-flight: an absolute reserve (response room, capped, +

@@ -45,6 +45,10 @@ pub(crate) fn classify_status(status: u16, retry_after_ms: Option<u64>) -> Provi
 /// Substring matching on a lowercased body keeps this dependency-free;
 /// providers' phrasing varies across camps, so the patterns are deliberately
 /// broad. Empty body falls back to classify_status.
+///
+/// The remaining rejected requests keep the endpoint's own message: a status
+/// code names no parameter, so without that text a user cannot tell a bad
+/// field from a malformed message sequence.
 pub(crate) fn classify_with_body(
     status: u16,
     retry_after_ms: Option<u64>,
@@ -66,7 +70,7 @@ pub(crate) fn classify_with_body(
                     || lower.contains("no such model")
                     || lower.contains("invalid model")) =>
         {
-            ProviderError::ModelNotFound(format!("HTTP {status}: {body}"))
+            ProviderError::ModelNotFound(status_detail(status, body))
         }
         400 | 422 | 413 | 414
             if lower.contains("context")
@@ -79,8 +83,56 @@ pub(crate) fn classify_with_body(
                 enforced_limit: extract_context_limit(body),
             }
         }
+        400 | 404 | 409 | 422 => ProviderError::InvalidRequest(status_detail(status, body)),
         _ => classify_status(status, retry_after_ms),
     }
+}
+
+/// Longest endpoint message carried into an error. A provider can echo the
+/// whole request back, and the transcript renders this on one row; the cut is
+/// marked so a reader knows the message was longer.
+const DETAIL_MAX_CHARS: usize = 240;
+
+/// A rejected-request error carrying the endpoint's message when the body has
+/// one. The bare status is the fallback, not the norm.
+fn status_detail(status: u16, body: &str) -> String {
+    match body_detail(body) {
+        Some(detail) => format!("HTTP {status}: {detail}"),
+        None => format!("HTTP {status}"),
+    }
+}
+
+/// The endpoint's message from a rejected-request body: its JSON error
+/// message when the body is JSON, else the body itself, flattened to one line
+/// and cut to a readable length. None when the body carries no text.
+fn body_detail(body: &str) -> Option<String> {
+    let raw = serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|value| {
+            let error = value.get("error")?;
+            let message = error
+                .get("message")
+                .or_else(|| value.get("message"))
+                .and_then(|message| message.as_str())
+                .or_else(|| error.as_str())?;
+            Some(message.to_owned())
+        })
+        .unwrap_or_else(|| body.to_owned());
+    let flat = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+    if flat.is_empty() {
+        return None;
+    }
+    Some(cut_detail(&flat))
+}
+
+/// Cut a message to DETAIL_MAX_CHARS characters, marking the cut.
+fn cut_detail(text: &str) -> String {
+    if text.chars().count() <= DETAIL_MAX_CHARS {
+        return text.to_owned();
+    }
+    let mut cut: String = text.chars().take(DETAIL_MAX_CHARS - 1).collect();
+    cut.push('…');
+    cut
 }
 
 /// Parse a Retry-After header. The header has two forms: integer seconds

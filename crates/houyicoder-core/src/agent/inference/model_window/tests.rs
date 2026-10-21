@@ -116,6 +116,21 @@ fn test_deepseek_family_window_output() {
     );
 }
 
+/// The dated flash ids the endpoint serves resolve to the same family row. A
+/// missing row does not fail loudly: the model silently runs against the
+/// conservative default, so the window and the output cap are both wrong.
+#[test]
+fn test_deepseek_1017_output() {
+    for id in [
+        "deepseek-v4.1-flash",
+        "deepseek-v4.1-flash-1017",
+        "deepseek-v4.1-flash-1017[1m]",
+    ] {
+        assert_eq!(resolve_context_window(id), 1_000_000, "window for {id}");
+        assert_eq!(resolve_max_output_tokens(id), 384_000, "output for {id}");
+    }
+}
+
 #[test]
 fn test_deepseek_effort_dialect() {
     // deepseek-v4 maps to the reasoning branch; the legacy chat name does not.
