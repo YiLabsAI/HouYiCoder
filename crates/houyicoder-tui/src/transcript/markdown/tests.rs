@@ -427,6 +427,31 @@ fn test_code_span_across_lines() {
     assert!(joined.contains("**x**"), "asterisks kept: {joined}");
     assert!(joined.contains('①'), "digit kept: {joined}");
 }
+
+/// A bold span whose closing run sits after a space still closes, and the
+/// code span inside it keeps its own styling.
+#[test]
+fn test_bold_before_trailing_space() {
+    let (lines, plain) = render_agent_text("●", "是**\"模型切换\"（`call.rs`）。 **", 80);
+    let joined = plain.join("\n");
+    assert!(!joined.contains("**"), "the runs are consumed: {joined}");
+    assert!(joined.contains("模型切换"), "text kept: {joined}");
+    assert!(
+        bold_text(&lines).contains("模型切换"),
+        "the span is bold: {lines:?}"
+    );
+}
+
+/// A run attached to a word on both sides is intraword emphasis the parser
+/// already reads, so it must not swallow the span that follows it.
+#[test]
+fn test_intraword_run_not_paired() {
+    let (lines, plain) = render_agent_text("●", "x ** y**z and **bold**", 80);
+    let joined = plain.join("\n");
+    assert!(joined.contains("x ** y**z and"), "kept literal: {joined}");
+    assert_eq!(bold_text(&lines), "bold");
+}
+
 #[test]
 fn test_ordered_list_keeps_numbers() {
     // A numbered breakdown where each item carries a paragraph + a nested
@@ -515,4 +540,14 @@ fn test_list_item_code_kept() {
         joined.contains("check_dep_graph"),
         "code span kept: {joined}"
     );
+}
+
+/// Curly quotes are what a Chinese reply usually puts around the emphasised
+/// words, so the rescue must read them the same way it reads ASCII quotes.
+#[test]
+fn test_bold_after_curly_quote() {
+    let (lines, plain) = render_agent_text("●", "是**“模型切换”**（x）", 80);
+    let joined = plain.join("\n");
+    assert!(!joined.contains("**"), "the runs are consumed: {joined}");
+    assert_eq!(bold_text(&lines), "“模型切换”");
 }

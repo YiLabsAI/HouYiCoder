@@ -32,11 +32,11 @@ fn test_runs_pair_in_order() {
 
 #[test]
 fn test_trailing_space_before_close() {
-    // A space between the closing run and the sentence end is how a reply
-    // often ends a bold span; the run still pairs and still closes.
+    // A space before the closing run is how a reply often ends a bold span.
+    // The run cannot open, so it closes the pending one.
     assert_eq!(
-        anchored("读得准**不等于**归因准。 **"),
-        "读得准**<a>不等于<a>**归因准。 **"
+        anchored("是**\"模型切换\"（`call.rs`）。 **"),
+        "是**<a>\"模型切换\"（`call.rs`）。 <a>**"
     );
 }
 
@@ -136,4 +136,12 @@ fn test_span_stops_at_blank() {
 fn test_span_stops_at_fence() {
     let text = "`a\n```\nx`\n```\n";
     assert_eq!(prose(text), text);
+}
+
+/// A run that can open after an opener nothing closed starts the span that
+/// gets the anchors, which is the pair the parser would read too.
+#[test]
+fn test_abandoned_opener_replaced() {
+    assert_eq!(anchored("**a **b**"), "**a **<a>b<a>**");
+    assert_eq!(anchored("a **b** c"), "a **<a>b<a>** c");
 }

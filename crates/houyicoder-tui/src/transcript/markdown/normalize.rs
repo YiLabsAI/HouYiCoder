@@ -190,15 +190,24 @@ fn scan_line(
         if c == '*' && !escaped(bytes, i) {
             let run = run_length(rest_line, '*');
             if run == 2 {
+                let prev = out.chars().next_back();
+                let can_open = opens_bold(rest_line, prev);
+                // A run attached to the word before it closes a span the way
+                // the parser reads it. A run that cannot open has no other
+                // reading either, which is how a closing run written after a
+                // space still closes.
+                let can_close = prev.is_some_and(|p| !p.is_whitespace()) || !can_open;
                 match *open {
-                    Some(at) if !starts_blank(&out[at..]) => {
+                    Some(at) if can_close && out.len() > at => {
                         pairs.push((at, out.len()));
                         *open = None;
                     }
-                    // A run whose span would open on whitespace is not a bold
-                    // opener in any reading, so it opens a new candidate
-                    // instead of closing the pending one.
-                    Some(_) | None => *open = Some(out.len() + 2),
+                    // This run is the opener the author meant; the pending one
+                    // had no closer of its own.
+                    Some(_) if can_open => *open = Some(out.len() + 2),
+                    Some(_) => {}
+                    None if can_open => *open = Some(out.len() + 2),
+                    None => {}
                 }
             }
             out.push_str(&rest_line[..run]);
@@ -277,9 +286,22 @@ fn escaped(bytes: &[u8], at: usize) -> bool {
     backslashes % 2 == 1
 }
 
-/// Whether the text a bold run would hold opens on whitespace.
-fn starts_blank(text: &str) -> bool {
-    text.chars().next().is_some_and(char::is_whitespace)
+/// Whether a bold run can open a span the parser needs help with.
+///
+/// A run followed by whitespace cannot open emphasis. A run attached to a word
+/// on both sides is intraword emphasis, which the parser already accepts, so
+/// anchoring it would only add bytes. Every other shape is one the flanking
+/// rule may reject because the run touches punctuation, which is what the
+/// anchor is for.
+fn opens_bold(text: &str, prev: Option<char>) -> bool {
+    let Some(next) = text.chars().nth(2) else {
+        return false;
+    };
+    if next.is_whitespace() {
+        return false;
+    }
+    let attached_left = prev.is_some_and(char::is_alphanumeric);
+    !(attached_left && next.is_alphanumeric())
 }
 
 /// The number an enclosed numeral stands for, or nothing when the character
