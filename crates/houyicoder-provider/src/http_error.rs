@@ -106,7 +106,7 @@ fn body_detail(body: &str) -> Option<String> {
             redact_next = false;
             continue;
         }
-        if word.eq_ignore_ascii_case("bearer") {
+        if word.eq_ignore_ascii_case("bearer") || word.to_ascii_lowercase().ends_with(":bearer") {
             out.push(word.to_string());
             redact_next = true;
             continue;

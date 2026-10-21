@@ -247,6 +247,7 @@ fn test_invalid_redacts_echoed_key() {
         r#"{"error":{"message":"invalid key sk-1234567890abcdef in header"}}"#,
         r#"{"error":{"message":"rejected key=sk-1234567890abcdef"}}"#,
         r#"{"error":{"message":"Authorization: Bearer secret-token-value"}}"#,
+        r#"{"error":{"message":"Authorization:Bearer secret-token-value"}}"#,
         r#"{"error":{"message":"api_key=my_raw_secret_value failed"}}"#,
     ] {
         match classify_with_body(400, None, body) {

@@ -96,31 +96,56 @@ impl HeldUserText {
     fn close_call(&mut self, items: &mut Vec<InputItem>, call_id: &str) {
         self.open.retain(|id| id != call_id);
         if self.open.is_empty() {
-            self.release(items);
+            self.flush_held(items);
         }
     }
 
-    /// Start a new assistant message. Any calls from the previous message that
-    /// were never answered in the log are closed with a stub tool result first,
-    /// then the held user text is released ahead of the new reply.
-    fn next_message(&mut self, items: &mut Vec<InputItem>) {
-        self.release(items);
-    }
-
-    /// Close any still-open calls with a stub tool result so an incomplete
-    /// turn never leaves an assistant tool-call message without matching tool
-    /// messages, then append the held user text in arrival order.
-    fn release(&mut self, items: &mut Vec<InputItem>) {
+    /// Close any still-open calls before a new assistant message or at the end
+    /// of the window. If a matching tool result appears later in the log, pull
+    /// that real result forward; otherwise emit a stub result so the assistant
+    /// tool-call message is never left unanswered.
+    fn finish_open_group(
+        &mut self,
+        items: &mut Vec<InputItem>,
+        events: &[SessionLogEntry],
+        from: usize,
+        backend: Option<&dyn ContextBackend>,
+        policy: &dyn RetentionPolicy,
+        now_ms: u64,
+    ) {
         for call_id in self.open.drain(..) {
-            items.push(InputItem::ToolResult {
-                call_id,
-                output: serde_json::json!({"error": "no tool result recorded"}),
-            });
+            let output = match find_late_result(events, from, &call_id) {
+                Some((idx, raw)) => materialize_result(events, idx, raw, backend, policy, now_ms),
+                None => serde_json::json!({"error": "no tool result recorded"}),
+            };
+            items.push(InputItem::ToolResult { call_id, output });
         }
+        self.flush_held(items);
+    }
+
+    /// Append the held user text in arrival order.
+    fn flush_held(&mut self, items: &mut Vec<InputItem>) {
         for text in self.held.drain(..) {
             append_user_text(items, &text);
         }
     }
+}
+
+/// Find a tool result for call_id at or after index from in the event slice.
+fn find_late_result<'a>(
+    events: &'a [SessionLogEntry],
+    from: usize,
+    target_id: &str,
+) -> Option<(usize, &'a serde_json::Value)> {
+    events[from..]
+        .iter()
+        .enumerate()
+        .find_map(|(offset, entry)| match &entry.event {
+            SessionEvent::ToolResult {
+                call_id, output, ..
+            } if call_id == target_id => Some((from + offset, output)),
+            _ => None,
+        })
 }
 
 /// Extract user-role text from an event when it is one of the user or
@@ -190,7 +215,7 @@ pub fn assemble_model_input_with(
         }
         match &events[i].event {
             SessionEvent::AssistantMessage { text, .. } => {
-                held.next_message(&mut items);
+                held.finish_open_group(&mut items, events, i, backend, policy, now_ms);
                 let mut tool_calls = Vec::new();
                 let mut j = i + 1;
                 while j < events.len() {
@@ -261,7 +286,7 @@ pub fn assemble_model_input_with(
             }
         }
     }
-    held.release(&mut items);
+    held.finish_open_group(&mut items, events, events.len(), backend, policy, now_ms);
     items
 }
 

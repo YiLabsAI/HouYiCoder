@@ -288,9 +288,9 @@ fn test_held_at_window_end() {
     }
 }
 
-/// A tool result that appears in the log after a new assistant reply has
-/// already closed the unanswered call with a stub is skipped rather than
-/// emitted as a dangling second tool message.
+/// A tool result that appears in the log after a new assistant reply is pulled
+/// forward to close its tool call in place, preserving its real output while
+/// not emitting a second dangling tool message at the tail.
 #[test]
 fn test_late_result_after_reply() {
     let events = vec![
@@ -308,8 +308,14 @@ fn test_late_result_after_reply() {
     assert_eq!(
         shape(&items),
         vec!["user", "assistant", "tool", "user", "assistant"],
-        "late result after a closed call is not emitted twice: {items:?}"
+        "late result is pulled into the open call slot and not emitted twice: {items:?}"
     );
+    match &items[2] {
+        InputItem::ToolResult { output, .. } => {
+            assert_eq!(output, &serde_json::json!({"late": 1}));
+        }
+        other => panic!("expected the real late result, got {other:?}"),
+    }
 }
 
 /// A recall that lands between two calls of one assistant message joins them
