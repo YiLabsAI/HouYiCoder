@@ -10,7 +10,10 @@
 //! is out of scope; the gate escalates anything ambiguous to Ask.
 
 use crate::heredoc::strip_quoted_heredoc_bodies;
-use crate::pipeline::detection::strip_quotes;
+
+mod readonly;
+
+pub use readonly::is_readonly_compound;
 
 /// Split a compound command into its top-level segments on and/or, semicolon,
 /// and pipe. A bare pipe counts as a segment boundary (each stage of a pipeline
@@ -98,13 +101,13 @@ fn push_seg(out: &mut Vec<String>, s: &str) {
 }
 
 /// Strip the redirect forms that do NOT touch a real file, so the
-/// attestability scan only escalates on a redirect to a path. The
-/// safe-redirect strip covers three forms: 2>&1 (stderr to stdout), an
-/// optional source fd then > then /dev/null (discard stdout), and < then
-/// /dev/null (discard stdin). The trailing boundary is mandatory — a
-/// redirect to /dev/nullo must NOT match /dev/null as a prefix, else the
-/// strip would hide a real file write and the redirect check would pass.
-/// The expression here is a hand-rolled char scan.
+/// attestability scan only escalates on a redirect to a path. Four forms are
+/// safe: 2>&1 (stderr to stdout), an optional source fd then > then /dev/null
+/// (discard stdout), < then /dev/null (discard stdin), and [01]? >& 2 (stdout
+/// to stderr). The trailing boundary is mandatory — a redirect to /dev/nullo
+/// must NOT match /dev/null as a prefix, else the strip would hide a real file
+/// write and the redirect check would pass. The expression here is a
+/// hand-rolled char scan.
 fn strip_safe_redirects(content: &str) -> String {
     let chars: Vec<char> = content.chars().collect();
     let n = chars.len();
@@ -123,9 +126,9 @@ fn strip_safe_redirects(content: &str) -> String {
 
 /// Try to match a safe-redirect form at chars[start..], returning the position
 /// one past the match (the caller skips the whole match). Returns None when no
-/// form matches or the trailing boundary (whitespace or end-of-input) fails.
-/// NOT quote-aware: a redirect inside a quoted string is rare data, an
-/// acceptable approximation.
+/// form matches or the trailing boundary (whitespace, end-of-input, or a
+/// separator) fails. NOT quote-aware: a redirect inside a quoted string is
+/// rare data, an acceptable approximation.
 fn match_safe_redirect(chars: &[char], start: usize) -> Option<usize> {
     let at = |i: usize| chars.get(i).copied();
 
@@ -190,6 +193,33 @@ fn match_safe_redirect(chars: &[char], start: usize) -> Option<usize> {
         }
     }
 
+    // Form D: [01]? >& 2 — stdout to stderr, the mirror of form A. It names
+    // no file either, so a script that splits its streams reads as
+    // attestable. A command that sends both streams to a file spells that as
+    // &> path, whose ampersand comes before the angle and never reaches here.
+    let mut j = start;
+    if matches!(at(j), Some('0' | '1')) {
+        j += 1;
+    }
+    while at(j) == Some(' ') || at(j) == Some('\t') {
+        j += 1;
+    }
+    if at(j) == Some('>') {
+        let mut k = j + 1;
+        while at(k) == Some(' ') || at(k) == Some('\t') {
+            k += 1;
+        }
+        if at(k) == Some('&') {
+            let mut m = k + 1;
+            while at(m) == Some(' ') || at(m) == Some('\t') {
+                m += 1;
+            }
+            if at(m) == Some('2') && is_boundary(at(m + 1)) {
+                return Some(m + 1);
+            }
+        }
+    }
+
     None
 }
 
@@ -204,11 +234,20 @@ fn matches_dev_null(chars: &[char], start: usize) -> bool {
     chars[start..start + DEV_NULL_LEN] == DEV_NULL
 }
 
-/// The trailing boundary a safe redirect must satisfy: followed by whitespace
-/// or end-of-input. This is the detail that prevents a prefix match on
-/// /dev/nullo from stripping the redirect and hiding a file write.
+/// The trailing boundary a safe redirect must satisfy: followed by whitespace,
+/// the end of the input, or a separator that ends the segment on the spot.
+///
+/// The separators matter because a redirect is often the last thing before
+/// one: a group closes with a paren, and a chain continues with a pipe or a
+/// semicolon. A quote is deliberately not a boundary. Quoting concatenates
+/// mid-word, so a redirect followed by a quoted fragment names the file the
+/// concatenation spells, and treating the quote as a boundary would strip a
+/// redirect that writes a real path.
 fn is_boundary(next: Option<char>) -> bool {
-    matches!(next, None | Some(' ' | '\t' | '\n' | '\r'))
+    matches!(
+        next,
+        None | Some(' ' | '\t' | '\n' | '\r' | ')' | ';' | '|')
+    )
 }
 
 /// Whether a single command segment is structurally attestable: free of file
@@ -216,8 +255,9 @@ fn is_boundary(next: Option<char>) -> bool {
 /// substitution outside quotes. A redirect or substitution inside quotes
 /// is data, not an operator.
 ///
-/// Safe redirect forms (2>&1, > /dev/null, < /dev/null) are stripped first so
-/// cargo test 2>&1 reads as attestable while cargo test > log.txt escalates.
+/// Safe redirect forms (2>&1, > /dev/null, < /dev/null, [01]? >& 2) are
+/// stripped first so cargo test 2>&1 reads as attestable while
+/// cargo test > log.txt escalates.
 /// Quoted heredoc bodies (<<'DELIM') are stripped to a placeholder so body
 /// content does not affect attestability; unquoted heredoc (<<DELIM) keeps
 /// bash expansion and stays un-attestable. The << operator itself is not a
@@ -263,154 +303,6 @@ pub fn compound_safe(segments: &[&str]) -> bool {
         return false;
     }
     segments.iter().all(|s| is_attestable(s))
-}
-
-/// Commands whose effect is reading or printing, never writing or executing.
-/// A segment whose first command token is in this set and whose only shell
-/// constructs are safe redirects (stripped) and command substitution (whose
-/// contents are themselves read-only) is read-only, so a pipe chain of
-/// read-only commands with command substitution auto-allows in Auto. Absent
-/// are passthrough builtins (command, env, exec, xargs) that run a wrapped
-/// command, and commands with dangerous positional forms (date sets the
-/// clock, hostname sets the host, printenv leaks secrets); the conditional
-/// ones need per-flag validation a follow-up ports. They still ask, which
-/// is safe.
-const READONLY_COMMANDS: &[&str] = &[
-    "cat", "head", "tail", "grep", "egrep", "fgrep", "rg", "strings", "ls", "wc", "file", "which",
-    "whereis", "basename", "dirname", "realpath", "stat", "du", "df", "pwd", "uname", "whoami",
-    "id", "groups", "echo", "printf", "seq", "test", "true", "false",
-];
-
-/// Whether a compound command is entirely read-only: every segment's first
-/// command token is in the read-only set, no segment writes a file (safe
-/// /dev/null and stderr-to-stdout redirects are stripped first), and every
-/// command substitution nests read-only commands (depth-limited,
-/// fail-closed). The destructive validator's word scan catches destructive
-/// verbs anywhere in the content, and the egress validator catches network
-/// tools at the top level, so a read-only shell around a destructive
-/// substitution still asks via the inner scan.
-pub fn is_readonly_compound(segments: &[&str]) -> bool {
-    is_readonly_compound_depth(segments, 3)
-}
-
-fn is_readonly_compound_depth(segments: &[&str], depth: u8) -> bool {
-    if segments.is_empty() || depth == 0 {
-        return false;
-    }
-    segments.iter().all(|s| is_readonly_segment(s, depth))
-}
-
-/// Whether one segment is read-only at the given recursion depth. Strips
-/// safe redirects, rejects unquoted file redirects and process substitution,
-/// extracts command-substitution and backtick bodies for recursive read-only
-/// checks, and requires the first non-assignment token to be a read-only
-/// command.
-fn is_readonly_segment(seg: &str, depth: u8) -> bool {
-    if depth == 0 {
-        return false;
-    }
-    let stripped = strip_safe_redirects(seg);
-    let chars: Vec<char> = stripped.chars().collect();
-    let n = chars.len();
-    let mut i = 0;
-    let mut in_single = false;
-    let mut in_double = false;
-    let mut substs: Vec<String> = Vec::new();
-    while i < n {
-        let c = chars[i];
-        match c {
-            '\'' if !in_double => {
-                in_single = !in_single;
-                i += 1;
-                continue;
-            }
-            '"' if !in_single => {
-                in_double = !in_double;
-                i += 1;
-                continue;
-            }
-            _ => {}
-        }
-        if in_single || in_double {
-            i += 1;
-            continue;
-        }
-        // Unquoted file redirect or process substitution writes or talks;
-        // not read-only. Safe redirects were already stripped.
-        if c == '>' || c == '<' {
-            return false;
-        }
-        // Command substitution: dollar plus open paren. Extract the body for
-        // a recursive read-only check.
-        if c == '$' && i + 1 < n && chars[i + 1] == '(' {
-            let Some(end) = find_matching_paren(&chars, i + 1) else {
-                return false;
-            };
-            substs.push(chars[i + 2..end].iter().collect());
-            i = end + 1;
-            continue;
-        }
-        // Backtick substitution. Extract the body for a recursive check.
-        if c == '`' {
-            let Some(rel) = chars[i + 1..].iter().position(|&ch| ch == '`') else {
-                return false;
-            };
-            let end = i + 1 + rel;
-            substs.push(chars[i + 1..end].iter().collect());
-            i = end + 1;
-            continue;
-        }
-        i += 1;
-    }
-    // First non-assignment command token must be a read-only command. Skip
-    // leading env assignments (FOO=bar) the way the egress scan does.
-    let first = stripped.split_whitespace().find(|t| !t.contains('='));
-    let Some(cmd) = first else { return false };
-    let cmd = strip_quotes(cmd);
-    if !READONLY_COMMANDS.contains(&cmd) {
-        return false;
-    }
-    // Every substitution body is itself a read-only compound (split on pipes,
-    // and-or, and semicolon so each stage is checked, depth-limited).
-    for s in &substs {
-        let segs = split_compound(s);
-        let refs: Vec<&str> = segs.iter().map(|x| x.as_str()).collect();
-        if !is_readonly_compound_depth(&refs, depth - 1) {
-            return false;
-        }
-    }
-    true
-}
-
-/// Find the index of the close paren matching the open paren at the given
-/// position, quote-aware so a paren inside quotes is not counted. Returns
-/// None when unbalanced (the caller fails closed).
-fn find_matching_paren(chars: &[char], open: usize) -> Option<usize> {
-    let mut depth = 0;
-    let mut in_single = false;
-    let mut in_double = false;
-    let mut i = open;
-    while i < chars.len() {
-        let c = chars[i];
-        match c {
-            '\'' if !in_double => in_single = !in_single,
-            '"' if !in_single => in_double = !in_double,
-            _ => {
-                if !in_single && !in_double {
-                    if c == '(' {
-                        depth += 1;
-                    } else if c == ')' {
-                        depth -= 1;
-                        if depth == 0 {
-                            return Some(i);
-                        }
-                    }
-                }
-            }
-        }
-        i += 1;
-    }
-    None
 }
 
 /// A quote-aware char scanner. Tracks single and double quote state so

@@ -283,3 +283,101 @@ fn test_gitconfig_read_reallowed() {
         "the read allow-back must land after the deny segment: {p}"
     );
 }
+
+/// A repository created in the session scratch dir may write its own
+/// .git/hooks and .git/config, and the rule that permits it must land after
+/// the mandatory deny that forbids those two paths everywhere else.
+#[test]
+fn test_scratch_git_after_deny() {
+    let scratch = "/private/var/folders/T/houyicoder-tmp-1";
+    let p = render(&ProfileSpec::new(
+        Path::new("/tmp/ws-4"),
+        scratch,
+        "/Users/bob",
+        "tag-s",
+    ));
+    let deny = p
+        .find("(deny file-write* (subpath \"/Users/bob/.git/hooks\")")
+        .expect("hooks deny present");
+    let allow = p
+        .find(&format!(
+            "(allow file-write* (regex #\"^{scratch}/(.*/)?\\.git/(hooks(/.*)?|config)$\")"
+        ))
+        .expect("scratch allow present");
+    assert!(
+        allow > deny,
+        "the scratch allow must land after the deny it lifts: {p}"
+    );
+}
+
+/// The rule names the scratch directory literally, so a path with regex
+/// operators in it cannot widen the allow past that directory.
+#[test]
+fn test_scratch_git_escaped() {
+    let p = render(&ProfileSpec::new(
+        Path::new("/tmp/ws-5"),
+        "/tmp/a.b+c[1]",
+        "/Users/bob",
+        "tag-e",
+    ));
+    assert!(
+        p.contains(r"^/tmp/a\.b\+c\[1\]/(.*/)?\.git/(hooks(/.*)?|config)$"),
+        "the scratch path is escaped: {p}"
+    );
+}
+
+/// Without a scratch dir there is nothing to re-allow, and the deny stands
+/// alone rather than an empty regex matching everything.
+#[test]
+fn test_scratch_git_absent() {
+    let p = render(&ProfileSpec::new(
+        Path::new("/tmp/ws-6"),
+        "",
+        "/Users/bob",
+        "tag-n",
+    ));
+    assert!(
+        !p.contains("(allow file-write* (regex"),
+        "no scratch allow without a scratch dir: {p}"
+    );
+}
+
+/// The workspace repository keeps its write denials even when the workspace
+/// sits inside the scratch dir the allowance names. The re-assertion must land
+/// after the allowance, or last-match-wins would hand the workspace repo the
+/// allowance meant for a throwaway one.
+#[test]
+fn test_workspace_git_denied_last() {
+    let scratch = "/tmp/scratch-nest";
+    let workspace = Path::new("/tmp/scratch-nest/ws");
+    let p = render(&ProfileSpec::new(workspace, scratch, "/Users/bob", "tag-w"));
+    let allow = p
+        .find("(allow file-write* (regex #\"^/tmp/scratch-nest/(.*/)?\\.git/")
+        .expect("scratch allow present");
+    let hooks = p
+        .find("(deny file-write* (subpath \"/tmp/scratch-nest/ws/.git/hooks\")")
+        .expect("workspace hooks deny present");
+    let config = p
+        .find("(deny file-write* (subpath \"/tmp/scratch-nest/ws/.git/config\")")
+        .expect("workspace config deny present");
+    assert!(
+        hooks > allow && config > allow,
+        "the workspace denials must land after the allowance: {p}"
+    );
+}
+
+/// A trailing slash on the scratch path must not leave a rule that matches
+/// nothing: the caller's path form is not the rule's contract.
+#[test]
+fn test_scratch_trailing_slash() {
+    let p = render(&ProfileSpec::new(
+        Path::new("/tmp/ws-7"),
+        "/tmp/scratch-slash/",
+        "/Users/bob",
+        "tag-t",
+    ));
+    assert!(
+        p.contains("(regex #\"^/tmp/scratch-slash/(.*/)?\\.git/"),
+        "the trailing slash is trimmed: {p}"
+    );
+}

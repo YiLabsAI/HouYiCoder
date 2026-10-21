@@ -227,6 +227,14 @@ pub fn render(spec: &ProfileSpec<'_>) -> String {
     // exfiltration vectors: it lands after the allow-back so an allow-back
     // of the workspace cannot wash out a deny of .ssh/.gitconfig inside it.
     s.push_str(&mandatory_deny(home, tag));
+    // A repository created inside the session scratch dir needs its own
+    // .git/hooks and .git/config, which the mandatory deny above forbids
+    // everywhere. The allow names only the scratch dir and only those two
+    // entries; the workspace denials are re-emitted after it, so a caller that
+    // renders a profile whose workspace sits inside the scratch dir cannot
+    // spend the allowance on the repository the user later opens.
+    s.push_str(&allow_scratch_git(tmpdir));
+    s.push_str(&deny_workspace_git(workspace, tag));
     // System /etc files git reads at startup. Lands AFTER mandatory_deny
     // (whose .profile regex also matches these system paths) so
     // last-match-wins re-allows the reads. The home profile file stays denied
@@ -390,6 +398,57 @@ fn filesystem_rules_with_access(
          (allow file-read* {read_subs})\n\
          (allow file-write* {write_subs} (literal \"/dev/null\") (literal \"/dev/stdout\") (literal \"/dev/stderr\"))\n"
     )
+}
+
+/// Re-allow the git internals of a repository created inside the session
+/// scratch directory, and only there.
+///
+/// A test or a timing run in scratch has to be able to initialize its own
+/// repository, and that writes .git/hooks and .git/config. Both paths are
+/// write-denied so an agent cannot plant a hook or redirect a credential
+/// helper in a repository the user later opens outside the fence. Inside
+/// scratch nothing outlives the session, so the same denial only stops the
+/// run. The rule ends at those two entries rather than covering the directory,
+/// so the authority files under scratch keep their own denial.
+fn allow_scratch_git(tmpdir: &str) -> String {
+    let tmpdir = tmpdir.trim_end_matches('/');
+    if tmpdir.is_empty() {
+        return String::new();
+    }
+    let escaped = escape_regex(tmpdir);
+    // The repository may sit at the top of the scratch dir or in a
+    // subdirectory, so the middle segment is optional.
+    format!("(allow file-write* (regex #\"^{escaped}/(.*/)?\\.git/(hooks(/.*)?|config)$\"))\n")
+}
+
+/// Re-assert the workspace repository's write denials after the scratch
+/// allowance. The allowance matches any repository under the scratch path, and
+/// a profile can be rendered with the workspace inside it; these two entries
+/// land last so the workspace keeps the posture the mandatory deny gives it.
+fn deny_workspace_git(workspace: &Path, tag: &str) -> String {
+    let ws = workspace.to_string_lossy();
+    format!(
+        "(deny file-write* (subpath \"{ws}/.git/hooks\") (with message \"{tag}\"))\n\
+         (deny file-write* (subpath \"{ws}/.git/config\") (with message \"{tag}\"))\n"
+    )
+}
+
+/// Escape the characters a seatbelt regex reads as operators, so a scratch
+/// path matches itself. The resolved temp path carries dots on this platform
+/// and can carry a bracket or a plus on another, and an unescaped one would
+/// widen the rule past the directory it names.
+fn escape_regex(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        if matches!(
+            c,
+            '\\' | '.' | '+' | '*' | '?' | '(' | ')' | '[' | ']' | '{' | '}' | '^' | '$' | '|'
+        ) {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
 }
 
 /// Re-emit nested read denies after allow-backs so they remain authoritative.

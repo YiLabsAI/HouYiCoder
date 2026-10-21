@@ -116,7 +116,10 @@ impl Tool for BashTool {
          single call with && to chain them. Use ; only when running \
          sequentially without caring if earlier commands fail. Pipe output \
          with | to pass it between commands (find . -name '*.rs' | xargs \
-         wc -l | sort -n). Do not use newlines to separate commands."
+         wc -l | sort -n). Do not use newlines to separate commands. \
+         For temporary files and scratch repositories use $TMPDIR, which the \
+         sandbox sets to a private writable directory; a write to /tmp is \
+         refused."
     }
     fn input_schema(&self) -> Value {
         json!({

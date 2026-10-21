@@ -63,6 +63,9 @@ struct Fence {
     workspace: PathBuf,
     profile: String,
     home: String,
+    /// A per-session scratch dir, when the probe needs one. Removed on drop
+    /// like the workspace, so a failing assertion leaves nothing behind.
+    scratch: Option<PathBuf>,
 }
 
 /// One probe result. A denial arrives as a non-zero exit whose stderr carries
@@ -144,7 +147,49 @@ impl Fence {
             workspace,
             profile,
             home,
+            scratch: None,
         }
+    }
+
+    /// Render the profile the way a session runs: a scratch dir of its own
+    /// beside the workspace, not a parent of it, so a rule that names scratch
+    /// cannot be confused with the one that names the workspace. Passing
+    /// nested puts the workspace inside the scratch dir instead, which is the
+    /// shape a caller may render and the one the workspace re-assertion exists
+    /// for.
+    fn with_scratch(label: &str, nested: bool) -> (Self, PathBuf) {
+        static SEQ: AtomicU64 = AtomicU64::new(0);
+        let home = var("HOME").unwrap_or_else(|_| "/Users/unknown".into());
+        let tmpdir = dunce::canonicalize(temp_dir()).expect("canonicalize temp dir");
+        let tag = format!(
+            "houyi-fence-{label}-{}-{}",
+            id(),
+            SEQ.fetch_add(1, Ordering::SeqCst)
+        );
+        let scratch = tmpdir.join(format!("{tag}-scratch"));
+        create_dir_all(&scratch).expect("create probe scratch");
+        let workspace = if nested {
+            scratch.join("ws")
+        } else {
+            tmpdir.join(&tag)
+        };
+        create_dir_all(&workspace).expect("create probe workspace");
+        let profile = houyicoder_sandbox::render(&ProfileSpec::new(
+            &workspace,
+            &scratch.to_string_lossy(),
+            &home,
+            &tag,
+        ));
+        if var("HOUYI_PROFILE_DUMP").is_ok() {
+            println!("{profile}");
+        }
+        let fence = Self {
+            workspace,
+            profile,
+            home,
+            scratch: Some(scratch.clone()),
+        };
+        (fence, scratch)
     }
 
     /// Render the real profile with an explicit network posture. Separate from
@@ -193,6 +238,9 @@ impl Fence {
 impl Drop for Fence {
     fn drop(&mut self) {
         remove_dir_all(&self.workspace).ok();
+        if let Some(scratch) = &self.scratch {
+            remove_dir_all(scratch).ok();
+        }
     }
 }
 
@@ -489,6 +537,113 @@ fn test_runs_git() {
         "git must read its config inside the fence without any environment \
          workaround. stderr: {}",
         o.stderr
+    );
+}
+
+/// A repository initialized inside the session scratch dir works: git writes
+/// .git/hooks and .git/config there. The same two paths inside the workspace
+/// stay refused, so the allowance cannot be spent on a repository the user
+/// opens outside the fence, and the permission store under scratch keeps its
+/// own refusal rather than being swept up by the wider rule.
+#[cfg(target_os = "macos")]
+#[test]
+fn test_scratch_git_init() {
+    let (f, scratch) = Fence::with_scratch("git-init", false);
+    let repo = scratch.join("repo");
+    let init = f.probe(
+        "git-init",
+        &format!(
+            "git init -q '{}' && test -f '{}/.git/config' && test -d '{}/.git/hooks'",
+            repo.display(),
+            repo.display(),
+            repo.display()
+        ),
+    );
+    assert!(
+        init.allowed(),
+        "a repository in the session scratch dir must initialize: {}",
+        init.detail()
+    );
+
+    // The top of the scratch dir is a repository location too, and the shell
+    // sees it through the variable the prompt tells the model to use.
+    let root = f.probe(
+        "git-init-root",
+        &format!(
+            "export TMPDIR='{}'; git init -q \"$TMPDIR/root-repo\" && test -f \"$TMPDIR/root-repo/.git/config\"",
+            scratch.display()
+        ),
+    );
+    assert!(
+        root.allowed(),
+        "a repository directly under the scratch dir must initialize: {}",
+        root.detail()
+    );
+
+    // The shared temp root stays out of reach: the allowance names the session
+    // scratch dir, not the directory every process shares.
+    let shared = f.probe("shared-tmp", "printf x > /tmp/houyi-probe-shared");
+    assert!(
+        !shared.allowed() && shared.denied_by_fence(),
+        "a write to the shared temp root must stay refused: {}",
+        shared.detail()
+    );
+
+    // The workspace repo keeps both denials even though the allowance names a
+    // path that could, in another rendering, contain the workspace.
+    create_dir_all(f.workspace.join(".git/hooks")).expect("create workspace hooks dir");
+    let hooks = f.probe("workspace-hooks", "printf x > .git/hooks/pre-commit");
+    assert!(
+        !hooks.allowed() && hooks.denied_by_fence(),
+        "a workspace hook must stay refused: {}",
+        hooks.detail()
+    );
+    let config = f.probe("workspace-config", "printf x >> .git/config");
+    assert!(
+        !config.allowed() && config.denied_by_fence(),
+        "a workspace git config must stay refused: {}",
+        config.detail()
+    );
+
+    let store = scratch.join("houyicoder-permissions");
+    create_dir_all(&store).expect("create scratch permission store");
+    let authority = f.probe(
+        "scratch-store",
+        &format!("printf '' >> '{}/permissions.json'", store.display()),
+    );
+    assert!(
+        !authority.allowed() && authority.denied_by_fence(),
+        "the permission store under scratch must stay refused: {}",
+        authority.detail()
+    );
+}
+
+/// A workspace rendered inside the scratch dir keeps its write denials. The
+/// allowance names the scratch path, so without the re-assertion the workspace
+/// repository would inherit it; this is the shape that proves the ordering is
+/// load-bearing rather than decorative.
+#[cfg(target_os = "macos")]
+#[test]
+fn test_nested_workspace_git() {
+    let (f, _scratch) = Fence::with_scratch("git-nested", true);
+    create_dir_all(f.workspace.join(".git/hooks")).expect("create workspace hooks dir");
+    let hooks = f.probe("nested-hooks", "printf x > .git/hooks/pre-commit");
+    assert!(
+        !hooks.allowed() && hooks.denied_by_fence(),
+        "a hook in a workspace inside the scratch dir must stay refused: {}",
+        hooks.detail()
+    );
+    let config = f.probe("nested-config", "printf x >> .git/config");
+    assert!(
+        !config.allowed() && config.denied_by_fence(),
+        "a git config in a workspace inside the scratch dir must stay refused: {}",
+        config.detail()
+    );
+    let repo = f.probe("nested-scratch-repo", "git init -q ../sibling");
+    assert!(
+        repo.allowed(),
+        "a sibling repository in the same scratch dir still initializes: {}",
+        repo.detail()
     );
 }
 

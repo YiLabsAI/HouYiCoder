@@ -56,12 +56,117 @@ fn test_input_redirect_unattestable() {
 
 #[test]
 fn test_attestable_fd_redirect() {
-    // stderr to stdout never writes a file, so it is safe. Other fd
-    // combinations (1>&2, >&2) are NOT in the safe set — only 2>&1 is
-    // stripped, the rest escalate.
+    // Neither direction names a file: 2>&1 sends stderr to stdout and >&2
+    // sends stdout to stderr. Both are plumbing a script emits, so both read
+    // as attestable. A command that sends both streams to a file spells that
+    // &> path, whose ampersand comes before the angle, and stays a write.
     assert!(is_attestable("cargo test 2>&1"));
-    assert!(!is_attestable("cargo test 1>&2"));
-    assert!(!is_attestable("make check >&2"));
+    assert!(is_attestable("cargo test 1>&2"));
+    assert!(is_attestable("make check >&2"));
+    assert!(is_attestable("cargo test 1 >& 2"));
+    assert!(is_attestable("cargo test 0>&2"));
+    assert!(!is_attestable("make check &> build.log"));
+}
+
+#[test]
+fn test_attestable_group_redirect() {
+    // The redirect is the last thing before the group closes, so the closing
+    // paren is the boundary it has to be recognised against.
+    assert!(is_attestable("(git rev-parse --show-toplevel 2>/dev/null)"));
+    let segs = split_compound("(git rev-parse --show-toplevel 2>/dev/null) | wc -l");
+    let refs: Vec<&str> = segs.iter().map(|s| s.as_str()).collect();
+    assert!(
+        compound_safe(&refs),
+        "a grouped pipe reads as safe: {refs:?}"
+    );
+}
+
+#[test]
+fn test_attestable_redirect_before_separator() {
+    // A separator ends the segment on the spot, so a redirect does not need a
+    // space after it to be recognised.
+    assert!(is_attestable("cargo test 2>/dev/null;"));
+    assert!(is_attestable("cargo test 2>/dev/null|wc -l"));
+}
+
+#[test]
+fn test_readonly_filter_tail() {
+    // A survey command ends with a counting or sorting tail; none of these
+    // write, so the chain stays read-only.
+    for cmd in [
+        "echo $(pwd) | sort",
+        "echo $(pwd) | sort | uniq",
+        "echo $(pwd) | cut -d/ -f1",
+        "echo $(pwd) | tr a-z A-Z",
+        "echo \"a b\" | sort file.txt",
+        "echo $(whoami) | cut -d: -f1 | sort -u",
+        "echo `whoami` | sort",
+        "echo $(echo \"a)b\") | sort",
+    ] {
+        let segs = split_compound(cmd);
+        let refs: Vec<&str> = segs.iter().map(|s| s.as_str()).collect();
+        assert!(is_readonly_compound(&refs), "read-only: {cmd}");
+    }
+}
+
+#[test]
+fn test_not_readonly_sort_output() {
+    // sort names its destination as an argument, where the redirect scan
+    // cannot see it, so the command itself has to be asked. Every spelling the
+    // tool accepts is covered: the short flag alone and inside a cluster, the
+    // long flag whole and abbreviated, and the two options that write or run
+    // something else.
+    for cmd in [
+        "echo $(pwd) | sort -o out.txt",
+        "echo $(pwd) | sort -oout.txt",
+        "echo $(pwd) | sort -no out.txt",
+        "echo $(pwd) | sort -ro out.txt",
+        "echo $(pwd) | sort --output=out.txt",
+        "echo $(pwd) | sort --output out.txt",
+        "echo $(pwd) | sort --outp=out.txt",
+        "echo $(pwd) | sort -T scratchdir",
+        "echo $(pwd) | sort --compress-program=gzip",
+    ] {
+        let segs = split_compound(cmd);
+        let refs: Vec<&str> = segs.iter().map(|s| s.as_str()).collect();
+        assert!(!is_readonly_compound(&refs), "writes a file: {cmd}");
+    }
+    // The same filter without a destination still reads.
+    for cmd in [
+        "echo $(pwd) | sort",
+        "echo $(pwd) | sort -n",
+        "echo $(pwd) | sort -k1,1",
+    ] {
+        let segs = split_compound(cmd);
+        let refs: Vec<&str> = segs.iter().map(|s| s.as_str()).collect();
+        assert!(is_readonly_compound(&refs), "reads only: {cmd}");
+    }
+}
+
+#[test]
+fn test_not_readonly_count_output() {
+    // uniq takes its output file as a second positional operand, with no flag
+    // to recognise, so the operand count is what decides.
+    for cmd in ["cat f | uniq - out.txt", "cat f | uniq in.txt out.txt"] {
+        let segs = split_compound(cmd);
+        let refs: Vec<&str> = segs.iter().map(|s| s.as_str()).collect();
+        assert!(!is_readonly_compound(&refs), "writes a file: {cmd}");
+    }
+    for cmd in ["cat f | uniq", "cat f | uniq -c", "cat f | uniq in.txt"] {
+        let segs = split_compound(cmd);
+        let refs: Vec<&str> = segs.iter().map(|s| s.as_str()).collect();
+        assert!(is_readonly_compound(&refs), "reads only: {cmd}");
+    }
+}
+
+#[test]
+fn test_quote_is_not_boundary() {
+    // Quoting concatenates mid-word, so a quoted fragment after a redirect
+    // names the file the concatenation spells. A quote must not end the match,
+    // or the strip would hide a write to a path the check never sees.
+    assert!(!is_attestable("echo x >/dev/null\"o\""));
+    assert!(!is_attestable("echo x >/dev/null'o'"));
+    assert!(!is_attestable("echo x 2>/dev/null\"o\""));
 }
 
 #[test]
@@ -170,6 +275,15 @@ fn test_readonly_nested_subst() {
     let segs = split_compound("head -5 $(grep foo bar | head -3)");
     let refs: Vec<&str> = segs.iter().map(|s| s.as_str()).collect();
     assert!(is_readonly_compound(&refs));
+}
+
+/// A substitution nested deeper than the recursion limit fails closed: the
+/// chain asks rather than being read as read-only on an unverified inner body.
+#[test]
+fn test_readonly_depth_limit() {
+    let segs = split_compound("echo $(echo $(echo $(echo x)))");
+    let refs: Vec<&str> = segs.iter().map(|s| s.as_str()).collect();
+    assert!(!is_readonly_compound(&refs), "too deep to attest");
 }
 
 #[test]

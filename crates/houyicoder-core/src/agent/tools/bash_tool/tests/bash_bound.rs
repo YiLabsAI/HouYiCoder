@@ -128,3 +128,17 @@ async fn test_active_skill_scans() {
     assert_eq!(scans.load(Ordering::Relaxed), 1);
     assert_eq!(output["authorizable_services"][0], "com.citrolabs.x");
 }
+
+/// The tool text names the scratch variable and says the shared temp root is
+/// refused. A model that never reads it keeps writing to /tmp and loses the
+/// command to the fence.
+#[test]
+fn test_description_names_tmpdir() {
+    let tool = BashTool::new(Arc::new(DiscoverStub {
+        services: Vec::new(),
+        scans: Arc::new(AtomicUsize::new(0)),
+    }));
+    let text = tool.description();
+    assert!(text.contains("$TMPDIR"), "names the scratch var: {text}");
+    assert!(text.contains("/tmp"), "names the refused path: {text}");
+}
