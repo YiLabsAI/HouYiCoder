@@ -145,3 +145,14 @@ fn test_abandoned_opener_replaced() {
     assert_eq!(anchored("**a **b**"), "**a **<a>b<a>**");
     assert_eq!(anchored("a **b** c"), "a **<a>b<a>** c");
 }
+
+/// A span the parser already reads and one it rejects pair apart, so the
+/// rejected one keeps its own anchors instead of inheriting the pair before
+/// it.
+#[test]
+fn test_mixed_spans_pair_apart() {
+    assert_eq!(
+        anchored("这是**模型切换**，以及**\"缓存命中\"**"),
+        "这是**<a>模型切换<a>**，以及**<a>\"缓存命中\"<a>**"
+    );
+}

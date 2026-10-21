@@ -191,7 +191,7 @@ fn scan_line(
             let run = run_length(rest_line, '*');
             if run == 2 {
                 let prev = out.chars().next_back();
-                let can_open = opens_bold(rest_line, prev);
+                let can_open = opens_bold(rest_line);
                 // A run attached to the word before it closes a span the way
                 // the parser reads it. A run that cannot open has no other
                 // reading either, which is how a closing run written after a
@@ -286,22 +286,16 @@ fn escaped(bytes: &[u8], at: usize) -> bool {
     backslashes % 2 == 1
 }
 
-/// Whether a bold run can open a span the parser needs help with.
+/// Whether a bold run can open a span.
 ///
-/// A run followed by whitespace cannot open emphasis. A run attached to a word
-/// on both sides is intraword emphasis, which the parser already accepts, so
-/// anchoring it would only add bytes. Every other shape is one the flanking
-/// rule may reject because the run touches punctuation, which is what the
-/// anchor is for.
-fn opens_bold(text: &str, prev: Option<char>) -> bool {
-    let Some(next) = text.chars().nth(2) else {
-        return false;
-    };
-    if next.is_whitespace() {
-        return false;
-    }
-    let attached_left = prev.is_some_and(char::is_alphanumeric);
-    !(attached_left && next.is_alphanumeric())
+/// A run followed by whitespace cannot open emphasis in any reading. Every
+/// other shape is one the flanking rule may reject because the run touches
+/// text or punctuation on its outside, which is what the anchor is for. The
+/// pairing must still see a run the parser would accept on its own: skipping
+/// it would let its closing run start the next pair and shift every span after
+/// it.
+fn opens_bold(text: &str) -> bool {
+    text.chars().nth(2).is_some_and(|c| !c.is_whitespace())
 }
 
 /// The number an enclosed numeral stands for, or nothing when the character

@@ -551,3 +551,13 @@ fn test_bold_after_curly_quote() {
     assert!(!joined.contains("**"), "the runs are consumed: {joined}");
     assert_eq!(bold_text(&lines), "“模型切换”");
 }
+
+/// A plain Chinese bold span and a quoted one in the same sentence both
+/// render: the quoted one is the shape the flanking rule rejects.
+#[test]
+fn test_bold_mixed_quoted() {
+    let (lines, plain) = render_agent_text("●", "这是**模型切换**，以及**\"缓存命中\"**", 80);
+    let joined = plain.join("\n");
+    assert!(!joined.contains("**"), "the runs are consumed: {joined}");
+    assert_eq!(bold_text(&lines), "模型切换\"缓存命中\"");
+}
