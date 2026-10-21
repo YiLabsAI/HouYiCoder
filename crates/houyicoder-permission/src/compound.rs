@@ -100,11 +100,13 @@ fn push_seg(out: &mut Vec<String>, s: &str) {
     }
 }
 
-/// Whether a word is an environment assignment (NAME=value) rather than a
-/// command or an argument. The name must be a plain identifier, so a flag
-/// carrying an inline value (--data=x) is not an assignment.
+/// Whether a word is a literal environment assignment (NAME=value) rather
+/// than a command, an argument, or a dynamic expansion. The name must be a
+/// plain identifier and the value must carry no expansion or command
+/// substitution, so an assignment that executes a subshell is never stripped
+/// ahead of the detectors.
 pub(crate) fn is_env_assignment(word: &str) -> bool {
-    let Some((name, _)) = word.split_once('=') else {
+    let Some((name, value)) = word.split_once('=') else {
         return false;
     };
     let mut chars = name.chars();
@@ -113,6 +115,7 @@ pub(crate) fn is_env_assignment(word: &str) -> bool {
         _ => return false,
     }
     chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+        && !value.contains(['$', '`', '(', ')', '\\', ';', '|', '&', '<', '>'])
 }
 
 /// Whether a whole segment only sets environment variables, so it reaches no

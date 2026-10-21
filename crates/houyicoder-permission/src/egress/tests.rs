@@ -67,6 +67,9 @@ fn test_destination_rejects_data() {
         "curl --config config https://api.github.com/x",
         "curl -x proxy.test:8080 https://api.github.com/x",
         "curl --resolve api.github.com:443:1.2.3.4 https://api.github.com/x",
+        "curl -L https://api.github.com/x",
+        "curl -sSL https://api.github.com/x",
+        "curl --location https://api.github.com/x",
         "wget --post-data=@secret https://api.github.com/x",
     ] {
         assert_eq!(egress_destination(command), None, "must refuse: {command}");

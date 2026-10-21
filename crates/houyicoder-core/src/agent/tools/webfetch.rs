@@ -57,6 +57,7 @@ use response::page_payload;
 use response::read_body;
 #[cfg(test)]
 use response::read_error;
+pub(crate) use route::RouteClient;
 use std::error::Error;
 #[cfg(test)]
 pub(crate) use std::net::IpAddr;
@@ -161,7 +162,7 @@ fn classify_failure(timed_out: bool, connect: bool, message: &str) -> &'static s
 /// (a system-level failure).
 pub struct WebFetchTool {
     direct: Client,
-    routed: Option<Client>,
+    routed: Option<RouteClient>,
     resolver: Arc<PublicResolver>,
     cache: Arc<Mutex<FetchCache>>,
 }
@@ -185,7 +186,7 @@ impl WebFetchTool {
     pub fn new() -> Self {
         let resolver = Arc::new(PublicResolver::new());
         let direct = direct_client(Arc::clone(&resolver));
-        let routed = route::build_route_client(Arc::clone(&resolver));
+        let routed = route::resolve_route_client(Arc::clone(&resolver));
         Self {
             direct,
             routed,

@@ -1,14 +1,20 @@
 //! System and environment route discovery for WebFetch.
 //!
-//! When standard proxy environment variables are present, the route client
-//! reads them directly. When they are absent on macOS, this module queries
-//! scutil once through the process launcher port and parses the HTTP, HTTPS,
-//! and exception settings so requests can use the active system route while
-//! retaining a direct client for automatic fallback.
+//! Explicit proxy environment variables (HTTPS_PROXY, HTTP_PROXY, ALL_PROXY)
+//! are treated as an operator-mandated route: when set, requests must go
+//! through that route and never silently fall back to a direct connection.
+//!
+//! When environment variables are absent on macOS, this module queries
+//! scutil lazily on the first fetch and parses HTTPProxy, HTTPSProxy, and
+//! ExceptionsList. Because a macOS desktop system proxy is frequently left
+//! enabled after a local proxy client is closed, a system route is tagged
+//! RouteClient::System so send_hop can fall back to the direct client when
+//! the local proxy port itself refuses connection, while still refusing to
+//! fall back on TLS or HTTP errors.
 
 use std::env::var_os;
 use std::sync::Arc;
-use std::sync::OnceLock;
+use std::sync::Mutex;
 use std::time::Duration;
 
 use houyicoder_api::launcher::ProcessLauncher;
@@ -25,6 +31,17 @@ use super::CONNECT_TIMEOUT_SECS;
 use super::FETCH_TIMEOUT_SECS;
 use super::TCP_KEEPALIVE_SECS;
 use super::resolver::PublicResolver;
+
+/// A mediated HTTP client and the authority that configured it.
+#[derive(Clone)]
+pub(crate) enum RouteClient {
+    /// Configured via explicit environment variables; never falls back to
+    /// direct on failure.
+    Env(Client),
+    /// Discovered from macOS desktop system settings; falls back to direct
+    /// only when the proxy port itself is unreachable at connect time.
+    System(Client),
+}
 
 /// Parsed system route configuration from macOS scutil output.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,22 +70,23 @@ pub(crate) fn has_env_route() -> bool {
         .any(|key| var_os(key).is_some_and(|val| !val.is_empty()))
 }
 
-/// Build the optional mediated client. Returns Some when an environment route
-/// or an enabled macOS system route is configured, and None when neither is
-/// configured so the caller uses the direct client alone.
-pub(crate) fn build_route_client(resolver: Arc<PublicResolver>) -> Option<Client> {
+/// Resolve the active mediated client for a fetch. Called lazily on fetch so
+/// constructing WebFetchTool never spawns a subprocess, and transient scutil
+/// failures are not cached forever.
+pub(crate) fn resolve_route_client(resolver: Arc<PublicResolver>) -> Option<RouteClient> {
     if has_env_route() {
-        return Client::builder()
+        let client = Client::builder()
             .redirect(Policy::none())
             .timeout(Duration::from_secs(FETCH_TIMEOUT_SECS))
             .connect_timeout(Duration::from_secs(CONNECT_TIMEOUT_SECS))
             .tcp_keepalive(Duration::from_secs(TCP_KEEPALIVE_SECS))
             .dns_resolver(resolver)
             .build()
-            .ok();
+            .ok()?;
+        return Some(RouteClient::Env(client));
     }
     let sys = cached_system_route()?;
-    client_from_route(sys, resolver)
+    client_from_route(&sys, resolver).map(RouteClient::System)
 }
 
 /// Build a client from a parsed system route specification.
@@ -101,13 +119,19 @@ pub(crate) fn client_from_route(
     builder.build().ok()
 }
 
-fn cached_system_route() -> Option<&'static SystemRoute> {
-    static CACHE: OnceLock<Option<SystemRoute>> = OnceLock::new();
-    CACHE.get_or_init(query_system_route).as_ref()
+fn cached_system_route() -> Option<SystemRoute> {
+    static CACHE: Mutex<Option<Option<SystemRoute>>> = Mutex::new(None);
+    let mut guard = CACHE.lock().ok()?;
+    if let Some(ref cached) = *guard {
+        return cached.clone();
+    }
+    let queried = query_system_route()?;
+    *guard = Some(queried.clone());
+    queried
 }
 
 #[cfg(target_os = "macos")]
-fn query_system_route() -> Option<SystemRoute> {
+fn query_system_route() -> Option<Option<SystemRoute>> {
     let launcher = StdProcessLauncher::new();
     let req = SpawnRequest::new("/usr/sbin/scutil")
         .with_args(["--proxy"])
@@ -118,12 +142,12 @@ fn query_system_route() -> Option<SystemRoute> {
         return None;
     }
     let text = exit.stdout?;
-    parse_system_route(&text)
+    Some(parse_system_route(&text))
 }
 
 #[cfg(not(target_os = "macos"))]
-fn query_system_route() -> Option<SystemRoute> {
-    None
+fn query_system_route() -> Option<Option<SystemRoute>> {
+    Some(None)
 }
 
 /// Parse the dictionary output of scutil into a SystemRoute.

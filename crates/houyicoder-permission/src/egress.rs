@@ -45,11 +45,13 @@ const REFUSED_LONG: &[&str] = &[
     "--resolve",
     "--interface",
     "--unix-socket",
+    "--location",
+    "--location-trusted",
 ];
 
 /// Short flags with the same effect. A short cluster is matched by the letter
 /// it carries, so an attached value form is caught as well.
-const REFUSED_SHORT: &[char] = &['d', 'F', 'T', 'K', 'x', 'X'];
+const REFUSED_SHORT: &[char] = &['d', 'F', 'T', 'K', 'x', 'X', 'L'];
 
 /// Short flags that carry a header, whose value can hold a credential.
 const HEADER_SHORT: char = 'H';

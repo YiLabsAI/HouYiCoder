@@ -72,13 +72,13 @@ pub(crate) enum FetchError {
 /// Request a target, following redirects by hand so every hop passes the URL
 /// rule and the resolved-address screen before it is sent.
 ///
-/// When a proxy client is configured, each hop tries the proxy first and
-/// automatically falls back to the direct client on any transport failure (for
-/// example when a local proxy daemon is stopped). On the direct client, a
-/// transient connect or timeout error is retried once before failing.
+/// An explicit environment route (RouteClient::Env) is authoritative and
+/// never falls back to direct. A desktop system route (RouteClient::System)
+/// falls back to the direct client only when the local proxy port fails at
+/// connect time (for example when a desktop proxy client was closed).
 pub(crate) async fn fetch_following(
     direct: &Client,
-    proxy: Option<&Client>,
+    routed: Option<&RouteClient>,
     resolver: Option<&PublicResolver>,
     start: &str,
 ) -> Result<reqwest::Response, FetchError> {
@@ -90,7 +90,7 @@ pub(crate) async fn fetch_following(
                 .await
                 .map_err(FetchError::Refused)?;
         }
-        let response = send_hop(direct, proxy, &target)
+        let response = send_hop(direct, routed, &target)
             .await
             .map_err(FetchError::Transport)?;
         let location = response
@@ -109,21 +109,25 @@ pub(crate) async fn fetch_following(
     }
 }
 
-/// Send one GET request with proxy-to-direct fallback and a single transient
-/// retry on the direct path.
+/// Send one GET request according to the route policy, with connect-only
+/// fallback for desktop system routes and a single connect retry on direct.
 async fn send_hop(
     direct: &Client,
-    proxy: Option<&Client>,
+    routed: Option<&RouteClient>,
     target: &str,
 ) -> Result<reqwest::Response, reqwest::Error> {
-    if let Some(proxy_client) = proxy
-        && let Ok(resp) = send_once(proxy_client, target).await
-    {
-        return Ok(resp);
+    match routed {
+        Some(RouteClient::Env(client)) => return send_once(client, target).await,
+        Some(RouteClient::System(client)) => match send_once(client, target).await {
+            Ok(resp) => return Ok(resp),
+            Err(err) if !err.is_connect() => return Err(err),
+            Err(_) => {}
+        },
+        None => {}
     }
     match send_once(direct, target).await {
         Ok(resp) => Ok(resp),
-        Err(err) if err.is_connect() || err.is_timeout() || err.is_request() => {
+        Err(err) if err.is_connect() => {
             sleep(Duration::from_millis(50)).await;
             send_once(direct, target).await
         }

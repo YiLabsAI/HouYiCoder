@@ -16,6 +16,7 @@ use std::sync::Mutex;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 
+use reqwest::Url;
 use reqwest::dns::Addrs;
 use reqwest::dns::Name;
 use reqwest::dns::Resolve;
@@ -78,19 +79,16 @@ impl PublicResolver {
     }
 
     /// Resolve the URL's host once, refuse any private or loopback address,
-    /// and cache the validated addresses for the direct connector.
+    /// and store the validated addresses for the next direct connection to
+    /// consume.
     pub(crate) async fn screen_target(&self, url: &str) -> Result<(), Value> {
-        let Some(authority) = url
-            .split_once("://")
-            .map(|(_, rest)| rest.split('/').next().unwrap_or(rest))
-        else {
+        let Ok(parsed) = Url::parse(url) else {
             return Ok(());
         };
-        let host = authority.split(':').next().unwrap_or(authority);
-        if host.is_empty() {
+        let Some(host) = parsed.host_str() else {
             return Ok(());
-        }
-        let port = if url.starts_with("https://") { 443 } else { 80 };
+        };
+        let port = parsed.port_or_known_default().unwrap_or(443);
         let Ok(addresses) = self.lookup_raw(host, port).await else {
             return Ok(());
         };
@@ -135,7 +133,7 @@ impl Resolve for PublicResolver {
             .validated
             .lock()
             .ok()
-            .and_then(|map| map.get(&host).cloned());
+            .and_then(|mut map| map.remove(&host));
         if let Some(addresses) = cached {
             return Box::pin(async move { Ok(Box::new(addresses.into_iter()) as Addrs) });
         }
