@@ -22,7 +22,7 @@ pub(crate) enum Hop {
 
 /// Decide the next hop from a response. The hop count is capped and the target
 /// passes the same URL rule as the first request; its resolved addresses are
-/// screened by the follower before the hop is sent.
+/// screened by the client resolver.
 pub(crate) fn redirect_hop(current: &str, location: Option<&str>, hops: usize) -> Hop {
     let Some(location) = location else {
         return Hop::Done;
@@ -68,10 +68,11 @@ pub(crate) enum FetchError {
     Transport(reqwest::Error),
 }
 
-/// Request a target, following redirects by hand so every hop passes the
-/// resolved address screen before it is sent. Each hop carries the request
-/// timeout on its own, so a long chain can spend more than one request budget;
-/// the hop count is what bounds it.
+/// Request a target, following redirects by hand so every hop passes the URL
+/// rule before it is sent. The resolved addresses are screened by the client's
+/// resolver, which is also the lookup the connection uses. Each hop carries
+/// the request timeout on its own, so a long chain can spend more than one
+/// request budget; the hop count is what bounds it.
 pub(crate) async fn fetch_following(
     client: &Client,
     start: &str,
@@ -79,9 +80,6 @@ pub(crate) async fn fetch_following(
     let mut target = start.to_string();
     let mut hops = 0usize;
     loop {
-        ensure_public_target(&target)
-            .await
-            .map_err(FetchError::Refused)?;
         let response = client
             .get(&target)
             .header("Accept", "text/markdown, text/html, */*")
@@ -136,38 +134,6 @@ pub(crate) fn validate_url(url: &str) -> bool {
     true
 }
 
-/// Refuse a target whose resolved addresses are private, loopback, or
-/// link-local. The literal check runs first; this covers a public name that
-/// resolves inward. The request re-resolves the name, so a name that changes
-/// its answer between the two lookups is not fully excluded; the screen
-/// removes the ordinary case without pinning the connection.
-pub(crate) async fn ensure_public_target(url: &str) -> Result<(), Value> {
-    let Some(authority) = url
-        .split_once("://")
-        .map(|(_, rest)| rest.split('/').next().unwrap_or(rest))
-    else {
-        return Ok(());
-    };
-    let host = authority.split(':').next().unwrap_or(authority);
-    if host.is_empty() {
-        return Ok(());
-    }
-    let port = if url.starts_with("https://") { 443 } else { 80 };
-    let Ok(addresses) = lookup_host((host.to_string(), port)).await else {
-        // A name that does not resolve fails at connect with its own stage.
-        return Ok(());
-    };
-    for address in addresses {
-        if is_private_ip(address.ip()) {
-            return Err(json!({
-                "error": format!("webfetch: target resolves to a private address ({})", address.ip()),
-                "error_kind": "private_target",
-            }));
-        }
-    }
-    Ok(())
-}
-
 /// Whether a resolved address belongs to this machine or a private network.
 pub(crate) fn is_private_ip(ip: IpAddr) -> bool {
     match ip {
@@ -202,7 +168,7 @@ pub(crate) fn is_private_ip(ip: IpAddr) -> bool {
 /// redirect to one of these, so the same check runs on every hop.
 ///
 /// A name is screened here by its literal form; the resolved addresses are
-/// screened by ensure_public_target before each hop is sent.
+/// screened by the client resolver, which is the lookup the connection uses.
 pub(crate) fn is_private_host(host: &str) -> bool {
     let host = host.trim_matches(['[', ']']).to_ascii_lowercase();
     if host == "localhost" || host.ends_with(".local") {

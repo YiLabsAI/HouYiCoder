@@ -537,9 +537,12 @@ fn test_redirect_hop_refused() {
             .expect("write");
         sleep(Duration::from_millis(50));
     });
+    // The system proxy is off: this exercises the redirect chain against a
+    // local server, and a proxy would answer for a name it cannot resolve.
     let client = Client::builder()
         .resolve("example.test", addr)
         .redirect(reqwest::redirect::Policy::none())
+        .no_proxy()
         .build()
         .expect("client");
     let runtime = Builder::new_current_thread()
@@ -579,9 +582,12 @@ fn test_follows_relative_redirect() {
             stream.write_all(reply).expect("write");
         }
     });
+    // The system proxy is off: this exercises the redirect chain against a
+    // local server, and a proxy would answer for a name it cannot resolve.
     let client = Client::builder()
         .resolve("example.test", addr)
         .redirect(reqwest::redirect::Policy::none())
+        .no_proxy()
         .build()
         .expect("client");
     let runtime = Builder::new_current_thread()
@@ -617,7 +623,10 @@ fn test_read_body_from_response() {
         .build()
         .expect("runtime");
     runtime.block_on(async {
-        let resp = reqwest::Client::new()
+        let resp = reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("client")
             .get(format!("http://{addr}/"))
             .send()
             .await
@@ -628,30 +637,34 @@ fn test_read_body_from_response() {
     server.join().expect("server");
 }
 
-/// The resolved-target check refuses a loopback answer and lets a public one
-/// through. A name that does not resolve is left to the connect stage.
+/// A name whose answer is loopback is refused by the resolver the connection
+/// uses, and the host is looked up exactly once, so no second answer can point
+/// somewhere the screen never saw.
 #[test]
-fn test_resolved_target_checked() {
+fn test_private_answer_refused() {
+    let resolver = Arc::new(PublicResolver::with_fixed(vec![
+        "127.0.0.1:80".parse().expect("address parses"),
+    ]));
+    let tool = WebFetchTool::with_resolver(Arc::clone(&resolver));
     let runtime = Builder::new_current_thread()
         .enable_all()
         .build()
         .expect("runtime");
-    runtime.block_on(async {
-        let loopback = ensure_public_target("http://127.0.0.1/x")
-            .await
-            .expect_err("a loopback target is refused");
-        assert_eq!(loopback["error_kind"], "private_target");
-        assert!(
-            ensure_public_target("http://localhost/x").await.is_err(),
-            "the loopback name is refused"
-        );
-        assert!(
-            ensure_public_target("http://does-not-resolve.invalid/x")
-                .await
-                .is_ok(),
-            "an unresolvable name is left to the connect stage"
-        );
-    });
+    let out = runtime
+        .block_on(tool.execute(
+            ToolCtx::new("test"),
+            json!({"url": "http://example.test/x", "prompt": "read"}),
+        ))
+        .expect("tool result");
+    assert_eq!(
+        out["error_kind"], "private_target",
+        "the refusal keeps its own kind: {out}"
+    );
+    assert_eq!(
+        resolver.lookup_count(),
+        1,
+        "one lookup per hop, which is the lookup the connection uses"
+    );
 }
 
 /// A cached failure tells the model to change source instead of retrying the
@@ -695,22 +708,25 @@ fn test_private_ip_ranges() {
     assert!(!is_private_ip("8.8.8.8".parse().expect("ip")));
 }
 
-/// The resolved-target screen leaves a malformed URL to the connect stage and
-/// refuses a literal private address.
+/// A literal private address and a loopback name are refused before any
+/// lookup, so a malformed or literal URL never reaches the resolver.
 #[test]
-fn test_public_target_edges() {
-    let runtime = Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("runtime");
-    runtime.block_on(async {
-        assert!(ensure_public_target("no-scheme").await.is_ok());
-        assert!(ensure_public_target("https:///x").await.is_ok());
-        let refused = ensure_public_target("http://10.0.0.1/x")
-            .await
-            .expect_err("a private literal is refused");
-        assert_eq!(refused["error_kind"], "private_target");
-    });
+fn test_literal_private_refused() {
+    for url in [
+        "http://127.0.0.1/x",
+        "http://localhost/x",
+        "http://10.0.0.1/x",
+        "http://[::1]/x",
+    ] {
+        assert!(
+            !validate_url(url),
+            "a private literal is refused by the URL rule: {url}"
+        );
+    }
+    assert!(
+        validate_url("https://example.test/x"),
+        "a public literal passes the URL rule"
+    );
 }
 
 /// A hex literal is a numeric host; a word made of hex letters is a domain.

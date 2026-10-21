@@ -23,6 +23,8 @@ use serde_json::{Value, json};
 use super::{Tool, ToolCtx, ToolError};
 
 mod cache;
+mod resolver;
+mod response;
 mod target;
 
 #[cfg(test)]
@@ -38,6 +40,23 @@ pub(crate) use cache::FetchCache;
 pub(crate) use cache::PAGE_TTL;
 use reqwest::Client;
 use reqwest::redirect::Policy;
+use resolver::PRIVATE_TARGET;
+use resolver::PublicResolver;
+#[cfg(test)]
+use response::append_chunk;
+use response::cached_failure_payload;
+#[cfg(test)]
+use response::decode_body;
+use response::fetch_failure_payload;
+use response::finish_page;
+use response::http_failure_payload;
+#[cfg(test)]
+use response::looks_like_missing_page;
+use response::page_payload;
+use response::read_body;
+#[cfg(test)]
+use response::read_error;
+use std::error::Error;
 #[cfg(test)]
 pub(crate) use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
@@ -49,8 +68,6 @@ pub(crate) use target::FetchError;
 pub(crate) use target::Hop;
 #[cfg(test)]
 pub(crate) use target::MAX_REDIRECTS;
-#[cfg(test)]
-pub(crate) use target::ensure_public_target;
 pub(crate) use target::fetch_following;
 #[cfg(test)]
 pub(crate) use target::is_private_host;
@@ -60,7 +77,6 @@ pub(crate) use target::is_private_ip;
 pub(crate) use target::redirect_hop;
 pub(crate) use target::upgrade_to_https;
 pub(crate) use target::validate_url;
-use tokio::net::lookup_host;
 
 /// Maximum URL length accepted by the tool. Guards against oversized URLs
 /// that may be crafted for data exfiltration.
@@ -93,13 +109,36 @@ const CONNECT_TIMEOUT_SECS: u64 = 10;
 const TCP_KEEPALIVE_SECS: u64 = 30;
 
 fn classify_fetch_error(error: &reqwest::Error) -> &'static str {
-    classify_failure(error.is_timeout(), error.is_connect(), &error.to_string())
+    classify_failure(
+        error.is_timeout(),
+        error.is_connect(),
+        &error_chain_text(error),
+    )
+}
+
+/// The error and every cause beneath it, joined. The client's own Display
+/// names only the request, so the reason a connection was refused is one link
+/// down the chain.
+fn error_chain_text(error: &reqwest::Error) -> String {
+    let mut parts = vec![error.to_string()];
+    let mut source = error.source();
+    while let Some(current) = source {
+        parts.push(current.to_string());
+        source = current.source();
+    }
+    parts.join(": ")
 }
 
 /// The failure stage from the transport facts and the message text. Split from
 /// the error type so each branch is stated by a test rather than inferred
 /// from a live network fault.
 fn classify_failure(timed_out: bool, connect: bool, message: &str) -> &'static str {
+    // The resolver refuses a name that answers with a private address. That
+    // reaches the client as a connect failure, so the screen's own wording is
+    // what tells this apart from an ordinary unreachable host.
+    if message.contains(PRIVATE_TARGET) {
+        return "private_target";
+    }
     if timed_out {
         if connect {
             "connect_timeout"
@@ -118,146 +157,6 @@ fn classify_failure(timed_out: bool, connect: bool, message: &str) -> &'static s
     }
 }
 
-/// The result of a page the tool can hand back: freshly fetched, or reused
-/// from the cache with the flag that says so.
-fn page_payload(
-    url: &str,
-    prompt: &str,
-    content: String,
-    content_type: String,
-    cached: bool,
-) -> Value {
-    let mut payload = json!({
-        "content": content,
-        "url": url,
-        "prompt": prompt,
-        "status": 200,
-        "content_type": content_type,
-    });
-    if cached {
-        payload["cached"] = json!(true);
-    }
-    payload
-}
-
-/// The result of a response the server marked as an error. The error field is
-/// what the transcript colors and the trajectory counts, so an error page can
-/// never read as content.
-fn http_failure_payload(url: &str, status: u16, reason: &str) -> Value {
-    json!({
-        "error": format!("webfetch: http_status: HTTP {status} {reason}"),
-        "error_kind": "http_status",
-        "status": status,
-        "url": url,
-    })
-}
-
-/// Turn a successful response body into the tool result, and keep the page for
-/// reuse. Split from the request so the extraction and the cache write are
-/// stated by a test rather than only by a live fetch.
-fn finish_page(
-    cache: &Mutex<FetchCache>,
-    url: &str,
-    prompt: &str,
-    body: String,
-    content_type: String,
-) -> Value {
-    let text = if content_type.contains("text/html") {
-        strip_html(&body)
-    } else {
-        body
-    };
-    let truncated = truncate_content(&text, MAX_CONTENT_CHARS);
-    let missing = looks_like_missing_page(&truncated);
-    // A page that reports itself missing is not reused: caching it would keep
-    // answering later requests with the same dead end.
-    if !missing && let Ok(mut c) = cache.lock() {
-        c.store_page(url, truncated.clone(), content_type.clone());
-    }
-    let mut payload = page_payload(url, prompt, truncated, content_type, false);
-    if missing {
-        payload["soft_404"] = json!(true);
-    }
-    payload
-}
-
-/// Read a response body up to the byte cap. A larger body returns the error
-/// payload rather than being read whole and then truncated: the memory is
-/// spent before the truncation would run.
-async fn read_body(mut resp: reqwest::Response) -> Result<String, Value> {
-    let mut body = Vec::new();
-    loop {
-        match resp.chunk().await {
-            Ok(Some(chunk)) => append_chunk(&mut body, &chunk)?,
-            Ok(None) => break,
-            Err(e) => return Err(read_error(&e.to_string())),
-        }
-    }
-    Ok(decode_body(&body))
-}
-
-/// Append one chunk unless the body would pass the cap.
-fn append_chunk(body: &mut Vec<u8>, chunk: &[u8]) -> Result<(), Value> {
-    if body.len() + chunk.len() > MAX_BODY_BYTES {
-        return Err(json!({
-            "error": format!("webfetch: response_too_large: over {MAX_BODY_BYTES} bytes"),
-            "error_kind": "response_too_large",
-        }));
-    }
-    body.extend_from_slice(chunk);
-    Ok(())
-}
-
-/// The payload for a URL that failed a moment ago: the stage, the fact that
-/// it is remembered, and the action that helps — change source.
-fn cached_failure_payload(kind: &'static str, message: &str) -> Value {
-    let mut payload = fetch_failure_payload(kind, message);
-    payload["cached_failure"] = json!(true);
-    payload["hint"] = json!(
-        "this url failed to connect a moment ago; try a different source rather than retrying it"
-    );
-    payload
-}
-
-/// The payload for a body that stopped arriving.
-fn read_error(message: &str) -> Value {
-    json!({
-        "error": format!("webfetch: body read error: {message}"),
-        "error_kind": "read",
-    })
-}
-
-/// Decode a body as text, replacing invalid bytes rather than failing: a page
-/// with one bad byte is still readable.
-fn decode_body(body: &[u8]) -> String {
-    String::from_utf8_lossy(body).into_owned()
-}
-
-/// Whether a short page says it does not exist. The check is deliberately
-/// narrow: a long document that mentions the phrase is real content, and a
-/// server that answers 200 with a missing-page notice is the case worth
-/// flagging.
-fn looks_like_missing_page(text: &str) -> bool {
-    if text.chars().count() >= 400 {
-        return false;
-    }
-    let head: String = text
-        .lines()
-        .take(6)
-        .collect::<Vec<_>>()
-        .join("\n")
-        .to_ascii_lowercase();
-    head.contains("page not found") || head.contains("404 not found")
-}
-
-/// The result of a transport failure, naming the stage it came from.
-fn fetch_failure_payload(kind: &'static str, message: &str) -> Value {
-    json!({
-        "error": format!("webfetch: {kind}: {message}"),
-        "error_kind": kind,
-    })
-}
-
 /// A web content fetch tool. Fetches a URL, converts HTML to plain text,
 /// truncates, and returns the content for the model to process.
 ///
@@ -270,19 +169,42 @@ pub struct WebFetchTool {
     cache: Arc<Mutex<FetchCache>>,
 }
 
-impl WebFetchTool {
-    pub fn new() -> Self {
-        let client = Client::builder()
-            // Redirects are followed here so every hop passes the resolved
-            // address screen, which the client's own policy cannot do.
+/// The builder every fetch client starts from. The resolver is a parameter so
+/// a test can hand back a known answer, and the caller finishes the build so a
+/// test can turn off the system proxy it is not exercising.
+fn fetch_client(resolver: Arc<PublicResolver>) -> reqwest::ClientBuilder {
+    Client::builder()
+            // Redirects are followed here so every hop passes the URL rule,
+            // which the client's own policy cannot do.
             .redirect(Policy::none())
             .timeout(Duration::from_secs(FETCH_TIMEOUT_SECS))
             .connect_timeout(Duration::from_secs(CONNECT_TIMEOUT_SECS))
             .tcp_keepalive(Duration::from_secs(TCP_KEEPALIVE_SECS))
-            .build()
-            .expect("HTTP client construction failed (TLS backend error)");
+            // The resolver both looks the name up and screens the answer, and
+            // its answer is the one the connection uses. No separate lookup
+            // can disagree with the screen.
+            .dns_resolver(resolver)
+}
+
+impl WebFetchTool {
+    pub fn new() -> Self {
         Self {
-            client,
+            client: fetch_client(Arc::new(PublicResolver::new()))
+                .build()
+                .expect("HTTP client construction failed (TLS backend error)"),
+            cache: Arc::new(Mutex::new(FetchCache::default())),
+        }
+    }
+
+    /// Build a tool whose names resolve through the given resolver, with the
+    /// system proxy off so the resolver is the path the request takes.
+    #[cfg(test)]
+    pub(crate) fn with_resolver(resolver: Arc<PublicResolver>) -> Self {
+        Self {
+            client: fetch_client(resolver)
+                .no_proxy()
+                .build()
+                .expect("test client"),
             cache: Arc::new(Mutex::new(FetchCache::default())),
         }
     }
@@ -383,7 +305,7 @@ impl Tool for WebFetchTool {
                 Err(FetchError::Refused(payload)) => Ok(payload),
                 Err(FetchError::Transport(e)) => {
                     let kind = classify_fetch_error(&e);
-                    let message = e.to_string();
+                    let message = error_chain_text(&e);
                     // Only a transport failure is worth remembering: a
                     // request the server rejected may succeed next time.
                     if matches!(kind, "connect" | "connect_timeout" | "tls")
