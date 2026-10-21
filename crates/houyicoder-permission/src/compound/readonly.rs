@@ -39,15 +39,15 @@ fn writes_output(cmd: &str, segment: &str) -> bool {
     let args: Vec<&str> = segment.split_whitespace().skip(1).collect();
     match cmd {
         "sort" => args.iter().any(|arg| sort_writes(arg)),
-        // uniq [OPTION]... [INPUT [OUTPUT]]: the second operand is a file.
-        "uniq" => args.iter().filter(|arg| is_operand(arg)).count() > 1,
+        // uniq [OPTION]... [INPUT [OUTPUT]]: the second path argument is a file.
+        "uniq" => args.iter().filter(|arg| is_path_arg(arg)).count() > 1,
         _ => false,
     }
 }
 
-/// Whether one argument of uniq names a file rather than an option. A lone
-/// dash stands for standard input, so it is an operand too.
-fn is_operand(arg: &str) -> bool {
+/// Whether one argument of uniq names a path rather than an option. A lone
+/// dash stands for standard input, so it is a path argument too.
+fn is_path_arg(arg: &str) -> bool {
     arg == "-" || !arg.starts_with('-')
 }
 

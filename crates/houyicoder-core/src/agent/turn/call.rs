@@ -2,12 +2,11 @@
 use futures::StreamExt;
 use tokio_util::sync::CancellationToken;
 
-use houyicoder_context::{SessionEvent, SessionId, TruncationSignal};
+use houyicoder_context::{SessionEvent, SessionId};
 use houyicoder_protocol::frontend::model::SpeedMode;
 use houyicoder_protocol::llm::{
-    CompletionResponse, EffortLevel, ModelSettings, OutputItem, ProviderError,
+    CompletionResponse, EffortLevel, ModelSettings, ProviderError, Usage,
 };
-use houyicoder_protocol::llm::{LlmEvent, Usage};
 
 use crate::agent::compaction::{CompactionSuppression, SuppressionCause};
 use crate::agent::context::AssembledContext;
@@ -16,21 +15,20 @@ use crate::agent::economy::{economy_decision, estimate_compaction};
 use crate::agent::model_window::{
     conservative_input_tokens, fill_omitted_usage, record_learned_context_window,
 };
-use crate::agent::truncation::{classify_truncation_signal, is_length_reason};
 use crate::agent::{RequestInferenceConfig, RunError, Runner, new_event, obs_wire};
-use houyicoder_api::agent_event::{EventHandler, ResponseStreamEvent};
 
 use super::stream_fold;
-use crate::agent::Tokenizer;
 use crate::agent::append::timing::{BlockSpans, is_first_output};
 use crate::agent::apply_effort_settings;
 use crate::agent::compaction::pre_flight_threshold;
 use crate::agent::resolve_applied_effort;
+use fold::{classify_stream_truncation, note_exhausted_truncation};
 use std::time::Duration;
 use std::time::Instant;
 use stream_fold::StreamFold;
 use tokio::time::sleep;
 
+mod fold;
 mod request;
 
 /// Max gap between stream chunks before the run aborts the call as a stall
@@ -507,40 +505,8 @@ impl Runner {
             // ignore stream_options.include_usage; substitute the estimated
             // input tokens so the status gauge + tally read the real footprint.
             fill_omitted_usage(&mut state.usage, estimated_input_tokens);
-            // Capture the raw provider finish_reason BEFORE dialect
-            // normalization so the verdict carries the original dialect
-            // (max_tokens / MAX_TOKENS / length / stop). Without this the
-            // normalize below flattens the dialect to "length" and the raw
-            // spelling the gateway used is lost to trajectory analysis.
-            let raw_finish_reason = state.finish_reason.clone();
-            // An unnormalized alias silently disables length recovery and leaves
-            // the response visibly truncated.
-            if let Some(reason) = &state.finish_reason
-                && reason != "length"
-                && is_length_reason(reason)
-            {
-                state.finish_reason = Some("length".into());
-            }
-            // Silent-truncation heuristic: a proxy can cut the stream at
-            // the token cap yet signal "stop". Synthesize "length" when the
-            // provider claimed a natural stop but the output looks cut, so
-            // the resume loop recovers. Either signal suffices: output at
-            // the token cap (server usage or a self-count), or an unclosed
-            // code fence (odd triple-backtick count). Classified once into
-            // TruncationSignal; skipped when the provider already cut.
-            let self_count_output_tokens = Tokenizer::new().count(&state.assistant_text);
-            let mut truncation_signal = TruncationSignal::None;
-            if state.finish_reason.as_deref() != Some("length") {
-                truncation_signal = classify_truncation_signal(
-                    &state.assistant_text,
-                    &state.usage,
-                    self_count_output_tokens,
-                    inference.max_output_tokens,
-                );
-                if truncation_signal != TruncationSignal::None {
-                    state.finish_reason = Some("length".into());
-                }
-            }
+            let (raw_finish_reason, self_count_output_tokens, truncation_signal) =
+                classify_stream_truncation(&mut state, inference.max_output_tokens);
             // Length-recovery: the provider cut the reply at the max_tokens
             // cap (finish_reason "length"). Withhold the truncation notice
             // while recovery can still succeed — append the partial assistant
@@ -619,23 +585,7 @@ impl Runner {
                 self.append_resume_nudge(session).await?;
                 continue 'outer;
             }
-            if state.finish_reason.as_deref() == Some("length") {
-                // Recovery exhausted: surface the cut so an empty/truncated
-                // reply is not a silent mystery.
-                if state.assistant_text.is_empty() {
-                    state.assistant_text = if state.reasoning.is_empty() {
-                        "*(output truncated at the token cap — no reply produced after recovery)*"
-                            .to_string()
-                    } else {
-                        "*(the model reasoned but produced no answer before the token cap — recovery exhausted)*"
-                            .to_string()
-                    };
-                } else {
-                    state
-                        .assistant_text
-                        .push_str("\n\n*…output truncated at the token cap — recovery exhausted.*");
-                }
-            }
+            note_exhausted_truncation(&mut state);
             // Terminal verdict: covers both recovery-exhausted (normalized
             // reason is length, recovery_attempts at the cap) and clean
             // success (normalized reason is stop, recovery_attempts is however
@@ -701,92 +651,6 @@ impl Runner {
             call.response = Some(response);
             return Ok(call);
         }
-    }
-
-    /// Append the resume-direct nudge as a persisted MetaUser event so the
-    /// next serve picks it up and the model continues the cut reply. The
-    /// nudge: no apology, no recap, pick up mid-thought, break remaining
-    /// work into smaller pieces. Served to the model, hidden from the
-    /// readable transcript.
-    async fn append_resume_nudge(&self, session: SessionId) -> Result<(), RunError> {
-        const NUDGE: &str = "Output token limit hit. Resume directly — no apology, no recap of what you were doing. Pick up mid-thought if that is where the cut happened. Break remaining work into smaller pieces.";
-        self.store
-            .append(new_event(
-                session,
-                SessionEvent::MetaUser {
-                    text: NUDGE.to_string(),
-                },
-            ))
-            .await?;
-        Ok(())
-    }
-
-    /// Fold one streamed LlmEvent into turn state and emit response events.
-    /// A ProviderError event is terminal for the turn.
-    /// Boundary events (TextStart/End, ToolInput*, Step*) are ignored —
-    /// tool-input streaming is not surfaced here yet.
-    async fn fold_event(
-        &self,
-        ev: LlmEvent,
-        state: &mut StreamFold,
-        session: SessionId,
-        response_handler: Option<&dyn EventHandler<ResponseStreamEvent>>,
-    ) -> Result<(), RunError> {
-        match ev {
-            LlmEvent::TextDelta { text, .. } => {
-                if let Some(handler) = response_handler {
-                    handler.handle(ResponseStreamEvent::AssistantTextDelta { text: text.clone() });
-                }
-                self.store
-                    .append(new_event(
-                        session,
-                        SessionEvent::AssistantTextDelta { text: text.clone() },
-                    ))
-                    .await?;
-                state.assistant_text.push_str(&text);
-            }
-            LlmEvent::ReasoningDelta { text, .. } => {
-                if let Some(handler) = response_handler {
-                    handler.handle(ResponseStreamEvent::ReasoningDelta { text: text.clone() });
-                }
-                state.reasoning.push(text);
-            }
-            LlmEvent::ToolCall { id, name, input } => {
-                state
-                    .tool_calls
-                    .push(OutputItem::ToolCall { id, name, input });
-            }
-            LlmEvent::Finish { reason, usage: u } => {
-                if let Some(u) = u {
-                    state.usage = u;
-                }
-                // Capture the provider's finish reason so the drive loop can
-                // react: a "length" finish means the reply was cut at the
-                // max_tokens cap mid-generation, and the loop continues with a
-                // resume-direct nudge (recovery). The marker surfacing lives
-                // in the drive loop, withheld while recovery can still
-                // succeed — not here, where it would fire on every length hit
-                // even when recovery is about to produce a complete reply.
-                state.finish_reason = Some(reason);
-            }
-            LlmEvent::ProviderError { .. } => {
-                return Err(RunError::ProviderFatal(ProviderError::Unknown(
-                    "provider error event mid-stream".into(),
-                )));
-            }
-            LlmEvent::TextStart { .. }
-            | LlmEvent::TextEnd { .. }
-            | LlmEvent::ReasoningStart { .. }
-            | LlmEvent::ReasoningEnd { .. }
-            | LlmEvent::ToolInputStart { .. }
-            | LlmEvent::ToolInputDelta { .. }
-            | LlmEvent::ToolInputEnd { .. }
-            | LlmEvent::ToolResult { .. }
-            | LlmEvent::ToolError { .. }
-            | LlmEvent::StepStart { .. }
-            | LlmEvent::StepFinish { .. } => {}
-        }
-        Ok(())
     }
 }
 

@@ -126,14 +126,54 @@ impl HeldUserText {
     }
 }
 
+/// Extract user-role text from an event when it is one of the user or
+/// system-reminder variants served to the model in a user message.
+fn user_text_of(event: &SessionEvent) -> Option<String> {
+    match event {
+        // Merge consecutive user messages: providers reject multiple
+        // user-in-a-row. MetaUser (runner nudge) + MemoryRecall
+        // (system-reminder memories) + SkillListing (system-reminder
+        // skill catalog) are served to the model identically; the
+        // transcript-skip happens in the host records assembly.
+        SessionEvent::UserInput { text }
+        | SessionEvent::MetaUser { text }
+        | SessionEvent::MemoryRecall { text, .. }
+        | SessionEvent::SkillListing { text, .. } => Some(text.clone()),
+        SessionEvent::SkillBody {
+            skill_name,
+            content,
+            untrusted,
+            ..
+        } => Some(frame_untrusted_body(skill_name, content, *untrusted)),
+        SessionEvent::MidTurnInput { text, .. } => Some(format!(
+            "[The user sent this message while you were working. \
+             Continue your current task and address it when natural.]\n\
+             {text}"
+        )),
+        SessionEvent::NotificationInjected { summary, .. } => Some(format!(
+            "[A background subagent completed. Act on its result if \
+             relevant to the current task.]\n{summary}"
+        )),
+        _ => None,
+    }
+}
+
+/// Join a bare tool call onto the trailing assistant message when one is open,
+/// or start a new assistant message when the window began mid-group.
+fn push_tool_call(items: &mut Vec<InputItem>, call: AssistantToolCall) {
+    match items.last_mut() {
+        Some(InputItem::Assistant { tool_calls, .. }) => tool_calls.push(call),
+        _ => items.push(InputItem::Assistant {
+            content: String::new(),
+            tool_calls: vec![call],
+        }),
+    }
+}
+
 /// Assemble the model-input history from a replayed event log with an explicit
 /// retention policy + wall-clock now. The cache-liveness policy uses now to
 /// test the cached-prefix TTL; the default path (tests + the no-cache view)
 /// passes the age policy + 0, which never reports a live cache.
-#[expect(
-    clippy::too_many_lines,
-    reason = "exhaustive match on a growing event enum; new variant arms pushed past the limit"
-)]
 pub fn assemble_model_input_with(
     events: &[SessionLogEntry],
     backend: Option<&dyn ContextBackend>,
@@ -146,65 +186,12 @@ pub fn assemble_model_input_with(
     let mut i = 0;
     let mut held = HeldUserText::default();
     while i < events.len() {
+        if let Some(text) = user_text_of(&events[i].event) {
+            held.push(&mut items, &text);
+            i += 1;
+            continue;
+        }
         match &events[i].event {
-            // Merge consecutive user messages: providers reject multiple
-            // user-in-a-row. MetaUser (runner nudge) + MemoryRecall
-            // (system-reminder memories) + SkillListing (system-reminder
-            // skill catalog) are served to the model identically; the
-            // transcript-skip happens in the host records assembly.
-            SessionEvent::UserInput { text }
-            | SessionEvent::MetaUser { text }
-            | SessionEvent::MemoryRecall { text, .. }
-            | SessionEvent::SkillListing { text, .. } => {
-                held.push(&mut items, text);
-                i += 1;
-            }
-            SessionEvent::SkillBody {
-                skill_name,
-                content,
-                untrusted,
-                ..
-            } => {
-                // An untrusted body (a non-managed/user source) is framed
-                // as data, not trusted instruction, so the model treats
-                // its directives as unverified and confirms before acting
-                // on state-changing steps. The framing helper is shared
-                // with the Skill tool path so framing does not differ by
-                // invocation path.
-                let text = frame_untrusted_body(skill_name, content, *untrusted);
-                held.push(&mut items, &text);
-                i += 1;
-            }
-            // Mid-work interjection: wrap with a framing note so the model
-            // reads "continue the task + address", not a fresh instruction
-            // that drops the in-flight task. The bare text stays in the
-            // durable log + transcript; the framing is model-only.
-            SessionEvent::MidTurnInput { text, .. } => {
-                let framed = format!(
-                    "[The user sent this message while you were working. \
-                     Continue your current task and address it when natural.]\n\
-                     {text}"
-                );
-                held.push(&mut items, &framed);
-                i += 1;
-            }
-            // A background subagent finished: the notification carries the
-            // child's result summary. Frame it as a child-completion report
-            // (not a user interjection) so the model reads it as a background
-            // result to act on, not a fresh user instruction that drops the
-            // in-flight task. The bare summary stays in the durable log; the
-            // framing is model-only.
-            SessionEvent::NotificationInjected { summary, .. } => {
-                let framed = format!(
-                    "[A background subagent completed. Act on its result if \
-                     relevant to the current task.]\n{summary}"
-                );
-                held.push(&mut items, &framed);
-                i += 1;
-            }
-            // Reward observations are audit signals, not model input.
-            SessionEvent::RewardObservation { .. } => i += 1,
-            SessionEvent::Unknown => i += 1,
             SessionEvent::AssistantMessage { text, .. } => {
                 held.next_message(&mut items);
                 let mut tool_calls = Vec::new();
@@ -245,24 +232,14 @@ pub fn assemble_model_input_with(
                 #[cfg(debug_assertions)]
                 seen_call_ids.insert(call_id.as_str());
                 held.open_call(call_id);
-                let call = AssistantToolCall {
-                    id: call_id.clone(),
-                    name: tool.clone(),
-                    input: input.clone(),
-                };
-                // The calls of one assistant message are appended one at a
-                // time, so background work can land between two of them and
-                // stop the scan above. Joining the trailing assistant item
-                // keeps them one message, which is what the provider needs;
-                // a window that starts mid-group has no item to join, so it
-                // opens one.
-                match items.last_mut() {
-                    Some(InputItem::Assistant { tool_calls, .. }) => tool_calls.push(call),
-                    _ => items.push(InputItem::Assistant {
-                        content: String::new(),
-                        tool_calls: vec![call],
-                    }),
-                }
+                push_tool_call(
+                    &mut items,
+                    AssistantToolCall {
+                        id: call_id.clone(),
+                        name: tool.clone(),
+                        input: input.clone(),
+                    },
+                );
                 i += 1;
             }
             SessionEvent::ToolResult {
@@ -280,25 +257,7 @@ pub fn assemble_model_input_with(
                 held.close_call(&mut items, call_id);
                 i += 1;
             }
-            SessionEvent::Reasoning { .. }
-            | SessionEvent::AssistantTextDelta { .. }
-            | SessionEvent::CompactionBoundary { .. }
-            | SessionEvent::CacheBreak { .. }
-            | SessionEvent::Summary { .. }
-            | SessionEvent::PermissionDecision { .. }
-            | SessionEvent::TurnAborted { .. }
-            | SessionEvent::TruncationVerdict { .. }
-            | SessionEvent::WorktreeEnter { .. }
-            | SessionEvent::WorktreeExit { .. }
-            | SessionEvent::TurnUsage { .. }
-            | SessionEvent::HookSignal { .. }
-            | SessionEvent::TurnStarted { .. }
-            | SessionEvent::SubagentSpawn { .. }
-            | SessionEvent::SubagentReturn { .. }
-            | SessionEvent::ChildDelegated { .. }
-            | SessionEvent::RunCompleted { .. }
-            | SessionEvent::ModelStepTiming { .. }
-            | SessionEvent::ContextCleared { .. } => {
+            _ => {
                 i += 1;
             }
         }

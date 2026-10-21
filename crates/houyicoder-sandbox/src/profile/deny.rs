@@ -167,13 +167,7 @@ pub(crate) fn mandatory_deny(home: &str, tag: &str) -> String {
     // is the load-bearing half, because the scopes that were reachable are the
     // ones resolved against the working and temp directories rather than the
     // home literal.
-    for file in MANDATORY_DENY_AUTHORITY_FILES {
-        let escaped = file.replace('.', r"\.");
-        let subpath = format!("{home}/{file}");
-        out.push_str(&format!(
-            "(deny file-write* (subpath \"{subpath}\") (regex #\".*/{escaped}$\") (with message \"{tag}\"))\n"
-        ));
-    }
+    out.push_str(&deny_authority_files(home, tag));
     for dir in MANDATORY_DENY_DIRS {
         let escaped = dir.replace('.', r"\.");
         emit(
@@ -198,6 +192,22 @@ pub(crate) fn mandatory_deny(home: &str, tag: &str) -> String {
         // down can take effect; the hooks escape is a write, not a read.
         out.push_str(&format!(
             "(deny file-write* (subpath \"{home}/{git_path}\") (regex #\".*/{escaped}(/|$)\") (with message \"{tag}\"))\n"
+        ));
+    }
+    out
+}
+
+/// Emit the write-deny rules for the self-authorization files. Re-emitted
+/// after the session temporary-directory allow-back so the local permission
+/// store under the temporary directory stays write-denied even while ordinary
+/// files and repositories inside that directory are writable.
+pub(crate) fn deny_authority_files(home: &str, tag: &str) -> String {
+    let mut out = String::new();
+    for file in MANDATORY_DENY_AUTHORITY_FILES {
+        let escaped = file.replace('.', r"\.");
+        let subpath = format!("{home}/{file}");
+        out.push_str(&format!(
+            "(deny file-write* (subpath \"{subpath}\") (regex #\".*/{escaped}$\") (with message \"{tag}\"))\n"
         ));
     }
     out

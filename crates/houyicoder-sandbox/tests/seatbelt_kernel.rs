@@ -32,21 +32,15 @@
 #![allow(clippy::disallowed_methods)]
 #![cfg(target_os = "macos")]
 
-use houyicoder_api::sandbox::Egress;
 use houyicoder_api::sandbox::NetworkPolicy;
-use houyicoder_api::sandbox::UnixSockets;
 use houyicoder_sandbox::ProfileSpec;
 use std::env::temp_dir;
 use std::env::var;
-use std::fs::canonicalize;
 use std::fs::create_dir_all;
 use std::fs::remove_dir;
 use std::fs::remove_dir_all;
 use std::fs::remove_file;
 use std::fs::write;
-use std::net::TcpListener;
-#[cfg(unix)]
-use std::os::unix::net::UnixListener;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
@@ -55,17 +49,18 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use std::time::Instant;
 
-/// A live fence: a throwaway workspace plus the profile rendered for it. The
-/// workspace is removed on drop so a failing assertion cannot leave a
-/// directory behind.
+#[path = "seatbelt_kernel/network.rs"]
+mod network;
+
+/// A live fence: a throwaway workspace, a sibling per-session temporary
+/// directory, and the profile rendered for them. Both directories are removed
+/// on drop so a failing assertion leaves nothing behind.
 #[cfg(target_os = "macos")]
 struct Fence {
     workspace: PathBuf,
+    tmpdir: PathBuf,
     profile: String,
     home: String,
-    /// A per-session scratch dir, when the probe needs one. Removed on drop
-    /// like the workspace, so a failing assertion leaves nothing behind.
-    scratch: Option<PathBuf>,
 }
 
 /// One probe result. A denial arrives as a non-zero exit whose stderr carries
@@ -126,14 +121,16 @@ impl Fence {
         // form names a path the kernel never sees: every allow under it would
         // silently fail to match, and every write probe would then be denied for
         // that reason rather than by the rule it means to exercise.
-        let tmpdir = dunce::canonicalize(temp_dir()).expect("canonicalize temp dir");
+        let root = dunce::canonicalize(temp_dir()).expect("canonicalize temp dir");
         let tag = format!(
             "houyi-fence-{label}-{}-{}",
             id(),
             SEQ.fetch_add(1, Ordering::SeqCst)
         );
-        let workspace = tmpdir.join(&tag);
+        let workspace = root.join(&tag);
+        let tmpdir = root.join(format!("{tag}-tmp"));
         create_dir_all(&workspace).expect("create probe workspace");
+        create_dir_all(&tmpdir).expect("create probe tmpdir");
         let profile = houyicoder_sandbox::render(&ProfileSpec::new(
             &workspace,
             &tmpdir.to_string_lossy(),
@@ -145,51 +142,10 @@ impl Fence {
         }
         Self {
             workspace,
+            tmpdir,
             profile,
             home,
-            scratch: None,
         }
-    }
-
-    /// Render the profile the way a session runs: a scratch dir of its own
-    /// beside the workspace, not a parent of it, so a rule that names scratch
-    /// cannot be confused with the one that names the workspace. Passing
-    /// nested puts the workspace inside the scratch dir instead, which is the
-    /// shape a caller may render and the one the workspace re-assertion exists
-    /// for.
-    fn with_scratch(label: &str, nested: bool) -> (Self, PathBuf) {
-        static SEQ: AtomicU64 = AtomicU64::new(0);
-        let home = var("HOME").unwrap_or_else(|_| "/Users/unknown".into());
-        let tmpdir = dunce::canonicalize(temp_dir()).expect("canonicalize temp dir");
-        let tag = format!(
-            "houyi-fence-{label}-{}-{}",
-            id(),
-            SEQ.fetch_add(1, Ordering::SeqCst)
-        );
-        let scratch = tmpdir.join(format!("{tag}-scratch"));
-        create_dir_all(&scratch).expect("create probe scratch");
-        let workspace = if nested {
-            scratch.join("ws")
-        } else {
-            tmpdir.join(&tag)
-        };
-        create_dir_all(&workspace).expect("create probe workspace");
-        let profile = houyicoder_sandbox::render(&ProfileSpec::new(
-            &workspace,
-            &scratch.to_string_lossy(),
-            &home,
-            &tag,
-        ));
-        if var("HOUYI_PROFILE_DUMP").is_ok() {
-            println!("{profile}");
-        }
-        let fence = Self {
-            workspace,
-            profile,
-            home,
-            scratch: Some(scratch.clone()),
-        };
-        (fence, scratch)
     }
 
     /// Render the real profile with an explicit network posture. Separate from
@@ -197,9 +153,8 @@ impl Fence {
     /// against, and so a network probe states its posture at the call site.
     fn with_network(label: &str, network: NetworkPolicy) -> Self {
         let mut f = Self::new(label);
-        let tmpdir = dunce::canonicalize(temp_dir()).expect("canonicalize temp dir");
         f.profile = houyicoder_sandbox::render(
-            &ProfileSpec::new(&f.workspace, &tmpdir.to_string_lossy(), &f.home, label)
+            &ProfileSpec::new(&f.workspace, &f.tmpdir.to_string_lossy(), &f.home, label)
                 .with_network(network),
         );
         f
@@ -216,6 +171,7 @@ impl Fence {
             .arg("-c")
             .arg(cmd)
             .current_dir(&self.workspace)
+            .env("TMPDIR", &self.tmpdir)
             .output()
             .expect("spawn sandbox-exec");
         let o = Outcome {
@@ -238,9 +194,7 @@ impl Fence {
 impl Drop for Fence {
     fn drop(&mut self) {
         remove_dir_all(&self.workspace).ok();
-        if let Some(scratch) = &self.scratch {
-            remove_dir_all(scratch).ok();
-        }
+        remove_dir_all(&self.tmpdir).ok();
     }
 }
 
@@ -488,17 +442,12 @@ fn test_denies_permission_store_write() {
         project_probe.detail()
     );
 
-    let local = temp_dir().join("houyicoder-permissions");
+    let local = f.tmpdir.join("houyicoder-permissions");
     create_dir_all(&local).expect("create local store dir");
     let local_probe = f.probe(
         "local-scope",
         "printf '' >> \"$TMPDIR/houyicoder-permissions/permissions.json\"",
     );
-    let leaked = local.join("permissions.json");
-    let existed = leaked.exists();
-    if existed {
-        remove_file(&leaked).ok();
-    }
     assert!(
         !local_probe.allowed(),
         "the local-scope permission rules must not be writable inside the \
@@ -540,48 +489,30 @@ fn test_runs_git() {
     );
 }
 
-/// A repository initialized inside the session scratch dir works: git writes
-/// .git/hooks and .git/config there. The same two paths inside the workspace
-/// stay refused, so the allowance cannot be spent on a repository the user
-/// opens outside the fence, and the permission store under scratch keeps its
-/// own refusal rather than being swept up by the wider rule.
+/// A repository initialized inside the session temporary directory works: git
+/// writes .git/hooks, .git/config, and .gitmodules there. The same paths
+/// inside the workspace stay refused, the shared /tmp root stays refused, and
+/// the permission store under the temporary directory keeps its own refusal.
 #[cfg(target_os = "macos")]
 #[test]
-fn test_scratch_git_init() {
-    let (f, scratch) = Fence::with_scratch("git-init", false);
-    let repo = scratch.join("repo");
+fn test_tmpdir_git_init() {
+    let f = Fence::new("git-init");
     let init = f.probe(
         "git-init",
-        &format!(
-            "git init -q '{}' && test -f '{}/.git/config' && test -d '{}/.git/hooks'",
-            repo.display(),
-            repo.display(),
-            repo.display()
-        ),
+        "git init -q \"$TMPDIR/repo\" \
+         && test -f \"$TMPDIR/repo/.git/config\" \
+         && test -d \"$TMPDIR/repo/.git/hooks\" \
+         && printf x > \"$TMPDIR/repo/.gitmodules\" \
+         && printf x > \"$TMPDIR/repo/.ripgreprc\"",
     );
     assert!(
         init.allowed(),
-        "a repository in the session scratch dir must initialize: {}",
+        "a repository and dotfiles in the session tmpdir must be writable: {}",
         init.detail()
     );
 
-    // The top of the scratch dir is a repository location too, and the shell
-    // sees it through the variable the prompt tells the model to use.
-    let root = f.probe(
-        "git-init-root",
-        &format!(
-            "export TMPDIR='{}'; git init -q \"$TMPDIR/root-repo\" && test -f \"$TMPDIR/root-repo/.git/config\"",
-            scratch.display()
-        ),
-    );
-    assert!(
-        root.allowed(),
-        "a repository directly under the scratch dir must initialize: {}",
-        root.detail()
-    );
-
     // The shared temp root stays out of reach: the allowance names the session
-    // scratch dir, not the directory every process shares.
+    // temporary directory, not the directory every process shares.
     let shared = f.probe("shared-tmp", "printf x > /tmp/houyi-probe-shared");
     assert!(
         !shared.allowed() && shared.denied_by_fence(),
@@ -589,8 +520,6 @@ fn test_scratch_git_init() {
         shared.detail()
     );
 
-    // The workspace repo keeps both denials even though the allowance names a
-    // path that could, in another rendering, contain the workspace.
     create_dir_all(f.workspace.join(".git/hooks")).expect("create workspace hooks dir");
     let hooks = f.probe("workspace-hooks", "printf x > .git/hooks/pre-commit");
     assert!(
@@ -604,46 +533,11 @@ fn test_scratch_git_init() {
         "a workspace git config must stay refused: {}",
         config.detail()
     );
-
-    let store = scratch.join("houyicoder-permissions");
-    create_dir_all(&store).expect("create scratch permission store");
-    let authority = f.probe(
-        "scratch-store",
-        &format!("printf '' >> '{}/permissions.json'", store.display()),
-    );
+    let modules = f.probe("workspace-gitmodules", "printf x > .gitmodules");
     assert!(
-        !authority.allowed() && authority.denied_by_fence(),
-        "the permission store under scratch must stay refused: {}",
-        authority.detail()
-    );
-}
-
-/// A workspace rendered inside the scratch dir keeps its write denials. The
-/// allowance names the scratch path, so without the re-assertion the workspace
-/// repository would inherit it; this is the shape that proves the ordering is
-/// load-bearing rather than decorative.
-#[cfg(target_os = "macos")]
-#[test]
-fn test_nested_workspace_git() {
-    let (f, _scratch) = Fence::with_scratch("git-nested", true);
-    create_dir_all(f.workspace.join(".git/hooks")).expect("create workspace hooks dir");
-    let hooks = f.probe("nested-hooks", "printf x > .git/hooks/pre-commit");
-    assert!(
-        !hooks.allowed() && hooks.denied_by_fence(),
-        "a hook in a workspace inside the scratch dir must stay refused: {}",
-        hooks.detail()
-    );
-    let config = f.probe("nested-config", "printf x >> .git/config");
-    assert!(
-        !config.allowed() && config.denied_by_fence(),
-        "a git config in a workspace inside the scratch dir must stay refused: {}",
-        config.detail()
-    );
-    let repo = f.probe("nested-scratch-repo", "git init -q ../sibling");
-    assert!(
-        repo.allowed(),
-        "a sibling repository in the same scratch dir still initializes: {}",
-        repo.detail()
+        !modules.allowed() && modules.denied_by_fence(),
+        "workspace .gitmodules must stay refused: {}",
+        modules.detail()
     );
 }
 
@@ -679,173 +573,4 @@ fn test_splits_gitconfig() {
         write.code,
         write.stderr
     );
-}
-
-// ---- network posture probes ------------------------------------------------
-//
-// Every probe below uses a literal address and never a hostname, so none of them
-// depends on DNS or on the host having working internet.
-//
-// The verbose flag on the network tool is load-bearing, not decoration. Without
-// it the tool is silent on every failure, which leaves a kernel refusal and a
-// permitted-but-unanswered connect indistinguishable and forces the verdict onto
-// a latency threshold. That would make these the only probes here whose result
-// depends on something other than the kernel, because a network that answers the
-// unreachable address with a reset fails just as fast as the fence does. With the
-// flag the tool prints the kernel's own wording, which is the same
-// not-permitted text the filesystem probes match on, so the network probes use
-// the same judgement as everything else in this file and a network-level refusal
-// reads as what it is rather than as a fence denial. The elapsed time is still
-// reported, as evidence in the output, but nothing asserts on it.
-
-/// The egress target: an address that cannot be routed anywhere.
-///
-/// A hardcoded literal on purpose, and not a value worth making configurable.
-/// This is the documentation-only range reserved by RFC 5737, and the standard
-/// reserving it is exactly what guarantees the property the probe needs. Any
-/// substitute loses that guarantee and is worse for a specific reason: an address
-/// that turns out to be reachable would have the open-posture probe open a real
-/// connection to a stranger's host from the test suite, and an address from a
-/// private range may well be routable on whatever network the machine is on and
-/// reach a real device there. Loopback is not an alternative either, since that
-/// is the separate axis the loopback probes cover.
-#[cfg(target_os = "macos")]
-const UNROUTABLE: &str = "192.0.2.1";
-
-/// Bind a loopback listener in the test process and hand back its port, so a
-/// probe can attempt a real loopback connection with a real peer on the other
-/// end. Kept alive by the returned listener; dropping it closes the port.
-#[cfg(target_os = "macos")]
-fn loopback_listener() -> (TcpListener, u16) {
-    let l = TcpListener::bind("127.0.0.1:0").expect("bind loopback listener");
-    let port = l.local_addr().expect("listener addr").port();
-    (l, port)
-}
-
-/// The contained posture must actually stop egress at the kernel. This is the
-/// baseline claim the whole containment story rests on, so it is asserted
-/// against the kernel rather than against the profile text.
-#[cfg(target_os = "macos")]
-#[test]
-fn test_contained_blocks_egress() {
-    let f = Fence::with_network("net-off", NetworkPolicy::contained());
-    let o = f.probe("egress", &format!("nc -v -G 1 -w 1 -z {UNROUTABLE} 80"));
-    assert!(!o.allowed(), "the contained posture must refuse egress");
-    assert!(
-        o.denied_by_fence(),
-        "the refusal must come from the fence rather than from the network: the \
-         kernel names its own verdict on stderr, and a permitted connect to the \
-         unreachable target reports a timeout instead. {}",
-        o.detail()
-    );
-}
-
-/// The open posture must actually reach the kernel too. Without this the
-/// previous probe could pass for the wrong reason — a profile that denied
-/// everything regardless of policy would satisfy it.
-#[cfg(target_os = "macos")]
-#[test]
-fn test_open_permits_egress() {
-    let mut p = NetworkPolicy::contained();
-    p.egress = Egress::Unrestricted;
-    let f = Fence::with_network("net-open", p);
-    let o = f.probe("egress", &format!("nc -v -G 1 -w 1 -z {UNROUTABLE} 80"));
-    assert!(
-        !o.denied_by_fence(),
-        "the open posture must let the connect through, which the unroutable \
-         target then leaves to time out; a not-permitted verdict means the fence \
-         blocked it. {}",
-        o.detail()
-    );
-}
-
-/// Loopback must be unreachable by default. A dev server left reachable under
-/// the default posture would be an opening nobody asked for.
-#[cfg(target_os = "macos")]
-#[test]
-fn test_contained_blocks_loopback() {
-    let (_l, port) = loopback_listener();
-    let f = Fence::with_network("net-lo-off", NetworkPolicy::contained());
-    let o = f.probe("loopback", &format!("nc -v -G 1 -w 1 -z 127.0.0.1 {port}"));
-    assert!(!o.allowed(), "loopback is not reachable by default");
-    assert!(
-        o.denied_by_fence(),
-        "expected a fence denial, not a timeout. {}",
-        o.detail()
-    );
-}
-
-/// The loopback opt-in must reach loopback while still refusing egress.
-///
-/// This is the probe that pins the trap. The outbound rule that makes loopback
-/// work has to filter on the remote address; spelled with a local-address filter
-/// instead it admits every host, because the source address of an unbound socket
-/// is the any-address at connect time and the loopback token matches it. Both
-/// halves are therefore asserted together: reaching loopback proves the rule
-/// fires, and the egress refusal in the same fence proves it did not fire wider
-/// than intended. Splitting them into separate tests would let the dangerous
-/// half regress while the reassuring half stayed green.
-#[cfg(target_os = "macos")]
-#[test]
-fn test_loopback_grants_no_egress() {
-    let (_l, port) = loopback_listener();
-    let mut p = NetworkPolicy::contained();
-    p.allow_local_binding = true;
-    let f = Fence::with_network("net-lo-on", p);
-    let lo = f.probe("loopback", &format!("nc -v -G 1 -w 1 -z 127.0.0.1 {port}"));
-    assert!(
-        lo.allowed(),
-        "the loopback opt-in must actually reach a loopback peer. stderr: {}",
-        lo.stderr
-    );
-    let out = f.probe("egress", &format!("nc -v -G 1 -w 1 -z {UNROUTABLE} 80"));
-    assert!(
-        out.denied_by_fence(),
-        "the loopback opt-in must not widen egress; a timeout here instead of a \
-         fence denial means the outbound rule matched every host, which is the \
-         source-address trap. {}",
-        out.detail()
-    );
-}
-
-/// Unix sockets must be unreachable by default, and reachable when listed.
-///
-/// Both halves live in one probe because the interesting property is the
-/// difference: the default denial is only meaningful if the same operation
-/// succeeds once the path is allowed, which also proves the three separate
-/// operations the allow-back emits are in fact all the operations needed.
-#[cfg(target_os = "macos")]
-#[test]
-fn test_socket_allowback_works() {
-    // Canonicalized because the fence matches the resolved realpath: the temp
-    // dir is reached through a symlink on macOS, so an allow-back naming the
-    // unresolved path would render a rule the kernel never matches. This is the
-    // same failure that made the system-etc segment dead for a long time.
-    let dir = temp_dir().join(format!("houyi-sock-{}", id()));
-    create_dir_all(&dir).expect("create socket dir");
-    let dir = canonicalize(&dir).expect("canonicalize socket dir");
-    let path = dir.join("probe.sock");
-    let listener = UnixListener::bind(&path).expect("bind unix socket");
-    let cmd = format!("nc -v -w 1 -U {} </dev/null", path.display());
-
-    let denied = Fence::with_network("sock-off", NetworkPolicy::contained());
-    let off = denied.probe("socket", &cmd);
-    assert!(
-        !off.allowed(),
-        "unix sockets are denied by default; the network class deny covers them"
-    );
-
-    let mut p = NetworkPolicy::contained();
-    p.unix_sockets = UnixSockets::Paths(vec![dir.to_string_lossy().into_owned()]);
-    let allowed = Fence::with_network("sock-on", p);
-    let on = allowed.probe("socket", &cmd);
-    assert!(
-        on.allowed(),
-        "a listed unix socket path must be reachable; a denial means one of the \
-         three operations the allow-back emits is missing. stderr: {}",
-        on.stderr
-    );
-
-    drop(listener);
-    remove_dir_all(&dir).ok();
 }

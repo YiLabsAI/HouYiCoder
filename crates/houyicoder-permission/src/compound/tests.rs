@@ -82,7 +82,7 @@ fn test_attestable_group_redirect() {
 }
 
 #[test]
-fn test_attestable_redirect_before_separator() {
+fn test_attestable_before_separator() {
     // A separator ends the segment on the spot, so a redirect does not need a
     // space after it to be recognised.
     assert!(is_attestable("cargo test 2>/dev/null;"));

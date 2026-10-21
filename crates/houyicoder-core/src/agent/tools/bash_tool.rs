@@ -117,9 +117,9 @@ impl Tool for BashTool {
          sequentially without caring if earlier commands fail. Pipe output \
          with | to pass it between commands (find . -name '*.rs' | xargs \
          wc -l | sort -n). Do not use newlines to separate commands. \
-         For temporary files and scratch repositories use $TMPDIR, which the \
-         sandbox sets to a private writable directory; a write to /tmp is \
-         refused."
+         For temporary files and directories use $TMPDIR, which points to the \
+         session's writable temporary directory; direct writes to /tmp are \
+         blocked by the sandbox."
     }
     fn input_schema(&self) -> Value {
         json!({
