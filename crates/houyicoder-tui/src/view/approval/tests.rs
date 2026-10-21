@@ -7,6 +7,7 @@ use crate::pending_prompt::PendingPrompt;
 use crate::records::Approval;
 use crate::state::Screen;
 use crate::test_harness::render_text;
+use houyicoder_protocol::acp_wire::{PermissionOption, PermissionOptionKind};
 use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::extension::ENTITLEMENT_TOOL;
 use houyicoder_protocol::frontend::permission::AskSource;
@@ -607,3 +608,107 @@ fn test_entitlement_detail_multibyte_safe() {
 }
 
 mod cursor_priority;
+
+/// Build the wire option set the server sends for a scoped network ask.
+fn scoped_options(label: &str) -> Vec<PermissionOption> {
+    vec![
+        PermissionOption {
+            option_id: "allow_once".into(),
+            name: "Allow once".into(),
+            kind: PermissionOptionKind::AllowOnce,
+            meta: None,
+        },
+        PermissionOption {
+            option_id: "allow_always".into(),
+            name: label.into(),
+            kind: PermissionOptionKind::AllowAlways,
+            meta: None,
+        },
+        PermissionOption {
+            option_id: "reject_once".into(),
+            name: "Reject once".into(),
+            kind: PermissionOptionKind::RejectOnce,
+            meta: None,
+        },
+    ]
+}
+
+/// A network ask on a command that sets a variable first: the remember option
+/// names the destination the server will install, not the command's first
+/// word.
+#[test]
+fn test_card_names_destination() {
+    let mut app = composition::app();
+    app.ui.navigation.screen = Screen::Working;
+    let command = "CACERT=/opt/cacert.pem; curl -sS --cacert \"$CACERT\" \
+                   \"https://api.github.com/repos/ray-project/ray/pulls/66986\" \
+                   -o \"$TMPDIR/pr.json\"; python3 -c \"print(1)\"";
+    app.sessions.current.prompt = Some(PendingPrompt::approval_card(
+        RequestId(0),
+        Approval {
+            tool: "bash".into(),
+            args: json!({ "command": command }).to_string(),
+            reason: "this command reaches the network".into(),
+            source: Some(AskSource::Detection),
+            selected: 2,
+            call_id: String::new(),
+            options: scoped_options("curl https://api.github.com *"),
+            ..Default::default()
+        },
+    ));
+    let out = render_text(&app, 100, 24);
+    assert!(
+        out.contains("2. Yes, and don't ask again for curl https://api.github.com *"),
+        "remember option must name the destination:\n{out}"
+    );
+    assert!(
+        !out.contains("for CACERT="),
+        "remember option must not name the assignment:\n{out}"
+    );
+}
+
+/// A command whose destination cannot be named: the server sends no remember
+/// option, so the card renders two choices instead of promising one it cannot
+/// install.
+#[test]
+fn test_no_scope_hides_remember() {
+    let mut app = composition::app();
+    app.ui.navigation.screen = Screen::Working;
+    app.sessions.current.prompt = Some(PendingPrompt::approval_card(
+        RequestId(0),
+        Approval {
+            tool: "bash".into(),
+            args: json!({ "command": "curl \"$DYNAMIC_URL\"" }).to_string(),
+            reason: "this command reaches the network".into(),
+            source: Some(AskSource::Detection),
+            selected: 0,
+            call_id: String::new(),
+            options: vec![
+                PermissionOption {
+                    option_id: "allow_once".into(),
+                    name: "Allow once".into(),
+                    kind: PermissionOptionKind::AllowOnce,
+                    meta: None,
+                },
+                PermissionOption {
+                    option_id: "reject_once".into(),
+                    name: "Reject once".into(),
+                    kind: PermissionOptionKind::RejectOnce,
+                    meta: None,
+                },
+            ],
+            ..Default::default()
+        },
+    ));
+    let out = render_text(&app, 100, 24);
+    assert!(out.contains("1. Yes"), "yes option missing:\n{out}");
+    assert!(out.contains("2. No"), "no option missing:\n{out}");
+    assert!(
+        !out.contains("don't ask again"),
+        "no remember option may appear:\n{out}"
+    );
+    assert!(
+        !out.contains("3. No"),
+        "a two-option card numbers No as 2:\n{out}"
+    );
+}

@@ -3,6 +3,15 @@
 
 use houyicoder_api::sandbox::SideEffect;
 
+/// Whether a tool name runs a shell command. The shell family shares one
+/// command field and one set of command checks.
+pub(crate) fn is_shell_tool(tool_name: &str) -> bool {
+    matches!(
+        tool_name.to_ascii_lowercase().as_str(),
+        "bash" | "sh" | "exec" | "shell"
+    )
+}
+
 /// Map a tool name to its side-effect level. Unknown tools default to None —
 /// the side-effect is a hint, not a fence; the mode default and the tool's own
 /// requires_approval flag still gate unknown tools.

@@ -65,7 +65,7 @@ fn test_ladder_matches_spec() {
             Stage::Detection,
             "network_egress",
             Immunity::ModeImmune,
-            false,
+            true,
         ),
         (
             Stage::Detection,

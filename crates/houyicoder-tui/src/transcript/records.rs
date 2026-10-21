@@ -667,13 +667,29 @@ pub struct Approval {
 pub const APPROVAL_OPTIONS: usize = 3;
 
 impl Approval {
+    /// The scope the server attached to its remember option, when it offered
+    /// one. The server is the authority on what a yes-always installs, so the
+    /// card shows that text instead of deriving one from the command.
+    pub fn remember_scope(&self) -> Option<&str> {
+        self.options
+            .iter()
+            .find(|option| matches!(option.kind, PermissionOptionKind::AllowAlways))
+            .map(|option| option.name.as_str())
+            .filter(|name| !name.is_empty())
+    }
+
     /// Whether the "Yes, and don't ask again" option is hidden. A protected-
     /// path check (source SystemSafety) is authoritative: a stored consent
     /// rule cannot override it, so persisting a yes-always would be a no-op
     /// at best and misleading at worst. Hide the option so the human is not
-    /// offered a choice the gate will ignore.
+    /// offered a choice the gate will ignore. A server that sent an explicit
+    /// option set is equally authoritative: when it offered no remember
+    /// option, it can install no scope for this call.
     pub fn remember_hidden(&self) -> bool {
-        matches!(self.source, Some(AskSource::SystemSafety))
+        if matches!(self.source, Some(AskSource::SystemSafety)) {
+            return true;
+        }
+        !self.options.is_empty() && self.remember_scope().is_none()
     }
 
     /// Whether this is an entitlement ask (a deny-log discovery offering

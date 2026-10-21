@@ -19,6 +19,7 @@
 mod compound;
 mod consent;
 mod decision;
+mod egress;
 mod gate;
 mod git_discard;
 mod guarded_tool;
@@ -35,17 +36,19 @@ mod wire;
 #[cfg(test)]
 mod tests;
 
-pub use compound::{compound_safe, is_attestable, split_compound};
+pub use compound::{compound_safe, is_attestable, normalize_shell_command, split_compound};
 pub use consent::{ConsentStore, InMemoryConsentStore, args_key};
 pub use decision::{
     AllowReason, AskReason, AskSource, Decision, DenyReason, DenySource, FenceProof, Outcome,
 };
+pub use egress::bash_egress_scope;
 pub use gate::{
     AutoPolicy, DefaultModeGate, DefaultPolicy, ModeGate, ModePolicy, classify_git_op, mode_default,
 };
 pub use guarded_tool::GuardedTool;
 pub use metrics::{DecisionBucket, DecisionCounter, outcome_label};
 pub use mode::{ModeChange, ModeError, PermissionMode, ToolRequest};
+pub use pipeline::detection::NETWORK_EGRESS;
 pub use rule::{
     Effect, GlobPattern, Rule, RuleContent, bash_always_allow_prefix, builtin_rule_id,
     builtin_rules, denied_agent_types, evaluate, input_content,

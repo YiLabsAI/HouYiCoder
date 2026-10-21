@@ -100,6 +100,81 @@ fn push_seg(out: &mut Vec<String>, s: &str) {
     }
 }
 
+/// Whether a word is an environment assignment (NAME=value) rather than a
+/// command or an argument. The name must be a plain identifier, so a flag
+/// carrying an inline value (--data=x) is not an assignment.
+pub(crate) fn is_env_assignment(word: &str) -> bool {
+    let Some((name, _)) = word.split_once('=') else {
+        return false;
+    };
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// Whether a whole segment only sets environment variables, so it reaches no
+/// program and no resource.
+fn is_assignment_only(segment: &str) -> bool {
+    let mut words = segment.split_whitespace();
+    let first = words.next();
+    first.is_some_and(is_env_assignment) && words.all(is_env_assignment)
+}
+
+/// Drop the environment prefix a command carries, so a rule and the call it
+/// governs describe the same program. Without this a rule derived from a call
+/// that begins with an assignment names the assignment, which no other call
+/// shares, and a rule for the real program never matches a call that sets a
+/// variable first.
+///
+/// Leading assignment-only segments are dropped whole; the leading assignment
+/// words of the first live segment are dropped from that segment. The rest of
+/// the command is returned unchanged, separators included, so a rule derived
+/// from the result still describes the same shell text.
+pub fn normalize_shell_command(command: &str) -> String {
+    let mut cursor = 0;
+    let mut keep_from = None;
+    for segment in split_compound(command) {
+        let Some(offset) = command[cursor..].find(segment.as_str()) else {
+            // The parsed segment is not a contiguous slice of the input, which
+            // means the split lost track of the original text. Leave the
+            // command alone rather than rewrite it into something else.
+            return command.trim().to_string();
+        };
+        let at = cursor + offset;
+        cursor = at + segment.len();
+        if keep_from.is_some() || is_assignment_only(&segment) {
+            continue;
+        }
+        keep_from = Some(at + assignment_prefix_len(&segment));
+    }
+    match keep_from {
+        Some(at) => command[at..].trim().to_string(),
+        None => String::new(),
+    }
+}
+
+/// The byte length of the leading run of environment assignments in one
+/// segment, including the whitespace after each.
+fn assignment_prefix_len(segment: &str) -> usize {
+    let mut consumed = 0;
+    let mut rest = segment;
+    loop {
+        let word_end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+        if !is_env_assignment(&rest[..word_end]) {
+            return consumed;
+        }
+        if word_end == rest.len() {
+            return segment.len();
+        }
+        let gap = rest[word_end..].len() - rest[word_end..].trim_start().len();
+        consumed += word_end + gap;
+        rest = &rest[word_end + gap..];
+    }
+}
+
 /// Strip the redirect forms that do NOT touch a real file, so the
 /// attestability scan only escalates on a redirect to a path. Four forms are
 /// safe: 2>&1 (stderr to stdout), an optional source fd then > then /dev/null

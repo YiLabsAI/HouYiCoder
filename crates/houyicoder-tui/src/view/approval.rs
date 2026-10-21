@@ -297,17 +297,7 @@ fn render_options(f: &mut Frame, a: &Approval, chunks: &[Rect]) {
         return;
     }
     let dont_ask_focused = a.selected == 2;
-    let dont_ask_label = match a.tool.to_ascii_lowercase().as_str() {
-        "bash" | "sh" | "exec" | "shell" => {
-            let val = serde_json::from_str::<Value>(&a.args).ok();
-            let cmd = args_command(&a.tool, val.as_ref(), &a.args);
-            cmd.split_whitespace()
-                .next()
-                .map(|t| format!("{t} *"))
-                .unwrap_or_else(|| a.tool.clone())
-        }
-        _ => a.tool.clone(),
-    };
+    let dont_ask_label = remember_label(a);
     f.render_widget(
         Paragraph::new(format!(
             " {} 2. Yes, and don't ask again for {}",
@@ -332,6 +322,27 @@ fn render_options(f: &mut Frame, a: &Approval, chunks: &[Rect]) {
         ),
         chunks[7],
     );
+}
+
+/// The scope text for the remember option. The server states it, because only
+/// the server knows what a yes-always installs; a card built without a server
+/// option set falls back to the tool's first word, which is the shape older
+/// engines understood.
+fn remember_label(a: &Approval) -> String {
+    if let Some(label) = a.remember_scope() {
+        return label.to_string();
+    }
+    match a.tool.to_ascii_lowercase().as_str() {
+        "bash" | "sh" | "exec" | "shell" => {
+            let val = serde_json::from_str::<Value>(&a.args).ok();
+            let cmd = args_command(&a.tool, val.as_ref(), &a.args);
+            cmd.split_whitespace()
+                .next()
+                .map(|t| format!("{t} *"))
+                .unwrap_or_else(|| a.tool.clone())
+        }
+        _ => a.tool.clone(),
+    }
 }
 
 /// A short label for the ask source, rendered as a prefix on the reason

@@ -300,7 +300,7 @@ impl Server {
             && reason.is_some()
             && scope == "always"
         {
-            self.apply_consent_rule(tool_name, input);
+            self.apply_consent_rule(tool_name, input, reason);
         }
         Ok(())
     }

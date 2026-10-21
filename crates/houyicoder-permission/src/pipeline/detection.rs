@@ -10,6 +10,7 @@ use std::sync::Arc;
 use crate::compound::compound_safe;
 use crate::compound::is_readonly_compound;
 use crate::decision::{AskReason, AskSource, Decision};
+use crate::egress::bash_egress_scope;
 use crate::git_discard::should_ask_before_git;
 use crate::heredoc::strip_quoted_heredoc_bodies;
 use crate::mode::ToolRequest;
@@ -52,7 +53,7 @@ fn should_ask_destructive(tool_name: &str, content: &str) -> bool {
 /// Auto, never a deny citing the fence. The fence blocks at execution time
 /// when it does not permit egress, and post_transform attaches that verdict
 /// as a containment_note so the user knows approval may not help.
-fn should_ask_egress(tool_name: &str, content: &str) -> bool {
+pub(crate) fn should_ask_egress(tool_name: &str, content: &str) -> bool {
     let lower = tool_name.to_ascii_lowercase();
     if !matches!(lower.as_str(), "bash" | "sh" | "exec" | "shell") {
         return false;
@@ -244,19 +245,19 @@ impl Validator for GitCheckpointValidator {
 }
 
 /// Network egress: curl, wget, git push, package publish, scp, rsync, ssh.
-/// Always asks. The fence is the single authority over containment: when it
-/// does not permit egress the kernel refuses at execution time, and
-/// post_transform attaches the fence's verdict (via would_block) as a
-/// containment_note so the user sees that approval will not help. The gate
-/// never denies on containment grounds — that would make it a second
-/// authority beside the fence.
+/// Asks unless the session remembered this command's destination. The fence is
+/// the single authority over containment: when it does not permit egress the
+/// kernel refuses at execution time, and post_transform attaches the fence's
+/// verdict (via would_block) as a containment_note so the user sees that
+/// approval will not help. The gate never denies on containment grounds — that
+/// would make it a second authority beside the fence.
 pub struct NetworkEgressValidator;
 
 /// The stable name of the network-egress validator. A metrics bucket key and
 /// the recognizer post_transform uses to query the fence at the network layer
 /// (an egress call runs via bash so its side-effect classification is Exec,
 /// but the fence blocks egress, not exec).
-pub(crate) const NETWORK_EGRESS: &str = "network_egress";
+pub const NETWORK_EGRESS: &str = "network_egress";
 
 impl Validator for NetworkEgressValidator {
     fn name(&self) -> &'static str {
@@ -269,22 +270,31 @@ impl Validator for NetworkEgressValidator {
         Immunity::ModeImmune
     }
     fn consent_overridable(&self) -> bool {
-        false
+        true
     }
     fn check(&self, req: &ToolRequest<'_>, ctx: &GateCtx<'_>) -> Option<Decision> {
         if !should_ask_egress(req.tool_name, ctx.content) {
             return None;
         }
-        // The gate always asks for egress, never denies citing the fence.
-        // The fence blocks at execution time; post_transform fills the note
-        // (via would_block) when the fence is expected to reject, so the user
-        // knows approval may not help.
+        // A destination the user already remembered for this session is not a
+        // new decision. The scope is derived from the whole command, so it
+        // covers only a literal read-only request to that one origin.
+        if let Some(scope) = bash_egress_scope(ctx.content)
+            && ctx.egress_allow.iter().any(|allowed| allowed == &scope)
+        {
+            return None;
+        }
+        if consent_allows(req, ctx) {
+            return None;
+        }
+        // The gate always asks for egress, never denies citing the fence. The
+        // fence blocks at execution time; post_transform fills the note (via
+        // would_block) when the fence is expected to reject, so the user knows
+        // approval may not help.
         Some(Decision::Ask(AskReason {
             source: AskSource::Detection,
             validator: self.name(),
-            detail: "this command reaches the network; approving runs it \
-                     (the sandbox fence may still block it)"
-                .into(),
+            detail: "this command reaches the network".into(),
             containment_note: None,
         }))
     }

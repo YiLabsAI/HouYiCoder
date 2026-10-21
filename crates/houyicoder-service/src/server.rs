@@ -42,7 +42,7 @@ use crate::diagnostics::DiagnosticsHandle;
 use crate::diagnostics::handle;
 use crate::lifecycle::PendingPermission;
 use crate::lifecycle::PendingTurn;
-use crate::protocol_adapter::consent_rule_for;
+use crate::protocol_adapter::{AlwaysScope, always_scope};
 pub use frame_carrier::FrameCarrier;
 use futures::future::Either;
 use futures::future::pending;
@@ -52,7 +52,7 @@ use houyicoder_core::agent::{
     ApprovalDecision as EngineApprovalDecision, ApprovalRequest as EngineApprovalRequest, RunError,
     RunOutcome, RunResult,
 };
-use houyicoder_permission::{Effect, Rule, RuleContent, Scope};
+use houyicoder_permission::AskReason;
 use houyicoder_protocol::acp_wire::AcpNotification;
 use std::path::PathBuf;
 use std::time::SystemTime;
@@ -255,30 +255,20 @@ impl Server {
     /// here — not in the frontend. git-checkpoint ops (git commit/rebase/reset/
     /// tag) route to a session-scope allow rule that shadows the builtin ask
     /// rule for that subcommand this session (cleared on restart, like the
-    /// reference's session rule source); everything else becomes a durable
-    /// allow rule. A compound/un-scopable bash command yields no rule
-    /// (approved once only).
-    fn apply_consent_rule(&self, tool_name: &str, input: &serde_json::Value) {
-        let command = houyicoder_permission::input_content(tool_name, Some(input));
-        if let Some(git_cmd) = houyicoder_permission::classify_git_op(tool_name, &command) {
-            // The discard forms (force push, clean -fd, ...) return their
-            // consent word too; only the four checkpoint subcommands map to a
-            // shadow-able builtin rule. For a discard word, fall through to
-            // the durable-rule path below (there is no builtin to shadow).
-            if matches!(git_cmd, "commit" | "rebase" | "reset" | "tag") {
-                let rule = Rule::with_content(
-                    "bash",
-                    RuleContent::Prefix(format!("git {git_cmd}")),
-                    Effect::Allow,
-                )
-                .unwrap()
-                .with_scope(Scope::Session);
-                self.gate.add_rule(rule);
-                return;
-            }
-        }
-        if let Some(rule) = consent_rule_for(tool_name, input) {
-            self.gate.add_rule(rule);
+    /// reference's session rule source); a remembered network destination
+    /// becomes a session entry in the gate's egress allowlist; everything else
+    /// becomes a durable allow rule. A compound/un-scopable bash command yields
+    /// no rule (approved once only).
+    fn apply_consent_rule(
+        &self,
+        tool_name: &str,
+        input: &serde_json::Value,
+        reason: Option<&AskReason>,
+    ) {
+        match always_scope(tool_name, input, reason) {
+            AlwaysScope::Once => {}
+            AlwaysScope::Egress(scope) => self.gate.add_egress_allow(&scope),
+            AlwaysScope::Rule(rule) => self.gate.add_rule(rule),
         }
     }
 

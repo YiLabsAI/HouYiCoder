@@ -3,6 +3,7 @@
 //! from serialization.
 
 pub(crate) mod agents;
+mod approval_scope;
 pub(crate) mod compaction;
 pub(crate) mod hooks;
 pub(crate) mod memory_view;
@@ -13,6 +14,7 @@ mod trajectory_row;
 use trajectory_row::{event_name, hex_short};
 
 use AcpxMethod::*;
+pub(crate) use approval_scope::{AlwaysScope, always_scope, approval_options};
 use houyicoder_context::SessionEvent;
 use houyicoder_core::agent::StatusSnapshot;
 use houyicoder_permission::PermissionMode as M;
@@ -118,7 +120,7 @@ pub(crate) fn build_approval_request(
         call_id: req.call_id.clone(),
         tool_name: req.tool_name.clone(),
         input: req.input.clone(),
-        options: Vec::new(),
+        options: approval_options(&req.tool_name, &req.input, reason),
         reason: reason.map(AskReason::from),
         delegation: delegation.cloned(),
     }

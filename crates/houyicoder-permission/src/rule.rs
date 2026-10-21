@@ -13,6 +13,7 @@ use glob::{MatchOptions, Pattern};
 use serde::{Deserialize, Serialize};
 
 use crate::compound::is_attestable;
+use crate::compound::normalize_shell_command;
 use crate::compound::split_compound;
 use crate::mode::ModeError;
 use crate::store::Scope;
@@ -213,7 +214,11 @@ impl Rule {
 /// Returns Some("npm run") for "npm run build", Some("ls") for "ls -la",
 /// Some("rm") for "rm -rf /tmp/build".
 pub fn bash_always_allow_prefix(command: &str) -> Option<String> {
-    let segs = split_compound(command);
+    // The prefix is matched against the same text the ladder sees, so the
+    // environment prefix a call carries is dropped here too. Without this the
+    // rule would name the assignment, which no other call shares.
+    let normalized = normalize_shell_command(command);
+    let segs = split_compound(&normalized);
     if segs.len() != 1 {
         return None;
     }

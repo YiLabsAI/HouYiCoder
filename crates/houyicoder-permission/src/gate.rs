@@ -15,7 +15,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use crate::compound::split_compound;
+use crate::compound::{normalize_shell_command, split_compound};
 use crate::consent::ConsentStore;
 use crate::decision::{AllowReason, AskReason, AskSource, Decision};
 use crate::git_discard::should_ask_before_git;
@@ -30,6 +30,7 @@ use crate::pipeline::{GateCtx, Pipeline};
 use crate::rule::builtin_rule_id;
 use crate::rule::builtin_rules;
 use crate::rule::{Rule, evaluate, input_content};
+use crate::side_effect::is_shell_tool;
 use crate::side_effect::side_effect_for;
 use crate::store::RuleStore;
 use crate::store::Scope;
@@ -52,6 +53,12 @@ pub trait ModeGate: Send + Sync {
     fn rules(&self) -> Vec<Rule>;
     /// Add a durable rule (AllowAlways persists when a store is attached).
     fn add_rule(&self, rule: Rule);
+    /// Remember one network destination for this session, as the scope string
+    /// the egress derivation produces. A destination is not a command rule:
+    /// the network check recognizes programs, not destinations, so it reads
+    /// this list instead of the rule set. Default no-op for gates that do not
+    /// keep one.
+    fn add_egress_allow(&self, _scope: &str) {}
     /// Persist a directory authorization (a path-bounds approval the user
     /// marked "always") to the durable store at the given scope, so the fence
     /// rehydrates it on restart. Default no-op (no store / a test gate). The
@@ -113,6 +120,11 @@ pub struct DefaultModeGate {
     /// git toggle). A disabled builtin rule is not seeded into the rule set,
     /// so the call it gated falls through to the rest of the ladder.
     disabled_builtins: Mutex<HashSet<String>>,
+    /// Network destinations the session remembered, keyed by the scope string
+    /// the egress derivation produces. Session-scoped on purpose: a durable
+    /// host allowlist is a larger decision than one approval, and nothing here
+    /// survives a restart.
+    egress_allow: Mutex<Vec<String>>,
 }
 
 impl DefaultModeGate {
@@ -129,6 +141,7 @@ impl DefaultModeGate {
             auto_allow_fenced_exec: AtomicBool::new(false),
             metrics: DecisionCounter::new(),
             disabled_builtins: Mutex::new(HashSet::new()),
+            egress_allow: Mutex::new(Vec::new()),
         }
     }
 
@@ -145,6 +158,7 @@ impl DefaultModeGate {
             auto_allow_fenced_exec: AtomicBool::new(false),
             metrics: DecisionCounter::new(),
             disabled_builtins: Mutex::new(HashSet::new()),
+            egress_allow: Mutex::new(Vec::new()),
         }
     }
 
@@ -165,6 +179,7 @@ impl DefaultModeGate {
             auto_allow_fenced_exec: AtomicBool::new(false),
             metrics: DecisionCounter::new(),
             disabled_builtins: Mutex::new(HashSet::new()),
+            egress_allow: Mutex::new(Vec::new()),
         }
     }
 
@@ -250,10 +265,19 @@ impl DefaultModeGate {
     /// then runs the validator registry lock-free against that snapshot.
     fn decide_inner(&self, req: &ToolRequest) -> Decision {
         let rules = self.rules.lock().expect("mode gate mutex");
-        let content = input_content(req.tool_name, req.input);
+        let raw_content = input_content(req.tool_name, req.input);
+        // A shell command's environment prefix names no program, so the ladder
+        // reasons about the command itself. Rules then describe the same text
+        // whether or not the caller set a variable first.
+        let content = if is_shell_tool(req.tool_name) {
+            normalize_shell_command(&raw_content)
+        } else {
+            raw_content
+        };
         let effect = evaluate(&rules, req.tool_name, &content);
         let segments = split_compound(&content);
         let mode = *self.mode.lock().expect("mode gate mutex");
+        let egress_allow = self.egress_allow.lock().expect("mode gate mutex").clone();
         let ctx = GateCtx {
             mode,
             content: &content,
@@ -261,6 +285,7 @@ impl DefaultModeGate {
             rules: &rules,
             consent: self.consent.as_deref(),
             effect,
+            egress_allow: &egress_allow,
             git_checkpoint_enabled: self.git_checkpoint_enabled(),
         };
         self.pipeline.decide(req, &ctx)
@@ -446,6 +471,16 @@ impl ModeGate for DefaultModeGate {
             }
         }
         true
+    }
+
+    fn add_egress_allow(&self, scope: &str) {
+        if scope.is_empty() {
+            return;
+        }
+        let mut allow = self.egress_allow.lock().expect("mode gate mutex");
+        if !allow.iter().any(|existing| existing == scope) {
+            allow.push(scope.to_string());
+        }
     }
 
     fn set_git_checkpoint_enabled(&self, enabled: bool) {

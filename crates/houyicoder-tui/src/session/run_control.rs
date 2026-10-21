@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::extension::ENTITLEMENT_TOOL;
-use houyicoder_protocol::frontend::permission::{AskSource, PermissionMode};
+use houyicoder_protocol::frontend::permission::PermissionMode;
 use houyicoder_protocol::frontend::run::{ApprovalDecision, ApprovalRequest, ContentBlock};
 use houyicoder_protocol::frontend::session_update::SessionUpdate;
 
@@ -371,7 +371,7 @@ impl App {
         // Malformed questions fall back to the generic card. Safety requests
         // hide persistent approval because consent cannot override them.
         let args = ask.input.to_string();
-        let mut selected = self.initial_cursor(&tool);
+        let selected = self.initial_cursor(&tool);
         let (reason, source, containment_note) = if tool == ENTITLEMENT_TOOL {
             // The entitlement ask carries no gate reason — the deny-log
             // scan is why the card is up.
@@ -382,24 +382,26 @@ impl App {
                 None => ("agent wants to run this tool".to_string(), None, None),
             }
         };
-        let two_option =
-            tool == ENTITLEMENT_TOOL || matches!(source, Some(AskSource::SystemSafety));
+        let mut card = Approval {
+            tool,
+            args,
+            reason,
+            source,
+            delegation: ask.delegation,
+            containment_note,
+            selected,
+            call_id,
+            // The server states which verdicts it can honor, so the card
+            // renders its options instead of guessing a scope from the
+            // command text.
+            options: ask.options,
+        };
         // Two-option cards cannot retain a hidden persistent choice.
-        if two_option && selected == 2 {
-            selected = 0;
+        if card.two_option_card() && card.selected == 2 {
+            card.selected = 0;
         }
         if let Some(p) = self.sessions.current.prompt.as_mut() {
-            p.set_approval(Some(Approval {
-                tool,
-                args,
-                reason,
-                source,
-                delegation: ask.delegation,
-                containment_note,
-                selected,
-                call_id,
-                options: Vec::new(),
-            }));
+            p.set_approval(Some(card));
         }
     }
 
