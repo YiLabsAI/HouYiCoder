@@ -329,7 +329,7 @@ fn render_options(f: &mut Frame, a: &Approval, chunks: &[Rect]) {
 /// option set falls back to the tool's first word, which is the shape older
 /// engines understood.
 fn remember_label(a: &Approval) -> String {
-    if let Some(label) = a.remember_scope() {
+    if let Some(label) = a.remember_name() {
         return label.to_string();
     }
     match a.tool.to_ascii_lowercase().as_str() {

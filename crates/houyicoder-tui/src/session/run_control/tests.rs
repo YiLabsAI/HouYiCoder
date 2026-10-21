@@ -5,6 +5,7 @@
 //! the wire: a paired in-memory server drives runner.run, the TUI ships
 //! MessageSend, and permission asks arrive as SessionMessage::Request
 //! reverse requests.
+use super::startup::StartupBatch;
 use super::*;
 use crate::agent_message::SessionMessage;
 use crate::agent_message::{ServerEvent, ServerRequest, ServerResponse};

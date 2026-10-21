@@ -10,7 +10,7 @@ use std::sync::Arc;
 use crate::compound::compound_safe;
 use crate::compound::is_readonly_compound;
 use crate::decision::{AskReason, AskSource, Decision};
-use crate::egress::bash_egress_scope;
+use crate::egress::egress_destination;
 use crate::git_discard::should_ask_before_git;
 use crate::heredoc::strip_quoted_heredoc_bodies;
 use crate::mode::ToolRequest;
@@ -279,8 +279,11 @@ impl Validator for NetworkEgressValidator {
         // A destination the user already remembered for this session is not a
         // new decision. The scope is derived from the whole command, so it
         // covers only a literal read-only request to that one origin.
-        if let Some(scope) = bash_egress_scope(ctx.content)
-            && ctx.egress_allow.iter().any(|allowed| allowed == &scope)
+        if let Some(destination) = egress_destination(ctx.content)
+            && ctx
+                .egress_allow
+                .iter()
+                .any(|allowed| allowed == &destination)
         {
             return None;
         }

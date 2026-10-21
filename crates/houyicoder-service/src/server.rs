@@ -42,7 +42,7 @@ use crate::diagnostics::DiagnosticsHandle;
 use crate::diagnostics::handle;
 use crate::lifecycle::PendingPermission;
 use crate::lifecycle::PendingTurn;
-use crate::protocol_adapter::{AlwaysScope, always_scope};
+use crate::protocol_adapter::{AlwaysGrant, always_grant};
 pub use frame_carrier::FrameCarrier;
 use futures::future::Either;
 use futures::future::pending;
@@ -265,10 +265,10 @@ impl Server {
         input: &serde_json::Value,
         reason: Option<&AskReason>,
     ) {
-        match always_scope(tool_name, input, reason) {
-            AlwaysScope::Once => {}
-            AlwaysScope::Egress(scope) => self.gate.add_egress_allow(&scope),
-            AlwaysScope::Rule(rule) => self.gate.add_rule(rule),
+        match always_grant(tool_name, input, reason) {
+            AlwaysGrant::Once => {}
+            AlwaysGrant::Network(destination) => self.gate.add_egress_allow(&destination),
+            AlwaysGrant::Rule(rule) => self.gate.add_rule(rule),
         }
     }
 

@@ -671,7 +671,7 @@ fn test_card_names_destination() {
 /// option, so the card renders two choices instead of promising one it cannot
 /// install.
 #[test]
-fn test_no_scope_hides_remember() {
+fn test_no_destination_hides_remember() {
     let mut app = composition::app();
     app.ui.navigation.screen = Screen::Working;
     app.sessions.current.prompt = Some(PendingPrompt::approval_card(

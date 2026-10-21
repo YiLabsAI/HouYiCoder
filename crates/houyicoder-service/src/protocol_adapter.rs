@@ -3,7 +3,7 @@
 //! from serialization.
 
 pub(crate) mod agents;
-mod approval_scope;
+mod always_grant;
 pub(crate) mod compaction;
 pub(crate) mod hooks;
 pub(crate) mod memory_view;
@@ -14,7 +14,7 @@ mod trajectory_row;
 use trajectory_row::{event_name, hex_short};
 
 use AcpxMethod::*;
-pub(crate) use approval_scope::{AlwaysScope, always_scope, approval_options};
+pub(crate) use always_grant::{AlwaysGrant, always_grant, approval_options};
 use houyicoder_context::SessionEvent;
 use houyicoder_core::agent::StatusSnapshot;
 use houyicoder_permission::PermissionMode as M;

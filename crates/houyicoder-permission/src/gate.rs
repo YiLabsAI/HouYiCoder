@@ -58,7 +58,7 @@ pub trait ModeGate: Send + Sync {
     /// the network check recognizes programs, not destinations, so it reads
     /// this list instead of the rule set. Default no-op for gates that do not
     /// keep one.
-    fn add_egress_allow(&self, _scope: &str) {}
+    fn add_egress_allow(&self, _destination: &str) {}
     /// Persist a directory authorization (a path-bounds approval the user
     /// marked "always") to the durable store at the given scope, so the fence
     /// rehydrates it on restart. Default no-op (no store / a test gate). The
@@ -473,13 +473,13 @@ impl ModeGate for DefaultModeGate {
         true
     }
 
-    fn add_egress_allow(&self, scope: &str) {
-        if scope.is_empty() {
+    fn add_egress_allow(&self, destination: &str) {
+        if destination.is_empty() {
             return;
         }
         let mut allow = self.egress_allow.lock().expect("mode gate mutex");
-        if !allow.iter().any(|existing| existing == scope) {
-            allow.push(scope.to_string());
+        if !allow.iter().any(|existing| existing == destination) {
+            allow.push(destination.to_string());
         }
     }
 

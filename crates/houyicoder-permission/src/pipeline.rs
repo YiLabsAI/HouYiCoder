@@ -103,8 +103,8 @@ pub struct GateCtx<'a> {
     /// top of the ladder so the rule-stage validators read a shared value
     /// instead of each re-running the rule matcher.
     pub effect: Option<Effect>,
-    /// The network destinations the session remembered, as the scope strings
-    /// the egress derivation produces. A text rule cannot name a destination,
+    /// The network destinations the session remembered, as the strings the
+    /// egress derivation produces. A text rule cannot name a destination,
     /// so the network check reads this list instead of the rule set.
     pub egress_allow: &'a [String],
     /// Whether the git-checkpoint builtin rules are enabled. Derived from the

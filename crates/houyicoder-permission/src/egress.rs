@@ -22,13 +22,13 @@ use crate::compound::split_compound;
 use crate::pipeline::detection::should_ask_egress;
 use crate::pipeline::detection::strip_quotes;
 
-/// Programs this module can derive a destination for.
-const EGRESS_PROGRAMS: &[&str] = &["curl", "wget"];
+/// Tools this module can derive a destination for.
+const EGRESS_TOOLS: &[&str] = &["curl", "wget"];
 
 /// Long flags that turn the request into an upload, retarget it, or load
 /// options from a file, so the literal URL no longer describes the request.
 /// Matched by prefix so an inline value form is caught too.
-const UNSCOPABLE_LONG: &[&str] = &[
+const REFUSED_LONG: &[&str] = &[
     "--data",
     "--form",
     "--upload-file",
@@ -49,7 +49,7 @@ const UNSCOPABLE_LONG: &[&str] = &[
 
 /// Short flags with the same effect. A short cluster is matched by the letter
 /// it carries, so an attached value form is caught as well.
-const UNSCOPABLE_SHORT: &[char] = &['d', 'F', 'T', 'K', 'x', 'X'];
+const REFUSED_SHORT: &[char] = &['d', 'F', 'T', 'K', 'x', 'X'];
 
 /// Short flags that carry a header, whose value can hold a credential.
 const HEADER_SHORT: char = 'H';
@@ -61,7 +61,7 @@ enum Segment {
     /// The segment does not leave the machine.
     Local,
     /// The segment reaches the network but not in a form this module can name.
-    Unscopable,
+    Refused,
     /// The segment reaches one origin through one program.
     Scoped { program: String, origin: String },
 }
@@ -72,7 +72,7 @@ enum Segment {
 /// The result names the program and the origin, for example curl followed by
 /// https://api.github.com, and is used both as the durable scope key and as the
 /// text the approval card shows for its remember option.
-pub fn bash_egress_scope(command: &str) -> Option<String> {
+pub fn egress_destination(command: &str) -> Option<String> {
     let normalized = normalize_shell_command(command);
     let mut scope: Option<String> = None;
     for clause in split_clauses(&normalized) {
@@ -96,7 +96,7 @@ pub fn bash_egress_scope(command: &str) -> Option<String> {
                         return None;
                     }
                 }
-                Segment::Unscopable => return None,
+                Segment::Refused => return None,
                 Segment::Scoped { program, origin } => {
                     if piped
                         && !stage_refs[idx + 1..]
@@ -180,12 +180,12 @@ fn classify_segment(segment: &str) -> Segment {
         return Segment::Local;
     };
     let program = strip_quotes(first);
-    if !EGRESS_PROGRAMS.contains(&program) {
+    if !EGRESS_TOOLS.contains(&program) {
         // A channel this module cannot name — git push, a package publish, an
         // interpreter-wrapped request — would ride along inside the remembered
         // scope, so the whole command stays unanswerable.
         return if should_ask_egress("bash", segment) {
-            Segment::Unscopable
+            Segment::Refused
         } else {
             Segment::Local
         };
@@ -196,7 +196,7 @@ fn classify_segment(segment: &str) -> Segment {
             program: program.to_string(),
             origin,
         },
-        None => Segment::Unscopable,
+        None => Segment::Refused,
     }
 }
 
@@ -241,7 +241,7 @@ fn literal_origin(args: &[&str]) -> Option<String> {
         let word = strip_quotes(args[index]);
         if let Some(name) = word.strip_prefix("--") {
             let flag = format!("--{}", name.split('=').next().unwrap_or(""));
-            if UNSCOPABLE_LONG.contains(&flag.as_str()) {
+            if REFUSED_LONG.contains(&flag.as_str()) {
                 return None;
             }
             if flag == HEADER_LONG {
@@ -255,7 +255,7 @@ fn literal_origin(args: &[&str]) -> Option<String> {
         } else if let Some(cluster) = word.strip_prefix('-')
             && !cluster.is_empty()
         {
-            if cluster.chars().any(|c| UNSCOPABLE_SHORT.contains(&c)) {
+            if cluster.chars().any(|c| REFUSED_SHORT.contains(&c)) {
                 return None;
             }
             if cluster.contains(HEADER_SHORT) {

@@ -1,7 +1,7 @@
 use super::*;
 use crate::decision::Outcome;
 use crate::decision::{AskReason, Decision};
-use crate::egress::bash_egress_scope;
+use crate::egress::egress_destination;
 use houyicoder_api::sandbox::{Containment, Coverage, SideEffect};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -133,7 +133,7 @@ fn test_ask_carries_fence_note() {
 /// prompt. The command also sets a certificate variable and parses the
 /// downloaded file locally, which is what made the prefix derivation give up.
 #[test]
-fn test_egress_scoped_host_allowed() {
+fn test_egress_destination_allowed() {
     let first = "CACERT=/opt/cacert.pem; curl -sS --max-time 25 --cacert \"$CACERT\" \
                  \"https://api.github.com/repos/ray-project/ray/pulls/66986\" \
                  -o \"$TMPDIR/pr.json\"; python3 -c \"print(1)\"";
@@ -189,14 +189,14 @@ fn test_egress_data_forms_ask() {
             matches!(g.decide(&bash_req(command)).outcome(), Outcome::Ask),
             "must still ask: {command}"
         );
-        assert_eq!(bash_egress_scope(command), None, "no scope: {command}");
+        assert_eq!(egress_destination(command), None, "no scope: {command}");
     }
 }
 
 /// The remembered scope names the program too: remembering a download with
 /// curl does not authorize the same origin fetched some other way.
 #[test]
-fn test_egress_scope_names_command() {
+fn test_egress_ignores_other_tool() {
     let g = DefaultModeGate::with_mode(PermissionMode::Auto);
     g.add_egress_allow("curl https://api.github.com");
     assert!(matches!(
@@ -228,7 +228,7 @@ fn test_real_session_metrics() {
     let mut prompts = 0usize;
     let mut repeat_prompts = 0usize;
     for (idx, cmd) in session_calls.iter().enumerate() {
-        let scope = bash_egress_scope(cmd);
+        let scope = egress_destination(cmd);
         if scope.as_deref() == Some("curl https://api.github.com") {
             accurate_targets += 1;
         }

@@ -12,11 +12,11 @@ use houyicoder_protocol::acp_wire::{PermissionOption, PermissionOptionKind};
 use super::consent_rule_for;
 
 /// What an "always" verdict on one ask can durably authorize. The approval
-/// card and the consent router both read this, so the scope the card promises
-/// is the scope that is installed.
-pub(crate) enum AlwaysScope {
+/// card and the consent router both read this, so what the card promises is
+/// what gets installed.
+pub(crate) enum AlwaysGrant {
     /// One network destination, remembered for the session.
-    Egress(String),
+    Network(String),
     /// A durable rule.
     Rule(houyicoder_permission::Rule),
     /// Nothing durable: the call must be answered once.
@@ -25,18 +25,18 @@ pub(crate) enum AlwaysScope {
 
 /// The durable authorization an "always" verdict on this ask would install.
 /// None-reason asks resolve to Once: without the gate's reason the caller
-/// cannot tell which scope the user is being asked about, so it must not
-/// promise one.
-pub(crate) fn always_scope(
+/// cannot tell what the user is being asked about, so it must not promise a
+/// durable grant.
+pub(crate) fn always_grant(
     tool_name: &str,
     input: &serde_json::Value,
     reason: Option<&houyicoder_permission::AskReason>,
-) -> AlwaysScope {
+) -> AlwaysGrant {
     let Some(reason) = reason else {
-        return AlwaysScope::Once;
+        return AlwaysGrant::Once;
     };
     if reason.source == AskSource::SystemSafety {
-        return AlwaysScope::Once;
+        return AlwaysGrant::Once;
     }
     if matches!(
         tool_name.to_ascii_lowercase().as_str(),
@@ -44,11 +44,11 @@ pub(crate) fn always_scope(
     ) && reason.validator == NETWORK_EGRESS
     {
         // A destination is not a command rule: the network check recognizes
-        // programs, not hosts, so a remembered destination is its own scope.
+        // programs, not hosts, so a remembered destination is its own entry.
         let command = houyicoder_permission::input_content(tool_name, Some(input));
-        return match houyicoder_permission::bash_egress_scope(&command) {
-            Some(scope) => AlwaysScope::Egress(scope),
-            None => AlwaysScope::Once,
+        return match houyicoder_permission::egress_destination(&command) {
+            Some(destination) => AlwaysGrant::Network(destination),
+            None => AlwaysGrant::Once,
         };
     }
     // The four history-moving git subcommands shadow their builtin ask rule
@@ -63,20 +63,20 @@ pub(crate) fn always_scope(
             Effect::Allow,
         )
     {
-        return AlwaysScope::Rule(rule.with_scope(Scope::Session));
+        return AlwaysGrant::Rule(rule.with_scope(Scope::Session));
     }
     match consent_rule_for(tool_name, input) {
-        Some(rule) => AlwaysScope::Rule(rule),
-        None => AlwaysScope::Once,
+        Some(rule) => AlwaysGrant::Rule(rule),
+        None => AlwaysGrant::Once,
     }
 }
 
 /// The text the approval card shows after "don't ask again for".
-fn always_label(scope: &AlwaysScope) -> Option<String> {
-    match scope {
-        AlwaysScope::Once => None,
-        AlwaysScope::Egress(scope) => Some(format!("{scope} *")),
-        AlwaysScope::Rule(rule) => Some(match &rule.content {
+fn always_label(grant: &AlwaysGrant) -> Option<String> {
+    match grant {
+        AlwaysGrant::Once => None,
+        AlwaysGrant::Network(destination) => Some(format!("{destination} *")),
+        AlwaysGrant::Rule(rule) => Some(match &rule.content {
             Some(RuleContent::Prefix(prefix)) => format!("{prefix} *"),
             Some(RuleContent::Exact(value)) => value.clone(),
             Some(RuleContent::Glob(pattern)) => pattern.clone(),
@@ -99,7 +99,7 @@ pub(crate) fn approval_options(
         kind: PermissionOptionKind::AllowOnce,
         meta: None,
     }];
-    if let Some(label) = always_label(&always_scope(tool_name, input, reason)) {
+    if let Some(label) = always_label(&always_grant(tool_name, input, reason)) {
         options.push(PermissionOption {
             option_id: "allow_always".into(),
             name: label,

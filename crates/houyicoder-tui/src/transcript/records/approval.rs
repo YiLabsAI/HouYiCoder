@@ -48,7 +48,7 @@ impl Approval {
     /// The scope the server attached to its remember option, when it offered
     /// one. The server is the authority on what a yes-always installs, so the
     /// card shows that text instead of deriving one from the command.
-    pub fn remember_scope(&self) -> Option<&str> {
+    pub fn remember_name(&self) -> Option<&str> {
         self.options
             .iter()
             .find(|option| matches!(option.kind, PermissionOptionKind::AllowAlways))
@@ -66,7 +66,7 @@ impl Approval {
         if matches!(self.source, Some(AskSource::SystemSafety)) {
             return true;
         }
-        !self.options.is_empty() && self.remember_scope().is_none()
+        !self.options.is_empty() && self.remember_name().is_none()
     }
 
     /// Whether this is an entitlement ask (a deny-log discovery offering

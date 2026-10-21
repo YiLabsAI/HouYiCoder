@@ -141,7 +141,7 @@ fn test_network_consent_remembers_host() {
 /// install the scope it names, and names the destination rather than the
 /// command's first word.
 #[test]
-fn test_card_offers_destination_scope() {
+fn test_card_offers_destination() {
     let command = "CACERT=/opt/cacert.pem; curl -sS --cacert \"$CACERT\" \
                    \"https://api.github.com/repos/a/b\" -o \"$TMPDIR/p.json\"; \
                    python3 -c \"print(1)\"";

@@ -41,7 +41,7 @@ pub use consent::{ConsentStore, InMemoryConsentStore, args_key};
 pub use decision::{
     AllowReason, AskReason, AskSource, Decision, DenyReason, DenySource, FenceProof, Outcome,
 };
-pub use egress::bash_egress_scope;
+pub use egress::egress_destination;
 pub use gate::{
     AutoPolicy, DefaultModeGate, DefaultPolicy, ModeGate, ModePolicy, classify_git_op, mode_default,
 };
