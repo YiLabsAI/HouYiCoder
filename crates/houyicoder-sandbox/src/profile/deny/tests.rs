@@ -66,7 +66,7 @@ fn test_git_hooks_write_denied() {
 }
 
 #[test]
-fn test_authority_files_write_denied() {
+fn test_permission_and_settings_denied() {
     // The profile places the two groups on either side of the session scratch
     // allow-back, so both are asserted through their own emitters rather than
     // through mandatory_deny, which no longer carries them.
@@ -83,11 +83,11 @@ fn test_authority_files_write_denied() {
     let line = p
         .lines()
         .find(|l| l.contains(r".*/\.houyicoder/permissions\.json$"))
-        .expect("authority deny present");
+        .expect("permission store deny present");
     assert!(
         line.starts_with("(deny file-write*"),
-        "authority files are write-denied only, since authoring rules is the \
-         hazard and reading them is not: {line}"
+        "these files are write-denied only: authoring rules is the hazard, \
+         reading them is not: {line}"
     );
 }
 
@@ -96,7 +96,7 @@ fn test_authority_files_write_denied() {
 /// deny written against the directory would refuse the agent every write in
 /// its own workspace.
 #[test]
-fn test_authority_deny_stays_narrow() {
+fn test_store_deny_stays_narrow() {
     let p = mandatory_deny("/Users/alice", "tag-x");
     assert!(
         !p.contains(r".*/\.houyicoder(/|$)"),

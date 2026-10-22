@@ -9,6 +9,7 @@
 
 #![allow(clippy::disallowed_methods)]
 
+use super::super::temp_dir::COUNTER;
 use super::super::*;
 use std::env::temp_dir;
 use std::env::var;

@@ -1,8 +1,8 @@
 //! Temp-directory naming: the session scratch path has to stay short enough
 //! that a build tool's Unix-domain socket fits under it.
 
-use super::super::helpers::MAX_TEMP_PATH_BYTES;
-use super::super::helpers::mkdtemp;
+use super::super::temp_dir::MAX_TEMP_PATH_BYTES;
+use super::super::temp_dir::mkdtemp;
 use std::fs::canonicalize;
 use std::fs::remove_dir_all;
 

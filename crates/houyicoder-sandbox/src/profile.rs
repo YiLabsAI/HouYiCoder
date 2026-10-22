@@ -94,7 +94,7 @@ pub struct ProfileSpec<'a> {
     pub workspace: &'a Path,
     /// The temp dir the sandboxed child may write to.
     pub tmpdir: &'a str,
-    /// The home dir used to place the mandatory exfiltration denies. Explicit
+    /// The home dir the mandatory credential denies are placed under. Explicit
     /// rather than read from the environment so tests are deterministic.
     pub home: &'a str,
     /// The violation message tag, used to attribute a kernel denial back to
@@ -208,21 +208,14 @@ pub fn render(spec: &ProfileSpec<'_>) -> String {
         additional.read_only,
         additional.read_write,
     ));
-    // Deny writes to the snapshot store inside the workspace so a destructive
-    // command (rm -rf, git clean -fdx) cannot destroy its own undo data.
-    // Last-match-wins: this lands after the workspace allow-write-back so the
-    // deny takes precedence. The snapshot store is written by the host process
-    // (BashTool::execute), not by the sandboxed child, so the deny does not
-    // block snapshot creation.
+    // The undo store is written by the host, never by the sandboxed command, so
+    // denying writes here costs nothing and stops a destructive command from
+    // erasing the data that would undo it. Both locations are denied because the
+    // session opens exactly one of them.
     s.push_str(&deny_snapshot_store(workspace, tag));
-    // The store may live under the config home instead, so both locations carry
-    // the deny: whichever one the session opened is the one holding its undo
-    // data.
     s.push_str(&deny_home_snapshot_store(home, tag));
-    // deny_read_always re-emits any DENY_REGIONS literal that is nested
-    // inside an allow-back subpath (workspace/tmpdir). When the workspace
-    // lives under a deny region (e.g. /Users/me/...), this keeps the
-    // sibling deny paths fired.
+    // Re-emits any deny region nested inside a path that was just opened for
+    // writing, so a workspace under /Users keeps the sibling denies.
     let allow_paths: Vec<&str> = {
         let mut v: Vec<&str> = vec![workspace.to_str().unwrap_or(""), tmpdir];
         v.extend(additional.read_only.iter().copied());
@@ -230,30 +223,17 @@ pub fn render(spec: &ProfileSpec<'_>) -> String {
         v
     };
     s.push_str(&deny_read_always(DENY_REGIONS, &allow_paths, tag));
-    // mandatory_deny is the concrete application of denyReadAlways to the
-    // exfiltration vectors: it lands after the allow-back so an allow-back
-    // of the workspace cannot wash out a deny of .ssh/.gitconfig inside it.
+    // Lands after the allow-backs so opening the workspace for writing cannot
+    // wash out a deny of a credential path inside it.
     s.push_str(&mandatory_deny(home, tag));
-    // The session temporary directory is removed on drop and never opened by
-    // the user on the host, so commands running inside it may initialize
-    // repositories, add submodules, or lay out dotfiles freely.
-    //
-    // Authority denies straddle that allow-back. A settings file is only ever
-    // read from the config home and the workspace, so its deny comes first and
-    // the scratch directory stays writable: a sandboxed test lays out its own
-    // fixture project there, and a test that cannot write its own fixture
-    // reports a permission fault unrelated to what it exercises. A permission
-    // store can legitimately live under the scratch directory, so its deny
-    // comes last and wins there.
+    // Settings are denied before the scratch directory is opened for writing,
+    // permission stores after it: a fixture project needs its own settings file,
+    // while a permission store under that directory must stay closed.
     s.push_str(&deny_settings_files(home, tag));
     s.push_str(&allow_tmpdir_writes(tmpdir, workspace));
     s.push_str(&deny_permission_stores(home, tag));
-    // System /etc files git reads at startup. Lands AFTER mandatory_deny
-    // (whose .profile regex also matches these system paths) so
-    // last-match-wins re-allows the reads. The home profile file stays denied
-    // — only the system-wide copies are re-allowed here. The shell runs
-    // non-login so it does not source /etc/profile; the entry stays for any
-    // tool that reads it directly.
+    // After the deny above, so last-match-wins lets git read the system copies.
+    // The home copies stay denied.
     s.push_str(&allow_system_etc(tag));
     // The home git config read, allowed back after both the broad home-region
     // deny and the write-only mandatory entry. Interim posture, see the
@@ -264,18 +244,12 @@ pub fn render(spec: &ProfileSpec<'_>) -> String {
     s
 }
 
-/// Re-allow reads of SYSTEM_ETC_ALLOW after the broad /etc deny and the
-/// mandatory rc-file regex denies. Last-match-wins lets these
-/// specific system files through so git can read /etc/gitconfig. The shell is
-/// non-login so it does not source /etc/profile; that entry is retained for
-/// direct reads. Writes stay denied (read-only allow).
+/// Re-allow reads of SYSTEM_ETC_ALLOW after the deny of the /etc tree, so git
+/// can read its system config. Writes stay denied.
 pub fn allow_system_etc(tag: &str) -> String {
     let _ = tag;
-    // Emit both the /etc literal and the /private/etc resolved form: on
-    // macOS /etc symlinks to /private/etc and seatbelt matches the resolved
-    // realpath, so an allow on /etc/X alone does not reach the read the kernel
-    // performs. Covering both here keeps the SYSTEM_ETC_ALLOW list as the
-    // single source (one entry per file, no manual /private/etc mirror).
+    // /etc resolves to /private/etc and the kernel matches the resolved path, so
+    // both spellings are emitted from the one list.
     let mut literals = Vec::new();
     for p in SYSTEM_ETC_ALLOW {
         literals.push(format!("(literal \"{p}\")"));
@@ -284,35 +258,22 @@ pub fn allow_system_etc(tag: &str) -> String {
             literals.push(format!("(literal \"{resolved}\")"));
         }
     }
-    // Allow the metadata read of the /etc node itself. Without this the leaf
-    // allows above never fire: /etc is a symlink to /private/etc, and the broad
-    // deny of the /etc subpath also covers that symlink node, so the kernel
-    // refuses while resolving the path and never evaluates the leaf rule. A
-    // real-kernel probe showed git reporting operation-not-permitted on
-    // /etc/gitconfig, and a plain read of the allow-listed /etc/paths failing
-    // the same way, even though both leaves were allow-listed. Metadata only:
-    // this grants resolution of the link, not read of anything under it, so
-    // every other path below /etc (the password file included) stays denied.
+    // The leaf rules above never fire without this: the deny covers the /etc
+    // symlink node, so the kernel refuses while resolving the path. Metadata
+    // only, so nothing under /etc becomes readable.
     format!(
         "(allow file-read* {})\n(allow file-read-metadata (literal \"/etc\"))\n",
         literals.join(" ")
     )
 }
 
-/// Re-allow reads of the home git config after the broad home-region deny and
-/// the write-only mandatory deny. Git reads this file on every invocation, so
-/// a denial does not degrade gracefully: git reports that it cannot access the
-/// path and exits non-zero, which breaks every git command in the sandbox
-/// rather than merely dropping a preference. Writes stay denied by the
-/// write-only mandatory entry, so a credential helper cannot be injected.
+/// Re-allow reads of the home git config. Git treats a denied config as fatal,
+/// so without this every git command in the session fails. Writes stay denied.
 ///
-/// Interim, as documented on the write-only list: the read is allowed so git
-/// works and the user's aliases and conditional includes stay faithful, at the
-/// cost of a credential section being readable into the transcript. Value-level
-/// redaction on the transcript boundary is the real fix and supersedes this.
-/// The alternative of passing a minimal config through the environment was
-/// rejected: it loses aliases, conditional includes and url rewrites, and the
-/// secret would still be reachable by another read path.
+/// Interim: the file can carry a credential section, which reaches the
+/// transcript. Redacting values at the transcript boundary replaces this. A
+/// minimal config passed through the environment was rejected because it drops
+/// aliases and url rewrites and leaves the secret readable by other means.
 pub fn allow_home_gitconfig(home: &str, tag: &str) -> String {
     let _ = tag;
     format!("(allow file-read* (literal \"{home}/.gitconfig\"))\n")
@@ -413,17 +374,13 @@ fn filesystem_rules_with_access(
     )
 }
 
-/// Re-allow writes inside the session's private temporary directory after the
-/// mandatory persistence denies.
+/// Re-allow writes inside the session's private temporary directory. That
+/// directory is removed on drop and never opened by the user, so a command may
+/// initialize repositories or lay out dotfiles there freely; the denies it
+/// lands after protect trees that outlive the session.
 ///
-/// The mandatory write-denies protect persistent trees (the user's home, the
-/// workspace, and user-added directories) from planted hooks, configs, or rc
-/// files that would fire after the session exits. The session temporary
-/// directory is removed on drop and never opened by the user on the host, so
-/// commands running tests or benchmarks inside it may initialize repositories,
-/// add submodules, or lay out dotfiles freely. Omitted when the temporary
-/// directory is empty or contains the workspace, so a caller that renders the
-/// workspace inside a shared temp root never washes out the workspace denies.
+/// Empty when the directory is unset or contains the workspace, so a workspace
+/// inside a shared temp root keeps its own denies.
 fn allow_tmpdir_writes(tmpdir: &str, workspace: &Path) -> String {
     let trimmed = tmpdir.trim_end_matches('/');
     if trimmed.is_empty() || workspace.starts_with(Path::new(trimmed)) {

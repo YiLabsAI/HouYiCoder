@@ -1,11 +1,12 @@
 //! Sandbox tests, split out of lib.rs so that file stays under the size gate.
 //! Inlined via the path attribute so the tests keep use-super access to the
-//! private helpers (kill process group, tree cpu secs, mkdtemp, TreeKillGuard).
+//! private process and temp-dir helpers plus the session guards.
 //!
 // ! Tests shell out to pgrep to measure process-tree state; those spawns are test ! scaffolding, not production spawns, so the spawn-chokepoint rule is allowed ! here. Production code routes every spawn through the launcher.
 
 #![allow(clippy::disallowed_methods)]
 
+use super::super::temp_dir::COUNTER;
 use super::super::*;
 use crate::{ProfileSpec, render};
 use houyicoder_api::sandbox::Egress;

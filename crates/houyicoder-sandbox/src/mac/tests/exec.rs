@@ -5,8 +5,7 @@
 //! file-attribute error. These spawn real sandbox-exec and are NOT
 //! ignored, so they enter make check and pin the fixes against
 //! regression. A run that is itself inside a fence cannot apply a nested
-//! one; those cases report the skip and set HOUYICODER_FENCE_TESTS_STRICT=1 to
-//! make the gate refuse instead. The effect-level evidence (the user's real-sandbox table)
+//! one and skips cleanly instead of reporting a false regression. The effect-level evidence (the user's real-sandbox table)
 //! lives here as code, not just in the bug-log.
 
 #![allow(clippy::disallowed_methods)]

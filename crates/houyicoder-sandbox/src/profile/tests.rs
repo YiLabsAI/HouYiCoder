@@ -116,7 +116,7 @@ fn test_read_only_dir() {
 #[test]
 fn test_users_open_credentials_denied() {
     // gap B: the /Users broad read-deny is lifted (cross-project source
-    // reads must work), and the credential vectors otherwise omitted are
+    // reads must work), and the credential paths otherwise omitted are
     // denied by name in mandatory_deny so lifting /Users does not expose
     // them.
     let p = render(&ProfileSpec::new(
@@ -143,7 +143,7 @@ fn test_users_open_credentials_denied() {
         );
     }
     // Ordinary source under /Users (a sibling project) is NOT denied —
-    // only the named credential vectors are.
+    // only the named credential paths are.
     assert!(
         !p.contains("(subpath \"/Users/alice/projects\")"),
         "ordinary sibling project path is not denied: {p}"
@@ -285,7 +285,7 @@ fn test_gitconfig_read_reallowed() {
 }
 
 /// The session temporary directory is re-allowed for writes after the
-/// mandatory persistence denies, and the authority files are re-denied after
+/// mandatory persistence denies, and the permission stores are denied after
 /// that so the local permission store stays protected.
 #[test]
 fn test_tmpdir_write_after_deny() {
@@ -304,10 +304,10 @@ fn test_tmpdir_write_after_deny() {
         .expect("tmpdir allow-back present");
     let auth_deny = p
         .rfind(r".*/houyicoder-permissions/permissions\.json$")
-        .expect("authority deny re-emitted");
+        .expect("permission store deny present");
     assert!(
         allow > hooks_deny && auth_deny > allow,
-        "tmpdir allow must sit between mandatory_deny and authority re-deny: {p}"
+        "the scratch allow must sit between the persistence denies and the store deny: {p}"
     );
 }
 

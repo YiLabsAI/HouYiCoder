@@ -222,9 +222,12 @@ fn migrate_store(legacy: &Path, store_root: &Path) {
         }
         let dst = store_root.join(name);
         if dst.exists() {
+            tracing::warn!("snapshot store move: {} already exists", dst.display());
             continue;
         }
-        let _moved = rename(&path, &dst);
+        if let Err(error) = rename(&path, &dst) {
+            tracing::warn!("snapshot store move failed for {}: {error}", path.display());
+        }
     }
     let _removed = remove_dir(legacy);
 }

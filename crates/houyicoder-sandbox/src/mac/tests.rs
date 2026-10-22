@@ -5,5 +5,6 @@
 mod exec;
 mod git_config;
 mod narrow_write;
+mod process;
 mod seatbelt;
 mod tmpdir;

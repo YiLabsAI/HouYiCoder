@@ -105,10 +105,17 @@ pub fn workspace_cwd(project: Option<String>) -> String {
 /// volume store would silently turn every snapshot into a full copy, which is
 /// slower and larger than the alternative it was meant to improve.
 pub fn snapshot_store_root(workspace: &Path) -> PathBuf {
-    let home_store = var("HOME")
+    let home_store = var(houyicoder_config::ENV_HOUYICODER_CONFIG_HOME)
         .ok()
+        .filter(|v| !v.is_empty())
         .map(PathBuf::from)
-        .map(|home| home.join(".houyicoder").join("snapshots"))
+        .or_else(|| {
+            var("HOME")
+                .ok()
+                .filter(|v| !v.is_empty())
+                .map(|home| PathBuf::from(home).join(".houyicoder"))
+        })
+        .map(|cfg| cfg.join("snapshots"))
         .filter(|dir| same_filesystem(workspace, dir));
     match home_store {
         Some(dir) => dir.join(workspace_slug(workspace)),

@@ -24,12 +24,11 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-mod helpers;
+mod process;
 mod seatbelt_stream;
+mod temp_dir;
 use crate::runtime_dirs::RuntimeDirs;
-#[cfg(test)]
-use helpers::COUNTER;
-use helpers::{ExecCountGuard, kill_process_group, mkdtemp, tree_cpu_secs};
+use process::{ExecCountGuard, kill_process_group, tree_cpu_secs};
 use seatbelt_stream::stream_drain;
 use std::env::var;
 use std::fs::remove_dir_all;
@@ -37,6 +36,7 @@ use std::process::Stdio;
 use std::process::id;
 use std::sync::atomic::AtomicI64;
 use std::time::Duration;
+use temp_dir::mkdtemp;
 use tokio::process::Command;
 use tokio::time::timeout;
 

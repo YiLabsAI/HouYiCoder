@@ -1,7 +1,5 @@
-//! Seatbelt rules for credentials, executable configuration, and files that
-//! govern the agent's own permissions. The profile places these rules on either
-//! side of the session temporary-directory allow-back, which is what decides
-//! whether a fixture settings file under that directory is writable.
+//! Seatbelt rules for credentials, executable configuration, and the files that
+//! decide what the agent is allowed to do.
 
 use std::path::Path;
 
@@ -27,16 +25,12 @@ const MANDATORY_DENY_FILES: &[&str] = &[
 const MANDATORY_DENY_WRITE_ONLY_FILES: &[&str] =
     &[".gitconfig", ".git/config", ".gitmodules", ".ripgreprc"];
 
-/// Permission and settings files denied for writing. Changing one would
-/// authorize later operations without the user's consent. Match files rather
-/// than entire directories so workspaces under those directories remain
-/// writable.
+/// Permission stores, denied for writing anywhere. Writing one authorizes later
+/// operations without the user's consent.
 ///
-/// Two lists because the profile emits them on either side of the session
-/// scratch allow-back. A permission store can live under the scratch
-/// directory, so its deny is emitted last and wins there. A settings file is
-/// read only from the config home and the workspace, so its deny is emitted
-/// first and the scratch directory stays writable for a fixture project.
+/// The profile emits this deny after the rule that makes the session scratch
+/// directory writable, so it wins there: a local store can live in that
+/// directory and must stay closed.
 const MANDATORY_DENY_PERMISSION_STORES: &[&str] = &[
     ".houyicoder/permissions.json",
     ".houyicoder/permissions.local.json",
@@ -44,22 +38,23 @@ const MANDATORY_DENY_PERMISSION_STORES: &[&str] = &[
     "houyicoder-permissions/permissions.json",
 ];
 
-/// Settings files, denied before the scratch allow-back. See the split note on
-/// MANDATORY_DENY_PERMISSION_STORES. The local overlay is listed with the
-/// shared file: it is read at higher precedence than the shared one, so leaving
-/// it out would leave the effective setting writable.
+/// Settings files, denied for writing everywhere except the session scratch
+/// directory, which is emitted after this and therefore stays writable: a
+/// sandboxed test lays out its own project there, and a settings file is only
+/// ever read from the config home and the workspace.
+///
+/// Each local overlay sits beside the file it overrides. It is read at higher
+/// precedence, so denying only the shared file would leave the effective
+/// setting writable.
 const MANDATORY_DENY_SETTINGS_FILES: &[&str] = &[
     ".houyicoder/settings.json",
     ".houyicoder/settings.local.json",
 ];
 
-/// AI-agent exfiltration vectors — directories (srt DANGEROUS_DIRECTORIES +
-/// the CLI command/agent dirs). .ssh holds private keys; the CLI dirs hold
-/// agent/skill definitions an attacker could rewrite to hijack later runs.
-/// The credential directories (.aws / .gnupg / .kube / .docker) are added
-/// here for the same reason as the credential files above: once the /Users
-/// broad read-deny is lifted, these home credential dirs would otherwise be
-/// readable, and a deny is the safe interim until redaction lands.
+/// Home directories denied for reading and writing. They hold credentials
+/// (.ssh, .aws, .gnupg, .kube, .docker) or the agent and skill definitions that
+/// decide what runs later, so reading them leaks secrets and writing them
+/// hijacks a future session. Denied outright until value redaction exists.
 const MANDATORY_DENY_DIRS: &[&str] = &[
     ".ssh",
     ".claude/commands",
@@ -82,25 +77,21 @@ const MANDATORY_DENY_DIRS: &[&str] = &[
 /// and agents skill dirs stay read+write denied above (no resource layer).
 const MANDATORY_DENY_WRITE_ONLY_DIRS: &[&str] = &[".houyicoder/skills"];
 
-/// Git-internal directories denied write only, reads allowed back further
-/// down — same posture as the git config entries above. .git/hooks blocks
-/// hook-based escape (an agent planting a post-checkout hook that runs when
-/// the user next checks out); the escape is a write, and reading hook source
-/// is not the vector. A hook may hold a hardcoded secret just as config may
-/// hold a credential section, so both reads are accepted under the same
-/// interim posture until value-level redaction lands.
+/// Git hook directory, denied for writing only. A planted hook runs the next
+/// time the user checks out, so the write is what has to be blocked; a hook may
+/// also hold a secret, which is the same interim read exposure as the config.
 const MANDATORY_DENY_GIT_PATHS: &[&str] = &[".git/hooks"];
 
-/// Mandatory deny of AI-agent exfiltration vectors (srt
-/// macos-sandbox-utils:60-86 + the CLI the CLI skills denyWrite idea). For each
-/// mandatory file/dir/git-path, deny read AND write of both the home literal
-/// copy and any nested-anywhere copy (regex). Landing after filesystem_rules
-/// means an allow-back of the workspace cannot wash these out — this is the
-/// denyReadAlways principle applied to the exfiltration vectors themselves.
+/// Deny the credential and instruction paths above, for reading and writing.
 ///
-/// Regex uses ICU syntax as accepted by sandbox-exec. For a file name we
-/// match it as the final path segment; for a directory we match the segment
-/// followed by end-of-string or a separator.
+/// Each entry is denied twice: at its home path, and as a trailing path segment
+/// anywhere on disk. The second form is what makes the deny hold inside a
+/// workspace that was opened for writing. Emitted after the filesystem rules so
+/// an allow-back cannot wash it out.
+///
+/// The regex uses the ICU syntax sandbox-exec accepts: a file name matches as
+/// the last segment, a directory as the last segment plus a separator or the end
+/// of the path.
 pub(crate) fn mandatory_deny(home: &str, tag: &str) -> String {
     let mut out = String::new();
     let emit = |out: &mut String, subpath: &str, regex: &str| {
@@ -122,17 +113,13 @@ pub(crate) fn mandatory_deny(home: &str, tag: &str) -> String {
     // possible at all: a read deny in this segment would be evaluated after
     // the allow-back only if it were emitted later, and moving it later would
     // defeat the allow-back entirely.
-    for file in MANDATORY_DENY_WRITE_ONLY_FILES {
-        let escaped = file.replace('.', r"\.");
-        let subpath = format!("{home}/{file}");
-        out.push_str(&format!(
-            "(deny file-write* (subpath \"{subpath}\") (regex #\".*/{escaped}$\") (with message \"{tag}\"))\n"
-        ));
-    }
-    // The authority-file denies are not emitted here: the profile places them
-    // on either side of the session scratch allow-back, which is what decides
-    // whether a permission store or a fixture settings file under that
-    // directory is writable.
+    out.push_str(&deny_write_files(
+        MANDATORY_DENY_WRITE_ONLY_FILES,
+        home,
+        tag,
+    ));
+    // The permission and settings denies are not emitted here: the profile
+    // places them on either side of the scratch-directory allow rule.
     for dir in MANDATORY_DENY_DIRS {
         let escaped = dir.replace('.', r"\.");
         emit(
@@ -162,12 +149,9 @@ pub(crate) fn mandatory_deny(home: &str, tag: &str) -> String {
     out
 }
 
-/// Deny writes to a permission store anywhere on disk. Emitted after the
-/// session scratch allow-back, because a local store under that directory is
-/// the case the deny exists for.
-pub(crate) fn deny_permission_stores(home: &str, tag: &str) -> String {
+fn deny_write_files(files: &[&str], home: &str, tag: &str) -> String {
     let mut out = String::new();
-    for file in MANDATORY_DENY_PERMISSION_STORES {
+    for file in files {
         let escaped = file.replace('.', r"\.");
         let subpath = format!("{home}/{file}");
         out.push_str(&format!(
@@ -177,20 +161,19 @@ pub(crate) fn deny_permission_stores(home: &str, tag: &str) -> String {
     out
 }
 
+/// Deny writes to a permission store anywhere on disk. Emitted after the
+/// session scratch allow-back, because a local store under that directory is
+/// the case the deny exists for.
+pub(crate) fn deny_permission_stores(home: &str, tag: &str) -> String {
+    deny_write_files(MANDATORY_DENY_PERMISSION_STORES, home, tag)
+}
+
 /// Deny writes to a settings file anywhere on disk except the session scratch
 /// directory, which is emitted after this and therefore wins there. Settings are
 /// read from the config home and the workspace only, so the scratch directory
 /// is free for a fixture project.
 pub(crate) fn deny_settings_files(home: &str, tag: &str) -> String {
-    let mut out = String::new();
-    for file in MANDATORY_DENY_SETTINGS_FILES {
-        let escaped = file.replace('.', r"\.");
-        let subpath = format!("{home}/{file}");
-        out.push_str(&format!(
-            "(deny file-write* (subpath \"{subpath}\") (regex #\".*/{escaped}$\") (with message \"{tag}\"))\n"
-        ));
-    }
-    out
+    deny_write_files(MANDATORY_DENY_SETTINGS_FILES, home, tag)
 }
 
 /// Deny writes to the user-wide snapshot store. The store holds the undo data
