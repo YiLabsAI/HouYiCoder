@@ -28,7 +28,7 @@ pub struct PtySession {
     sessions_dir: PathBuf,
     /// A temp home the harness created (not caller-provided); cleaned in Drop
     /// so isolated config roots do not accumulate in /tmp.
-    _owned_home: Option<PathBuf>,
+    dirs: LaunchDirs,
 }
 
 const ROWS: u16 = 24;
@@ -49,7 +49,8 @@ struct LaunchOptions {
 }
 
 impl PtySession {
-    /// Launch the real binary with an isolated home, stub provider, and workspace cwd.
+    /// Launch the real binary with an isolated home, stub provider, and its own
+    /// scratch cwd (a case that needs the real checkout passes one explicitly).
     pub fn launch() -> Self {
         Self::launch_inner(None, None, None, None)
     }
@@ -200,15 +201,9 @@ impl PtySession {
         options: LaunchOptions,
     ) -> Self {
         let bin = houyi_binary_path();
-        let cwd = cwd_override.unwrap_or_else(workspace_root);
-        // Default to a harness-owned home and pre-trust ordinary fixtures.
-        let home_provided = home.is_some();
-        let home = home.unwrap_or_else(|| fresh_temp_dir("pty-home"));
-        let _owned_home = if home_provided {
-            None
-        } else {
-            Some(home.clone())
-        };
+        let dirs = LaunchDirs::resolve(home, cwd_override);
+        let home = dirs.home.clone();
+        let cwd = dirs.cwd.clone();
         let mut cmd = CommandBuilder::new(&bin);
         cmd.cwd(&cwd);
         for arg in extra_args {
@@ -302,7 +297,7 @@ impl PtySession {
             _reader: reader_thread,
             master: pair.master,
             sessions_dir,
-            _owned_home,
+            dirs,
         }
     }
 
@@ -480,8 +475,8 @@ impl Drop for PtySession {
             }
         }
         let _wait = self._child.wait();
-        if let Some(h) = &self._owned_home {
-            drop(fs::remove_dir_all(h));
+        for dir in &self.dirs.owned {
+            drop(fs::remove_dir_all(dir));
         }
     }
 }
@@ -565,15 +560,35 @@ fn houyi_binary_path() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(format!("target/{profile}/houyi")))
 }
 
-/// The workspace root (two levels above this crate). Used as the binary's cwd
-/// so resolve_project_workspace walks up to the workspace Cargo.toml.
-fn workspace_root() -> PathBuf {
-    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    manifest
-        .parent()
-        .and_then(|p| p.parent())
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| PathBuf::from("."))
+/// The home and cwd one launch runs with, plus the directories this harness
+/// created and must therefore remove. A path the caller supplied belongs to
+/// the caller, so it is never deleted here.
+struct LaunchDirs {
+    home: PathBuf,
+    cwd: PathBuf,
+    owned: Vec<PathBuf>,
+}
+
+impl LaunchDirs {
+    /// Resolve the fixture directories. A test that names no cwd gets its own
+    /// scratch workspace rather than the developer's checkout: the binary reads
+    /// and writes project state under the cwd, so a shared real workspace lets
+    /// one test's snapshot of the repo land in the developer's tree and lets
+    /// the developer's accumulated state decide the test's timing.
+    fn resolve(home: Option<PathBuf>, cwd: Option<PathBuf>) -> Self {
+        let mut owned = Vec::new();
+        let home = home.unwrap_or_else(|| {
+            let dir = fresh_temp_dir("pty-home");
+            owned.push(dir.clone());
+            dir
+        });
+        let cwd = cwd.unwrap_or_else(|| {
+            let dir = fresh_temp_dir("pty-ws");
+            owned.push(dir.clone());
+            dir
+        });
+        Self { home, cwd, owned }
+    }
 }
 
 /// Default timeout for a render to arrive after a keystroke. Generous (the

@@ -14,6 +14,7 @@
 use std::env;
 use std::ffi::OsStr;
 use std::fs;
+use std::fs::remove_dir_all;
 use std::path::{Path, PathBuf};
 use std::process;
 use std::thread;
@@ -639,12 +640,28 @@ fn test_status_version_before_turn() {
 fn test_continue_resumes_latest_session() {
     let sessions_dir = common::fresh_temp_dir("sessions-continue");
     let sid_a = "44444444-4444-4444-4444-444444444444";
-    common::seed_session_on_disk(&sessions_dir, sid_a, "continue-model", "seeded prompt a");
+    // --continue selects the session whose recorded cwd is this one, so the
+    // seed and the launch have to name the same workspace: the harness gives
+    // every launch its own scratch cwd, and a seed recorded against anything
+    // else is correctly filtered out.
+    // Canonicalized because the binary's own cwd comes back from getcwd in the
+    // resolved form: a seed recorded against the symlinked spelling would be
+    // filtered out by the very comparison this test exercises. The harness only
+    // removes the directories it created, so this one is removed here.
+    let owned_cwd = common::fresh_temp_dir("pty-ws-continue");
+    let cwd = dunce::canonicalize(&owned_cwd).expect("canonicalize the launch cwd");
+    common::seed_session_with_cwd(
+        &sessions_dir,
+        sid_a,
+        "continue-model",
+        "seeded prompt a",
+        &cwd.to_string_lossy(),
+    );
     let mut s = PtySession::launch_with_sessions_dir(
         None,
         None,
         None,
-        None,
+        Some(cwd),
         &["--continue".to_string()],
         sessions_dir,
     );
@@ -664,6 +681,7 @@ fn test_continue_resumes_latest_session() {
         "--continue should show the resumed history:\n{}",
         s.output()
     );
+    drop(remove_dir_all(&owned_cwd));
 }
 
 /// --continue with no session in the current workspace errors with guidance,
