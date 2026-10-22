@@ -319,15 +319,19 @@ async fn test_cancel_aborts_process_tree() {
         wall_timeout_ms: 10000,
         ..ExecConfig::default()
     };
-    let cmd = "sleep 100 & sleep 100 & wait";
-    let task = tokio::spawn(async move { s.exec_with_config(cmd, cfg).await });
+    // The sleep carries a duration no other process would use, so the search
+    // below matches this test's children and not a leftover from another run or
+    // another session on the same host.
+    let marker = format!("sleep 100.{}", id());
+    let cmd = format!("{marker} & {marker} & wait");
+    let task = tokio::spawn(async move { s.exec_with_config(&cmd, cfg).await });
     // Poll for the grandchildren to appear (10ms ticks up to 2s) — event driven, not a fixed sleep. The spawn + fork takes ~10-50ms; a fixed 1s sleep wasted 950ms every run.
     let mut started = false;
     for _ in 0..200 {
         sleep(Duration::from_millis(10)).await;
         let pgrep = Command::new("pgrep")
             .arg("-lf")
-            .arg("sleep 100")
+            .arg(&marker)
             .output()
             .expect("pgrep");
         if !String::from_utf8_lossy(&pgrep.stdout).is_empty() {
@@ -347,7 +351,7 @@ async fn test_cancel_aborts_process_tree() {
         sleep(Duration::from_millis(100)).await;
         let pgrep = Command::new("pgrep")
             .arg("-lf")
-            .arg("sleep 100")
+            .arg(&marker)
             .output()
             .expect("pgrep");
         leftover = String::from_utf8_lossy(&pgrep.stdout).into_owned();
