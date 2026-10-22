@@ -5,6 +5,7 @@
 
 use std::sync::Arc;
 
+use super::paths::snapshot_store_root;
 use houyicoder_api::sandbox::SandboxSession;
 use houyicoder_api::tool::{Tool, ToolProvider};
 use houyicoder_core::agent::ConditionalSkillActivator;
@@ -35,8 +36,10 @@ impl BuiltInToolProvider {
     pub(super) fn new(session: Option<Arc<dyn SandboxSession>>, gate: Arc<dyn ModeGate>) -> Self {
         let (undo_stack, snapshot_store) = match &session {
             Some(s) => {
+                let workspace = s.workspace_root();
+                let store_root = snapshot_store_root(&workspace);
                 let store = super::degrade_with_notice(
-                    SnapshotStore::new(s.workspace_root()),
+                    SnapshotStore::new_at(&workspace, store_root),
                     "snapshot store init failed",
                     "undo unavailable; destructive bash commands will require explicit approval",
                 )

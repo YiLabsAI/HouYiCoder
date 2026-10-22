@@ -4,11 +4,14 @@
 //! restores from the snapshot. File-tool per-file before-images (Write/Edit/
 //! MultiEdit) share the same undo stack (the per-file before-image design).
 //!
-//! The snapshot store is workspace-local (the workspace-local snapshot store)
-//! because clonefile/FICLONE require same-volume (a global store may cross a
-//! volume boundary -> EXDEV). The store directory itself is pruned from the
-//! walkdir so a snapshot does not clone prior snapshots (self-referential
-//! explosion).
+//! The store's default location is workspace-local, because clonefile/FICLONE
+//! require one volume and a store on another volume would turn every snapshot
+//! into a full copy. The composition root may place it outside the workspace
+//! (the caller picks the root through new_at) so the agent's own find and grep
+//! do not walk cloned trees; it falls back to the workspace-local root when the
+//! two paths are on different volumes. The store directory itself is pruned
+//! from the walkdir so a snapshot does not clone prior snapshots
+//! (self-referential explosion).
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -16,11 +19,14 @@ use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::agent::git_discard::command_triggers_git_snapshot;
+use crate::agent::runner_config::DEFAULT_SNAPSHOT_TTL_SECS;
 use std::fs::copy;
 use std::fs::create_dir_all;
 use std::fs::read_dir;
+use std::fs::remove_dir;
 use std::fs::remove_dir_all;
 use std::fs::remove_file;
+use std::fs::rename;
 use std::fs::write;
 use std::io::Error;
 use std::io::ErrorKind;
@@ -172,20 +178,68 @@ impl UndoStack {
 
     /// Rebuild the stack from a re-link scan of surviving on-disk snapshots
     /// (after a restart/resume). The on-disk snap-N dirs persist across
-    /// processes; only the in-memory stack is lost. Entries must be in LIFO
-    /// order (most recent first) -- the caller (relink_undo_entries) sorts
-    /// by snap id descending.
+    /// processes; only the in-memory stack is lost. Entries must be in push
+    /// order, oldest first, because pop takes the last one: the newest
+    /// snapshot has to end up at the end of the vec.
     pub fn from_entries(entries: Vec<UndoEntry>) -> Self {
         Self { entries }
     }
 }
+
+/// Move a previous store's snapshots into the current one, then drop the old
+/// directory if it empties out.
+///
+/// A snapshot that cannot be moved stays where it is, which means that undo
+/// entry is no longer reachable: the store only scans its own root. Every such
+/// failure is therefore reported rather than swallowed, and the leftover
+/// directory is left in place so the files are still on disk for a manual
+/// recovery.
+fn migrate_store(legacy: &Path, store_root: &Path) {
+    if legacy == store_root || !legacy.is_dir() {
+        return;
+    }
+    let Ok(entries) = read_dir(legacy) else {
+        return;
+    };
+    let mut ready = false;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name() else {
+            continue;
+        };
+        if !path.is_dir() || !name.to_string_lossy().starts_with("snap-") {
+            continue;
+        }
+        if !ready {
+            if let Err(error) = create_dir_all(store_root) {
+                tracing::warn!(
+                    "snapshot store move: {} cannot be created: {error}",
+                    store_root.display()
+                );
+                return;
+            }
+            ready = true;
+        }
+        let dst = store_root.join(name);
+        if dst.exists() {
+            continue;
+        }
+        let _moved = rename(&path, &dst);
+    }
+    let _removed = remove_dir(legacy);
+}
+
+/// Most snapshots a resume re-links onto the undo stack. The stack is a
+/// recovery convenience, not an archive: a resumed session acts on the newest
+/// few, and everything older is left for prune to reclaim.
+const MAX_UNDO_DEPTH: usize = 10;
 
 /// The default threshold (bytes) above which a full-copy fallback on a
 /// no-reflink filesystem degrades to Ask instead of paying a slow copy per
 /// destructive command.
 const NO_REFLINK_SIZE_THRESHOLD: u64 = 512 * 1024 * 1024;
 
-/// The workspace-local snapshot store. Snapshots are whole-tree CoW clones
+/// The snapshot store. Snapshots are whole-tree CoW clones
 /// (reflink per file + create_dir), O(file count). The store directory itself
 /// is pruned from the walk.
 pub struct SnapshotStore {
@@ -216,10 +270,33 @@ pub trait SnapshotAuditSink: Send + Sync {
 }
 
 impl SnapshotStore {
+    /// Open the workspace-local store. The store lives beside the workspace
+    /// because clonefile and FICLONE only work within one volume.
     pub fn new(workspace_root: impl AsRef<Path>) -> std::io::Result<Self> {
         let workspace_root = workspace_root.as_ref().to_path_buf();
         let store_root = workspace_root.join(".houyicoder").join("snapshots");
-        create_dir_all(&store_root)?;
+        Self::new_at(workspace_root, store_root)
+    }
+
+    /// Open a store at an explicit root. The caller picks the location: the
+    /// composition root keeps it outside the workspace so the agent's own find
+    /// and grep do not walk cloned trees, and falls back to the workspace-local
+    /// default when the two paths are on different volumes.
+    pub fn new_at(
+        workspace_root: impl AsRef<Path>,
+        store_root: impl AsRef<Path>,
+    ) -> std::io::Result<Self> {
+        let workspace_root = workspace_root.as_ref().to_path_buf();
+        let store_root = store_root.as_ref().to_path_buf();
+        // The store directory is created on first use rather than here: a
+        // session that never takes a snapshot leaves nothing behind, and a test
+        // run that opens one store per workspace does not litter the config
+        // home with a directory each.
+        // A store that moved out of the workspace still owes the undo history
+        // it holds: the previous location's snapshots are moved in before the
+        // counter is scanned, so their ids keep their meaning.
+        let legacy = workspace_root.join(".houyicoder").join("snapshots");
+        migrate_store(&legacy, &store_root);
         // Scan existing snap-N dirs to avoid id collision across restarts.
         // The store dir persists across processes; a fresh counter at 0
         // would land new snap-0 on top of old snap-0.
@@ -244,8 +321,13 @@ impl SnapshotStore {
     /// Reconstruct undo entries from the surviving on-disk snap-N dirs, so a
     /// resumed session can /undo a destructive operation from the prior
     /// process. The snapshots persist on disk across restarts; only the
-    /// in-memory stack is lost. Returns entries in LIFO order (highest snap
-    /// id first = most recent destructive op on top).
+    /// in-memory stack is lost. The result is in LIFO order: the last element
+    /// is the newest snapshot, which is the one a pop must hand back first.
+    ///
+    /// Only snapshots a resume can still act on are re-linked. One older than
+    /// the retention TTL is left for prune, and the stack stops at the undo
+    /// depth. A re-link that loaded every directory on disk would mark all of
+    /// them protected, and prune would then never reclaim any of them.
     ///
     /// Workspace-only snapshots re-link cleanly (restore maps the cloned tree
     /// back to the workspace root). Snapshots that carried additional writable
@@ -255,6 +337,15 @@ impl SnapshotStore {
     /// (a future refinement); today they are left on disk, unrecoverable via
     /// /undo after a restart, the same as before this re-link.
     pub fn relink_undo_entries(&self) -> Vec<UndoEntry> {
+        self.relink_undo_entries_within(DEFAULT_SNAPSHOT_TTL_SECS)
+    }
+
+    /// Re-link with an explicit retention. The store keeps whatever TTL its
+    /// owner configured; reading a snapshot back that prune would already
+    /// consider expired would put the two retention decisions on one dataset
+    /// out of step.
+    pub fn relink_undo_entries_within(&self, ttl_secs: u64) -> Vec<UndoEntry> {
+        let now = SystemTime::now();
         let mut ids: Vec<u64> = Vec::new();
         if let Ok(dir) = read_dir(&self.store_root) {
             for entry in dir.flatten() {
@@ -272,6 +363,15 @@ impl SnapshotStore {
                 let Ok(n) = num.parse::<u64>() else {
                     continue;
                 };
+                let age = entry
+                    .metadata()
+                    .and_then(|m| m.modified())
+                    .ok()
+                    .and_then(|t| now.duration_since(t).ok())
+                    .unwrap_or_default();
+                if age.as_secs() > ttl_secs {
+                    continue;
+                }
                 let snap_path = self.store_root.join(name);
                 // Skip additional-roots snapshots: the __extra subtree's
                 // root mapping is not on disk, so restore could not remap.
@@ -282,8 +382,9 @@ impl SnapshotStore {
             }
         }
         ids.sort_unstable();
-        ids.iter()
-            .rev()
+        let keep_from = ids.len().saturating_sub(MAX_UNDO_DEPTH);
+        ids[keep_from..]
+            .iter()
             .map(|&n| UndoEntry::CoWSnapshot {
                 store_path: self.store_root.join(format!("snap-{n}")),
                 extra_roots: Vec::new(),
@@ -300,6 +401,9 @@ impl SnapshotStore {
     /// once per process rather than once per command.
     pub fn can_reflink(&self) -> bool {
         *self.reflink_capable.get_or_init(|| {
+            if create_dir_all(&self.store_root).is_err() {
+                return false;
+            }
             let src = self.store_root.join(".reflink-test-src");
             let dst = self.store_root.join(".reflink-test-dst");
             if write(&src, b"t").is_err() {

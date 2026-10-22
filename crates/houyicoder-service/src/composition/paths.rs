@@ -9,7 +9,10 @@
 
 use std::env::current_dir;
 use std::env::var;
+use std::fs::metadata;
 use std::fs::read_to_string;
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 /// The workspace override decision: the first non-empty raw value wins and is
@@ -90,6 +93,87 @@ pub fn workspace_cwd(project: Option<String>) -> String {
         .or_else(cwd_fallback)
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_default()
+}
+
+/// Where the workspace's snapshot store lives. It is kept outside the
+/// workspace tree so the agent's own find and grep do not walk cloned copies of
+/// the repository, which both slows the search down and returns hits from
+/// files that are not the working tree.
+///
+/// clonefile and FICLONE only work within one volume, so the store stays
+/// workspace-local when the home directory is on a different volume: a cross
+/// volume store would silently turn every snapshot into a full copy, which is
+/// slower and larger than the alternative it was meant to improve.
+pub fn snapshot_store_root(workspace: &Path) -> PathBuf {
+    let home_store = var("HOME")
+        .ok()
+        .map(PathBuf::from)
+        .map(|home| home.join(".houyicoder").join("snapshots"))
+        .filter(|dir| same_filesystem(workspace, dir));
+    match home_store {
+        Some(dir) => dir.join(workspace_slug(workspace)),
+        None => workspace.join(".houyicoder").join("snapshots"),
+    }
+}
+
+/// Whether two paths live on the same filesystem. A missing path is measured
+/// through its nearest existing ancestor, so a store directory that has not
+/// been created yet is judged by the volume it would land on. An unresolvable
+/// path answers no, so the caller falls back to the location that is
+/// guaranteed to work.
+#[cfg(unix)]
+fn same_filesystem(a: &Path, b: &Path) -> bool {
+    match (filesystem_of(a), filesystem_of(b)) {
+        (Some(dev_a), Some(dev_b)) => dev_a == dev_b,
+        _ => false,
+    }
+}
+
+#[cfg(unix)]
+fn filesystem_of(path: &Path) -> Option<u64> {
+    let mut cursor = path;
+    loop {
+        if let Ok(meta) = metadata(cursor) {
+            return Some(meta.dev());
+        }
+        cursor = cursor.parent()?;
+    }
+}
+
+#[cfg(not(unix))]
+fn same_filesystem(_a: &Path, _b: &Path) -> bool {
+    false
+}
+
+/// A filesystem-safe, stable directory name for one workspace: its own name
+/// plus a hash of the full path, so two checkouts named alike do not share a
+/// store.
+///
+/// The hash is taken over the path as given, so callers pass the canonical
+/// form: the same workspace spelled through a symlink would otherwise mint a
+/// second store, and the second store's migration would find the first one's
+/// snapshots already there.
+fn workspace_slug(workspace: &Path) -> String {
+    let raw_name = workspace
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("workspace");
+    let name: String = raw_name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .take(48)
+        .collect();
+    let mut hash: u64 = 5381;
+    for byte in workspace.to_string_lossy().as_bytes() {
+        hash = hash.wrapping_mul(33) ^ u64::from(*byte);
+    }
+    format!("{name}-{hash:016x}")
 }
 
 /// The sessions root. Each session lives in <sid>/log.jsonl under this.

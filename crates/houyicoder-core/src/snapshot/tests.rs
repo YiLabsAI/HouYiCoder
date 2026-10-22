@@ -509,3 +509,187 @@ fn test_id_continues_across_restart() {
     assert!(id >= 2, "counter continues past restart: id={id}");
     remove_dir_all(&tmp).ok();
 }
+
+/// A re-link hands back the newest snapshot last, so the first pop restores the
+/// most recent destructive operation. Reading the ids in reverse put the oldest
+/// snapshot on top, which restored the wrong state.
+#[test]
+fn test_relink_orders_newest_last() {
+    let tmp = temp_dir().join(format!("snap-relink-order-{}", id()));
+    remove_dir_all(&tmp).ok();
+    create_dir_all(&tmp).expect("mkdir");
+    write(tmp.join("real.txt"), "data").expect("write");
+    let store = SnapshotStore::new(&tmp).expect("store");
+    store.snapshot(&[]).expect("snap-0");
+    store.snapshot(&[]).expect("snap-1");
+    store.snapshot(&[]).expect("snap-2");
+    let resumed = SnapshotStore::new(&tmp).expect("resumed");
+    let entries = resumed.relink_undo_entries();
+    let ids: Vec<String> = entries
+        .iter()
+        .map(|e| match e {
+            UndoEntry::CoWSnapshot { store_path, .. } => store_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_string(),
+            _ => String::new(),
+        })
+        .collect();
+    assert_eq!(
+        ids,
+        vec!["snap-1", "snap-2", "snap-3"],
+        "the newest snapshot must be last so pop restores it first"
+    );
+    remove_dir_all(&tmp).ok();
+}
+
+/// A snapshot past the retention TTL is not re-linked: it is left for prune.
+/// Re-linking it would mark it protected and prune could never reclaim it.
+#[test]
+fn test_relink_skips_expired_snapshot() {
+    let tmp = temp_dir().join(format!("snap-relink-ttl-{}", id()));
+    remove_dir_all(&tmp).ok();
+    create_dir_all(&tmp).expect("mkdir");
+    write(tmp.join("real.txt"), "data").expect("write");
+    let store = SnapshotStore::new(&tmp).expect("store");
+    let fresh = store.snapshot(&[]).expect("fresh");
+    let UndoEntry::CoWSnapshot {
+        store_path: stale, ..
+    } = store.snapshot(&[]).expect("stale")
+    else {
+        panic!("expected CoWSnapshot");
+    };
+    let aged = SystemTime::now() - std::time::Duration::from_secs(DEFAULT_SNAPSHOT_TTL_SECS + 60);
+    let handle = std::fs::File::open(&stale).expect("open snapshot dir");
+    handle.set_modified(aged).expect("age the snapshot");
+    let resumed = SnapshotStore::new(&tmp).expect("resumed");
+    let entries = resumed.relink_undo_entries();
+    let paths: Vec<&PathBuf> = entries
+        .iter()
+        .map(|e| match e {
+            UndoEntry::CoWSnapshot { store_path, .. } => store_path,
+            _ => unreachable!(),
+        })
+        .collect();
+    let UndoEntry::CoWSnapshot {
+        store_path: fresh_path,
+        ..
+    } = fresh
+    else {
+        panic!("expected CoWSnapshot");
+    };
+    assert_eq!(
+        paths,
+        vec![&fresh_path],
+        "the expired snapshot must be left for prune, not re-linked"
+    );
+    remove_dir_all(&tmp).ok();
+}
+
+/// A store that moves out of the workspace takes its history with it, and a
+/// store opened where a previous one lived starts its counter past those ids.
+#[test]
+fn test_store_move_carries_snapshots() {
+    let tmp = temp_dir().join(format!("snap-move-{}", id()));
+    remove_dir_all(&tmp).ok();
+    create_dir_all(&tmp).expect("mkdir");
+    write(tmp.join("real.txt"), "data").expect("write");
+    let legacy = SnapshotStore::new(&tmp).expect("legacy store");
+    legacy.snapshot(&[]).expect("snap in the old location");
+    drop(legacy);
+    let new_root = temp_dir().join(format!("snap-move-out-{}", id()));
+    remove_dir_all(&new_root).ok();
+    let moved = SnapshotStore::new_at(&tmp, &new_root).expect("moved store");
+    let entries = moved.relink_undo_entries();
+    assert_eq!(
+        entries.len(),
+        1,
+        "the old store's snapshot must move with the store: {entries:?}"
+    );
+    let next = moved.snapshot(&[]).expect("snapshot after the move");
+    let UndoEntry::CoWSnapshot { store_path, .. } = next else {
+        panic!("expected CoWSnapshot");
+    };
+    assert_eq!(
+        store_path.file_name().and_then(|n| n.to_str()),
+        Some("snap-2"),
+        "the counter continues past the moved snapshot"
+    );
+    remove_dir_all(&tmp).ok();
+    remove_dir_all(&new_root).ok();
+}
+
+/// A re-link keeps only the newest MAX_UNDO_DEPTH snapshots. Keeping more
+/// would mark every one of them protected, which is what stopped prune from
+/// reclaiming anything.
+#[test]
+fn test_relink_respects_cap() {
+    let tmp = temp_dir().join(format!("snap-relink-cap-{}", id()));
+    remove_dir_all(&tmp).ok();
+    create_dir_all(&tmp).expect("mkdir");
+    write(tmp.join("real.txt"), "data").expect("write");
+    let store = SnapshotStore::new(&tmp).expect("store");
+    for _ in 0..MAX_UNDO_DEPTH + 3 {
+        store.snapshot(&[]).expect("snapshot");
+    }
+    let resumed = SnapshotStore::new(&tmp).expect("resumed");
+    let entries = resumed.relink_undo_entries();
+    assert_eq!(
+        entries.len(),
+        MAX_UNDO_DEPTH,
+        "the stack stops at the undo depth"
+    );
+    let last = match entries.last() {
+        Some(UndoEntry::CoWSnapshot { store_path, .. }) => store_path.clone(),
+        _ => unreachable!(),
+    };
+    let highest = scan_max_snapshot_id(&tmp.join(".houyicoder").join("snapshots"));
+    assert_eq!(
+        last.file_name().and_then(|n| n.to_str()),
+        Some(format!("snap-{highest}").as_str()),
+        "the kept window is the newest one"
+    );
+    remove_dir_all(&tmp).ok();
+}
+
+/// A store move leaves a snapshot that already exists at the destination
+/// alone, and leaves the previous directory in place so the files are still
+/// on disk rather than deleted on the floor.
+#[test]
+fn test_store_move_keeps_existing() {
+    let tmp = temp_dir().join(format!("snap-move-collide-{}", id()));
+    remove_dir_all(&tmp).ok();
+    create_dir_all(&tmp).expect("mkdir");
+    write(tmp.join("real.txt"), "data").expect("write");
+    let legacy = SnapshotStore::new(&tmp).expect("legacy");
+    legacy.snapshot(&[]).expect("snap in the old location");
+    drop(legacy);
+    let new_root = temp_dir().join(format!("snap-move-collide-out-{}", id()));
+    remove_dir_all(&new_root).ok();
+    create_dir_all(new_root.join("snap-1")).expect("pre-create the destination id");
+    let moved = SnapshotStore::new_at(&tmp, &new_root).expect("moved store");
+    let entries = moved.relink_undo_entries();
+    assert_eq!(
+        entries.len(),
+        1,
+        "only the destination's own snapshot re-links: {entries:?}"
+    );
+    let UndoEntry::CoWSnapshot { store_path, .. } = &entries[0] else {
+        panic!("expected CoWSnapshot");
+    };
+    assert_eq!(
+        store_path,
+        &new_root.join("snap-1"),
+        "the re-linked entry is the destination's, not the collided one"
+    );
+    assert!(
+        tmp.join(".houyicoder")
+            .join("snapshots")
+            .join("snap-1")
+            .is_dir(),
+        "the collided snapshot is left on disk, not deleted"
+    );
+    remove_dir_all(&tmp).ok();
+    remove_dir_all(&new_root).ok();
+}
