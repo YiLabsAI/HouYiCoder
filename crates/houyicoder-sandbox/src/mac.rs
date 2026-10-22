@@ -118,11 +118,11 @@ impl MacSeatbeltSession {
     /// profile bound to it. Used by tests and as a fallback when no cwd is
     /// available. The tempdir is removed on Drop.
     pub fn new() -> Result<Self, SandboxError> {
-        let workspace = mkdtemp("houyicoder-sandbox")?;
+        let workspace = mkdtemp("hy-work")?;
         // Canonicalize so mac /var -> /private/var symlinks do not make
         // starts_with checks in resolve() reject legitimate workspace paths.
         let workspace = dunce::canonicalize(&workspace)?;
-        let tmpdir = mkdtemp("houyicoder-tmp")?;
+        let tmpdir = mkdtemp("hy-tmp")?;
         let tmpdir = dunce::canonicalize(&tmpdir)?;
         let home = var("HOME").unwrap_or_else(|_| "/Users/unknown".into());
         let shell = var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
@@ -163,7 +163,7 @@ impl MacSeatbeltSession {
     pub fn new_in_cwd(cwd: &Path) -> Result<Self, SandboxError> {
         let workspace = dunce::canonicalize(cwd)
             .map_err(|e| SandboxError::Io(format!("cwd canonicalize: {e}")))?;
-        let tmpdir = mkdtemp("houyicoder-tmp")?;
+        let tmpdir = mkdtemp("hy-tmp")?;
         let tmpdir = dunce::canonicalize(&tmpdir)?;
         let home = var("HOME").unwrap_or_else(|_| "/Users/unknown".into());
         let shell = var("SHELL").unwrap_or_else(|_| "/bin/sh".into());

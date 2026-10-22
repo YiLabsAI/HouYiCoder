@@ -23,8 +23,8 @@ use std::env::temp_dir;
 use std::env::var_os;
 use std::ffi::OsString;
 use std::fs::create_dir;
-use std::fs::create_dir_all;
 use std::fs::remove_dir_all;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 use std::process::Stdio;
@@ -32,8 +32,6 @@ use std::process::id;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
-use std::time::SystemTime;
-use std::time::UNIX_EPOCH;
 use tokio::time::timeout;
 
 /// File name of the fence binary, located beside the daemon executable.
@@ -56,19 +54,25 @@ pub struct LinuxLandlockSession {
     dirs: RuntimeDirs,
 }
 
-/// Mint the per-session scratch dir under the system temp root. The name
-/// mixes pid, a per-process counter and nanos so two sessions can never
-/// share one dir; create_dir then fails rather than reusing a stray dir.
+/// Mint the per-session scratch dir under the system temp root. The leaf is
+/// short on purpose: build tools put their Unix-domain socket under TMPDIR, and
+/// a long temp path pushes those past SUN_LEN, failing every build in the
+/// session. pid plus a per-process counter keeps names unique within a boot;
+/// create_dir is the collision check, so a leftover name is stepped over.
 fn session_tmpdir() -> Result<PathBuf, SandboxError> {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let n = COUNTER.fetch_add(1, Ordering::SeqCst);
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let dir = temp_dir().join(format!("houyicoder-tmp-{}-{n}-{nanos}", id()));
-    create_dir(&dir)?;
-    dunce::canonicalize(&dir).map_err(|e| SandboxError::Io(format!("tmpdir canonicalize: {e}")))
+    loop {
+        let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+        let dir = temp_dir().join(format!("hy-tmp-{}-{n:x}", id()));
+        match create_dir(&dir) {
+            Ok(()) => {
+                return dunce::canonicalize(&dir)
+                    .map_err(|e| SandboxError::Io(format!("tmpdir canonicalize: {e}")));
+            }
+            Err(e) if e.kind() == ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e.into()),
+        }
+    }
 }
 
 impl LinuxLandlockSession {
@@ -93,15 +97,22 @@ impl LinuxLandlockSession {
     /// Create a session rooted at a fresh temp dir this session owns. Drop
     /// removes it. Used by tests and as a fallback when no cwd is available.
     pub fn new() -> Result<Self, SandboxError> {
-        let workspace = temp_dir().join(format!(
-            "houyicoder-sandbox-{}-{}",
-            id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
-        ));
-        create_dir_all(&workspace)?;
+        static WORKSPACE_COUNTER: AtomicU64 = AtomicU64::new(0);
+        // create_dir, not create_dir_all: the name is short and predictable, so
+        // a leftover from a crashed process must be stepped over rather than
+        // adopted. Adopting it would let Drop delete another session's files.
+        let workspace = loop {
+            let candidate = temp_dir().join(format!(
+                "hy-work-{}-{:x}",
+                id(),
+                WORKSPACE_COUNTER.fetch_add(1, Ordering::SeqCst)
+            ));
+            match create_dir(&candidate) {
+                Ok(()) => break candidate,
+                Err(e) if e.kind() == ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(e.into()),
+            }
+        };
         let fence = probe_fence(&workspace);
         Ok(Self {
             workspace,

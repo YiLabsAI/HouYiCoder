@@ -5,7 +5,6 @@
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use houyicoder_context::SandboxError;
 use nix::sys::signal::Signal;
@@ -13,6 +12,7 @@ use nix::sys::signal::kill;
 use nix::unistd::Pid;
 use std::env::temp_dir;
 use std::fs::create_dir;
+use std::io::ErrorKind;
 use std::process::Command;
 use std::process::id;
 use std::sync::Arc;
@@ -20,20 +20,37 @@ use std::sync::Arc;
 /// Counter for unique temp-dir names within this process.
 pub(super) static COUNTER: AtomicU64 = AtomicU64::new(0);
 
-/// Mint a fresh temp directory under the system temp root with a unique
-/// per-process, per-counter, per-nanos name. Used for both the session
-/// workspace (a sandboxed cwd this session owns) and the per-session tmp dir
-/// (allow-listed in the profile, exported as TMPDIR).
+/// Longest temp-directory path this module will hand out, in bytes. Build
+/// tools put their Unix-domain socket under TMPDIR, and those paths are capped
+/// by SUN_LEN (104 bytes on macOS). A session temp path that eats most of that
+/// budget fails every build in the session with an error naming the socket
+/// rather than the temp dir, so the minted path leaves room for a socket name.
+///
+/// Asserted in the tests rather than enforced at mint time: a host whose temp
+/// root is already long cannot be fixed by refusing to start a session.
+#[cfg(test)]
+pub(super) const MAX_TEMP_PATH_BYTES: usize = 80;
+
+/// Mint a fresh temp directory under the system temp root. Used for both the
+/// session workspace (a sandboxed cwd this session owns) and the per-session
+/// tmp dir (allow-listed in the profile, exported as TMPDIR).
+///
+/// The leaf is deliberately short: pid in hex plus a per-process counter. That
+/// is unique within a boot, and create_dir is the collision check, so a name
+/// left behind by a crashed process with the same pid advances the counter
+/// instead of failing the session.
 pub(super) fn mkdtemp(prefix: &str) -> Result<PathBuf, SandboxError> {
-    let n = COUNTER.fetch_add(1, Ordering::SeqCst);
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let mut path = temp_dir();
-    path.push(format!("{prefix}-{}-{n}-{nanos}", id()));
-    create_dir(&path)?;
-    Ok(path)
+    let base = temp_dir();
+    loop {
+        let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+        let mut path = base.clone();
+        path.push(format!("{prefix}-{}-{n:x}", id()));
+        match create_dir(&path) {
+            Ok(()) => return Ok(path),
+            Err(e) if e.kind() == ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e.into()),
+        }
+    }
 }
 
 /// Kill the whole process group (SIGKILL). No-op on pgid <= 0. Best-effort.
