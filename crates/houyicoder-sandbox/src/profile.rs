@@ -10,8 +10,8 @@ mod deny;
 mod network;
 
 use self::deny::{
-    deny_home_snapshot_store, deny_permission_stores, deny_settings_files, deny_snapshot_store,
-    mandatory_deny,
+    deny_home_snapshot_store, deny_permission_stores, deny_settings_files,
+    deny_shared_temp_guarded, deny_snapshot_store, mandatory_deny,
 };
 use self::network::network_rules;
 use std::env::var;
@@ -34,6 +34,11 @@ const MACH_SERVICES: &[&str] = &[
     "com.apple.coreservices.launchservicesd",
     "com.apple.SecurityServer",
     "com.apple.hiservices-xpcservice",
+    // Certificate verification. A child that links the system TLS stack asks
+    // trustd to evaluate the chain; without it the handshake fails with an
+    // OSStatus error rather than a certificate error.
+    "com.apple.trustd",
+    "com.apple.trustd.agent",
 ];
 
 /// /dev devices sh/dyld opens with ioctl.
@@ -59,6 +64,11 @@ const SYSTEM_ETC_ALLOW: &[&str] = &[
     // cargo links the system OpenSSL/LibreSSL, which reads this public
     // trust-store config at process init; denying it breaks cargo.
     "/etc/ssl/openssl.cnf",
+    // The public CA bundle curl and LibreSSL load. Both are world-readable and
+    // contain no secret; without the bundle a TLS client reports a missing CA.
+    "/etc/ssl/cert.pem",
+    // Local time, so a child reports the host zone instead of UTC.
+    "/etc/localtime",
 ];
 
 /// Render a complete profile. Mandatory denies follow allow-backs so they
@@ -208,6 +218,11 @@ pub fn render(spec: &ProfileSpec<'_>) -> String {
         additional.read_only,
         additional.read_write,
     ));
+    // The shared temp root is writable: tools that hard-code /tmp cannot be
+    // redirected, and a session that cannot write there fails on programs it
+    // does not control. The subtrees other processes own stay closed.
+    s.push_str("(allow file-read* file-write* (subpath \"/private/tmp\") (subpath \"/tmp\"))\n");
+    s.push_str(&deny_shared_temp_guarded(tag));
     // The undo store is written by the host, never by the sandboxed command, so
     // denying writes here costs nothing and stops a destructive command from
     // erasing the data that would undo it. Both locations are denied because the

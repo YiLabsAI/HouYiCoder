@@ -176,6 +176,25 @@ pub(crate) fn deny_settings_files(home: &str, tag: &str) -> String {
     deny_write_files(MANDATORY_DENY_SETTINGS_FILES, home, tag)
 }
 
+/// Subtrees of the shared temp root that belong to other processes: launchd
+/// and app sockets, tmux sessions, X11 sockets. Writing there can break or
+/// hijack a process outside the session, so the shared root is writable but
+/// these prefixes are not.
+const GUARDED_SHARED_TEMP: &[&str] = &["com\\.apple\\.", "tmux-", "\\.X11-unix"];
+
+/// Deny writes to the guarded subtrees of the shared temp root, in both the
+/// /tmp spelling and the /private/tmp one the kernel resolves to.
+pub(crate) fn deny_shared_temp_guarded(tag: &str) -> String {
+    let alternation = GUARDED_SHARED_TEMP.join("|");
+    let mut out = String::new();
+    for root in ["/tmp", "/private/tmp"] {
+        out.push_str(&format!(
+            "(deny file-write* (regex #\"^{root}/({alternation})\") (with message \"{tag}\"))\n"
+        ));
+    }
+    out
+}
+
 /// Deny writes to the user-wide snapshot store. The store holds the undo data
 /// for destructive commands, so a command that could write it could rewrite its
 /// own recovery evidence. Snapshot creation is unaffected: the host process

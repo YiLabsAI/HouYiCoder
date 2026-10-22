@@ -26,6 +26,8 @@ use std::time::Instant;
 
 #[path = "seatbelt_kernel/network.rs"]
 mod network;
+#[path = "seatbelt_kernel/replay.rs"]
+mod replay;
 
 /// A live fence: a throwaway workspace, a sibling per-session temporary
 /// directory, and the profile rendered for them. Both directories are removed
@@ -45,6 +47,7 @@ struct Fence {
 #[cfg(target_os = "macos")]
 struct Outcome {
     code: Option<i32>,
+    stdout: String,
     stderr: String,
     elapsed: Duration,
 }
@@ -151,6 +154,7 @@ impl Fence {
             .expect("spawn sandbox-exec");
         let o = Outcome {
             code: out.status.code(),
+            stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
             stderr: String::from_utf8_lossy(&out.stderr).trim().to_owned(),
             elapsed: started.elapsed(),
         };
@@ -537,8 +541,8 @@ fn test_runs_git() {
 
 /// A repository initialized inside the session temporary directory works: git
 /// writes .git/hooks, .git/config, and .gitmodules there. The same paths
-/// inside the workspace stay refused, the shared /tmp root stays refused, and
-/// the permission store under the temporary directory keeps its own refusal.
+/// inside the workspace stay refused, and the permission store under the
+/// temporary directory keeps its own refusal.
 #[cfg(target_os = "macos")]
 #[test]
 fn test_tmpdir_git_init() {
@@ -555,15 +559,6 @@ fn test_tmpdir_git_init() {
         init.allowed(),
         "a repository and dotfiles in the session tmpdir must be writable: {}",
         init.detail()
-    );
-
-    // The shared temp root stays out of reach: the allowance names the session
-    // temporary directory, not the directory every process shares.
-    let shared = f.probe("shared-tmp", "printf x > /tmp/houyi-probe-shared");
-    assert!(
-        !shared.allowed() && shared.denied_by_fence(),
-        "a write to the shared temp root must stay refused: {}",
-        shared.detail()
     );
 
     create_dir_all(f.workspace.join(".git/hooks")).expect("create workspace hooks dir");
@@ -618,5 +613,93 @@ fn test_splits_gitconfig() {
         "expected a fence denial on the write, got exit {:?} with stderr: {}",
         write.code,
         write.stderr
+    );
+}
+
+/// Tools that hard-code the shared temp root cannot be redirected, so the root
+/// is writable and only the subtrees other processes own stay closed. Process
+/// substitution depends on it: the system diff writes its FIFO through a
+/// hardcoded path under the root, so a closed root fails the command with a
+/// permission error that names the pipe rather than the directory.
+#[cfg(target_os = "macos")]
+#[test]
+fn test_shared_temp_writable() {
+    let f = Fence::new("shared-temp");
+    let write = f.probe(
+        "tmp-write",
+        "printf x > /tmp/houyi-probe-shared && cat /tmp/houyi-probe-shared",
+    );
+    assert!(
+        write.allowed(),
+        "the shared temp root must be writable: a tool that hard-codes it \
+         cannot be redirected into TMPDIR. {}",
+        write.detail()
+    );
+    // Process substitution is a bash feature; the probe shell is sh.
+    let proc_sub = f.probe("tmp-proc-sub", "bash -c 'diff <(echo a) <(echo a)'");
+    assert!(
+        proc_sub.allowed(),
+        "process substitution must work: the system diff stages pipe input \
+         through the shared temp root. {}",
+        proc_sub.detail()
+    );
+    let _cleanup = remove_file("/tmp/houyi-probe-shared");
+}
+
+/// The subtrees of the shared temp root that other processes own stay closed,
+/// so opening the root cannot be used to plant a file another program runs.
+#[cfg(target_os = "macos")]
+#[test]
+fn test_shared_temp_guarded_paths() {
+    let f = Fence::new("shared-temp-guard");
+    for (label, cmd) in [
+        ("com.apple", "printf x > /private/tmp/com.apple.houyi-probe"),
+        ("tmux", "printf x > /private/tmp/tmux-houyi-probe"),
+        ("x11", "mkdir /private/tmp/.X11-unix"),
+    ] {
+        let out = f.probe(label, cmd);
+        assert!(
+            !out.allowed() && out.denied_by_fence(),
+            "the {label} subtree belongs to another process and must stay \
+             write-denied: {}",
+            out.detail()
+        );
+    }
+}
+
+/// A child that verifies a certificate needs the public CA bundle, and one that
+/// reports a time needs the local zone. Both are world-readable files with no
+/// secret in them, and both were denied by the blanket /etc deny.
+#[cfg(target_os = "macos")]
+#[test]
+fn test_trust_store_and_clock() {
+    let f = Fence::new("ca-time");
+    let ca = f.probe("ca-read", "head -c 32 /etc/ssl/cert.pem > /dev/null");
+    assert!(
+        ca.allowed(),
+        "the public CA bundle must be readable or every TLS client reports a \
+         missing certificate authority. {}",
+        ca.detail()
+    );
+    let ca_write = f.probe("ca-write", "printf x >> /etc/ssl/cert.pem");
+    assert!(
+        !ca_write.allowed() && ca_write.denied_by_fence(),
+        "the CA bundle stays write-denied: {}",
+        ca_write.detail()
+    );
+    // The zone has to match the host, not merely be readable: a sandbox that
+    // falls back to UTC stamps every commit and log line with the wrong offset.
+    let host_zone = Command::new("date").arg("+%Z").output().expect("host date");
+    let host_zone = String::from_utf8_lossy(&host_zone.stdout).trim().to_owned();
+    let zone = f.probe("zone-read", "date +%Z");
+    assert!(
+        zone.allowed(),
+        "the local time zone must be readable: {}",
+        zone.detail()
+    );
+    assert!(
+        zone.stdout.trim() == host_zone,
+        "the sandboxed zone must match the host zone ({host_zone}), got {:?}",
+        zone.stdout.trim()
     );
 }
