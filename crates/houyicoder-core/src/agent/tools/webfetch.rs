@@ -23,10 +23,10 @@ use serde_json::{Value, json};
 use super::{Tool, ToolCtx, ToolError};
 
 mod cache;
+mod redirect;
 mod resolver;
 mod response;
 mod route;
-mod target;
 
 #[cfg(test)]
 pub(crate) use cache::CACHE_MAX_ENTRIES;
@@ -39,6 +39,14 @@ pub(crate) use cache::FailedUrl;
 pub(crate) use cache::FetchCache;
 #[cfg(test)]
 pub(crate) use cache::PAGE_TTL;
+pub(crate) use redirect::FetchError;
+pub(crate) use redirect::fetch_following;
+#[cfg(test)]
+pub(crate) use redirect::is_private_host;
+#[cfg(test)]
+pub(crate) use redirect::is_private_ip;
+pub(crate) use redirect::upgrade_to_https;
+pub(crate) use redirect::validate_url;
 use reqwest::Client;
 use reqwest::redirect::Policy;
 use resolver::PRIVATE_TARGET;
@@ -65,14 +73,6 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 #[cfg(test)]
 pub(crate) use std::time::Instant;
-pub(crate) use target::FetchError;
-pub(crate) use target::fetch_following;
-#[cfg(test)]
-pub(crate) use target::is_private_host;
-#[cfg(test)]
-pub(crate) use target::is_private_ip;
-pub(crate) use target::upgrade_to_https;
-pub(crate) use target::validate_url;
 
 /// Maximum URL length accepted by the tool. Guards against oversized URLs
 /// that may be crafted for data exfiltration.

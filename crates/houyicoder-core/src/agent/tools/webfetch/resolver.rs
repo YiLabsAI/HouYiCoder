@@ -25,7 +25,7 @@ use serde_json::Value;
 use serde_json::json;
 use tokio::net::lookup_host;
 
-use super::target::is_private_ip;
+use super::redirect::is_private_ip;
 
 /// Prefix of the error a refused lookup reports.
 pub(crate) const PRIVATE_TARGET: &str = "webfetch: target resolves to a private address";
