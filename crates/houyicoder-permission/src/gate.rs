@@ -18,7 +18,8 @@ use std::sync::{Arc, Mutex};
 use crate::compound::{normalize_shell_command, split_compound};
 use crate::consent::ConsentStore;
 use crate::decision::{AllowReason, AskReason, AskSource, Decision};
-use crate::git_discard::should_ask_before_git;
+use crate::egress::trusted_egress_scopes;
+use crate::git_discard::collect_git_ask_ops;
 use crate::metrics::DecisionBucket;
 use crate::metrics::DecisionCounter;
 use crate::metrics::decision_labels;
@@ -241,6 +242,19 @@ impl DefaultModeGate {
     /// mechanism set it explicitly.
     pub fn with_auto_allow_fenced_exec(self, on: bool) -> Self {
         self.auto_allow_fenced_exec.store(on, Ordering::Relaxed);
+        self
+    }
+
+    /// Seed the session's egress allowlist with the built-in read-only
+    /// developer documentation and public repository hosts.
+    pub fn with_trusted_hosts(self) -> Self {
+        let mut list = self.egress_allow.lock().expect("mode gate mutex");
+        for scope in trusted_egress_scopes() {
+            if !list.contains(&scope) {
+                list.push(scope);
+            }
+        }
+        drop(list);
         self
     }
 
@@ -481,6 +495,10 @@ impl ModeGate for DefaultModeGate {
         if !allow.iter().any(|existing| existing == destination) {
             allow.push(destination.to_string());
         }
+        let session_key = format!("session:{destination}");
+        if !allow.iter().any(|existing| existing == &session_key) {
+            allow.push(session_key);
+        }
     }
 
     fn set_git_checkpoint_enabled(&self, enabled: bool) {
@@ -546,7 +564,13 @@ impl ModeGate for DefaultModeGate {
 /// The service boundary uses this to route a session-scope approval to the
 /// gate's session consent rather than a persistent allow rule.
 pub fn classify_git_op(tool_name: &str, content: &str) -> Option<&'static str> {
-    should_ask_before_git(tool_name, content)
+    let ops = collect_git_ask_ops(tool_name, content);
+    let first = *ops.first()?;
+    if ops.iter().all(|&op| op == first) {
+        Some(first)
+    } else {
+        Some("mixed")
+    }
 }
 
 /// A per-mode strategy that decides Allow / Ask / Deny for a tool request when

@@ -11,8 +11,11 @@
 
 use crate::heredoc::strip_quoted_heredoc_bodies;
 
+mod effect;
 mod readonly;
 
+pub(crate) use effect::is_temp_target;
+pub use effect::{is_effect_safe, reads_only_protected, removes_only_temp};
 pub use readonly::is_readonly_compound;
 
 /// Split a compound command into its top-level segments on and/or, semicolon,
@@ -109,6 +112,27 @@ pub(crate) fn is_env_assignment(word: &str) -> bool {
     let Some((name, value)) = word.split_once('=') else {
         return false;
     };
+    if matches!(
+        name,
+        "TMPDIR"
+            | "TMPPREFIX"
+            | "HOME"
+            | "CURL_HOME"
+            | "HTTP_PROXY"
+            | "HTTPS_PROXY"
+            | "ALL_PROXY"
+            | "http_proxy"
+            | "https_proxy"
+            | "all_proxy"
+            | "GIT_SSH_COMMAND"
+            | "LD_PRELOAD"
+            | "LD_LIBRARY_PATH"
+            | "DYLD_INSERT_LIBRARIES"
+            | "DYLD_LIBRARY_PATH"
+    ) || name.contains('[')
+    {
+        return false;
+    }
     let mut chars = name.chars();
     match chars.next() {
         Some(c) if c.is_ascii_alphabetic() || c == '_' => {}
@@ -186,7 +210,7 @@ fn assignment_prefix_len(segment: &str) -> usize {
 /// must NOT match /dev/null as a prefix, else the strip would hide a real file
 /// write and the redirect check would pass. The expression here is a
 /// hand-rolled char scan.
-fn strip_safe_redirects(content: &str) -> String {
+pub(crate) fn strip_safe_redirects(content: &str) -> String {
     let chars: Vec<char> = content.chars().collect();
     let n = chars.len();
     let mut out = String::with_capacity(n);
@@ -345,7 +369,17 @@ pub fn is_attestable(segment: &str) -> bool {
     let stripped = strip_quoted_heredoc_bodies(&strip_safe_redirects(segment));
     let mut scan = QuoteScan::new(&stripped);
     while let Some(c) = scan.next() {
-        if scan.in_quote() {
+        if scan.in_single {
+            continue;
+        }
+        if c == '`' {
+            return false;
+        }
+        // Command substitution runs inside double quotes as well as unquoted.
+        if c == '$' && scan.peek_next() == Some('(') {
+            return false;
+        }
+        if scan.in_double {
             continue;
         }
         // Quoted heredoc (<< with quote, dash, or backslash after) feeds
@@ -360,13 +394,6 @@ pub fn is_attestable(segment: &str) -> bool {
             return false;
         }
         if c == '>' || c == '<' {
-            return false;
-        }
-        if c == '`' {
-            return false;
-        }
-        // Command substitution: dollar plus open paren.
-        if c == '$' && scan.peek_next() == Some('(') {
             return false;
         }
     }
@@ -418,10 +445,6 @@ impl QuoteScan {
 
     fn peek_next(&self) -> Option<char> {
         self.chars.get(self.pos).copied()
-    }
-
-    fn in_quote(&self) -> bool {
-        self.in_single || self.in_double
     }
 }
 

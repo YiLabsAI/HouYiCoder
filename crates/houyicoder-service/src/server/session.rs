@@ -199,6 +199,8 @@ async fn reemit_and_settle_ask(
             tool: ask_perm.tool.clone(),
             verdict,
             scope: decision.scope.clone(),
+            validator: reason.as_ref().map(|r| r.validator.to_string()),
+            reason: reason.as_ref().map(|r| r.detail.clone()),
         },
     };
     if let Err(e) = server.runner.store().append(audit).await {

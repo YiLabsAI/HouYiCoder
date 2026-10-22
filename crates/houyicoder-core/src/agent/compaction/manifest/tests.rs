@@ -389,7 +389,9 @@ fn test_estimate_counts_each_kind() {
                 call_id: "c".into(),
                 tool: "bash".into(),
                 verdict: PermissionVerdict::Approved,
-                scope: "once".into()
+                scope: "once".into(),
+                validator: None,
+                reason: None,
             }),
             &tokenizer
         ),

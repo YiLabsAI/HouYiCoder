@@ -371,12 +371,8 @@ fn test_denies_skill_dir_write() {
     );
 }
 
-/// The ecosystem and agents skill dirs are read-denied at the kernel fence,
-/// unlike the native skills dir whose reads the resource layer opens. A
-/// .claude/skills or .agents/skills file is refused on read so a crafted
-/// definition an attacker rewrote cannot reach the model through the fence —
-/// the source split reserves the resource layer for the native dir. Pins the
-/// deny side that test_allows_skill_dir_read's allow asserts against.
+/// All three skill directories allow reads so reference files and overlays
+/// are reachable, while writes remain denied by the fence.
 #[cfg(target_os = "macos")]
 #[test]
 fn test_denies_ecosystem_skill_read() {
@@ -390,14 +386,18 @@ fn test_denies_ecosystem_skill_read() {
             &format!("cat {family}/commit/reference.md"),
         );
         assert!(
-            !read.allowed(),
-            "a {family} read must be denied (no resource layer for ecosystem/agents source): {}",
+            read.allowed(),
+            "a {family} read must be allowed for skill references: {}",
             read.detail()
         );
+        let write_attempt = f.probe(
+            "write-eco-skill",
+            &format!("printf x >> {family}/commit/SKILL.md"),
+        );
         assert!(
-            read.denied_by_fence(),
-            "the denial must come from the fence, not an ordinary failure: {}",
-            read.detail()
+            !write_attempt.allowed() && write_attempt.denied_by_fence(),
+            "a {family} write must remain denied by the fence: {}",
+            write_attempt.detail()
         );
     }
 }

@@ -219,11 +219,11 @@ fn test_egress_ignores_other_tool() {
 #[test]
 fn test_real_session_metrics() {
     let session_calls = [
-        "CACERT=/Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/site-packages/certifi/cacert.pem; curl -sS --max-time 25 --cacert \"$CACERT\" \"https://api.github.com/repos/ray-project/ray/pulls/66986\" -o \"$TMPDIR/pr.json\"; python3 -c \"print(1)\"",
-        "CACERT=/Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/site-packages/certifi/cacert.pem; curl -sS --max-time 25 --cacert \"$CACERT\" \"https://api.github.com/repos/ray-project/ray/issues/66986/comments?per_page=50\" -o \"$TMPDIR/c.json\"; python3 -c \"print(2)\"",
-        "CACERT=/Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/site-packages/certifi/cacert.pem; curl -sS --max-time 25 --cacert \"$CACERT\" \"https://api.github.com/repos/ray-project/ray/pulls/66986/files\" -o \"$TMPDIR/f.json\"; curl -sS --max-time 25 --cacert \"$CACERT\" \"https://api.github.com/repos/ray-project/ray/pulls/66986/reviews\" -o \"$TMPDIR/r.json\"; python3 -c \"print(3)\"",
-        "CACERT=/Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/site-packages/certifi/cacert.pem; curl -sS --max-time 25 --cacert \"$CACERT\" -H \"Accept: application/vnd.github.raw\" \"https://api.github.com/repos/ray-project/enhancements/contents/reps/2026-07-14-ray-sandboxing.md\" -o \"$TMPDIR/rep.md\"; wc -c \"$TMPDIR/rep.md\"; grep -n \"gVisor\" \"$TMPDIR/rep.md\" | head -40",
-        "CACERT=/Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/site-packages/certifi/cacert.pem; curl -sS --max-time 25 --cacert \"$CACERT\" \"https://api.github.com/repos/ray-project/ray/pulls/66986/comments?per_page=100\" -o \"$TMPDIR/ic.json\"; python3 -c \"print(5)\"",
+        "CACERT=/opt/python/certifi/cacert.pem; curl -sS --max-time 25 --cacert \"$CACERT\" \"https://api.github.com/repos/ray-project/ray/pulls/66986\" -o \"$TMPDIR/pr.json\"; python3 -c \"print(1)\"",
+        "CACERT=/opt/python/certifi/cacert.pem; curl -sS --max-time 25 --cacert \"$CACERT\" \"https://api.github.com/repos/ray-project/ray/issues/66986/comments?per_page=50\" -o \"$TMPDIR/c.json\"; python3 -c \"print(2)\"",
+        "CACERT=/opt/python/certifi/cacert.pem; curl -sS --max-time 25 --cacert \"$CACERT\" \"https://api.github.com/repos/ray-project/ray/pulls/66986/files\" -o \"$TMPDIR/f.json\"; curl -sS --max-time 25 --cacert \"$CACERT\" \"https://api.github.com/repos/ray-project/ray/pulls/66986/reviews\" -o \"$TMPDIR/r.json\"; python3 -c \"print(3)\"",
+        "CACERT=/opt/python/certifi/cacert.pem; curl -sS --max-time 25 --cacert \"$CACERT\" -H \"Accept: application/vnd.github.raw\" \"https://api.github.com/repos/ray-project/enhancements/contents/reps/2026-07-14-ray-sandboxing.md\" -o \"$TMPDIR/rep.md\"; wc -c \"$TMPDIR/rep.md\"; grep -n \"gVisor\" \"$TMPDIR/rep.md\" | head -40",
+        "CACERT=/opt/python/certifi/cacert.pem; curl -sS --max-time 25 --cacert \"$CACERT\" \"https://api.github.com/repos/ray-project/ray/pulls/66986/comments?per_page=100\" -o \"$TMPDIR/ic.json\"; python3 -c \"print(5)\"",
     ];
     let g = DefaultModeGate::with_mode(PermissionMode::Auto);
     let mut accurate_targets = 0usize;

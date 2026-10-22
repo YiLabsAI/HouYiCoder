@@ -362,6 +362,10 @@ impl Containment for MacSeatbeltSession {
             _ => None,
         }
     }
+
+    fn temp_dir(&self) -> Option<PathBuf> {
+        Some(self.tmpdir.clone())
+    }
 }
 
 impl Drop for MacSeatbeltSession {
@@ -611,8 +615,10 @@ impl SandboxSession for MacSeatbeltSession {
                 worktree.display()
             )));
         }
-        // Allow-back the repo .git so git ops can read/write objects + refs.
+        // Allow-back the repo .git so git ops can read/write objects + refs,
+        // and keep the main checkout readable while writes stay narrowed.
         self.add_working_dir(git_common.to_str().expect("git common path str"))?;
+        self.add_reading_dir(self.workspace.to_str().expect("workspace path str"))?;
         // Record the narrow state: current_profile re-renders bound to the
         // worktree + appends the .git/config read-allow; exec uses the
         // worktree as cwd and leaves the environment untouched.
@@ -629,10 +635,12 @@ impl SandboxSession for MacSeatbeltSession {
         let narrow_git = Arc::clone(&self.narrow_git_common);
         let dirs = self.dirs.clone();
         let git_common_for_restore = git_common.clone();
+        let repo_for_restore = self.workspace.clone();
         Ok(WorktreeFenceGuard::new(Box::new(move || {
             *narrow_ws.lock().expect("restore: narrow ws lock") = None;
             *narrow_git.lock().expect("restore: narrow git lock") = None;
             dirs.remove_write(&git_common_for_restore);
+            dirs.remove_read(&repo_for_restore);
             Ok(())
         })))
     }

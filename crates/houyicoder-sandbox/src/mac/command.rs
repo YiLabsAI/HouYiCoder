@@ -11,7 +11,7 @@ use std::path::PathBuf;
 /// this function's to explain.
 fn refused_path(stderr: &str) -> bool {
     stderr.lines().any(|line| {
-        let Some((before, after)) = line.split_once(": ") else {
+        let Some((before, after)) = line.rsplit_once(": ") else {
             return false;
         };
         after.starts_with("Operation not permitted") && before.contains('/')

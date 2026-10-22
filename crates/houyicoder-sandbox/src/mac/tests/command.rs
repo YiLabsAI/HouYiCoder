@@ -45,7 +45,7 @@ fn test_fence_refusal_note() {
     let workspace = Path::new("/work/repo");
     let tmpdir = Path::new("/private/var/folders/T/hy-tmp-1");
 
-    let mut refused = result("/etc/hosts: Operation not permitted\n", Some(1));
+    let mut refused = result("bash: /etc/hosts: Operation not permitted\n", Some(1));
     annotate_fence_refusal(&mut refused, workspace, tmpdir);
     assert!(
         refused.stderr.contains("Writable roots: /work/repo"),

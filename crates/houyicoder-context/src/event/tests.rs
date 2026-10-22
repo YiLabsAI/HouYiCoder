@@ -338,6 +338,8 @@ fn test_event_variants_round_trip() {
                 tool: "bash".into(),
                 verdict: PermissionVerdict::Approved,
                 scope: "once".into(),
+                validator: None,
+                reason: None,
             },
         ),
         event(

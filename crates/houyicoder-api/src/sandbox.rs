@@ -229,6 +229,11 @@ pub trait Containment: Send + Sync {
     fn boundary_write_dirs(&self) -> Vec<PathBuf> {
         self.boundary_dirs()
     }
+
+    /// The host-owned per-session temporary directory when the fence is active.
+    fn temp_dir(&self) -> Option<PathBuf> {
+        None
+    }
 }
 
 mod boundary;

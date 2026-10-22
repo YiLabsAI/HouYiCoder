@@ -70,6 +70,8 @@ fn test_every_kind_maps() {
                 tool: "bash".into(),
                 verdict: PermissionVerdict::Approved,
                 scope: "once".into(),
+                validator: None,
+                reason: None,
             },
             false,
             true,
@@ -127,6 +129,8 @@ fn test_permission_decision_maps_acpx() {
         tool: "bash".into(),
         verdict: PermissionVerdict::Denied,
         scope: "session".into(),
+        validator: None,
+        reason: None,
     };
     let n = map_acpx_notification(&kind).expect("verdict maps");
     assert_eq!(n.method, AcpxMethod::ContextPermissionDecision);

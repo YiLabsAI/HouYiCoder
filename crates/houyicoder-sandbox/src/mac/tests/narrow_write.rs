@@ -41,6 +41,52 @@ fn test_resolve_admits_session_tmpdir() {
     ));
 }
 
+/// Narrowing a session to a linked worktree keeps the main checkout readable
+/// for Read/Grep/Glob while refusing writes to the main checkout.
+#[tokio::test]
+async fn test_narrow_worktree_reads_main() {
+    let parent = temp_dir().join(format!(
+        "houyi-narrow-read-{}-{}",
+        id(),
+        COUNTER.fetch_add(1, Ordering::SeqCst)
+    ));
+    create_dir_all(&parent).expect("mkdir parent");
+    let repo = parent.join("repo");
+    create_dir_all(&repo).expect("mkdir repo");
+    let run = |args: &[&str]| Command::new("git").arg("-C").arg(&repo).args(args).status();
+    assert!(run(&["init", "-q"]).unwrap().success());
+    let _ = run(&["config", "user.email", "t@x"]).unwrap();
+    let _ = run(&["config", "user.name", "t"]).unwrap();
+    write(repo.join("README.md"), "main-readme\n").expect("write readme");
+    assert!(run(&["add", "README.md"]).unwrap().success());
+    assert!(run(&["commit", "-m", "init", "-q"]).unwrap().success());
+    let wt = repo.join(".houyicoder/worktrees/narrow-read");
+    create_dir_all(wt.parent().unwrap()).expect("mkdir wt parent");
+    assert!(
+        run(&["worktree", "add", &wt.to_string_lossy(), "-q"])
+            .unwrap()
+            .success()
+    );
+
+    let s = MacSeatbeltSession::new_in_cwd(&repo).expect("session");
+    let guard = s
+        .narrow_to_worktree(&wt, &repo.join(".git"))
+        .expect("narrow");
+    let main_readme = repo.join("README.md").canonicalize().expect("canonical");
+    let main_str = main_readme.to_string_lossy();
+    let bytes = s
+        .read_file(&main_str, 64)
+        .await
+        .expect("read main checkout from worktree");
+    assert_eq!(bytes, b"main-readme\n");
+    assert!(
+        s.resolve_write(&main_str).is_err(),
+        "writes to the main checkout must stay refused while narrowed"
+    );
+    guard.restore().expect("restore");
+    let _cleanup = remove_dir_all(&parent);
+}
+
 /// The narrow worktree fence refuses a write of the main tree and allows a
 /// write inside the worktree. Pins the genuine isolation (writes), not reads.
 #[tokio::test]

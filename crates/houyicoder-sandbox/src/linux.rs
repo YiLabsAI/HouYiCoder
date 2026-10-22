@@ -237,7 +237,12 @@ impl LinuxLandlockSession {
                     "sandbox audit: landlock fence NOT enforced; running unfenced (wall={}ms)",
                     config.wall_timeout_ms
                 );
-                let mut cmd = tokio::process::Command::new("/bin/sh");
+                let shell = if Path::new("/bin/bash").is_file() {
+                    "/bin/bash"
+                } else {
+                    "/bin/sh"
+                };
+                let mut cmd = tokio::process::Command::new(shell);
                 cmd.arg("-c").arg(&command);
                 cmd
             }
@@ -481,6 +486,10 @@ impl Containment for LinuxLandlockSession {
 
     fn would_block(&self, _effect: SideEffect) -> Option<String> {
         None
+    }
+
+    fn temp_dir(&self) -> Option<PathBuf> {
+        Some(self.tmpdir.clone())
     }
 }
 

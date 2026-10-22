@@ -28,7 +28,10 @@ use crate::consent::{ConsentStore, args_key};
 use crate::decision::Decision;
 use crate::mode::{PermissionMode, ToolRequest};
 use crate::rule::{Effect, Rule};
-use detection::PathBoundsValidator;
+use detection::{
+    CompoundCommandValidator, DestructiveCommandValidator, GitCheckpointValidator,
+    NetworkEgressValidator, PathBoundsValidator,
+};
 use houyicoder_api::sandbox::Containment;
 use safety_stage::ProtectedPathValidator;
 use std::sync::Arc;
@@ -151,10 +154,10 @@ impl Pipeline {
         let validators: Vec<Box<dyn Validator>> = vec![
             Box::new(rule_stage::RuleDenyValidator),
             Box::new(ProtectedPathValidator::new(None)),
-            Box::new(detection::DestructiveCommandValidator),
-            Box::new(detection::GitCheckpointValidator),
-            Box::new(detection::NetworkEgressValidator),
-            Box::new(detection::CompoundCommandValidator),
+            Box::new(DestructiveCommandValidator::new(None)),
+            Box::new(GitCheckpointValidator),
+            Box::new(NetworkEgressValidator::new(None)),
+            Box::new(CompoundCommandValidator::new(None)),
             Box::new(PathBoundsValidator::new(None)),
             Box::new(rule_stage::RuleAllowValidator),
             Box::new(rule_stage::RuleAskValidator),
@@ -179,8 +182,28 @@ impl Pipeline {
     /// ladder built without a fence loses no coverage.
     pub fn with_containment(containment: Arc<dyn Containment>) -> Self {
         let mut p = Self::standard();
+        p.validators.retain(|v| {
+            !matches!(
+                v.name(),
+                "path-bounds"
+                    | "protected_path"
+                    | "destructive_command"
+                    | "network_egress"
+                    | "compound_command"
+            )
+        });
         p.validators
-            .retain(|v| v.name() != "path-bounds" && v.name() != "protected_path");
+            .push(Box::new(DestructiveCommandValidator::new(Some(
+                Arc::clone(&containment),
+            ))));
+        p.validators
+            .push(Box::new(NetworkEgressValidator::new(Some(Arc::clone(
+                &containment,
+            )))));
+        p.validators
+            .push(Box::new(CompoundCommandValidator::new(Some(Arc::clone(
+                &containment,
+            )))));
         p.validators
             .push(Box::new(PathBoundsValidator::new(Some(Arc::clone(
                 &containment,

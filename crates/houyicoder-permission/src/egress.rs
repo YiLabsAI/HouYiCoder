@@ -14,44 +14,80 @@
 //! instead of remembering a scope wider than the command the user saw.
 
 use std::mem::take;
+use std::path::Path;
 
 use crate::compound::is_attestable;
+use crate::compound::is_effect_safe;
 use crate::compound::is_readonly_compound;
+use crate::compound::is_temp_target;
 use crate::compound::normalize_shell_command;
 use crate::compound::split_compound;
 use crate::pipeline::detection::should_ask_egress;
 use crate::pipeline::detection::strip_quotes;
 
+const TRUSTED_HOSTS_JSON: &str = include_str!("../preapproved_hosts.json");
+
+/// Public developer documentation and repository hosts whose read-only
+/// requests do not require an interactive prompt in autonomous mode.
+pub fn trusted_hosts() -> Vec<String> {
+    serde_json::from_str::<Vec<String>>(TRUSTED_HOSTS_JSON).unwrap_or_default()
+}
+
+/// The session-scope allow entries corresponding to trusted_hosts.
+pub fn trusted_egress_scopes() -> Vec<String> {
+    let mut scopes = Vec::new();
+    for host in trusted_hosts() {
+        for tool in EGRESS_TOOLS {
+            scopes.push(format!("{tool} https://{host}"));
+        }
+    }
+    scopes
+}
+
 /// Tools this module can derive a destination for.
 const EGRESS_TOOLS: &[&str] = &["curl", "wget"];
 
-/// Long flags that turn the request into an upload, retarget it, or load
-/// options from a file, so the literal URL no longer describes the request.
-/// Matched by prefix so an inline value form is caught too.
-const REFUSED_LONG: &[&str] = &[
-    "--data",
-    "--form",
-    "--upload-file",
-    "--post-data",
-    "--post-file",
-    "--body-data",
-    "--body-file",
-    "--json",
-    "--method",
-    "--request",
-    "--config",
-    "--proxy",
-    "--connect-to",
-    "--resolve",
-    "--interface",
-    "--unix-socket",
-    "--location",
-    "--location-trusted",
+/// Long flags permitted on a read-only curl or wget request that take no
+/// separate value argument.
+const ALLOWED_BOOL_LONG: &[&str] = &[
+    "--silent",
+    "--show-error",
+    "--fail",
+    "--fail-with-body",
+    "--head",
+    "--include",
+    "--compressed",
+    "--http1.1",
+    "--http2",
+    "--ipv4",
+    "--ipv6",
+    "--no-buffer",
+    "--no-progress-meter",
+    "--progress-bar",
+    "--quiet",
+    "--server-response",
 ];
 
-/// Short flags with the same effect. A short cluster is matched by the letter
-/// it carries, so an attached value form is caught as well.
-const REFUSED_SHORT: &[char] = &['d', 'F', 'T', 'K', 'x', 'X', 'L'];
+/// Long flags permitted on a read-only curl or wget request that consume a
+/// value (either attached via = or as the next argument).
+const ALLOWED_VALUE_LONG: &[&str] = &[
+    "--max-time",
+    "--connect-timeout",
+    "--write-out",
+    "--cacert",
+    "--capath",
+    "--user-agent",
+    "--output",
+    "--output-document",
+];
+
+/// Short flag letters permitted on a read-only curl or wget request that take
+/// no value.
+const ALLOWED_BOOL_SHORT: &[char] = &['s', 'S', 'f', 'I', 'i', 'N', 'q', '4', '6', 'v'];
+
+/// Short flag letters permitted on a read-only curl or wget request that
+/// consume the next argument as their value.
+const ALLOWED_VALUE_SHORT: &[char] = &['m', 'w', 'A', 'o', 'O'];
 
 /// Short flags that carry a header, whose value can hold a credential.
 const HEADER_SHORT: char = 'H';
@@ -64,8 +100,11 @@ enum Segment {
     Local,
     /// The segment reaches the network but not in a form this module can name.
     Refused,
-    /// The segment reaches one origin through one program.
-    Scoped { program: String, origin: String },
+    /// The segment reaches one or more origins through one program.
+    Scoped {
+        program: String,
+        origin_list: Vec<String>,
+    },
 }
 
 /// The session scope a shell command's network access can be remembered under,
@@ -75,8 +114,65 @@ enum Segment {
 /// https://api.github.com, and is used both as the durable scope key and as the
 /// text the approval card shows for its remember option.
 pub fn egress_destination(command: &str) -> Option<String> {
+    let list = collect_egress_scopes(command, false)?;
+    if list.len() == 1 {
+        list.into_iter().next()
+    } else {
+        None
+    }
+}
+
+/// All read-only program-and-origin scopes a command reaches when every
+/// non-network clause in the command is effect-safe. Used by the egress
+/// validator to check whether every destination in a multi-step command has
+/// already been approved or trusted.
+pub fn egress_scope_list(command: &str) -> Option<Vec<String>> {
+    collect_egress_scopes(command, true)
+}
+
+/// Whether every file-writing output flag passed to curl or wget either writes
+/// to /dev/null or stdout, or targets a verified non-symlink child inside the
+/// session's temporary directory.
+pub fn egress_outputs_safe(command: &str, temp_dir: Option<&Path>) -> bool {
     let normalized = normalize_shell_command(command);
-    let mut scope: Option<String> = None;
+    for clause in split_clauses(&normalized) {
+        for stage in split_compound(&clause) {
+            let words = shell_words(stage.trim());
+            let Some(first) = words.first() else {
+                continue;
+            };
+            if !EGRESS_TOOLS.contains(&strip_quotes(first)) {
+                continue;
+            }
+            let mut idx = 1;
+            while idx < words.len() {
+                let w = strip_quotes(&words[idx]);
+                if let Some(val) = w
+                    .strip_prefix("--output=")
+                    .or_else(|| w.strip_prefix("--output-document="))
+                {
+                    let v = strip_quotes(val);
+                    if v != "/dev/null" && v != "-" && !is_temp_target(v, temp_dir) {
+                        return false;
+                    }
+                } else if matches!(w, "-o" | "-O" | "--output" | "--output-document") {
+                    let v = words.get(idx + 1).map(|s| strip_quotes(s)).unwrap_or("");
+                    if v != "/dev/null" && v != "-" && !is_temp_target(v, temp_dir) {
+                        return false;
+                    }
+                    idx += 2;
+                    continue;
+                }
+                idx += 1;
+            }
+        }
+    }
+    true
+}
+
+fn collect_egress_scopes(command: &str, allow_effect_safe: bool) -> Option<Vec<String>> {
+    let normalized = normalize_shell_command(command);
+    let mut scopes: Vec<String> = Vec::new();
     for clause in split_clauses(&normalized) {
         let stages: Vec<String> = split_compound(&clause);
         let stage_refs: Vec<&str> = stages.iter().map(|s| s.as_str()).collect();
@@ -86,20 +182,25 @@ pub fn egress_destination(command: &str) -> Option<String> {
             if trimmed.is_empty() {
                 continue;
             }
-            if !is_attestable(trimmed) {
+            let stage_ok = if allow_effect_safe {
+                is_attestable(trimmed) || is_effect_safe(trimmed, None)
+            } else {
+                is_attestable(trimmed)
+            };
+            if !stage_ok {
                 return None;
             }
             match classify_segment(trimmed) {
                 Segment::Local => {
-                    // When a clause pipes an egress command into a downstream
-                    // stage, every downstream stage in that pipeline must be a
-                    // read-only filter; piping into sh or python is refused.
                     if piped && idx > 0 && !is_readonly_compound(&stage_refs[idx..=idx]) {
                         return None;
                     }
                 }
                 Segment::Refused => return None,
-                Segment::Scoped { program, origin } => {
+                Segment::Scoped {
+                    program,
+                    origin_list,
+                } => {
                     if piped
                         && !stage_refs[idx + 1..]
                             .iter()
@@ -107,17 +208,21 @@ pub fn egress_destination(command: &str) -> Option<String> {
                     {
                         return None;
                     }
-                    let key = format!("{program} {origin}");
-                    match &scope {
-                        Some(existing) if existing != &key => return None,
-                        Some(_) => {}
-                        None => scope = Some(key),
+                    for origin in origin_list {
+                        let key = format!("{program} {origin}");
+                        if !scopes.contains(&key) {
+                            scopes.push(key);
+                        }
                     }
                 }
             }
         }
     }
-    scope
+    if scopes.is_empty() {
+        None
+    } else {
+        Some(scopes)
+    }
 }
 
 /// Split a normalized command on semicolons and logical operators outside
@@ -178,6 +283,13 @@ fn split_clauses(command: &str) -> Vec<String> {
 /// Classify one command segment by where it reaches.
 fn classify_segment(segment: &str) -> Segment {
     let words = shell_words(segment);
+    if words
+        .iter()
+        .take_while(|w| w.contains('='))
+        .any(|w| is_refused_egress_env(w))
+    {
+        return Segment::Refused;
+    }
     let Some(first) = words.first() else {
         return Segment::Local;
     };
@@ -193,13 +305,34 @@ fn classify_segment(segment: &str) -> Segment {
         };
     }
     let arg_refs: Vec<&str> = words[1..].iter().map(|s| s.as_str()).collect();
-    match literal_origin(&arg_refs) {
-        Some(origin) => Segment::Scoped {
+    match literal_origin_list(&arg_refs, allow_multi_origin_for(program)) {
+        Some(origin_list) => Segment::Scoped {
             program: program.to_string(),
-            origin,
+            origin_list,
         },
         None => Segment::Refused,
     }
+}
+
+fn allow_multi_origin_for(program: &str) -> bool {
+    matches!(program, "curl" | "wget")
+}
+
+fn is_refused_egress_env(word: &str) -> bool {
+    let Some((name, _)) = strip_quotes(word).split_once('=') else {
+        return false;
+    };
+    matches!(
+        name,
+        "CURL_HOME"
+            | "HTTP_PROXY"
+            | "HTTPS_PROXY"
+            | "ALL_PROXY"
+            | "http_proxy"
+            | "https_proxy"
+            | "all_proxy"
+            | "GIT_SSH_COMMAND"
+    )
 }
 
 /// Split a segment into words while keeping single- and double-quoted spans
@@ -236,67 +369,136 @@ fn shell_words(segment: &str) -> Vec<String> {
 /// The single origin a request program's arguments name, or None when the
 /// arguments upload, retarget, carry a credential, or name no single literal
 /// URL.
-fn literal_origin(args: &[&str]) -> Option<String> {
-    let mut origin: Option<String> = None;
+fn literal_origin_list(args: &[&str], allow_multiple: bool) -> Option<Vec<String>> {
+    let mut origin_list: Vec<String> = Vec::new();
     let mut index = 0;
     while index < args.len() {
         let word = strip_quotes(args[index]);
         if let Some(name) = word.strip_prefix("--") {
-            let flag = format!("--{}", name.split('=').next().unwrap_or(""));
-            if REFUSED_LONG.contains(&flag.as_str()) {
-                return None;
-            }
-            if flag == HEADER_LONG {
-                let value = args.get(index + 1).map(|v| strip_quotes(v))?;
-                if carries_credential(value) {
+            let (flag_name, inline_val) = match name.split_once('=') {
+                Some((f, v)) => (format!("--{f}"), Some(strip_quotes(v))),
+                None => (format!("--{name}"), None),
+            };
+            if ALLOWED_BOOL_LONG.contains(&flag_name.as_str()) {
+                if inline_val.is_some() {
                     return None;
                 }
-                index += 2;
-                continue;
+            } else if flag_name == HEADER_LONG {
+                let value = match inline_val {
+                    Some(v) => v,
+                    None => {
+                        let next = args.get(index + 1).map(|v| strip_quotes(v))?;
+                        index += 1;
+                        next
+                    }
+                };
+                if carries_credential(value) || value.starts_with('@') || value.contains(['$', '`'])
+                {
+                    return None;
+                }
+            } else if ALLOWED_VALUE_LONG.contains(&flag_name.as_str()) {
+                let value = match inline_val {
+                    Some(v) => v,
+                    None => {
+                        let next = args.get(index + 1).map(|v| strip_quotes(v))?;
+                        index += 1;
+                        next
+                    }
+                };
+                if !is_safe_flag_value(&flag_name, value) {
+                    return None;
+                }
+            } else {
+                return None;
             }
         } else if let Some(cluster) = word.strip_prefix('-')
             && !cluster.is_empty()
         {
-            if cluster.chars().any(|c| REFUSED_SHORT.contains(&c)) {
-                return None;
-            }
-            if cluster.contains(HEADER_SHORT) {
-                let value = args.get(index + 1).map(|v| strip_quotes(v))?;
-                if carries_credential(value) {
+            if cluster.len() == 1 {
+                let ch = cluster.chars().next()?;
+                if ALLOWED_BOOL_SHORT.contains(&ch) {
+                    // Pure read-only boolean flag.
+                } else if ch == HEADER_SHORT {
+                    let value = args.get(index + 1).map(|v| strip_quotes(v))?;
+                    if carries_credential(value)
+                        || value.starts_with('@')
+                        || value.contains(['$', '`'])
+                    {
+                        return None;
+                    }
+                    index += 2;
+                    continue;
+                } else if ALLOWED_VALUE_SHORT.contains(&ch) {
+                    let value = args.get(index + 1).map(|v| strip_quotes(v))?;
+                    let mapped = match ch {
+                        'o' | 'O' => "--output",
+                        'w' => "--write-out",
+                        'A' => "--user-agent",
+                        _ => "",
+                    };
+                    if !is_safe_flag_value(mapped, value) {
+                        return None;
+                    }
+                    index += 2;
+                    continue;
+                } else {
                     return None;
                 }
-                index += 2;
-                continue;
-            }
-        } else if let Some(found) = http_origin(word) {
-            // A second URL means the command reaches two destinations, which
-            // one scope cannot describe.
-            if origin.is_some() {
+            } else if !cluster.chars().all(|c| ALLOWED_BOOL_SHORT.contains(&c)) {
                 return None;
             }
-            origin = Some(found);
+        } else if let Some(found) = http_origin(word) {
+            if !origin_list.contains(&found) {
+                if !allow_multiple && !origin_list.is_empty() {
+                    return None;
+                }
+                origin_list.push(found);
+            }
+        } else {
+            return None;
         }
         index += 1;
     }
-    origin
+    if origin_list.is_empty() {
+        None
+    } else {
+        Some(origin_list)
+    }
 }
 
-/// Whether a header value names a credential rather than a content
-/// preference.
-fn carries_credential(value: &str) -> bool {
-    let lower = value.to_ascii_lowercase();
-    lower.contains("authorization")
-        || lower.contains("cookie")
-        || lower.contains("token")
-        || lower.contains("bearer")
-        || lower.contains("api-key")
-        || lower.contains("apikey")
+fn is_safe_flag_value(flag: &str, value: &str) -> bool {
+    if value.is_empty() || value.contains('`') || value.contains("$(") {
+        return false;
+    }
+    match flag {
+        "--write-out" => {
+            !value.starts_with('@')
+                && !value.contains('$')
+                && !value.to_ascii_lowercase().contains("%output")
+        }
+        "--user-agent" => !value.contains('$'),
+        "--output" | "--output-document" => {
+            if value == "/dev/null" || value == "-" {
+                return true;
+            }
+            let suffix = value
+                .strip_prefix("$TMPDIR/")
+                .or_else(|| value.strip_prefix("${TMPDIR}/"));
+            suffix.is_some_and(|s| {
+                !s.is_empty()
+                    && s != "."
+                    && s != ".."
+                    && !s.contains(['/', '*', '?', '[', '$', '`', '('])
+            })
+        }
+        _ => true,
+    }
 }
 
 /// The origin of a literal http or https URL: scheme plus host, with the
 /// default port for that scheme dropped. None for anything a static check
 /// cannot read as a plain URL.
-fn http_origin(url: &str) -> Option<String> {
+pub(crate) fn http_origin(url: &str) -> Option<String> {
     // A character the shell would expand or escape means the text does not
     // name the destination the process will use. It is checked over the whole
     // URL because an expansion in the path can extend the host.
@@ -324,6 +526,18 @@ fn http_origin(url: &str) -> Option<String> {
         Some(port) if port != default_port => Some(format!("{scheme}://{host}:{port}")),
         _ => Some(format!("{scheme}://{host}")),
     }
+}
+
+/// Whether a header value names a credential rather than a content
+/// preference.
+fn carries_credential(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    lower.contains("authorization")
+        || lower.contains("cookie")
+        || lower.contains("token")
+        || lower.contains("bearer")
+        || lower.contains("api-key")
+        || lower.contains("apikey")
 }
 
 #[cfg(test)]

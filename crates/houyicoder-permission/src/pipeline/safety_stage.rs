@@ -21,11 +21,13 @@ use std::sync::Arc;
 
 use houyicoder_api::sandbox::Containment;
 
+use crate::compound::reads_only_protected;
 use crate::decision::{AskReason, AskSource, Decision};
-use crate::mode::ToolRequest;
+use crate::mode::{PermissionMode, ToolRequest};
 use crate::pipeline::{GateCtx, Immunity, Stage, Validator};
 use crate::rule::input_content;
 use crate::safety::{marker_hit, safety_check};
+use crate::side_effect::is_shell_tool;
 use std::fs::canonicalize;
 
 /// Tools whose input names a single file the host process writes directly.
@@ -93,12 +95,18 @@ impl Validator for ProtectedPathValidator {
     fn consent_overridable(&self) -> bool {
         false
     }
-    fn check(&self, req: &ToolRequest<'_>, _ctx: &GateCtx<'_>) -> Option<Decision> {
+    fn check(&self, req: &ToolRequest<'_>, ctx: &GateCtx<'_>) -> Option<Decision> {
         // The stage guards writes: a read-only call on a protected path
         // cannot damage the files the markers protect. A tool that does not
         // declare itself read-only stays guarded (an unknown read claim is
         // treated as a write, fail-closed).
         if req.is_read_only {
+            return None;
+        }
+        if ctx.mode == PermissionMode::Auto
+            && is_shell_tool(req.tool_name)
+            && reads_only_protected(ctx.content)
+        {
             return None;
         }
         let hit = safety_check(req.tool_name, req.input).is_some()

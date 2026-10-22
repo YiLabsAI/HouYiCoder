@@ -36,7 +36,7 @@ const READONLY_COMMANDS: &[&str] = &[
 /// write. uniq names its output file with a second positional operand. cut and
 /// tr print only, so they need no check.
 fn writes_output(cmd: &str, segment: &str) -> bool {
-    if !matches!(cmd, "sort" | "uniq") {
+    if !matches!(cmd, "sort" | "uniq" | "printf") {
         return false;
     }
     let raw_args: Vec<&str> = segment.split_whitespace().skip(1).collect();
@@ -57,6 +57,7 @@ fn writes_output(cmd: &str, segment: &str) -> bool {
         "sort" => args.iter().any(|arg| sort_writes(arg)),
         // uniq [OPTION]... [INPUT [OUTPUT]]: the second path argument is a file.
         "uniq" => args.iter().filter(|arg| is_path_arg(arg)).count() > 1,
+        "printf" => args.iter().any(|arg| arg == "-v"),
         _ => false,
     }
 }
@@ -137,17 +138,11 @@ fn is_readonly_segment(seg: &str, depth: u8) -> bool {
             }
             _ => {}
         }
-        if in_single || in_double {
+        if in_single {
             i += 1;
             continue;
         }
-        // Unquoted file redirect or process substitution writes or talks;
-        // not read-only. Safe redirects were already stripped.
-        if c == '>' || c == '<' {
-            return false;
-        }
-        // Command substitution: dollar plus open paren. Extract the body for
-        // a recursive read-only check.
+        // Command substitution and backticks execute inside double quotes too.
         if c == '$' && i + 1 < n && chars[i + 1] == '(' {
             let Some(end) = find_matching_paren(&chars, i + 1) else {
                 return false;
@@ -156,7 +151,6 @@ fn is_readonly_segment(seg: &str, depth: u8) -> bool {
             i = end + 1;
             continue;
         }
-        // Backtick substitution. Extract the body for a recursive check.
         if c == '`' {
             let Some(rel) = chars[i + 1..].iter().position(|&ch| ch == '`') else {
                 return false;
@@ -165,6 +159,15 @@ fn is_readonly_segment(seg: &str, depth: u8) -> bool {
             substs.push(chars[i + 1..end].iter().collect());
             i = end + 1;
             continue;
+        }
+        if in_double {
+            i += 1;
+            continue;
+        }
+        // Unquoted file redirect or process substitution writes or talks;
+        // not read-only. Safe redirects were already stripped.
+        if c == '>' || c == '<' {
+            return false;
         }
         i += 1;
     }
@@ -194,7 +197,7 @@ fn is_readonly_segment(seg: &str, depth: u8) -> bool {
 /// Find the index of the close paren matching the open paren at the given
 /// position, quote-aware so a paren inside quotes is not counted. Returns
 /// None when unbalanced (the caller fails closed).
-fn find_matching_paren(chars: &[char], open: usize) -> Option<usize> {
+pub(super) fn find_matching_paren(chars: &[char], open: usize) -> Option<usize> {
     let mut depth = 0;
     let mut in_single = false;
     let mut in_double = false;

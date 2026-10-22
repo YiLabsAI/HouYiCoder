@@ -49,6 +49,11 @@ impl RuntimeDirs {
         remove_path(&self.read_write, path);
     }
 
+    #[cfg(target_os = "macos")]
+    pub(crate) fn remove_read(&self, path: &Path) {
+        remove_path(&self.read_only, path);
+    }
+
     pub(crate) fn allows_read(&self, path: &Path) -> bool {
         contains_path(&self.read_only, path) || self.allows_write(path)
     }

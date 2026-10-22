@@ -42,3 +42,5 @@ mod mode_decision;
 mod pipeline_contract;
 #[cfg(test)]
 mod rule_dedup;
+#[cfg(test)]
+mod session_replay;

@@ -145,6 +145,8 @@ impl Server {
                 tool: approval.tool_name.clone(),
                 verdict,
                 scope: decision.scope.clone(),
+                validator: reason.as_ref().map(|r| r.validator.to_string()),
+                reason: reason.as_ref().map(|r| r.detail.clone()),
             },
         };
         if let Err(e) = self.runner.store().append(audit).await {

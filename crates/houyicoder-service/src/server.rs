@@ -267,7 +267,11 @@ impl Server {
     ) {
         match always_grant(tool_name, input, reason) {
             AlwaysGrant::Once => {}
-            AlwaysGrant::Network(destination) => self.gate.add_egress_allow(&destination),
+            AlwaysGrant::Network(scopes) => {
+                for scope in scopes {
+                    self.gate.add_egress_allow(&scope);
+                }
+            }
             AlwaysGrant::Rule(rule) => self.gate.add_rule(rule),
         }
     }

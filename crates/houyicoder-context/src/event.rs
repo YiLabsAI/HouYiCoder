@@ -351,6 +351,10 @@ pub enum SessionEvent {
         tool: String,
         verdict: PermissionVerdict,
         scope: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        validator: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
     },
     /// A turn was interrupted mid-flight (process crash or forced abort) and is
     /// about to be re-driven from the durable log. Lands as the first event of

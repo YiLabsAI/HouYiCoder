@@ -28,7 +28,6 @@ use houyicoder_api::session::TrajectoryPosition;
 use houyicoder_context::{EventId, PermissionVerdict, SessionEvent, SessionId, SessionLogEntry};
 use houyicoder_core::agent::RunResult;
 use houyicoder_core::agent::{RunOutcome, Runner};
-use houyicoder_protocol::acp_wire::RequestPermissionOutcome;
 use houyicoder_protocol::acp_wire::{
     AcpError, AcpErrorCode, AcpNotification, AcpRequest, AcpRequestId, AcpResponse, JsonRpcVersion,
     PromptRequest, PromptResponse, RequestPermissionResponse,
@@ -308,15 +307,15 @@ impl AcpServer {
                                 })?;
                             // Record the durable PermissionDecision audit event
                             // before resume applies the decision.
-                            let verdict =
-                                if matches!(perm_resp.outcome, RequestPermissionOutcome::Cancelled)
-                                {
-                                    PermissionVerdict::Denied
-                                } else {
-                                    // Look up the decision the mapping computes.
-                                    PermissionVerdict::Approved
-                                };
-                            let _verdict = verdict; // reserved for the audit below
+                            let decision = acp_permission_response_to_decision(
+                                perm_resp,
+                                approval.call_id.clone(),
+                            );
+                            let verdict = if decision.approved {
+                                PermissionVerdict::Approved
+                            } else {
+                                PermissionVerdict::Denied
+                            };
                             let audit = SessionLogEntry {
                                 id: EventId::new(),
                                 session: self.session,
@@ -327,15 +326,14 @@ impl AcpServer {
                                     tool: approval.tool_name.clone(),
                                     verdict,
                                     scope: "once".into(),
+                                    validator: None,
+                                    reason: None,
                                 },
                             };
                             if let Err(e) = self.runner.store().append(audit).await {
                                 tracing::warn!("permission-decision audit append failed: {e}");
                             }
-                            decisions.push(acp_permission_response_to_decision(
-                                perm_resp,
-                                approval.call_id.clone(),
-                            ));
+                            decisions.push(decision);
                         }
                         result = {
                             let resume_fut = self.runner.resume(self.session, &decisions);

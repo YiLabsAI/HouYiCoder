@@ -15,8 +15,8 @@ use super::consent_rule_for;
 /// card and the consent router both read this, so what the card promises is
 /// what gets installed.
 pub(crate) enum AlwaysGrant {
-    /// One network destination, remembered for the session.
-    Network(String),
+    /// Network destinations remembered for the session.
+    Network(Vec<String>),
     /// A durable rule.
     Rule(houyicoder_permission::Rule),
     /// Nothing durable: the call must be answered once.
@@ -46,24 +46,26 @@ pub(crate) fn always_grant(
         // A destination is not a command rule: the network check recognizes
         // programs, not hosts, so a remembered destination is its own entry.
         let command = houyicoder_permission::input_content(tool_name, Some(input));
-        return match houyicoder_permission::egress_destination(&command) {
-            Some(destination) => AlwaysGrant::Network(destination),
-            None => AlwaysGrant::Once,
+        return match houyicoder_permission::egress_scope_list(&command) {
+            Some(scopes) if !scopes.is_empty() => AlwaysGrant::Network(scopes),
+            _ => AlwaysGrant::Once,
         };
     }
     // The four history-moving git subcommands shadow their builtin ask rule
     // for this session only: the approval is about one commit, not about every
     // future one.
     let command = houyicoder_permission::input_content(tool_name, Some(input));
-    if let Some(git_cmd) = houyicoder_permission::classify_git_op(tool_name, &command)
-        && matches!(git_cmd, "commit" | "rebase" | "reset" | "tag")
-        && let Ok(rule) = Rule::with_content(
-            "bash",
-            RuleContent::Prefix(format!("git {git_cmd}")),
-            Effect::Allow,
-        )
-    {
-        return AlwaysGrant::Rule(rule.with_scope(Scope::Session));
+    if let Some(git_cmd) = houyicoder_permission::classify_git_op(tool_name, &command) {
+        if matches!(git_cmd, "commit" | "rebase" | "reset" | "tag")
+            && let Ok(rule) = Rule::with_content(
+                "bash",
+                RuleContent::Prefix(format!("git {git_cmd}")),
+                Effect::Allow,
+            )
+        {
+            return AlwaysGrant::Rule(rule.with_scope(Scope::Session));
+        }
+        return AlwaysGrant::Once;
     }
     match consent_rule_for(tool_name, input) {
         Some(rule) => AlwaysGrant::Rule(rule),
@@ -75,7 +77,14 @@ pub(crate) fn always_grant(
 fn always_label(grant: &AlwaysGrant) -> Option<String> {
     match grant {
         AlwaysGrant::Once => None,
-        AlwaysGrant::Network(destination) => Some(format!("{destination} *")),
+        AlwaysGrant::Network(scopes) => match scopes.as_slice() {
+            [] => None,
+            [one] => Some(format!("{one} *")),
+            [first, second] => Some(format!("{first}, {second} *")),
+            [first, second, rest @ ..] => {
+                Some(format!("{first}, {second} (+{} more) *", rest.len()))
+            }
+        },
         AlwaysGrant::Rule(rule) => Some(match &rule.content {
             Some(RuleContent::Prefix(prefix)) => format!("{prefix} *"),
             Some(RuleContent::Exact(value)) => value.clone(),

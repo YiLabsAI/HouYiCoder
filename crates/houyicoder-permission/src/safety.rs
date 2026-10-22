@@ -70,16 +70,25 @@ pub fn safety_check(tool_name: &str, input: Option<&Value>) -> Option<Effect> {
 /// resolved to the file it actually names, not only to the string the caller
 /// supplied.
 pub(crate) fn marker_hit(content: &str) -> bool {
-    // Normalize backslashes to forward slashes so the forward-slash markers
-    // match Windows paths. No-op on Unix.
-    let lower = content.replace('\\', "/").to_ascii_lowercase();
+    let normalized = content.replace('\\', "/").to_ascii_lowercase();
+    if marker_hit_normalized(&normalized) {
+        return true;
+    }
+    if content.contains(['\'', '"', '\\']) {
+        let unquoted: String = content
+            .chars()
+            .filter(|&c| c != '\'' && c != '"' && c != '\\')
+            .collect::<String>()
+            .to_ascii_lowercase();
+        if marker_hit_normalized(&unquoted) {
+            return true;
+        }
+    }
+    false
+}
+
+fn marker_hit_normalized(lower: &str) -> bool {
     for marker in PROTECTED {
-        // For each occurrence of the marker, check whether that occurrence is
-        // a worktree container path (the workspace, exempt) or a real config
-        // dir (fire). The exempt is per-occurrence, not whole-content: a
-        // nested config dir inside the workspace (a second marker occurrence
-        // after the container) must still fire, or a workspace skill script
-        // would bypass the protected-path ask under a blanket bash allow.
         for idx in lower.match_indices(marker).map(|(i, _)| i) {
             let after = &lower[idx + marker.len()..];
             if !is_container_occurrence(marker, after) {

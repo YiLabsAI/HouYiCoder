@@ -563,6 +563,8 @@ pub fn map_acpx_notification(kind: &SessionEvent) -> Option<AcpxNotification> {
             tool,
             verdict,
             scope,
+            validator,
+            reason,
         } => AcpxNotification::new(
             ContextPermissionDecision,
             serde_json::json!({
@@ -570,6 +572,8 @@ pub fn map_acpx_notification(kind: &SessionEvent) -> Option<AcpxNotification> {
                 "tool": tool,
                 "verdict": verdict.label(),
                 "scope": scope,
+                "validator": validator,
+                "reason": reason,
             }),
         ),
         // The interrupt notice is an event of the turn it interrupts, not a

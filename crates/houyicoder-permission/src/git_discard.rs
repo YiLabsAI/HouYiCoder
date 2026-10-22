@@ -19,6 +19,7 @@
 //! conservative copy. The two stay in sync on the clear-cut forms via a
 //! shared DRIFT_VECTOR duplicated in both crates' tests.
 
+use crate::compound::strip_safe_redirects;
 use crate::pipeline::detection::interpreter_inline_code;
 
 /// The git subcommand word for a discard form, for session-scoped consent.
@@ -65,7 +66,7 @@ pub(crate) fn git_discard_consent_word(sub: &str, args: &[&str]) -> Option<&'sta
                 .find(|a| !a.starts_with('-'))
                 .copied()
                 .unwrap_or("");
-            if !matches!(sub2, "drop" | "clear" | "pop") {
+            if matches!(sub2, "list" | "show" | "apply" | "branch") {
                 return None;
             }
             "stash"
@@ -96,32 +97,52 @@ pub(crate) fn git_discard_consent_word(sub: &str, args: &[&str]) -> Option<&'sta
 /// (git -C <dir> checkout ., (git checkout .), FOO=bar git checkout .) via
 /// git_sub_and_args — the same fix core's snapshot trigger uses.
 pub(crate) fn should_ask_before_git(tool_name: &str, content: &str) -> Option<&'static str> {
+    collect_git_ask_ops(tool_name, content).into_iter().next()
+}
+
+/// Every git checkpoint or discard subcommand present across all segments of a
+/// shell command, in order of appearance.
+pub(crate) fn collect_git_ask_ops(tool_name: &str, content: &str) -> Vec<&'static str> {
     let lower = tool_name.to_ascii_lowercase();
     if !matches!(lower.as_str(), "bash" | "sh" | "exec" | "shell") {
-        return None;
+        return Vec::new();
     }
     if content.is_empty() {
-        return None;
+        return Vec::new();
     }
     let scan = interpreter_inline_code(content).unwrap_or(content);
-    let lower_scan = scan.to_ascii_lowercase();
-    for segment in lower_scan.split(['&', ';', '|', '\n']) {
-        let tokens: Vec<&str> = segment.split_whitespace().collect();
-        let Some((sub, args)) = git_sub_and_args(&tokens) else {
+    let cleaned = strip_safe_redirects(scan);
+    let lower_scan = cleaned.to_ascii_lowercase();
+    let mut ops = Vec::new();
+    for segment in lower_scan.split(['&', ';', '|', '\n', '(', ')', '`']) {
+        let raw_tokens: Vec<&str> = segment.split_whitespace().collect();
+        let unquoted: Vec<String> = raw_tokens.iter().map(|t| decode_token(t)).collect();
+        let token_refs: Vec<&str> = unquoted.iter().map(String::as_str).collect();
+        let Some((sub, args)) = git_sub_and_args(&token_refs) else {
             continue;
         };
-        match sub {
-            "commit" => return Some("commit"),
-            "rebase" => return Some("rebase"),
-            "reset" => return Some("reset"),
-            "tag" => return Some("tag"),
-            _ => {}
-        }
-        if let Some(word) = git_discard_consent_word(sub, &args) {
-            return Some(word);
+        let matched = match sub {
+            "commit" => Some("commit"),
+            "rebase" => Some("rebase"),
+            "reset" => {
+                if args
+                    .iter()
+                    .take_while(|&&a| a != "--")
+                    .any(|&a| matches!(a, "--hard" | "--merge" | "--keep"))
+                {
+                    Some("reset --hard")
+                } else {
+                    Some("reset")
+                }
+            }
+            "tag" => Some("tag"),
+            _ => git_discard_consent_word(sub, &args),
+        };
+        if let Some(word) = matched {
+            ops.push(word);
         }
     }
-    None
+    ops
 }
 
 /// Find the git subcommand + its args in a segment's tokens, skipping leading
@@ -132,10 +153,10 @@ pub(crate) fn should_ask_before_git(tool_name: &str, content: &str) -> Option<&'
 /// agent::git_discard::git_sub_and_args — keep both in sync.
 fn git_sub_and_args<'a>(tokens: &[&'a str]) -> Option<(&'a str, Vec<&'a str>)> {
     let mut i = 0;
-    // Skip leading shell env-assignments (FOO=bar) to reach "git".
+    // Skip leading shell control keywords and env-assignments (FOO=bar) to reach "git".
     while i < tokens.len() {
         let t = trim_shell_punct(tokens[i]);
-        if t.is_empty() {
+        if t.is_empty() || is_shell_control_keyword(t) {
             i += 1;
             continue;
         }
@@ -197,6 +218,53 @@ fn trim_shell_punct(s: &str) -> &str {
 /// second copy of the quote-strip logic.
 fn strip_quotes(s: &str) -> &str {
     crate::pipeline::detection::strip_quotes(s)
+}
+
+pub(crate) fn is_shell_control_keyword(word: &str) -> bool {
+    matches!(
+        word,
+        "if" | "then"
+            | "elif"
+            | "else"
+            | "fi"
+            | "for"
+            | "while"
+            | "until"
+            | "do"
+            | "done"
+            | "time"
+            | "!"
+    )
+}
+
+pub(crate) fn decode_token(raw: &str) -> String {
+    let trimmed = trim_shell_punct(raw);
+    let mut out = String::with_capacity(trimmed.len());
+    let chars: Vec<char> = trimmed.chars().collect();
+    let mut i = 0;
+    let mut in_single = false;
+    let mut in_double = false;
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '\'' && !in_double {
+            in_single = !in_single;
+            i += 1;
+            continue;
+        }
+        if c == '"' && !in_single {
+            in_double = !in_double;
+            i += 1;
+            continue;
+        }
+        if c == '\\' && !in_single && i + 1 < chars.len() {
+            out.push(chars[i + 1]);
+            i += 2;
+            continue;
+        }
+        out.push(c);
+        i += 1;
+    }
+    out
 }
 
 #[cfg(test)]

@@ -8,6 +8,7 @@
 //! detection + safety ladders run.
 
 use crate::decision::{AllowReason, AskReason, AskSource, Decision, DenyReason, DenySource};
+use crate::git_discard::should_ask_before_git;
 use crate::mode::ToolRequest;
 use crate::pipeline::{GateCtx, Immunity, Stage, Validator, consent_allows};
 use crate::rule::Effect;
@@ -68,10 +69,16 @@ impl Validator for RuleAskValidator {
         if consent_allows(req, ctx) {
             return Some(Decision::Allow(AllowReason::Consent));
         }
+        let detail = match should_ask_before_git(req.tool_name, ctx.content) {
+            Some(git_word @ ("commit" | "rebase" | "reset" | "tag")) => {
+                format!("git {git_word} checkpoint op needs confirmation")
+            }
+            _ => "an ask rule matched this call".into(),
+        };
         Some(Decision::Ask(AskReason {
             source: AskSource::UserRule,
             validator: self.name(),
-            detail: "an ask rule matched this call".into(),
+            detail,
             containment_note: None,
         }))
     }

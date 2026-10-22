@@ -32,7 +32,7 @@ pub(super) fn build_session_fences(
     project: Option<String>,
     rule_store: Option<Arc<dyn RuleStore>>,
 ) -> SessionFences {
-    let mut gate_builder = DefaultModeGate::new();
+    let mut gate_builder = DefaultModeGate::new().with_trusted_hosts();
     if let Some(rule_store) = &rule_store {
         gate_builder = gate_builder.with_store(rule_store.clone());
     }
@@ -127,6 +127,10 @@ impl Containment for ContainmentAdapter {
             .map(PathBuf::from)
             .collect()
     }
+
+    fn temp_dir(&self) -> Option<PathBuf> {
+        self.0.as_containment().and_then(|c| c.temp_dir())
+    }
 }
 
 /// Restore persistent directory grants from the rule store into the kernel
@@ -196,6 +200,14 @@ pub(crate) fn attach_git_common_dir(session: &dyn SandboxSession, workspace: &Pa
         tracing::warn!(
             "startup: could not allow-back the git common dir {}: {e}; git writes from this worktree will be refused by the fence",
             common.display()
+        );
+    }
+    if let Some(repo_root) = common.parent()
+        && let Err(e) = session.add_reading_dir(&repo_root.to_string_lossy())
+    {
+        tracing::warn!(
+            "startup: could not allow-back read access to the main checkout {}: {e}",
+            repo_root.display()
         );
     }
 }

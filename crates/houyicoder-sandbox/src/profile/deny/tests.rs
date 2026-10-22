@@ -13,37 +13,27 @@ fn test_mandatory_deny_home_paths() {
     assert!(p.contains("(subpath \"/Users/alice/.claude/agents\")"));
 }
 
-/// The ecosystem-compat and agents skill dirs stay read+write denied:
-/// those sources get no resource layer, and the read-deny blocks direct
-/// reads of their skill bodies. The native skills dir is write-only:
-/// reads are allowed back (the resource layer) while writes stay
-/// denied so the agent cannot plant a SKILL.md. The body reaches the
-/// model via the host-side load, so the read-deny added nothing.
+/// All three skill directories are write-only-denied: reads are allowed so
+/// the agent and verification subagents can read skill reference files and
+/// overlays, while writes stay denied so a skill definition cannot be
+/// planted or rewritten from inside the fence.
 #[test]
 fn test_skill_dirs_denied() {
     let p = mandatory_deny("/Users/alice", "tag-x");
-    // Ecosystem + agents dirs: read+write denied (no resource layer).
-    for dir in [".claude/skills", ".agents/skills"] {
+    for dir in [".houyicoder/skills", ".claude/skills", ".agents/skills"] {
         assert!(
             p.contains(&format!(
+                "(deny file-write* (subpath \"/Users/alice/{dir}\")"
+            )),
+            "{dir} must be write-denied: {p}"
+        );
+        assert!(
+            !p.contains(&format!(
                 "(deny file-read* file-write* (subpath \"/Users/alice/{dir}\")"
             )),
-            "{dir} must be read+write denied: {p}"
+            "{dir} must not be read-denied: {p}"
         );
     }
-    // Native skills dir: write-only (reads allowed back, writes denied).
-    assert!(
-        p.contains("(deny file-write* (subpath \"/Users/alice/.houyicoder/skills\")"),
-        "native skills dir must be write-denied: {p}"
-    );
-    assert!(
-        !p.contains("(deny file-read* file-write* (subpath \"/Users/alice/.houyicoder/skills\")"),
-        "native skills dir must not be read-denied (resource layer): {p}"
-    );
-    // The write-deny regex covers the nested-anywhere form so it holds
-    // for the user-level path and the project path, not only the home
-    // literal — a SKILL.md planted anywhere under the native skills
-    // path is blocked, not just the home copy.
     assert!(
         p.contains(r".*/\.houyicoder/skills(/|$)"),
         "native skills dir write-deny covers nested-anywhere: {p}"

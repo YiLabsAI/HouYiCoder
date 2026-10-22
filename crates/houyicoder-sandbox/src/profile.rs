@@ -223,12 +223,6 @@ pub fn render(spec: &ProfileSpec<'_>) -> String {
     // does not control. The subtrees other processes own stay closed.
     s.push_str("(allow file-read* file-write* (subpath \"/private/tmp\") (subpath \"/tmp\"))\n");
     s.push_str(&deny_shared_temp_guarded(tag));
-    // The undo store is written by the host, never by the sandboxed command, so
-    // denying writes here costs nothing and stops a destructive command from
-    // erasing the data that would undo it. Both locations are denied because the
-    // session opens exactly one of them.
-    s.push_str(&deny_snapshot_store(workspace, tag));
-    s.push_str(&deny_home_snapshot_store(home, tag));
     // Re-emits any deny region nested inside a path that was just opened for
     // writing, so a workspace under /Users keeps the sibling denies.
     let allow_paths: Vec<&str> = {
@@ -242,11 +236,14 @@ pub fn render(spec: &ProfileSpec<'_>) -> String {
     // wash out a deny of a credential path inside it.
     s.push_str(&mandatory_deny(home, tag));
     // Settings are denied before the scratch directory is opened for writing,
-    // permission stores after it: a fixture project needs its own settings file,
-    // while a permission store under that directory must stay closed.
+    // permission stores and snapshot stores after it: a fixture project needs
+    // its own settings file, while permission stores and undo snapshots must
+    // stay write-denied even when placed under the scratch or shared temp root.
     s.push_str(&deny_settings_files(home, tag));
     s.push_str(&allow_tmpdir_writes(tmpdir, workspace));
     s.push_str(&deny_permission_stores(home, tag));
+    s.push_str(&deny_snapshot_store(workspace, tag));
+    s.push_str(&deny_home_snapshot_store(home, tag));
     // After the deny above, so last-match-wins lets git read the system copies.
     // The home copies stay denied.
     s.push_str(&allow_system_etc(tag));

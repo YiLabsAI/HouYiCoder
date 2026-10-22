@@ -1,6 +1,8 @@
 //! Seatbelt rules for credentials, executable configuration, and the files that
 //! decide what the agent is allowed to do.
 
+use houyicoder_api::sandbox::normalize_tool_path;
+use std::env::var;
 use std::path::Path;
 
 /// Credential and shell-startup files denied for reading and writing.
@@ -49,6 +51,8 @@ const MANDATORY_DENY_PERMISSION_STORES: &[&str] = &[
 const MANDATORY_DENY_SETTINGS_FILES: &[&str] = &[
     ".houyicoder/settings.json",
     ".houyicoder/settings.local.json",
+    ".claude/settings.json",
+    ".claude/settings.local.json",
 ];
 
 /// Home directories denied for reading and writing. They hold credentials
@@ -59,8 +63,6 @@ const MANDATORY_DENY_DIRS: &[&str] = &[
     ".ssh",
     ".claude/commands",
     ".claude/agents",
-    ".claude/skills",
-    ".agents/skills",
     ".aws",
     ".gnupg",
     ".kube",
@@ -73,9 +75,9 @@ const MANDATORY_DENY_DIRS: &[&str] = &[
 /// A read-deny adds nothing: the body is host-injected (the deny cannot
 /// reach it), and the resource files are the resource layer the deny would
 /// block. The write-deny is the load-bearing half. The nested-anywhere
-/// regex covers project, user, and managed paths. The ecosystem-compat
-/// and agents skill dirs stay read+write denied above (no resource layer).
-const MANDATORY_DENY_WRITE_ONLY_DIRS: &[&str] = &[".houyicoder/skills"];
+/// regex covers project, user, and managed paths across all three skill roots.
+const MANDATORY_DENY_WRITE_ONLY_DIRS: &[&str] =
+    &[".houyicoder/skills", ".claude/skills", ".agents/skills"];
 
 /// Git hook directory, denied for writing only. A planted hook runs the next
 /// time the user checks out, so the write is what has to be blocked; a hook may
@@ -211,9 +213,16 @@ pub(crate) fn deny_shared_temp_guarded(tag: &str) -> String {
 /// own recovery evidence. Snapshot creation is unaffected: the host process
 /// writes the store and is not inside the fence.
 pub(crate) fn deny_home_snapshot_store(home: &str, tag: &str) -> String {
-    format!(
-        "(deny file-write* (subpath \"{home}/.houyicoder/snapshots\") (with message \"{tag}\"))\n"
-    )
+    let mut out = String::new();
+    let home_store = Path::new(home).join(".houyicoder").join("snapshots");
+    emit_store_deny(&mut out, &home_store, tag);
+    if let Ok(cfg_home) = var("HOUYICODER_CONFIG_HOME")
+        && !cfg_home.is_empty()
+    {
+        let custom_store = Path::new(cfg_home.trim_end_matches('/')).join("snapshots");
+        emit_store_deny(&mut out, &custom_store, tag);
+    }
+    out
 }
 
 /// Deny writes to the snapshot store directory inside the workspace. This
@@ -223,10 +232,25 @@ pub(crate) fn deny_home_snapshot_store(home: &str, tag: &str) -> String {
 /// does not block snapshot creation — it only blocks the agent's commands from
 /// clobbering the undo stack.
 pub(crate) fn deny_snapshot_store(workspace: &Path, tag: &str) -> String {
-    let ws = workspace.to_string_lossy();
-    format!(
-        "(deny file-write* (subpath \"{ws}/.houyicoder/snapshots\") (with message \"{tag}\"))\n"
-    )
+    let mut out = String::new();
+    let ws_store = workspace.join(".houyicoder").join("snapshots");
+    emit_store_deny(&mut out, &ws_store, tag);
+    out
+}
+
+fn emit_store_deny(out: &mut String, store: &Path, tag: &str) {
+    let raw = store.to_string_lossy();
+    out.push_str(&format!(
+        "(deny file-write* (subpath \"{raw}\") (with message \"{tag}\"))\n"
+    ));
+    if let Some(resolved) = normalize_tool_path(store) {
+        let canonical = resolved.to_string_lossy();
+        if canonical != raw {
+            out.push_str(&format!(
+                "(deny file-write* (subpath \"{canonical}\") (with message \"{tag}\"))\n"
+            ));
+        }
+    }
 }
 
 #[cfg(test)]
