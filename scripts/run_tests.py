@@ -281,9 +281,26 @@ for line in result.stdout.splitlines():
         continue
     if in_failures and s and not s.startswith("----"):
         failures.append(s)
-status = "ok" if failed == 0 else "FAILED"
+build_failed = result.returncode != 0 and failed == 0
+status = "ok" if failed == 0 and not build_failed else "FAILED"
 scope = "changed crates only; full suite runs at push" if not FULL else "full workspace"
 print(f"test result: {status}. {passed} passed; {failed} failed; {ignored} ignored ({scope})")
 for f in failures:
     print(f)
+# A non-zero exit with no failing test is a build or wrapper failure, not a
+# test failure: cargo never reached a test binary, or the compiler wrapper
+# died. The aggregate line then reads "ok. 0 passed; 0 failed" and the gate
+# stops on a contradiction, so the real cause has to be printed here. It is
+# normally in stderr, which the run above merged into stdout.
+if result.returncode != 0 and failed == 0:
+    lines = [line.rstrip() for line in result.stdout.splitlines()]
+    tail = [line for line in lines if line.strip()][-15:]
+    print(
+        f"test run failed (exit {result.returncode}) with no failing test: "
+        "the build or the compiler wrapper failed, so the tests above are not "
+        "a verdict on the change.",
+        file=sys.stderr,
+    )
+    for line in tail:
+        print(f"  {line}", file=sys.stderr)
 sys.exit(result.returncode)
