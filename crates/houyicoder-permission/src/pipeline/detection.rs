@@ -4,27 +4,17 @@
 //! preserved exactly; the validators are thin adapters over the shared
 //! context, not a re-derivation of the rules.
 
-use houyicoder_api::sandbox::{BoundaryAccess, Containment, Coverage, boundary_grants_for};
-use std::path::PathBuf;
+use houyicoder_api::sandbox::{BoundaryAccess, Containment, boundary_grants_for};
 use std::sync::Arc;
 
-use crate::compound::{compound_safe, is_effect_safe, is_readonly_compound, removes_only_temp};
+use crate::compound::{compound_safe, is_effect_safe, is_readonly_compound};
 use crate::decision::{AskReason, AskSource, Decision};
-use crate::egress::{egress_destination, egress_outputs_safe, egress_scope_list};
+use crate::egress::{egress_outputs_safe, egress_scope_list};
 use crate::git_discard::{collect_git_ask_ops, decode_token, is_shell_control_keyword};
 use crate::heredoc::strip_quoted_heredoc_bodies;
 use crate::mode::{PermissionMode, ToolRequest};
 use crate::pipeline::{GateCtx, Immunity, Stage, Validator, consent_allows};
 use crate::rule::{Effect, evaluate};
-
-fn session_temp_dir(containment: &Option<Arc<dyn Containment>>) -> Option<PathBuf> {
-    let c = containment.as_ref()?;
-    if matches!(c.coverage(), Coverage::Fenced { .. }) {
-        c.temp_dir()
-    } else {
-        None
-    }
-}
 
 /// Destructive verbs (rm, sudo, dd, …) escalate to Ask even when the mode
 /// default would Allow. Consent-overridable for an exact pre-approved call.
@@ -182,15 +172,7 @@ pub(crate) fn interpreter_inline_code(content: &str) -> Option<&str> {
 }
 
 /// rm / sudo / un-attestable redirects and substitution. Consent-overridable.
-pub struct DestructiveCommandValidator {
-    containment: Option<Arc<dyn Containment>>,
-}
-
-impl DestructiveCommandValidator {
-    pub fn new(containment: Option<Arc<dyn Containment>>) -> Self {
-        Self { containment }
-    }
-}
+pub struct DestructiveCommandValidator;
 
 impl Validator for DestructiveCommandValidator {
     fn name(&self) -> &'static str {
@@ -207,13 +189,6 @@ impl Validator for DestructiveCommandValidator {
     }
     fn check(&self, req: &ToolRequest<'_>, ctx: &GateCtx<'_>) -> Option<Decision> {
         if !should_ask_destructive(req.tool_name, ctx.content) {
-            return None;
-        }
-        let temp_dir = session_temp_dir(&self.containment);
-        if ctx.mode == PermissionMode::Auto
-            && interpreter_inline_code(ctx.content).is_none()
-            && removes_only_temp(ctx.content, temp_dir.as_deref())
-        {
             return None;
         }
         if consent_allows(req, ctx) {
@@ -296,15 +271,7 @@ impl Validator for GitCheckpointValidator {
 /// verdict (via would_block) as a containment_note so the user sees that
 /// approval will not help. The gate never denies on containment grounds — that
 /// would make it a second authority beside the fence.
-pub struct NetworkEgressValidator {
-    containment: Option<Arc<dyn Containment>>,
-}
-
-impl NetworkEgressValidator {
-    pub fn new(containment: Option<Arc<dyn Containment>>) -> Self {
-        Self { containment }
-    }
-}
+pub struct NetworkEgressValidator;
 
 /// The stable name of the network-egress validator. A metrics bucket key and
 /// the recognizer post_transform uses to query the fence at the network layer
@@ -329,21 +296,13 @@ impl Validator for NetworkEgressValidator {
         if !should_ask_egress(req.tool_name, ctx.content) {
             return None;
         }
-        let temp_dir = session_temp_dir(&self.containment);
-        if egress_outputs_safe(ctx.content, temp_dir.as_deref())
+        let outputs_safe = egress_outputs_safe(ctx.content);
+        if outputs_safe
             && let Some(scopes) = egress_scope_list(ctx.content)
             && !scopes.is_empty()
             && scopes
                 .iter()
                 .all(|dest| ctx.egress_allow.iter().any(|allowed| allowed == dest))
-        {
-            return None;
-        }
-        if let Some(destination) = egress_destination(ctx.content)
-            && ctx
-                .egress_allow
-                .iter()
-                .any(|allowed| allowed == &format!("session:{destination}"))
         {
             return None;
         }
@@ -353,22 +312,19 @@ impl Validator for NetworkEgressValidator {
         Some(Decision::Ask(AskReason {
             source: AskSource::Detection,
             validator: self.name(),
-            detail: "this command reaches the network".into(),
+            detail: if outputs_safe {
+                "this command reaches the network".into()
+            } else {
+                "this command writes a local file; origin approval does not authorize file output"
+                    .into()
+            },
             containment_note: None,
         }))
     }
 }
 
 /// A compound shell command that is not statically attestable.
-pub struct CompoundCommandValidator {
-    containment: Option<Arc<dyn Containment>>,
-}
-
-impl CompoundCommandValidator {
-    pub fn new(containment: Option<Arc<dyn Containment>>) -> Self {
-        Self { containment }
-    }
-}
+pub struct CompoundCommandValidator;
 
 impl Validator for CompoundCommandValidator {
     fn name(&self) -> &'static str {
@@ -392,11 +348,9 @@ impl Validator for CompoundCommandValidator {
         if refs.is_empty() {
             return None;
         }
-        let temp_dir = session_temp_dir(&self.containment);
         if compound_safe(&refs)
             || is_readonly_compound(&refs)
-            || (ctx.mode == PermissionMode::Auto
-                && is_effect_safe(ctx.content, temp_dir.as_deref()))
+            || (ctx.mode == PermissionMode::Auto && is_effect_safe(ctx.content))
         {
             return None;
         }

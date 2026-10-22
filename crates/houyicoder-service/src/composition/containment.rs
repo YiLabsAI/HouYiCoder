@@ -127,10 +127,6 @@ impl Containment for ContainmentAdapter {
             .map(PathBuf::from)
             .collect()
     }
-
-    fn temp_dir(&self) -> Option<PathBuf> {
-        self.0.as_containment().and_then(|c| c.temp_dir())
-    }
 }
 
 /// Restore persistent directory grants from the rule store into the kernel

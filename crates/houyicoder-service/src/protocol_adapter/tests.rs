@@ -5,13 +5,74 @@ use houyicoder_context::{EventId, SessionId, SessionLogEntry};
 use houyicoder_core::agent::ApprovalRequest;
 use houyicoder_core::agent::RunError;
 use houyicoder_permission::PermissionMode as E;
-use houyicoder_permission::{DefaultModeGate, ModeGate, Outcome, ToolRequest};
+use houyicoder_permission::{Decision, DefaultModeGate, ModeGate, Outcome, ToolRequest};
 use houyicoder_permission::{Effect, Rule, RuleContent, Scope};
 use houyicoder_protocol::acpx::AcpxMethod;
 use houyicoder_protocol::frontend::permission::RuleDestination;
 use houyicoder_protocol::llm::ProviderError;
 use serde_json::Value;
 use std::slice::from_ref;
+
+#[test]
+fn test_file_output_once() {
+    let gate = DefaultModeGate::with_mode(E::Auto);
+    let input = serde_json::json!({
+        "command": "curl https://example.test/ -o \"$TMPDIR/result.log\""
+    });
+    let request = ToolRequest {
+        tool_name: "bash",
+        input: Some(&input),
+        is_destructive: true,
+        is_read_only: false,
+        native_requires_approval: true,
+    };
+    let reason = match gate.decide(&request) {
+        Decision::Ask(reason) => reason,
+        other => panic!("expected file output approval: {other:?}"),
+    };
+    assert!(matches!(
+        always_grant("bash", &input, Some(&reason)),
+        AlwaysGrant::Once
+    ));
+    let options = approval_options("bash", &input, Some(&reason));
+    let ids: Vec<&str> = options.iter().map(|o| o.option_id.as_str()).collect();
+    assert_eq!(ids, ["allow_once", "reject_once"]);
+    gate.add_egress_allow("curl https://example.test");
+    assert_eq!(gate.decide(&request).outcome(), Outcome::Ask);
+}
+
+#[test]
+fn test_read_scope_remember() {
+    let gate = DefaultModeGate::with_mode(E::Auto);
+    let input = serde_json::json!({
+        "command": "curl https://one.example/a https://two.example/b"
+    });
+    let request = ToolRequest {
+        tool_name: "bash",
+        input: Some(&input),
+        is_destructive: true,
+        is_read_only: false,
+        native_requires_approval: true,
+    };
+    let reason = match gate.decide(&request) {
+        Decision::Ask(reason) => reason,
+        other => panic!("expected origin approval: {other:?}"),
+    };
+    let scopes = match always_grant("bash", &input, Some(&reason)) {
+        AlwaysGrant::Network(scopes) => scopes,
+        _ => panic!("expected origin scopes"),
+    };
+    assert_eq!(
+        scopes,
+        ["curl https://one.example", "curl https://two.example"]
+    );
+    let options = approval_options("bash", &input, Some(&reason));
+    assert!(options.iter().any(|o| o.option_id == "allow_always"));
+    for scope in scopes {
+        gate.add_egress_allow(&scope);
+    }
+    assert_eq!(gate.decide(&request).outcome(), Outcome::Allow);
+}
 
 /// Every durable turn-event kind maps to a session update, an ACPX
 /// notification, or neither. Streaming deltas are transient runtime events;

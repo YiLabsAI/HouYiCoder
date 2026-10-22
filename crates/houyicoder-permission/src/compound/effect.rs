@@ -1,16 +1,13 @@
-//! Effect-based checks for compound shell commands in autonomous mode:
-//! scratch-only redirects and removals under the session temporary directory,
-//! recursive inspection of command and process substitutions, and read-only
-//! inspection of protected configuration paths.
+//! Conservative checks for shell constructs and protected-path reads.
+//! File output requires approval because command text cannot establish resource
+//! ownership or preserve a filesystem pre-check until execution.
 
 use super::readonly::{find_matching_paren, is_readonly_compound};
 use super::{is_env_assignment, split_compound, strip_safe_redirects};
 use crate::git_discard::{decode_token, is_shell_control_keyword, should_ask_before_git};
 use crate::heredoc::strip_quoted_heredoc_bodies;
-use crate::pipeline::detection::{should_ask_egress, strip_quotes};
+use crate::pipeline::detection::should_ask_egress;
 use crate::safety::marker_hit;
-use std::fs::symlink_metadata;
-use std::path::Path;
 
 const MAX_DEPTH: u8 = 4;
 
@@ -45,14 +42,14 @@ const READONLY_GIT_SUBCOMMANDS: &[&str] = &[
     "hash-object",
 ];
 
-/// Whether a command's compound constructs are safe when validated against the
-/// session's temporary directory.
-pub fn is_effect_safe(command: &str, temp_dir: Option<&Path>) -> bool {
+/// Whether supported shell constructs avoid file output and nested risky
+/// commands. This does not prove the behavior of arbitrary executables.
+pub fn is_effect_safe(command: &str) -> bool {
     let stripped = strip_quoted_heredoc_bodies(command);
     if sets_tmpdir(&stripped) {
         return false;
     }
-    check_compound_depth(&stripped, MAX_DEPTH, false, temp_dir)
+    check_compound_depth(&stripped, MAX_DEPTH)
 }
 
 fn sets_tmpdir(command: &str) -> bool {
@@ -130,12 +127,7 @@ fn sets_tmpdir(command: &str) -> bool {
     false
 }
 
-fn check_compound_depth(
-    command: &str,
-    depth: u8,
-    inherited_scratch_cwd: bool,
-    scratch_root: Option<&Path>,
-) -> bool {
+fn check_compound_depth(command: &str, depth: u8) -> bool {
     if depth == 0 {
         return false;
     }
@@ -143,92 +135,21 @@ fn check_compound_depth(
     if segments.is_empty() {
         return false;
     }
-    let mut in_scratch_cwd = inherited_scratch_cwd;
     for segment in &segments {
-        update_scratch_cwd(command, segment, &mut in_scratch_cwd, scratch_root);
         if depth < MAX_DEPTH
             && (should_ask_egress("bash", segment)
                 || should_ask_before_git("bash", segment).is_some())
         {
             return false;
         }
-        if !segment_effect_safe(segment, depth, in_scratch_cwd, scratch_root) {
+        if !segment_effect_safe(segment, depth) {
             return false;
         }
     }
     true
 }
 
-fn update_scratch_cwd(
-    full_command: &str,
-    segment: &str,
-    in_scratch_cwd: &mut bool,
-    scratch_root: Option<&Path>,
-) {
-    let trimmed = segment.trim();
-    let Some(rest) = trimmed.strip_prefix("cd ") else {
-        return;
-    };
-    let target = strip_quotes(rest.split_whitespace().next().unwrap_or(""));
-    let followed_by_and = full_command
-        .find(trimmed)
-        .map(|pos| {
-            full_command[pos + trimmed.len()..]
-                .trim_start()
-                .starts_with("&&")
-        })
-        .unwrap_or(false);
-    *in_scratch_cwd = followed_by_and && is_tmpdir_root_or_child(target, scratch_root);
-}
-
-fn is_tmpdir_root_or_child(target: &str, temp_dir: Option<&Path>) -> bool {
-    if target.contains("..") || target.contains('`') || target.contains("$(") {
-        return false;
-    }
-    if target == "$TMPDIR" || target == "${TMPDIR}" {
-        return temp_dir.is_some_and(Path::is_dir);
-    }
-    is_temp_target(target, temp_dir)
-}
-
-pub(crate) fn is_temp_target(target: &str, temp_dir: Option<&Path>) -> bool {
-    let Some(root) = temp_dir else {
-        return false;
-    };
-    if !root.is_dir() {
-        return false;
-    }
-    let rest = target
-        .strip_prefix("$TMPDIR/")
-        .or_else(|| target.strip_prefix("${TMPDIR}/"));
-    let Some(suffix) = rest else {
-        return false;
-    };
-    if !is_direct_scratch_name(suffix) || marker_hit(target) {
-        return false;
-    }
-    let candidate = root.join(suffix);
-    if let Ok(meta) = symlink_metadata(&candidate)
-        && meta.file_type().is_symlink()
-    {
-        return false;
-    }
-    true
-}
-
-fn is_direct_scratch_name(path: &str) -> bool {
-    !path.is_empty()
-        && path != "."
-        && path != ".."
-        && !path.contains(['/', '*', '?', '[', '$', '`', '('])
-}
-
-fn segment_effect_safe(
-    segment: &str,
-    depth: u8,
-    in_scratch_cwd: bool,
-    scratch_root: Option<&Path>,
-) -> bool {
+fn segment_effect_safe(segment: &str, depth: u8) -> bool {
     let cleaned = strip_safe_redirects(segment);
     if first_command_word(&cleaned).as_deref() == Some("eval") {
         return false;
@@ -289,8 +210,11 @@ fn segment_effect_safe(
             i = close + 1;
             continue;
         }
-        if c == '<' || c == '>' {
-            let Some(next_i) = scan_redirect_at(&chars, i, in_scratch_cwd, scratch_root) else {
+        if c == '>' {
+            return false;
+        }
+        if c == '<' {
+            let Some(next_i) = scan_redirect_at(&chars, i) else {
                 return false;
             };
             i = next_i;
@@ -300,15 +224,10 @@ fn segment_effect_safe(
     }
     nested
         .iter()
-        .all(|body| check_compound_depth(body, depth - 1, in_scratch_cwd, scratch_root))
+        .all(|body| check_compound_depth(body, depth - 1))
 }
 
-fn scan_redirect_at(
-    chars: &[char],
-    i: usize,
-    in_scratch_cwd: bool,
-    scratch_root: Option<&Path>,
-) -> Option<usize> {
+fn scan_redirect_at(chars: &[char], i: usize) -> Option<usize> {
     let c = chars[i];
     if c == '<' && chars.get(i + 1) == Some(&'<') {
         let after = chars.get(i + 2).copied();
@@ -318,20 +237,8 @@ fn scan_redirect_at(
             None
         };
     }
-    if c == '<' {
-        let (target, next_i) = read_redirect_token(chars, i + 1)?;
-        return is_safe_input_redirect(&target).then_some(next_i);
-    }
-    if i > 0 && chars[i - 1] == '&' {
-        return None;
-    }
-    let after_op = if chars.get(i + 1) == Some(&'>') {
-        i + 2
-    } else {
-        i + 1
-    };
-    let (target, next_i) = read_redirect_token(chars, after_op)?;
-    is_safe_output_redirect(&target, in_scratch_cwd, scratch_root).then_some(next_i)
+    let (target, next_i) = read_redirect_token(chars, i + 1)?;
+    is_safe_input_redirect(&target).then_some(next_i)
 }
 
 fn read_redirect_token(chars: &[char], start: usize) -> Option<(String, usize)> {
@@ -391,96 +298,9 @@ fn is_safe_input_redirect(target: &str) -> bool {
         && !marker_hit(target)
 }
 
-fn is_safe_output_redirect(target: &str, _in_scratch_cwd: bool, temp_dir: Option<&Path>) -> bool {
-    is_temp_target(target, temp_dir)
-}
-
 fn starts_with_tmpdir_brace(chars: &[char], start: usize) -> bool {
     const TMPDIR_BRACE: [char; 9] = ['$', '{', 'T', 'M', 'P', 'D', 'I', 'R', '}'];
     chars.get(start..start + TMPDIR_BRACE.len()) == Some(&TMPDIR_BRACE)
-}
-
-/// Whether every destructive token in the command is an rm call whose targets
-/// are verified non-symlink children of the session's temporary directory.
-pub fn removes_only_temp(command: &str, temp_dir: Option<&Path>) -> bool {
-    let Some(root) = temp_dir else {
-        return false;
-    };
-    let stripped = strip_quoted_heredoc_bodies(command);
-    if sets_tmpdir(&stripped) {
-        return false;
-    }
-    check_scratch_rm_segments(&stripped, Some(root), true)
-}
-
-fn check_scratch_rm_segments(
-    stripped: &str,
-    scratch_root: Option<&Path>,
-    require_root: bool,
-) -> bool {
-    let lower = stripped.to_ascii_lowercase();
-    for word in lower.split(|c: char| !c.is_alphanumeric()) {
-        if matches!(word, "rmdir" | "unlink" | "sudo" | "dd" | "truncate") {
-            return false;
-        }
-    }
-    if lower.contains("-delete") {
-        return false;
-    }
-    let mut saw_rm = false;
-    for segment in split_compound(stripped) {
-        if !segment_contains_rm(&segment) {
-            continue;
-        }
-        saw_rm = true;
-        if !rm_segment_is_scratch_only(&segment, scratch_root, require_root) {
-            return false;
-        }
-    }
-    saw_rm
-}
-
-fn segment_contains_rm(segment: &str) -> bool {
-    segment
-        .split(|c: char| !c.is_alphanumeric())
-        .any(|w| w.eq_ignore_ascii_case("rm"))
-}
-
-fn rm_segment_is_scratch_only(
-    segment: &str,
-    scratch_root: Option<&Path>,
-    require_root: bool,
-) -> bool {
-    let cleaned = strip_safe_redirects(segment);
-    if first_command_word(&cleaned).as_deref() != Some("rm") {
-        return false;
-    }
-    let mut saw_target = false;
-    for token in cleaned.split_whitespace().skip(1) {
-        if is_env_assignment(token) {
-            return false;
-        }
-        let word = strip_quotes(token);
-        if word.is_empty() || word == "--" {
-            continue;
-        }
-        if word.starts_with('-') {
-            continue;
-        }
-        saw_target = true;
-        let ok = if require_root {
-            is_temp_target(word, scratch_root)
-        } else {
-            let rest = word
-                .strip_prefix("$TMPDIR/")
-                .or_else(|| word.strip_prefix("${TMPDIR}/"));
-            rest.is_some_and(is_direct_scratch_name) && !marker_hit(word)
-        };
-        if !ok {
-            return false;
-        }
-    }
-    saw_target
 }
 
 /// Whether a shell command that references a protected marker only inspects it

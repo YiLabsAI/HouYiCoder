@@ -109,10 +109,10 @@ fn test_network_consent_remembers_host() {
     let (server, gate) = server_with_gate();
     let first = "CACERT=/opt/cacert.pem; curl -sS --cacert \"$CACERT\" \
                  \"https://api.github.com/repos/ray-project/ray/pulls/66986\" \
-                 -o \"$TMPDIR/pr.json\"; python3 -c \"print(1)\"";
+                 -o /dev/null; python3 -c \"print(1)\"";
     let second = "CACERT=/opt/cacert.pem; curl -sS --cacert \"$CACERT\" \
                   \"https://api.github.com/repos/ray-project/ray/pulls/66986/comments\" \
-                  -o \"$TMPDIR/ic.json\"; python3 -c \"print(2)\"";
+                  -o /dev/null; python3 -c \"print(2)\"";
     let decide = |command: &str| {
         let input: &'static serde_json::Value =
             Box::leak(serde_json::json!({"command": command}).into());
@@ -135,6 +135,13 @@ fn test_network_consent_remembers_host() {
     assert_eq!(decide(second), Outcome::Allow);
     // A different origin is still a new decision.
     assert_eq!(decide("curl https://evil.test/x"), Outcome::Ask);
+    let download = "curl https://api.github.com/x -o \"$TMPDIR/result.json\"";
+    server.apply_consent_rule(
+        "bash",
+        &serde_json::json!({"command": download}),
+        Some(&network_reason()),
+    );
+    assert_eq!(decide(download), Outcome::Ask);
 }
 
 /// The approval card offers the remember option only when the server can
@@ -143,7 +150,7 @@ fn test_network_consent_remembers_host() {
 #[test]
 fn test_card_offers_destination() {
     let command = "CACERT=/opt/cacert.pem; curl -sS --cacert \"$CACERT\" \
-                   \"https://api.github.com/repos/a/b\" -o \"$TMPDIR/p.json\"; \
+                   \"https://api.github.com/repos/a/b\" -o /dev/null; \
                    python3 -c \"print(1)\"";
     let options = approval_options(
         "bash",
@@ -155,6 +162,15 @@ fn test_card_offers_destination() {
         .find(|o| o.option_id == "allow_always")
         .expect("remember option offered");
     assert_eq!(always.name, "curl https://api.github.com *");
+
+    let options = approval_options(
+        "bash",
+        &serde_json::json!({
+            "command": "curl https://api.github.com/x -o \"$TMPDIR/result.json\""
+        }),
+        Some(&network_reason()),
+    );
+    assert!(options.iter().all(|o| o.option_id != "allow_always"));
 
     // A command whose destination cannot be named offers no remember option.
     let options = approval_options(

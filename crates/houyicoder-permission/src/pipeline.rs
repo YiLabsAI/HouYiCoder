@@ -3,12 +3,9 @@
 //! ladder order is asserted by an invariant test rather than by the order of
 //! construction calls.
 //!
-//! The shared context deliberately carries no containment handle. Only two
-//! components see the fence: the mode-default validator, which may relax its
-//! own fallback, and the post transform, which may annotate a prompt. Every
-//! other validator cannot reference the fence because it has no way to reach
-//! it. That absence is the enforcement mechanism for the containment
-//! contracts; adding a field here would silently undo them.
+//! The shared context carries no containment handle. Path validators obtain
+//! directory bounds through their own port; automatic shell decisions do not
+//! infer resource ownership from filesystem pre-checks.
 
 // The describe() ladder view plus the immunity / consent_overridable methods
 // are exercised by the invariant tests and feed a permission view that is not
@@ -154,10 +151,10 @@ impl Pipeline {
         let validators: Vec<Box<dyn Validator>> = vec![
             Box::new(rule_stage::RuleDenyValidator),
             Box::new(ProtectedPathValidator::new(None)),
-            Box::new(DestructiveCommandValidator::new(None)),
+            Box::new(DestructiveCommandValidator),
             Box::new(GitCheckpointValidator),
-            Box::new(NetworkEgressValidator::new(None)),
-            Box::new(CompoundCommandValidator::new(None)),
+            Box::new(NetworkEgressValidator),
+            Box::new(CompoundCommandValidator),
             Box::new(PathBoundsValidator::new(None)),
             Box::new(rule_stage::RuleAllowValidator),
             Box::new(rule_stage::RuleAskValidator),
@@ -182,28 +179,8 @@ impl Pipeline {
     /// ladder built without a fence loses no coverage.
     pub fn with_containment(containment: Arc<dyn Containment>) -> Self {
         let mut p = Self::standard();
-        p.validators.retain(|v| {
-            !matches!(
-                v.name(),
-                "path-bounds"
-                    | "protected_path"
-                    | "destructive_command"
-                    | "network_egress"
-                    | "compound_command"
-            )
-        });
         p.validators
-            .push(Box::new(DestructiveCommandValidator::new(Some(
-                Arc::clone(&containment),
-            ))));
-        p.validators
-            .push(Box::new(NetworkEgressValidator::new(Some(Arc::clone(
-                &containment,
-            )))));
-        p.validators
-            .push(Box::new(CompoundCommandValidator::new(Some(Arc::clone(
-                &containment,
-            )))));
+            .retain(|v| v.name() != "path-bounds" && v.name() != "protected_path");
         p.validators
             .push(Box::new(PathBoundsValidator::new(Some(Arc::clone(
                 &containment,

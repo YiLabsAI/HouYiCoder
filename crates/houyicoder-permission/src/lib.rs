@@ -41,7 +41,10 @@ pub use consent::{ConsentStore, InMemoryConsentStore, args_key};
 pub use decision::{
     AllowReason, AskReason, AskSource, Decision, DenyReason, DenySource, FenceProof, Outcome,
 };
-pub use egress::{egress_destination, egress_scope_list, trusted_egress_scopes, trusted_hosts};
+pub use egress::{
+    egress_destination, egress_outputs_safe, egress_scope_list, trusted_egress_scopes,
+    trusted_hosts,
+};
 pub use gate::{
     AutoPolicy, DefaultModeGate, DefaultPolicy, ModeGate, ModePolicy, classify_git_op, mode_default,
 };

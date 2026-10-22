@@ -14,12 +14,10 @@
 //! instead of remembering a scope wider than the command the user saw.
 
 use std::mem::take;
-use std::path::Path;
 
 use crate::compound::is_attestable;
 use crate::compound::is_effect_safe;
 use crate::compound::is_readonly_compound;
-use crate::compound::is_temp_target;
 use crate::compound::normalize_shell_command;
 use crate::compound::split_compound;
 use crate::pipeline::detection::should_ask_egress;
@@ -130,10 +128,10 @@ pub fn egress_scope_list(command: &str) -> Option<Vec<String>> {
     collect_egress_scopes(command, true)
 }
 
-/// Whether every file-writing output flag passed to curl or wget either writes
-/// to /dev/null or stdout, or targets a verified non-symlink child inside the
-/// session's temporary directory.
-pub fn egress_outputs_safe(command: &str, temp_dir: Option<&Path>) -> bool {
+/// Whether supported output arguments name only stdout or /dev/null.
+/// This classifies arguments, not client startup configuration. Origin consent
+/// never grants permission to open a local output file.
+pub fn egress_outputs_safe(command: &str) -> bool {
     let normalized = normalize_shell_command(command);
     for clause in split_clauses(&normalized) {
         for stage in split_compound(&clause) {
@@ -141,9 +139,11 @@ pub fn egress_outputs_safe(command: &str, temp_dir: Option<&Path>) -> bool {
             let Some(first) = words.first() else {
                 continue;
             };
-            if !EGRESS_TOOLS.contains(&strip_quotes(first)) {
+            let program = strip_quotes(first);
+            if !EGRESS_TOOLS.contains(&program) {
                 continue;
             }
+            let mut document_output = program == "curl";
             let mut idx = 1;
             while idx < words.len() {
                 let w = strip_quotes(&words[idx]);
@@ -152,18 +152,35 @@ pub fn egress_outputs_safe(command: &str, temp_dir: Option<&Path>) -> bool {
                     .or_else(|| w.strip_prefix("--output-document="))
                 {
                     let v = strip_quotes(val);
-                    if v != "/dev/null" && v != "-" && !is_temp_target(v, temp_dir) {
+                    if v != "/dev/null" && v != "-" {
                         return false;
                     }
+                    document_output = true;
                 } else if matches!(w, "-o" | "-O" | "--output" | "--output-document") {
+                    if program == "curl" && w == "-O" {
+                        return false;
+                    }
                     let v = words.get(idx + 1).map(|s| strip_quotes(s)).unwrap_or("");
-                    if v != "/dev/null" && v != "-" && !is_temp_target(v, temp_dir) {
+                    if v != "/dev/null" && v != "-" {
+                        return false;
+                    }
+                    if program == "wget" && w == "-o" {
+                        if v != "/dev/null" {
+                            return false;
+                        }
+                    } else {
+                        document_output = true;
+                    }
+                    if program == "wget" && w == "--output" {
                         return false;
                     }
                     idx += 2;
                     continue;
                 }
                 idx += 1;
+            }
+            if !document_output {
+                return false;
             }
         }
     }
@@ -183,7 +200,7 @@ fn collect_egress_scopes(command: &str, allow_effect_safe: bool) -> Option<Vec<S
                 continue;
             }
             let stage_ok = if allow_effect_safe {
-                is_attestable(trimmed) || is_effect_safe(trimmed, None)
+                is_attestable(trimmed) || is_effect_safe(trimmed)
             } else {
                 is_attestable(trimmed)
             };

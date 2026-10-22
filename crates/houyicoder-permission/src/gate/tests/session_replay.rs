@@ -1,22 +1,18 @@
-//! Replay of the 61 real permission-prompt commands from the dogfood session
-//! against the autonomous gate with pre-approved public hosts.
+//! Fixed session commands evaluated through the public permission gate.
 
 use super::*;
 use crate::Scope;
-use crate::compound::{is_effect_safe, reads_only_protected, removes_only_temp};
+use crate::compound::{is_effect_safe, reads_only_protected};
 use crate::decision::{Decision, Outcome};
 use crate::egress::{egress_destination, egress_scope_list, trusted_hosts};
 use crate::rule::{Effect, Rule, RuleContent};
 use houyicoder_api::sandbox::{Containment, Coverage, SideEffect};
 use std::collections::HashSet;
 use std::env::temp_dir;
-use std::fs::{create_dir_all, remove_dir_all, write};
+use std::fs::{create_dir_all, remove_dir_all};
 use std::path::PathBuf;
 use std::process::id;
 use std::sync::Arc;
-
-#[cfg(unix)]
-use std::os::unix::fs::symlink;
 
 struct ScratchFence {
     scratch: PathBuf,
@@ -30,9 +26,6 @@ impl Containment for ScratchFence {
     }
     fn would_block(&self, _effect: SideEffect) -> Option<String> {
         None
-    }
-    fn temp_dir(&self) -> Option<PathBuf> {
-        Some(self.scratch.clone())
     }
 }
 
@@ -101,12 +94,11 @@ const SESSION_CORPUS: &[&str] = &[
 ];
 
 #[test]
-fn test_session_corpus_reduction() {
-    // Full 61-command denominator from session 71336e41: 40 normal workflow
-    // commands auto-allow (0 Deny), while 21 commands still require
-    // confirmation under the strict single-component scratch invariant.
+fn test_session_corpus_decisions() {
     const EXPECTED_ASK_CALLS: &[usize] = &[
-        2, 10, 14, 15, 17, 18, 23, 24, 26, 27, 37, 38, 39, 40, 44, 45, 46, 49, 55, 56, 58, 59,
+        2, 3, 4, 5, 6, 7, 10, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 31, 32,
+        33, 34, 36, 37, 38, 39, 40, 41, 42, 44, 45, 46, 47, 48, 49, 50, 52, 53, 54, 55, 56, 58, 59,
+        60, 61,
     ];
 
     let scratch = temp_dir().join(format!("hy-replay-scratch-{}", id()));
@@ -121,9 +113,21 @@ fn test_session_corpus_reduction() {
     for (idx, &cmd) in SESSION_CORPUS.iter().enumerate() {
         let call_num = idx + 1;
         let decision = gate.decide(&bash_req(cmd));
+        let expected = if EXPECTED_ASK_CALLS.contains(&call_num) {
+            Outcome::Ask
+        } else {
+            Outcome::Allow
+        };
+        assert_eq!(
+            decision.outcome(),
+            expected,
+            "call #{call_num}: {decision:?}"
+        );
         match &decision {
             Decision::Allow(_) => allow_count += 1,
             Decision::Ask(reason) => {
+                assert!(!reason.validator.is_empty(), "call #{call_num}");
+                assert!(!reason.detail.trim().is_empty(), "call #{call_num}");
                 actual_asks.push(call_num);
                 if reason.validator == "git_checkpoint" && reason.detail.starts_with("git commit ")
                 {
@@ -145,11 +149,11 @@ fn test_session_corpus_reduction() {
     }
     drop(remove_dir_all(&scratch));
     assert_eq!(SESSION_CORPUS.len(), 61, "full 61-command denominator");
-    assert_eq!(allow_count, 39, "39 of 61 commands auto-allow");
     assert_eq!(
         actual_asks, EXPECTED_ASK_CALLS,
-        "39 of 61 auto-allow; all 22 checkpoint, shared-tmp write, and boundary-probe commands Ask"
+        "all 61 requests retain their expected decision"
     );
+    assert_eq!(allow_count, 12, "12 Allow, 49 Ask, 0 Deny");
 }
 
 #[test]
@@ -312,101 +316,21 @@ fn test_trusted_egress_scopes() {
 
 #[test]
 fn test_effect_boundary_checks() {
-    let scratch = temp_dir().join(format!("hy-boundary-scratch-{}", id()));
-    create_dir_all(&scratch).expect("mkdir scratch");
-    assert!(is_effect_safe("make check 2>&1 | tail -20", None));
+    assert!(is_effect_safe("make check 2>&1 | tail -20"));
+    assert!(!is_effect_safe("make check > \"$TMPDIR/out.log\" 2>&1"));
     assert!(!is_effect_safe(
-        "make check > \"$TMPDIR/out.log\" 2>&1",
-        None
+        "printf changed > \"$TMPDIR/audit-output.log\""
     ));
-    assert!(is_effect_safe(
-        "make check > \"$TMPDIR/out.log\" 2>&1",
-        Some(&scratch)
-    ));
-    assert!(!is_effect_safe(
-        "printf changed > \"$TMPDIR/audit-output.log\"",
-        None
-    ));
-    #[cfg(unix)]
-    {
-        let target = scratch.join("target-file");
-        write(&target, "before").expect("write target");
-        let link = scratch.join("audit-output.log");
-        symlink(&target, &link).expect("symlink");
-        assert!(!is_effect_safe(
-            "printf changed > \"$TMPDIR/audit-output.log\"",
-            Some(&scratch)
-        ));
-        let fenced_gate = DefaultModeGate::with_mode(PermissionMode::Auto)
-            .with_trusted_hosts()
-            .with_containment(Arc::new(ScratchFence {
-                scratch: scratch.clone(),
-            }));
-        assert_eq!(
-            fenced_gate
-                .decide(&bash_req("printf changed > \"$TMPDIR/audit-output.log\""))
-                .outcome(),
-            Outcome::Ask
-        );
-        assert_eq!(
-            fenced_gate
-                .decide(&bash_req(
-                    "curl -sS https://docs.rs/ -o \"$TMPDIR/audit-output.log\""
-                ))
-                .outcome(),
-            Outcome::Ask
-        );
-        assert_eq!(
-            fenced_gate
-                .decide(&bash_req(
-                    "curl -sS https://docs.rs/ --output=\"$TMPDIR/audit-output.log\""
-                ))
-                .outcome(),
-            Outcome::Ask
-        );
-    }
-    assert!(removes_only_temp(
-        "rm -rf \"$TMPDIR/fresh\"",
-        Some(&scratch)
-    ));
-    assert!(!removes_only_temp("rm -rf \"$TMPDIR/fresh\"", None));
-    assert!(!removes_only_temp(
-        "cd \"$TMPDIR/fresh\" && rm -rf target",
-        Some(&scratch)
-    ));
-    assert!(!removes_only_temp(
-        "TMPDIR=/work/repo; rm -rf \"$TMPDIR/src\"",
-        Some(&scratch)
-    ));
-    assert!(!removes_only_temp("rm -rf \"$TMPDIR\"", Some(&scratch)));
-    assert!(!removes_only_temp("rm -rf \"$TMPDIR/\"", Some(&scratch)));
-    assert!(!removes_only_temp("rm -rf \"$TMPDIR//\"", Some(&scratch)));
-    assert!(!removes_only_temp("rm -rf \"$TMPDIR/*\"", Some(&scratch)));
-    assert!(!removes_only_temp(
-        "rm -rf \"$TMPDIR/src/*\"",
-        Some(&scratch)
-    ));
-    assert!(!removes_only_temp(
-        "rm -rf \"$TMPDIR/existing-link/src\"",
-        Some(&scratch)
-    ));
-    assert!(!removes_only_temp(
-        "rm -rf \"$TMPDIR/../escape\"",
-        Some(&scratch)
-    ));
-    assert!(!removes_only_temp("rm -rf /tmp/shared", Some(&scratch)));
-    drop(remove_dir_all(&scratch));
 }
 
 #[test]
 fn test_dangerous_variants_ask() {
-    assert!(!is_effect_safe("eval \"$(echo hi)\"", None));
-    assert!(!is_effect_safe("cat <<EOF\n$HOME\nEOF", None));
-    assert!(!is_effect_safe("echo x > \"$TMPDIR/../escape\"", None));
-    assert!(!is_effect_safe("echo x > \"$TMPDIR/.git/config\"", None));
+    assert!(!is_effect_safe("eval \"$(echo hi)\""));
+    assert!(!is_effect_safe("cat <<EOF\n$HOME\nEOF"));
+    assert!(!is_effect_safe("echo x > \"$TMPDIR/../escape\""));
+    assert!(!is_effect_safe("echo x > \"$TMPDIR/.git/config\""));
     assert!(!is_effect_safe(
-        "TMPDIR=/work/repo; echo x > \"$TMPDIR/file\"",
-        None
+        "TMPDIR=/work/repo; echo x > \"$TMPDIR/file\""
     ));
 
     assert!(reads_only_protected("cat .claude/settings.json"));

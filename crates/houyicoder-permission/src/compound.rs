@@ -14,8 +14,7 @@ use crate::heredoc::strip_quoted_heredoc_bodies;
 mod effect;
 mod readonly;
 
-pub(crate) use effect::is_temp_target;
-pub use effect::{is_effect_safe, reads_only_protected, removes_only_temp};
+pub use effect::{is_effect_safe, reads_only_protected};
 pub use readonly::is_readonly_compound;
 
 /// Split a compound command into its top-level segments on and/or, semicolon,

@@ -487,10 +487,6 @@ impl Containment for LinuxLandlockSession {
     fn would_block(&self, _effect: SideEffect) -> Option<String> {
         None
     }
-
-    fn temp_dir(&self) -> Option<PathBuf> {
-        Some(self.tmpdir.clone())
-    }
 }
 
 #[cfg(test)]

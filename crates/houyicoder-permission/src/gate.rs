@@ -495,10 +495,6 @@ impl ModeGate for DefaultModeGate {
         if !allow.iter().any(|existing| existing == destination) {
             allow.push(destination.to_string());
         }
-        let session_key = format!("session:{destination}");
-        if !allow.iter().any(|existing| existing == &session_key) {
-            allow.push(session_key);
-        }
     }
 
     fn set_git_checkpoint_enabled(&self, enabled: bool) {

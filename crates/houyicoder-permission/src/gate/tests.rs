@@ -44,3 +44,5 @@ mod pipeline_contract;
 mod rule_dedup;
 #[cfg(test)]
 mod session_replay;
+#[cfg(test)]
+mod shell_policy;

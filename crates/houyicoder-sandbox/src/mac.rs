@@ -362,10 +362,6 @@ impl Containment for MacSeatbeltSession {
             _ => None,
         }
     }
-
-    fn temp_dir(&self) -> Option<PathBuf> {
-        Some(self.tmpdir.clone())
-    }
 }
 
 impl Drop for MacSeatbeltSession {

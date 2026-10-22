@@ -128,12 +128,9 @@ fn test_ask_carries_fence_note() {
     assert_eq!(containment_note.as_deref(), Some("egress is contained"));
 }
 
-/// The two commands from a real session name the same origin through one
-/// program, so remembering that origin answers the second one without a
-/// prompt. The command also sets a certificate variable and parses the
-/// downloaded file locally, which is what made the prefix derivation give up.
+/// Origin consent does not grant local file output for another request.
 #[test]
-fn test_egress_destination_allowed() {
+fn test_egress_output_needs_consent() {
     let first = "CACERT=/opt/cacert.pem; curl -sS --max-time 25 --cacert \"$CACERT\" \
                  \"https://api.github.com/repos/ray-project/ray/pulls/66986\" \
                  -o \"$TMPDIR/pr.json\"; python3 -c \"print(1)\"";
@@ -149,8 +146,8 @@ fn test_egress_destination_allowed() {
 
     g.add_egress_allow("curl https://api.github.com");
 
-    assert_eq!(g.decide(&bash_req(first)).outcome(), Outcome::Allow);
-    assert_eq!(g.decide(&bash_req(second)).outcome(), Outcome::Allow);
+    assert_eq!(g.decide(&bash_req(first)).outcome(), Outcome::Ask);
+    assert_eq!(g.decide(&bash_req(second)).outcome(), Outcome::Ask);
 }
 
 /// Remembering one origin does not answer a different one, and a command that
@@ -208,14 +205,7 @@ fn test_egress_ignores_other_tool() {
     ));
 }
 
-/// Replay the 5 real session commands from session 71336e41 (fetching PR
-/// metadata, issue comments, files and reviews, raw markdown with grep and
-/// head, and inline comments) and verify the quantitative metrics:
-/// - option target accuracy: 5/5 (100%) resolve to curl https://api.github.com
-///   instead of the leading env assignment;
-/// - repeat-ask rate: after approving the first command with Always,
-///   0/4 (0%) of the remaining 4 commands prompt;
-/// - total prompts across the 5-call sequence: drops from 5 to 1.
+/// Session requests retain accurate origins without granting their file writes.
 #[test]
 fn test_real_session_metrics() {
     let session_calls = [
@@ -249,6 +239,9 @@ fn test_real_session_metrics() {
         accurate_targets, 5,
         "M3 option target accuracy = 5/5 (100%)"
     );
-    assert_eq!(repeat_prompts, 0, "M1 repeat-ask rate = 0/4 (0%)");
-    assert_eq!(prompts, 1, "M4 prompts across 5 calls = 1 (down from 5)");
+    assert_eq!(
+        repeat_prompts, 4,
+        "origin consent cannot approve file output"
+    );
+    assert_eq!(prompts, 5, "all five file-writing requests need approval");
 }

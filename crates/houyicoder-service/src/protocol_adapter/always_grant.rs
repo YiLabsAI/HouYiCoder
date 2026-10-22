@@ -6,7 +6,9 @@
 //! derived offers no remember option: a choice the gate would ignore is worse
 //! than no choice.
 
-use houyicoder_permission::{AskSource, Effect, NETWORK_EGRESS, Rule, RuleContent, Scope};
+use houyicoder_permission::{
+    AskSource, Effect, NETWORK_EGRESS, Rule, RuleContent, Scope, egress_outputs_safe,
+};
 use houyicoder_protocol::acp_wire::{PermissionOption, PermissionOptionKind};
 
 use super::consent_rule_for;
@@ -46,6 +48,9 @@ pub(crate) fn always_grant(
         // A destination is not a command rule: the network check recognizes
         // programs, not hosts, so a remembered destination is its own entry.
         let command = houyicoder_permission::input_content(tool_name, Some(input));
+        if !egress_outputs_safe(&command) {
+            return AlwaysGrant::Once;
+        }
         return match houyicoder_permission::egress_scope_list(&command) {
             Some(scopes) if !scopes.is_empty() => AlwaysGrant::Network(scopes),
             _ => AlwaysGrant::Once,
