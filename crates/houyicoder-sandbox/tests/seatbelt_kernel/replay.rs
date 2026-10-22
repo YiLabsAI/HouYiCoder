@@ -1,21 +1,19 @@
-//! Replay of the commands a real session failed on, run under the session's own
-//! shell and profile. Each entry is a command the agent actually issued, so the
-//! suite is the regression net for the whole class rather than for one repaired
-//! path.
+//! The commands a real session failed on, run under the session's shell and the
+//! rendered profile. Each one is a command the agent issued and the session
+//! refused; the tests below fail if any of them stops working.
 
 use super::Fence;
 use houyicoder_sandbox::command_shell;
 use std::fs::remove_file;
 use std::fs::write;
 
-/// Commands that failed inside the session, each paired with the marker its
-/// success prints. They run under the shell the session uses, which is the
-/// property the dialect cases exist to pin: the same lines abort under a login
-/// shell that reads a leading === as a command lookup, treats status as
-/// read-only, and refuses an unmatched glob.
+/// The shell constructs the session refused to run: a leading === read as a
+/// command lookup, status treated as a read-only variable, and an unmatched
+/// glob aborting the line. Each command prints a marker after the construct, so
+/// a shell that rejects the line leaves the marker out.
 #[cfg(target_os = "macos")]
 #[test]
-fn test_session_shell_failures() {
+fn test_bash_constructs_run() {
     let f = Fence::new("session-replay");
     let shell = command_shell();
     // The grep case needs a pattern with no match, so the glob has to reach
@@ -54,8 +52,8 @@ fn test_session_shell_failures() {
             "{label}: {why}. {}",
             out.detail()
         );
-        // A glob the shell refuses is reported in its own words, which is what
-        // the dialect cases exist to keep out of the session.
+        // A refused glob is reported in the shell's own words, which no command
+        // in the session should have to read.
         assert!(
             !out.stderr.contains("no matches found"),
             "{label}: the shell must hand the pattern on rather than refuse it. {}",
@@ -64,11 +62,11 @@ fn test_session_shell_failures() {
     }
 }
 
-/// The profile-level failures: the shared temp root, process substitution
-/// through it, and the public CA bundle.
+/// The paths the session could not reach: the shared temp root a tool
+/// hard-codes, process substitution through it, and the public CA bundle.
 #[cfg(target_os = "macos")]
 #[test]
-fn test_session_path_failures() {
+fn test_shared_paths_work() {
     let f = Fence::new("session-replay-path");
     let shell = command_shell();
     let cases = [

@@ -155,7 +155,8 @@ impl ShellSnapshot {
         // aliases are a future item once the snapshot-creation shell and the
         // command shell are the same one.
         let dump = r##"
-          export -p >> "$SNAPSHOT_FILE"
+          export -p | grep -v '^export -' >> "$SNAPSHOT_FILE"
+          printf 'export PATH=%q\n' "$PATH" >> "$SNAPSHOT_FILE"
         "##;
         format!(
             "SNAPSHOT_FILE={snap:?}\n{config_line}\n\

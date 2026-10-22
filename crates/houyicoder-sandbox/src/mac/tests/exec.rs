@@ -184,7 +184,12 @@ async fn test_runs_bash_semantics() {
     }
     let out = s
         .exec_with_config(
-            "echo ===; echo ====; status=0; echo status=$status; ls /nonexist* 2>/dev/null; echo tail-ok",
+            "echo ===; echo ====; status=0; echo status=$status; \
+             ls /nonexist* 2>/dev/null; diff <(echo a) <(echo a) && \
+             head -c 16 /etc/ssl/cert.pem >/dev/null && \
+             mkdir -p \"$TMPDIR/fx/.houyicoder\" && \
+             printf '{}' > \"$TMPDIR/fx/.houyicoder/settings.json\" && \
+             echo tail-ok",
             ExecConfig::default(),
         )
         .await

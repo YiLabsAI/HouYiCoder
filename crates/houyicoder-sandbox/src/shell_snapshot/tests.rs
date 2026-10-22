@@ -104,3 +104,17 @@ fn test_inject_without_passes_through() {
     let out = snap.inject("echo hi", None);
     assert!(out.contains("echo hi"));
 }
+
+#[test]
+fn test_dump_script_exports_path() {
+    let snap = ShellSnapshot::new(PathBuf::from("/bin/zsh"), PathBuf::from("/tmp"));
+    let script = snap.dump_script(Path::new("/tmp/snap.sh"), Path::new("/tmp/.zshrc"), false);
+    assert!(
+        script.contains("grep -v '^export -'"),
+        "zsh flag exports must be stripped before bash sources the file: {script}"
+    );
+    assert!(
+        script.contains("export PATH=%q"),
+        "PATH must be emitted as a scalar export for bash: {script}"
+    );
+}

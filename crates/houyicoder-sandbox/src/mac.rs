@@ -130,6 +130,7 @@ impl MacSeatbeltSession {
         let tmpdir = dunce::canonicalize(&tmpdir)?;
         let home = var("HOME").unwrap_or_else(|_| "/Users/unknown".into());
         let shell = command_shell();
+        let snapshot_shell = command::login_shell().unwrap_or_else(|| shell.clone());
         let tag = format!("houyicoder-sandbox-{}", id());
         let profile = render(&ProfileSpec::new(
             &workspace,
@@ -151,11 +152,8 @@ impl MacSeatbeltSession {
             owned: true,
             breaker: None,
             network: NetworkPolicy::contained(),
-            shell_snapshot: Mutex::new(ShellSnapshot::new(
-                PathBuf::from(&shell),
-                PathBuf::from(&home),
-            )),
-            shell: PathBuf::from(&shell),
+            shell_snapshot: Mutex::new(ShellSnapshot::new(snapshot_shell, PathBuf::from(&home))),
+            shell,
         })
     }
 
@@ -171,6 +169,7 @@ impl MacSeatbeltSession {
         let tmpdir = dunce::canonicalize(&tmpdir)?;
         let home = var("HOME").unwrap_or_else(|_| "/Users/unknown".into());
         let shell = command_shell();
+        let snapshot_shell = command::login_shell().unwrap_or_else(|| shell.clone());
         let tag = format!("houyicoder-sandbox-{}", id());
         let profile = render(&ProfileSpec::new(
             &workspace,
@@ -192,11 +191,8 @@ impl MacSeatbeltSession {
             owned: false,
             breaker: None,
             network: NetworkPolicy::contained(),
-            shell_snapshot: Mutex::new(ShellSnapshot::new(
-                PathBuf::from(&shell),
-                PathBuf::from(&home),
-            )),
-            shell: PathBuf::from(&shell),
+            shell_snapshot: Mutex::new(ShellSnapshot::new(snapshot_shell, PathBuf::from(&home))),
+            shell,
         })
     }
 
