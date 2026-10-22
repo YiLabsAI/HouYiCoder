@@ -423,7 +423,7 @@ impl SandboxSession for WindowsJobSession {
                 Ok(Err(e)) => Err(SandboxError::Io(format!("wait: {e}"))),
                 Err(_elapsed) => Err(SandboxError::Timeout(format!(
                     "wall-clock {}s exceeded",
-                    config.wall_timeout_ms
+                    config.wall_timeout_ms / 1000
                 ))),
             }
         })

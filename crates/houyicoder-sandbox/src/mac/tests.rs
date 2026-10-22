@@ -2,6 +2,7 @@
 //! narrow-write fence, the repo git-config read posture, command execution,
 //! and the sandbox baseline itself.
 
+mod command;
 mod exec;
 mod git_config;
 mod narrow_write;

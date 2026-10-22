@@ -172,3 +172,38 @@ async fn test_cargo_version_in_sandbox() {
     );
     assert!(out.is_success(), "cargo --version should succeed: {out:?}");
 }
+
+/// The command runs under bash, not the user's login shell. A model writes
+/// bash, and zsh reads a leading === as a command lookup, treats status as a
+/// read-only variable, and aborts the whole command line on an unmatched glob.
+/// Each of these fails on zsh and must succeed here.
+#[tokio::test]
+async fn test_runs_bash_semantics() {
+    let s = MacSeatbeltSession::new().unwrap();
+    if nested_fence(&s).await {
+        return;
+    }
+    let out = s
+        .exec_with_config(
+            "echo ===; echo ====; status=0; echo status=$status; ls /nonexist* 2>/dev/null; echo tail-ok",
+            ExecConfig::default(),
+        )
+        .await
+        .expect("run");
+    assert!(
+        out.is_success(),
+        "bash constructs must run under the session shell: {out:?}"
+    );
+    assert!(
+        out.stdout.contains("==="),
+        "echo === reaches stdout: {out:?}"
+    );
+    assert!(
+        out.stdout.contains("status=0"),
+        "status is an ordinary variable: {out:?}"
+    );
+    assert!(
+        out.stdout.contains("tail-ok"),
+        "an unmatched glob does not abort the line: {out:?}"
+    );
+}

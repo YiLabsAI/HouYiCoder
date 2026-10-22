@@ -276,9 +276,14 @@ async fn test_long_command_trips_timeout() {
         ..ExecConfig::default()
     };
     let r = s.exec_with_config("sleep 100", cfg).await;
+    let Err(SandboxError::Timeout(message)) = &r else {
+        panic!("wall-clock 200ms must trip Timeout, got {r:?}");
+    };
+    // The message reports seconds, so the raw millisecond budget must not leak
+    // into it: a 200ms budget reads as 0s, and a 120s one as 120s.
     assert!(
-        matches!(r, Err(SandboxError::Timeout(_))),
-        "wall-clock 1s must trip Timeout, got {r:?}"
+        message.contains("wall-clock 0s"),
+        "the budget is reported in seconds, not milliseconds: {message}"
     );
 }
 

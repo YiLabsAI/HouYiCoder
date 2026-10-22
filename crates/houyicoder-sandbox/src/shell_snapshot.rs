@@ -198,7 +198,7 @@ impl ShellSnapshot {
                     None => String::new(),
                 };
                 format!(
-                    "source {p:?} 2>/dev/null || true{reassert} && {{ shopt -u extglob 2>/dev/null || setopt NO_EXTENDED_GLOB 2>/dev/null || true; }} && eval {quoted}"
+                    "source {p:?} 2>/dev/null || true{reassert} && {{ shopt -u extglob 2>/dev/null || setopt NO_EXTENDED_GLOB NO_EQUALS NO_NOMATCH 2>/dev/null || true; }} && eval {quoted}"
                 )
             }
             None => command.to_string(),

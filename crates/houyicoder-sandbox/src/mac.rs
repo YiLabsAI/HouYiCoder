@@ -24,10 +24,12 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+mod command;
 mod process;
 mod seatbelt_stream;
 mod temp_dir;
 use crate::runtime_dirs::RuntimeDirs;
+use command::{annotate_fence_refusal, command_shell, timeout_message};
 use process::{ExecCountGuard, kill_process_group, tree_cpu_secs};
 use seatbelt_stream::stream_drain;
 use std::env::var;
@@ -125,7 +127,7 @@ impl MacSeatbeltSession {
         let tmpdir = mkdtemp("hy-tmp")?;
         let tmpdir = dunce::canonicalize(&tmpdir)?;
         let home = var("HOME").unwrap_or_else(|_| "/Users/unknown".into());
-        let shell = var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
+        let shell = command_shell();
         let tag = format!("houyicoder-sandbox-{}", id());
         let profile = render(&ProfileSpec::new(
             &workspace,
@@ -166,7 +168,7 @@ impl MacSeatbeltSession {
         let tmpdir = mkdtemp("hy-tmp")?;
         let tmpdir = dunce::canonicalize(&tmpdir)?;
         let home = var("HOME").unwrap_or_else(|_| "/Users/unknown".into());
-        let shell = var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
+        let shell = command_shell();
         let tag = format!("houyicoder-sandbox-{}", id());
         let profile = render(&ProfileSpec::new(
             &workspace,
@@ -496,18 +498,20 @@ impl MacSeatbeltSession {
         // descendants are still visible to ps; on a clean exit they were
         // already reaped and this reads ~0.
         let cpu_secs = breaker.as_ref().map(|_| tree_cpu_secs(pgid)).unwrap_or(0);
-        let result = match outcome {
+        let mut result = match outcome {
             Ok(Ok(output)) => Ok(ExecResult {
                 stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
                 stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
                 exit_code: output.status.code(),
             }),
             Ok(Err(e)) => Err(SandboxError::Io(format!("sandbox-exec wait: {e}"))),
-            Err(_elapsed) => Err(SandboxError::Timeout(format!(
-                "wall-clock {}s exceeded",
-                config.wall_timeout_ms
+            Err(_elapsed) => Err(SandboxError::Timeout(timeout_message(
+                config.wall_timeout_ms,
             ))),
         };
+        if let Ok(exec) = &mut result {
+            annotate_fence_refusal(exec, &self.workspace, &self.tmpdir);
+        }
         // Feed the measured outcome to the guard; its Drop records End on
         // this path AND on the cancel path (where it measures CPU itself).
         // A user cancel is not a budget exceed (only Timeout /
