@@ -311,6 +311,41 @@ fn test_tmpdir_write_after_deny() {
     );
 }
 
+/// A settings file under the session scratch directory is writable, while a
+/// permission store there is not. The two denies straddle the scratch
+/// allow-back for exactly this reason: a sandboxed test lays out its own
+/// fixture project in the scratch directory, and a fixture it cannot write
+/// reports a permission fault unrelated to what the test exercises.
+#[test]
+fn test_scratch_settings_file_allowed() {
+    let scratch = "/private/var/folders/T/hy-tmp-1";
+    let p = render(&ProfileSpec::new(
+        Path::new("/tmp/ws-7"),
+        scratch,
+        "/Users/bob",
+        "tag-s",
+    ));
+    let settings_deny = p
+        .find(r".*/\.houyicoder/settings\.json$")
+        .expect("settings deny present");
+    let allow = p
+        .find(&format!("(allow file-write* (subpath \"{scratch}\"))"))
+        .expect("tmpdir allow-back present");
+    let store_deny = p
+        .find(r".*/houyicoder-permissions/permissions\.json$")
+        .expect("permission store deny present");
+    assert!(
+        settings_deny < allow,
+        "the settings deny must land before the scratch allow-back, or a \
+         fixture project under the scratch directory cannot be written: {p}"
+    );
+    assert!(
+        allow < store_deny,
+        "the permission store deny must land after the scratch allow-back, or \
+         a local store under it becomes writable: {p}"
+    );
+}
+
 /// When the temporary directory is empty or contains the workspace, the
 /// post-deny allow-back is omitted so the workspace denies stay in force.
 #[test]

@@ -9,7 +9,10 @@ use std::path::Path;
 mod deny;
 mod network;
 
-use self::deny::{deny_authority_files, deny_snapshot_store, mandatory_deny};
+use self::deny::{
+    deny_home_snapshot_store, deny_permission_stores, deny_settings_files, deny_snapshot_store,
+    mandatory_deny,
+};
 use self::network::network_rules;
 use std::env::var;
 
@@ -212,6 +215,10 @@ pub fn render(spec: &ProfileSpec<'_>) -> String {
     // (BashTool::execute), not by the sandboxed child, so the deny does not
     // block snapshot creation.
     s.push_str(&deny_snapshot_store(workspace, tag));
+    // The store may live under the config home instead, so both locations carry
+    // the deny: whichever one the session opened is the one holding its undo
+    // data.
+    s.push_str(&deny_home_snapshot_store(home, tag));
     // deny_read_always re-emits any DENY_REGIONS literal that is nested
     // inside an allow-back subpath (workspace/tmpdir). When the workspace
     // lives under a deny region (e.g. /Users/me/...), this keeps the
@@ -229,11 +236,18 @@ pub fn render(spec: &ProfileSpec<'_>) -> String {
     s.push_str(&mandatory_deny(home, tag));
     // The session temporary directory is removed on drop and never opened by
     // the user on the host, so commands running inside it may initialize
-    // repositories, add submodules, or lay out dotfiles freely. The self-
-    // authorization files are re-denied after it so the local permission store
-    // under the temporary directory stays protected.
+    // repositories, add submodules, or lay out dotfiles freely.
+    //
+    // Authority denies straddle that allow-back. A settings file is only ever
+    // read from the config home and the workspace, so its deny comes first and
+    // the scratch directory stays writable: a sandboxed test lays out its own
+    // fixture project there, and a test that cannot write its own fixture
+    // reports a permission fault unrelated to what it exercises. A permission
+    // store can legitimately live under the scratch directory, so its deny
+    // comes last and wins there.
+    s.push_str(&deny_settings_files(home, tag));
     s.push_str(&allow_tmpdir_writes(tmpdir, workspace));
-    s.push_str(&deny_authority_files(home, tag));
+    s.push_str(&deny_permission_stores(home, tag));
     // System /etc files git reads at startup. Lands AFTER mandatory_deny
     // (whose .profile regex also matches these system paths) so
     // last-match-wins re-allows the reads. The home profile file stays denied

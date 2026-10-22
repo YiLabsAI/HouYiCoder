@@ -1,6 +1,7 @@
 //! Seatbelt rules for credentials, executable configuration, and files that
-//! govern the agent's own permissions. The authority-file rules are emitted
-//! again after the session temporary directory is made writable.
+//! govern the agent's own permissions. The profile places these rules on either
+//! side of the session temporary-directory allow-back, which is what decides
+//! whether a fixture settings file under that directory is writable.
 
 use std::path::Path;
 
@@ -26,15 +27,30 @@ const MANDATORY_DENY_FILES: &[&str] = &[
 const MANDATORY_DENY_WRITE_ONLY_FILES: &[&str] =
     &[".gitconfig", ".git/config", ".gitmodules", ".ripgreprc"];
 
-/// Permission and settings files denied for writing wherever they occur.
-/// Changing one would authorize later operations without the user's consent.
-/// Match files rather than entire directories so workspaces under those
-/// directories remain writable.
-const MANDATORY_DENY_AUTHORITY_FILES: &[&str] = &[
+/// Permission and settings files denied for writing. Changing one would
+/// authorize later operations without the user's consent. Match files rather
+/// than entire directories so workspaces under those directories remain
+/// writable.
+///
+/// Two lists because the profile emits them on either side of the session
+/// scratch allow-back. A permission store can live under the scratch
+/// directory, so its deny is emitted last and wins there. A settings file is
+/// read only from the config home and the workspace, so its deny is emitted
+/// first and the scratch directory stays writable for a fixture project.
+const MANDATORY_DENY_PERMISSION_STORES: &[&str] = &[
     ".houyicoder/permissions.json",
-    ".houyicoder/settings.json",
+    ".houyicoder/permissions.local.json",
     ".houyicoder/skill-grants.json",
     "houyicoder-permissions/permissions.json",
+];
+
+/// Settings files, denied before the scratch allow-back. See the split note on
+/// MANDATORY_DENY_PERMISSION_STORES. The local overlay is listed with the
+/// shared file: it is read at higher precedence than the shared one, so leaving
+/// it out would leave the effective setting writable.
+const MANDATORY_DENY_SETTINGS_FILES: &[&str] = &[
+    ".houyicoder/settings.json",
+    ".houyicoder/settings.local.json",
 ];
 
 /// AI-agent exfiltration vectors — directories (srt DANGEROUS_DIRECTORIES +
@@ -113,11 +129,10 @@ pub(crate) fn mandatory_deny(home: &str, tag: &str) -> String {
             "(deny file-write* (subpath \"{subpath}\") (regex #\".*/{escaped}$\") (with message \"{tag}\"))\n"
         ));
     }
-    // Authority files: write denied, read left alone. The nested-anywhere regex
-    // is the load-bearing half, because the scopes that were reachable are the
-    // ones resolved against the working and temp directories rather than the
-    // home literal.
-    out.push_str(&deny_authority_files(home, tag));
+    // The authority-file denies are not emitted here: the profile places them
+    // on either side of the session scratch allow-back, which is what decides
+    // whether a permission store or a fixture settings file under that
+    // directory is writable.
     for dir in MANDATORY_DENY_DIRS {
         let escaped = dir.replace('.', r"\.");
         emit(
@@ -147,13 +162,12 @@ pub(crate) fn mandatory_deny(home: &str, tag: &str) -> String {
     out
 }
 
-/// Emit the write-deny rules for the self-authorization files. Re-emitted
-/// after the session temporary-directory allow-back so the local permission
-/// store under the temporary directory stays write-denied even while ordinary
-/// files and repositories inside that directory are writable.
-pub(crate) fn deny_authority_files(home: &str, tag: &str) -> String {
+/// Deny writes to a permission store anywhere on disk. Emitted after the
+/// session scratch allow-back, because a local store under that directory is
+/// the case the deny exists for.
+pub(crate) fn deny_permission_stores(home: &str, tag: &str) -> String {
     let mut out = String::new();
-    for file in MANDATORY_DENY_AUTHORITY_FILES {
+    for file in MANDATORY_DENY_PERMISSION_STORES {
         let escaped = file.replace('.', r"\.");
         let subpath = format!("{home}/{file}");
         out.push_str(&format!(
@@ -161,6 +175,32 @@ pub(crate) fn deny_authority_files(home: &str, tag: &str) -> String {
         ));
     }
     out
+}
+
+/// Deny writes to a settings file anywhere on disk except the session scratch
+/// directory, which is emitted after this and therefore wins there. Settings are
+/// read from the config home and the workspace only, so the scratch directory
+/// is free for a fixture project.
+pub(crate) fn deny_settings_files(home: &str, tag: &str) -> String {
+    let mut out = String::new();
+    for file in MANDATORY_DENY_SETTINGS_FILES {
+        let escaped = file.replace('.', r"\.");
+        let subpath = format!("{home}/{file}");
+        out.push_str(&format!(
+            "(deny file-write* (subpath \"{subpath}\") (regex #\".*/{escaped}$\") (with message \"{tag}\"))\n"
+        ));
+    }
+    out
+}
+
+/// Deny writes to the user-wide snapshot store. The store holds the undo data
+/// for destructive commands, so a command that could write it could rewrite its
+/// own recovery evidence. Snapshot creation is unaffected: the host process
+/// writes the store and is not inside the fence.
+pub(crate) fn deny_home_snapshot_store(home: &str, tag: &str) -> String {
+    format!(
+        "(deny file-write* (subpath \"{home}/.houyicoder/snapshots\") (with message \"{tag}\"))\n"
+    )
 }
 
 /// Deny writes to the snapshot store directory inside the workspace. This

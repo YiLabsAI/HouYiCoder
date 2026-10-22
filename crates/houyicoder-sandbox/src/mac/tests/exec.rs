@@ -4,7 +4,9 @@
 //! against that dir, and a zsh glob for-loop does not trip the unknown
 //! file-attribute error. These spawn real sandbox-exec and are NOT
 //! ignored, so they enter make check and pin the fixes against
-//! regression. The effect-level evidence (the user's real-sandbox table)
+//! regression. A run that is itself inside a fence cannot apply a nested
+//! one; those cases report the skip and set HOUYICODER_FENCE_TESTS_STRICT=1 to
+//! make the gate refuse instead. The effect-level evidence (the user's real-sandbox table)
 //! lives here as code, not just in the bug-log.
 
 #![allow(clippy::disallowed_methods)]
@@ -15,12 +17,33 @@ use std::fs::create_dir;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 
+/// Whether this process is already inside a fence. The kernel refuses a
+/// nested sandbox_apply, and these tests spawn a real sandbox-exec, so inside
+/// a fence they can only report that refusal. Saying so is honest; reporting it
+/// as a fence regression is not, because the profile under test never ran.
+async fn nested_fence(session: &MacSeatbeltSession) -> bool {
+    let Ok(out) = session
+        .exec_with_config("true", ExecConfig::default())
+        .await
+    else {
+        return false;
+    };
+    let nested = out.stderr.contains("sandbox_apply");
+    if nested {
+        eprintln!("skipped: a fence cannot be applied inside a fence");
+    }
+    nested
+}
+
 /// A quoted heredoc executes (its body is not flattened by the command
 /// wrapping). Pins the eval single-quote wrap against the prior Rust Debug
 /// {:?} newline-escape that collapsed heredoc bodies onto one line.
 #[tokio::test]
 async fn test_heredoc_executes() {
     let s = MacSeatbeltSession::new().unwrap();
+    if nested_fence(&s).await {
+        return;
+    }
     let out = s
         .exec_with_config("cat << 'EOF'\nhello\nEOF", ExecConfig::default())
         .await
@@ -38,6 +61,9 @@ async fn test_heredoc_executes() {
 #[tokio::test]
 async fn test_tmpdir_env_session_dir() {
     let s = MacSeatbeltSession::new().unwrap();
+    if nested_fence(&s).await {
+        return;
+    }
     let want = s.tmpdir.to_string_lossy().into_owned();
     let out = s
         .exec_with_config("echo $TMPDIR", ExecConfig::default())
@@ -60,6 +86,9 @@ async fn test_tmpdir_env_session_dir() {
 #[tokio::test]
 async fn test_writes_to_tmpdir() {
     let s = MacSeatbeltSession::new().unwrap();
+    if nested_fence(&s).await {
+        return;
+    }
     let out = s
         .exec_with_config(
             "echo ok > $TMPDIR/probe && cat $TMPDIR/probe",
@@ -80,6 +109,9 @@ async fn test_writes_to_tmpdir() {
 #[tokio::test]
 async fn test_glob_for_basename_nonempty() {
     let s = MacSeatbeltSession::new().unwrap();
+    if nested_fence(&s).await {
+        return;
+    }
     create_dir(s.workspace.join("adir")).expect("mkdir subdir");
     let out = s
         .exec_with_config(
@@ -107,6 +139,9 @@ async fn test_glob_for_basename_nonempty() {
 #[tokio::test]
 async fn test_exec_streaming_counts_lines() {
     let s = MacSeatbeltSession::new().unwrap();
+    if nested_fence(&s).await {
+        return;
+    }
     let counter = Arc::new(AtomicI64::new(-1));
     let out = s
         .exec_streaming("seq 1 10", Arc::clone(&counter))

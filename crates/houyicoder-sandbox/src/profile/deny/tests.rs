@@ -66,8 +66,15 @@ fn test_git_hooks_write_denied() {
 }
 
 #[test]
-fn test_mandatory_deny_authority_files() {
-    let p = mandatory_deny("/Users/alice", "tag-x");
+fn test_authority_files_write_denied() {
+    // The profile places the two groups on either side of the session scratch
+    // allow-back, so both are asserted through their own emitters rather than
+    // through mandatory_deny, which no longer carries them.
+    let p = format!(
+        "{}{}",
+        deny_settings_files("/Users/alice", "tag-x"),
+        deny_permission_stores("/Users/alice", "tag-x")
+    );
     assert!(p.contains(r".*/\.houyicoder/permissions\.json$"));
     assert!(p.contains(r".*/\.houyicoder/settings\.json$"));
     assert!(p.contains(r".*/\.houyicoder/skill-grants\.json$"));
@@ -171,5 +178,21 @@ fn test_ripgreprc_write_denied() {
     assert!(
         !p.contains("(deny file-read* file-write* (subpath \"/Users/alice/.ripgreprc\")"),
         ".ripgreprc must not be read-denied, rg needs to read it and it has no secrets: {p}"
+    );
+}
+
+/// The user-wide snapshot store carries a write deny: it holds the undo data
+/// for destructive commands, so a command that could write it could rewrite its
+/// own recovery evidence.
+#[test]
+fn test_home_store_denied() {
+    let p = deny_home_snapshot_store("/Users/alice", "tag-x");
+    assert!(
+        p.contains("(deny file-write* (subpath \"/Users/alice/.houyicoder/snapshots\")"),
+        "the home snapshot store must be write-denied: {p}"
+    );
+    assert!(
+        !p.contains("file-read"),
+        "reading the store is not the hazard; only writing it is: {p}"
     );
 }

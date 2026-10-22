@@ -448,6 +448,77 @@ fn test_denies_permission_store_write() {
     );
 }
 
+/// A sandboxed test lays out its own fixture project under the session
+/// temporary directory, and that fixture needs a writable settings file. The
+/// real permission store under the same directory must stay refused, and so
+/// must the settings file inside the workspace: the split is the file's role,
+/// not the directory.
+#[cfg(target_os = "macos")]
+#[test]
+fn test_scratch_settings_file_writable() {
+    let f = Fence::new("scratch-settings");
+    let fixture = f.tmpdir.join("fixture/.houyicoder");
+    create_dir_all(&fixture).expect("create fixture dir");
+    let scratch = f.probe(
+        "scratch-settings",
+        "printf '{}' > \"$TMPDIR/fixture/.houyicoder/settings.json\"",
+    );
+    assert!(
+        scratch.allowed(),
+        "a fixture project under the session scratch directory must be able to \
+         write its own settings file; a denial here makes every sandboxed test \
+         that builds a throwaway project fail for a reason unrelated to what it \
+         exercises. {}",
+        scratch.detail()
+    );
+
+    // The workspace settings file must be refused by the fence, not by a
+    // missing parent directory: create the directory first so the only thing
+    // that can fail is the write itself.
+    create_dir_all(f.workspace.join(".houyicoder")).expect("create workspace config dir");
+    let workspace_settings = f.probe(
+        "workspace-settings",
+        "printf '{}' > .houyicoder/settings.json",
+    );
+    assert!(
+        !workspace_settings.allowed() && workspace_settings.denied_by_fence(),
+        "the workspace settings file stays refused by the fence: it configures \
+         the session. {}",
+        workspace_settings.detail()
+    );
+    let workspace_local = f.probe(
+        "workspace-settings-local",
+        "printf '{}' > .houyicoder/settings.local.json",
+    );
+    assert!(
+        !workspace_local.allowed() && workspace_local.denied_by_fence(),
+        "the local settings overlay is read at higher precedence than the \
+         shared file, so it needs the same deny. {}",
+        workspace_local.detail()
+    );
+    let workspace_store_local = f.probe(
+        "workspace-permissions-local",
+        "printf '' >> .houyicoder/permissions.local.json",
+    );
+    assert!(
+        !workspace_store_local.allowed() && workspace_store_local.denied_by_fence(),
+        "the local permission overlay grants standing approval exactly as the \
+         shared store does. {}",
+        workspace_store_local.detail()
+    );
+
+    let scratch_store = f.probe(
+        "scratch-store",
+        "printf '' >> \"$TMPDIR/fixture/.houyicoder/permissions.json\"",
+    );
+    assert!(
+        !scratch_store.allowed(),
+        "a permission store under the scratch directory stays refused: writing \
+         one grants standing approval for later turns. {}",
+        scratch_store.detail()
+    );
+}
+
 /// Git must work inside the fence with no environment workaround. It reads its
 /// system and home config on every invocation and treats a denied read as
 /// fatal, so this exercises both allow-backs at once.
