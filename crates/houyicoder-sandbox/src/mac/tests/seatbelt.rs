@@ -279,10 +279,10 @@ async fn test_long_command_trips_timeout() {
     let Err(SandboxError::Timeout(message)) = &r else {
         panic!("wall-clock 200ms must trip Timeout, got {r:?}");
     };
-    // The message reports seconds, so the raw millisecond budget must not leak
-    // into it: a 200ms budget reads as 0s, and a 120s one as 120s.
+    // The message reports seconds, and keeps the fraction so a sub-second
+    // budget does not read as a measured zero.
     assert!(
-        message.contains("wall-clock 0s"),
+        message.contains("wall-clock 0.2s"),
         "the budget is reported in seconds, not milliseconds: {message}"
     );
 }

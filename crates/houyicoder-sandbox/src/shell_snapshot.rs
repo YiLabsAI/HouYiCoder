@@ -149,11 +149,11 @@ impl ShellSnapshot {
         // Dump only exported environment variables (export -p produces
         // POSIX-compatible export VAR=value lines, including PATH). Functions,
         // shell options, and aliases are shell-specific (zsh typeset output
-        // will not parse in the bash sh that runs the sandboxed command), so
-        // they are skipped to avoid a parse error that aborts the source.
-        // PATH is the user-reported loss; the exported env covers it. Functions
-        // and aliases are a future item once the sandboxed shell matches the
-        // snapshot-creation shell.
+        // does not parse in the bash that runs the sandboxed command), so they
+        // are skipped to avoid a parse error that aborts the source. PATH is
+        // the user-reported loss; the exported env covers it. Functions and
+        // aliases are a future item once the snapshot-creation shell and the
+        // command shell are the same one.
         let dump = r##"
           export -p >> "$SNAPSHOT_FILE"
         "##;
@@ -186,8 +186,8 @@ impl ShellSnapshot {
     /// would clobber the spawn-time env set on the child, leaving TMPDIR
     /// pointing at the host temp root (outside the fence). Re-asserting the
     /// per-session values keeps heredoc temp files and tools that honor TMPDIR
-    /// inside the fence. TMPPREFIX routes zsh heredoc temp (zsh ignores TMPDIR
-    /// for that) to the same dir.
+    /// inside the fence. TMPPREFIX covers a host that fell back to zsh, whose
+    /// heredoc temp ignores TMPDIR.
     pub fn inject(&mut self, command: &str, tmpdir: Option<&str>) -> String {
         match self.ensure() {
             Some(p) => {

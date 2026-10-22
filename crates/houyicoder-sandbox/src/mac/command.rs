@@ -6,6 +6,18 @@ use std::env::var;
 use std::path::Path;
 use std::path::PathBuf;
 
+/// Whether the message has the shape the kernel uses for a path refusal:
+/// a path, a colon, then the refusal. A bare refusal names no path and is not
+/// this function's to explain.
+fn refused_path(stderr: &str) -> bool {
+    stderr.lines().any(|line| {
+        let Some((before, after)) = line.split_once(": ") else {
+            return false;
+        };
+        after.starts_with("Operation not permitted") && before.contains('/')
+    })
+}
+
 /// Shells a sandboxed command runs under, best first. The model writes bash,
 /// so running the user's login shell applies zsh parsing rules to bash text and
 /// aborts on constructs like a leading === or a read-only status. A newer bash
@@ -34,23 +46,22 @@ pub(super) fn login_shell() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-pub(super) fn command_shell() -> PathBuf {
+pub fn command_shell() -> PathBuf {
     first_present(PREFERRED_SHELLS, |path| path.is_file())
         .or_else(login_shell)
         .unwrap_or_else(|| PathBuf::from("/bin/sh"))
 }
 
-/// The wall-clock budget as the model reads it: seconds, never the raw
-/// millisecond count.
-pub(super) fn timeout_message(millis: u64) -> String {
-    format!("wall-clock {}s exceeded", millis / 1000)
-}
-
-/// Append an actionable note when the kernel refused the command. The raw
-/// message names a path and nothing else, which reads as a broken tool rather
-/// than a boundary, so the note states where the session may write.
+/// Append an actionable note when the kernel refused a path. The raw message
+/// names a path and nothing else, which reads as a broken tool rather than a
+/// boundary, so the note states where the session may write.
+///
+/// The identification is a heuristic on the message shape: a path, a colon, and
+/// the refusal. A program that refuses an operation of its own (a chmod the
+/// user may not perform, a signal to another process) prints the same words
+/// with no path in front, and gets no note.
 pub(super) fn annotate_fence_refusal(exec: &mut ExecResult, workspace: &Path, tmpdir: &Path) {
-    if exec.is_success() || !exec.stderr.contains("Operation not permitted") {
+    if exec.is_success() || !refused_path(exec.stderr.as_str()) {
         return;
     }
     exec.stderr.push_str(&format!(

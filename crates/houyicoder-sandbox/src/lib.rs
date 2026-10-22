@@ -36,10 +36,13 @@ pub use shell_snapshot::ShellSnapshot;
 mod mac;
 #[cfg(target_os = "macos")]
 pub use mac::MacSeatbeltSession;
+#[cfg(target_os = "macos")]
+pub use mac::command_shell;
 
 pub mod deny_log;
 
 mod runtime_dirs;
+mod timeout;
 
 #[cfg(target_os = "linux")]
 mod linux;

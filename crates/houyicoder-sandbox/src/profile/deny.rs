@@ -176,11 +176,22 @@ pub(crate) fn deny_settings_files(home: &str, tag: &str) -> String {
     deny_write_files(MANDATORY_DENY_SETTINGS_FILES, home, tag)
 }
 
-/// Subtrees of the shared temp root that belong to other processes: launchd
-/// and app sockets, tmux sessions, X11 sockets. Writing there can break or
-/// hijack a process outside the session, so the shared root is writable but
+/// Subtrees of the shared temp root that belong to other processes: launchd and
+/// application sockets, tmux sessions, the display and font servers, ssh agent
+/// sockets, editor IPC endpoints, and postgres sockets. Writing there can break
+/// or hijack a process outside the session, so the shared root is writable and
 /// these prefixes are not.
-const GUARDED_SHARED_TEMP: &[&str] = &["com\\.apple\\.", "tmux-", "\\.X11-unix"];
+const GUARDED_SHARED_TEMP: &[&str] = &[
+    "com\\.apple\\.",
+    "tmux-",
+    "\\.X11-unix",
+    "\\.ICE-unix",
+    "\\.XIM-unix",
+    "\\.font-unix",
+    "ssh-",
+    "\\.vscode-ipc-",
+    "\\.s\\.PGSQL\\.",
+];
 
 /// Deny writes to the guarded subtrees of the shared temp root, in both the
 /// /tmp spelling and the /private/tmp one the kernel resolves to.

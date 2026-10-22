@@ -27,6 +27,7 @@
 //! application-level path resolver remains the only boundary.
 
 use crate::runtime_dirs::RuntimeDirs;
+use crate::timeout::message;
 use houyicoder_api::sandbox::{
     Containment, Coverage, FenceStatus, NetworkPolicy, SandboxSession, SideEffect,
     normalize_tool_path,
@@ -421,10 +422,7 @@ impl SandboxSession for WindowsJobSession {
                     exit_code: output.status.code(),
                 }),
                 Ok(Err(e)) => Err(SandboxError::Io(format!("wait: {e}"))),
-                Err(_elapsed) => Err(SandboxError::Timeout(format!(
-                    "wall-clock {}s exceeded",
-                    config.wall_timeout_ms / 1000
-                ))),
+                Err(_elapsed) => Err(SandboxError::Timeout(message(config.wall_timeout_ms))),
             }
         })
     }

@@ -378,3 +378,53 @@ fn test_tmpdir_nested_omitted() {
         "a tmpdir containing the workspace must not be re-allowed after mandatory_deny: {p_nested}"
     );
 }
+
+/// The shared temp root is opened for writing before the denies that must still
+/// win inside it: the guarded subtrees, and the authority files that can live
+/// under any writable root. A reorder that put the allow last would hand the
+/// whole root, guarded paths included, to the command.
+#[test]
+fn test_shared_temp_allow_order() {
+    let scratch = "/private/var/folders/T/hy-tmp-2";
+    let p = render(&ProfileSpec::new(
+        Path::new("/tmp/ws-9"),
+        scratch,
+        "/Users/bob",
+        "tag-s",
+    ));
+    let allow = p
+        .find("(allow file-read* file-write* (subpath \"/private/tmp\")")
+        .expect("shared temp allow present");
+    let guarded = p
+        .find("com\\.apple\\.")
+        .expect("guarded subtree deny present");
+    let store = p
+        .find(r".*/houyicoder-permissions/permissions\.json$")
+        .expect("permission store deny present");
+    assert!(
+        allow < guarded,
+        "the guarded subtrees must be denied after the root is opened: {p}"
+    );
+    assert!(
+        guarded < store,
+        "the authority denies must stay last so an opened root cannot wash them out: {p}"
+    );
+}
+
+/// Certificate verification needs the trust daemon, and the profile has to say
+/// so: a missing Mach service is inert, so nothing else would report it.
+#[test]
+fn test_trust_service_allowed() {
+    let p = render(&ProfileSpec::new(
+        Path::new("/tmp/ws-10"),
+        "/private/var/folders/T/hy-tmp-3",
+        "/Users/bob",
+        "tag-s",
+    ));
+    for service in ["com.apple.trustd", "com.apple.trustd.agent"] {
+        assert!(
+            p.contains(&format!("(global-name \"{service}\")")),
+            "{service} must be allowed or a child's TLS handshake fails: {p}"
+        );
+    }
+}

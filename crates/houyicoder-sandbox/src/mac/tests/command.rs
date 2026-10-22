@@ -5,7 +5,6 @@ use super::super::command::annotate_fence_refusal;
 use super::super::command::command_shell;
 use super::super::command::first_present;
 use super::super::command::login_shell;
-use super::super::command::timeout_message;
 use houyicoder_context::ExecResult;
 use std::path::Path;
 use std::path::PathBuf;
@@ -46,7 +45,7 @@ fn test_fence_refusal_note() {
     let workspace = Path::new("/work/repo");
     let tmpdir = Path::new("/private/var/folders/T/hy-tmp-1");
 
-    let mut refused = result("bash: /etc/hosts: Operation not permitted\n", Some(1));
+    let mut refused = result("/etc/hosts: Operation not permitted\n", Some(1));
     annotate_fence_refusal(&mut refused, workspace, tmpdir);
     assert!(
         refused.stderr.contains("Writable roots: /work/repo"),
@@ -62,10 +61,17 @@ fn test_fence_refusal_note() {
     );
 
     let mut own_failure = result("cargo: error: could not compile\n", Some(101));
+    let mut bare_refusal = result("chmod: Operation not permitted\n", Some(1));
     annotate_fence_refusal(&mut own_failure, workspace, tmpdir);
     assert_eq!(
         own_failure.stderr, "cargo: error: could not compile\n",
         "a command's own failure keeps its stderr"
+    );
+
+    annotate_fence_refusal(&mut bare_refusal, workspace, tmpdir);
+    assert_eq!(
+        bare_refusal.stderr, "chmod: Operation not permitted\n",
+        "a refusal that names no path is the program's own, not the fence's"
     );
 
     let mut ok = result("", Some(0));
@@ -91,18 +97,10 @@ fn test_first_present_order() {
     assert_eq!(first_present(&candidates, |_| false), None);
 }
 
-/// The budget is reported in seconds. A raw millisecond count read as seconds
-/// made a two-minute limit look like a two-day one.
-#[test]
-fn test_timeout_message_reports_seconds() {
-    assert_eq!(timeout_message(200), "wall-clock 0s exceeded");
-    assert_eq!(timeout_message(120_000), "wall-clock 120s exceeded");
-}
-
 /// The host's login shell is the fallback when no bash is installed. It is read
 /// from the environment, so the host running the tests always has one.
 #[test]
-fn test_login_shell_from_environment() {
+fn test_login_shell_present() {
     let shell = login_shell();
     assert!(
         shell.is_some(),

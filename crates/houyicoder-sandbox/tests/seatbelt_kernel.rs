@@ -138,14 +138,24 @@ impl Fence {
         f
     }
 
+    /// Run one command inside the fence under an explicit shell, so a test can
+    /// use the same shell the session hands its commands to.
+    fn probe_via(&self, label: &str, shell: &Path, cmd: &str) -> Outcome {
+        self.probe_with(label, shell, cmd)
+    }
+
     /// Run one shell command inside the fence and report the verdict.
     fn probe(&self, label: &str, cmd: &str) -> Outcome {
+        self.probe_with(label, Path::new("/bin/sh"), cmd)
+    }
+
+    fn probe_with(&self, label: &str, shell: &Path, cmd: &str) -> Outcome {
         let started = Instant::now();
         let out = Command::new("sandbox-exec")
             .arg("-p")
             .arg(&self.profile)
             .arg("--")
-            .arg("/bin/sh")
+            .arg(shell)
             .arg("-c")
             .arg(cmd)
             .current_dir(&self.workspace)
@@ -625,10 +635,10 @@ fn test_splits_gitconfig() {
 #[test]
 fn test_shared_temp_writable() {
     let f = Fence::new("shared-temp");
-    let write = f.probe(
-        "tmp-write",
-        "printf x > /tmp/houyi-probe-shared && cat /tmp/houyi-probe-shared",
-    );
+    // A per-run name, so a concurrent session's probe cannot answer for this
+    // one.
+    let name = format!("/tmp/hy-shared-{}", id());
+    let write = f.probe("tmp-write", &format!("printf x > {name} && cat {name}"));
     assert!(
         write.allowed(),
         "the shared temp root must be writable: a tool that hard-codes it \
@@ -643,7 +653,7 @@ fn test_shared_temp_writable() {
          through the shared temp root. {}",
         proc_sub.detail()
     );
-    let _cleanup = remove_file("/tmp/houyi-probe-shared");
+    let _cleanup = remove_file(&name);
 }
 
 /// The subtrees of the shared temp root that other processes own stay closed,
@@ -655,7 +665,12 @@ fn test_shared_temp_guarded_paths() {
     for (label, cmd) in [
         ("com.apple", "printf x > /private/tmp/com.apple.houyi-probe"),
         ("tmux", "printf x > /private/tmp/tmux-houyi-probe"),
-        ("x11", "mkdir /private/tmp/.X11-unix"),
+        // The socket directory may already exist, so a create is denied either
+        // way: as a write into it, or as a create of it.
+        (
+            "x11",
+            "printf x > /private/tmp/.X11-unix/hy-probe || mkdir /private/tmp/.X11-unix",
+        ),
     ] {
         let out = f.probe(label, cmd);
         assert!(

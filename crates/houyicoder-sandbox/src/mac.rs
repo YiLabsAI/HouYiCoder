@@ -1,7 +1,7 @@
 //! macOS Seatbelt sandbox session. Commands run via sandbox-exec -p PROFILE
-//! -- /bin/sh -c CMD with the workspace as cwd. The shell is non-login so it
-//! sources no profile (no /etc/profile, no ~/.profile) — PATH is inherited from
-//! the parent process. The profile denies default, allows system reads + the
+//! -- SHELL -c CMD with the workspace as cwd, where SHELL is bash unless the
+//! host has none. The shell is non-login so it sources no profile; PATH comes
+//! from the parent process and the env snapshot. The profile denies default, allows system reads + the
 //! workspace read/write + system-binary exec, and denies the network unless the
 //! session carries a policy that opens it. Drop
 //! removes the workspace only when this session created it (tempdir); a
@@ -25,11 +25,13 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 mod command;
+pub use command::command_shell;
 mod process;
 mod seatbelt_stream;
 mod temp_dir;
 use crate::runtime_dirs::RuntimeDirs;
-use command::{annotate_fence_refusal, command_shell, timeout_message};
+use crate::timeout;
+use command::annotate_fence_refusal;
 use process::{ExecCountGuard, kill_process_group, tree_cpu_secs};
 use seatbelt_stream::stream_drain;
 use std::env::var;
@@ -106,12 +108,12 @@ pub struct MacSeatbeltSession {
     network: NetworkPolicy,
     /// Login-shell env snapshot: captures PATH/aliases/functions once per
     /// session by running the user's login shell, then sources the snapshot
-    /// into each sandboxed command so the non-login sh shell still sees the
+    /// into each sandboxed command so the non-login shell still sees the
     /// user's environment (homebrew PATH, rc aliases).
     shell_snapshot: Mutex<ShellSnapshot>,
-    /// The user's login shell ($SHELL), used to run sandboxed commands so they
-    /// match the env snapshot (a zsh snapshot sources cleanly in zsh; the old
-    /// /bin/sh mismatched the snapshot's shell and aborted on zsh syntax).
+    /// The shell a sandboxed command runs under: bash when the host has one,
+    /// the login shell otherwise. The snapshot holds plain exported variables,
+    /// so either shell can source it.
     shell: PathBuf,
 }
 
@@ -391,7 +393,7 @@ impl MacSeatbeltSession {
         let profile = self.current_profile();
         let cwd = self.effective_workspace();
         // Wrap the command to source the login-shell env snapshot first, so
-        // the non-login sh shell still sees the user's PATH / aliases /
+        // the non-login shell still sees the user's PATH / aliases /
         // functions. No-op when the snapshot is unavailable (degraded). The
         // snapshot file lives under the config home, which the profile
         // allow-backs so the sandboxed shell can read it.
@@ -424,12 +426,12 @@ impl MacSeatbeltSession {
             return Err(SandboxError::BreakerOpen(e.to_string()));
         }
         let mut cmd = Command::new("sandbox-exec");
-        // Export the per-session temp dir as TMPDIR so heredoc temp files
-        // and tools that honor TMPDIR land inside the fence (the profile
-        // allow-lists this exact path). TMPPREFIX routes zsh's heredoc
-        // temp there too (zsh ignores TMPDIR for heredoc temp files);
-        // non-zsh shells ignore TMPPREFIX. Set explicitly rather than
-        // inheriting the parent TMPDIR, which points outside the fence.
+        // Export the per-session temp dir as TMPDIR so heredoc temp files and
+        // tools that honor TMPDIR land inside the fence (the profile
+        // allow-lists this exact path). TMPPREFIX covers a host that fell back
+        // to zsh, whose heredoc temp ignores TMPDIR; bash ignores it. Set
+        // explicitly rather than inheriting the parent TMPDIR, which points
+        // outside the fence.
         let tmpdir_str = self.tmpdir.to_string_lossy().into_owned();
         cmd.env("TMPDIR", &tmpdir_str)
             .env("TMPPREFIX", format!("{tmpdir_str}/zsh"))
@@ -505,12 +507,15 @@ impl MacSeatbeltSession {
                 exit_code: output.status.code(),
             }),
             Ok(Err(e)) => Err(SandboxError::Io(format!("sandbox-exec wait: {e}"))),
-            Err(_elapsed) => Err(SandboxError::Timeout(timeout_message(
+            Err(_elapsed) => Err(SandboxError::Timeout(timeout::message(
                 config.wall_timeout_ms,
             ))),
         };
         if let Ok(exec) = &mut result {
-            annotate_fence_refusal(exec, &self.workspace, &self.tmpdir);
+            // The narrowed root is the one the profile allows; the original
+            // workspace is refused in a worktree session, so naming it would
+            // send the reader to a second denial.
+            annotate_fence_refusal(exec, &self.effective_workspace(), &self.tmpdir);
         }
         // Feed the measured outcome to the guard; its Drop records End on
         // this path AND on the cancel path (where it measures CPU itself).

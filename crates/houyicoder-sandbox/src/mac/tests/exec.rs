@@ -1,8 +1,7 @@
 //! Real sandbox-exec tests for the command-execution fixes: heredoc
 //! survives the single-quote wrap, TMPDIR inside the fence is the
 //! per-session dir (not clobbered by the snapshot source), mktemp works
-//! against that dir, and a zsh glob for-loop does not trip the unknown
-//! file-attribute error. These spawn real sandbox-exec and are NOT
+//! against that dir, and bash constructs run under the session shell. These spawn real sandbox-exec and are NOT
 //! ignored, so they enter make check and pin the fixes against
 //! regression. A run that is itself inside a fence cannot apply a nested
 //! one and skips cleanly instead of reporting a false regression. The effect-level evidence (the user's real-sandbox table)
@@ -102,9 +101,9 @@ async fn test_writes_to_tmpdir() {
     );
 }
 
-/// A zsh glob for-loop over directories does not trip the unknown
-/// file-attribute error the prior eval {:?} wrapping induced. Pins that
-/// the LLM's bash syntax runs clean under the sandboxed shell.
+/// A glob for-loop over directories works under the session shell, which is
+/// what the model writes. The shell must hand the pattern to the loop rather
+/// than refusing it, which is the failure a login shell produced.
 #[tokio::test]
 async fn test_glob_for_basename_nonempty() {
     let s = MacSeatbeltSession::new().unwrap();
@@ -126,8 +125,8 @@ async fn test_glob_for_basename_nonempty() {
         out.stdout
     );
     assert!(
-        !out.stderr.contains("unknown file attribute"),
-        "no zsh glob-attribute error: {out:?}"
+        !out.stderr.contains("no matches found"),
+        "the shell must not refuse the glob: {out:?}"
     );
 }
 

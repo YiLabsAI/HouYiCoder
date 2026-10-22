@@ -8,6 +8,7 @@
 //! remains the boundary.
 
 use crate::runtime_dirs::RuntimeDirs;
+use crate::timeout::message;
 use houyicoder_api::sandbox::{
     Containment, Coverage, FenceStatus, NetworkPolicy, SandboxSession, SideEffect,
     normalize_tool_path,
@@ -267,10 +268,7 @@ impl LinuxLandlockSession {
         match outcome {
             Ok(Ok(output)) => Ok(exec_result_from_output(output)),
             Ok(Err(e)) => Err(SandboxError::Io(format!("wait: {e}"))),
-            Err(_elapsed) => Err(SandboxError::Timeout(format!(
-                "wall-clock {}ms exceeded",
-                config.wall_timeout_ms
-            ))),
+            Err(_elapsed) => Err(SandboxError::Timeout(message(config.wall_timeout_ms))),
         }
     }
 }

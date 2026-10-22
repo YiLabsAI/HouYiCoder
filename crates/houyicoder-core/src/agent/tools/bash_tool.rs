@@ -118,8 +118,9 @@ impl Tool for BashTool {
          with | to pass it between commands (find . -name '*.rs' | xargs \
          wc -l | sort -n). Do not use newlines to separate commands. \
          For temporary files and directories use $TMPDIR, which points to the \
-         session's writable temporary directory; direct writes to /tmp are \
-         blocked by the sandbox."
+         session's own writable temporary directory. /tmp is writable too but \
+         shared with other processes on the host, so use it only where a tool \
+         hard-codes it."
     }
     fn input_schema(&self) -> Value {
         json!({
